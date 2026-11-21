@@ -1,0 +1,226 @@
+-- Property tests over seeded random inputs (spec/design/testing.md). Each
+-- property compares two independent ways of computing one result: the
+-- three exact number subtypes against each other, queries against loops,
+-- and formatters against their parsers. A failure names the seed and the
+-- input, so it reproduces.
+
+pledge("load")
+
+-- A 64-bit xorshift generator, so the inputs are the same on every run and
+-- in every JIT mode.
+local function rng(seed)
+    local s = seed * 2654435761 + 1
+    return function(lo, hi)
+        s = s ~ (s << 13)
+        s = s ~ (s >> 7)
+        s = s ~ (s << 17)
+        if lo == nil then return s end
+        return lo + (s & 0x7fffffffffffffff) % (hi - lo + 1)
+    end
+end
+
+local function pick(r, list)
+    return list[r(1, #list)]
+end
+
+-- Integers that do not overflow agree with bigints and decimals.
+local function integer_bigint_and_decimal_arithmetic_agree_test()
+    local r = rng(1)
+    for i = 1, 3000 do
+        local a, b = r(-3037000499, 3037000499), r(-3037000499, 3037000499)
+        if i % 7 == 0 then b = r(-9, 9) end
+        local ba, bb = bigint(a), bigint(b)
+        local da, db = decimal(a), decimal(b)
+        local function agree(op, x, y, z)
+            if not (x == y and y == z) then
+                error(`seed 1, case $i: $a $op $b gives $(x), $(y), $(z)`)
+            end
+        end
+        agree("+", a + b, ba + bb, da + db)
+        agree("-", a - b, ba - bb, da - db)
+        agree("*", a * b, ba * bb, da * db)
+        if b ~= 0 then
+            agree("//", a // b, ba // bb, da // db)
+            agree("%", a % b, ba % bb, da % db)
+        end
+        agree("<", a < b, ba < bb, da < db)
+        agree("==", a == b, ba == bb, da == db)
+        assert(math.tointeger(ba) == a and math.tointeger(da) == a)
+    end
+end
+
+-- Bigints past 64 bits agree with decimals while they fit in 34 digits.
+local function bigint_and_decimal_agree_past_64_bits_test()
+    local r = rng(2)
+    for i = 1, 2000 do
+        local a = bigint(r(-999999999, 999999999)) * bigint(r(0, 999999999)) + bigint(r(-99, 99))
+        local b = bigint(r(-999999999, 999999999))
+        if b == 0n then b = 7n end
+        local da, db = decimal(a), decimal(b)
+        assert(decimal(a * b) == da * db, `case $i: $(a) * $(b)`)
+        assert(decimal(a + b) == da + db, `case $i: $(a) + $(b)`)
+        assert(decimal(a // b) == da // db, `case $i: $(a) // $(b) gives $(a // b) and $(da // db)`)
+        assert(decimal(a % b) == da % db, `case $i: $(a) % $(b) gives $(a % b) and $(da % db)`)
+        assert(bigint(tostring(a)) == a and decimal(tostring(da)) == da)
+        assert((a // b) * b + a % b == a, `case $i: division identity for $(a), $(b)`)
+    end
+end
+
+-- Integer arithmetic wraps exactly where bigint arithmetic reduced to 64
+-- bits says it does.
+local function integer_wraparound_matches_bigint_modulo_test()
+    local r = rng(3)
+    local two64 = 2n ^ 64
+    local function wrap(x)
+        x = x % two64
+        if x >= 2n ^ 63 then x = x - two64 end
+        return x
+    end
+    for i = 1, 2000 do
+        local a, b = r(), r()
+        assert(bigint(a + b) == wrap(bigint(a) + bigint(b)), `case $i: $a + $b`)
+        assert(bigint(a * b) == wrap(bigint(a) * bigint(b)), `case $i: $a * $b`)
+        assert(bigint(a - b) == wrap(bigint(a) - bigint(b)), `case $i: $a - $b`)
+        local s = r(0, 63)
+        assert(bigint(a << s) == wrap(bigint(a) << s), `case $i: $a << $s`)
+        assert(bigint(a & b) == (bigint(a) & bigint(b)), `case $i: $a & $b`)
+        assert(bigint(a ~ b) == (bigint(a) ~ bigint(b)), `case $i: $a ~ $b`)
+    end
+end
+
+-- Floats that hold small integers agree with integers, and every float
+-- prints to text that reads back as the same float.
+local function floats_read_back_and_agree_with_integers_test()
+    local r = rng(4)
+    for i = 1, 3000 do
+        local a, b = r(-1000000, 1000000), r(-1000000, 1000000)
+        assert(a + 0.0 + b == a + b, `case $i`)
+        assert((a + 0.0) * b == a * b, `case $i`)
+        if b ~= 0 then assert((a + 0.0) // b == a // b and (a + 0.0) % b == a % b, `case $i: $a, $b`) end
+        local f = (r() >> 11) * 2.0 ^ r(-1074, 970) * pick(r, { 1, -1 })
+        assert(tonumber(tostring(f)) == f, `case $i: $(f) does not read back`)
+        assert(fromjson(tojson(f)) == f, `case $i: $(f) does not survive JSON`)
+    end
+end
+
+local function random_string(r)
+    local pieces = { "a", "Z", "é", "日", "😀", " ", ",", "\"", "\n", "\\", "0", "%", "\u{D800}", "x" }
+    local out = {}
+    for i = 1, r(0, 12) do out[i] = pick(r, pieces) end
+    return table.concat(out)
+end
+
+-- Strings keep the invariants of character indexing.
+local function string_indexing_invariants_hold_test()
+    local r = rng(5)
+    for i = 1, 3000 do
+        local s = random_string(r)
+        local n = #s
+        local count = 0
+        for _ in utf8.codes(s, true) do count = count + 1 end
+        assert(count == n, `case $i: #s is $n and utf8.codes counts $count for $(string.format("%q", s))`)
+        local a, b = r(0, n + 1), r(0, n + 1)
+        assert(s:sub(1, a) .. s:sub(a + 1) == s, `case $i: split at $a`)
+        if a >= 1 and b >= a then assert(s[a, b] == s:sub(a, b), `case $i: slice $a, $b`) end
+        assert(s:reverse():reverse() == s, `case $i`)
+        assert(vector.tostring(vector.fromstring(s)) == s, `case $i`)
+        assert(#(s .. s) == 2 * n)
+    end
+end
+
+-- A JSON value made of tables, strings, numbers, and booleans round trips.
+local function json_round_trips_generated_values_test()
+    local r = rng(6)
+    local function value(depth)
+        local k = r(1, depth > 3 and 4 or 6)
+        if k == 1 then return r(-100000, 100000) end
+        if k == 2 then return random_string(r) end
+        if k == 3 then return r(0, 1) == 1 end
+        if k == 4 then return r(-1000, 1000) / 8 end
+        if k == 5 then
+            local t = {}
+            for i = 1, r(1, 4) do t[i] = value(depth + 1) end
+            return t
+        end
+        local t = {}
+        for _ = 1, r(1, 4) do t["k" .. r(1, 9)] = value(depth + 1) end
+        return t
+    end
+    for i = 1, 500 do
+        local v = value(0)
+        local text = tojson(v)
+        local back = fromjson(text)
+        assert(same(v, back), `case $i: $text`)
+        assert(tojson(back) == text, `case $i: $text`)
+    end
+end
+
+-- Rows of strings round trip through CSV.
+local function csv_round_trips_generated_rows_test()
+    local r = rng(7)
+    for i = 1, 500 do
+        local rows = {}
+        local width = r(1, 4)
+        for j = 1, r(1, 5) do
+            local row = {}
+            for k = 1, width do row[k] = random_string(r) end
+            rows[j] = row
+        end
+        -- A single empty field makes a blank line, which reads as no row.
+        if width == 1 then
+            for _, row in ipairs(rows) do if row[1] == "" then row[1] = "e" end end
+        end
+        local text = tocsv(rows)
+        assert(same(fromcsv(text), rows), `case $i: $(string.format("%q", text))`)
+    end
+end
+
+-- A query returns the same rows as the loop it stands for.
+local function queries_agree_with_loops_test()
+    local r = rng(8)
+    for i = 1, 300 do
+        local t = {}
+        for j = 1, r(0, 30) do t[j] = { x = r(-5, 5), y = "r" .. r(1, 4), z = j } end
+        local k = r(-5, 5)
+        local got = {}
+        for row in query(@t as p where p.x > k select p.x, p.z order by p.x desc, p.z) do
+            got[#got + 1] = row.x .. ":" .. row.z
+        end
+        local want = {}
+        for _, p in ipairs(t) do if p.x > k then want[#want + 1] = p end end
+        table.sort(want, function(a, b)
+            if a.x ~= b.x then return a.x > b.x end
+            return a.z < b.z
+        end)
+        for j, p in ipairs(want) do want[j] = p.x .. ":" .. p.z end
+        assert(table.concat(got, ",") == table.concat(want, ","), `case $i: $(table.concat(got, ",")) vs $(table.concat(want, ","))`)
+        local counts, n = {}, 0
+        for row in query(@t as p select p.y, count(*) as c group by p.y order by p.y) do
+            counts[row.y] = row.c
+            n = n + row.c
+        end
+        assert(n == #t, `case $i: groups hold $n of $(#t) rows`)
+        for _, p in ipairs(t) do counts[p.y] = counts[p.y] - 1 end
+        for y, c in pairs(counts) do assert(c == 0, `case $i: group $y`) end
+    end
+end
+
+-- Sorting agrees with insertion sort on random arrays, with and without a
+-- comparator.
+local function sort_agrees_with_insertion_sort_test()
+    local r = rng(9)
+    for i = 1, 300 do
+        local a = {}
+        for j = 1, r(0, 60) do a[j] = r(-20, 20) end
+        local b = table.clone(a)
+        table.sort(a)
+        for j = 2, #b do
+            local v, k = b[j], j - 1
+            while k >= 1 and b[k] > v do b[k + 1] = b[k] k = k - 1 end
+            b[k + 1] = v
+        end
+        assert(table.concat(a, ",") == table.concat(b, ","), `case $i`)
+        table.sort(a, function(x, y) return x > y end)
+        for j = 2, #a do assert(a[j - 1] >= a[j], `case $i`) end
+    end
+end

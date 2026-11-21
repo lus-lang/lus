@@ -51,11 +51,19 @@ pub const Out = struct {
     }
 };
 
+/// The buffered standard output of a state. `openAll` creates it with
+/// `prepare`, so a state with its libraries open never allocates here.
 pub fn stdout(g: *Global) *Out {
+    return prepare(g) catch @panic("out of memory");
+}
+
+/// Creates the standard output of a state, or returns the one it has.
+pub fn prepare(g: *Global) error{OutOfMemory}!*Out {
     if (g.ext.get("out.stdout")) |p| return @ptrCast(@alignCast(p));
-    const o = g.gpa.create(Out) catch @panic("out of memory");
+    try g.ext.ensureUnusedCapacity(g.gpa, 1);
+    const o = try g.gpa.create(Out);
     o.* = .{ .file = std.Io.File.stdout() };
-    g.ext.put(g.gpa, "out.stdout", o) catch @panic("out of memory");
+    g.ext.putAssumeCapacity("out.stdout", o);
     return o;
 }
 

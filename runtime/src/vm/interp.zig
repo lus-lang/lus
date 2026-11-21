@@ -422,9 +422,12 @@ fn handleError(l: *Thread, stop: usize) bool {
                 closeTbc(l, level, err) catch {
                     // An error in __close replaces the caught error.
                 };
-                l.stack[fr.base + h.dest] = l.err;
+                // A __close handler pushes frames of its own, which can
+                // move the frame list, so the frame is read again.
+                const here = &l.frames.items[i];
+                l.stack[here.base + h.dest] = l.err;
                 l.err = .nil;
-                fr.pc = h.handler_pc;
+                here.pc = h.handler_pc;
                 return true;
             }
         }

@@ -1,0 +1,195 @@
+-- Runs generated programs under every configuration of the runtime and
+-- reports each crash and each difference between configurations.
+--
+-- Usage: LUS_JIT=off lus run.lus [--count N] [--start SEED] [--jobs J]
+--            [--size S] [--configs a,b,c] [--lus PATH] [--stress PATH]
+--            [--x64 PATH] [--wasm PATH] [--timeout SECONDS] [--out DIR]
+--            [--reduce] [--forever] [--minutes M]
+--
+-- The runner itself runs interpreted, and every program runs in fresh
+-- processes, one per configuration, so a bug of the runtime under test
+-- cannot hide a bug in the generated programs. With --jobs above 1 the
+-- runner starts that many copies of itself, each taking every Jth seed.
+-- Each finding is written to DIR (default tests/diff/findings) as the
+-- program, a report, and with --reduce a reduced program. --forever runs
+-- batches of N until stopped, or for M minutes with --minutes. The exit
+-- status is 1 when anything was found.
+
+global arg, assert, io, ipairs, math, os, package, pairs, pledge, print, require, string, table, tonumber, tostring
+
+pledge("exec", "fs", "env", "load")
+
+local here = arg[0]:match("^(.*)/[^/]*$") or "."
+package.path = here .. "/?.lus;" .. package.path
+local gen = require("gen")
+local lib = require("lib")
+
+local opts = {}
+do
+    local i = 1
+    while arg[i] do
+        local a = arg[i]
+        if a == "--reduce" or a == "--forever" then
+            opts[a:sub(3)] = true
+            i = i + 1
+        elseif a:sub(1, 2) == "--" then
+            opts[a:sub(3)] = arg[i + 1]
+            i = i + 2
+        else
+            i = i + 1
+        end
+    end
+end
+
+local root = here .. "/../.."
+local binaries = {
+    lus = opts.lus or (root .. "/runtime/zig-out/bin/lus"),
+    stress = opts.stress,
+    x64 = opts.x64,
+    wasm = opts.wasm,
+    wasmRunner = here .. "/wasm.mjs",
+}
+local count = tonumber(opts.count or "100")
+local start = tonumber(opts.start or tostring(os.time() % 1000000000))
+local jobs = tonumber(opts.jobs or "4")
+local size = tonumber(opts.size or "8")
+local seconds = tonumber(opts.timeout or "30")
+local outDir = opts.out or (here .. "/findings")
+local configs = lib.select(opts.configs, binaries)
+local deadline = opts.minutes and (os.time() + tonumber(opts.minutes) * 60) or math.huge
+
+local function names(list)
+    local out = {}
+    for i, c in ipairs(list) do out[i] = c.name end
+    return table.concat(out, " ")
+end
+
+-- With several jobs, this copy only starts the others and adds up what
+-- they report on their last line.
+if jobs > 1 and not opts.shard then
+    local pipes = {}
+    for j = 1, jobs do
+        local cmd = {}
+        for k, v in pairs(opts) do
+            if k ~= "jobs" then
+                cmd[#cmd + 1] = v == true and ("--" .. k) or ("--" .. k .. " " .. lib.quote(v))
+            end
+        end
+        cmd[#cmd + 1] = "--start " .. start .. " --shard " .. j .. "/" .. jobs
+        pipes[j] = assert(io.popen("LUS_JIT=off " .. lib.quote(binaries.lus) .. " " .. lib.quote(arg[0]) .. " " .. table.concat(cmd, " ")))
+    end
+    local ran, found, slow = 0, 0, 0
+    for _, p in ipairs(pipes) do
+        for line in p:lines() do
+            local a, b, c = line:match("^SHARD (%d+) (%d+) (%d+)$")
+            if a then
+                ran, found, slow = ran + tonumber(a), found + tonumber(b), slow + tonumber(c)
+            else
+                print(line)
+            end
+        end
+    end
+    print(`$ran programs, $found with findings, $slow slow, configurations: $(names(configs))`)
+    os.exit(found > 0 and 1 or 0)
+end
+
+local shard, shards = 1, 1
+if opts.shard then shard, shards = opts.shard:match("(%d+)/(%d+)") shard, shards = tonumber(shard), tonumber(shards) end
+
+local tmp = lib.tempDir()
+local ran, found, slow = 0, 0, 0
+local seen = {}
+
+local function report(seed, src, results, findings)
+    os.execute("mkdir -p " .. lib.quote(outDir))
+    local base = outDir .. "/seed" .. seed
+    lib.writeFile(base .. ".lus", src)
+    local out = { "seed " .. seed }
+    for _, f in ipairs(findings) do
+        if f.kind == "crash" then
+            out[#out + 1] = `crash in $(f.config): $(f.what)`
+        else
+            out[#out + 1] = `$(f.ref) and $(f.config) differ at line $(f.what.line):`
+            out[#out + 1] = "  " .. f.what.want
+            out[#out + 1] = "  " .. f.what.got
+        end
+    end
+    for _, r in ipairs(results) do
+        out[#out + 1] = `--- $(r.config): status $(r.code)`
+        out[#out + 1] = r.stderr:sub(1, 4000)
+    end
+    lib.writeFile(base .. ".txt", table.concat(out, "\n") .. "\n")
+    return base
+end
+
+local function one(seed)
+    local src = gen.generate(seed, size)
+    local file = tmp .. "/p" .. seed .. ".lus"
+    lib.writeFile(file, src)
+    local results = lib.runAll(file, configs, binaries, seconds, tmp)
+    -- A timeout under load is often the machine and not the program, so a
+    -- configuration that timed out runs once more on its own.
+    local any, every = false, true
+    for _, r in ipairs(results) do
+        if r.timeout then any = true else every = false end
+    end
+    if any and not every then
+        for i, r in ipairs(results) do
+            if r.timeout then results[i] = lib.runAll(file, { configs[i] }, binaries, seconds * 2, tmp)[1] end
+        end
+    end
+    ran = ran + 1
+    local findings = lib.judge(results)
+    if #findings == 0 then return end
+    local f = findings[1]
+    if f.kind == "slow" then
+        slow = slow + 1
+        print(`seed $seed: slow in every configuration`)
+        return
+    end
+    found = found + 1
+    local sig = f.kind == "crash" and (f.kind .. ":" .. f.what) or (f.kind .. ":" .. f.config)
+    local fresh = not seen[sig]
+    seen[sig] = true
+    local summary
+    if f.kind == "crash" then
+        summary = `$(f.config): $(f.what)`
+    else
+        summary = `$(f.ref) vs $(f.config) at line $(f.what.line): $(f.what.want:sub(1, 120)) / $(f.what.got:sub(1, 120))`
+    end
+    print(`seed $seed: $(f.kind) $summary$(fresh and "" or " (seen)")`)
+    local base = report(seed, src, results, findings)
+    if opts.reduce and fresh then
+        local reduce = require("reduce")
+        local test = reduce.predicate({
+            crash = f.kind == "crash" and f.config or nil,
+            crashWhat = f.kind == "crash" and f.what or nil,
+            mismatch = f.kind == "mismatch" and (f.ref .. "," .. f.config) or nil,
+            binaries = binaries,
+            seconds = seconds,
+            dir = tmp,
+        })
+        local small = reduce.reduce(src, test)
+        lib.writeFile(base .. ".min.lus", small)
+        local n = 0
+        for _ in small:gmatch("\n") do n = n + 1 end
+        print(`seed $seed: reduced to $n lines in $base.min.lus`)
+    end
+end
+
+repeat
+    for i = 0, count - 1 do
+        local seed = start + i
+        if (seed - start) % shards == shard - 1 then one(seed) end
+        if os.time() >= deadline then break end
+    end
+    start = start + count
+until not opts.forever or os.time() >= deadline
+
+lib.removeDir(tmp)
+if opts.shard then
+    print(`SHARD $ran $found $slow`)
+else
+    print(`$ran programs, $found with findings, $slow slow, configurations: $(names(configs))`)
+    os.exit(found > 0 and 1 or 0)
+end

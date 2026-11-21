@@ -1,0 +1,259 @@
+-- Shrinks a Lus program while a finding stays.
+--
+-- The reducer reads the program as a tree of lines by their indentation,
+-- which is how `lus fmt` and the generator lay programs out. It deletes
+-- runs of statements with everything nested in them, then replaces block
+-- statements by their bodies, then replaces parenthesized expressions by
+-- small literals, and repeats until no change keeps the finding. The
+-- finding is a crash with the same message in one configuration, or a
+-- difference between two configurations. Each candidate runs in fresh
+-- processes, and the reducer itself runs interpreted.
+--
+-- Usage: LUS_JIT=off lus reduce.lus FILE --crash CONFIG [--out FILE]
+--        LUS_JIT=off lus reduce.lus FILE --mismatch REF,CONFIG [--out FILE]
+-- Options: --lus PATH, --stress PATH, --x64 PATH, --wasm PATH,
+-- --timeout SECONDS.
+
+global arg, assert, io, ipairs, math, os, package, pledge, print, require, string, table, tonumber
+
+pledge("exec", "fs", "env", "load")
+
+local here = arg and arg[0] and arg[0]:match("^(.*)/[^/]*$") or "."
+package.path = here .. "/?.lus;" .. package.path
+local lib = require("lib")
+
+local M = {}
+
+local function trim(s)
+    return (s:match("^%s*(.-)%s*$"))
+end
+
+local function indentOf(line)
+    return #line:match("^%s*")
+end
+
+local function isCloser(line)
+    local t = trim(line)
+    return t:find("^end%f[^%w_]") ~= nil or t:find("^end%)") ~= nil or t:find("^until%f[^%w_]") ~= nil
+        or t:find("^else%f[^%w_]") ~= nil or t:find("^elseif%f[^%w_]") ~= nil or t == "}" or t == "})"
+end
+
+local function isBranch(line)
+    local t = trim(line)
+    return t:find("^else%f[^%w_]") ~= nil or t:find("^elseif%f[^%w_]") ~= nil
+end
+
+-- The index after the last line of the statement at `i`: the line itself,
+-- every line nested deeper below it, and the closing lines at its own
+-- indentation (`else`, `elseif`, and `end`) with what they nest.
+local function extent(lines, i)
+    local ind = indentOf(lines[i])
+    local j = i + 1
+    while true do
+        while j <= #lines and (trim(lines[j]) == "" or indentOf(lines[j]) > ind) do j = j + 1 end
+        if j <= #lines and indentOf(lines[j]) == ind and isCloser(lines[j]) then
+            local branch = isBranch(lines[j])
+            j = j + 1
+            if not branch then break end
+        else
+            break
+        end
+    end
+    return j
+end
+
+local function splitLines(s)
+    local out = {}
+    for line in (s .. "\n"):gmatch("([^\n]*)\n") do out[#out + 1] = line end
+    if out[#out] == "" then out[#out] = nil end
+    return out
+end
+
+local function without(lines, i, j)
+    local out = {}
+    for k = 1, i - 1 do out[#out + 1] = lines[k] end
+    for k = j, #lines do out[#out + 1] = lines[k] end
+    return out
+end
+
+-- The spans of balanced parentheses in a line, longest first, skipping
+-- the insides of string literals.
+local function parenSpans(line)
+    local out, stack = {}, {}
+    local quote = nil
+    local i = 1
+    local n = #line
+    while i <= n do
+        local c = line:sub(i, i)
+        if quote then
+            if c == "\\" then i = i + 1 elseif c == quote then quote = nil end
+        elseif c == "\"" or c == "'" or c == "`" then
+            quote = c
+        elseif c == "(" then
+            stack[#stack + 1] = i
+        elseif c == ")" and #stack > 0 then
+            out[#out + 1] = { stack[#stack], i }
+            stack[#stack] = nil
+        end
+        i = i + 1
+    end
+    table.sort(out, function(x, y) return (x[2] - x[1]) > (y[2] - y[1]) end)
+    return out
+end
+
+function M.reduce(source, interesting, log)
+    log = log or function() end
+    local lines = splitLines(source)
+    local tests = 0
+    local function try(cand)
+        tests = tests + 1
+        if interesting(table.concat(cand, "\n") .. "\n") then return cand end
+        return nil
+    end
+    local changed = true
+    while changed do
+        changed = false
+        -- Delete runs of sibling statements, halving the run length.
+        local chunk = math.max(1, #lines // 2)
+        while chunk >= 1 do
+            local i = 1
+            while i <= #lines do
+                if isCloser(lines[i]) then
+                    i = i + 1
+                else
+                    local j, k = i, 0
+                    local ind = indentOf(lines[i])
+                    while j <= #lines and k < chunk do
+                        if indentOf(lines[j]) < ind or (indentOf(lines[j]) == ind and isCloser(lines[j])) then break end
+                        j = extent(lines, j)
+                        k = k + 1
+                    end
+                    if j == i then
+                        i = i + 1
+                    else
+                        if cand = try(without(lines, i, j)) then
+                            lines = cand
+                            changed = true
+                            log(#lines .. " lines after " .. tests .. " tests")
+                        else
+                            i = chunk > 1 and j or i + 1
+                        end
+                    end
+                end
+            end
+            chunk = chunk // 2
+        end
+        -- Replace a block statement by its body.
+        local i = 1
+        while i <= #lines do
+            local e = extent(lines, i)
+            if e - i >= 2 then
+                local ind = indentOf(lines[i])
+                local body = {}
+                for k = i + 1, e - 1 do
+                    local t = lines[k]
+                    if not (indentOf(t) == ind and isCloser(t)) then
+                        body[#body + 1] = indentOf(t) - ind >= 4 and t:sub(5) or t
+                    end
+                end
+                local cand = {}
+                for k = 1, i - 1 do cand[#cand + 1] = lines[k] end
+                for _, b in ipairs(body) do cand[#cand + 1] = b end
+                for k = e, #lines do cand[#cand + 1] = lines[k] end
+                if try(cand) then
+                    lines = cand
+                    changed = true
+                    log(#lines .. " lines after " .. tests .. " tests")
+                end
+            end
+            i = i + 1
+        end
+        -- Replace parenthesized subexpressions by a small literal.
+        for li = 1, #lines do
+            for _, lit in ipairs({ "0", "1", "nil", "\"\"" }) do
+                local improved = true
+                while improved do
+                    improved = false
+                    local line = lines[li]
+                    for _, span in ipairs(parenSpans(line)) do
+                        local a, b = span[1], span[2]
+                        if b - a >= 3 then
+                            local cand = table.clone(lines)
+                            cand[li] = line:sub(1, a - 1) .. lit .. line:sub(b + 1)
+                            if try(cand) then
+                                lines = cand
+                                improved = true
+                                changed = true
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return table.concat(lines, "\n") .. "\n"
+end
+
+-- An interestingness test for a crash in one configuration or a
+-- difference between two. A timeout counts only while the interpreter
+-- still finishes, or the reducer would keep any infinite loop.
+function M.predicate(o)
+    local n = 0
+    return function(src)
+        n = n + 1
+        local file = o.dir .. "/cand" .. (n % 4) .. ".lus"
+        lib.writeFile(file, src)
+        if o.crash then
+            local cfg = lib.config(o.crash)
+            local list = { cfg }
+            if o.crashWhat == "timeout" then list[2] = lib.CONFIGS[1] end
+            local res = lib.runAll(file, list, o.binaries, o.seconds, o.dir)
+            local c = lib.crashOf(res[1])
+            if c == nil or (o.crashWhat and c ~= o.crashWhat) then return false end
+            if c == "timeout" then return lib.crashOf(res[2]) == nil end
+            return true
+        end
+        local a, b = o.mismatch:match("([^,]+),([^,]+)")
+        local res = lib.runAll(file, { lib.config(a), lib.config(b) }, o.binaries, o.seconds, o.dir)
+        if lib.crashOf(res[1]) or lib.crashOf(res[2]) then return false end
+        return lib.firstDifference(res[1], res[2]) ~= nil
+    end
+end
+
+if arg and arg[0] and arg[0]:find("reduce%.lus$") and not package.loaded["reduce"] then
+    local file = arg[1]
+    local opts = {}
+    for i = 2, #arg, 2 do opts[arg[i]:sub(3)] = arg[i + 1] end
+    local root = here .. "/../.."
+    local binaries = {
+        lus = opts.lus or (root .. "/runtime/zig-out/bin/lus"),
+        stress = opts.stress, x64 = opts.x64, wasm = opts.wasm,
+        wasmRunner = here .. "/wasm.mjs",
+    }
+    local seconds = tonumber(opts.timeout or "10")
+    local dir = lib.tempDir()
+    local source = lib.readFile(file)
+    local crashWhat = nil
+    if opts.crash then
+        local res = lib.runAll(file, { lib.config(opts.crash) }, binaries, seconds, dir)
+        crashWhat = lib.crashOf(res[1])
+        if not crashWhat then
+            print("the program does not crash in " .. opts.crash)
+            os.exit(2)
+        end
+        print("reducing " .. crashWhat)
+    end
+    local test = M.predicate({ crash = opts.crash, crashWhat = crashWhat, mismatch = opts.mismatch, binaries = binaries, seconds = seconds, dir = dir })
+    if not test(source) then
+        print("the finding does not reproduce")
+        os.exit(2)
+    end
+    local small = M.reduce(source, test, function(m) io.stderr:write(m, "\n") end)
+    local out = opts.out or file:gsub("%.lus$", ".min.lus")
+    lib.writeFile(out, small)
+    lib.removeDir(dir)
+    print("wrote " .. out)
+end
+
+return M

@@ -74,11 +74,17 @@ pub const Set = struct {
     fn clone(s: *Set, gpa: Allocator) !*Set {
         const n = try gpa.create(Set);
         n.* = .{ .sealed = s.sealed };
+        // A copy that runs out of memory frees what it built so far.
+        errdefer n.destroy(gpa);
+        try n.entries.ensureTotalCapacity(gpa, s.entries.items.len);
         for (s.entries.items) |e| {
-            var ne: Entry = .{ .name = try gpa.dupe(u8, e.name), .rejected = e.rejected, .unrestricted = e.unrestricted };
-            for (e.values.items) |v| try ne.values.append(gpa, try gpa.dupe(u8, v));
-            for (e.link_values.items) |v| try ne.link_values.append(gpa, try gpa.dupe(u8, v));
-            try n.entries.append(gpa, ne);
+            n.entries.appendAssumeCapacity(.{ .name = &.{}, .rejected = e.rejected, .unrestricted = e.unrestricted });
+            const ne = &n.entries.items[n.entries.items.len - 1];
+            ne.name = try gpa.dupe(u8, e.name);
+            try ne.values.ensureTotalCapacity(gpa, e.values.items.len);
+            for (e.values.items) |v| ne.values.appendAssumeCapacity(try gpa.dupe(u8, v));
+            try ne.link_values.ensureTotalCapacity(gpa, e.link_values.items.len);
+            for (e.link_values.items) |v| ne.link_values.appendAssumeCapacity(try gpa.dupe(u8, v));
         }
         return n;
     }
@@ -105,12 +111,23 @@ const Registry = struct {
     on_request: ?RequestHook = null,
 };
 
+/// The capability registry of a state. `openAll` creates it with
+/// `prepare`, so a state with its libraries open never allocates here.
 fn registry(g: *Global) *Registry {
+    return prepare(g) catch @panic("out of memory");
+}
+
+/// Creates the capability registry of a state, or returns the one it has.
+pub fn prepare(g: *Global) error{OutOfMemory}!*Registry {
     if (g.ext.get("pledge.registry")) |p| return @ptrCast(@alignCast(p));
-    const r = g.gpa.create(Registry) catch @panic("out of memory");
+    try g.ext.ensureUnusedCapacity(g.gpa, 1);
+    const r = try g.gpa.create(Registry);
     r.* = .{};
-    for (builtin_caps) |c| r.caps.append(g.gpa, c) catch @panic("out of memory");
-    g.ext.put(g.gpa, "pledge.registry", r) catch @panic("out of memory");
+    r.caps.appendSlice(g.gpa, &builtin_caps) catch |e| {
+        g.gpa.destroy(r);
+        return e;
+    };
+    g.ext.putAssumeCapacity("pledge.registry", r);
     return r;
 }
 
@@ -129,7 +146,7 @@ pub fn deinit(g: *Global) void {
 
 /// Declares a capability. Extension modules call this once per state.
 pub fn define(g: *Global, cap: Capability) !void {
-    try registry(g).caps.append(g.gpa, cap);
+    try (try prepare(g)).caps.append(g.gpa, cap);
 }
 
 /// Whether a capability named `base` is declared.
@@ -205,9 +222,10 @@ pub fn release(l: *Thread) void {
 /// A sealed copy of the permission set of `l`, for a worker state. The
 /// worker runs with its creator's permissions and can never grant itself
 /// more. Sets are not shared across states, since each state frees its
-/// own.
+/// own. The copy belongs to no state yet, so it is made with the parent
+/// allocator, which `discard` frees it with.
 pub fn snapshot(l: *Thread) Allocator.Error!*anyopaque {
-    const gpa = l.g.gpa;
+    const gpa = l.g.parent_gpa;
     const n = if (setOf(l)) |s| try s.clone(gpa) else blk: {
         const n = try gpa.create(Set);
         n.* = .{};
@@ -217,10 +235,16 @@ pub fn snapshot(l: *Thread) Allocator.Error!*anyopaque {
     return n;
 }
 
-/// Installs a set made by `snapshot` as the permissions of `l`.
-pub fn adopt(l: *Thread, p: *anyopaque) void {
+/// Installs a copy of a set made by `snapshot` as the permissions of `l`,
+/// made with the allocator of `l` so that its bytes count toward that
+/// state, and frees the snapshot with `parent`. On failure the snapshot is
+/// left as it was.
+pub fn adopt(l: *Thread, p: *anyopaque, parent: Allocator) Allocator.Error!void {
+    const s: *Set = @ptrCast(@alignCast(p));
+    const own = try s.clone(l.g.gpa);
+    s.destroy(parent);
     release(l);
-    l.pledges = p;
+    l.pledges = own;
 }
 
 /// Frees a set made by `snapshot` that was never adopted.
@@ -490,8 +514,8 @@ fn canonicalizeLinkWith(gpa: Allocator, path: []const u8, rules: PathRules, reso
 /// first wildcard (or the whole path without one) resolves through its
 /// deepest existing ancestor, so a grant made before its directory exists
 /// stays attached to the right place.
-fn canonicalPattern(g: *Global, raw: []const u8, keep_last: bool) []u8 {
-    return canonicalPatternWith(g.gpa, raw, keep_last, host_rules, HostResolver{ .g = g }) catch @panic("oom");
+fn canonicalPattern(g: *Global, raw: []const u8, keep_last: bool) Allocator.Error![]u8 {
+    return canonicalPatternWith(g.gpa, raw, keep_last, host_rules, HostResolver{ .g = g });
 }
 
 fn canonicalPatternWith(gpa: Allocator, raw: []const u8, keep_last: bool, rules: PathRules, resolver: anytype) Allocator.Error![]u8 {
@@ -684,7 +708,8 @@ fn record(l: *Thread, set: *Set, name: []const u8, val: ?[]const u8, reject: boo
     const g = l.g;
     const gpa = g.gpa;
     const e = set.find(name) orelse blk: {
-        set.entries.append(gpa, .{ .name = gpa.dupe(u8, name) catch return l.raiseMem() }) catch return l.raiseMem();
+        set.entries.ensureUnusedCapacity(gpa, 1) catch return l.raiseMem();
+        set.entries.appendAssumeCapacity(.{ .name = gpa.dupe(u8, name) catch return l.raiseMem() });
         break :blk &set.entries.items[set.entries.items.len - 1];
     };
     if (reject) {
@@ -696,9 +721,25 @@ fn record(l: *Thread, set: *Set, name: []const u8, val: ?[]const u8, reject: boo
     if (val) |v| {
         const cap = findCap(g, split(name)[0]);
         const is_path = cap != null and cap.?.kind == .path;
-        const stored = if (is_path) canonicalPattern(g, v, false) else gpa.dupe(u8, v) catch return l.raiseMem();
-        e.values.append(gpa, stored) catch return l.raiseMem();
-        if (is_path) e.link_values.append(gpa, canonicalPattern(g, v, true)) catch return l.raiseMem();
+        const stored = (if (is_path) canonicalPattern(g, v, false) else gpa.dupe(u8, v)) catch return l.raiseMem();
+        const link: ?[]u8 = if (is_path) canonicalPattern(g, v, true) catch {
+            gpa.free(stored);
+            return l.raiseMem();
+        } else null;
+        // Both lists grow before either changes, so a failure leaves the
+        // grant as it was.
+        e.values.ensureUnusedCapacity(gpa, 1) catch {
+            gpa.free(stored);
+            if (link) |k| gpa.free(k);
+            return l.raiseMem();
+        };
+        if (link != null) e.link_values.ensureUnusedCapacity(gpa, 1) catch {
+            gpa.free(stored);
+            gpa.free(link.?);
+            return l.raiseMem();
+        };
+        e.values.appendAssumeCapacity(stored);
+        if (link) |k| e.link_values.appendAssumeCapacity(k);
     } else e.unrestricted = true;
 }
 
