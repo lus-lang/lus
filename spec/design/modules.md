@@ -161,7 +161,7 @@ The index skips any read or fetch that the command line forbids. When `-P` limit
 
 A _dynamic require_ is a load whose module the index cannot name. These forms are dynamic.
 
-- A call of `require` with any argument other than one string constant, such as `require(name)` or ``require(`plugins.{kind}`)``.
+- A call of `require` with any argument other than one string constant, such as `require(name)` or ``require(`plugins.$kind`)``.
 - Any use of the global `require` other than as the function of a call, such as `local r = require` or `pcall(require, name)`.
 - A call of `load`, `loadfile`, or `dofile`, because the chunk it runs may require anything.
 - A read of a global through a computed key, such as `_G[k]`, `_ENV[k]`, or `rawget(_G, k)`, because the key may be `"require"`.

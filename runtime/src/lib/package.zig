@@ -9,6 +9,7 @@ const ops = @import("../vm/ops.zig");
 const api = @import("../api.zig");
 const aux = @import("auxlib.zig");
 const pledge = @import("../vm/pledge.zig");
+const modtree = @import("../modtree.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -37,6 +38,20 @@ pub const Preinclude = struct {
 pub var preincludes: []const Preinclude = &.{};
 
 const preinclude_key = "_PREINCLUDE";
+
+/// The standard library modules that `package.loaded` holds from the
+/// start, so `require` never searches a file for them.
+pub const builtin_names = [_][]const u8{ "string", "table", "math", "os", "io", "coroutine", "utf8", "debug", "package", "vector", "fs", "network", "time", "worker", "_G" };
+
+/// Whether a searcher before the file searcher answers `name`: a library
+/// of the standard library, a preincluded module, or a module of the
+/// bundle. The index of the require tree skips these names.
+pub fn answeredEarly(name: []const u8) bool {
+    for (builtin_names) |n| if (std.mem.eql(u8, n, name)) return true;
+    for (preincludes) |p| if (std.mem.eql(u8, p.name, name)) return true;
+    if (bundle) |b| if (b.find(name) != null) return true;
+    return false;
+}
 
 /// The bundle of a standalone executable made by `lus build`, or null in
 /// a plain interpreter. The CLI sets it before any state is created and
@@ -79,7 +94,7 @@ pub fn open(l: *Thread) Error!void {
     try aux.setGlobal(l, "require", try withPackage(l, require, "require", pkg));
     // Every library opened so far is registered as loaded.
     const globals = l.g.globals.as(Table);
-    for ([_][]const u8{ "string", "table", "math", "os", "io", "coroutine", "utf8", "debug", "package", "vector", "fs", "network", "time", "worker" }) |name| {
+    for (builtin_names) |name| {
         const v = try aux.getField(l, globals, name);
         if (!v.isNil()) try aux.setField(l, loaded, name, v);
     }
@@ -265,6 +280,18 @@ fn searcherLus(l: *Thread) Error!u32 {
     const file = (try findFile(l, name, "path", &tried)) orelse return aux.retStr(l, tried.items);
     defer l.g.gpa.free(file);
     if (!pledge.allowed(l, "load", null)) return l.raiseFmt("permission \"load\" denied", .{});
+    // A module of the require tree that the index compiled from this very
+    // file loads from its compiled form (`modtree.zig`).
+    if (modtree.lookup(l.g, file, l.g.io)) |e| {
+        const cn = std.fmt.allocPrint(l.g.gpa, "@{s}", .{file}) catch return l.raiseMem();
+        defer l.g.gpa.free(cn);
+        if (e.err) |msg| return l.raiseFmt("error loading module '{s}' from file '{s}':\n\t{s}", .{ name, file, msg });
+        api.load(l, e.chunk.?, cn) catch {
+            return l.raiseFmt("error loading module '{s}' from file '{s}':\n\t{s}", .{ name, file, api.errorMessage(l, l.err) });
+        };
+        try l.push(try l.newStringValue(file));
+        return 2;
+    }
     const src = try @import("base.zig").readFile(l, file);
     defer l.g.gpa.free(src);
     const chunkname = std.fmt.allocPrint(l.g.gpa, "@{s}", .{file}) catch return l.raiseMem();

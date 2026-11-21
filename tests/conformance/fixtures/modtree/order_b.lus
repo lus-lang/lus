@@ -1,0 +1,3 @@
+local a = require("order_a")
+print("B after " .. a.name)
+return {}

@@ -1,0 +1,2 @@
+local a = require("order_a")
+worker.message(a.name)

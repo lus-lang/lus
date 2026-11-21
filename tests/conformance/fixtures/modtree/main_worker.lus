@@ -1,0 +1,4 @@
+local dir = arg[0]:match("^(.*)/[^/]*$")
+pledge("load", "fs:read")
+local w = worker.create(dir .. "/worker_child.lus")
+print("WORKER-" .. worker.receive(w))

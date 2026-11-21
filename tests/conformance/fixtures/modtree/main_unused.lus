@@ -1,0 +1,7 @@
+pledge("load", "fs:read")
+if #arg > 100 then
+    require("broken")
+end
+print("UNUSED-OK")
+local ok, err = catch require("broken")
+print(ok, (err:find("error loading module 'broken'", 1, true)) ~= nil, (err:find("unexpected symbol", 1, true)) ~= nil)
