@@ -117,6 +117,14 @@ fn zoneOf(v: Value) *FlatZone {
     return payload(FlatZone, v.as(Userdata));
 }
 
+/// The zone attached to a zoned value, or nil when it has none. The slot
+/// is a user value, which debug.setuservalue can replace, so anything but
+/// a zone reads as no zone.
+fn attachedZone(l: *Thread, u: *Userdata) Value {
+    const zv = u.userValues()[0];
+    return if (toUserdata(l, zv, .zone) != null) zv else .nil;
+}
+
 fn rangeError(l: *Thread) Error {
     return l.raiseFmt("time value out of range", .{});
 }
@@ -172,7 +180,7 @@ fn pushZonedInZone(l: *Thread, naive: i64, frac: i32, zone: Value) Error!void {
 /// the zone of `src` when it has one and keeping its fixed offset
 /// otherwise.
 fn rebuildZoned(l: *Thread, src: *Userdata, naive: i64, frac: i32) Error!u32 {
-    const zone = src.userValues()[0];
+    const zone = attachedZone(l, src);
     if (zone.isNil()) {
         const off = payload(Zoned, src).offset;
         _ = try pushZoned(l, .{ .sec = try ok(l, i64, tc.subChecked(naive, off)), .nsec = frac }, off);
@@ -701,9 +709,9 @@ fn utcInfo() tc.ZoneInfo {
 
 /// Zone information for a zoned value: its own offset, with the
 /// abbreviation of its zone when it has one.
-fn zonedInfo(u: *Userdata) tc.ZoneInfo {
+fn zonedInfo(l: *Thread, u: *Userdata) tc.ZoneInfo {
     const z = payload(Zoned, u);
-    const zv = u.userValues()[0];
+    const zv = attachedZone(l, u);
     if (!zv.isNil()) {
         const inf = zoneOf(zv).info(z.span.sec);
         if (inf.utoff == z.offset) return inf;
@@ -898,7 +906,7 @@ fn zonedFormat(l: *Thread) Error!u32 {
     const z = payload(Zoned, u);
     const fmt = (try aux.optString(l, 2, iso_local)).?;
     const wall = try ok(l, i64, tc.addChecked(z.span.sec, z.offset));
-    return retFormatted(l, wall, fmt, zonedInfo(u), "");
+    return retFormatted(l, wall, fmt, zonedInfo(l, u), "");
 }
 
 fn zonedIso(l: *Thread) Error!u32 {
@@ -912,7 +920,7 @@ fn zonedIso(l: *Thread) Error!u32 {
     } else {
         tc.formatOffset(l.g.gpa, &suffix_buf, z.offset, true) catch return l.raiseMem();
     }
-    return retFormatted(l, wall, iso_local, zonedInfo(u), suffix_buf.items);
+    return retFormatted(l, wall, iso_local, zonedInfo(l, u), suffix_buf.items);
 }
 
 /// Replaces the named wall clock fields and re-resolves the result
