@@ -102,12 +102,13 @@ The user adds `$LUS_HOME/bin` to `PATH` once. `use` replaces `bin/lus` with an a
 
 ### Release index
 
-The manager learns about releases from the _release index_, a signed JSON document at `https://lus.dev/releases/index.json`. The environment variable `LUS_RELEASE_URL` replaces `https://lus.dev/releases/` for mirrors and tests. The index is a signed document (section 5), signed with the keys of the Lus release process. Its payload has this shape.
+The manager learns about releases from the _release index_, a signed JSON document at `https://lus.dev/releases/index.json`. The environment variable `LUS_RELEASE_URL` replaces `https://lus.dev/releases/` for mirrors and tests. The index is a signed document (section 5), signed with the keys of the Lus release process. It has this shape.
 
 ```json
 {
   "schema": 1,
-  "signed": "2027-02-01T12:00:00Z",
+  "generated": "2027-02-01T12:00:00Z",
+  "key": "lus-release-2027-1",
   "channels": {"stable": "2.0.3", "unstable": "2.1.0-unstable.7"},
   "releases": [
     {
@@ -118,7 +119,8 @@ The manager learns about releases from the _release index_, a signed JSON docume
         "aarch64-macos": {"url": "https://github.com/.../lus-v2.0.3-aarch64-macos.tar.gz", "sha256": "9f2c...", "size": 4194304}
       }
     }
-  ]
+  ],
+  "signature": "<base64>"
 }
 ```
 
@@ -126,8 +128,8 @@ The targets are named `aarch64-macos`, `x86_64-macos`, `aarch64-linux-musl`, `x8
 
 `install` verifies in three steps. It installs nothing unless all three pass.
 
-1. The index must carry a valid signature by a signing key of the Lus release process. Each binary embeds the root key of the release process, which signs the key list at `https://lus.dev/releases/keys.json`, as section 5 describes for atmosphere.
-2. The `signed` time of the index must not be older than the one in `index/seen`. This rejects an attacker who replays an old index to keep a user on a release with a known flaw. After the check, the manager records the new time.
+1. The index must carry a valid signature by a signing key of the Lus release process. Each binary embeds the root key of the release process, which signs the list of signing keys at `https://lus.dev/releases/keys.json`, as section 5 describes for atmosphere.
+2. The `generated` time of the index must not be older than the one in `index/seen`. This rejects an attacker who replays an old index to keep a user on a release with a known flaw. After the check, the manager records the new time.
 3. The SHA-256 digest of the downloaded archive must equal the `sha256` of its asset. Its length must equal `size`.
 
 A new signing key needs only a new key list, which the root key signs. Key rotation therefore never strands an installed release.
@@ -291,80 +293,45 @@ The first release of a package for a stable line fixes its major and minor versi
 
 The client enforces the rule as well. It records the version of the release that a line URL last resolved to. It accepts a later release document for that URL only when its version has the same major and minor version and a patch number at least as high. This also stops an attacker who replays an older signed document to hold a program on a release with a known flaw. A violation is an error that names both versions.
 
-### Detection
-
-The client requests the module URL with the header `Accept: application/vnd.atmos.release+json;v=1, text/plain;q=0.1`. An atmosphere server answers with status 200, the content type `application/vnd.atmos.release+json;v=1`, and a signed release document. Any other content type marks a generic server, whose body is the source of the module. An atmosphere server must send `Vary: Accept`, so a cache in between keeps the two answers apart. A plain request without that header, such as a browser's, receives the source of the main module.
-
-An error from an atmosphere server is a JSON object with the fields `error` and `message`, with status 404 for an unknown package or a package without a release for the line, 410 for a removed package, and 451 for a release withheld for a legal reason. `require` raises an error that quotes the message.
-
-### Signed documents
-
-A _signed document_ carries the exact bytes that were signed, so no canonical form of JSON is needed. Atmosphere release documents, the atmosphere key list, and the Lus release index are all signed documents, so one routine verifies them.
-
-```json
-{
-  "payload": "<base64 of the payload bytes>",
-  "signatures": [{"key": "<key id>", "sig": "<base64 Ed25519 signature of the payload bytes>"}]
-}
-```
-
-A signed document is valid when at least one signature verifies under a signing key that the client trusts and the `signed` time inside the payload falls within that key's period. A client ignores signatures by keys it does not know, so a server may sign with an old key and a new one during a rotation.
-
-The keys form two levels. The binary embeds the public half of the atmosphere _root key_. The root key signs only the _key list_ at `https://HOST/.well-known/atmos-keys.json`, a signed document whose payload lists each signing key with `id`, `public`, `not_before`, and `not_after`, and whose `signed` field dates it. The client caches the newest verified list in `keys/<host>.json`. It fetches the list again when a document names a key it lacks, and it refuses a list older than the cached one. A new signing key therefore needs no release of the runtime.
-
-For a host other than `atmosp.here`, the key list also carries the field `root`, the root public key, and the client pins that key on first contact in `hosts/<host>.json`. A later list signed by another root key is an error that names the file to delete to accept the new key.
-
 ### Release documents
 
-The payload of a release document is JSON with these fields.
+The client requests the module URL. An atmosphere server answers with status 200, the content type `application/vnd.atmos.release+json`, and a release document. Any other content type marks a generic server, whose body is the source of the module. An error from an atmosphere server is a JSON object with the fields `error` and `message`, with status 404 for an unknown package or a package without a release for the line, 410 for a removed package, and 451 for a release withheld for a legal reason. `require` raises an error that quotes the message.
+
+A release document is canonical JSON, which is UTF-8 with keys sorted by byte value and no insignificant whitespace. Its fields are these.
 
 ```json
-{
-  "atmosphere": 1,
-  "url": "https://atmosp.here/2.0/dates.lus",
-  "name": "dates",
-  "version": "1.4.1",
-  "lus": "2.0",
-  "lus_min": "2.0.0",
-  "main": "dates.lus",
-  "signed": "2027-02-01T12:00:00Z",
-  "commit": "9c41...",
-  "bundle": {"url": "/b/3be1....tar.zst", "sha256": "3be1...", "size": 18213},
-  "files": {"dates.lus": "a1f0...", "dates/zones.lus": "77c2..."},
-  "requires": ["https://atmosp.here/2.0/strings.lus"],
-  "permissions": ["fs:read=/usr/share/zoneinfo/*"],
-  "flags": [{"name": "tzdata", "type": "string", "default": null}],
-  "yanked": false,
-  "deprecated": null,
-  "author": {"key": "<base64 Ed25519 public key>", "sig": "<base64 signature>"}
-}
+{"bundle":"https://atmosp.here/b/3be1....tar.zst","commit":"9c41...","deprecated":null,"files":{"dates.lus":"a1f0...","dates/zones.lus":"77c2..."},"flags":[{"default":null,"name":"tzdata","type":"string"}],"key":"atmos-2027-1","lus":"2.0","lus_min":"2.0.0","main":"dates.lus","name":"dates","permissions":["fs:read=/usr/share/zoneinfo/*"],"requires":["https://atmosp.here/2.0/strings.lus"],"sha256":"3be1...","signature":"<base64>","signed":"2027-02-01T12:00:00Z","size":18213,"version":"1.4.1","yanked":false}
 ```
 
-- `url` must equal the normalized URL the client requested.
 - `name`, `version`, and `main` name the package, its version, and the path of its main module in the bundle.
 - `lus` is the line the release runs on. `lus_min` is the oldest Lus release of that line it runs on.
-- `bundle` locates the bundle and fixes its digest and length. Its URL is absolute or relative to the module URL, and its host must equal the module's host. `files` maps each path in the bundle to the SHA-256 digest of that file.
+- `bundle`, `sha256`, and `size` locate the bundle and fix its content. `files` maps each path in the bundle to the SHA-256 digest of that file.
 - `requires` lists the atmosphere URLs that the package requires, so the client prefetches them before it unpacks the bundle.
 - `permissions` and `flags` copy the package header (section 6).
 - `yanked` is `true` for a release that its author withdrew. A line URL never resolves to one. A pinned URL still loads it, with a warning. `deprecated` is a message, or `null`. `require` prints it once per run.
-- `author` is optional. When present, `author.sig` signs the bytes of the line `atmosphere-bundle 1 URL VERSION SHA256`, with single spaces, where `SHA256` is the hexadecimal digest of the bundle.
+- `key` names the signing key, `signed` is the time of the signature, and `signature` is the signature.
 
-A client ignores fields it does not know, so a later protocol version may add fields.
+### Signatures
+
+A _signed document_ is canonical JSON with a `key` field and a `signature` field. Atmosphere release documents and the Lus release index are both signed documents, so one routine verifies both. The signature is the Ed25519 signature, in base64, of the canonical JSON of the document without its `signature` field. The client verifies it over the bytes it received, after removing the top-level `signature` member and the comma before it. In canonical JSON those bytes are exactly what the server signed, so the client never serializes JSON to verify.
+
+The keys form two levels. The binary embeds the public half of the atmosphere _root key_. The root key signs only the list of _signing keys_ at `https://HOST/.well-known/atmos-keys.json`, a signed document whose `keys` field lists each key with `id`, `public`, `not_before`, and `not_after`. A release document is valid when the root key signed the list, the list holds the key that `key` names, and `signed` falls within that key's period. The client caches the newest verified list in `keys/<host>.json` and fetches the list again when a document names a key it lacks.
+
+For a host other than `atmosp.here`, the client pins the root key on first contact in `hosts/<host>.json`. The key list of such a host carries its root public key in the field `root`. A later list signed by another root key is an error that names the file to delete to accept the new key.
 
 ### Checks
 
 The client loads an atmosphere package only after every check below passes. A failed check raises an error at the `require` and leaves the cache as it was.
 
-1. The release document is a valid signed document under the host's keys, and `url` matches.
+1. The signature verifies under a signing key that the root key vouches for.
 2. The Lus version check: the major version in `lus` equals the major version of the running release, the minor version in `lus` is at most the minor version of the running release, and the running release is at least `lus_min`. A package for `2.1` fails on Lus 2.0 with the message `https://atmosp.here/2.1/dates.lus needs Lus 2.1, this is Lus 2.0.3`. The client decides from the document alone and never from the line in the URL.
 3. For a line URL, the patch rule holds.
-4. The author check. If the first release document that the client accepted for a URL carried `author`, the client pinned that key. Every later document for the URL must then carry an `author` signature by the pinned key. A document may carry `author.rotation`, a signature by the pinned key of the line `atmosphere-rotate 1 URL NEWKEY`, which moves the pin to the new key. A URL whose first document had no `author` needs none. Authors who publish with plain git sign their commits and tags, which the server verifies, so the registry signature covers their releases.
-5. The bundle's length and SHA-256 digest match `bundle`.
-6. After unpacking, the bundle holds exactly the paths of `files`, and each file has its digest.
+4. The bundle's length and SHA-256 digest match `size` and `sha256`.
+5. After unpacking, the bundle holds exactly the paths of `files`, and each file has its digest.
 
 ### Bundles
 
-A bundle is a tar archive in the POSIX ustar format, compressed with Zstandard, at an address that its digest names, such as `https://atmosp.here/b/SHA256.tar.zst`. It holds source files only, so each chunk compiles with the build flags of the program. It accepts only regular files and directories. It rejects an archive with a link, a device, an absolute path, a `..` segment, a path with a character outside `A-Z a-z 0-9 . _ - /`, more than 10000 entries, or more than 64 MiB unpacked. The client unpacks into a temporary directory and renames it into `bundles/<sha256>/` once complete, so a bundle in the cache is always whole.
+A bundle is a tar archive in the POSIX ustar format, compressed with Zstandard, at an address that its digest names, such as `https://atmosp.here/b/SHA256.tar.zst`. It holds source files only, so each chunk compiles with the build flags of the program. The client follows redirects to `https` hosts only. It accepts only regular files and directories. It rejects an archive with a link, a device, an absolute path, a `..` segment, a path with a character outside `A-Z a-z 0-9 . _ - /`, more than 10000 entries, or more than 64 MiB unpacked. The client unpacks into a temporary directory and renames it into `bundles/<sha256>/` once complete, so a bundle in the cache is always whole.
 
 ## 6. Package metadata
 
