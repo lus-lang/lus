@@ -80,56 +80,65 @@ git push origin main 2.0
 
 ## Signing
 
-### Author signatures
+Three signatures protect a release. The author signs the git commit or tag. Atmosphere signs the release document. The author may also sign the bundle.
+
+### Git signatures
 
 An author registers public keys with their account: SSH keys of type `ssh-ed25519`, or OpenPGP keys. Git signs commits and tags with either kind. For each push, the server writes the keys of the authors of the package to an allowed signers file and a temporary keyring, then runs `git verify-commit` or `git verify-tag` for each ref it publishes. A signature by any other key, by a revoked key, or by a key registered after the signature was made refuses the ref.
 
 A commit that a web interface creates, such as a merge on GitHub, carries the signature of that service. Its key belongs to no author, so such a commit is refused as the tip of `main`. The author publishes by pushing a signed commit on top of it, which `atmos publish` does.
 
-### Atmosphere signatures
+### Signed envelopes
 
-Atmosphere signs every release document with Ed25519. The runtime embeds the public half of the atmosphere _root key_. The root key signs only the list of _signing keys_ at `https://atmosp.here/.well-known/atmos-keys.json`, a signed document whose `keys` field lists each key with `id`, `public`, `not_before`, and `not_after`. A release document names the signing key that signed it in `key` and the time of signing in `signed`. The runtime accepts a signature when the root key signed the list, the list holds that key, and `signed` falls within the key's period.
+A _signed envelope_ is a JSON object with two fields. `payload` holds the base64 of the signed bytes. `signatures` is a list of objects, each with `key`, the identifier of a signing key, and `sig`, the base64 of an Ed25519 signature over the payload bytes. The runtime verifies the bytes it received, so the payload needs no canonical form. Release documents and the key list are signed envelopes.
+
+### Registry signatures
+
+The runtime embeds the public half of the atmosphere _root key_. The root key signs only the list of _signing keys_ at `https://atmosp.here/.well-known/atmos-keys.json`. Its payload has a `keys` field that lists each key with `id`, `public`, `not_before`, and `not_after`, and a `signed` field with the time of signing. The runtime refuses a key list older than the one in its cache. A release document records the time of signing in `signed`. The runtime accepts it when the root key signed the list, the list holds the key that signed the document, and `signed` falls within the key's period.
 
 Another server that implements this protocol publishes its root public key in the `root` field of its key list. The runtime pins that key the first time it contacts the host, so a private registry needs no release of Lus.
 
-The split lets atmosphere replace a signing key without a release of the runtime. The root key stays offline. It signs a new key list only when a signing key changes.
+The split lets atmosphere replace a signing key without a release of the runtime, which matters because version 1 of the protocol is frozen with Lus 2.0. The root key stays offline. It signs a new key list only when a signing key changes.
+
+### Bundle signatures
+
+The optional field `author` of a release document holds an Ed25519 public key of the author and its signature over the line `atmosphere-bundle 1 URL VERSION SHA256`. `atmos publish` computes the bundle exactly as the server does and adds this signature when the author has an Ed25519 key. A release published with git alone has no `author` field, since only `atmos` can compute the bundle before the push. If the first release document that the runtime accepted for a URL had an `author` field, the runtime pins that key. Every later document for the URL must then be signed by it, or carry `author.rotation`, a signature by the pinned key that names the new one. A release signed by another key then fails even when the registry signed its document.
 
 ## Release documents and bundles
 
-A _release document_ describes one release. A _bundle_ holds its files. The runtime fetches the release document first, verifies it, and then fetches the bundle that it names.
+A _release document_ describes one release. A _bundle_ holds its files. The runtime fetches the release document first, verifies it, and then fetches the bundle that it names. `spec/design/modules.md` section 5 is the runtime half of this protocol.
 
 ### Release documents
 
-A request for `https://atmosp.here/LINE/NAME.lus` or `https://atmosp.here/LINE/NAME@VERSION.lus` returns status 200 with the content type `application/vnd.atmos.release+json`. The body is canonical JSON: keys sorted by byte value, no insignificant whitespace, and UTF-8. The runtime verifies the signature over the bytes it received after it removes the `signature` member and the comma before it, so the server must emit exactly the canonical bytes it signed. Sorting never puts `signature` first, because `bundle` always precedes it. Its fields are the following.
+The runtime requests `https://atmosp.here/LINE/NAME.lus` or `https://atmosp.here/LINE/NAME@VERSION.lus` with the header `Accept: application/vnd.atmos.release+json;v=1, text/plain;q=0.1`. The server answers with that content type and a signed envelope whose payload is the release document. Every answer carries `Vary: Accept`. A request without that `Accept` header receives the source of the main module as `text/plain`, so a browser shows the code. The fields of the release document are the following. The runtime ignores fields it does not know.
 
 | Field | Value |
 | --- | --- |
+| `atmosphere` | The protocol version, `1`. |
+| `url` | The address that was requested. It must equal the URL that the runtime requested. |
 | `name` | The package name. |
 | `version` | The package version. |
 | `lus` | The line the release runs on, such as `"2.0"`. |
 | `lus_min` | The oldest Lus release that the release runs on, such as `"2.0.0"`. |
 | `main` | The path of the main module inside the bundle. |
-| `bundle` | The URL of the bundle. |
-| `sha256` | The SHA-256 of the bundle, in lowercase hexadecimal. |
-| `size` | The size of the bundle in bytes. |
+| `signed` | The time of signing, in RFC 3339 form in UTC, such as `"2027-02-01T12:00:00Z"`. |
+| `commit` | The git commit of the release. |
+| `bundle` | An object with `url`, `sha256`, and `size`: the address of the bundle on the same host, its SHA-256 in lowercase hexadecimal, and its size in bytes. |
 | `files` | A table from each path in the bundle to the SHA-256 of that file. |
+| `requires` | The atmosphere URLs that the package requires. |
 | `permissions` | The permissions that the package declares, as `pledge` strings. |
 | `flags` | The build flags that the package declares, each with `name`, `type`, and `default`. |
-| `requires` | The atmosphere URLs that the package requires. |
-| `commit` | The git commit of the release. |
 | `yanked` | `true` for a yanked release, otherwise `false`. |
 | `deprecated` | The deprecation message, or `null`. |
-| `key` | The identifier of the signing key. |
-| `signed` | The time of signing, in RFC 3339 form in UTC, such as `"2027-02-01T12:00:00Z"`. |
-| `signature` | The Ed25519 signature, in base64, of the canonical JSON of the document without its `signature` field. |
+| `author` | The optional [bundle signature](#bundle-signatures). |
 
-The document for a line address may change with every release, so it is served with `Cache-Control: max-age=300`. The document for a pinned address is served with `Cache-Control: immutable` apart from its `yanked` and `deprecated` fields, which the runtime reads again when it revalidates.
+The document for a line address may change with every release, so it is served with `Cache-Control: max-age=300`. The document for a pinned address never changes apart from its `yanked` and `deprecated` fields, which the runtime reads again when it revalidates.
 
 The runtime decides compatibility from the document alone. The line in the URL selects which document the server returns. The runtime never trusts it. The runtime accepts the document when its own major version equals the major version in `lus`, its own minor version is at least the minor version in `lus`, and its own version is at least `lus_min`. Otherwise `require` raises an error that names both versions. A package for `2.0` therefore runs on Lus 2.1. A package for `2.1` fails on Lus 2.0. Whether a package for `2.0` may run on Lus 2.1 is a question for the user, recorded in [Questions for review](#questions-for-review).
 
 ### Bundles
 
-A bundle is a ustar archive compressed with `vector.archive.zstd`, served at `https://atmosp.here/b/SHA256.tar.zst`. Its address is its hash, so a bundle never changes and every cache may keep it forever. It holds the package's `.lus` files except test files, together with `LICENSE`, `README.md`, and `AGENTS.md` when they exist. Every path is relative to the root of the repository. A push whose bundle would break a limit of the runtime, such as a path with a character outside `A-Z a-z 0-9 . _ - /` or more than 10000 entries, is refused.
+A bundle is a ustar archive compressed with `vector.archive.zstd`, served at `https://atmosp.here/b/SHA256.tar.zst`. Its address is its hash, so a bundle never changes and every cache may keep it forever. The runtime fetches bundles only from the host of the module. It holds the package's `.lus` files except test files, together with `LICENSE`, `README.md`, and `AGENTS.md` when they exist. Every path is relative to the root of the repository. A push whose bundle would break a limit of the runtime, such as a path with a character outside `A-Z a-z 0-9 . _ - /` or more than 10000 entries, is refused.
 
 A package keeps its other modules in a directory named after it, such as `dates/zones.lus`. Inside the bundle, `require("dates.zones")` resolves against the root of the bundle, so the same name works in the package's own repository.
 
@@ -195,11 +204,12 @@ A package declares its permissions with `@permission`. The analysis reads the sy
 | `permission-undeclared` | error | A call needs a permission that no `@permission` covers. |
 | `permission-unused` | warning | A declared permission covers no call. |
 | `package-restricts` | error | A package calls `pledge` with `seal` or with a rejection such as `~exec`. |
-| `package-grants` | warning | A package calls `pledge` to grant a permission. |
+| `package-pledge` | warning | A module with a package header calls `pledge` at its top level. `lus check` reports it. |
 | `package-load` | warning | A package calls `load` or `require` with a name that is not a literal string, so its permissions cannot be analyzed. |
-| `flag-undeclared` | error | A package reads a field of `flags` that no `@flag` declares. |
+| `package-flag` | error | A package reads a field of `flags` that no `@flag` declares. `lus check` reports it. |
+| `package-header` | error | The package header lacks a required annotation. `lus check` reports it. |
 
-Restricting permissions is the job of the main program. A program grants the permissions that its dependencies declare, loads them, and then seals, as in `pledge("fs:read=/usr/share/zoneinfo/*", "seal")` after its last `require`. A package that seals or rejects permits nothing more to the program that loads it, so the program loses permissions that it may still need. The failure then appears far from its cause. A package that grants itself a permission defeats the program's choice in the same way, which is why `package-grants` is reported. The push is refused when the granted permission is not declared.
+Restricting permissions is the job of the main program. A program grants the permissions that its dependencies declare, loads them, and then seals, as in `pledge("fs:read=/usr/share/zoneinfo/*", "seal")` after its last `require`. A package that seals or rejects permits nothing more to the program that loads it, so the program loses permissions that it may still need. The failure then appears far from its cause. A package that grants itself a permission defeats the program's choice in the same way, which is why `package-pledge` is reported. The push is refused when the granted permission is not declared.
 
 The package page shows the declared permissions of the package and, separately, the union of the permissions of all its dependencies. A user sees what a dependency asks for before adding it.
 
@@ -272,9 +282,9 @@ The server keeps its state in one SQLite database. Its tables are `accounts`, `k
 
 The first deployment stores git repositories and bundles on GitHub, so the server needs no durable storage apart from its SQLite database.
 
-Each package has a repository `lus-lang/atmos-NAME` on GitHub. Only atmosphere writes to it, with a deploy credential of the `lus-lang` organization. A push to `git.atmosp.here` lands in a temporary bare repository that the server fetches from the GitHub repository first. The `pre-receive` hook validates it as usual. The `post-receive` hook pushes the accepted refs to GitHub, uploads each bundle as an asset of a GitHub release named after the version, and deletes the temporary repository. A clone of `git.atmosp.here/2.0/NAME.git` and a fetch of `/b/SHA256.tar.zst` receive a redirect to GitHub. The runtime follows a redirect of a bundle to any `https` host.
+Each package has a repository `lus-lang/atmos-NAME` on GitHub. Only atmosphere writes to it, with a deploy credential of the `lus-lang` organization. A push to `git.atmosp.here` lands in a temporary bare repository that the server fetches from the GitHub repository first. The `pre-receive` hook validates it as usual. The `post-receive` hook pushes the accepted refs to GitHub, uploads each bundle as an asset of a GitHub release named after the version, and deletes the temporary repository. A clone of `git.atmosp.here/2.0/NAME.git` receives a redirect to GitHub. A request for `/b/SHA256.tar.zst` is answered by the server, which fetches the asset from GitHub once and keeps it in a local cache, because the runtime fetches bundles only from the host of the module.
 
-The release documents, the documentation, and every other part of the server stay on atmosphere, so the signature that the runtime verifies comes from atmosphere. A bundle that GitHub serves is verified by its hash, so the redirect requires no trust in GitHub. When atmosphere gains its own storage, the server copies each repository and bundle from GitHub and stops redirecting. No address changes.
+The release documents, the documentation, and every other part of the server stay on atmosphere, so the signature that the runtime verifies comes from atmosphere. The server and the runtime both check the hash of every bundle, so GitHub never needs to be trusted. When atmosphere gains its own storage, the server copies each repository and bundle from GitHub and stops redirecting. No address changes.
 
 ## The `atmos` command
 
@@ -363,7 +373,7 @@ This design needs the following from the runtime and the standard library.
 | Metadata lives in a doc comment header of the main module. | The user chose it over a manifest file. One text serves `lus doc`, the registry, and the reader. |
 | The server runs the git binaries for the wire protocol. | The user chose it over implementing git in Lus. The Lus code handles accounts, validation, documentation, and bundles. |
 | Library versions are pegged to Lus lines, with patch releases only within a line. | The user chose Debian's model. A program on a line never sees a change of interface. |
-| Release documents are signed. Bundles are verified by hash. | One signature covers every file. Bundles may therefore come from any host, including GitHub during the first deployment. |
+| Release documents are signed envelopes. Bundles are verified by hash. | One signature covers every file. The envelope signs the exact bytes, so no canonical form of JSON is needed. Bundles may be stored anywhere, including GitHub during the first deployment. |
 | A root key signs the signing keys. | A signing key can change without a runtime release. |
 | Bundles hold source code. | Build flags fold dead branches in package code. One bundle serves every runtime of the line. |
 | Packages declare permissions and never restrict them. | The main program grants, loads, and then seals, so it controls its own permissions. |
