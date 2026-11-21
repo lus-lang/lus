@@ -221,7 +221,7 @@ pos = { x = 5 }    -- only updates x
 print(pos.x, pos.y)  --> 5  0
 ```
 
-The set of fields is fixed when the code is compiled. An overwrite that names a field the group lacks, such as `pos = { z = 1 }`, fails with `'z' is not a field of group 'pos'`. A new group declaration may take another group as its initializer, which copies the current field values. A field initializer is any expression, including a [do expression](#do-expressions):
+The set of fields is fixed when the code is compiled. An overwrite that names a field the group lacks, such as `pos = { z = 1 }`, fails with `'z' is not a field of group 'pos'`. An overwrite may also take another group, as in `pos = start`, which assigns each field of `start` to the field of `pos` with the same name. A new group declaration may take another group as its initializer, which copies the current field values. A field initializer is any expression, including a [do expression](#do-expressions):
 
 ```lus
 local a <group> = {

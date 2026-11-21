@@ -2637,6 +2637,9 @@ fn groupOverwrite(fs: *FuncState, target: *ast.Expr, values: []*ast.Expr, line: 
     var rv: ExpDesc = .{};
     try singleVarAux(fs, gname, &rv, true);
     const group = fs.c.actvars.items[@intCast(rv.aux)].group.?;
+    if (values.len == 1 and values[0].kind == .name) {
+        if (try groupSource(fs, values[0].kind.name.text)) |src| return groupAssign(fs, group, gname, src, line);
+    }
     if (values.len != 1 or values[0].kind != .table) return fs.c.err(line, "group can only be assigned a constructor or another group", .{});
     for (values[0].kind.table) |f| {
         const nf = switch (f.kind) {
@@ -2653,6 +2656,40 @@ fn groupOverwrite(fs: *FuncState, target: *ast.Expr, values: []*ast.Expr, line: 
                 try groupField(fs, vabs, &fv);
                 var ve: ExpDesc = .{};
                 try expr(fs, nf.value, &ve);
+                try storeVar(fs, &fv, &ve);
+            },
+        }
+    }
+}
+
+/// The group that `name` refers to, or null when it names something else.
+fn groupSource(fs: *FuncState, name: []const u8) Error!?*Group {
+    var rv: ExpDesc = .{};
+    try singleVarAux(fs, name, &rv, true);
+    if (!(rv.kind == .void_ and rv.info == -3)) return null;
+    return fs.c.actvars.items[@intCast(rv.aux)].group.?;
+}
+
+/// `g = src` with another group: every field of `src` is assigned to the
+/// field of `g` with the same name, as the constructor that lists them
+/// would assign it.
+fn groupAssign(fs: *FuncState, group: *Group, gname: []const u8, src: *Group, line: u32) Error!void {
+    var it = src.fields.iterator();
+    while (it.next()) |entry| {
+        const svabs = switch (entry.value_ptr.*) {
+            .sub => return fs.c.err(line, "cannot overwrite subgroups", .{}),
+            .field => |v| v,
+        };
+        const m = group.fields.get(entry.key_ptr.*) orelse return fs.c.err(line, "'{s}' is not a field of group '{s}'", .{ entry.key_ptr.*, gname });
+        switch (m) {
+            .sub => return fs.c.err(line, "cannot overwrite subgroups", .{}),
+            .field => |vabs| {
+                if (fs.c.actvars.items[vabs].readonly) return fs.c.err(line, "attempt to assign to const variable '{s}'", .{entry.key_ptr.*});
+                if (vabs == svabs) continue;
+                var fv: ExpDesc = .{};
+                try groupField(fs, vabs, &fv);
+                var ve: ExpDesc = .{};
+                try groupField(fs, svabs, &ve);
                 try storeVar(fs, &fv, &ve);
             },
         }
