@@ -533,6 +533,9 @@ fn parseFormat(l: *Thread, s: []const u8, fmt: []const u8) Error!u32 {
             c.i += 1;
         }
     }
+    // The pattern must account for the whole text, as an ISO 8601 parse
+    // does.
+    if (c.i < s.len) return l.raiseFmt("trailing characters in '{s}'", .{s});
     if (mo < 1 or mo > 12 or d < 1 or d > 31) return mismatch(l, s, fmt);
     const naive = try ok(l, i64, tc.civilSeconds(y, mo, d, h, mi, sec));
     return pushParsed(l, naive, 0, offset);

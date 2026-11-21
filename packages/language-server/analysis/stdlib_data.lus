@@ -9147,7 +9147,7 @@ print(p:iso())                                  --> 2026-07-02T09:15:00-04:00
 print(catch time.parse("2026-13-01"))           --> false  ...: ISO 8601 date out of range in '2026-13-01'
 ```
 
-With a `format`, text that continues after the end of the pattern still parses, and the rest is ignored, so `time.parse("2026-07-02x", "%Y-%m-%d")` returns midnight of that day. A `%z` that reads `Z` returns an instant. `instant:iso()` and `zoned:iso()` write the ISO 8601 form that this function reads.]],
+With a `format`, the pattern must account for the whole text, so `time.parse("2026-07-02x", "%Y-%m-%d")` raises `trailing characters in '2026-07-02x'`. A `%z` that reads `Z` returns an instant. `instant:iso()` and `zoned:iso()` write the ISO 8601 form that this function reads.]],
     kind = "function",
     module = "time",
     name = "time.parse",

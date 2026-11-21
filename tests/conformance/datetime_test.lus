@@ -947,3 +947,14 @@ local function gaps_move_forward_and_repeats_take_the_earlier_instant_test()
     assert(half:iso() == "2026-10-04T02:45:00+11:00", half:iso())
     assert(gap:with({ minute = 0 }):iso() == "2026-03-08T03:00:00-04:00")
 end
+
+-- ============================================================================
+-- a pattern parse accounts for the whole text
+-- ============================================================================
+
+local function a_pattern_parse_rejects_trailing_text_test()
+    assert(time.parse("2026-07-02", "%Y-%m-%d"):iso() == "2026-07-02T00:00:00Z")
+    local ok, e = catch time.parse("2026-07-02x", "%Y-%m-%d")
+    assert(not ok and e:find("trailing characters in '2026-07-02x'", 1, true), e)
+    assert(time.parse("2026-07-02  ", "%Y-%m-%d "):iso() == "2026-07-02T00:00:00Z")
+end
