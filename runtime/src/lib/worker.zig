@@ -388,17 +388,14 @@ const Domain = struct {
         d.ev_mutex.unlock(d.io);
     }
 
-    /// Makes every later event of the domain wake the scheduler of `g`,
-    /// the state that owns the domain. Returns false when the system
-    /// gives the scheduler no wake source, and waits then sleep on the
-    /// condition.
-    fn wakes(d: *Domain, g: *Global) bool {
-        if (d.waker != null) return true;
-        if (!sched.enableNotify(g)) return false;
+    /// Makes every later event of the domain wake the scheduler of the
+    /// state of `l`, which owns the domain.
+    fn wakes(d: *Domain, l: *Thread) Error!void {
+        if (d.waker != null) return;
+        try enableNotify(l, "worker.receive");
         d.ev_mutex.lockUncancelable(d.io);
-        d.waker = g;
+        d.waker = l.g;
         d.ev_mutex.unlock(d.io);
-        return true;
     }
 
     fn currentEpoch(d: *Domain) u64 {
@@ -671,14 +668,23 @@ fn message(l: *Thread) Error!u32 {
     return 0;
 }
 
+/// Gives the scheduler of the state of `l` a wake source, so another
+/// thread can wake it. A wait that other coroutines share must never
+/// sleep on a condition, since the event it waits for may need one of
+/// those coroutines to run first. A system that cannot open the source,
+/// for lack of memory or descriptors, therefore raises an error.
+fn enableNotify(l: *Thread, what: []const u8) Error!void {
+    if (!sched.enableNotify(l.g)) return l.raiseFmt("{s}: cannot wait while detached coroutines run (no wake source: out of memory or descriptors)", .{what});
+}
+
 /// True when a wait for the inbox of `w` goes through the scheduler of
-/// its state `g`: detached coroutines exist, and the system gives the
-/// scheduler a wake source. Every later change of the inbox then wakes
-/// that scheduler.
-fn inboxWakes(w: *Worker, g: *Global) bool {
+/// the state of `l`: detached coroutines exist. Every later change of the
+/// inbox then wakes that scheduler.
+fn inboxWakes(w: *Worker, l: *Thread) Error!bool {
+    const g = l.g;
     if (!sched.active(g)) return false;
     if (w.waker != null) return true;
-    if (!sched.enableNotify(g)) return false;
+    try enableNotify(l, "worker.peek");
     w.in_mutex.lockUncancelable(g.io);
     w.waker = g;
     w.in_mutex.unlock(g.io);
@@ -691,7 +697,7 @@ fn peek(l: *Thread) Error!u32 {
     const w = selfOf(l.g) orelse return l.raiseFmt("worker.peek called outside worker context", .{});
     const io = l.g.io;
     while (true) {
-        const scheduled = inboxWakes(w, l.g);
+        const scheduled = try inboxWakes(w, l);
         w.in_mutex.lockUncancelable(io);
         if (!scheduled) {
             while (w.inbox.head == null and !w.shutdown) w.in_cond.waitUncancelable(io, &w.in_mutex);
@@ -863,7 +869,8 @@ fn receive(l: *Thread) Error!u32 {
     while (true) {
         // The outboxes are read after this, so an event that follows the
         // reading wakes the scheduler.
-        const scheduled = sched.active(l.g) and d.wakes(l.g);
+        const scheduled = sched.active(l.g);
+        if (scheduled) try d.wakes(l);
         const seen = d.currentEpoch();
         var all_dead = true;
         i = 1;
