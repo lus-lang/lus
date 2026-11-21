@@ -84,6 +84,9 @@ const Ctx = struct {
     aggs: std.ArrayList(Agg) = .empty,
     clause: Clause = .where,
     in_agg: bool = false,
+    /// The projections, once `select` is lowered, so a bare name in
+    /// `having` can name one of them.
+    items: []const Item = &.{},
 
     fn err(c: *Ctx, line: u32, comptime fmt: []const u8, args: anytype) Error {
         return c.fs.c.err(line, fmt, args);
@@ -203,6 +206,13 @@ const Ctx = struct {
                 if (c.clause == .order and chain.len == 1) {
                     // A bare name in 'order by' names a projection field.
                     return c.newNode(line, .{ .nameref = head });
+                }
+                if (c.clause == .having and chain.len == 1) {
+                    // A bare name in 'having' that names a projection
+                    // stands for the expression of that projection.
+                    for (c.items) |it| {
+                        if (it.name) |n| if (std.mem.eql(u8, n, head)) return it.node;
+                    }
                 }
                 const idx: u32 = @intCast(c.params.items.len);
                 try c.params.append(c.arena, try c.chainExpr(line, chain));
@@ -646,6 +656,7 @@ pub fn queryExpr(fs: *FS, q: *ast.Query, v: *Exp) Error!void {
     var having: ?*Node = null;
     if (q.having) |h| {
         c.clause = .having;
+        c.items = items.items;
         having = try c.lower(h);
     }
     var order: std.ArrayList(*Node) = .empty;

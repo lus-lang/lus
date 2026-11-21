@@ -1720,3 +1720,21 @@ local function a_wide_where_over_sqlite_matches_the_plain_table_test()
         end
     end
 end
+
+-- a bare name in 'having' stands for the projection it names
+local function having_reads_a_projection_alias_test()
+    local books = {
+        { author = "a", pages = 500 }, { author = "a", pages = 400 }, { author = "b", pages = 100 },
+    }
+    local rows = collect(@books as b select b.author, sum(b.pages) as pages group by b.author having pages > 800)
+    assert(#rows == 1 and rows[1].author == "a" and rows[1].pages == 900)
+end
+
+-- the SQLite provider reads a projection alias in 'having' the same way
+local function having_reads_a_projection_alias_through_sqlite_test()
+    local db <close> = io.sqlite(":memory:")
+    db:exec("CREATE TABLE t (author TEXT, pages INTEGER)")
+    db:exec("INSERT INTO t VALUES ('a', 500), ('a', 400), ('b', 100)")
+    local rows = collect(@db.t as b select b.author, sum(b.pages) as pages group by b.author having pages > 800)
+    assert(#rows == 1 and rows[1].author == "a" and rows[1].pages == 900)
+end

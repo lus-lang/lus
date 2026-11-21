@@ -1329,7 +1329,7 @@ for row in query(big) do
 end
 ```
 
-The aggregates are `count`, `sum`, `avg`, `min`, and `max`. `count(*)` counts rows, and `count(expr)` counts the rows where `expr` is not `nil`. In a grouped query every projection must be an aggregate or a group key, so the result is the same with every provider. An `order by` item is an expression with an optional `asc` or `desc`, and the default is ascending. A bare name in `order by` refers to a projection alias, so the query below orders by the computed `total`:
+The aggregates are `count`, `sum`, `avg`, `min`, and `max`. `count(*)` counts rows, and `count(expr)` counts the rows where `expr` is not `nil`. In a grouped query every projection must be an aggregate or a group key, so the result is the same with every provider. An `order by` item is an expression with an optional `asc` or `desc`, and the default is ascending. A bare name in `order by` refers to a projection alias, and a bare name in `having` stands for the expression of the projection it names, so `having total > 1000` below would filter on `sum(s.amount)`. The query below orders by the computed `total`:
 
 ```lus
 local sales = {
