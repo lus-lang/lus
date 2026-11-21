@@ -176,12 +176,16 @@ pub const Options = struct {
     /// Module names that other searchers answer first: the standard
     /// library, preincluded modules, and the bundle.
     skip: *const fn (name: []const u8) bool,
+    /// Decides whether the command line could ever let the program fetch
+    /// a URL. Null turns fetching before the run off.
+    may_fetch: ?*const fn (ctx: *anyopaque, url: []const u8) bool = null,
 };
 
 const api = @import("api.zig");
 const codegen = @import("compile/codegen.zig");
 const dump = @import("compile/dump.zig");
 const state = @import("vm/state.zig");
+const remote = @import("remote.zig");
 
 /// The first file that a template of `path` names for `name`, as the
 /// searcher of `require` builds it, or null.
@@ -238,11 +242,20 @@ pub fn build(l: *state.Thread, src: []const u8, chunkname: []const u8, opts: Opt
         }
     }
 
+    var urls: std.ArrayList([]u8) = .empty;
+    defer {
+        for (urls.items) |u| gpa.free(u);
+        urls.deinit(gpa);
+    }
     var head: usize = 0;
     while (head < queue.items.len) : (head += 1) {
         const name = queue.items[head];
         if (seen.contains(name)) continue;
         try seen.put(gpa, try gpa.dupe(u8, name), {});
+        if (remote.isUrl(name)) {
+            try urls.append(gpa, try gpa.dupe(u8, name));
+            continue;
+        }
         if (opts.skip(name)) continue;
         const file = (try resolveName(gpa, io, name, opts)) orelse continue;
         if (ix.hasPath(file)) {
@@ -306,7 +319,62 @@ pub fn build(l: *state.Thread, src: []const u8, chunkname: []const u8, opts: Opt
         }
         try ix.entries.append(gpa, entry);
     }
+    if (opts.may_fetch) |may| if (remote.store) |st| try prefetch(gpa, st, urls.items, may, opts.ctx);
     return ix;
+}
+
+/// Fetches the remote modules of the tree before the program runs: the
+/// literal URL requires, the `requires` of atmosphere releases, and the
+/// literal requires of modules from generic servers. A failure is left
+/// for the `require` that names the module to raise.
+fn prefetch(gpa: Allocator, st: *remote.Store, start: []const []u8, may: *const fn (*anyopaque, []const u8) bool, ctx: *anyopaque) !void {
+    var queue: std.ArrayList([]u8) = .empty;
+    defer {
+        for (queue.items) |q| gpa.free(q);
+        queue.deinit(gpa);
+    }
+    var why: std.ArrayList(u8) = .empty;
+    defer why.deinit(gpa);
+    for (start) |u| {
+        const n = remote.normalize(gpa, u, &why) catch continue;
+        try queue.append(gpa, n);
+    }
+    var head: usize = 0;
+    while (head < queue.items.len) : (head += 1) {
+        const url = queue.items[head];
+        if (!may(ctx, url)) continue;
+        st.lock();
+        defer st.unlock();
+        if (st.peek(url) != null) continue;
+        const p = st.get(url, &why) catch continue;
+        // A fetch before the run is the expected one, so `require` prints
+        // no warning for it.
+        p.fetched = false;
+        for (p.requires) |r| {
+            const n = remote.normalize(gpa, r, &why) catch continue;
+            try queue.append(gpa, n);
+        }
+        if (p.kind != .generic or std.mem.indexOf(u8, p.source, "require") == null) continue;
+        var arena_state = std.heap.ArenaAllocator.init(gpa);
+        defer arena_state.deinit();
+        const sc = (try scan(gpa, arena_state.allocator(), p.source, url)) orelse continue;
+        for (sc.literal) |lit| {
+            if (remote.isUrl(lit)) {
+                const n = remote.normalize(gpa, lit, &why) catch continue;
+                try queue.append(gpa, n);
+            } else if (!isBuiltin(lit)) {
+                // A relative name of a generic module names a file beside it.
+                const rel = try std.mem.replaceOwned(u8, gpa, lit, ".", "/");
+                defer gpa.free(rel);
+                const cand = try std.mem.concat(gpa, u8, &.{ remote.dirOf(url), rel, ".lus" });
+                try queue.append(gpa, cand);
+            }
+        }
+    }
+}
+
+fn isBuiltin(name: []const u8) bool {
+    return @import("lib/package.zig").answeredEarly(name);
 }
 
 /// The compiled form of the module at `path` for a state with the global

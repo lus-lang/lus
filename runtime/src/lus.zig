@@ -35,6 +35,8 @@ pub const semver = @import("semver.zig");
 pub const httpc = @import("httpc.zig");
 pub const signed = @import("signed.zig");
 pub const modtree = @import("modtree.zig");
+pub const remote = @import("remote.zig");
+pub const home = @import("home.zig");
 
 pub const lib = struct {
     pub const aux = @import("lib/auxlib.zig");
@@ -56,6 +58,7 @@ test {
     _ = httpc;
     _ = signed;
     _ = modtree;
+    _ = remote;
     _ = syntax.token;
     _ = syntax.lexer;
     _ = syntax.parser;

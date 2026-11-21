@@ -47,6 +47,9 @@ The options come before the script name, because `lus` passes everything after t
 | `-F name[=value]`, `--flag name[=value]` | Define a build flag, which the script reads from the readonly table `flags`. A flag with no value is `true`. A numeric value is a number. Any other value is a string. The compiler removes the branch of an `if flags.name` or `if not flags.name` that can never run with the given flags, so debugging code behind a flag costs nothing when the flag is off. |
 | `--include path[:alias]` | Compile a module file, or every module in a directory, when the interpreter starts. `require` then loads the module from memory with no `load` or `fs:read` permission, so a program that has sealed its permissions can still require it. The alias is the name of the module. |
 | `--readonly-env` | Make the global table and the standard library tables readonly once the script starts. An assignment to a global or to a library field then raises `attempt to modify a readonly table`, which protects a program from code that replaces a library function. |
+| `--offline` | Load [remote modules](/manual/guide#modules-from-the-network) only from the module cache. A module that the cache lacks raises an error at its `require`. |
+| `--reload` | Ask the server of every remote module whether it changed before the program runs, even when the cached copy is recent. |
+| `--no-prefetch` | Download nothing before the program runs. Each remote module is downloaded at its `require`, with a warning. |
 | `--gc-pause N` | Let the heap grow by N percent of its live size before the next collection starts. A lower value uses less memory and more processor time. |
 | `-W` | Turn warnings on. [`warn`](/manual/api#warn) then writes its messages to standard error. |
 | `-E` | Ignore the environment variables that configure the interpreter, such as `LUS_PATH` and `LUS_JIT`. |

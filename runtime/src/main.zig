@@ -48,6 +48,9 @@ const usage =
     \\  --include path[:alias]
     \\                   preinclude a module file or directory for require
     \\  --readonly-env   freeze the global environment after startup
+    \\  --offline        load remote modules only from the module cache
+    \\  --reload         revalidate every remote module before the run
+    \\  --no-prefetch    fetch remote modules at their require
     \\  --gc-pause N     heap growth before a collection, in percent
     \\  --dis            print bytecode instead of running
     \\  --               stop handling options
@@ -76,6 +79,9 @@ const Cli = struct {
     dis: bool = false,
     readonly_env: bool = false,
     gc_pause: ?usize = null,
+    offline: bool = false,
+    reload: bool = false,
+    no_prefetch: bool = false,
 };
 
 const OptSpec = struct {
@@ -124,6 +130,15 @@ fn optDis(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
 fn optReadonlyEnv(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
     c.readonly_env = true;
 }
+fn optOffline(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.offline = true;
+}
+fn optReload(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.reload = true;
+}
+fn optNoPrefetch(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.no_prefetch = true;
+}
 
 /// The single option table. Short options with arguments accept both
 /// "-e stat" and "-estat".
@@ -141,6 +156,9 @@ const options = [_]OptSpec{
     .{ .short = null, .long = "gc-pause", .takes_arg = true, .apply = optGcPause },
     .{ .short = null, .long = "dis", .takes_arg = false, .apply = optDis },
     .{ .short = null, .long = "readonly-env", .takes_arg = false, .apply = optReadonlyEnv },
+    .{ .short = null, .long = "offline", .takes_arg = false, .apply = optOffline },
+    .{ .short = null, .long = "reload", .takes_arg = false, .apply = optReload },
+    .{ .short = null, .long = "no-prefetch", .takes_arg = false, .apply = optNoPrefetch },
 };
 
 fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8, start: usize) !?Cli {
@@ -337,8 +355,17 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
     package.preincludes = preinc.list.items;
     defer package.preincludes = &.{};
 
-    // The index of the require tree outlives the state, because workers
-    // read it until the state stops them.
+    // The store of remote modules and the index of the require tree
+    // outlive the state, because workers read them until the state stops
+    // them.
+    const home_dir = if (cli.ignore_env) null else (lus.home.path(gpa, init.environ_map) catch null);
+    defer if (home_dir) |h| gpa.free(h);
+    var store: lus.remote.Store = .init(gpa, io, .{ .home = home_dir, .offline = cli.offline, .reload = cli.reload, .env = init.environ_map });
+    lus.remote.store = &store;
+    defer {
+        lus.remote.store = null;
+        store.deinit();
+    }
     var index: ?*lus.modtree.Index = null;
     defer if (index) |x| dropIndex(gpa, x);
 
@@ -399,6 +426,7 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         const chunkname = try std.fmt.allocPrint(gpa, "@{s}", .{path});
         defer gpa.free(chunkname);
         index = indexTree(l, src, chunkname, &cli);
+        store.running = true;
         if (!runChunk(l, src, chunkname, args[cli.script_index + 1 ..])) return 1;
     } else if (cli.stdin) {
         var buf: std.ArrayList(u8) = .empty;
@@ -407,6 +435,7 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         var r = std.Io.File.stdin().readerStreaming(io, &rbuf);
         r.interface.appendRemainingUnlimited(gpa, &buf) catch {};
         index = indexTree(l, buf.items, "=stdin", &cli);
+        store.running = true;
         if (!runChunk(l, buf.items, "=stdin", args[cli.script_index + 1 ..])) return 1;
     }
     if (cli.interactive or (cli.script == null and !cli.stdin and cli.actions.items.len == 0 and !cli.version)) {
@@ -649,6 +678,10 @@ fn indexTree(l: *lus.vm.state.Thread, src: []const u8, chunkname: []const u8, cl
             const t: *lus.vm.state.Thread = @ptrCast(@alignCast(ctx));
             return pledge.allowed(t, "fs:read", path);
         }
+        fn mayFetch(ctx: *anyopaque, url: []const u8) bool {
+            const t: *lus.vm.state.Thread = @ptrCast(@alignCast(ctx));
+            return pledge.allowed(t, "network:http", url);
+        }
     };
     const path = blk: {
         if (!cli.ignore_env) if (l.g.environ) |e| if (e.get("LUS_PATH")) |p| break :blk p;
@@ -657,6 +690,7 @@ fn indexTree(l: *lus.vm.state.Thread, src: []const u8, chunkname: []const u8, cl
     const ix = lus.modtree.build(l, src, chunkname, .{
         .path = path,
         .may_read = if (limitsFileReads(cli.pledges.items)) Ceiling.mayRead else null,
+        .may_fetch = if (cli.no_prefetch) null else if (limitsGrants(cli.pledges.items)) Ceiling.mayFetch else Always.yes,
         .ctx = l,
         .skip = package.answeredEarly,
     }) catch return null;
@@ -668,6 +702,18 @@ fn dropIndex(gpa: std.mem.Allocator, ix: *lus.modtree.Index) void {
     lus.modtree.current = null;
     ix.deinit();
     gpa.destroy(ix);
+}
+
+const Always = struct {
+    fn yes(_: *anyopaque, _: []const u8) bool {
+        return true;
+    }
+};
+
+/// Whether `-P` limits what the script may pledge. The script may then
+/// pledge only within the grants of the command line.
+fn limitsGrants(specs: []const []const u8) bool {
+    return specs.len > 0;
 }
 
 fn limitsFileReads(specs: []const []const u8) bool {

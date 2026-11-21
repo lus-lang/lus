@@ -143,7 +143,7 @@ When `lus` starts a program, and when `lus build` bundles one, it first indexes 
 The index does three things.
 
 - It fetches every remote module in the tree before the program runs (section 3), so a program pays the network latency once, up front, in parallel.
-- It compiles every module in the tree once per process. Every state of the process, including workers, loads the compiled module from memory. Remote modules also keep their compiled form on disk (section 4).
+- It compiles every module in the tree once per process. Every state of the process, including workers, loads the compiled module from memory.
 - It gives `lus build` the set of modules to bundle and tells it which modules no code can reach.
 
 ### What the index may not change
@@ -232,7 +232,7 @@ A remote module that the index did not fetch, because a dynamic require names it
 lus: warning: main.lus:12: fetched https://atmosp.here/2.0/csvx.lus during execution. A literal require lets lus fetch it before the program starts.
 ```
 
-A fetch inside a detached coroutine waits through the scheduler, so the other coroutines keep running.
+A fetch blocks the thread that runs it, detached coroutines included, until the download ends. This is a second reason to keep requires literal.
 
 Three options of `lus` control fetching. `--offline` never contacts the network and loads remote modules only from the cache. `--reload` revalidates every remote module of the tree with its server before the program runs. `--no-prefetch` turns off fetching before the run, so every remote module is fetched at its `require`, which is useful to see which code paths load which modules.
 
@@ -261,7 +261,7 @@ The module cache is `$LUS_HOME/cache`, with the Lus home of section 1. It holds 
 
 ```
 cache/
-  hosts/<host>.json             atmosphere or generic, and the pinned root key of a custom server
+  hosts/<host>.json             atmosphere or generic, and the pinned root key of another server
   keys/<host>.json              the newest verified signing key list of the host
   modules/<url-hash>/
     url                         the normalized module URL
@@ -269,10 +269,9 @@ cache/
     source.lus                  the file, for a generic server
   releases/<sha256>.json        a verified release document, named by the digest of its bytes
   bundles/<sha256>/             an unpacked bundle, named by its digest and shared by every release that names it
-  compiled/<build-id>/<sha256>  compiled chunks, keyed by the digest of the source and the flags
 ```
 
-`<url-hash>` is the first 32 hexadecimal digits of the SHA-256 digest of the normalized URL. Hashing keeps file names valid on every filesystem, including case-insensitive ones. `<build-id>` names the runtime build, so two releases never load each other's compiled chunks. `atmos cache` lists, cleans, and verifies this directory, so its layout is part of the contract.
+`<url-hash>` is the first 32 hexadecimal digits of the SHA-256 digest of the normalized URL. Hashing keeps file names valid on every filesystem, including case-insensitive ones. `atmos cache` lists, cleans, and verifies this directory, so its layout is part of the contract.
 
 A resolution record is _fresh_ until its `expires` time. A fresh record is used without contacting the network. A stale record is revalidated with a conditional request that sends the stored ETag. A `304 Not Modified` response renews it. If the server cannot be reached, `require` uses the stale record and prints a warning, so a program keeps working offline with the modules it last had. A module that was never fetched raises an error when the network is unavailable.
 

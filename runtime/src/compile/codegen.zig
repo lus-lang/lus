@@ -193,6 +193,10 @@ pub const Options = struct {
     flags: ?*const std.StringHashMapUnmanaged(Value) = null,
     /// Disables optimizations that hide locals from the debugger.
     debug: bool = false,
+    /// Replaces every read `flags.NAME` with the value of the flag in
+    /// `flags`. The modules of a remote package compile this way, so they
+    /// read the flags of their package (`spec/design/modules.md`).
+    fold_flag_reads: bool = false,
 };
 
 pub const Compiler = struct {
@@ -1494,6 +1498,18 @@ fn expr(fs: *FuncState, e: *ast.Expr, v: *ExpDesc) Error!void {
         },
         .index => |ix| {
             if (try groupPath(fs, e, v)) return;
+            if (fs.c.opts.fold_flag_reads) if (foldFlagRead(fs, ix.obj, ix.key)) |val| {
+                v.* = switch (val.tag) {
+                    .nil => .{ .kind = .nil },
+                    .true => .{ .kind = .true_ },
+                    .false => .{ .kind = .false_ },
+                    .integer => .{ .kind = .kint, .ival = val.asInt() },
+                    .float => .{ .kind = .kflt, .nval = val.asFloat() },
+                    .string => .{ .kind = .kstr, .strval = val.as(vm.object.String).bytes() },
+                    else => .{ .kind = .nil },
+                };
+                return;
+            };
             try expr(fs, ix.obj, v);
             try exp2anyregup(fs, v);
             var k: ExpDesc = .{};
@@ -2820,6 +2836,34 @@ fn condTests(fs: *FuncState, first: u32, n: u32) Error!i32 {
         try concatJumps(fs, &f, j);
     }
     return f;
+}
+
+/// The value of `flags.NAME` when `obj` is the reserved name `flags`, no
+/// local hides it, and `key` is a string constant.
+fn foldFlagRead(fs: *FuncState, obj: *const ast.Expr, key: *const ast.Expr) ?Value {
+    const flags = fs.c.opts.flags orelse return Value.nil;
+    if (obj.kind != .name or !std.mem.eql(u8, obj.kind.name.text, "flags")) return null;
+    if (key.kind != .string) return null;
+    if (!flagsIsReserved(fs)) return null;
+    return flags.get(key.kind.string) orelse Value.nil;
+}
+
+/// Whether the name `flags` refers to the reserved global here.
+fn flagsIsReserved(fs: *FuncState) bool {
+    var gi: i32 = -1;
+    if (searchVar(fs, "flags", &gi)) |vidx| {
+        const vd = getLocalVar(fs, vidx);
+        if (vd.kind != .global_star and vd.kind != .global_named) return false;
+    }
+    var p = fs.parent;
+    while (p) |pf| : (p = pf.parent) {
+        var pp: i32 = -1;
+        if (searchVar(pf, "flags", &pp)) |vidx| {
+            const vd = getLocalVar(pf, vidx);
+            if (vd.kind != .global_star and vd.kind != .global_named) return false;
+        }
+    }
+    return true;
 }
 
 fn foldFlag(fs: *FuncState, cond: ast.Cond) ?bool {

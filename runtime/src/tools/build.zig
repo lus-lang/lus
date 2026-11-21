@@ -36,6 +36,7 @@ const codegen = lus.compile.codegen;
 const dump = @import("../compile/dump.zig");
 const package = lus.lib.package;
 const modtree = lus.modtree;
+const remote = lus.remote;
 const Allocator = std.mem.Allocator;
 
 const usage =
@@ -134,6 +135,8 @@ const Collector = struct {
     dynamic: bool = false,
     /// Set while a directory of `--include` is being collected.
     in_dir: bool = false,
+    /// Resolves the remote modules that literal requires name.
+    store: *remote.Store,
 
     const Info = struct { requires: [][]u8, candidate: bool };
 
@@ -260,11 +263,136 @@ const Collector = struct {
         // Modules that a candidate reaches are candidates too, so they
         // stay only when a root reaches them.
         for (reqs) |mod| {
+            if (remote.isUrl(mod)) {
+                try c.addRemote(mod);
+                continue;
+            }
             if (c.hasName(mod)) continue;
             const file = try c.resolve(mod) orelse continue;
             defer c.gpa.free(file);
             try c.add(mod, file);
         }
+    }
+
+    /// Fetches a remote module and bundles it under its key, as `require`
+    /// stores it in `package.loaded`. An atmosphere package contributes
+    /// every module of its bundle, compiled with the flags of its package.
+    /// A module from a generic server contributes itself and the modules
+    /// that its literal requires name.
+    fn addRemote(c: *Collector, text: []const u8) anyerror!void {
+        var why: std.ArrayList(u8) = .empty;
+        defer why.deinit(c.gpa);
+        const url = remote.normalize(c.gpa, text, &why) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Remote => {
+                std.debug.print("lus build: {s}\n", .{why.items});
+                return error.Reported;
+            },
+        };
+        defer c.gpa.free(url);
+        if (c.hasName(url)) return;
+        c.store.lock();
+        const pkg = c.store.get(url, &why) catch |e| {
+            c.store.unlock();
+            switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Remote => {
+                    std.debug.print("lus build: {s}\n", .{why.items});
+                    return error.Reported;
+                },
+            }
+        };
+        c.store.unlock();
+        if (pkg.kind == .atmosphere) return c.addBundle(pkg, pkg.bundle_dir, "");
+        try c.addSource(url, pkg.source, null, null);
+        var arena_state = std.heap.ArenaAllocator.init(c.gpa);
+        defer arena_state.deinit();
+        const sc = (try modtree.scan(c.gpa, arena_state.allocator(), pkg.source, url)) orelse return;
+        for (sc.literal) |lit| {
+            if (remote.isUrl(lit)) {
+                try c.addRemote(lit);
+            } else if (!package.answeredEarly(lit)) {
+                const rel = try std.mem.replaceOwned(u8, c.gpa, lit, ".", "/");
+                defer c.gpa.free(rel);
+                const next = try std.mem.concat(c.gpa, u8, &.{ remote.dirOf(url), rel, ".lus" });
+                defer c.gpa.free(next);
+                try c.addRemote(next);
+            }
+        }
+    }
+
+    /// Bundles every `.lus` file below `dir` of an atmosphere package.
+    fn addBundle(c: *Collector, pkg: *remote.Package, dir: []const u8, rel: []const u8) anyerror!void {
+        var d = std.Io.Dir.cwd().openDir(c.io, dir, .{ .iterate = true }) catch {
+            std.debug.print("lus build: cannot open the cached bundle of {s}\n", .{pkg.url});
+            return error.Reported;
+        };
+        defer d.close(c.io);
+        var it = d.iterate();
+        while (try it.next(c.io)) |ent| {
+            const sub_rel = if (rel.len == 0) try c.gpa.dupe(u8, ent.name) else try std.fmt.allocPrint(c.gpa, "{s}/{s}", .{ rel, ent.name });
+            defer c.gpa.free(sub_rel);
+            const full = try std.fmt.allocPrint(c.gpa, "{s}/{s}", .{ dir, ent.name });
+            defer c.gpa.free(full);
+            if (ent.kind == .directory) {
+                try c.addBundle(pkg, full, sub_rel);
+                continue;
+            }
+            if (!std.mem.endsWith(u8, ent.name, ".lus")) continue;
+            const src = try std.Io.Dir.cwd().readFileAlloc(c.io, full, c.gpa, .unlimited);
+            defer c.gpa.free(src);
+            if (std.mem.eql(u8, sub_rel, pkg.main)) {
+                try c.addSource(pkg.url, src, pkg, null);
+                continue;
+            }
+            // dates/zones.lus is the module dates.zones, dates/init.lus
+            // the module dates.
+            var stem = sub_rel[0 .. sub_rel.len - 4];
+            if (std.mem.endsWith(u8, stem, "/init")) stem = stem[0 .. stem.len - 5];
+            const mod = try std.mem.replaceOwned(u8, c.gpa, stem, "/", ".");
+            defer c.gpa.free(mod);
+            const key = try std.mem.concat(c.gpa, u8, &.{ pkg.url, "#", mod });
+            defer c.gpa.free(key);
+            try c.addSource(key, src, pkg, mod);
+        }
+    }
+
+    /// Compiles `src` and bundles it as the module `key`. A module of an
+    /// atmosphere package compiles with the flags of its package.
+    fn addSource(c: *Collector, key: []const u8, src: []const u8, pkg: ?*remote.Package, sub: ?[]const u8) anyerror!void {
+        if (c.hasName(key)) return;
+        const chunkname = try std.fmt.allocPrint(c.gpa, "@{s}", .{key});
+        errdefer c.gpa.free(chunkname);
+        const g = c.l.g;
+        var fmap: std.StringHashMapUnmanaged(lus.vm.value.Value) = .empty;
+        defer fmap.deinit(c.gpa);
+        var fp: std.ArrayList(u8) = .empty;
+        defer fp.deinit(c.gpa);
+        const top = c.l.top;
+        defer c.l.top = top;
+        if (pkg) |p| try package.packageFlags(c.l, p, sub, &fmap, &fp);
+        const flags: ?*const std.StringHashMapUnmanaged(lus.vm.value.Value) = if (pkg != null) &fmap else if (g.ext.get("flags.compile")) |fl| @ptrCast(@alignCast(fl)) else null;
+        const r = try codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flags, .fold_flag_reads = pkg != null });
+        const proto = switch (r) {
+            .err => |msg| {
+                defer c.gpa.free(msg);
+                std.debug.print("lus build: {s}\n", .{msg});
+                return error.Reported;
+            },
+            .ok => |p| p,
+        };
+        const data = dump.dump(c.gpa, proto, false) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Unsupported => {
+                std.debug.print("lus build: {s} holds a constant that cannot be bundled\n", .{key});
+                return error.Reported;
+            },
+        };
+        errdefer c.gpa.free(data);
+        const owned = try c.gpa.dupe(u8, key);
+        errdefer c.gpa.free(owned);
+        try c.modules.append(c.gpa, .{ .name = owned, .chunkname = chunkname, .data = data });
+        try c.info.append(c.gpa, .{ .requires = &.{}, .candidate = false });
     }
 
     /// Resolves a module name through the path templates, as `require`
@@ -369,7 +497,11 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     try api.setFlags(l, opts.flags.items);
 
     const path_templates = if (init.environ_map.get("LUS_PATH")) |p| p else package.default_path;
-    var c: Collector = .{ .gpa = gpa, .io = io, .l = l, .path_templates = path_templates };
+    const home_dir = lus.home.path(gpa, init.environ_map) catch null;
+    defer if (home_dir) |h| gpa.free(h);
+    var store: remote.Store = .init(gpa, io, .{ .home = home_dir, .env = init.environ_map });
+    defer store.deinit();
+    var c: Collector = .{ .gpa = gpa, .io = io, .l = l, .path_templates = path_templates, .store = &store };
     defer c.deinit();
     // The entry module is named after the script, as a module file of
     // that name would be.

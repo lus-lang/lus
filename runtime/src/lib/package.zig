@@ -10,6 +10,7 @@ const api = @import("../api.zig");
 const aux = @import("auxlib.zig");
 const pledge = @import("../vm/pledge.zig");
 const modtree = @import("../modtree.zig");
+const remote = @import("../remote.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -327,11 +328,253 @@ fn searcherCroot(l: *Thread) Error!u32 {
     return nativeLoadError(l, name, file);
 }
 
+/// The chunk name of the Lus function that called the running native,
+/// without its `@`, or null.
+fn callerSource(l: *Thread) ?[]const u8 {
+    const frames = l.frames.items;
+    if (frames.len < 2) return null;
+    const f = frames[frames.len - 2];
+    const c = f.closure orelse return null;
+    const src = (c.proto.source orelse return null).bytes();
+    if (src.len < 2 or src[0] != '@') return null;
+    return src[1..];
+}
+
+fn isBuiltinName(name: []const u8) bool {
+    for (builtin_names) |n| if (std.mem.eql(u8, n, name)) return true;
+    return false;
+}
+
+/// Calls `loader` for the module stored under `key` and records the
+/// result in `loaded`, as `require` does. The loader receives the key and
+/// `extra`.
+fn runLoader(l: *Thread, loaded: *Table, key: Value, loader: Value, extra: Value) Error!u32 {
+    const base = l.top;
+    try l.push(loader);
+    try l.push(extra);
+    const r = try ops.call1(l, loader, &.{ key, extra });
+    if (!r.isNil()) try ops.rawSet(l, loaded, key, r);
+    var final = table.getStr(loaded, key.as(String));
+    if (final.isNil()) {
+        final = .true;
+        try ops.rawSet(l, loaded, key, final);
+    }
+    l.top = base;
+    try l.push(final);
+    try l.push(extra);
+    return 2;
+}
+
+/// Builds the flags that a module of an atmosphere package compiles with:
+/// the program flags that carry the package's prefix, without the prefix,
+/// and the declared defaults of the package for the others. Writes a
+/// fingerprint of the result to `fp`, so a compiled chunk is shared only
+/// between states that see the same flags. String values stay on the
+/// stack while the caller compiles.
+pub fn packageFlags(l: *Thread, pkg: *const remote.Package, sub: ?[]const u8, map: *std.StringHashMapUnmanaged(Value), fp: *std.ArrayList(u8)) Error!void {
+    const gpa = l.g.gpa;
+    const prefix = pkg.flagPrefix(sub);
+    if (api.flagsTable(l.g)) |prog| {
+        var it = prog.iterator();
+        while (it.next()) |e| {
+            const k = e.key_ptr.*;
+            if (k.len > prefix.len + 1 and std.mem.startsWith(u8, k, prefix) and k[prefix.len] == '.')
+                map.put(gpa, k[prefix.len + 1 ..], e.value_ptr.*) catch return l.raiseMem();
+        }
+    }
+    if (std.mem.eql(u8, prefix, pkg.name)) for (pkg.flag_defaults) |spec| {
+        const eq = std.mem.indexOfScalar(u8, spec, '=');
+        const fname = if (eq) |i| spec[0..i] else spec;
+        if (map.contains(fname)) continue;
+        var v: Value = .true;
+        if (eq) |i| {
+            const raw = spec[i + 1 ..];
+            if (@import("../syntax/lexer.zig").parseNumber(raw)) |n| {
+                v = switch (n) {
+                    .integer => |x| Value.int(x),
+                    .float => |x| Value.float(x),
+                };
+            } else {
+                v = try l.newStringValue(raw);
+                try l.push(v);
+            }
+        }
+        map.put(gpa, fname, v) catch return l.raiseMem();
+    };
+    // The fingerprint lists the flags in a fixed order.
+    var keys: std.ArrayList([]const u8) = .empty;
+    defer keys.deinit(gpa);
+    var kit = map.keyIterator();
+    while (kit.next()) |k| keys.append(gpa, k.*) catch return l.raiseMem();
+    std.mem.sort([]const u8, keys.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lt);
+    for (keys.items) |k| {
+        const v = map.get(k).?;
+        fp.print(gpa, "\x00{s}={d}:", .{ k, @backingInt(v.tag) }) catch return l.raiseMem();
+        if (v.tag == .string) fp.appendSlice(gpa, v.as(String).bytes()) catch return l.raiseMem() else fp.print(gpa, "{d}", .{v.payload}) catch return l.raiseMem();
+    }
+}
+
+/// `require` of a URL, or of a name inside a remote package (`remote.zig`).
+/// Returns null when the name is neither, so `require` goes on as usual.
+fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
+    const caller = callerSource(l);
+    const caller_url: ?[]const u8 = if (caller) |c| (if (remote.isUrl(c)) c[0 .. std.mem.indexOfScalar(u8, c, '#') orelse c.len] else null) else null;
+    const is_url = remote.isUrl(name);
+    if (!is_url and (caller_url == null or isBuiltinName(name))) return null;
+    const gpa = l.g.gpa;
+    const st = remote.store orelse return l.raiseFmt("remote modules are unavailable in this build", .{});
+    var why: std.ArrayList(u8) = .empty;
+    defer why.deinit(gpa);
+
+    // The package to load and the module inside it.
+    var pkg_url: []u8 = undefined;
+    var sub: ?[]const u8 = null;
+    if (is_url) {
+        pkg_url = remote.normalize(gpa, name, &why) catch |e| switch (e) {
+            error.OutOfMemory => return l.raiseMem(),
+            error.Remote => return l.raiseFmt("{s}", .{why.items}),
+        };
+    } else {
+        st.lock();
+        const owner = st.peek(caller_url.?);
+        var kind = if (owner) |o| o.kind else remote.Kind.generic;
+        st.unlock();
+        // In a standalone executable the store is empty, and the bundle
+        // tells a module of an atmosphere package by its key.
+        if (owner == null) if (bundle) |b| {
+            const k = std.mem.concat(gpa, u8, &.{ caller_url.?, "#", name }) catch return l.raiseMem();
+            defer gpa.free(k);
+            if (b.find(k) != null) kind = .atmosphere;
+        };
+        if (kind == .atmosphere) {
+            pkg_url = gpa.dupe(u8, caller_url.?) catch return l.raiseMem();
+            sub = name;
+        } else {
+            // A name inside a module from a generic server names a file
+            // beside that module.
+            const rel = std.mem.replaceOwned(u8, gpa, name, ".", "/") catch return l.raiseMem();
+            defer gpa.free(rel);
+            pkg_url = std.mem.concat(gpa, u8, &.{ remote.dirOf(caller_url.?), rel, ".lus" }) catch return l.raiseMem();
+        }
+    }
+    defer gpa.free(pkg_url);
+    const key_text = if (sub) |n| std.mem.concat(gpa, u8, &.{ pkg_url, "#", n }) catch return l.raiseMem() else gpa.dupe(u8, pkg_url) catch return l.raiseMem();
+    defer gpa.free(key_text);
+    const key = try l.newStringValue(key_text);
+    try l.push(key);
+    const existing = table.getStr(loaded, key.as(String));
+    if (existing.truthy()) {
+        l.top -= 1;
+        return try aux.ret(l, existing);
+    }
+
+    // A standalone executable carries the remote modules it requires.
+    // They are part of the program, so they need no permission.
+    if (bundle) |b| if (b.find(key_text)) |m| {
+        api.load(l, m.data, m.chunkname) catch {
+            return l.raiseFmt("error loading bundled module '{s}':\n\t{s}", .{ name, api.errorMessage(l, l.err) });
+        };
+        const loader = l.stack[l.top - 1];
+        const extra = try l.newStringValue(pkg_url);
+        return try runLoader(l, loaded, key, loader, extra);
+    };
+
+    try pledge.require(l, "network:http", pkg_url);
+    if (!pledge.allowed(l, "load", null)) return l.raiseFmt("permission \"load\" denied", .{});
+
+    // Resolve, and read the source while the store is locked.
+    st.lock();
+    const pkg = st.get(pkg_url, &why) catch |e| {
+        st.unlock();
+        return switch (e) {
+            error.OutOfMemory => l.raiseMem(),
+            error.Remote => l.raiseFmt("{s}", .{why.items}),
+        };
+    };
+    if (pkg.fetched and st.running and st.firstWarning(pkg_url)) {
+        var pos: std.ArrayList(u8) = .empty;
+        defer pos.deinit(gpa);
+        l.where(&pos, 1) catch {};
+        std.debug.print("lus: warning: {s}fetched {s} during execution. A literal require lets lus fetch it before the program starts.\n", .{ pos.items, pkg_url });
+    }
+    pkg.fetched = false;
+    const chunkname = std.mem.concat(gpa, u8, &.{ "@", key_text }) catch {
+        st.unlock();
+        return l.raiseMem();
+    };
+    defer gpa.free(chunkname);
+    // The modules of an atmosphere package read the flags of their package.
+    var fmap: std.StringHashMapUnmanaged(Value) = .empty;
+    defer fmap.deinit(gpa);
+    var cache_key: std.ArrayList(u8) = .empty;
+    defer cache_key.deinit(gpa);
+    cache_key.appendSlice(gpa, chunkname) catch {
+        st.unlock();
+        return l.raiseMem();
+    };
+    if (pkg.kind == .atmosphere) packageFlags(l, pkg, sub, &fmap, &cache_key) catch |e| {
+        st.unlock();
+        return e;
+    };
+    const cached = if (st.compiled.get(cache_key.items)) |c| gpa.dupe(u8, c) catch null else null;
+    const src: ?[]u8 = if (cached != null) null else pkg.read(gpa, l.g.io, sub) catch null;
+    st.unlock();
+    defer if (cached) |c| gpa.free(c);
+    defer if (src) |x| gpa.free(x);
+    if (cached == null and src == null) {
+        return l.raiseFmt("module '{s}' not found in {s}", .{ name, pkg_url });
+    }
+    const code = cached orelse src.?;
+    if (cached == null and pkg.kind == .atmosphere) {
+        const r = @import("../compile/codegen.zig").compile(l.g, code, .{ .chunkname = chunkname, .flags = &fmap, .fold_flag_reads = true, .debug = l.g.debugger != null }) catch return l.raiseMem();
+        switch (r) {
+            .err => |msg| {
+                defer gpa.free(msg);
+                return l.raiseFmt("error loading module '{s}' from {s}:\n\t{s}", .{ name, pkg_url, msg });
+            },
+            .ok => |p| {
+                const cl = try api.newMainClosure(l, p, l.g.globals);
+                try l.push(Value.obj(.closure, cl));
+            },
+        }
+    } else {
+        api.load(l, code, chunkname) catch {
+            return l.raiseFmt("error loading module '{s}' from {s}:\n\t{s}", .{ name, pkg_url, api.errorMessage(l, l.err) });
+        };
+    }
+    const loader = l.stack[l.top - 1];
+    if (cached == null) {
+        // Every later state loads the compiled chunk.
+        if (loader.tag == .closure) {
+            if (@import("../compile/dump.zig").dump(gpa, loader.as(object.Closure).proto, false)) |bin| {
+                st.lock();
+                defer st.unlock();
+                if (!st.compiled.contains(cache_key.items)) {
+                    const k = gpa.dupe(u8, cache_key.items) catch null;
+                    if (k) |kk| st.compiled.put(gpa, kk, bin) catch {
+                        gpa.free(kk);
+                        gpa.free(bin);
+                    } else gpa.free(bin);
+                } else gpa.free(bin);
+            } else |_| {}
+        }
+    }
+    // The loader stays on the stack, above the flag strings, until
+    // `runLoader` has called it.
+    const extra = try l.newStringValue(pkg_url);
+    return try runLoader(l, loaded, key, loader, extra);
+}
+
 fn require(l: *Thread) Error!u32 {
     const name = try aux.checkString(l, 1);
     const pkg = packageTable(l);
     const loaded_v = try aux.getField(l, l.g.registry.as(Table), "_LOADED");
     const loaded = loaded_v.as(Table);
+    if (try requireRemote(l, name.bytes(), loaded)) |n| return n;
     const existing = table.getStr(loaded, name);
     if (existing.truthy()) return aux.ret(l, existing);
     const searchers = try aux.getField(l, pkg, "searchers");
