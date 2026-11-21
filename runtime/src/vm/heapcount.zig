@@ -7,6 +7,26 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Alignment = std.mem.Alignment;
+pub const fail_alloc = @import("build_options").fail_alloc;
+
+/// Allocation failure injection, compiled in by `-Dfail-alloc=true`. Every
+/// allocation of every state, and every segment of the object heap, takes
+/// a number. The allocation whose number is `target` fails, and with
+/// `sticky` every later one fails too. `lus` reads `LUS_FAIL_ALLOC` at
+/// startup (`main.zig`) and `tests/oom/run.mjs` sweeps it.
+pub const inject = struct {
+    pub var target: usize = 0;
+    pub var sticky: bool = false;
+    pub var count: std.atomic.Value(usize) = .init(0);
+
+    /// Whether the allocation being made must fail.
+    pub inline fn fail() bool {
+        if (!fail_alloc) return false;
+        const n = count.fetchAdd(1, .monotonic) + 1;
+        if (target == 0) return false;
+        return if (sticky) n >= target else n == target;
+    }
+};
 
 /// Blocks of at least this many bytes take pages of their own on macOS
 /// when the state allocates from the C heap (`Counting.big_pages`).
@@ -37,6 +57,7 @@ pub const Counting = struct {
 
     fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
         const self: *Counting = @ptrCast(@alignCast(ctx));
+        if (inject.fail()) return null;
         const p = if (self.isBig(len)) pages.rawAlloc(len, alignment, ret_addr) else self.child.rawAlloc(len, alignment, ret_addr);
         self.bytes += len;
         return p orelse {
@@ -61,6 +82,7 @@ pub const Counting = struct {
         // A block that crosses the size of big blocks moves between the
         // two allocators, which the caller does with alloc and free.
         if (big != self.isBig(new_len)) return null;
+        if (new_len > memory.len and inject.fail()) return null;
         const p = if (big) growPages(memory, alignment, new_len) else self.child.rawRemap(memory, alignment, new_len, ret_addr);
         self.bytes = (self.bytes -| memory.len) + new_len;
         return p orelse {

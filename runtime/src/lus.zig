@@ -17,6 +17,7 @@ pub const vm = struct {
     pub const object = @import("vm/object.zig");
     pub const gc = @import("vm/gc.zig");
     pub const state = @import("vm/state.zig");
+    pub const heapcount = @import("vm/heapcount.zig");
     pub const table = @import("vm/table.zig");
     pub const wtf8 = @import("vm/wtf8.zig");
     pub const numeric = @import("vm/numeric.zig");

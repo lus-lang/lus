@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
         .archive = b.option(bool, "archive", "Include vector.archive compression (default: true)"),
         .jit = b.option(bool, "jit", "Include the baseline JIT on targets that have one (default: true)") orelse true,
         .op_profile = b.option(bool, "op-profile", "Count the opcode sequences the interpreter runs and print them at exit (default: false)") orelse false,
+        .fail_alloc = b.option(bool, "fail-alloc", "Fail the allocation that LUS_FAIL_ALLOC names, to test out of memory handling (default: false)") orelse false,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -286,6 +287,7 @@ const Features = struct {
     archive: ?bool = null,
     jit: bool = true,
     op_profile: bool = false,
+    fail_alloc: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -310,6 +312,7 @@ const Features = struct {
         options.addOption(bool, "archive", r.archive);
         options.addOption(bool, "jit", f.jit);
         options.addOption(bool, "op_profile", f.op_profile);
+        options.addOption(bool, "fail_alloc", f.fail_alloc);
         return options;
     }
 };
