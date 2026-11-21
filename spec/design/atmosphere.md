@@ -57,7 +57,7 @@ The newest commit on `main` is published to the `unstable` line on every push, w
 
 ### Removing a release tag
 
-Deleting a release tag removes that release from the index of its line. The release disappears from search, from the package page, and from the resolution of the line address, which then serves the newest release of the line that still has a tag. The release stays downloadable at its pinned address, where its release document carries `"yanked": true` and the runtime prints a warning. A program therefore never breaks because a tag was deleted. Pushing the same tag again restores the release, provided it points to the same commit.
+Deleting a release tag removes that release from the index of its line. The release disappears from search, from the package page, and from the resolution of the line address, which then serves the newest release of the line that still has a tag. The release stays downloadable at its pinned address, where its release document carries `"yanked": true` and the runtime prints a warning. The server signs the release that the line address now serves again, because the runtime accepts a lower patch on a line only from a document signed later than the one it cached. A program therefore never breaks because a tag was deleted. Pushing the same tag again restores the release, provided it points to the same commit.
 
 Only an administrator of the registry removes a release from download. Its addresses then answer 410.
 
