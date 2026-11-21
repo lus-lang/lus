@@ -1,0 +1,3 @@
+pledge("load", "fs:read", "env")
+package.path = os.getenv("MODTREE_TWO") .. "?.lus;" .. package.path
+print("PATH-" .. require("which"))

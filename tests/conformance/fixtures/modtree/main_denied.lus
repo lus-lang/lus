@@ -1,0 +1,2 @@
+local ok, err = catch require("order_a")
+print(ok, (err:find("module 'order_a' not found", 1, true)) ~= nil)

@@ -12,10 +12,14 @@
 //!                          names it
 //!
 //! The command compiles the script, finds every `require` call whose
-//! argument is a string literal, resolves those names through the default
+//! argument is a string literal (`modtree.scan`), resolves those names through the default
 //! module path (or `LUS_PATH`), and compiles the modules it finds,
 //! recursively. Names that resolve to no file, such as standard library
 //! modules, are left to the usual searchers at run time.
+//! A directory named with `--include` contributes candidates: the bundle
+//! keeps only those that a literal require reaches from the script or
+//! from a file named with `--include`, unless some chunk loads modules
+//! dynamically (`spec/design/modules.md`, section 2).
 //!
 //! The executable is a copy of the running `lus` with the compiled chunks
 //! appended (see `bundle.zig`). It grants nothing implicitly: the program
@@ -30,8 +34,8 @@ const bundle = @import("../bundle.zig");
 const api = lus.api;
 const codegen = lus.compile.codegen;
 const dump = @import("../compile/dump.zig");
-const lexer = lus.syntax.lexer;
 const package = lus.lib.package;
+const modtree = lus.modtree;
 const Allocator = std.mem.Allocator;
 
 const usage =
@@ -122,6 +126,16 @@ const Collector = struct {
     l: *lus.vm.state.Thread,
     path_templates: []const u8,
     modules: std.ArrayList(bundle.Module) = .empty,
+    /// For each module, in the order of `modules`: the names of its
+    /// literal requires and whether it came from an `--include` of a
+    /// directory, which makes it a candidate for tree shaking.
+    info: std.ArrayList(Info) = .empty,
+    /// Whether any collected chunk loads modules dynamically.
+    dynamic: bool = false,
+    /// Set while a directory of `--include` is being collected.
+    in_dir: bool = false,
+
+    const Info = struct { requires: [][]u8, candidate: bool };
 
     fn deinit(c: *Collector) void {
         for (c.modules.items) |m| {
@@ -130,6 +144,60 @@ const Collector = struct {
             c.gpa.free(m.data);
         }
         c.modules.deinit(c.gpa);
+        for (c.info.items) |i| {
+            for (i.requires) |r| c.gpa.free(r);
+            c.gpa.free(i.requires);
+        }
+        c.info.deinit(c.gpa);
+    }
+
+    /// Drops the candidates that no literal require reaches from the
+    /// roots, unless some chunk loads modules dynamically. Returns the
+    /// number of modules dropped and prints their names.
+    fn shake(c: *Collector, io: std.Io) !usize {
+        if (c.dynamic) return 0;
+        const n = c.modules.items.len;
+        const keep = try c.gpa.alloc(bool, n);
+        defer c.gpa.free(keep);
+        var queue: std.ArrayList(usize) = .empty;
+        defer queue.deinit(c.gpa);
+        for (c.info.items, 0..) |i, k| {
+            keep[k] = !i.candidate;
+            if (keep[k]) try queue.append(c.gpa, k);
+        }
+        while (queue.pop()) |k| {
+            for (c.info.items[k].requires) |r| {
+                for (c.modules.items, 0..) |m, j| {
+                    if (!keep[j] and std.mem.eql(u8, m.name, r)) {
+                        keep[j] = true;
+                        try queue.append(c.gpa, j);
+                    }
+                }
+            }
+        }
+        var dropped: usize = 0;
+        var w: usize = 0;
+        for (0..n) |k| {
+            if (keep[k]) {
+                c.modules.items[w] = c.modules.items[k];
+                c.info.items[w] = c.info.items[k];
+                w += 1;
+                continue;
+            }
+            const m = c.modules.items[k];
+            const note = try std.fmt.allocPrint(c.gpa, "left out {s}, which no literal require reaches\n", .{m.name});
+            defer c.gpa.free(note);
+            std.Io.File.stdout().writeStreamingAll(io, note) catch {};
+            c.gpa.free(m.name);
+            c.gpa.free(m.chunkname);
+            c.gpa.free(m.data);
+            for (c.info.items[k].requires) |r| c.gpa.free(r);
+            c.gpa.free(c.info.items[k].requires);
+            dropped += 1;
+        }
+        c.modules.shrinkRetainingCapacity(w);
+        c.info.shrinkRetainingCapacity(w);
+        return dropped;
     }
 
     fn hasName(c: *Collector, name: []const u8) bool {
@@ -171,15 +239,27 @@ const Collector = struct {
         errdefer c.gpa.free(data);
         const owned_name = try c.gpa.dupe(u8, name);
         errdefer c.gpa.free(owned_name);
-        try c.modules.append(c.gpa, .{ .name = owned_name, .chunkname = chunkname, .data = data });
 
-        var required: std.ArrayList([]const u8) = .empty;
-        defer {
+        var required: std.ArrayList([]u8) = .empty;
+        errdefer {
             for (required.items) |s| c.gpa.free(s);
             required.deinit(c.gpa);
         }
-        try literalRequires(c.gpa, src, &required);
-        for (required.items) |mod| {
+        {
+            var arena_state = std.heap.ArenaAllocator.init(c.gpa);
+            defer arena_state.deinit();
+            if (try modtree.scan(c.gpa, arena_state.allocator(), src, chunkname)) |sc| {
+                if (sc.dynamic) c.dynamic = true;
+                for (sc.literal) |lit| try required.append(c.gpa, try c.gpa.dupe(u8, lit));
+            }
+        }
+        try c.modules.append(c.gpa, .{ .name = owned_name, .chunkname = chunkname, .data = data });
+        const reqs = try required.toOwnedSlice(c.gpa);
+        try c.info.append(c.gpa, .{ .requires = reqs, .candidate = c.in_dir });
+
+        // Modules that a candidate reaches are candidates too, so they
+        // stay only when a root reaches them.
+        for (reqs) |mod| {
             if (c.hasName(mod)) continue;
             const file = try c.resolve(mod) orelse continue;
             defer c.gpa.free(file);
@@ -225,6 +305,9 @@ const Collector = struct {
     }
 
     fn includeDir(c: *Collector, path: []const u8, prefix: []const u8) !void {
+        const was = c.in_dir;
+        c.in_dir = true;
+        defer c.in_dir = was;
         var dir = std.Io.Dir.cwd().openDir(c.io, path, .{ .iterate = true }) catch {
             std.debug.print("lus build: cannot open directory '{s}'\n", .{path});
             return error.Reported;
@@ -260,41 +343,6 @@ fn moduleName(gpa: Allocator, file: []const u8, prefix: []const u8) ![]u8 {
     if (std.mem.endsWith(u8, stem, ".lus") or std.mem.endsWith(u8, stem, ".lua")) stem = stem[0 .. stem.len - 4];
     if (prefix.len == 0) return gpa.dupe(u8, stem);
     return std.fmt.allocPrint(gpa, "{s}.{s}", .{ prefix, stem });
-}
-
-/// Appends the names in `require "x"` and `require("x")` calls of `src`.
-/// A source that does not lex contributes nothing, since compiling it
-/// reports the error.
-pub fn literalRequires(gpa: Allocator, src: []const u8, out: *std.ArrayList([]const u8)) !void {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const res = lexer.lex(gpa, arena_state.allocator(), src) catch |e| switch (e) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return,
-    };
-    const toks = res.tokens;
-    var i: usize = 0;
-    while (i + 1 < toks.len) : (i += 1) {
-        const t = toks[i];
-        if (t.tag != .name) continue;
-        if (!std.mem.eql(u8, payloadText(res, t) orelse continue, "require")) continue;
-        // A field or method named require is not the global function.
-        if (i > 0 and (toks[i - 1].tag == .dot or toks[i - 1].tag == .colon)) continue;
-        var j = i + 1;
-        const paren = toks[j].tag == .lparen;
-        if (paren) j += 1;
-        if (j >= toks.len or toks[j].tag != .string) continue;
-        if (paren and (j + 1 >= toks.len or toks[j + 1].tag != .rparen)) continue;
-        const name = payloadText(res, toks[j]) orelse continue;
-        try out.append(gpa, try gpa.dupe(u8, name));
-    }
-}
-
-fn payloadText(res: lexer.Result, t: lus.syntax.token.Token) ?[]const u8 {
-    return switch (res.payloads[t.payload]) {
-        .text => |s| s,
-        else => null,
-    };
 }
 
 /// The output path for `script` when `-o` is absent.
@@ -337,6 +385,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             return e;
         };
     }
+    _ = try c.shake(io);
 
     // The preserved options, applied before the program runs.
     var preserved: std.ArrayList([]const u8) = .empty;
@@ -384,23 +433,4 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     defer gpa.free(note);
     std.Io.File.stdout().writeStreamingAll(io, note) catch {};
     return 0;
-}
-
-test "literal requires" {
-    const gpa = std.testing.allocator;
-    var out: std.ArrayList([]const u8) = .empty;
-    defer {
-        for (out.items) |s| gpa.free(s);
-        out.deinit(gpa);
-    }
-    try literalRequires(gpa,
-        \\local a = require("lib.a")
-        \\local b = require "b"
-        \\local c = require(name)
-        \\local d = obj.require("no")
-        \\local e = require("x" .. y)
-    , &out);
-    try std.testing.expectEqual(@as(usize, 2), out.items.len);
-    try std.testing.expectEqualStrings("lib.a", out.items[0]);
-    try std.testing.expectEqualStrings("b", out.items[1]);
 }

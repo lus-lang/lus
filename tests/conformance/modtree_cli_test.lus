@@ -1,0 +1,86 @@
+--[[
+    Test suite for the require tree (spec/design/modules.md, section 2).
+
+    At launch lus indexes the literal requires of the program and compiles
+    every module once. The index never changes what a program observes:
+    module bodies run when require runs, a broken module that is never
+    required raises nothing, a change of package.path wins over the index,
+    and every require checks its permissions. Each scenario runs as a
+    subprocess.
+]]
+
+pledge("exec", "env=LUS_EXE", "fs:write")
+
+local lus_cmd = os.getenv("LUS_EXE")
+local FIX = TEST_DIR .. "/fixtures/modtree/"
+
+local function run(cmdline)
+    local f = io.popen(cmdline .. " 2>&1")
+    local out = f:read("a")
+    local ok = f:close()
+    return (ok == true or ok == 0), out
+end
+
+local function lus(script, env)
+    return run((env or "") .. " LUS_PATH='" .. FIX .. "?.lus' " .. lus_cmd .. " " .. FIX .. script)
+end
+
+local function module_bodies_run_at_require_in_order_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, out = lus("main_order.lus")
+    assert(ok, out)
+    assert(out == "MAIN-START\nA\nB after a\nORDER-OK\n", out)
+end
+
+local function a_broken_module_raises_only_when_required_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, out = lus("main_unused.lus")
+    assert(ok, out)
+    assert(out == "UNUSED-OK\nfalse\ttrue\ttrue\n", out)
+end
+
+local function a_package_path_change_wins_over_the_index_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, out = run("MODTREE_TWO='" .. FIX .. "two/' LUS_PATH='" .. FIX .. "one/?.lus' "
+        .. lus_cmd .. " " .. FIX .. "main_path.lus")
+    assert(ok, out)
+    assert(out == "PATH-TWO\n", out)
+end
+
+local function require_checks_permissions_of_indexed_modules_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, out = lus("main_denied.lus")
+    assert(ok, out)
+    assert(out == "false\ttrue\n", out)
+end
+
+local function workers_load_indexed_modules_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, out = lus("main_worker.lus")
+    assert(ok, out)
+    assert(out == "A\nWORKER-a\n", out)
+end
+
+local function build(script)
+    local out = os.tmpname()
+    local ok, text = run("cd '" .. FIX .. "shake' && " .. lus_cmd .. " build --include lib -o '" .. out .. "' " .. script)
+    catch fs.remove(out)
+    return ok, text
+end
+
+local function build_leaves_out_unreached_directory_modules_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, out = build("main.lus")
+    assert(ok, out)
+    assert(out:find("left out lib.unused, which no literal require reaches", 1, true), out)
+    assert(not out:find("left out lib.used", 1, true), out)
+    assert(out:find("(2 modules)", 1, true), out)
+end
+
+local function build_keeps_every_directory_module_with_a_dynamic_require_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, out = build("dynamic.lus")
+    assert(ok, out)
+    assert(not out:find("left out", 1, true), out)
+    assert(out:find("(3 modules)", 1, true), out)
+end

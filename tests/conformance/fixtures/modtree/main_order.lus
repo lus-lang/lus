@@ -1,0 +1,5 @@
+pledge("load", "fs:read")
+print("MAIN-START")
+local b = require("order_b")
+local a = require("order_a")
+print("ORDER-OK")

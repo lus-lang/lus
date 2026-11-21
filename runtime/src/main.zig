@@ -337,6 +337,11 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
     package.preincludes = preinc.list.items;
     defer package.preincludes = &.{};
 
+    // The index of the require tree outlives the state, because workers
+    // read it until the state stops them.
+    var index: ?*lus.modtree.Index = null;
+    defer if (index) |x| dropIndex(gpa, x);
+
     const l = try api.newState(gpa, io);
     defer api.closeForExit(l);
     defer out.deinit(l.g);
@@ -393,6 +398,7 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         defer gpa.free(src);
         const chunkname = try std.fmt.allocPrint(gpa, "@{s}", .{path});
         defer gpa.free(chunkname);
+        index = indexTree(l, src, chunkname, &cli);
         if (!runChunk(l, src, chunkname, args[cli.script_index + 1 ..])) return 1;
     } else if (cli.stdin) {
         var buf: std.ArrayList(u8) = .empty;
@@ -400,6 +406,7 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         var rbuf: [4096]u8 = undefined;
         var r = std.Io.File.stdin().readerStreaming(io, &rbuf);
         r.interface.appendRemainingUnlimited(gpa, &buf) catch {};
+        index = indexTree(l, buf.items, "=stdin", &cli);
         if (!runChunk(l, buf.items, "=stdin", args[cli.script_index + 1 ..])) return 1;
     }
     if (cli.interactive or (cli.script == null and !cli.stdin and cli.actions.items.len == 0 and !cli.version)) {
@@ -632,6 +639,37 @@ fn repl(l: *Thread, io: std.Io) !void {
 
 /// True when the -P grants mention the file system, which makes them the
 /// ceiling for reading the entry script.
+/// Indexes the require tree of the main chunk before it runs
+/// (`modtree.zig`). The index reads files under the authority of the
+/// runtime, except those that the `-P` grants of the command line could
+/// never allow. A failure to index leaves every module to `require`.
+fn indexTree(l: *lus.vm.state.Thread, src: []const u8, chunkname: []const u8, cli: *const Cli) ?*lus.modtree.Index {
+    const Ceiling = struct {
+        fn mayRead(ctx: *anyopaque, path: []const u8) bool {
+            const t: *lus.vm.state.Thread = @ptrCast(@alignCast(ctx));
+            return pledge.allowed(t, "fs:read", path);
+        }
+    };
+    const path = blk: {
+        if (!cli.ignore_env) if (l.g.environ) |e| if (e.get("LUS_PATH")) |p| break :blk p;
+        break :blk package.default_path;
+    };
+    const ix = lus.modtree.build(l, src, chunkname, .{
+        .path = path,
+        .may_read = if (limitsFileReads(cli.pledges.items)) Ceiling.mayRead else null,
+        .ctx = l,
+        .skip = package.answeredEarly,
+    }) catch return null;
+    lus.modtree.current = ix;
+    return ix;
+}
+
+fn dropIndex(gpa: std.mem.Allocator, ix: *lus.modtree.Index) void {
+    lus.modtree.current = null;
+    ix.deinit();
+    gpa.destroy(ix);
+}
+
 fn limitsFileReads(specs: []const []const u8) bool {
     for (specs) |spec| {
         if (std.mem.startsWith(u8, spec, "fs") and (spec.len == 2 or spec[2] == ':' or spec[2] == '=')) return true;

@@ -440,6 +440,8 @@ local utils = require("lib.utils")     -- lib/utils.lus
 local sub = require("lib.sub.module")  -- lib/sub/module.lus
 ```
 
+A directory often holds more modules than one program uses. `lus build` keeps only the modules of a directory that a literal `require` reaches from the script or from a file named on its own with `--include`. It lists the modules it leaves out. The program might load any module by a computed name, so `lus build` keeps the whole directory when the program loads code dynamically anywhere. Code loads dynamically when it calls `require` with anything other than one string constant, uses `require` as a value, calls `load`, `loadfile`, `dofile`, or `rawget`, or reads `_G` or `_ENV` with a computed key.
+
 ### Running the executable
 
 The executable is a copy of the running `lus` with the compiled code of the program appended. `require` looks for a bundled module before it searches any file, so a file of the same name in the working directory never replaces a module of the program. Loading a bundled module needs no permission, as for the [preincluded modules](/manual/guide#modules) of the interpreter.
