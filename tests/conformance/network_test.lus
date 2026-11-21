@@ -123,6 +123,30 @@ local function fetch_merges_caller_and_repeated_headers_test()
     assert(r.headers["x-tag"] == "one, two", r.headers["x-tag"])
 end
 
+-- The default User-Agent names the full version of the runtime.
+local function fetch_sends_the_version_in_its_user_agent_test()
+    local r = fetch_once("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+    assert(r.ok, r.err)
+    local agent
+    for _, line in ipairs(r.request) do
+        agent = agent or line:match("^User%-Agent: (.*)$")
+    end
+    assert(agent and agent:match("^Lus/%d+%.%d+%.%d+"), agent)
+end
+
+-- A list as the value of a request header sends one line for each value.
+local function fetch_sends_a_list_header_as_several_lines_test()
+    local r = fetch_once("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+        { ["X-Multi"] = { "one", "two", 3 } })
+    assert(r.ok, r.err)
+    local values = {}
+    for _, line in ipairs(r.request) do
+        local v = line:match("^X%-Multi: (.*)$")
+        if v then values[#values + 1] = v end
+    end
+    assert(table.concat(values, ",") == "one,two,3", table.concat(values, ","))
+end
+
 -- A response to HEAD ends after its headers, even with a Content-Length.
 local function fetch_head_reads_no_body_test()
     local r = fetch_once("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n")

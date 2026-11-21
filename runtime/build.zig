@@ -334,8 +334,11 @@ const Features = struct {
         options.addOption(bool, "archive", r.archive);
         options.addOption(bool, "jit", f.jit);
         options.addOption(bool, "op_profile", f.op_profile);
-        options.addOption(?[]const u8, "version", f.version);
         options.addOption(bool, "fail_alloc", f.fail_alloc);
+        // The version that `lus -v` and the User-Agent of network.fetch
+        // report. A release of an unstable channel sets it with `-Dversion`,
+        // and every other build takes the version in build.zig.zon.
+        options.addOption([]const u8, "version", f.version orelse @import("build.zig.zon").version);
         return options;
     }
 };

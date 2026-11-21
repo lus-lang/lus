@@ -304,6 +304,7 @@ fn profiled(result: anyerror!u8) anyerror!u8 {
 /// closed, which ends the thread of that worker too. A normal return
 /// would free memory that the worker may still use.
 fn exitAfterWorkers(result: anyerror!u8) anyerror!u8 {
+    lus.lib.term.restore();
     if (api.workers_abandoned) std.process.exit(result catch 1);
     return result;
 }

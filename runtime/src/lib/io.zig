@@ -16,6 +16,7 @@ const wtf8 = @import("../vm/wtf8.zig");
 const aux = @import("auxlib.zig");
 const shell = @import("shell.zig");
 const out = @import("out.zig");
+const term = @import("term.zig");
 const vector = @import("vector.zig");
 const lexer = @import("../syntax/lexer.zig");
 const Value = value.Value;
@@ -65,9 +66,11 @@ pub fn open(l: *Thread) Error!void {
     const methods = try aux.newLib(l, &.{
         .{ .name = "close", .func = fClose },
         .{ .name = "flush", .func = fFlush },
+        .{ .name = "isatty", .func = fIsatty },
         .{ .name = "lines", .func = fLines },
         .{ .name = "read", .func = fRead },
         .{ .name = "seek", .func = fSeek },
+        .{ .name = "setraw", .func = fSetraw },
         .{ .name = "setvbuf", .func = fSetvbuf },
         .{ .name = "write", .func = fWrite },
     });
@@ -232,12 +235,14 @@ fn readCount(l: *Thread, h: *Handle, n: usize) Error!?Value {
     // Text: count whole characters.
     var bytes: usize = 0;
     var chars: usize = 0;
+    // Each character waits only for its own bytes, so a terminal or a
+    // pipe returns a character as soon as it arrives.
     while (chars < n) {
-        if (try fill(l, h, bytes + 4) <= bytes) break;
-        const p = pending(h);
-        const len = wtf8.seqLen(p[bytes]);
-        if (bytes + len > p.len) {
-            bytes = p.len;
+        if (try fill(l, h, bytes + 1) <= bytes) break;
+        const len = wtf8.seqLen(pending(h)[bytes]);
+        const got = try fill(l, h, bytes + len);
+        if (bytes + len > got) {
+            bytes = got;
             break;
         }
         bytes += len;
@@ -587,6 +592,24 @@ fn ioFlush(l: *Thread) Error!u32 {
     return aux.retBool(l, true);
 }
 
+/// f:isatty(): whether the handle is a terminal.
+fn fIsatty(l: *Thread) Error!u32 {
+    const h = try checkHandle(l, 1);
+    return aux.retBool(l, term.isatty(l.g.io, h.file));
+}
+
+/// f:setraw(on): switches the terminal of the handle to raw input, or back
+/// when `on` is false. Returns the handle, or nil and a message.
+fn fSetraw(l: *Thread) Error!u32 {
+    const h = try checkHandle(l, 1);
+    const on = l.arg(2).isNil() or l.arg(2).truthy();
+    term.setRaw(l.g.io, h.file, on) catch |e| return failResult(l, switch (e) {
+        error.NotATerminal => "not a terminal",
+        error.Unsupported => "raw mode is not supported",
+    });
+    return aux.ret(l, l.arg(1));
+}
+
 fn fSetvbuf(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
     const mode = try aux.checkOption(l, 2, null, &.{ "no", "full", "line" });
@@ -739,7 +762,7 @@ fn popen(l: *Thread) Error!u32 {
     if (!reading and !std.mem.eql(u8, mode, "w")) return aux.argError(l, 2, "invalid mode", .{});
     out.flushAll(l.g);
     if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for popen", .{});
-    const child = shell.spawn(l.g.io, l.g.gpa, cmd, if (reading) .stdout else .stdin) catch return failResult(l, "cannot run command");
+    const child = shell.spawn(l.g.io, l.g.gpa, cmd, if (reading) .stdout else .stdin, @import("os.zig").ownedEnviron(l.g)) catch return failResult(l, "cannot run command");
     const f = if (reading) child.stdout.? else child.stdin.?;
     const hv = try newHandle(l, .{ .file = f, .kind = .pipe, .readable = reading, .writable = !reading, .child = child });
     return aux.ret(l, hv);

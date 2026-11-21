@@ -40,6 +40,7 @@ const ops = @import("../vm/ops.zig");
 const gc = @import("../vm/gc.zig");
 const numeric = @import("../vm/numeric.zig");
 const pledge = @import("../vm/pledge.zig");
+const os = @import("os.zig");
 const sched = @import("../vm/sched.zig");
 const blob = @import("../vm/blob.zig");
 const api = @import("../api.zig");
@@ -333,6 +334,9 @@ const Worker = struct {
     flags: [][]u8 = &.{},
     pledges: ?*anyopaque = null,
     environ: ?*std.process.Environ.Map = null,
+    /// Set when `environ` is a copy that the worker owns, made because its
+    /// creator changed its environment with `os.setenv`.
+    environ_owned: bool = false,
     warn_on: bool = false,
     env_frozen: bool = false,
     pause: usize = 200,
@@ -357,6 +361,7 @@ const Worker = struct {
         for (w.flags) |f| gpa.free(f);
         gpa.free(w.flags);
         if (w.pledges) |p| pledge.discard(gpa, p);
+        if (w.environ_owned) if (w.environ) |m| os.freeEnviron(m);
         gpa.destroy(w);
     }
 };
@@ -580,6 +585,10 @@ fn run(w: *Worker, msg: *?[]u8, val: *?*Packet) void {
         api.close(l);
     }
     g.environ = w.environ;
+    if (w.environ_owned) {
+        os.adoptEnviron(g, w.environ.?) catch return fail(msg, gpa, "failed to create worker state");
+        w.environ_owned = false;
+    }
     g.warn_on = w.warn_on;
     g.pause = w.pause;
     api.setFlags(l, w.flags) catch return fail(msg, gpa, "failed to create worker state");
@@ -786,7 +795,12 @@ fn create(l: *Thread) Error!u32 {
     w.args = args.toOwnedSlice(gpa) catch return l.raiseMem();
     w.flags = try flagSpecs(l);
     w.pledges = pledge.snapshot(l) catch return l.raiseMem();
-    w.environ = g.environ;
+    // A creator that changed its environment gives the worker a copy, so
+    // the two never share a map that one of them writes.
+    if (os.ownedEnviron(g) != null) {
+        w.environ = os.copyEnviron(g) catch return l.raiseMem();
+        w.environ_owned = true;
+    } else w.environ = g.environ;
     w.warn_on = g.warn_on;
     w.env_frozen = g.env_frozen;
     w.pause = g.pause;

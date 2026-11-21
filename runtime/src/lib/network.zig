@@ -1758,6 +1758,9 @@ fn headerText(l: *Thread, v: Value, buf: *std.ArrayList(u8)) Error!bool {
     return true;
 }
 
+/// The default User-Agent header: `Lus/` and the version of the build.
+const user_agent = "User-Agent: Lus/" ++ @import("build_options").version ++ "\r\n";
+
 fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: ParsedUrl, body: ?[]const u8) Error!void {
     const gpa = l.g.gpa;
     const default_port: u16 = if (u.https) 443 else 80;
@@ -1781,13 +1784,23 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
             name.clearRetainingCapacity();
             val.clearRetainingCapacity();
             if (!try headerText(l, kv.key, &name)) continue;
-            if (!try headerText(l, kv.val, &val)) continue;
-            if (std.mem.indexOfAny(u8, name.items, "\r\n") != null or std.mem.indexOfAny(u8, val.items, "\r\n") != null)
+            if (std.mem.indexOfAny(u8, name.items, "\r\n") != null)
                 return l.raiseFmt("invalid characters in HTTP header", .{});
-            if (std.ascii.eqlIgnoreCase(name.items, "host")) has_host = true;
-            if (std.ascii.eqlIgnoreCase(name.items, "connection")) has_conn = true;
-            if (std.ascii.eqlIgnoreCase(name.items, "user-agent")) has_agent = true;
-            own.print(gpa, "{s}: {s}\r\n", .{ name.items, val.items }) catch return l.raiseMem();
+            // A list sends one header line for each of its values.
+            const list: ?*Table = if (kv.val.tag == .table) kv.val.as(Table) else null;
+            const n: i64 = if (list) |t| table.length(t) else 1;
+            var i: i64 = 1;
+            while (i <= n) : (i += 1) {
+                val.clearRetainingCapacity();
+                const v = if (list) |t| table.getInt(t, i) else kv.val;
+                if (!try headerText(l, v, &val)) continue;
+                if (std.mem.indexOfAny(u8, val.items, "\r\n") != null)
+                    return l.raiseFmt("invalid characters in HTTP header", .{});
+                if (std.ascii.eqlIgnoreCase(name.items, "host")) has_host = true;
+                if (std.ascii.eqlIgnoreCase(name.items, "connection")) has_conn = true;
+                if (std.ascii.eqlIgnoreCase(name.items, "user-agent")) has_agent = true;
+                own.print(gpa, "{s}: {s}\r\n", .{ name.items, val.items }) catch return l.raiseMem();
+            }
         }
     }
     if (!has_host) {
@@ -1797,7 +1810,7 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
             req.print(gpa, "Host: {s}\r\n", .{u.host}) catch return l.raiseMem();
     }
     if (!has_conn) req.appendSlice(gpa, "Connection: close\r\n") catch return l.raiseMem();
-    if (!has_agent) req.appendSlice(gpa, "User-Agent: Lus/1.0\r\n") catch return l.raiseMem();
+    if (!has_agent) req.appendSlice(gpa, user_agent) catch return l.raiseMem();
     req.appendSlice(gpa, own.items) catch return l.raiseMem();
     if (body) |b| if (b.len > 0) {
         req.print(gpa, "Content-Length: {d}\r\n", .{b.len}) catch return l.raiseMem();

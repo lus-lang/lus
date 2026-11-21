@@ -43,6 +43,8 @@ pub const lib = struct {
     pub const base = @import("lib/base.zig");
     pub const out = @import("lib/out.zig");
     pub const package = @import("lib/package.zig");
+    pub const term = @import("lib/term.zig");
+    pub const serve = @import("lib/serve.zig");
     pub const crypto = @import("lib/crypto.zig");
 };
 
@@ -54,6 +56,7 @@ pub const compile = struct {
 };
 
 test {
+    _ = lib.serve;
     _ = semver;
     _ = httpc;
     _ = signed;

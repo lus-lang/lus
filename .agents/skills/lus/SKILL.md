@@ -29,7 +29,7 @@ pledge("fs:read=./data/*", "network:http")
 pledge("seal")
 ```
 
-Grant the narrowest permission that works. `fs:read=./data/*` beats `fs:read`, which beats `fs`. The permission names are `fs`, `fs:read`, `fs:write`, `fs:exec`, `network`, `network:http`, `network:tcp`, `network:udp`, `network:tls`, `network:server`, `exec`, `env`, `load`, and `worker`. Test files pledge exactly like scripts.
+Grant the narrowest permission that works. `fs:read=./data/*` beats `fs:read`, which beats `fs`. The permission names are `fs`, `fs:read`, `fs:write`, `fs:exec`, `network`, `network:http`, `network:tcp`, `network:udp`, `network:tls`, `network:server`, `exec`, `env`, `env:read`, `env:write`, `load`, and `worker`. Test files pledge exactly like scripts.
 
 ## Reach for the standard library first
 
