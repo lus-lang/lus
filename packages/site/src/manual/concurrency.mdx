@@ -159,7 +159,7 @@ A detached coroutine that resumes another detached coroutine is suspended while 
 
 ### Cancelling
 
-[`coroutine.close(co)`](/manual/api#coroutine.close) cancels a detached coroutine that is no longer needed, such as the accept loop of a server that shuts down. Lus stops the coroutine and closes its pending `<close>` variables, then `close` returns `true` and the status of the coroutine becomes `"dead"`. Callers that were waiting for the coroutine in `resume` receive `false` and `"cannot resume dead coroutine"`.
+[`coroutine.close(co)`](/manual/api#coroutine.close) cancels a detached coroutine that is no longer needed, such as the accept loop of a server that shuts down. Lus stops the coroutine, closes its pending `<close>` variables, and sets its status to `"dead"`, then `close` returns `true`. Callers that were waiting for the coroutine in `resume` receive `false` and `"cannot resume dead coroutine"`.
 
 In the following program, one coroutine cancels another, whose `<close>` variable runs its cleanup.
 
@@ -199,7 +199,7 @@ A _suspension point_ is an operation that waits for something outside the progra
 
 Inside a detached coroutine, a suspension point suspends the coroutine until it can continue. During the wait, `coroutine.status` reports `"suspended"` for it. In the main chunk, or in a plain coroutine that no detached coroutine resumed, the same operation blocks its caller while the detached coroutines run. In the server example of [Detached coroutines](#detached-coroutines), the acceptor and the connections run during the `receive` calls of the main chunk.
 
-Every other operation that takes time, such as reading and writing files, a SQLite query, or `os.execute`, blocks the whole program, detached coroutines included. [`network.fetch`](/manual/api#network.fetch) behaves in both ways. The detached coroutines run while `fetch` waits in the top-level code of a script, as they do at a suspension point, but a `fetch` inside a detached coroutine blocks the whole program.
+Every other operation that takes time, such as reading and writing files, SQLite calls, or `os.execute`, blocks the whole program, detached coroutines included. [`network.fetch`](/manual/api#network.fetch) behaves in both ways. The detached coroutines run while `fetch` waits in the top-level code of a script, as they do at a suspension point, but a `fetch` inside a detached coroutine blocks the whole program.
 
 A plain coroutine that reads a socket inside a detached coroutine suspends the detached coroutine with it. A line iterator written with `coroutine.wrap` therefore works unchanged on a connection that a detached coroutine serves. A suspension point reached inside a function that a library function calls back, such as the comparison function of `table.sort`, cannot suspend its coroutine, so it blocks the coroutine while the other coroutines run.
 
@@ -364,7 +364,7 @@ fs.remove(script)
 
 `nil`, booleans, numbers of every kind, strings, tables, and vectors may be passed to `worker.create` and sent as messages. Every other type, such as functions, coroutines, userdata, enum values, and queries, raises an error such as `"cannot serialize function to worker"`.
 
-A table arrives as a copy, so the receiver never changes the table of the sender. The copy has no metatable but keeps the structure of the original, so two references to one table arrive as two references to one copy. A table that contains itself arrives as a copy that contains itself. A table nested deeper than 100 levels raises `"table nesting too deep for serialization"`.
+A table arrives as a copy, so the receiver never changes the table of the sender. The copy keeps the structure of the original, so two references to one table arrive as two references to one copy. The copy has no metatable. A table that contains itself arrives as a copy that contains itself. A table nested deeper than 100 levels raises `"table nesting too deep for serialization"`.
 
 The following worker checks that the table it receives kept both kinds of reference.
 
@@ -384,7 +384,7 @@ print(worker.receive(worker.create(script, value)))   --> true
 fs.remove(script)
 ```
 
-A vector is moved, which makes sending a large buffer of bytes cheap. The receiver gets the bytes while the vector of the sender becomes empty, so sending it again raises `"cannot send a vector that was transferred to another worker"` and `vector.tostring` on it raises an error that says the vector was transferred to another worker. A sender that still needs the bytes sends [`vector.clone`](/manual/api#vector.clone) of the vector.
+A vector is moved, which makes sending a large buffer of bytes cheap. The receiver gets the bytes, which leaves the vector of the sender empty. Sending that vector again raises `"cannot send a vector that was transferred to another worker"`, as does `vector.tostring` on it. A sender that still needs the bytes sends [`vector.clone`](/manual/api#vector.clone) of the vector.
 
 In the following program, the vector of the sender is empty after the worker has received its three bytes.
 

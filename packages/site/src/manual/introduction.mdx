@@ -25,7 +25,7 @@ Lus is a personal project of [Louka Ménard Blondin](https://louka.sh), maintain
 _Language sovereignty_ is how much a programmer can do with the language alone. It has three parts.
 
 - **Implementation.** A sovereign language behaves the same in every environment that it runs in. The standard library of Lus is cross-platform.
-- **Use.** A program in a sovereign language rarely needs a third-party library. The standard library of Lus covers complete programs.
+- **Use.** A program in a sovereign language rarely needs a third-party library. The standard library of Lus covers what command line tools and network services need.
 - **Adoption.** A sovereign language takes little effort to learn and use. Lus has the small, readable syntax of Lua.
 
 ## Goals
@@ -54,13 +54,13 @@ The design also has the following **non-goals**, which Lus leaves to other langu
 
 - **_Other language syndrome._** Developers often solve problems with patterns from the languages they already know. A feature of Lus is designed to suit Lus, even when another language solves the same problem in another way.
 
-- **Modules.** Lus organizes programs with two features alone: `require` loads code from other files, while `local` makes a name private to its file.
+- **Modules.** Lus organizes programs with `require` and `local` alone: `require` loads code from other files, while `local` makes a name private to its file.
 
 - **Bureaucracy.** Lus is a single-repository project dedicated to the public domain, whose author decides every change to the language. The project is maintained with as little process as possible.
 
 ## Contributing
 
-Bug fixes, optimizations, and test cases are welcome, because they make the language better at what it already does. Most feature requests are declined, because design decisions stay with the author to keep the language coherent. Contributors need a working knowledge of Zig, Lua, and Lus, along with an understanding of how an interpreter and a garbage collector work.
+Bug fixes, optimizations, and test cases are welcome, because they make the language better at what it already does. Most feature requests are declined. Design decisions stay with the author, which keeps the language coherent. Contributors need a working knowledge of Zig, Lua, and Lus, along with an understanding of how an interpreter and a garbage collector work.
 
 LLM use is permitted when the operator knows Lus and the implementation languages and understands the complete change. The operator must carefully review everything that gets pushed. A person examines every contribution thoroughly before it enters the repository.
 

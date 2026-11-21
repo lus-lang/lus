@@ -12,7 +12,7 @@ Permissions limit the damage that a faulty program can do. A script that pledges
 
 ## Granting permissions
 
-`pledge` takes one or more permission names and returns one boolean for each name, in order, which is `true` when the program now holds the permission and `false` when the grant was refused.
+`pledge` takes one or more permission names and returns one boolean for each name, in order. A result is `true` when the program now holds the permission and `false` when the grant was refused.
 
 ```lus
 print(pledge("fs:read"))              --> true
@@ -31,7 +31,7 @@ print(#fs.list(".") > 0)   --> true
 
 The error object is a string of the form `permission "NAME" denied for 'VALUE'`. The value is the path, URL, address, or variable name that the operation requested. For an operation without such a value, the message names the operation, as in `permission "exec" denied for os.execute`, or it ends after `denied`.
 
-`pledge` is an ordinary function, so a program may call it at any point. Most programs pledge everything they need when they start, but a program may also pledge later, such as `network:http` only when a command line option enables a feature that uses the network.
+`pledge` is an ordinary function, so a program may call it at any point. Most programs pledge everything they need when they start, but a program may also pledge later, for example `network:http` once a command line option enables a feature that uses the network.
 
 Every grant succeeds in a script that runs without the `-P` option. When the person or the host program that starts a script grants permissions itself, the script may pledge only what those grants cover, with `pledge` returning `false` for everything else. [Granting from the command line](#granting-from-the-command-line) and [Permissions in an embedding host](#permissions-in-an-embedding-host) describe the two cases. A refused grant raises no error, so the error comes later, from the operation that requires the permission.
 

@@ -1775,7 +1775,7 @@ end
 print(config.host, config.port, config.debug)  --> example.org  8080  true
 ```
 
-The pattern for a line has five parts:
+The pattern for a line consists of the following parts.
 
 - `^%s*` matches optional whitespace at the start of the line.
 - `([%w_]+)` captures the key, which consists of letters, digits, and underscores.
@@ -3180,7 +3180,7 @@ print(coroutine.status(counter))   --> dead
 
 ### Detached coroutines
 
-Many programs spend most of their time waiting. A chat server holds a thousand connections that each send a line every few minutes. A script that requests data from five services waits a second for each answer. Sequential code waits for one thing at a time, so while it waits for a line from the first connection, the other 999 connections get no answer.
+Many programs spend most of their time waiting, such as a chat server whose thousand connections each send a line every few minutes, or a script that requests data from several services that each take a second to answer. Sequential code waits for one thing at a time, so while it waits for a line from the first connection, every other connection gets no answer.
 
 A _detached coroutine_ is a coroutine that the runtime resumes by itself. [`coroutine.detach`](/manual/api#coroutine.detach) starts one. When a detached coroutine reaches an operation that waits, such as reading from a network connection, the runtime pauses that coroutine and runs the others until its data has arrived. A program therefore creates one detached coroutine for each connection or request, each written as sequential code.
 

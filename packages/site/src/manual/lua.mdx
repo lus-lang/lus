@@ -14,9 +14,9 @@ Lus keeps the core of Lua: tables, metatables, functions as values, multiple res
 
 The two languages have different purposes. Lua is designed as an extension language, embedded in a host program written in C that supplies most of what a script uses: file operations beyond the basic ones, networking, threads, and the rules for what a script may do. This keeps Lua small enough for game engines, routers, and editors.
 
-Lus is designed for complete programs, such as command line tools and network services. The `lus` executable contains the libraries and tools that these programs need, such as JSON, file operations, networking, a database, a test runner, and a formatter. A host program can still embed Lus with the C interface in [`lus.h`](/manual/embedding).
+Lus is designed first for programs that run on their own, such as command line tools and network services, so the `lus` executable contains the libraries and tools that these programs need, such as JSON, file operations, networking, a database, a test runner, and a formatter. A host program can still embed Lus with the C interface in [`lus.h`](/manual/embedding).
 
-This difference of purpose explains most of the differences between the two languages. A complete program needs a larger standard library, a way to limit its own access to the system, and a string type that is safe to treat as text.
+This difference of purpose explains most of the differences between the two languages. A program that has no host to rely on needs a larger standard library, a way to limit its own access to the system, and a string type that is safe to treat as text.
 
 ## Porting a Lua program
 
@@ -24,7 +24,7 @@ A Lua program may need changes before it runs in Lus. They concern strings that 
 
 ### What runs unchanged
 
-The following parts of Lua behave in Lus as they do in Lua 5.5. Library functions that access the system also need [permissions](#permissions).
+The following parts of Lua behave the same in Lus. Library functions that access the system also need [permissions](#permissions).
 
 - The syntax of Lua 5.5, including `goto`, integer division, the bitwise operators, `global` declarations, and the `<const>` and `<close>` attributes.
 - Integers and floats, with the same arithmetic, conversions, and wraparound on integer overflow.
@@ -65,7 +65,7 @@ config_host.lua:10:1: warning: local declaration can be moved to the if conditio
 config_host.lua:10:14: warning: and-chain can use optional chaining: x?.y?.z [use-optional-chain]
 ```
 
-The first warning must be fixed, because the call to `pcall` raises an error in Lus. The other two are suggestions about code that runs as written. A file that uses a new reserved word as a name has a syntax error, which is then the only finding that `lus check` reports. Calls to the other removed functions and missing permissions raise errors when the program runs, each naming the missing function or permission. [Developer tools](/manual/tools#checking) describes every diagnostic.
+The first warning must be fixed, because the call to `pcall` raises an error in Lus. The other two are suggestions about code that runs as written. A file that uses a new reserved word as a name has a syntax error, which is then the only finding that `lus check` reports. `lus check` reports neither the other removed functions nor missing permissions, which raise errors that name the function or the permission when the program runs. [Developer tools](/manual/tools#checking) describes every diagnostic.
 
 ### Strings and bytes
 
@@ -78,7 +78,7 @@ print(utf8.codepoint(s, utf8.offset(s, 2)), utf8.char(233))     -- 233  é
 print(#s, s:byte(2), s:byte(3))                                 -- 6  195  169
 ```
 
-A Lus string is text, so every string operation counts characters. A _character_ is one Unicode code point. Bytes have a separate type, the _vector_, which is a resizable buffer of bytes whose offsets start at 0. The same code in Lus is as follows.
+A Lus string is text, so every string operation counts characters. A _character_ is one Unicode code point. Bytes have a separate type, the _vector_, which is a resizable buffer of bytes whose offsets start at 0. In Lus, the same code needs no calls to `utf8`.
 
 ```lus
 local s = "héllo"
@@ -234,16 +234,16 @@ local ok, port = pcall(function()
 end)
 print(ok, port)                   -- true  8080
 
-local failed, err = pcall(load_settings, "app.toml")
-print(failed, err)                -- false  cannot read app.toml
+local ok2, err = pcall(load_settings, "app.toml")
+print(ok2, err)                   -- false  cannot read app.toml
 
-local failed, info = xpcall(load_settings, describe, "app.toml")
-print(failed, info.operation)     -- false  load settings
+local ok3, info = xpcall(load_settings, describe, "app.toml")
+print(ok3, info.operation)        -- false  load settings
 ```
 
 The wrapped code is in a different function, where a `return` returns from the wrapper only and the `...` of the enclosing function is unavailable. Code can therefore change meaning when it is moved into a `pcall`. In a call to `xpcall`, the handler is written between the function and its arguments.
 
-In Lus, `catch` is a keyword followed by an expression. It evaluates the expression, then returns `true` and every result of the expression, or `false` and the error object. A _catch handler_ is a function written in brackets after `catch`, which receives the error object and returns the value that replaces it, as the handler of `xpcall` does. The same code in Lus is as follows.
+In Lus, `catch` is a keyword followed by an expression. It evaluates the expression, then returns `true` and every result of the expression, or `false` and the error object. A _catch handler_ is a function written in brackets after `catch`, which receives the error object and returns the value that replaces it, as the handler of `xpcall` does. With `catch`, the same program needs no wrapper function.
 
 ```lus
 local config = { server = { port = 8080 } }
@@ -259,11 +259,11 @@ end
 local ok, port = catch config.server.port
 print(ok, port)                   --> true  8080
 
-local failed, err = catch load_settings("app.toml")
-print(failed, err)                --> false  cannot read app.toml
+local ok2, err = catch load_settings("app.toml")
+print(ok2, err)                   --> false  cannot read app.toml
 
-local failed, info = catch[describe] load_settings("app.toml")
-print(failed, info.operation)     --> false  load settings
+local ok3, info = catch[describe] load_settings("app.toml")
+print(ok3, info.operation)        --> false  load settings
 ```
 
 A `catch` can also be a statement that evaluates the expression and discards the results or the error, which is useful for cleanup whose failure does not matter.
@@ -290,7 +290,8 @@ local function find_user(id)
     end
 end
 
-print(find_user(1) and find_user(1).name, find_user(2) and find_user(2).name, calls)   -- Ada  nil  3
+local first, second = find_user(1), find_user(2)
+print(first and first.name, second and second.name, calls)                            -- Ada  nil  2
 
 local config = { server = {} }
 print(config and config.server and config.server.host or "localhost")                 -- localhost
@@ -299,9 +300,9 @@ local on_done = nil
 print(on_done and on_done("finished"))                                                -- nil
 ```
 
-The expression repeats every prefix, so it grows with each level of nesting. A prefix that is a call runs once for each time it is written, which is why `find_user(1)` runs twice and `calls` ends at 3, unless the program first stores the result in a local variable.
+The expression repeats every prefix, so it grows with each level of nesting. A prefix that is a call would run once for each time it is written, so the program first stores each result of `find_user` in a local variable.
 
-In Lus, a `?` after a value makes the next step optional. This syntax is [optional chaining](/manual/guide#optional-chaining). When the value before `?` is `nil` or `false`, Lus skips the rest of the chain, which then has that value as its result. Each prefix is written once and evaluated once. The `?` also works before a method call, as in `file?:read("l")`, and before a function call, as in `on_done?(result)`. The same code in Lus is as follows.
+In Lus, a `?` after a value makes the next step optional. This syntax is [optional chaining](/manual/guide#optional-chaining). When the value before `?` is `nil` or `false`, Lus skips the rest of the chain, which then has that value as its result. Each prefix is written once and evaluated once. The `?` also works before a method call, as in `file?:read("l")`, and before a function call, as in `on_done?(result)`. With optional chaining, the program writes each call once, inside the expression that uses it.
 
 ```lus
 local calls = 0
@@ -337,7 +338,7 @@ print("total: " .. string.format("%.2f", 19.5))                                 
 
 The `..` operator raises an error for `nil` and for booleans, so each such value needs a call to `tostring`. A value that is unexpectedly `nil` makes the line that reports the problem raise an error itself. `string.format` lists the values after the format string, away from the specifiers that mark their places in the text, which must match the values in number and order.
 
-In a Lus [string written between backticks](/manual/guide#strings), `$name` inserts the value of a variable and `$(expression)` inserts the result of an expression. Lus converts every inserted value as `tostring` does, including `nil` and booleans. The same code in Lus is as follows.
+In a Lus [string written between backticks](/manual/guide#strings), `$name` inserts the value of a variable and `$(expression)` inserts the result of an expression. Lus converts every inserted value as `tostring` does, including `nil` and booleans. With interpolation, each line of the same program is one string.
 
 ```lus
 local name, count, active = "ada", 3, true
@@ -383,7 +384,7 @@ end
 
 Each local variable stays in scope after its test, until the end of the enclosing block, so each fallback needs another variable name and another `if`. The `while` loop contains the call to `table.remove` twice, once before the loop and once at the end of its body.
 
-In Lus, the [condition](/manual/guide#conditions-that-declare-variables) of an `if`, an `elseif`, or a `while` may declare a variable with `name = expression`. Lus assigns the value, then tests it. The variable is in scope until the `end` of the statement. A sequence of fallbacks becomes one `if` statement with an `elseif` for each fallback, while a `while` condition contains its call once. The same code in Lus is as follows.
+In Lus, the [condition](/manual/guide#conditions-that-declare-variables) of an `if`, an `elseif`, or a `while` may declare a variable with `name = expression`. Lus assigns the value, then tests it. The variable is in scope until the `end` of the statement. In the same program, the fallbacks become one `if` statement with an `elseif` for each. The `while` loop writes its call once, in the condition.
 
 ```lus
 local env = { PORT = "8080" }
@@ -424,12 +425,15 @@ local timeout = cfg.timeout
 print(host, port, timeout)    -- localhost  8080  30
 
 local insert, concat = table.insert, table.concat
-print(concat({ "a", "b" }, "+"))   -- a+b
+local parts = {}
+insert(parts, host)
+insert(parts, port)
+print(concat(parts, ":"))     -- localhost:8080
 ```
 
 Each name is written twice, once as the variable and once as the field. When the table comes from a call, the program stores it in a variable first so that the call runs once.
 
-In Lus, [`local a, b from t`](/manual/guide#destructuring-with-from) declares the variables `a` and `b` with the values of `t.a` and `t.b`. Lus evaluates the expression after `from` once, whatever the number of names. The same code in Lus is as follows.
+In Lus, [`local a, b from t`](/manual/guide#destructuring-with-from) declares the variables `a` and `b` with the values of `t.a` and `t.b`. Lus evaluates the expression after `from` once, whatever the number of names. In the same program, each name appears once.
 
 ```lus
 local function load_config()
@@ -440,7 +444,10 @@ local host, port, timeout from load_config()
 print(host, port, timeout)    --> localhost  8080  30
 
 local insert, concat from table
-print(concat({ "a", "b" }, "+"))   --> a+b
+local parts = {}
+insert(parts, host)
+insert(parts, port)
+print(concat(parts, ":"))     --> localhost:8080
 ```
 
 `from` also works in an assignment to existing variables, in a `global` declaration, and in a condition. With a call to `require` after `from`, one line imports several functions of a module, as in `local encode, decode from require("codec")`.
@@ -462,7 +469,7 @@ end
 
 Every loop that skips iterations needs a label at the end of its body. A label must not have the same name as another visible label, so a loop nested inside another loop that also skips iterations needs a different label name.
 
-In Lus, the [`continue`](/manual/guide#break-and-continue) statement skips the rest of the current iteration of the innermost enclosing loop, in every kind of loop. The same code in Lus is as follows.
+In Lus, the [`continue`](/manual/guide#break-and-continue) statement skips the rest of the current iteration of the innermost enclosing loop, in every kind of loop. In the same program, the loop needs no label.
 
 ```lus
 local lines = { "alpha", "", "# note", "beta" }
@@ -501,12 +508,12 @@ local labels = {
 local current = Status.suspended
 print(type(current), labels[current])              -- number  Suspended
 print(current == "suspended", current == 2)        -- false  true
-print(current < Status.closed, current)            -- true  2
+print(current < Status.closed, tonumber(current))  -- true  2
 ```
 
 A numbered constant is equal to any number with the same value, such as a count or an identifier read from a file. A string constant is equal to any string with the same text.
 
-A Lus [`enum`](/manual/guide#enums) declares _members_. A member has the type `enum` and is equal only to itself. Members compare with `<` in the order of their declaration. `tonumber` returns the position of a member in its declaration. The same code in Lus is as follows.
+A Lus [`enum`](/manual/guide#enums) declares _members_. A member has the type `enum` and is equal only to itself. Members compare with `<` in the order of their declaration. `tonumber` returns the position of a member in its declaration. With an enum, the same program shows that the current state is equal neither to its name nor to its position.
 
 ```lus
 local Status = enum active, suspended, closed end
@@ -542,7 +549,7 @@ print(total, total == 1)       -- 0.99999999999999989  false
 
 A Lua program that handles money therefore stores every amount as an integer number of cents. A Lua program that handles identifiers wider than 64 bits stores them as strings.
 
-Lus keeps integers and floats with the same behavior and adds two exact subtypes of [`number`](/manual/guide#numbers). A _bigint_, written with the suffix `n`, is an integer of any size. A _decimal_, written with the suffix `d`, is a number that keeps its exact fractional part. The same code with these subtypes is as follows.
+Lus keeps integers and floats with the same behavior and adds two exact subtypes of [`number`](/manual/guide#numbers). A _bigint_, written with the suffix `n`, is an integer of any size. A _decimal_, written with the suffix `d`, is a number that keeps its exact fractional part. With these subtypes, the same calculations are exact.
 
 ```lus
 print(math.maxinteger + 1n)    --> 9223372036854775808
@@ -581,7 +588,7 @@ print(s:sub(utf8.offset(s, 2), utf8.offset(s, 5) - 1))        -- éll
 
 `table.unpack` places every element on the stack, so a long range fails with the error `too many results to unpack`. `table.move` needs five arguments for one copy.
 
-In Lus, the [slice](/manual/guide#slices) `t[i, j]` copies the positions from `i` to `j` of a table, a string, or a vector. Either bound may be left out. The same code in Lus is as follows.
+In Lus, the [slice](/manual/guide#slices) `t[i, j]` copies the positions from `i` to `j` of a table, a string, or a vector. Either bound may be left out. With slices, each copy in the same program is one expression.
 
 ```lus
 local list = { 10, 20, 30, 40, 50 }
@@ -633,7 +640,7 @@ print(deep.self == deep, deep.ports[1])                     -- true  8080
 
 The versions differ in whether they copy keys and metatables. A version without the `seen` table recurses without end on a table that contains itself.
 
-[`table.clone(t)`](/manual/api#table.clone) makes a shallow copy and `table.clone(t, true)` makes a deep copy. A deep copy copies each table once, even when the original refers to that table several times or the table contains itself. The same code in Lus is as follows.
+[`table.clone(t)`](/manual/api#table.clone) makes a shallow copy and `table.clone(t, true)` makes a deep copy. A deep copy copies each table once, even when the original refers to that table several times or the table contains itself. With `table.clone`, the same program needs neither function.
 
 ```lus
 local defaults = { name = "app", ports = { 80, 443 } }
@@ -668,7 +675,7 @@ print(port)   -- 8081
 
 This idiom creates a function each time the line runs. A `return` inside the function returns from that function only, so the code cannot return from the enclosing function, use `break` on an enclosing loop, or read the `...` of the enclosing function. A program can also declare the variable first and assign it inside the loop, but the variable is then `nil` when no assignment runs, unless the program assigns a default after the loop.
 
-A Lus [_do expression_](/manual/guide#do-expressions) is a `do ... end` block that is used as a value. The `provide` statement ends the block and gives the values of the do expression. The block is part of the enclosing function, so Lus creates no function for it. Its local variables go out of scope at its `end`. The same code in Lus is as follows.
+A Lus [_do expression_](/manual/guide#do-expressions) is a `do ... end` block that is used as a value. The `provide` statement ends the block and gives the values of the do expression. The block is part of the enclosing function, so Lus creates no function for it. Its local variables go out of scope at its `end`. With a do expression, the same computation needs no function.
 
 ```lus
 local config = { http_port = "8081" }
@@ -729,7 +736,7 @@ print(area(3, 4))   -- call area, then 12
 
 The wrapping is a separate statement after the function, where a reader may miss it. It also contains the name of the function three times. A Lua program that checks every value assigned to a variable has a similar problem. It repeats the check at every assignment, or replaces the variable with a table whose `__newindex` metamethod checks each value.
 
-Lua 5.4 introduced the attributes `<const>` and `<close>`. In Lus, a program can also define its own. A [_runtime attribute_](/manual/guide#runtime-attributes) is a function written in angle brackets after the name of a local variable in its declaration. Lus calls it at the declaration and at every later assignment in the function that declares the variable, passing the name of the variable and the value being assigned, then stores the value that the attribute returns. An attribute can therefore wrap a function where the function is declared. The same code in Lus is as follows.
+Lua 5.4 introduced the attributes `<const>` and `<close>`. In Lus, a program can also define its own. A [_runtime attribute_](/manual/guide#runtime-attributes) is a function written in angle brackets after the name of a local variable in its declaration. Lus calls it at the declaration and at every later assignment in the function that declares the variable, passing the name of the variable and the value being assigned, then stores the value that the attribute returns. An attribute can therefore wrap a function where the function is declared, as the following program does with the same `logged` function.
 
 ```lus
 local function logged(name, fn)
@@ -787,7 +794,7 @@ hi_y = 100
 print(hi_x, hi_y)               -- 7  100
 ```
 
-A Lus [_local group_](/manual/guide#local-groups) is a set of local variables declared together under one name with the attribute `<group>`. Each field of a group is a local variable, so a group allocates no table. A field is read and written as `name.field`. Assigning a table constructor to the group assigns the fields that the constructor names, while the other fields keep their values. The same code in Lus is as follows.
+A Lus [_local group_](/manual/guide#local-groups) is a set of local variables declared together under one name with the attribute `<group>`. Each field of a group is a local variable, so a group allocates no table. A field is read and written as `name.field`. Assigning a table constructor to the group assigns the fields that the constructor names, while the other fields keep their values. With groups, the coordinates of each corner of the same bounding box share one name.
 
 ```lus
 local points = { { x = 3, y = 8 }, { x = -2, y = 5 }, { x = 7, y = -1 } }
@@ -823,7 +830,7 @@ print(verbose)   -- nil
 
 The test runs every time the line is reached. The optional code is part of the compiled program even when it can never run.
 
-A [_flag_](/manual/guide#build-flags) is a field of the readonly global table `flags`, set with the `-F` option of `lus`. `lus -Fverbose app.lus` sets `flags.verbose` to `true`. `-Flevel=3` sets `flags.level` to the number 3. A flag that was not set is `nil`. When the condition of an `if` is exactly `flags.name` or `not flags.name`, Lus evaluates it at compile time and leaves the branch that cannot run out of the compiled code. The same code in Lus is as follows.
+A [_flag_](/manual/guide#build-flags) is a field of the readonly global table `flags`, set with the `-F` option of `lus`. `lus -Fverbose app.lus` sets `flags.verbose` to `true`. `-Flevel=3` sets `flags.level` to the number 3. A flag that was not set is `nil`. When the condition of an `if` is exactly `flags.name` or `not flags.name`, Lus evaluates it at compile time and leaves the branch that cannot run out of the compiled code. With a flag, the same test costs nothing at run time.
 
 ```lus
 local cache = { 1, 2, 3 }
@@ -862,7 +869,7 @@ end
 
 The operation is divided among a loop, a condition, a constructor, and a comparison function. For a database table, the same operation is written again as an SQL string with its own parameters.
 
-A Lus [_query_](/manual/guide#queries) is one expression that starts with `@` and contains the source, the filter, the fields to keep, and the order. The function `query` runs a query and returns an iterator over the rows of the result. The same code in Lus is as follows.
+A Lus [_query_](/manual/guide#queries) is one expression that starts with `@` and contains the source, the filter, the fields to keep, and the order. The function `query` runs a query and returns an iterator over the rows of the result. With a query, the loop, the condition, the constructor, and the comparison of the same program become one expression.
 
 ```lus
 local orders = {
