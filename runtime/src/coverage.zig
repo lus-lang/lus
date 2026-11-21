@@ -142,7 +142,11 @@ pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, only: ?[
     if (foreign > 0) std.debug.print("lus: skipped {d} coverage files of another build\n", .{foreign});
 
     const si = try std.debug.getSelfDebugInfo();
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    // The symbol lookup holds the lock of the debug information while it
+    // allocates. The allocator of a debug build captures a stack trace on
+    // each allocation, which takes the same lock, so the lookup allocates
+    // from pages instead.
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var by_dir: std.StringArrayHashMapUnmanaged(Tally) = .empty;
