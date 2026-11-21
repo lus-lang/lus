@@ -1,6 +1,6 @@
 # Lus
 
-> Lus is a small, fast programming language derived from Lua 5.5. One executable of about 7 MB runs scripts and carries a test runner, formatter, checker, documentation generator, debugger, and bundler. The standard library covers JSON, CSV, SQLite, HTTP clients and servers, TCP, UDP, TLS, compression, time zones, and threads. Every script runs with no permissions until it pledges the ones it needs.
+> Lus is a small, fast programming language derived from Lua 5.5. One executable of about 7 MB runs scripts and carries a test runner, formatter, checker, documentation generator, debugger, and bundler. The standard library covers JSON, CSV, SQLite, HTTP clients and servers, TCP, UDP, TLS, compression, cryptography, time zones, and threads. Every script runs with no permissions until it pledges the ones it needs.
 
 Agents writing Lus should install the `lus` skill below, then work in a loop of `lus check --json`, `lus fmt --write`, and `lus test --json`. Lus differs from Lua in a few places that matter for generated code: `catch` replaces `pcall`, strings are text indexed by character, raw bytes are vectors, and I/O functions raise an error until the script calls `pledge`. Each link below is a Markdown page. The documentation describes Lus 2.0.
 
@@ -27,6 +27,7 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 - [Coroutines and workers](https://lus.dev/manual/concurrency.md): `coroutine.detach`, and interpreter states on their own threads with message passing.
 - [Filesystem](https://lus.dev/manual/filesystem.md): The `fs` library and `fs.path`.
 - [Time](https://lus.dev/manual/time.md): Instants, durations, and zoned times with embedded tzdata. Unstable.
+- [Cryptography](https://lus.dev/manual/crypto.md): SHA-2 digests, HMAC, Ed25519 signatures, Argon2id password hashes, secure random bytes, UUIDs, and ULIDs. Unstable.
 - [Text and bytes](https://lus.dev/manual/text.md): WTF-8 strings measured in characters, vectors for binary data, transcoding, and compression through `vector.archive`.
 
 ## Language

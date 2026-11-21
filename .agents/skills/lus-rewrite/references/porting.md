@@ -12,6 +12,9 @@ Common dependencies and idioms, with the Lus feature that covers each. Check a r
 | `asyncio`, promises, callbacks around sockets | sequential code in `coroutine.detach`. Socket calls suspend only the calling coroutine. |
 | `multiprocessing`, worker threads | `worker.create(file, args)`, `worker.send`, `worker.receive` |
 | `gzip`, `zlib`, `zstandard`, `brotli` | `vector.archive.gzip`, `deflate`, `zstd`, `brotli`, `lz4` |
+| `hashlib`, `hmac`, Node `crypto`, `crypto/sha256` | `crypto.hash`, `crypto.hmac`, and `crypto.hasher` for streams. Digests are vectors, written as hex with `string.transcode`. |
+| `bcrypt`, `argon2`, `passlib` | `crypto.hashpassword` (Argon2id) and `crypto.verifypassword`. Stored Argon2 hashes from other libraries verify as they are. Plan a password reset, or a migration window where the original service checks bcrypt hashes. |
+| `uuid`, `ulid`, `secrets` | `crypto.uuid(4)` or `crypto.uuid(7)`, `crypto.ulid()`, `crypto.random(n)` |
 | `datetime` with `zoneinfo`, Luxon, `time` | `time.now()`, `time.zone(name)`, durations such as `time.hours(n)` |
 | `decimal.Decimal`, big integers | `1.50d` decimals, `123n` bigints |
 | `os.path`, `pathlib`, `fs` | `fs.path.join`, `fs.path.name`, `fs.path.parent`, `fs.list`, `fs.type` |
