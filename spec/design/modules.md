@@ -98,7 +98,7 @@ $LUS_HOME/
   lock                        held while a command changes the directory
 ```
 
-The user adds `$LUS_HOME/bin` to `PATH` once. `use` replaces `bin/lus` with an atomic rename. When `lus` on `PATH` resolves to another file, `use` and `which` print a warning that names that file. `install` unpacks into a temporary directory under `versions/` and renames it into place, so an interrupted install leaves no partial version. A command that changes the directory holds an exclusive lock on `lock` for its duration, so two installs never interleave.
+The official installers, `install.sh` and the Windows installer, install the release they download into `versions/`, make it the default, and add `$LUS_HOME/bin` to `PATH`. A fresh installation is therefore already managed by `lus version`. `use` replaces `bin/lus` with an atomic rename. When `lus` on `PATH` resolves to another file, `use` and `which` print a warning that names that file. `install` unpacks into a temporary directory under `versions/` and renames it into place, so an interrupted install leaves no partial version. A command that changes the directory holds an exclusive lock on `lock` for its duration, so two installs never interleave.
 
 ### Release index
 
