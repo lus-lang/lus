@@ -9,6 +9,10 @@ const Thread = state.Thread;
 const Error = state.Error;
 
 pub fn openAll(l: *Thread) Error!void {
+    // The standard output and the capability registry are made here, where
+    // running out of memory raises an error, and are only looked up later.
+    _ = @import("out.zig").prepare(l.g) catch return l.raiseMem();
+    _ = @import("../vm/pledge.zig").prepare(l.g) catch return l.raiseMem();
     l.g.dict_tables = true;
     defer l.g.dict_tables = false;
     try @import("base.zig").open(l);

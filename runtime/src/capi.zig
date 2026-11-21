@@ -839,7 +839,7 @@ export fn lus_load(l: *Thread, buf: ?[*]const u8, len: usize, chunkname: ?[*:0]c
     const name = if (chunkname) |c| std.mem.span(c) else "=(load)";
     const top = l.top;
     api.load(l, src, name) catch {
-        const syntax = l.top > top;
+        const syntax = !(l.err.tag == .string and l.err.as(String) == l.g.memerr);
         l.top = top;
         pushErr(l);
         if (!syntax) return errStatus(l);
