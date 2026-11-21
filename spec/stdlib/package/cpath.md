@@ -16,4 +16,4 @@ Lus 2.0 runs its standard library in the runtime itself, and a host program exte
 print(package.cpath == "")   --> true
 ```
 
-[`package.loadlib`](/manual/api#package.loadlib) reports the same message for a library loaded directly. [Embedding Lus](/manual/guide#embedding-lus) in the guide describes how a host registers native functions.
+[`package.loadlib`](/manual/api#package.loadlib) reports the same message for a library loaded directly. [Embedding Lus](/manual/guide#embedding) in the guide describes how a host registers native functions.

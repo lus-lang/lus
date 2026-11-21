@@ -1,96 +1,344 @@
 ---
-order: 5.5
-title: "Lus and Lua"
+order: 5
+title: "Lus for Lua programmers"
 icon: git-fork
 group: learn
-shortdesc: "Where Lus departs from Lua, what Lua does in each case, and why Lus decided differently."
+shortdesc: "What a Lua program must change to run in Lus, and each Lus feature beside the Lua idiom it replaces, with the reason for the difference."
 ---
 
-Lus grew out of Lua 5.5 and keeps its core: tables as the one data structure, metatables, first-class functions and closures, multiple results, coroutines, 1-based indexing, and a grammar small enough to learn in an afternoon. Lua earned its place by saying a lot in few words, and Lus holds itself to the same standard. Every addition below had to read as plain Lua to a Lua programmer, add no more syntax than it saves, and leave existing Lua idioms working wherever it could.
+Lus is derived from Lua 5.5. This page is for a programmer who knows Lua 5.4 or 5.5 and wants to write Lus or port Lua code to it. The first part lists what a Lua program must change before it runs in Lus. The second part shows each Lus feature beside the Lua idiom it replaces and gives the reason for the difference. The Lua blocks appear for comparison and run only in Lua.
 
-The two languages answer different questions. Lua is an extension language. It is built to live inside a host program written in C, it compiles anywhere an ISO C compiler runs, and the host supplies most of what a program touches: files beyond the basics, networking, threads, and policy. Lus is a language for complete programs. Its runtime ships the libraries and tools a program needs, runs scripts on its own, and still embeds in a host through [`lus.h`](/manual/embedding). Most of the differences on this page follow from that one change of purpose.
+## How the languages relate
 
-[Coming from Lua](/manual/adapting) lists what changes when porting code. This page explains the decisions behind those changes.
+Lus keeps the core of Lua: tables as the one data structure, metatables, functions as values, multiple results, coroutines, 1-based indexing, and a small grammar. Most Lua code is valid Lus.
 
-## The standard library
+The two languages serve different purposes. Lua is an extension language. It is built to run inside a host program written in C, it compiles wherever an ISO C compiler runs, and the host supplies most of what a script uses: files beyond the basics, networking, threads, and the policy for what a script may do. That design keeps Lua small enough to fit in game engines, routers, and editors.
 
-Lua ships a deliberately small library: strings, tables, math, `io`, `os`, `utf8`, coroutines, and `debug`. Anything beyond it is the host's job or a third-party module, because an embedded interpreter should cost its host as little as possible and assume nothing about the platform. That restraint is why Lua fits in game engines, routers, and editors alike.
+Lus is a language for complete programs. The `lus` executable runs a script without a host, and it contains the libraries and tools that such a program needs, such as JSON, files, networking, a database, a test runner, and a formatter. Lus still embeds in a host program through [`lus.h`](/manual/embedding).
 
-Lus ships JSON and CSV, a filesystem library, HTTP, TCP, UDP, and TLS, an HTTP server, SQLite, compression, character set transcoding, time zones, workers, and a test runner, all in one executable. A program written for the `lus` command runs with that one executable and its own source files. The cost is a larger binary, about 7 MB. A host that wants a smaller runtime can leave the network, worker, SQLite, and compression libraries out at build time ([Compiling Lus](/manual/compiling)).
+Most differences on this page follow from that change of purpose. A program that runs without a host needs a larger standard library, a way to limit its own access to the system, and a string type that is safe to treat as text.
 
-## Errors: `catch` in place of `pcall`
+## Porting a Lua program
 
-In Lua, a protected call runs a function. `pcall(f, ...)` calls `f` and returns `true` and its results, or `false` and the error object. `xpcall` adds a message handler. The design mirrors the C API, where `lua_pcall` is the single point at which errors are caught, and it keeps the language free of special error syntax. Protecting an expression means wrapping it in a function first:
+A Lua 5.5 program needs changes in six places before it runs in Lus: strings that hold bytes, a few removed functions, new global names, five new reserved words, permissions, and modules written in C. The sections below take them in turn.
+
+### What runs unchanged
+
+The rest of Lua 5.5 works as a Lua programmer expects. The following all behave as in Lua, once the program holds the [permissions](#permissions) that its library calls need.
+
+- The syntax of Lua 5.5, including `goto`, integer division, the bitwise operators, `global` declarations, and the `<const>` and `<close>` attributes.
+- Integers and floats, with the same arithmetic, conversions, and wraparound on integer overflow.
+- Tables, metatables, and every metamethod, including `__index`, `__close`, `__gc`, and `__pairs`.
+- Coroutines, `error`, `assert`, `require`, `load`, and environments through `_ENV`.
+- The `string`, `table`, `math`, `io`, `os`, `utf8`, `coroutine`, `debug`, and `package` libraries, apart from the functions listed under [Removed functions](#removed-functions).
+- String patterns, with the same items and the same functions. A pattern item matches a whole character, and the classes such as `%a` and `%w` cover ASCII characters only, as in Lua, so `%a` does not match `é`.
+- Named variable arguments. `function f(...args)` collects the extra arguments into the table `args`, and `args.n` holds their count.
+
+The `lus` command runs a file whatever its extension, so `lus app.lua` works. `require` looks for `name.lus` and `name/init.lus` first, then for `name.lua` and `name/init.lua`. A project can therefore move to Lus one file at a time.
+
+### `lus check`
+
+`lus check` reads source files without running them. It reports compile errors, likely mistakes, and Lua idioms that have a direct Lus form. Running it over a Lua program shows much of what needs to change. The following Lua file loads a configuration file and prints one field.
 
 ```lua
-local ok, result = pcall(function() return config.load(path) end)
+local function load_config(path)
+    local ok, result = pcall(dofile, path)
+    if not ok then
+        return nil, result
+    end
+    return result
+end
+
+local config = load_config("config.lua")
+local host = config and config.server and config.server.host
+if host then
+    print(host)
+end
 ```
 
-Lus makes the protected region an expression. `catch` evaluates the expression that follows it and returns the same `true, results` or `false, error` pair, and `catch[handler]` passes a failure through a handler first:
+`lus check config_host.lua` prints one line for each finding, with the position, the message, and a code in brackets.
+
+```text
+config_host.lua:2:24: warning: 'pcall' no longer exists, use a 'catch' expression instead [deprecated-pcall]
+config_host.lua:10:1: warning: local declaration can be moved to the if condition (use if-assignment) [use-if-assign]
+config_host.lua:10:14: warning: and-chain can use optional chaining: x?.y?.z [use-optional-chain]
+```
+
+The first warning must be fixed, because the program stops at the call to `pcall`. The other two are suggestions, and the code they point at runs as written. A file that uses a new reserved word as a name fails to parse, and `lus check` then reports that syntax error alone. The checker does not know about the other removed functions or about permissions. Those surface as errors when the program runs, and each error names the missing function or the missing permission. [Developer tools](/manual/tools#checking) describes every diagnostic.
+
+### Strings and bytes
+
+A Lua string is a sequence of bytes with no encoding attached. The same type carries UTF-8 text, text in other encodings, and binary data, and `#s` counts bytes. This keeps the string library small and lets a host pass any buffer through Lua untouched. The cost appears when a program handles text, because a position counted in bytes can fall inside a character.
+
+```lua
+local s = "héllo"
+print(#s)                               -- 6
+print(s:sub(1, 2))                      -- "h" and the first byte of "é"
+print(s:sub(1, utf8.offset(s, 3) - 1))  -- "hé"
+```
+
+A Lus string is text, and every string operation counts characters. A _character_ is one Unicode code point. Raw bytes have a type of their own, the _vector_, which is a resizable buffer of bytes with offsets that start at 0.
+
+```lus
+local s = "héllo"
+print(#s, s:sub(1, 2), s:upper())       --> 5  hé  HéLLO
+print(s:byte(2), string.char(233))      --> 233  é
+
+local bytes = vector.fromstring(s)
+print(#bytes, vector.get(bytes, 1), vector.get(bytes, 2))   --> 6  195  169
+print(vector.tostring(bytes) == s)      --> true
+```
+
+A function that receives a Lus string can measure it, cut it, and print it without checking what it holds, and the conversion between bytes and text is a visible call. Lua code that used strings as text needs no change, except that it may drop its calls to `utf8.offset`. Lua code that used strings as byte arrays changes in the following places.
+
+- `#s`, `string.sub`, `string.find`, and the other string functions take and return character positions. The width in a `string.format` specifier such as `%5s` also counts characters.
+- `utf8.offset`, `utf8.codepoint`, and `utf8.codes` take and return character positions too. `utf8.offset("héllo", 3)` is 3, so Lua code that combined them with `string.sub` keeps working.
+- `string.byte` returns code points, and `string.char` builds a string from code points. Use `vector.get` and `vector.set` to read and write single bytes.
+- A string literal must be valid text. A literal such as `"\xFF"` is a compile error, and its message points to vectors.
+- `string.pack` and `string.dump` return vectors. `string.unpack` and `load` accept them.
+- A file opened in binary mode, with `"b"` in its mode string, reads vectors. A file opened in text mode reads strings, and a read that meets bytes that are not valid text raises an error.
+- Sockets and `network.fetch` return vectors.
+
+The following example packs two integers into a vector, reads them back, and reads a file as bytes.
+
+```lus
+pledge("fs")
+
+local packed = string.pack("<I2I2", 513, 7)
+print(type(packed), #packed, vector.get(packed, 0), vector.get(packed, 1))   --> vector  4  1  2
+print(string.unpack("<I2I2", packed))   --> 513  7  5
+
+local path = os.tmpname()
+io.open(path, "wb"):write(packed):close()
+local file <close> = io.open(path, "rb")
+local data = file:read("a")
+print(type(data), #data)                --> vector  4
+fs.remove(path)
+```
+
+[Text and bytes](/manual/text) describes strings, vectors, and the conversions between them in full.
+
+### Removed functions
+
+Lus removes a few Lua functions and gives each a replacement. A call to a removed function raises `attempt to call a nil value` with the name of the function.
+
+| Lua | Lus |
+| --- | --- |
+| `pcall(f, ...)` | `catch f(...)`, described under [Errors with `catch`](#errors-with-catch) |
+| `xpcall(f, handler, ...)` | `catch[handler] f(...)` |
+| `os.remove(path)` | [`fs.remove(path)`](/manual/api#fs.remove) |
+| `os.rename(old, new)` | [`fs.move(old, new)`](/manual/api#fs.move) |
+| The `LUA_PATH` environment variable | The `LUS_PATH` environment variable |
+| The `LUA_INIT` environment variable | The `-e` and `-l` options of `lus` |
+
+`fs.remove` and `fs.move` raise an error on failure, where `os.remove` and `os.rename` return `nil` and a message. Code that tested the result of the Lua function uses `catch` in Lus.
+
+```lus
+pledge("fs")
+
+local path = os.tmpname()
+fs.move(path, path .. ".bak")
+fs.remove(path .. ".bak")
+print((catch fs.remove(path .. ".bak")))   --> false
+```
+
+### New global names
+
+Lus defines global names that Lua leaves free: `bigint`, `decimal`, `flags`, `fromcsv`, `fromjson`, `fs`, `network`, `pledge`, `query`, `range`, `time`, `tocsv`, `tojson`, `vector`, and `worker`. A Lua program that assigns its own global with one of these names replaces the Lus value for the whole program, which is harmless unless the program also wants the library. A local variable with one of these names hides the global as usual. The name `flags` is the exception. It is readonly, so assigning to the global `flags` is a compile error.
+
+### Reserved words
+
+Lus reserves five words that Lua 5.5 leaves free: `catch`, `continue`, `enum`, `from`, and `provide`. A Lua program that uses one of them as the name of a variable, a field written after a dot, or a label must rename it. The most common case is the label that Lua programs place at the end of a loop body.
+
+```lua
+for _, line in ipairs(lines) do
+    if line == "" then goto continue end
+    process(line)
+    ::continue::
+end
+```
+
+Lus rejects this file with the error `<name> expected near 'continue'`. The fix is to delete the label and write the [`continue`](#continue) statement in place of the `goto`. A field named with a reserved word remains reachable with brackets, as in `t["from"]`.
+
+### Permissions
+
+A Lua script may open any file and run any command that its process may. In Lua, limiting a script is the work of the host, which chooses the libraries to open. A Lus program runs without a host, so the limit is part of the language. A script starts with no access to files, the network, other processes, or environment variables, and it acquires each kind of access with the function `pledge`. Most ported scripts therefore need one new line.
+
+A call that needs a permission the script does not hold raises an error that names the permission. The following script shows the error and then the pledge that prevents it.
 
 ```lus nocheck
-local ok, result = catch config.load(path)
-local ok, message = catch[simplify] config.load(path)
+print(catch io.open("notes.txt"))
+--> false  script.lus:1: permission "fs:read" denied for 'notes.txt'
+
+pledge("fs:read")
+local file = io.open("notes.txt")
 ```
 
-The code under protection reads in place, with no closure to allocate and no change to how its upvalues are captured. Lus removes `pcall` and `xpcall` so that a program has one way to catch an error, and `lus check` reports each Lua form it finds.
+The table lists the permission that each Lua function needs.
 
-## Strings are text
+| Function | Permission |
+| --- | --- |
+| `io.open` and `io.lines` on a file that is read | `fs:read` |
+| `io.open` for writing, `io.tmpfile`, `os.tmpname` | `fs:write` |
+| `require` of a module file, `dofile`, `loadfile` | `fs:read` and `load` |
+| `load` | `load` |
+| `os.execute`, `io.popen` | `exec` |
+| `os.getenv` | `env` |
 
-A Lua string is an immutable sequence of bytes. The language attaches no encoding to it, so the same type carries UTF-8 text, Latin-1 text, and binary data, and `#s` counts bytes. The `utf8` library decodes code points when a program asks for them. This keeps the string library small and lets a host pass any buffer through Lua untouched.
+`require` deserves attention in a program with several files. Without `fs:read` and `load`, `require` skips the files it may not read and reports the module as not found. A program that loads its own modules starts as follows.
 
-A Lus string is text. Every string is well formed WTF-8, and every string operation counts and indexes characters, so `#"héllo"` is 5 and a slice never cuts a character in half. Bytes have a type of their own, the [`vector`](/manual/text#vectors), and binary reads, network reads, `string.pack`, and the compressors produce vectors.
+```lus nocheck
+pledge("fs:read", "load")
 
-```lus
-print(#"héllo", ("héllo"):sub(2, 2))  --> 5  é
+local util = require("util")
 ```
 
-The split gives each type one meaning. A function that receives a string can count, match, and print it without asking what it holds, and the conversion between bytes and text is a visible call with a chosen error mode. WTF-8 is UTF-8 extended to lone surrogate code points, which Windows paths and UTF-16 data contain, so text from those sources survives a round trip unchanged. Character indexing stays fast because each string records whether it is pure ASCII, which indexes in constant time, and a longer non-ASCII string keeps an index of every 64th character ([Text and bytes](/manual/text)).
+`pledge` is an ordinary function. A program may call it at any point, may limit a permission to certain paths or hosts, as in `pledge("fs:read=./data/*")`, and may give up the ability to pledge more with `pledge("seal")`. The command line can grant permissions as well, so an unmodified Lua script runs without a `pledge` line.
 
-## Exact numbers
-
-Since Lua 5.3, a number is a 64-bit integer or a double, and integer arithmetic wraps around on overflow. The two subtypes cover what most programs compute, and they fit in a machine register, which keeps the interpreter fast and its C interface simple.
-
-Lus keeps both subtypes with the same semantics and adds two exact ones. A _bigint_, written `2n`, is an integer of any size. A _decimal_, written `19.90d`, is a base 10 number that keeps the digits it was given.
-
-```lus
-print(2n ^ 100)               --> 1267650600228229401496703205376
-print(0.1d + 0.2d == 0.3d)    --> true
+```sh
+lus -Pfs:read -Pload app.lua
+lus -Pall app.lua
 ```
 
-Money, measurements written in base 10, and identifiers wider than 64 bits are common in the data that programs exchange, and binary floats cannot hold them exactly. Both new subtypes belong to `number`, so code that works with numbers works with them, and comparisons and table keys follow mathematical value. Mixing a decimal with a float raises an error, which keeps the choice between exact and approximate arithmetic visible. Integers and floats stay inline in every value, so a program that uses only them runs at the same speed as before.
+When the command line grants any permission, the script may pledge only what the command line granted. [Permissions](/manual/permissions) is the complete reference for permission names, values, rejection, sealing, and the rules for coroutines and workers.
 
-## Absent values: optional chaining
+### C modules
 
-Lua reads through a value that may be `nil` with `and`: `config and config.server and config.server.host`. The idiom needs no new syntax, and it is correct, but it repeats each prefix and grows with the depth of the path. Method calls on a value that may be absent need an `if` of their own.
+Lua loads modules written in C with `require` through `package.cpath`, and with `package.loadlib`. Lus loads no native libraries at run time. `package.cpath` is empty, and `package.loadlib` returns `nil` and a message that says native libraries are unavailable.
 
-Lus adds the `?` suffix. `config?.server?.host` stops at the first falsy value and evaluates to it, and the same suffix guards indexing, method calls, and function calls.
+Most C modules that Lua programs depend on have a counterpart in the Lus standard library, which [The standard library](#the-standard-library) lists. Native code that has no counterpart moves into a host program. The host registers its functions through the C interface in `lus.h`, as [Embedding](/manual/embedding) describes. That interface differs from the C API of Lua. Its functions have the prefix `lus_` and report failure with a status code, so a C module needs porting and does not compile unchanged.
 
-```lus
-local config = {server = {}}
-print(config?.server?.host or "localhost")  --> localhost
-```
+## Lus forms for Lua idioms
 
-The suffix keeps the semantics of the `and` idiom, including that `false` stops the chain and stays `false`, so an expression rewritten from one form to the other means the same thing. It names each optional step once, at the place where the value may be absent.
+Each section below shows a Lua idiom, says where it strains, and shows the Lus form with the reason for it. Apart from the changes listed under [Porting a Lua program](#porting-a-lua-program), Lus keeps the Lua forms valid, so a port may adopt the Lus forms one at a time.
 
-## Building strings: interpolation
+### Errors with `catch`
 
-Lua builds strings with `..` and `string.format`. Both are explicit and both are fast, and `string.format` gives precise control over numbers. In longer strings the concatenation operators and `tostring` calls outnumber the text, and a format string separates each value from the place where it appears.
-
-Lus adds backtick strings. `$name` inserts a variable and `$(expr)` an expression, converted as `tostring` converts it.
-
-```lus
-local name, items = "Ada", 3
-print(`$name has $(items * 2) points`)  --> Ada has 6 points
-```
-
-Each value appears where it is printed, and the conversion is built into the runtime, so it works even when the global `tostring` is replaced. `string.format` remains the tool for padding and precision.
-
-## Conditions that bind
-
-In Lua, a value tested by `if` or `while` is declared first, in the enclosing scope:
+Lua catches errors with `pcall`, which calls a function and returns `true` and its results, or `false` and the error object. `xpcall` adds a handler that receives the error object first. The design mirrors the C API of Lua and needs no syntax. Both functions protect a function call, so protecting an expression means wrapping it in a function.
 
 ```lua
+local ok, port = pcall(function()
+    return json.decode(text).server.port
+end)
+
+local ok, err = xpcall(load_settings, function(e)
+    return { cause = e, operation = "load settings" }
+end, "app.toml")
+```
+
+The wrapper moves the code into another function. Inside it, `return` leaves the wrapper and the `...` of the enclosing function is out of reach, so code that moves into a `pcall` can change meaning. `xpcall` places the handler between the function and its arguments, away from the call it protects.
+
+In Lus, `catch` is a keyword that takes an expression. It evaluates the expression after it and returns `true` and every result, or `false` and the error object.
+
+```lus
+local ok, port = catch fromjson('{"server": {"port": 8080}}').server.port
+print(ok, port)      --> true  8080
+
+local failed, err = catch fromjson('{"server": ').server.port
+print(failed, err)   --> false  JSON parse error at position 12: unexpected end of input
+```
+
+A handler in brackets after `catch` receives the error object and returns the value that `catch` gives back in its place. It takes the role of the handler of `xpcall`, and it stands beside the expression it protects.
+
+```lus
+local function describe(e)
+    return { cause = e, operation = "load settings" }
+end
+
+local function load_settings(path)
+    error(`cannot read $path`, 0)
+end
+
+local ok, err = catch[describe] load_settings("app.toml")
+print(ok, err.operation, err.cause)   --> false  load settings  cannot read app.toml
+```
+
+A `catch` at the start of a statement runs the expression and discards both its results and its error. It suits cleanup that may fail without consequence.
+
+```lus
+pledge("fs:write")
+
+catch fs.remove("cache.tmp")   -- the file may not exist
+print("done")                  --> done
+```
+
+Lus has one way to catch an error, and the protected code reads the local variables and the `...` of its function directly. `error`, `assert`, and error objects of any type work as in Lua. The guide describes [errors](/manual/guide#errors) in full, and [Do expressions](#do-expressions) shows how `catch` protects several statements.
+
+### Optional chaining
+
+Lua reads a field of a value that may be `nil` by guarding each step with `and`. The idiom needs no syntax and is correct.
+
+```lua
+local host = config and config.server and config.server.host or "localhost"
+local name = find_user(id) and find_user(id).name
+```
+
+The guard repeats every prefix and grows with the depth of the path. A prefix that is a call runs once for each repetition, so the second line calls `find_user` twice unless the program adds a local variable.
+
+The `?` suffix names each optional step once. If the value before `?` is `nil` or `false`, Lus skips the rest of the chain and the chain evaluates to that value. Otherwise the chain continues. Each prefix runs once.
+
+```lus
+local calls = 0
+local function find_user(id)
+    calls = calls + 1
+    if id == 1 then
+        return { name = "Ada" }
+    end
+end
+
+print(find_user(1)?.name, find_user(2)?.name, calls)   --> Ada  nil  2
+
+local config = { server = {} }
+print(config?.server?.host or "localhost")             --> localhost
+```
+
+The same suffix guards a method call, as in `file?:read("l")`, and a function call, as in `on_done?(result)`.
+
+```lus
+local on_done = nil
+local result = on_done?("finished")
+print(result)   --> nil
+```
+
+The suffix keeps the meaning of the `and` idiom, including that `false` stops the chain and stays `false`. An expression rewritten from one form to the other therefore gives the same value. The guide describes optional chaining under [Tables](/manual/guide#tables).
+
+### String interpolation
+
+Lua builds messages with the `..` operator or with `string.format`. Both are explicit, and `string.format` gives exact control over the form of numbers.
+
+```lua
+local msg = "user " .. name .. " has " .. count .. " items (" .. tostring(active) .. ")"
+local msg = string.format("user %s has %d items (%s)", name, count, tostring(active))
+```
+
+The `..` operator raises an error on `nil` and on booleans, so each such value needs a `tostring` call. A value that is unexpectedly `nil` then stops the program at the message that was meant to report it. A format string keeps each value away from the place where it appears, and its specifiers must match the arguments in number and order.
+
+A string written between backticks inserts `$name` and `$(expression)` where they appear. Lus converts every inserted value as `tostring` does, including `nil` and booleans.
+
+```lus
+local name, count, active = "ada", 3, true
+
+print(`user $name has $count items ($active)`)    --> user ada has 3 items (true)
+print(`next: $(count + 1), missing: $(nil)`)      --> next: 4, missing: nil
+print(`total: $(string.format("%.2f", 19.5))`)    --> total: 19.50
+```
+
+Each value appears where it is printed. `string.format` remains the tool for padding and precision, and `..` works as in Lua. The guide describes string literals under [Values and types](/manual/guide#values-and-types).
+
+### Conditions that declare variables
+
+Lua declares a value before the `if` or `while` that tests it.
+
+```lua
+local value = env[name]
+if value then
+    return value, "env"
+end
+local fallback = defaults[name]
+if fallback then
+    return fallback, "default"
+end
+
 local line = file:read()
 while line do
     process(line)
@@ -98,83 +346,726 @@ while line do
 end
 ```
 
-The variable outlives the test, and a `while` loop repeats the call that produces it. Lus lets the condition declare it: `while line = file:read() do` declares `line`, tests it, and scopes it to the loop. The same form chains through `elseif`, so a sequence of fallbacks stays flat. Each name lives exactly as long as the code that uses it.
+Each local variable remains visible after its test, for the rest of the enclosing block. A chain of fallbacks needs a new name and a new `if` for every step. The `while` loop writes the call that produces the value twice, once before the loop and once at the end of its body.
 
-## Destructuring with `from`
+In Lus, the condition of an `if`, an `elseif`, or a `while` may declare a variable with `name = expression`. Lus assigns the value, tests it, and keeps the name visible until the `end` of the statement. A chain of fallbacks stays flat.
 
-Lua copies fields into locals one assignment at a time, as in `local insert = table.insert`. Lus states the list once: `local insert, remove from table`. Each name reads the field of the same name. The form works in `local`, `global`, assignments, and conditions, and it makes the common import pattern `local a, b from require("m")` a single line. Lua code that copies fields still runs, and `lus check` points out the places where `from` fits.
+```lus
+local env = { PORT = "8080" }
+local defaults = { HOST = "localhost" }
 
-## Loops: `continue` and `range`
+local function lookup(name)
+    if value = env[name] then
+        return value, "env"
+    elseif value = defaults[name] then
+        return value, "default"
+    end
+    return nil, "unset"
+end
 
-Lua has no `continue`. The Lua authors have pointed to its interaction with `repeat ... until`, whose condition can see the locals declared in the body, so a `continue` could skip a declaration that the condition reads. Since Lua 5.2, `goto continue` with a label at the end of the body covers the need.
+print(lookup("PORT"))   --> 8080  env
+print(lookup("HOST"))   --> localhost  default
+print(lookup("USER"))   --> nil  unset
+```
 
-Lus adds `continue` and resolves the `repeat` case at compile time: a `continue` that would skip a local visible to `until` is a compile error.
+In a `while` condition, the same form makes the call once for each iteration.
+
+```lus
+local queue = { "first", "second" }
+while job = table.remove(queue, 1) do
+    print(job)   --> first, then second
+end
+```
+
+Each name is visible exactly where its value has been tested. The guide describes these conditions under [Control flow](/manual/guide#control-flow).
+
+### Destructuring with `from`
+
+Lua copies fields into local variables one assignment at a time.
+
+```lua
+local cfg = load_config()
+local host = cfg.host
+local port = cfg.port
+local timeout = cfg.timeout
+local insert, concat = table.insert, table.concat
+```
+
+Each name appears twice, once as the variable and once as the field. A source that is a call needs a variable of its own so that the call runs once.
+
+In Lus, `local a, b from t` declares each name and gives it the field of the same name. The source expression runs once, whatever the number of names.
+
+```lus
+local function load_config()
+    return { host = "localhost", port = 8080, timeout = 30 }
+end
+
+local host, port, timeout from load_config()
+print(host, port, timeout)    --> localhost  8080  30
+
+local insert, concat from table
+local parts = {}
+insert(parts, "a")
+insert(parts, "b")
+print(concat(parts, "+"))     --> a+b
+```
+
+`from` also works in an assignment to existing variables, in a `global` declaration, and in a condition. With `require` as the source, it imports several functions of a module in one line, as in `local encode, decode from require("codec")`. The guide describes destructuring under [Tables](/manual/guide#tables).
+
+### `continue`
+
+Lua has no `continue` statement. A `continue` inside `repeat ... until` could skip the declaration of a local variable that the `until` condition reads, and Lua avoids the question. Since Lua 5.2, `goto` and a label at the end of the body skip the rest of an iteration.
+
+```lua
+for _, line in ipairs(lines) do
+    if line == "" then goto continue end
+    if line:sub(1, 1) == "#" then goto continue end
+    process(line)
+    ::continue::
+end
+```
+
+Every loop that skips carries a label at the end of its body. A label must not repeat a visible label of the same name, so a loop nested inside another loop that also skips needs a second label name.
+
+In Lus, `continue` skips to the next iteration of the innermost loop, in every kind of loop.
+
+```lus
+local lines = { "alpha", "", "# note", "beta" }
+
+for _, line in ipairs(lines) do
+    if line == "" then continue end
+    if line:sub(1, 1) == "#" then continue end
+    print(line)   --> alpha, then beta
+end
+```
+
+Lus settles the `repeat` case when it compiles the loop. A `continue` that would skip a local variable that the `until` condition can see is a compile error, so the condition never reads a variable that was not initialized.
 
 ```lus nocheck
+local i = 0
 repeat
     i = i + 1
-    if i < 3 then continue end  -- error: jumps into the scope of 'done'
+    if i < 3 then continue end   -- compile error: this skips the declaration of 'done'
     local done = true
 until done
 ```
 
-`continue` states the intent in one word and keeps the body of the loop flat, and the compile rule keeps the reason Lua left it out from becoming a bug.
+The guide describes `continue` under [Control flow](/manual/guide#control-flow).
 
-Lua writes counting loops with the numeric `for`, a statement form with its own grammar. Lus adds `range(start, limit, step)`, an ordinary iterator function, so a counting loop reads as a generic `for` and the iterator is a value that can be stored and passed.
+### `range`
 
-## Enums
+Lua counts with the numeric `for`, and Lus keeps that statement unchanged. The numeric `for` is a statement, so the sequence it counts cannot be stored in a variable or passed to a function. A Lua program that wants to pass a counting sequence writes an iterator by hand.
 
-Lua represents a fixed set of choices with strings or with a table of constants. Strings compare by value, so a misspelled choice is a different valid string, and a table of constants holds numbers that compare equal to any other number.
+```lua
+local function range(first, last, step)
+    step = step or 1
+    local i = first - step
+    return function()
+        i = i + step
+        if (step > 0 and i <= last) or (step < 0 and i >= last) then
+            return i
+        end
+    end
+end
+```
 
-A Lus `enum` creates opaque values that equal only themselves.
+Lus provides this function as the global `range`. `range(n)` counts from 1 to `n`, and `range(first, last, step)` counts from `first` to `last` inclusive by `step`, which defaults to 1 and may be negative. The arguments are numbers, and the result is an iterator function that a generic `for` consumes and that a variable or an argument can hold. A function that accepts any iterator therefore accepts a counting sequence too. A plain loop over numbers stays a numeric `for`.
 
 ```lus
-local Color = enum red, green, blue end
-print(Color.red == Color.red, Color.red == Color.green)  --> true  false
+local function sum(iter)
+    local total = 0
+    for n in iter do
+        total = total + n
+    end
+    return total
+end
+
+print(sum(range(1, 10, 3)), sum(range(4)))   --> 22  10
+
+local countdown = range(3, 1, -1)
+print(countdown(), countdown(), countdown(), countdown())   --> 3  2  1  nil
+
+print((catch range(1, 5, 0)))          --> false
 ```
 
-An enum value never equals a string or a number, so a variant cannot collide with data that happens to hold the same name or position.
+A step of zero raises an error, where the hand-written iterator above ends at once without a sign. The guide describes loops over iterators under [Iteration](/manual/guide#iteration).
 
-## Permissions
+### Enums
 
-Lua sandboxes code through its host. The host chooses which libraries to open, and `load` takes an environment table that limits the names a chunk sees. That is enough for an extension language, where the host decides what scripts may do and builds the sandbox for them.
+Lua represents a fixed set of choices with strings or with a table of numbered constants.
 
-A Lus program runs without a host to decide for it, so the decision moves into the language. A program starts with no access to files, the network, processes, or the environment. It acquires each capability with `pledge`, which can narrow a capability to values such as a directory, reject it with `~`, or seal the set so that nothing changes later. The command line can grant capabilities with `-P` before the script runs.
+```lua
+local state = "suspended"
+if state == "suspnded" then resume() end
+
+local Status = { ACTIVE = 1, SUSPENDED = 2, CLOSED = 3 }
+if row.flags == Status.SUSPENDED then resume() end
+```
+
+A string choice equals any string with the same text. A misspelled choice is therefore a different valid string, and the first test above is false without any error. A numbered constant equals every other number of the same value, including a count or an identifier that happens to share it.
+
+A Lus `enum` declares _members_, which are values of their own type that equal only themselves. Members order by their position in the declaration, work as table keys, and give their position to `tonumber`.
+
+```lus
+local Status = enum active, suspended, closed end
+
+local labels = {
+    [Status.active] = "Active",
+    [Status.suspended] = "Suspended",
+    [Status.closed] = "Closed",
+}
+
+local current = Status.suspended
+print(type(current), labels[current])              --> enum  Suspended
+print(current == "suspended", current == 2)        --> false  false
+print(current < Status.closed, tonumber(current))  --> true  2
+```
+
+A member never equals a string or a number, so it cannot be confused with data that happens to hold the same name or position. `tostring` of a member prints its type and an address, such as `enum: 0x0000010143c030`, so text for display comes from a table keyed by member, as `labels` shows. The guide describes [enums](/manual/guide#enums) in full.
+
+### Exact numbers
+
+A Lua number is a 64-bit integer or a 64-bit float. Both fit in a machine register, which keeps arithmetic fast. Integer arithmetic wraps around on overflow, and a float cannot hold most decimal fractions exactly.
+
+```lua
+print(math.maxinteger + 1)     -- -9223372036854775808
+print(0.1 + 0.2 == 0.3)        -- false
+
+local total = 0
+for _ = 1, 10 do total = total + 0.10 end
+print(total == 1.0)            -- false
+```
+
+A program that handles money scales every amount to integer cents, and a program that handles identifiers wider than 64 bits keeps them as strings.
+
+Lus keeps integers and floats with the same behavior and adds two exact subtypes of `number`. A _bigint_, written with the suffix `n`, is an integer of any size. A _decimal_, written with the suffix `d`, is a number that keeps its exact fractional part.
+
+```lus
+print(math.maxinteger + 1)                 --> -9223372036854775808
+print(math.maxinteger + 1n, 2n ^ 100)      --> 9223372036854775808  1267650600228229401496703205376
+
+local total = 0d
+for _ = 1, 10 do
+    total = total + 0.10d
+end
+print(total, total == 1)                   --> 1.00  true
+
+local price = 19.99d
+print(price * 3, price * 0.0825d)          --> 59.97  1.649175
+print(math.type(2n), math.type(price))     --> bigint  decimal
+```
+
+Both subtypes work with the arithmetic and comparison operators, and a number equals another number of the same mathematical value whatever the subtypes. Arithmetic between a decimal and a float raises an error, because the result would silently lose exactness. The functions `decimal` and `bigint` convert a number or a string.
+
+```lus
+print(3n == 3, 0.5d == 0.5)                --> true  true
+print((catch 19.99d * 1.5))                --> false
+print(19.99d * decimal("1.5"))             --> 29.985
+```
+
+Integers and floats behave exactly as in Lua, so existing arithmetic needs no change. The guide describes numbers under [Values and types](/manual/guide#values-and-types) and arithmetic under [Operators](/manual/guide#operators).
+
+### Slices
+
+Lua copies part of a sequence with `table.unpack` inside a constructor or with `table.move`, and part of a string with `string.sub`.
+
+```lua
+local middle = { table.unpack(list, 2, 4) }
+local tail = table.move(list, 3, #list, 1, {})
+local word = text:sub(2, 4)
+```
+
+`table.unpack` places every element on the stack, so a long range fails with the error `too many results to unpack`. `table.move` takes five arguments to express one copy.
+
+In Lus, `t[i, j]` copies the positions from `i` to `j` of a table, a string, or a vector. Either bound may be left out.
+
+```lus
+local list = { 10, 20, 30, 40, 50 }
+print(table.concat(list[2, 4], " "))   --> 20 30 40
+print(table.concat(list[3, ], " "))    --> 30 40 50
+print(table.concat(list[, 2], " "))    --> 10 20
+print(("héllo")[2, 4])                 --> éll
+```
+
+One form covers the three sequence types. A string slice counts characters and a vector slice counts bytes. The guide describes slices under [Tables](/manual/guide#tables).
+
+### `table.clone`
+
+Lua leaves copies of tables to the program, and most projects carry a version of the following function.
+
+```lua
+local function deepcopy(t, seen)
+    if type(t) ~= "table" then return t end
+    seen = seen or {}
+    if seen[t] then return seen[t] end
+    local copy = {}
+    seen[t] = copy
+    for k, v in pairs(t) do
+        copy[deepcopy(k, seen)] = deepcopy(v, seen)
+    end
+    return setmetatable(copy, getmetatable(t))
+end
+```
+
+The versions differ in whether they copy keys and metatables. A version without the `seen` table never returns on a table that refers to itself.
+
+[`table.clone(t)`](/manual/api#table.clone) makes a shallow copy. `table.clone(t, true)` makes a deep copy in which every table that the original reaches twice is also shared in the copy, including a table that contains itself.
+
+```lus
+local defaults = { name = "app", ports = { 80, 443 } }
+defaults.self = defaults
+
+local shallow = table.clone(defaults)
+local deep = table.clone(defaults, true)
+deep.ports[1] = 8080
+
+print(shallow.ports == defaults.ports, defaults.ports[1])   --> true  80
+print(deep.self == deep, deep.ports[1])                     --> true  8080
+```
+
+Both copies keep the metatable of the original. Copying a table is common enough, and a correct deep copy is hard enough, that Lus provides one.
+
+### Do expressions
+
+Lua computes a value that takes several statements with a function that it calls at once.
+
+```lua
+local port = (function()
+    for _, key in ipairs({ "port", "http_port", "PORT" }) do
+        local n = tonumber(config[key])
+        if n then return n end
+    end
+    return 8080
+end)()
+```
+
+The idiom creates a function each time the line runs. Inside it, `return` leaves the inner function, so the code cannot return from the enclosing function, and `break`, `continue`, and `...` of the enclosing function are out of reach. The alternative is to declare the variable first and assign it inside the loop, which leaves the variable without a value on some paths unless the program adds a default after the loop.
+
+A Lus _do expression_ is a `do ... end` block used as a value. The statement `provide` ends the block and gives the value. The block is part of the enclosing function, so its local variables end with the block and no function is created.
+
+```lus
+local config = { http_port = "8081" }
+
+local port = do
+    for _, key in ipairs({ "port", "http_port", "PORT" }) do
+        if n = tonumber(config[key]) then
+            provide n
+        end
+    end
+    provide 8080
+end
+print(port)   --> 8081
+```
+
+The declaration of `port` states its value in one place, although finding the value takes a loop, and the variables `key` and `n` end with the block.
+
+A do expression is also how `catch` protects several statements. In Lua, that is the `pcall(function() ... end)` idiom again. The function below parses a JSON text, validates a field, and returns two values. Any of its steps may raise an error, and no single function call covers the three of them, so `catch` takes a do expression.
+
+```lus
+local function parse_endpoint(text)
+    return catch do
+        local data = fromjson(text)
+        local port = math.tointeger(data.port)
+        if not port then
+            error("port must be an integer", 0)
+        end
+        provide data.host or "localhost", port
+    end
+end
+
+print(parse_endpoint('{"port": 8080}'))      --> true  localhost  8080
+print(parse_endpoint('{"port": "http"}'))    --> false  port must be an integer
+print(parse_endpoint('{"port": '))           --> false  JSON parse error at position 10: unexpected end of input
+```
+
+A `return`, `break`, or `continue` inside a do expression acts on the enclosing function or loop, as in any block. The guide describes [do expressions](/manual/guide#do-expressions) in full.
+
+### Runtime attributes
+
+A Lua program that wants to wrap a function, for example to log its calls or to cache its results, defines the function and then replaces it with the wrapped version.
+
+```lua
+local function logged(name, fn)
+    return function(...)
+        print("call " .. name)
+        return fn(...)
+    end
+end
+
+local function area(w, h)
+    return w * h
+end
+area = logged("area", area)
+```
+
+The wrapping is a second statement that sits after the function, where a reader may miss it, and it repeats the name twice. Checking the values that a variable receives has the same shape in Lua. The program repeats the check at every assignment, or it replaces the variable with a table whose `__newindex` metamethod validates each store.
+
+Lua 5.4 introduced attributes with `<const>` and `<close>`. Lus lets a program define its own. A _runtime attribute_ is a function named in angle brackets after a local variable. Lus calls it with the name of the variable and the value being stored, at the declaration and at every later assignment in the function that declares the variable, and stores what it returns. Applied to a function value, an attribute is a decorator.
+
+```lus
+local function logged(name, fn)
+    return function(...)
+        print(`call $name`)
+        return fn(...)
+    end
+end
+
+local area <logged> = function(w, h)
+    return w * h
+end
+
+print(area(3, 4))   --> call area, then 12
+```
+
+The wrapper is named at the declaration, before the body of the function, and it receives the name of the variable without the program repeating it.
+
+Applied to a plain value, an attribute checks or converts every value that the variable receives. The attribute may be any expression that evaluates to a function, so a function that returns an attribute gives it a parameter. An error raised by the attribute propagates from the assignment, which prevents the variable from being written.
+
+```lus
+local function at_least(min)
+    return function(name, value)
+        if value < min then
+            error(`$name must be at least $min, got $value`, 0)
+        end
+        return value
+    end
+end
+
+local workers <at_least(1)> = 4
+print(catch do workers = 0 end)   --> false  workers must be at least 1, got 0
+print(workers)                    --> 4
+```
+
+The rule for a variable is stated once, at its declaration, and every assignment to it in that function is checked. An assignment from a nested function stores the value without calling the attribute, so a variable whose values must always be checked is assigned only in the function that declares it. The guide describes attributes under [Variable attributes](/manual/guide#variable-attributes).
+
+### Local groups
+
+A Lua program that tracks a few related values chooses between two forms. A table keeps the values together under one name, at the cost of an allocation and a table lookup for each access. Separate local variables cost nothing, and their relation survives only in a naming convention.
+
+```lua
+local lo = { x = math.huge, y = math.huge }      -- one table
+local hi_x, hi_y = -math.huge, -math.huge        -- or separate locals
+```
+
+The cost of the table matters in a function that runs often, because each call allocates a table that the collector must later free.
+
+A Lus _local group_ is a set of local variables declared together under one name with the attribute `<group>`. Each group field is a local variable, so a group allocates no table, and the fields are read and written as `name.field`. Assigning a constructor to the group updates the fields it names and leaves the others unchanged.
+
+```lus
+local points = { { x = 3, y = 8 }, { x = -2, y = 5 }, { x = 7, y = -1 } }
+
+local lo <group> = { x = math.huge, y = math.huge }
+local hi <group> = { x = -math.huge, y = -math.huge }
+
+for _, p in ipairs(points) do
+    lo = { x = math.min(lo.x, p.x), y = math.min(lo.y, p.y) }
+    hi = { x = math.max(hi.x, p.x), y = math.max(hi.y, p.y) }
+end
+print(lo.x, lo.y, hi.x, hi.y)   --> -2  -1  7  8
+
+hi = { y = 100 }
+print(hi.x, hi.y)               --> 7  100
+```
+
+A group is a set of variables and not a value. Therefore it cannot be passed to a function or stored in a table, and its set of fields is fixed at the declaration. A table remains the right choice for data that leaves the function. The guide describes groups under [Variable attributes](/manual/guide#variable-attributes).
+
+### Build flags
+
+Lua programs switch optional behavior, such as debug output, with a global variable or an environment variable that they test at run time.
+
+```lua
+local DEBUG = os.getenv("APP_DEBUG") ~= nil
+if DEBUG then print("cache size", #cache) end
+```
+
+The test runs every time, and the code behind it stays in the compiled program whether or not it can ever run.
+
+The `-F` option of `lus` sets a _flag_ in the readonly global table `flags`. `lus -Fverbose app.lus` sets `flags.verbose` to `true`, and `-Flevel=3` sets `flags.level` to the number 3. A flag that was not given reads as `nil`. An `if` whose condition is exactly `flags.name` or `not flags.name` is decided when Lus compiles the file, and the branch that the flags rule out is left out of the compiled code.
+
+```lus
+local cache = { 1, 2, 3 }
+
+if flags.verbose then
+    print("cache size", #cache)   -- compiled only with -Fverbose
+end
+print(flags.verbose)              --> nil
+```
+
+A disabled branch costs nothing at run time. `lus build -F` fixes the flags in a standalone executable, so one source tree produces a debug build and a release build. The guide describes flags under [The environment](/manual/guide#the-environment).
+
+### Queries
+
+Lua filters, reshapes, and orders a list of records with a loop and `table.sort`.
+
+```lua
+local big = {}
+for _, o in ipairs(orders) do
+    if o.total >= 100 then
+        big[#big + 1] = { customer = o.customer, total = o.total }
+    end
+end
+table.sort(big, function(a, b) return a.total > b.total end)
+```
+
+The intent is spread across a loop, a condition, a constructor, and a comparison function. The same filter over a database table is a separate SQL string with its own parameters.
+
+A Lus _query_ states the source, the filter, the fields to keep, and the order in one expression that starts with `@`. The function `query` runs it and returns an iterator over the resulting rows.
+
+```lus
+local orders = {
+    { customer = "Ada", total = 120 },
+    { customer = "Linus", total = 40 },
+    { customer = "Grace", total = 300 },
+}
+
+local big = @orders as o where o.total >= 100 select o.customer, o.total order by o.total desc
+
+for row in query(big) do
+    print(row.customer, row.total)   --> Grace  300, then Ada  120
+end
+```
+
+The same query works over a table of a [SQLite](/manual/sqlite) database, where SQLite evaluates the filter. The guide teaches [queries](/manual/guide#queries) one clause at a time.
+
+## The standard library
+
+Lua provides a small standard library on purpose, because an embedded interpreter should cost its host little and assume little about the platform. A Lua program that reads JSON or opens a socket installs a module for it, and a module written in C needs a compiler on every platform where the program runs.
+
+A Lus program runs without a host, so the `lus` executable contains these libraries. The table lists common tasks, a module that Lua programs often use for each, and the Lus counterpart.
+
+| Task | Common Lua module | Lus |
+| --- | --- | --- |
+| JSON | dkjson, lua-cjson | [`fromjson`](/manual/api#fromjson), [`tojson`](/manual/api#tojson) |
+| CSV | A hand-written parser | [`fromcsv`](/manual/api#fromcsv), [`tocsv`](/manual/api#tocsv) |
+| Directories and paths | LuaFileSystem | [`fs`](/manual/filesystem) |
+| HTTP, TCP, and UDP | LuaSocket | [`network`](/manual/network) |
+| SQLite | lsqlite3 | [`io.sqlite`](/manual/sqlite) |
+| Time zones and calendar arithmetic | `os.date` with offsets computed by hand | [`time`](/manual/time) |
+| Compression | lua-zlib | [`vector.archive`](/manual/text#compression) |
+| Character sets | lua-iconv | [`string.transcode`](/manual/text#transcoding) |
+| Splitting and trimming strings | Helpers copied between projects | [`string.split`](/manual/api#string.split), [`string.trim`](/manual/api#string.trim) |
+
+The following example reads JSON and CSV. The second argument of `fromcsv`, `true`, makes the first row the column names. Hand-written CSV parsing with `gmatch` drops empty fields and splits quoted fields that contain a comma. `fromcsv` follows RFC 4180, and `string.split` keeps empty fields.
+
+```lus
+local data = fromjson('{"name": "Ada", "langs": ["lus", "lua"]}')
+print(data.name, #data.langs)                  --> Ada  2
+print(tojson({ ok = true }))                   --> {"ok":true}
+
+local rows = fromcsv('name,city\nAda,"London, UK"\nLinus,', true)
+print(rows[1].city, rows[2].city == "")        --> London, UK  true
+
+print(#string.split("a,,b", ","), string.trim("  x  "))   --> 3  x
+```
+
+The `fs` library lists, creates, copies, moves, and removes files and directories, and `fs.path` works on path strings.
+
+```lus
+pledge("fs")
+
+local base = os.tmpname()
+local dir = base .. ".d"
+fs.createdirectory(dir)
+io.open(fs.path.join(dir, "a.txt"), "w"):write("first"):close()
+io.open(fs.path.join(dir, "b.txt"), "w"):write("second"):close()
+
+local names = fs.list(dir, "*.txt")
+table.sort(names)
+print(table.concat(names, " "), (fs.type(dir)))   --> a.txt b.txt  directory
+
+fs.remove(dir, true)
+fs.remove(base)
+```
+
+`io.sqlite` opens a SQLite database in a file or in memory. Statements take their values as parameters, and rows come back as tables.
+
+```lus
+local db <close> = io.sqlite(":memory:")
+db:exec("CREATE TABLE users (name TEXT, age INTEGER)")
+db:run("INSERT INTO users VALUES (?, ?)", "Ada", 36)
+db:run("INSERT INTO users VALUES (?, ?)", "Linus", 12)
+
+for row in db:query("SELECT name FROM users WHERE age >= ?", 18) do
+    print(row.name)   --> Ada
+end
+```
+
+The `time` library separates a point in time from its reading on a clock in a time zone, and it includes the time zone database.
+
+```lus
+local launch = time.instant(1782998100)
+print(launch:iso())                                    --> 2026-07-02T13:15:00Z
+print(launch:at(time.zone("America/New_York")):iso())  --> 2026-07-02T09:15:00-04:00
+print((launch + time.hours(72)):format("%A %d %B"))    --> Sunday 05 July
+```
+
+`vector.archive` compresses and decompresses with gzip, deflate, Zstandard, Brotli, and LZ4. `string.transcode` converts text between character sets. Both return vectors where the result is bytes.
+
+```lus
+local text = string.rep("hello world ", 100)
+local packed = vector.archive.gzip.compress(text)
+print(#packed < #text)                                                 --> true
+print(vector.tostring(vector.archive.gzip.decompress(packed)) == text) --> true
+
+local utf16 = string.transcode("hé", "utf-8", "utf-16le")
+print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))            --> 4  hé
+```
+
+`network.fetch` makes an HTTP or HTTPS request and returns the status, the body as a vector, and the headers. The following program contacts a remote host.
 
 ```lus nocheck
-pledge("fs:read=./data/*", "network")
-pledge("seal")
+pledge("network:http=api.example.com/*")
+
+local status, body = network.fetch("https://api.example.com/v1/items")
+if status == 200 then
+    local items = fromjson(vector.tostring(body))
+    print(#items)
+end
 ```
 
-The first lines of a program state everything it touches, and the libraries check each operation against the set. A reader learns the reach of a script before reading its body, and a mistake that would write outside the pledged paths fails instead of succeeding quietly. Environment tables still work as in Lua ([Permissions](/manual/permissions)).
+The cost of these libraries is a larger executable than `lua`. A host that embeds Lus may leave the network, worker, SQLite, and compression libraries out of its build, as [Compiling Lus](/manual/compiling) describes. The guide gives a tour of every library under [The standard library](/manual/guide#the-standard-library).
 
 ## Concurrency
 
-Lua coroutines are cooperative and asymmetric: a coroutine runs until it yields, and the code that resumed it decides what happens next. Lua leaves scheduling to the program or the host, so waiting for many sockets at once needs an event loop from a library. For parallel work, a C host runs separate Lua states on separate threads.
+Lua coroutines are cooperative. A coroutine runs until it yields, and the code that resumed it decides what happens next. Lua leaves the scheduling to the program or the host. Lus keeps coroutines as they are and adds two things: a scheduler for coroutines that wait, and workers for work in parallel.
 
-Lus keeps coroutines as they are and lets the runtime schedule them. [`coroutine.detach`](/manual/concurrency#detached-coroutines) hands a coroutine to the runtime, and a blocking operation inside it, such as `receive` on a socket, suspends that coroutine while the others run. A connection handler is then sequential code with ordinary loops, `catch`, and to-be-closed variables, and the same function works in a plain coroutine, a detached one, or the main chunk. Every function has one form, whether or not it waits. For parallel work, [workers](/manual/concurrency#workers) run separate states on their own threads and exchange messages, the model a Lua host builds by hand, provided by the runtime.
+### Detached coroutines
 
-## Smaller additions
+A program that serves many network connections spends most of its time waiting, and it must wait for all of them at once. In Lua, that takes an event library, and the program registers a callback for each event.
 
-Several additions fill gaps that Lua programs fill with small helpers.
+```lua
+local uv = require("luv")
+local client = uv.new_tcp()
+client:connect("127.0.0.1", 8080, function(err)
+    client:write("GET / HTTP/1.1\r\n\r\n")
+    client:read_start(function(err, chunk)
+        -- every chunk of the response arrives here
+    end)
+end)
+uv.run()
+```
 
-| Lua | Lus | Reason |
-| --- | --- | --- |
-| `table.move` copies a range into another table | `t[2, 4]` slices a table or a string | A range is a value in one expression. |
-| A copy is a loop or a library function | `table.clone(t)` and `table.clone(t, true)` | A deep copy that keeps cycles is easy to get wrong by hand. |
-| A computed value is an immediately called function | A `do` block with `provide` is an expression | The temporary names stay in a block, with no closure. |
-| `<const>` and `<close>` attributes | A runtime attribute names a function that runs on every assignment | Invariants of a variable sit at its declaration. |
-| Build variants check globals at run time | `-F name` defines a readonly flag that the compiler folds | A disabled branch costs nothing and does not exist in the bytecode. |
-| String splitting and trimming are written by hand | `string.split`, `string.trim`, and the `table` data functions | These are the helpers most Lua code bases reimplement. |
+The logic of one connection is spread across nested callbacks, and an error inside a callback never reaches a `pcall` around the code that started the request.
+
+In Lus, [`coroutine.detach`](/manual/api#coroutine.detach) marks a coroutine for Lus to resume whenever the socket it waits for is ready. Such a coroutine is a _detached coroutine_. A `receive`, `send`, `accept`, or `connect` inside it suspends that coroutine alone while the others run. The code for one connection is therefore sequential, with ordinary loops, `catch`, and `<close>` variables. A socket call in the main chunk waits as usual and runs the detached coroutines during the wait. The program below runs an echo server and two clients in one thread this way, and each connection has its own detached coroutine.
+
+```lus
+pledge("network:tcp")
+
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+
+local function echo(conn)
+    local closing <close> = conn
+    while true do
+        local line = vector.tostring(conn:receive("*l"))
+        if line == "" then
+            break
+        end
+        conn:send(`echo: $line\n`)
+    end
+end
+
+local acceptor = coroutine.detach(coroutine.create(function()
+    while true do
+        coroutine.detach(coroutine.create(echo), server:accept())
+    end
+end))
+
+local a = network.tcp.connect("127.0.0.1", port)
+local b = network.tcp.connect("127.0.0.1", port)
+a:send("first\n")
+b:send("second\n")
+print(vector.tostring(b:receive("*l")))   --> echo: second
+print(vector.tostring(a:receive("*l")))   --> echo: first
+
+a:close()
+b:close()
+coroutine.close(acceptor)
+server:close()
+```
+
+Both connections stay open at the same time, and the server answers `b` while the connection of `a` waits for its next line. The function `echo` is the same function that a program would write for a single blocking connection. [`coroutine.resume`](/manual/api#coroutine.resume) on a detached coroutine waits for it to end and returns its results or its error, which is how a program collects the outcome of a task.
+
+### Workers
+
+Detached coroutines share one thread, so they do not speed up computation. In Lua, parallel work is the job of a C host, which runs separate Lua states on separate threads.
+
+A Lus _worker_ is a script that runs in a state of its own on another thread. [`worker.create`](/manual/api#worker.create) starts one and passes it arguments. The worker and its creator share no values. They exchange copies of values as messages, which rules out data races. In the following fragment, `primes.lus` counts the primes between its two arguments and sends the count with `worker.message`, so the two halves of the range are counted in parallel.
+
+```lus nocheck
+pledge("fs:read", "load")
+
+local low = worker.create("primes.lus", 1, 50000)
+local high = worker.create("primes.lus", 50001, 100000)
+print(worker.receive(low) + worker.receive(high))   --> 9592
+```
+
+[Workers](/manual/concurrency#workers) shows complete programs. The table says which tool fits which problem.
+
+| Problem | Tool |
+| --- | --- |
+| Many operations that wait on sockets, such as connections and timeouts | Detached coroutines |
+| Computation that should use several processor cores | Workers |
+| Several HTTP requests with `network.fetch` at once, since `fetch` blocks its thread | Workers |
+| A sequence of values produced on demand, such as an iterator | Plain coroutines, as in Lua |
+
+[Coroutines and workers](/manual/concurrency) describes both in full, and the guide introduces them under [Coroutines](/manual/guide#coroutines).
+
+## Restricting loaded code
+
+Lua limits code that a program loads, such as a plugin, through the environment table that `load` receives.
+
+```lua
+local env = { print = print, tonumber = tonumber, io = io }
+local chunk = load(source, "plugin", "t", env)
+chunk()
+```
+
+An environment controls which names the code sees. Every function placed in it brings its full authority. Passing `io` so that a plugin can read its input also lets the plugin overwrite any file that the process can write.
+
+Lus keeps environment tables and adds permissions, which limit what an operation may do whoever calls it. A coroutine starts with the permissions of its creator, and a change of permissions inside a coroutine stays inside it. A function that runs code with less authority therefore creates a coroutine, rejects what the code must not use with the prefix `~`, and seals the set. In the following fragment, `chunk` is the plugin that the Lua example above loads. It keeps the `io` library of its environment, yet any attempt to write a file or to load more code raises a permission error.
+
+```lus nocheck
+local co = coroutine.create(function()
+    pledge("~fs:write", "~load", "seal")
+    return chunk()
+end)
+print(coroutine.resume(co))
+```
+
+The caller keeps its own permissions after the coroutine ends. [Permissions in coroutines](/manual/permissions#permissions-in-coroutines) shows the complete program and states the rules, and [Permissions](/manual/permissions) is the complete reference.
 
 ## Tools
 
-Lua distributes an interpreter, `lua`, and a compiler to bytecode, `luac`. Testing, formatting, linting, documentation, and packaging come from the community, which suits a language whose users each embed it differently.
+Lua distributes an interpreter, `lua`, and a compiler to bytecode, `luac`. Testing, formatting, checking, documentation, and packaging come from separate projects, which suits a language that each host embeds differently.
 
-The `lus` executable includes [`lus test`](/manual/testing), `lus fmt`, `lus check`, `lus doc`, `lus ast`, `lus debug` for editors, and `lus build`, which bundles a script and its modules into one executable ([Developer tools](/manual/tools)). Every project starts with the same tools at the same version as the runtime.
+The `lus` executable includes these tools as commands, so every project has the same tools at the same version as the runtime.
+
+| Command | Purpose |
+| --- | --- |
+| [`lus test`](/manual/testing) | Runs the test functions of a project and the code blocks of its documentation. |
+| `lus fmt` | Formats source files. |
+| `lus check` | Reports errors and likely mistakes without running the code. |
+| `lus doc` | Generates reference documentation from comments. |
+| `lus debug` | Runs a script under a debugger that editors connect to. |
+| `lus build` | Bundles a script and its modules into one executable file. |
+| `lus compile` | Compiles a script to a binary chunk, as `luac` does. |
+
+[Developer tools](/manual/tools) describes each command, and [Command line](/manual/cli) lists their options.
 
 ## The implementation
 
-The reference implementation of Lua is a register-based interpreter written in portable ISO C, which runs on nearly any platform with a C compiler and stays small enough to read. LuaJIT is a separate implementation of Lua 5.1 with a tracing JIT compiler.
+The reference implementation of Lua is an interpreter written in portable ISO C. It runs on nearly any platform with a C compiler and stays small enough to read in full.
 
-The Lus runtime is written in Zig. Its interpreter shares the definition of every instruction with a baseline JIT that compiles hot functions for aarch64 and x86-64, an optimizing tier compiles the code that stays hot with predicted types and unboxed values, and the WebAssembly build compiles hot functions to WebAssembly. Native code runs the same frames as the interpreter, so every tier agrees with the interpreter by construction. The collector is generational and does part of its work in parallel. The trade is the one this page has described throughout: Lua optimizes for the smallest portable core, and Lus for the speed and completeness of programs that run on their own.
+The Lus runtime is written in Zig and has three tiers. Every function starts in an interpreter. On macOS and Linux, a baseline JIT compiler translates a function that runs often to machine code for aarch64 and x86-64, and an optimizing tier recompiles the code that stays busy, using the types it has observed. A program needs no change to use them, and the three tiers give the same results. The WebAssembly build of Lus has an interpreter and a compiler that produces WebAssembly. Memory is managed by a generational garbage collector, and `collectgarbage` remains available.
+
+Lua aims for the smallest portable core. Lus accepts a larger runtime in exchange for speed and a complete standard library. The guide describes the runtime under [Internals](/manual/guide#internals).
+
+## Related pages
+
+- [Guide to Lus](/manual/guide) teaches the whole language in order.
+- [Best practices](/manual/practices) gives advice on structuring and tuning Lus programs.
+- [Permissions](/manual/permissions) is the complete reference for `pledge`.
+- [Developer tools](/manual/tools) describes `lus check` and every warning it reports.
+- [Embedding](/manual/embedding) describes the C interface for host programs.

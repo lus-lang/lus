@@ -21,4 +21,4 @@ print(tonumber(z.weekday))                      --> 4
 print(time.weekday[7] == time.weekday.sunday)   --> true
 ```
 
-`print` shows a member as `enum:` and an address, so a program prints `tonumber(member)` or a name from `z:format("%A")`. Members follow the rules of every [enum](/manual/guide#enum): they compare in order with `<`, and arithmetic on them raises an error. The value `time.weekday` is itself the member `monday`. [`time.month`](/manual/api#time.month) is the enum of the months.
+`print` shows a member as `enum:` and an address, so a program prints `tonumber(member)` or a name from `z:format("%A")`. Members follow the rules of every [enum](/manual/guide#enums): they compare in order with `<`, and arithmetic on them raises an error. The value `time.weekday` is itself the member `monday`. [`time.month`](/manual/api#time.month) is the enum of the months.

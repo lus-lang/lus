@@ -6,6 +6,8 @@ group: use
 shortdesc: "Every lus command and option: run, test, fmt, check, doc, ast, build, compile, debug, help, and agents."
 ---
 
+The `lus` executable runs Lus programs and holds the tools of a Lus project as commands. This page lists every command and option. [Testing](/manual/testing) and [Developer tools](/manual/tools) describe how to use the tools.
+
 ## lus
 
 ```
@@ -13,41 +15,57 @@ lus [options] [script [args]]
 lus <command> [arguments]
 ```
 
-The `lus` executable runs scripts and carries the tools of a Lus project as commands. With no command, or with `run`, it runs a script.
+`lus script.lus` runs a script and passes the arguments after its name to it. The script reads them from `...` and from the table `arg`. With no script and no `-e`, `lus` starts an interactive session that runs each line as it is entered. A first argument that names a command runs that command.
 
 | Command | Purpose |
 | --- | --- |
-| `run` | Run a Lus script (the default). |
-| `test` | Run tests: functions ending in `_test` in `*_test.lus` files. |
-| `fmt` | Format source files. |
-| `check` | Check source files for errors and lint warnings. |
-| `doc` | Generate API documentation from doc comments. |
-| `ast` | Print the syntax tree of a file as JSON. |
-| `build` | Bundle a script into a standalone executable. |
-| `compile` | Compile a script to a binary chunk. |
-| `debug` | Run a script under the Debug Adapter Protocol. |
-| `help` | Print the standard library reference for a name. |
-| `agents` | Set a project up for coding agents. |
+| `run` | Run a script. `lus run script.lus` is the same as `lus script.lus`. |
+| [`test`](#lus-test) | Run the tests of a project. |
+| [`fmt`](#lus-fmt) | Format source files. |
+| [`check`](#lus-check) | Find errors and likely mistakes without running the code. |
+| [`doc`](#lus-doc) | Generate API documentation from doc comments. |
+| [`ast`](#lus-ast) | Print the syntax tree of a file as JSON. |
+| [`build`](#lus-build) | Bundle a script and its modules into a standalone executable. |
+| [`compile`](#lus-compile) | Compile a script to a binary chunk. |
+| [`debug`](#lus-debug) | Run a script under a debugger. |
+| [`help`](#lus-help) | Print the standard library reference for a name. |
+| [`agents`](#lus-agents) | Set a project up for coding agents. |
 
 ### Options
 
+The options come before the script name. Everything after the script name belongs to the script.
+
 | Option | Effect |
 | --- | --- |
-| `-e stat` | Execute the string `stat`. |
-| `-i` | Enter interactive mode after executing `script`. |
-| `-l mod` | Require library `mod` into global `mod`. |
-| `-l g=mod` | Require library `mod` into global `g`. |
-| `-v`, `--version` | Show version information. |
-| `-E` | Ignore environment variables such as `LUS_PATH`. |
-| `-W` | Turn warnings on. |
-| `-P perm`, `--pledge perm` | Grant a [permission](/manual/permissions), such as `-Pfs:read` or `-Pnetwork`. |
-| `-F name[=value]`, `--flag name[=value]` | Define a readonly [compile-time flag](/manual/guide#compile-time-flags). No value means `true`, a numeric value is a number, and anything else is a string. |
-| `--include path[:alias]` | [Preinclude](/manual/guide#preincluded-modules) a module file or directory so `require` finds it without `load` or `fs` permissions. |
-| `--readonly-env` | Freeze `_ENV` and the module tables after startup. |
-| `--gc-pause N` | Let the heap grow by N percent of its live size before a collection starts. Lower values trade CPU for lower peak memory. |
-| `--dis` | Print the bytecode of the script instead of running it. The script compiles exactly as it would run, so the listing reflects the flags given with `-F`. |
-| `--` | Stop handling options. |
-| `-` | Stop handling options and execute standard input. |
+| `-e stat` | Run the string `stat` as a chunk, for a one-line program such as `lus -e 'print(2^10)'`. The option may repeat. |
+| `-i` | Enter interactive mode after `script` ends, with its globals in place, to inspect the state it left. |
+| `-l mod` | Require the module `mod` and store it in the global `mod` before the script runs. |
+| `-l g=mod` | Require the module `mod` and store it in the global `g`. |
+| `-P perm`, `--pledge perm` | Grant a [permission](/manual/permissions) to the script, such as `-Pfs:read` or `-Pnetwork`. Once the command line grants a permission, the script may pledge only what the command line grants, so this option decides what a script that you have not read may do. |
+| `-F name[=value]`, `--flag name[=value]` | Define a build flag, which the script reads from the readonly table `flags`. A flag with no value is `true`, a numeric value is a number, and any other value is a string. The compiler removes the branch of an `if flags.name` or `if not flags.name` that the flags rule out, so a flag switches debugging code on without a cost when it is off. |
+| `--include path[:alias]` | Compile a module file, or every module in a directory, when the interpreter starts. `require` then loads the module from memory with no `load` or `fs:read` permission, so a program that has sealed its permissions can still require it. The alias names the module. |
+| `--readonly-env` | Make the global table and the standard library tables readonly once the script starts. An assignment to a global or to a library field then raises `attempt to modify a readonly table`, which protects a program from code that replaces a library function. |
+| `--gc-pause N` | Let the heap grow by N percent of its live size before the next collection starts. A lower value uses less memory and more processor time. |
+| `-W` | Turn warnings on, so that messages from [`warn`](/manual/api#warn) reach standard error. |
+| `-E` | Ignore the environment variables that configure the interpreter, such as `LUS_PATH` and `LUS_JIT`. |
+| `--dis` | Print the bytecode of the script and exit without running it. The listing reflects the flags given with `-F`. |
+| `-v`, `--version` | Print the version and exit. |
+| `-h`, `--help` | Print the commands and options and exit. |
+| `--` | Stop handling options, for a script whose name starts with a dash. |
+| `-` | Stop handling options and run standard input as the script. |
+
+### Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `LUS_PATH` | The initial value of [`package.path`](/manual/api#package.path), the list of templates that `require` searches. |
+| `LUS_JIT` | The setting of the JIT compiler. `on`, the default, compiles the functions that run often. `off` interprets everything, `baseline` runs only the first tier, and `eager` and `opt-eager` compile every function on its first call, which serves tests. |
+| `LUS_JIT_THRESHOLD` | How many calls and loop iterations a function makes before the JIT compiles it. A program that is tuned or measured can set it to see how the threshold affects its speed. |
+| `LUS_GC_THREADS` | The number of threads that the garbage collector marks with. The default uses up to eight and leaves one processor free. A lower value, such as `1`, leaves more processor time to other programs on the machine. |
+
+### Exit status
+
+`lus` exits with status 0 when the script ends normally. An error that the script does not catch prints the error and a traceback to standard error and exits with status 1. A script sets another status with [`os.exit`](/manual/api#os.exit).
 
 ## lus test
 
@@ -55,17 +73,20 @@ The `lus` executable runs scripts and carries the tools of a Lus project as comm
 lus test [options] [path ...]
 ```
 
-Runs the tests in the named files, or in every `*_test.lus` file below the named directories, the current directory by default. Each file runs in its own process and temporary directory, and files run in parallel. [Testing](/manual/testing) describes how to write tests.
+Runs the tests in the named files, or in every `*_test.lus` file below the named directories. With no path it searches the current directory. Each file runs in its own process and temporary directory, and files run in parallel. [Testing](/manual/testing) describes how to write tests.
 
 | Option | Effect |
 | --- | --- |
-| `-v` | List skipped tests and the output of passing files too. |
 | `--filter TEXT` | Run only the tests whose names contain `TEXT`. |
-| `-u`, `--update` | Rewrite snapshots that no longer match. |
-| `--json` | Print one JSON record per test. |
-| `--jobs N` | Run at most N files at once (default: the number of processors). |
-| `--timeout S` | Stop a file that writes no output for S seconds (default: 60). |
-| `--file-timeout S` | Stop a file that runs longer than S seconds in all (default: ten times the timeout). |
+| `-u`, `--update` | Rewrite the snapshots that no longer match. |
+| `--doc` | Run the ` ```lus ` code blocks of Markdown files in place of test files, which keeps the examples of documentation correct. |
+| `-v` | List the skipped tests of passing files too. |
+| `--json` | Print one JSON record per test, for other tools to read. |
+| `--jobs N` | Run at most N files at once. The default is the number of processors. |
+| `--timeout S` | Stop a file that writes no output for S seconds. The default is 60. |
+| `--file-timeout S` | Stop a file that runs longer than S seconds in all. The default is ten times the timeout. |
+
+The exit status is 0 when every file passes, 1 when a test fails or a file cannot run, and 2 when a named path does not exist.
 
 ## lus fmt
 
@@ -73,13 +94,13 @@ Runs the tests in the named files, or in every `*_test.lus` file below the named
 lus fmt [--check] [--write] [--indent N] [path ...]
 ```
 
-Prints the formatted text of each file to standard output. A directory stands for every `.lus` file below it. With no file, or with the file `-`, it reads standard input.
+Gives source files one standard layout. With no option it prints the formatted text of each file to standard output. A directory stands for every `.lus` file below it. With no file, or with the file `-`, it reads standard input.
 
 | Option | Effect |
 | --- | --- |
-| `--check` | Change nothing and list the files that are not formatted (exit 1 if any). |
 | `--write` | Rewrite the files in place. |
-| `--indent N` | Spaces per indentation level (default: 4). |
+| `--check` | Change nothing, list the files that are not formatted, and exit with status 1 if there is one. This form suits continuous integration. |
+| `--indent N` | Use N spaces per indentation level. The default is 4. |
 
 ## lus check
 
@@ -87,11 +108,11 @@ Prints the formatted text of each file to standard output. A directory stands fo
 lus check [--json] [--list] [path ...]
 ```
 
-Parses, lints, and compiles each file without running it and prints each problem as `file:line:column: severity: message [code]`. A directory stands for every `.lus` file below it, and files named `*_test.lus` are checked with the conventions of `lus test`. The exit status is 1 when anything is reported.
+Finds errors and likely mistakes without running the code. It parses, lints, and compiles each file and prints each problem as `file:line:column: severity: message [code]`. A directory stands for every `.lus` file below it, and files named `*_test.lus` are checked with the conventions of `lus test`. The exit status is 1 when anything is reported. [Checking](/manual/tools#checking) lists the diagnostics.
 
 | Option | Effect |
 | --- | --- |
-| `--json` | Print the diagnostics as one JSON array. |
+| `--json` | Print the diagnostics as one JSON array, for editors and other tools. |
 | `--list` | Print every diagnostic code with its severity and summary. |
 
 ## lus doc
@@ -100,12 +121,12 @@ Parses, lints, and compiles each file without running it and prints each problem
 lus doc [-o DIR] [--format md|json] file ...
 ```
 
-Generates reference documentation from `---` doc comments, one module per file.
+Generates reference documentation from the `---` doc comments of each file. Each file is one module. [Documentation](/manual/tools#documentation) describes the comments.
 
 | Option | Effect |
 | --- | --- |
-| `-o DIR` | Write one file per module into `DIR` instead of standard output. |
-| `--format md\|json` | Output format (default: `md`). |
+| `-o DIR` | Write one file per module into `DIR`. Without it, the output goes to standard output. |
+| `--format md\|json` | Choose Markdown, the default, or JSON. |
 
 ## lus ast
 
@@ -113,12 +134,12 @@ Generates reference documentation from `---` doc comments, one module per file.
 lus ast [--no-comments] [--no-recover] file
 ```
 
-Prints the syntax tree of a file as JSON, in the shape that [`debug.parse`](/manual/api#debug.parse) returns.
+Prints the syntax tree of a file as JSON, in the shape that [`debug.parse`](/manual/api#debug.parse) returns, for tools that analyze or transform Lus code. [Syntax trees](/manual/tools#syntax-trees) describes the tree.
 
 | Option | Effect |
 | --- | --- |
 | `--no-comments` | Leave comments out of the tree. |
-| `--no-recover` | Stop at the first syntax error. |
+| `--no-recover` | Stop at the first syntax error. Without it, the parser continues past an error and lists every error in the tree. |
 
 ## lus build
 
@@ -126,14 +147,14 @@ Prints the syntax tree of a file as JSON, in the shape that [`debug.parse`](/man
 lus build [options] script
 ```
 
-Bundles a script and every module it requires by a literal name into a standalone executable. [Developer tools](/manual/tools) describes the bundle.
+Bundles a script and the modules it requires into one executable, which runs on a machine that has neither `lus` nor the source files. The command finds every `require` whose argument is a string literal. [Standalone executables](/manual/tools#standalone-executables) describes the bundle.
 
 | Option | Effect |
 | --- | --- |
-| `-o FILE` | Write the executable to `FILE` (default: the script name without its extension). |
-| `-P perm`, `--pledge perm` | Grant a permission every time the program runs. |
-| `-F name[=value]`, `--flag name[=value]` | Define a compile-time flag. |
-| `--include path[:alias]` | Bundle a module file or directory even when no literal `require` names it. |
+| `-o FILE` | Write the executable to `FILE`. The default is the script name without its extension. |
+| `-P perm`, `--pledge perm` | Grant a permission every time the executable runs. |
+| `-F name[=value]`, `--flag name[=value]` | Define a build flag for the bundled code. |
+| `--include path[:alias]` | Bundle a module file or directory that no literal `require` names. |
 
 ## lus compile
 
@@ -141,13 +162,13 @@ Bundles a script and every module it requires by a literal name into a standalon
 lus compile [options] script
 ```
 
-Compiles a script to a binary chunk, the same chunk that [`string.dump`](/manual/api#string.dump) writes for the compiled script. `lus` runs the chunk directly, and `load` reads it in binary mode. The default output is the script name with the extension `.lusc`.
+Compiles a script to a binary chunk, which `lus` runs directly and `load` reads in binary mode. A binary chunk loads without being parsed again and can be distributed without its source. The default output is the script name with the extension `.lusc`. [Binary chunks](/manual/tools#binary-chunks) describes the format.
 
 | Option | Effect |
 | --- | --- |
 | `-o FILE` | Write the chunk to `FILE`. |
-| `-s`, `--strip` | Leave out debug information. |
-| `-F name[=value]`, `--flag name[=value]` | Define a compile-time flag, which folds into the chunk. |
+| `-s`, `--strip` | Leave out debug information, which makes the chunk smaller and removes line numbers from its error messages. |
+| `-F name[=value]`, `--flag name[=value]` | Define a build flag, whose value is fixed in the chunk. |
 
 ## lus debug
 
@@ -155,12 +176,12 @@ Compiles a script to a binary chunk, the same chunk that [`string.dump`](/manual
 lus debug [--stdio | --port N] [-P perm]... [script [args]]
 ```
 
-Runs a script under the Debug Adapter Protocol for editors such as VS Code. [Developer tools](/manual/tools#debugger) describes the debugger.
+Runs a script under the Debug Adapter Protocol, which editors such as VS Code use to set breakpoints, step through code, and inspect variables. An editor starts this command itself. [Debugger](/manual/tools#debugger) describes the features.
 
 | Option | Effect |
 | --- | --- |
-| `--stdio` | Speak the protocol on standard input and output (the default). |
-| `--port N` | Accept one client on `127.0.0.1:N`. |
+| `--stdio` | Speak the protocol on standard input and output. This is the default. |
+| `--port N` | Accept one client on `127.0.0.1:N`, for an editor that connects to a running adapter. |
 | `-P perm`, `--pledge perm` | Grant a permission to the program. |
 
 ## lus help
@@ -169,7 +190,7 @@ Runs a script under the Debug Adapter Protocol for editors such as VS Code. [Dev
 lus help [name | module | --search text]
 ```
 
-Prints the standard library reference compiled into the executable, so it matches the running version. A name such as `string.find` or `tcp_socket:receive` prints the signature, the permissions the call needs, the stability, and the description. A module such as `fs.path` lists its entries, and no argument lists the modules. A name that matches nothing lists the names that contain it, with exit status 1.
+Prints the reference of the standard library from the terminal. The reference is part of the executable, so it describes the version that is running. A name such as `string.find` or `tcp_socket:receive` prints the signature, the permissions the call needs, the stability, and the description. A module such as `fs.path` lists its entries, and no argument lists the modules. A name that matches no entry lists the names that contain it and exits with status 1.
 
 | Option | Effect |
 | --- | --- |
@@ -181,6 +202,11 @@ Prints the standard library reference compiled into the executable, so it matche
 lus agents init [dir]
 ```
 
-Writes the agent skills of the running version into `dir/.agents/skills`, the current directory by default, links `.claude/skills` to them, and adds a Lus section to `AGENTS.md`. Running it again updates the skills. The [agents page](/agents) lists the skills and the prompts to start from.
+Prepares a project for coding agents, so that an agent working in the project knows how to write and test Lus. The command writes the agent skills of the running version into `dir/.agents/skills`, links `.claude/skills` to them, and adds a Lus section to `AGENTS.md`. `dir` defaults to the current directory. Running the command again updates the skills. The [agents page](/agents) lists the skills and the prompts to start from.
 
-Building the executable itself is covered in [Compiling Lus](/manual/compiling).
+## Related pages
+
+- [Testing](/manual/testing) describes how to write tests for `lus test`.
+- [Developer tools](/manual/tools) describes the formatter, the checker, the documentation generator, standalone executables, and the debugger.
+- [Permissions](/manual/permissions) describes the permissions that `-P` grants.
+- [Compiling Lus](/manual/compiling) describes how to build the `lus` executable from source.

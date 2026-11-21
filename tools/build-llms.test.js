@@ -37,7 +37,7 @@ assert.equal(
 assert.equal(signature({name: "math.pi", kind: "constant"}), "math.pi");
 
 // Manual links point at Markdown twins, other site links at HTML pages.
-assert.equal(rewriteLinks("[g](/manual/guide#scope)"), "[g](https://lus.dev/manual/guide.md#scope)");
+assert.equal(rewriteLinks("[g](/manual/guide#blocks-and-scope)"), "[g](https://lus.dev/manual/guide.md#blocks-and-scope)");
 assert.equal(rewriteLinks("[a](/manual/api#string.find)"), "[a](https://lus.dev/manual/api.md#string.find)");
 assert.equal(rewriteLinks("[p](/playground)"), "[p](https://lus.dev/playground)");
 assert.equal(rewriteLinks("[c](/manual/api/c)"), "[c](https://lus.dev/manual/api/c)");

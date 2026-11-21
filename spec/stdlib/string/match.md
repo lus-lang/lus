@@ -18,7 +18,7 @@ returns: string|nil
 
 Searches `s` for the first match of `pattern` and returns its captures, or the whole match when the pattern has no captures.
 
-`s` is the string to search, and `pattern` is a [pattern](/manual/guide#string-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`.
+`s` is the string to search, and `pattern` is a [pattern](/manual/guide#strings-and-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`.
 
 On a match, the results are the captures in order, with a position capture `()` yielding a character position as an integer. A pattern without captures returns the whole match as one string. Without a match, the result is a single `nil`.
 

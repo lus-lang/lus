@@ -6,146 +6,237 @@ group: library
 shortdesc: "The fs library: listing directories, inspecting, copying, moving, and removing files, symbolic links, and portable path functions."
 ---
 
-The `fs` library works with files, directories, and symbolic links, and its `fs.path` table builds and takes apart paths for the platform the program runs on. Reading and writing the contents of a file belong to the [`io` library](/manual/api#io-library), and `fs` covers everything around them.
+The `fs` library manages files, directories, and symbolic links: it lists directories, tells files from directories, creates directories, and copies, moves, and removes entries. Its `fs.path` functions build and take apart paths so that the same code runs on POSIX systems and on Windows. The [`io` library](/manual/api#io-library) reads and writes the contents of a file.
 
-Every `fs` function that touches the filesystem checks the `fs:read` or `fs:write` [permission](/manual/permissions) for each path it uses, and every one raises an error when it fails. A relative path resolves against the working directory of the process.
+Every `fs` function that touches the filesystem checks the `fs:read` or `fs:write` [permission](/manual/permissions) for each path it uses, and raises an error when it fails. A relative path is resolved against the working directory of the process.
+
+## Reading and writing files
+
+[`io.open(path, mode)`](/manual/api#io.open) opens a file and returns a file handle. The mode `"r"`, the default, reads. The mode `"w"` creates the file or empties it and then writes, and `"a"` writes at the end of the file. A handle declared with the `<close>` attribute closes when its block ends, including when an error ends the block.
+
+```lus
+pledge("fs")
+
+local path = os.tmpname()
+do
+    local out <close> = assert(io.open(path, "w"))
+    out:write("first line\n", "second line\n")
+end
+
+do
+    local input <close> = assert(io.open(path))
+    print(#input:read("a"))   --> 23
+end
+
+for line in io.lines(path) do
+    print(line)
+end
+--> first line
+--> second line
+fs.remove(path)
+```
+
+`io.open` returns `nil` and a message when it cannot open the file, which is why the example wraps it in `assert`. `read("a")` returns the whole file, and [`io.lines`](/manual/api#io.lines) reads a file line by line and closes it after the last line. Reading requires `fs:read` for the path and writing requires `fs:write`. [Files](/manual/text#files) describes reading bytes and text in other encodings.
+
+[`os.tmpname()`](/manual/api#os.tmpname) creates an empty temporary file and returns its path, for data that a program keeps only while it runs. The program removes the file with `fs.remove` when it is done. The examples on this page pledge the permissions they need and build their paths from `os.tmpname()`, so they leave nothing behind.
 
 ## Listing a directory
 
-[`fs.list(path, glob)`](/manual/api#fs.list) returns an array with the name of every entry in the directory at `path`. The names carry no directory prefix, and the array leaves out `.` and `..`. The order of the names is unspecified.
+[`fs.list(path, glob)`](/manual/api#fs.list) returns an array with the name of every entry in the directory at `path`. The names carry no directory prefix, so a program joins each one to `path` before it uses it. The array leaves out `.` and `..`, and the order of the names is unspecified.
 
 ```lus
-fs.createdirectory("listing")
-io.open("listing/a.txt", "w"):close()
-io.open("listing/b.txt", "w"):close()
+pledge("fs")
 
-local names = fs.list("listing")
+local base = os.tmpname()
+local dir = base .. ".d"
+fs.createdirectory(dir)
+io.open(fs.path.join(dir, "a.txt"), "w"):close()
+io.open(fs.path.join(dir, "b.txt"), "w"):close()
+
+local names = fs.list(dir)
 table.sort(names)
 print(table.concat(names, " "))   --> a.txt b.txt
+fs.remove(dir, true)
+fs.remove(base)
 ```
 
-The optional `glob` keeps only the names that match it. In a glob, `*` matches any sequence of characters, including the empty one, and `?` matches exactly one byte, which is one character in an ASCII name. A name that starts with `.` matches `*` like any other name.
+The optional `glob` keeps only the names that match it, which selects files by extension or by prefix without a loop. In a glob, `*` matches any sequence of characters, including the empty one, and `?` matches exactly one byte, which is one character in an ASCII name. Every other character matches itself. A name that starts with `.` matches `*` like any other name.
 
 ```lus
-fs.createdirectory("configs")
+pledge("fs")
+
+local base = os.tmpname()
+local dir = base .. ".d"
+fs.createdirectory(dir)
 for _, name in ipairs({"config1.json", "config22.json", "notes.md"}) do
-    io.open("configs/" .. name, "w"):close()
+    io.open(fs.path.join(dir, name), "w"):close()
 end
 
-print(#fs.list("configs", "*.json"))           --> 2
-print(fs.list("configs", "config?.json")[1])   --> config1.json
+print(#fs.list(dir, "*.json"))           --> 2
+print(fs.list(dir, "config?.json")[1])   --> config1.json
+fs.remove(dir, true)
+fs.remove(base)
 ```
 
 `fs.list` requires `fs:read` for `path`. It raises `"cannot list directory PATH: No such file or directory"` when the directory does not exist and `"PATH is not a directory"` when `path` names a file.
 
 ## Inspecting a path
 
-[`fs.type(path)`](/manual/api#fs.type) returns two values. The first is `"directory"` for a directory and `"file"` for anything else. The second is `true` when `path` is a symbolic link. A link reports the type of its target, and a link whose target does not exist reports `"file"`.
+[`fs.type(path)`](/manual/api#fs.type) tells a directory from a file, which a program needs before it lists or opens an entry. It returns two values. The first is `"directory"` for a directory and `"file"` for anything else. The second is `true` when `path` is a symbolic link. A link reports the type of its target, and a link whose target does not exist reports `"file"`.
 
 ```lus
-fs.createdirectory("inspect")
-io.open("inspect/data.txt", "w"):close()
-fs.createlink("inspect/shortcut", "data.txt")
+pledge("fs")
 
-print(fs.type("inspect"))            --> directory  false
-print(fs.type("inspect/data.txt"))   --> file  false
-print(fs.type("inspect/shortcut"))   --> file  true
+local base = os.tmpname()
+local dir = base .. ".d"
+fs.createdirectory(dir)
+io.open(fs.path.join(dir, "data.txt"), "w"):close()
+fs.createlink(fs.path.join(dir, "shortcut"), "data.txt")
+
+print(fs.type(dir))                              --> directory  false
+print(fs.type(fs.path.join(dir, "data.txt")))    --> file  false
+print(fs.type(fs.path.join(dir, "shortcut")))    --> file  true
+fs.remove(dir, true)
+fs.remove(base)
 ```
 
-`fs.type` raises `"path 'PATH' does not exist"` when nothing exists at `path`. A program that tests for existence wraps the call in `catch`.
+`fs.type` raises `"path 'PATH' does not exist"` when nothing exists at `path`. A program tests whether a path exists by wrapping the call in [`catch`](/manual/guide#errors), whose first result is `false` when the call raised an error.
 
 ```lus
-local exists = catch fs.type("no-such-file")
-print(exists)   --> false
+pledge("fs:read")
+
+local function exists(path)
+    return (catch fs.type(path))
+end
+
+print(exists("."), exists("no-such-file"))   --> true  false
 ```
 
-[`fs.follow(path)`](/manual/api#fs.follow) returns the target of the symbolic link at `path` exactly as the link stores it, without resolving it further. It raises `"'PATH' is not a symbolic link"` for any other entry. Both functions require `fs:read` for `path`.
+[`fs.follow(path)`](/manual/api#fs.follow) returns the target of the symbolic link at `path` exactly as the link stores it. It raises `"'PATH' is not a symbolic link"` for any other entry. Both functions require `fs:read` for `path`.
 
 ## Creating directories
 
-[`fs.createdirectory(path, recursive)`](/manual/api#fs.createdirectory) creates a directory. Without `recursive`, the parent must exist and `path` must not. The call raises `"cannot create directory 'PATH': parent does not exist"` or `"cannot create directory 'PATH': already exists"` otherwise.
+[`fs.createdirectory(path, recursive)`](/manual/api#fs.createdirectory) creates a directory. Without `recursive`, the parent must exist and `path` must not. Otherwise the call raises `"cannot create directory 'PATH': parent does not exist"` or `"cannot create directory 'PATH': already exists"`.
 
 ```lus
-fs.createdirectory("single")
-print((catch fs.createdirectory("single")))          --> false
-print((catch fs.createdirectory("missing/child")))   --> false
+pledge("fs")
+
+local base = os.tmpname()
+local dir = base .. ".d"
+fs.createdirectory(dir)
+print((catch fs.createdirectory(dir)))                    --> false
+print((catch fs.createdirectory(dir .. "/missing/child")))  --> false
+fs.remove(dir)
+fs.remove(base)
 ```
 
-With `recursive` set to `true`, the call creates every missing directory along `path`, in order, and succeeds when the whole path already exists. A component of `path` that exists as a file raises an error. A recursive `path` must not contain a `..` component, and one that does raises `"cannot create directory 'PATH': '..' is denied"`.
+With `recursive` set to `true`, the call creates every missing directory along `path` and succeeds when the whole path already exists. This is the form for a program that needs a directory to exist before it writes into it, such as an output or cache directory. A component of `path` that exists as a file raises an error. A recursive `path` must not contain a `..` component, and one that does raises `"cannot create directory 'PATH': '..' is denied"`.
 
 ```lus
-fs.createdirectory("tree/a/b/c", true)
-fs.createdirectory("tree/a/b/c", true)
-print(fs.type("tree/a/b/c"))   --> directory  false
+pledge("fs")
+
+local base = os.tmpname()
+local tree = base .. ".d"
+fs.createdirectory(tree .. "/a/b/c", true)
+fs.createdirectory(tree .. "/a/b/c", true)
+print((fs.type(tree .. "/a/b/c")))   --> directory
+fs.remove(tree, true)
+fs.remove(base)
 ```
 
-`fs.createdirectory` requires `fs:write` for `path`. In recursive mode each directory it creates must also be covered by `fs:write`.
+`fs.createdirectory` requires `fs:write` for `path`. In recursive mode, `fs:write` must also cover each directory that the call creates.
 
 ## Copying and moving
 
-[`fs.copy(source, dest)`](/manual/api#fs.copy) copies the contents of the file at `source` into a new file at `dest`. It never replaces an existing file, and a `dest` that exists raises `"target 'DEST' already exists"`. The source must be a file, so a directory raises an error. If the copy fails partway, `fs.copy` removes the partial file at `dest` before it raises the error.
+[`fs.copy(source, dest)`](/manual/api#fs.copy) copies the contents of the file at `source` into a new file at `dest`. It never replaces an existing file, so a program cannot lose data through a copy. A `dest` that exists raises `"target 'DEST' already exists"`. The source must be a file, and a directory raises an error. If the copy fails partway, `fs.copy` removes the partial file at `dest` before it raises the error.
 
 ```lus
-io.open("original.txt", "w"):write("contents"):close()
-fs.copy("original.txt", "backup.txt")
-print(io.open("backup.txt"):read("a"))              --> contents
-print((catch fs.copy("original.txt", "backup.txt")))   --> false
+pledge("fs")
+
+local original = os.tmpname()
+local backup = original .. ".bak"
+io.open(original, "w"):write("contents"):close()
+fs.copy(original, backup)
+
+local copy <close> = io.open(backup)
+print(copy:read("a"))                       --> contents
+print((catch fs.copy(original, backup)))    --> false
+fs.remove(original)
+fs.remove(backup)
 ```
 
 `fs.copy` requires `fs:read` for `source` and `fs:write` for `dest`.
 
-[`fs.move(source, dest)`](/manual/api#fs.move) renames a file or a directory, which also moves it to another directory on the same filesystem. Like `fs.copy`, it never replaces an existing entry, and a `dest` that exists raises `"cannot move to 'DEST': target already exists"`. A missing `source` raises `"cannot move 'SOURCE': source does not exist"`. A move across two filesystems raises an error that ends in `cross-device move`, and a program that needs one copies the file and removes the original.
+[`fs.move(source, dest)`](/manual/api#fs.move) renames a file or a directory. A `dest` in another directory of the same filesystem moves the entry there. Like `fs.copy`, it never replaces an existing entry, and a `dest` that exists raises `"cannot move to 'DEST': target already exists"`. A missing `source` raises `"cannot move 'SOURCE': source does not exist"`. A move between two filesystems, such as two disks, raises an error that ends in `cross-device move`. A program that needs one copies the file and removes the original.
 
 ```lus
-fs.createdirectory("archive")
-io.open("draft.txt", "w"):close()
-fs.move("draft.txt", "final.txt")
-fs.move("final.txt", "archive/final.txt")
-print(fs.type("archive/final.txt"))   --> file  false
+pledge("fs")
+
+local base = os.tmpname()
+local archive = base .. ".archive"
+fs.createdirectory(archive)
+fs.move(base, base .. ".final")
+fs.move(base .. ".final", fs.path.join(archive, "final.txt"))
+print((fs.type(fs.path.join(archive, "final.txt"))))   --> file
+fs.remove(archive, true)
 ```
 
 `fs.move` requires `fs:read` and `fs:write` for `source` and `fs:write` for `dest`.
 
 ## Removing files and directories
 
-[`fs.remove(path, recursive)`](/manual/api#fs.remove) removes a file, a symbolic link, or an empty directory. A directory that still has entries raises `"cannot remove directory 'PATH': not empty"` unless `recursive` is `true`, in which case the directory and everything below it are removed. A missing `path` raises `"cannot remove 'PATH': path does not exist"`.
+[`fs.remove(path, recursive)`](/manual/api#fs.remove) removes a file, a symbolic link, or an empty directory. A directory that still has entries raises `"cannot remove directory 'PATH': not empty"` unless `recursive` is `true`. A recursive call removes the directory and everything below it. A missing `path` raises `"cannot remove 'PATH': path does not exist"`.
 
 ```lus
-fs.createdirectory("scratch/deep", true)
-io.open("scratch/deep/file.txt", "w"):close()
+pledge("fs")
 
-print((catch fs.remove("scratch")))   --> false
-fs.remove("scratch", true)
-print((catch fs.type("scratch")))     --> false
+local base = os.tmpname()
+local scratch = base .. ".d"
+fs.createdirectory(scratch .. "/deep", true)
+io.open(scratch .. "/deep/file.txt", "w"):close()
+
+print((catch fs.remove(scratch)))   --> false
+fs.remove(scratch, true)
+print((catch fs.type(scratch)))     --> false
+fs.remove(base)
 ```
 
-`fs.remove` never follows a symbolic link. Removing a link removes the link and leaves its target, and a recursive removal removes the links it meets inside the tree without entering them. The permission check follows the same rule. `fs.remove` requires `fs:write` for the location of `path` itself, so a grant that covers a link permits removing the link even when its target lies outside the grant.
+`fs.remove` never follows a symbolic link. Removing a link removes the link and leaves its target, and a recursive removal removes the links it meets inside the tree without entering them. A recursive removal therefore never deletes files outside the tree it was given.
+
+The permission check follows the same rule. `fs.remove` requires `fs:write` for the location of `path` itself, so a grant that covers a link permits removing the link even when its target lies outside the grant.
 
 ## Symbolic links
 
-[`fs.createlink(link, target)`](/manual/api#fs.createlink) creates a symbolic link at `link` that points to `target`. The link stores `target` as given, so a relative target resolves against the directory of the link when the link is used. `fs.follow` reads the stored target back.
+A _symbolic link_ is an entry that points to another path, so that opening the link opens its target. [`fs.createlink(link, target)`](/manual/api#fs.createlink) creates a symbolic link at `link` that points to `target`. The link stores `target` as given. A relative target is therefore resolved against the directory of the link when the link is used. `fs.follow` reads the stored target back.
 
 ```lus
-fs.createdirectory("links")
-io.open("links/real.txt", "w"):close()
-fs.createlink("links/alias", "real.txt")
+pledge("fs")
 
-print(fs.follow("links/alias"))   --> real.txt
-print(fs.type("links/alias"))     --> file  true
+local base = os.tmpname()
+local dir = base .. ".d"
+fs.createdirectory(dir)
+io.open(fs.path.join(dir, "real.txt"), "w"):close()
+local alias = fs.path.join(dir, "alias")
+fs.createlink(alias, "real.txt")
+
+print(fs.follow(alias))   --> real.txt
+print(fs.type(alias))     --> file  true
+fs.remove(dir, true)
+fs.remove(base)
 ```
 
-`fs.createlink` requires `fs:write` for both `link` and `target`, so a script cannot plant a link that leads outside the paths it may write. A failure raises an error of the form `"failed to create symlink 'LINK' -> 'TARGET': REASON"`.
+`fs.createlink` requires `fs:write` for both `link` and `target`, so a script cannot create a link that leads outside the paths it may write. A failure raises an error of the form `"failed to create symlink 'LINK' -> 'TARGET': REASON"`.
 
 ## Paths
 
-The functions of [`fs.path`](/manual/api#fs.path) work on path strings alone and never touch the filesystem, so they need no permission. They treat `/` as a separator on every platform and also `\` on Windows.
+POSIX systems separate the parts of a path with `/` and Windows separates them with `\`, so a path built with `dir .. "/" .. name` is correct on only some systems. The functions of [`fs.path`](/manual/api#fs.path) build and split paths with the separator of the platform the program runs on. They work on path strings alone and never touch the filesystem, so they need no permission. They accept `/` as a separator on every platform, and `\` as well on Windows.
 
-[`fs.path.join(...)`](/manual/api#fs.path.join) joins its arguments with the platform separator. It skips empty arguments and adds no separator where one is already present. An absolute argument replaces everything before it.
+[`fs.path.join(...)`](/manual/api#fs.path.join) joins its arguments with the platform separator. It skips empty arguments and adds no separator where one is already present. An absolute argument replaces everything before it. The output below is the output on a POSIX system.
 
 ```lus
-print(fs.path.join("dir", "sub", "file.txt"))   --> dir/sub/file.txt on POSIX
-print(fs.path.join("relative", "/absolute"))   --> /absolute
-print(fs.path.join("a/", "", "b"))             --> a/b
+print(fs.path.join("dir", "sub", "file.txt"))   --> dir/sub/file.txt
+print(fs.path.join("relative", "/absolute"))    --> /absolute
+print(fs.path.join("a/", "", "b"))              --> a/b
 ```
 
 [`fs.path.split(path)`](/manual/api#fs.path.split) returns an array of the components between the separators. An absolute path starts with an empty component, and a trailing separator adds none.
@@ -155,7 +246,7 @@ local parts = fs.path.split("/usr/local/bin")
 print(#parts, parts[1] == "", parts[2], parts[4])   --> 4  true  usr  bin
 ```
 
-[`fs.path.name(path)`](/manual/api#fs.path.name) returns the part after the last separator, and [`fs.path.parent(path)`](/manual/api#fs.path.parent) returns the part before it. The parent of a path without a separator is `"."`, and the parent of an entry directly under the root is the root. A path that ends in a separator has the empty string as its name.
+[`fs.path.name(path)`](/manual/api#fs.path.name) returns the part after the last separator, which is the file name. [`fs.path.parent(path)`](/manual/api#fs.path.parent) returns the part before it, which is the directory that holds the entry. The parent of a path without a separator is `"."`, and the parent of an entry directly under the root is the root. A path that ends in a separator has the empty string as its name.
 
 ```lus
 print(fs.path.name("/home/user/report.pdf"))     --> report.pdf
@@ -164,19 +255,23 @@ print(fs.path.parent("/etc"))                    --> /
 print(fs.path.parent("report.pdf"))              --> .
 ```
 
-[`fs.path.separator`](/manual/api#fs.path.separator) is the separator of the platform, `"/"` on POSIX and `"\"` on Windows. [`fs.path.delimiter`](/manual/api#fs.path.delimiter) is the character that separates entries of a path list such as `PATH`, `":"` on POSIX and `";"` on Windows.
+[`fs.path.separator`](/manual/api#fs.path.separator) is the separator of the platform, `"/"` on POSIX and `"\"` on Windows. [`fs.path.delimiter`](/manual/api#fs.path.delimiter) is the character that separates the entries of a list of paths such as the `PATH` environment variable, `":"` on POSIX and `";"` on Windows.
 
 ## Errors
 
-Every failure raises an error object that is a string naming the operation, the path, and the reason. The reasons that the runtime writes itself, such as `already exists` and `not empty`, are the same on every platform. Other reasons come from the operating system, such as `No such file or directory`.
+Every failure of an `fs` function raises an error object that is a string. The string names the operation, the path, and the reason. The reasons that the runtime writes itself, such as `already exists` and `not empty`, are the same on every platform. Other reasons come from the operating system, such as `No such file or directory`. The message starts with the position of the call, which the example below strips.
 
 ```lus
+pledge("fs")
+
 local ok, err = catch fs.remove("nonexistent")
 print(ok)                      --> false
 print(err:match("cannot.*"))   --> cannot remove 'nonexistent': path does not exist
 ```
 
-A copy of a whole directory tree combines the functions above.
+## Copying a directory tree
+
+`fs.copy` copies one file. The following function copies a whole directory by combining `fs.list`, `fs.type`, `fs.path.join`, and `fs.copy`. It calls itself for each directory it finds.
 
 ```lus
 local function copytree(src, dst)
@@ -192,14 +287,21 @@ local function copytree(src, dst)
     end
 end
 
-fs.createdirectory("project/src", true)
-io.open("project/src/main.lus", "w"):write("print(1)"):close()
-copytree("project", "project-backup")
-print(fs.type("project-backup/src/main.lus"))   --> file  false
+pledge("fs")
+
+local base = os.tmpname()
+fs.createdirectory(base .. ".project/src", true)
+io.open(base .. ".project/src/main.lus", "w"):write("print(1)"):close()
+copytree(base .. ".project", base .. ".backup")
+print((fs.type(base .. ".backup/src/main.lus")))   --> file
+fs.remove(base .. ".project", true)
+fs.remove(base .. ".backup", true)
+fs.remove(base)
 ```
 
 ## Related pages
 
 - [Permissions](/manual/permissions) describes `fs:read` and `fs:write` and the path values that limit them.
-- The [`io` library](/manual/api#io-library) reads and writes the contents of files.
+- [Text and bytes](/manual/text#files) describes reading files as bytes and as text.
+- The [`io` library](/manual/api#io-library) lists every function that reads and writes the contents of files.
 - The [API reference](/manual/api#filesystem-library) lists every `fs` function.

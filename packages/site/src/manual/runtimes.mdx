@@ -3,92 +3,112 @@ order: 5.6
 title: "Lus and other runtimes"
 icon: scale
 group: learn
-shortdesc: "How the design of Lus compares with Bun, Node.js, Python, Ruby, PHP, and LuaJIT, with the measurements behind each claim."
+shortdesc: "Benchmark results for Lus and seven other runtimes, and the design choices behind them with what each one costs."
 ---
 
 import RuntimeTable from "../components/RuntimeTable.astro"
 
-Lus is a dynamic language for complete programs, the same niche as JavaScript on Bun and Node.js, Python, Ruby, and PHP. This page explains the design decisions that set Lus apart from those runtimes and from LuaJIT, and what each decision costs. Every claim about speed or memory rests on the cross-language suite described below.
+Lus is a dynamic language for complete programs: scripts, command line tools, and network services. This page shows how Lus performs beside other runtimes that serve the same purpose, then explains the design choices behind the results and what each choice costs.
 
-## The measurements
+## Benchmark results
 
-The suite in `tests/bench/compare` holds six programs, each written once per language in its idiomatic style with its standard library first, and an HTTP server. Every program generates the same input in process and prints a checksum, and the harness checks that every runtime prints the same line before it times anything. Lus is a ReleaseFast build with its default JIT tiers, Ruby runs with YJIT, and PHP runs with opcache and its tracing JIT. Each cell keeps the best of several runs, and the best value of each row is in bold.
+The benchmark suite holds six programs and an HTTP server. Each program is written once per language, in the usual style of that language, and uses the standard library of that language wherever it covers the task. Every version generates the same input and does the same work.
 
-The tables show the latest run of the suite, as the [benchmarks](/#benchmarks) on the home page and [benchmarks.md](/benchmarks.md) do. The figures quoted in the prose of this page come from the run of 21 November 2026 on an Apple M4 Max with 14 cores and 36 GB under macOS 27.2.1, best of 7 runs.
+| Program | What it does |
+| --- | --- |
+| `csv` | Generates two million rows of CSV text, parses them, and totals the quantity and revenue of each region. |
+| `json` | Builds one million records, encodes them as JSON, decodes the text, and sums fields of the result. |
+| `logs` | Generates one million web server log lines, parses each line with one pattern, and counts the requests for each status code and each path. |
+| `lru` | Simulates four million requests to a cache of 50,000 entries that evicts the entry used least recently. |
+| `template` | Renders an HTML report of one million items, escaping every title and tag. |
+| `wordfreq` | Counts how often each word occurs in a text of ten million words and sorts the words by count. |
 
-The first table gives the wall time of each program in seconds. In the run of 21 November, Lus was first on five of the six programs and PHP was first on `logs`.
+The tables below show one run of the suite and change with every new run. The best value of each row is in bold.
+
+<RuntimeTable metric="setup" />
+
+### Time
+
+The first table gives the time each program takes from start to exit, in seconds. A lower value is better.
 
 <RuntimeTable metric="time" />
 
-The second table gives the peak resident memory of each program in megabytes. In the run of 21 November, Lus used the least memory on `csv`, `json`, and `logs`, and less than Bun and Node.js on every program.
+### Memory
+
+The second table gives the largest amount of memory each program holds at any point of its run, in megabytes. A lower value is better.
 
 <RuntimeTable metric="memory" />
 
-The HTTP server answers each request with a JSON document built for that request, under 64 keep-alive connections. LuaJIT has no sockets in its standard library and takes part in the compute programs only.
+### HTTP server
+
+The third table measures a server that answers each request with a small JSON document built for that request. A load generator sends requests over 64 connections that stay open. The table gives the number of requests each server answers per second, the time the median request takes, the time under which 99 percent of requests finish, and the largest amount of memory the server holds during the load. The runtimes without sockets in their standard library take part in the six programs only.
 
 <RuntimeTable metric="http" />
 
-## A small language
+## Design choices
 
-JavaScript, Python, Ruby, and PHP are large languages. Each has classes, several ways to define a function, and decades of syntax that a runtime must keep working. Lus keeps the grammar of Lua, where one table type serves as array, record, object, and module, and functions are the only unit of behavior. A Lus program therefore has few constructs to read, and the runtime has few to make fast.
+The results follow from a few decisions about the language and the runtime. Each decision below is stated with what it gives a program and what it costs.
 
-The small grammar is also why one person can build three compilers for it. The interpreter, the baseline JIT, and the optimizing tier share the definition of every instruction, so a construct that the optimizing tier compiles behaves exactly as it does in the interpreter. A larger language spreads the same effort over more constructs.
+### A small language
 
-The cost is expressiveness that some programmers expect. Lus has no classes, no static types, and no decorators. A program builds objects from tables and metatables, as a Lua program does.
+Lus builds on the syntax of Lua. One data structure, the table, serves as array, dictionary, record, object, and module. A program therefore has few constructs to learn and to read.
 
-## One executable
+The cost is that Lus leaves out constructs that larger languages provide. Objects and inheritance are built from tables and metatables, with no class syntax. Types are checked when the program runs, with no static type annotations.
 
-A Lus program needs the `lus` executable and nothing else. The standard library covers JSON, CSV, SQLite, HTTP clients and servers, sockets, the filesystem, compression, and time zones, and the same executable formats, checks, tests, and debugs code. It is about 7 MB.
+### One executable with a large standard library
 
-Python and PHP share this view of a large standard library, and Bun ships its runtime, package manager, bundler, and test runner as one executable too. Node.js and Ruby lean on their package registries for formats, databases, and tooling. LuaJIT inherits the small library of Lua 5.1 and leaves the rest to C libraries that the host or the program loads.
+The `lus` executable contains the whole standard library: JSON, CSV, SQLite, HTTP clients and servers, sockets, the filesystem, compression, and time zones. The same executable formats, checks, tests, documents, debugs, and bundles programs. A program that uses only the standard library depends on that one executable, so it has no packages to download and no versions to reconcile.
 
-A program that depends only on the executable keeps working as long as the executable does, and needs no install step on a new machine. The cost is size and scope: the runtime carries code for formats a given program never touches, and a library that the standard library lacks has to be written in Lus or embedded from C.
+The standard library is also where much of the speed in the tables comes from. The JSON and CSV parsers and the string functions are part of the runtime and are compiled with it, so a program that spends its time in them runs compiled library code.
 
-## Concurrency without colored functions
+The cost is scope. The executable carries code for formats that a given program never uses. Functionality that the standard library lacks has to be written in Lus or added by a host program through the C interface.
 
-Bun, Node.js, and Python mark a function that waits with `async`, and every caller of such a function has to `await` it. Lus marks nothing. A socket read inside a [detached coroutine](/manual/concurrency#detached-coroutines) suspends that coroutine, and the scheduler resumes it when the socket is ready. The same function runs unchanged in the main chunk, in a plain coroutine, and in a detached one, so a library never comes in two versions.
+### Concurrency with coroutines and workers
 
-Parallelism comes from [workers](/manual/concurrency#workers). Each worker is a complete state with its own heap and collector on its own operating system thread, and workers exchange messages. Python holds a global interpreter lock in its default build, and Ruby holds a global VM lock, so threads in either share one core for interpreted code. Lus workers share nothing, so no lock exists to hold, and no collection stops more than one thread.
+A Lus function that reads from a socket looks like any other function. A read from a socket inside a [detached coroutine](/manual/concurrency#detached-coroutines) suspends that coroutine, and the runtime resumes it when data arrives. The same function runs unchanged in the main program, in a coroutine, and in a detached coroutine, so functions need no `async` marker and a library exists in one version. HTTP requests made with `network.fetch` block the thread, so a program that sends several requests at once sends them from workers. The HTTP server in the third table runs every connection as a detached coroutine on a single thread, and a suspended coroutine holds little memory, which is why the server stays small under load.
 
-The HTTP results show the effect. `network.serve` runs every connection in a detached coroutine on one thread, and its 99th percentile latency is the lowest of the six servers. PHP serves about 21 percent more requests per second, and Bun and PHP answer the median request faster.
+Parallel work runs in [workers](/manual/concurrency#workers). Each worker is a separate instance of the runtime on its own thread, with its own memory and its own garbage collector. Workers exchange messages and share no data, so they need no locks and a collection in one worker never pauses another.
 
-## Memory
+Both have costs. Detached coroutines on one thread run one at a time, so a long computation with no wait in it delays every other coroutine on that thread. Workers communicate only by messages, and the runtime copies most values that cross between them. A server that handles requests on one thread also uses one processor core, so a runtime that spreads requests over several threads or processes can answer more requests per second.
 
-Lus uses less memory than Bun and Node.js on every program of the suite, between 1.3 and 4.3 times less than Bun, and the least of all seven runtimes on three of the six programs. The runtime is laid out to hold data compactly:
+### Compact memory layout
 
-- A value takes 16 bytes, and integers and floats live inside it, so a number never allocates.
-- A table header takes 48 bytes, and a table with a small known size keeps its parts in the same allocation.
-- Strings hold WTF-8, one byte per ASCII character, and short strings are interned, so a repeated key or word is stored once.
-- The collector is generational and non-moving, with pages sized by class, so a program that holds its data steadily stays close to the size of that data.
+The runtime stores data compactly. Integers and floats are stored directly in the variable or table slot that holds them, so arithmetic allocates nothing. An array whose elements are all integers, all floats, all strings, or all tables takes half the memory of an array of mixed values. A small table keeps its fields in the same block of memory as the table itself. A short string that occurs many times, such as a field name, is stored once.
 
-The memory of the HTTP server follows from the same decisions. A suspended detached coroutine with its stack takes about 1.6 KB, and the server peaked at 11.2 MB under load, less than half of any other server and about an eighth of Node.js.
+The garbage collector is generational. It collects recently created objects often and long-lived objects rarely, so a program that holds a steady amount of data stays close to the size of that data. The collector never moves an object, so the pointers that a host program holds stay valid.
 
-Other runtimes use less memory than Lus on the other three programs. Ruby runs `wordfreq` in 96 MB against 267 MB for Lus, because its program appends every word to one preallocated string, where the Lus program collects the words in a table and joins them with `table.concat`. PHP, Python, and Ruby run `lru` in 46 to 52 MB against 53 MB for Lus. Ruby runs `template` in 537 MB against 538 MB.
+The cost of a collector that never moves objects is fragmentation. Free space scattered between live objects stays part of the memory of the program until new objects of the same size fill it.
 
-## Speed
+### An interpreter and two compilers
 
-Lus runs code in an interpreter, compiles hot functions with a baseline JIT, and compiles code that stays hot with an optimizing tier that keeps values unboxed in machine registers. Bun, Node.js, LuaJIT, Ruby with YJIT, and PHP with its tracing JIT compile to native code as well, and Python 3.14 runs in its interpreter by default. The tables above therefore compare compilers in every column but one.
+Lus starts a program in an interpreter, which begins running at once. A function that runs often is compiled to machine code by a baseline compiler that works in a single fast pass. Code that keeps running is compiled again by an optimizing compiler, which predicts the types of values from what the program has done so far and keeps numbers in processor registers. All three run every instruction from one shared definition, so a program behaves the same in each of them.
 
-Lus is faster than Bun on all six programs, by 15 percent on `template` and by 97 percent on `wordfreq`. It is faster than Node.js, Python, Ruby, and LuaJIT on all six. The JSON and CSV codecs and the string functions are written in Zig, the language of the runtime, so a program that spends its time in them runs compiled library code.
+The cost is that compilation takes time and memory while the program runs, so a short script gains little from it. The compilers produce code for 64-bit ARM and x86 processors on macOS and Linux, and the WebAssembly build has its own compiler. On every other target Lus runs in the interpreter alone.
 
-PHP finishes `logs` in 0.56 seconds against 0.74 for Lus. That program parses each line with one regular expression, which PHP hands to PCRE, a regular expression library that compiles each pattern to native code.
+Lus interprets its patterns. A program that spends most of its time matching one pattern, such as `logs`, therefore depends on the speed of the pattern interpreter more than on the compilers.
 
-## Permissions
+### Permissions
 
-A Lus script starts with no access to files, the network, processes, or the environment, and [pledges](/manual/permissions) what it uses. Node.js has a permission model that a flag turns on, and Bun, Python, Ruby, PHP, and LuaJIT give every script the full authority of its user. A Lus program therefore states its reach in its first lines, and a dependency cannot reach further than the program that loads it.
+A Lus script starts with no access to files, the network, other processes, or environment variables. The script acquires access by calling [`pledge`](/manual/permissions) with the name of a permission, such as `fs:read` for one directory, or the person who runs the script grants it on the command line. A program can also seal its permissions, after which nothing it loads or runs can acquire more. A mistake or a compromised dependency therefore reaches only what the program was given.
 
-## Embedding
+The cost is a line or two in every program that touches the outside world. An operation that lacks its permission raises an error, and each operation checks its permission when it runs.
 
-Lus keeps the embedding model of Lua. A host links one library, creates a state, and exchanges values with it through a stack in the C interface `lus.h`, as [Embedding](/manual/embedding) describes. Python and Ruby can be embedded through their C interfaces, and V8 and JavaScriptCore through C++ interfaces, but each of them carries a much larger runtime into the host. LuaJIT embeds as easily as Lus and is smaller, with the smaller library of Lua 5.1.
+### Embedding
 
-## Choosing a runtime
+Lus can run inside another program. The host program links one library, creates an instance of the runtime, and exchanges values with it through a C interface, as [Embedding](/manual/embedding) describes. The host decides which permissions its scripts receive and which of its own functions they may call.
 
-The decisions above suit some programs better than others.
+The cost falls on the host. Values cross the interface one at a time through a stack, which takes more code than calling a function of the host language directly. The host must also call into each instance from one thread at a time.
 
-- **Lus** suits scripts, command line tools, and services that should run from one file, start with only the access they declare, and use little memory.
-- **Bun and Node.js** suit programs that need the npm ecosystem or share code with a browser.
-- **Python** suits programs that need its scientific and machine learning libraries.
-- **Ruby and PHP** suit web applications built on their frameworks. PHP also serves plain HTTP faster than Lus today.
-- **LuaJIT** suits hosts that embed Lua 5.1 code and need its FFI.
+## How the measurements are made
 
-[Lus and Lua](/manual/lua) explains where Lus departs from Lua, and [Coroutines and workers](/manual/concurrency) describes detached coroutines and workers in full.
+The programs and the harness are in the Lus repository under `tests/bench/compare`, with one directory per program and one file per language. Every program prints one line with its name and a checksum of its result. Before it times anything, the harness runs each program at a small size on every runtime and compares the lines. A runtime that prints a different line is reported and left out of the timing for that program.
+
+Lus is built with `zig build -Doptimize=ReleaseFast`, as the release archives are, and runs with its default settings. Ruby runs with `--yjit`, and PHP runs with opcache and its tracing JIT enabled. The other runtimes run with their defaults. The timed runs alternate between the runtimes, so background activity on the machine affects all of them alike. Each cell shows the fastest of several runs and the peak memory of that run, as the operating system reports it.
+
+For the HTTP table, the harness starts each server, checks its answers, warms it up, and then loads it with the `oha` load generator. The first column of the table names the standard library server that each runtime uses. A row that gives only the name of a runtime is a small HTTP server written on the standard socket library of that language. The results file in the same directory records the machine, the operating system, and the version of every runtime, which the section above lists.
+
+## Related pages
+
+- [Lus for Lua programmers](/manual/lua) explains where Lus differs from Lua.
+- [Coroutines and workers](/manual/concurrency) describes detached coroutines and workers in full.
+- [Permissions](/manual/permissions) is the complete reference for `pledge`.

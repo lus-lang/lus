@@ -81,7 +81,7 @@ local ok, err = catch assert(tonumber("x"), { code = 400 })
 print(ok, err.code)          --> false  400
 ```
 
-A function that fails by returning `nil` and a message fits `assert` directly, so `assert(io.open(path))` raises the message of `io.open`. [`error`](/manual/api#error) raises an error unconditionally, and the `catch` expression captures one, as [Error handling](/manual/guide#error-handling) describes.]],
+A function that fails by returning `nil` and a message fits `assert` directly, so `assert(io.open(path))` raises the message of `io.open`. [`error`](/manual/api#error) raises an error unconditionally, and the `catch` expression captures one, as [Error handling](/manual/guide#errors) describes.]],
     fastcall = true,
     kind = "function",
     module = "base",
@@ -1747,7 +1747,7 @@ print(catch parse("x"))           --> false  not a number: x
 print(select(2, catch error({ code = 7 })).code)   --> 7
 ```
 
-The `catch` expression captures the error object, as [Error handling](/manual/guide#error-handling) describes. [`assert`](/manual/api#assert) raises an error when a value is falsy.]],
+The `catch` expression captures the error object, as [Error handling](/manual/guide#errors) describes. [`assert`](/manual/api#assert) raises an error when a value is falsy.]],
     kind = "function",
     module = "base",
     name = "error",
@@ -2567,7 +2567,7 @@ mt.__metatable = "locked"
 print(getmetatable(t))                           --> locked
 ```
 
-A `__metatable` field also makes [`setmetatable`](/manual/api#setmetatable) refuse to change the metatable. [Metatables and metamethods](/manual/guide#metatables-and-metamethods) in the guide lists the metamethods.]],
+A `__metatable` field also makes [`setmetatable`](/manual/api#setmetatable) refuse to change the metatable. [Metatables and metamethods](/manual/guide#metatables-and-objects) in the guide lists the metamethods.]],
     fastcall = true,
     kind = "function",
     module = "base",
@@ -4589,7 +4589,7 @@ print(math.type(1n), math.type(1d))     --> bigint  decimal
 print(math.type("1"), math.type(nil))   --> nil  nil
 ```
 
-The four subtypes are values of the one type `number`, so `type(x)` returns `"number"` for each of them. The [`number`](/manual/guide#number) section of the guide describes how arithmetic picks the subtype of a result.]],
+The four subtypes are values of the one type `number`, so `type(x)` returns `"number"` for each of them. The [`number`](/manual/guide#numbers) section of the guide describes how arithmetic picks the subtype of a result.]],
     fastcall = true,
     kind = "function",
     module = "math",
@@ -5569,7 +5569,7 @@ Lus 2.0 runs its standard library in the runtime itself, and a host program exte
 print(package.cpath == "")   --> true
 ```
 
-[`package.loadlib`](/manual/api#package.loadlib) reports the same message for a library loaded directly. [Embedding Lus](/manual/guide#embedding-lus) in the guide describes how a host registers native functions.]],
+[`package.loadlib`](/manual/api#package.loadlib) reports the same message for a library loaded directly. [Embedding Lus](/manual/guide#embedding) in the guide describes how a host registers native functions.]],
     kind = "variable",
     module = "package",
     name = "package.cpath",
@@ -5622,7 +5622,7 @@ print(package.loadlib("missing.so", "luaopen_missing"))
 --> nil  cannot open missing.so: No such file or directory  open
 ```
 
-A host program adds native functions through the C embedding API in `lus.h`, as [Embedding Lus](/manual/guide#embedding-lus) describes. [`package.cpath`](/manual/api#package.cpath) describes how `require` treats native modules.
+A host program adds native functions through the C embedding API in `lus.h`, as [Embedding Lus](/manual/guide#embedding) describes. [`package.cpath`](/manual/api#package.cpath) describes how `require` treats native modules.
 
 **Requires pledges:** `fs:read`, `load`]],
     kind = "function",
@@ -5992,7 +5992,7 @@ local next_even = range(2, 4, 2)
 print(next_even(), next_even(), next_even())                 --> 2  4  nil
 ```
 
-The iterator keeps its position in its own upvalues, so it works in a generic `for`, when stored and called directly, and when passed to other functions. A float `step` makes every number after the first a float, as in `range(1, 2, 0.5)`, which produces `1`, `1.5`, and `2.0`. The numeric `for` statement, `for i = start, limit, step`, counts the same sequence without a function call, as [Numeric for](/manual/guide#numeric-for) describes.]],
+The iterator keeps its position in its own upvalues, so it works in a generic `for`, when stored and called directly, and when passed to other functions. A float `step` makes every number after the first a float, as in `range(1, 2, 0.5)`, which produces `1`, `1.5`, and `2.0`. The numeric `for` statement, `for i = start, limit, step`, counts the same sequence without a function call, as [Numeric for](/manual/guide#numeric-for-loops) describes.]],
     kind = "function",
     module = "base",
     name = "range",
@@ -6119,7 +6119,7 @@ print(#t, rawlen(t))     --> 99  3
 print(rawlen("héllo"))   --> 5
 ```
 
-[`rawget`](/manual/api#rawget), [`rawset`](/manual/api#rawset), and [`rawequal`](/manual/api#rawequal) bypass the other metamethods. [Length operator](/manual/guide#length-operator) in the guide describes the length of a table.]],
+[`rawget`](/manual/api#rawget), [`rawset`](/manual/api#rawset), and [`rawequal`](/manual/api#rawequal) bypass the other metamethods. [Length operator](/manual/guide#length) in the guide describes the length of a table.]],
     fastcall = true,
     kind = "function",
     module = "base",
@@ -6157,7 +6157,7 @@ rawset(t, "b", 2)
 print(t.a, t.b, #log)   --> nil  2  1
 ```
 
-[`rawget`](/manual/api#rawget) reads a field without `__index`. A table that `--readonly-env` froze raises `attempt to modify a readonly table` for `rawset` as it does for assignment, as [Readonly environment](/manual/guide#readonly-environment) describes.]],
+[`rawget`](/manual/api#rawget) reads a field without `__index`. A table that `--readonly-env` froze raises `attempt to modify a readonly table` for `rawset` as it does for assignment, as [Readonly environment](/manual/guide#the---readonly-env-option) describes.]],
     fastcall = true,
     generic = "T",
     kind = "function",
@@ -6212,7 +6212,7 @@ print(greeter.hello(), origin)          --> hello from greeter  :preload:
 print(require("greeter") == greeter)    --> true
 ```
 
-`require` keeps the loaded table that the package library created, so assigning a new table to `package.loaded` leaves the cache in place. The standard libraries are in the cache from the start, so `require("string")` returns the `string` table. [Modules and require](/manual/guide#modules-and-require) in the guide describes search paths and preincluded modules.]],
+`require` keeps the loaded table that the package library created, so assigning a new table to `package.loaded` leaves the cache in place. The standard libraries are in the cache from the start, so `require("string")` returns the `string` table. [Modules and require](/manual/guide#modules) in the guide describes search paths and preincluded modules.]],
     kind = "function",
     module = "base",
     name = "require",
@@ -6253,7 +6253,7 @@ print(select(-1, "a", "b", "c"))    --> c
 print(select("#", "a", nil, nil))   --> 3
 ```
 
-`select("#", ...)` is the way to count the arguments of a variadic function that may receive `nil` values, as [Variadic functions](/manual/guide#variadic-functions) describes.]],
+`select("#", ...)` is the way to count the arguments of a variadic function that may receive `nil` values, as [Variadic functions](/manual/guide#variable-arguments) describes.]],
     kind = "function",
     module = "base",
     name = "select",
@@ -6294,7 +6294,7 @@ local p = setmetatable({ x = 3, y = 4 }, Point)
 print(p:norm(), getmetatable(p) == Point)   --> 5.0  true
 ```
 
-[`getmetatable`](/manual/api#getmetatable) reads a metatable. The metatables of other types, such as the shared metatable of strings, are set through [`debug.setmetatable`](/manual/api#debug.setmetatable). [Metatables and metamethods](/manual/guide#metatables-and-metamethods) in the guide lists the metamethods.]],
+[`getmetatable`](/manual/api#getmetatable) reads a metatable. The metatables of other types, such as the shared metatable of strings, are set through [`debug.setmetatable`](/manual/api#debug.setmetatable). [Metatables and metamethods](/manual/guide#metatables-and-objects) in the guide lists the metamethods.]],
     fastcall = true,
     generic = "T",
     kind = "function",
@@ -6495,7 +6495,7 @@ The result is a version-dependent runtime artifact for trusted storage and distr
     description = [[
 Searches `s` for the first match of `pattern` and returns the character positions where the match starts and ends, followed by its captures.
 
-`s` is the string to search, and `pattern` is a [pattern](/manual/guide#string-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`. When `plain` is true, `pattern` is a literal substring with no special characters. `plain` defaults to false, and passing it requires an `init`, which may be `nil`.
+`s` is the string to search, and `pattern` is a [pattern](/manual/guide#strings-and-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`. When `plain` is true, `pattern` is a literal substring with no special characters. `plain` defaults to false, and passing it requires an `init`, which may be `nil`.
 
 On a match, the first two results are the positions of the first and the last character of the match. The captures of the pattern follow, and a position capture `()` yields an integer. Without a match, the result is a single `nil`.
 
@@ -6604,7 +6604,7 @@ print(catch string.format("%d", 1.5))              --> false  ...: bad argument 
     description = [[
 Returns an iterator function that returns the next match of `pattern` in `s` each time it is called, as the captures of the match or as the whole match when the pattern has no captures.
 
-`s` is the string to search, and `pattern` is a [pattern](/manual/guide#string-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`.
+`s` is the string to search, and `pattern` is a [pattern](/manual/guide#strings-and-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`.
 
 Each call of the iterator returns the captures of the next match, with a position capture `()` yielding an integer, or the whole match. After the last match it returns `nil`, which ends a generic `for` loop.
 
@@ -6658,7 +6658,7 @@ A pattern that matches the empty string yields an empty match at every position,
     description = [[
 Returns a copy of `s` in which the matches of `pattern` are replaced by `repl`, followed by the number of matches that were replaced.
 
-`s` is the string to search, and `pattern` is a [pattern](/manual/guide#string-patterns). A number in either place is converted to its textual form. `repl` says what replaces each match:
+`s` is the string to search, and `pattern` is a [pattern](/manual/guide#strings-and-patterns). A number in either place is converted to its textual form. `repl` says what replaces each match:
 
 - A string is copied, with `%1` through `%9` standing for the captures, `%0` for the whole match, and `%%` for a percent sign. A number is converted to a string first.
 - A table is indexed with the first capture, or with the whole match when the pattern has no captures.
@@ -6888,7 +6888,7 @@ print(string.ltrim("ééa", "é"))                --> a
     description = [[
 Searches `s` for the first match of `pattern` and returns its captures, or the whole match when the pattern has no captures.
 
-`s` is the string to search, and `pattern` is a [pattern](/manual/guide#string-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`.
+`s` is the string to search, and `pattern` is a [pattern](/manual/guide#strings-and-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`.
 
 On a match, the results are the captures in order, with a position capture `()` yielding a character position as an integer. A pattern without captures returns the whole match as one string. Without a match, the result is a single `nil`.
 
@@ -9029,7 +9029,7 @@ print(time.month[12] == time.month.december)      --> true
 print(type(time.month.july), time.month.smarch)   --> enum  nil
 ```
 
-The `month` field of a zoned value is a plain integer from 1 to 12, so that arithmetic on it works as with [`os.date`](/manual/api#os.date). Members follow the rules of every [enum](/manual/guide#enum): they compare in order with `<`, and arithmetic on them raises an error. The value `time.month` is itself the member `january`, since an enum evaluates to its first member. [`time.weekday`](/manual/api#time.weekday) is the enum of the days of the week.]],
+The `month` field of a zoned value is a plain integer from 1 to 12, so that arithmetic on it works as with [`os.date`](/manual/api#os.date). Members follow the rules of every [enum](/manual/guide#enums): they compare in order with `<`, and arithmetic on them raises an error. The value `time.month` is itself the member `january`, since an enum evaluates to its first member. [`time.weekday`](/manual/api#time.weekday) is the enum of the days of the week.]],
     kind = "constant",
     module = "time",
     name = "time.month",
@@ -9262,7 +9262,7 @@ print(tonumber(z.weekday))                      --> 4
 print(time.weekday[7] == time.weekday.sunday)   --> true
 ```
 
-`print` shows a member as `enum:` and an address, so a program prints `tonumber(member)` or a name from `z:format("%A")`. Members follow the rules of every [enum](/manual/guide#enum): they compare in order with `<`, and arithmetic on them raises an error. The value `time.weekday` is itself the member `monday`. [`time.month`](/manual/api#time.month) is the enum of the months.]],
+`print` shows a member as `enum:` and an address, so a program prints `tonumber(member)` or a name from `z:format("%A")`. Members follow the rules of every [enum](/manual/guide#enums): they compare in order with `<`, and arithmetic on them raises an error. The value `time.weekday` is itself the member `monday`. [`time.month`](/manual/api#time.month) is the enum of the months.]],
     kind = "constant",
     module = "time",
     name = "time.weekday",
@@ -9593,7 +9593,7 @@ print(type(print), type(vector.create(4)))         --> function  vector
 print(type(5n), type(1.5d))                        --> number  number
 ```
 
-Every number reports `"number"`, and [`math.type`](/manual/api#math.type) distinguishes the subtypes `integer`, `float`, `bigint`, and `decimal`. An enum and each of its members report `"enum"`. The [Values](/manual/guide#values) section of the guide describes each type.]],
+Every number reports `"number"`, and [`math.type`](/manual/api#math.type) distinguishes the subtypes `integer`, `float`, `bigint`, and `decimal`. An enum and each of its members report `"enum"`. The [Values](/manual/guide#values-and-types) section of the guide describes each type.]],
     fastcall = true,
     kind = "function",
     module = "base",
@@ -9783,7 +9783,7 @@ end
 print()   --> [a][ñ][b]
 ```
 
-[String patterns](/manual/guide#string-patterns) in the guide describes the pattern language.]],
+[String patterns](/manual/guide#strings-and-patterns) in the guide describes the pattern language.]],
     kind = "constant",
     module = "utf8",
     name = "utf8.charpattern",

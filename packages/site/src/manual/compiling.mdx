@@ -6,15 +6,19 @@ group: use
 shortdesc: "Build the interpreter, the embedding library, and the WebAssembly module from source with Zig."
 ---
 
-The Lus runtime is written in Zig and builds with the Zig compiler alone. The build produces the `lus` executable, the `liblus` embedding library with its header `lus.h`, and the `lus.wasm` WebAssembly module. SQLite, Zstandard, and Brotli are compiled from source as part of the build, so no system libraries are required.
+Building from source serves platforms without a prebuilt archive, hosts that need a library with parts left out, and people who work on the runtime. Everyone else can install a release, as [Getting Started](/manual/getting-started) describes.
 
-You will need the following tools to compile the runtime:
+The Lus runtime is written in Zig and builds with the Zig compiler alone. The build produces the `lus` executable, the `liblus` embedding library with its header `lus.h`, and the `lus.wasm` WebAssembly module. SQLite, Zstandard, and Brotli are compiled from source as part of the build, so the build needs no system libraries.
 
-- The Lus source code, which can be downloaded from its [repository](https://github.com/lus-lang/lus).
-- [Zig](https://ziglang.org/download/) 0.17.1. The repository pins it in `mise.toml`, so `mise install` provides the right version.
+The build requires the following:
+
+- The Lus source code from its [repository](https://github.com/lus-lang/lus).
+- [Zig](https://ziglang.org/download/) 0.17.1. The repository pins this version in `mise.toml`, so `mise install` provides it.
 - Network access on the first build, which fetches the pinned Zstandard and Brotli sources listed in `runtime/build.zig.zon`.
 
 ## Building
+
+The following commands clone the repository and build the interpreter.
 
 ```bash
 git clone https://github.com/lus-lang/lus.git
@@ -22,11 +26,11 @@ cd lus/runtime
 zig build -Doptimize=ReleaseSafe
 ```
 
-The `lus` executable is placed in `zig-out/bin`. `ReleaseSafe` keeps the runtime's safety checks while optimizing, which is the recommended mode for running programs. `-Doptimize=ReleaseFast` drops the checks for extra speed. Debug builds work but run slowly, because the debug allocator records a stack trace for every allocation.
+The build writes the `lus` executable to `zig-out/bin`. `ReleaseSafe` optimizes and keeps the safety checks of the runtime, so a failed check stops the program with a message. It suits work on the runtime, where those checks find mistakes. `-Doptimize=ReleaseFast` removes the checks for more speed, and the release archives are built in this mode. A build without `-Doptimize` is a debug build, which runs much slower.
 
 ### Optional libraries
 
-Four libraries can be left out of a build. Each defaults to included, and a library left out is never registered and its code is compiled out.
+A build for a host that never opens a socket or a database can leave those libraries out, which makes the executable smaller. Each of the following options defaults to `true`. With `false`, the code of the library is compiled out, so a program finds `nil` where the library would be.
 
 | Option | Library |
 | --- | --- |
@@ -35,42 +39,54 @@ Four libraries can be left out of a build. Each defaults to included, and a libr
 | `-Dsqlite=false` | `io.sqlite`. |
 | `-Darchive=false` | The `vector.archive` compression codecs. |
 
+`-Djit=false` builds a runtime that interprets every function and never compiles one to machine code. It serves systems that forbid memory that is both writable and executable, and it makes the executable smaller.
+
 ### Verification
+
+The following commands print the version of the new executable and run the unit tests of the runtime.
 
 ```bash
 ./zig-out/bin/lus -v
 zig build test
 ```
 
-`zig build test` runs the unit tests of the runtime. Further steps exercise the C embedding interface (`zig build test-embed`), standalone executables (`zig build test-bundle`), and the debugger (`zig build test-debug`, which needs Node). The conformance suite is written for `lus test`.
+Three further steps test other parts. `zig build test-embed` tests the C embedding interface, `zig build test-bundle` tests standalone executables, and `zig build test-debug` tests the debugger and needs Node. The conformance suite of the language runs under `lus test`:
+
+```bash
+./zig-out/bin/lus test ../tests/conformance
+```
 
 ## Installation
 
 Copy `zig-out/bin/lus` to a directory on your `PATH`:
 
-- On macOS and Linux, you can place it in the `/usr/local/bin` directory.
+- On macOS and Linux, `/usr/local/bin` is the usual choice.
 - On Windows, create a directory for Lus and add that directory to your user `PATH` through Windows Settings.
 
-The executable is self-contained. It carries the standard library, the IANA time zone database, and every tool described in the [CLI](/manual/cli) reference.
+The executable depends on no other file. It contains the standard library, the IANA time zone database, and every tool described in the [CLI](/manual/cli) reference.
 
 ## Embedding Lus
+
+A host program that embeds Lus links the embedding library, which the `lib` step builds.
 
 ```bash
 zig build lib -Doptimize=ReleaseSafe
 ```
 
-This step writes the static library `liblus.a`, the shared `liblus`, and the header `lus.h` under `zig-out`. Each library carries the vendored C code, so a host links one file:
+This step writes the static library `liblus.a`, the shared library `liblus`, and the header `lus.h` under `zig-out`. Each library includes the C code of SQLite, Zstandard, and Brotli, so a host links one file:
 
 ```bash
 cc -o myapp myapp.c -Izig-out/include zig-out/lib/liblus.a
 ```
 
-[Embedding Lus](/manual/guide#embedding-lus) in the Guide introduces the interface, and [Embedding](/manual/embedding) documents it in full.
+[Embedding](/manual/embedding) describes the interface, and the [C API reference](/manual/api/c) documents every function of `lus.h`.
 
 ## WebAssembly
+
+The `wasm` step builds the runtime for browsers and other WebAssembly hosts.
 
 ```bash
 zig build wasm
 ```
 
-This step writes `zig-out/wasm/lus.wasm`, a WASI module that exports the embedding interface. The `lus-wasm` package in `packages/wasm` runs it in browsers, web workers, and Node, as described in [WebAssembly](/manual/webassembly).
+This step writes `zig-out/wasm/lus.wasm`, a WASI module that exports the embedding interface. The `lus-wasm` package in `packages/wasm` runs it in browsers, web workers, and Node, as [WebAssembly](/manual/webassembly) describes. `mise run wasm` builds the module and copies it into that package as `dist/lus.wasm`.

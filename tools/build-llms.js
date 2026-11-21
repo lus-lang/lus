@@ -45,7 +45,7 @@ const API_SECTIONS = [
 // Manual pages in the order llms-full.txt reads them. The topic pages
 // of the use and library groups follow in sidebar order, then the API
 // reference. Pages about the release process and the build stay out.
-const LEAD_PAGES = ["introduction", "getting-started", "adapting", "lua", "runtimes", "patterns", "guide", "cli"];
+const LEAD_PAGES = ["introduction", "getting-started", "lua", "runtimes", "guide", "cli"];
 const FULL_GROUPS = ["use", "library"];
 const FULL_SKIP = new Set(["releases", "compiling", "ide-setup", "license"]);
 
@@ -296,6 +296,14 @@ function renderAgents(prompts, skills) {
 // One table of the page Lus and other runtimes, as
 // packages/site/src/components/RuntimeTable.astro renders it.
 function renderRuntimeTable(data, metric) {
+  const ids = ["lus", "lua", "bun", "node", "php", "luajit", "python", "ruby"].filter((id) => data.runtimes[id]);
+  if (metric === "setup") {
+    return [
+      `The measurements ran under ${data.os} on a machine with ${data.device.cores} processor cores (${data.device.cpu}) and ${data.device.memory_gb} GB of memory. Each time is the best of ${data.runs} runs. The runtimes have the following versions.`,
+      "",
+      ...ids.map((id) => `- ${data.runtimes[id].version || data.runtimes[id].name}`),
+    ].join("\n");
+  }
   if (metric === "http") {
     const servers = {lus: "Lus, network.serve", bun: "Bun, Bun.serve", node: "Node.js, http", python: "Python, ThreadingHTTPServer"};
     const rows = Object.entries(data.http || {})
@@ -306,7 +314,6 @@ function renderRuntimeTable(data, metric) {
   }
   const key = metric === "time" ? "best_s" : "peak_rss_mb";
   const fmt = (v) => (metric === "time" ? v.toFixed(2) : String(Math.round(v)));
-  const ids = ["lus", "bun", "node", "php", "luajit", "python", "ruby"].filter((id) => data.runtimes[id]);
   const rows = Object.keys(data.programs).sort(compareText).map((program) => {
     const cells = ids.map((id) => {
       const c = data.programs[program][id];

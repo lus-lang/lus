@@ -7,8 +7,8 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 ## Start here
 
 - [Getting started](https://lus.dev/manual/getting-started.md): Install the binary and run a first program.
-- [Coming from Lua](https://lus.dev/manual/adapting.md): Every difference from Lua 5.5, and how `lus check` finds Lua idioms.
-- [Guide](https://lus.dev/manual/guide.md): The full language reference in one page.
+- [Lus for Lua programmers](https://lus.dev/manual/lua.md): What changes when porting from Lua 5.5, each Lua idiom beside its Lus form, and how `lus check` finds them.
+- [Guide](https://lus.dev/manual/guide.md): The language taught in order, from values to internals, in one page.
 - [CLI](https://lus.dev/manual/cli.md): Every `lus` command and option.
 
 ## Agent skills
@@ -31,20 +31,19 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 
 ## Language
 
-- [Guide](https://lus.dev/manual/guide.md): The complete language reference.
-- [Lus and Lua](https://lus.dev/manual/lua.md): Where Lus departs from Lua, and why.
-- [Lus and other runtimes](https://lus.dev/manual/runtimes.md): How the design of Lus compares with Bun, Node.js, Python, Ruby, PHP, and LuaJIT, with measurements.
-- [Lua patterns in Lus](https://lus.dev/manual/patterns.md): Common Lua idioms beside the Lus forms that replace them.
+- [Guide](https://lus.dev/manual/guide.md): The language taught in order, with the standard library and the internals.
+- [Lus for Lua programmers](https://lus.dev/manual/lua.md): Porting from Lua, and the Lus form of each Lua idiom.
+- [Lus and other runtimes](https://lus.dev/manual/runtimes.md): Benchmark results against six other runtimes, and the design choices behind them.
 - [Best practices](https://lus.dev/manual/practices.md): File layout, permissions, errors, concurrency, testing, and performance habits.
-- [Catch](https://lus.dev/manual/guide.md#error-handling) and [catch handlers](https://lus.dev/manual/guide.md#catch-handlers): Expression-level error handling.
+- [Catch](https://lus.dev/manual/guide.md#catching-errors) and [catch handlers](https://lus.dev/manual/guide.md#catch-handlers): Expression-level error handling.
 - [Optional chaining](https://lus.dev/manual/guide.md#optional-chaining): The `?` suffix operator.
-- [If-assignment](https://lus.dev/manual/guide.md#if-elseif-else) and [while-assignment](https://lus.dev/manual/guide.md#while): Variables scoped to a condition.
-- [Destructuring](https://lus.dev/manual/guide.md#table-destructuring): `local a, b from t`.
-- [String interpolation](https://lus.dev/manual/guide.md#string): Backtick strings with `$name` and `$(expr)`.
+- [Conditions that declare variables](https://lus.dev/manual/guide.md#conditions-that-declare-variables): `if x = f() then` and `while line = read() do`.
+- [Destructuring](https://lus.dev/manual/guide.md#destructuring-with-from): `local a, b from t`.
+- [String interpolation](https://lus.dev/manual/guide.md#strings): Backtick strings with `$name` and `$(expr)`.
 - [Do expressions](https://lus.dev/manual/guide.md#do-expressions): Blocks that `provide` a value.
-- [Enums](https://lus.dev/manual/guide.md#enum), [slices](https://lus.dev/manual/guide.md#slices), and [local groups](https://lus.dev/manual/guide.md#local-groups).
-- [Continue and range](https://lus.dev/manual/guide.md#break-continue-and-goto): `continue` and `range(start, limit, step)`.
-- [Bigints and decimals](https://lus.dev/manual/guide.md#number): `123n` and `1.50d`.
+- [Enums](https://lus.dev/manual/guide.md#enums), [slices](https://lus.dev/manual/guide.md#slices), [runtime attributes](https://lus.dev/manual/guide.md#runtime-attributes), and [local groups](https://lus.dev/manual/guide.md#local-groups).
+- [Continue](https://lus.dev/manual/guide.md#break-and-continue) and [range](https://lus.dev/manual/guide.md#counting-with-range).
+- [Bigints and decimals](https://lus.dev/manual/guide.md#numbers): `123n` and `1.50d`.
 - [Queries](https://lus.dev/manual/guide.md#queries): First-class queries over tables and databases. Unstable.
 
 ## Tools
@@ -60,5 +59,5 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 - [Compact documentation](https://lus.dev/llms-small.txt): The language differences and every function signature, sized for a small context.
 - [Embedding API](https://lus.dev/manual/embedding.md): The `lus.h` C interface for host programs.
 - [WebAssembly](https://lus.dev/manual/webassembly.md): The runtime as a WASI module with a JavaScript host.
-- [Flags](https://lus.dev/manual/guide.md#compile-time-flags), [preinclusion](https://lus.dev/manual/guide.md#preincluded-modules), and [readonly environment](https://lus.dev/manual/guide.md#readonly-environment): Build and startup options.
+- [Build flags](https://lus.dev/manual/guide.md#build-flags), [preinclusion](https://lus.dev/manual/guide.md#preincluded-modules), and [readonly environment](https://lus.dev/manual/guide.md#the---readonly-env-option): Build and startup options.
 - [Benchmarks](https://lus.dev/benchmarks.md): Lus against Node.js, Bun, Python, Ruby, PHP, and Lua on six programs, with the method.

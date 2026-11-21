@@ -36,4 +36,4 @@ local next_even = range(2, 4, 2)
 print(next_even(), next_even(), next_even())                 --> 2  4  nil
 ```
 
-The iterator keeps its position in its own upvalues, so it works in a generic `for`, when stored and called directly, and when passed to other functions. A float `step` makes every number after the first a float, as in `range(1, 2, 0.5)`, which produces `1`, `1.5`, and `2.0`. The numeric `for` statement, `for i = start, limit, step`, counts the same sequence without a function call, as [Numeric for](/manual/guide#numeric-for) describes.
+The iterator keeps its position in its own upvalues, so it works in a generic `for`, when stored and called directly, and when passed to other functions. A float `step` makes every number after the first a float, as in `range(1, 2, 0.5)`, which produces `1`, `1.5`, and `2.0`. The numeric `for` statement, `for i = start, limit, step`, counts the same sequence without a function call, as [Numeric for](/manual/guide#numeric-for-loops) describes.

@@ -18,7 +18,7 @@ const { pledges } = Astro.props
     <div class="pledge-req" aria-label="Required pledges">
       <span class="pledge-req-label">requires</span>
       {pledges.map((p) => (
-        <a class="pledge-chip" href="/manual/guide#sandboxing" title={`This call is denied unless the "${p}" pledge is granted`}>
+        <a class="pledge-chip" href="/manual/guide#running-code-with-its-own-environment" title={`This call is denied unless the "${p}" pledge is granted`}>
           {p}
         </a>
       ))}

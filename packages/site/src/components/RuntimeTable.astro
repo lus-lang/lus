@@ -8,7 +8,7 @@
 import results from "../data/benchmarks.json"
 
 interface Props {
-  metric: "time" | "memory" | "http"
+  metric: "time" | "memory" | "http" | "setup"
 }
 
 interface Cell {
@@ -21,13 +21,16 @@ interface Cell {
 }
 
 const data = results as unknown as {
-  runtimes: Record<string, { name: string }>
+  device: { cpu: string; cores: number; memory_gb: number }
+  os: string
+  runs: number
+  runtimes: Record<string, { name: string; version?: string }>
   programs: Record<string, Record<string, Cell>>
   http?: Record<string, Cell>
 }
 
 const { metric } = Astro.props
-const columns = ["lus", "bun", "node", "php", "luajit", "python", "ruby"].filter(
+const columns = ["lus", "lua", "bun", "node", "php", "luajit", "python", "ruby"].filter(
   (id) => data.runtimes[id],
 )
 const name = (id: string) => data.runtimes[id].name
@@ -66,6 +69,19 @@ const httpBest = {
 const b = (on: boolean, text: string) => (on ? `<strong>${text}</strong>` : text)
 ---
 
+{
+  metric === "setup" ? (
+    <>
+      <p>
+        The measurements ran under {data.os} on a machine with {data.device.cores} processor cores
+        ({data.device.cpu}) and {data.device.memory_gb} GB of memory. Each time is the best of {data.runs} runs. The
+        runtimes have the following versions.
+      </p>
+      <ul>
+        {columns.map((id) => <li>{data.runtimes[id].version ?? data.runtimes[id].name}</li>)}
+      </ul>
+    </>
+  ) : (
 <div class="table-wrap" tabindex="0" role="region" aria-label={`${metric} results`}>
 {
   metric === "http" ? (
@@ -113,6 +129,8 @@ const b = (on: boolean, text: string) => (on ? `<strong>${text}</strong>` : text
   )
 }
 </div>
+  )
+}
 
 <style>
   .num {

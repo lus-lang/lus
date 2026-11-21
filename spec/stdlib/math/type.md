@@ -26,4 +26,4 @@ print(math.type(1n), math.type(1d))     --> bigint  decimal
 print(math.type("1"), math.type(nil))   --> nil  nil
 ```
 
-The four subtypes are values of the one type `number`, so `type(x)` returns `"number"` for each of them. The [`number`](/manual/guide#number) section of the guide describes how arithmetic picks the subtype of a result.
+The four subtypes are values of the one type `number`, so `type(x)` returns `"number"` for each of them. The [`number`](/manual/guide#numbers) section of the guide describes how arithmetic picks the subtype of a result.

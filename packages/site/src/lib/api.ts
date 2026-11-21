@@ -57,7 +57,7 @@ const stdlibOrder: SectionSpec[] = [
   { title: "OS library", filter: (d) => d.module === "os" },
   { title: "Debug library", page: { href: "/manual/tools#debugger", title: "Debugger" }, filter: (d) => d.module === "debug" },
   { title: "Coroutine library", page: { href: "/manual/concurrency#detached-coroutines", title: "Detached coroutines" }, filter: (d) => d.module === "coroutine" },
-  { title: "Package library", page: { href: "/manual/guide#modules-and-require", title: "Modules and require" }, filter: (d) => d.module === "package" },
+  { title: "Package library", page: { href: "/manual/guide#modules", title: "Modules and require" }, filter: (d) => d.module === "package" },
   { title: "UTF-8 library", filter: (d) => d.module === "utf8" },
   {
     title: "Filesystem library", page: { href: "/manual/filesystem", title: "Filesystem" },

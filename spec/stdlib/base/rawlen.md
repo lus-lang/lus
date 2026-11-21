@@ -22,4 +22,4 @@ print(#t, rawlen(t))     --> 99  3
 print(rawlen("héllo"))   --> 5
 ```
 
-[`rawget`](/manual/api#rawget), [`rawset`](/manual/api#rawset), and [`rawequal`](/manual/api#rawequal) bypass the other metamethods. [Length operator](/manual/guide#length-operator) in the guide describes the length of a table.
+[`rawget`](/manual/api#rawget), [`rawset`](/manual/api#rawset), and [`rawequal`](/manual/api#rawequal) bypass the other metamethods. [Length operator](/manual/guide#length) in the guide describes the length of a table.

@@ -6,74 +6,95 @@ group: use
 shortdesc: "Guidance for laying out, securing, structuring, testing, and tuning Lus programs, with the reason behind each practice."
 ---
 
-The practices below cover the layout of a file, permissions, errors, text and numbers, modules, concurrency, the tools, and the habits that the JIT tiers reward. [Lua patterns in Lus](/manual/patterns) covers the language features that replace common Lua idioms, and the [guide](/manual/guide) is the reference for every feature these practices use.
+This page collects the habits that keep a Lus program easy to read, safe to run, and fast. Each practice comes with its reason, so that you can judge when it applies. The [guide](/manual/guide) teaches the features that these practices use, and [Lus for Lua programmers](/manual/lua) shows the Lus forms of common Lua idioms.
 
 ## File layout
 
-A Lus file starts with its `global` declarations, then pledges its permissions, then defines its locals. The globals that a file reads, the standard library names included, go into one `global` statement at the top. The `pledge` calls follow immediately, and the rest of the file is locals:
+Arrange a file in three parts: the globals it uses, the permissions it needs, and then its own code as locals. A reader then learns from the top of the file what it takes from outside itself.
+
+The first part is one `global` statement that names every global the file uses, the standard library names included. A file with such a statement may use only the globals it names. Any other free name is a compile error, `variable 'NAME' not declared`, so a misspelled name is caught before the program runs. The `pledge` calls follow, and the rest of the file is locals:
 
 ```lus
-global io, pledge, print, string
+global fs, os, pledge, print, string
 
-pledge("fs:read=./notes.txt", "fs:write=./notes.txt")
+pledge("env=PATH")
 pledge("seal")
 
-local function count_words(path)
-    local f <close> = io.open(path)
-    return #string.split(f:read("a"), " ")
+local function search_path()
+    return string.split(os.getenv("PATH") or "", fs.path.delimiter)
 end
 
-io.open("notes.txt", "w"):write("one two three"):close()
-print(count_words("notes.txt"))   --> 3
+print(#search_path() > 0)   --> true
 ```
 
-A named `global` declaration replaces the implicit `global *` of the chunk, so every free name that the file uses must appear in it. A name missing from the list is a compile error, `variable 'NAME' not declared`, which catches a misspelled global before the program runs. A reader learns everything the file reaches outside itself from its first lines: the globals it uses and the permissions it holds.
+`pledge` is an ordinary function, so a program may also call it later. A program that needs a permission only for an optional feature, such as an upload that the user requests with a command line option, pledges it at the point where the feature starts. Pledging at the top is the convention for everything else, because a permission that the whole program needs is then visible at once.
 
 ## Permissions
 
 ### Pledge the narrowest permission
 
-Pledge a subcapability with a value in preference to a base capability. `fs:read=./data/*` permits reads below one directory, while `fs` permits every filesystem operation. A program that holds only what it needs turns a mistake, such as a path built from bad input, into a permission error at the operation that went wrong:
+Pledge a permission for the files, hosts, or variables that the program uses, in preference to the whole capability. `fs:read=./*` permits reads below the current directory, while `fs` permits every filesystem operation. With a narrow pledge, a path built from bad input fails with a permission error at the operation that used it, where a broad pledge would let the program read or overwrite an unrelated file:
 
 ```lus
 global io, pledge, print
 
-pledge("fs:read=./report.txt", "fs:write=./report.txt")
+pledge("fs:read=./*")
 pledge("seal")
 
-io.open("report.txt", "w"):write("ok"):close()
-print(io.open("report.txt"):read("a"))       --> ok
-print((catch io.open("/etc/hosts")))          --> false
-print((catch io.open("other.txt", "w")))      --> false
+print(io.open("./missing.txt"))
+--> nil  ./missing.txt: No such file or directory  2
+print(catch io.open("/etc/hosts"))
+--> false  ...: permission "fs:read" denied for '/etc/hosts'
+print(catch io.open("./report.txt", "w"))
+--> false  ...: permission "fs:write" denied for './report.txt'
 ```
 
-[Restricting a permission to values](/manual/permissions#restricting-a-permission-to-values) describes the patterns that a value may hold for files, hosts, and environment variables.
+The first call is permitted and reports that the file does not exist. The other two raise a permission error, which `catch` returns as `false` and the message. [Restricting a permission to values](/manual/permissions#restricting-a-permission-to-values) describes the patterns that a value may hold for files, hosts, and environment variables.
 
 ### Reject and seal
 
-Reject a capability that the program never uses with the prefix `~`, and seal the set once the program has pledged everything it needs. A rejection holds even against a later `pledge`, and after `pledge("seal")` every grant and every rejection returns `false`. Code that runs later, including a library or a loaded chunk, then cannot widen the set:
+After the pledges, close off what the program does not need. A rejection, written with the prefix `~`, removes a capability for the rest of the run, so a later `pledge` of it raises an error. `pledge("seal")` freezes the whole set, after which every `pledge` returns `false`. Code that runs later, such as a module or a chunk that the program loads, then cannot acquire more than the program decided:
 
 ```lus
 global pledge, print
 
-pledge("fs:read=./*", "~exec", "~network")
+pledge("fs:read=./*", "~exec")
 pledge("seal")
 
-local granted = pledge("network:http")
-print(granted)   --> false
+print(pledge("network:http"))   --> false
 ```
 
-`lus check` warns about a `pledge` that follows the seal with the code `pledge-after-seal`. A host that runs a script grants its permissions with `-P` on the command line, and the script may then pledge only within those grants, as [Granting from the command line](/manual/permissions#granting-from-the-command-line) describes. A [worker](/manual/concurrency#workers) always starts with a sealed copy of the permissions of its creator.
+`lus check` reports a `pledge` that follows the seal with the code `pledge-after-seal`. The person who runs a script can also set its limits from outside with `-P` on the command line, as [Granting from the command line](/manual/permissions#granting-from-the-command-line) describes.
 
 ### Run untrusted parts with fewer permissions
 
-A coroutine starts with the permissions of its creator, and its own rejections and seal stay inside it. A function that runs a plugin or a callback with less authority creates a coroutine, rejects what that code must not use, seals, and calls the code inside it. [Permissions in coroutines](/manual/permissions#permissions-in-coroutines) shows the full pattern, and [Sandboxing loaded code](/manual/patterns#sandboxing-loaded-code) combines it with an environment table.
+A program sometimes runs code that it trusts less than itself, such as a plugin or a callback from a user. Run that code in a coroutine that holds fewer permissions than the program. A coroutine starts with the permissions of its creator, and the rejections and the seal it makes apply only inside it. The following function runs a plugin that may compute and read files but can never start a process or use the network:
+
+```lus
+global coroutine, io, pledge, print
+
+pledge("fs:read", "exec")
+
+local function run_plugin(plugin)
+    local co = coroutine.create(function()
+        pledge("~exec", "~network")
+        pledge("seal")
+        return plugin()
+    end)
+    return coroutine.resume(co)
+end
+
+print(run_plugin(function() return (catch io.popen("true")) end))   --> true  false
+print((catch io.popen("true")))                                     --> true
+```
+
+The plugin fails to start a process although the program holds `exec`, while the program itself still starts one afterwards. [Permissions in coroutines](/manual/permissions#permissions-in-coroutines) describes the rules.
 
 ## Errors
 
 ### Raise errors and return absent results
 
-Return `nil` and a message when absence is an ordinary result that the caller checks on the spot, as [`io.open`](/manual/api#io.open) does for a missing file. Raise an error when the caller cannot continue, as the `fs` functions do. A raised error travels to the nearest [`catch`](/manual/guide#error-handling) at whatever level can respond, and entering a `catch` costs nothing until an error occurs:
+A function has two ways to report that it has no result, and the choice depends on what the caller can do about it. Return `nil` and a message when the absence is an ordinary outcome that the caller checks at once, as [`io.open`](/manual/api#io.open) does for a missing file. Raise an error when the caller cannot continue, as a function does when it receives an invalid argument. A raised error needs no check at each call, because it travels up to the nearest [`catch`](/manual/guide#errors), which can be several calls away:
 
 ```lus
 global error, ipairs, print, tonumber
@@ -99,11 +120,11 @@ print(find_user("bob"))           --> nil  no user named bob
 print(catch parse_port("http"))   --> false  invalid port: http
 ```
 
-`error` adds the position where it was called to a string message. A level of `0`, as above, raises the message alone, which suits a message meant for the user of a program.
+`error` adds the position where it was called to a string message. The level `0`, as above, raises the message alone, which suits a message meant for the user of a program.
 
 ### Raise tables for errors that code inspects
 
-Raise a table when the code that catches the error branches on what went wrong. The error object keeps its identity through `catch`, so its fields reach the handler as they were raised. A `__tostring` metamethod gives the table a readable message, which `tostring`, interpolation, and the report of an uncaught error all use:
+Raise a table when the code that catches the error must decide what to do from the kind of failure. A handler that reads `err.kind` keeps working when the wording of the message changes, while a handler that searches the message text does not. The table arrives at the `catch` unchanged, with every field it was raised with. Give it a `__tostring` metamethod, so that `tostring`, interpolation, and the report of an uncaught error print a message in place of a table address:
 
 ```lus
 global error, print, setmetatable, tostring
@@ -122,14 +143,12 @@ print(ok, err.kind)    --> false  config
 print(tostring(err))   --> config: missing key 'port'
 ```
 
-An uncaught table without `__tostring` reports only its address. A [catch handler](/manual/guide#catch-handlers) converts the errors of a library into one shape at the boundary where a program calls it.
-
 ### Release resources with `<close>`
 
-Declare a file, a socket, or a database handle with the `<close>` attribute. Its `__close` metamethod runs when the variable goes out of scope, whether the block ends normally or an error leaves it, so a failure that `catch` captures still closes the resource:
+Declare a file, a socket, or a database handle with the `<close>` attribute. Lus then closes it when the variable goes out of scope, whether the block ends normally or an error leaves it. Without the attribute, an error between opening and closing would leave the resource open. In the following example the error leaves `save` before any `close` call could run, and the file is closed and holds its data all the same:
 
 ```lus
-global error, io, pledge, print
+global error, fs, io, os, pledge, print
 
 pledge("fs")
 
@@ -139,14 +158,17 @@ local function save(path)
     error("disk full", 0)
 end
 
-print(catch save("out.txt"))   --> false  disk full
-local f <close> = io.open("out.txt")
-print(f:read("a"))             --> partial
+local path = os.tmpname()
+print(catch save(path))   --> false  disk full
+
+local f <close> = io.open(path)
+print(f:read("a"))        --> partial
+fs.remove(path)
 ```
 
 ## Text and bytes
 
-Keep text in strings and raw bytes in vectors. Every string is well formed text and every string operation counts characters, so bytes that are not valid UTF-8 cannot form a string. A [vector](/manual/text#vectors) holds bytes, and files opened in binary mode, sockets, [`string.pack`](/manual/api#string.pack), and the compressors produce vectors:
+Keep text in strings and raw bytes in vectors. A string is always valid text, and every string operation counts characters. Bytes that are not text, such as an image or a compressed block, therefore belong in a [vector](/manual/text#vectors), which is a buffer of bytes. Files opened in binary mode, sockets, [`string.pack`](/manual/api#string.pack), and the compressors all produce vectors. The following program writes a binary header to a file and reads it back:
 
 ```lus
 global fs, io, os, pledge, print, string, vector
@@ -164,7 +186,7 @@ print(#bytes, vector.unpack(bytes, 0, "<c4I2I2"))   --> 8  LUSB  1  3  8
 fs.remove(path)
 ```
 
-Decode bytes into text at the edge of the program with [`vector.tostring`](/manual/api#vector.tostring). Its default mode, `"strict"`, raises an error that names the offset of the first invalid byte, and the mode `"lossy"` replaces each invalid sequence with U+FFFD. Choose strict decoding for data that must be valid and lossy decoding for display:
+Convert bytes to text once, where they enter the program, with [`vector.tostring`](/manual/api#vector.tostring). The rest of the program then works with strings and never meets invalid input. The default mode, `"strict"`, raises an error that names the offset of the first invalid byte, which suits data that must be valid. The mode `"lossy"` replaces each invalid sequence with U+FFFD, which suits text that is only displayed:
 
 ```lus
 global print, vector
@@ -181,39 +203,35 @@ print(vector.tostring(v, 0, 3, "lossy"))  --> ok�
 
 ## Numbers
 
-Choose the subtype of a number by what it measures:
+Lus has four kinds of number, and each fits a kind of quantity:
 
-- An integer counts and indexes. Integer arithmetic is exact within 64 bits and wraps around beyond them, and `//` keeps two integers an integer.
-- A float holds a measurement or a ratio, where a relative error in the last bits is acceptable.
-- A decimal holds money and any other quantity that is written in base 10 and must stay exact.
+- An integer counts and indexes. It is a 64-bit number, and its arithmetic is exact within that range.
+- A float holds a measurement or a ratio, where a small rounding error is acceptable.
+- A decimal holds money and any other quantity that must keep its exact fractional part.
 - A bigint holds an integer that may exceed 64 bits, such as an identifier from another system.
 
-Read exact numbers from JSON with the option `{ exact = true }`, which decodes an integer beyond 64 bits as a bigint and a number with a fraction as a decimal. Without it, such an integer raises `number out of range`:
+Use integers and floats by default, because their arithmetic is the fastest. Use decimals and bigints where a rounded or wrapped result would be a wrong result. Data from outside is where this matters most. By default, `fromjson` reads a number with a fraction as a float and raises `number out of range` for an integer beyond 64 bits. The option `{ exact = true }` reads such an integer as a bigint and a number with a fraction as a decimal, so an amount of money arrives exactly as it was written:
 
 ```lus
 global fromjson, math, print
 
-local count = 10 // 3
-local ratio = 10 / 4
 local order = fromjson('{"id": 12345678901234567890, "total": 59.70}', { exact = true })
 
-print(math.type(count), math.type(ratio))            --> integer  float
-print(math.type(order.id), order.id)                 --> bigint  12345678901234567890
-print(math.type(order.total), order.total)           --> decimal  59.70
+print(math.type(order.id), order.id)         --> bigint  12345678901234567890
+print(math.type(order.total), order.total)   --> decimal  59.70
+print(order.total * 3)                       --> 179.10
 ```
 
-Use bigints and decimals where exactness matters, and integers and floats elsewhere. Integers and floats live inline in every value and take the fast paths of the interpreter and of both JIT tiers. A bigint or decimal operand takes the generic path. Arithmetic between a decimal and a float raises an error, so convert one side with [`decimal`](/manual/api#decimal) or [`tonumber`](/manual/api#tonumber). The guide describes the four subtypes under [`number`](/manual/guide#number).
+Arithmetic between a decimal and a float raises an error, because the result could not be exact. Convert one side first, with [`decimal`](/manual/api#decimal) or [`tonumber`](/manual/api#tonumber). The guide describes the four kinds under [Values and types](/manual/guide#values-and-types).
 
 ## Modules
 
-Write a module as a file that builds a local table and returns it. Helpers stay local to the file, the module adds no globals, and `require` caches the table in [`package.loaded`](/manual/api#package.loaded). The caller imports the names it uses with [`from` destructuring](/manual/guide#table-destructuring):
+Write a module as a file that builds a local table and returns it. The table holds what the module offers, and everything else in the file stays local, so a module adds no globals and two modules can never overwrite each other's names. The following file is a module with one public function and one private helper:
 
 ```lus
-global io, pledge, print, require
+-- geometry.lus
+global math
 
-pledge("fs", "load")
-
-io.open("geometry.lus", "w"):write([[
 local M = {}
 
 local function square(x)
@@ -225,42 +243,44 @@ function M.distance(a, b)
 end
 
 return M
-]]):close()
+```
+
+A program loads the module with `require`, which runs the file once and returns the same table to every later `require` of that name. [`from`](/manual/guide#tables) takes the functions it needs out of the table by name:
+
+```lus nocheck
+global pledge, print, require
+
+pledge("fs:read", "load")
 
 local distance from require("geometry")
 print(distance({ x = 0, y = 0 }, { x = 3, y = 4 }))   --> 5.0
 ```
 
-Loading a module from a file requires `fs:read` for the file and `load`. A program that seals its permissions and still loads modules names them with `--include`, which compiles them at startup and lets `require` load them from memory, as [Preincluded modules](/manual/guide#preincluded-modules) describes. `lus build` bundles a script and every module it requires by a literal name into one executable ([Standalone executables](/manual/tools#standalone-executables)).
+Loading a module from a file requires the `load` permission and `fs:read` for the file. A program that seals its permissions without them names its modules with `--include` on the command line. The interpreter then compiles those modules when it starts, and `require` loads them from memory. To distribute a program, [`lus build`](/manual/tools#standalone-executables) bundles a script and the modules it requires into one executable.
 
 ## Concurrency
 
-Use detached coroutines for work that waits and workers for work that computes. The detached coroutines of one state run one at a time, and each runs until it waits, yields, or ends. They serve many sockets with sequential code, because a socket operation inside one suspends only that coroutine, but they never run two computations at once. A worker is a separate state on its own operating system thread, so workers compute in parallel and exchange copies of values as messages:
+Lus has two tools for doing several things at once, and they solve different problems. Use detached coroutines for work that waits, such as many network connections. Use workers for work that computes, such as processing a large data set on every processor.
 
-```lus
-global io, pledge, print, worker
+Detached coroutines share one thread. Each runs until it waits for a socket, yields, or ends, and another one runs in the meantime. One thread can therefore serve thousands of connections with code that reads from top to bottom, but two coroutines never compute at the same moment. A worker is a separate instance of the runtime on its own thread, so workers compute in parallel. Workers share no variables and exchange copies of values as messages. The following fragment splits a sum over two workers that run the same script, `squares.lus`, on half of the range each. The script sends its result with `worker.message`.
 
-pledge("fs", "load")
+```lus nocheck
+global pledge, print, worker
 
-io.open("squares.lus", "w"):write([[
-local first, last = ...
-local total = 0
-for i = first, last do
-    total = total + i * i
-end
-worker.message(total)
-]]):close()
+pledge("fs:read", "load")
 
 local a = worker.create("squares.lus", 1, 500000)
 local b = worker.create("squares.lus", 500001, 1000000)
-print(worker.receive(a) + worker.receive(b))   --> 333333833333500000
+print(worker.receive(a) + worker.receive(b))
 ```
 
-Send a worker the data it needs as arguments or messages. Tables arrive as copies, and a vector moves to the receiver, which leaves the vector of the sender empty, so a large buffer crosses without a copy. Functions, coroutines, userdata, and enum members cannot cross. [Coroutines and workers](/manual/concurrency) describes both models, and [Waiting for many sockets](/manual/patterns#waiting-for-many-sockets) shows detached coroutines serving and fetching over TCP.
+Give a worker its data as arguments or as messages. A table arrives as a copy. A vector moves to the receiver and leaves the vector of the sender empty, so a large buffer crosses without being copied. Functions, coroutines, userdata, and enum members cannot be sent. [Coroutines and workers](/manual/concurrency) describes both tools with complete programs, including detached coroutines that serve network connections and workers that share a computation.
 
 ## Testing
 
-Put tests in files whose names end in `_test.lus`, as local functions whose names end in `_test`. `lus test` runs each file in its own process and temporary directory, in parallel with the others, so one test file cannot leak globals or files into another. A local `NAME_cases` table runs `NAME_test` once per entry, and the helpers `raises`, `same`, `skip`, and `snapshot` cover errors, structural equality, skipped tests, and recorded output:
+Put the tests of a module in a file beside it whose name ends in `_test.lus`, and write each test as a local function whose name ends in `_test`. `lus test` finds these files without configuration. It runs each file in its own process and temporary directory, so a test file cannot leave globals or files behind for another, and files run in parallel.
+
+Three features of the runner keep tests short. A plain `assert` on a comparison reports the values of both sides when it fails. A table named `NAME_cases` runs `NAME_test` once per entry, which tests many inputs with one function. The helper `raises` checks that a call raises an error that matches a pattern:
 
 ```lus
 -- slug_test.lus
@@ -285,11 +305,11 @@ local function bad_input_test()
 end
 ```
 
-A failed `assert` on a comparison reports the values of both operands, so a plain `assert` carries enough information. A test file pledges its own permissions, and the pledges of each test are undone when it ends. Run the code blocks of documentation with `lus test --doc`, so that examples in Markdown stay correct. [Testing](/manual/testing) describes the runner in full.
+Run the code blocks of your documentation with `lus test --doc`, so that an example in a Markdown file fails a test when the code it shows stops working. [Testing](/manual/testing) describes the runner in full.
 
 ## Formatting and checking
 
-Run `lus fmt --check` and `lus check` over the sources in continuous integration. `lus fmt` gives every file of a project one layout with 4-space indentation, and `--check` lists the files that differ and exits with status 1. `lus check` parses, lints, and compiles every file without running it, and it exits with status 1 when it reports anything, warnings included:
+Run the formatter, the checker, and the tests on every change, in continuous integration. `lus fmt --check` lists the files whose layout differs from the standard one, so a review never has to discuss layout. `lus check` reports mistakes that would otherwise appear only when the affected line runs: undeclared and unused names, unreachable code, and a `pledge` after the seal. Both commands exit with status 1 when they report anything, so a build fails on them:
 
 ```sh
 lus fmt --check src
@@ -297,15 +317,15 @@ lus check src
 lus test
 ```
 
-`lus check` reports undeclared and unused names, unreachable code, a `pledge` after the seal, and Lua idioms that have a Lus form, each with a stable code. `lus fmt --write src` applies the layout in place. [Developer tools](/manual/tools) lists every diagnostic code.
+`lus fmt --write src` applies the layout in place. [Developer tools](/manual/tools) lists every diagnostic of `lus check`.
 
 ## Performance
 
-The interpreter quickens instructions as a program runs, the baseline JIT compiles functions that become hot, and the optimizing tier compiles the code that stays hot with predicted types and unboxed values. Each tier is fastest on code whose types and table layouts stay the same from one run of an instruction to the next. The habits below follow from the design notes of the two tiers, `spec/design/jit.md` and `spec/design/opt.md` in the repository.
+On macOS and Linux, Lus compiles the code that runs often to machine code, in two steps. A first compiler translates a function once it has run many times. A second, optimizing compiler then recompiles the code that stays busy, using the types of the values it has seen there. Code is therefore fastest when the values at each operation keep the same type. Most programs need none of the habits below. They matter in a loop that runs millions of times.
 
 ### Build records in one constructor
 
-Create each kind of record with one constructor that names every field, and keep its set of fields fixed. A constructor sizes the hash part of a small record exactly, and a record of up to four fields fits in one 128-byte cell together with its table. Field accesses predict the hash node that held the key the last time, and the optimizing tier compiles a field access against the node that holds the key in the tables it observes. In optimized code, a record that is never stored into another table, captured, or passed to code that needs the table itself is never allocated:
+Create each kind of record in one table constructor that names every field. A constructor knows the number of fields in advance and allocates exactly the room they need, while a table that receives its fields one assignment at a time grows in steps and ends up larger. Records that a constructor builds take noticeably less memory. Records with the same fields in every instance also keep field access fast:
 
 ```lus
 global print
@@ -328,7 +348,7 @@ print(sum)   --> 1501500
 
 ### Keep the elements of an array one kind
 
-Fill an array with elements of one kind: integers, floats, strings, or tables. Such an array stores one 64-bit word per element, and both JIT tiers load and store its elements inline. Storing an element of another kind boxes the array part for the rest of its life, which doubles the memory of every element, and the store that changes the kind takes the general path. An integer stored into an array of floats is another kind, so write `0.0` where the array holds floats:
+Fill an array with elements of one kind: all integers, all floats, all strings, or all tables. Lus stores such an array compactly, with 8 bytes per element. The first element of another kind converts the whole array to a general form that takes 16 bytes per element and is slower to read. An integer in an array of floats counts as another kind, so write `0.0` where the array holds floats:
 
 ```lus
 global math, print
@@ -342,19 +362,19 @@ weights[3] = 1.5
 print(math.type(weights[1]), weights[3])   --> float  1.5
 ```
 
-Had the loop stored `0`, the array part would hold integers, and the store of `1.5` would box it.
+Had the loop stored `0`, the array would hold integers, and the store of `1.5` would convert it.
 
 ### Prefer locals and small functions
 
-Keep values that a hot path reads in locals. A local lives in a register of its frame, and the optimizing tier keeps it in a machine register. A global is a field of `_ENV`, so each read is a table lookup that every tier guards. A small Lus function with fixed parameters is compiled into its caller, up to three levels deep. A larger or recursive function can be called directly from optimized code, without a frame, when it qualifies. Among the conditions are at most four fixed parameters, no varargs, no closure over one of its registers, and no tail call:
+Keep the variables that a hot loop updates in locals. A local is a slot of the running function, while a global is a field of the global table, so every access to a global is a table access. Library functions need no local copy: a call to `math.sqrt` in a loop runs as fast as a call through a local that holds it.
+
+Split code into small functions without concern for the cost of a call. The optimizing compiler places the body of a small function directly in its caller, so the helper `length` below costs the same as writing its expression in the loop:
 
 ```lus
 global math, print
 
-local sqrt = math.sqrt
-
 local function length(x, y)
-    return sqrt(x * x + y * y)
+    return math.sqrt(x * x + y * y)
 end
 
 local total = 0.0
@@ -364,11 +384,11 @@ end
 print(math.floor(total))   --> 707813
 ```
 
-Running a program with [`--readonly-env`](/manual/guide#readonly-environment) freezes `_ENV` and the library tables, which lets the compiler and the interpreter rely on the standard library staying in place.
+Define a function outside a hot loop when it can be. A function expression inside a loop creates a new function value on every iteration, which costs an allocation each time.
 
 ### Count hot loops over arrays
 
-Iterate a hot loop over an array with a numeric `for` that counts up by one. The optimizing tier checks the bounds of such a loop once, in front of it, and keeps the load of each element and a test for `nil` inside. Loops over `pairs` and `ipairs`, float loops, and loops with a step other than 1 or -1 run through baseline code inside an optimized function. Create closures outside hot loops, because each closure is an allocation that native code hands to the interpreter:
+Iterate a hot loop over an array with a numeric `for` that counts up by one. The optimizing compiler checks the bounds of the array once, before such a loop, where a loop with `ipairs` or `pairs` calls an iterator on every step. On a loop that sums a million integers, the numeric form runs several times faster. `ipairs` remains the clearer choice everywhere else:
 
 ```lus
 global print
@@ -384,7 +404,7 @@ print(total)   --> 108
 
 ### Join many strings with `table.concat`
 
-Collect the pieces of a long string in a table and join them once with [`table.concat`](/manual/api#table.concat). It measures the result first and writes it in place, while `..` in a loop builds a new intermediate string on every iteration. Short concatenations and interpolations, which join a few strings and integers into at most 64 bytes, take a fast path of their own:
+To build a long string from many pieces, collect the pieces in a table and join them once with [`table.concat`](/manual/api#table.concat). `s = s .. piece` in a loop copies the whole string built so far on every iteration, so the work grows with the square of the length. `table.concat` measures the result first and writes each piece once. A few concatenations or an interpolated string outside a loop need no such care:
 
 ```lus
 global print, table
@@ -398,18 +418,31 @@ print(table.concat(parts, ", "))   --> item 1, item 2, item 3, item 4, item 5
 
 ### Measure before tuning
 
-Compare a run with the environment variable `LUS_JIT=off`, which interprets everything, against the default, which runs both JIT tiers. [`debug.jit`](/manual/api#debug.jit) reports the settings of the tiers and the number of units compiled, and `debug.jit(f)` reports whether `f` has native code and optimized code in use. Native code never runs while a debug hook is set, so a program under `lus debug` or `debug.sethook` runs interpreted and is no measure of its speed:
+Measure a change before keeping it, because a guess about speed is often wrong. [`os.clock`](/manual/api#os.clock) returns the processor time that the program has used, so the difference between two calls times the code between them:
+
+```lus
+global os, print
+
+local start = os.clock()
+local total = 0
+for i = 1, 1000000 do
+    total = total + i
+end
+print(total, os.clock() - start < 5)   --> 500000500000  true
+```
+
+To learn whether the compilers matter for a program, compare a run with the environment variable `LUS_JIT=off`, which interprets everything, against a default run:
 
 ```sh
 LUS_JIT=off lus app.lus
 lus app.lus
 ```
 
-An instruction whose predicted types keep failing runs at baseline speed from then on, while the rest of its function stays optimized. A function whose values keep one type at each operation stays in optimized code.
+Machine code never runs under the debugger or while a hook set with `debug.sethook` is active, so a program measured there runs slower than it does normally.
 
 ## Related pages
 
-- [Lua patterns in Lus](/manual/patterns) sets common Lua idioms beside the Lus forms that replace them.
+- [Lus for Lua programmers](/manual/lua) sets common Lua idioms beside the Lus forms that replace them.
 - [Permissions](/manual/permissions) describes `pledge`, values, rejection, and sealing.
 - [Testing](/manual/testing) describes `lus test`, case tables, helpers, snapshots, and doc tests.
 - [Developer tools](/manual/tools) describes `lus fmt`, `lus check`, `lus build`, and the debugger.

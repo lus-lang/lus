@@ -31,4 +31,4 @@ print(greeter.hello(), origin)          --> hello from greeter  :preload:
 print(require("greeter") == greeter)    --> true
 ```
 
-`require` keeps the loaded table that the package library created, so assigning a new table to `package.loaded` leaves the cache in place. The standard libraries are in the cache from the start, so `require("string")` returns the `string` table. [Modules and require](/manual/guide#modules-and-require) in the guide describes search paths and preincluded modules.
+`require` keeps the loaded table that the package library created, so assigning a new table to `package.loaded` leaves the cache in place. The standard libraries are in the cache from the start, so `require("string")` returns the `string` table. [Modules and require](/manual/guide#modules) in the guide describes search paths and preincluded modules.

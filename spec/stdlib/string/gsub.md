@@ -20,7 +20,7 @@ returns: string
 
 Returns a copy of `s` in which the matches of `pattern` are replaced by `repl`, followed by the number of matches that were replaced.
 
-`s` is the string to search, and `pattern` is a [pattern](/manual/guide#string-patterns). A number in either place is converted to its textual form. `repl` says what replaces each match:
+`s` is the string to search, and `pattern` is a [pattern](/manual/guide#strings-and-patterns). A number in either place is converted to its textual form. `repl` says what replaces each match:
 
 - A string is copied, with `%1` through `%9` standing for the captures, `%0` for the whole match, and `%%` for a percent sign. A number is converted to a string first.
 - A table is indexed with the first capture, or with the whole match when the pattern has no captures.

@@ -6,13 +6,13 @@ group: library
 shortdesc: "Strings as WTF-8 text indexed by character, vectors as byte buffers, and the transcoding and compression functions that move data between them."
 ---
 
-Lus gives text and binary data a type each. A string holds text, and every string operation counts characters. A [`vector`](/manual/guide#vector) holds raw bytes, and every library function that produces or consumes bytes uses one. Conversions between the two are explicit calls: [`vector.fromstring`](/manual/api#vector.fromstring) and [`vector.tostring`](/manual/api#vector.tostring) for WTF-8, [`string.transcode`](/manual/api#string.transcode) for other encodings, and the [`vector.archive`](/manual/api#archive-library) compressors for compressed data.
+Lus keeps text and binary data in two different types. A string holds text, which is a sequence of characters. A [vector](#vectors) holds raw bytes, such as the contents of an image, a compressed file, or a network packet.
+
+The separation has two benefits. Since a string is always text, its length is its number of characters, and no operation cuts a character in half. Since bytes become text only through an explicit call, a program states which encoding it expects and what happens to input that is not valid in it. [`vector.tostring`](/manual/api#vector.tostring) and [`vector.fromstring`](/manual/api#vector.fromstring) convert between bytes and text in UTF-8, [`string.transcode`](/manual/api#string.transcode) handles other encodings, and the [`vector.archive`](/manual/api#archive-library) functions compress and decompress.
 
 ## Strings
 
-Every string is well formed WTF-8. _WTF-8_ is the superset of UTF-8 that also encodes lone surrogate code points, so it represents any sequence of Unicode code points, including the unpaired surrogates that occur in Windows file names and in UTF-16 data. Text from any of those sources round trips through a Lus string without loss.
-
-A _character_ is one Unicode code point, including a lone surrogate. Every string operation indexes and measures by character:
+A _character_ is one Unicode code point: a letter, a digit, a punctuation mark, an emoji, or any other entry of the Unicode standard. The letter `é` is one character, although UTF-8 stores it in two bytes. Every string operation indexes and measures by character:
 
 - `#s` and [`string.len`](/manual/api#string.len) return the number of characters.
 - Positions in [`string.sub`](/manual/api#string.sub), [slices](/manual/guide#slices), [`string.find`](/manual/api#string.find), [`string.match`](/manual/api#string.match), [`string.gmatch`](/manual/api#string.gmatch), and [`string.gsub`](/manual/api#string.gsub) are character positions.
@@ -32,9 +32,9 @@ print(s:byte(2), string.char(233, 0x1F600))  --> 233  é😀
 
 ### Case and patterns
 
-[`string.upper`](/manual/api#string.upper) and [`string.lower`](/manual/api#string.lower) change the ASCII letters and leave every other character as it is.
+[`string.upper`](/manual/api#string.upper) and [`string.lower`](/manual/api#string.lower) change the ASCII letters `a` to `z` and leave every other character as it is, so `é` stays `é`.
 
-[Patterns](/manual/guide#string-patterns) match whole characters, and the pattern engine never splits a multi-byte character. The class `.` matches one character. A set such as `[éà]` may contain any characters, and a range such as `[α-ω]` compares code points. The classes `%a`, `%d`, `%l`, `%s`, `%u`, `%w`, `%x`, `%p`, and `%c` describe ASCII characters only, so `%a` does not match `é`.
+A [pattern](/manual/guide#strings-and-patterns) describes the form of a piece of text, and the string functions that search and replace take one. Patterns match whole characters. The item `.` matches any one character. A set such as `[éà]` may contain any characters, and a range such as `[α-ω]` covers the code points between its two ends. The classes `%a`, `%d`, `%l`, `%s`, `%u`, `%w`, `%x`, `%p`, and `%c` cover ASCII characters only, so `%a`, the class of letters, does not match `é`.
 
 ```lus
 global print
@@ -47,7 +47,7 @@ print(("é1"):match("%a"))        --> nil
 
 ### String literals
 
-A string literal is text. The escapes `\xNN` and `\ddd` produce the bytes of a UTF-8 sequence, and the literal as a whole must decode as WTF-8, so `"\xC3\xA9"` is the string `"é"`. A literal whose bytes are not valid text is a compile error that rejects the whole chunk, and the message points to vectors for raw bytes. The escape `\u{XXXX}` writes any code point, including a surrogate.
+A string literal is text. The escape `\u{XXXX}` writes the character with that code point in hexadecimal. The escapes `\xNN` and `\ddd` write single bytes of the UTF-8 form of a character, and the literal as a whole must be valid text, so `"\xC3\xA9"` is the string `"é"`. A literal whose bytes are not valid text is a compile error, and the message points to vectors, which are the type for raw bytes.
 
 ```lus
 global print, load, pledge
@@ -58,9 +58,13 @@ print("\xC3\xA9" == "é")         --> true
 print(load("return '\\xFF'"))    --> nil  [string "return '\xFF'"]:1: invalid UTF-8 in string literal (use a vector for raw bytes)
 ```
 
-### Surrogate pairs
+### Surrogates
 
-Concatenating a string that ends with a lead surrogate and a string that starts with a trail surrogate joins the pair into one supplementary character, as WTF-8 requires. Every other concatenation joins the two strings unchanged.
+UTF-16, the encoding of Windows file names and of several other systems, writes each character above U+FFFF as a pair of 16-bit units called _surrogates_. Data from those systems sometimes contains half of a pair, which UTF-8 cannot represent.
+
+Lus stores strings as _WTF-8_, which is UTF-8 extended to hold such a lone surrogate. A lone surrogate counts as one character. Any Windows file name or UTF-16 text can therefore pass through a Lus string and come back unchanged.
+
+Concatenating a string that ends with the first half of a pair and a string that starts with the second half joins the two into the one character they stand for. Every other concatenation joins the two strings unchanged.
 
 ```lus
 global print
@@ -71,11 +75,13 @@ print(joined, #joined)  --> a𐀀b  3
 
 ## Vectors
 
-A vector is a mutable, resizable buffer of bytes. A _byte_ is one element of a vector, an integer from 0 to 255. Vector offsets are zero based, and `#v` and [`vector.size`](/manual/api#vector.size) return the size in bytes. Two vectors are equal only when they are the same object.
+A _vector_ is a buffer of bytes that a program can read, change, and resize. A _byte_ is an integer from 0 to 255. Programs use vectors for data that is not text: the contents of binary files, compressed data, and what sockets send and receive.
+
+Offsets into a vector start at 0, as they do in the binary formats that vectors hold. `#v` and [`vector.size`](/manual/api#vector.size) return the size in bytes. Two vectors are equal only when they are the same vector, so `==` does not compare their contents.
 
 ### Creating and resizing
 
-[`vector.create`](/manual/api#vector.create) makes a vector of a given size with every byte set to zero. Its optional second argument, the `fast` flag, is accepted for compatibility, and the bytes start at zero with or without it. [`vector.resize`](/manual/api#vector.resize) changes the size, keeps the bytes that fit in the new size, and sets new bytes to zero. [`vector.clone`](/manual/api#vector.clone) returns an independent copy.
+[`vector.create(size)`](/manual/api#vector.create) makes a vector of `size` bytes, all set to zero. An optional second argument, `fast`, is accepted so that code written for earlier releases keeps working, and it has no effect. [`vector.resize`](/manual/api#vector.resize) changes the size, keeps the bytes that fit in the new size, and sets new bytes to zero. [`vector.clone`](/manual/api#vector.clone) returns a copy that later changes to the original do not affect.
 
 ```lus
 global print, vector
@@ -92,7 +98,7 @@ print(vector.get(v, 0), vector.get(copy, 0))                   --> 255  1
 
 ### Single bytes
 
-[`vector.get`](/manual/api#vector.get) returns the byte at an offset, or `nil` when the offset lies outside the vector. [`vector.set`](/manual/api#vector.set) stores a byte. An offset outside the vector, or a value outside the range 0 to 255, raises an error, so a write past the end needs a `vector.resize` first.
+[`vector.get(v, offset)`](/manual/api#vector.get) returns the byte at an offset, or `nil` when the offset lies outside the vector. [`vector.set(v, offset, byte)`](/manual/api#vector.set) stores a byte. An offset outside the vector, or a value outside the range 0 to 255, raises an error. A vector does not grow on its own, so a program calls `vector.resize` before it writes past the end.
 
 ```lus
 global print, vector
@@ -105,7 +111,9 @@ print(catch vector.set(v, 0, 256))  --> false  ...: bad argument #3 to 'set' (by
 
 ### Packed values
 
-[`vector.pack`](/manual/api#vector.pack) writes values into a vector at an offset, and [`vector.unpack`](/manual/api#vector.unpack) reads them back followed by the offset just past the last byte read. Both use the format strings of [`string.pack`](/manual/api#string.pack). A read that runs past the end of the vector raises the error `data too short`.
+Binary formats store numbers in a fixed number of bytes, such as a 4-byte length at the start of a record. [`vector.pack(v, offset, format, ...)`](/manual/api#vector.pack) writes values into a vector in such a form, and [`vector.unpack(v, offset, format)`](/manual/api#vector.unpack) reads them back. `unpack` returns the values followed by the offset just past the last byte it read, which is where the next read starts.
+
+The format string describes the bytes, and [`string.pack`](/manual/api#string.pack) lists every item it may contain. In the example below, `<` selects little-endian byte order, and each `I4` is an unsigned integer of 4 bytes. A read that runs past the end of the vector raises the error `data too short`.
 
 ```lus
 global print, vector
@@ -115,7 +123,7 @@ vector.pack(v, 0, "<I4I4I4", 1, 2, 3)
 print(vector.unpack(v, 4, "<I4"))  --> 2  8
 ```
 
-[`vector.unpackmany`](/manual/api#vector.unpackmany) returns an iterator that unpacks the same format again and again, starting at an offset. The loop ends when the vector holds no more bytes at the next offset. The optional fourth argument is a count, the largest number of iterations, not an end offset. An iteration whose format reaches past the end of the vector raises the error `unpack falls out of bounds`.
+A file often holds many records of the same form, one after the other. [`vector.unpackmany(v, offset, format, count)`](/manual/api#vector.unpackmany) returns an iterator that unpacks the same format repeatedly, starting at `offset`, so a `for` loop visits every record. The loop ends when it reaches the end of the vector. The optional `count` is the largest number of records to read. A record that reaches past the end of the vector raises the error `unpack falls out of bounds`.
 
 ```lus
 global io, print, vector
@@ -136,7 +144,12 @@ print()                                    --> 1 2
 
 ### Strings to bytes and back
 
-`vector.fromstring` returns a new vector that holds the WTF-8 bytes of a string. Given a vector, it returns a copy. `vector.tostring(v, i, j, mode)` decodes the bytes from offset `i` up to, but not including, offset `j`. `i` defaults to 0 and `j` to the size of the vector, and both are clamped to the vector. With `mode` set to `"strict"`, the default, input that is not valid WTF-8 raises an error that names the byte offset of the first invalid sequence. With `mode` set to `"lossy"`, each invalid sequence becomes U+FFFD.
+`vector.fromstring(s)` returns a new vector that holds the UTF-8 bytes of a string. Given a vector, it returns a copy.
+
+`vector.tostring(v, i, j, mode)` decodes bytes as UTF-8 text and returns a string. It reads from offset `i` up to, but not including, offset `j`. `i` defaults to 0 and `j` to the size of the vector, and an offset outside the vector is moved to its nearest end. `mode` decides what happens to bytes that are not valid text:
+
+- `"strict"`, the default, raises an error that names the byte offset of the first invalid sequence. A program uses it when invalid input means that something is wrong.
+- `"lossy"` replaces each invalid sequence with the replacement character U+FFFD, which displays as `�`. A program uses it to show or log data whose encoding it cannot trust.
 
 ```lus
 global print, vector
@@ -148,7 +161,7 @@ print(vector.tostring(v, 0, 2, "lossy"))       --> h�
 print(catch vector.tostring(v, 0, 2))          --> false  ...: invalid UTF-8 at byte 1
 ```
 
-String interpolation produces text, so interpolating a vector raises an error that points to `vector.tostring`. A program decodes the bytes explicitly and chooses between strict and lossy decoding.
+String interpolation produces text, so interpolating a vector raises an error that points to `vector.tostring`. The program decodes the bytes itself, which is where it chooses between strict and lossy decoding.
 
 ```lus
 global print, vector
@@ -160,14 +173,14 @@ print(`$(vector.tostring(v))`)       --> abc
 
 ## Bytes in the standard library
 
-Every library function that produces raw bytes returns a vector, and every function that reads raw bytes accepts one:
+Every library function that produces raw bytes returns a vector, and every function that reads raw bytes accepts one. A program therefore knows from the type of a value whether it must decode it before it treats it as text.
 
-- [`string.pack`](/manual/api#string.pack) returns a vector, and [`string.unpack`](/manual/api#string.unpack) and `vector.unpack` read vectors.
+- [`string.pack`](/manual/api#string.pack) returns a vector, and [`string.unpack`](/manual/api#string.unpack) and `vector.unpack` read vectors. `string.unpack(format, data, pos)` counts positions from 1, as Lua does, so it suits code ported from Lua. `vector.unpack(v, offset, format)` counts offsets from 0, like the other `vector` functions, so it suits code that also reads single bytes with `vector.get`. Each returns the values and then the place where the next read starts, in its own counting.
 - The [compressors](#compression) accept a string or a vector and return a vector. The decompressors accept a vector or a string and return a vector.
 - [`string.transcode`](#transcoding) returns a vector when the target is a byte encoding and a string when the target is a text encoding. Its input may be either.
-- [`string.dump`](/manual/api#string.dump) returns a vector, and [`load`](/manual/api#load) accepts that vector as a binary chunk.
+- [`string.dump`](/manual/api#string.dump) returns a vector, and [`load`](/manual/api#load) accepts that vector as a [compiled chunk](#compiled-chunks).
 - A file opened in binary mode reads vectors.
-- TCP and UDP reads and the body that `network.fetch` returns are vectors, as [Networking](/manual/network) describes.
+- What TCP and UDP sockets receive, and the body that `network.fetch` returns, are vectors, as [Network](/manual/network) describes.
 - A SQLite `BLOB` column reads back as a vector, as [SQLite](/manual/sqlite) describes.
 
 The following example packs two numbers, compresses text, and transcodes text into UTF-16, receiving a vector each time.
@@ -187,7 +200,12 @@ print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))     --> 4  hé
 
 ### Files
 
-A file opened in binary mode, with `"b"` in its mode string, reads vectors. A file opened in text mode reads strings and validates them. A text read that meets invalid input raises an error that names the byte offset. Passing `{ lossy = true }` as the third argument of [`io.open`](/manual/api#io.open) replaces each invalid sequence with U+FFFD. Writing accepts strings and vectors in either mode.
+[`io.open`](/manual/api#io.open) opens a file in text mode or in binary mode, and the mode decides what its reads return.
+
+- A file opened in text mode reads strings. A read that meets bytes that are not valid UTF-8 raises an error that names the byte offset. Passing `{ lossy = true }` as the third argument of `io.open` replaces each invalid sequence with U+FFFD instead.
+- A file opened in binary mode, with `"b"` in its mode string, reads vectors. This is the mode for images, archives, and text in an encoding other than UTF-8, which the program then converts with `string.transcode`.
+
+Writing accepts strings and vectors in either mode.
 
 ```lus
 global fs, io, os, print, pledge, type, vector
@@ -205,11 +223,13 @@ print(type(all), #all, vector.get(all, 0))  --> vector  13  98
 fs.remove(path)
 ```
 
-Command line arguments, environment variables, and file system paths decode as WTF-8 on Windows and as UTF-8 with lossy replacement on other systems, so they are always strings.
+Command line arguments, environment variables, and filesystem paths are always strings. Windows supplies them as UTF-16, which Lus converts without loss. Other systems supply bytes, which Lus decodes as UTF-8 with each invalid sequence replaced by U+FFFD.
 
 ### Compiled chunks
 
-`string.dump` serializes a Lus function into a vector, and `load` accepts a vector as a binary chunk. A function with native code, such as `print`, raises the error `unable to dump given function`. The mode argument of `load` decides which kinds of chunk it accepts: `"t"` for text only, `"b"` for binary only, and `"bt"`, the default, for both. Loading code requires the `load` [permission](/manual/permissions). A binary chunk is a version-dependent build artifact for trusted storage, so text from an untrusted source belongs in mode `"t"`.
+A _compiled chunk_ is the compiled form of a function, which a program stores to load it later without compiling the source again. `string.dump` returns the compiled chunk of a Lus function as a vector, and `load` accepts that vector. A function of the standard library, such as `print`, has no compiled chunk and raises the error `unable to dump given function`.
+
+The mode argument of `load` decides what it accepts: `"t"` for source text only, `"b"` for compiled chunks only, and `"bt"`, the default, for both. Loading code requires the `load` [permission](/manual/permissions). A compiled chunk works only with the version of Lus that produced it, and `load` does not check that its contents are safe to run. A program that loads code from a source it does not trust therefore passes mode `"t"`.
 
 ```lus
 global print, string, load, pledge
@@ -224,18 +244,24 @@ print(load(chunk, "double", "t"))  --> nil  attempt to load a binary chunk (mode
 
 ## Transcoding
 
+An _encoding_ is a rule for writing text or bytes in another form. Programs meet several of them: Base64 carries bytes inside JSON and HTTP headers, URL encoding carries text inside a URL, hexadecimal displays bytes, UTF-16 is the text format of Windows interfaces, and ISO-8859-1 is common in older files. `string.transcode` converts between all of these with one call.
+
 `string.transcode(input, from, to, ignorebad)` converts `input` from the encoding `from` to the encoding `to`. The input may be a string or a vector. The result is a vector when `to` is a byte encoding and a string when `to` is a text encoding.
 
 The encodings divide into two groups:
 
 - **Byte encodings** produce vectors: `"utf-16le"`, `"utf-16be"`, `"utf-32le"`, `"utf-32be"`, `"iso-8859-1"` with the aliases `"latin1"` and `"latin-1"`, and `"binary"`, which stands for the raw bytes.
-- **Text encodings** produce strings: `"utf-8"`, `"utf-8bom"`, `"ascii"`, and the binary to text encodings `"base64"`, `"url"`, and `"hex"`.
+- **Text encodings** produce strings: `"utf-8"`, `"utf-8bom"`, `"ascii"`, and `"base64"`, `"url"`, and `"hex"`, which write bytes as printable text.
 
 An unknown name raises the error `invalid source encoding` or `invalid target encoding` with the name.
 
 ### Binary to text encodings
 
-Encoding to `"base64"`, `"url"`, or `"hex"` writes the bytes of the input as printable text. Decoding from one of them yields the raw bytes, which are then converted to `to`. URL encoding writes every byte outside the unreserved characters `A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, and `~` as a percent escape, and URL decoding reads `+` as a space. Hexadecimal output is lowercase, and hexadecimal input may use either case. Base64 input may omit its padding.
+Encoding to `"base64"`, `"url"`, or `"hex"` writes the bytes of the input as printable text, which lets binary data travel through formats that carry only text. Decoding from one of them gives the bytes back, which are then converted to `to`.
+
+- Base64 writes every 3 bytes as 4 letters, digits, and signs. Base64 input may omit its `=` padding.
+- URL encoding keeps the characters `A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, and `~` and writes every other byte as `%` and two hexadecimal digits. URL decoding also reads `+` as a space.
+- Hexadecimal writes every byte as two digits. Its output is lowercase, and its input may use either case.
 
 ```lus
 global print, string
@@ -247,7 +273,7 @@ print(string.transcode("a%3D1+b", "url", "utf-8"))           --> a=1 b
 print(string.transcode("é", "utf-8", "hex"))                 --> c3a9
 ```
 
-Both sides of a conversion may be binary to text encodings, which converts directly between them. Decoding to `"binary"` returns the raw bytes as a vector.
+Both `from` and `to` may be one of these three encodings, which converts directly between them. Decoding to `"binary"` returns the raw bytes as a vector.
 
 ```lus
 global print, string, type
@@ -260,7 +286,7 @@ print(type(raw), #raw)                                --> vector  5
 
 ### Character sets
 
-Conversions between character encodings go through Unicode code points. UTF-16 writes each character as one or two 16-bit code units, and a supplementary character such as U+1D306 becomes a surrogate pair.
+A _character set_ encoding stores the characters of a text as bytes. A program converts when it exchanges text with a system that expects an encoding other than UTF-8. UTF-16 writes each character as one or two 16-bit units, and a character above U+FFFF, such as U+1D306, becomes a [surrogate](#surrogates) pair.
 
 ```lus
 global print, string, vector
@@ -272,7 +298,7 @@ local tetragram = string.transcode("𝌆", "utf-8", "utf-16le")
 print(string.format("%X %X", vector.unpack(tetragram, 0, "<I2I2")))  --> D834 DF06
 ```
 
-ISO-8859-1 writes one byte per character, so it represents the code points from U+0000 to U+00FF. Reading a legacy file opened in binary mode and converting it from `"iso-8859-1"` to `"utf-8"` produces a string.
+ISO-8859-1, also called Latin-1, writes one byte per character, so it represents only the characters from U+0000 to U+00FF. A program reads an older file in this encoding by opening it in binary mode and converting the vector from `"iso-8859-1"` to `"utf-8"`, which produces a string.
 
 ```lus
 global print, string, vector
@@ -282,7 +308,7 @@ print(#latin, vector.get(latin, 3))                   --> 4  233
 print(string.transcode(latin, "iso-8859-1", "utf-8"))  --> café
 ```
 
-The encoding `"utf-8bom"` adds the byte order mark U+FEFF when it is the target, and removes a leading byte order mark when it is the source. Since its output is a string, the mark appears as the character U+FEFF.
+Some programs, mostly on Windows, start a UTF-8 file with the character U+FEFF, called the _byte order mark_. The encoding `"utf-8bom"` adds the mark when it is the target and removes a leading mark when it is the source. Its output is a string, so the mark appears as the character U+FEFF at the start.
 
 ```lus
 global print, string
@@ -294,7 +320,7 @@ print(string.transcode(marked, "utf-8bom", "utf-8"))     --> Hello
 
 ### Invalid input
 
-Invalid input raises an error, and so does a character that the target encoding cannot represent. The messages name the problem and, for malformed input, the position.
+Input that is not valid in the encoding `from` raises an error, and so does a character that the encoding `to` cannot represent. The message names the problem, and for malformed input it names the position.
 
 ```lus
 global print, string, vector
@@ -307,7 +333,7 @@ vector.pack(bytes, 0, "BB", 0xFF, 0xFE)
 print(catch string.transcode(bytes, "utf-8", "utf-16le"))        --> false  ...: invalid UTF-8 sequence at position 1
 ```
 
-When `ignorebad` is true, the conversion skips invalid sequences and characters that the target cannot represent, and returns the rest.
+When `ignorebad` is true, the conversion skips invalid sequences and characters that the target cannot represent, and returns the rest. A program uses it when a partial result is better than none, such as when it reduces text to ASCII for a file name.
 
 ```lus
 global print, string, vector
@@ -322,7 +348,7 @@ print(string.transcode(bytes, "utf-8", "utf-8", true))                       -->
 
 ## Compression
 
-The `vector.archive` library compresses and decompresses data with five formats. Every function accepts a string or a vector as input and returns a vector, since compressed and decompressed data are bytes. `vector.tostring` turns decompressed text back into a string.
+Compression makes data smaller for storage or for sending over a network, at the cost of the time it takes to compress and decompress. The `vector.archive` library compresses and decompresses data in five formats. Every function accepts a string or a vector as input and returns a vector, since compressed and decompressed data are bytes. `vector.tostring` turns decompressed text back into a string.
 
 ```lus
 global print, string, type, vector
@@ -333,7 +359,15 @@ print(type(packed), #packed < #text)                                  --> vector
 print(vector.tostring(vector.archive.zstd.decompress(packed)) == text)  --> true
 ```
 
-Each format is a table with a `compress` and a `decompress` function. The optional second argument of `compress` sets the level, a trade between speed and ratio:
+The format to choose depends on who reads the data.
+
+- **gzip** is the format that the most tools read, including web servers, browsers, and the `gzip` command.
+- **deflate** is the compression inside gzip without its header and checksum, for use inside another format that has its own.
+- **zstd** compresses faster than gzip to a smaller size, which makes it a good choice when the program controls both ends.
+- **brotli** is the format that browsers accept for web content. At its default level it produces small output and compresses slowly.
+- **lz4** is designed for speed, and its output is larger than that of the others.
+
+Each format is a table with a `compress` and a `decompress` function. The optional second argument of `compress` sets the level. A higher level produces smaller output and takes more time.
 
 | Format | Standard | Level | Default |
 |---|---|---|---|
@@ -343,13 +377,15 @@ Each format is a table with a `compress` and a `decompress` function. The option
 | [`brotli`](/manual/api#vector.archive.brotli.compress) | RFC 7932 | 0 to 11 | 11 |
 | [`lz4`](/manual/api#vector.archive.lz4.compress) | LZ4 frame | 1 to 12 | 1 |
 
-The formats differ in their framing:
+The formats differ in these details:
 
-- **gzip** wraps deflate data in a gzip header and a CRC32 checksum. Its level 0 stores the data without compression, and level 9 produces the smallest output. Decompression validates the header and the checksum.
-- **deflate** writes raw deflate data with no header and no checksum, for embedding in a container that carries its own. Decompression performs no header or checksum validation.
-- **zstd** writes Zstandard frames. Negative levels compress faster with a lower ratio, and level 22 produces the smallest output. Decompression validates the frame header and the optional content checksum.
-- **brotli** takes a third argument, `lgwin`, from 10 to 24 with a default of 22, which sets the LZ77 window to 2 to the power `lgwin` bytes.
-- **lz4** writes the current LZ4 frame format, and decompression validates the frame header and the optional checksum. [`vector.archive.lz4.decompress_hc`](/manual/api#vector.archive.lz4.decompress_hc) reads the legacy LZ4 frame format, identified by the magic number `0x184C2102`, which older LZ4 tools produced.
+- **gzip** adds a header and a CRC32 checksum to deflate data, and decompression checks both. Level 0 stores the data without compression.
+- **deflate** writes no header and no checksum, so decompression cannot detect every corrupted input.
+- **zstd** accepts negative levels, which compress faster to a larger size. Decompression checks the header and the checksum when the data carries one.
+- **brotli** takes a third argument, `lgwin`, from 10 to 24 with a default of 22. The compressor looks for repetitions within the last 2 to the power `lgwin` bytes, so a smaller value uses less memory and compresses less.
+- **lz4** writes the current LZ4 frame format, and decompression checks the header and the checksum when the data carries one. [`vector.archive.lz4.decompress_hc`](/manual/api#vector.archive.lz4.decompress_hc) reads the older LZ4 frame format that earlier LZ4 tools produced, which starts with the number `0x184C2102`.
+
+Every `decompress` function takes an optional second argument, the largest size in bytes that the output may reach. It defaults to 512 MiB, and larger output raises `decompressed size exceeds limit`. A program that decompresses data from a source it does not trust passes a limit that fits the data it expects, so that a small input cannot expand until memory runs out.
 
 ```lus
 global print, string, vector
@@ -363,7 +399,7 @@ print(#stored > #text, vector.tostring(vector.archive.brotli.decompress(quick)) 
 
 ### Compression errors
 
-An input that is neither a string nor a vector, a level or window outside its range, and corrupted or truncated compressed data each raise an error. A number is converted to its textual form, as everywhere strings are expected.
+An input that is neither a string nor a vector, a level or `lgwin` outside its range, and corrupted or truncated compressed data each raise an error. A number given as input is converted to its text first.
 
 ```lus
 global print, vector
@@ -375,7 +411,7 @@ print(catch vector.archive.gzip.decompress("not gzip data"))  --> false  ...: gz
 
 ## Related pages
 
-- [Data formats](/manual/data) parses and writes JSON and CSV, and covers the table and string helpers for data processing.
+- [Data formats](/manual/data) describes JSON and CSV, and the functions that split, join, and trim strings.
 - [SQLite](/manual/sqlite) stores strings as `TEXT` and vectors as `BLOB`.
-- [Filesystem](/manual/filesystem) covers the `fs` library and the permissions that file access needs.
-- The [guide](/manual/guide#string) describes string literals, interpolation, and the other value types.
+- [Filesystem](/manual/filesystem) describes the `fs` library and the permissions that file access needs.
+- [Strings and patterns](/manual/guide#strings-and-patterns) in the guide teaches the string functions and patterns.

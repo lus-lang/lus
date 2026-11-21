@@ -28,4 +28,4 @@ mt.__metatable = "locked"
 print(getmetatable(t))                           --> locked
 ```
 
-A `__metatable` field also makes [`setmetatable`](/manual/api#setmetatable) refuse to change the metatable. [Metatables and metamethods](/manual/guide#metatables-and-metamethods) in the guide lists the metamethods.
+A `__metatable` field also makes [`setmetatable`](/manual/api#setmetatable) refuse to change the metatable. [Metatables and metamethods](/manual/guide#metatables-and-objects) in the guide lists the metamethods.

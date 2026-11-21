@@ -59,7 +59,9 @@ The vocabulary below is fixed across the documentation.
 
 A description is complete when it names the result in every case. For a function that means each return value, in order, on success and on failure, the errors it raises, and what it does with `nil`, empty, negative, and out of range arguments. "Success returns `true` followed by every result of the expression. Failure returns exactly `false` and the raw error object" is complete. "Returns the result or an error" is not.
 
-Numbers are exact and carry units: "a 64-bit two's complement integer", "a header of 16 bytes on 64-bit targets", "at most 63 characters". A default is stated together with the name that changes it.
+Numbers are exact and carry units: "a 64-bit integer", "a header of 16 bytes on 64-bit targets", "at most 63 characters". A default is stated together with the name that changes it.
+
+This section applies in full to reference pages: the API reference, `spec/stdlib/`, the grammar, and the design notes. Teaching pages follow section 6a, which keeps exactness and leaves completeness to the reference.
 
 An error is stated by its kind and its place. A compile error rejects the whole chunk before it runs. A runtime error is raised at a specific operation. The page says which one, and quotes the message when the message is part of the contract.
 
@@ -84,6 +86,31 @@ A stdlib entry in `spec/stdlib/` follows one template, in this order:
 5. A short example.
 6. Edge cases and related entries.
 
+## 6a. Teaching pages
+
+The guide, the getting started page, the page for Lua programmers, and the opening sections of every topic page teach. A reader of a teaching page wants to know what a feature is for and how to use it well, and reaches for the reference only when that is not enough. These rules come from reader feedback on an earlier manual that failed them.
+
+1. **Introduce before use.** A section uses only concepts that an earlier section explained. Destructuring comes after tables, `<close>` after metatables, and queries after tables and iteration.
+2. **Purpose first.** A feature opens with the problem it solves and when to reach for it. Mechanics follow. A feature whose purpose is obvious, such as `coroutine.close`, needs only its description.
+3. **Examples beat the obvious alternative.** If a reader could ask "why not just write X", the example shows the wrong case. A do expression example that a plain call expresses with less code teaches nothing about do expressions.
+4. **Idiomatic code only.** Examples use the standard library as an experienced Lus programmer would, and never show a pattern to avoid unless they label it as one.
+5. **One home per topic.** Arithmetic, iteration, and permissions are each explained once and linked from elsewhere.
+6. **No assumed background.** A teaching page assumes general programming knowledge only. It teaches tables, queries, and patterns from scratch, and explains every clause, aggregate, and pattern item it uses.
+7. **User concepts.** Implementation terms such as "closure", "upvalue", "tail call", "provider", and "bytecode" stay out of teaching sections. The page describes what the programmer sees. The Internals section of the guide explains the implementation in its own terms.
+8. **No needless precision.** A qualifier that adds no meaning goes. "An integer is a 64-bit number." "Each group field is a local variable." Exhaustive rules, limits, and error messages belong to the reference, and the teaching page links to them.
+9. **No syntax before its introduction.** A sentence never names syntax that the reader has not seen yet. It describes what the thing does first.
+10. **A link that promises a complete reference leads to one.**
+
+## 6b. Plain statement
+
+Mannered prose replaces a direct statement with a metaphor or a flourish: "a dial worth turning" for "a parameter worth varying", "earns its keep" for "still matters". Such phrases make the reader work harder, and they carry connotations the writer did not choose. When a literal phrase exists, use it.
+
+The relation between two clauses is stated. A cause and its effect are joined with "so", "because", "which", or "therefore", or written as two sentences, and never with a bare "and". "An error raised by an attribute propagates from the assignment, which prevents the variable from being written" states the relation that "..., and the variable keeps its previous value" hides. "Groups are always local. Therefore, declaring a global as a group is an error."
+
+A sentence that implies a contrast that does not exist stays out. "`nil` is a first-class value that can be passed as an argument" suggests that some values cannot be passed.
+
+A page states nothing that depends on when it is read. It has no dates of runs and no "today", and a figure that changes with every measurement lives in a table generated from the data.
+
 A design note in `spec/design/` states the decision, the reason, and the measurement that supports it. Alternatives that were built and measured belong in the note with their numbers, because the note is the record of what was tried. The note describes the design that ships first and the measured alternatives after it.
 
 ## 7. Examples
@@ -106,7 +133,7 @@ The link text is the thing linked, never "here" or "this page". A section that e
 
 Lua is the baseline every Lus reader knows, and Lus shares its central value: a small language that says a lot in a few words. A comparison with Lua explains what Lua does and why that serves Lua, then what Lus does and why. It treats Lua with respect, as the language Lus grew from. "Lua indexes strings by byte, which keeps its string library small and encoding agnostic. Lus indexes by character, so that `#s` and `string.sub` agree with what a reader sees" is the shape.
 
-A comparison with another runtime rests on a measurement and links to it. Where another runtime wins, the page says so in the same plain voice it uses for a Lus win: "PHP serves more HTTP requests per second than Lus today." A limit of Lus is stated as a fact, with the reason when the reason is known.
+A comparison with another runtime rests on a measurement and links to it. Where another runtime wins, the page says so in the same plain voice it uses for a Lus win: "A server that answers on several threads serves more HTTP requests per second than `network.serve`, which runs every connection on one thread." A figure that changes with each run belongs in the generated table, not in the sentence. A limit of Lus is stated as a fact, with the reason when the reason is known.
 
 A design decision is explained by its consequences. The page says what the decision makes possible and what it costs, so the reader can judge the tradeoff without the page arguing for it.
 
@@ -166,3 +193,5 @@ Before committing prose, check each point.
 5. Every function description covers success, failure, and the edge cases.
 6. Every rule with an effect has an example, and `lus test --doc` runs it.
 7. Every claim about speed or memory names its measurement.
+8. On a teaching page, every feature says what it is for, and every example shows a case where the feature is the better tool.
+9. The page reads correctly from start to end, in order, for a reader who has only read the pages before it.

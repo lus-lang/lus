@@ -8,13 +8,17 @@ shortdesc: "Downloads, release archives, versioning, and integrity checks."
 
 import ReleaseStrip from "../components/ReleaseStrip.astro"
 
-Each Lus release ships prebuilt archives for six targets, a Windows installer, a standalone WebAssembly module, the VSCode extension, and a checksum manifest.
+A Lus release consists of prebuilt archives for six targets, a Windows installer, a WebAssembly module, the VSCode extension, and a checksum manifest. This page describes what each download holds, how to check a download, and how versions are numbered.
 
 ## Downloads
 
 <ReleaseStrip />
 
-Every archive holds the `lus` interpreter together with the embedding libraries and the `lus.h` header, so one download serves both running scripts and [embedding Lus](/manual/api/c) in a C program. Archive names carry the release tag and the target.
+### Release channels
+
+Releases come in two channels, and the strip above shows the latest release of each. The _stable_ channel holds the full releases, which a production deployment runs. The _unstable_ channel holds prereleases, whose tags carry a suffix such as `v2.0.0-rc.1`. A prerelease lets people try the next version before it becomes stable, and what it adds may still change. It ships every archive and `lus.wasm`, but not the VSCode extension. A manual page that documents a feature of the unstable channel says so at its top.
+
+Every archive holds the `lus` interpreter, the embedding libraries, and the `lus.h` header, so the same download runs scripts and [embeds Lus](/manual/embedding) in a host program. The name of an archive contains the release tag and the target.
 
 | Platform | Architecture | Archive |
 | --- | --- | --- |
@@ -43,15 +47,15 @@ A host program on Linux or macOS builds against an unpacked archive like this.
 cc -o host host.c -Ilus/include lus/lib/liblus.a
 ```
 
-Each library carries the vendored C code of SQLite, Zstandard, and Brotli, so a host links that one file.
+Each library includes the C code of SQLite, Zstandard, and Brotli, so a host links that one file.
 
 ## WebAssembly
 
-The release also includes `lus.wasm`, the runtime built for `wasm32-wasi`. It exports every function of `lus.h`, as [WebAssembly](/manual/webassembly) describes, and it is the same module that powers the [playground](/playground).
+The release also includes `lus.wasm`, the runtime built for `wasm32-wasi`. It exports every function of `lus.h`, as [WebAssembly](/manual/webassembly) describes, and it is the module that the [playground](/playground) runs.
 
 ## Checking download integrity
 
-Each release includes `SHA256SUMS`, which lists the SHA-256 digest of every archive, of `lus-setup.exe`, of `lus.wasm`, and of the VSCode extension files. A download is checked against it with `sha256sum`.
+Each release includes `SHA256SUMS`, which lists the SHA-256 digest of every archive, of `lus-setup.exe`, of `lus.wasm`, and of the VSCode extension files. The following commands download the manifest and check the files in the current directory against it.
 
 ```bash
 curl -LO https://github.com/lus-lang/lus/releases/latest/download/SHA256SUMS
@@ -60,20 +64,18 @@ sha256sum -c --ignore-missing SHA256SUMS
 
 On macOS, `shasum -a 256 -c --ignore-missing SHA256SUMS` performs the same check.
 
-The digest detects corruption and any mismatch between an asset and the manifest of its release. The manifest and the assets come from the same GitHub release, so the check confirms consistency within that release. Environments that require publisher authentication pin an expected tag and verify the provenance of the release through their own trusted policy.
+A matching digest proves that the download is complete and is the file that the release lists. The manifest comes from the same GitHub release as the files, so the check does not prove who published the release. An environment that needs that proof pins the tag it expects and verifies the origin of the release by its own policy.
 
 ## How a release is made
 
-Pushing a tag such as `v2.0.0` starts the release workflow. The workflow first confirms that the tag matches the version in `runtime/build.zig.zon`. It then runs the unit, embedding, bundle, check, and documentation tests along with the conformance suite and the language server tests. When they pass, it cross compiles every target from one runner with Zig, builds `lus.wasm`, and packages the VSCode extension with the Open VSX publisher that later uploads it. A Windows runner then compiles `lus-setup.exe` from the x86_64 archive and installs and uninstalls it as a smoke test. The last step writes `SHA256SUMS` over every asset.
-
-The workflow publishes the result as a draft GitHub release titled after the version, with `CHANGELOG.md` as its notes. A maintainer reviews the draft and its assets and then publishes it.
+Every release is built from a version tag by the continuous integration of the repository. The build runs the full test suite, including the conformance suite and the documentation examples, before it compiles any target. It then cross-compiles every archive, builds `lus.wasm` and the Windows installer, tests that the installer installs and uninstalls, and writes `SHA256SUMS`. The result becomes a draft release, which a maintainer reviews before publishing it.
 
 ## Versioning
 
 Lus follows semantic versioning for its language, standard library, C API, and command line.
 
-- A patch release carries compatible fixes, security updates, packaging corrections, or documentation corrections.
-- A minor release adds compatible features and can deprecate older surfaces.
+- A patch release contains compatible fixes, security updates, packaging corrections, or documentation corrections.
+- A minor release adds compatible features and can deprecate older functions and options.
 - A major release can make breaking changes.
 
-Production deployments use a published release and pin its version according to their update policy.
+A production deployment should run a published release and pin its version.

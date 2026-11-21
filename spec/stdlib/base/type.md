@@ -22,4 +22,4 @@ print(type(print), type(vector.create(4)))         --> function  vector
 print(type(5n), type(1.5d))                        --> number  number
 ```
 
-Every number reports `"number"`, and [`math.type`](/manual/api#math.type) distinguishes the subtypes `integer`, `float`, `bigint`, and `decimal`. An enum and each of its members report `"enum"`. The [Values](/manual/guide#values) section of the guide describes each type.
+Every number reports `"number"`, and [`math.type`](/manual/api#math.type) distinguishes the subtypes `integer`, `float`, `bigint`, and `decimal`. An enum and each of its members report `"enum"`. The [Values](/manual/guide#values-and-types) section of the guide describes each type.

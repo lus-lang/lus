@@ -19,4 +19,4 @@ end
 print()   --> [a][ñ][b]
 ```
 
-[String patterns](/manual/guide#string-patterns) in the guide describes the pattern language.
+[String patterns](/manual/guide#strings-and-patterns) in the guide describes the pattern language.

@@ -18,7 +18,7 @@ returns: function
 
 Returns an iterator function that returns the next match of `pattern` in `s` each time it is called, as the captures of the match or as the whole match when the pattern has no captures.
 
-`s` is the string to search, and `pattern` is a [pattern](/manual/guide#string-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`.
+`s` is the string to search, and `pattern` is a [pattern](/manual/guide#strings-and-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`.
 
 Each call of the iterator returns the captures of the next match, with a position capture `()` yielding an integer, or the whole match. After the last match it returns `nil`, which ends a generic `for` loop.
 

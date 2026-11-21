@@ -29,4 +29,4 @@ rawset(t, "b", 2)
 print(t.a, t.b, #log)   --> nil  2  1
 ```
 
-[`rawget`](/manual/api#rawget) reads a field without `__index`. A table that `--readonly-env` froze raises `attempt to modify a readonly table` for `rawset` as it does for assignment, as [Readonly environment](/manual/guide#readonly-environment) describes.
+[`rawget`](/manual/api#rawget) reads a field without `__index`. A table that `--readonly-env` froze raises `attempt to modify a readonly table` for `rawset` as it does for assignment, as [Readonly environment](/manual/guide#the---readonly-env-option) describes.

@@ -24,4 +24,4 @@ print(catch divide(1, 0))   --> false  division by zero
 print(pcall)                --> nil
 ```
 
-[Error handling](/manual/guide#error-handling) describes `catch` and its handlers.
+[Error handling](/manual/guide#errors) describes `catch` and its handlers.

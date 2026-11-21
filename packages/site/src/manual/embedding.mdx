@@ -6,20 +6,22 @@ group: use
 shortdesc: "The lus.h C interface for host programs: states, the stack, calls, C functions, userdata, references, and the permission policy of the host."
 ---
 
-A _host_ is a program that embeds the Lus runtime through the C header `lus.h` and the library `liblus`. The host creates a state, opens the standard libraries, sets the permission policy, loads and runs code, and exchanges values with it through a stack. Every function that can fail returns a status code, and errors never jump across C frames, so a host written in C, C++, Rust, Zig, or any language with a C foreign function interface handles them with ordinary control flow.
+Embedding puts the Lus runtime inside another program, so that the users of that program can script it. For example, a game can run its levels as Lus scripts, an editor can load plugins, and a server can read its configuration as code. A _host_ is a program that embeds the runtime through the C header `lus.h` and the library `liblus`. The host creates a state, opens the standard libraries, decides which permissions scripts may hold, loads and runs code, and exchanges values with that code through a stack.
+
+Every function of the interface that can fail returns a status code, and an error never jumps out of a C function. A host written in C, C++, Rust, Zig, or any language that can call C therefore handles errors with ordinary `if` statements.
 
 The [C API reference](/manual/api/c) documents every function, type, and constant of `lus.h`. This page describes how the parts fit together.
 
 ## Building and linking
 
-The embedding library is built from the runtime directory. The step writes the static library `liblus.a`, the shared library `liblus`, and the header `lus.h` under `zig-out`.
+Every [release archive](/manual/releases#archive-layout) contains the embedding library and the header. To build them from source, run the `lib` step in the runtime directory. The step writes the static library `liblus.a`, the shared library `liblus`, and the header `lus.h` under `zig-out`.
 
 ```sh
 cd runtime
 zig build lib -Doptimize=ReleaseSafe
 ```
 
-Each library carries the vendored C code of SQLite, Zstandard, and Brotli, so a host links one file.
+Each library includes the C code of SQLite, Zstandard, and Brotli, so a host links one file.
 
 ```sh
 cc -o host host.c -Iruntime/zig-out/include runtime/zig-out/lib/liblus.a
@@ -66,21 +68,21 @@ int main(void) {
 }
 ```
 
-[`lus_newstate`](/manual/api/c#lus_newstate) creates a state with no libraries and no permissions, and returns `NULL` when memory runs out. [`lus_openlibs`](/manual/api/c#lus_openlibs) opens every standard library into the global table. A state is used by one thread at a time. [`lus_close`](/manual/api/c#lus_close) closes the detached coroutines that have not ended, runs the remaining finalizers, stops the workers the state started, and frees the state.
+A _state_ is one independent instance of the runtime, with its own globals and its own memory. [`lus_newstate`](/manual/api/c#lus_newstate) creates a state with no libraries and no permissions, and returns `NULL` when memory runs out. [`lus_openlibs`](/manual/api/c#lus_openlibs) opens every standard library into the global table. Only one thread may use a state at a time. [`lus_close`](/manual/api/c#lus_close) closes the detached coroutines that have not ended, runs the remaining finalizers, stops the workers that the state started, and frees the state.
 
 ## The stack
 
-Every value that a host or a C function sees lives in a stack slot. Positive indices count from the bottom of the current frame, so index 1 is the first argument of a C function. Negative indices count from the top, so index -1 is the value pushed last. `lus_gettop` returns the number of values in the frame, `lus_settop` grows or shrinks it, and `lus_pop`, `lus_pushvalue`, `lus_insert`, `lus_remove`, and `lus_replace` rearrange it.
+C code never holds a Lus value directly, because the garbage collector must know every value that is in use. The host and its C functions instead work on a _stack_ of values that the state owns: a function pushes values onto the stack, reads them by index, and pops them. Positive indices count from the bottom of the current frame, so index 1 is the first argument of a C function. Negative indices count from the top, so index -1 is the value pushed last. `lus_gettop` returns the number of values in the frame, `lus_settop` grows or shrinks it, and `lus_pop`, `lus_pushvalue`, `lus_insert`, `lus_remove`, and `lus_replace` rearrange it.
 
 Values are read with `lus_toboolean`, `lus_tointeger`, `lus_tonumber`, `lus_tostring`, `lus_tobytes` for vectors, `lus_touserdata`, and `lus_tolight`, and `lus_type` returns the type of a slot as one of the `LUS_T` constants. Strings are well formed WTF-8 followed by a zero byte. `lus_tostring` returns `NULL` for a value that is not a string and converts no other type.
 
 Values are pushed with `lus_pushnil`, `lus_pushboolean`, `lus_pushinteger`, `lus_pushnumber`, `lus_pushstring`, `lus_pushlstring`, `lus_pushfstring`, `lus_pushbytes` for vectors, `lus_pushlight` for raw host pointers, and `lus_newtable`.
 
-A push that allocates returns a status, and it always pushes exactly one value: the new value on success and the error object on failure. The stack therefore changes by the documented amount in every case, and a function that checks a status can return `lus_error(L)` immediately.
+A push that allocates memory returns a status, and it always pushes exactly one value: the new value on success and the error object on failure. Because the error object is then on top of the stack, a C function that sees a failed status can raise that error by returning `lus_error(L)`.
 
 ## Tables and globals
 
-`lus_getfield`, `lus_setfield`, `lus_gettable`, `lus_settable`, `lus_getglobal`, `lus_setglobal`, and `lus_len` honor metamethods, so they can fail and return a status. `lus_rawget`, `lus_rawgeti`, `lus_rawset`, `lus_rawseti`, and `lus_rawlen` bypass metamethods. `lus_next` traverses a table, starting from a nil key.
+A host reads the results and the configuration of a script, and gives it data, through tables and globals. `lus_getfield`, `lus_setfield`, `lus_gettable`, `lus_settable`, `lus_getglobal`, `lus_setglobal`, and `lus_len` behave as the same operations do in Lus code, metamethods included, so they can fail and they return a status. `lus_rawget`, `lus_rawgeti`, `lus_rawset`, `lus_rawseti`, and `lus_rawlen` skip metamethods. `lus_next` visits the entries of a table one at a time, starting from a nil key.
 
 The following fragment reads a field and checks the status, which is `LUS_ERRRUN` with the message `attempt to index a nil value` when the slot holds nil.
 
@@ -93,7 +95,7 @@ lus_pop(L, 1);
 
 ## Calling Lus from C
 
-A call pushes the function, then its arguments, then calls [`lus_pcall`](/manual/api/c#lus_pcall) with the number of arguments and the number of results to keep, or `LUS_MULTRET` for all of them. On success the function and its arguments are replaced by the results. On failure they are replaced by the error object, and `lus_pcall` returns the status code. [`lus_traceback`](/manual/api/c#lus_traceback) returns the stack traceback of the last error that `lus_pcall` caught, or `NULL` when that error had none.
+A host calls a Lus function to run an event handler, a callback, or an entry point that a script defined. To make the call, the host pushes the function, then its arguments, then calls [`lus_pcall`](/manual/api/c#lus_pcall) with the number of arguments and the number of results to keep, or `LUS_MULTRET` for all of them. On success the results replace the function and its arguments. On failure the error object replaces them, and `lus_pcall` returns the status code. [`lus_traceback`](/manual/api/c#lus_traceback) returns the stack traceback of the last error that `lus_pcall` caught, or `NULL` when that error had none. The following fragment calls the global function `greet` with one argument and prints its result.
 
 ```c
 lus_getglobal(L, "greet");
@@ -103,7 +105,7 @@ if (lus_pcall(L, 1, 1) == LUS_OK)
 lus_pop(L, 1);
 ```
 
-`lus_load` compiles source text or a binary chunk and pushes it as a function, and `lus_loadfile` loads a file. The host reads the file under its own authority, without a permission check. `lus_dostring` and `lus_dofile` load and run in one step and leave the results on the stack.
+`lus_load` compiles source text or a binary chunk and pushes it as a function, and `lus_loadfile` does the same for a file. The host itself reads the file, so no permission of the state is checked. `lus_dostring` and `lus_dofile` load and run in one step and leave the results on the stack.
 
 The status codes are the following.
 
@@ -115,17 +117,17 @@ The status codes are the following.
 | `LUS_ERRMEM` | The allocator failed. |
 | `LUS_ERRFILE` | A file could not be opened or read. |
 
-A program that detaches coroutines needs the host to run them. [`lus_runpending`](/manual/api/c#lus_runpending) with a nonzero `wait` runs the detached coroutines until none is left, as the `lus` command does after the main chunk. With `wait` zero it runs the coroutines that are ready and returns, so a host with an event loop of its own calls it whenever it has time. [`lus_pending`](/manual/api/c#lus_pending) returns the number of detached coroutines that have not ended.
+A script that uses [detached coroutines](/manual/concurrency), for example to serve network connections, needs the host to keep running them after the call that started them returns. [`lus_runpending`](/manual/api/c#lus_runpending) with a nonzero `wait` runs the detached coroutines until none is left, as the `lus` command does after the main chunk. With `wait` zero it runs the coroutines that are ready and returns, so a host with an event loop of its own can call it on every turn of the loop. [`lus_pending`](/manual/api/c#lus_pending) returns the number of detached coroutines that have not ended.
 
 ## Writing C functions
 
-A C function receives its arguments at indices 1 through `lus_gettop(L)`, pushes its results, and returns how many it pushed. To raise an error it returns `LUS_ERROR`, which is what [`lus_error`](/manual/api/c#lus_error) returns after it takes the top value as the error object. `lus_errorstr` and `lus_errorf` raise a message prefixed with the position of the calling Lus code, as in `(dostring):1: bad argument #1 to 'greet' (string expected)`.
+A C function is how a host offers its own features to scripts, as `greet` does in the first host. It receives its arguments at indices 1 through `lus_gettop(L)`, pushes its results, and returns how many it pushed. To raise an error it returns `LUS_ERROR`, which is what [`lus_error`](/manual/api/c#lus_error) returns after it takes the top value as the error object. `lus_errorstr` and `lus_errorf` raise a message prefixed with the position of the calling Lus code, as in `(dostring):1: bad argument #1 to 'greet' (string expected)`.
 
-`lus_pushcclosure` pops values and creates a C function that holds them as upvalues, which the function reads with `lus_getupvalue`. `lus_stringify` converts any value to a string the way `tostring` does, honoring `__tostring` and `__name`.
+A C function sometimes needs data of its own, such as a pointer to the object it acts on. `lus_pushcclosure` pops values from the stack and creates a C function that keeps them. The function reads the kept values back with `lus_getupvalue`, where an _upvalue_ is one of the values that a function keeps. `lus_stringify` converts any value to a string as `tostring` does, which includes calling `__tostring`.
 
 ## Userdata
 
-[`lus_newuserdata`](/manual/api/c#lus_newuserdata) pushes a block of host memory, aligned to 8 bytes, that the collector manages. `lus_newmetatable` creates or fetches a metatable registered under a type name, `lus_setmetatable` attaches a metatable to a value, and `lus_toudata` returns the block only when the value carries the metatable of the expected name. A `__gc` field in the metatable becomes the finalizer of the object. The finalizer receives the object as its only argument and runs at most once, after the object becomes unreachable or when the state closes.
+A _userdata_ is a block of host memory that scripts hold as a value. It is how a host gives scripts an object of its own, such as a file, a sprite, or a database connection, with methods and automatic cleanup. [`lus_newuserdata`](/manual/api/c#lus_newuserdata) pushes a new block, aligned to 8 bytes, which the garbage collector frees when no script refers to it. A metatable gives the userdata its type and its methods. `lus_newmetatable` creates or fetches a metatable registered under a type name, `lus_setmetatable` attaches a metatable to a value, and `lus_toudata` returns the block only when the value has the metatable of the expected name, which protects a method against a value of another type. A `__gc` field in the metatable is the finalizer of the object. The finalizer receives the object as its only argument and runs at most once, after the object becomes unreachable or when the state closes.
 
 The following functions implement a counter type with a constructor and a `bump` method.
 
@@ -151,8 +153,9 @@ static int counter_bump(lus_State *L) {
   return 1;
 }
 
+/* Registers the Counter type. The host calls it once and gets a status. */
 static int open_counter(lus_State *L) {
-  if (lus_newmetatable(L, "Counter") < 0)
+  if (lus_newmetatable(L, "Counter") == LUS_ERROR)
     return LUS_ERRMEM;
   lus_newtable(L, 0, 1);
   lus_pushcfunction(L, counter_bump);
@@ -168,15 +171,20 @@ After `open_counter`, the script `local c = Counter(41) print(c:bump(), c:bump()
 
 ## References
 
-A value that the host keeps between calls, such as a callback, is held through a _reference_, a stable integer handle to a value that lives outside the stack. [`lus_ref`](/manual/api/c#lus_ref) pops a value and returns a reference to it, and nil gives `LUS_NOREF`. `lus_getref` pushes the value again, and `lus_unref` releases the reference, whose number may then be reused.
+The stack of a C function is gone when the function returns, so a host needs another way to keep a Lus value between calls, such as a callback that a script registered. A _reference_ is an integer that names a value which the state keeps alive for the host. [`lus_ref`](/manual/api/c#lus_ref) pops a value and returns a reference to it, or `LUS_NOREF` when the value is nil. `lus_getref` pushes the value again. `lus_unref` releases the reference, after which the state may give the same number to another value. The following host stores a callback in `on_event` and calls it later from `fire`. A second call to `on_event` releases the reference to the previous callback before it stores the new one.
 
 ```c
 static int callback = LUS_NOREF;
 
-/* onevent(fn) stores fn for later. */
+/* on_event(fn) stores fn for later. */
 static int on_event(lus_State *L) {
+  lus_unref(L, callback);
   lus_pushvalue(L, 1);
   callback = lus_ref(L);
+  if (callback == LUS_ERROR) {
+    callback = LUS_NOREF;
+    return lus_error(L);
+  }
   return 0;
 }
 
@@ -190,25 +198,27 @@ static void fire(lus_State *L) {
 
 ## Permissions
 
-A state starts with no [permissions](/manual/permissions). The host decides what scripts may do before they run, with the same capability names and value syntax as `pledge`.
+A host usually runs scripts that its own author did not write, so it decides what those scripts may reach. A state starts with no [permissions](/manual/permissions), and the host sets its policy before any script runs, with the same capability names and values that `pledge` takes.
 
 - [`lus_grant`](/manual/api/c#lus_grant) grants a capability, such as `"fs:read=/srv/data/*"` or `"network"`.
-- [`lus_reject`](/manual/api/c#lus_reject) rejects a capability permanently, and later grants of it fail.
-- [`lus_seal`](/manual/api/c#lus_seal) freezes the permission set.
+- [`lus_reject`](/manual/api/c#lus_reject) rejects a capability for the life of the state, so every later grant of it fails.
+- [`lus_seal`](/manual/api/c#lus_seal) freezes the permissions, as `pledge("seal")` does in a script.
 
-Once the host grants anything, scripts can pledge only what those grants cover. A script that pledges a rejected capability raises an error such as `permission "exec" was rejected`.
+Once the host grants anything, a script can pledge only what those grants cover, and `pledge` returns `false` for everything else. A script that pledges a rejected capability raises an error such as `permission "exec" was rejected`.
 
-A host that decides pledges interactively installs a request hook with [`lus_onrequest`](/manual/api/c#lus_onrequest). The hook runs when a script pledges a capability that the host has neither granted nor rejected. It receives the capability, such as `"fs:read"`, and the requested value, or `NULL` when there is none, and it returns 1 to allow the grant.
+A host can also decide each pledge at the moment a script makes it, for example by asking the user. Such a host installs a request hook with [`lus_onrequest`](/manual/api/c#lus_onrequest). The hook runs when a script pledges a capability that the host has neither granted nor rejected. It receives the capability, such as `"fs:read"`, and the requested value, or `NULL` when there is none, and it returns 1 to allow the grant. The following host grants one directory, rejects `exec`, and asks on the terminal about every other pledge.
 
 ```c
 #include <stdio.h>
 #include "lus.h"
 
 static int ask(void *ud, lus_State *L, const char *capability, const char *value) {
+  char answer[16];
   (void)ud;
   (void)L;
   printf("allow %s=%s? ", capability, value ? value : "");
-  return getchar() == 'y';
+  fflush(stdout);
+  return fgets(answer, sizeof answer, stdin) != NULL && answer[0] == 'y';
 }
 
 void configure(lus_State *L) {
@@ -220,7 +230,7 @@ void configure(lus_State *L) {
 
 ### Capabilities of an extension
 
-An extension declares its own capabilities with [`lus_defcapability`](/manual/api/c#lus_defcapability). Its C functions check them with `lus_require`, which pushes the standard permission error and returns `LUS_ERRRUN` on failure, or with `lus_allowed`, which only answers and never raises. Scripts then pledge the new capability like any built-in one.
+The functions that a host adds can reach things that no built-in permission covers, such as the documents of an application. An extension therefore declares its own capabilities with [`lus_defcapability`](/manual/api/c#lus_defcapability). Its C functions check them with `lus_require`, which pushes the standard permission error and returns `LUS_ERRRUN` on failure, or with `lus_allowed`, which answers without raising. Scripts then pledge the new capability as they pledge a built-in one.
 
 The value kind of a capability decides how a granted value matches a requested one.
 
@@ -265,6 +275,6 @@ With `lus_grant(L, "store:read=users/*")`, the script call `store.get("users/ada
 ## Related pages
 
 - The [C API reference](/manual/api/c) documents every function of `lus.h`.
-- [Embedding Lus](/manual/guide#embedding-lus) in the guide introduces the interface, and [Errors in the embedding API](/manual/guide#errors-in-the-embedding-api) summarizes how errors cross the interface.
+- [Compiling Lus](/manual/compiling) describes how to build the library and how to leave parts of it out.
 - [WebAssembly](/manual/webassembly) describes the module that exports the same interface to JavaScript.
 - [Permissions](/manual/permissions) describes the capabilities that hosts grant and scripts pledge.

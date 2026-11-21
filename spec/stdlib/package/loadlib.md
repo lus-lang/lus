@@ -26,4 +26,4 @@ print(package.loadlib("missing.so", "luaopen_missing"))
 --> nil  cannot open missing.so: No such file or directory  open
 ```
 
-A host program adds native functions through the C embedding API in `lus.h`, as [Embedding Lus](/manual/guide#embedding-lus) describes. [`package.cpath`](/manual/api#package.cpath) describes how `require` treats native modules.
+A host program adds native functions through the C embedding API in `lus.h`, as [Embedding Lus](/manual/guide#embedding) describes. [`package.cpath`](/manual/api#package.cpath) describes how `require` treats native modules.
