@@ -11,6 +11,11 @@
 //! global functions are public API, so they are listed even without a doc
 //! comment. Other declarations are listed only when documented.
 //!
+//! A module comment that holds a package header (`doccomment.zig`) adds
+//! the package fields to the frontmatter and a `package` object to the
+//! JSON model, with `name`, `version`, `lus`, `license`, `homepage`,
+//! `repository`, `flags`, `permissions`, and `includes`.
+//!
 //! The Markdown output starts with the module frontmatter and has one
 //! section per entry. The JSON output is a model whose entries carry the
 //! fields of the `spec/stdlib` frontmatter (`name`, `module`, `kind`,
@@ -69,6 +74,8 @@ pub const Module = struct {
     description: []const u8 = "",
     since: ?[]const u8 = null,
     stability: ?[]const u8 = null,
+    /// The package header of a main module.
+    package: ?doccomment.Package = null,
     entries: []Entry,
 };
 
@@ -361,6 +368,7 @@ pub fn extract(arena: Allocator, chunk: ast.Chunk, module: []const u8) Allocator
         .description = if (md) |d| d.text else "",
         .since = if (md) |d| d.since else null,
         .stability = if (md) |d| d.stability else null,
+        .package = if (mdoc) |d| d.package else null,
         .entries = x.entries.items,
     };
 }
@@ -372,9 +380,18 @@ fn writeMarkdown(w: *std.Io.Writer, m: Module) std.Io.Writer.Error!void {
     try w.print("---\nname: {s}\nkind: module\n", .{m.name});
     if (m.since) |s| try w.print("since: {s}\n", .{s});
     if (m.stability) |s| try w.print("stability: {s}\n", .{s});
+    if (m.package) |p| {
+        if (p.name) |v| try w.print("package: {s}\n", .{v});
+        if (p.version) |v| try w.print("version: {s}\n", .{v});
+        if (p.lus) |v| try w.print("lus: {s}\n", .{v});
+        if (p.license) |v| try w.print("license: {s}\n", .{v});
+        if (p.homepage) |v| try w.print("homepage: {s}\n", .{v});
+        if (p.repository) |v| try w.print("repository: {s}\n", .{v});
+    }
     try w.writeAll("---\n\n");
     try w.print("# {s}\n", .{m.name});
     if (m.description.len > 0) try w.print("\n{s}\n", .{m.description});
+    if (m.package) |p| try writePackageMarkdown(w, p);
     for (m.entries) |e| {
         try w.print("\n## {s}\n", .{e.name});
         if (e.is_function) {
@@ -419,6 +436,79 @@ fn writeMarkdown(w: *std.Io.Writer, m: Module) std.Io.Writer.Error!void {
     }
 }
 
+fn writePackageMarkdown(w: *std.Io.Writer, p: doccomment.Package) std.Io.Writer.Error!void {
+    if (p.permissions.len > 0) {
+        try w.writeAll("\n**Permissions**\n\n");
+        for (p.permissions) |x| {
+            try w.print("- `{s}`", .{x.pledge});
+            if (x.description.len > 0) try w.print(": {s}", .{x.description});
+            try w.writeAll("\n");
+        }
+    }
+    if (p.flags.len > 0) {
+        try w.writeAll("\n**Flags**\n\n");
+        for (p.flags) |f| {
+            try w.print("- `{s}` (`{s}`", .{ f.name, f.type });
+            if (f.default) |d| try w.print(", default `{s}`", .{d});
+            try w.writeAll(")");
+            if (f.description.len > 0) try w.print(": {s}", .{f.description});
+            try w.writeAll("\n");
+        }
+    }
+    if (p.includes.len > 0) {
+        try w.writeAll("\n**Includes**\n\n");
+        for (p.includes) |i| try w.print("- `{s}` {s} from {s}\n", .{ i.name, i.version, i.url });
+    }
+}
+
+fn optStr(w: *std.Io.Writer, comptime key: []const u8, v: ?[]const u8) std.Io.Writer.Error!void {
+    try w.writeAll(", \"" ++ key ++ "\": ");
+    if (v) |s| try str(w, s) else try w.writeAll("null");
+}
+
+fn writePackageJson(w: *std.Io.Writer, p: doccomment.Package) std.Io.Writer.Error!void {
+    try w.writeAll(",\n  \"package\": {\"name\": ");
+    if (p.name) |s| try str(w, s) else try w.writeAll("null");
+    try optStr(w, "version", p.version);
+    try optStr(w, "lus", p.lus);
+    try optStr(w, "license", p.license);
+    try optStr(w, "homepage", p.homepage);
+    try optStr(w, "repository", p.repository);
+    try w.writeAll(", \"flags\": [");
+    for (p.flags, 0..) |f, i| {
+        if (i > 0) try w.writeAll(", ");
+        try w.writeAll("{\"name\": ");
+        try str(w, f.name);
+        try w.writeAll(", \"type\": ");
+        try str(w, f.type);
+        try optStr(w, "default", f.default);
+        try w.writeAll(", \"description\": ");
+        try str(w, f.description);
+        try w.writeAll("}");
+    }
+    try w.writeAll("], \"permissions\": [");
+    for (p.permissions, 0..) |x, i| {
+        if (i > 0) try w.writeAll(", ");
+        try w.writeAll("{\"pledge\": ");
+        try str(w, x.pledge);
+        try w.writeAll(", \"description\": ");
+        try str(w, x.description);
+        try w.writeAll("}");
+    }
+    try w.writeAll("], \"includes\": [");
+    for (p.includes, 0..) |x, i| {
+        if (i > 0) try w.writeAll(", ");
+        try w.writeAll("{\"name\": ");
+        try str(w, x.name);
+        try w.writeAll(", \"url\": ");
+        try str(w, x.url);
+        try w.writeAll(", \"version\": ");
+        try str(w, x.version);
+        try w.writeAll("}");
+    }
+    try w.writeAll("]}");
+}
+
 fn str(w: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void {
     try astexport.jsonString(w, s);
 }
@@ -437,6 +527,7 @@ fn writeJson(w: *std.Io.Writer, m: Module) std.Io.Writer.Error!void {
     }
     try w.writeAll(",\n  \"description\": ");
     try str(w, m.description);
+    if (m.package) |p| try writePackageJson(w, p);
     try w.writeAll(",\n  \"entries\": [");
     for (m.entries, 0..) |e, i| {
         try w.writeAll(if (i == 0) "\n    {" else ",\n    {");

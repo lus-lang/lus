@@ -1,0 +1,22 @@
+--- Parses, formats, and compares dates in ISO 8601.
+---
+--- @package dates
+--- @version 1.4.1
+--- @lus 2.0
+--- @license 0BSD
+--- @repository https://github.com/example/dates
+--- @permission fs:read=/usr/share/zoneinfo/* Reads the system time zone database.
+--- @flag tzdata string Path of a time zone database to use in place of the system one.
+--- @flag strict boolean false Reject fields that ISO 8601 does not define.
+--- @includes strings https://atmosp.here/2.0/strings.lus 1.0.0
+
+local dates = {}
+
+--- Parses a date.
+--- @param text string The date in ISO 8601.
+--- @return table The date.
+function dates.parse(text)
+    return { text = text }
+end
+
+return dates

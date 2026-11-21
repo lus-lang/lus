@@ -354,7 +354,7 @@ local dates = {}
 
 The text before the first annotation is the description, in Markdown. The annotations are the following.
 
-- `@package NAME` names the package. A name has 2 to 40 characters from `a-z`, `0-9`, and `_`, and starts with a letter, so it is a valid Lus identifier. It equals the file name of the main module. Required.
+- `@package NAME` names the package. A name has 2 to 40 characters from `a-z`, `0-9`, and `_`. It starts with a letter, so it is a valid Lus identifier. It equals the file name of the main module. Required.
 - `@version VERSION` is the version of the package, `MAJOR.MINOR.PATCH`. Required.
 - `@lus LINE` is the Lus line the package runs on, such as `2.0`. `@lus 2.0.3` also sets the oldest release of the line, `lus_min`. Required.
 - `@license EXPR` is an SPDX license expression. Required.

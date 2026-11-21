@@ -1,0 +1,125 @@
+global io, ipairs, type, string, table, fromjson
+
+-- Completion of atmosphere URLs inside require (spec/design/modules.md,
+-- section 7). The server asks the atmos command for the packages whose
+-- names start with what the user typed, on https://atmosp.here and on
+-- every server of the setting lus.atmosphere.servers. Without atmos it
+-- completes nothing.
+
+local atmosphere = {}
+
+local DEFAULT_SERVER = "https://atmosp.here"
+
+local servers = { DEFAULT_SERVER }
+local cache = {}
+
+-- Runs atmos with the given arguments and returns its standard output, or
+-- nil when atmos is missing or fails. Tests replace it.
+local function default_runner(args)
+    local quoted = {}
+    for i, a in ipairs(args) do
+        quoted[i] = "'" .. string.gsub(a, "'", "'\\''") .. "'"
+    end
+    local ok, f = catch io.popen("atmos " .. table.concat(quoted, " ") .. " 2>/dev/null")
+    if not ok or not f then
+        return nil
+    end
+    local out = f:read("a")
+    local closed = f:close()
+    if closed ~= true and closed ~= 0 then
+        return nil
+    end
+    return out
+end
+
+local runner = default_runner
+
+function atmosphere.set_runner(fn)
+    runner = fn or default_runner
+    cache = {}
+end
+
+-- Reads the servers from the configuration of the client: the
+-- initialization options or the settings of didChangeConfiguration, in
+-- either case under atmosphere.servers or lus.atmosphere.servers.
+function atmosphere.configure(settings)
+    if type(settings) ~= "table" then
+        return
+    end
+    local section = settings.atmosphere
+    if section == nil and type(settings.lus) == "table" then
+        section = settings.lus.atmosphere
+    end
+    if type(section) ~= "table" or type(section.servers) ~= "table" then
+        return
+    end
+    servers = { DEFAULT_SERVER }
+    for _, s in ipairs(section.servers) do
+        if type(s) == "string" and string.match(s, "^https?://[%w%.%-:]+") and s ~= DEFAULT_SERVER then
+            servers[#servers + 1] = (string.gsub(s, "/+$", ""))
+        end
+    end
+    cache = {}
+end
+
+function atmosphere.servers()
+    return servers
+end
+
+-- The packages whose URLs start with `typed`, as {url, name, version,
+-- description} records. `typed` is the text of the require string so far.
+function atmosphere.complete(typed)
+    -- The prefix goes to a command line, so it holds URL characters only.
+    if string.find(typed, "[^%w%._%-/:@]") then
+        return {}
+    end
+    local results = {}
+    for _, server in ipairs(servers) do
+        local query = nil
+        if string.sub(server, 1, #typed) == typed then
+            query = ""
+        elseif string.sub(typed, 1, #server) == server then
+            local rest = string.sub(typed, #server + 2)
+            -- After the line, such as 2.0/, the rest is a package name.
+            query = string.match(rest, "^[^/]*/(.*)$") or ""
+        end
+        if query ~= nil then
+            local key = server .. "\0" .. query
+            local found = cache[key]
+            if found == nil then
+                found = {}
+                local out = runner({
+                    "search",
+                    "--json",
+                    "--server",
+                    server,
+                    query,
+                })
+                if out then
+                    local ok, list = catch fromjson(out)
+                    if ok and type(list) == "table" then
+                        for _, item in ipairs(list) do
+                            if type(item) == "table" and type(item.url) == "string" then
+                                found[#found + 1] = {
+                                    url = item.url,
+                                    name = item.name,
+                                    version = item.version,
+                                    description = item.description,
+                                }
+                            end
+                        end
+                    end
+                end
+                cache[key] = found
+            end
+            for _, item in ipairs(found) do
+                if string.sub(item.url, 1, #typed) == typed then
+                    results[#results + 1] = item
+                end
+            end
+        end
+    end
+    return results
+end
+
+return atmosphere

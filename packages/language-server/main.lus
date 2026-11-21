@@ -1,6 +1,6 @@
 global require, io, os, arg, pledge
 
-pledge("load", "fs:read")
+pledge("load", "fs:read", "exec")
 
 local transport = require("lus-language.transport")
 local protocol = require("lus-language.protocol")

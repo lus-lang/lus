@@ -12,6 +12,7 @@ local nav_references = require("lus-language.operations.references")
 local nav_hover = require("lus-language.operations.hover")
 local nav_rename = require("lus-language.operations.rename")
 local modules = require("lus-language.analysis.modules")
+local atmosphere = require("lus-language.analysis.atmosphere")
 local doc_completion = require("lus-language.operations.completion")
 local doc_signature = require("lus-language.operations.signature")
 local doc_folding = require("lus-language.operations.folding")
@@ -80,6 +81,7 @@ function server.new()
     end
     local roots = roots_from_initialize(params)
     modules.set_roots(roots)
+    atmosphere.configure(params.initializationOptions)
     instance.initialized = true
     return response_or_nil(msg, protocol.initialize_result())
   end
@@ -179,6 +181,12 @@ function server.new()
     document.reset_workspace(roots)
     modules.set_roots(roots)
     publish_invalidated(previous)
+    return nil
+  end
+
+  handlers["workspace/didChangeConfiguration"] = function(msg)
+    local params = params_table(msg)
+    if params then atmosphere.configure(params.settings) end
     return nil
   end
 

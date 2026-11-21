@@ -1,0 +1,16 @@
+--- A package header that lacks @license, a top-level pledge, and a read
+--- of a flag that the header does not declare.
+---
+--- @package dates
+--- @version 1.4.1
+--- @lus 2.0
+--- @flag strict boolean Reject unknown fields.
+
+global pledge
+
+pledge("fs:read")
+
+local strict = flags.strict
+local loud = flags.loud
+
+return { strict = strict, loud = loud }

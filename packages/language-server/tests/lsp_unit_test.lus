@@ -26,6 +26,7 @@ local diagnostics = require("lus-language.analysis.diagnostics")
 local linting = require("lus-language.analysis.linting")
 local symbols = require("lus-language.operations.symbols")
 local completion = require("lus-language.operations.completion")
+local atmosphere = require("lus-language.analysis.atmosphere")
 local hover = require("lus-language.operations.hover")
 local definition = require("lus-language.operations.definition")
 local references = require("lus-language.operations.references")
@@ -579,6 +580,50 @@ local function returns_scope_variables_test()
   end
   assert(found)
   close_doc(uri)
+end
+
+local function completes_atmosphere_urls_in_require_test()
+  local calls = {}
+  atmosphere.set_runner(function(args)
+    calls[#calls + 1] = table.concat(args, " ")
+    if args[4] == "https://atmosp.here" then
+      return '[{"url":"https://atmosp.here/2.0/dates.lus","name":"dates","version":"1.4.1","description":"Dates.","extra":1},'
+        .. '{"url":"https://atmosp.here/2.0/csvx.lus","name":"csvx","version":"2.0.0"}]'
+    end
+    return '[{"url":"https://pkgs.example.com/2.0/dates.lus","name":"dates","version":"0.9.0"}]'
+  end)
+  atmosphere.configure({ lus = { atmosphere = { servers = { "https://pkgs.example.com/" } } } })
+  local text = 'local d = require("https://atmosp.here/2.0/da'
+  local uri = open_doc(text)
+  local items = completion.compute(uri, {line = 0, character = #text})
+  assert(#items == 1, #items)
+  assert(items[1].label == "https://atmosp.here/2.0/dates.lus")
+  assert(items[1].detail == "dates 1.4.1")
+  assert(items[1].textEdit.range.start.character == 19)
+  assert(items[1].textEdit.newText == "https://atmosp.here/2.0/dates.lus")
+  close_doc(uri)
+  -- An empty string offers every configured server.
+  local empty = 'require("'
+  local uri2 = open_doc(empty)
+  local all = completion.compute(uri2, {line = 0, character = #empty})
+  assert(#all == 3, #all)
+  close_doc(uri2)
+  -- Text that a shell would read specially never reaches atmos.
+  local before = #calls
+  assert(#atmosphere.complete("https://atmosp.here/$(x)") == 0)
+  assert(#calls == before)
+  atmosphere.set_runner(nil)
+  atmosphere.configure({ atmosphere = { servers = {} } })
+end
+
+local function completes_nothing_for_urls_without_atmos_test()
+  atmosphere.set_runner(function() return nil end)
+  local text = 'require("https://atmosp.here/2.0/'
+  local uri = open_doc(text)
+  local items = completion.compute(uri, {line = 0, character = #text})
+  assert(#items == 0)
+  close_doc(uri)
+  atmosphere.set_runner(nil)
 end
 
 local function returns_keywords_test()

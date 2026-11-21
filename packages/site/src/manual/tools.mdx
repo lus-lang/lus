@@ -83,6 +83,9 @@ Every diagnostic has a code that stays the same between releases, so a tool can 
 | `use-optional-chain` | warning | Nested nil checks or an `and` chain do what optional chaining does. |
 | `use-if-assign` | warning | A local exists only for the truth test of the next `if`. |
 | `doc-unknown-param` | warning | A doc comment documents a parameter the function does not have. |
+| `package-flag` | warning | A package reads a flag that its [package header](#package-headers) does not declare. |
+| `package-pledge` | warning | A package calls `pledge` at the top level, which acts on the permissions of the program. |
+| `package-header` | error | A package header lacks a required annotation or has a malformed one. |
 | `assign-const` | error | A constant, a close variable, or a loop control variable is assigned. |
 | `undeclared-global` | error | A free name is used in the scope of a named `global` declaration. |
 | `undefined-label` | error | A `goto` names no visible label. |
@@ -251,6 +254,37 @@ return M
 ```
 
 The name of an entry in the returned table starts with the name of the module. When this module is saved as `res.lus`, `lus doc` lists `res.open` with its comment and `res.close` without one but omits the local `helper`.
+
+### Package headers
+
+A package is a module that other programs load by URL, as [Modules from the network](/manual/guide#modules-from-the-network) describes. The doc comment at the start of the main module of a package is its _package header_. It describes the package and declares what a program needs to know to use it. The following header starts the package `dates`.
+
+```lus nocheck
+--- Parses, formats, and compares dates in ISO 8601.
+---
+--- @package dates
+--- @version 1.4.1
+--- @lus 2.0
+--- @license 0BSD
+--- @repository https://github.com/example/dates
+--- @permission fs:read=/usr/share/zoneinfo/* Reads the system time zone database.
+--- @flag tzdata string Path of a time zone database to use in place of the system one.
+
+local dates = {}
+```
+
+The annotations of a package header are the following. The first four are required.
+
+- `@package NAME` names the package. A name has 2 to 40 characters from `a` to `z`, `0` to `9`, and `_`. It starts with a letter.
+- `@version VERSION` is the version of the package, as `MAJOR.MINOR.PATCH`.
+- `@lus LINE` is the Lus line the package runs on, such as `2.0`. A release such as `2.0.3` also names the oldest release of the line it runs on.
+- `@license EXPR` is the license, as an SPDX expression such as `MIT`.
+- `@permission PLEDGE DESCRIPTION` declares a permission that functions of the package use, in the form that `pledge` accepts.
+- `@flag NAME TYPE DEFAULT DESCRIPTION` declares a build flag. `TYPE` is `boolean`, `number`, `string`, or a list of strings such as `"fast"|"small"`. `DEFAULT` is optional: `true` or `false` for a boolean, a number for a number, or a string in double quotes.
+- `@includes NAME URL VERSION` records a package copied into this one, with the URL and the version it came from.
+- `@homepage URL` and `@repository URL` link to the project.
+
+A program sets a flag of a package with the name of the package as a prefix, as in `lus -F dates.tzdata=/opt/tz main.lus`. Inside the package, `flags.tzdata` holds the value. `lus check` reports a header that lacks a required annotation, a read of a flag that the header does not declare, and a call of `pledge` at the top level of the package. `lus doc` adds the fields of the header to the frontmatter of its Markdown output and as a `package` object to its JSON output.
 
 ### Output
 
