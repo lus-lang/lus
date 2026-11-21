@@ -249,6 +249,13 @@ pub fn errnoOf(e: anyerror) ErrInfo {
         error.SymLinkLoop => .{ .msg = "Too many levels of symbolic links", .errno = 62 },
         error.NoSpaceLeft => .{ .msg = "No space left on device", .errno = 28 },
         error.FileNotFoundOrNoAccess => .{ .msg = "No such file or directory", .errno = 2 },
+        error.InputOutput => .{ .msg = "Input/output error", .errno = 5 },
+        error.SystemResources => .{ .msg = "Cannot allocate memory", .errno = 12 },
+        error.SystemFdQuotaExceeded => .{ .msg = "Too many open files in system", .errno = 23 },
+        error.ProcessFdQuotaExceeded => .{ .msg = "Too many open files", .errno = 24 },
+        error.FileTooBig => .{ .msg = "File too large", .errno = 27 },
+        error.BrokenPipe => .{ .msg = "Broken pipe", .errno = 32 },
+        error.ConnectionResetByPeer => .{ .msg = "Connection reset by peer", .errno = if (builtin.os.tag == .linux) 104 else 54 },
         else => .{ .msg = @errorName(e), .errno = 0 },
     };
 }
