@@ -68,7 +68,7 @@ const Environ = std.process.Environ.Map;
 const environ_key = "os.environ";
 /// The allocator of the environment maps a state owns. It is safe to use
 /// from any thread, so a map made for a worker can be freed by it.
-const environ_gpa = std.heap.smp_allocator;
+const environ_gpa = if (builtin.single_threaded) std.heap.wasm_allocator else std.heap.smp_allocator;
 
 /// The environment map that state `g` owns, or null while it reads the
 /// environment the host gave it.

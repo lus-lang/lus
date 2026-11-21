@@ -1758,6 +1758,9 @@ fn headerText(l: *Thread, v: Value, buf: *std.ArrayList(u8)) Error!bool {
     return true;
 }
 
+/// The default User-Agent header: `Lus/` and the version of the build.
+const user_agent = "User-Agent: Lus/" ++ @import("build_options").version ++ "\r\n";
+
 fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: ParsedUrl, body: ?[]const u8) Error!void {
     const gpa = l.g.gpa;
     const default_port: u16 = if (u.https) 443 else 80;
@@ -1807,7 +1810,7 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
             req.print(gpa, "Host: {s}\r\n", .{u.host}) catch return l.raiseMem();
     }
     if (!has_conn) req.appendSlice(gpa, "Connection: close\r\n") catch return l.raiseMem();
-    if (!has_agent) req.appendSlice(gpa, "User-Agent: Lus/1.0\r\n") catch return l.raiseMem();
+    if (!has_agent) req.appendSlice(gpa, user_agent) catch return l.raiseMem();
     req.appendSlice(gpa, own.items) catch return l.raiseMem();
     if (body) |b| if (b.len > 0) {
         req.print(gpa, "Content-Length: {d}\r\n", .{b.len}) catch return l.raiseMem();
