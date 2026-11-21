@@ -659,8 +659,7 @@ fn cmdInstall(c: *Ctx, args: []const []const u8) !u8 {
         defer ar.deinit(c.gpa);
         if (ar.status != 200) return c.fail(.failed, "network", "cannot download {s}: status {d}", .{ asset.url, ar.status });
         if (ar.body.len != asset.size) return c.fail(.verify, "verify", "the archive of lus {s} has {d} bytes, the index says {d}", .{ rel.text, ar.body.len, asset.size });
-        var digest: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(ar.body, &digest, .{});
+        const digest = lus.lib.crypto.sha256(ar.body);
         const hex = std.fmt.bytesToHex(digest, .lower);
         if (!std.ascii.eqlIgnoreCase(&hex, asset.sha256)) return c.fail(.verify, "verify", "the archive of lus {s} does not match its SHA-256 digest", .{rel.text});
         unpack(c, hd, rel.text, rel.channel, ar.body) catch |e| switch (e) {

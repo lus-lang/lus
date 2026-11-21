@@ -18,6 +18,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Ed25519 = std.crypto.sign.Ed25519;
+const crypto = @import("lib/crypto.zig");
 const base64 = std.base64.standard;
 
 pub const Error = error{
@@ -144,13 +145,9 @@ fn open(gpa: Allocator, bytes: []const u8, msg: *std.ArrayList(u8), sig: *[64]u8
     return .{ .parsed = parsed, .key = key_v.string, .signed = t };
 }
 
+/// Strict RFC 8032 verification, shared with `crypto.verify`.
 pub fn verifySig(public: [32]u8, msg: []const u8, sig: [64]u8) bool {
-    const pk = Ed25519.PublicKey.fromBytes(public) catch return false;
-    const s = Ed25519.Signature.fromBytes(sig);
-    var v = s.verifier(pk) catch return false;
-    v.update(msg);
-    v.verifyStrict() catch return false;
-    return true;
+    return crypto.ed25519Verify(public, msg, sig);
 }
 
 /// Parses and verifies a key list signed by `root_key`.

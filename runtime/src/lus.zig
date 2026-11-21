@@ -40,6 +40,7 @@ pub const lib = struct {
     pub const base = @import("lib/base.zig");
     pub const out = @import("lib/out.zig");
     pub const package = @import("lib/package.zig");
+    pub const crypto = @import("lib/crypto.zig");
 };
 
 pub const compile = struct {
