@@ -12,9 +12,6 @@ const Alignment = std.mem.Alignment;
 /// when the state allocates from the C heap (`Counting.big_pages`).
 pub const big_block = 1 << 20;
 
-/// Freed big blocks below this size may be kept for reuse.
-const keep_block = 4 << 20;
-
 pub const Counting = struct {
     child: Allocator,
     bytes: usize = 0,
@@ -24,12 +21,6 @@ pub const Counting = struct {
     /// behind stay in memory. A block in pages of its own goes back to
     /// the system when it is freed.
     big_pages: bool = false,
-    /// The last big block freed, when it is smaller than `keep_block`,
-    /// for the next big block of the same size. A table that a program
-    /// keeps rehashing at one size, as one that loses and gains keys,
-    /// then reuses its pages instead of mapping fresh ones every time.
-    kept: []u8 = &.{},
-
     pub fn init(child: Allocator) Counting {
         return .{ .child = child, .big_pages = builtin.os.tag == .macos and child.vtable == std.heap.c_allocator.vtable };
     }
@@ -44,37 +35,9 @@ pub const Counting = struct {
         return self.big_pages and len >= big_block;
     }
 
-    /// Unmaps the kept block. The state calls it when it closes.
-    pub fn releaseKept(self: *Counting) void {
-        if (self.kept.len > 0) pages.rawFree(self.kept, .of(u8), @returnAddress());
-        self.kept = &.{};
-    }
-
-    inline fn pageLen(len: usize) usize {
-        return std.mem.alignForward(usize, len, std.heap.pageSize());
-    }
-
-    fn bigAlloc(self: *Counting, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
-        if (self.kept.len > 0 and pageLen(self.kept.len) == pageLen(len) and alignment.toByteUnits() <= std.heap.pageSize()) {
-            const p = self.kept.ptr;
-            self.kept = &.{};
-            return p;
-        }
-        return pages.rawAlloc(len, alignment, ret_addr);
-    }
-
-    fn bigFree(self: *Counting, memory: []u8, alignment: Alignment, ret_addr: usize) void {
-        if (memory.len < keep_block and alignment.toByteUnits() <= std.heap.pageSize()) {
-            self.releaseKept();
-            self.kept = memory;
-            return;
-        }
-        pages.rawFree(memory, alignment, ret_addr);
-    }
-
     fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
         const self: *Counting = @ptrCast(@alignCast(ctx));
-        const p = if (self.isBig(len)) self.bigAlloc(len, alignment, ret_addr) else self.child.rawAlloc(len, alignment, ret_addr);
+        const p = if (self.isBig(len)) pages.rawAlloc(len, alignment, ret_addr) else self.child.rawAlloc(len, alignment, ret_addr);
         self.bytes += len;
         return p orelse {
             self.bytes -= len;
@@ -108,7 +71,7 @@ pub const Counting = struct {
 
     fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
         const self: *Counting = @ptrCast(@alignCast(ctx));
-        if (self.isBig(memory.len)) self.bigFree(memory, alignment, ret_addr) else self.child.rawFree(memory, alignment, ret_addr);
+        if (self.isBig(memory.len)) pages.rawFree(memory, alignment, ret_addr) else self.child.rawFree(memory, alignment, ret_addr);
         self.bytes -|= memory.len;
     }
 };

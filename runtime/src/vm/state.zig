@@ -1232,7 +1232,6 @@ pub fn destroy(g: *Global) void {
     g.finobj.deinit(gpa);
     g.tobefnz.deinit(gpa);
     g.ext.deinit(gpa);
-    g.counter.releaseKept();
     g.parent_gpa.destroy(g);
 }
 
