@@ -435,7 +435,7 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         defer gpa.free(src);
         const chunkname = try std.fmt.allocPrint(gpa, "@{s}", .{path});
         defer gpa.free(chunkname);
-        index = indexTree(l, src, chunkname, &cli);
+        index = indexTree(l, gpa, src, chunkname, &cli);
         store.running = true;
         if (!runChunk(l, src, chunkname, args[cli.script_index + 1 ..])) return 1;
     } else if (cli.stdin) {
@@ -444,7 +444,7 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         var rbuf: [4096]u8 = undefined;
         var r = std.Io.File.stdin().readerStreaming(io, &rbuf);
         r.interface.appendRemainingUnlimited(gpa, &buf) catch {};
-        index = indexTree(l, buf.items, "=stdin", &cli);
+        index = indexTree(l, gpa, buf.items, "=stdin", &cli);
         store.running = true;
         if (!runChunk(l, buf.items, "=stdin", args[cli.script_index + 1 ..])) return 1;
     }
@@ -682,7 +682,7 @@ fn repl(l: *Thread, io: std.Io) !void {
 /// (`modtree.zig`). The index reads files under the authority of the
 /// runtime, except those that the `-P` grants of the command line could
 /// never allow. A failure to index leaves every module to `require`.
-fn indexTree(l: *lus.vm.state.Thread, src: []const u8, chunkname: []const u8, cli: *const Cli) ?*lus.modtree.Index {
+fn indexTree(l: *lus.vm.state.Thread, gpa: std.mem.Allocator, src: []const u8, chunkname: []const u8, cli: *const Cli) ?*lus.modtree.Index {
     const Ceiling = struct {
         fn mayRead(ctx: *anyopaque, path: []const u8) bool {
             const t: *lus.vm.state.Thread = @ptrCast(@alignCast(ctx));
@@ -698,6 +698,7 @@ fn indexTree(l: *lus.vm.state.Thread, src: []const u8, chunkname: []const u8, cl
         break :blk package.default_path;
     };
     const ix = lus.modtree.build(l, src, chunkname, .{
+        .gpa = gpa,
         .path = path,
         .may_read = if (limitsFileReads(cli.pledges.items)) Ceiling.mayRead else null,
         .may_fetch = if (cli.no_prefetch) null else if (limitsGrants(cli.pledges.items)) Ceiling.mayFetch else Always.yes,

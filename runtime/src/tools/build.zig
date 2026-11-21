@@ -370,7 +370,7 @@ const Collector = struct {
         defer fp.deinit(c.gpa);
         const top = c.l.top;
         defer c.l.top = top;
-        if (pkg) |p| try package.packageFlags(c.l, p, sub, &fmap, &fp);
+        if (pkg) |p| try package.packageFlags(c.l, c.gpa, p, sub, &fmap, &fp);
         const flags: ?*const std.StringHashMapUnmanaged(lus.vm.value.Value) = if (pkg != null) &fmap else if (g.ext.get("flags.compile")) |fl| @ptrCast(@alignCast(fl)) else null;
         const r = try codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flags, .fold_flag_reads = pkg != null });
         const proto = switch (r) {

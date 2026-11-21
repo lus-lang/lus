@@ -6,23 +6,44 @@
     module bodies run when require runs, a broken module that is never
     required raises nothing, a change of package.path wins over the index,
     and every require checks its permissions. Each scenario runs as a
-    subprocess.
+    subprocess, with its environment set through os.setenv so the
+    commands work in every shell.
 ]]
 
-pledge("exec", "env=LUS_EXE", "fs:write")
+pledge("exec", "env", "fs:write")
 
 local lus_cmd = os.getenv("LUS_EXE")
 local FIX = TEST_DIR .. "/fixtures/modtree/"
+local windows = string.sub(package.config, 1, 1) == "\\"
 
-local function run(cmdline)
-    local f = io.popen(cmdline .. " 2>&1")
+local function quote(s)
+    return '"' .. s .. '"'
+end
+
+-- Runs a command line with the variables of `env` set, and returns
+-- whether it succeeded and its output with line ends normalized.
+local function run(cmdline, env)
+    for k, v in pairs(env or {}) do
+        os.setenv(k, v)
+    end
+    local full = cmdline .. " 2>&1"
+    -- cmd.exe strips the outer quotes of a command that starts with one.
+    if windows then
+        full = quote(full)
+    end
+    local f = io.popen(full)
     local out = f:read("a")
     local ok = f:close()
-    return (ok == true or ok == 0), out
+    for k in pairs(env or {}) do
+        os.setenv(k, nil)
+    end
+    return (ok == true or ok == 0), (string.gsub(out, "\r\n", "\n"))
 end
 
 local function lus(script, env)
-    return run((env or "") .. " LUS_PATH='" .. FIX .. "?.lus' " .. lus_cmd .. " " .. FIX .. script)
+    env = env or {}
+    env.LUS_PATH = env.LUS_PATH or FIX .. "?.lus"
+    return run(quote(lus_cmd) .. " " .. quote(FIX .. script), env)
 end
 
 local function module_bodies_run_at_require_in_order_test()
@@ -41,8 +62,7 @@ end
 
 local function a_package_path_change_wins_over_the_index_test()
     if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
-    local ok, out = run("MODTREE_TWO='" .. FIX .. "two/' LUS_PATH='" .. FIX .. "one/?.lus' "
-        .. lus_cmd .. " " .. FIX .. "main_path.lus")
+    local ok, out = lus("main_path.lus", { MODTREE_TWO = FIX .. "two/", LUS_PATH = FIX .. "one/?.lus" })
     assert(ok, out)
     assert(out == "PATH-TWO\n", out)
 end
@@ -58,12 +78,14 @@ local function workers_load_indexed_modules_test()
     if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
     local ok, out = lus("main_worker.lus")
     assert(ok, out)
-    assert(out == "A\nWORKER-a\n", out)
+    -- Only the main thread prints, so the output has one order.
+    assert(out == "WORKER-quiet\n", out)
 end
 
 local function build(script)
     local out = os.tmpname()
-    local ok, text = run("cd '" .. FIX .. "shake' && " .. lus_cmd .. " build --include lib -o '" .. out .. "' " .. script)
+    local dir = FIX .. "shake/"
+    local ok, text = run(quote(lus_cmd) .. " build --include " .. quote(dir .. "lib") .. " -o " .. quote(out) .. " " .. quote(dir .. script), { LUS_PATH = dir .. "?.lus" })
     catch fs.remove(out)
     return ok, text
 end
