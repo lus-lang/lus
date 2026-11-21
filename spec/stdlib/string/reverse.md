@@ -16,7 +16,7 @@ Returns a string with the characters of `s` in reverse order.
 
 `s` is the string to reverse. A number is converted to its textual form first.
 
-The result is a string with the same characters as `s`. The empty string reverses to itself.
+The result is a string with the same characters as `s`, with one exception. A lone trail surrogate followed by a lone lead surrogate comes out as the lead followed by the trail, and the two join into one supplementary character, as they do when two strings are concatenated. Such a result is one character shorter for each pair, and reversing it again does not give back `s`. Text without lone surrogates reverses back to itself. The empty string reverses to itself.
 
 An argument that is neither a string nor a number raises `bad argument #1 to 'string.reverse' (string expected, got nil)` with its type.
 

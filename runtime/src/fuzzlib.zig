@@ -225,7 +225,11 @@ const strings = target(
     \\if S:sub(1, j) .. S:sub(j + 1) ~= S then fail("sub does not split at", j) end
     \\if S:sub(i, j) ~= S[i, j] and i >= 1 and j >= i then fail("slice and sub differ at", i, j) end
     \\if #S:upper() ~= n or #S:lower() ~= n and false then fail("case changed the length") end
-    \\if S:reverse():reverse() ~= S then fail("reverse is not an involution") end
+    \\-- Reversing puts a lone trail surrogate before a lone lead surrogate
+    \\-- into the order that joins them, so only text without lone
+    \\-- surrogates reverses back to itself.
+    \\if #S:reverse() > n then fail("reverse made the string longer") end
+    \\if utf8.len(S) and S:reverse():reverse() ~= S then fail("reverse is not an involution") end
     \\if S:rep(3, A) ~= S .. A .. S .. A .. S then fail("rep with a separator is wrong") end
     \\if vector.tostring(vector.fromstring(S)) ~= S then fail("vector round trip changed the string") end
     \\catch utf8.len(S) catch utf8.offset(S, i) catch utf8.codepoint(S, 1, -1)

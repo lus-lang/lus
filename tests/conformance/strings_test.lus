@@ -961,3 +961,14 @@ local function string_sub_windows_on_long_non_ascii_strings_test()
     local t = { s:sub(1, 1), s:sub(2, 2) }
     assert(t[1] == "h" and t[2] == "é" and #t == 2)
 end
+
+-- Reversing a lone trail surrogate before a lone lead surrogate puts them
+-- in the order that joins them into one character, as concatenation does.
+local function reverse_joins_a_reversed_surrogate_pair_test()
+    local s = "\u{DC00}\u{D800}"
+    assert(#s == 2)
+    local r = s:reverse()
+    assert(#r == 1 and r == "\u{10000}")
+    assert(("a\u{D800}b"):reverse() == "b\u{D800}a")
+    assert(("héllo"):reverse():reverse() == "héllo")
+end
