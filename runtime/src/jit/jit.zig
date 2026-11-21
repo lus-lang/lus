@@ -457,6 +457,15 @@ fn stackBounds() Bounds {
                 }
                 _ = std.c.pthread_attr_destroy(&attr);
             }
+            // The stack of a thread ends within the stack size limit below
+            // its top. The C library reads the bounds of the main thread
+            // from the memory map, and under an emulator that map can
+            // include memory below the stack, such as its guard page.
+            if (b.low != 0) {
+                if (std.posix.getrlimit(.STACK)) |lim| {
+                    if (lim.cur != 0 and lim.cur < b.high) b.low = @max(b.low, b.high - lim.cur);
+                } else |_| {}
+            }
         },
         else => {},
     };
