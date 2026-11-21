@@ -16,7 +16,9 @@ pledge("load")
 ]]
 
 
-pledge("fs:read=/tmp/lua_*", "fs:write",
+-- os.tmpname creates its file in TMPDIR, which differs between hosts, so
+-- reading it back needs fs:read wherever that is.
+pledge("fs:read", "fs:write",
     "env=LC_*", "env=PATH", "env=LUS_TEST_*")
 
 

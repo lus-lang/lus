@@ -745,6 +745,8 @@ fn ioTmpfile(l: *Thread) Error!u32 {
     const dir = if (l.g.environ) |env| env.get("TMPDIR") orelse "/tmp" else "/tmp";
     const path = std.fmt.allocPrint(l.g.gpa, "{s}/lus_{x}", .{ std.mem.trimEnd(u8, dir, "/"), std.mem.readInt(u64, &rnd, .little) }) catch return l.raiseMem();
     defer l.g.gpa.free(path);
+    // A grant limited to some paths must cover the file.
+    try @import("../vm/pledge.zig").require(l, "fs:write", path);
     const v = (try openFile(l, path, "w+", false)) orelse return l.raise(l.err);
     // The file is removed right away and lives until closed.
     std.Io.Dir.cwd().deleteFile(l.g.io, path) catch {};
