@@ -1,5 +1,5 @@
 //! The object heap. Small objects live in 16 KB pages carved out of
-//! 256 KB aligned segments. Every page holds cells of one size class, and
+//! 1 MB aligned segments. Every page holds cells of one size class, and
 //! every size class is a multiple of the 16-byte granule. A page also
 //! holds objects of one kind: scanned objects, which the marker traces,
 //! or leaf objects (strings, bigints, decimals, vector headers), which it
@@ -7,7 +7,7 @@
 //! the backing allocator and are kept in a list.
 //!
 //! The first page of every segment holds the metadata of the other
-//! fifteen: a mark bitmap with one bit per granule, the free list, and
+//! sixty-three: a mark bitmap with one bit per granule, the free list, and
 //! the bump limit. A fresh page bump-allocates. A swept page allocates
 //! from a free list rebuilt from its mark bitmap. Pages are swept lazily,
 //! one at a time, when the allocator reaches them, or by collector steps.
@@ -22,7 +22,11 @@ const Header = gc.Header;
 const Global = state_mod.Global;
 const Allocator = std.mem.Allocator;
 
-pub const segment_size = 256 * 1024;
+/// A segment spends its first page on the metadata of the others, a
+/// whole 16 KB page on systems with pages of that size, so segments of
+/// 1 MB spend 1.6 percent of the heap on it where segments of 256 KB
+/// spent 6.25.
+pub const segment_size = 1024 * 1024;
 pub const page_size = 16 * 1024;
 pub const pages_per_segment = segment_size / page_size;
 pub const granule = 16;
