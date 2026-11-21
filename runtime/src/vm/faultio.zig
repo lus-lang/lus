@@ -7,8 +7,12 @@
 //! fail with the error a real system reports for it: `InputOutput` for a
 //! read, `NoSpaceLeft` for a write, `ConnectionResetByPeer` for a socket,
 //! and `ProcessFdQuotaExceeded` for an open. `LUS_FAIL_IO=N:short` makes
-//! every read and write from operation N on move at most one byte, which
-//! a correct caller retries. `LUS_FAIL_IO=count` fails nothing and prints
+//! every file read and write from operation N on move at most one byte,
+//! which a correct caller retries. Sockets keep their full transfers in
+//! this mode: the scheduler waits for a socket edge after a short
+//! transfer, which on a real system means the buffer is empty or full,
+//! and a short transfer with data still waiting would never see that
+//! edge. `LUS_FAIL_IO=count` fails nothing and prints
 //! how many operations a run made (`main.zig`). `tests/oom/run.lus --io`
 //! sweeps N.
 //!
@@ -97,12 +101,6 @@ fn operate(userdata: ?*anyopaque, operation: Io.Operation) Io.Cancelable!Io.Oper
             switch (op) {
                 .file_read_streaming => |*r| r.data = oneRead(r.data, &rstore),
                 .file_write_streaming => |*w| {
-                    w.data = oneWrite(w.header, w.data, &wstore);
-                    w.header = &.{};
-                    w.splat = 1;
-                },
-                .net_read => |*r| r.data = @constCast(oneRead(r.data, &rstore)),
-                .net_write => |*w| {
                     w.data = oneWrite(w.header, w.data, &wstore);
                     w.header = &.{};
                     w.splat = 1;
