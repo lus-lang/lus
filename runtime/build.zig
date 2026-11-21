@@ -229,6 +229,14 @@ fn agentDocsModule(b: *std.Build) *std.Build.Module {
         var walker = dir.walk(b.allocator) catch @panic("OOM");
         defer walker.deinit();
         while (walker.next(b.graph.io) catch null) |entry| {
+            // The configure cache tracks the entries of one directory, not
+            // of the directories below it, so every directory of the tree
+            // is a dependency of its own. A file added to any of them then
+            // reaches `lus help` on the next build.
+            if (entry.kind == .directory) {
+                b.dependOnDirectoryContents(b.path(b.fmt("{s}/{s}", .{ g.rel, entry.path })));
+                continue;
+            }
             if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".md")) continue;
             const rel = std.mem.replaceOwned(u8, b.allocator, entry.path, "\\", "/") catch @panic("OOM");
             names.append(b.allocator, rel) catch @panic("OOM");
