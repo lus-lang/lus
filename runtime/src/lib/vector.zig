@@ -54,6 +54,18 @@ pub fn newVectorFrom(l: *Thread, list: *std.ArrayList(u8)) Error!*Vector {
     return v;
 }
 
+/// The bytes of a string or vector argument, the input of functions that
+/// read bytes whichever form they arrive in. A number converts to its
+/// textual form first, as it does for every string parameter.
+pub fn checkData(l: *Thread, i: u32) Error![]const u8 {
+    const v = l.arg(i);
+    return switch (v.tag) {
+        .string => v.as(object.String).bytes(),
+        .vector => (try checkVector(l, i)).bytes.items,
+        else => if (v.isNumber()) try aux.checkBytes(l, i) else aux.typeError(l, i, "string or vector"),
+    };
+}
+
 pub fn checkVector(l: *Thread, i: u32) Error!*Vector {
     const v = l.arg(i);
     if (v.tag != .vector) return aux.typeError(l, i, "vector");

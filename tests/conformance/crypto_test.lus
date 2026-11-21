@@ -1,0 +1,410 @@
+-- The crypto library (spec/design/crypto.md): published test vectors for
+-- every primitive, round trips over random inputs, and argument errors.
+
+local function bytes(hexText)
+    return string.transcode(hexText, "hex", "binary")
+end
+
+local function hex(v)
+    return string.transcode(v, "binary", "hex")
+end
+
+local function rep(byte, n)
+    local v = vector.create(n)
+    for i = 0, n - 1 do vector.set(v, i, byte) end
+    return v
+end
+
+-- ============================================================
+-- Digests: FIPS 180-4 examples and the NIST long messages
+-- ============================================================
+
+local two_blocks = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+
+local hash_cases = {
+    { "sha256", "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+    { "sha256", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" },
+    { "sha256", two_blocks, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1" },
+    { "sha256", string.rep("a", 1000000), "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0" },
+    { "sha384", "", "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b" },
+    { "sha384", "abc", "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7" },
+    { "sha384", two_blocks, "3391fdddfc8dc7393707a65b1b4709397cf8b1d162af05abfe8f450de5f36bc6b0455a8520bc4e6f5fe95b1fe3c8452b" },
+    { "sha512", "", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e" },
+    { "sha512", "abc", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f" },
+    { "sha1", "", "da39a3ee5e6b4b0d3255bfef95601890afd80709" },
+    { "sha1", "abc", "a9993e364706816aba3e25717850c26c9cd0d89d" },
+    { "sha1", two_blocks, "84983e441c3bd26ebaae4aa1f95129e5e54670f1" },
+    { "sha1", string.rep("a", 1000000), "34aa973cd4c4daa4f61eeb2bdbad27316534016f" },
+}
+
+local function hash_test(alg, input, want)
+    local v = crypto.hash(alg, input)
+    assert(type(v) == "vector")
+    assert(hex(v) == want)
+    assert(hex(crypto.hash(alg, vector.fromstring(input))) == want)
+end
+
+-- A hasher gives the digest of the whole input however it is split.
+local function hasher_test(alg, input, want)
+    local h = crypto.hasher(alg)
+    assert(hex(h:digest()) == hex(crypto.hash(alg, "")))
+    local i = 1
+    local step = 1
+    while i <= #input do
+        h:update(input:sub(i, i + step - 1))
+        i = i + step
+        step = step * 3 + 1
+    end
+    assert(hex(h:digest()) == want)
+    -- digest leaves the hasher unchanged.
+    assert(hex(h:digest()) == want)
+end
+
+local hasher_cases = hash_cases
+
+local function hasher_continues_after_digest_test()
+    local h = crypto.hasher("sha256")
+    assert(h:update("a") == h)
+    h:update(vector.fromstring("b"))
+    assert(crypto.equal(h:digest(), crypto.hash("sha256", "ab")))
+    h:update("c")
+    assert(hex(h:digest()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+end
+
+local function hasher_random_splits_test()
+    for _ = 1, 30 do
+        local data = crypto.random(math.random(0, 5000))
+        for _, alg in ipairs({ "sha256", "sha384", "sha512", "sha1" }) do
+            local h = crypto.hasher(alg)
+            local pos = 0
+            while pos < #data do
+                local n = math.random(1, 700)
+                local len = math.min(n, #data - pos)
+                local part = vector.create(len)
+                for k = 0, len - 1 do vector.set(part, k, vector.get(data, pos + k)) end
+                h:update(part)
+                pos = pos + len
+            end
+            assert(crypto.equal(h:digest(), crypto.hash(alg, data)))
+        end
+    end
+end
+
+local function hasher_errors_test()
+    raises(function() crypto.hasher("md5") end, "bad argument #1 to 'hasher' %(invalid option 'md5'%)")
+    local h = crypto.hasher("sha1")
+    raises(function() h:update({}) end, "bad argument #1 to 'update' %(string or vector expected")
+    raises(function() h.update({}, "x") end, "bad argument #1 to 'update' %(crypto.hasher expected")
+    raises(function() h.digest(vector.create(4)) end, "bad argument #1 to 'digest' %(crypto.hasher expected")
+    assert(tostring(h):find("^crypto.hasher"))
+end
+
+local function hash_sizes_test()
+    assert(#crypto.hash("sha256", "x") == 32)
+    assert(#crypto.hash("sha384", "x") == 48)
+    assert(#crypto.hash("sha512", "x") == 64)
+    assert(#crypto.hash("sha1", "x") == 20)
+end
+
+local function hash_reads_wtf8_bytes_test()
+    -- A string contributes its WTF-8 bytes, so a string and the vector of
+    -- its bytes hash alike, and a number hashes as its text.
+    local s = "héllo 日本"
+    assert(crypto.equal(crypto.hash("sha256", s), crypto.hash("sha256", vector.fromstring(s))))
+    assert(crypto.equal(crypto.hash("sha256", 42), crypto.hash("sha256", "42")))
+end
+
+local function hash_errors_test()
+    raises(function() crypto.hash("md5", "x") end, "bad argument #1 to 'hash' %(invalid option 'md5'%)")
+    raises(function() crypto.hash("sha256", {}) end, "bad argument #2 to 'hash' %(string or vector expected")
+end
+
+-- ============================================================
+-- HMAC: RFC 4231 and RFC 2202
+-- ============================================================
+
+local hmac_cases = {
+    { "sha256", rep(0x0b, 20), "Hi There", "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7" },
+    { "sha512", rep(0x0b, 20), "Hi There", "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854" },
+    { "sha256", "Jefe", "what do ya want for nothing?", "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" },
+    { "sha384", rep(0x0b, 20), "Hi There", "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6" },
+    { "sha384", "Jefe", "what do ya want for nothing?", "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649" },
+    { "sha512", "Jefe", "what do ya want for nothing?", "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737" },
+    { "sha256", rep(0xaa, 131), "Test Using Larger Than Block-Size Key - Hash Key First", "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54" },
+    { "sha1", rep(0x0b, 20), "Hi There", "b617318655057264e28bc0b6fb378c8ef146be00" },
+    { "sha1", "Jefe", "what do ya want for nothing?", "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79" },
+}
+
+local function hmac_test(alg, key, data, want)
+    local mac = crypto.hmac(alg, key, data)
+    assert(type(mac) == "vector")
+    assert(hex(mac) == want)
+end
+
+local function hmac_errors_test()
+    raises(function() crypto.hmac("md5", "k", "x") end, "bad argument #1 to 'hmac'")
+    raises(function() crypto.hmac("sha256", true, "x") end, "bad argument #2 to 'hmac' %(string or vector expected")
+    raises(function() crypto.hmac("sha256", "k", nil) end, "bad argument #3 to 'hmac' %(string or vector expected")
+end
+
+-- ============================================================
+-- Ed25519: RFC 8032, section 7.1
+-- ============================================================
+
+local ed25519_cases = {
+    {
+        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "",
+        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+    },
+    {
+        "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+        "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        "72",
+        "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+    },
+    {
+        "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+        "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+        "af82",
+        "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+    },
+}
+
+local function ed25519_test(secretHex, publicHex, msgHex, sigHex)
+    local secret, public = crypto.keypair(bytes(secretHex))
+    assert(hex(secret) == secretHex)
+    assert(hex(public) == publicHex)
+    local msg = bytes(msgHex)
+    local sig = crypto.sign(secret, msg)
+    assert(hex(sig) == sigHex)
+    assert(crypto.verify(public, msg, sig))
+    assert(crypto.verify(bytes(publicHex), msg, bytes(sigHex)))
+end
+
+local function sign_round_trip_test()
+    for i = 1, 50 do
+        local secret, public = crypto.keypair()
+        assert(#secret == 32 and #public == 32)
+        local msg = crypto.random(i * 7)
+        local sig = crypto.sign(secret, msg)
+        assert(#sig == 64)
+        assert(crypto.verify(public, msg, sig))
+        -- Signing is deterministic.
+        assert(crypto.equal(sig, crypto.sign(secret, msg)))
+        -- The same seed gives the same pair.
+        local s2, p2 = crypto.keypair(secret)
+        assert(crypto.equal(s2, secret) and crypto.equal(p2, public))
+    end
+end
+
+local function verify_rejects_any_bit_flip_test()
+    local secret, public = crypto.keypair()
+    local msg = vector.fromstring("package lus-json 1.2.0")
+    local sig = crypto.sign(secret, msg)
+    for i = 0, 63 do
+        for bit = 0, 7, 3 do
+            local bad = vector.clone(sig)
+            vector.set(bad, i, vector.get(bad, i) ~ (1 << bit))
+            assert(not crypto.verify(public, msg, bad))
+        end
+    end
+    for i = 0, #msg - 1 do
+        local bad = vector.clone(msg)
+        vector.set(bad, i, vector.get(bad, i) ~ 1)
+        assert(not crypto.verify(public, bad, sig))
+    end
+    local _, other = crypto.keypair()
+    assert(not crypto.verify(other, msg, sig))
+end
+
+local function verify_is_strict_test()
+    local secret, public = crypto.keypair(bytes("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"))
+    local sig = crypto.sign(secret, "")
+    -- S plus the group order L is the same scalar in a non-canonical
+    -- encoding, which strict verification rejects.
+    local L = bytes("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010")
+    local bad = vector.clone(sig)
+    local carry = 0
+    for i = 0, 31 do
+        local s = vector.get(bad, 32 + i) + vector.get(L, i) + carry
+        vector.set(bad, 32 + i, s & 0xff)
+        carry = s >> 8
+    end
+    assert(not crypto.verify(public, "", bad))
+    -- The identity point is a public key of small order.
+    local identity = bytes("0100000000000000000000000000000000000000000000000000000000000000")
+    assert(not crypto.verify(identity, "", sig))
+end
+
+local function ed25519_errors_test()
+    raises(function() crypto.keypair(vector.create(31)) end, "bad argument #1 to 'keypair' %(32%-byte vector expected%)")
+    raises(function() crypto.keypair(string.rep("a", 32)) end, "32%-byte vector expected")
+    raises(function() crypto.sign(vector.create(64), "x") end, "bad argument #1 to 'sign' %(32%-byte vector expected%)")
+    raises(function() crypto.sign(vector.create(32), {}) end, "bad argument #2 to 'sign' %(string or vector expected")
+    local _, public = crypto.keypair()
+    raises(function() crypto.verify("x", "m", vector.create(64)) end, "bad argument #1 to 'verify' %(32%-byte vector expected%)")
+    raises(function() crypto.verify(public, "m", vector.create(63)) end, "bad argument #3 to 'verify' %(64%-byte vector expected%)")
+end
+
+-- ============================================================
+-- Random bytes and comparison
+-- ============================================================
+
+local function random_test()
+    assert(#crypto.random(0) == 0)
+    assert(#crypto.random(1) == 1)
+    assert(#crypto.random(1 << 20) == 1 << 20)
+    local a, b = crypto.random(32), crypto.random(32)
+    assert(type(a) == "vector")
+    assert(not crypto.equal(a, b))
+    -- Every byte value shows up in 64 KiB of random output.
+    local seen, count = {}, 0
+    local v = crypto.random(65536)
+    for i = 0, #v - 1 do
+        local x = vector.get(v, i)
+        if not seen[x] then
+            seen[x] = true
+            count = count + 1
+        end
+    end
+    assert(count == 256)
+end
+
+local function random_errors_test()
+    raises(function() crypto.random(-1) end, "bad argument #1 to 'random' %(size out of range%)")
+    raises(function() crypto.random((1 << 20) + 1) end, "size out of range")
+    raises(function() crypto.random("many") end, "bad argument #1 to 'random' %(number expected")
+end
+
+local function equal_test()
+    assert(crypto.equal("", ""))
+    assert(crypto.equal("abc", "abc"))
+    assert(crypto.equal("abc", vector.fromstring("abc")))
+    assert(not crypto.equal("abc", "abd"))
+    assert(not crypto.equal("abc", "abcd"))
+    assert(not crypto.equal("é", "e"))
+    local v = crypto.random(100)
+    assert(crypto.equal(v, vector.clone(v)))
+    raises(function() crypto.equal("a", {}) end, "bad argument #2 to 'equal' %(string or vector expected")
+end
+
+-- ============================================================
+-- Passwords: hashes from the Argon2 reference implementation
+-- ============================================================
+
+local reference_cases = {
+    { "password", "$argon2i$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG" },
+    { "password", "$argon2id$v=19$m=65536,t=2,p=1$c29tZXNhbHQ$CTFhFdXPJO1aFaMaO6Mm5c8y7cJHAph8ArZWb2GRPPc" },
+    { "password", "$argon2id$v=19$m=4096,t=3,p=2$c29tZXNhbHQ$lXVg849vSND1P2W3dzLsZi7RPhAgyEyD" },
+    { "hunter2", "$argon2d$v=19$m=1024,t=1,p=1$c2FsdHNhbHRzYWx0$7Ctj9DyPueZGsXFUwQmsQF505jgTOVyEGw+Mc9+SMKY" },
+    { "päss", "$argon2id$v=19$m=256,t=1,p=1$MDEyMzQ1Njc4OWFiY2RlZg$BjMLddORgXwnGOvG/vsTxTbsWLJDgUS99fbaqxbf52o" },
+}
+
+local function reference_test(password, stored)
+    assert(crypto.verifypassword(password, stored))
+    assert(crypto.verifypassword(vector.fromstring(password), stored))
+    assert(not crypto.verifypassword(password .. "x", stored))
+    assert(not crypto.verifypassword("", stored))
+end
+
+local function hashpassword_test()
+    local cheap = { memory = 64, time = 1 }
+    local a = crypto.hashpassword("secret", cheap)
+    local b = crypto.hashpassword("secret", cheap)
+    assert(a:find("^%$argon2id%$v=19%$m=64,t=1,p=1%$[%w+/]+%$[%w+/]+$"))
+    -- A fresh salt makes every hash different.
+    assert(a ~= b)
+    assert(crypto.verifypassword("secret", a))
+    assert(crypto.verifypassword("secret", b))
+    assert(not crypto.verifypassword("Secret", a))
+    local c = crypto.hashpassword("secret", { memory = 64, time = 2, parallelism = 2 })
+    assert(c:find("m=64,t=2,p=2", 1, true))
+    assert(crypto.verifypassword("secret", c))
+end
+
+local function hashpassword_defaults_test()
+    local h = crypto.hashpassword("correct horse battery staple")
+    assert(h:find("^%$argon2id%$v=19%$m=19456,t=2,p=1%$"))
+    assert(crypto.verifypassword("correct horse battery staple", h))
+end
+
+local function hashpassword_errors_test()
+    raises(function() crypto.hashpassword("x", { memory = 7 }) end, "bad argument #2 to 'hashpassword' %(option 'memory' out of range%)")
+    raises(function() crypto.hashpassword("x", { memory = 15, parallelism = 2 }) end, "option 'memory' out of range")
+    raises(function() crypto.hashpassword("x", { time = 0 }) end, "option 'time' out of range")
+    raises(function() crypto.hashpassword("x", { parallelism = 256 }) end, "option 'parallelism' out of range")
+    raises(function() crypto.hashpassword("x", { time = 1.5 }) end, "option 'time' must be an integer")
+    raises(function() crypto.hashpassword("x", 5) end, "bad argument #2 to 'hashpassword' %(table expected")
+end
+
+local function verifypassword_errors_test()
+    raises(function() crypto.verifypassword("x", "not a hash") end, "bad argument #2 to 'verifypassword' %(invalid password hash%)")
+    raises(function() crypto.verifypassword("x", "$argon2id$v=19$m=99999999,t=1,p=1$c29tZXNhbHQ$CTFhFdXPJO1aFaMaO6Mm5c8y7cJHAph8ArZWb2GRPPc") end, "invalid password hash")
+    raises(function() crypto.verifypassword("x", "$scrypt$v=19$m=64,t=1,p=1$c29tZXNhbHQ$CTFhFdXPJO1aFaMaO6Mm5c8y7cJHAph8ArZWb2GRPPc") end, "unsupported password hash 'scrypt'")
+    raises(function() crypto.verifypassword("x", "$argon2id$v=16$m=64,t=1,p=1$c29tZXNhbHQ$CTFhFdXPJO1aFaMaO6Mm5c8y7cJHAph8ArZWb2GRPPc") end, "unsupported Argon2 version")
+end
+
+-- ============================================================
+-- UUIDs and ULIDs
+-- ============================================================
+
+local uuid_pattern = "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-(%x)%x%x%x%-(%x)%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$"
+
+local function uuid4_test()
+    local seen = {}
+    for _ = 1, 1000 do
+        local id = crypto.uuid()
+        local version, variant = id:match(uuid_pattern)
+        assert(version == "4")
+        assert(("89ab"):find(variant, 1, true))
+        assert(id == id:lower())
+        assert(not seen[id])
+        seen[id] = true
+    end
+    assert(crypto.uuid(4):match(uuid_pattern) == "4")
+end
+
+local function uuid7_test()
+    local before = os.time()
+    local prev = crypto.uuid(7)
+    for _ = 1, 2000 do
+        local id = crypto.uuid(7)
+        local version, variant = id:match(uuid_pattern)
+        assert(version == "7")
+        assert(("89ab"):find(variant, 1, true))
+        assert(id > prev)
+        prev = id
+    end
+    -- The first 48 bits are the Unix time in milliseconds.
+    local ms = tonumber(prev:sub(1, 8) .. prev:sub(10, 13), 16)
+    assert(ms // 1000 >= before - 1 and ms // 1000 <= os.time() + 1)
+end
+
+local function uuid_errors_test()
+    raises(function() crypto.uuid(1) end, "bad argument #1 to 'uuid' %(version 4 or 7 expected%)")
+    raises(function() crypto.uuid(8) end, "version 4 or 7 expected")
+end
+
+local crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+local function ulid_test()
+    local before = os.time()
+    local prev = crypto.ulid()
+    for _ = 1, 2000 do
+        local id = crypto.ulid()
+        assert(#id == 26)
+        assert(id:find("^[0-9A-HJKMNP-TV-Z]+$"))
+        assert(id > prev)
+        prev = id
+    end
+    -- The first 10 characters are the Unix time in milliseconds.
+    local ms = 0
+    for i = 1, 10 do
+        ms = ms * 32 + crockford:find(prev:sub(i, i), 1, true) - 1
+    end
+    assert(ms // 1000 >= before - 1 and ms // 1000 <= os.time() + 1)
+    -- 128 bits in 26 characters leave the first one below 8.
+    assert(prev:sub(1, 1) <= "7")
+end

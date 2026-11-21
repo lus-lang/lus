@@ -35,6 +35,7 @@ pub fn openAll(l: *Thread) Error!void {
     if (build_options.net) try @import("network.zig").open(l);
     try @import("time.zig").open(l);
     try @import("csv.zig").open(l);
+    try @import("crypto.zig").open(l);
     if (build_options.workers) try @import("worker.zig").open(l);
     // package last, so it registers the libraries above as loaded.
     try @import("package.zig").open(l);
@@ -53,5 +54,6 @@ test {
     _ = @import("pack.zig");
     _ = @import("fs.zig");
     _ = @import("transcode.zig");
+    _ = @import("crypto.zig");
     if (build_options.archive) _ = @import("archive.zig");
 }

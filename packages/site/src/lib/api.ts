@@ -80,6 +80,7 @@ const stdlibOrder: SectionSpec[] = [
     filter: (d) => d.module === "worker" && !d.header,
   },
   { title: "Time library", page: { href: "/manual/time", title: "Time" }, filter: (d) => d.module === "time" },
+  { title: "Crypto library", page: { href: "/manual/crypto", title: "Cryptography" }, filter: (d) => d.module === "crypto" },
 ]
 
 /* C API entries are grouped by their directory under spec/capi. */

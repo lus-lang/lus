@@ -257,9 +257,10 @@ An unknown name raises the error `invalid source encoding` or `invalid target en
 
 ### Binary to text encodings
 
-Encoding to `"base64"`, `"url"`, or `"hex"` writes the bytes of the input as printable text, so a program can put binary data in a format that holds only text. Decoding from one of these encodings recovers the bytes, which `string.transcode` then converts to the encoding `to`.
+Encoding to `"base64"`, `"base64url"`, `"url"`, or `"hex"` writes the bytes of the input as printable text, so a program can put binary data in a format that holds only text. Decoding from one of these encodings recovers the bytes, which `string.transcode` then converts to the encoding `to`.
 
 - Base64 writes every 3 bytes as 4 printable characters. Base64 input may omit its `=` padding.
+- Base64url is base64 with `-` and `_` in place of `+` and `/`, written without padding, which makes its output safe in a URL or a file name. JSON Web Tokens use it, and its input may carry padding.
 - URL encoding keeps the characters `A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, and `~` and writes every other byte as `%` followed by two hexadecimal digits. URL decoding also reads `+` as a space.
 - Hexadecimal writes every byte as two lowercase digits and accepts either case as input.
 
@@ -268,6 +269,7 @@ global print, string
 
 print(string.transcode("user:password", "utf-8", "base64"))  --> dXNlcjpwYXNzd29yZA==
 print(string.transcode("aGk", "base64", "utf-8"))            --> hi
+print(string.transcode("hi?", "utf-8", "base64url"))         --> aGk_
 print(string.transcode("São Paulo", "utf-8", "url"))         --> S%C3%A3o%20Paulo
 print(string.transcode("a%3D1+b", "url", "utf-8"))           --> a=1 b
 print(string.transcode("é", "utf-8", "hex"))                 --> c3a9
