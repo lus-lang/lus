@@ -3,77 +3,77 @@ order: 5.6
 title: "Lus and other runtimes"
 icon: scale
 group: learn
-shortdesc: "Benchmark results for Lus and seven other runtimes, and the design choices behind them with what each one costs."
+shortdesc: "Benchmark results for Lus and seven other runtimes, with the design choices behind them and what each choice costs."
 ---
 
 import RuntimeTable from "../components/RuntimeTable.astro"
 
-Lus is a dynamic language for complete programs: scripts, command line tools, and network services. This page shows how Lus performs beside other runtimes that serve the same purpose, then explains the design choices behind the results and what each choice costs.
+Lus is a dynamic language for complete programs: scripts, command line tools, and network services. The benchmarks compare Lus with seven other runtimes that are used for the same kinds of programs. The design choices that produce the results each have a cost.
 
 ## Benchmark results
 
-The benchmark suite holds six programs and an HTTP server. Each program is written once per language, in the usual style of that language, and uses the standard library of that language wherever it covers the task. Every version generates the same input and does the same work.
+The benchmark suite holds six programs and an HTTP server. Each program is written once per language, in the usual style of that language. It uses the standard library of that language wherever the library covers the task. Every version generates the same input and does the same work.
 
 | Program | What it does |
 | --- | --- |
-| `csv` | Generates two million rows of CSV text, parses them, and totals the quantity and revenue of each region. |
-| `json` | Builds one million records, encodes them as JSON, decodes the text, and sums fields of the result. |
-| `logs` | Generates one million web server log lines, parses each line with one pattern, and counts the requests for each status code and each path. |
+| `csv` | Parses two million generated rows of CSV text and totals the quantity and revenue of each region. |
+| `json` | Encodes one million records as JSON, then decodes the text and sums fields of the result. |
+| `logs` | Parses one million generated web server log lines with one pattern and counts the requests for each status code and each path. |
 | `lru` | Simulates four million requests to a cache of 50,000 entries that evicts the entry used least recently. |
 | `template` | Renders an HTML report of one million items, escaping every title and tag. |
-| `wordfreq` | Counts how often each word occurs in a text of ten million words and sorts the words by count. |
+| `wordfreq` | Counts how often each word occurs in a text of ten million words, then sorts the words by count. |
 
-The tables below show one run of the suite and change with every new run. The best value of each row is in bold.
+The tables show one run of the suite, so their figures change with every new run. The best value of each row is in bold.
 
 <RuntimeTable metric="setup" />
 
 ### Time
 
-The first table gives the time each program takes from start to exit, in seconds. A lower value is better.
+The time of a program is measured from its start to its exit, in seconds. A lower value is better.
 
 <RuntimeTable metric="time" />
 
 ### Memory
 
-The second table gives the largest amount of memory each program holds at any point of its run, in megabytes. A lower value is better.
+The memory of a program is the largest amount that it holds at any point of its run, in megabytes. A lower value is better.
 
 <RuntimeTable metric="memory" />
 
 ### HTTP server
 
-The third table measures a server that answers each request with a small JSON document built for that request. A load generator sends requests over 64 connections that stay open. The table gives the number of requests each server answers per second, the time the median request takes, the time under which 99 percent of requests finish, and the largest amount of memory the server holds during the load. The runtimes without sockets in their standard library take part in the six programs only.
+The HTTP benchmark measures a server that answers each request with a small JSON document built for that request. A load generator sends requests over 64 connections that stay open. The table gives four figures for each server: the number of requests it answers per second, the time of the median request, the time under which 99 percent of requests finish, and the largest amount of memory the server holds during the load. The runtimes without sockets in their standard library take part in the six programs only.
 
 <RuntimeTable metric="http" />
 
 ## Design choices
 
-The results follow from a few decisions about the language and the runtime. Each decision below is stated with what it gives a program and what it costs.
+The results follow from a few decisions about the language and the runtime. Each decision gives a program something and costs it something.
 
 ### A small language
 
-Lus builds on the syntax of Lua. One data structure, the table, serves as array, dictionary, record, object, and module. A program therefore has few constructs to learn and to read.
+Lus uses the syntax of Lua. It has one data structure, the table. A table is used as an array, a dictionary, a record, an object, or a module. A program therefore has few constructs to learn and to read.
 
-The cost is that Lus leaves out constructs that larger languages provide. Objects and inheritance are built from tables and metatables, with no class syntax. Types are checked when the program runs, with no static type annotations.
+The cost is that Lus leaves out constructs that larger languages provide. Lus has no class syntax, so objects and inheritance are built from tables and metatables. Lus has no static type annotations, so types are checked when the program runs.
 
 ### One executable with a large standard library
 
 The `lus` executable contains the whole standard library: JSON, CSV, SQLite, HTTP clients and servers, sockets, the filesystem, compression, and time zones. The same executable formats, checks, tests, documents, debugs, and bundles programs. A program that uses only the standard library depends on that one executable, so it has no packages to download and no versions to reconcile.
 
-The standard library is also where much of the speed in the tables comes from. The JSON and CSV parsers and the string functions are part of the runtime and are compiled with it, so a program that spends its time in them runs compiled library code.
+Much of the speed in the tables comes from the standard library. The JSON and CSV parsers and the string functions are part of the runtime and are compiled with it, so a program that spends its time in them runs compiled library code.
 
-The cost is scope. The executable carries code for formats that a given program never uses. Functionality that the standard library lacks has to be written in Lus or added by a host program through the C interface.
+This choice has two costs. The executable contains code for formats that a given program never uses. Functionality that the standard library lacks has to be written in Lus, or written in a host program and registered with the C interface.
 
 ### Concurrency with coroutines and workers
 
-A Lus function that reads from a socket looks like any other function. A read from a socket inside a [detached coroutine](/manual/concurrency#detached-coroutines) suspends that coroutine, and the runtime resumes it when data arrives. The same function runs unchanged in the main program, in a coroutine, and in a detached coroutine, so functions need no `async` marker and a library exists in one version. `network.fetch` waits for one response at a time, so a program that sends several requests at once sends them from workers. The HTTP server in the third table runs every connection as a detached coroutine on a single thread, and a suspended coroutine holds little memory, which is why the server stays small under load.
+A Lus function that reads from a socket is written like any other function. A read from a socket inside a [detached coroutine](/manual/concurrency#detached-coroutines) suspends that coroutine. The runtime resumes the coroutine when data arrives. The same function runs unchanged in the main program, in a coroutine, and in a detached coroutine. Functions therefore need no `async` marker, so a library is written once. `network.fetch` waits for one response at a time, so a program that sends several requests at once sends them from workers. The HTTP server in the benchmark runs every connection as a detached coroutine on a single thread. A suspended coroutine holds little memory, which is why the server stays small under load.
 
-Parallel work runs in [workers](/manual/concurrency#workers). Each worker is a separate instance of the runtime on its own thread, with its own memory and its own garbage collector. Workers exchange messages and share no data, so they need no locks and a collection in one worker never pauses another.
+Parallel work runs in [workers](/manual/concurrency#workers). Each worker is a separate instance of the runtime on its own thread, with its own memory and its own garbage collector. Workers exchange messages and share no data, so they need no locks. A garbage collection in one worker never pauses another worker.
 
-Both have costs. Detached coroutines on one thread run one at a time, so a long computation with no wait in it delays every other coroutine on that thread. Workers communicate only by messages, and the runtime copies most values that cross between them. A server that handles requests on one thread also uses one processor core, so a runtime that spreads requests over several threads or processes can answer more requests per second.
+Both have costs. Detached coroutines on one thread run one at a time, so a long computation with no wait in it delays every other coroutine on that thread. Workers communicate only by messages. The runtime copies most values that one worker sends to another. A server that handles requests on one thread also uses one processor core, so a runtime that spreads requests over several threads or processes can answer more requests per second.
 
 ### Compact memory layout
 
-The runtime stores data compactly. Integers and floats are stored directly in the variable or table slot that holds them, so arithmetic allocates nothing. An array whose elements are all integers, all floats, all strings, or all tables takes half the memory of an array of mixed values. A small table keeps its fields in the same block of memory as the table itself. Records with the same string keys share those keys through a _shape_, so each record stores only its values. A short string that occurs many times, such as a field name, is stored once.
+The runtime stores data compactly. Integers and floats are stored directly in the variable or table slot that holds them, so arithmetic allocates nothing. An array whose elements are all integers, all floats, all strings, or all tables takes half the memory of an array of mixed values. A small table keeps its fields in the same block of memory as the table itself. Records with the same string keys share one list of those keys, called a _shape_, so each record stores only its values. A short string that occurs many times, such as a field name, is stored once.
 
 The garbage collector is generational. It collects recently created objects often and long-lived objects rarely, so a program that holds a steady amount of data stays close to the size of that data. The collector never moves an object, so the pointers that a host program holds stay valid.
 
@@ -81,31 +81,31 @@ The cost of a collector that never moves objects is fragmentation. Free space sc
 
 ### An interpreter and two compilers
 
-Lus starts a program in an interpreter, which begins running at once. A function that runs often is compiled to machine code by a baseline compiler that works in a single fast pass. Code that keeps running is compiled again by an optimizing compiler, which predicts the types of values from what the program has done so far and keeps numbers in processor registers. All three run every instruction from one shared definition, so a program behaves the same in each of them.
+Lus starts a program in an interpreter, so the program begins running at once. A baseline compiler compiles a function that runs often to machine code, in a single fast pass. An optimizing compiler compiles code that keeps running a second time. It predicts the types of values from what the program has done so far. It also keeps numbers in processor registers. All three run every instruction from one shared definition, so a program behaves the same in each of them.
 
-The cost is that compilation takes time and memory while the program runs, so a short script gains little from it. The compilers produce code for 64-bit ARM and x86 processors on macOS and Linux, and the WebAssembly build has its own compiler. On every other target Lus runs in the interpreter alone.
+The cost is that compilation takes time and memory while the program runs, so a short script gains little from it. The compilers produce code for 64-bit ARM and x86 processors on macOS and Linux. The WebAssembly build has its own compiler. On every other target Lus runs in the interpreter alone.
 
 Lus interprets its patterns. A program that spends most of its time matching one pattern, such as `logs`, therefore depends on the speed of the pattern interpreter more than on the compilers.
 
 ### Permissions
 
-A Lus script starts with no access to files, the network, other processes, or environment variables. The script acquires access by calling [`pledge`](/manual/permissions) with the name of a permission, such as `fs:read` for one directory, or the person who runs the script grants it on the command line. A program can also seal its permissions, after which nothing it loads or runs can acquire more. A mistake or a compromised dependency therefore reaches only what the program was given.
+A Lus script starts with no access to files, the network, other processes, or environment variables. The script acquires access by calling [`pledge`](/manual/permissions) with the name of a permission, such as `fs:read` for one directory. The person who runs the script can also grant a permission on the command line. A program can seal its permissions, after which nothing it loads or runs can acquire more. A mistake or a compromised dependency can therefore affect only what the program was granted.
 
-The cost is a line or two in every program that touches the outside world. An operation that lacks its permission raises an error, and each operation checks its permission when it runs.
+The cost is a line or two in every program that uses files, the network, other processes, or the environment. Each such operation checks its permission when it runs. An operation that lacks its permission raises an error.
 
 ### Embedding
 
-Lus can run inside another program. The host program links one library, creates an instance of the runtime, and exchanges values with it through a C interface, as [Embedding](/manual/embedding) describes. The host decides which permissions its scripts receive and which of its own functions they may call.
+Lus can run inside another program. The host program links one library and creates an instance of the runtime. It calls the functions of a C interface to exchange values with the instance, as [Embedding](/manual/embedding) describes. The host chooses the permissions that its scripts receive and the host functions that they may call.
 
-The cost falls on the host. Values cross the interface one at a time through a stack, which takes more code than calling a function of the host language directly. The host must also call into each instance from one thread at a time.
+The cost falls on the host. The host passes values to an instance one at a time by pushing them on a stack, which takes more code than calling a function of the host language directly. The host must also call into each instance from one thread at a time.
 
 ## How the measurements are made
 
 The programs and the harness are in the Lus repository under `tests/bench/compare`, with one directory per program and one file per language. Every program prints one line with its name and a checksum of its result. Before it times anything, the harness runs each program at a small size on every runtime and compares the lines. A runtime that prints a different line is reported and left out of the timing for that program.
 
-Lus is built with `zig build -Doptimize=ReleaseFast`, as the release archives are, and runs with its default settings. Ruby runs with `--yjit`, and PHP runs with opcache and its tracing JIT enabled. The other runtimes run with their defaults. The timed runs alternate between the runtimes, so background activity on the machine affects all of them alike. Each cell shows the fastest of several runs and the peak memory of that run, as the operating system reports it.
+Lus is built with `zig build -Doptimize=ReleaseFast`, as the release archives are. It runs with its default settings. Ruby runs with `--yjit`. PHP runs with opcache and its tracing JIT enabled. The other runtimes run with their defaults. The timed runs alternate between the runtimes, so background activity on the machine affects all of them alike. Each cell shows the fastest of several runs and the peak memory of that run, as the operating system reports it.
 
-For the HTTP table, the harness starts each server, checks its answers, warms it up, and then loads it with the `oha` load generator. The first column of the table names the standard library server that each runtime uses. A row that gives only the name of a runtime is a small HTTP server written on the standard socket library of that language. The results file in the same directory records the machine, the operating system, and the version of every runtime, which the section above lists.
+For the HTTP table, the harness starts each server and checks its answers. It then warms the server up and loads it with the `oha` load generator. The first column of the table names the standard library server that each runtime uses. A row that gives only the name of a runtime is a small HTTP server written on the standard socket library of that language. The results file in the same directory records the machine, the operating system, and the version of every runtime. The first table under [Benchmark results](#benchmark-results) lists them.
 
 ## Related pages
 

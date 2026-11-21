@@ -6,20 +6,20 @@ group: library
 shortdesc: "The pledge function, permission names and values, rejection, sealing, and how permissions pass to coroutines and workers."
 ---
 
-A _permission_ is the right to perform one kind of sensitive operation, such as reading files, running commands, or sending HTTP requests. Lus checks the permission before every such operation and raises an error when the program does not hold it. A script started by the `lus` command holds no permissions, and it acquires the ones it needs by calling [`pledge`](/manual/api#pledge).
+A _permission_ is the right to perform one kind of sensitive operation, such as reading files, running commands, or sending HTTP requests. Lus checks the permission before every such operation. If the program does not hold the permission, the operation raises an error. A script started by the `lus` command holds no permissions. It acquires the ones it needs by calling [`pledge`](/manual/api#pledge).
 
-Permissions limit the damage a program can do when something in it goes wrong. A script that pledged only `fs:read` for its log directory and then sealed its permissions cannot delete a file or contact a server, whether the cause is a bug, a module it loaded, or input written to mislead it. Permissions also let the person who runs a script decide what it may do, from the command line, without reading its code.
+Permissions limit the damage that a faulty program can do. Suppose a script pledges only `fs:read` for its log directory and then seals its permissions. That script cannot delete a file or contact a server. This holds when the script has a bug, when a module it loaded misbehaves, and when its input was written to mislead it. The person who runs a script can also set its permissions on the command line, without reading its code.
 
 ## Granting permissions
 
-`pledge` takes one or more permission names and returns one boolean for each of them, in order. A result is `true` when the program now holds the permission and `false` when the grant was refused.
+`pledge` takes one or more permission names. It returns one boolean for each name, in order. A result is `true` when the program now holds the permission. It is `false` when the grant was refused.
 
 ```lus
 print(pledge("fs:read"))              --> true
 print(pledge("network:http", "env"))  --> true  true
 ```
 
-An operation that needs a permission the program does not hold raises an error at the call. The following script fails at its first line and succeeds after it pledges `fs:read`.
+An operation raises an error at the call when the program does not hold the permission that the operation requires. The following script lists a directory twice. The first attempt fails. The second succeeds because the script has pledged `fs:read`.
 
 ```lus nocheck
 local ok, err = catch fs.list(".")
@@ -29,15 +29,15 @@ pledge("fs:read")
 print(#fs.list(".") > 0)   --> true
 ```
 
-The error object is a string of the form `permission "NAME" denied for 'VALUE'`, where the value is the path, URL, address, or variable name that the operation asked for. An operation without such a value names itself, as in `permission "exec" denied for os.execute`, or ends the message after `denied`.
+The error object is a string of the form `permission "NAME" denied for 'VALUE'`. The value is the path, URL, address, or variable name that the operation requested. For an operation without such a value, the message names the operation, as in `permission "exec" denied for os.execute`, or it ends after `denied`.
 
-`pledge` is an ordinary function, so a program may call it at any point. Most programs pledge everything they need when they start. A program may also pledge later, for example only when a command line option asks for a feature that uses the network.
+`pledge` is an ordinary function, so a program may call it at any point. Most programs pledge everything they need when they start. A program may also pledge later. For example, a program can pledge `network:http` only when a command line option enables a feature that uses the network.
 
-A script that runs without the `-P` option may pledge any permission, and the grant succeeds. When the person or the host program that starts the script grants permissions itself, the script may pledge only what those grants cover, and `pledge` returns `false` for everything else. [Granting from the command line](#granting-from-the-command-line) and [Permissions in an embedding host](#permissions-in-an-embedding-host) describe both cases. A refused grant raises no error, so the operation that needed the permission is what fails later.
+Every grant succeeds in a script that runs without the `-P` option. The person or the host program that starts a script can also grant permissions itself. The script may then pledge only what those grants cover. `pledge` returns `false` for everything else. [Granting from the command line](#granting-from-the-command-line) and [Permissions in an embedding host](#permissions-in-an-embedding-host) describe the two cases. A refused grant raises no error. The error comes later, from the operation that requires the permission.
 
 ## Permission names
 
-A permission name is either a base permission, such as `fs`, or a base permission followed by `:` and one of its parts, such as `fs:read`. Granting a base permission grants every one of its parts.
+A permission name is either a base permission, such as `fs`, or a base permission followed by `:` and one of its parts, such as `fs:read`. Granting a base permission grants every one of its parts. The following script pledges `fs`. It can then create a directory, which requires `fs:write`. It can also read the type of the directory, which requires `fs:read`.
 
 ```lus
 pledge("fs")
@@ -50,7 +50,7 @@ fs.remove(dir)
 fs.remove(base)
 ```
 
-The table below lists every permission that the standard library checks.
+The standard library checks the following permissions.
 
 | Permission | What it allows |
 | --- | --- |
@@ -71,23 +71,25 @@ Several functions check more than one permission.
 - [`load`](/manual/api#load) requires `load`. [`loadfile`](/manual/api#loadfile), [`dofile`](/manual/api#dofile), and a `require` that loads a file require `fs:read` for the file and `load` to run it. A `require` skips every file that it may not read, so it reports the module as not found.
 - [`package.loadlib`](/manual/api#package.loadlib) requires `fs:read` and `load`.
 - [`io.open`](/manual/api#io.open) requires `fs:read` to read and `fs:write` to write. A mode that does both, such as `"r+"`, requires both. [`io.tmpfile`](/manual/api#io.tmpfile) and [`os.tmpname`](/manual/api#os.tmpname) require `fs:write`.
-- [`io.sqlite`](/manual/api#io.sqlite) requires `fs:read` for a database file, and `fs:write` as well unless it opens the file read-only.
+- [`io.sqlite`](/manual/api#io.sqlite) requires `fs:read` for a database file. It also requires `fs:write` unless it opens the file read-only.
 - [`worker.create`](/manual/api#worker.create) requires `load` and `fs:read` for the script of the worker.
 - [`network.serve`](/manual/api#network.serve) requires `network:server` for the address it serves and `network:tcp` to bind it.
 
-The runtime also knows the names `fs:exec`, `network:tls`, `ffi`, and `worker`, which are reserved for host programs and extensions. `pledge` accepts them, and no standard library function checks them.
+`pledge` also accepts the names `fs:exec`, `network:tls`, `ffi`, and `worker`. They are reserved for host programs and extensions. No standard library function checks them.
 
-`pledge` raises an error for a name it does not know, such as `unknown permission: 'bogus'`, and for a part that the base permission does not have, such as `invalid fs subpermission 'nope'`. The name `"all"` grants every permission, and only the command line and a host program may use it. A script that pledges it receives the error `permission "all" cannot be requested from scripts`.
+`pledge` raises an error for an unknown name, such as `unknown permission: 'bogus'`. It also raises an error for a part that the base permission lacks, such as `invalid fs subpermission 'nope'`. The name `"all"` grants every permission. Only the command line and a host program may use it. A script that pledges `"all"` gets the error `permission "all" cannot be requested from scripts`.
 
 ## Restricting a permission to values
 
-A permission may be limited to certain paths, hosts, or variable names, so that a program holds only the access it uses. A script that reads its own data directory pledges `fs:read=./data/*`, which leaves the rest of the disk closed to it.
+A permission can be limited to certain paths, hosts, or variable names. The program then holds only the access it uses. For example, a script that reads its own data directory pledges `fs:read=./data/*`. The script cannot read any other part of the disk.
 
-The limit is a _value_ written after `=`. In a value, `*` matches any sequence of characters, including `/` and the empty sequence, and `?` matches exactly one byte.
+The limit is a _value_ written after `=`. In a value, `*` matches any sequence of characters, including `/` and the empty sequence. `?` matches exactly one byte.
 
 ### Filesystem values
 
-A filesystem value is an absolute path, or a path that starts with `.` and is resolved against the working directory. Any other value raises the error `filesystem permission values must be an absolute path or start with '.'`. A value without a wildcard matches that one path. A value that ends in `/*` matches everything below the directory and leaves out the directory itself, so a program that also lists the directory pledges both forms.
+A filesystem value is an absolute path or a path that starts with `.`. Lus resolves a path that starts with `.` against the working directory. Any other value raises the error `filesystem permission values must be an absolute path or start with '.'`. A value without a wildcard matches that one path. A value that ends in `/*` matches everything inside the directory but not the directory itself. A program that also lists the directory pledges both forms.
+
+The following script pledges read access to a data directory and to everything inside it. Reading the parent directory then fails. The setup and the cleanup run in [coroutines](#permissions-in-coroutines), so the main script never holds their wider permissions.
 
 ```lus
 -- Prepare a directory in a coroutine, whose permissions end with it.
@@ -111,11 +113,13 @@ coroutine.wrap(function()
 end)()
 ```
 
-Lus makes the granted path and the requested path absolute and resolves their symbolic links before it compares them. A link that leads out of a granted directory therefore gives no access to its target. A requested file that does not exist yet is resolved through its parent directory. On macOS, `/tmp` is a link to `/private/tmp`, and a grant for either name covers both. On Windows, paths match without regard to the case of ASCII letters, and `\` and `/` are both separators.
+Before Lus compares the granted path with the requested path, it makes both absolute and resolves their symbolic links. A link that leads out of a granted directory therefore gives no access to its target. If a requested file does not exist yet, Lus resolves its parent directory and appends the file name. On macOS, `/tmp` is a link to `/private/tmp`, so a grant for either name covers both. On Windows, matching ignores the case of ASCII letters. `\` and `/` are both separators there.
 
 ### Network values
 
-A network value has the form `host[:port][/path]`, and the host may contain `*`. The host part matches the host of the requested URL or address. The port part, when present, matches its port, and the path part, when present, matches the path of a requested URL. A value that starts with `http://` or `https://` matches the whole requested URL. `network.fetch` requests its URL, and TCP and UDP operations request `host:port`.
+A network value has the form `host[:port][/path]`. The host may contain `*`. The host part matches the host of the requested URL or address. The port part, when present, matches its port. The path part, when present, matches the path of a requested URL. A value that starts with `http://` or `https://` matches the whole requested URL. `network.fetch` requests its URL. TCP and UDP operations request `host:port`.
+
+The following pledges limit HTTP requests to the `/v1/` paths of one host. They limit TCP to the ports of `127.0.0.1`. They limit UDP to the hosts whose names end in `.internal.test`.
 
 ```lus nocheck
 pledge("network:http=api.example.com/v1/*")
@@ -126,11 +130,11 @@ pledge("network:tcp=127.0.0.1:*")
 pledge("network:udp=*.internal.test")
 ```
 
-A value matches the host as the program wrote it. A grant for `127.0.0.1` does not cover a request to `localhost`.
+Lus compares the value with the host exactly as the program wrote it. A grant for `127.0.0.1` therefore does not cover a request to `localhost`.
 
 ### Environment values
 
-An `env` value matches the name of the environment variable that [`os.getenv`](/manual/api#os.getenv) reads.
+An `env` value matches the name of the environment variable that [`os.getenv`](/manual/api#os.getenv) reads. The following script may read `HOME` and no other variable.
 
 ```lus
 pledge("env=HOME")
@@ -140,13 +144,13 @@ print((catch os.getenv("PATH")))   --> false
 
 ### Several values
 
-Each grant with a value adds that value to the permission, and a check succeeds when any of its values matches.
+Each grant with a value adds that value to the permission. A check succeeds when any of the values matches.
 
-A permission that holds a value stays limited to its values. A later grant of the same permission without a value returns `true` and changes nothing. The limit of a part also holds when its base permission was granted without a value, so `pledge("fs")` followed by `pledge("fs:read=./data/*")` permits reads only below `data` and writes everywhere.
+A permission that has a value stays limited to its values. A later grant of the same permission without a value returns `true` and changes nothing. The limit of a part also applies when its base permission was granted without a value. For example, `pledge("fs")` followed by `pledge("fs:read=./data/*")` permits reads only inside `data` and writes everywhere.
 
 ## Rejecting permissions
 
-A program rejects a permission to make sure that no later code can acquire it. A name with the prefix `~` rejects that permission for the rest of the run. Every later check of the permission fails, including when the permission was granted before, and a later `pledge` of the same name raises the error `permission "NAME" was rejected`.
+A program rejects a permission to make sure that no later code can acquire it. A name with the prefix `~` rejects that permission for the rest of the run. Every later check of the permission fails, even if the permission was granted before. A later `pledge` of the same name raises the error `permission "NAME" was rejected`. The following script grants `exec` and then rejects it. Running a command and pledging `exec` again both fail.
 
 ```lus
 pledge("exec")
@@ -155,7 +159,7 @@ print((catch os.execute("true")))   --> false
 print((catch pledge("exec")))       --> false
 ```
 
-Rejecting a base permission denies every one of its parts. A later `pledge` of one of those parts returns `true`, and the operation is still denied because the base permission stays rejected.
+Rejecting a base permission rejects every one of its parts. A later `pledge` of one of those parts returns `true`, but the operation still fails because the base permission stays rejected.
 
 ```lus
 pledge("~network")
@@ -173,7 +177,7 @@ print((catch fs.createdirectory("nope")))   --> false
 
 ## Sealing permissions
 
-A program seals its permissions once it holds everything it needs. From then on nothing in the program can change them, including modules and code that it loads later. The name `"seal"` does this. After it, `pledge` returns `false` for every grant and every rejection, even for a permission the program already holds, and the operations that were permitted before the seal stay permitted.
+A program seals its permissions once it holds everything it needs. After the seal, no code in the program can change them. This includes modules and code that the program loads later. Pledging the name `"seal"` seals the permissions. From then on, `pledge` returns `false` for every grant and every rejection, even for a permission the program already holds. The operations that were permitted before the seal stay permitted.
 
 ```lus
 pledge("fs:read")
@@ -183,17 +187,17 @@ print(pledge("~fs"))     --> false
 print((fs.type(".")))    --> directory
 ```
 
-A program usually pledges and seals in one call, since `pledge` handles its arguments in order.
+`pledge` processes its arguments in order, so a program usually pledges and seals in one call.
 
 ```lus
 print(pledge("fs:read=./data/*", "~exec", "seal"))   --> true  true  true
 ```
 
-A name that `pledge` does not know still raises its error after a seal.
+An unknown name still raises an error after a seal.
 
 ## Granting from the command line
 
-The person who runs a script grants permissions with the `-P` option of `lus`, also written `--pledge`. The script holds these permissions from its first line, without a call to `pledge`. The option accepts every form that `pledge` accepts, including values, rejections, `seal`, and `all`, and it may repeat.
+The person who runs a script grants permissions with the `-P` option of `lus`, also written `--pledge`. The script holds these permissions from its first line, without a call to `pledge`. The option accepts every form that `pledge` accepts, including values, rejections, `seal`, and `all`. It can appear several times.
 
 ```bash
 lus -Pfs script.lus
@@ -203,7 +207,7 @@ lus -P~exec script.lus
 lus -Pall script.lus
 ```
 
-When the command line grants at least one permission, those grants are the limit of the script. A `pledge` in the script returns `true` only for what the command line already allows, and returns `false` for anything else. This is how a person runs a script that they have not read: they grant what the script is supposed to need, and every other operation fails. The following script runs under `lus -Pfs:read=/srv/app/* script.lus`.
+When the command line grants at least one permission, those grants are the limit of the script. A `pledge` in the script returns `true` for what the command line already allows. It returns `false` for anything else. This lets a person run a script that they have not read. The person grants what the script is supposed to need, so every other sensitive operation fails. The following script runs under `lus -Pfs:read=/srv/app/* script.lus`.
 
 ```lus nocheck
 print(pledge("fs:read=/srv/app/*"))   --> true
@@ -217,7 +221,7 @@ A command line that only rejects permissions, such as `lus -P~exec`, sets no lim
 
 ## Permissions in coroutines
 
-Each coroutine has its own set of permissions, which lets a program run a piece of code with fewer permissions than the rest of the program has. A coroutine starts with a copy of the permissions of the coroutine that created it. From then on the two sets are independent. A grant, a rejection, or a seal inside the coroutine stays inside it, and later changes in the creator do not reach the coroutine.
+Each coroutine has its own set of permissions. A program can therefore run a piece of code with fewer permissions than the rest of the program has. A coroutine starts with a copy of the permissions of the coroutine that created it. After that the two sets are independent. A grant, a rejection, or a seal inside the coroutine changes only the set of that coroutine. Later changes in the creator leave the set of the coroutine unchanged. In the following script, a coroutine rejects `env`. The main program can still read environment variables afterwards.
 
 ```lus
 pledge("fs:read", "env")
@@ -231,7 +235,7 @@ print(coroutine.resume(co))            --> true  false
 print((catch os.getenv("HOME")))       --> true
 ```
 
-The following function runs code that the program trusts less, such as a plugin. It creates a coroutine, rejects what the code must not use, and seals the set before it calls the code. The rejections and the seal end with the coroutine, so the rest of the program keeps its permissions.
+The following function runs code that the program trusts less, such as a plugin. It creates a coroutine. The coroutine rejects what the code must not use, seals its permissions, then calls the code. The rejections and the seal apply only to the coroutine, so the rest of the program keeps its permissions.
 
 ```lus
 pledge("fs", "network", "exec")
@@ -254,23 +258,23 @@ print((fs.type(notes)))                --> file
 fs.remove(notes)
 ```
 
-Restricted code may restrict further in the same way, since every coroutine starts from the set of its creator. [Detached coroutines](/manual/concurrency#detached-coroutines) follow the same rules.
+Restricted code can create a coroutine of its own to restrict other code further, because every coroutine starts with the permissions of its creator. [Detached coroutines](/manual/concurrency#detached-coroutines) follow the same rules.
 
 ## Permissions in workers
 
-A [worker](/manual/concurrency#workers) starts with a sealed copy of the permissions that its creator held when it called `worker.create`. Code in the worker uses those permissions as they are. Every `pledge` in a worker returns `false`, rejections included, so a worker never holds more than its creator did. A program that wants a worker with fewer permissions creates it from a coroutine that rejected the rest.
+A [worker](/manual/concurrency#workers) starts with a sealed copy of the permissions that its creator held when it called `worker.create`. Code in the worker uses those permissions unchanged. Every `pledge` in a worker returns `false`, including a rejection, so a worker never holds more than its creator did. To give a worker fewer permissions, create it from a coroutine that has rejected the others.
 
 ## Permissions in an embedding host
 
-A _host_ is a program that [embeds Lus](/manual/embedding) through its C interface. The host creates a _state_, which is one instance of the Lus runtime. A new state holds no permissions, and the host sets them before it runs a script.
+A _host_ is a program that [embeds Lus](/manual/embedding) by calling its C interface. The host creates a _state_, which is one instance of the Lus runtime. A new state holds no permissions. The host sets them before it runs a script.
 
 - `lus_grant` grants a permission, with the same names and values as `pledge`.
 - `lus_reject` rejects a permission for the life of the state.
 - `lus_seal` seals the set.
 
-The rule of the command line applies. Once the host grants anything, a script may pledge only what those grants cover. A host that wants to decide each request itself, for example by asking the user, installs a function with `lus_onrequest`. Lus calls it when a script pledges a permission that the host neither granted nor rejected, and the function allows or refuses the grant.
+The rule of the [command line](#granting-from-the-command-line) applies here too. Once the host grants anything, a script may pledge only what those grants cover. A host can also decide each request when a script makes it, for example by asking the user. Such a host installs a function with `lus_onrequest`. Lus calls the function when a script pledges a permission that the host neither granted nor rejected. The function allows or refuses the grant.
 
-An extension written in C declares permissions of its own with `lus_defcapability` and checks them with `lus_require` and `lus_allowed`. Scripts pledge them like the built-in ones. [Embedding](/manual/embedding#permissions) shows each of these functions in use.
+An extension written in C declares permissions of its own with `lus_defcapability` and checks them with `lus_require` and `lus_allowed`. Scripts pledge them as they pledge the built-in permissions. [Embedding](/manual/embedding#permissions) shows each of these functions in use.
 
 ## Related pages
 

@@ -8,11 +8,11 @@ shortdesc: "The network library: HTTP and HTTPS requests, TCP clients and server
 
 The `network` library connects a program to other machines. [`network.fetch`](/manual/api#network.fetch) sends an HTTP or HTTPS request, which is how a program calls a web API or downloads a file. [`network.serve`](/manual/api#network.serve) answers HTTP requests, which makes the program a web server. The `network.tcp` and `network.udp` functions open sockets for every other protocol.
 
-Data that arrives from the network is bytes, so every function that receives data returns a [vector](/manual/text#vectors). [`vector.tostring`](/manual/api#vector.tostring) decodes a vector that holds text into a string. Every function that contacts the network checks a `network` [permission](/manual/permissions), which the examples on this page acquire with `pledge("network")`.
+Data that arrives from the network is bytes, so every function that receives data returns a [vector](/manual/text#vectors). [`vector.tostring`](/manual/api#vector.tostring) decodes a vector that holds text into a string. Every function that contacts the network requires a `network` [permission](#permissions).
 
 ## Permissions
 
-Each operation checks one part of the `network` permission, and `pledge("network")` grants all of them.
+Each operation checks one part of the `network` [permission](/manual/permissions). `pledge("network")` grants every part.
 
 | Operation | Permission | Requested value |
 | --- | --- | --- |
@@ -21,11 +21,11 @@ Each operation checks one part of the `network` permission, and `pledge("network
 | `network.udp.open`, `setsockname`, `sendto` | `network:udp` | `host:port`, or no value for an unbound socket |
 | `network.serve` | `network:server` | `host:port` of the address it serves |
 
-A permission with a value permits only the hosts that match it. A program that calls one API pledges `network:http=api.example.com/*`, so a bug or a misleading input cannot make it contact another host. [Restricting a permission to values](/manual/permissions#restricting-a-permission-to-values) gives the matching rules. `sendto` checks the permission for every destination, so a UDP grant for one host never permits datagrams to another. `network.serve` also binds a TCP server, so it requires `network:tcp` for the same address.
+A permission with a value permits only the hosts that match it. A program that calls one API pledges `network:http=api.example.com/*`, so a bug or a misleading input cannot make it contact another host. [Restricting a permission to values](/manual/permissions#restricting-a-permission-to-values) describes the matching rules. `sendto` checks the permission for every destination, so a UDP grant for one host never permits datagrams to another. `network.serve` also binds a TCP server, so it requires `network:tcp` for the same address.
 
 ## HTTP requests
 
-`network.fetch(url, method, headers, body)` sends one HTTP or HTTPS request and waits for the response. It returns three values: the integer status code, the response body as a vector, and a table of the response headers. The header names in that table are lowercase, and a header that the response repeats keeps its last value.
+`network.fetch(url, method, headers, body)` sends one HTTP or HTTPS request and waits for the response. It returns three values: the integer status code, the response body as a vector, and a table of the response headers. The header names in that table are lowercase.
 
 The following program requests a JSON document and decodes it with [`fromjson`](/manual/api#fromjson).
 
@@ -38,7 +38,7 @@ print(headers["content-type"])   --> application/json
 local data = fromjson(vector.tostring(body))
 ```
 
-The arguments after `url` are optional and are given by position. `method` defaults to `"GET"`. `headers` is a table from header names to values, and `body` is a string or a vector. The following request posts a JSON body.
+The arguments after `url` are optional and are given by position. `method` defaults to `"GET"`. `headers` is a table from header names to values. `body` is a string or a vector. The following request posts a JSON body.
 
 ```lus nocheck
 local status, body = network.fetch(
@@ -49,7 +49,7 @@ local status, body = network.fetch(
 )
 ```
 
-`fetch` returns every status that the server answers with, so a program checks the status before it uses the body. A 404 or a 500 is a result, and so is a redirect, which returns its 3xx status together with its `location` header. `fetch` does not follow redirects.
+`fetch` returns whatever status the server sends, so a program checks the status before it uses the body. A 404 or a 500 response is a normal result. A redirect is also a normal result. `fetch` returns the 3xx status and the `location` header of the redirect. The program sends the next request itself. The following program downloads a CSV file and stops when the status is anything other than 200.
 
 ```lus nocheck
 local status, body = network.fetch("https://example.com/report.csv")
@@ -59,7 +59,7 @@ end
 local rows = fromcsv(vector.tostring(body), true)
 ```
 
-`fetch` raises an error when it cannot reach the server or cannot read the response, such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"`. A [`catch`](/manual/guide#errors) around the call lets a program continue.
+`fetch` raises an error when it cannot reach the server or cannot read the response, such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"`. A program that must continue after such a failure wraps the call in [`catch`](/manual/guide#errors).
 
 ```lus nocheck
 local ok, err = catch network.fetch("https://invalid.host.example")
@@ -68,40 +68,41 @@ if not ok then
 end
 ```
 
-The remaining rules of `fetch` are these.
+`fetch` also follows these rules.
 
-- Every request carries the headers `Host`, `Connection: close`, and `User-Agent: Lus/1.0`, then the headers of the `headers` table, then `Content-Length` when the body is not empty. A header in the table replaces a default header of the same name, whatever its case.
-- A response to `"HEAD"`, and a 1xx, 204, or 304 response, has an empty body. A response header that appears more than once holds its values joined by `", "`.
-- HTTPS verifies the certificate of the server against the certificates of the system and raises an error when the verification fails.
-- A response body is limited to 64 MiB, and a larger body raises `"response body too large"`.
+- Every request has the headers `Host`, `Connection: close`, and `User-Agent: Lus/1.0`, then the headers of the `headers` table, then `Content-Length` when the body is not empty. A header in the table replaces a default header of the same name, whatever its case.
+- A response to a `"HEAD"` request has an empty body. So does a response with status 1xx, 204, or 304.
+- The values of a response header that appears more than once are joined with `", "`.
+- For an HTTPS URL, `fetch` verifies the certificate of the server against the certificates of the system. A failed verification raises an error.
+- A response body is limited to 64 MiB. A larger body raises `"response body too large"`.
 - A URL with a scheme other than `http` or `https` raises `"invalid URL: URL"`. A URL, method, or header that contains a line break raises an error before anything is sent.
 
-While the main chunk waits in `network.fetch`, the program's [detached coroutines](/manual/concurrency#detached-coroutines) keep running. A program can therefore fetch from its own `network.serve` server. Inside a detached coroutine, `fetch` makes the whole program wait, the other detached coroutines included. A coroutine that talks to a server of the same program sends the request through a TCP socket, as the example under [HTTP server](#http-server) does. A program that needs several requests at the same time sends each from a [worker](/manual/concurrency#workers).
+While the main chunk waits in `network.fetch`, the program's [detached coroutines](/manual/concurrency#detached-coroutines) keep running. A program can therefore fetch from its own `network.serve` server. Inside a detached coroutine, `fetch` blocks the whole program, the other detached coroutines included. A detached coroutine that sends a request to a server of the same program must therefore use a [TCP socket](#tcp-clients). A program that needs several requests at the same time sends each from a [worker](/manual/concurrency#workers).
 
 ## TCP clients
 
-A _TCP socket_ is a two-way connection that delivers bytes in the order they were sent. A program uses one to speak a protocol that `fetch` does not cover, such as the protocol of a database, a mail server, or a service of its own.
+A _TCP socket_ is a two-way connection that delivers bytes in the order they were sent. A program uses one for a protocol other than HTTP, such as the protocol of a database, a mail server, or a service of its own.
 
-[`network.tcp.connect(host, port)`](/manual/api#network.tcp.connect) opens a connection and returns a socket. `host` is a name or a numeric address. A connection that the system refuses or cannot reach raises an error such as `"cannot connect to HOST:PORT: Connection refused"`.
+[`network.tcp.connect(host, port)`](/manual/api#network.tcp.connect) opens a connection and returns a socket. `host` is a name or a numeric address. A connection that fails raises an error such as `"cannot connect to HOST:PORT: Connection refused"`.
 
 A TCP socket has these methods.
 
 | Method | Effect |
 | --- | --- |
 | `send(data)` | Sends a string or a vector in full and returns the number of bytes sent. |
-| `receive(pattern, max_bytes)` | Receives data as a vector, as described below. |
-| `settimeout(seconds)` | Limits every later wait of the socket, as described in [Timeouts](#timeouts). |
+| `receive(pattern, max_bytes)` | Receives data as a vector. [Receiving from a TCP socket](#receiving-from-a-tcp-socket) describes the patterns. |
+| `settimeout(seconds)` | Limits every later wait of the socket. [Timeouts](#timeouts) describes the limit. |
 | `getsockname()` | Returns the local numeric address and port. |
 | `getpeername()` | Returns the numeric address and port of the other end. |
 | `close()` | Closes the connection. A second `close` does nothing. |
 
-A socket declared with the `<close>` attribute closes when its block ends, which is the usual way to make sure a connection is released. The garbage collector also closes a socket that the program no longer refers to.
+A socket declared with the `<close>` attribute closes when its block ends, which is the usual way to release a connection. The garbage collector also closes a socket that the program no longer refers to.
 
-A method other than `close` on a closed socket raises `"attempt to use a closed socket"`. A failure of the connection itself during `send` or `receive`, such as a reset by the other end, returns `nil` and a message such as `"receive: Connection reset by peer"`.
+A method other than `close` on a closed socket raises `"attempt to use a closed socket"`. When the connection fails during `send` or `receive`, for example because the other end reset it, the method returns `nil` and a message such as `"receive: Connection reset by peer"`.
 
 ## Receiving from a TCP socket
 
-A TCP connection carries a stream of bytes with no boundaries between messages, so the receiver says how much to read. [`socket:receive(pattern, max_bytes)`](/manual/api#tcp_socket:receive) reads according to one of three patterns and returns a vector.
+A TCP connection carries a stream of bytes with no boundaries between messages, so each `receive` call specifies how much to read. [`socket:receive(pattern, max_bytes)`](/manual/api#tcp_socket:receive) reads according to one of three patterns and returns a vector.
 
 | Pattern | Result | Limit |
 | --- | --- | --- |
@@ -109,11 +110,11 @@ A TCP connection carries a stream of bytes with no boundaries between messages, 
 | A positive integer `n` | Exactly `n` bytes, or the bytes that remain when the connection ends first | `n` must be at most 1 MiB |
 | `"*a"` | Everything up to the end of the connection | 64 MiB, or `max_bytes` |
 
-Text protocols read lines with `"*l"`. Binary protocols usually send a length first, and the program reads that many bytes with an integer. `"*a"` suits a peer that sends one message and closes the connection.
+Text protocols read lines with `"*l"`. Binary protocols usually send a length first. The program then reads that many bytes with an integer pattern. `"*a"` is for a peer that sends one message and closes the connection.
 
-At the end of the connection every pattern returns the bytes that remain, which is an empty vector once nothing remains. A program detects the end of the connection by an empty result. An integer that is zero, negative, or larger than 1 MiB raises `"invalid receive size: N"`, and any other pattern raises `"invalid receive pattern: PATTERN"`.
+At the end of the connection, every pattern returns the bytes that remain. Once nothing remains, the result is an empty vector, which is how a program detects the end of the connection. An integer that is zero, negative, or larger than 1 MiB raises `"invalid receive size: N"`. Any other pattern raises `"invalid receive pattern: PATTERN"`.
 
-The optional positive integer `max_bytes` sets the limit of `"*l"` and `"*a"`. A line or a stream that exceeds its limit closes the socket and raises `"receive limit exceeded"`. A server passes a small `max_bytes` so that a peer that never sends a line break cannot make the program use memory without limit.
+The optional positive integer `max_bytes` sets the limit of `"*l"` and `"*a"`. A line or a stream that exceeds its limit closes the socket and raises `"receive limit exceeded"`. A server passes a small `max_bytes` so that a peer that never sends a line break cannot make the program use memory without limit. The following calls read a request line of at most 8 KiB and an upload of at most 8 MiB.
 
 ```lus nocheck
 local request_line = socket:receive("*l", 8192)
@@ -122,11 +123,11 @@ local upload = socket:receive("*a", 8 * 1024 * 1024)
 
 ## TCP servers
 
-A _TCP server_ listens on a port and accepts the connections that clients open to it. [`network.tcp.bind(host, port, backlog)`](/manual/api#network.tcp.bind) starts one and returns it. `backlog` is the number of connections that the system keeps waiting until `accept` takes them, and defaults to 128. Port `0` lets the operating system choose a free port, and [`server:getsockname()`](/manual/api#tcp_server:getsockname) returns the numeric address and the port it chose.
+A _TCP server_ listens on a port and accepts the connections that clients open to it. [`network.tcp.bind(host, port, backlog)`](/manual/api#network.tcp.bind) starts one and returns it. `backlog` is the number of connections that the system keeps waiting until `accept` takes them. It defaults to 128. With port `0`, the operating system chooses a free port. [`server:getsockname()`](/manual/api#tcp_server:getsockname) returns the numeric address and the chosen port.
 
 A server has the methods `accept`, `settimeout`, `getsockname`, and `close`. `accept()` waits for the next connection and returns it as a TCP socket.
 
-The following program runs a server and a client in one process. The server runs in a [detached coroutine](/manual/concurrency#detached-coroutines), which Lus resumes whenever the connection it waits for is ready. The main chunk connects, sends a name, and waits for the reply, and the server coroutine runs during that wait. At the end, `coroutine.resume` waits for the server coroutine to end and returns its error if it failed, which `assert` raises.
+The following program is a greeting server and its client in one process. The server runs in a [detached coroutine](/manual/concurrency#detached-coroutines), which Lus resumes whenever the connection it waits for is ready. The main chunk connects, sends a name, and waits for the reply. The server coroutine runs during that wait. The final `coroutine.resume` waits for the server coroutine to end. If the coroutine failed, `resume` returns its error and `assert` raises it.
 
 ```lus
 pledge("network")
@@ -147,13 +148,13 @@ assert(coroutine.resume(greeter))
 server:close()
 ```
 
-A server that handles many clients accepts in a loop and detaches one coroutine per connection. [Suspension points](/manual/concurrency#suspension-points) shows that program.
+A server that handles many clients accepts in a loop and detaches one coroutine per connection. [Detached coroutines](/manual/concurrency#detached-coroutines) has a server of this kind.
 
 ## UDP sockets
 
-A _UDP socket_ sends and receives single messages called datagrams, without a connection. A datagram arrives whole or not at all, and the network may lose or reorder datagrams. Programs use UDP for short messages where a lost one is acceptable, such as metrics, discovery on a local network, and DNS queries.
+A _UDP socket_ sends and receives single messages called datagrams, without a connection. A datagram arrives whole or not at all. The network may lose or reorder datagrams. Programs use UDP for short messages where a lost one is acceptable, such as metrics, discovery on a local network, and DNS queries.
 
-[`network.udp.open(port, address)`](/manual/api#network.udp.open) creates a UDP socket. With an `address`, or with a `port` other than `0`, the socket is bound to that local address and port, which is what a receiver needs. The address is a numeric IPv4 address and defaults to `0.0.0.0`, which stands for every address of the machine. Without either argument the socket sends from a port that the system chooses, which is enough for a sender.
+[`network.udp.open(port, address)`](/manual/api#network.udp.open) creates a UDP socket. With an `address`, or with a `port` other than `0`, the socket is bound to that local address and port, which is what a receiver needs. The address is a numeric IPv4 address and defaults to `0.0.0.0`, which means every address of the machine. Without either argument the socket sends from a port that the system chooses, which is enough for a sender.
 
 A UDP socket has these methods.
 
@@ -166,7 +167,9 @@ A UDP socket has these methods.
 | `settimeout(seconds)` | Limits every later wait of the socket. |
 | `close()` | Closes the socket. |
 
-`receive(size)` returns at most `size` bytes of the datagram and discards the rest of it. `size` defaults to 8 KiB and must be between 1 and 1 MiB, and any other size raises `"invalid receive size: N"`. `setsockname` on a socket that is already bound returns `nil` and an error message. A method other than `close` on a closed socket raises `"attempt to use a closed UDP socket"`.
+`receive(size)` returns at most `size` bytes of the datagram and discards the rest of it. `size` defaults to 8 KiB and must be between 1 and 1 MiB. Any other size raises `"invalid receive size: N"`. `setsockname` on a socket that is already bound returns `nil` and an error message. A method other than `close` on a closed socket raises `"attempt to use a closed UDP socket"`.
+
+The following program sends one datagram from one socket to another on the same machine.
 
 ```lus
 pledge("network")
@@ -186,9 +189,11 @@ receiver:close()
 
 ## Timeouts
 
-A socket operation waits as long as it takes by default, so a peer that stops answering stops the code that waits for it. A _timeout_ limits how long one operation of a socket or server may wait. `settimeout(seconds)` sets it for every later operation, and `seconds` may have a fraction. A negative value or NaN removes the timeout. A timeout of `0` never waits, so an operation that cannot complete at once fails at once.
+By default, a socket operation waits until it completes, so a peer that stops answering stops the code that waits for it. A _timeout_ limits how long one operation of a socket or server may wait. `settimeout(seconds)` sets the timeout for every later operation. `seconds` may have a fraction. A negative value or NaN removes the timeout. With a timeout of `0`, an operation that cannot complete at once fails at once.
 
 When a timeout runs out, the operation raises `"receive timeout"`, `"send timeout"`, `"accept timeout"`, or `"sendto timeout"`. The socket stays open and usable after a timeout.
+
+The following server waits 50 milliseconds for a connection. No client connects, so `accept` raises an error.
 
 ```lus
 pledge("network")
@@ -202,13 +207,15 @@ server:close()
 
 ## Waiting inside detached coroutines
 
-A program that serves several connections must wait for all of them at once. [Detached coroutines](/manual/concurrency#detached-coroutines) make that possible: a socket operation inside one suspends only that coroutine, and the other detached coroutines run until its socket is ready. An operation with this behavior is called a _suspension point_. `connect`, `accept`, `send`, and `receive` on TCP, and `receive` and `sendto` on UDP, are suspension points.
+A program that serves several connections must wait for all of them at once. [Detached coroutines](/manual/concurrency#detached-coroutines) make that possible. A socket operation inside a detached coroutine suspends only that coroutine. The other detached coroutines run until its socket is ready. An operation with this behavior is called a _suspension point_. The TCP suspension points are `connect`, `accept`, `send`, and `receive`. The UDP suspension points are `receive` and `sendto`.
 
-Outside a detached coroutine, the same operation blocks its caller, and the detached coroutines run during the wait. A timeout limits the wait in both cases. [Suspension points](/manual/concurrency#suspension-points) describes the rules in full.
+Outside a detached coroutine, the same operation blocks its caller. The detached coroutines run during the wait. A timeout limits the wait in both cases. [Suspension points](/manual/concurrency#suspension-points) describes the rules in full.
 
 ## HTTP server
 
-`network.serve(host, port, handler, options)` turns a program into an HTTP/1.1 server. It listens on `host` and `port` and calls `handler` once for every request, with a table that describes the request. The handler returns the status, the body, and the headers of the response. `serve` runs for as long as the server does, so the call returns only when the server stops.
+`network.serve(host, port, handler, options)` runs an HTTP/1.1 server. It listens on `host` and `port` and calls `handler` once for every request, with a table that describes the request. The handler returns the status, the body, and the headers of the response. The call to `serve` returns when the server stops.
+
+The following server answers `GET /` with a greeting and every other request with 404.
 
 ```lus nocheck
 pledge("network")
@@ -221,9 +228,9 @@ network.serve("127.0.0.1", 8080, function(req)
 end)
 ```
 
-`serve` runs every connection in a detached coroutine of its own, so a slow client does not delay the others. A connection stays open between requests unless the client asks to close it.
+`serve` runs every connection in a detached coroutine of its own, so a slow client does not delay the others. A connection stays open between requests until the client closes it or sends the header `Connection: close`.
 
-The second form, `network.serve(server, handler, options)`, serves on a server that `network.tcp.bind` returned. A program uses it to bind port `0` and read the chosen port with `getsockname` before it serves, as a test does. A server that `serve` bound itself closes when `serve` ends, and a server passed to it stays open until the program closes it. `serve` ends when the coroutine that called it is closed, or when accepting a connection fails for a reason other than a shortage of file descriptors or memory.
+The second form, `network.serve(server, handler, options)`, serves on a server that `network.tcp.bind` returned. A program uses it to bind port `0` and read the chosen port with `getsockname` before it serves, as a test does. A server that `serve` bound itself closes when `serve` ends. A server passed to `serve` stays open until the program closes it. `serve` ends when the coroutine that called it is closed, or when accepting a connection fails for a reason other than a shortage of file descriptors or memory.
 
 The following program serves in a detached coroutine and sends one request over a TCP socket from the main chunk. [`coroutine.close`](/manual/concurrency#cancelling) stops the server.
 
@@ -256,22 +263,24 @@ The handler receives one table per request with five fields.
 | `method` | The request method, such as `"GET"`. |
 | `path` | The request target up to the first `?`, as the client sent it. |
 | `query` | The text after the first `?`, or the empty string. |
-| `headers` | A table from lowercase header names to their values. A header that repeats joins its values with `", "`. |
+| `headers` | A table from lowercase header names to their values. The values of a repeated header are joined with `", "`. |
 | `body` | The request body as a vector, which is empty for a request without a body. |
 
-The server reads bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, and it answers `Expect: 100-continue`.
+The server reads bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`. It also answers `Expect: 100-continue`.
 
 ### Responses
 
-The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. The server adds the `Date` and `Content-Length` headers when the handler leaves them out, and it leaves the body out of the response to a `HEAD` request.
+The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. The server adds the `Date` and `Content-Length` headers when the handler leaves them out. It omits the body from the response to a `HEAD` request.
 
-A handler may wait for something, such as a query to another server. A socket operation or a `coroutine.yield` inside it suspends its connection only, and the other connections run during the wait. The server sets no limit on the time a handler takes.
+A handler may wait for something, such as a query to another server. A socket operation or a `coroutine.yield` inside the handler suspends only its own connection. The other connections run during the wait. The server sets no limit on the time a handler takes.
 
 ### Handler errors
 
 When the handler raises an error, the server answers 500 with an empty body and closes that connection. It does the same when the handler returns values that make no response, such as a status that is not an integer. The other connections continue, so one failing request does not stop the server.
 
-The server writes the error to standard error in the form `lus: network.serve: MESSAGE`. A program that records errors elsewhere passes an `on_error` function in the options, which receives the error object in place of that line.
+The server writes the error to standard error in the form `lus: network.serve: MESSAGE`. A program that records errors elsewhere passes an `on_error` function in the options. The server then calls `on_error` with the error object and writes nothing to standard error.
+
+The following server fails on every request and collects the errors in a table.
 
 ```lus
 pledge("network")
@@ -300,17 +309,17 @@ server:close()
 
 | Field | Value |
 | --- | --- |
-| `idle_timeout` | How many seconds a connection may spend without progress. It defaults to 60, and a negative value lets a connection wait without limit. |
-| `max_connections` | How many connections the server keeps open at once. It defaults to half of the file descriptors that the process may open, and to 65536 at most. |
+| `idle_timeout` | How many seconds a connection may spend without progress. The default is 60. A negative value removes the limit. |
+| `max_connections` | How many connections the server keeps open at once. The default is half of the file descriptors that the process may open, up to 65536. |
 | `on_error` | A function that receives the error object of a failed handler in place of the line on standard error. |
 
-A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that stays idle for `idle_timeout` between two requests closes. One that stops in the middle of a request is answered with 408 and closes, and one that stops reading its response closes as well. The time the handler takes does not count.
+A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that makes no progress for `idle_timeout` seconds between two requests closes. A connection that stops in the middle of a request receives a 408 response and closes. A connection that stops reading its response also closes. The time that the handler takes is excluded.
 
-While `max_connections` connections are open, further clients wait in the queue of the system, and the server accepts the next one when a connection closes. When the system has no file descriptor or no memory left for a new connection, the server waits for a connection to close, or for a moment, and accepts again.
+While `max_connections` connections are open, further clients wait in the queue of the system. The server accepts the next one when a connection closes. When the system has no file descriptor or no memory left for a new connection, the server waits until a connection closes or a short time passes. It then accepts again.
 
 ### Limits
 
-The server limits the size of a request so that a client cannot exhaust its memory. The request line and the headers of a request are limited to 64 KiB and 128 header lines, and a request body to 16 MiB. A chunked body gives each chunk size as hexadecimal digits alone, and the line that starts a chunk is limited to 1 KiB. The chunk lines and trailers of a chunked body are limited to 64 KiB plus 8 bytes for every byte of the body. A request over a limit is answered with 431 or 413, and a malformed request with 400. The connection closes after each of these answers.
+The server limits the size of a request so that a client cannot exhaust its memory. The request line and the headers of a request are limited to 64 KiB and 128 header lines. A request body is limited to 16 MiB. A chunked body gives each chunk size as hexadecimal digits alone. The line that starts a chunk is limited to 1 KiB. The chunk lines and trailers of a chunked body are limited to 64 KiB plus 8 bytes for every byte of the body. The server answers a request over a limit with 431 or 413. It answers a malformed request with 400. The connection closes after each of these answers.
 
 ## Related pages
 

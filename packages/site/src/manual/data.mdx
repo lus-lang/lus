@@ -3,16 +3,16 @@ order: 60
 title: Data formats
 icon: braces
 group: library
-shortdesc: "JSON and CSV parsing and serialization, and the table and string functions that aggregate, transform, and split data."
+shortdesc: "JSON and CSV parsing and serialization. Table and string functions that aggregate, transform, and split data."
 ---
 
-Programs exchange data with other programs as text in a few common formats. Lus reads and writes the two most common ones with four global functions: [`fromjson`](/manual/api#fromjson) and [`tojson`](/manual/api#tojson) for JSON, and [`fromcsv`](/manual/api#fromcsv) and [`tocsv`](/manual/api#tocsv) for CSV. Once the data is in tables, functions of the [`table`](/manual/api#table-library) and [`string`](/manual/api#string-library) libraries compute statistics over it, transform it, group it, and split and trim its text.
+Programs exchange data with other programs as text in a few common formats. JSON and CSV are the two most common. The global functions [`fromjson`](/manual/api#fromjson) and [`tojson`](/manual/api#tojson) read and write JSON. The global functions [`fromcsv`](/manual/api#fromcsv) and [`tocsv`](/manual/api#tocsv) read and write CSV. All four convert between text and tables. The [`table`](/manual/api#table-library) library has functions that summarize, transform, group, and sort the tables. The [`string`](/manual/api#string-library) library has functions that split, join, and trim text.
 
 ## JSON
 
-_JSON_ is a text format for structured data: numbers, strings, booleans, lists, and records with named fields, nested to any depth. Web APIs answer in it, and many programs keep their configuration in it. `fromjson` turns JSON text into Lus values, and `tojson` turns a Lus value into JSON text. Both follow the JSON standard, RFC 8259.
+_JSON_ is a text format for structured data. It holds numbers, strings, booleans, lists, and records with named fields. Lists and records can nest to any depth. Web APIs return JSON. Many programs keep their configuration in it. `fromjson` converts JSON text to Lus values. `tojson` converts a Lus value to JSON text. Both follow the JSON standard, RFC 8259.
 
-The following example reads a configuration, changes one setting, and writes a part of it back as JSON.
+The following program reads a configuration and changes the port of the server. It then writes the address of the server as JSON.
 
 ```lus
 global fromjson, print, tojson
@@ -32,14 +32,14 @@ print(tojson({ config.server.host, config.server.port }))  --> ["localhost",9090
 
 ### Parsing
 
-`fromjson(s, options)` parses one complete JSON value from the string `s`, and the whole input must be valid. JSON values become Lus values as follows:
+`fromjson(s, options)` parses the string `s`, which must hold exactly one valid JSON value. JSON values become Lus values as follows:
 
 - `null` becomes `nil`.
 - `true` and `false` become booleans.
-- A number written with integer syntax becomes an integer, and a number with a decimal point or an exponent becomes a float.
+- A number without a decimal point or an exponent becomes an integer. A number with either one becomes a float.
 - A string becomes a string.
 - An array becomes a table with integer keys from 1.
-- An object becomes a table with string keys. If an object repeats a key, the last value wins.
+- An object becomes a table with string keys. If an object repeats a key, the table holds the last value.
 
 ```lus
 global fromjson, math, print
@@ -49,7 +49,7 @@ print(fromjson("null"), fromjson("true"), fromjson('"hi"'))   --> nil  true  hi
 print(fromjson('{"a": 1, "a": 2}').a)                         --> 2
 ```
 
-Since `null` becomes `nil`, and a table cannot hold `nil`, a null field of an object is absent from the resulting table and a null element of an array leaves a gap. JSON that contains null values therefore changes when a program parses it and writes it back.
+A table cannot hold `nil`. A null field of an object is therefore absent from the resulting table. A null element of an array leaves a gap. JSON that contains null values changes when a program parses it and writes it back.
 
 ```lus
 global fromjson, print, tojson
@@ -59,7 +59,7 @@ print(row[1], row[2], row[3])                 --> 1  nil  3
 print(tojson(fromjson('{"a": null}')))        --> []
 ```
 
-A float cannot hold every decimal fraction exactly, and an integer holds at most 64 bits. Data such as prices and long identifiers must not change on the way through a program. The optional `options` table therefore takes the boolean field `exact`. With `exact` set, an integer too large for 64 bits becomes a bigint, and a number with a fraction or an exponent becomes a decimal, which keeps its digits as written. `tojson` writes both back with the same digits. [Values and types](/manual/guide#values-and-types) in the guide describes bigints and decimals.
+Prices and long identifiers must keep every digit when a program reads them. A float stores most decimal fractions approximately. An integer holds at most 64 bits. The `exact` field of the optional `options` table makes `fromjson` keep every digit. When `exact` is `true`, an integer too large for 64 bits becomes a bigint. A number with a fraction or an exponent becomes a decimal, which keeps its digits as written. `tojson` writes both with the same digits. [Values and types](/manual/guide#values-and-types) in the guide describes bigints and decimals.
 
 ```lus
 global fromjson, math, print, tojson
@@ -71,7 +71,7 @@ local id = fromjson("123456789012345678901234567890", { exact = true })
 print(math.type(id), tojson(id))               --> bigint  123456789012345678901234567890
 ```
 
-Without `exact`, a number outside the range of a 64-bit integer or a float raises an error. Invalid syntax, text after the end of the value, and arrays and objects nested deeper than 1,000 levels also raise errors. The message gives the position of the problem as a byte count from the start of the text, where the first byte is 1.
+Without `exact`, a number outside the range of a 64-bit integer or a float raises an error. Invalid syntax, text after the end of the value, and arrays and objects nested deeper than 1,000 levels also raise errors. The error message gives the position of the problem in bytes from the start of the text. The first byte is position 1.
 
 ```lus
 global fromjson, print
@@ -85,7 +85,7 @@ print(catch fromjson("99999999999999999999"))   --> false  JSON parse error at p
 
 `tojson(value, filter)` returns the JSON text of `value` as a string, without spaces or line breaks.
 
-A Lus table serves as both a list and a record, and JSON has a separate form for each, so `tojson` decides by the keys of the table. A table whose keys are exactly the integers from 1 to some `n` becomes a JSON array, and the empty table becomes `[]`. Every other table becomes a JSON object, which keeps the string keys and leaves out keys of every other type. A table with integer keys and a gap between them is therefore an object with no members.
+A Lus table can be a list or a record. JSON has a separate form for each: an array and an object. `tojson` chooses the form from the keys of the table. A table whose keys are exactly the integers from 1 to some `n` becomes a JSON array. The empty table becomes `[]`. Every other table becomes a JSON object. The object contains the string keys of the table and omits keys of every other type. A table with integer keys and a gap between them is therefore an object with no members.
 
 ```lus
 global print, tojson
@@ -112,7 +112,7 @@ print(tojson(3.0), tojson(0.1))               --> 3  0.1
 print(tojson(math.huge), tojson(0 / 0))       --> null  null
 ```
 
-Functions, coroutines, userdata, vectors, and enum values have no JSON form. Each becomes `null` when it is the whole value or an element of an array, and an object field that holds one is left out.
+Functions, coroutines, userdata, vectors, and enum values have no JSON form. Each becomes `null` when it is the whole value or an element of an array. An object field that holds one is left out.
 
 ```lus
 global print, tojson
@@ -123,7 +123,7 @@ print(tojson({status.ready}))          --> [null]
 print(tojson({status = status.ready})) --> {}
 ```
 
-A table that is referenced from several places is written in full at each place. A table that contains itself, directly or through other tables, raises the error `circular reference detected in table`.
+A table that is referenced from several places is written in full at each place. A table that contains itself, directly or indirectly, raises the error `circular reference detected in table`.
 
 ```lus
 global print, tojson
@@ -140,9 +140,9 @@ print(catch tojson(cycle))     --> false  ...: circular reference detected in ta
 
 ### Filters
 
-A program often needs to leave out or change some values on the way to JSON, such as a password field or an internal identifier. The optional `filter` function of `tojson` does that without a copy of the data. `tojson` first calls it with the key `nil` and the whole value, then with each integer key of an array and each string key of an object, together with the value at that key. The filter returns the value to write in its place. When the returned value is a table, `tojson` filters its contents in the same way.
+A program often needs to omit or change some values in its JSON output, such as a password field or an internal identifier. The optional `filter` argument of `tojson` is a function that does this, so the program has no need to copy the data first. `tojson` first calls the filter with the key `nil` and the whole value. It then calls the filter for each integer key of an array and each string key of an object, with the key and the value at that key. `tojson` writes the value that the filter returns. When the filter returns a table, `tojson` filters the contents of that table in the same way.
 
-If the filter returns `nil`, the field is left out of an object, the element becomes `null` in an array, and the whole value becomes `null`. An error raised in the filter propagates from `tojson`.
+A filter that returns `nil` for a field of an object removes the field. A filter that returns `nil` for an element of an array or for the whole value writes `null`. An error raised in the filter propagates from `tojson`.
 
 ```lus
 global print, tojson
@@ -161,7 +161,7 @@ end))                                    --> [1,null,3]
 
 ### The `__json` metamethod
 
-An object of a class usually holds fields that do not belong in its JSON form. The `__json` metamethod lets the class define that form once, so every `tojson` call that meets one of its objects uses it. A table whose [metatable](/manual/guide#metatables-and-objects) has a `__json` field is written as the value that `__json` returns when called with the table. The returned value follows the same rules and may have a `__json` metamethod of its own. If `__json` returns `nil`, the table is written as `null`. An error raised in the metamethod propagates from `tojson`.
+An object of a class usually holds fields that do not belong in its JSON form. A class defines the JSON form of its objects once with the `__json` metamethod. When a table has a [metatable](/manual/guide#metatables-and-objects) with a `__json` field, `tojson` calls `__json` with the table and writes the value that the call returns. `tojson` serializes the returned value by the same rules, so that value may have a `__json` metamethod of its own. If `__json` returns `nil`, the table is written as `null`. An error raised in the metamethod propagates from `tojson`.
 
 ```lus
 global fromjson, print, setmetatable, tojson
@@ -177,7 +177,7 @@ local decoded = fromjson(tojson(point))
 print(decoded.x, decoded.y, decoded.internal)  --> 10  20  nil
 ```
 
-A program that must write `null` for a field, where `nil` would leave the field out, uses a value of its own for it: a table with a `__json` metamethod that returns `nil`.
+A field that holds `nil` is absent from the output. To write `null` for a field, give the field a table with a `__json` metamethod that returns `nil`.
 
 ```lus
 global print, setmetatable, tojson
@@ -188,9 +188,9 @@ print(tojson({ email = null }))   --> {"email":null}
 
 ## CSV
 
-_CSV_ is a text format for a table of values: each line is a row, and commas separate the fields of a row. Spreadsheets and databases export and import it. `fromcsv` parses CSV text into a table of rows, and `tocsv` writes a table of rows as CSV text. Both follow the CSV standard, RFC 4180.
+_CSV_ is a text format for a table of values. Each line is a row. Commas separate the fields of a row. Spreadsheets and databases export and import CSV. `fromcsv` parses CSV text into a table of rows. `tocsv` writes a table of rows as CSV text. Both follow the CSV standard, RFC 4180.
 
-The following example reads orders from CSV text whose first line names the columns, and computes their total. The prices are money, so the program reads them as [decimals](/manual/practices#numbers), which keep their cents exactly.
+The following program computes the total of a list of orders. The first line of the CSV text names the columns. The prices are money, so the program converts them to [decimals](/manual/practices#numbers), which keep their cents exactly.
 
 ```lus
 global decimal, fromcsv, ipairs, print, tonumber
@@ -205,7 +205,7 @@ print(#orders, orders[1].item, total)   --> 2  pen  13.00
 
 ### Parsing CSV
 
-`fromcsv(s, headers, delimiter)` returns an array with one entry per row. Each row is an array of strings. CSV has no types, so every field is a string, and a program converts the fields that hold numbers with `tonumber`, or with `decimal` for money.
+`fromcsv(s, headers, delimiter)` returns an array with one entry per row. Each row is an array of strings. CSV has no types, so every field is a string. A program converts the fields that hold numbers with `tonumber`, or with `decimal` for money.
 
 ```lus
 global fromcsv, print
@@ -214,7 +214,7 @@ local data = fromcsv("name,age,city\nAlice,30,Paris\nBob,25,London")
 print(#data, data[1][1], data[2][1], data[2][2])  --> 3  name  Alice  30
 ```
 
-Most CSV files name their columns in the first row. When `headers` is `true`, `fromcsv` uses the first row as those names, and each later row becomes a table with one field per column name. Code then reads `row.age` in place of `row[2]`, which keeps working when the columns change order. A row with fewer fields than the header lacks the missing names, and a field beyond the last name is dropped.
+Most CSV files name their columns in the first row. When `headers` is `true`, `fromcsv` reads the column names from the first row. Each later row becomes a table with one field per column name. A program can then read `row.age`. Unlike `row[2]`, this keeps working when the columns change order. A row with fewer fields than the header has no field for the missing columns. A field beyond the last column name is dropped.
 
 ```lus
 global fromcsv, print
@@ -223,7 +223,7 @@ local people = fromcsv("name,age,city\nAlice,30,Paris\nBob,25,London", true)
 print(#people, people[1].name, people[1].age, people[2].city)  --> 2  Alice  30  London
 ```
 
-CSV encloses a field in double quotes when the field contains the delimiter, a line break, or a double quote, and it writes a double quote inside a quoted field twice. `fromcsv` reads these forms and returns the field without the quotes. Rows end with a line feed or with a carriage return followed by a line feed, and a line break at the end of the text adds no row. An empty line inside the text is a row with one empty field.
+A CSV field is enclosed in double quotes when it contains the delimiter, a line break, or a double quote. A double quote inside a quoted field is written twice. `fromcsv` reads these forms and returns the field without the enclosing quotes. A row ends with a line feed, or with a carriage return followed by a line feed. A line break at the end of the text adds no row. An empty line inside the text is a row with one empty field.
 
 ```lus
 global fromcsv, print
@@ -242,7 +242,7 @@ local data = fromcsv("name\tage\nAlice\t30", false, "\t")
 print(data[2][1], data[2][2])  --> Alice  30
 ```
 
-A quoted field without a closing quote raises an error, and so does a character other than the delimiter or a line break after the closing quote of a field. The message gives the byte position.
+A quoted field without a closing quote raises an error. The closing quote of a field must be followed by the delimiter, a line break, or the end of the text. Any other character raises an error. The message gives the byte position.
 
 ```lus
 global fromcsv, print
@@ -253,7 +253,7 @@ print(catch fromcsv('"a"b,c'))         --> false  ...: CSV parse error at positi
 
 ### Writing CSV
 
-`tocsv(rows, delimiter)` returns a string with one line per row, and every line, the last included, ends with a line feed. Each row must be an array of fields, and the header line is a row like the others. A row that is not a table raises the error `row N is not a table`. `tocsv` reads only the array part of a row, so a row with named fields writes an empty line.
+`tocsv(rows, delimiter)` returns a string with one line per row. Every line ends with a line feed, including the last. Each row must be an array of fields. The header line is a row like the others. A row that is not a table raises the error `row N is not a table`. `tocsv` reads only the fields at indices 1 to the length of a row, so a row that has only named fields produces an empty line.
 
 ```lus
 global print, tocsv
@@ -265,7 +265,7 @@ local csv = tocsv({
 print(csv == "name,age\nAlice,30\n")  --> true
 ```
 
-`tocsv` converts each value that is not a string with `tostring`. The number of fields in a row is its length as the `#` operator reports it. A `nil` inside that length becomes an empty field, but a `nil` can also end the length of a row early, so a program writes an empty field as `""`. A field that contains the delimiter, a line break, or a double quote is enclosed in double quotes, with each inner double quote written twice.
+`tocsv` converts each value that is not a string with `tostring`. The number of fields in a row is the length that the `#` operator returns. A `nil` inside that length becomes an empty field. A `nil` can also make `#` return a shorter length, so a program should write an empty field as `""`. A field that contains the delimiter, a line break, or a double quote is enclosed in double quotes. Each double quote inside the field is written twice.
 
 ```lus
 global print, tocsv
@@ -285,13 +285,13 @@ print(tocsv({{"a", "b"}, {"c", "d"}}, "\t") == "a\tb\nc\td\n")  --> true
 
 ## Table functions
 
-The `table` library has functions for the common steps of processing a list of values or records: summarizing it, transforming it, grouping it, and sorting it. Each reads its array argument from index 1 to the length that `#` reports.
+The `table` library has functions that summarize, transform, group, and sort a list of values or records. Each function reads its array argument from index 1 to the length that `#` returns.
 
 ### Statistics
 
-Four functions summarize the numbers of an array. A string that holds a number, as the fields of a CSV row do, counts as that number, and every other value is skipped. Each function returns a float:
+Four functions summarize the numbers in an array. A string that holds a number is treated as that number, so the functions accept the fields of a CSV row. Every other value is skipped. Each function returns a float:
 
-- [`table.sum`](/manual/api#table.sum) returns the sum, and `0.0` for an array with no numbers.
+- [`table.sum`](/manual/api#table.sum) returns the sum. The sum of an array with no numbers is `0.0`.
 - [`table.mean`](/manual/api#table.mean) returns the average, which is the sum divided by the count.
 - [`table.median`](/manual/api#table.median) returns the middle value of the sorted numbers, or the average of the two middle values when their count is even. One unusually large or small value changes the median far less than the mean. The function leaves the array unchanged.
 - [`table.stdev(array, sample)`](/manual/api#table.stdev) returns the standard deviation, which measures how far the values spread around their mean. It divides by the count `n`, which is correct when the array holds every value of interest. When `sample` is `true`, it divides by `n - 1`, which is correct when the array is a sample of a larger set.
@@ -313,9 +313,9 @@ print(table.stdev(values), table.stdev(values, true))           --> 2.0  2.13808
 
 ### Transforming arrays
 
-[`table.map(array, func)`](/manual/api#table.map) builds a new array by applying a function to every element, such as converting every field of a column to a number. Element `i` of the result is `func(array[i], i)`, and a call that returns `nil` leaves a gap at that index.
+[`table.map(array, func)`](/manual/api#table.map) builds a new array by applying a function to every element. A typical use is to convert every field of a column to a number. Element `i` of the result is `func(array[i], i)`. A call that returns `nil` leaves a gap at that index.
 
-[`table.filter(array, test)`](/manual/api#table.filter) builds a new array of the elements that pass a test. It keeps the elements for which `test(element)` returns a truthy value, in their original order and without gaps. Neither function changes its argument.
+[`table.filter(array, test)`](/manual/api#table.filter) builds a new array of the elements that pass a test. It keeps the elements for which `test(element)` returns a truthy value, in their original order and without gaps. Both functions leave their argument unchanged.
 
 ```lus
 global print, table
@@ -327,7 +327,7 @@ local evens = table.filter({1, 2, 3, 4, 5}, function(x) return x % 2 == 0 end)
 print(#evens, evens[1], evens[2])          --> 2  2  4
 ```
 
-[`table.reduce(array, func, initial)`](/manual/api#table.reduce) combines all elements into one value, such as a product, a longest string, or a table of counts. It keeps a running result, which starts as `initial`. For each element it calls `func(result, element, index)`, and the value that `func` returns becomes the new running result. If `initial` is absent, the first element is the starting result and the calls begin at the second element. An empty array with no `initial` raises an error.
+[`table.reduce(array, func, initial)`](/manual/api#table.reduce) combines all elements into one value, such as a product, a longest string, or a table of counts. It keeps a running result, which starts as `initial`. For each element it calls `func(result, element, index)`. The value that `func` returns becomes the new running result. If `initial` is absent, the first element is the starting result and the calls begin at the second element. An empty array with no `initial` raises an error.
 
 ```lus
 global print, table
@@ -339,7 +339,7 @@ print(catch table.reduce({}, function(acc, x) return acc end))              --> 
 
 ### Grouping and sorting
 
-[`table.groupby(array, keyfunc)`](/manual/api#table.groupby) sorts the elements of an array into groups, such as employees by department. It calls `keyfunc(element)` for each element and returns a new table that maps each result to an array of the elements that produced it, in their original order. A key function that returns `nil` raises the error `table index is nil`.
+[`table.groupby(array, keyfunc)`](/manual/api#table.groupby) divides the elements of an array into groups, such as employees by department. It calls `keyfunc(element)` for each element. The result of the call is the key of the group that the element belongs to. `groupby` returns a new table that maps each key to an array of the elements with that key, in their original order. A key function that returns `nil` raises the error `table index is nil`.
 
 ```lus
 global print, table
@@ -354,7 +354,7 @@ local byDept = table.groupby(people, function(p) return p.dept end)
 print(#byDept.eng, #byDept.sales, byDept.eng[2].name)  --> 2  1  Charlie
 ```
 
-[`table.sortby(array, keyfunc, asc)`](/manual/api#table.sortby) sorts records by one of their properties, such as people by age. Where [`table.sort`](/manual/api#table.sort) takes a function that compares two elements, `sortby` takes a function that returns the value to sort by, which is shorter to write and is called only once per element. It sorts the array itself and returns nothing. It compares the keys with `<`, and elements with equal keys keep their relative order. When `asc` is `false`, the order is descending. Otherwise it is ascending.
+[`table.sortby(array, keyfunc, asc)`](/manual/api#table.sortby) sorts records by one of their properties, such as people by age. [`table.sort`](/manual/api#table.sort) takes a function that compares two elements. `sortby` takes a function that returns the value to sort by, which is called the key. A key function is shorter to write than a comparison. `sortby` calls it once per element. `sortby` sorts the array in place and returns nothing. It compares the keys with `<`. Elements with equal keys keep their relative order. When `asc` is `false`, the order is descending. Otherwise it is ascending.
 
 ```lus
 global print, table
@@ -374,9 +374,9 @@ print(people[1].name)                  --> Charlie
 
 ### Combining arrays
 
-Data sometimes arrives as separate columns, such as an array of names and an array of ages, when the program needs one entry per person. [`table.zip(...)`](/manual/api#table.zip) combines several arrays element by element into one array, where entry `i` is the array `{t1[i], t2[i], ...}`. The result is as long as the shortest argument.
+Data sometimes arrives as separate columns, such as an array of names and an array of ages. A program that needs one entry per person combines the columns with [`table.zip(...)`](/manual/api#table.zip). Entry `i` of the result is the array `{t1[i], t2[i], ...}`, which holds element `i` of each argument. The result is as long as the shortest argument.
 
-[`table.unzip(entries)`](/manual/api#table.unzip) does the reverse and returns one array per position. The number of arrays it returns is the length of the first entry, and it returns nothing for an empty table.
+[`table.unzip(entries)`](/manual/api#table.unzip) is the reverse. It returns one array per position. The number of arrays it returns is the length of the first entry. It returns nothing for an empty table.
 
 ```lus
 global print, table
@@ -390,11 +390,11 @@ print(names[2], ages[1])                    --> Bob  30
 
 ### Matrices
 
-A _matrix_ is an array of rows, each an array of the same length. The rows that `fromcsv` returns form one.
+A _matrix_ is an array of rows, where every row is an array of the same length. The result of `fromcsv` is a matrix when every row has the same number of fields.
 
-[`table.transpose(matrix)`](/manual/api#table.transpose) turns rows into columns: it returns a new matrix in which `result[i][j]` is `matrix[j][i]`. Transposing the rows of a CSV file gives one array per column. Rows of different lengths raise the error `non-rectangular matrix in 'transpose'`.
+[`table.transpose(matrix)`](/manual/api#table.transpose) turns rows into columns. It returns a new matrix in which `result[i][j]` is `matrix[j][i]`. Transposing the rows of a CSV file gives one array per column. Rows of different lengths raise the error `non-rectangular matrix in 'transpose'`.
 
-[`table.reshape(array, rows, cols)`](/manual/api#table.reshape) arranges a flat array into a matrix of `rows` rows and `cols` columns. It fills the first row from left to right, then the second, and so on. The length of the array must equal `rows * cols`, and any other length raises an error.
+[`table.reshape(array, rows, cols)`](/manual/api#table.reshape) arranges a flat array into a matrix of `rows` rows and `cols` columns. It fills the rows in order, each from left to right. The length of the array must equal `rows * cols`. Any other length raises an error.
 
 ```lus
 global print, table
@@ -409,9 +409,9 @@ print(catch table.reshape({1, 2, 3}, 2, 2))  --> false  ...: array length 3 does
 
 ## String functions
 
-Three groups of string functions handle the text that surrounds data: lines to cut into fields, fields to join into a line, and spaces to remove.
+The `string` library has functions that cut a line into fields, join fields into a line, and remove the spaces around a value.
 
-[`string.split(s, delimiter)`](/manual/api#string.split) cuts a string at every occurrence of a delimiter and returns an array of the pieces. The delimiter is plain text, not a pattern, and may be several characters long. Two delimiters in a row, and a delimiter at either end, produce empty strings. An empty delimiter splits the string into its characters.
+[`string.split(s, delimiter)`](/manual/api#string.split) cuts a string at every occurrence of a delimiter and returns an array of the pieces. The delimiter may be several characters long. It is matched as plain text, so pattern characters such as `.` have no special meaning in it. Two adjacent delimiters produce an empty string between them. A delimiter at either end of the string produces an empty string at that end. An empty delimiter splits the string into its characters.
 
 ```lus
 global print, string
@@ -426,7 +426,7 @@ local chars = ("héllo"):split("")
 print(#chars, chars[2])                   --> 5  é
 ```
 
-[`string.join(t, delimiter)`](/manual/api#string.join) is the reverse: it joins the elements of an array into one string with the delimiter between them. It converts values that are not strings with `tostring`, so it joins booleans and other values that [`table.concat`](/manual/api#table.concat) rejects. `table.concat` joins strings and numbers only, and it is the choice for building a long string from pieces. An empty array produces the empty string. The delimiter is required.
+[`string.join(t, delimiter)`](/manual/api#string.join) is the reverse. It joins the elements of an array into one string with the delimiter between them. It converts values that are not strings with `tostring`, so it accepts booleans and other values that [`table.concat`](/manual/api#table.concat) rejects. `table.concat` accepts strings and numbers only. It is the function to use for building a long string from many pieces. An empty array produces the empty string. The delimiter is required.
 
 ```lus
 global print, string
@@ -436,7 +436,7 @@ print(string.join({1, true, 2.5}, ","))       --> 1,true,2.5
 print(string.join({}, ",") == "")             --> true
 ```
 
-Text that people type or that files contain often carries spaces or line breaks around the value. [`string.trim`](/manual/api#string.trim) removes characters from both ends of a string, [`string.ltrim`](/manual/api#string.ltrim) from the start, and [`string.rtrim`](/manual/api#string.rtrim) from the end. Without a second argument they remove spaces, tabs, line feeds, and carriage returns. With a string as the second argument, they remove the characters that the string contains instead.
+Text from a person or a file often has spaces or line breaks around the value. [`string.trim`](/manual/api#string.trim) removes characters from both ends of a string. [`string.ltrim`](/manual/api#string.ltrim) removes them from the start. [`string.rtrim`](/manual/api#string.rtrim) removes them from the end. Without a second argument, the three functions remove spaces, tabs, line feeds, and carriage returns. With a string as the second argument, they remove the characters in that string.
 
 ```lus
 global print, string

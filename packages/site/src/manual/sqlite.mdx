@@ -7,11 +7,11 @@ draft: true
 shortdesc: "File-backed and in-memory SQLite databases with bound parameters, prepared statements, transactions, and permission checks on every file operation."
 ---
 
-A _database_ stores records in a file and finds, changes, and combines them on request. A program uses one when its data must outlive the program, when it has more records than fit in memory or than a loop can search quickly, or when several changes must succeed or fail together. Lus has the SQLite database engine built in, so a program opens a database with [`io.sqlite`](/manual/api#io.sqlite) and needs no server and no other installation.
+A _database_ stores records in a file. A program can search, change, and combine the records. A database is useful when data must remain after the program ends, when the records are too many to keep in memory or to search with a loop, or when several changes must succeed or fail together. The SQLite database engine is built into Lus. A program opens a database with [`io.sqlite`](/manual/api#io.sqlite) and needs nothing else installed.
 
-A program gives a database its instructions in _SQL_, a small language made for that purpose. This page explains every SQL statement it uses. The SQLite documentation at [sqlite.org](https://sqlite.org/lang.html) describes the whole language.
+A program controls a database with statements in _SQL_, which is a language made for databases. The SQLite documentation at [sqlite.org](https://sqlite.org/lang.html) describes the whole language.
 
-The following program creates a database in memory, stores three books, and prints the ones published after 1900. The sections below explain each step.
+The following program creates a database in memory, stores three books, and prints the books published after 1900.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -30,11 +30,11 @@ end
 
 ## Opening a database
 
-`io.sqlite(path)` opens the database file at `path`, creates the file when it does not exist, and returns a database handle. The whole database is that one file, which a program may copy or move like any other file while no program has it open.
+`io.sqlite(path)` opens the database file at `path` and returns a database handle. It creates the file if the file does not exist. The whole database is that one file. The file can be copied or moved like any other file while no program has it open.
 
-The path `":memory:"` opens a database that exists only in memory and disappears when it is closed. It suits tests, and data that a program wants to query but need not keep.
+The path `":memory:"` opens a database that exists only in memory. Its contents are discarded when it is closed. An in-memory database is useful for tests and for data that a program queries but has no need to keep.
 
-A database file needs the `fs:read` and `fs:write` [permissions](/manual/permissions). SQLite keeps temporary files next to the database, whose names start with the name of the database, so a program that limits its permissions to the database pledges the path followed by `*`.
+Opening a database file requires the `fs:read` and `fs:write` [permissions](/manual/permissions). SQLite keeps temporary files in the same directory as the database. Their names start with the name of the database file. A program that limits its permissions to the database therefore pledges the path followed by `*`.
 
 ```lus
 pledge("fs:read=./library.db*", "fs:write=./library.db*")
@@ -46,13 +46,13 @@ end
 fs.remove("library.db")
 ```
 
-The `<close>` attribute closes the database when the variable goes out of scope, as [Closing a database](#closing-a-database) describes. The examples on this page use it throughout.
+The `<close>` attribute closes the database when the variable goes out of scope, as [Closing a database](#closing-a-database) describes.
 
 ## Creating a table
 
-A database holds _tables_. A table has a fixed set of named _columns_ and any number of _rows_, like a spreadsheet: a table of books has one row per book and one column for each thing it records about a book.
+A database holds _tables_. A table has a fixed set of named _columns_ and any number of _rows_, like a spreadsheet. A table of books has one row per book and one column for each property of a book, such as its title.
 
-The SQL statement `CREATE TABLE` defines a table, and `db:exec(sql)` runs it. `exec` runs SQL that has no values to fill in and returns nothing.
+The SQL statement `CREATE TABLE` defines a table. `db:exec(sql)` runs SQL text that needs no values from the program. It returns nothing.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -68,18 +68,18 @@ db:exec([[
 
 Each line between the parentheses defines one column by its name, its type, and optional rules.
 
-- The type says what the column holds: `INTEGER` for whole numbers, `REAL` for floats, `TEXT` for strings, and `BLOB` for bytes.
-- `PRIMARY KEY` marks the column that identifies each row. SQLite fills an `INTEGER PRIMARY KEY` column with a new number when a row leaves it out, so every book gets an `id` of its own.
-- `NOT NULL` makes the column required. A row without a title is rejected with an error.
-- `IF NOT EXISTS` makes the statement do nothing when the table is already there. A program can then run it every time it starts.
+- The type is the kind of value that the column holds: `INTEGER` for whole numbers, `REAL` for floats, `TEXT` for strings, and `BLOB` for bytes.
+- `PRIMARY KEY` declares that the value of the column identifies each row. When a new row has no value for an `INTEGER PRIMARY KEY` column, SQLite stores a new number in it, so every book has a different `id`.
+- `NOT NULL` makes the column required. Inserting a row without a title raises an error.
+- With `IF NOT EXISTS`, the statement has no effect when the table already exists. A program can therefore run the statement every time it starts.
 
-`exec` accepts several statements in one string, separated by semicolons, which is how a program creates all its tables at once.
+`exec` accepts several statements in one string, separated by semicolons. A program can therefore create all its tables with one call.
 
 ## Inserting rows
 
-The SQL statement `INSERT INTO table (columns) VALUES (values)` adds one row. `db:run(sql, ...)` runs one statement that changes data. It returns two integers: the number of rows the statement changed, and the `id` that SQLite gave to the last inserted row.
+The SQL statement `INSERT INTO table (columns) VALUES (values)` adds one row. `db:run(sql, ...)` runs one statement that changes data. It returns two integers. The first is the number of rows that the statement changed. The second is the `id` of the last inserted row.
 
-Each `?` in the SQL is a _parameter_, a place for a value. `run` fills the parameters with its extra arguments, in order.
+Each `?` in the SQL is a _parameter_, which is a place for a value. `run` fills the parameters with its extra arguments, in order.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -92,7 +92,9 @@ local changed, id = db:run(
 print(changed, id)   --> 1  1
 ```
 
-A value always goes into a statement through a parameter, never by building the SQL text from it. Suppose a program inserted a title with `"... VALUES ('" .. title .. "')"`. A title that contains a quote would then end the string inside the SQL, and the rest of the title would run as SQL. A person who types such a title into a form could delete or read the whole database. This attack is called _SQL injection_. A parameter prevents it, because the database receives the value separately from the statement and never reads it as SQL.
+A program must pass every value to a statement as a parameter. A program that builds the SQL text from a value, as in `"... VALUES ('" .. title .. "')"`, is open to an attack. A quote in the title ends the string inside the SQL. SQLite then runs the rest of the title as SQL. A person who types such a title into a form could delete or read the whole database. This attack is called _SQL injection_. A parameter prevents it, because the database receives the value separately from the statement and never reads the value as SQL.
+
+The following program stores a title that would delete the table if it were part of the SQL text.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -106,7 +108,7 @@ for row in db:query("SELECT title FROM books") do
 end
 ```
 
-A statement with many values is easier to read with named parameters. A name after `:` in the SQL takes its value from the field of that name in a table, which is the single extra argument.
+A statement with many values is easier to read with named parameters. A named parameter is a `:` followed by a name. The single extra argument is then a table. Each parameter receives the value of the field with its name.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -119,17 +121,17 @@ db:run("INSERT INTO books (title, author, year) VALUES (:title, :author, :year)"
 })
 ```
 
-A column that the statement leaves out, or whose value is `nil`, holds no value in the new row. SQL calls this `NULL`.
+A column has no value in the new row when the statement omits it or when its value is `nil`. SQL calls the absence of a value `NULL`.
 
 ## Reading rows
 
-The SQL statement `SELECT columns FROM table` reads rows. `db:query(sql, ...)` runs it and returns an iterator for a `for` loop. Each row arrives as a table with one field per selected column, named after the column. `query` fills parameters as `run` does.
+The SQL statement `SELECT columns FROM table` reads rows. `db:query(sql, ...)` runs it and returns an iterator for a `for` loop. Each row is a table with one field per selected column. The field has the name of the column. `query` fills parameters as `run` does.
 
 Three optional parts of a `SELECT` choose and arrange the rows.
 
-- `WHERE condition` keeps only the rows for which the condition holds, such as `year > 1900` or `author = ?`.
+- `WHERE condition` selects only the rows for which the condition is true, such as `year > 1900` or `author = ?`.
 - `ORDER BY column` sorts the rows by a column. Adding `DESC` reverses the order. Without `ORDER BY`, the order of the rows is unspecified.
-- `LIMIT n` stops after `n` rows.
+- `LIMIT n` returns at most `n` rows.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -149,7 +151,7 @@ for row in db:query("SELECT title FROM books ORDER BY year DESC LIMIT 1") do
 end
 ```
 
-A column that holds `NULL` is absent from its row table, so reading it gives `nil`. The condition `column IS NULL` finds such rows.
+A column that holds `NULL` is absent from its row table, so reading it gives `nil`. The condition `column IS NULL` matches such rows.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -161,7 +163,7 @@ for row in db:query("SELECT title, author FROM books WHERE author IS NULL") do
 end
 ```
 
-SQL can also compute over all the rows that a `SELECT` matches. `count(*)` gives the number of rows, and `min(column)`, `max(column)`, `sum(column)`, and `avg(column)` give the smallest value, the largest value, the sum, and the average of a column. Such a query returns one row. `AS name` names a computed column, which becomes the name of its field in the row table.
+SQL can also compute one value from all the rows that a `SELECT` matches. `count(*)` is the number of rows. `min(column)`, `max(column)`, `sum(column)`, and `avg(column)` are the smallest value, the largest value, the sum, and the average of a column. Such a query returns one row. `AS name` gives a computed column a name, which is also the name of its field in the row table.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -174,7 +176,7 @@ for row in db:query("SELECT count(*) AS total, min(year) AS oldest FROM books") 
 end
 ```
 
-A loop that collects the rows into an array keeps them after the query has ended.
+A query produces its rows one at a time. A program that needs all the rows after the loop stores them in an array.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -191,7 +193,7 @@ print(table.concat(titles, ", "))   --> Dune, Emma
 
 ## Updating and deleting rows
 
-`UPDATE table SET column = value WHERE condition` changes the rows that match a condition, and `DELETE FROM table WHERE condition` removes them. Both run through `db:run`, whose first result tells how many rows were changed. An `UPDATE` or `DELETE` without `WHERE` applies to every row of the table.
+`UPDATE table SET column = value WHERE condition` changes the rows that match a condition. `DELETE FROM table WHERE condition` removes the rows that match. A program runs both with `db:run`. The first result of `db:run` is the number of rows that the statement changed or removed. An `UPDATE` or `DELETE` without `WHERE` applies to every row of the table.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -206,9 +208,11 @@ print((db:run("DELETE FROM books WHERE year > ?", 3000)))                    -->
 
 ## Transactions
 
-A _transaction_ is a group of changes that the database applies completely or not at all. A transfer between two accounts takes money from one and adds it to the other. If the program failed between the two steps, the money would be lost. Inside a transaction, a failure undoes the first step too.
+A _transaction_ is a group of changes that the database applies completely or not at all. A transfer between two accounts takes money from one and adds it to the other. If the program failed between the two steps, the money would be lost. Inside a transaction, a failure at that point also undoes the first step.
 
-`db:transaction(fn)` runs the function `fn` inside a transaction. If `fn` returns, the database keeps all its changes, and `db:transaction` returns every value that `fn` returned. If `fn` raises an error, the database undoes every change that `fn` made, and the error propagates to the caller.
+`db:transaction(fn)` runs the function `fn` inside a transaction. If `fn` returns, the database keeps all its changes. `db:transaction` then returns every value that `fn` returned. If `fn` raises an error, the database undoes every change that `fn` made. The error then propagates to the caller of `db:transaction`.
+
+The following program transfers money between two accounts. The second transfer exceeds the balance, so the transaction undoes its first step.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -238,15 +242,15 @@ end
 --> ben  50
 ```
 
-A transaction also makes many changes faster. Outside a transaction, the database completes each statement on its own, which for a database file includes writing to the disk. A program that inserts thousands of rows therefore wraps the loop in one transaction. A transaction inside another raises the error `cannot start a transaction within a transaction`.
+A transaction also makes many changes faster. Outside a transaction, the database completes each statement separately. For a database file, completing a statement includes writing to the disk. A program that inserts thousands of rows should therefore run the loop inside one transaction. Starting a transaction inside another raises the error `cannot start a transaction within a transaction`.
 
 ## Closing a database
 
-A database handle declared with the `<close>` attribute closes when its block ends, including when an error ends the block. This is the usual way to close a database. `db:close()` closes a handle whose lifetime does not follow a block, such as one stored in a table. A method called on a closed database, a second `close` included, raises `attempt to use a closed database`. The garbage collector closes a database that the program no longer refers to.
+A database handle declared with the `<close>` attribute closes when its block ends, including when an error ends the block. This is the usual way to close a database. `db:close()` closes a handle that must stay open after the block that created it, such as a handle stored in a table. Any method call on a closed database raises the error `attempt to use a closed database`. This includes a second call to `close`. The garbage collector closes a database that the program no longer refers to.
 
 ## Errors
 
-A statement that SQLite rejects raises an error whose error object is the message of SQLite. This covers mistakes in the SQL, such as an unknown column, and rows that break a rule of the table, such as `NOT NULL`. A [`catch`](/manual/guide#errors) around the call captures the error.
+A statement that SQLite rejects raises an error. The error object is the message from SQLite. SQLite rejects mistakes in the SQL, such as an unknown column. It also rejects rows that break a rule of the table, such as `NOT NULL`. A [`catch`](/manual/guide#errors) around the call captures the error.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -260,7 +264,7 @@ Opening a database that SQLite cannot open, such as a file in a directory that d
 
 ## Running statements
 
-The sections above introduced the methods of a database handle one at a time. The table below lists all of them.
+A database handle has the following methods.
 
 | Method | Effect |
 | --- | --- |
@@ -271,7 +275,7 @@ The sections above introduced the methods of a database handle one at a time. Th
 | `db:transaction(fn)` | Runs `fn` inside a [transaction](#transactions). |
 | `db:close()` | Closes the database. |
 
-`run` and `query` accept exactly one statement, and text with a second statement raises `sql contains more than one statement`.
+`run` and `query` accept exactly one statement. SQL text that contains a second statement raises the error `sql contains more than one statement`.
 
 ## Parameters
 
@@ -280,7 +284,7 @@ A statement uses one of two parameter styles.
 - A positional `?` takes the extra arguments of `run` or `query` in order.
 - A named parameter, written `:name`, `@name`, or `$name`, takes the field `name` of a single table argument.
 
-A statement must use one style. A statement that mixes them raises the error `statement mixes named and positional parameters`. Numbered parameters such as `?1` raise the error `numbered parameters are not supported`. A statement given more or fewer values than it has positional parameters raises an error that states both counts, and a named parameter without a field in the table raises `no value for parameter ':name'`.
+A statement must use one style. A statement that mixes them raises the error `statement mixes named and positional parameters`. Numbered parameters such as `?1` raise the error `numbered parameters are not supported`. The number of values must equal the number of positional parameters. Any other number raises an error that states both counts. A named parameter without a field in the table raises the error `no value for parameter ':name'`.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -298,11 +302,11 @@ print(catch db:run("INSERT INTO users VALUES (?1, 0)", "x"))
 --> false  ...: numbered parameters are not supported
 ```
 
-A parameter stands for a value. It cannot stand for the name of a table or a column, which must be part of the SQL text.
+A parameter can only supply a value. The name of a table or a column must be part of the SQL text.
 
 ## Types
 
-Lus values and SQLite values convert as follows when a parameter is filled and when a row is read.
+The following table shows how SQLite stores a Lus value that fills a parameter. The last column shows the value that a program reads from a row.
 
 | Lus value | Stored as | Read back as |
 | --- | --- | --- |
@@ -314,9 +318,11 @@ Lus values and SQLite values convert as follows when a parameter is filled and w
 | string | `TEXT` | string |
 | [vector](/manual/text#vectors) | `BLOB` | vector |
 
-SQLite has no boolean type, so a boolean comes back as `1` or `0`. A float that is NaN is stored as `NULL`.
+SQLite has no boolean type, so a stored boolean is read as `1` or `0`. A float that is NaN is stored as `NULL`.
 
-A `TEXT` value that is not valid UTF-8 raises an error when the row is read, and the message names the column and the byte offset. Such a value can only come from another program, since Lus strings are always valid text. Selecting it as a `BLOB`, with `CAST(column AS BLOB)`, reads its bytes as a vector.
+A `TEXT` value that is not valid UTF-8 raises an error when the row is read. The message gives the column and the byte offset. Only another program can store such a value, because Lus strings are always valid text. A query that selects `CAST(column AS BLOB)` reads the bytes of the value as a vector.
+
+The following program stores a string, a vector, a boolean, and a NaN, then reads them back.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -330,7 +336,7 @@ end
 
 ## Prepared statements
 
-Before SQLite runs a statement, it analyzes the SQL text and plans how to carry it out. A program that runs the same statement many times saves that work with a _prepared statement_. `db:prepare(sql)` does the analysis once and returns a statement object. Its methods `stmt:run(...)` and `stmt:query(...)` run the statement with new parameter values, and return what `db:run` and `db:query` return.
+Before SQLite runs a statement, it analyzes the SQL text and plans how to execute it. A _prepared statement_ keeps the result of that work, which saves time for a statement that runs many times. `db:prepare(sql)` does the analysis once and returns a statement object. The methods `stmt:run(...)` and `stmt:query(...)` run the statement with new parameter values. They return the same values as `db:run` and `db:query`.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -351,11 +357,11 @@ end
 print(table.concat(names, " "))   --> Alice Carol
 ```
 
-`stmt:close()` releases a statement before its database closes, and a statement declared with `<close>` is released when its block ends. A closed statement raises the error `attempt to use a closed statement`. Closing a database closes its statements first.
+`stmt:close()` releases a statement before its database closes. A statement declared with `<close>` is released when its block ends. Using a closed statement raises the error `attempt to use a closed statement`. Closing a database closes its statements first.
 
 ## Queries over tables
 
-Lus has a [query syntax](/manual/guide#queries) of its own that filters, sorts, and groups lists of records. The same syntax reads a SQLite table. Indexing a database handle with the name of a table, as in `db.users`, gives a reference to that table, which a query uses as its source. Lus translates the conditions of the query into SQL with parameters, so SQLite does the filtering, and values from the program are as safe as in a statement with `?`.
+The Lus [query syntax](/manual/guide#queries) filters, sorts, and groups lists of records. It can also read a SQLite table. Indexing a database handle with the name of a table, as in `db.users`, returns a reference to that table. A query accepts the reference as its source. Lus translates the conditions of the query into SQL with parameters, so SQLite does the filtering. Values from the program are passed as parameters, which protects the query from SQL injection.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
@@ -369,35 +375,35 @@ for row in query(@db.users as u where u.age >= min select u.name) do
 end
 ```
 
-A table whose name is also the name of a method, such as `close`, cannot be reached this way. The garbage collector leaves a database open while the program still holds a reference to one of its tables.
+A table whose name is also the name of a method, such as `close`, has no reference, because `db.close` is the method. The garbage collector leaves a database open while the program still holds a reference to one of its tables.
 
 ## Lifetime
 
-A query holds its statement open while its loop runs. The loop releases the statement when it ends, including when a `break` or an error leaves it early. A program may therefore run other statements on the same database inside the loop and after it.
+A query keeps its statement open while its loop runs. The statement is released when the loop ends, including when a `break` or an error ends it early. A program may therefore run other statements on the same database inside the loop and after it.
 
-A database handle, a prepared statement, and a running query each have a `__close` metamethod, which is what the `<close>` attribute calls, and a `__gc` metamethod, through which the garbage collector releases the ones a program leaves open. A prepared statement or a query used after its database has closed raises `attempt to use a closed statement`.
+A database handle, a prepared statement, and a running query each have a `__close` metamethod and a `__gc` metamethod. The `<close>` attribute calls `__close`. The garbage collector calls `__gc` to release an object that the program left open. Using a prepared statement or a query after its database has closed raises the error `attempt to use a closed statement`.
 
 ## Permissions and files
 
-This section describes exactly which files a database touches and which permissions it checks. A program that pledges `fs:read=PATH*` and `fs:write=PATH*` for its database, as in [Opening a database](#opening-a-database), needs none of it.
+A program that pledges `fs:read=PATH*` and `fs:write=PATH*` for its database, as in [Opening a database](#opening-a-database), has every permission that the database needs. A program with narrower permissions must allow each file that SQLite uses and each permission that Lus checks.
 
 ### Files of a database
 
-A database at `PATH` uses up to four files: the database itself, and the temporary files `PATH-journal`, `PATH-wal`, and `PATH-shm`. SQLite records changes in them before it moves them into the database, which is how it keeps the database intact when a program stops in the middle of a change. A pledge for `PATH*` covers all four.
+A database at `PATH` uses up to four files. One is the database itself. The others are the temporary files `PATH-journal`, `PATH-wal`, and `PATH-shm`. SQLite records changes in the temporary files before it writes them to the database. This keeps the database intact when a program stops in the middle of a change. A pledge for `PATH*` covers all four files.
 
-Opening a database checks `fs:read` for its path, and `fs:write` as well unless the mode is `"r"`. After that, Lus checks the permission again each time SQLite opens, creates, writes, or deletes one of the four files. A pledge for the exact path alone therefore fails at the first temporary file, with an error such as `permission "fs:read" denied for 'PATH-journal'`.
+`io.sqlite` checks `fs:read` for the path. It also checks `fs:write` unless the mode is `"r"`. Lus then checks the permission again each time SQLite opens, creates, writes, or deletes one of the four files. With a pledge for the exact path only, the first use of a temporary file therefore raises an error such as `permission "fs:read" denied for 'PATH-journal'`.
 
-A database opened for writing uses the write-ahead log of SQLite, the `-wal` file, which lets other connections read while one writes.
+A database opened for writing uses the write-ahead log of SQLite, which is the `-wal` file. With the write-ahead log, other connections can read while one connection writes.
 
 ### Read-only connections
 
-`io.sqlite(path, "r")` opens the database read-only, and it requires only `fs:read`. A statement that changes data raises `attempt to write a readonly database`. Any mode other than `"r"` and `"rw"`, the default, raises the error `invalid mode`.
+`io.sqlite(path, "r")` opens the database read-only. This mode requires only `fs:read`. A statement that changes data raises the error `attempt to write a readonly database`. The default mode is `"rw"`. Any other mode raises the error `invalid mode`.
 
-A read-only connection never creates or changes a file. It can read a database that uses the write-ahead log only while the `-wal` and `-shm` files exist, which is the case while another connection has the database open for writing. When they do not exist, the first statement raises an `fs:write` permission error for the `-wal` file. A program that only needs to read such a database, and has no writer beside it, opens it in the default mode.
+A read-only connection never creates or changes a file. It can read a database that uses the write-ahead log only while the `-wal` and `-shm` files exist. They exist while another connection has the database open for writing. When they are missing, the first statement raises an `fs:write` permission error for the `-wal` file. A program that reads such a database while no other connection writes to it must open it in the default mode.
 
 ### In-memory databases
 
-A database opened with `":memory:"` touches no file and needs no permission, so it works in a program that has sealed its permissions without any filesystem access.
+A database opened with `":memory:"` uses no file and requires no permission. It therefore works in a program that has sealed its permissions without any filesystem access.
 
 ```lus nocheck
 pledge("seal")
@@ -411,7 +417,7 @@ print(db:run("INSERT INTO t VALUES (?)", 42))  --> 1  1
 
 ### Operations that are denied
 
-SQL has statements that name other files. Lus denies them, so that a database cannot reach a path that no permission check covered. SQLite also keeps its temporary data for sorting and for statements in memory, so it never writes such data to a file of its own choosing.
+SQL has statements that name other files. Lus denies them, so that SQLite opens only paths that a permission check covered. SQLite also keeps its temporary data for sorting and for statements in memory, so that data is never written to a file.
 
 - `ATTACH` and `VACUUM INTO` raise an authorization error. A plain `VACUUM` runs.
 - The statements `PRAGMA data_store_directory`, `PRAGMA temp_store_directory`, and `PRAGMA lock_proxy_file`, which change where SQLite puts files, are denied in any letter case.
@@ -420,11 +426,11 @@ SQL has statements that name other files. Lus denies them, so that a database ca
 
 ## Workers
 
-A call to SQLite blocks the program until it returns, [detached coroutines](/manual/concurrency#detached-coroutines) included. A program moves long database work to a [worker](/manual/concurrency#workers) to keep the rest running. A database handle cannot be sent in a message, so the worker opens the same file itself. Several connections may read a database while one writes to it.
+A call to SQLite blocks the whole program until it returns, including its [detached coroutines](/manual/concurrency#detached-coroutines). A program that runs long database work in a [worker](/manual/concurrency#workers) continues to run during that work. A database handle cannot be sent in a message, so the worker opens the same file with its own call to `io.sqlite`. Several connections may read a database while one writes to it.
 
 ## Builds
 
-The built-in engine includes the math functions of SQLite, such as `sqrt`. A runtime built with `zig build -Dsqlite=false` leaves out SQLite and `io.sqlite`. The WebAssembly build includes SQLite without the write-ahead log.
+The built-in engine includes the math functions of SQLite, such as `sqrt`. A runtime built with `zig build -Dsqlite=false` omits SQLite and `io.sqlite`. The WebAssembly build includes SQLite without the write-ahead log.
 
 ## Related pages
 

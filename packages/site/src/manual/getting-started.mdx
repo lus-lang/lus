@@ -8,11 +8,11 @@ shortdesc: "Install the binary and run your first program in five minutes."
 
 import InstallBlocks from "../components/InstallBlocks.astro"
 
-This page installs Lus, runs a first program, and introduces permissions, which a program must acquire before it reads a file, opens a connection, or reads the environment.
+Lus is installed as a single executable named `lus`. The executable contains the runtime, the standard library, and the tools.
 
 ## Install automatically
 
-On Linux and macOS, run this command in a terminal:
+On Linux and macOS, run this command in a terminal.
 
 ```bash
 curl -fsSL https://lus.dev/install.sh | sh
@@ -22,7 +22,7 @@ On Windows, download and run **[lus-setup.exe](https://github.com/lus-lang/lus/r
 
 On platforms without prebuilt archives, such as the BSDs and illumos, build from source as [Compiling Lus](/manual/compiling) describes.
 
-Check the installation by printing the version:
+Check the installation by printing the version.
 
 ```bash
 lus -v
@@ -34,28 +34,28 @@ To install without the script, download the release archive for your platform an
 
 <InstallBlocks />
 
-Each release lists the SHA-256 digest of every download in its `SHA256SUMS` file. [Checking download integrity](/manual/releases#checking-download-integrity) shows how to check a download and says what the check proves.
+Each release lists the SHA-256 digest of every download in its `SHA256SUMS` file. [Checking download integrity](/manual/releases#checking-download-integrity) shows how to check a download and explains what the check proves.
 
 ## Hello, Lus
 
-Create a file named `hello.lus`:
+Create a file named `hello.lus` with the following program.
 
 ```lus
 local name = "Lus"
 print(`Hello, $name!`)   --> Hello, Lus!
 ```
 
-Run it:
+Run the program with `lus`.
 
 ```bash
 lus hello.lus
 ```
 
-A string between backticks is an interpolated string, which replaces `$name` with the value of the variable. The `-->` comment shows what the line prints.
+A string between backticks is an _interpolated string_. `$name` inserts the value of the variable `name` into it. The `-->` comment shows what the line prints.
 
 ## A first real program
 
-JSON, CSV, files, HTTP, and SQLite are part of the standard library, so a useful program needs nothing beyond `lus`. The following program reads an order from JSON text and prints a receipt. Save it as `order.lus` and run it with `lus order.lus`:
+JSON, CSV, files, HTTP, and SQLite are part of the standard library, so a useful program needs nothing beyond `lus`. The following program reads an order from JSON text and prints a receipt. Save it as `order.lus` and run it with `lus order.lus`.
 
 ```lus
 local order = fromjson([[
@@ -79,14 +79,14 @@ print(`$(order.customer) owes $(string.format("%.2f", total))`)
 --> Ada owes 12.25
 ```
 
-The program uses four things that the [guide](/manual/guide) explains in full:
+The [guide](/manual/guide) explains in full the four features that this program uses.
 
-- `fromjson` turns JSON text into tables. A _table_ is the data structure that Lus uses for both lists, such as `order.items`, and records with named fields, such as `item.price`.
+- `fromjson` converts JSON text into tables. A _table_ holds a list, such as `order.items`, or named fields, such as `item.price`.
 - `[[` and `]]` enclose a string that spans several lines.
-- `for _, item in ipairs(...)` visits each element of a list in order.
+- `for _, item in ipairs(...)` runs its body once for each element of a list, in order.
 - `$(...)` inside an interpolated string inserts the value of any expression.
 
-Bad input raises an error. `catch` runs an expression and returns `false` and the error when it fails, so the program can respond:
+Invalid input raises an error, which stops the program. `catch` runs an expression. If the expression raises an error, `catch` returns `false` and the error object, so the program can continue.
 
 ```lus
 local ok, err = catch fromjson("{oops")
@@ -95,7 +95,7 @@ print(ok, err)   --> false  JSON parse error at position 2: expected string key 
 
 ## Asking for permission
 
-A Lus program starts with no access to files, the network, other processes, or environment variables. It acquires each capability by calling `pledge`. The following program reads the name of the current user from the environment, which requires the `env` permission:
+A Lus program starts with no access to files, the network, other processes, or environment variables. It acquires each capability by calling `pledge`. The following program reads the name of the current user from the environment, which requires the `env` permission.
 
 ```lus
 pledge("env")
@@ -104,7 +104,7 @@ local user = os.getenv("USER") or "stranger"
 print(`Hello, $user!`)
 ```
 
-Without the `pledge` line, the program stops at `os.getenv` with the error `permission "env" denied for 'USER'`. Reading a file requires `pledge("fs:read")` in the same way, and an HTTP request requires `pledge("network")`. The person who runs a script can also set the limit from outside. A script started with `-P` options, as in `lus -Pfs:read=./data/* script.lus`, can do only what those options grant, so a script you have not read cannot reach anything else. [Permissions](/manual/permissions) describes every capability and how to narrow one to a single path or host.
+Without the `pledge` line, the program stops at `os.getenv` with the error `permission "env" denied for 'USER'`. Reading a file requires `pledge("fs:read")`. An HTTP request requires `pledge("network")`. The person who runs a script can also limit its permissions on the command line. A script started with `-P` options, as in `lus -Pfs:read=./data/* script.lus`, has only the permissions that those options grant. A script that you have not read can then reach only what you granted. [Permissions](/manual/permissions) describes every capability and how to narrow one to a single path or host.
 
 ## Where next
 

@@ -6,13 +6,13 @@ group: use
 shortdesc: "The lus test runner: test files, power asserts, case tables, helpers, snapshots, fixtures, isolated parallel runs, and doc tests."
 ---
 
-`lus test` is the test runner built into the `lus` command. A test is an ordinary function in a file with a conventional name, so a project needs no test library and no configuration file. The runner finds the test files, runs each one in its own process, and reports every test. The [CLI page](/manual/cli#lus-test) lists its options.
+`lus test` is the test runner built into the `lus` command. A test is an ordinary function in a file whose name follows a convention, so a project needs no test library and no configuration file. The runner finds the test files and runs each one in its own process. It reports the result of every test. The [CLI page](/manual/cli#lus-test) lists its options.
 
 ## Test files and tests
 
-A _test file_ is a Lus file whose name ends in `_test.lus`. Every top-level function in it whose name ends in `_test` is a _test_. A test passes when it returns and fails when it raises an error, which is what a failed `assert` does. The rest of the top-level code runs once, before the tests, and sets up what they share.
+A _test file_ is a Lus file whose name ends in `_test.lus`. Every top-level function in it whose name ends in `_test` is a _test_. A test passes when it returns. It fails when it raises an error, as a failed `assert` does. The rest of the top-level code runs once, before the tests. Use it to set up what the tests share.
 
-The following file holds two tests.
+The following file tests a function `add` with positive and with negative arguments.
 
 ```lus
 -- math_test.lus
@@ -27,13 +27,13 @@ local function negative_test()
 end
 ```
 
-The runner recognizes three forms of declaration: `local function NAME_test`, `function NAME_test`, and `local NAME_test = function ... end`. Prefer the local forms, because `function NAME_test` assigns a global, which [`lus check`](/manual/tools#checking) reports as `implicit-global`. Tests run in the order in which they appear in the file.
+A test is declared in one of three forms: `local function NAME_test`, `function NAME_test`, and `local NAME_test = function ... end`. Prefer the local forms, because `function NAME_test` assigns a global, which [`lus check`](/manual/tools#checking) reports as `implicit-global`. Tests run in the order in which they appear in the file.
 
 The runner collects local test functions by appending a `return` statement to the file. A test file must therefore end without a `return` of its own. A file that ends with one fails with the file error `TestFileReturns`.
 
 ## Running tests
 
-`lus test` with no argument searches the current directory and every directory below it for files whose names end in `_test.lus`. Arguments name files or directories to search instead. A file named on the command line runs whatever its name. The search skips every path that contains `node_modules`, `.git`, `zig-out`, or `.zig-cache`.
+`lus test` with no argument searches the current directory and its subdirectories for files whose names end in `_test.lus`. With arguments, it runs the named files and searches the named directories. A file named on the command line runs whatever its name is. The search skips every path that contains `node_modules`, `.git`, `zig-out`, or `.zig-cache`.
 
 ```sh
 lus test                        # every *_test.lus below the current directory
@@ -42,7 +42,7 @@ lus test math_test.lus -v       # one file, listing skipped tests too
 lus test --filter negative      # only the tests whose names contain "negative"
 ```
 
-Each file runs in its own child process inside a new temporary directory, so a crash, a global, or a file written by one test file cannot affect another. Because the files are isolated, the runner runs them in parallel, by default as many at once as there are processors. It prints one line per file as soon as the file ends, then a summary. For a file with a failure, the line is followed by each failed test with its message, each skipped test with its reason, and the standard output of the file.
+Each file runs in its own child process inside a new temporary directory, so a crash, a global, or a file written by one test file cannot affect another. Because the files are isolated, the runner runs them in parallel. By default, it runs as many files at once as there are processors. It prints one line per file as soon as the file ends, then a summary. For a file with a failure, the line is followed by each failed test with its message, each skipped test with its reason, and the standard output of the file.
 
 ```
 FAIL math_test.lus (5 passed, 1 failed, 1 skipped, 2 ms)
@@ -57,15 +57,15 @@ FAIL math_test.lus (5 passed, 1 failed, 1 skipped, 2 ms)
 1 files, 5 passed, 1 failed, 1 skipped
 ```
 
-A file whose tests all pass prints its line alone. With `-v`, the line is followed by the skipped tests of the file too.
+For a file whose tests all pass, the runner prints only that line. With `-v`, it also prints the skipped tests of the file.
 
-A _file error_ is a failure of the file as a whole, such as a syntax error, an error raised by the top-level setup code, or a crash of the process. The runner reports it under `file error:` together with the standard error of the file, and the summary counts the file as one with errors.
+A _file error_ is a failure of the file as a whole, such as a syntax error, an error raised by the top-level setup code, or a crash of the process. The runner reports it under `file error:` together with the standard error of the file. The summary counts the file as one with errors.
 
 ### Exit status and machine output
 
 The exit status of `lus test` is 0 when every file passes. It is 1 when a test fails, a file has a file error, or a file times out. It is 2 when a path named on the command line does not exist.
 
-`--json` serves tools that read the results, such as a continuous integration service. It replaces the report with one JSON record per test, one per line, with the fields `status`, `name`, and `message`. The status is `pass`, `fail`, or `skip`. The message is empty for a passing test, the error message for a failure, and the reason for a skipped test.
+`--json` is for tools that read the results, such as a continuous integration service. It replaces the report with one JSON record per test, each on its own line. A record has the fields `status`, `name`, and `message`. The status is `pass`, `fail`, or `skip`. The message is empty for a passing test, the error message for a failure, and the reason for a skipped test.
 
 ```
 {"status":"pass","name":"add_test","message":""}
@@ -75,11 +75,11 @@ The exit status of `lus test` is 0 when every file passes. It is 1 when a test f
 
 ### Timeouts
 
-Timeouts keep a test that hangs from blocking the whole run. The runner stops a file that writes no output for 60 seconds, which `--timeout S` changes. It also stops a file that runs longer than ten times that timeout in all, even while it writes output, which `--file-timeout S` changes. When the runner stops a file, it kills every process that the file started, and the report names the timeout that ended it. The tests that finished before the timeout keep their results.
+A timeout stops a test that hangs, so the rest of the run can finish. The runner stops a file that writes no output for 60 seconds. `--timeout S` changes this limit. The runner also stops a file whose total run time exceeds ten times that timeout, even while it writes output. `--file-timeout S` changes this limit. When the runner stops a file, it kills every process that the file started. The report names the timeout that ended the file. The tests that finished before the timeout keep their results.
 
 ## Power asserts
 
-A failed assertion is useful only when it says what the values were. Inside a test file, a plain `assert` therefore reports the expression that failed together with the values of its operands, so a test needs no separate function for each kind of comparison. A comparison shows both sides, and any other expression shows its value. A message passed as the second argument appears as well.
+A failed assertion is useful only when its message contains the values that were tested. In a test file, a failed `assert` reports the expression together with the values of its operands, so a test needs no separate function for each kind of comparison. For a comparison, the report shows both sides. For any other expression, it shows the value. It also shows a message passed as the second argument.
 
 ```lus
 local function area(w, h) return w * h end
@@ -95,7 +95,7 @@ local function flag_test()
 end
 ```
 
-The two failures read as follows.
+The runner reports the two failures as follows.
 
 ```
   FAIL area_test
@@ -112,7 +112,7 @@ Only the `assert` calls written in the test file report this way. Modules that t
 
 ## Case tables
 
-A case table runs one test over many inputs, each reported as a test of its own, so one failing input does not hide the others. A _case table_ is a table named `NAME_cases`, and the runner calls the test `NAME_test` once per entry. An entry that is a table supplies its array items as the arguments, and any other entry is passed as the single argument. The case table may be a local, a declared global, or a global assigned at the top level of the file.
+A _case table_ runs one test with many inputs. The runner reports each input as a test of its own, so one failing input does not hide the others. A case table is a table named `NAME_cases`. The runner calls the test `NAME_test` once per entry. When an entry is a table, its array items are the arguments of the call. Any other entry is the single argument. The case table may be a local, a declared global, or a global assigned at the top level of the file. The following file tests `add` with three pairs of numbers and their expected sums.
 
 ```lus
 local function add(a, b) return a + b end
@@ -128,18 +128,18 @@ local function add_test(a, b, want)
 end
 ```
 
-The runner names each run after its entry. The array entries run first, in order, and are named by their position, as in `add_test[2]`. The entries with other keys run after them and are named by their key, as in `add_test[zero]` for the entry `zero = { 0, 0, 0 }`. The order of the keyed entries is unspecified.
+The name of each run contains its entry. The array entries run first, in order. Each is named by its position, as in `add_test[2]`. The entries with other keys run after them. Each is named by its key, as in `add_test[zero]` for the entry `zero = { 0, 0, 0 }`. The order of the keyed entries is unspecified.
 
 ## Helpers
 
-The runner defines four helper functions as globals in every test file. They cover what `assert` alone cannot express: an error that must occur, two tables with equal contents, a test that cannot run here, and output that is too long to write out by hand.
+The runner defines four helper functions as globals in every test file. They handle four cases that `assert` alone does not: an error that must occur, two tables with equal contents, a test that cannot run on the current machine, and output that is too long to write by hand.
 
-- `raises(f, pattern, ...)` calls `f(...)` and fails the test unless the call raises an error. If `pattern` is given, `tostring` of the error object must match it as a [string pattern](/manual/guide#strings-and-patterns). It returns the error object for further checks.
-- `same(a, b)` compares two values by content and returns a boolean. `==` on two tables is true only for one and the same table, while `same` is true for two tables that hold the same keys with the same values, nested tables included. Tables that refer to themselves compare correctly.
+- `raises(f, pattern, ...)` calls `f(...)` and fails the test unless the call raises an error. If `pattern` is given, `tostring` of the error object must match it as a [string pattern](/manual/guide#strings-and-patterns). `raises` returns the error object, so the test can check it further.
+- `same(a, b)` compares two values by content and returns a boolean. `==` on two tables is true only when both are the same table. `same` is true for two tables that hold the same keys with the same values, including nested tables. It also compares tables that refer to themselves.
 - `skip(reason)` stops the current test and records it as skipped with the reason.
-- `snapshot(value)` compares a value with its recorded snapshot, as described under [Snapshots](#snapshots).
+- `snapshot(value)` compares a value with its recorded snapshot. [Snapshots](#snapshots) describes it.
 
-The following tests use the first three helpers.
+The first of the following tests checks that invalid JSON raises a parse error and that valid JSON parses to the expected table. The second compares two tables that contain themselves. The third is skipped because it needs the network.
 
 ```lus
 local function parse_test()
@@ -165,7 +165,7 @@ When the function passed to `raises` returns without an error, the test fails wi
 
 ## Snapshots
 
-A snapshot checks a large value, such as a parsed document or a generated report, without writing the expected value in the test. `snapshot(value)` renders the value as Lus source and compares the rendering with the one recorded in `__snapshots__/FILE.snap` beside the test file, where `FILE` is the name of the test file. The first run records the snapshot. A later run that renders something different fails and shows both versions. If the change is intended, `lus test -u` records the new rendering. Several snapshots in one test are numbered in order. The snapshot files are plain text and belong in version control with the tests.
+A snapshot test compares a large value, such as a parsed document or a generated report, with a recorded copy, so the expected value need not be written in the test. `snapshot(value)` renders the value as Lus source. It compares the rendering with the one recorded in `__snapshots__/FILE.snap` next to the test file, where `FILE` is the name of the test file. The first run records the snapshot. A later run with a different rendering fails and shows both versions. If the change is intended, `lus test -u` records the new rendering. Several snapshots in one test are numbered in order. The snapshot files are plain text. Commit them to version control with the tests.
 
 ```lus
 local function config_test()
@@ -173,14 +173,14 @@ local function config_test()
 end
 ```
 
-The recorded file `__snapshots__/config_test.lus.snap` reads as follows.
+The first run writes the following file, `__snapshots__/config_test.lus.snap`.
 
 ```
 == config_test #1
 {name = "app", ports = {80, 443}}
 ```
 
-A mismatch names the snapshot and shows both renderings.
+The report of a mismatch names the snapshot and shows both renderings.
 
 ```
   FAIL config_test
@@ -192,9 +192,9 @@ A mismatch names the snapshot and shows both renderings.
 
 ## Fixtures and permissions
 
-The working directory of a test file is a new temporary directory, which the runner deletes when the file ends, so a test can create files without cleaning up. The runner creates the directory below `TMPDIR` when that environment variable is set, and below `/tmp` otherwise. A _fixture_ is a file that a test reads, such as sample input. Fixtures stay beside the test file, and the global `TEST_DIR` holds the absolute path of the directory that contains the test file, so a test finds them there. The environment variable `LUS_EXE` holds the path of the interpreter that runs the tests, for a test that starts another interpreter with `io.popen` or `os.execute`.
+The working directory of a test file is a new temporary directory. The runner deletes it when the file ends, so a test can create files without cleaning up. The runner creates the directory in `TMPDIR` when that environment variable is set. Otherwise it creates the directory in `/tmp`. A _fixture_ is a file that a test reads, such as sample input. Keep fixtures next to the test file. The global `TEST_DIR` is the absolute path of the directory that contains the test file, so a test opens a fixture with a path that starts with `TEST_DIR`. The environment variable `LUS_EXE` is the path of the interpreter that runs the tests. A test uses it to start another interpreter with `io.popen` or `os.execute`.
 
-A test file starts with no [permissions](/manual/permissions) and pledges the ones it needs, as a script does. Each test starts with the permissions that the file holds after its top-level code. The runner undoes the pledges of a test when the test ends, so a permission that one test acquires never reaches the next.
+A test file starts with no [permissions](/manual/permissions) and pledges the ones it needs, as a script does. Each test starts with the permissions that the file holds after its top-level code. The runner undoes the pledges of a test when the test ends, so the next test starts without them. The following file pledges `fs:read` for every test. `env_test` also pledges `env`, which only that test holds.
 
 ```lus
 pledge("fs:read")
@@ -216,9 +216,9 @@ A test may start [detached coroutines](/manual/concurrency), for example to run 
 
 ## Doc tests
 
-An example in documentation goes stale when the code it describes changes. `lus test --doc` prevents this by running the code blocks of Markdown files as tests. Arguments name Markdown files or directories, and the search in a directory finds the files whose names end in `.md` or `.mdx`. Every block fenced as ` ```lus ` is a test named after the line where its code starts, as in `line 12`. A block passes when it runs to the end without raising an error.
+An example in documentation becomes wrong when the code it describes changes. `lus test --doc` detects this by running the code blocks of Markdown files as tests. The arguments are Markdown files or directories. In a directory, the runner finds the files whose names end in `.md` or `.mdx`. Every block fenced as ` ```lus ` is a test. Its name is the line where its code starts, as in `line 12`. A block passes when it runs to the end without raising an error.
 
-Each block runs on its own, with none of the variables of the blocks before it, and with every permission granted. Its detached coroutines must end for it to pass. Fence a block that cannot run by itself, such as a fragment or code that shows an error, as ` ```lus nocheck `. The runner records such a block as skipped. The manual, the standard library specification, and the agent skills of Lus all run under `lus test --doc`.
+Each block runs separately. It has none of the variables of the blocks before it. It holds every permission. Its detached coroutines must end for it to pass. Fence a block that cannot run alone, such as a fragment or code that shows an error, as ` ```lus nocheck `. The runner records such a block as skipped. The manual, the standard library specification, and the agent skills of Lus are all tested with `lus test --doc`.
 
 ```sh
 lus test --doc docs/
@@ -228,5 +228,5 @@ lus test --doc README.md --filter "line 4"
 ## Related pages
 
 - The [CLI page](/manual/cli#lus-test) lists every option of `lus test`.
-- [Developer tools](/manual/tools) describes the checker, which knows the conventions of test files, and the debugger.
+- [Developer tools](/manual/tools) describes the debugger and the checker, which accepts the globals that the runner defines in test files.
 - [Permissions](/manual/permissions) describes `pledge` and the capabilities a test file can acquire.
