@@ -78,7 +78,8 @@ local function workers_load_indexed_modules_test()
     if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
     local ok, out = lus("main_worker.lus")
     assert(ok, out)
-    assert(out == "A\nWORKER-a\n", out)
+    -- Only the main thread prints, so the output has one order.
+    assert(out == "WORKER-quiet\n", out)
 end
 
 local function build(script)

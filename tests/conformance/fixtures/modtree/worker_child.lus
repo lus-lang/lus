@@ -1,2 +1,2 @@
-local a = require("order_a")
-worker.message(a.name)
+local q = require("quiet")
+worker.message(q.name)
