@@ -1,0 +1,55 @@
+-- What the `lus` command does with workers that still run when the main
+-- chunk ends. Closing the state stops them, and one that never reaches a
+-- wait, such as a busy loop, gets a short grace before the process exits.
+-- Each test runs a script in a child process.
+pledge("load", "fs", "exec", "env")
+
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local windows = package.config:sub(1, 1) == "\\"
+local script_number = 0
+
+local function shell_quote(value)
+    if windows then
+        return '"' .. value .. '"'
+    end
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
+local function write(path, source)
+    local file = assert(io.open(path, "wb"))
+    assert(file:write(source))
+    assert(file:close())
+end
+
+-- Runs `main` with a busy worker script as its first argument.
+local function run_with_busy_worker(main)
+    script_number = script_number + 1
+    local busy = `worker_exit_busy_$(script_number).lus`
+    local path = `worker_exit_main_$(script_number).lus`
+    write(busy, "while true do end\n")
+    write(path, main)
+    local handle = assert(io.popen(`$(shell_quote(lus_bin)) -P all $(shell_quote(path)) $(shell_quote(busy)) 2>&1`))
+    local output = handle:read("a")
+    local done = handle:close()
+    catch fs.remove(path)
+    catch fs.remove(busy)
+    return done == true or done == 0, output
+end
+
+local function an_error_in_the_main_chunk_ends_the_process_test()
+    local ok, output = run_with_busy_worker([[
+        local w = worker.create(arg[1])
+        error("main fails")
+    ]])
+    assert(not ok, output)
+    assert(output:find("main fails", 1, true), output)
+end
+
+local function the_end_of_the_main_chunk_ends_the_process_test()
+    local ok, output = run_with_busy_worker([[
+        local w = worker.create(arg[1])
+        print("main ends")
+    ]])
+    assert(ok, output)
+    assert(output == "main ends\n", output)
+end

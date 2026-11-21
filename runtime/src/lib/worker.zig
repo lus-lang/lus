@@ -321,6 +321,9 @@ const Worker = struct {
     outbox: Queue = .{},
     status: Status = .running,
     err_msg: ?[]u8 = null,
+    /// A copy of the error value of a failed worker when it is not a
+    /// string and can cross between states, such as a table.
+    err_value: ?*Packet = null,
 
     // Startup data.
     chunkname: []u8,
@@ -345,6 +348,7 @@ const Worker = struct {
         w.inbox.clear(gpa);
         w.outbox.clear(gpa);
         if (w.err_msg) |m| gpa.free(m);
+        if (w.err_value) |p| p.destroy(gpa);
         gpa.free(w.chunkname);
         if (w.source) |s| gpa.free(s);
         if (w.load_error) |m| gpa.free(m);
@@ -455,11 +459,9 @@ pub fn isWorker(g: *Global) bool {
     return g.ext.get(self_key) != null;
 }
 
-/// Stops every worker created by `g` and waits for their threads. Called
-/// when the state closes.
-pub fn closeState(g: *Global) void {
-    const p = g.ext.get(domain_key) orelse return;
-    const d: *Domain = @ptrCast(@alignCast(p));
+/// Marks every worker of `d` as shutting down and wakes those that wait
+/// in `worker.peek`, in a scheduler, or in a `worker.receive` of their own.
+fn signalShutdown(d: *Domain) void {
     const io = d.io;
     for (d.workers.items) |w| {
         w.in_mutex.lockUncancelable(io);
@@ -469,6 +471,41 @@ pub fn closeState(g: *Global) void {
         if (w.child_domain) |cd| cd.notify();
         w.in_mutex.unlock(io);
     }
+}
+
+/// How long a process that exits waits for its workers to stop.
+const exit_grace: Io.Duration = .fromMilliseconds(500);
+
+/// Stops the workers created by `g` before the process exits. A worker
+/// stops at its next wait, so most end at once. One that computes or
+/// blocks in a read the runtime cannot wake gets `exit_grace` to end.
+/// Returns false when some worker still runs after that. Its thread and
+/// everything it shares with this state are then left to the exit of the
+/// process, which ends the thread.
+pub fn stopForExit(g: *Global) bool {
+    const p = g.ext.get(domain_key) orelse return true;
+    const d: *Domain = @ptrCast(@alignCast(p));
+    const io = d.io;
+    signalShutdown(d);
+    const deadline: Io.Timeout = (Io.Timeout{ .duration = .{ .raw = exit_grace, .clock = .awake } }).toDeadline(io);
+    d.ev_mutex.lockUncancelable(io);
+    defer d.ev_mutex.unlock(io);
+    while (true) {
+        const all = for (d.workers.items) |w| {
+            if (w.thread != null and !w.done.load(.acquire)) break false;
+        } else true;
+        if (all) return true;
+        d.ev_cond.waitTimeout(io, &d.ev_mutex, deadline) catch return false;
+    }
+}
+
+/// Stops every worker created by `g` and waits for their threads. Called
+/// when the state closes.
+pub fn closeState(g: *Global) void {
+    const p = g.ext.get(domain_key) orelse return;
+    const d: *Domain = @ptrCast(@alignCast(p));
+    const io = d.io;
+    signalShutdown(d);
     for (d.workers.items) |w| {
         if (w.thread) |t| t.join();
         w.thread = null;
@@ -504,16 +541,26 @@ fn halt(l: *Thread, comptime what: []const u8) Error {
 
 fn threadMain(w: *Worker) void {
     var msg: ?[]u8 = null;
-    run(w, &msg);
+    var val: ?*Packet = null;
+    run(w, &msg, &val);
     w.out_mutex.lockUncancelable(w.domain.io);
     w.status = if (msg != null) .failed else .dead;
     w.err_msg = msg;
+    w.err_value = val;
     w.out_mutex.unlock(w.domain.io);
     w.domain.notify();
     w.done.store(true, .release);
 }
 
-fn run(w: *Worker, msg: *?[]u8) void {
+/// Copies an error value that is not a string out of the state of the
+/// worker, so the creator raises the value itself. A value that cannot
+/// cross, such as a table holding a function, leaves only its message.
+fn keepError(l: *Thread, v: Value, val: *?*Packet) void {
+    if (v.tag == .string or v.isNil()) return;
+    val.* = encode(l, v) catch null;
+}
+
+fn run(w: *Worker, msg: *?[]u8, val: *?*Packet) void {
     const gpa = w.domain.gpa;
     const io = w.domain.io;
     const fail = struct {
@@ -559,7 +606,11 @@ fn run(w: *Worker, msg: *?[]u8) void {
         const v = decode(l, p) catch return fail(msg, gpa, api.errorMessage(l, l.err));
         l.push(v) catch return fail(msg, gpa, api.errorMessage(l, l.err));
     }
-    if (!api.pcall(l, @intCast(w.args.len), 0)) return fail(msg, gpa, api.errorMessage(l, l.stack[l.top - 1]));
+    if (!api.pcall(l, @intCast(w.args.len), 0)) {
+        const e = l.stack[l.top - 1];
+        keepError(l, e, val);
+        return fail(msg, gpa, api.errorMessage(l, e));
+    }
     l.top = base;
     // The coroutines that the body detached run to their end, as they do
     // after the main chunk of a program. The error of one that failed
@@ -572,7 +623,10 @@ fn run(w: *Worker, msg: *?[]u8) void {
         w.waker = g;
         w.in_mutex.unlock(io);
     }
-    sched.drainWhile(l, w, running) catch return fail(msg, gpa, api.errorMessage(l, l.err));
+    sched.drainWhile(l, w, running) catch {
+        keepError(l, l.err, val);
+        return fail(msg, gpa, api.errorMessage(l, l.err));
+    };
 }
 
 /// True until the creator of the worker `ctx` shuts it down.
@@ -803,6 +857,16 @@ fn receive(l: *Thread) Error!u32 {
             const w = try checkWorker(l, i);
             w.out_mutex.lockUncancelable(io);
             if (w.status == .failed) {
+                if (w.err_value) |pk| {
+                    // A copy of the value is raised, so every receive
+                    // raises an equal value.
+                    const v = decode(l, pk) catch |e| {
+                        w.out_mutex.unlock(io);
+                        return e;
+                    };
+                    w.out_mutex.unlock(io);
+                    return l.raise(v);
+                }
                 const text = w.err_msg orelse "worker error";
                 const s = l.newString(text) catch |e| {
                     w.out_mutex.unlock(io);

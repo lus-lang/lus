@@ -19,7 +19,7 @@ returns: T
 
 The parameter `t` must be a table, and any other value raises `bad argument #1 to 'setmetatable' (table expected, got TYPE)`. The parameter `metatable` is a table, or `nil` to remove the metatable. A missing `metatable` counts as `nil`, and any other value raises `bad argument #2 to 'setmetatable' (nil or table expected, got TYPE)`.
 
-If the current metatable of `t` has a `__metatable` field, the metatable is protected, and `setmetatable` raises `cannot change a protected metatable`. A metatable with a `__gc` field marks `t` for finalization when it is set.
+If the current metatable of `t` has a `__metatable` field, the metatable is protected, and `setmetatable` raises `cannot change a protected metatable`. A read-only table, such as `flags` or a table that `--readonly-env` froze, keeps its metatable, and `setmetatable` on it raises `attempt to modify a readonly table`. A metatable with a `__gc` field marks `t` for finalization when it is set.
 
 ```lus
 local Point = {}

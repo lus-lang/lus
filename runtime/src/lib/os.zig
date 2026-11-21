@@ -164,9 +164,15 @@ pub fn errnoOf(e: anyerror) ErrInfo {
 }
 
 fn tmpname(l: *Thread) Error!u32 {
-    if (!@import("../vm/pledge.zig").allowed(l, "fs:write", null)) return l.raiseFmt("permission \"fs:write\" denied for os.tmpname", .{});
+    const pledge = @import("../vm/pledge.zig");
+    // Without any grant of fs:write the call fails before it reads the
+    // environment. A grant limited to some paths must cover the file.
+    if (!pledge.allowed(l, "fs:write", null)) return l.raiseFmt("permission \"fs:write\" denied for os.tmpname", .{});
     const io = l.g.io;
-    const dir: []const u8 = if (builtin.os.tag == .windows) (envGet(l, "TEMP") orelse ".") else "/tmp";
+    const dir: []const u8 = if (builtin.os.tag == .windows)
+        (envGet(l, "TEMP") orelse ".")
+    else
+        std.mem.trimEnd(u8, envGet(l, "TMPDIR") orelse "/tmp", "/");
     const sep: []const u8 = if (builtin.os.tag == .windows) "\\" else "/";
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     var seed: u64 = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
@@ -179,7 +185,8 @@ fn tmpname(l: *Thread) Error!u32 {
             seed = seed *% 6364136223846793005 +% 1442695040888963407;
             c.* = alphabet[@intCast((seed >> 33) % alphabet.len)];
         }
-        const path = std.fmt.bufPrint(&buf, "{s}{s}lua_{s}", .{ dir, sep, suffix }) catch break;
+        const path = std.fmt.bufPrint(&buf, "{s}{s}lua_{s}", .{ if (dir.len == 0) "/" else dir, if (dir.len == 0) "" else sep, suffix }) catch break;
+        try pledge.require(l, "fs:write", path);
         const f = std.Io.Dir.cwd().createFile(io, path, .{ .exclusive = true }) catch |e| switch (e) {
             error.PathAlreadyExists => continue,
             else => break,

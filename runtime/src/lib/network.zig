@@ -1548,6 +1548,9 @@ const TimedReader = struct {
     timeout_ms: i32,
     interface: Io.Reader,
     err: ?anyerror = null,
+    /// The thread that reads, which waits through the scheduler when it
+    /// is set.
+    thread: ?*Thread = null,
 
     fn init(io: Io, stream: net.Stream, timeout_ms: i32, buffer: []u8) TimedReader {
         return .{
@@ -1573,7 +1576,15 @@ const TimedReader = struct {
 
     fn readVec(io_r: *Io.Reader, data: [][]u8) Io.Reader.Error!usize {
         const r: *TimedReader = @alignCast(@fieldParentPtr("interface", io_r));
-        switch (waitHandle(r.stream.socket.handle, false, r.timeout_ms)) {
+        const wait: Wait = if (r.thread) |l| blk: {
+            // With detached coroutines alive, a caller that cannot suspend
+            // runs the scheduler while it waits, so a `network.serve` of
+            // the same state answers.
+            if (!sched.active(l.g) or sched.canSuspend(l)) break :blk waitHandle(r.stream.socket.handle, false, r.timeout_ms);
+            const ready = sched.waitIo(l, r.stream.socket.handle, .read, r.timeout_ms) catch break :blk .failed;
+            break :blk if (ready) .ready else .timeout;
+        } else waitHandle(r.stream.socket.handle, false, r.timeout_ms);
+        switch (wait) {
             .ready => {},
             .timeout => {
                 r.err = error.Timeout;
@@ -1793,6 +1804,7 @@ fn fetch(l: *Thread) Error!u32 {
     c.stream = stream;
     c.use_tls = false;
     c.sr = .init(io, stream, fetch_timeout_ms, &c.sr_buf);
+    c.sr.thread = l;
     c.sw = stream.writer(io, &c.sw_buf);
 
     if (u.https) {
@@ -1860,7 +1872,10 @@ fn fetch(l: *Thread) Error!u32 {
     var resp: std.ArrayList(u8) = .empty;
     defer resp.deinit(gpa);
     var buf: [4096]u8 = undefined;
-    if (chunked) {
+    // A response to HEAD, and a 1xx, 204 or 304 response, ends after its
+    // headers, whatever Content-Length says (RFC 9112, section 6.3).
+    const no_body = std.ascii.eqlIgnoreCase(method, "HEAD") or status == 204 or status == 304 or (status >= 100 and status < 200);
+    if (no_body) {} else if (chunked) {
         while (true) {
             const n = readHttpLine(r, &line) orelse return l.raiseFmt("truncated chunked response", .{});
             const size = parseChunkSize(line[0..n]) orelse return l.raiseFmt("invalid chunk size", .{});

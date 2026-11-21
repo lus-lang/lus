@@ -117,6 +117,14 @@ fn zoneOf(v: Value) *FlatZone {
     return payload(FlatZone, v.as(Userdata));
 }
 
+/// The zone attached to a zoned value, or nil when it has none. The slot
+/// is a user value, which debug.setuservalue can replace, so anything but
+/// a zone reads as no zone.
+fn attachedZone(l: *Thread, u: *Userdata) Value {
+    const zv = u.userValues()[0];
+    return if (toUserdata(l, zv, .zone) != null) zv else .nil;
+}
+
 fn rangeError(l: *Thread) Error {
     return l.raiseFmt("time value out of range", .{});
 }
@@ -151,17 +159,31 @@ fn pushZoned(l: *Thread, span: Span, offset: i64) Error!*Userdata {
 }
 
 /// Resolves the wall clock time `naive` (seconds since the epoch as if
-/// UTC) through `zone`, pushes the zoned result and attaches the zone. One
-/// correction pass handles the usual daylight saving step. Gaps and
-/// overlaps resolve to a single deterministic side.
+/// UTC) through `zone`, pushes the zoned result and attaches the zone.
+/// The offsets around `naive` are the candidates. A time that two of them
+/// read takes the earlier instant, and a time in a gap, which none of them
+/// reads, moves forward by the length of the gap.
 fn pushZonedInZone(l: *Thread, naive: i64, frac: i32, zone: Value) Error!void {
     const z = zoneOf(zone);
-    var g = z.offsetAt(naive);
-    var utc = try ok(l, i64, tc.subChecked(naive, g));
-    const g2 = z.offsetAt(utc);
-    if (g2 != g) {
-        utc = try ok(l, i64, tc.subChecked(naive, g2));
-        g = g2;
+    const a = z.offsetAt(naive);
+    const b = z.offsetAt(try ok(l, i64, tc.subChecked(naive, a)));
+    const lo = @min(a, b);
+    const hi = @max(a, b);
+    const at_hi = try ok(l, i64, tc.subChecked(naive, hi));
+    const at_lo = try ok(l, i64, tc.subChecked(naive, lo));
+    var utc: i64 = undefined;
+    var g: i64 = undefined;
+    if (z.offsetAt(at_hi) == hi) {
+        utc = at_hi;
+        g = hi;
+    } else if (z.offsetAt(at_lo) == lo) {
+        utc = at_lo;
+        g = lo;
+    } else {
+        // In a gap, the offset before it applies, which lands past the
+        // gap, where the offset after it holds.
+        utc = at_lo;
+        g = z.offsetAt(at_lo);
     }
     const u = try pushZoned(l, .{ .sec = utc, .nsec = frac }, g);
     u.userValues()[0] = zone;
@@ -172,7 +194,7 @@ fn pushZonedInZone(l: *Thread, naive: i64, frac: i32, zone: Value) Error!void {
 /// the zone of `src` when it has one and keeping its fixed offset
 /// otherwise.
 fn rebuildZoned(l: *Thread, src: *Userdata, naive: i64, frac: i32) Error!u32 {
-    const zone = src.userValues()[0];
+    const zone = attachedZone(l, src);
     if (zone.isNil()) {
         const off = payload(Zoned, src).offset;
         _ = try pushZoned(l, .{ .sec = try ok(l, i64, tc.subChecked(naive, off)), .nsec = frac }, off);
@@ -511,6 +533,9 @@ fn parseFormat(l: *Thread, s: []const u8, fmt: []const u8) Error!u32 {
             c.i += 1;
         }
     }
+    // The pattern must account for the whole text, as an ISO 8601 parse
+    // does.
+    if (c.i < s.len) return l.raiseFmt("trailing characters in '{s}'", .{s});
     if (mo < 1 or mo > 12 or d < 1 or d > 31) return mismatch(l, s, fmt);
     const naive = try ok(l, i64, tc.civilSeconds(y, mo, d, h, mi, sec));
     return pushParsed(l, naive, 0, offset);
@@ -701,9 +726,9 @@ fn utcInfo() tc.ZoneInfo {
 
 /// Zone information for a zoned value: its own offset, with the
 /// abbreviation of its zone when it has one.
-fn zonedInfo(u: *Userdata) tc.ZoneInfo {
+fn zonedInfo(l: *Thread, u: *Userdata) tc.ZoneInfo {
     const z = payload(Zoned, u);
-    const zv = u.userValues()[0];
+    const zv = attachedZone(l, u);
     if (!zv.isNil()) {
         const inf = zoneOf(zv).info(z.span.sec);
         if (inf.utoff == z.offset) return inf;
@@ -898,7 +923,7 @@ fn zonedFormat(l: *Thread) Error!u32 {
     const z = payload(Zoned, u);
     const fmt = (try aux.optString(l, 2, iso_local)).?;
     const wall = try ok(l, i64, tc.addChecked(z.span.sec, z.offset));
-    return retFormatted(l, wall, fmt, zonedInfo(u), "");
+    return retFormatted(l, wall, fmt, zonedInfo(l, u), "");
 }
 
 fn zonedIso(l: *Thread) Error!u32 {
@@ -912,7 +937,7 @@ fn zonedIso(l: *Thread) Error!u32 {
     } else {
         tc.formatOffset(l.g.gpa, &suffix_buf, z.offset, true) catch return l.raiseMem();
     }
-    return retFormatted(l, wall, iso_local, zonedInfo(u), suffix_buf.items);
+    return retFormatted(l, wall, iso_local, zonedInfo(l, u), suffix_buf.items);
 }
 
 /// Replaces the named wall clock fields and re-resolves the result

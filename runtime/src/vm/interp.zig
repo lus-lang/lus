@@ -1241,23 +1241,9 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .rangeprep => {
-            // R[A] holds the iterator expression results. When R[A] is
-            // the builtin range, convert to an integer numeric loop:
-            // R[A..A+2] = start, count, step and skip to the numeric
-            // loop body following this instruction. Otherwise continue
-            // with the generic protocol at the offset in C.
-            const r = c.fr.base + opc.a(ins);
-            if (isBuiltinRange(l, l.stack[r])) {
-                c.fr.pc = pc;
-                if (try rangePrep(l, r)) {
-                    pc += opc.bx(ins) + 1;
-                } else {
-                    const lr = c.bp + opc.a(ins);
-                    if (lr[0].tag == .integer) try tierFor(l, &c, pc, @bitCast(lr[1].asInt()));
-                }
-            } else {
-                pc += opc.c(ins);
-            }
+            // A loop over the builtin range with plain numbers skips the
+            // JMP to the generic copy and takes the FORPREP after it.
+            if (rangeArgs(l, c.bp + opc.a(ins))) pc += 1;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
 
@@ -2450,18 +2436,35 @@ fn forValue(l: *Thread, v: Value, what: []const u8) Error!Value {
 }
 
 fn isBuiltinRange(l: *Thread, v: Value) bool {
-    if (v.tag != .native) return false;
-    const p = l.g.ext.get("range") orelse return false;
-    return @intFromPtr(p) == v.payload;
+    return v.tag == .native and v.address() == l.g.range_native;
 }
 
-/// Converts `range(a, b [, step])` arguments at r+1..r+3 into the numeric
-/// loop layout at r..r+3. Returns true when the loop is empty.
-fn rangePrep(l: *Thread, r: u32) Error!bool {
-    l.stack[r] = l.stack[r + 1];
-    l.stack[r + 1] = l.stack[r + 2];
-    l.stack[r + 2] = if (l.stack[r + 3].isNil()) Value.int(1) else l.stack[r + 3];
-    return forPrep(l, r);
+/// Writes the start, limit and step of `range(a [, b [, step]])`, whose
+/// arguments are at r+1..r+3, to the numeric loop layout at r+4..r+6 when
+/// r holds the builtin `range` and the arguments are integers or floats,
+/// with a step that is not zero or NaN. Returns false and changes nothing
+/// otherwise, and the generic loop then calls whatever r holds, which
+/// raises the errors of `range` itself.
+pub fn rangeArgs(l: *Thread, r: [*]Value) bool {
+    if (!isBuiltinRange(l, r[0])) return false;
+    const plain = struct {
+        fn f(v: Value) bool {
+            return v.tag == .integer or v.tag == .float;
+        }
+    }.f;
+    if (!plain(r[1])) return false;
+    if (!r[2].isNil() and !plain(r[2])) return false;
+    const step = if (r[3].isNil()) Value.int(1) else r[3];
+    if (!plain(step)) return false;
+    switch (step.tag) {
+        .integer => if (step.asInt() == 0) return false,
+        else => if (!(step.asFloat() != 0)) return false,
+    }
+    // range(n) counts from 1 to n.
+    r[4] = if (r[2].isNil()) Value.int(1) else r[1];
+    r[5] = if (r[2].isNil()) r[1] else r[2];
+    r[6] = step;
+    return true;
 }
 
 fn globalDefine(l: *Thread, env: Value, name: Value, v: Value) Error!void {

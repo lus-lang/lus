@@ -152,7 +152,7 @@ print(jan31:add{ months = 1 }:iso())               --> 2026-02-28T00:00:00-05:00
 print(noon:with{ hour = 8, minute = 5 }:iso())     --> 2026-03-07T08:05:00-05:00
 ```
 
-A wall-clock time that a zone skips at the start of daylight saving, or repeats at its end, resolves to one of the offsets around the transition. Which offset it takes is unspecified.
+A wall-clock time that a zone skips at the start of daylight saving moves forward by the length of the skip, so 02:30 on a day when New York jumps from 02:00 to 03:00 becomes 03:30 with the offset `-04:00`. A wall-clock time that a zone repeats at the end of daylight saving takes the earlier of its two instants, the one with the daylight saving offset.
 
 ## Formatting
 

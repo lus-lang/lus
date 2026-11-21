@@ -221,7 +221,7 @@ pos = { x = 5 }    -- only updates x
 print(pos.x, pos.y)  --> 5  0
 ```
 
-The set of fields is fixed when the code is compiled. An overwrite that names a field the group lacks, such as `pos = { z = 1 }`, fails with `'z' is not a field of group 'pos'`. A new group declaration may take another group as its initializer, which copies the current field values. A field initializer is any expression, including a [do expression](#do-expressions):
+The set of fields is fixed when the code is compiled. An overwrite that names a field the group lacks, such as `pos = { z = 1 }`, fails with `'z' is not a field of group 'pos'`. An overwrite may also take another group, as in `pos = start`, which assigns each field of `start` to the field of `pos` with the same name. A new group declaration may take another group as its initializer, which copies the current field values. A field initializer is any expression, including a [do expression](#do-expressions):
 
 ```lus
 local a <group> = {
@@ -670,7 +670,7 @@ end
 
 The loop variable is local to the body and cannot be assigned. The start, stop, and step expressions are evaluated once before the loop begins.
 
-The global function [`range`](/manual/api#range) counts in a generic `for`. `range(a, b, step)` counts from `a` to `b`, the step defaults to 1, and `range(n)` counts from 1 to `n`:
+The global function [`range`](/manual/api#range) writes the same loop in the form of a generic `for`. `range(a, b, step)` counts from `a` to `b`, the step defaults to 1, and `range(n)` counts from 1 to `n`. When a `for` loop calls the builtin `range` directly with integer or float arguments, it runs exactly the numeric loop above:
 
 ```lus
 for i in range(1, 5) do       -- 1, 2, 3, 4, 5
@@ -682,9 +682,9 @@ for i in range(10, 1, -2) do  -- 10, 8, 6, 4, 2
 end
 ```
 
-`range` evaluates its bounds and its step once, when it is called, and returns an iterator function. A negative step counts down, a range whose start lies past its stop yields nothing, and a step of zero raises `bad argument #3 to 'range' (step must not be zero)`. An integer range stays in integers. The first value is `a` exactly as given, and each later value is the previous one plus the step, so `range(1, 2, 0.5)` yields `1`, `1.5`, and `2.0`, where the numeric loop yields `1.0`, `1.5`, and `2.0`.
+A direct call follows the rules of the numeric loop. The bounds and the step are evaluated once, the loop variable is local to the body, an integer loop stays in integers, and a float start or step makes every value a float, so `range(1, 2, 0.5)` yields `1.0`, `1.5`, and `2.0`. A negative step counts down, a range whose start lies past its stop yields nothing, and a step of zero raises `bad argument #3 to 'range' (step must not be zero)`.
 
-The iterator is an ordinary function, so it can be stored, passed around, and called directly. It returns `nil` once the range is exhausted.
+Elsewhere `range` returns an iterator function with the same values, so it can be stored, passed around, and called directly. It returns `nil` once the range is exhausted. A local or global that shadows `range` is called like any other iterator.
 
 ```lus
 local next_odd = range(1, 5, 2)
@@ -1626,7 +1626,7 @@ The `--readonly-env` option freezes the global environment and the standard libr
 - Every table stored in `_ENV`, such as `math`, `string`, `table`, `io`, `os`, `fs`, `network`, `worker`, and `arg`.
 - Every table stored in those tables, such as `network.tcp` and `network.udp`.
 
-A write to a frozen table, including one through `rawset`, raises `attempt to modify a readonly table`. A new global is such a write, so a program under `--readonly-env` keeps its state in locals. Tables that the program creates stay writable. `package.loaded` also stays writable, because `require` stores every module it loads there, and the global bindings stay frozen around it:
+A write to a frozen table, including one through `rawset`, raises `attempt to modify a readonly table`, and so does `setmetatable` on a frozen table, because a metatable could redirect every access to it. A new global is such a write, so a program under `--readonly-env` keeps its state in locals. Tables that the program creates stay writable. `package.loaded` also stays writable, because `require` stores every module it loads there, and the global bindings stay frozen around it:
 
 ```lus nocheck
 -- lus --readonly-env script.lus

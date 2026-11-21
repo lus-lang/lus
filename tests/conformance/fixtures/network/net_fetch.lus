@@ -1,0 +1,7 @@
+local config = worker.peek()
+local ok, status, body, headers = catch network.fetch(`http://127.0.0.1:$(config.port)/`, config.method)
+if ok then
+    worker.message({ ok = true, status = status, size = #body, length = headers["content-length"] })
+else
+    worker.message({ ok = false, err = status })
+end
