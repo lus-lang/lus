@@ -382,7 +382,7 @@ local function keeps_one_qualified_standard_library_symbol_graph_test()
   local path_module = stdlib_data.resolve("fs.path")
   assert(path_module ~= nil)
   assert(path_module.source == "stdlib/fs/path/_module.md")
-  assert(string.find(path_module.description, "sub%-module"))
+  assert(string.find(path_module.description, "path strings", 1, true))
 
   local unzip = stdlib_data.resolve("table.unzip")
   assert(#unzip.returns == 1)
