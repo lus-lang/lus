@@ -541,6 +541,12 @@ scripts["tableerror"] = [==[error({ code = 42, msg = "bad" })]==]
 scripts["numbererror"] = [==[error(17)]==]
 scripts["funcerror"] = [==[error({ f = print })]==]
 
+-- Sends a message, then fails.
+scripts["msgthenerror"] = [==[
+worker.message("working")
+error("worker broke", 0)
+]==]
+
 -- Write every generated helper script to disk.
 local script_names = {}
 for name, src in pairs(scripts) do
@@ -953,14 +959,18 @@ local function an_errored_worker_preempts_a_queued_message_in_select_test()
     drain(prod)
 end
 
--- A worker that buffers messages and then errors surfaces the error rather
--- than the buffered messages, because receive checks status before the outbox.
-local function an_error_preempts_messages_buffered_before_it_test()
+-- A worker that buffers messages and then errors delivers the buffered
+-- messages first, and every receive after them raises the error.
+local function messages_buffered_before_an_error_arrive_first_test()
     local w = worker.create(gen("buferr"))
     wait_dead(w)
-    local ok, err = catch worker.receive(w)
-    assert(not ok)
-    assert(string.find(tostring(err), "boom after buffer"))
+    assert(worker.receive(w) == 1)
+    assert(worker.receive(w) == 2)
+    for _ = 1, 2 do
+        local ok, err = catch worker.receive(w)
+        assert(not ok)
+        assert(string.find(tostring(err), "boom after buffer"))
+    end
 end
 
 -- A genuine nil message and end-of-stream both surface as nil, so the drain
@@ -1278,4 +1288,16 @@ local function a_table_error_arrives_as_a_table_test()
     assert(not ok and e == 17)
     ok, e = catch worker.receive(worker.create(gen("funcerror")))
     assert(not ok and type(e) == "string" and e:find("table: ", 1, true), tostring(e))
+end
+
+
+-- A message sent before an error arrives before the error, however the
+-- threads interleave.
+local function a_message_before_an_error_arrives_first_test()
+    for _ = 1, 100 do
+        local w = worker.create(gen("msgthenerror"))
+        assert(worker.receive(w) == "working")
+        local ok, e = catch worker.receive(w)
+        assert(not ok and e == "worker broke", e)
+    end
 end

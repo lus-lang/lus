@@ -856,6 +856,17 @@ fn receive(l: *Thread) Error!u32 {
         while (i <= n) : (i += 1) {
             const w = try checkWorker(l, i);
             w.out_mutex.lockUncancelable(io);
+            // Messages sent before the error arrive first.
+            const p = w.outbox.pop();
+            if (p) |pk| {
+                w.out_mutex.unlock(io);
+                defer pk.destroy(l.g.parent_gpa);
+                const v = try decode(l, pk);
+                try l.ensure(n);
+                var j: u32 = 1;
+                while (j <= n) : (j += 1) l.push(if (j == i) v else .nil) catch unreachable;
+                return n;
+            }
             if (w.status == .failed) {
                 if (w.err_value) |pk| {
                     // A copy of the value is raised, so every receive
@@ -876,16 +887,7 @@ fn receive(l: *Thread) Error!u32 {
                 return l.raise(Value.obj(.string, s));
             }
             if (w.status == .running) all_dead = false;
-            const p = w.outbox.pop();
             w.out_mutex.unlock(io);
-            if (p) |pk| {
-                defer pk.destroy(l.g.parent_gpa);
-                const v = try decode(l, pk);
-                try l.ensure(n);
-                var j: u32 = 1;
-                while (j <= n) : (j += 1) l.push(if (j == i) v else .nil) catch unreachable;
-                return n;
-            }
         }
         if (all_dead) {
             try l.ensure(n);
