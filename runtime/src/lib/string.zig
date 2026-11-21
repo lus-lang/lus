@@ -1760,6 +1760,28 @@ fn fmtFloat(b: *Builder, spec: Spec, conv: u8, f: f64) Error!void {
     }
     var d = Decimal.init(gpa, @abs(f)) catch return l.raiseMem();
     defer d.deinit(gpa);
+    return fmtDigits(b, spec, conv, prefix, &d);
+}
+
+/// The %e, %f and %g conversions of a decimal number, from its exact
+/// digits, so `%.2f` of 2.675d rounds 2.675 itself.
+fn fmtExactDecimal(b: *Builder, spec: Spec, conv: u8, v: *const numeric.Decimal) Error!void {
+    const l = b.l;
+    const gpa = l.g.gpa;
+    var m = v.coef().toManaged(gpa) catch return l.raiseMem();
+    defer m.deinit();
+    m.abs();
+    const digits = m.toString(gpa, 10, .lower) catch return l.raiseMem();
+    var d = Decimal.fromCoefficient(gpa, digits, v.exponent);
+    defer d.deinit(gpa);
+    const prefix = signPrefix(spec, !v.positive and !d.isZero());
+    return fmtDigits(b, spec, conv, prefix, &d);
+}
+
+fn fmtDigits(b: *Builder, spec: Spec, conv: u8, prefix: []const u8, d: *Decimal) Error!void {
+    const l = b.l;
+    const gpa = l.g.gpa;
+    const upper_case = std.ascii.isUpper(conv);
     var body: std.ArrayList(u8) = .empty;
     defer body.deinit(gpa);
     const prec = spec.precision orelse 6;
@@ -2035,9 +2057,15 @@ fn formatInto(comptime leaf: bool, l: *Thread, b: *Builder, fmt: []const u8, arg
                 try fmtHexFloat(b, sp, conv, try fmtFloat64(leaf, l, args, arg));
             },
             'e', 'E', 'f', 'F', 'g', 'G' => {
-                const f = try fmtFloat64(leaf, l, args, arg);
-                const sp = try parseSpec(l, form, spec, flags_float, true);
-                try fmtFloat(b, sp, conv, f);
+                if (args[arg - 1].tag == .decimal) {
+                    if (leaf) return error.LusError;
+                    const sp = try parseSpec(l, form, spec, flags_float, true);
+                    try fmtExactDecimal(b, sp, conv, args[arg - 1].as(numeric.Decimal));
+                } else {
+                    const f = try fmtFloat64(leaf, l, args, arg);
+                    const sp = try parseSpec(l, form, spec, flags_float, true);
+                    try fmtFloat(b, sp, conv, f);
+                }
             },
             'p' => {
                 const sp = try parseSpec(l, form, spec, flags_char, false);

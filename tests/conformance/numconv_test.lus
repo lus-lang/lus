@@ -633,3 +633,13 @@ local function floats_print_with_the_fewest_round_trip_digits_test()
         end
     end
 end
+
+-- string.format writes a decimal from its exact digits
+local function format_writes_a_decimal_from_its_exact_digits_test()
+    assert(string.format("%.2f", 2.675d) == "2.68")
+    assert(string.format("%.2f", 2.665d) == "2.66")
+    assert(string.format("%e", 1234.5d) == "1.234500e+03")
+    assert(string.format("%.3g", 123456d) == "1.23e+05")
+    assert(string.format("%f", 1e30d) == "1000000000000000000000000000000.000000")
+    assert(string.format("%.2f", 2.675) == "2.67")
+end
