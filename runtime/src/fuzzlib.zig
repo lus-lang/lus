@@ -87,15 +87,11 @@ const json = target(
     \\    if ok2 then
     \\        local ok3, v2 = catch fromjson(t)
     \\        if not ok3 then fail("tojson output does not parse:", t, v2) end
-    \\        -- An array with a null element has a hole, and an empty object is
-    \\        -- an empty table, so the first round trip may change the text
-    \\        -- (spec/stdlib/base/tojson.md). The second one must not.
+    \\        -- tojson writes null in every hole, so its output parses back to
+    \\        -- a value that formats to the same text. An empty object and a
+    \\        -- trailing null have no key, so v itself may differ from v2.
     \\        local t2 = tojson(v2)
-    \\        if t2 == t then
-    \\            if not same(v, v2) then fail("round trip changed the value of", t) end
-    \\        elseif tojson(fromjson(t2)) ~= t2 then
-    \\            fail("formatting does not settle:", t, t2, tojson(fromjson(t2)))
-    \\        end
+    \\        if t2 ~= t then fail("round trip changed", t, "to", t2) end
     \\    end
     \\    local ok4, pretty = catch tojson(v, { indent = 2 })
     \\    if ok4 and ok2 then

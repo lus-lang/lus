@@ -23,7 +23,7 @@ The value maps to Lus as follows:
 - Integer syntax produces an integer, and syntax with a fraction or an exponent produces a float.
 - Strings become strings, and `true` and `false` become booleans.
 - Arrays become tables with integer keys from 1, and objects become tables with string keys.
-- JSON `null` becomes `nil`, so a null field is absent and a null array element leaves a hole.
+- JSON `null` becomes `nil`, so a null field is absent and a null array element leaves a hole. `tojson` writes `null` in that hole again, except at the end of an array, where the hole has no key.
 - An object with a duplicate key keeps the last value.
 
 With `exact` set, an integer that overflows 64 bits decodes as a bigint and a number with a fraction or an exponent decodes as a decimal, so [`tojson`](/manual/api#tojson) reproduces the original digits on the way back.

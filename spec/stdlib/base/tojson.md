@@ -20,7 +20,7 @@ The parameter `value` is the value to serialize. The optional `filter` is a func
 
 Values map to JSON as follows:
 
-- A table whose complete key set is the contiguous integer range from 1 through `n` becomes an array. The empty table becomes `[]`.
+- A table whose keys are all positive integers becomes an array that runs from 1 through its largest key, with `null` in each missing position, so `{1, nil, 3}` becomes `[1,null,3]`. The empty table becomes `[]`. Trailing `nil` values have no key, so `{1, 2, nil}` becomes `[1,2]`. An array whose largest key is greater than 10 must hold more than half of its positions. A sparser one raises `excessively sparse array (largest key N with C elements)`.
 - Every other table becomes an object that keeps its string keys and omits keys of other types. The order of object members is unspecified.
 - Integers, and floats with an integral value, are written without a fraction, so `tojson(1.0)` is `"1"`. Other floats are written with the fewest significant digits, from 14 up to 17, that read back as the same float, so `tojson(0.1)` is `"0.1"`. Bigints and decimals are written with their exact digits.
 - Infinite and NaN floats become `null`.
