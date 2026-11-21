@@ -1046,7 +1046,7 @@ pub fn newListIn(g: *Global, vals: []const Value) Allocator.Error!*Table {
     }
     gc.maybeCollect(g);
     const units = table.inlineUnitsSlots(vals.len, 0, @sizeOf(u64));
-    const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * 16);
+    const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * Table.inline_unit);
     t.* = .{ .hdr = t.hdr, .cell = .{ .inline_units = @intCast(units) } };
     if (units > 0) {
         table.initInline(t, vals.len, 0);
@@ -1073,7 +1073,7 @@ fn newTableSlotsIn(g: *Global, narr: usize, nhash: usize, slot: usize) Allocator
     gc.maybeCollect(g);
     // Small parts of known size live in the cell of the table itself.
     const units = table.inlineUnitsSlots(narr, nhash, slot);
-    const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * 16);
+    const t = try gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * Table.inline_unit);
     t.* = .{ .hdr = t.hdr, .cell = .{ .inline_units = @intCast(units) } };
     if (units > 0) {
         table.initInline(t, narr, nhash);

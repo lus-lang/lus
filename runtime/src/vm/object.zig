@@ -325,13 +325,17 @@ pub const Table = struct {
     /// The size of the storage that trails the table in its own cell, and
     /// the weak mode.
     pub const Cell = packed struct(u8) {
-        /// Size in 16-byte units of the storage that trails the table in
-        /// its own cell. A table created with known sizes holds its first
-        /// parts there, and parts that outgrow it move to the backing
-        /// allocator. At most 512 bytes.
+        /// Size in `inline_unit` bytes of the storage that trails the
+        /// table in its own cell. A table created with known sizes holds
+        /// its first parts there, and parts that outgrow it move to the
+        /// backing allocator. At most 504 bytes (`table.max_inline`).
         inline_units: u6 = 0,
         weak_mode: WeakMode = .none,
     };
+
+    /// The unit of the storage that trails a table in its cell, the step
+    /// between the small size classes of the heap.
+    pub const inline_unit = 8;
 
     pub const empty_nodes: [*]Node = @ptrFromInt(@alignOf(Node));
 
@@ -433,7 +437,7 @@ pub const Table = struct {
     /// The storage that trails the table in its cell.
     pub inline fn inlineBytes(t: *Table) []u8 {
         const base: [*]u8 = @ptrCast(t);
-        return (base + @sizeOf(Table))[0 .. @as(usize, t.cell.inline_units) * 16];
+        return (base + @sizeOf(Table))[0 .. @as(usize, t.cell.inline_units) * inline_unit];
     }
     /// True when `p` points into the storage that trails the table.
     pub inline fn ownsInline(t: *Table, p: *const anyopaque) bool {

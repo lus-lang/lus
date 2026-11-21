@@ -2125,7 +2125,7 @@ pub const Lower = struct {
         // as its fields until something needs the table itself.
         if (nb == 0 and nc >= 1 and table.inlineUnits(0, nc) > 0 and b.vobjs.items.len < 6) {
             const hsize: u32 = @intCast(table.hashSizeExact(nc));
-            _ = try b.emit(.{ .op = .gdebt, .imm = @intCast(@sizeOf(Table) + table.inlineUnits(0, nc) * 16), .snap = try b.snap() });
+            _ = try b.emit(.{ .op = .gdebt, .imm = @intCast(@sizeOf(Table) + table.inlineUnits(0, nc) * Table.inline_unit), .snap = try b.snap() });
             const ref = try b.f.addDetached(.{ .op = .valloc, .ty = .table, .imm = nc });
             try b.vobjs.append(b.arena, .{ .ref = ref, .nc = nc, .mask = hsize - 1 });
             try b.setReg(ra, ref, Sample.tagged(.table));

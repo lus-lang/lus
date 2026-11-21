@@ -561,10 +561,11 @@ pub fn hashSizeExact(hcount: usize) usize {
     return hashSizeFor(hcount);
 }
 
-/// Largest storage, in bytes, that a new table keeps in its own cell.
-const max_inline = 512;
+/// Largest storage, in bytes, that a new table keeps in its own cell:
+/// as many units as `Table.Cell` counts.
+const max_inline = std.math.maxInt(@FieldType(Table.Cell, "inline_units")) * Table.inline_unit;
 
-/// The size in 16-byte units of the storage that a new table with
+/// The size in `Table.inline_unit` bytes of the storage that a new table with
 /// `narr` array slots and room for `nhash` hash entries keeps in its own
 /// cell, or zero when the parts are too big for it. The array part
 /// reserves a full value per slot so that it can box in place.
@@ -580,7 +581,7 @@ pub fn inlineUnitsSlots(narr: usize, nhash: usize, slot: usize) usize {
     if (narr > max_inline or nhash > max_inline) return 0;
     const bytes = hashBytes(hashSizeExact(nhash)) + narr * slot;
     if (bytes > max_inline) return 0;
-    return std.math.divCeil(usize, bytes, 16) catch unreachable;
+    return std.math.divCeil(usize, bytes, Table.inline_unit) catch unreachable;
 }
 
 /// Lays out the parts of a fresh table in the storage of its cell, as

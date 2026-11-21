@@ -99,7 +99,7 @@ inline fn initHeader(comptime T: type, comptime tag: Tag, mem: [*]u8, size: usiz
 pub fn objectSize(h: *Header) usize {
     return switch (h.tag) {
         .string => h.as(object.String).cellSize(),
-        .table => @sizeOf(object.Table) + @as(usize, h.as(object.Table).cell.inline_units) * 16,
+        .table => @sizeOf(object.Table) + @as(usize, h.as(object.Table).cell.inline_units) * object.Table.inline_unit,
         .closure => object.Closure.allocSize(h.as(object.Closure).nupvals),
         .native => state_mod.Native.allocSize(h.as(state_mod.Native).nupvals),
         .userdata => object.Userdata.allocSize(h.as(object.Userdata).size, h.as(object.Userdata).nuser),
