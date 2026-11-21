@@ -42,7 +42,7 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 - [String interpolation](https://lus.dev/manual/guide.md#strings): Backtick strings with `$name` and `$(expr)`.
 - [Do expressions](https://lus.dev/manual/guide.md#do-expressions): Blocks that `provide` a value.
 - [Enums](https://lus.dev/manual/guide.md#enums), [slices](https://lus.dev/manual/guide.md#slices), [runtime attributes](https://lus.dev/manual/guide.md#runtime-attributes), and [local groups](https://lus.dev/manual/guide.md#local-groups).
-- [Continue](https://lus.dev/manual/guide.md#break-and-continue) and [range](https://lus.dev/manual/guide.md#counting-with-range).
+- [Continue](https://lus.dev/manual/guide.md#break-and-continue): Skip to the next iteration of a loop.
 - [Bigints and decimals](https://lus.dev/manual/guide.md#numbers): `123n` and `1.50d`.
 - [Queries](https://lus.dev/manual/guide.md#queries): First-class queries over tables and databases. Unstable.
 

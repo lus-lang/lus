@@ -251,7 +251,7 @@
       "name": "variable.language.self.lus"
     },
     {
-      "match": "(?<![^.]\\.|:)\\b(?:collectgarbage|getmetatable|setmetatable|fromjson|loadfile|rawequal|tonumber|tostring|decimal|fromcsv|require|assert|bigint|dofile|ipairs|pledge|rawget|rawlen|rawset|select|tojson|error|pairs|print|query|range|tocsv|load|next|type|warn)\\b(?!\\s*=(?!=))",
+      "match": "(?<![^.]\\.|:)\\b(?:collectgarbage|getmetatable|setmetatable|fromjson|loadfile|rawequal|tonumber|tostring|decimal|fromcsv|require|assert|bigint|dofile|ipairs|pledge|rawget|rawlen|rawset|select|tojson|error|pairs|print|query|tocsv|load|next|type|warn)\\b(?!\\s*=(?!=))",
       "name": "support.function.lus"
     },
     {

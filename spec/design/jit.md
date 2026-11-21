@@ -61,7 +61,7 @@ A function has a counter that starts at the threshold, 60 events by default. The
 
 - Native code counts a call exactly when it reaches a function that has no code yet, and so does a call from a native function.
 - The `warm` interpreter loop samples. Calls and backward jumps decrement a budget held in a machine register. When it reaches zero, the running function is charged for the whole period, and the next period gets a different length between 5 and 12, so a regular program cannot hide a function from the samples.
-- A numeric `for` or `range` loop of 16 or more iterations charges its function for the whole count when it starts. A long loop therefore compiles before its first iteration, and its loop instruction counts nothing.
+- A numeric `for` loop of 16 or more iterations charges its function for the whole count when it starts. A long loop therefore compiles before its first iteration, and its loop instruction counts nothing.
 
 Baseline code counts in turn. Its call entries and backward branches decrement a second counter of the function, and at zero the optimizing tier looks at the function or at the loop (`opt.md`).
 

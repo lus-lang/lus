@@ -274,32 +274,6 @@ local function numeric_loops_test()
     assert(once(100000) == 300000)
 end
 
-local function range_loops_test()
-    local function sum(a, b, c)
-        local s = 0
-        for i in range(a, b, c) do s = s + i end
-        return s
-    end
-    assert(hot(sum, 1, 10) == 55)
-    assert(sum(10, 1, -1) == 55)
-    assert(sum(1, 10, 2) == 25)
-    assert(sum(5, 1) == 0)
-    -- A shadowed `range` runs as an ordinary iterator.
-    local function shadow()
-        local range = function(n)
-            local i = 0
-            return function()
-                i = i + 1
-                if i <= n then return i end
-            end
-        end
-        local s = 0
-        for i in range(4) do s = s + i end
-        return s
-    end
-    assert(hot(shadow) == 10)
-end
-
 local function other_loops_test()
     local function f(n)
         local i, s = 0, 0

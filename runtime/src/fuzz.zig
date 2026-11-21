@@ -22,7 +22,6 @@ const seeds = [_][]const u8{
     "local x = 1 + 2 * 3",
     "local function f(a, ...) return a, ... end print(f(1, 2))",
     "for i = 1, 10 do if i % 2 == 0 then continue end print(i) end",
-    "for i in range(1, 9, 2) do print(i) end",
     "local t = { a = 1, [2] = 'b', 3; x = { y = {} } } print(t.a, t?.x?.y)",
     "local s = `value $(1 + 2) and $name` print(s)",
     "local ok, err = catch error('boom') print(ok, err)",

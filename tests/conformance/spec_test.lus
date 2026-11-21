@@ -101,5 +101,5 @@ end
 local function the_spec_was_found_test()
     -- Guards the other tests against passing on an empty scan.
     assert(#sorted(live) > 200)
-    assert(live["string.sub"] and live["range"] and removed["pcall"])
+    assert(live["string.sub"] and live["ipairs"] and removed["pcall"])
 end

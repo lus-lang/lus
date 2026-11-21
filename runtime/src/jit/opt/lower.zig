@@ -1536,7 +1536,6 @@ pub const Lower = struct {
             .test_ => return b.testReg(ra, rc != 0, false, last),
             .testnil => return b.testReg(ra, rc != 0, true, last),
             .forprep => return b.forPrep(ra, last),
-            .rangeprep => return b.rangePrep(ra, last),
             .forloop => return b.forLoop(ra, last),
             .call => return b.call(ra, rb, rc, last),
             .tailcall => return b.tailCall(ra, rb, last),
@@ -2727,50 +2726,6 @@ pub const Lower = struct {
         return false;
     }
 
-    /// RANGEPREP over the builtin `range` with integer arguments and a
-    /// constant step. A guard proves the callee, R[A+4..A+6] take the
-    /// numeric loop layout, and the code goes on to the FORPREP that
-    /// follows. The generic copy of the loop is never reached.
-    fn rangePrep(b: *Lower, ra: u32, last: bool) Error!bool {
-        const nd = b.fr.cfg.nodes.items[b.node];
-        if (!last or nd.nsuccs != 2) return b.generic(b.pc, last);
-        const s = b.fr.regs[ra].sample;
-        if (!s.exact or s.v.tag != .native or s.v.address() != b.l.g.range_native) return b.generic(b.pc, last);
-        for ([_]u32{ ra, ra + 1, ra + 2, ra + 3, ra + 4, ra + 5, ra + 6 }) |r| if (b.captured(r)) return b.generic(b.pc, last);
-        if ((b.guess(ra + 1, 0) orelse return b.generic(b.pc, last)) != .int) return b.generic(b.pc, last);
-        const t2 = b.guess(ra + 2, 0) orelse return b.generic(b.pc, last);
-        if (t2 != .int and t2 != .nil) return b.generic(b.pc, last);
-        const step_val = b.fr.regs[ra + 3].val;
-        const step_imm: i64 = if (step_val == ir.none) blk: {
-            if ((b.guess(ra + 3, 0) orelse return b.generic(b.pc, last)) != .nil) return b.generic(b.pc, last);
-            break :blk 1;
-        } else blk: {
-            const st = b.f.at(step_val).*;
-            if (st.op == .knil) break :blk 1;
-            if (st.op != .kint or st.imm == 0) return b.generic(b.pc, last);
-            break :blk st.imm;
-        };
-        try b.guardNative(ra, natives.range);
-        const first = try b.typed(ra + 1, .int);
-        if (step_val == ir.none) _ = try b.typed(ra + 3, .nil);
-        var start = first;
-        var limit = first;
-        if (t2 == .nil) {
-            _ = try b.typed(ra + 2, .nil);
-            start = try b.kint(1);
-        } else limit = try b.typed(ra + 2, .int);
-        try b.setReg(ra + 4, start, Sample.tagged(.integer));
-        try b.setReg(ra + 5, limit, Sample.tagged(.integer));
-        try b.setReg(ra + 6, try b.kint(step_imm), Sample.tagged(.integer));
-        b.specialized += 1;
-        // The second successor is the FORPREP after the JMP to the
-        // generic copy.
-        const e = try b.edgeTo(nd.succs[1]);
-        _ = try b.emit(.{ .op = .jmp, .t = e });
-        try b.finishEdges();
-        return false;
-    }
-
     fn forLoop(b: *Lower, ra: u32, last: bool) Error!bool {
         const nd = b.fr.cfg.nodes.items[b.node];
         if (!last or nd.nsuccs != 2) return b.generic(b.pc, last);
@@ -3637,7 +3592,6 @@ pub const Lower = struct {
         const sub = find(&stringlib.funcs, "sub");
         const byte = find(&stringlib.funcs, "byte");
         const setmetatable = find(&baselib.funcs, "setmetatable");
-        const range = find(&baselib.funcs, "range");
     };
 
     /// Guards that register `ra` holds the native function `f`.

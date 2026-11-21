@@ -68,7 +68,7 @@ goto      if        in        local     nil       not       or
 provide   repeat    return    then      true      until     while
 ```
 
-Compared to Lua 5.5, Lus adds `catch`, `continue`, `enum`, `from`, and `provide`. The word `global` is always reserved. None of the reserved words can be used as a variable name, a label, a field name after `.` or `:`, or an enum member. The word `range` is not reserved. It names an ordinary global function (section 5.13).
+Compared to Lua 5.5, Lus adds `catch`, `continue`, `enum`, `from`, and `provide`. The word `global` is always reserved. None of the reserved words can be used as a variable name, a label, a field name after `.` or `:`, or an enum member.
 
 **Tested** (`compile_errors_test.lus`): `local from = 1`, `local provide = 1`, `local enum = 1`, `local global = 1`, and `local catch = 1` all fail with `<name> expected near 'KEYWORD'`. `local continue = 1` fails the same way.
 
@@ -1207,9 +1207,9 @@ Evaluating a query expression evaluates the sources left to right, then the boun
 
 **Tested** (`query_test.lus`): clause words work as ordinary locals, fields, and methods outside queries. `@` inside comments and strings is inert. Queries appear in every expression position. A query ends at the first unrelated name. Clause order is free. `return @` and `return @t as` (truncated) fail with `<name> expected near <eof>`. Each pair of query values built separately is distinct. A query is not closable, cannot cross a worker boundary, and survives `string.dump`.
 
-### 5.13 `continue` and `range`
+### 5.13 `continue`
 
-**Source:** `syntax/parser.zig`, `compile/codegen.zig` (`patchContinues`), `lib/base.zig` (`range`). **Manual:** `guide.mdx`.
+**Source:** `syntax/parser.zig`, `compile/codegen.zig` (`patchContinues`). **Manual:** `guide.mdx`.
 
 #### Syntax
 
@@ -1236,16 +1236,6 @@ for i = 1, 10 do
     if i % 2 == 0 then continue end
     odd = odd + i
 end                                   -- odd == 25
-```
-
-#### `range`
-
-`range` is a global function, not syntax. `range(a, b)` yields `a` to `b` inclusive, `range(a, b, step)` advances by `step`, and `range(n)` yields 1 to `n`. A step of zero raises `bad argument #3 to 'range' (step must not be zero)`. A generic `for` over `range(...)` follows the rules of the numeric `for`: the bounds and step are evaluated once and an integer loop stays in integers. A local or global that shadows `range` is called like any other iterator.
-
-```lus
-local t = {}
-for i in range(1, 10, 3) do t[#t + 1] = i end   -- 1, 4, 7, 10
-for i in range(3) do t[#t + 1] = i end          -- 1, 2, 3
 ```
 
 ---
@@ -1380,7 +1370,6 @@ All paths are relative to `runtime/src/`.
 | name resolution, locals, globals, groups, flags folding | `compile/codegen.zig` |
 | query plans | `compile/query_gen.zig`, `vm/query.zig` |
 | catch, slices, enums, interpolation conversion | `vm/interp.zig`, `vm/ext.zig`, `vm/ops.zig` |
-| `range` | `lib/base.zig` |
 | error formatting | `syntax/parser.zig` (`errNear`, `errSem`, `chunkDisplay`), `compile/codegen.zig` (`Compiler.err`) |
 
 The grammar descends from the Lus 1.7 C implementation. Its lexer and parser are `lus/src/llex.c` and `lus/src/lparser.c` at the `v1.7-legacy` tag.

@@ -25,4 +25,4 @@ end
 --> 2  b
 ```
 
-[`pairs`](/manual/api#pairs) visits every key of a table, and [`range`](/manual/api#range) counts over numbers.
+[`pairs`](/manual/api#pairs) visits every key of a table.

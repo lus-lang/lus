@@ -129,7 +129,7 @@ test "loops, calls, and closures agree with the interpreter" {
         \\local s = 0
         \\for i, v in ipairs(t) do s = s + v end
         \\for k, v in pairs({ a = 1, b = 2 }) do s = s + v end
-        \\for i in range(1, 10) do s = s + i end
+        \\for i = 10, 1, -1 do s = s + i end
         \\out[#out + 1] = s
         \\local i = 0
         \\while i < 10 do i = i + 1 if i % 2 == 0 then continue end s = s + i end
