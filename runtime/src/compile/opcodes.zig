@@ -10,8 +10,9 @@
 //! field extract decodes it.
 //!
 //! Register operands address the current frame. `K` operands index the
-//! constant table. Quickened variants of generic opcodes share the generic
-//! operand layout so the interpreter can rewrite the opcode byte in place.
+//! constant table. The compiler chooses specialized instructions and fused
+//! pairs, and inline caches and size feedback adapt the generic ones at run
+//! time. No instruction rewrites itself.
 
 const std = @import("std");
 

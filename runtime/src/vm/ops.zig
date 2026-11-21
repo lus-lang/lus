@@ -330,7 +330,7 @@ pub fn arithRaw(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
             .mul => Value.int(x *% y),
             .div => Value.float(@as(f64, @floatFromInt(x)) / @as(f64, @floatFromInt(y))),
             .mod => blk: {
-                if (y == 0) return l.raiseFmt("attempt to perform 'n%%0'", .{});
+                if (y == 0) return l.raiseFmt("attempt to perform 'n%0'", .{});
                 break :blk Value.int(imod(x, y));
             },
             .idiv => blk: {
