@@ -316,7 +316,7 @@ pub const Global = struct {
     /// The allocator the state was created with, which owns the Global.
     parent_gpa: Allocator = undefined,
     threshold: usize = 1 << 20,
-    pause: usize = 200,
+    pause: usize = 175,
     gc_depth: u32 = 0,
     gc_stopped: bool = false,
     /// Allocation points seen, for the GC stress build.
