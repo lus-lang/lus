@@ -396,6 +396,45 @@ local function the_response_carries_status_body_and_headers_test()
     end)
 end
 
+-- Reads the status line and the header lines of a response as they came.
+local function raw_head(sock)
+    local lines = {}
+    while true do
+        local line = txt(sock:receive("*l"))
+        if line == "" then
+            return lines
+        end
+        lines[#lines + 1] = line
+    end
+end
+
+local function a_list_sends_one_header_line_per_value_test()
+    serving(function(req)
+        return 200, "ok", { ["Set-Cookie"] = { "a=1; Path=/", "b=2", 3 } }
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send(get("/"))
+        local lines = raw_head(sock)
+        local cookies = {}
+        for _, line in ipairs(lines) do
+            local v = line:match("^Set%-Cookie: (.*)$")
+            if v then cookies[#cookies + 1] = v end
+        end
+        assert(#cookies == 3 and cookies[1] == "a=1; Path=/" and cookies[2] == "b=2" and cookies[3] == "3")
+        assert(txt(sock:receive(2)) == "ok")
+    end)
+end
+
+local function an_empty_list_sends_no_header_line_test()
+    serving(function(req)
+        return 200, "ok", { ["X-None"] = {} }
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/"))
+        assert(r.status == 200 and r.headers["x-none"] == nil and r.body == "ok")
+    end)
+end
+
 local function a_handler_that_returns_nothing_answers_200_test()
     serving(function(req) end, function(port)
         local sock <close> = connect(port)
@@ -626,7 +665,10 @@ local invalid_results_cases = {
     headers_text = { function() return 200, "x", "Content-Type: text/plain" end, "invalid headers" },
     header_name_number = { function() return 200, "x", { [1] = "v" } end, "invalid header name" },
     header_name_space = { function() return 200, "x", { ["bad name"] = "v" } end, "invalid header name" },
-    header_value_table = { function() return 200, "x", { ["x-a"] = {} } end, "invalid value for the header 'x%-a'" },
+    header_value_table = { function() return 200, "x", { ["x-a"] = { {} } } end, "invalid value for the header 'x%-a'" },
+    header_list_newline = { function() return 200, "x", { ["x-a"] = { "ok", "one\r\nx-b: two" } } end, "invalid header value" },
+    body_function = { function() return 200, function() end end, "invalid body" },
+    upgrade_without_function = { function() return 101, "x" end, "status 101 without an upgrade function" },
     header_value_newline = { function() return 200, "x", { ["x-a"] = "one\r\nx-b: two" } end, "invalid header value" },
 }
 
@@ -639,6 +681,68 @@ local function invalid_results_test(handler, message)
         assert(at_end(sock))
     end)
     assert(#reported == 1 and string.find(reported[1], message), reported[1])
+end
+
+-- ===== Upgrades =====
+
+local websocket_request = "GET /chat HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    .. "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+
+local function a_websocket_upgrade_hands_over_the_socket_test()
+    serving(function(req)
+        assert(req.headers.upgrade == "websocket")
+        return 101, function(sock)
+            local got = txt(sock:receive(5))
+            sock:send("echo " .. got)
+        end
+    end, function(port)
+        local sock <close> = connect(port)
+        -- The first bytes after the request arrive with it, and the
+        -- upgraded connection reads them first.
+        sock:send(websocket_request .. "hel")
+        local lines = raw_head(sock)
+        assert(lines[1] == "HTTP/1.1 101 Switching Protocols", lines[1])
+        local set = {}
+        for i = 2, #lines do
+            local name, value = lines[i]:match("^([^:]+): (.*)$")
+            set[name:lower()] = value
+        end
+        assert(set.upgrade == "websocket" and set.connection == "Upgrade")
+        assert(set["sec-websocket-accept"] == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+        assert(set["content-length"] == nil)
+        sock:send("lo")
+        assert(txt(sock:receive("*a")) == "echo hello")
+    end)
+end
+
+local function an_upgrade_keeps_the_headers_of_the_handler_test()
+    serving(function(req)
+        return 101, function(sock) end, { Upgrade = "chat", Connection = "upgrade" }
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send("GET / HTTP/1.1\r\nHost: test\r\nUpgrade: chat\r\nConnection: upgrade\r\n\r\n")
+        local lines = raw_head(sock)
+        local count = 0
+        for _, line in ipairs(lines) do
+            if line:lower():match("^upgrade:") or line:lower():match("^connection:") then count = count + 1 end
+            assert(not line:match("^Sec%-WebSocket%-Accept"))
+        end
+        assert(count == 2)
+        assert(at_end(sock))
+    end)
+end
+
+local function an_error_in_the_upgrade_function_is_reported_test()
+    reported = {}
+    serving(function(req)
+        return 101, function(sock) error("upgraded and failed") end
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send(websocket_request)
+        assert(raw_head(sock)[1] == "HTTP/1.1 101 Switching Protocols")
+        assert(at_end(sock))
+    end)
+    assert(#reported == 1 and string.find(reported[1], "upgraded and failed"), reported[1])
 end
 
 local function a_handler_may_suspend_test()

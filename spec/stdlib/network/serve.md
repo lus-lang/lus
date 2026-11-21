@@ -36,9 +36,32 @@ The handler receives one table per request:
 | `headers` | A table from lowercase header names to their values. A header that repeats joins its values with `", "`. |
 | `body` | The request body as a vector, which is empty for a request without a body. |
 
-The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
+The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. A header value may also be a list of strings and integers, which sends one header line for each element in order, so a response can set several cookies with `{ ["Set-Cookie"] = { "a=1", "b=2" } }`. An empty list sends no line. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
 
 When the handler raises an error, or returns values that make no response, such as a status that is not an integer, the server answers 500 with an empty body, reports the error, and closes that connection. The other connections continue. It writes the error to standard error, in the form `lus: network.serve: message`, or passes the error value to the `on_error` function of the options.
+
+A handler upgrades the connection to another protocol, such as a WebSocket, by returning the status 101 and a function in place of the body. The server sends the 101 response with the headers of the handler and no body, then calls the function with the TCP socket of the connection, in the coroutine of the connection. Bytes that the client sent after the request are already in the buffer of the socket, so the first `receive` returns them. The connection closes when the function returns. When the function raises an error, the server reports it like an error of a handler and closes the connection without a further response. The socket keeps the `idle_timeout` of the server until the function calls `settimeout`. A function body with any other status, and the status 101 with any other body, count as values that make no response.
+
+When the request carries a `Sec-WebSocket-Key` header, the server adds the headers of a WebSocket handshake that the handler does not set: `Upgrade: websocket`, `Connection: Upgrade`, and the `Sec-WebSocket-Accept` value that RFC 6455 derives from the key. The function then exchanges WebSocket frames over the socket. A handler that checks `req.headers.upgrade` before it upgrades refuses other requests with an ordinary status.
+
+```lus
+pledge("network")
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    return 101, function(sock)
+        sock:send("upgraded")
+    end
+end)
+local sock <close> = network.tcp.connect("127.0.0.1", port)
+sock:send("GET /chat HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    .. "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+local response = vector.tostring(sock:receive("*a"))
+print(response:match("Sec%-WebSocket%-Accept: ([^\r]+)"))   --> s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+print(response:match("\r\n\r\n(.*)$"))                     --> upgraded
+coroutine.close(serving)
+server:close()
+```
 
 `options` is a table with any of these fields:
 

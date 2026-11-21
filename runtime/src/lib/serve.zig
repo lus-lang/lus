@@ -146,6 +146,22 @@ const connection_src =
     \\            respond(conn, 500, nil, nil, false, false)
     \\            return
     \\        end
+    \\        if status == 101 then
+    \\            -- An upgrade hands the connection to the function the handler
+    \\            -- returned once the 101 response is out, and the connection
+    \\            -- ends with that function.
+    \\            local valid, alive = catch respond(conn, status, body, headers, true, false, req.headers["sec-websocket-key"])
+    \\            if not valid then
+    \\                report(on_error, alive)
+    \\                respond(conn, 500, nil, nil, false, false)
+    \\                return
+    \\            end
+    \\            if alive then
+    \\                local ran, err = catch body(conn)
+    \\                if not ran then report(on_error, err) end
+    \\            end
+    \\            return
+    \\        end
     \\        local valid, alive = catch respond(conn, status, body, headers, keep, head)
     \\        if not valid then
     \\            report(on_error, alive)
@@ -778,6 +794,36 @@ fn checkHeaderText(l: *Thread, s: []const u8, comptime what: []const u8) Error!v
     }
 }
 
+/// The `Sec-WebSocket-Accept` value for the `Sec-WebSocket-Key` of a
+/// request: the SHA-1 digest of the key and the fixed GUID of RFC 6455, in
+/// base64.
+pub fn websocketAccept(key: []const u8, out: *[28]u8) void {
+    var sha = std.crypto.hash.Sha1.init(.{});
+    sha.update(std.mem.trim(u8, key, " \t"));
+    sha.update("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    var digest: [20]u8 = undefined;
+    sha.final(&digest);
+    _ = std.base64.standard.Encoder.encode(out, &digest);
+}
+
+test "the accept value of the RFC 6455 example key" {
+    var out: [28]u8 = undefined;
+    websocketAccept("dGhlIHNhbXBsZSBub25jZQ==", &out);
+    try std.testing.expectEqualStrings("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", &out);
+}
+
+/// Writes the header line `name: v`. The value is a string or an integer.
+fn writeHeader(l: *Thread, out: *std.ArrayList(u8), name: []const u8, v: Value) Error!void {
+    var num: [64]u8 = undefined;
+    const val: []const u8 = switch (v.tag) {
+        .string => v.as(object.String).bytes(),
+        .integer => std.fmt.bufPrint(&num, "{d}", .{v.asInt()}) catch unreachable,
+        else => return l.raiseFmt("handler returned an invalid value for the header '{s}' (string expected, got {s})", .{ name, l.typeNameOf(v) }),
+    };
+    try checkHeaderText(l, val, "value");
+    out.print(l.g.gpa, "{s}: {s}\r\n", .{ name, val }) catch return l.raiseMem();
+}
+
 /// Formats the response into `h.out`. The handler returned `status`,
 /// `body`, and `headers` in the arguments 2 to 4.
 fn buildResponse(l: *Thread, h: *Http, keep: bool, head: bool) Error!void {
@@ -794,8 +840,12 @@ fn buildResponse(l: *Thread, h: *Http, keep: bool, head: bool) Error!void {
         if (status < 100 or status > 999) return l.raiseFmt("handler returned an invalid status ({d})", .{status});
     }
     var body: []const u8 = "";
+    const upgrade = status == 101;
+    const is_fn = l.arg(3).tag == .closure or l.arg(3).tag == .native;
+    if (upgrade and !is_fn) return l.raiseFmt("handler returned status 101 without an upgrade function (got {s})", .{l.typeNameOf(l.arg(3))});
     switch (l.arg(3).tag) {
         .nil => {},
+        .closure, .native => if (!upgrade) return l.raiseFmt("handler returned an invalid body (string or vector expected, got function)", .{}),
         .string => body = l.arg(3).as(object.String).bytes(),
         .vector => body = l.arg(3).as(object.Vector).bytes.items,
         else => return l.raiseFmt("handler returned an invalid body (string or vector expected, got {s})", .{l.typeNameOf(l.arg(3))}),
@@ -806,6 +856,8 @@ fn buildResponse(l: *Thread, h: *Http, keep: bool, head: bool) Error!void {
     var has_length = false;
     var has_date = false;
     var has_connection = false;
+    var has_upgrade = false;
+    var has_accept = false;
     if (!l.arg(4).isNil()) {
         if (l.arg(4).tag != .table) return l.raiseFmt("handler returned invalid headers (table expected, got {s})", .{l.typeNameOf(l.arg(4))});
         const t = l.arg(4).as(Table);
@@ -815,17 +867,31 @@ fn buildResponse(l: *Thread, h: *Http, keep: bool, head: bool) Error!void {
             const name = e.key.as(object.String).bytes();
             if (name.len == 0) return l.raiseFmt("handler returned an invalid header name", .{});
             for (name) |c| if (!isToken(c)) return l.raiseFmt("handler returned an invalid header name", .{});
-            var num: [64]u8 = undefined;
-            const val: []const u8 = switch (e.val.tag) {
-                .string => e.val.as(object.String).bytes(),
-                .integer => std.fmt.bufPrint(&num, "{d}", .{e.val.asInt()}) catch unreachable,
-                else => return l.raiseFmt("handler returned an invalid value for the header '{s}' (string expected, got {s})", .{ name, l.typeNameOf(e.val) }),
-            };
-            try checkHeaderText(l, val, "value");
             if (std.ascii.eqlIgnoreCase(name, "content-length")) has_length = true;
             if (std.ascii.eqlIgnoreCase(name, "date")) has_date = true;
             if (std.ascii.eqlIgnoreCase(name, "connection")) has_connection = true;
-            out.print(gpa, "{s}: {s}\r\n", .{ name, val }) catch return l.raiseMem();
+            if (std.ascii.eqlIgnoreCase(name, "upgrade")) has_upgrade = true;
+            if (std.ascii.eqlIgnoreCase(name, "sec-websocket-accept")) has_accept = true;
+            if (e.val.tag == .table) {
+                // A list sends one header line for each of its values.
+                const list = e.val.as(Table);
+                const n = table.length(list);
+                var i: i64 = 1;
+                while (i <= n) : (i += 1) try writeHeader(l, out, name, table.getInt(list, i));
+            } else try writeHeader(l, out, name, e.val);
+        }
+    }
+    if (upgrade and l.arg(7).tag == .string) {
+        // A WebSocket handshake answers the key of the request.
+        if (!has_upgrade) out.appendSlice(gpa, "Upgrade: websocket\r\n") catch return l.raiseMem();
+        if (!has_connection) {
+            out.appendSlice(gpa, "Connection: Upgrade\r\n") catch return l.raiseMem();
+            has_connection = true;
+        }
+        if (!has_accept) {
+            var accept: [28]u8 = undefined;
+            websocketAccept(l.arg(7).as(object.String).bytes(), &accept);
+            out.print(gpa, "Sec-WebSocket-Accept: {s}\r\n", .{&accept}) catch return l.raiseMem();
         }
     }
     if (!has_date) out.print(gpa, "Date: {s}\r\n", .{dateText(h, l.g.io)}) catch return l.raiseMem();
@@ -835,7 +901,9 @@ fn buildResponse(l: *Thread, h: *Http, keep: bool, head: bool) Error!void {
     if (!head and !bodiless) out.appendSlice(gpa, body) catch return l.raiseMem();
 }
 
-/// respond(sock, status, body, headers, keep, head): writes a response.
+/// respond(sock, status, body, headers, keep, head, key): writes a
+/// response. `key` is the `Sec-WebSocket-Key` of a request that the
+/// response upgrades.
 /// Returns true when all of it was sent. Raises when the handler returned
 /// values that make no response, before it writes anything.
 fn respond(l: *Thread) Error!u32 {

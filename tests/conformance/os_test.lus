@@ -19,7 +19,7 @@ pledge("load")
 -- os.tmpname creates its file in TMPDIR, which differs between hosts, so
 -- reading it back needs fs:read wherever that is.
 pledge("fs:read", "fs:write",
-    "env=LC_*", "env=PATH", "env=LUS_TEST_*")
+    "env=LC_*", "env=PATH", "env=LUS_TEST_*", "env=LUS_SET_*", "env:write=LUS_SET_*")
 
 
 -- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.
@@ -371,7 +371,7 @@ end
 -- denies a variable outside every grant
 local function denies_a_variable_outside_every_grant_test()
     -- HOME matches none of the granted globs, so the read is refused.
-    raises(function() os.getenv("HOME") end, 'permission "env" denied for')
+    raises(function() os.getenv("HOME") end, 'permission "env:read" denied for')
 end
 
 -- requires a variable name argument
@@ -382,6 +382,81 @@ end
 -- rejects a non-string, non-coercible argument
 local function rejects_a_non_string_non_coercible_argument_test()
     raises(function() os.getenv({}) end, "string expected")
+end
+
+-- ============================================================================
+-- os.setenv
+-- ============================================================================
+
+-- sets a variable that os.getenv then reads
+local function sets_a_variable_that_getenv_reads_test()
+    os.setenv("LUS_SET_A", "first")
+    assert(os.getenv("LUS_SET_A") == "first")
+    os.setenv("LUS_SET_A", "second")
+    assert(os.getenv("LUS_SET_A") == "second")
+    os.setenv("LUS_SET_A", "")
+    assert(os.getenv("LUS_SET_A") == "")
+end
+
+-- removes a variable when the value is nil
+local function removes_a_variable_when_the_value_is_nil_test()
+    os.setenv("LUS_SET_B", "x")
+    os.setenv("LUS_SET_B", nil)
+    assert(os.getenv("LUS_SET_B") == nil)
+    -- Removing a variable that is not set does nothing.
+    os.setenv("LUS_SET_B", nil)
+    assert(os.getenv("LUS_SET_B") == nil)
+end
+
+-- keeps the variables it did not change
+local function keeps_the_variables_it_did_not_change_test()
+    local path = os.getenv("PATH")
+    os.setenv("LUS_SET_C", "1")
+    assert(os.getenv("PATH") == path)
+end
+
+-- passes the changed environment to a child process
+local function passes_the_changed_environment_to_a_child_process_test()
+    if os.platform() == "wasi" then skip("child processes are unavailable") end
+    pledge("exec")
+    os.setenv("LUS_SET_CHILD", "from parent")
+    local cmd = os.platform() == "windows" and "echo %LUS_SET_CHILD%" or "echo $LUS_SET_CHILD"
+    local p = io.popen(cmd)
+    local text = p:read("a")
+    p:close()
+    assert(text:match("from parent"), text)
+end
+
+-- gives a worker a copy of the changed environment
+local function gives_a_worker_a_copy_of_the_changed_environment_test()
+    pledge("worker")
+    os.setenv("LUS_SET_W", "parent")
+    local path = os.tmpname()
+    local f <close> = io.open(path, "w")
+    f:write([[
+        local before = os.getenv("LUS_SET_W")
+        os.setenv("LUS_SET_W", "worker")
+        worker.message(before .. "," .. os.getenv("LUS_SET_W"))
+    ]])
+    f:close()
+    local w = worker.create(path)
+    assert(worker.receive(w) == "parent,worker")
+    assert(os.getenv("LUS_SET_W") == "parent")
+end
+
+-- needs env:write for the variable
+local function needs_env_write_for_the_variable_test()
+    raises(function() os.setenv("PATH", "x") end, 'permission "env:write" denied for \'PATH\'')
+    raises(function() os.setenv("LUS_TEST_X", "x") end, 'permission "env:write" denied for')
+end
+
+-- rejects an invalid name or value
+local function rejects_an_invalid_name_or_value_test()
+    raises(function() os.setenv("", "x") end, "invalid environment variable name")
+    raises(function() os.setenv("LUS_SET_=D", "x") end, "invalid environment variable name")
+    raises(function() os.setenv("LUS_SET_E", "a\0b") end, "zero byte")
+    raises(function() os.setenv({}, "x") end, "string expected")
+    raises(function() os.setenv("LUS_SET_E", {}) end, "string expected")
 end
 
 -- ============================================================================

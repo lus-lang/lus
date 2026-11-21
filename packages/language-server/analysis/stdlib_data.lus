@@ -1770,6 +1770,97 @@ The `catch` expression captures the error object, as [Error handling](/manual/gu
     source = "stdlib/base/error.md",
     stability = "stable",
   },
+  ["file"] = {
+    children = {
+      "file:isatty",
+      "file:setraw",
+    },
+    kind = "type",
+    module = "io",
+    name = "file",
+    parent = nil,
+    receiver_type = true,
+    short_name = "file",
+    synthetic = true,
+  },
+  ["file:isatty"] = {
+    children = {},
+    description = [[
+Returns `true` when the file handle is a terminal, and `false` otherwise.
+
+The standard streams are terminals when the program runs in an interactive terminal and are not redirected. A file opened with [`io.open`](/manual/api#io.open), a pipe, and a redirected stream return `false`. A program uses the result to decide whether to print colors or to ask questions interactively. The method needs no permission, and a closed handle raises `attempt to use a closed file`.
+
+```lus
+local color = io.stdout:isatty()
+print(type(color))   --> boolean
+```
+
+[`file:setraw`](/manual/api#file:setraw) switches a terminal to raw input.]],
+    kind = "function",
+    module = "io",
+    name = "file:isatty",
+    origin = "lus",
+    params = {},
+    parent = "file",
+    receiver = "file",
+    returns = {
+      {
+        type = "boolean",
+      },
+    },
+    short_name = "isatty",
+    since = "2.0.0",
+    source = "stdlib/io/isatty.md",
+    stability = "stable",
+  },
+  ["file:setraw"] = {
+    children = {},
+    description = [[
+Switches the terminal of a file handle to raw input when `on` is `true` or absent, and back to its earlier mode when `on` is `false`.
+
+In raw mode the terminal neither echoes keys nor waits for a whole line. Each key reaches the program as soon as it is pressed, so `io.stdin:read(1)` returns one character per key. Keys that a terminal sends as several characters arrive as escape sequences, such as `"\27[A"` for the up arrow. Ctrl-C arrives as the character `"\3"` and ends nothing, so a program in raw mode handles it itself. Output keeps turning a line feed into a new line. On Windows the console delivers the same escape sequences through its virtual terminal input.
+
+On success the method returns the handle. A handle that is not a terminal returns `nil` and `"not a terminal"`, and a platform without terminals returns `nil` and `"raw mode is not supported"`. The method needs no permission, and a closed handle raises `attempt to use a closed file`.
+
+Raw mode belongs to the terminal, which the whole process shares. Switching back restores the mode from before the first switch, and the process restores it as well when it ends, including through an error or `os.exit`. A prompt for a password reads keys in raw mode and prints nothing for them.
+
+```lus nocheck
+io.stdin:setraw(true)
+io.write("password: ")
+local chars = {}
+while true do
+    local key = io.stdin:read(1)
+    if key == "\r" or key == "\n" then break end
+    chars[#chars + 1] = key
+end
+io.stdin:setraw(false)
+print()
+```
+
+[`file:isatty`](/manual/api#file:isatty) tells whether a handle is a terminal.]],
+    kind = "function",
+    module = "io",
+    name = "file:setraw",
+    origin = "lus",
+    params = {
+      {
+        name = "on",
+        optional = true,
+        type = "boolean",
+      },
+    },
+    parent = "file",
+    receiver = "file",
+    returns = {
+      {
+        type = "file|nil",
+      },
+    },
+    short_name = "setraw",
+    since = "2.0.0",
+    source = "stdlib/io/setraw.md",
+    stability = "stable",
+  },
   ["flags"] = {
     children = {},
     kind = "variable",
@@ -4676,7 +4767,7 @@ The `<` operator compares the same integers as signed values. [`math.maxinteger`
     description = [[
 Sends one HTTP or HTTPS request to `url` and returns the response status, the response body as a vector, and the response headers.
 
-`url` is a string that starts with `http://` or `https://`. The arguments after it are positional and optional. `method` is a string that defaults to `"GET"`. `headers` is a table from header names to values. `body` is the request body as a string or a vector and defaults to an empty body. The request carries `Host`, `Connection: close`, and `User-Agent: Lus/1.0`, except those that `headers` names in any case, then the entries of `headers`, then `Content-Length` when the body is not empty.
+`url` is a string that starts with `http://` or `https://`. The arguments after it are positional and optional. `method` is a string that defaults to `"GET"`. `headers` is a table from header names to values. A value is a string, a number, or a list of them, and a list sends one header line for each element in order. `body` is the request body as a string or a vector and defaults to an empty body. The request carries `Host`, `Connection: close`, and `User-Agent: Lus/1.0`, except those that `headers` names in any case, then the entries of `headers`, then `Content-Length` when the body is not empty.
 
 On success the call returns three values: the integer status code, the body as a vector, and a table from lowercase header names to their values. A response to `"HEAD"`, and a 1xx, 204, or 304 response, has an empty body whatever its `Content-Length` says. A response header that appears more than once holds its values joined by `", "` in the order they arrived. Every status counts as a response, so a 404 or a 500 is returned like a 200, and a redirect returns its 3xx status together with its `location` header. A program that expects text decodes the body with [`vector.tostring`](/manual/api#vector.tostring).
 
@@ -4764,9 +4855,32 @@ The handler receives one table per request:
 | `headers` | A table from lowercase header names to their values. A header that repeats joins its values with `", "`. |
 | `body` | The request body as a vector, which is empty for a request without a body. |
 
-The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
+The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. A header value may also be a list of strings and integers, which sends one header line for each element in order, so a response can set several cookies with `{ ["Set-Cookie"] = { "a=1", "b=2" } }`. An empty list sends no line. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
 
 When the handler raises an error, or returns values that make no response, such as a status that is not an integer, the server answers 500 with an empty body, reports the error, and closes that connection. The other connections continue. It writes the error to standard error, in the form `lus: network.serve: message`, or passes the error value to the `on_error` function of the options.
+
+A handler upgrades the connection to another protocol, such as a WebSocket, by returning the status 101 and a function in place of the body. The server sends the 101 response with the headers of the handler and no body, then calls the function with the TCP socket of the connection, in the coroutine of the connection. Bytes that the client sent after the request are already in the buffer of the socket, so the first `receive` returns them. The connection closes when the function returns. When the function raises an error, the server reports it like an error of a handler and closes the connection without a further response. The socket keeps the `idle_timeout` of the server until the function calls `settimeout`. A function body with any other status, and the status 101 with any other body, count as values that make no response.
+
+When the request carries a `Sec-WebSocket-Key` header, the server adds the headers of a WebSocket handshake that the handler does not set: `Upgrade: websocket`, `Connection: Upgrade`, and the `Sec-WebSocket-Accept` value that RFC 6455 derives from the key. The function then exchanges WebSocket frames over the socket. A handler that checks `req.headers.upgrade` before it upgrades refuses other requests with an ordinary status.
+
+```lus
+pledge("network")
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    return 101, function(sock)
+        sock:send("upgraded")
+    end
+end)
+local sock <close> = network.tcp.connect("127.0.0.1", port)
+sock:send("GET /chat HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    .. "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+local response = vector.tostring(sock:receive("*a"))
+print(response:match("Sec%-WebSocket%-Accept: ([^\r]+)"))   --> s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+print(response:match("\r\n\r\n(.*)$"))                     --> upgraded
+coroutine.close(serving)
+server:close()
+```
 
 `options` is a table with any of these fields:
 
@@ -5107,6 +5221,7 @@ The order of traversal is unspecified, even for integer keys. During a traversal
       "os.exit",
       "os.getenv",
       "os.platform",
+      "os.setenv",
       "os.setlocale",
       "os.time",
       "os.tmpname",
@@ -5323,7 +5438,7 @@ The example is fenced as a fragment because it ends the process that runs it. A 
     description = [[
 Returns the value of the environment variable `varname` as a string, or `nil` when the variable is not set.
 
-`varname` is a string, and a missing argument raises a `bad argument` error. The call requires the `env` permission for `varname`, and without it raises `permission "env" denied for 'VARNAME'`. The `env` permission can be limited to individual variables, as in `pledge("env=HOME")`, and a request for any other variable then raises the same error, whether or not that variable is set.
+`varname` is a string, and a missing argument raises a `bad argument` error. The call requires the `env:read` permission for `varname`, which `env` includes, and without it raises `permission "env:read" denied for 'VARNAME'`. The permission can be limited to individual variables, as in `pledge("env:read=HOME")`, and a request for any other variable then raises the same error, whether or not that variable is set.
 
 ```lus
 pledge("env")
@@ -5331,9 +5446,9 @@ print(type(os.getenv("PATH")))                  --> string
 print(os.getenv("LUS_EXAMPLE_UNSET_VARIABLE"))  --> nil
 ```
 
-A variable that is set to the empty string returns the empty string. [Permissions](/manual/permissions) describes values that limit a permission.
+A variable that is set to the empty string returns the empty string. A variable that [`os.setenv`](/manual/api#os.setenv) changed returns its new value. [Permissions](/manual/permissions) describes values that limit a permission.
 
-**Requires pledge:** `env`]],
+**Requires pledge:** `env:read`]],
     kind = "function",
     module = "os",
     name = "os.getenv",
@@ -5346,7 +5461,7 @@ A variable that is set to the empty string returns the empty string. [Permission
     },
     parent = "os",
     pledges = {
-      "env",
+      "env:read",
     },
     returns = {
       {
@@ -5386,6 +5501,55 @@ print(separator == fs.path.separator)   --> true
     short_name = "platform",
     since = "0.1.0",
     source = "stdlib/os/platform.md",
+    stability = "stable",
+  },
+  ["os.setenv"] = {
+    children = {},
+    description = [[
+Sets the environment variable `varname` to `value`, or removes the variable when `value` is `nil`.
+
+`varname` is a string that is not empty and contains neither `=` nor a zero byte. `value` is a string without a zero byte, or `nil`. Any other name raises `bad argument #1 to 'setenv' (invalid environment variable name)`, and a value with a zero byte raises `bad argument #2 to 'setenv' (environment variable value contains a zero byte)`. Removing a variable that is not set does nothing. The call returns no values.
+
+The call requires the `env:write` permission for `varname`, which `env` includes, and without it raises `permission "env:write" denied for 'VARNAME'`. The permission can be limited to individual variables or to a pattern, as in `pledge("env:write=APP_*")`.
+
+```lus
+pledge("env")
+os.setenv("LUS_EXAMPLE_MODE", "fast")
+print(os.getenv("LUS_EXAMPLE_MODE"))   --> fast
+os.setenv("LUS_EXAMPLE_MODE", nil)
+print(os.getenv("LUS_EXAMPLE_MODE"))   --> nil
+```
+
+The change applies to the state that makes it. [`os.getenv`](/manual/api#os.getenv) reads the new value, and a child process that [`os.execute`](/manual/api#os.execute) or [`io.popen`](/manual/api#io.popen) starts afterwards receives the changed environment. A worker receives a copy of the environment of its creator when it starts, so later changes on either side stay on that side.
+
+**Requires pledge:** `env:write`]],
+    kind = "function",
+    module = "os",
+    name = "os.setenv",
+    origin = "lus",
+    params = {
+      {
+        name = "varname",
+        type = "string",
+      },
+      {
+        name = "value",
+        optional = true,
+        type = "string|nil",
+      },
+    },
+    parent = "os",
+    pledges = {
+      "env:write",
+    },
+    returns = {
+      {
+        type = "nil",
+      },
+    },
+    short_name = "setenv",
+    since = "2.0.0",
+    source = "stdlib/os/setenv.md",
     stability = "stable",
   },
   ["os.setlocale"] = {

@@ -72,6 +72,7 @@ fn closeRest(g: *state.Global) void {
         g.gpa.destroy(map);
     }
     @import("vm/pledge.zig").deinit(g);
+    @import("lib/os.zig").deinitEnviron(g);
     state.destroy(g);
 }
 

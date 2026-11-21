@@ -1781,13 +1781,23 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
             name.clearRetainingCapacity();
             val.clearRetainingCapacity();
             if (!try headerText(l, kv.key, &name)) continue;
-            if (!try headerText(l, kv.val, &val)) continue;
-            if (std.mem.indexOfAny(u8, name.items, "\r\n") != null or std.mem.indexOfAny(u8, val.items, "\r\n") != null)
+            if (std.mem.indexOfAny(u8, name.items, "\r\n") != null)
                 return l.raiseFmt("invalid characters in HTTP header", .{});
-            if (std.ascii.eqlIgnoreCase(name.items, "host")) has_host = true;
-            if (std.ascii.eqlIgnoreCase(name.items, "connection")) has_conn = true;
-            if (std.ascii.eqlIgnoreCase(name.items, "user-agent")) has_agent = true;
-            own.print(gpa, "{s}: {s}\r\n", .{ name.items, val.items }) catch return l.raiseMem();
+            // A list sends one header line for each of its values.
+            const list: ?*Table = if (kv.val.tag == .table) kv.val.as(Table) else null;
+            const n: i64 = if (list) |t| table.length(t) else 1;
+            var i: i64 = 1;
+            while (i <= n) : (i += 1) {
+                val.clearRetainingCapacity();
+                const v = if (list) |t| table.getInt(t, i) else kv.val;
+                if (!try headerText(l, v, &val)) continue;
+                if (std.mem.indexOfAny(u8, val.items, "\r\n") != null)
+                    return l.raiseFmt("invalid characters in HTTP header", .{});
+                if (std.ascii.eqlIgnoreCase(name.items, "host")) has_host = true;
+                if (std.ascii.eqlIgnoreCase(name.items, "connection")) has_conn = true;
+                if (std.ascii.eqlIgnoreCase(name.items, "user-agent")) has_agent = true;
+                own.print(gpa, "{s}: {s}\r\n", .{ name.items, val.items }) catch return l.raiseMem();
+            }
         }
     }
     if (!has_host) {
