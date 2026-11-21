@@ -139,13 +139,15 @@ jobs:
         timeout-minutes: 20
         # Generated programs must print the same under every JIT mode.
         if: runner.os != 'Windows'
-        run: node tests/diff/run.mjs --count 200 --start 1 --timeout 120000 --out "$RUNNER_TEMP/diff-findings"
+        env:
+          LUS_JIT: "off"
+        run: runtime/zig-out/bin/lus tests/diff/run.lus --count 200 --start 1 --jobs 4 --timeout 120 --out "$RUNNER_TEMP/diff-findings"
       - name: Allocation failure sweep
         timeout-minutes: 25
         if: runner.os == 'Linux'
         run: |
           (cd runtime && zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom)
-          node tests/oom/run.mjs --samples 8 --timeout 120000
+          LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --samples 8 --jobs 4 --timeout 120
       - name: WebAssembly host tests
         timeout-minutes: 10
         if: runner.os == 'Linux'

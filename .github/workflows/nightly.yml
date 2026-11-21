@@ -76,9 +76,12 @@ jobs:
         run: |
           zig build -Doptimize=ReleaseSafe
           zig build -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress
+          zig build wasm
       - name: Generate and compare programs for 80 minutes
         timeout-minutes: 95
-        run: node tests/diff/run.mjs --forever --minutes 80 --reduce --timeout 120000 --stress runtime/zig-out-stress/bin/lus --out findings
+        env:
+          LUS_JIT: "off"
+        run: runtime/zig-out/bin/lus tests/diff/run.lus --forever --minutes 80 --reduce --jobs 4 --timeout 120 --stress runtime/zig-out-stress/bin/lus --wasm runtime/zig-out/wasm/lus.wasm --out findings
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
@@ -96,18 +99,21 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: ${{ env.ZIG_VERSION }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
       - name: Build
         working-directory: runtime
-        run: zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom
+        run: |
+          zig build -Doptimize=ReleaseSafe
+          zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom
       - name: Fail one allocation
         timeout-minutes: 120
-        run: node tests/oom/run.mjs --samples 400 --timeout 120000
+        env:
+          LUS_JIT: "off"
+        run: runtime/zig-out/bin/lus tests/oom/run.lus --samples 400 --jobs 4 --timeout 120
       - name: Fail every allocation from one point on
         timeout-minutes: 60
-        run: node tests/oom/run.mjs --samples 100 --sticky --timeout 120000
+        env:
+          LUS_JIT: "off"
+        run: runtime/zig-out/bin/lus tests/oom/run.lus --samples 100 --sticky --jobs 4 --timeout 120
 
   fuzz:
     name: Fuzzing

@@ -37,12 +37,12 @@ run = "zig build test --fuzz=1M -Doptimize=ReleaseSafe"
 [tasks.diff]
 description = "Run 200 generated programs under every JIT mode and compare their output"
 depends = ["build"]
-run = "node tests/diff/run.mjs --count 200 --start 1 --timeout 60000"
+run = "LUS_JIT=off runtime/zig-out/bin/lus tests/diff/run.lus --count 200 --start 1 --jobs 4 --timeout 60"
 
 [tasks."diff:long"]
-description = "Generate programs until stopped, under every JIT mode, the gc-stress build, and the x86-64 build"
-depends = ["build", "build:stress", "build:x64"]
-run = "node tests/diff/run.mjs --forever --reduce --timeout 60000 --stress runtime/zig-out-stress/bin/lus --x64 runtime/zig-out-x64/bin/lus"
+description = "Generate programs until stopped, under every JIT mode and the gc-stress, x86-64, and WebAssembly builds"
+depends = ["build", "build:stress", "build:x64", "wasm"]
+run = "LUS_JIT=off runtime/zig-out/bin/lus tests/diff/run.lus --forever --reduce --jobs 8 --timeout 60 --stress runtime/zig-out-stress/bin/lus --x64 runtime/zig-out-x64/bin/lus --wasm packages/wasm/dist/lus.wasm"
 
 [tasks."build:stress"]
 description = "Build the gc-stress and gc-verify runtime into runtime/zig-out-stress"
@@ -61,13 +61,13 @@ run = "zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom"
 
 [tasks.oom]
 description = "Fail sampled allocations of every conformance test and check for crashes, leaks, and hangs"
-depends = ["build:oom"]
-run = "node tests/oom/run.mjs --samples 8"
+depends = ["build", "build:oom"]
+run = "LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --samples 8"
 
 [tasks."oom:long"]
 description = "Fail 400 sampled allocations of every conformance test, once and from that point on"
-depends = ["build:oom"]
-run = ["node tests/oom/run.mjs --samples 400", "node tests/oom/run.mjs --samples 100 --sticky"]
+depends = ["build", "build:oom"]
+run = ["LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --samples 400", "LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --samples 100 --sticky"]
 
 [tasks.wasm]
 description = "Build lus.wasm for wasm32-wasi into packages/wasm/dist"
