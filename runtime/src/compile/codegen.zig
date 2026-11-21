@@ -2218,9 +2218,12 @@ fn localStat(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u3
                 try adjustLocalVars(fs, @intCast(names.len));
                 return;
             }
-            // Not a constant: finish as a normal declaration.
-            for (names) |an| _ = try newLocalVar(fs, an.name.text, try attribKind(fs, an, line, true));
+            // Not a constant: finish as a normal declaration. The values
+            // are placed first, because a deferred value such as a do
+            // expression compiles a block of its own, and the names
+            // declare only after it.
             try adjustAssign(fs, @intCast(names.len), @intCast(values.len), &e);
+            for (names) |an| _ = try newLocalVar(fs, an.name.text, try attribKind(fs, an, line, true));
             try adjustLocalVars(fs, @intCast(names.len));
             _ = saved_free;
             _ = saved_pc;
