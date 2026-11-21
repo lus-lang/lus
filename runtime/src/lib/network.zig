@@ -1719,10 +1719,23 @@ fn parseStatus(line: []const u8) ?i64 {
 }
 
 /// Stores one response header in `t`, decoding invalid UTF-8 lossily.
+/// Stores a response header in `t`. A header that repeats joins its
+/// earlier values with ", ", as HTTP allows for a field that appears more
+/// than once.
 fn setHeader(l: *Thread, t: *Table, key: []const u8, val: []const u8) Error!void {
     const gpa = l.g.gpa;
     var tmp: std.ArrayList(u8) = .empty;
     defer tmp.deinit(gpa);
+    {
+        var kb: std.ArrayList(u8) = .empty;
+        defer kb.deinit(gpa);
+        wtf8.appendLossy(gpa, &kb, key) catch return l.raiseMem();
+        const prev = table.getStr(t, try l.newString(kb.items));
+        if (prev.tag == .string) {
+            tmp.appendSlice(gpa, prev.as(object.String).bytes()) catch return l.raiseMem();
+            tmp.appendSlice(gpa, ", ") catch return l.raiseMem();
+        }
+    }
     wtf8.appendLossy(gpa, &tmp, val) catch return l.raiseMem();
     try l.push(try l.newStringValue(tmp.items));
     defer l.top -= 1;
@@ -1749,11 +1762,13 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
     const gpa = l.g.gpa;
     const default_port: u16 = if (u.https) 443 else 80;
     req.print(gpa, "{s} {s} HTTP/1.1\r\n", .{ method, u.path }) catch return l.raiseMem();
-    if (u.port != default_port)
-        req.print(gpa, "Host: {s}:{d}\r\n", .{ u.host, u.port }) catch return l.raiseMem()
-    else
-        req.print(gpa, "Host: {s}\r\n", .{u.host}) catch return l.raiseMem();
-    req.appendSlice(gpa, "Connection: close\r\nUser-Agent: Lus/1.0\r\n") catch return l.raiseMem();
+    // The headers of the caller come after the request line, and a default
+    // header that the caller also names is left out.
+    var own: std.ArrayList(u8) = .empty;
+    defer own.deinit(gpa);
+    var has_host = false;
+    var has_conn = false;
+    var has_agent = false;
     if (l.arg(3).tag == .table) {
         const ht = l.arg(3).as(Table);
         var key: Value = .nil;
@@ -1769,9 +1784,21 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
             if (!try headerText(l, kv.val, &val)) continue;
             if (std.mem.indexOfAny(u8, name.items, "\r\n") != null or std.mem.indexOfAny(u8, val.items, "\r\n") != null)
                 return l.raiseFmt("invalid characters in HTTP header", .{});
-            req.print(gpa, "{s}: {s}\r\n", .{ name.items, val.items }) catch return l.raiseMem();
+            if (std.ascii.eqlIgnoreCase(name.items, "host")) has_host = true;
+            if (std.ascii.eqlIgnoreCase(name.items, "connection")) has_conn = true;
+            if (std.ascii.eqlIgnoreCase(name.items, "user-agent")) has_agent = true;
+            own.print(gpa, "{s}: {s}\r\n", .{ name.items, val.items }) catch return l.raiseMem();
         }
     }
+    if (!has_host) {
+        if (u.port != default_port)
+            req.print(gpa, "Host: {s}:{d}\r\n", .{ u.host, u.port }) catch return l.raiseMem()
+        else
+            req.print(gpa, "Host: {s}\r\n", .{u.host}) catch return l.raiseMem();
+    }
+    if (!has_conn) req.appendSlice(gpa, "Connection: close\r\n") catch return l.raiseMem();
+    if (!has_agent) req.appendSlice(gpa, "User-Agent: Lus/1.0\r\n") catch return l.raiseMem();
+    req.appendSlice(gpa, own.items) catch return l.raiseMem();
     if (body) |b| if (b.len > 0) {
         req.print(gpa, "Content-Length: {d}\r\n", .{b.len}) catch return l.raiseMem();
     };
