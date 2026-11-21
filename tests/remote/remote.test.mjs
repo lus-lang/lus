@@ -391,3 +391,22 @@ print(dates.zone, dates.shout, hello.msg)
   assert.equal(existsSync(path.join(empty, "cache")), false);
   await rm(empty, { recursive: true, force: true });
 });
+
+test("lus test loads remote modules as lus does", async () => {
+  await freshCheck();
+  publish();
+  const f = await script(
+    "remote_test.lus",
+    `pledge("load", "network:http=127.0.0.1:*")
+
+local function loads_a_package_test()
+    local dates = require("${base}/2.0/dates.lus")
+    assert(dates.zone == "UTC")
+end
+`,
+  );
+  const r = await run(["test", f]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /1 passed, 0 failed/);
+  assert.doesNotMatch(r.stdout + r.stderr, /unavailable/);
+});

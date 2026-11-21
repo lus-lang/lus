@@ -377,7 +377,7 @@ Inside the string of a `require`, the language server completes atmosphere URLs 
 
 ## 8. WebAssembly
 
-The WebAssembly build has no network library. `require` of a URL raises `remote modules are unavailable in this build`. The index of section 2 indexes local modules only. A host that wants remote modules fetches them itself and adds them to `package.preload`. `lus version` is unavailable there, because the build cannot start another process.
+The WebAssembly build has no network library. `require` of a URL raises `remote modules are unavailable in the WebAssembly build, which has no network library`, unless `package.loaded` or `package.preload` holds the URL under its exact name. The index of section 2 indexes local modules only. A host that wants remote modules fetches them itself and adds them to `package.preload`. `lus version` is unavailable there, because the build cannot start another process.
 
 ## 9. Tests
 

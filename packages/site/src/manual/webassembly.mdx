@@ -114,7 +114,7 @@ The variable `LUS_JIT` in `lus.env` sets the JIT mode of each state, as the envi
 
 ## Remote modules
 
-The WebAssembly build has no network library, so a `require` of a URL raises `remote modules are unavailable in this build`. A host page that wants a remote module fetches the file itself and stores a loader for it in `package.preload` before the program runs.
+The WebAssembly build has no network library, so a `require` of a URL raises `remote modules are unavailable in the WebAssembly build, which has no network library`. A host page that wants a remote module fetches the file itself and stores a loader for it in `package.preload` before the program runs.
 
 ## Related pages
 

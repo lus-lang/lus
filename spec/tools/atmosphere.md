@@ -6,7 +6,7 @@ This page is the contract between `lus` and the servers it loads modules from. I
 
 A _remote module_ is a module that `require` names by URL. A module URL is an absolute `https` URL whose path ends in `.lus` and which has no query and no fragment. An `http` URL is accepted only when its host is `127.0.0.1`, `::1`, or `localhost`. Any other URL raises an error at the `require`.
 
-`require` normalizes a URL before it uses it. The scheme and the host become lowercase, a default port is removed, and `.` and `..` segments of the path are resolved. The normalized URL is the key of the module in `package.loaded`, so two spellings of one URL load one module.
+`require` normalizes a URL before it uses it. The scheme and the host become lowercase, a default port is removed, and `.` and `..` segments of the path are resolved. The normalized URL is the key of the module in `package.loaded`, so two spellings of one URL load one module. Before it normalizes, `require` looks the URL up under its exact name in `package.loaded` and then in `package.preload`, as it does for any name. A module found there loads without the network and needs no network permission, so a host or a test can provide a remote module.
 
 An atmosphere server serves two forms of URL.
 
@@ -117,4 +117,4 @@ A record is fresh until its expiry time, which is the `max-age` of the response'
 
 ## WebAssembly
 
-The WebAssembly build has no network library, so a `require` of a URL raises `remote modules are unavailable in this build`. A host that embeds `lus.wasm` and wants remote modules fetches them itself and stores their loaders in `package.preload`.
+The WebAssembly build has no network library, so a `require` of a URL that neither `package.loaded` nor `package.preload` holds raises `remote modules are unavailable in the WebAssembly build, which has no network library`. Every command of the `lus` binary that runs Lus code, including `lus test` and `lus debug`, loads remote modules. A host that embeds the native library gets an error that names the missing module store. A host that embeds `lus.wasm` and wants remote modules fetches them itself and stores their loaders in `package.preload`.
