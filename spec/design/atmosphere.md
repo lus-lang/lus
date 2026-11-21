@@ -134,7 +134,7 @@ The runtime decides compatibility from the document alone. The line in the URL s
 
 ### Bundles
 
-A bundle is a ustar archive compressed with `vector.archive.zstd`, served at `https://atmosp.here/b/SHA256.tar.zst`. Its address is its hash, so a bundle never changes and every cache may keep it forever. It holds the package's `.lus` files except test files, together with `LICENSE`, `README.md`, and `AGENTS.md` when they exist. Every path is relative to the root of the repository. A push whose bundle would break a limit of the runtime, such as a path with a character outside `A-Z a-z 0-9 . _ - /` or more than 10000 entries, is refused.
+A bundle is a ustar archive compressed with `vector.archive.zstd`, served at `https://atmosp.here/b/SHA256.tar.zst`. Its address is its hash, so a bundle never changes and every cache may keep it forever. It holds the main module and every module that the main module reaches through requires with literal names, as `lus build` does, together with `LICENSE`, `README.md`, and `AGENTS.md` when they exist. A require with a computed name makes the bundle hold every `.lus` file except test files, since any of them may be loaded. Tools, tests, and other programs in the repository therefore stay out of the bundle. Every path is relative to the root of the repository. A push whose bundle would break a limit of the runtime, such as a path with a character outside `A-Z a-z 0-9 . _ - /` or more than 10000 entries, is refused.
 
 A package keeps its other modules in a directory named after it, such as `dates/zones.lus`. Inside the bundle, `require("dates.zones")` resolves against the root of the bundle, so the same name works in the package's own repository.
 
@@ -152,7 +152,9 @@ With `self_contained` on, the checks report the following as errors on a stable 
 | --- | --- |
 | `bundle-remote-require` | A `require` whose argument is a literal `http` or `https` URL. |
 | `bundle-missing-module` | A `require` of a literal name that no file of the bundle provides and that is not a standard library module. |
-| `bundle-dynamic-load` | A call of `load`, `loadfile`, `dofile`, or `require` whose argument is not a literal, so the bundle cannot be shown to be complete. |
+| `bundle-dynamic-load` | A call of `loadfile` or `dofile`, or a `require` whose argument is not a literal, so the bundle cannot be shown to be complete. |
+
+A call of `load` compiles text that the package already holds or receives, so it is reported as the warning `package-load` on every server.
 
 `atmos check` runs the same checks before a push, and `atmos add` copies a dependency in the required form. The `requires` field of every release document on such a server is the empty list.
 
@@ -197,6 +199,8 @@ The header annotations are the following. `@package`, `@version`, `@lus`, and `@
 ### Build flags of a package
 
 A program passes a flag to a package by prefixing the flag with the package name, as in `lus -F dates.tzdata=/opt/tz main.lus`. Inside the files of `dates`, `flags.tzdata` holds `"/opt/tz"`. A package sees only its own flags. Its flags never appear as unprefixed names, so the flags of two packages never collide with each other or with the program's own flags. The checker reports a read of a flag that the header does not declare. The package page lists every declared flag with its type, default, and description.
+
+A dependency copied into a package keeps its own header, so the files of `dates` copied into `app` read the flags that the header of `dates` declares. The checker checks them against that header, and `-F dates.tzdata` sets them whether `dates` is loaded by its URL or copied into another package.
 
 The runtime compiles each bundle with a `flags` table filtered by the package prefix, which also holds the declared defaults. `spec/design/modules.md` records that part.
 
