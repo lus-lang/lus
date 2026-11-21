@@ -1262,14 +1262,48 @@ pub const Emitter = struct {
         a.jumpIfBit(.{ .base = A.t0, .disp = tl.flags }, tl.barrier_bit, true, e.addCold(pc, .{ .barrier_table = .{ .v = v, .key = null } }, done));
     }
 
+    /// The test that `interp.fast.getStr` makes of a shaped table before
+    /// it trusts a slot prediction: the table in `tab` has the shape that
+    /// the inline cache of `pc` names. Branches to `other` when it does
+    /// not. Otherwise `slot` holds the address of the payload of the
+    /// predicted slot, and its tag is at `tl.slot_tag` from `tags`. The
+    /// key is a constant, so the shape alone proves that the slot holds
+    /// it. A cache that recorded the shape without a slot proves that the
+    /// table lacks the key, and the test branches to `absent`.
+    fn shapedSlot(e: *Emitter, pc: u32, tab: A.Reg, slot_r: A.Reg, tags: A.Reg, tmp: A.Reg, other: Label, absent: Label) void {
+        const a = &e.a;
+        a.load32(tmp, .{ .base = tab, .disp = tl.hash_used });
+        a.movImm(slot_r, e.prediction(pc, il.ic_shape));
+        a.load16(slot_r, .{ .base = slot_r });
+        a.movImm(tags, tl.shaped_bit);
+        a.@"or"(slot_r, tags);
+        a.jumpIf(.ne, tmp, slot_r, other);
+        a.movImm(slot_r, e.prediction(pc, il.ic_own));
+        a.load16(slot_r, .{ .base = slot_r });
+        // The cache records that the shape lacks the key.
+        a.movImm(tags, object.IcEntry.none);
+        a.jumpIf(.eq, slot_r, tags, absent);
+        a.load64(tmp, .{ .base = tab, .disp = e.lay.hash_ptr });
+        a.subScaled(tags, tmp, slot_r, 0);
+        a.addScaled(slot_r, tmp, slot_r, tl.word_shift);
+    }
+
     /// R[dst] = t[K[kc]] for a constant string key.
     fn fieldGet(e: *Emitter, pc: u32, t: Place, kc: u32, dst: u32) void {
         const a = &e.a;
         const done = a.newLabel();
+        const dict = a.newLabel();
         const miss = e.addCold(pc, .{ .table = .{ .helper = @intFromPtr(&helpers.getStr), .t = t, .key = .{ .konst = kc }, .v = .{ .reg = dst } } }, done);
         e.loadTable(t, miss);
-        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, A.t3, miss, miss);
+        e.shapedSlot(pc, A.t0, A.t1, A.t2, A.t3, dict, miss);
         // A nil value may have an `__index` to follow.
+        a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.slot_tag }, tag_nil, miss);
+        a.load64(A.t3, .{ .base = A.t1 });
+        a.load8(A.t4, .{ .base = A.t2, .disp = tl.slot_tag });
+        a.storePair64(A.t3, A.t4, slot(dst));
+        a.jmp(done);
+        a.bind(dict);
+        e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, A.t3, miss, miss);
         a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.tag_val }, tag_nil, miss);
         e.loadNodeVal(slot(dst), A.t1, A.t2, A.t3, A.t4);
         a.bind(done);
@@ -1285,10 +1319,50 @@ pub const Emitter = struct {
         // A constructor stores into a fresh table, where the predicted
         // node is still empty.
         const other_key = if (key.flags().interned) e.addCold(pc, .{ .field_insert = call }, done) else miss;
+        const dict = a.newLabel();
+        const stored = a.newLabel();
         e.loadTable(t, miss);
         e.guardRawStore(A.t0, A.t1, miss);
+        e.shapedSlot(pc, A.t0, A.t1, A.t2, A.t3, dict, miss);
+        a.load64(A.t3, slot(v));
+        a.store64(A.t3, .{ .base = A.t1 });
+        a.load8(A.t3, tagOf(v));
+        a.store8(A.t3, .{ .base = A.t2, .disp = tl.slot_tag });
+        a.jmp(stored);
+        // The store that the cache saw adding the key to a table of the
+        // shape `ic.index`: the table moves to the shape `ic.holder`, and
+        // the value goes into the slot `ic.own`, when its slots have room
+        // for it (`interp.fast.setStr`).
+        a.bind(dict);
+        const dict2 = a.newLabel();
+        a.load32(A.t3, .{ .base = A.t0, .disp = tl.hash_used });
+        a.movImm(A.t1, e.prediction(pc, il.ic_index));
+        a.load16(A.t1, .{ .base = A.t1 });
+        a.movImm(A.t2, tl.shaped_bit);
+        a.@"or"(A.t1, A.t2);
+        a.jumpIf(.ne, A.t3, A.t1, dict2);
+        a.jumpIfByte(.eq, tagOf(v), tag_nil, miss);
+        a.movImm(A.t1, e.prediction(pc, il.ic_own));
+        a.load16(A.t1, .{ .base = A.t1 });
+        a.load64(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+        a.load8(A.t2, .{ .base = A.t3, .disp = -1 });
+        a.jumpIf(.hs, A.t1, A.t2, miss);
+        a.movImm(A.t2, e.prediction(pc, il.ic_holder));
+        a.load16(A.t2, .{ .base = A.t2 });
+        a.movImm(A.t4, tl.shaped_bit);
+        a.@"or"(A.t2, A.t4);
+        a.store32(A.t2, .{ .base = A.t0, .disp = tl.hash_used });
+        a.subScaled(A.t2, A.t3, A.t1, 0);
+        a.addScaled(A.t1, A.t3, A.t1, tl.word_shift);
+        a.load64(A.t3, slot(v));
+        a.store64(A.t3, .{ .base = A.t1 });
+        a.load8(A.t3, tagOf(v));
+        a.store8(A.t3, .{ .base = A.t2, .disp = tl.slot_tag });
+        a.jmp(stored);
+        a.bind(dict2);
         e.predictedNode(e.prediction(pc, il.ic_own), A.t0, key, A.t1, A.t2, A.t3, miss, other_key);
         e.storeNodeVal(slot(v), A.t1, A.t2, A.t3);
+        a.bind(stored);
         a.storeImm16(.{ .base = A.t0, .disp = tl.tm_absent }, 0);
         e.tableBarrier(pc, v, done);
         a.bind(done);
@@ -1304,9 +1378,26 @@ pub const Emitter = struct {
         const call: TableCall = .{ .helper = @intFromPtr(&helpers.getStr), .t = .{ .reg = ra + 1 }, .key = .{ .konst = kc }, .v = .{ .reg = ra } };
         const other = e.addCold(pc, .{ .method = .{ .call = call, .chain = chain, .rb = rb } }, done);
         const miss = e.addCold(pc, .{ .table = call }, done);
+        const dict = a.newLabel();
         a.copy16(slot(ra + 1), slot(rb));
         a.jumpIfByte(.ne, tagOf(rb), tag_table, other);
         a.load64(A.t0, slot(rb));
+        // A shaped receiver that holds the method in its predicted slot,
+        // or whose shape the cache knows to lack it, which sends it to
+        // the chain: it has no hash nodes, so the chain goes straight to
+        // the metatable. A shaped receiver of another shape takes the
+        // helper, since the chain proves only that a dictionary lacks
+        // the key.
+        e.shapedSlot(pc, A.t0, A.t1, A.t2, A.t3, dict, chain);
+        a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.slot_tag }, tag_nil, miss);
+        a.load64(A.t3, .{ .base = A.t1 });
+        a.load8(A.t4, .{ .base = A.t2, .disp = tl.slot_tag });
+        a.storePair64(A.t3, A.t4, slot(ra));
+        a.jmp(done);
+        a.bind(dict);
+        a.load32(A.t1, .{ .base = A.t0, .disp = tl.hash_used });
+        a.movImm(A.t2, tl.shaped_bit);
+        a.jumpIf(.hs, A.t1, A.t2, miss);
         e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, A.t3, chain, chain);
         a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.tag_val }, tag_nil, miss);
         e.loadNodeVal(slot(ra), A.t1, A.t2, A.t3, A.t4);

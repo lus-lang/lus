@@ -212,7 +212,9 @@ pub fn retFail(l: *Thread, msg: []const u8) Error!u32 {
 // Registration
 
 pub fn newLib(l: *Thread, funcs: []const Reg) Error!*Table {
-    const t = try l.newTable(0, funcs.len);
+    // A library is a namespace that code reads by name, which a hash part
+    // serves as well as a shape, without making one for each key.
+    const t = state.newDictIn(l.g, funcs.len) catch return l.raiseMem();
     // Keep the table rooted while the natives are allocated.
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;

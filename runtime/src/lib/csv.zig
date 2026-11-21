@@ -139,7 +139,7 @@ const Parser = struct {
                 const t = r.?;
                 // A long row grows by doubling, like any array.
                 if (stored + count > t.asize and !last)
-                    table.resize(gpa, t, @max(stored + count, 2 * @as(usize, t.asize)), t.hash_used) catch return l.raiseMem();
+                    table.resize(gpa, t, @max(stored + count, 2 * @as(usize, t.asize)), table.hashCount(t)) catch return l.raiseMem();
                 table.storeList(gpa, t, stored, l.stack[slot + 1 ..][0..count]) catch return l.raiseMem();
                 stored += count;
                 l.top = slot + 1;

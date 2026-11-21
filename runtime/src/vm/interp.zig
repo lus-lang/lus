@@ -13,6 +13,7 @@ const value = @import("value.zig");
 const object = @import("object.zig");
 const state = @import("state.zig");
 const table = @import("table.zig");
+const shape = @import("shape.zig");
 const ops = @import("ops.zig");
 const gc = @import("gc.zig");
 const jit = @import("../jit/jit.zig");
@@ -1833,6 +1834,15 @@ inline fn noNewindexMeta(t: *Table) bool {
 /// predicts before probing, and records where the key was found.
 inline fn lookupIc(tab: *Table, s: *String, slot: *u16) Value {
     const i: usize = slot.*;
+    if (tab.isShaped()) {
+        // A prediction names a slot of the shape, which holds the key
+        // when the shape says so.
+        const sh = table.shapeOf(tab);
+        if (i < sh.n and sh.keys[i] == s) return tab.slotVal(i);
+        const idx = sh.findText(s) orelse return .nil;
+        slot.* = @intCast(idx);
+        return tab.slotVal(idx);
+    }
     if (i < tab.hash_len and tab.keyIsStr(i, s)) return tab.val(i);
     const idx = table.findStr(tab, s) orelse return .nil;
     if (idx < object.IcEntry.none) slot.* = @intCast(idx);
@@ -1870,6 +1880,9 @@ pub const layout = struct {
     pub const ic_own: usize = @offsetOf(object.IcEntry, "own");
     pub const ic_index: usize = @offsetOf(object.IcEntry, "index");
     pub const ic_holder: usize = @offsetOf(object.IcEntry, "holder");
+    /// Byte offset of the shape id that comes with the `own` prediction,
+    /// 16 bits wide.
+    pub const ic_shape: usize = @offsetOf(object.IcEntry, "shape");
     /// Bits of `Table.tm_absent`.
     pub const absent_index: u4 = @backingInt(state.TM.index);
     pub const absent_newindex: u4 = @backingInt(state.TM.newindex);
@@ -1878,6 +1891,7 @@ pub const layout = struct {
         std.debug.assert(@FieldType(object.IcEntry, "own") == u16);
         std.debug.assert(@FieldType(object.IcEntry, "index") == u16);
         std.debug.assert(@FieldType(object.IcEntry, "holder") == u16);
+        std.debug.assert(@FieldType(object.IcEntry, "shape") == u16);
     }
 };
 
@@ -1896,24 +1910,50 @@ pub const fast = struct {
             return stringMethod(l, ic, key.as(String), out);
         }
         const tab = t.as(Table);
-        // The predicted node holds the key with a value: copy the value
-        // straight from the node. Testing the node in place keeps the
-        // value out of a temporary, which the general path below needs
-        // because its value may also be nil.
         const i: usize = ic.own;
-        if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload) {
-            // Both tags with one load.
-            const tags = tab.tagPair(i).*;
-            if (tags[0] == @backingInt(value.Tag.string) and tags[1] != @backingInt(value.Tag.nil)) {
-                out.* = Value.make(tab.hash_ptr[i].val, @fromBackingInt(tags[1]));
+        if (tab.hash_used == Table.shaped_bit | @as(u32, ic.shape) and i != object.IcEntry.none and table.shapeOf(tab).keys[i] == key.as(String)) {
+            // The table has the shape the cache saw, and the key, which
+            // a variable key may change, is the one in the predicted slot.
+            const tg = tab.slotTag(i);
+            if (tg != .nil) {
+                out.* = Value.make(tab.slotWords()[i], tg);
                 return true;
             }
-        }
-        if (table.findStr(tab, key.as(String))) |idx| {
-            if (idx < object.IcEntry.none) ic.own = @intCast(idx);
-            if (tab.valTag(idx) != .nil) {
-                out.* = tab.val(idx);
-                return true;
+        } else if (tab.isShaped()) {
+            // The cache records the slot of the key, or that the shape
+            // lacks it, which native code with a constant key trusts
+            // before it follows `__index`.
+            ic.shape = tab.shapeId();
+            if (table.shapeOf(tab).findText(key.as(String))) |idx| {
+                ic.own = @intCast(idx);
+                const v = tab.slotVal(idx);
+                if (!v.isNil()) {
+                    out.* = v;
+                    return true;
+                }
+            } else ic.own = object.IcEntry.none;
+        } else {
+            // The predicted node holds the key with a value: copy the
+            // value straight from the node. Testing the node in place
+            // keeps the value out of a temporary, which the general path
+            // below needs because its value may also be nil.
+            if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload) {
+                // Both tags with one load.
+                const tags = tab.tagPair(i).*;
+                if (tags[0] == @backingInt(value.Tag.string) and tags[1] != @backingInt(value.Tag.nil)) {
+                    out.* = Value.make(tab.hash_ptr[i].val, @fromBackingInt(tags[1]));
+                    return true;
+                }
+            }
+            if (table.findStr(tab, key.as(String))) |idx| {
+                if (idx < object.IcEntry.none) {
+                    ic.own = @intCast(idx);
+                    ic.shape = object.IcEntry.none;
+                }
+                if (tab.valTag(idx) != .nil) {
+                    out.* = tab.val(idx);
+                    return true;
+                }
             }
         }
         if (noIndexMeta(tab)) {
@@ -1933,11 +1973,52 @@ pub const fast = struct {
         const tab = t.as(Table);
         if (tab.isReadonly() or !noNewindexMeta(tab)) return false;
         const i: usize = ic.own;
-        if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload and tab.keyTag(i) == .string) {
+        if (tab.hash_used == Table.shaped_bit | @as(u32, ic.shape) and i != object.IcEntry.none and table.shapeOf(tab).keys[i] == key.as(String)) {
+            tab.setSlot(i, v.*);
+            if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
+        } else if (tab.hash_used == Table.shaped_bit | @as(u32, ic.index) and ic.holder != object.IcEntry.none and
+            v.tag != .nil and i < tab.slotCap() and i + 1 == shape.get(ic.holder).n and shape.get(ic.holder).keys[i] == key.as(String))
+        {
+            // The store that the cache saw adding the key to a table of
+            // this shape: the table moves to the child shape, and the
+            // value goes into the new slot.
+            tab.setShapeId(ic.holder);
+            tab.setSlot(i, v.*);
+            if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
+        } else if (tab.isShaped()) {
+            const s = key.as(String);
+            if (table.shapeOf(tab).findText(s)) |idx| {
+                // The transition the entry may record names another slot
+                // than `own` from now on, so it goes.
+                ic.own = @intCast(idx);
+                ic.shape = tab.shapeId();
+                ic.index = object.IcEntry.none;
+                ic.holder = object.IcEntry.none;
+                tab.setSlot(idx, v.*);
+            } else {
+                // A new key moves the table to the child shape. The cache
+                // records the move, so that the next table of this shape
+                // takes it inline.
+                if (v.tag == .nil or !s.flags().interned) return false;
+                const from = tab.shapeId();
+                const idx = (table.addShaped(l.g.gpa, tab, s, v.*) catch return false) orelse return false;
+                ic.index = from;
+                ic.holder = tab.shapeId();
+                ic.own = @intCast(idx);
+                ic.shape = tab.shapeId();
+                if (l.g.new_table.table == tab) ops.learnTableSizeFor(l.g, tab);
+            }
+            if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
+        } else if (i < tab.hash_len and tab.hash_ptr[i].key == key.payload and tab.keyTag(i) == .string) {
             tab.setVal(i, v.*);
             if (v.tag.isCollectable()) gc.barrierTable(l.g, tab, .nil, v.*);
         } else if (table.storeStr(tab, key, v)) |idx| {
-            if (idx < object.IcEntry.none) ic.own = @intCast(idx);
+            if (idx < object.IcEntry.none) {
+                ic.own = @intCast(idx);
+                ic.shape = object.IcEntry.none;
+                ic.index = object.IcEntry.none;
+                ic.holder = object.IcEntry.none;
+            }
             // The store may have added the key itself.
             gc.barrierTable(l.g, tab, key.*, v.*);
         } else return false;

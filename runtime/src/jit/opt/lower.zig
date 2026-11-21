@@ -20,6 +20,7 @@ const state = @import("../../vm/state.zig");
 const object = @import("../../vm/object.zig");
 const value = @import("../../vm/value.zig");
 const table = @import("../../vm/table.zig");
+const shape = @import("../../vm/shape.zig");
 const interp = @import("../../vm/interp.zig");
 const gc = @import("../../vm/gc.zig");
 const opc = @import("../../compile/opcodes.zig");
@@ -207,7 +208,24 @@ const Fresh = struct {
     keys: [12]?*String = @splat(null),
     nodes: [12]u32 = @splat(0),
     metatable: bool = false,
+    /// For a shaped table: its shape, which the builder follows as keys
+    /// arrive, and the number of slots in its cell. `nodes` then holds
+    /// slots.
+    shape: ?*shape.Shape = null,
+    cap: u32 = 0,
 };
+
+/// Displacement from a table of the payload of slot `i` of the slots in
+/// its cell, when it holds `cap` slots.
+fn slotDisp(cap: usize, i: usize) i32 {
+    return @intCast(@sizeOf(Table) + table.slotTagBytes(cap) + i * @sizeOf(u64));
+}
+
+/// Displacement from a table of the tag of slot `i` of the slots in its
+/// cell.
+fn slotTagDisp(cap: usize, i: usize) i32 {
+    return @as(i32, @intCast(@sizeOf(Table) + table.slotTagBytes(cap))) + tl.slot_tag - @as(i32, @intCast(i));
+}
 
 const class_count = @typeInfo(ir.Class).@"enum".field_values.len;
 
@@ -1865,6 +1883,11 @@ pub const Lower = struct {
     /// the first empty node. Returns false when the sample does not
     /// prove the absence in a few steps.
     fn absent(b: *Lower, t: Ref, st: *Table, key_str: *String) Error!bool {
+        if (st.isShaped()) return false;
+        // A shaped table has no hash nodes, so the walk below proves
+        // nothing about it.
+        const used = try b.load(t, tl.hash_used, .int, 4, .tab_hash, ir.none);
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.lo), .a = used, .imm = @intCast(Table.shaped_bit) });
         const len = try b.load(t, b.hash_len, .int, 4, .tab_hash, ir.none);
         const g = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = len, .imm = @intCast(st.hash_len) });
         if (st.hash_len == 0) return true;
@@ -1896,8 +1919,42 @@ pub const Lower = struct {
     /// t[key] for a string key, along the path that the sample takes:
     /// the table itself, or the table that `__index` of its metatable
     /// names. Returns null when the lookup needs the general path.
+    /// Guards that table `t` has the shape that its sample `st` has.
+    fn shapeGuard(b: *Lower, t: Ref, st: *Table) Error!Ref {
+        const used = try b.load(t, tl.hash_used, .int, 4, .tab_hash, ir.none);
+        return b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = used, .imm = @intCast(st.hash_used) });
+    }
+
+    /// The slot `idx` of the shaped table `t`, whose shape is guarded by
+    /// `dep`: its payload is at `off` and its tag at `tags` from `hp`.
+    fn shapedSlot(b: *Lower, t: Ref, idx: usize, dep: Ref) Error!Node {
+        const hp = try b.load(t, b.hash_ptr, .int, 8, .tab_hash, dep);
+        const i: i32 = @intCast(idx);
+        return .{ .hp = hp, .off = i * 8 - tl.node_val, .tags = tl.slot_tag - i - tl.tag_val, .dep = dep };
+    }
+
     fn fieldLoad(b: *Lower, t: Ref, st: *Table, key_str: *String) Error!?Loaded {
         if (!key_str.flags().interned) return null;
+        if (st.isShaped()) {
+            // The shape proves where the key is, or that the table lacks
+            // it.
+            const g = try b.shapeGuard(t, st);
+            if (table.shapeOf(st).find(key_str)) |idx| {
+                const v = st.slotVal(idx);
+                if (v.isNil()) return null;
+                const n = try b.shapedSlot(t, idx, g);
+                return .{ .ref = try b.loadValueAt(n.hp, n.val(), n.valTag(), v, .node_val, n.dep), .sample = Sample.of(v) };
+            }
+            const mt0 = st.metatable orelse {
+                const m = try b.load(t, tl.metatable, .int, 8, .tab_meta, ir.none);
+                _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = m, .imm = 0 });
+                return .{ .ref = try b.knil(), .sample = Sample.of(.nil) };
+            };
+            if (!b.reachable(mt0, key_str)) return null;
+            const m = try b.load(t, tl.metatable, .table, 8, .tab_meta, ir.none);
+            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
+            return b.viaMetatable(m, mt0, key_str);
+        }
         if (table.findStr(st, key_str)) |idx| {
             const v = st.val(idx);
             if (v.isNil()) return null;
@@ -1918,14 +1975,25 @@ pub const Lower = struct {
         return b.viaMetatable(m, mt, key_str);
     }
 
+    /// The place of the string `key` in table `t`, whose sample `st`
+    /// holds it, proven by a guard: a hash node of a dictionary, or a
+    /// slot of a shaped table.
+    fn keyNode(b: *Lower, t: Ref, st: *Table, key_str: *String) Error!?Node {
+        if (st.isShaped()) {
+            const idx = table.shapeOf(st).find(key_str) orelse return null;
+            const g = try b.shapeGuard(t, st);
+            return try b.shapedSlot(t, idx, g);
+        }
+        const idx = table.findStr(st, key_str) orelse return null;
+        return try b.hashNode(t, idx, key_str);
+    }
+
     /// Whether `viaMetatable` finds the key through the sample `mt`.
     fn reachable(b: *Lower, mt: *Table, key_str: *String) bool {
         const index_name = b.l.g.tm_names[@backingInt(state.TM.index)].?;
-        const hidx = table.findStr(mt, index_name) orelse return false;
-        const h = mt.val(hidx);
+        const h = table.getStr(mt, index_name);
         if (h.tag != .table) return false;
-        const idx2 = table.findStr(h.as(Table), key_str) orelse return false;
-        return !h.as(Table).val(idx2).isNil();
+        return !table.getStr(h.as(Table), key_str).isNil();
     }
 
     /// The lookup of a key that a table lacks, through the metatable
@@ -1934,14 +2002,12 @@ pub const Lower = struct {
     fn viaMetatable(b: *Lower, m: Ref, mt: *Table, key_str: *String) Error!?Loaded {
         if (!b.reachable(mt, key_str)) return null;
         const index_name = b.l.g.tm_names[@backingInt(state.TM.index)].?;
-        const hidx = table.findStr(mt, index_name).?;
-        const h = mt.val(hidx);
+        const h = table.getStr(mt, index_name);
         const holder = h.as(Table);
-        const idx2 = table.findStr(holder, key_str).?;
-        const v2 = holder.val(idx2);
-        const n1 = try b.hashNode(m, hidx, index_name);
+        const v2 = table.getStr(holder, key_str);
+        const n1 = (try b.keyNode(m, mt, index_name)) orelse return null;
         const hv = try b.loadValueAt(n1.hp, n1.val(), n1.valTag(), h, .node_val, n1.dep);
-        const n2 = try b.hashNode(hv, idx2, key_str);
+        const n2 = (try b.keyNode(hv, holder, key_str)) orelse return null;
         return .{ .ref = try b.loadValueAt(n2.hp, n2.val(), n2.valTag(), v2, .node_val, n2.dep), .sample = Sample.of(v2) };
     }
 
@@ -1985,19 +2051,17 @@ pub const Lower = struct {
         const slot_ptr = &g.type_metatables[value.typeSlot(.string)];
         const mt = slot_ptr.* orelse return false;
         const index_name = g.tm_names[@backingInt(state.TM.index)].?;
-        const hidx = table.findStr(mt, index_name) orelse return false;
-        const h = mt.val(hidx);
+        const h = table.getStr(mt, index_name);
         if (h.tag != .table) return false;
-        const idx2 = table.findStr(h.as(Table), key_str) orelse return false;
-        const v2 = h.as(Table).val(idx2);
+        const v2 = table.getStr(h.as(Table), key_str);
         if (v2.isNil()) return false;
         const sv = try b.typed(rb, .string);
         const recv_sample = b.fr.regs[rb].sample;
         const m = try b.load(try b.kint(@bitCast(@as(u64, @intFromPtr(slot_ptr)))), 0, .table, 8, .tab_meta, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
-        const n1 = try b.hashNode(m, hidx, index_name);
+        const n1 = (try b.keyNode(m, mt, index_name)) orelse return false;
         const hv = try b.loadValueAt(n1.hp, n1.val(), n1.valTag(), h, .node_val, n1.dep);
-        const n2 = try b.hashNode(hv, idx2, key_str);
+        const n2 = (try b.keyNode(hv, h.as(Table), key_str)) orelse return false;
         const v = try b.loadValueAt(n2.hp, n2.val(), n2.valTag(), v2, .node_val, n2.dep);
         try b.setReg(ra + 1, sv, recv_sample);
         try b.setReg(ra, v, Sample.of(v2));
@@ -2069,9 +2133,43 @@ pub const Lower = struct {
             if (b.fr.regs[src.reg].val == fz.ref) return b.freshStore(fz, key_v, rv);
         };
         const t = (try b.tableOf(src, 0)) orelse return false;
+        if (t.sample.isShaped()) {
+            const sh = table.shapeOf(t.sample);
+            if (sh.find(key_str) == null) return b.shapedAdd(t, sh, key_str, rv);
+            const idx = sh.find(key_str).?;
+            if (!try b.rawStore(t)) return false;
+            const g = try b.shapeGuard(t.ref, t.sample);
+            const n = try b.shapedSlot(t.ref, idx, g);
+            try b.storeRegNode(n.hp, n.val(), n.valTag(), rv, t.ref);
+            b.clobber(.tab_absent);
+            _ = try b.emit(.{ .op = .store, .size = 2, .cls = .tab_absent, .a = t.ref, .b = try b.kint(0), .imm = tl.tm_absent });
+            return true;
+        }
         const idx = table.findStr(t.sample, key_str) orelse return false;
         if (!try b.rawStore(t)) return false;
         const n = try b.hashNode(t.ref, idx, key_str);
+        try b.storeRegNode(n.hp, n.val(), n.valTag(), rv, t.ref);
+        b.clobber(.tab_absent);
+        _ = try b.emit(.{ .op = .store, .size = 2, .cls = .tab_absent, .a = t.ref, .b = try b.kint(0), .imm = tl.tm_absent });
+        return true;
+    }
+
+    /// Adds the key `key_str`, which the shape `sh` of the sample lacks,
+    /// to a shaped table: the table moves to the child shape, and the
+    /// value, which is not nil, goes into the new slot, when the slots of
+    /// the table have room for it (`table.addShaped`).
+    fn shapedAdd(b: *Lower, t: TableRef, sh: *shape.Shape, key_str: *String, rv: u32) Error!bool {
+        const ty = b.staticTy(rv) orelse return false;
+        if (ty == .nil) return false;
+        const g = b.l.g;
+        const c = (g.shapes.transition(g.gpa, sh, key_str, g) catch return false) orelse return false;
+        if (!try b.rawStore(t)) return false;
+        const sg = try b.shapeGuard(t.ref, t.sample);
+        const hp = try b.load(t.ref, b.hash_ptr, .int, 8, .tab_hash, sg);
+        const cap = try b.load(hp, -1, .int, 1, .tab_hash, sg);
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.hi), .a = cap, .imm = sh.n, .c = sg });
+        _ = try b.store(t.ref, tl.hash_used, try b.kint(Table.shaped_bit | @as(u32, c.id)), 4, .tab_hash, false);
+        const n = try b.shapedSlot(t.ref, sh.n, sg);
         try b.storeRegNode(n.hp, n.val(), n.valTag(), rv, t.ref);
         b.clobber(.tab_absent);
         _ = try b.emit(.{ .op = .store, .size = 2, .cls = .tab_absent, .a = t.ref, .b = try b.kint(0), .imm = tl.tm_absent });
@@ -2084,6 +2182,31 @@ pub const Lower = struct {
         const key_str = key_v.as(String);
         const ty = b.staticTy(rv) orelse return false;
         if (ty == .nil or fz.metatable) return false;
+        if (fz.shape) |sh| {
+            // A shaped table moves to the child shape for a new key, as
+            // `table.set` would, and the builder follows the same
+            // transitions.
+            var slot: ?usize = null;
+            for (fz.keys[0..fz.used], fz.nodes[0..fz.used]) |k, si| {
+                if (k.? == key_str) slot = si;
+            }
+            const v = try b.typed(rv, ty);
+            if (slot == null) {
+                if (fz.used >= fz.keys.len) return false;
+                const g = b.l.g;
+                const c = (g.shapes.transition(g.gpa, sh, key_str, g) catch return false) orelse return false;
+                if (c.n > fz.cap) return false;
+                slot = sh.n;
+                fz.keys[fz.used] = key_str;
+                fz.nodes[fz.used] = sh.n;
+                fz.used += 1;
+                fz.shape = c;
+                _ = try b.emit(.{ .op = .store, .size = 4, .cls = .tab_hash, .a = fz.ref, .b = try b.kint(Table.shaped_bit | @as(u32, c.id)), .imm = tl.hash_used, .flags = .{ .fresh = true } });
+            }
+            try b.storeValueAt(fz.ref, slotDisp(fz.cap, slot.?), slotTagDisp(fz.cap, slot.?), 1, v, .node_val, true);
+            _ = try b.emit(.{ .op = .barrier, .a = fz.ref, .b = v, .imm = @bitCast(@as(u64, @intFromPtr(key_str))) });
+            return true;
+        }
         // A full hash part sends the store to the general path, as
         // `table.storeStr` does.
         const len = fz.mask + 1;
@@ -2123,7 +2246,9 @@ pub const Lower = struct {
         if (b.marks() != 0) return false;
         // A record constructor allocates nothing yet. The table exists
         // as its fields until something needs the table itself.
-        if (nb == 0 and nc >= 1 and table.inlineUnits(0, nc) > 0 and b.vobjs.items.len < 6) {
+        // The record may still become a dictionary when no shape holds its
+        // keys (`materialize`), and its nodes are then in its cell too.
+        if (nb == 0 and nc >= 1 and table.inlineUnitsDict(0, nc, @sizeOf(Value)) > 0 and b.vobjs.items.len < 6) {
             const hsize: u32 = @intCast(table.hashSizeExact(nc));
             _ = try b.emit(.{ .op = .gdebt, .imm = @intCast(@sizeOf(Table) + table.inlineUnits(0, nc) * Table.inline_unit), .snap = try b.snap() });
             const ref = try b.f.addDetached(.{ .op = .valloc, .ty = .table, .imm = nc });
@@ -2152,8 +2277,14 @@ pub const Lower = struct {
         b.fresh = null;
         const units = table.inlineUnits(nb, nc);
         if (nb == 0 and nc > 0 and units > 0) {
-            const hsize: u32 = @intCast(table.hashSizeExact(nc));
-            b.fresh = .{ .ref = t, .mask = hsize - 1 };
+            if (nc <= shape.max_keys) {
+                // The table starts with the root shape and its slots in
+                // its cell (`table.initInline`).
+                b.fresh = .{ .ref = t, .mask = 0, .shape = &shape.root, .cap = nc };
+            } else {
+                const hsize: u32 = @intCast(table.hashSizeExact(nc));
+                b.fresh = .{ .ref = t, .mask = hsize - 1 };
+            }
         }
         return true;
     }
@@ -2766,6 +2897,47 @@ pub const Lower = struct {
         _ = try b.emit(.{ .op = .gpending, .cls = .pending, .snap = snap_id });
         _ = try b.emit(.{ .op = .gccheck, .snap = snap_id, .aux = b.fr.off + live_top });
         b.gcPoint();
+        // The keys in the order they arrived give the shape of the table,
+        // when shapes may hold them.
+        var sh: ?*shape.Shape = &shape.root;
+        for (v.keys[0..v.used]) |k| {
+            const cur = sh orelse break;
+            const g = b.l.g;
+            sh = g.shapes.transition(g.gpa, cur, k, g) catch null;
+        }
+        const cap: u32 = @intCast(@max(v.used, @min(v.nc, shape.max_keys)));
+        if (sh) |shp| {
+            const t = try b.emit(.{
+                .op = .callc,
+                .ty = .table,
+                .a = try b.kint(cap),
+                .b = try b.kint(shp.id),
+                .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.newShapedTable))),
+                .flags = .{ .thread = true },
+            });
+            _ = try b.emit(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = t, .imm = 0, .snap = snap_id });
+            _ = b.vobjs.swapRemove(vi);
+            var fz: Fresh = .{ .ref = t, .mask = 0, .used = v.used, .metatable = v.mt != ir.none, .shape = shp, .cap = cap };
+            for (v.keys[0..v.used], v.vals[0..v.used], 0..) |k, val, i| {
+                try b.storeValueAt(t, slotDisp(cap, i), slotTagDisp(cap, i), 1, val, .node_val, true);
+                _ = try b.emit(.{ .op = .barrier, .a = t, .b = val, .imm = @bitCast(@as(u64, @intFromPtr(k))) });
+                fz.keys[i] = k;
+                fz.nodes[i] = @intCast(i);
+            }
+            if (v.mt != ir.none) {
+                _ = try b.store(t, tl.metatable, v.mt, 8, .tab_meta, true);
+                _ = try b.emit(.{ .op = .barrier, .a = t, .aux = 1 });
+            }
+            var it: ?*Frame = b.fr;
+            while (it) |x| : (it = x.parent) {
+                for (x.regs) |*reg| {
+                    if (reg.val == ref) reg.val = t;
+                }
+            }
+            b.fresh = fz;
+            b.snap_cache = ir.no_snap;
+            return t;
+        }
         const t = try b.emit(.{
             .op = .callc,
             .ty = .table,

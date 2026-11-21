@@ -10,6 +10,7 @@ const value = @import("value.zig");
 const object = @import("object.zig");
 const state = @import("state.zig");
 const table = @import("table.zig");
+const shape = @import("shape.zig");
 const numeric = @import("numeric.zig");
 const wtf8 = @import("wtf8.zig");
 const lexer = @import("../syntax/lexer.zig");
@@ -117,10 +118,12 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
         }
     }
     const hlen = t.hash_len;
+    const shape_before = t.hash_used;
     const alen = t.asize;
     const kind = t.kind;
     table.set(l.g.gpa, t, k, val) catch return l.raiseMem();
-    if (t.hash_len != hlen or t.asize != alen) learnTableSize(l.g, t);
+    // A shaped table that took a new key has another shape.
+    if (t.hash_len != hlen or t.asize != alen or (t.isShaped() and t.hash_used != shape_before)) learnTableSize(l.g, t);
     if (t.kind != kind) learnListKind(l.g, t);
     if (val.tag.isCollectable() or k.tag.isCollectable()) @import("gc.zig").barrierTable(l.g, t, k, val);
 }
@@ -134,10 +137,15 @@ pub fn rawSet(l: *Thread, t: *Table, key: Value, val: Value) Error!void {
 /// of `newtable` is only a size hint, so every tier stays correct with
 /// any value there. Tiers that compiled the instruction keep the hint
 /// they saw.
+/// `learnTableSize` for a store that a fast path made.
+pub fn learnTableSizeFor(g: *state.Global, t: *Table) void {
+    learnTableSize(g, t);
+}
+
 noinline fn learnTableSize(g: *state.Global, t: *Table) void {
     const site = &g.new_table;
     if (site.table != t or site.cycle != g.cycles) return;
-    const used = t.hash_used;
+    const used = table.hashCount(t);
     const asize = t.asize;
     if (used > state.NewTableSite.max_learned or asize > state.NewTableSite.max_learned) {
         site.table = null;
@@ -150,6 +158,26 @@ noinline fn learnTableSize(g: *state.Global, t: *Table) void {
     const ins = site.ins.?;
     if (used > opc.c(ins.*)) opc.setC(ins, @intCast(used));
     if (elems > opc.b(ins.*)) opc.setB(ins, @intCast(elems));
+    if (t.isShaped()) if (site.ic) |ic| learnShape(ic, table.shapeOf(t));
+}
+
+/// Shape feedback for constructors: the instruction keeps the shape that
+/// its last table reached, so that the next tables start with it and
+/// every field store finds its slot. It moves only to a shape that adds
+/// keys to the one it has, so a site whose tables differ keeps the first
+/// one.
+fn learnShape(ic: *object.IcEntry, c: *shape.Shape) void {
+    if (ic.shape == object.IcEntry.none) {
+        ic.shape = c.id;
+        return;
+    }
+    var p: ?*shape.Shape = c.parent;
+    while (p) |ps| : (p = ps.parent) {
+        if (ps.id == ic.shape) {
+            ic.shape = c.id;
+            return;
+        }
+    }
 }
 
 /// Kind feedback for constructors. When the table that the last
