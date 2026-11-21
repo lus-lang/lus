@@ -246,6 +246,14 @@ pub fn main(init: std.process.Init) !u8 {
 /// them (`-Dop-profile=true`), and passes the result of the run on.
 fn profiled(result: anyerror!u8) anyerror!u8 {
     lus.vm.opprofile.dump();
+    return exitAfterWorkers(result);
+}
+
+/// Ends the process at once when a worker did not stop as the state
+/// closed, which ends the thread of that worker too. A normal return
+/// would free memory that the worker may still use.
+fn exitAfterWorkers(result: anyerror!u8) anyerror!u8 {
+    if (api.workers_abandoned) std.process.exit(result catch 1);
     return result;
 }
 
@@ -263,7 +271,7 @@ fn runBundle(init: std.process.Init, b: *const lus.bundle.Bundle, args: []const 
     if (args.len > 1) try argv.appendSlice(gpa, args[1..]);
     package.bundle = b;
     defer package.bundle = null;
-    return runMain(init, argv.items, 1, b.entryModule());
+    return exitAfterWorkers(runMain(init, argv.items, 1, b.entryModule()));
 }
 
 fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry: ?lus.bundle.Module) !u8 {

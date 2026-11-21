@@ -55,8 +55,14 @@ pub fn close(l: *Thread) void {
     // to-be-closed variables while everything they use is alive.
     closeCoroutines(g);
     // Finalizers run next, while worker handles still reach their domain.
-    // Then workers created by this state stop before anything is freed.
     finalizeAll(g);
+    closeRest(g);
+}
+
+/// The part of `close` after the finalizers: workers created by this
+/// state stop before anything is freed, then output flushes and the
+/// state is freed.
+fn closeRest(g: *state.Global) void {
     if (@import("build_options").workers) @import("lib/worker.zig").closeState(g);
     // Finalizers may print, so standard output flushes after them.
     @import("lib/out.zig").deinit(g);
@@ -75,14 +81,27 @@ pub fn close(l: *Thread) void {
 /// of returning it object by object, which reads every live object once
 /// more. Safe builds free everything, so their allocators still check
 /// the whole teardown.
+///
+/// Workers stop at their next wait. When one is still running after a
+/// short grace, nothing that it may share is freed, and
+/// `workers_abandoned` tells the caller to end the process at once,
+/// which ends the thread of that worker.
 pub fn closeForExit(l: *Thread) void {
-    if (std.debug.runtime_safety) return close(l);
     const g = l.g;
     closeCoroutines(g);
     finalizeAll(g);
+    if (@import("build_options").workers and !@import("lib/worker.zig").stopForExit(g)) {
+        workers_abandoned = true;
+        @import("lib/out.zig").deinit(g);
+        return;
+    }
+    if (std.debug.runtime_safety) return closeRest(g);
     if (@import("build_options").workers) @import("lib/worker.zig").closeState(g);
     @import("lib/out.zig").deinit(g);
 }
+
+/// Set by `closeForExit` when a worker did not stop in time.
+pub var workers_abandoned = false;
 
 /// Compiles `src` and pushes the resulting function. On a syntax error,
 /// pushes the message string and returns error.LusError.

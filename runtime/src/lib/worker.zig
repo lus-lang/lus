@@ -455,11 +455,9 @@ pub fn isWorker(g: *Global) bool {
     return g.ext.get(self_key) != null;
 }
 
-/// Stops every worker created by `g` and waits for their threads. Called
-/// when the state closes.
-pub fn closeState(g: *Global) void {
-    const p = g.ext.get(domain_key) orelse return;
-    const d: *Domain = @ptrCast(@alignCast(p));
+/// Marks every worker of `d` as shutting down and wakes those that wait
+/// in `worker.peek`, in a scheduler, or in a `worker.receive` of their own.
+fn signalShutdown(d: *Domain) void {
     const io = d.io;
     for (d.workers.items) |w| {
         w.in_mutex.lockUncancelable(io);
@@ -469,6 +467,41 @@ pub fn closeState(g: *Global) void {
         if (w.child_domain) |cd| cd.notify();
         w.in_mutex.unlock(io);
     }
+}
+
+/// How long a process that exits waits for its workers to stop.
+const exit_grace: Io.Duration = .fromMilliseconds(500);
+
+/// Stops the workers created by `g` before the process exits. A worker
+/// stops at its next wait, so most end at once. One that computes or
+/// blocks in a read the runtime cannot wake gets `exit_grace` to end.
+/// Returns false when some worker still runs after that. Its thread and
+/// everything it shares with this state are then left to the exit of the
+/// process, which ends the thread.
+pub fn stopForExit(g: *Global) bool {
+    const p = g.ext.get(domain_key) orelse return true;
+    const d: *Domain = @ptrCast(@alignCast(p));
+    const io = d.io;
+    signalShutdown(d);
+    const deadline: Io.Timeout = (Io.Timeout{ .duration = .{ .raw = exit_grace, .clock = .awake } }).toDeadline(io);
+    d.ev_mutex.lockUncancelable(io);
+    defer d.ev_mutex.unlock(io);
+    while (true) {
+        const all = for (d.workers.items) |w| {
+            if (w.thread != null and !w.done.load(.acquire)) break false;
+        } else true;
+        if (all) return true;
+        d.ev_cond.waitTimeout(io, &d.ev_mutex, deadline) catch return false;
+    }
+}
+
+/// Stops every worker created by `g` and waits for their threads. Called
+/// when the state closes.
+pub fn closeState(g: *Global) void {
+    const p = g.ext.get(domain_key) orelse return;
+    const d: *Domain = @ptrCast(@alignCast(p));
+    const io = d.io;
+    signalShutdown(d);
     for (d.workers.items) |w| {
         if (w.thread) |t| t.join();
         w.thread = null;
