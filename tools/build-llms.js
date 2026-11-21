@@ -45,7 +45,7 @@ const API_SECTIONS = [
 // Manual pages in the order llms-full.txt reads them. The topic pages
 // of the use and library groups follow in sidebar order, then the API
 // reference. Pages about the release process and the build stay out.
-const LEAD_PAGES = ["introduction", "getting-started", "adapting", "guide", "cli"];
+const LEAD_PAGES = ["introduction", "getting-started", "adapting", "lua", "guide", "cli"];
 const FULL_GROUPS = ["use", "library"];
 const FULL_SKIP = new Set(["releases", "compiling", "ide-setup", "license"]);
 
