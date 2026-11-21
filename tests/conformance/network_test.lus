@@ -86,6 +86,41 @@ local function closed_tcp_port()
     return port
 end
 
+-- Answers one request on `server` with `head` and closes the connection,
+-- while a worker runs network.fetch with `method`. Returns what the worker
+-- reported.
+local function fetch_once(method, head)
+    local server = tcp_bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local w = worker.create(FIXTURES .. "/net_fetch.lus")
+    worker.send(w, { port = port, method = method })
+    local conn = server:accept()
+    while true do
+        local line = txt(conn:receive("*l"))
+        if line == nil or line == "" then break end
+    end
+    conn:send(head)
+    conn:close()
+    server:close()
+    return worker.receive(w)
+end
+
+-- A response to HEAD ends after its headers, even with a Content-Length.
+local function fetch_head_reads_no_body_test()
+    local r = fetch_once("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n")
+    assert(r.ok, r.err)
+    assert(r.status == 200 and r.size == 0 and r.length == "5")
+end
+
+-- A 204 or 304 response has no body either.
+local fetch_bodiless_statuses_read_no_body_cases = { { 204 }, { 304 } }
+
+local function fetch_bodiless_statuses_read_no_body_test(status)
+    local r = fetch_once("GET", `HTTP/1.1 $(status) X\r\nContent-Length: 5\r\n\r\n`)
+    assert(r.ok, r.err)
+    assert(r.status == status and r.size == 0)
+end
+
 -- ============================================================
 -- TCP loopback data path (bind-dependent)
 -- ============================================================

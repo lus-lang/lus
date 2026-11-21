@@ -1860,7 +1860,10 @@ fn fetch(l: *Thread) Error!u32 {
     var resp: std.ArrayList(u8) = .empty;
     defer resp.deinit(gpa);
     var buf: [4096]u8 = undefined;
-    if (chunked) {
+    // A response to HEAD, and a 1xx, 204 or 304 response, ends after its
+    // headers, whatever Content-Length says (RFC 9112, section 6.3).
+    const no_body = std.ascii.eqlIgnoreCase(method, "HEAD") or status == 204 or status == 304 or (status >= 100 and status < 200);
+    if (no_body) {} else if (chunked) {
         while (true) {
             const n = readHttpLine(r, &line) orelse return l.raiseFmt("truncated chunked response", .{});
             const size = parseChunkSize(line[0..n]) orelse return l.raiseFmt("invalid chunk size", .{});
