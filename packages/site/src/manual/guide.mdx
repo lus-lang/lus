@@ -283,9 +283,8 @@ A few built-in functions are used everywhere:
 - `type(value)` returns the name of the type of a value, which tells a program what it received when the value came from outside.
 
 ```lus
-print(tonumber("twelve"))                            --> nil
+print(tonumber("twelve"))                               --> nil
 print(type(tonumber("12")), type(tonumber("twelve")))   --> number  nil
-print(tostring(3.5))                                 --> 3.5
 ```
 
 Most built-in functions belong to a _library_, a group named after its subject. Their names are written with a dot: `math.floor` is the function `floor` of the `math` library, which rounds a number down, and `string.upper` is the function `upper` of the `string` library, which capitalizes text. A library also holds constants, such as `math.pi`. [Tables](#tables-as-modules) explains what the dot means.
