@@ -913,12 +913,17 @@ const Formatter = struct {
     }
 
     /// Literal text of an interpolated string, with `$`, the backtick, and
-    /// the backslash escaped.
+    /// the backslash escaped. A carriage return is written as `\r`,
+    /// because a raw one would read back as a line break.
     fn interpText(f: *Formatter, s: []const u8) Error!void {
         for (s) |c| {
             switch (c) {
                 '$' => try f.putc('$'),
                 '`', '\\' => try f.putc('\\'),
+                '\r' => {
+                    try f.put("\\r");
+                    continue;
+                },
                 else => {},
             }
             try f.putc(c);
@@ -1264,6 +1269,10 @@ test "format statements and comments" {
     try expectFormat("local x=1 -- one\n\n\nprint 'hi'", "local x = 1  -- one\n\nprint('hi')\n");
     try expectFormat("if a then b() elseif c then else d() end", "if a then\n    b()\nelseif c then\nelse\n    d()\nend\n");
     try expectFormat("--[[\nlong]]\nx = {1,2,3,4}", "--[[\nlong]]\nx = {\n    1,\n    2,\n    3,\n    4,\n}\n");
+}
+
+test "format escapes a carriage return in interpolated strings" {
+    try expectFormat("x = `a\\r\\n$(b)`", "x = `a\\r\n$b`\n");
 }
 
 test "format keeps comment markers and long comments as written" {
