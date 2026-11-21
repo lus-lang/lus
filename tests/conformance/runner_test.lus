@@ -33,6 +33,16 @@ local function file_line(report, name)
     end
 end
 
+-- A test that fails closes the coroutines it detached, so one that waits
+-- for a message the test never sent cannot stop the file.
+local function a_failed_test_closes_its_waiting_coroutines_test()
+    local report, ok = run_tests("--timeout 10", "abandoned.lus")
+    assert(not ok, report)
+    assert(not report:find("timed out", 1, true), report)
+    assert(report:find("the test fails before it sends anything", 1, true), report)
+    assert(file_line(report, "abandoned.lus"):find("1 passed, 1 failed", 1, true), report)
+end
+
 local function a_chatty_file_stops_at_the_file_timeout_test()
     local report, ok = run_tests("--timeout 30 --file-timeout 1", "chatty.lus")
     assert(not ok, report)

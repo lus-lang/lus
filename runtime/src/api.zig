@@ -213,6 +213,13 @@ pub fn runPending(l: *Thread, wait: bool) bool {
     return true;
 }
 
+/// Closes the detached coroutines that have not ended, running their
+/// pending to-be-closed variables, and keeps the scheduler for later
+/// ones.
+pub fn closePending(l: *Thread) void {
+    sched.closeLive(l.g);
+}
+
 /// The number of detached coroutines that have not ended.
 pub fn pendingCoroutines(l: *Thread) usize {
     return sched.pending(l.g);
