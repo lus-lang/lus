@@ -441,3 +441,27 @@ local function loadlib_rejects_non_string_arguments_test(call, argno)
     assert(not ok)
     assert(string.find(tostring(err), "bad argument #" .. argno))
 end
+
+-- A URL resolves through package.loaded and package.preload under its
+-- exact name before require goes to the network, so a host or a test can
+-- provide a remote module. Neither path needs a network permission.
+local function preload_provides_a_module_url_test()
+    local url = "https://pkg.invalid/2.0/preloaded_" .. RUN .. ".lus"
+    package.preload[url] = function(name, extra)
+        return { name = name, extra = extra }
+    end
+    local m = require(url)
+    assert(m.name == url)
+    assert(m.extra == ":preload:")
+    assert(require(url) == m)
+    package.preload[url] = nil
+    package.loaded[url] = nil
+end
+
+local function loaded_provides_a_module_url_test()
+    local url = "https://pkg.invalid/2.0/loaded_" .. RUN .. ".lus"
+    local value = {}
+    package.loaded[url] = value
+    assert(require(url) == value)
+    package.loaded[url] = nil
+end

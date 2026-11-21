@@ -372,14 +372,10 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
     // The store of remote modules and the index of the require tree
     // outlive the state, because workers read them until the state stops
     // them.
-    const home_dir = if (cli.ignore_env) null else (lus.home.path(gpa, init.environ_map) catch null);
-    defer if (home_dir) |h| gpa.free(h);
-    var store: lus.remote.Store = .init(gpa, io, .{ .home = home_dir, .offline = cli.offline, .reload = cli.reload, .env = init.environ_map });
-    lus.remote.store = &store;
-    defer {
-        lus.remote.store = null;
-        store.deinit();
-    }
+    var remote_process: lus.remote.Process = undefined;
+    remote_process.begin(gpa, io, init.environ_map, .{ .ignore_env = cli.ignore_env, .offline = cli.offline, .reload = cli.reload });
+    defer remote_process.end();
+    const store = &remote_process.store;
     var index: ?*lus.modtree.Index = null;
     defer if (index) |x| dropIndex(gpa, x);
 

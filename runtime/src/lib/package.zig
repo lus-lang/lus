@@ -426,7 +426,7 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
     const is_url = remote.isUrl(name);
     if (!is_url and (caller_url == null or isBuiltinName(name))) return null;
     const gpa = l.g.gpa;
-    const st = remote.store orelse return l.raiseFmt("remote modules are unavailable in this build", .{});
+    const st = remote.store orelse return l.raiseFmt("{s}", .{remote.unavailable});
     var why: std.ArrayList(u8) = .empty;
     defer why.deinit(gpa);
 
@@ -569,12 +569,23 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
     return try runLoader(l, loaded, key, loader, extra);
 }
 
+/// Whether `package.preload` holds a loader for `name`.
+fn preloaded(l: *Thread, pkg: *Table, name: *String) bool {
+    const pre = aux.getField(l, pkg, "preload") catch return false;
+    if (pre.tag != .table) return false;
+    return !table.getStr(pre.as(Table), name).isNil();
+}
+
 fn require(l: *Thread) Error!u32 {
     const name = try aux.checkString(l, 1);
     const pkg = packageTable(l);
     const loaded_v = try aux.getField(l, l.g.registry.as(Table), "_LOADED");
     const loaded = loaded_v.as(Table);
-    if (try requireRemote(l, name.bytes(), loaded)) |n| return n;
+    // A URL that `package.loaded` or `package.preload` holds under its
+    // exact name loads from there, as any other name does, so a host or a
+    // test can provide a remote module without the network.
+    const local = remote.isUrl(name.bytes()) and (table.getStr(loaded, name).truthy() or preloaded(l, pkg, name));
+    if (!local) if (try requireRemote(l, name.bytes(), loaded)) |n| return n;
     const existing = table.getStr(loaded, name);
     if (existing.truthy()) return aux.ret(l, existing);
     const searchers = try aux.getField(l, pkg, "searchers");

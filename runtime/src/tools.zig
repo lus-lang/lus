@@ -20,6 +20,11 @@ pub fn run(init: std.process.Init, cmd: []const u8, args: []const []const u8) !u
             }
         }
     }
+    // The commands that run Lus code load remote modules as `lus` does.
+    var remote_process: @import("remote.zig").Process = undefined;
+    const runs_code = std.mem.eql(u8, cmd, "test") or std.mem.eql(u8, cmd, "debug");
+    if (runs_code) remote_process.begin(init.gpa, init.io, init.environ_map, .{});
+    defer if (runs_code) remote_process.end();
     if (std.mem.eql(u8, cmd, "test")) return @import("tools/test.zig").run(init, args);
     if (std.mem.eql(u8, cmd, "ast")) return @import("tools/ast.zig").run(init, args);
     if (std.mem.eql(u8, cmd, "fmt")) return @import("tools/fmt.zig").run(init, args);

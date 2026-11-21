@@ -861,8 +861,44 @@ fn warn(s: *Store, comptime fmt: []const u8, args: anytype) void {
 }
 
 /// The store of the running program, or null when remote modules are
-/// unavailable. The CLI creates it before any state.
+/// unavailable. Every entry point of the CLI that runs Lus code installs
+/// one with `Process` before it creates a state.
 pub var store: ?*Store = null;
+
+/// The store of one process: the Lus home and the store, installed as
+/// `store` from `begin` to `end`. It must outlive every state of the
+/// process, because workers read it until their state stops them.
+pub const Process = struct {
+    gpa: Allocator,
+    home: ?[]u8,
+    store: Store,
+
+    pub fn begin(p: *Process, gpa: Allocator, io: Io, env: ?*const std.process.Environ.Map, opts: struct {
+        ignore_env: bool = false,
+        offline: bool = false,
+        reload: bool = false,
+    }) void {
+        const h = if (opts.ignore_env) null else (home_mod.path(gpa, env) catch null);
+        p.* = .{
+            .gpa = gpa,
+            .home = h,
+            .store = .init(gpa, io, .{ .home = h, .offline = opts.offline, .reload = opts.reload, .env = env }),
+        };
+        store = &p.store;
+    }
+
+    pub fn end(p: *Process) void {
+        store = null;
+        p.store.deinit();
+        if (p.home) |h| p.gpa.free(h);
+    }
+};
+
+/// The reason `require` gives when `store` is null.
+pub const unavailable = if (builtin.cpu.arch.isWasm())
+    "remote modules are unavailable in the WebAssembly build, which has no network library"
+else
+    "remote modules are unavailable here, because the host that embeds Lus set up no module store";
 
 test "normalize" {
     const gpa = std.testing.allocator;
