@@ -99,7 +99,7 @@ inline fn initHeader(comptime T: type, comptime tag: Tag, mem: [*]u8, size: usiz
 pub fn objectSize(h: *Header) usize {
     return switch (h.tag) {
         .string => h.as(object.String).cellSize(),
-        .table => @sizeOf(object.Table) + @as(usize, h.as(object.Table).cell.inline_units) * 16,
+        .table => @sizeOf(object.Table) + @as(usize, h.as(object.Table).cell.inline_units) * object.Table.inline_unit,
         .closure => object.Closure.allocSize(h.as(object.Closure).nupvals),
         .native => state_mod.Native.allocSize(h.as(state_mod.Native).nupvals),
         .userdata => object.Userdata.allocSize(h.as(object.Userdata).size, h.as(object.Userdata).nuser),
@@ -241,7 +241,7 @@ fn promote(g: *Global, v: Value) void {
 /// Appends `h` to a gray list, without a call while the list has room.
 inline fn pushGray(g: *Global, list: *GrayList, h: *Header) void {
     if (list.items.len < list.capacity) return list.appendAssumeCapacity(h);
-    list.append(g.gpa, h) catch {
+    list.append(gcpar.stack_alloc, h) catch {
         g.gcs.overflow = true;
     };
 }
@@ -261,7 +261,7 @@ fn barrierSlow(g: *Global, h: *Header) void {
     if (!isMarked(h)) return;
     // When the list cannot grow, the end of the mark phase traces every
     // marked object again instead.
-    s.grayagain.append(g.gpa, h) catch {
+    s.grayagain.append(gcpar.stack_alloc, h) catch {
         s.overflow = true;
     };
 }
@@ -347,6 +347,10 @@ pub const State = struct {
     /// Set when minor collections failed right after a major one, until
     /// the major collection that they asked for ends.
     minors_failed: bool = false,
+    /// Minor collections in a row, after two that freed little, that
+    /// freed little too. Each of them doubles the allocation before the
+    /// next one (`probeMinor`).
+    probes: u8 = 0,
     stepmul: usize = 200,
     stepsize: usize = 200 * @sizeOf(object.Table),
     minormul: usize = 20,
@@ -354,8 +358,8 @@ pub const State = struct {
     majorminor: usize = 50,
 
     pub fn deinit(s: *State, gpa: Allocator) void {
-        s.gray.deinit(gpa);
-        s.grayagain.deinit(gpa);
+        s.gray.deinit(gcpar.stack_alloc);
+        s.grayagain.deinit(gcpar.stack_alloc);
         s.weak.deinit(gpa);
         s.all_weak.deinit(gpa);
         s.ephemerons.deinit(gpa);
@@ -634,8 +638,8 @@ fn finishMark(g: *Global, m: *Marker, major: bool) void {
     std.debug.assert(s.gray.items.len == 0 and s.grayagain.items.len == 0);
     // The gray stack holds an entry per reference while it drains, so a
     // heap with many references grows it far past what a later cycle
-    // needs. Its memory is counted as heap, so a large one is freed.
-    if (s.gray.capacity > gray_keep) s.gray.clearAndFree(g.gpa);
+    // needs, and a large one is freed.
+    if (s.gray.capacity > gray_keep) s.gray.clearAndFree(gcpar.stack_alloc);
     s.heap_at_mark = g.counter.bytes;
     s.swept = 0;
     s.last_major = major;
@@ -772,6 +776,7 @@ fn finishSweep(g: *Global) void {
         s.gen_base = live;
         s.minors = 0;
         s.poor_minor = false;
+        s.probes = 0;
         // A program that built its data a moment ago may now discard
         // most of what it allocates. The minor collection that follows,
         // after the usual young allocation, tells the two apart much
@@ -782,17 +787,25 @@ fn finishSweep(g: *Global) void {
             s.skip_minors -= 1;
             s.major_pending = true;
         } else s.major_pending = false;
-    } else if (poorMinor(s, live, before) and s.poor_minor) {
+    } else if (poorMinor(s, live, before) and (s.poor_minor or s.probes > 0)) {
         // Two minor collections in a row that freed less than
         // `majorminor` percent of what the program allocated before each
-        // of them traced young objects that live on, and those die old.
-        // Major collections at the usual goal then serve better, until
-        // the minor collection after one of them frees enough again. A
-        // single such minor collection may only have met a large result
-        // that the program keeps, such as text it just joined.
+        // of them traced young objects that live on: the program builds
+        // its data. A single such minor collection may only have met a
+        // large result that the program keeps, such as text it just
+        // joined. The next minor collections wait for twice as much
+        // allocation each time, so that they cost little while the
+        // program builds, and still find the moment it starts to discard
+        // what it allocates. One that still freed a quarter keeps the
+        // wait it had. Past the goal of the next major collection, that
+        // collection runs instead.
         s.poor_minor = false;
+        if (s.probes == 0) failedMinors(s);
+        if (s.probes == 0 or !freedQuarter(s, live, before)) s.probes +|= 1;
+        s.minors += 1;
+        if (probeMinor(g)) return;
+        s.probes = 0;
         s.major_pending = true;
-        failedMinors(s);
         return setThresholdFrom(g, s.gen_base);
     } else if (@as(u64, live) * 100 > @as(u64, s.gen_base) * (100 + s.minormajor)) {
         s.poor_minor = false;
@@ -803,6 +816,7 @@ fn finishSweep(g: *Global) void {
     } else {
         s.poor_minor = poorMinor(s, live, before);
         if (!s.poor_minor) s.backoff = 0;
+        s.probes = 0;
         // Old objects die only in major collections. A program sees
         // that through finalizers and weak tables, so while it has
         // either, a major collection runs after a bounded number of
@@ -835,6 +849,12 @@ fn failedMinors(s: *State) void {
     if (s.minors < 2) s.minors_failed = true;
 }
 
+/// True when the minor collection that just ended freed at least a
+/// quarter of what the program allocated since the collection before it.
+fn freedQuarter(s: *const State, live: usize, before: usize) bool {
+    return @as(u64, s.heap_at_mark -| live) * 4 >= @as(u64, s.heap_at_mark -| before);
+}
+
 /// True when the minor collection that just ended freed less than
 /// `majorminor` percent of what the program allocated since the
 /// collection before it, which left `before` bytes.
@@ -850,6 +870,22 @@ fn setMinorThreshold(g: *Global) void {
     const t = @max(@as(u64, s.live) + young, @as(u64, g.counter.bytes) + s.stepsize);
     g.threshold = @intCast(@min(t, std.math.maxInt(usize)));
     s.next_check = g.threshold;
+}
+
+/// Sets the threshold of the minor collection after `probes` minor
+/// collections that freed little: the usual young allocation, doubled
+/// for each of them. Returns false when that threshold would pass the
+/// goal of the next major collection.
+fn probeMinor(g: *Global) bool {
+    const s = &g.gcs;
+    const pause: u64 = if (s.growing) @as(u64, g.pause) * 2 else g.pause;
+    const goal: u64 = @as(u64, s.gen_base) * pause / 100;
+    const young: u64 = @max(@as(u64, s.gen_base) * s.minormul / 100, min_young) << @intCast(@min(s.probes, 16));
+    const t = @max(@as(u64, s.live) + young, @as(u64, g.counter.bytes) + s.stepsize);
+    if (t >= goal) return false;
+    g.threshold = @intCast(t);
+    s.next_check = g.threshold;
+    return true;
 }
 
 /// The most minor collections between two major ones.
@@ -979,8 +1015,8 @@ const prefetch_distance = 8;
 pub const GrayList = std.ArrayList(*align(1) Header);
 
 /// The gray stack capacity, in entries, that survives the end of a mark
-/// phase (512 KB on 64-bit targets).
-pub const gray_keep = 64 * 1024;
+/// phase (2 MB on 64-bit targets).
+pub const gray_keep = 256 * 1024;
 
 /// Set in a gray stack entry whose object was not marked when it was
 /// pushed (`Marker.markValue`).
@@ -1039,11 +1075,6 @@ fn MarkerOf(comptime par: bool) type {
             return .{ .g = d.g, .gray = stack, .drain = d };
         }
 
-        /// The allocator of the gray stack.
-        inline fn grayAlloc(m: *M) Allocator {
-            return if (par) gcpar.stack_alloc else m.g.gpa;
-        }
-
         inline fn isMarkedM(h: *const Header) bool {
             return if (par) isMarkedAtomic(h) else isMarked(h);
         }
@@ -1078,7 +1109,7 @@ fn MarkerOf(comptime par: bool) type {
                 gray.appendAssumeCapacity(h);
                 return true;
             }
-            gray.append(m.grayAlloc(), h) catch return false;
+            gray.append(gcpar.stack_alloc, h) catch return false;
             return true;
         }
 

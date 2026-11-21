@@ -1,14 +1,14 @@
 //! The object heap. Small objects live in 16 KB pages carved out of
-//! 256 KB aligned segments. Every page holds cells of one size class, and
-//! every size class is a multiple of the 16-byte granule. A page also
-//! holds objects of one kind: scanned objects, which the marker traces,
-//! or leaf objects (strings, bigints, decimals, vector headers), which it
-//! only marks. Objects larger than the biggest class come straight from
-//! the backing allocator and are kept in a list.
+//! 1 MB aligned segments. Every page holds cells of one size class, and
+//! every size class is a multiple of 8 bytes. A page also holds objects
+//! of one kind: scanned objects, which the marker traces, or leaf objects
+//! (strings, bigints, decimals, vector headers), which it only marks.
+//! Objects larger than the biggest class come straight from the backing
+//! allocator and are kept in a list.
 //!
 //! The first page of every segment holds the metadata of the other
-//! fifteen: a mark bitmap with one bit per granule, the free list, and
-//! the bump limit. A fresh page bump-allocates. A swept page allocates
+//! sixty-three: a mark bitmap with one bit per 16-byte granule, the free
+//! list, and the bump limit. A fresh page bump-allocates. A swept page allocates
 //! from a free list rebuilt from its mark bitmap. Pages are swept lazily,
 //! one at a time, when the allocator reaches them, or by collector steps.
 //! Sweeping uses whole bitmap words, so a run of 64 live granules costs
@@ -22,7 +22,11 @@ const Header = gc.Header;
 const Global = state_mod.Global;
 const Allocator = std.mem.Allocator;
 
-pub const segment_size = 256 * 1024;
+/// A segment spends its first page on the metadata of the others, a
+/// whole 16 KB page on systems with pages of that size, so segments of
+/// 1 MB spend 1.6 percent of the heap on it where segments of 256 KB
+/// spent 6.25.
+pub const segment_size = 1024 * 1024;
 pub const page_size = 16 * 1024;
 pub const pages_per_segment = segment_size / page_size;
 pub const granule = 16;
@@ -30,40 +34,77 @@ pub const max_small = 2048;
 const granules_per_page = page_size / granule;
 pub const bitmap_words = granules_per_page / 64;
 
-/// Size classes in granules: every granule up to 256 bytes, which holds
-/// small records with their hash parts exactly, then classes that grow by
-/// a quarter, which bounds internal fragmentation by 20 percent.
-pub const class_granules = [_]u16{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128 };
-pub const class_count = class_granules.len;
+/// The step between the small size classes: the alignment of an object
+/// header, 8 bytes on 64-bit targets and 16 on 32-bit ones. Cells start
+/// on such boundaries, and no cell is smaller than a granule, so the cell
+/// that starts in a granule is the only one there.
+pub const class_step = @alignOf(Header);
 
-const class_of_granules: [max_small / granule + 1]u8 = blk: {
-    var t: [max_small / granule + 1]u8 = undefined;
+/// Size classes in bytes: every step up to 256, which holds short strings
+/// and small records with their hash parts exactly, then classes that
+/// grow by a quarter, which bounds internal fragmentation by 20 percent.
+pub const class_sizes = blk: {
+    const steps = (256 - 16) / class_step + 1;
+    var t: [steps + 12]u16 = undefined;
+    for (0..steps) |i| t[i] = 16 + class_step * i;
+    for (.{ 320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048 }, steps..) |b, i| t[i] = b;
+    break :blk t;
+};
+
+comptime {
+    std.debug.assert(class_step == 8 or class_step == granule);
+}
+pub const class_count = class_sizes.len;
+
+const class_of_steps: [max_small / class_step + 1]u8 = blk: {
+    var t: [max_small / class_step + 1]u8 = undefined;
     var c: usize = 0;
     for (0..t.len) |n| {
-        while (class_granules[c] < n) c += 1;
+        while (class_sizes[c] < n * class_step) c += 1;
         t[n] = c;
     }
     break :blk t;
 };
 
 pub inline fn classFor(size: usize) u8 {
-    return class_of_granules[(size + granule - 1) / granule];
+    return class_of_steps[(size + class_step - 1) / class_step];
 }
 
 pub inline fn classBytes(class: u8) u32 {
-    return @as(u32, class_granules[class]) * granule;
+    return class_sizes[class];
 }
 
 /// For each class, the bitmap bits of the granules where cells start.
 const start_masks: [class_count][bitmap_words]u64 = blk: {
     @setEvalBranchQuota(100_000);
     var t: [class_count][bitmap_words]u64 = undefined;
-    for (class_granules, 0..) |cg, c| {
+    for (class_sizes, 0..) |cb, c| {
         var m: [bitmap_words]u64 = @splat(0);
-        const ncells = page_size / (cg * granule);
+        const ncells = page_size / cb;
         for (0..ncells) |i| {
-            const gi = i * cg;
+            const gi = i * cb / granule;
             m[gi / 64] |= @as(u64, 1) << @intCast(gi % 64);
+        }
+        t[c] = m;
+    }
+    break :blk t;
+};
+
+/// For each class, the bits of the granules whose cell starts 8 bytes
+/// into the granule. Only classes that are not a multiple of the
+/// granule have any.
+const half_masks: [class_count][bitmap_words]u64 = blk: {
+    @setEvalBranchQuota(100_000);
+    var t: [class_count][bitmap_words]u64 = undefined;
+    for (class_sizes, 0..) |cb, c| {
+        var m: [bitmap_words]u64 = @splat(0);
+        const ncells = page_size / cb;
+        for (0..ncells) |i| {
+            const off = i * cb;
+            if (off % granule != 0) {
+                const gi = off / granule;
+                m[gi / 64] |= @as(u64, 1) << @intCast(gi % 64);
+            }
         }
         t[c] = m;
     }
@@ -405,7 +446,9 @@ pub fn sweepPage(g: *Global, p: *Page) void {
     defer g.gcs.swept += before -| g.counter.bytes;
     const base = p.base();
     const masks = &start_masks[p.class];
-    const top_granule = p.top / granule;
+    const halves = &half_masks[p.class];
+    // The granule after the one where the last allocated cell starts.
+    const top_granule = if (p.top == 0) 0 else (p.top - p.cell) / granule + 1;
     var head: ?*FreeCell = null;
     var tail: *?*FreeCell = &head;
     var live: u32 = 0;
@@ -420,7 +463,8 @@ pub fn sweepPage(g: *Global, p: *Page) void {
         while (dead != 0) {
             const bit = @ctz(dead);
             dead &= dead - 1;
-            const cell: *FreeCell = @ptrFromInt(base + (lo + bit) * granule);
+            const half: usize = @intCast((halves[w] >> @intCast(bit)) & 1);
+            const cell: *FreeCell = @ptrFromInt(base + (lo + bit) * granule + half * class_step);
             if (!cell.hdr.flags.free) {
                 if (gc.needsRelease(&cell.hdr)) gc.releaseObject(g, &cell.hdr);
                 // Safe builds poison dead cells, so a use after free shows

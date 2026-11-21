@@ -1004,7 +1004,7 @@ pub const rt = struct {
         // per slot (`state.newTableAt`).
         const words = narr > 0 and ic != null and ic.?.own == object.IcEntry.lists_words;
         const units = table.inlineUnitsSlots(narr, nhash, if (words) @sizeOf(u64) else @sizeOf(Value));
-        const t = gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * 16) catch return null;
+        const t = gc.allocUninit(g, Table, .table, @sizeOf(Table) + units * Table.inline_unit) catch return null;
         t.* = .{ .hdr = t.hdr, .cell = .{ .inline_units = @intCast(units) } };
         if (units > 0) {
             table.initInline(t, narr, nhash);
@@ -1021,7 +1021,7 @@ pub const rt = struct {
     /// the count gives that back, and the allocation is charged once.
     pub fn newVirtualTable(l: *Thread, narr: usize, nhash: usize) callconv(.c) ?*Table {
         const g = l.g;
-        g.jit.sunk -|= @sizeOf(Table) + table.inlineUnits(narr, nhash) * 16;
+        g.jit.sunk -|= @sizeOf(Table) + table.inlineUnits(narr, nhash) * Table.inline_unit;
         return newTable(l, narr, nhash, null);
     }
 
