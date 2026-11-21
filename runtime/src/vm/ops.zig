@@ -637,10 +637,12 @@ pub fn numberToBuf(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), v: Value) !v
 }
 
 /// Lua's "%.14g" float formatting, plus a trailing ".0" when the result
-/// looks like an integer.
+/// looks like an integer. Every NaN prints as "nan": the sign of a NaN
+/// comes from the hardware (x86-64 sets it where arm64 clears it), so
+/// printing it would make output differ between platforms.
 pub fn formatFloat(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64) !void {
     if (std.math.isNan(f)) {
-        try buf.appendSlice(gpa, if (std.math.signbit(f)) "-nan" else "nan");
+        try buf.appendSlice(gpa, "nan");
         return;
     }
     if (std.math.isInf(f)) {

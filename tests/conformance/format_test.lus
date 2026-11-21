@@ -412,3 +412,22 @@ local function format_preserves_embedded_nul_bytes_in_the_literal_text_test()
     assert(string.byte(out, 2) == 0)
     assert(string.sub(out, 3, 3) == "5")
 end
+
+-- Every NaN prints as nan, whatever its sign bit. The sign bit of 0/0
+-- differs between x86-64 and arm64, so printing it would make output
+-- depend on the platform.
+local function nan_prints_without_a_sign_on_every_platform_test()
+    local z = 0
+    local nans = { 0 / z, -(0 / z), math.huge - math.huge, math.sqrt(-1), -(math.huge - math.huge) }
+    for i, n in ipairs(nans) do
+        assert(n ~= n, `value $i is not a NaN`)
+        assert(tostring(n) == "nan", `tostring of NaN $i`)
+        assert("x" .. n == "xnan", `concatenation of NaN $i`)
+        assert(string.format("%f|%g|%e|%a|%s", n, n, n, n, n) == "nan|nan|nan|nan|nan", `string.format of NaN $i`)
+        assert(string.format("%F|%G|%E|%A", n, n, n, n) == "NAN|NAN|NAN|NAN", `uppercase conversions of NaN $i`)
+        assert(string.format("%5.1f|%-5g|%+f", n, n, n) == "  nan|nan  |+nan", `flags with NaN $i`)
+        assert(string.format("%q", n) == "(0/0)")
+        assert(tojson(n) == "null")
+    end
+    assert(tostring(-math.huge) == "-inf" and string.format("%f", -math.huge) == "-inf")
+end
