@@ -204,15 +204,15 @@ static void fire(lus_State *L) {
 
 ## Permissions
 
-A host usually runs scripts that its own author did not write, so the host limits what those scripts can do. A state starts with no [permissions](/manual/permissions). The host sets them before any script runs, with the same names and values that `pledge` takes. `lus.h` calls a permission a _capability_.
+A host usually runs scripts that its own author did not write, so the host limits what those scripts can do. A state starts with no [permissions](/manual/permissions). The host sets them before any script runs, with the same names and values that `pledge` takes. `lus.h` calls a permission a _capability_, which is why the names of its functions and types contain `capability`.
 
-- [`lus_grant`](/manual/api/c#lus_grant) grants a capability, such as `"fs:read=/srv/data/*"` or `"network"`.
-- [`lus_reject`](/manual/api/c#lus_reject) rejects a capability for the life of the state, so every later grant of it fails.
+- [`lus_grant`](/manual/api/c#lus_grant) grants a permission, such as `"fs:read=/srv/data/*"` or `"network"`.
+- [`lus_reject`](/manual/api/c#lus_reject) rejects a permission for the life of the state, so every later grant of it fails.
 - [`lus_seal`](/manual/api/c#lus_seal) seals the permissions, as `pledge("seal")` does in a script.
 
-Once the host grants anything, a script can pledge only what those grants cover. `pledge` returns `false` for everything else. Pledging a rejected capability raises an error such as `permission "exec" was rejected`.
+Once the host grants anything, a script can pledge only what those grants cover. `pledge` returns `false` for everything else. Pledging a rejected permission raises an error such as `permission "exec" was rejected`.
 
-A host can also decide each pledge when a script makes it, for example by asking the user. Such a host installs a _request hook_ with [`lus_onrequest`](/manual/api/c#lus_onrequest). Lus calls the hook when a script pledges a capability that the host has neither granted nor rejected. The hook receives the capability, such as `"fs:read"`. It also receives the requested value, which is `NULL` when the pledge has none. The hook returns 1 to allow the grant. The following host grants read access to one directory and rejects `exec`. For every other pledge, it prompts the person at the terminal.
+A host can also decide each pledge when a script makes it, for example by asking the user. Such a host installs a _request hook_ with [`lus_onrequest`](/manual/api/c#lus_onrequest). Lus calls the hook when a script pledges a permission that the host has neither granted nor rejected. The hook receives the name of the permission, such as `"fs:read"`. It also receives the requested value, which is `NULL` when the pledge has none. The hook returns 1 to allow the grant. The following host grants read access to one directory and rejects `exec`. For every other pledge, it prompts the person at the terminal.
 
 ```c
 #include <stdio.h>
@@ -236,19 +236,19 @@ void configure(lus_State *L) {
 
 ### Capabilities of an extension
 
-The functions that a host adds can give scripts access to things that no built-in permission covers, such as the documents of an application. An extension therefore declares its own capabilities with [`lus_defcapability`](/manual/api/c#lus_defcapability). Its C functions check a capability with `lus_require` or `lus_allowed`. When the check fails, `lus_require` pushes the standard permission error and returns `LUS_ERRRUN`. `lus_allowed` returns 1 when the script holds the capability and 0 otherwise. It never raises an error. Scripts pledge the new capability as they pledge a built-in one.
+The functions that a host adds can give scripts access to things that no built-in permission covers, such as the documents of an application. An extension therefore declares its own permissions with [`lus_defcapability`](/manual/api/c#lus_defcapability). Its C functions check a permission with `lus_require` or `lus_allowed`. When the check fails, `lus_require` pushes the standard permission error and returns `LUS_ERRRUN`. `lus_allowed` returns 1 when the script holds the permission and 0 otherwise. It never raises an error. Scripts pledge the new permission as they pledge a built-in one.
 
-The _value kind_ of a capability determines how Lus compares a granted value with a requested one.
+The _value kind_ of a permission determines how Lus compares a granted value with a requested one.
 
 | Kind | Matching |
 | --- | --- |
-| `LUS_CAP_NONE` | The capability takes no value. |
+| `LUS_CAP_NONE` | The permission takes no value. |
 | `LUS_CAP_PATH` | Canonical file system path globs. |
 | `LUS_CAP_HOST` | A host with an optional port and path glob, as in `host:port/path`. |
 | `LUS_CAP_PATTERN` | A glob over an opaque string. |
 | `LUS_CAP_CUSTOM` | The extension supplies a function that compares the two values. |
 
-The following extension declares the capability `store` with the subcapabilities `read` and `write`. Its `store.get` function checks `store:read` for the key it reads.
+The following extension declares the permission `store` with the subpermissions `read` and `write`. Its `store.get` function checks `store:read` for the key it reads.
 
 ```c
 static const char *const store_subs[] = {"read", "write", NULL};
@@ -283,4 +283,4 @@ After `lus_grant(L, "store:read=users/*")`, the call `store.get("users/ada")` su
 - The [C API reference](/manual/api/c) documents every function of `lus.h`.
 - [Compiling Lus](/manual/compiling) describes how to build the library and how to leave parts of it out.
 - [WebAssembly](/manual/webassembly) describes the module that exports the same interface to JavaScript.
-- [Permissions](/manual/permissions) describes the capabilities that hosts grant and scripts pledge.
+- [Permissions](/manual/permissions) describes the permissions that hosts grant and scripts pledge.

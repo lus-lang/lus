@@ -53,7 +53,7 @@ The first call is permitted and reports that the file does not exist. The other 
 
 ### Reject and seal
 
-After the pledges, remove the capabilities that the program does not need. A rejection is a permission name with the prefix `~`. It removes a capability for the rest of the run, so a later `pledge` of that capability raises an error. `pledge("seal")` freezes the whole set. After the seal, every `pledge` returns `false`. Code that runs later, such as a module or a chunk that the program loads, therefore cannot acquire a permission that the program lacked at the seal.
+After the pledges, reject the permissions that the program does not need. A rejection is a permission name with the prefix `~`. It removes a permission for the rest of the run, so a later `pledge` of that permission raises an error. After `pledge("seal")`, the set of permissions can no longer change. Every later `pledge` returns `false`. Code that runs later, such as a module or a chunk that the program loads, therefore cannot acquire a permission that the program lacked at the seal.
 
 ```lus
 global pledge, print

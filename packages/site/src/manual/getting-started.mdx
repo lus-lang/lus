@@ -95,7 +95,7 @@ print(ok, err)   --> false  JSON parse error at position 2: expected string key 
 
 ## Asking for permission
 
-A Lus program starts with no access to files, the network, other processes, or environment variables. It acquires each capability by calling `pledge`. The following program reads the name of the current user from the environment, which requires the `env` permission.
+A Lus program starts with no access to files, the network, other processes, or environment variables. It acquires each kind of access by calling `pledge`. The following program reads the name of the current user from the environment, which requires the `env` permission.
 
 ```lus
 pledge("env")
@@ -104,7 +104,7 @@ local user = os.getenv("USER") or "stranger"
 print(`Hello, $user!`)
 ```
 
-Without the `pledge` line, the program stops at `os.getenv` with the error `permission "env" denied for 'USER'`. Reading a file requires `pledge("fs:read")`. An HTTP request requires `pledge("network")`. The person who runs a script can also limit its permissions on the command line. A script started with `-P` options, as in `lus -Pfs:read=./data/* script.lus`, has only the permissions that those options grant. A script that you have not read can then reach only what you granted. [Permissions](/manual/permissions) describes every capability and how to narrow one to a single path or host.
+Without the `pledge` line, the program stops at `os.getenv` with the error `permission "env" denied for 'USER'`. Reading a file requires `pledge("fs:read")`. An HTTP request requires `pledge("network")`. The person who runs a script can also limit its permissions on the command line. A script started with `-P` options, as in `lus -Pfs:read=./data/* script.lus`, has only the permissions that those options grant. A script that you have not read can then reach only what you granted. [Permissions](/manual/permissions) describes every permission and how to narrow one to a single path or host.
 
 ## Where next
 

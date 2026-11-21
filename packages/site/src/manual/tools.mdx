@@ -94,7 +94,7 @@ Every diagnostic has a code that stays the same between releases, so a tool can 
 
 ### A pledge after the seal
 
-`pledge("seal")` freezes the [permissions](/manual/permissions) of a program, so a `pledge` that follows it grants nothing. `lus check` reports such a call. Without the warning, the operation that needs the permission fails later, far from the `pledge` that caused the failure.
+After `pledge("seal")`, the [permissions](/manual/permissions) of a program can no longer change, so a later `pledge` grants nothing. `lus check` reports such a call. Without the warning, the operation that needs the permission fails later, far from the `pledge` that caused the failure.
 
 ```lus
 pledge("fs")

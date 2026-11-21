@@ -22,7 +22,7 @@ local people = 3
 print(`Each of us pays $(bill / people)`)   --> Each of us pays 32.43
 ```
 
-`local bill = 97.29` creates a variable named `bill` that holds 97.29. The next line creates `people`. The text between backticks is a template. `$( )` inserts the result of a calculation into it. `print` writes the text to the terminal.
+`local bill = 97.29` creates a variable named `bill` that holds 97.29. The next line creates `people`. The text between backticks is a string. `$( )` inserts the result of a calculation into it. `print` writes the text to the terminal.
 
 Save the program as `bill.lus` and run it with `lus`. [Getting started](/manual/getting-started) shows how to install `lus`.
 
@@ -44,7 +44,7 @@ local price = 4.50   -- per cup
 ]]
 ```
 
-A comment that starts with `-->` shows what its line prints. `print` separates several values with a tab, which the comments show as two spaces.
+In the examples, a comment after `-->` shows what the line prints. `print` separates several values with a tab, which the comments show as two spaces.
 
 ```lus
 print(2 + 2)            --> 4
@@ -53,7 +53,7 @@ print("tea", 4.50)      --> tea  4.5
 
 ## Values and types
 
-A _value_ is a piece of data, such as the number `97.29`, the text `"tea"`, or `true`. Every value has a _type_. The type determines the operations that apply to the value. Numbers can be added and text can be searched. Comparing the text `"tea"` with `true` is an error, which Lus reports when the line runs.
+A _value_ is a piece of data, such as the number `97.29`, the text `"tea"`, or `true`. Every value has a _type_. The type determines the operations that apply to the value. Numbers can be added and text can be searched. Adding `"tea"` to `true` is an error, which Lus reports when the line runs.
 
 The type belongs to the value. A variable can hold a number at one point and text later.
 
@@ -68,14 +68,14 @@ print(winner)  --> nil
 
 ### Booleans
 
-The booleans are `true` and `false`. They are the answers to yes-or-no questions, such as whether a door is locked. Comparisons such as `age >= 18` produce booleans, as [Comparison](#comparison) shows.
+The booleans are `true` and `false`. A boolean records whether something is the case, such as whether a door is locked. Comparisons such as `age >= 18` produce booleans, as [Comparison](#comparison) shows.
 
 ```lus
 local door_locked = true
 print(door_locked)   --> true
 ```
 
-A condition in Lus accepts any value. `false` and `nil` count as false and are called _falsy_. Every other value counts as true and is called _truthy_. This includes `0` and the empty string `""`.
+When Lus tests a value, as an `if` statement does, `false` and `nil` count as false. They are called _falsy_. Every other value counts as true and is called _truthy_. This includes `0` and the empty string `""`.
 
 ### Numbers
 
@@ -142,11 +142,11 @@ A string cannot change after it is created. Functions that modify text, such as 
 
 ### Other types
 
-A _table_ holds many values, as a list or as named fields. A _function_ is code that a program can call. [Tables](#tables) and [Functions](#functions) describe them. [Enums](#enums), [coroutines](#coroutines), and [queries](#queries) are also types. A _vector_ holds raw bytes. A _userdata_ is an object from the runtime or from a C library, such as an open file.
+A _table_ holds many values, as a list or as named fields. A _function_ is code that a program can call, such as `print`. [Tables](#tables) and [Functions](#functions) describe them. [Enums](#enums), [coroutines](#coroutines), and [queries](#queries) are also types. A _vector_ holds raw bytes. A _userdata_ is an object from the runtime or from a C library, such as an open file.
 
 ## Variables
 
-A _variable_ is a name for a value. Variables keep values for later use. A good name also tells the reader what a value means.
+A _variable_ is a name for a value. Variables keep values for later use. A well-chosen name also makes the code easier to read.
 
 ### Local variables
 
@@ -160,7 +160,7 @@ visitors = visitors + 1
 print(visitors)          --> 2
 ```
 
-A declaration without a value leaves the variable `nil`. One statement can declare or assign several variables, with commas between the names and between the values. A name without a matching value gets `nil`.
+One statement can declare or assign several variables, with commas between the names and between the values. A name without a matching value gets `nil`.
 
 ```lus
 local width, height = 80, 24
@@ -214,7 +214,7 @@ The new variable enters scope after its own declaration. The `price` on the righ
 
 ### Global variables
 
-A _global variable_ is visible in every file of a program. The built-in functions are global variables, so `print` works in every file. Assigning to a name that has no `local` declaration creates a global variable. A global that was never assigned is `nil`.
+A _global variable_ is visible in every file of a program. `print` is a global variable, so it works in every file. Assigning to a name that has no `local` declaration creates a global variable. A global that was never assigned is `nil`.
 
 ```lus
 attempts = 1          -- no local declaration, so attempts is a global
@@ -224,7 +224,7 @@ print(retries)        --> nil
 
 Local variables are the better default. A local is only visible in its block, which makes it easy to find every place that changes it. Lus also reads and writes locals faster than globals. Globals are for the few values that the whole program shares.
 
-A misspelled name is also an undeclared name. The misspelling therefore creates a new global that holds `nil`. The program then continues with a wrong value. The `global` statement prevents this. It declares the globals that a file uses. After it, every other undeclared name in the block is an error.
+A misspelled name is also an undeclared name. Assigning to a misspelled name creates a new global. Reading a misspelled name gives `nil`. In both cases, the program continues with a wrong value. The `global` statement prevents this. It declares the globals that a file uses. After it, every other undeclared name in the block is an error.
 
 ```lus
 global print
@@ -234,7 +234,7 @@ attempts = attempts + 1
 print(attempts)       --> 1
 ```
 
-The built-in names are globals too, so the declaration includes `print`. `global attempts = 0` also gives the global a first value. If another part of the program has already defined `attempts`, this declaration stops the program with the error `global 'attempts' already defined`.
+The declaration includes `print` because `print` is a global. `global attempts = 0` also gives the global a first value. If another part of the program has already defined `attempts`, this declaration stops the program with the error `global 'attempts' already defined`.
 
 With these declarations, a misspelling is a _compile error_. Lus reports a compile error when it loads the file, before any statement runs.
 
@@ -244,8 +244,6 @@ global attempts = 0
 
 attemps = attempts + 1    -- compile error: variable 'attemps' not declared
 ```
-
-A file without a `global` statement treats every undeclared name as a global.
 
 ### Constants
 
@@ -266,7 +264,7 @@ A global can be constant too, as in `global VERSION <const> = "2.0"`. [Variable 
 
 ## Built-in functions
 
-A _function_ is a named piece of code. A program _calls_ a function by writing its name followed by parentheses. The values inside the parentheses are the _arguments_. Many functions return a value, called the _result_. `print` is one of many built-in functions.
+A _built-in function_ is a function that Lus provides, such as `print`. A program _calls_ a function by writing its name followed by parentheses. The values inside the parentheses are the _arguments_. Many functions return a value, called the _result_.
 
 `tonumber` converts text to a number. Input from a person or from a file is text, even when it contains digits, so a program converts it before it calculates.
 
@@ -300,7 +298,7 @@ The [API reference](/manual/api) lists every built-in function. In a terminal, `
 
 ## Operators
 
-An _operator_ combines one or two values into a new value. An _expression_ is anything that produces a value: a _literal_ (a value written directly in the code, such as `42` or `"tea"`), a variable, a function call, or operators applied to smaller expressions.
+An _operator_ combines one or two values into a new value. An _expression_ is any code that produces a value. A _literal_ is a value written directly in the code, such as `42` or `"tea"`. Literals, variables, and function calls are expressions. Operators applied to smaller expressions form a larger expression.
 
 ### Arithmetic
 
@@ -339,13 +337,7 @@ print(-7 % 2)           --> 1
 print(seconds % 2)      --> 0
 ```
 
-The largest integer is `math.maxinteger`. A result past it wraps around to the most negative integer. A calculation that can grow that large needs bigints.
-
-```lus
-print(math.maxinteger)        --> 9223372036854775807
-print(math.maxinteger + 1)    --> -9223372036854775808
-print(2n ^ 63)                --> 9223372036854775808
-```
+The largest integer is `math.maxinteger`. [Numbers](#numbers) shows what happens to a result past it.
 
 Dividing an integer by zero with `//` or `%` raises an error. Float division by zero produces an infinity, which prints as `inf` or `-inf`.
 
@@ -361,7 +353,7 @@ print(7n // 2)              --> 3
 
 #### Decimals
 
-A decimal computes in base 10, as a person does on paper. Its sums, differences, and products are exact. An operation between a decimal and an integer or a bigint produces a decimal. A division of decimals keeps up to 34 significant digits and rounds the rest.
+Decimal arithmetic is in base 10. Sums, differences, and products of decimals are exact. An operation between a decimal and an integer or a bigint produces a decimal. A division of decimals keeps up to 34 significant digits and rounds the rest.
 
 ```lus
 local price = 19.99d
@@ -372,7 +364,7 @@ print(1d / 3)           --> 0.3333333333333333333333333333333333
 
 #### Mixed subtypes
 
-The table gives the subtype of the result of `+`, `-`, `*`, `//`, and `%` for every pair of operand subtypes.
+The subtype of the result of `+`, `-`, `*`, `//`, and `%` depends on the subtypes of both operands.
 
 | | integer | float | bigint | decimal |
 | --- | --- | --- | --- | --- |
@@ -383,7 +375,7 @@ The table gives the subtype of the result of `+`, `-`, `*`, `//`, and `%` for ev
 
 `/` follows the same table, except that it produces a float when no operand is a decimal. `^` produces a float when both operands are integers or floats. A bigint or a decimal raised to a positive whole number stays exact. For example, `2n ^ 100` is a bigint. `1.5d ^ 2` is the decimal `2.25`.
 
-A decimal is exact and a float is approximate. An operation between the two is an error. The program converts one side first, depending on whether it needs an exact or an approximate result. `decimal(x)` converts a number to a decimal. `tonumber(d)` converts a decimal to a float.
+An operation between a decimal and a float is an error. The program converts one side first, depending on whether it needs an exact or an approximate result. `decimal(x)` converts a number to a decimal. `tonumber(d)` converts a decimal to a float.
 
 ```lus
 local price = 19.99d
@@ -457,7 +449,7 @@ print(false and "unused")        --> false
 print(1 and 2)                   --> 2
 ```
 
-`and` and `or` evaluate the right operand only when the left operand does not already decide the result. A check on the left can therefore protect the expression on the right.
+`and` evaluates its right operand only when the left operand is truthy. `or` evaluates its right operand only when the left operand is falsy. A program puts a check on the left so that the expression on the right runs only when it is valid.
 
 ```lus
 local divisor = 0
@@ -476,7 +468,7 @@ print(size)                      --> 10
 
 The default also replaces `false`. A setting where `false` is a valid choice needs an explicit comparison with `nil`.
 
-Together, `and` and `or` choose between two values. `condition and a or b` is `a` when the condition is truthy. Otherwise it is `b`. This only works when `a` is truthy. A falsy `a` makes the expression produce `b`.
+The expression `condition and a or b` is `a` when the condition is truthy. Otherwise it is `b`. This only works when `a` is truthy. A falsy `a` makes the expression produce `b`.
 
 ```lus
 local stock = 0
@@ -509,7 +501,7 @@ Before a list, `#` produces the number of items, as [Lists](#lists) shows.
 
 ### Bitwise operators
 
-The bitwise operators work on the 64 bits of an integer. They store several yes-or-no settings in one number. They also read and write binary formats.
+The bitwise operators work on the 64 bits of an integer. Programs use them to store several yes-or-no settings in one number. Programs also use them to read and write binary formats.
 
 | Operator | Meaning |
 | --- | --- |
@@ -612,7 +604,7 @@ end
 
 `tonumber` returns `nil` for text that is not a number. The first branch therefore runs only with a usable `n`. The variable exists in every branch of the `if` and ends at its `end`.
 
-A condition can declare several variables, which is useful with a function that returns several values. The condition is true only if every declared variable is truthy. `string.find` searches a string. It returns the positions where the match starts and ends, or `nil` if there is no match.
+A condition can declare several variables when its expression produces several values. The condition is true only if every declared variable is truthy. `string.find` searches a string. It returns two values, which are the positions where the match starts and ends. It returns `nil` if there is no match.
 
 ```lus
 local line = "level=warn"
@@ -675,16 +667,20 @@ print(digits)   --> 4
 
 With `n = 0`, the body runs once and the count is 1.
 
-The condition after `until` can use the local variables of the body. In this example, the body records whether a connection attempt succeeded. The condition reads the result.
+The condition after `until` can use the local variables of the body. This loop computes the square root of 2. Each pass improves the estimate. The loop ends when a pass changes the estimate by less than a millionth. `math.abs` returns a number without its sign.
 
 ```lus
-local attempts = 0
+local n = 2
+local estimate = n
+local passes = 0
 
 repeat
-    attempts = attempts + 1
-    local connected = attempts >= 3   -- stands for a real connection attempt
-until connected
-print(attempts)   --> 3
+    local better = (estimate + n / estimate) / 2
+    local change = math.abs(better - estimate)
+    estimate = better
+    passes = passes + 1
+until change < 0.000001
+print(estimate, passes)   --> 1.414213562373095  5
 ```
 
 ### Numeric `for` loops
@@ -765,11 +761,11 @@ print("no pair found")
 ::found::
 ```
 
-A `goto` can jump to a label in its own block or in an enclosing block. It cannot jump into the scope of a local variable, so labels are usually at the end of a block. Loops, `break`, and `continue` are clearer in most cases. `goto` is for the remaining cases.
+A `goto` can jump to a label in its own block or in an enclosing block. It cannot jump into the scope of a local variable, so labels are usually at the end of a block. Loops, `break`, and `continue` are clearer in most cases.
 
 ## Functions
 
-A _function_ is a piece of code with a name. A program can call it many times with different inputs. A calculation in a function is written once. Its name says what it does.
+A program declares its own functions for code that it needs in several places. The code is written once and called many times with different inputs. A well-chosen function name also makes each call easy to read.
 
 ### Declaring and calling
 
@@ -816,7 +812,7 @@ greet("Lin", 2)   --> Hello, Lin!
                   --> Hello, Lin!
 ```
 
-`or` also replaces `false`. A parameter for which `false` is a valid value needs `if times == nil then` before the default is assigned.
+A parameter for which `false` is a valid value needs the test `if times == nil then`, as [Logical operators](#logical-operators) explains.
 
 ### Multiple results
 
@@ -873,7 +869,7 @@ print(value, tries)  --> connected  3
 
 The expression `function(attempt) ... end` creates a function without a name. A declaration such as `local function f() end` creates the same kind of value and stores it in the variable `f`.
 
-### Functions that remember local variables
+### Functions that keep local variables
 
 A function can use the local variables that are in scope where it is written. It keeps them after their block has ended. This gives a function private state that no other code can reach.
 
@@ -947,13 +943,15 @@ print(factorial(20))  --> 2432902008176640000
 
 ## Tables
 
-A _table_ is a collection of values. Each value is stored under a _key_. A program uses the key to read the value again. A table whose keys are the integers 1, 2, 3, and up is a list. A table whose keys are names is a record. A table whose keys are data, such as words or identifiers, is a dictionary.
+A _table_ is a collection of values. Each value is stored under a _key_. A program uses the key to read the value again.
 
-The table is the collection type of Lus. Lists, records, dictionaries, objects, and modules are all tables. The same syntax and the same library functions work on all of them.
+The table is the collection type of Lus. [Lists](#lists), [records](#records), [dictionaries](#dictionaries), objects, and modules are all tables. The same syntax and the same library functions work on all of them.
 
 ### Creating tables
 
 Curly braces create a table. The values between the braces are separated by commas. They get the keys 1, 2, 3, and up, in the order in which they are written. A value written as `name = value` is stored under the string key `"name"`.
+
+Square brackets after a table contain a key. `primes[1]` is the value that the table `primes` stores under the key 1. `point.x` is a short form of `point["x"]`, as [Records](#records) explains.
 
 ```lus
 local empty = {}
@@ -964,9 +962,7 @@ print(primes[1], primes[4])  --> 2  7
 print(point.x, point.y)      --> 10  20
 ```
 
-`primes[1]` is the first item of the list. `point.x` is the value under the key `"x"`, as [Records](#records) explains.
-
-Square brackets after a table contain a key. `stock["apples"]` is the value that the table `stock` stores under the key `"apples"`. An assignment to `stock["apples"]` stores a new value under that key. A key that is not in the table has the value `nil`. Assigning `nil` to a key removes the key from the table.
+An assignment to `stock["apples"]` stores a value under the key `"apples"`. A key that is not in the table has the value `nil`. Assigning `nil` to a key removes the key from the table.
 
 ```lus
 local stock = {}
@@ -1165,7 +1161,7 @@ account:deposit(50)
 print(account:report())  --> balance: 150
 ```
 
-`account:deposit(50)` is the same as `account.deposit(account, 50)`. With the colon, the table is written once. This is shorter when the table is the result of a long expression, as in `bank.accounts[id]:deposit(50)`.
+With the colon, the table is written once. This is shorter when the table is the result of a long expression, as in `bank.accounts[id]:deposit(50)`.
 
 These methods are fields of one table. A program with many accounts stores the methods once and shares them among all the accounts with a metatable, as [Metatables and objects](/manual/guide#metatables-and-objects) explains.
 
@@ -1388,7 +1384,7 @@ print(free_seats(), free_seats())  --> 3  nil
 
 The generic `for` loop calls its [iterator](#iteration) before each pass. It assigns the results of the call to the loop variables. The loop ends when the first result is `nil`. An iterator therefore returns the values of the next item on each call. When no item is left, it returns `nil`.
 
-A program writes its own iterator when several loops go over data in the same way, such as a dictionary in sorted order. Each of those loops is then as short as a loop over `ipairs`. An iterator is usually created by another function, which returns it. The iterator stores its position in a local variable of that function, which it [keeps between calls](/manual/guide#functions-that-remember-local-variables).
+A program writes its own iterator when several loops go over data in the same way, such as a dictionary in sorted order. Each of those loops is then as short as a loop over `ipairs`. An iterator is usually created by another function, which returns it. The iterator stores its position in a local variable of that function, which it [keeps between calls](/manual/guide#functions-that-keep-local-variables).
 
 The following `sorted_pairs` function produces the keys of a dictionary in sorted order, with their values.
 
@@ -1450,9 +1446,9 @@ Several library functions return iterators. [`string.gmatch`](/manual/api#string
 
 ## Strings and patterns
 
-Many programs work with text. They clean input that a person typed, extract the fields of a log line, or build a report. The functions of the [`string`](/manual/api#string-library) library measure, cut, convert, search, and replace text. The search functions take a _pattern_, which is a string that describes the text to find.
+Many programs work with text. They clean input that a person typed, extract the fields of a log line, or build a report. The functions of the [`string`](/manual/api#string-library) library measure, cut, convert, search, and replace text. The functions that search and replace take a [pattern](#patterns).
 
-Every function of the library can be called as a [method](#methods) of a string. `name:upper()` is the same as `string.upper(name)`. A string literal must be in parentheses for a method call, as in `("abc"):upper()`.
+Every function whose first argument is a string can be called as a [method](#methods) of that string. `name:upper()` is the same as `string.upper(name)`. A string literal must be in parentheses for a method call, as in `("abc"):upper()`.
 
 ### Length and parts
 
@@ -1551,7 +1547,7 @@ print(string.char(72, 105))      --> Hi
 print(string.char(("a"):byte() + 3))  --> d
 ```
 
-### Why patterns
+### Patterns
 
 A program often searches for text of a certain form, such as a number, a date, a word followed by a colon, or everything between two quotes. The exact characters differ from one occurrence to the next. A _pattern_ is a string that describes such a form. Text that has the form _matches_ the pattern. Four functions take a pattern:
 
@@ -1560,7 +1556,7 @@ A program often searches for text of a certain form, such as a number, a date, a
 - [`string.gmatch`](/manual/api#string.gmatch) iterates over every match.
 - [`string.gsub`](/manual/api#string.gsub) replaces every match.
 
-One pattern does the work of a loop over the characters of the text. The following call extracts the time, the level, and the message of a log entry.
+A pattern replaces a loop over the characters. The following call extracts the time, the level, and the message of a log entry.
 
 ```lus
 local entry = "12:30:07 ERROR connection lost"
@@ -1581,7 +1577,7 @@ print(("status: ready"):match("ready"))  --> ready
 print(("status: ready"):match("done"))   --> nil
 ```
 
-Matching is case sensitive, so the pattern `Ready` does not match the text `ready`.
+Matching is case sensitive, so the pattern `Ready` does not match the text `ready`. To match without regard to case, [convert the text to lower case](#case-repetition-and-reversal) first.
 
 The punctuation characters `( ) . % + - * ? [ ] ^ $` have special meanings in a pattern. After a `%`, such a character matches itself, so `%.` matches a dot.
 
@@ -1711,7 +1707,7 @@ print(tonumber(month) + 1)               --> 4
 print(("2026-3-4"):match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$"))  --> nil
 ```
 
-If the pattern does not match, `string.match` returns one `nil`, so every variable of the assignment is `nil`. A [condition that declares variables](/manual/guide#conditions-that-declare-variables) tests the match and names the captures in one statement. The following example reads the name and the value of an HTTP header.
+When the pattern does not match, every variable of the assignment is `nil`. A [condition that declares variables](/manual/guide#conditions-that-declare-variables) tests the match and names the captures in one statement. The following example reads the name and the value of an HTTP header.
 
 ```lus
 local line = "Content-Length: 348"
@@ -1740,7 +1736,7 @@ print(([[say "it's fine" now]]):match("([\"'])(.-)%1")) --> "  it's fine
 
 ### Finding with `string.find`
 
-[`string.find`](/manual/api#string.find) returns the positions of the first and the last character of the first match. If the string has no match, it returns `nil`. A program uses it to test whether a string contains a match, or to learn where the match is.
+A program calls [`string.find`](/manual/api#string.find) to test whether a string contains a match, or to learn where the match is. Its results are the [positions where the first match starts and ends](#conditions-that-declare-variables).
 
 ```lus
 local s = "error at line 42"
@@ -1753,9 +1749,7 @@ if s:find("^error") then
 end
 ```
 
-A third argument is the position where the search starts. The [`while` loop](#while-loops) that counts commas uses it.
-
-To search for literal text that contains special characters, pass `true` as the fourth argument. `string.find` then searches for the second argument as plain text. The call must also have the third argument. A third argument of `1` searches from the start.
+To search for literal text that contains special characters, pass `true` as the fourth argument. `string.find` then searches for the second argument as plain text. The call must also have the third argument, which is the [position where the search starts](#while-loops). A third argument of `1` searches from the start.
 
 ```lus
 local price = "total (USD): 3.50"
@@ -1769,7 +1763,7 @@ In the last line, the dot is a pattern, so it matches the first character of the
 
 ### Extracting with `string.match`
 
-[`string.match`](/manual/api#string.match) returns the captures of the first match. If the pattern has no captures, it returns the whole match. If the pattern does not match, it returns `nil`. Like `string.find`, it accepts a starting position as its third argument.
+A program calls [`string.match`](/manual/api#string.match) when it needs parts of a text. Its results are the [captures](#captures) of the first match. Like `string.find`, it accepts a starting position as its third argument.
 
 The following example extracts the parts of a web address. The scheme is one or more letters. The host is everything up to the next slash. The path is the rest.
 
@@ -1783,7 +1777,7 @@ print(scheme, host, path)  --> https  lus.dev  /manual/guide
 
 [`string.gmatch`](/manual/api#string.gmatch) returns an [iterator](/manual/guide#iteration) that produces the matches of a pattern one after another, from left to right. A `for` loop over the iterator runs once for each match. The loop variables hold the captures. If the pattern has no captures, the loop variable holds the whole match.
 
-The pattern `%S+` matches one or more characters that are not whitespace. The following loop uses it to split a string into words, whatever the number of spaces between them.
+The following loop uses the pattern `%S+` to split a string into words, whatever the number of spaces between them.
 
 ```lus
 local words = {}
@@ -1851,7 +1845,7 @@ print(("2026-03-04"):gsub("(%d+)%-(%d+)%-(%d+)", "%3/%2/%1"))  --> 04/03/2026  1
 print(("ada lin"):gsub("%a+", "<%0>"))           --> <ada> <lin>  2
 ```
 
-With a replacement table, `string.gsub` uses each match as a key of the table. If the pattern has captures, the key is the first capture. The value under that key replaces the match. The following call fills a template that has placeholders of the form `$name`. `$` is a special character, so the pattern contains `%$`.
+With a replacement table, `string.gsub` uses each match as a key of the table. If the pattern has captures, the key is the first capture. The value under that key replaces the match. The following call fills a template that has placeholders of the form `$name`. `$` is a special character, so the pattern contains `%$`. If the table has no value for a match, the match stays in the result unchanged.
 
 ```lus
 local template = "Dear $name, your order $id ships on $day."
@@ -1861,7 +1855,7 @@ local letter = template:gsub("%$(%w+)", values)
 print(letter)  --> Dear Ada, your order 1042 ships on Friday.
 ```
 
-With a replacement function, `string.gsub` calls the function with the captures of each match. The result of the function replaces the match. A function is for replacements that the program must compute. The following example fills a template of the same kind and marks each placeholder that has no value.
+With a replacement function, `string.gsub` calls the function with the captures of each match. The result of the function replaces the match. If the function returns `nil` or `false`, the match stays in the result unchanged. A function is for replacements that the program must compute. The following example fills a template of the same kind and marks each placeholder that has no value.
 
 ```lus
 local values = { name = "Ada" }
@@ -1882,16 +1876,9 @@ end)
 print(decoded)  --> tea & milk?
 ```
 
-If the table has no value for a match, the match stays in the result unchanged. The same applies if the function returns `nil` or `false`.
-
 A fourth argument is the maximum number of replacements, so `s:gsub(" ", "", 1)` removes only the first space.
 
-`gsub` returns two results. A call to `gsub` that is the last argument of another call therefore passes both, as [Multiple results](#multiple-results) explains. Parentheses around the call keep only the string.
-
-```lus
-print(("a-b"):gsub("-", "+"))    --> a+b  1
-print((("a-b"):gsub("-", "+")))  --> a+b
-```
+[Parentheses](#multiple-results) around a call to `gsub` keep only the string.
 
 ### Balanced pairs and word boundaries
 
@@ -1923,7 +1910,7 @@ The last line capitalizes each word. The pattern matches a lower case letter at 
 
 ### Escaping
 
-A `%` before a punctuation character _escapes_ it, so that the character matches itself. `%.` matches a dot. `%(` matches an opening parenthesis. `%%` matches a percent sign. A `%` is also allowed before a punctuation character that has no special meaning. A safe rule is therefore to escape every punctuation character that must match itself.
+A `%` before a [special character](#literal-text) _escapes_ it. A `%` is also allowed before a punctuation character that has no special meaning. A safe rule is therefore to escape every punctuation character that must match itself.
 
 ```lus
 print(("version 2.10.3"):match("%d+%.%d+%.%d+"))   --> 2.10.3
@@ -1946,21 +1933,6 @@ print(("open report (v1.2).txt now"):match(escape(name)))  --> report (v1.2).txt
 A search for the text alone needs no escaping. The [fourth argument](#finding-with-stringfind) of `string.find` makes the search literal.
 
 ### Worked examples
-
-#### A log line
-
-This example extracts the five fields of a log line. The date and the time each consist of characters that are not whitespace. The level consists of upper case letters. The source is a word before a colon. The message is the rest of the line. The last statement extracts the attempt number from the message.
-
-```lus
-local line = "2026-03-04 12:30:07 ERROR db: connection lost (attempt 3)"
-
-local date, time, level, source, message =
-    line:match("^(%S+) (%S+) (%u+) (%w+): (.*)$")
-print(date, time, level)  --> 2026-03-04  12:30:07  ERROR
-print(source, message)    --> db  connection lost (attempt 3)
-
-print(tonumber(message:match("attempt (%d+)")))  --> 3
-```
 
 #### Numbers in text
 
@@ -2033,13 +2005,11 @@ print(params.page, params.sort, params.desc)  --> 2  name  nil
 
 ### The limits of patterns
 
-Patterns are a deliberately small notation. These tasks need more than one pattern, or a different tool.
+Patterns have no notation for four tasks. A program does each of them in another way.
 
 - A pattern matches one sequence of items, so it cannot express a choice between two words, such as `cat` or `dog`. The program tries one pattern after the other. A set expresses a choice between single characters, as in `[Cc]at`.
 - A repetition character applies to one character, class, or set. To repeat a sequence such as `ab`, or a capture, the program uses a loop.
 - A count such as "exactly four digits" is written by repeating the item, as in `%d%d%d%d`. For larger counts, [`string.rep`](/manual/api#string.rep) builds the pattern: `("%d"):rep(4)`.
-- To match without regard to case, convert the text with `string.lower` first, or use sets such as `[Yy]es`.
-- The classes `%a`, `%l`, `%u`, and `%w` contain ASCII letters only. A set such as `[%aéèà]` adds other letters.
 - Nested formats, such as JSON or the source code of a program, need a parser. `%b` matches only one kind of balanced pair.
 
 The following function accepts a date in two notations. It tries one pattern for each notation and uses the first pattern that matches.
@@ -2061,7 +2031,7 @@ print(parse_date("04/03/2026"))  --> 2026  3  4
 print(parse_date("March 4"))     --> nil
 ```
 
-The standard library has parsers for the common data formats. They handle quoting, escapes, and nesting correctly. [`fromjson`](/manual/api#fromjson) reads JSON. [`fromcsv`](/manual/api#fromcsv) reads CSV. [Data formats](/manual/data) describes both. Use these functions for JSON and CSV.
+The standard library has parsers for the common data formats. They handle quoting, escapes, and nesting correctly. [`fromjson`](/manual/api#fromjson) reads JSON. [`fromcsv`](/manual/api#fromcsv) reads CSV. [Data formats](/manual/data) describes both.
 
 ### Text and bytes
 
@@ -2069,7 +2039,7 @@ A string is text. It always consists of whole Unicode characters. Every string f
 
 ## Errors
 
-An _error_ stops work that cannot continue. Typical causes are a missing file, an argument of the wrong type, or malformed input. Lus raises an error when an operation is invalid, such as adding a number to `nil`. A program raises an error by calling [`error`](/manual/api#error). An error ends the current function, then the function that called it, then the caller of that function. This continues until a `catch` captures the error.
+A program raises an _error_ when it cannot continue. Typical causes are a missing file, an argument of the wrong type, or malformed input. Lus itself raises an error for an invalid operation, such as adding a number to `nil`. Code raises an error by calling [`error`](/manual/api#error). An error ends the current function, then the function that called it, then the caller of that function. This continues until a `catch` captures the error.
 
 ### Raising errors
 
@@ -2217,7 +2187,7 @@ local ok, err = catch[as_table] error({ code = "timeout" })
 print(ok, err.code)   --> false  timeout
 ```
 
-Every `catch[as_table]` produces an error object with a `code` field, whatever raised the error. Lus calls the handler only when the expression raises an error. When the expression succeeds, `catch` produces `true` and the values of the expression.
+Every `catch[as_table]` produces an error object with a `code` field, whatever raised the error.
 
 ### The catch statement
 
@@ -2261,7 +2231,7 @@ A do expression keeps the computation of a value at the place where the value is
 
 ### Constants computed by statements
 
-A [`<const>`](/manual/guide#constants) variable receives its value in its declaration. When the value depends on an `if` statement, a program usually declares the variable first and assigns it in a branch. Such a variable cannot be `<const>`. The following code decides whether a program shows a progress bar. Any later statement can reassign `show_progress` by mistake.
+A [`<const>`](/manual/guide#constants) variable receives its value in its declaration. When the value depends on an `if` statement, a program usually declares the variable first and assigns it in a branch. Such a variable cannot be `<const>`. The following code computes whether a program shows a progress bar. Any later statement can reassign `show_progress` by mistake.
 
 ```lus
 local mode = "quiet"
@@ -2347,7 +2317,7 @@ The same search with a plain loop needs a variable declared before the loop, an 
 
 `catch` applies to one expression. That is enough when the code that can raise an error is one call, as in `catch fromjson(text)`. Often several statements can raise an error. The program handles an error from any of them in the same way. Loading settings takes three steps that can each raise an error: parsing the text, checking the type of one field, and reading another field. With `catch f()`, the program would need a new function that holds the three steps and is called once.
 
-`catch do ... end` captures an error from any statement in the block. When the block succeeds, `catch` produces `true` followed by the values that `provide` lists. In the following function, `math.type` returns `"integer"` only for a number whose subtype is integer.
+`catch do ... end` captures an error from any statement in the block. When the block succeeds, `catch` produces `true` followed by the values that `provide` lists. The following function loads a port and a host count from JSON text.
 
 ```lus
 local function load_settings(text)
@@ -2367,11 +2337,11 @@ load_settings('{"port": ')
 --> false  JSON parse error at position 10: unexpected end of input  nil
 ```
 
-The first call succeeds. The second call raises an error in the type check. The third call raises an error in `fromjson`. The same `catch` captures both errors. The statements in the block use the parameter `text` directly. A separate function would need `text` as an argument.
+The first call succeeds. The second call raises an error in the type check, because `math.type` returns `"integer"` only for a number whose subtype is integer. The third call raises an error in `fromjson`. The same `catch` captures both errors. The statements in the block use the parameter `text` directly. A separate function would need `text` as an argument.
 
 ### Fields in table constructors
 
-The value of a field in a table constructor can be a do expression. The statements that compute the value then stay in the field. In the following constructor, the field `missing` is the first item of an order that is out of stock.
+The value of a field in a table constructor can be a do expression. The constructor then contains the statements that compute the field. In the following constructor, the field `missing` is the first item of an order that is out of stock.
 
 ```lus
 local stock = { tea = 10, mug = 0, spoon = 4 }
@@ -2563,7 +2533,7 @@ print(`starting at $origin`)   --> starting at (0, 0)
 
 ### Callable tables
 
-With the `__call` metamethod, a program can call a table like a function. Lus calls the metamethod with the table, followed by the arguments of the call. A callable table is useful for an operation that has settings. Code that expects a function can call the table. The settings are fields, so the program can read and change them. The local variables of a [function that remembers them](#functions-that-remember-local-variables) are only visible inside that function.
+With the `__call` metamethod, a program can call a table like a function. Lus calls the metamethod with the table, followed by the arguments of the call. A callable table is useful for an operation that has settings. Code that expects a function can call the table. A [function with private local variables](#functions-that-keep-local-variables) hides its settings. A callable table exposes them as fields, so the program can read and change them.
 
 The following code checks names against a rule. The rule is called like a function. Its minimum length is a field, which the program changes later.
 
@@ -2600,11 +2570,11 @@ print(count_valid(names, valid_name))           --> 4
 
 Standard library functions that take a function, such as `table.filter`, raise an error for a callable table. Functions that the program defines, such as `count_valid`, accept one.
 
-### Resources that close themselves
+### Closing resources automatically
 
 A program that opens a file, takes a lock, or starts a transaction must release it later. The release must happen however the code that uses the resource ends: at its normal end, at an early `return`, at a `break`, or at an error. A release that is written by hand for each case is easy to forget.
 
-The `<close>` attribute makes the release automatic. When the scope of a `<close>` variable ends for any reason, Lus calls the `__close` metamethod of its value. Files opened with `io.open` have this metamethod. A file in a `<close>` variable is therefore closed when its block ends, as [`io`](#io) shows.
+The `<close>` attribute makes the release automatic. When the scope of a `<close>` variable ends for any reason, Lus calls the `__close` metamethod of its value. `io.open` opens a file and returns a value that reads and writes it. This value has a `__close` metamethod. A file in a `<close>` variable is therefore closed when its block ends, as [`io`](#io) shows.
 
 A table with a `__close` metamethod is released in the same way. Lus calls `__close` with two arguments. The first is the value of the variable. The second is the error object if an error ends the block. Otherwise it is `nil`. The following transaction commits when its block ends normally. It rolls back when an error ends the block.
 
@@ -2696,7 +2666,7 @@ For `savings.deposit`, Lus looks in the object first, then in `Savings`, then in
 
 Lus frees a table when the program can no longer reach it. Two metatable fields change how Lus frees a table or what it holds. Few programs need them.
 
-The `__gc` metamethod is a _finalizer_. Lus calls it with the table some time after the table becomes unreachable. A finalizer releases a resource that the table owns, such as an open connection, if the program has not released it. The time of the call is unspecified. A resource that must be released at a known point belongs in a [`<close>` variable](#resources-that-close-themselves).
+The `__gc` metamethod is a _finalizer_. Lus calls it with the table some time after the table becomes unreachable. A finalizer releases a resource that the table owns, such as an open connection, if the program has not released it. The time of the call is unspecified. A resource that must be released at a known point belongs in a [`<close>` variable](#closing-resources-automatically).
 
 Lus keeps every key and value of a table in memory while the table is reachable. A cache should hold a value only while another part of the program uses it. The `__mode` field makes the keys or the values of a table _weak_. Lus frees a weak key or value when nothing else refers to it. It then removes the entry from the table. `__mode` is `"k"` for weak keys, `"v"` for weak values, or `"kv"` for both. [`collectgarbage`](/manual/api#collectgarbage) frees unreachable values immediately. The following cache loses the entry that only the cache refers to.
 
@@ -2715,7 +2685,7 @@ The variable `report` still refers to the first table, so its cache entry stays.
 
 ## Variable attributes
 
-[`<const>`](#constants) and [`<close>`](#resources-that-close-themselves) are built-in attributes. A program can also define its own attributes, which check or convert every value assigned to a variable. The `<group>` attribute declares several local variables under one name.
+[`<const>`](#constants) and [`<close>`](#closing-resources-automatically) are built-in attributes. A program can also define its own attributes, which check or convert every value assigned to a variable. The `<group>` attribute declares several local variables under one name.
 
 ### Runtime attributes
 
@@ -2836,7 +2806,7 @@ print(message)   --> count must be a number, got a string
 print(count)     --> 1
 ```
 
-`only "number"` is a call of `only` with one string argument, so it [omits the parentheses](#declaring-and-calling). A call with several arguments keeps them, as in `<clamped(0, 10)>`. Lus evaluates the expression once, when the variable is declared.
+`only "number"` is a call of `only` with one string argument, so it [omits the parentheses](#declaring-and-calling). Lus evaluates the expression once, when the variable is declared.
 
 ### Chained attributes
 
@@ -2856,17 +2826,15 @@ volume = -3
 print(volume)   --> 0
 ```
 
-`only "number"` comes first, so `clamped` only receives numbers, which `math.max` and `math.min` can compare.
+`only "number"` comes first, so `clamped` only receives numbers, which `math.max` and `math.min` can compare. The call `clamped(0, 10)` has two arguments, so it keeps its parentheses.
 
 ### Rules for runtime attributes
 
-The following rules determine when Lus calls an attribute and what it stores.
+Lus calls the attribute when the variable is initialized and at every assignment to it in the function that declares it. An assignment inside a nested function stores the value directly, with no call of the attribute. An assignment of `nil` also stores `nil` directly, so an attribute never receives `nil`.
 
-- Lus calls the attribute when the variable is initialized and at every assignment to it in the function that declares it. An assignment inside a nested function stores the value directly, with no call of the attribute.
-- An assignment of `nil` also stores `nil` directly. An attribute therefore never receives `nil`.
-- A `nil` result keeps the value. Any other result, including `false`, replaces it.
-- When an attribute raises an error, the variable keeps its previous value.
-- A runtime attribute is allowed in a `local` statement that declares one variable. `<const>` and `<close>` can appear in the same list. They must come first, as in `local limit <const, only "number"> = 10`.
+A result of `false` replaces the assigned value, as any result other than `nil` does.
+
+A runtime attribute is allowed in a `local` statement that declares one variable. `<const>` and `<close>` can appear in the same list. They must come first, as in `local limit <const, only "number"> = 10`.
 
 ### Local groups
 
@@ -2928,6 +2896,8 @@ pos = start
 print(pos.x, pos.y)   --> 0  0
 ```
 
+A group can also initialize a new group. `local backup <group> = stats` declares `backup` with the same fields and the current values of `stats`.
+
 A field with the `<const>` attribute cannot be reassigned. A field with the `<group>` attribute is a nested group with its own fields. The following group describes a moving body. As separate local variables, its values would need five names such as `body_position_x`.
 
 ```lus
@@ -2944,12 +2914,11 @@ end
 print(body.position.x, body.position.y)   --> 3  9
 ```
 
-A group differs from a table in four ways.
+A group differs from a table in three ways.
 
 - The declaration fixes the fields. A read or write of any other field, such as `stats.average`, is a compile error.
 - A group is a set of variables, so it cannot be passed to a function, returned, or stored in a table. `print(stats)` is a compile error. A program passes or returns the fields, as `centroid` does in its `return`.
 - A group is always local. A global declared with `<group>` is an error.
-- A group can be copied into a new group. `local backup <group> = stats` declares `backup` with the same fields and the current values of `stats`.
 
 A table is the right choice when the values must leave the function, when fields are added later, or when the program iterates over the fields.
 
@@ -3002,7 +2971,7 @@ print(ok)                          --> false
 
 ### Enums as table keys
 
-A member can be a table key. A table with members as keys holds data for each choice. `tostring` converts a member to `enum:` followed by an address, so a program prints a member by reading its name from such a table.
+A member can be a table key. A table with members as keys holds data for each choice. `print` and `tostring` show a member as `enum:` followed by an address, so a program prints a member by reading its name from such a table.
 
 ```lus nocheck
 local names = {
@@ -3017,12 +2986,6 @@ local function log(level, message)
 end
 
 log(Level.warning, "disk almost full")   --> [WARN] disk almost full
-```
-
-`print` shows a member as an address, which differs from run to run.
-
-```lus nocheck
-print(Level.info)   --> enum: 0x0000010303c090
 ```
 
 ### Positions
@@ -3041,9 +3004,9 @@ print(restored == Level.warning)   --> true
 
 A _permission_ is the right to perform one kind of operation outside the program, such as reading files. A Lus script starts with no permissions. It cannot read or write files, open network connections, run other programs, or read environment variables. The function [`pledge`](/manual/api#pledge) requests a permission.
 
-This default limits the damage that a mistake or a third-party module can cause. Consider a script that pledges to read `./data` and then [seals](#rejecting-and-sealing) its permissions. A wrong path in that script cannot delete a home directory. A module that the script loads cannot open a network connection. The `pledge` calls of a program are also a short list of everything the program can touch, which a reader finds with a search. The person who runs a script can also limit its permissions from the command line.
+This default limits the damage that a mistake or a third-party module can cause. Consider a script that pledges to read `./data` and then [seals](#rejecting-and-sealing) its permissions. A wrong path in that script cannot delete a home directory. A module that the script loads cannot open a network connection. A search for `pledge` finds every kind of access the program has. The person who runs a script can also limit its permissions from the command line.
 
-### Asking with `pledge`
+### Requesting permissions with `pledge`
 
 An operation raises an error when the program does not hold the permission it needs. `io.open` opens a file. The following script, saved as `report.lus`, opens a file without the permission to read it.
 
@@ -3127,7 +3090,7 @@ local granted = catch pledge("exec")
 print(granted and "granted" or "refused for good")   --> refused for good
 ```
 
-The name `"seal"` freezes the set of permissions. After a seal, every `pledge` returns `false`. The program keeps exactly the permissions it held when it sealed. A server typically pledges the permissions it needs and seals before it accepts its first connection.
+After `pledge("seal")`, the set of permissions cannot change. Every later `pledge` returns `false`. The program keeps exactly the permissions it held when it sealed. A server typically pledges the permissions it needs and seals before it accepts its first connection.
 
 ```lus
 pledge("fs:read", "network:tcp", "seal")
@@ -3148,7 +3111,7 @@ When the command line grants at least one permission, those grants are the limit
 
 A command line that only rejects, such as `lus -P~exec script.lus`, sets no limit. The script may pledge anything except the rejected permissions.
 
-[Permissions](/manual/permissions) is the complete reference. It lists every permission and the functions that check it. It also gives the matching rules for paths and hosts. It describes how rejection, sealing, the command line, and embedding hosts interact.
+[Permissions](/manual/permissions) lists every permission, the functions that check it, and the matching rules for paths and hosts.
 
 ## Coroutines
 
@@ -3158,9 +3121,7 @@ Coroutines have three uses in Lus:
 
 - A [generator](#generators) is a coroutine that produces a sequence of values one at a time.
 - A coroutine can hold a task that needs input at several points, such as a conversation. It keeps its place between inputs.
-- A _detached coroutine_ lets one program wait for many things at once, such as many network connections. Each task is still written as sequential code.
-
-[Workers](#workers) are for computing on several processor cores at the same time.
+- A [detached coroutine](#detached-coroutines) lets one program wait for many things at once, such as many network connections.
 
 ### Creating and resuming
 
@@ -3198,9 +3159,9 @@ print(coroutine.resume(task))   --> false  cannot resume dead coroutine
 
 ### Generators
 
-Some traversals are easy to write as a loop or a recursive function that handles each item where it finds it. The same traversals are hard to write as a function that returns one item per call. Walking a tree is the usual case, because the position in a tree is a whole chain of nested calls.
+Walking a tree is easy with a recursive function. It is hard with an iterator function, which returns one item per call and has to store its position in the tree between calls.
 
-[`coroutine.wrap`](/manual/api#coroutine.wrap) turns such a function into an [iterator](#writing-an-iterator-with-a-function). An iterator made this way is called a _generator_. Inside the function, `coroutine.yield` passes one value to the `for` loop and pauses the function. The next pass of the loop continues the function from that point. The loop ends when the function returns.
+[`coroutine.wrap`](/manual/api#coroutine.wrap) turns the recursive function into an [iterator](#writing-an-iterator-with-a-function). An iterator made this way is called a _generator_. Inside the function, `coroutine.yield` passes one value to the `for` loop and pauses the function. The next pass of the loop continues the function from that point. The loop ends when the function returns.
 
 The following program lists the files of a folder tree. The `walk` function is an ordinary recursive traversal. It yields each file path it reaches.
 
@@ -3245,7 +3206,7 @@ end
 
 [`coroutine.status`](/manual/api#coroutine.status) returns the state of a coroutine as a string. A coroutine is `"suspended"` before it starts and while it is paused. It is `"running"` while its code runs. It is `"normal"` while it waits for another coroutine that it resumed. It is `"dead"` once it has returned or failed.
 
-[`coroutine.close`](/manual/api#coroutine.close) ends a suspended coroutine that the program no longer needs. It also closes the [`<close>` variables](#resources-that-close-themselves) of the coroutine, which releases the files or connections they hold. The following counter never returns, so the program closes it after it has taken one number.
+[`coroutine.close`](/manual/api#coroutine.close) ends a suspended coroutine that the program no longer needs. It also closes the [`<close>` variables](#closing-resources-automatically) of the coroutine, which releases the files or connections they hold. The following counter never returns, so the program closes it after it has taken one number.
 
 ```lus
 local counter = coroutine.create(function()
@@ -3268,14 +3229,7 @@ Many programs spend most of their time waiting. A chat server holds a thousand c
 
 A _detached coroutine_ is a coroutine that the runtime resumes by itself. [`coroutine.detach`](/manual/api#coroutine.detach) starts one. When a detached coroutine reaches an operation that waits, such as reading from a network connection, the runtime pauses that coroutine and runs the others. The runtime resumes the coroutine when its data has arrived. A program therefore creates one detached coroutine for each connection or request. Each one is written as sequential code.
 
-The following program is a server that answers price requests on port 7000. Each client sends the name of an item on a line. The server replies with the price of the item. The program uses these operations:
-
-- `network.tcp.bind` opens a socket that listens on a port.
-- `server:accept()` waits for the next client and returns its connection.
-- `conn:receive("*l", 1024)` reads one line of at most 1024 bytes. The limit protects the memory of the server from a client that never sends a line break. `receive` returns a [vector](#vector) of bytes, which `vector.tostring` converts to a string. At the end of a connection, `receive` returns an empty vector.
-- `conn:send` writes text to the client.
-
-The function `serve` handles one connection from start to end. Its `<close>` variable `closing` closes the connection when `serve` returns. The `pledge` call requests the network [permission](#permissions) that the program needs.
+The following program is a server that answers price requests on port 7000. Each client sends the name of an item on a line. The server replies with the price of the item. The function `serve` handles one connection from start to end.
 
 ```lus nocheck
 pledge("network:tcp")
@@ -3298,6 +3252,15 @@ while true do
     coroutine.detach(coroutine.create(serve), server:accept())
 end
 ```
+
+The program uses these operations:
+
+- `network.tcp.bind` opens a socket that listens on a port.
+- `server:accept()` waits for the next client and returns its connection.
+- `conn:receive("*l", 1024)` reads one line of at most 1024 bytes. The limit protects the memory of the server from a client that never sends a line break. `receive` returns a [vector](#vector) of bytes, which `vector.tostring` converts to a string. At the end of a connection, `receive` returns an empty vector.
+- `conn:send` writes text to the client.
+
+The `<close>` variable `closing` closes the connection when `serve` returns. The `pledge` call requests the network [permission](#permissions) that the program needs.
 
 `coroutine.detach(co, ...)` passes its extra arguments to the function of the coroutine. Here the extra argument is the new connection. `detach` returns the coroutine at once. A client that stays silent for an hour pauses only its own coroutine, inside `receive`. The last loop keeps accepting new clients. The server answers every other connection as its lines arrive.
 
@@ -3363,7 +3326,7 @@ print("the script has reached its last line")
 --> tick  3
 ```
 
-Inside a detached coroutine, `coroutine.yield()` pauses the coroutine until the others have had a turn. A task with a long computation calls it from time to time so that the other tasks stay responsive.
+Inside a detached coroutine, `coroutine.yield()` pauses the coroutine until the other detached coroutines have run. A task with a long computation calls it from time to time so that the other tasks stay responsive.
 
 Detached coroutines run one at a time. The runtime switches between them only where one waits, yields, or ends. It never interrupts the code between two waits, so detached coroutines read and change the same tables without locks.
 
@@ -3467,7 +3430,7 @@ A program can use both. `worker.receive` pauses a detached coroutine while it wa
 
 [`network.fetch`](/manual/api#network.fetch) behaves differently from the other network operations. Called from the top-level code of a script, it lets the detached coroutines run while it waits. Called inside a detached coroutine, it blocks every other coroutine until its response arrives. In both cases it waits for one response at a time. A program that sends several HTTP requests at the same time calls `fetch` from one worker per request.
 
-[Coroutines and workers](/manual/concurrency) is the full description of both. It lists every operation that pauses a detached coroutine. It also describes timeouts and the rules for values that cross between workers.
+[Coroutines and workers](/manual/concurrency) lists every operation that pauses a detached coroutine, the timeouts, and the rules for values that cross between workers.
 
 ### Permissions of coroutines and workers
 
@@ -3475,9 +3438,9 @@ A coroutine starts with a copy of the permissions of the code that created it. L
 
 ## Queries
 
-A program often holds a list of records, such as the rows of a CSV file or the products of a catalog. It needs answers from that list: the records that match a condition, the records in sorted order, or a total for each category. Written by hand, such an answer needs a loop with an `if`, a call to `table.sort` with a comparison function, or a table of running totals. A _query_ states the answer in a few clauses. Lus does the filtering, sorting, and totaling. The same query also runs on a table of a SQLite database.
+A program often holds a list of records, such as the rows of a CSV file or the products of a catalog. It needs answers from that list: the records that match a condition, the records in sorted order, or a total for each category. Written by hand, such an answer needs a loop with an `if`, a call to `table.sort` with a comparison function, or a table of running totals. A _query_ describes the result in a few clauses. Lus does the filtering, sorting, and totaling. The same query also runs on a table of a SQLite database.
 
-The following program finds the two longest science fiction books in a small list.
+The following program finds the two longest science fiction books in the list `books`. Every later query example in this chapter starts from this list as it is written here.
 
 ```lus
 local books = {
@@ -3495,11 +3458,11 @@ end
 --> Neuromancer  270
 ```
 
-The query reads `books` and keeps the entries whose genre is `"scifi"`. It sorts them from the most pages to the fewest and stops after two. The other queries in this chapter read the same `books` list.
+The query reads `books` and keeps the entries whose genre is `"scifi"`. It sorts them from the most pages to the fewest and stops after two.
 
 ### Sources and rows
 
-A query starts with `@` followed by the list it reads. This list is the _source_ of the query. A source is an array of records. A record is a table with named fields. Each record is one _row_. The function [`query`](/manual/api#query) runs a query. A `for` loop uses it as it uses `pairs`. The loop variable receives one result per pass. A query that consists of a source alone yields every row in the order of the array.
+A query starts with `@` followed by the list it reads. This list is the _source_ of the query. A source is a list of [records](#records). Each record is one _row_. The function [`query`](/manual/api#query) runs a query. A `for` loop uses it as it uses `pairs`. The loop variable receives one result per pass. A query that consists of a source alone yields every row in the order of the list.
 
 Inside a query, the _row variable_ is the row that the query is examining. It has the name of the source. In a query on `books`, the expression `books.pages` reads the `pages` field of the current row. The word `as` gives the row variable another name, which shortens long queries.
 
@@ -3513,7 +3476,7 @@ The row variable `b` exists only inside the query. The loop variable `book` is a
 
 ### Filtering with `where`
 
-The `where` clause holds a condition. The query evaluates the condition once for each row. It keeps the rows for which the condition is truthy. The condition is an ordinary expression. It may contain comparisons, `and`, `or`, `not`, arithmetic, and calls to functions and methods. Inside a query, a comparison with `nil` is false, as [nil in queries](#nil-in-queries) explains. The following query finds the novels and the books whose title starts with S.
+The `where` clause holds a condition. The query evaluates the condition once for each row. It keeps the rows for which the condition is truthy. The condition is an ordinary expression. It may contain comparisons, `and`, `or`, `not`, arithmetic, and calls to functions and methods. A row with a missing field follows the rules of [`nil` in queries](#nil-in-queries). The following query finds the novels and the books whose title starts with S.
 
 ```lus nocheck
 for book in query(@books as b where b.genre == "novel" or b.title:sub(1, 1) == "S") do
@@ -3590,7 +3553,7 @@ An _aggregate_ computes one value from many rows, such as their number or their 
 - `avg(expr)` is the average of the values of `expr`, as a float.
 - `min(expr)` and `max(expr)` are the smallest and the largest value of `expr`. They compare numbers by size and strings alphabetically.
 
-An aggregate is written in the `select` clause and gets its name from `as`. A query whose `select` holds aggregates yields a single row that summarizes all the rows it kept. Every aggregate ignores `nil` values. In the following query, the average rating therefore covers the three books that have a rating. The query is stored in a variable and spans several lines. A query continues over the clauses that follow it. Inside a call such as `query(...)`, the closing parenthesis ends it.
+An aggregate is written in the `select` clause and gets its name from `as`. A query whose `select` holds aggregates yields a single row that summarizes all the rows it kept. Every aggregate ignores `nil` values. In the following query, the average rating therefore covers the three books that have a rating. A query is a value that a program may store in a variable, pass to a function, or return from one. The following query is stored in a variable and spans several lines. A query ends after its last clause, or at the closing parenthesis of a call.
 
 ```lus nocheck
 local summary = @books as b select
@@ -3646,7 +3609,7 @@ end
 
 ### Joining two sources
 
-Related data is often held in two lists. One list holds books with the name of their author. Another list holds authors with their country. A _join_ answers questions that need both lists, such as the country each book comes from. The query names both sources, separated by a comma. Each source has its own row variable. The query considers every pair of one row from the first source and one row from the second. The `where` clause keeps the pairs that belong together.
+Related data is often held in two lists. One list holds books with the name of their author. Another list holds authors with their country. A _join_ answers questions that need both lists, such as the country each book comes from. The query names both sources, separated by a comma. Each source has its own row variable. The query forms every pair of one row from the first source and one row from the second. The `where` clause keeps the pairs that belong together.
 
 ```lus nocheck
 local authors = {
@@ -3707,7 +3670,7 @@ end
 
 ### Running a query
 
-A query is a value. Writing one only describes the work. A query may be stored in a variable, passed to a function, or returned from one. The work happens when `query` runs it in a `for` loop. Each loop runs the query from the start on the current contents of its sources. The `for` loop is the only way to get the results. A program that needs the results as a list builds the list inside the loop.
+Writing a query only describes the work. The work happens when `query` runs it in a `for` loop. Each loop runs the query from the start on the current contents of its sources. The `for` loop is the only way to get the results. A program that needs the results as a list builds the list inside the loop.
 
 ```lus nocheck
 local novels = @books as b where b.genre == "novel" select b.title
@@ -3742,13 +3705,13 @@ A missing field reads as `nil`. Queries treat `nil` as follows:
 
 - A comparison with `nil` is false. `where b.rating < 5` and `where b.rating ~= 5` both skip the books without a rating. `where b.rating == nil` matches no row. The condition `where not b.rating` finds the rows where the field is missing.
 - `order by` places rows whose sort value is `nil` first in ascending order and last in descending order.
-- Aggregates ignore `nil` values. When a query keeps no rows, `count` yields `0` and every other aggregate yields `nil`.
+- When a query keeps no rows, `count` yields `0` and every other aggregate yields `nil`.
 
 ### Queries on a database
 
-A table of a SQLite database is also a source. A database opened with [`io.sqlite`](/manual/api#io.sqlite) has one field for each of its tables, so `@db.books` is a query on the table `books`. SQLite does the filtering. A function that receives its source as a parameter runs the same query on a Lus table or on a database table.
+A table of a SQLite database is also a source. A database opened with [`io.sqlite`](/manual/api#io.sqlite) has one field for each of its tables, so `@db.books` is a query on the table `books`. SQLite does the filtering.
 
-The following program opens a database in memory, which needs no permission. Each `db:run` line inserts one row. Its arguments replace the `?` marks. [SQLite](#sqlite) explains these statements.
+The following function `short_books` builds one query for any source. The program runs it on a database table and on a Lus table. The database is in memory, which needs no permission. Each `db:run` line inserts one row. Its arguments replace the `?` marks. [SQLite](#sqlite) explains these statements.
 
 ```lus
 local function short_books(source)
@@ -3772,13 +3735,13 @@ A source written as a parenthesized expression, such as `@(source)`, always take
 
 ## Modules
 
-A program that grows past a few hundred lines is easier to work on as several files, each with one job. A _module_ is a file of Lus code that another file loads by name. The local variables of a module are private to it. The module chooses what it shares, so two files can each have a helper function with the same name. Several programs may also load the same module, which keeps shared code in one place.
+A program that grows past a few hundred lines is easier to work on as several files, each with one job. The files of such a program are [modules](#tables-as-modules). Another file loads a module by name. The local variables of a module are private to it. Other files see only the value that the module returns, so two files can each have a helper function with the same name. Several programs may also load the same module, which keeps shared code in one place.
 
 The standard library is built in. JSON, CSV, the filesystem, networking, and the other libraries of [The standard library](#the-standard-library) are available in every file without loading. Modules are for the code of the project itself.
 
 ### Writing a module
 
-A module is a file that ends with `return`. The value it returns is the module. That value is usually a [table of functions](#tables-as-modules). The following file is a module named `shapes`, saved as `shapes.lus`.
+A module file ends with `return`. The value it returns is usually a table of functions. The following file is a module named `shapes`, saved as `shapes.lus`.
 
 ```lus
 local shapes = {}
@@ -3870,7 +3833,7 @@ print((catch require("geometry.units")))    --> false
 lus build -o app main.lus
 ```
 
-The command follows every `require` whose argument is a literal string, such as `require("shapes")`. It bundles those modules with `main.lus`. A module that the program loads under a computed name is added with `--include`, which takes the same forms as it does for `lus`. Inside the executable, `require` returns bundled modules from memory and needs no permission. [Developer tools](/manual/tools) describes `lus build` in full.
+`lus build` reads the source and finds every call to `require` whose argument is a literal string, such as `require("shapes")`. It bundles those modules with `main.lus`. A module that the program loads under a computed name is added with `--include`, which takes the same forms as it does for `lus`. Inside the executable, `require` returns bundled modules from memory and needs no permission. [Developer tools](/manual/tools) describes `lus build` in full.
 
 ## The environment
 
@@ -3995,11 +3958,11 @@ An `if` whose condition is a flag alone, as in `if flags.debug then` or `if not 
 
 The standard library is the set of functions that every Lus program can call without loading anything. It is compiled into the `lus` executable. Most of its functions are fields of global tables such as `string`, `table`, and `math`. A few functions that almost every program uses, such as `print`, `tostring`, and `fromjson`, are plain globals.
 
-Functions that read or write files, contact the network, read environment variables, or start processes need a [permission](#permissions). A program acquires a permission by calling `pledge`.
+Functions that read or write files, contact the network, read environment variables, or start processes need a [permission](#permissions).
 
 ### `string`
 
-The `string` library works on text. Its functions measure, slice, search, replace, split, and format strings. Its pattern functions extract the parts of text that has a known form. [Strings and patterns](#strings-and-patterns) explains these functions. The [string library reference](/manual/api#string-library) lists every one.
+The `string` library works on text. [Strings and patterns](#strings-and-patterns) explains its functions. The [string library reference](/manual/api#string-library) lists every one.
 
 ### `table`
 
@@ -4102,7 +4065,7 @@ end
 print(cheapest, lowest)  --> mug  3
 ```
 
-[`math.type`](/manual/api#math.type) returns the subtype of a number as a string: `"integer"`, `"float"`, `"bigint"`, or `"decimal"`. [`math.tointeger`](/manual/api#math.tointeger) converts a whole number to an integer. It returns `nil` for a number with a fractional part. A program can use it to check that a count or a port number is whole.
+[`math.type`](/manual/api#math.type) returns the name of the [subtype](#numbers) of a number. [`math.tointeger`](/manual/api#math.tointeger) returns `nil` for a number that is not whole, as [Catching errors](#catching-errors) shows.
 
 [`math.random`](/manual/api#math.random) returns a random number. Without arguments it returns a float from 0 up to, but not including, 1. With one integer `n` it returns an integer from 1 to `n`. With two integers it returns an integer between them, both ends included. The numbers differ on every run of a program.
 
@@ -4131,7 +4094,7 @@ The generator is fast and its numbers are well distributed. Its output can be pr
 
 The `io` library reads and writes files and the standard streams of the program. Opening a file needs the `fs:read` permission, the `fs:write` permission, or both, depending on the mode.
 
-[`io.open`](/manual/api#io.open) opens a file and returns a _file handle_, a value with methods that read, write, and close the file. Its second argument is the mode. `"r"` reads and is the default. `"w"` writes and empties the file first. `"a"` writes at the end of the file. A program must close a handle when it has finished with it. A handle declared with `<close>` is closed when the variable goes out of scope, including when an error ends the block early. The following program writes two lines to a file and reads them back.
+[`io.open`](/manual/api#io.open) opens a file and returns a _file handle_, a value with methods that read, write, and close the file. Its second argument is the mode. `"r"` reads and is the default. `"w"` writes and empties the file first. `"a"` writes at the end of the file. A program must close a handle when it has finished with it. A handle declared with [`<close>`](#closing-resources-automatically) is closed when its block ends. The following program writes two lines to a file and reads them back.
 
 ```lus nocheck
 pledge("fs")
@@ -4148,7 +4111,7 @@ do
 end
 ```
 
-`file:write` writes each of its arguments, which may be strings or numbers. It adds nothing between or after them. The argument of `file:read` is a format that specifies how much to read. `"l"` reads one line without its line break. `"a"` reads everything that remains. `"n"` reads a number. An integer reads that many characters. At the end of the file, `"l"` returns `nil`.
+`file:write` writes each of its arguments, which may be strings or numbers. It adds nothing between or after them. The argument of `file:read` is a format that specifies how much to read. The line that `"l"` returns excludes its line break. At the end of the file, `"l"` returns `nil`. `"a"` reads everything that remains. `"n"` reads a number. An integer reads that many characters.
 
 [`io.lines`](/manual/api#io.lines) opens a file and returns an iterator over its lines. The file is closed after the last line. `io.lines` is the shortest way to process a text file line by line. The following file `stock.txt` lists a count for each fruit.
 
@@ -4218,7 +4181,7 @@ end
 print(string.format("%.3f seconds", os.clock() - start))  --> 0.004 seconds
 ```
 
-[`os.getenv`](/manual/api#os.getenv) returns the value of an environment variable, or `nil` when the variable is not set. Environment variables often hold secrets such as access tokens, so reading one needs the `env` permission. The permission can name the variables that the program may read, as in `pledge("env=HOME")`. The following program reads the home directory of the user. It uses `vi` when no editor is configured.
+[`os.getenv`](/manual/api#os.getenv) returns the value of an environment variable, or `nil` when the variable is not set. It needs the `env` permission, which a program can [narrow](#narrowing-a-permission) to the variables it reads. The following program reads the home directory of the user. It uses `vi` when no editor is configured.
 
 ```lus nocheck
 pledge("env")
@@ -4241,7 +4204,7 @@ end
 
 ### `utf8`
 
-The `utf8` library converts between characters and their Unicode code points. It also checks that text is valid Unicode. A _code point_ is the number that Unicode assigns to a character, such as 233 for `é`. A Lus string may hold a _lone surrogate_, a code point that is not valid Unicode by itself. Lone surrogates can occur in file names from Windows. `utf8.len` returns `nil` and the position of the first lone surrogate. `utf8.codes` raises an error when it reaches one. A program can use either function to check text before it passes the text to a system that requires valid Unicode.
+The `utf8` library converts between characters and their [code points](#characters-and-code-points). It also checks that text is valid Unicode. A Lus string may hold a _lone surrogate_, a code point that is not valid Unicode by itself. Lone surrogates can occur in file names from Windows. `utf8.len` returns `nil` and the position of the first lone surrogate. `utf8.codes` raises an error when it reaches one. A program can use either function to check text before it passes the text to a system that requires valid Unicode.
 
 [`utf8.char`](/manual/api#utf8.char) builds a string from code points. [`utf8.codepoint`](/manual/api#utf8.codepoint) returns the code points of the characters in a range of a string. [`utf8.codes`](/manual/api#utf8.codes) is an iterator that visits each character with its position and its code point.
 
@@ -4259,13 +4222,13 @@ end
 --> 3  98
 ```
 
-The [UTF-8 library reference](/manual/api#utf-8-library) lists every function. [`vector.fromstring`](#vector) returns the bytes that encode a string.
+The [UTF-8 library reference](/manual/api#utf-8-library) lists every function. The [`vector`](#vector) library converts a string to its bytes.
 
 ### `vector`
 
-A _vector_ is a buffer of bytes that a program can read and change in place. A string holds text and cannot change, so binary data belongs in a vector. Examples of binary data are the contents of an image or an archive, a network packet, and a file format with fields at fixed offsets. Every library function that produces raw bytes, such as a read from a binary file or from a socket, returns a vector.
+A _vector_ is a buffer of bytes that a program can read and change in place. It holds [data that is not text](#text-and-bytes), such as the contents of an image or an archive, a network packet, or a file format with fields at fixed offsets. Every library function that produces raw bytes, such as a read from a binary file or from a socket, returns a vector.
 
-[`vector.create`](/manual/api#vector.create) makes a vector of a given size filled with zeros. Offsets into a vector start at 0. [`vector.get`](/manual/api#vector.get) and [`vector.set`](/manual/api#vector.set) read and write single bytes. `#v` is the size of the vector `v` in bytes. [`vector.pack`](/manual/api#vector.pack) and [`vector.unpack`](/manual/api#vector.unpack) write and read numbers that span several bytes. Their format string describes the layout of each number. In the following example, `>I4I4` means two unsigned integers of 4 bytes each, with the most significant byte first.
+[`vector.create`](/manual/api#vector.create) makes a vector of a given size filled with zeros. Offsets into a vector start at 0. [`vector.get`](/manual/api#vector.get) and [`vector.set`](/manual/api#vector.set) read and write single bytes. `#v` is the size of the vector `v` in bytes. [`vector.pack`](/manual/api#vector.pack) and [`vector.unpack`](/manual/api#vector.unpack) write and read numbers that span several bytes. Their format string describes the layout of each number. The following example writes the width and height of an image into an 8-byte header. The format `>I4I4` means two unsigned integers of 4 bytes each, with the most significant byte first.
 
 ```lus
 -- The header of an image: width and height as 4-byte integers.
@@ -4291,9 +4254,7 @@ The `vector.archive` modules compress and decompress vectors with gzip, deflate,
 
 ### `coroutine`
 
-The `coroutine` library creates and controls [coroutines](/manual/guide#coroutines). [`coroutine.wrap`](/manual/api#coroutine.wrap) turns a function into a generator. [`coroutine.detach`](/manual/api#coroutine.detach) gives a coroutine to the runtime, which resumes it when the network operation it waits for is ready. One program can serve many connections this way. The `worker` library runs code on other processor cores.
-
-[Coroutines](/manual/guide#coroutines) explains when to use generators, detached coroutines, and workers. [Coroutines and workers](/manual/concurrency) is the complete description. The references are the [coroutine library](/manual/api#coroutine-library) and the [worker library](/manual/api#worker-library).
+The `coroutine` library creates and controls coroutines. The `worker` library runs code on other processor cores. [Coroutines](#coroutines) explains both libraries. The references are the [coroutine library](/manual/api#coroutine-library) and the [worker library](/manual/api#worker-library).
 
 ### `debug`
 
@@ -4335,7 +4296,7 @@ Each line gives a file, a line number, and the function that was running there. 
 
 ### `package`
 
-The `package` library contains the settings that `require` reads. [`package.path`](/manual/api#package.path) is a string of file name templates that `require` tries when it searches for a module. [`package.loaded`](/manual/api#package.loaded) is the table of modules that are already loaded. Most programs leave both unchanged. [Modules](/manual/guide#modules) explains `require`, the search path, and how to write a module. The [package library reference](/manual/api#package-library) lists every field.
+The `package` library contains the settings that `require` reads, such as [`package.path`](/manual/api#package.path). [Modules](#modules) explains them. The [package library reference](/manual/api#package-library) lists every field.
 
 ### JSON and CSV
 
@@ -4352,7 +4313,7 @@ print(tojson(order.items))                   --> ["tea","cup","spoon"]
 print(tojson({ total = 12.5 }))              --> {"total":12.5}
 ```
 
-`fromjson` raises an error for text that is not valid JSON. The error message gives the position of the problem. A program should therefore parse input from outside the program inside a `catch`.
+The error that `fromjson` raises for invalid JSON gives the position of the problem. [Catching errors](#catching-errors) shows how a program handles it.
 
 ```lus
 local ok, problem = catch fromjson("{broken")
@@ -4452,7 +4413,7 @@ The `network.tcp` and `network.udp` modules open sockets for protocols other tha
 
 ### Time
 
-The `time` library works with dates, clock times, and time zones. `os.time` and `os.date` are enough to put a timestamp on a log line. The `time` library answers further questions: what time a moment is in another city, how long it is until a deadline, or what date is one month after another.
+The `time` library works with dates, clock times, and time zones. It computes the time of a moment in another city, the time that remains until a deadline, and the date one month after another.
 
 The library has three types of value. Many date bugs come from treating one type as another.
 
@@ -4684,7 +4645,7 @@ The host and a script exchange values on a stack that belongs to the state. `add
 
 ## Internals
 
-The way the runtime executes a program determines what each part of the program costs.
+The speed and memory use of a program depend on how the runtime executes it.
 
 The runtime is written in Zig. It has a compiler that translates source text into bytecode, an interpreter that runs the bytecode, two compilers that translate frequently run bytecode into machine code, a garbage collector, and the standard library.
 
@@ -4736,11 +4697,11 @@ Every value takes 16 bytes: 8 bytes of _payload_ and a _tag_ that gives the type
 
 For every other type, the payload is the address of an _object_ in the heap, the region of memory that the garbage collector manages. Strings, tables, functions, coroutines, vectors, bigints, and decimals are objects. Each object starts with a header that holds its type and the bits that the collector needs. Assigning a table to a second variable copies the 16-byte value, so both variables refer to one object.
 
-The tag makes the common operations fast. To add two values, the interpreter and the compiled code compare two tags and then add two payloads. The tag is stored beside the payload, so an integer has all 64 bits and a float is a standard double precision number.
+The tag makes the common operations fast. To add two values, the interpreter and the compiled code compare two tags and then add two payloads. The payload of an integer is a full 64-bit integer. The payload of a float is a standard double precision number.
 
 ### String representation
 
-A string is an immutable object that holds its text as bytes in the WTF-8 encoding. WTF-8 is UTF-8, the common encoding of Unicode text, extended to allow the unpaired surrogate code points that file names on Windows and text from JavaScript can contain. Lus therefore reads and writes such text unchanged. Raw bytes that are not text belong in a vector.
+A string is an immutable object that holds its text as bytes in the WTF-8 encoding. WTF-8 is UTF-8, the common encoding of Unicode text, extended to allow the unpaired surrogate code points that file names on Windows and text from JavaScript can contain. Lus therefore reads and writes such text unchanged.
 
 A string is indexed by character. A character takes one to four bytes in this encoding, so the byte position of the tenth character depends on the characters before it. The string object stores three things that make indexing fast.
 
@@ -4764,13 +4725,13 @@ A program that models data creates tables with named fields in large numbers, so
 
 A table whose keys are all short strings keeps its keys in a _shape_ and has no hash part. Most tables with named fields are of this kind. A shape is an ordered list of keys. Every table that received the same keys in the same order shares one shape. The table itself stores only the values, one slot per key, so a million tables with the same fields store their field names once. Adding a key gives the table the shape that has its current keys followed by the new key. A table that receives a key of another kind, such as a long string or a table, becomes a dictionary with a hash part.
 
-Field access rarely needs a search, because of the [inline caches](#the-interpreter) of the interpreter. The cache of an instruction such as `point.x` holds the shape of the last table and the slot of `x` in that shape. Tables built by the same code share a shape, so the access usually costs one comparison and one load.
+Field access rarely needs a search. Tables built by the same code share a shape, so the [inline cache](#the-interpreter) of an instruction such as `point.x` usually reduces the access to one comparison and one load.
 
 A metatable also records which metamethods are absent from it. An access to a table whose metatable has no `__index` or `__newindex` therefore costs almost the same as an access to a table without a metatable.
 
 ### The interpreter
 
-The _interpreter_ is a loop. Each pass reads one instruction and runs the code for its operation. Every function starts in the interpreter. Code that runs rarely stays there.
+The _interpreter_ is a loop. Each pass reads one instruction and runs the code for its operation. Every function starts in the interpreter. Code that seldom runs stays in the interpreter.
 
 The registers of all active calls are in one array, the _stack_ of the running coroutine. Each call has a small record called a _frame_. A frame records which function is running, where its registers start, and where execution continues after the call returns. A call from one Lus function to another pushes a frame and continues in the same loop. Deep recursion therefore uses the Lus stack, which grows in the heap. For the same reason, a coroutine can be suspended in the middle of any chain of calls.
 
@@ -4806,7 +4767,7 @@ Machine code is stored in memory that the runtime requests from the operating sy
 
 Baseline code is fast to produce, but it does more work than necessary. It stores every intermediate result to the stack. It tests the type of every operand on every execution. The _optimizing tier_ compiles code a second time when the code stays hot after the baseline JIT compiled it. The optimizing tier takes more time and produces faster code. Baseline code counts its own calls and loop iterations for this purpose. The optimizing tier usually compiles a whole function. When a loop inside a long-running function becomes hot, it compiles the code from that loop onward.
 
-The optimizing tier compiles from predictions. It compiles while the function is running, so it can read the values in the registers, the tables they refer to, and the inline caches of the interpreter. From these it predicts facts about each value. Examples are that a register holds an integer, that a table has its field `x` in a certain slot, or that a call always reaches the same function. The optimizing tier then produces machine code that is correct only when the predictions hold. It puts a _guard_ before each use of a prediction. A guard is a short test of one prediction.
+The optimizing tier compiles a function while the function is running, so it can read the values in the registers, the tables they refer to, and the inline caches of the interpreter. From these it predicts facts about each value. Examples are that a register holds an integer, that a table has its field `x` in a certain slot, or that a call always reaches the same function. The optimizing tier then produces machine code that is correct only when the predictions hold. It puts a _guard_ before each use of a prediction. A guard is a short test of one prediction.
 
 Guarded code allows four optimizations that are unavailable to the baseline JIT.
 
@@ -4837,7 +4798,7 @@ The _garbage collector_ frees memory for the program. It finds the objects that 
 
 The Lus collector has four properties that the rest of the runtime depends on.
 
-It is **precise**. Every value carries its tag, so the collector can determine exactly which words of an object are references. It never treats a number as an address, so a number can never keep an unreachable object alive.
+It is **precise**. Every value carries its tag, so the collector determines exactly which words of an object are references. An unreachable object is therefore always found.
 
 It is **non-moving**. An object stays at one address from its creation until it is freed. Machine code can therefore contain the addresses of objects. Inline caches stay valid. A C host can hold a pointer to the contents of a string. The cost is that the heap cannot be compacted. The collector limits fragmentation by grouping objects of the same size into the same pages of memory. A freed slot in such a page has exactly the size of the next object that is allocated there.
 
@@ -4847,7 +4808,7 @@ A minor collection skips the old objects, so it needs a list of the old objects 
 
 It is partly **parallel**. Marking a large heap is the expensive part of a major collection. When a collection runs while the program is paused and has enough objects to mark, the collector divides the marking among several threads. Each thread takes a share of the objects to trace. A thread that has finished its share takes work from another thread. A small heap is marked by one thread, because starting more threads would cost more time than it saves. Sweeping is _lazy_. After marking, the collector sweeps each page of the heap when the program next allocates from it. The cost of sweeping is therefore divided among the allocations that follow.
 
-The amount of live data determines when the collector runs. After a collection, the collector measures the memory of the surviving objects. The next collection starts when the heap has grown by a proportion of that amount. The option `--gc-pause` of `lus` sets the proportion. A larger proportion uses more memory and less time. A major collection on a large heap pauses the program for longer than some programs can tolerate. For such a program, `collectgarbage("incremental")` selects a mode that marks in small steps between the steps of the program. The entry for [`collectgarbage`](/manual/api#collectgarbage) lists the controls.
+The amount of live data determines when the collector runs. After a collection, the collector measures the memory of the surviving objects. The next collection starts when the heap has grown by a proportion of that amount. The option `--gc-pause` of `lus` sets the proportion. A larger proportion uses more memory and less time. A major collection on a large heap can pause the program for a noticeable time. For a program that must respond quickly, `collectgarbage("incremental")` selects a mode that marks in small steps between the steps of the program. The entry for [`collectgarbage`](/manual/api#collectgarbage) lists the controls.
 
 The collector processes finalizers and weak tables at the end of marking. [Metatables and objects](/manual/guide#metatables-and-objects) describes both. An unreachable object with a `__gc` metamethod is kept for one more cycle so that its finalizer can run. Entries of weak tables that refer to unreachable objects are cleared.
 
@@ -4859,9 +4820,9 @@ A coroutine is an object with its own stack of registers and its own list of fra
 
 The _scheduler_ of the runtime resumes detached coroutines. It keeps a queue of coroutines that are ready to run, a list of deadlines for timeouts, and a _poller_. The poller is the facility of the operating system that reports which network connections have data to read or room to write. The poller is kqueue on macOS and epoll on Linux.
 
-A detached coroutine is suspended inside the library functions that wait for the network, so Lus code needs no syntax for suspension. A function such as the `receive` method of a socket first tries to read without waiting. If no data has arrived, it registers the socket with the scheduler and suspends its coroutine with the mechanism of a yield. The scheduler runs other coroutines. When the poller reports the socket as readable, the scheduler resumes the waiting coroutine. `receive` then reads again and succeeds. To the Lus code that called `receive`, the call is an ordinary function call that returned a result.
+A detached coroutine is suspended inside the library functions that wait for the network. A function such as the `receive` method of a socket first tries to read without waiting. If no data has arrived, it registers the socket with the scheduler and suspends its coroutine with the mechanism of a yield. The scheduler runs other coroutines. When the poller reports the socket as readable, the scheduler resumes the waiting coroutine. `receive` then reads again and succeeds. To the Lus code that called `receive`, the call is an ordinary function call that returned a result.
 
-The main program has no coroutine to suspend. When the main program calls `receive`, the function runs the scheduler inside the call until its own socket is ready. The detached coroutines therefore continue to run while the main program waits. All coroutines of a state run on one thread, one at a time. The runtime switches between them only at these waiting points and at explicit yields. Code between two such points runs without interruption, so coroutines can share data without locks.
+The main program has no coroutine to suspend. When the main program calls `receive`, the function runs the scheduler inside the call until its own socket is ready. The detached coroutines therefore continue to run while the main program waits. All coroutines of a state run on one thread, one at a time. The runtime switches between them only at these waiting points and at explicit yields. Detached coroutines therefore [share tables without locks](#results-errors-and-cancellation).
 
 ### How workers run
 

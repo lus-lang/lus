@@ -10,7 +10,7 @@ import Dedication from "../components/Dedication.astro"
 
 Lus is a small programming language for general-purpose programs. Its syntax is short and readable. Its standard library is large. One executable holds the runtime, the library, and the tools.
 
-The language is [sovereign](#sovereignty), which means that its built-in facilities cover most tasks. The standard library includes files, networking, JSON and CSV, compression, time, and SQLite. The `lus` command includes a test runner, a formatter, a checker, and a debugger.
+A Lus program needs only the `lus` executable for most tasks. The standard library includes files, networking, JSON and CSV, compression, time, and SQLite. The `lus` command includes a test runner, a formatter, a checker, and a debugger. This property is called [sovereignty](#sovereignty).
 
 ## Background
 
@@ -22,13 +22,15 @@ Lus is a personal project of [Louka Ménard Blondin](https://louka.sh). It is ma
 
 ## Sovereignty
 
-_Language sovereignty_ is how much a language can do without depending on anything outside itself. It has three parts. **Implementation** is how far the environment that the language runs in limits it. **Use** is how much a program can do before it needs a third-party library. **Adoption** is how much effort the language takes to learn and use.
+_Language sovereignty_ is how much a programmer can do with the language alone. It has three parts.
 
-Lus addresses all three. Its standard library is cross-platform and covers complete programs. Its syntax is the small, readable syntax of Lua.
+- **Implementation.** A sovereign language behaves the same in every environment that it runs in. The standard library of Lus is cross-platform.
+- **Use.** A program in a sovereign language rarely needs a third-party library. The standard library of Lus covers complete programs.
+- **Adoption.** A sovereign language takes little effort to learn and use. Lus has the small, readable syntax of Lua.
 
 ## Goals
 
-Lus has the following design goals.
+The design of Lus has eight goals.
 
 - **Boring is good.** Lus adopts an idea once the idea has proven useful in practice. The latest trends in programming language theory are left to other languages.
 
@@ -40,13 +42,13 @@ Lus has the following design goals.
 
 - **Minimalism.** Lus has a concise, readable syntax and few keywords, as Lua does, so it is quick to adopt.
 
-- **Explicit permissions.** A script starts with no access to files, the network, processes, or environment variables. It [pledges](/manual/permissions) each capability before it uses it. A program can also give up capabilities permanently, which limits what a bug or a loaded module can reach.
+- **Explicit permissions.** A script starts with no access to files, the network, processes, or environment variables. It [pledges](/manual/permissions) a permission for each kind of access that it uses. A program can also give up permissions permanently, which limits what a bug or a loaded module can reach.
 
 - **Strong release engineering.** The language has stable, tested releases. Its design changes deliberately.
 
-- **Backwards _embeddability_.** Lua was engineered to be embedded in other programs. Lus keeps that ease of integration, although its first concern is the sovereignty of the runtime. The runtime is written in Zig and has a C interface, `lus.h`, so a host program [embeds Lus](/manual/embedding) much as it embeds Lua. The same runtime also runs in the browser as a [WebAssembly](/manual/webassembly) module.
+- **Backwards _embeddability_.** Lua was engineered to be embedded in other programs. Lus keeps that ease of integration, although standalone use has priority. The runtime is written in Zig and has a C interface, `lus.h`, so a host program [embeds Lus](/manual/embedding) much as it embeds Lua. The same runtime also runs in the browser as a [WebAssembly](/manual/webassembly) module.
 
-Lus has the following **non-goals**.
+The design also has four **non-goals**, which Lus leaves to other languages.
 
 - **Strong typing.** Lus keeps Lua's dynamic typing.
 
@@ -54,7 +56,7 @@ Lus has the following **non-goals**.
 
 - **Modules.** The `require` function loads code from other files. A name declared with `local` is private to its file. Lus organizes programs with these two features alone.
 
-- **Bureaucracy.** Lus has no committee to approve changes to the language, no organization to plan its development, and no foundation to manage its funding. It is a single-repository project dedicated to the public domain and maintained with as little process as possible.
+- **Bureaucracy.** Lus is a single-repository project dedicated to the public domain. Its author decides every change to the language. The project is maintained with as little process as possible.
 
 ## Contributing
 
