@@ -1202,7 +1202,7 @@ pub fn createSeeded(gpa: Allocator, io: std.Io, seed_opt: ?u64) !*Global {
     seed ^= @intFromPtr(g);
     g.* = .{ .gpa = gpa, .io = io, .seed = seed_opt orelse seed };
     g.parent_gpa = gpa;
-    g.counter = .{ .child = gpa };
+    g.counter = .init(gpa);
     g.gpa = g.counter.allocator();
     errdefer destroy(g);
     g.gc_stopped = true; // no collection until the state is fully built
@@ -1232,6 +1232,7 @@ pub fn destroy(g: *Global) void {
     g.finobj.deinit(gpa);
     g.tobefnz.deinit(gpa);
     g.ext.deinit(gpa);
+    g.counter.releaseKept();
     g.parent_gpa.destroy(g);
 }
 
