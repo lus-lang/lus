@@ -164,7 +164,7 @@ return dates
 
 The header annotations are the following. `@package`, `@version`, `@lus`, and `@license` are required.
 
-- `@package NAME` names the package. It must equal the file name and the repository name.
+- `@package NAME` names the package. It must equal the name of the main module file and the name of the repository on atmosphere, `git.atmosp.here/LINE/NAME.git`. An upstream repository may have any name, such as `lus-lang/atmos-NAME` in the [first deployment](#first-deployment).
 - `@version VERSION` gives the package version.
 - `@lus LINE` gives the line. `@lus 2.0.3` also sets `lus_min` to `2.0.3`.
 - `@license SPDX` gives the license as an SPDX identifier, such as `0BSD` or `MIT`.
