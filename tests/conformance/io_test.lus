@@ -466,6 +466,57 @@ local function io_type_reports_the_standard_streams_as_files_test(stream)
 end
 
 -- ============================================
+-- isatty and setraw
+-- ============================================
+
+-- a file is not a terminal
+local function a_file_is_not_a_terminal_test()
+    reset_streams()
+    writefile("tty.txt", "x")
+    local f <close> = io.open(path("tty.txt"), "r")
+    assert(f:isatty() == false)
+end
+
+-- setraw on a file returns nil and a message
+local function setraw_on_a_file_returns_nil_and_a_message_test()
+    reset_streams()
+    writefile("raw.txt", "x")
+    local f <close> = io.open(path("raw.txt"), "r")
+    local r, msg = f:setraw(true)
+    assert(r == nil and msg == "not a terminal", msg)
+    r, msg = f:setraw(false)
+    assert(r == nil and msg == "not a terminal", msg)
+end
+
+-- the standard streams answer isatty with a boolean
+local function the_standard_streams_answer_isatty_with_a_boolean_test()
+    assert(type(io.stdin:isatty()) == "boolean")
+    assert(type(io.stdout:isatty()) == "boolean")
+    assert(type(io.stderr:isatty()) == "boolean")
+end
+
+-- a closed handle raises
+local function isatty_on_a_closed_handle_raises_test()
+    reset_streams()
+    writefile("ttyclosed.txt", "x")
+    local f = io.open(path("ttyclosed.txt"), "r")
+    f:close()
+    raises(function() f:isatty() end, "closed file")
+    raises(function() f:setraw(true) end, "closed file")
+end
+
+-- a counted read from a pipe returns a character as soon as it arrives
+local function a_counted_read_returns_without_waiting_for_more_bytes_test()
+    if os.platform() == "windows" or os.platform() == "wasi" then skip("uses a POSIX shell") end
+    pledge("exec")
+    local p <close> = io.popen("printf a; sleep 3; printf b")
+    local start = os.time()
+    assert(p:read(1) == "a")
+    assert(os.time() - start <= 2)
+    assert(p:read(1) == "b")
+end
+
+-- ============================================
 -- seek and setvbuf
 -- ============================================
 

@@ -37,6 +37,8 @@ pub const lib = struct {
     pub const base = @import("lib/base.zig");
     pub const out = @import("lib/out.zig");
     pub const package = @import("lib/package.zig");
+    pub const term = @import("lib/term.zig");
+    pub const serve = @import("lib/serve.zig");
 };
 
 pub const compile = struct {
@@ -47,6 +49,7 @@ pub const compile = struct {
 };
 
 test {
+    _ = lib.serve;
     _ = syntax.token;
     _ = syntax.lexer;
     _ = syntax.parser;

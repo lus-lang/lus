@@ -59,7 +59,9 @@ The standard library checks the following permissions.
 | `fs:write` | Creating, changing, moving, and removing files, directories, and links. |
 | `load` | Running code that the program loads while it runs, from a string or from a file. |
 | `exec` | Running external commands with `os.execute` and `io.popen`. |
-| `env` | Reading environment variables with `os.getenv`. |
+| `env` | Reading and setting environment variables. |
+| `env:read` | Reading environment variables with `os.getenv`. |
+| `env:write` | Setting and removing environment variables with `os.setenv`. |
 | `network` | Every network operation. |
 | `network:http` | HTTP and HTTPS requests with `network.fetch`. |
 | `network:tcp` | Connecting TCP sockets and binding TCP servers. |
@@ -134,12 +136,21 @@ Lus compares the value with the host exactly as the program wrote it. A grant fo
 
 ### Environment values
 
-An `env` value matches the name of the environment variable that [`os.getenv`](/manual/api#os.getenv) reads. The following script may read `HOME` and no other variable.
+An `env` value matches the name of the environment variable that [`os.getenv`](/manual/api#os.getenv) reads or [`os.setenv`](/manual/api#os.setenv) sets. The following script may read `HOME` and no other variable.
 
 ```lus
-pledge("env=HOME")
+pledge("env:read=HOME")
 print((catch os.getenv("HOME")))   --> true
 print((catch os.getenv("PATH")))   --> false
+```
+
+The following script may read every variable and set only the variables whose names start with `APP_`.
+
+```lus
+pledge("env:read", "env:write=APP_*")
+os.setenv("APP_MODE", "test")
+print(os.getenv("APP_MODE"))                  --> test
+print((catch os.setenv("PATH", "/tmp")))      --> false
 ```
 
 ### Several values

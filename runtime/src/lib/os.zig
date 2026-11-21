@@ -28,6 +28,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "exit", .func = exit },
     .{ .name = "getenv", .func = getenv },
     .{ .name = "platform", .func = platform },
+    .{ .name = "setenv", .func = setenv },
     .{ .name = "setlocale", .func = setlocale },
     .{ .name = "time", .func = time },
     .{ .name = "tmpname", .func = tmpname },
@@ -58,9 +59,97 @@ pub fn envGet(l: *Thread, name: []const u8) ?[]const u8 {
 
 fn getenv(l: *Thread) Error!u32 {
     const name = try aux.checkBytes(l, 1);
-    if (!@import("../vm/pledge.zig").allowed(l, "env", name)) return l.raiseFmt("permission \"env\" denied for '{s}'", .{name});
+    try @import("../vm/pledge.zig").require(l, "env:read", name);
     const v = envGet(l, name) orelse return aux.retNil(l);
     return aux.ret(l, try lossyString(l, v));
+}
+
+const Environ = std.process.Environ.Map;
+const environ_key = "os.environ";
+/// The allocator of the environment maps a state owns. It is safe to use
+/// from any thread, so a map made for a worker can be freed by it.
+const environ_gpa = if (builtin.single_threaded) std.heap.wasm_allocator else std.heap.smp_allocator;
+
+/// The environment map that state `g` owns, or null while it reads the
+/// environment the host gave it.
+pub fn ownedEnviron(g: *state.Global) ?*Environ {
+    const p = g.ext.get(environ_key) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
+/// Makes `m` the environment that state `g` owns and reads.
+pub fn adoptEnviron(g: *state.Global, m: *Environ) error{OutOfMemory}!void {
+    g.ext.put(g.gpa, environ_key, m) catch return error.OutOfMemory;
+    g.environ = m;
+}
+
+/// Frees the environment map that state `g` owns.
+pub fn deinitEnviron(g: *state.Global) void {
+    const m = ownedEnviron(g) orelse return;
+    _ = g.ext.remove(environ_key);
+    if (g.environ == m) g.environ = null;
+    freeEnviron(m);
+}
+
+pub fn freeEnviron(m: *Environ) void {
+    m.deinit();
+    environ_gpa.destroy(m);
+}
+
+/// A copy of the environment that state `g` reads, as a map of its own.
+/// Without a map from the host it copies the process environment.
+pub fn copyEnviron(g: *state.Global) error{OutOfMemory}!*Environ {
+    const m = try environ_gpa.create(Environ);
+    errdefer environ_gpa.destroy(m);
+    if (g.environ) |e| {
+        m.* = try e.clone(environ_gpa);
+        return m;
+    }
+    m.* = Environ.init(environ_gpa);
+    errdefer m.deinit();
+    if (builtin.link_libc and builtin.os.tag != .windows) {
+        var i: usize = 0;
+        while (std.c.environ[i]) |entry| : (i += 1) {
+            const line = std.mem.span(entry);
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+            if (eq == 0) continue;
+            try m.put(line[0..eq], line[eq + 1 ..]);
+        }
+    }
+    return m;
+}
+
+/// The map that `os.setenv` writes. A state copies the environment of
+/// its host into a map of its own before its first change, so a map that
+/// other states share is never written.
+fn writableEnviron(l: *Thread) Error!*Environ {
+    const g = l.g;
+    if (ownedEnviron(g)) |m| return m;
+    const m = copyEnviron(g) catch return l.raiseMem();
+    adoptEnviron(g, m) catch {
+        freeEnviron(m);
+        return l.raiseMem();
+    };
+    return m;
+}
+
+/// os.setenv(name, value): sets the environment variable `name`, or
+/// removes it when `value` is nil.
+fn setenv(l: *Thread) Error!u32 {
+    const name = try aux.checkBytes(l, 1);
+    const val: ?[]const u8 = if (l.arg(2).isNil()) null else try aux.checkBytes(l, 2);
+    if (name.len == 0 or std.mem.indexOfAny(u8, name, "=\x00") != null)
+        return aux.argError(l, 1, "invalid environment variable name", .{});
+    if (val) |v| if (std.mem.indexOfScalar(u8, v, 0) != null)
+        return aux.argError(l, 2, "environment variable value contains a zero byte", .{});
+    try @import("../vm/pledge.zig").require(l, "env:write", name);
+    const m = try writableEnviron(l);
+    if (val) |v| {
+        m.put(name, v) catch return l.raiseMem();
+    } else {
+        _ = m.orderedRemove(name);
+    }
+    return 0;
 }
 
 /// Makes a string from bytes that may not be valid UTF-8, replacing each
@@ -96,6 +185,7 @@ fn exit(l: *Thread) Error!u32 {
     // everything anyway.
     if (@import("build_options").workers and @import("worker.zig").isWorker(l.g)) return l.raiseFmt("os.exit is unavailable in a worker", .{});
     out.flushAll(l.g);
+    @import("term.zig").restore();
     std.process.exit(@truncate(@as(u64, @bitCast(status))));
 }
 
@@ -213,7 +303,7 @@ fn spawnShell(l: *Thread) Error!u32 {
     const io = l.g.io;
     out.flushAll(l.g);
     const shell = @import("shell.zig");
-    var child = shell.spawn(io, l.g.gpa, c, .none) catch |e| return fileError(l, null, e);
+    var child = shell.spawn(io, l.g.gpa, c, .none, ownedEnviron(l.g)) catch |e| return fileError(l, null, e);
     const status = shell.wait(io, &child) catch |e| return fileError(l, null, e);
     return @import("io.zig").pushStatus(l, status);
 }

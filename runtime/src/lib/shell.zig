@@ -16,13 +16,15 @@ pub const Pipe = enum { none, stdin, stdout };
 pub const SpawnError = std.process.SpawnError || std.mem.Allocator.Error;
 
 /// Starts `command` in the system shell. The caller waits for the child
-/// with `std.process.Child.wait`.
-pub fn spawn(io: std.Io, gpa: std.mem.Allocator, command: []const u8, pipe: Pipe) SpawnError!std.process.Child {
-    if (comptime windows) return spawnWindows(gpa, command, pipe);
+/// with `std.process.Child.wait`. The child gets the environment `env`, or
+/// the environment of the process when it is null.
+pub fn spawn(io: std.Io, gpa: std.mem.Allocator, command: []const u8, pipe: Pipe, env: ?*const std.process.Environ.Map) SpawnError!std.process.Child {
+    if (comptime windows) return spawnWindows(gpa, command, pipe, env);
     return std.process.spawn(io, .{
         .argv = &.{ "/bin/sh", "-c", command },
         .stdin = if (pipe == .stdin) .pipe else .inherit,
         .stdout = if (pipe == .stdout) .pipe else .inherit,
+        .environ_map = env,
     });
 }
 
@@ -102,7 +104,7 @@ const win = if (windows) struct {
     }
 } else struct {};
 
-fn spawnWindows(gpa: std.mem.Allocator, command: []const u8, pipe: Pipe) SpawnError!std.process.Child {
+fn spawnWindows(gpa: std.mem.Allocator, command: []const u8, pipe: Pipe, env: ?*const std.process.Environ.Map) SpawnError!std.process.Child {
     const w = std.os.windows;
     const line = try windowsCommandLine(gpa, command);
     defer gpa.free(line);
@@ -200,7 +202,13 @@ fn spawnWindows(gpa: std.mem.Allocator, command: []const u8, pipe: Pipe) SpawnEr
     // With a handle list, bInheritHandles lets the child inherit only the
     // handles of the list.
     const inherit: w.BOOL = if (count > 0) .TRUE else .FALSE;
-    if (!w.kernel32.CreateProcessW(app.ptr, line_w.ptr, null, null, inherit, .{ .extended_startupinfo_present = true }, null, null, &si.info, &pi).toBool()) {
+    const block: ?std.process.Environ.WindowsBlock = if (env) |m| m.createWindowsBlock(gpa, .{ .zig_progress_handle = null }) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidWtf8 => return error.InvalidWtf8,
+    } else null;
+    defer if (block) |b| b.deinit(gpa);
+    const env_ptr: ?[*:0]const u16 = if (block) |b| b.slice.ptr else null;
+    if (!w.kernel32.CreateProcessW(app.ptr, line_w.ptr, null, null, inherit, .{ .extended_startupinfo_present = true, .create_unicode_environment = block != null }, env_ptr, null, &si.info, &pi).toBool()) {
         return switch (w.GetLastError()) {
             .FILE_NOT_FOUND, .PATH_NOT_FOUND => error.FileNotFound,
             .ACCESS_DENIED => error.AccessDenied,

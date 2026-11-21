@@ -41,7 +41,7 @@ const builtin_caps = [_]Capability{
     .{ .name = "fs", .subs = &.{ "read", "write", "exec" }, .kind = .path },
     .{ .name = "network", .subs = &.{ "tcp", "udp", "http", "tls", "server" }, .kind = .host },
     .{ .name = "exec", .kind = .none },
-    .{ .name = "env", .kind = .pattern },
+    .{ .name = "env", .subs = &.{ "read", "write" }, .kind = .pattern },
     .{ .name = "load", .kind = .none },
     .{ .name = "ffi", .kind = .none },
     .{ .name = "worker", .kind = .none },

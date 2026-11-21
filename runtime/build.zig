@@ -313,6 +313,9 @@ const Features = struct {
         options.addOption(bool, "jit", f.jit);
         options.addOption(bool, "op_profile", f.op_profile);
         options.addOption(bool, "fail_alloc", f.fail_alloc);
+        // The version of the package, which `lus -v` and the User-Agent of
+        // network.fetch report.
+        options.addOption([]const u8, "version", @import("build.zig.zon").version);
         return options;
     }
 };

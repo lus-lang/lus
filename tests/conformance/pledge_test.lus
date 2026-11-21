@@ -129,8 +129,8 @@ end
 
 local function base_permission_without_value_test()
     with_baseline(BASE_A, function()
-        -- "env" is a base permission with no subpermission or value, and it
-        -- has not been granted yet, so the grant must observably take effect
+        -- "env" is a base permission without a value, and it has not been
+        -- granted yet, so the grant must observably take effect
         local denied = catch os.getenv("PATH")
         assert(not denied, "getenv should be denied before the env grant")
         local result = pledge("env")
@@ -138,6 +138,35 @@ local function base_permission_without_value_test()
         local ok, value = catch os.getenv("PATH")
         assert(ok, "getenv should succeed after the env grant")
         assert(type(value) == "string", "PATH should be readable")
+    end)
+end
+
+local function env_read_and_env_write_are_separate_test()
+    with_baseline(BASE_A, function()
+        pledge("env:read=PATH")
+        assert(type(os.getenv("PATH")) == "string")
+        raises(function() os.setenv("PATH", "x") end, 'permission "env:write" denied')
+        pledge("env:write=LUS_PLEDGE_*")
+        os.setenv("LUS_PLEDGE_A", "1")
+        raises(function() os.getenv("LUS_PLEDGE_A") end, 'permission "env:read" denied')
+        raises(function() os.setenv("LUS_PLEDGE", "1") end, 'permission "env:write" denied')
+    end)
+end
+
+local function env_grants_reading_and_writing_test()
+    with_baseline(BASE_A, function()
+        pledge("env=LUS_PLEDGE_*")
+        os.setenv("LUS_PLEDGE_B", "2")
+        assert(os.getenv("LUS_PLEDGE_B") == "2")
+        raises(function() os.setenv("PATH", "x") end, 'permission "env:write" denied')
+    end)
+end
+
+local function rejecting_env_write_keeps_reading_test()
+    with_baseline(BASE_A, function()
+        pledge("env", "~env:write")
+        assert(type(os.getenv("PATH")) == "string")
+        raises(function() os.setenv("LUS_PLEDGE_C", "3") end, 'permission "env:write" denied')
     end)
 end
 
@@ -472,7 +501,7 @@ local malformed_permission_string_raises_cases = {
     {"=value", "unknown permission"},
     {"fs:", "fs subpermission"},
     {"fs:bogus", "fs subpermission"},
-    {"env:read=x", "env subpermission"},
+    {"env:bogus", "env subpermission"},
 }
 
 local function malformed_permission_string_raises_test(perm, pattern)

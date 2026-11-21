@@ -3001,7 +3001,7 @@ A permission name starts with a group, such as `fs` for the filesystem. Most nam
 | `network:udp` | Sending and receiving UDP datagrams. |
 | `network:server` | Serving HTTP with `network.serve`, together with `network:tcp`. |
 | `exec` | Running other programs with `os.execute` and `io.popen`. |
-| `env` | Reading environment variables with `os.getenv`. |
+| `env` | Reading environment variables with `os.getenv` and setting them with `os.setenv`. `env:read` and `env:write` allow one of the two. |
 | `load` | Running code that the program loads while it runs, with `load`, `require` of a file, or a worker. |
 
 Some operations need two permissions: loading a module file or starting a worker needs `load` to run the code and `fs:read` to read the file.
@@ -4109,6 +4109,17 @@ end
 io.stderr:write(`numbered $number lines\n`)
 ```
 
+[`file:isatty`](/manual/api#file:isatty) tells whether a handle is a terminal. A program that prints colors checks `io.stdout:isatty()` first, so its output stays plain text in a file or a pipe. [`file:setraw`](/manual/api#file:setraw) switches a terminal to raw input, where each key reaches the program as soon as it is pressed and nothing is echoed. Arrow keys arrive as escape sequences such as `"\27[A"`. A menu that moves with the arrow keys, or a prompt for a password, reads keys in raw mode and switches back when it is done. The process restores the terminal when it ends, even after an error. The following function reads one key.
+
+```lus nocheck
+local function readkey()
+    io.stdin:setraw(true)
+    local key = io.stdin:read(1)
+    io.stdin:setraw(false)
+    return key
+end
+```
+
 A mode with a `b`, such as `"rb"`, opens a file in binary mode, where a read returns raw bytes as a [vector](#vector). In text mode, a read returns a string and checks that the string is valid text. The [io library reference](/manual/api#io-library) lists every function and every method of a file handle. [Text and bytes](/manual/text#files) describes the two modes.
 
 ### `os`
@@ -4136,12 +4147,20 @@ end
 print(string.format("%.3f seconds", os.clock() - start))  --> 0.004 seconds
 ```
 
-[`os.getenv`](/manual/api#os.getenv) returns the value of an environment variable, or `nil` when the variable is not set. It needs the `env` permission, which a program can [narrow](#narrowing-a-permission) to the variables it reads. The following program reads the home directory of the user and picks `vi` when no editor is configured.
+[`os.getenv`](/manual/api#os.getenv) returns the value of an environment variable, or `nil` when the variable is not set. It needs the `env:read` permission, which `env` includes and which a program can [narrow](#narrowing-a-permission) to the variables it reads. The following program reads the home directory of the user and picks `vi` when no editor is configured.
 
 ```lus nocheck
 pledge("env")
 print(os.getenv("HOME"))                  --> /home/ada
 local editor = os.getenv("EDITOR") or "vi"
+```
+
+[`os.setenv`](/manual/api#os.setenv) sets an environment variable, and removes it when the value is `nil`. It needs the `env:write` permission. The new value reaches `os.getenv` and every program that `os.execute` or `io.popen` starts afterwards. The following program sets a variable before it runs a tool that reads it.
+
+```lus nocheck
+pledge("env", "exec")
+os.setenv("TOOL_LEVEL", "debug")
+os.execute("tool --check")
 ```
 
 [`os.tmpname`](/manual/api#os.tmpname) creates an empty file with a fresh name in the temporary directory of the system and returns its path. It needs the `fs:write` permission. The file stays until the program removes it with `fs.remove`.

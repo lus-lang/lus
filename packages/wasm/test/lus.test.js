@@ -62,7 +62,7 @@ describe("run", () => {
     assert.equal(
       r.stdout,
       "false\t(playground):1: permission \"fs:write\" denied for '/notes.txt'\n" +
-        "false\t(playground):2: permission \"env\" denied for 'HOME'\n",
+        "false\t(playground):2: permission \"env:read\" denied for 'HOME'\n",
     );
     assert.equal(lus.fs.exists("/notes.txt"), false);
   });

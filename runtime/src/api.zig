@@ -18,7 +18,7 @@ const Global = state.Global;
 const Error = state.Error;
 
 /// The version of the runtime, as `lus -v` prints it.
-pub const version = "Lus 2.0.0-dev";
+pub const version = "Lus " ++ @import("build_options").version;
 
 pub const Options = struct {
     /// Libraries to open. All by default.
@@ -72,6 +72,7 @@ fn closeRest(g: *state.Global) void {
         g.gpa.destroy(map);
     }
     @import("vm/pledge.zig").deinit(g);
+    @import("lib/os.zig").deinitEnviron(g);
     state.destroy(g);
 }
 
