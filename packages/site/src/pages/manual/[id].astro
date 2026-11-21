@@ -17,9 +17,8 @@ const { page } = Astro.props
 const rendered = await render(page)
 
 // prev/next follows the sidebar's visible order: group rank first
-// (learn → use → reference), then frontmatter `order`; acquis pages have
-// no group and high orders, so they trail the reference group
-const rank: Record<string, number> = { learn: 0, use: 1, reference: 2 }
+// (learn → use → library → reference), then frontmatter `order`
+const rank: Record<string, number> = { learn: 0, use: 1, library: 2, reference: 3 }
 const all = manual.toSorted(
   (a, b) =>
     (rank[a.data.group ?? "reference"] - rank[b.data.group ?? "reference"]) ||
@@ -54,24 +53,10 @@ for (const h of headings) {
 
 // the chapter's readout: one bar per h2 section, sized by its length
 const sections = (page.body ?? "").split(/^## /m).slice(1)
-// the acquis index reads every acquis instead, one bar each
-const acquisPages = manual
-  .filter((p) => p.data.acquis)
-  .toSorted((a, b) => a.data.order - b.data.order)
 // h2 headings in order, to link each section bar to its section
 const h2Slugs = rendered.headings.filter((h) => h.depth === 2).map((h) => `#${h.slug}`)
-const sectionLinks =
-  page.id === "acquis"
-    ? acquisPages.map((p) => `/manual/${p.id}`)
-    : h2Slugs.length === sections.length
-      ? h2Slugs
-      : undefined
-const sectionHeights =
-  page.id === "acquis"
-    ? skyline(acquisPages.map((p) => (p.body ?? "").length))
-    : sections.length >= 4
-      ? skyline(sections.map((t) => t.length))
-      : null
+const sectionLinks = h2Slugs.length === sections.length ? h2Slugs : undefined
+const sectionHeights = sections.length >= 4 ? skyline(sections.map((t) => t.length)) : null
 
 // the outline pairs each h2 with its readout bar when the readout reads
 // this page's own sections
@@ -92,13 +77,6 @@ const sidebarToc = headings
   toc={sidebarToc}
   markdown={`/manual/${page.id}.md`}
 >
-  {
-    page.data.acquis && (
-      <nav aria-label="Breadcrumb" class="crumb">
-        <a href="/manual/acquis">acquis</a> / {page.data.title}
-      </nav>
-    )
-  }
   {
     sectionHeights ? (
       <div class="title-row">
@@ -183,14 +161,6 @@ const sidebarToc = headings
     @apply sr-only focus:not-sr-only focus:inline-block focus:mt-10 focus:font-mono focus:text-xs focus:text-ink focus:bg-accent-soft focus:px-2 focus:py-1;
   }
 
-  .crumb {
-    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3 pt-2;
-
-    a {
-      @apply font-semibold no-underline text-link hover:text-ink;
-    }
-  }
-
   .draft-notice {
     @apply bg-tint-red text-ink-red font-semibold px-3 py-1.5 mb-3 text-sm;
 
@@ -265,10 +235,6 @@ const sidebarToc = headings
   }
 
   :global(html.unstable) {
-    .crumb a {
-      @apply text-link-red;
-    }
-
     .toc {
       .toc-label {
         @apply text-ink-red/70;

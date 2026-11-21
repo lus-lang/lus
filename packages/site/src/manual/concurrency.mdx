@@ -1,0 +1,310 @@
+---
+order: 40
+title: Coroutines and workers
+icon: cpu
+group: library
+shortdesc: "Detached coroutines that the runtime resumes when their sockets are ready, and workers that run scripts in parallel and exchange messages."
+---
+
+Lus runs work concurrently in two ways. A _detached coroutine_ is a coroutine that the runtime resumes by itself, so one state serves many network connections with ordinary sequential code. A _worker_ is a separate Lus state that runs a script on an operating system thread of its own, in parallel with its creator, and exchanges messages with it.
+
+## Detached coroutines
+
+A coroutine becomes detached when [`coroutine.detach`](/manual/api#coroutine.detach) hands it to the runtime. The runtime resumes it whenever what it waits for is ready, and blocking operations inside it suspend it while the other coroutines run. The coroutines of one state run one at a time, and each runs until it waits, yields, or ends. [Coroutines](/manual/guide#coroutines) in the guide describes plain coroutines, which keep their meaning.
+
+### Detaching a coroutine
+
+`coroutine.detach(co, ...)` hands the suspended coroutine `co` to the runtime and returns `co`. For a coroutine that has not started, the extra arguments are the arguments of its body. For a coroutine that already ran and yielded, they become the results of its pending `coroutine.yield`.
+
+```lus
+local function greet(name)
+    print("hello, " .. name)
+    return #name
+end
+
+local co = coroutine.detach(coroutine.create(greet), "world")
+print(coroutine.status(co))   --> suspended
+print(coroutine.resume(co))   --> hello, world, then: true  5
+```
+
+`detach` returns at once, and the coroutine starts on its next turn. Detached coroutines take turns in the order in which they became ready.
+
+Detaching raises an error when `co` is the main thread, or when it is running, normal, dead, or already detached. The message names the case, as in `"cannot detach the main thread"`, `"cannot detach a running coroutine"`, `"cannot detach a normal coroutine"`, `"cannot detach a dead coroutine"`, and `"cannot detach a detached coroutine"`.
+
+### Taking turns
+
+Inside a detached coroutine, [`coroutine.yield`](/manual/api#coroutine.yield) gives the next turn to the other detached coroutines, and the runtime resumes the coroutine when its turn comes again. The arguments of `yield` are dropped, and `yield` returns no values.
+
+```lus
+local log = {}
+local function step(name)
+    for i = 1, 2 do
+        log[#log + 1] = name .. i
+        coroutine.yield()
+    end
+end
+
+local a = coroutine.detach(coroutine.create(step), "a")
+local b = coroutine.detach(coroutine.create(step), "b")
+coroutine.resume(a)
+coroutine.resume(b)
+print(table.concat(log, " "))   --> a1 b1 a2 b2
+```
+
+A plain coroutine keeps its usual meaning inside a detached one. A generator made with [`coroutine.wrap`](/manual/api#coroutine.wrap), or driven with `coroutine.resume`, yields its values to the code that resumed it.
+
+```lus
+local task = coroutine.detach(coroutine.create(function()
+    local numbers = coroutine.wrap(function()
+        for i = 1, 3 do
+            coroutine.yield(i)
+        end
+    end)
+    local seen = {}
+    for n in numbers do
+        seen[#seen + 1] = n
+    end
+    return table.concat(seen, ",")
+end))
+
+print(coroutine.resume(task))   --> true  1,2,3
+```
+
+### Waiting for a detached coroutine
+
+[`coroutine.resume(co)`](/manual/api#coroutine.resume) on a detached coroutine waits until `co` has ended. It then returns what `resume` returns for any coroutine that ends: `true` and the results of the body, or `false` and the error object. Extra arguments passed to `resume` are ignored.
+
+```lus
+local ok = coroutine.detach(coroutine.create(function()
+    return "a", "b"
+end))
+local bad = coroutine.detach(coroutine.create(function()
+    error("failed", 0)
+end))
+
+print(coroutine.resume(ok))    --> true   a   b
+print(coroutine.resume(bad))   --> false  failed
+print(coroutine.resume(ok))    --> false  cannot resume dead coroutine
+```
+
+A detached coroutine that ends before anything resumes it keeps its results, or its error, until the first `resume` collects them. Every caller that was already waiting when the coroutine ended receives them as well. A later `resume` finds a dead coroutine and returns `false` and `"cannot resume dead coroutine"`.
+
+A detached coroutine that resumes another detached coroutine is suspended while it waits, and `coroutine.status` reports `"suspended"` for it. Code outside detached coroutines, such as the main chunk, runs the detached coroutines of the program while it waits. When the coroutines left can only wait for each other, none of them can continue, and the waiting `resume` returns `false` and `"deadlock: every coroutine waits for another coroutine"`.
+
+### Cancelling
+
+[`coroutine.close(co)`](/manual/api#coroutine.close) cancels a detached coroutine. The runtime stops resuming it, its pending to-be-closed variables are closed, and it is dead afterwards. Callers that were waiting for it in `resume` receive `false` and `"cannot resume dead coroutine"`. Closing a detached coroutine that failed returns `false` and its error object, which counts as collecting that error.
+
+```lus
+local log = {}
+local co = coroutine.detach(coroutine.create(function()
+    local mark <close> = setmetatable({}, { __close = function()
+        log[#log + 1] = "closed"
+    end })
+    while true do
+        coroutine.yield()
+    end
+end))
+
+local other = coroutine.detach(coroutine.create(function()
+    coroutine.yield()
+end))
+coroutine.resume(other)
+
+print(coroutine.close(co), log[1])   --> true  closed
+print(coroutine.status(co))          --> dead
+```
+
+### Suspension points
+
+A _suspension point_ is an operation that waits for something outside the program and lets other coroutines run while it waits. The suspension points are these operations.
+
+- `network.tcp.connect`, and `accept` on a TCP server.
+- `send` and `receive` on a TCP socket.
+- `receive` and `sendto` on a UDP socket.
+- [`worker.receive`](/manual/api#worker.receive), and [`worker.peek`](/manual/api#worker.peek) inside a worker.
+
+Inside a detached coroutine, a suspension point suspends the coroutine until it can continue, and the other coroutines run in the meantime. `coroutine.status` reports `"suspended"` for a coroutine that waits this way. In the main chunk, or in a plain coroutine that no detached coroutine resumed, the same operation blocks its caller and runs the detached coroutines while it waits.
+
+The following program accepts connections in one detached coroutine and serves each connection in a detached coroutine of its own. The `receive` of the main chunk is what lets the acceptor and the connection run.
+
+```lus
+pledge("network")
+
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+
+local acceptor = coroutine.detach(coroutine.create(function()
+    while true do
+        local sock = server:accept()
+        coroutine.detach(coroutine.create(function(conn)
+            local closing <close> = conn
+            while true do
+                local line = conn:receive("*l")
+                if #line == 0 then
+                    break
+                end
+                conn:send(vector.tostring(line) .. "\n")
+            end
+        end), sock)
+    end
+end))
+
+local sock <close> = network.tcp.connect("127.0.0.1", port)
+sock:send("ping\n")
+print(vector.tostring(sock:receive("*l")))   --> ping
+coroutine.close(acceptor)
+server:close()
+```
+
+A plain coroutine that reads a socket inside a detached coroutine suspends the detached coroutine with it, so a line iterator written with `coroutine.wrap` works unchanged on a connection that a detached coroutine serves. An operation called from a function that the runtime calls back from native code, such as the comparison function of `table.sort`, keeps its coroutine running and runs the other coroutines while it waits.
+
+A timeout set with `settimeout` bounds each wait and raises `"receive timeout"`, `"send timeout"`, `"sendto timeout"`, or `"accept timeout"` when it runs out. A zero timeout never waits. [Network](/manual/network#timeouts) describes the timeouts of sockets.
+
+### Errors that nothing collects
+
+The error of a detached coroutine belongs to whoever resumes or closes it. When a detached coroutine fails and nothing collects its error, the program stops with that error and the traceback of the coroutine. That happens when `lus` has finished running the coroutines after the main chunk, or earlier, when the collector finds the failed coroutine unreachable. Results that nothing collects are dropped.
+
+```lus nocheck
+coroutine.detach(coroutine.create(function()
+    coroutine.yield()
+    error("lost")
+end))
+print("main done")
+--> main done
+--> lus: script.lus:3: lost
+--> stack traceback: ...
+```
+
+### After the main chunk
+
+When the main chunk returns, `lus` keeps running the detached coroutines until every one of them has ended. A program whose main chunk only starts coroutines therefore runs to completion.
+
+```lus
+coroutine.detach(coroutine.create(function()
+    for i = 1, 3 do
+        print("tick", i)
+        coroutine.yield()
+    end
+end))
+print("the main chunk is done")
+--> the main chunk is done
+--> tick 1
+--> tick 2
+--> tick 3
+```
+
+A host that [embeds Lus](/manual/embedding) calls `lus_runpending(L, wait)` for the same effect. With `wait` nonzero it runs the coroutines until none is left. With `wait` zero it runs the ones that are ready and returns, which suits a host with an event loop of its own. `lus_pending` returns how many detached coroutines have not ended, and `lus_close` closes the ones that remain.
+
+## Workers
+
+Each worker has its own globals, stack, heap, and collector, so workers run in parallel with their creator and with each other. A worker shares no values with its creator. The two exchange copies of values as messages. Workers share the process with their creator, so the process stays the security boundary, and [permissions](/manual/permissions) limit what a worker may do. The WebAssembly build of Lus leaves the worker library out.
+
+### Creating a worker
+
+[`worker.create(path, ...)`](/manual/api#worker.create) starts a worker that runs the script at `path` and returns a handle to it. The extra arguments are copied into the new state and become the values of `...` in the script. A script that cannot be read makes the worker fail, and the first `worker.receive` raises the error `"cannot open worker script 'PATH': REASON"`.
+
+[`worker.status(handle)`](/manual/api#worker.status) returns `"running"` while the worker runs and `"dead"` after it has finished or failed.
+
+### Messages
+
+Inside a worker, [`worker.message(value)`](/manual/api#worker.message) appends a copy of `value` to the outbox of the worker. The creator calls `worker.receive(handle)`, which waits for the next value and returns it. In the other direction, [`worker.send(handle, value)`](/manual/api#worker.send) appends a copy to the inbox of the worker, and `worker.peek()` inside the worker waits for the next value and returns it. Each queue keeps its messages in the order they were sent.
+
+The following program writes a worker script, starts it with a table of numbers, sends it a command, and receives two messages back.
+
+```lus
+io.open("summer.lus", "w"):write([[
+    local values = ...
+    local total = 0
+    for _, v in ipairs(values) do
+        total = total + v
+    end
+    worker.message(total)
+    local command = worker.peek()
+    worker.message(command.reply)
+]]):close()
+
+local handle = worker.create("summer.lus", {1, 2, 3})
+print(worker.receive(handle))           --> 6
+worker.send(handle, { reply = "done" })
+print(worker.receive(handle))           --> done
+print(worker.receive(handle))           --> nil
+print(worker.status(handle))            --> dead
+```
+
+A worker that has finished and has no message left makes `worker.receive` return `nil`.
+
+`worker.receive` accepts several handles. It waits until at least one of them has a message or has ended, then returns one value per handle, in the order of the arguments. A handle without a ready message contributes `nil`.
+
+```lus
+io.open("echo.lus", "w"):write("worker.message(...)"):close()
+
+local first = worker.create("echo.lus", "first")
+local second = worker.create("echo.lus", "second")
+
+local pending = 2
+while pending > 0 do
+    local a, b = worker.receive(first, second)
+    if a then print(a) pending = pending - 1 end
+    if b then print(b) pending = pending - 1 end
+end
+```
+
+### Values that cross between states
+
+`nil`, booleans, numbers of every subtype, strings, tables, and vectors may cross between a worker and its creator, as arguments of `worker.create` and as messages. Every other type, such as functions, coroutines, userdata, enum values, and queries, raises an error such as `"cannot serialize function to worker"`.
+
+A table arrives as a copy, so the receiver never changes the table of the sender. The copy keeps the shape of the original: two references to one table arrive as two references to one copy, and a table that contains itself arrives as a copy that contains itself. Metatables stay behind. Tables may nest up to 100 levels, and a deeper table raises `"table nesting too deep for serialization"`.
+
+```lus
+io.open("shape.lus", "w"):write([[
+    local t = ...
+    worker.message(t.a == t.b and t.self == t)
+]]):close()
+
+local shared = {}
+local value = { a = shared, b = shared }
+value.self = value
+print(worker.receive(worker.create("shape.lus", value)))   --> true
+```
+
+A vector moves to the receiver instead. The receiver takes over its bytes, and the vector of the sender becomes empty. Sending it again raises `"cannot send a vector that was transferred to another worker"`, and `vector.tostring` on it raises an error that says the vector was transferred to another worker.
+
+```lus
+io.open("size.lus", "w"):write("worker.message(#(...))"):close()
+
+local bytes = vector.fromstring("abc")
+local handle = worker.create("size.lus", bytes)
+print(worker.receive(handle))   --> 3
+print(#bytes)                   --> 0
+```
+
+### Errors in a worker
+
+An error that ends the script of a worker is raised in the creator by `worker.receive`, and by every later `worker.receive` on that handle. A `catch` around the call captures it as usual.
+
+```lus
+io.open("broken.lus", "w"):write('error("worker broke", 0)'):close()
+
+local handle = worker.create("broken.lus")
+local ok, err = catch worker.receive(handle)
+print(ok, err)                  --> false  worker broke
+print(worker.status(handle))    --> dead
+```
+
+[`os.exit`](/manual/api#os.exit) ends the process when the main state calls it. Inside a worker it raises the error `"os.exit is unavailable in a worker"`, which the worker may catch and continue. An uncaught instance reaches the creator through `worker.receive`, like any other error of the worker.
+
+### Permissions of a worker
+
+Creating a worker requires the `load` permission and `fs:read` for its script. The worker starts with a sealed copy of the permissions of its creator, so it may use everything its creator held when it created the worker, and every `pledge` inside the worker returns `false`. [Permissions in workers](/manual/permissions#permissions-in-workers) describes the rule.
+
+### Detached coroutines in a worker
+
+A worker runs its script and then the coroutines that the script detached, as `lus` does for a program, and it ends when the last of them has ended. `worker.receive` and `worker.peek` are suspension points, so a detached coroutine that waits for a message lets the other coroutines of its state run. The error of a detached coroutine that failed with nothing left to collect it becomes the error of the worker, and `worker.receive` raises it in the creator.
+
+## Related pages
+
+- [Network](/manual/network) describes the sockets whose operations are suspension points, and the `network.serve` HTTP server that runs every connection in a detached coroutine.
+- [Permissions](/manual/permissions) describes how coroutines and workers inherit permissions.
+- [Coroutines](/manual/guide#coroutines) in the guide describes `coroutine.create`, `resume`, `yield`, and `wrap`.
+- [Embedding](/manual/embedding) describes `lus_runpending` and the rest of the C interface.

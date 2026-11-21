@@ -1,5 +1,5 @@
 --[[
-    Test suite for the package module (Acquis: modules and require).
+    Test suite for the package module (modules and require).
 
     This exercises the caching semantics of package.loaded, the priority
     of package.preload, on-disk module resolution through package.path with

@@ -1,0 +1,555 @@
+---
+order: 4.6
+title: Developer tools
+icon: wrench
+group: use
+shortdesc: "The formatter, checker, documentation generator, syntax trees, standalone executables, binary chunks, debugger, and reference built into lus."
+---
+
+The `lus` executable carries the everyday tools of a Lus project as commands. Each tool uses the parser of the interpreter, so every tool accepts exactly the programs the interpreter accepts and reports positions the way the compiler does. The [CLI page](/manual/cli) lists the options of every command, and [Testing](/manual/testing) describes `lus test`.
+
+```
+lus fmt      format source files
+lus check    check source files for errors and lint warnings
+lus doc      generate API documentation from doc comments
+lus ast      print the syntax tree of a file as JSON
+lus build    bundle a script into a standalone executable
+lus compile  compile a script to a binary chunk
+lus debug    run a script under the Debug Adapter Protocol
+lus help     print the standard library reference for a name
+lus agents   set a project up for coding agents
+```
+
+## Files, input, and exit status
+
+`lus fmt` and `lus check` accept files and directories. A directory stands for every `.lus` file below it, except the files in a directory named `node_modules`, `.git`, `zig-out`, or `.zig-cache`. With no file, or with the file `-`, both read standard input. `lus doc` and `lus ast` take file names only.
+
+The tools share one convention for the exit status. It is 0 on success, 1 when the tool reports a problem in the input, such as a syntax error, an unformatted file, or a diagnostic, and 2 for a usage error or a file that cannot be read.
+
+## Formatting
+
+`lus fmt` prints the formatted text of each file to standard output. `--write` rewrites the files that change in place. `--check` changes nothing, lists each file that is not formatted as `FILE: not formatted`, and exits with status 1 if there is one, which suits continuous integration. `--indent N` sets the width of one indentation level, 4 spaces by default.
+
+```sh
+lus fmt --write src
+lus fmt --check src
+```
+
+A file that does not parse stays unchanged, and the formatter reports the syntax error and exits with status 1. [`debug.format`](/manual/api#debug.format) exposes the same formatter to Lus code.
+
+## Checking
+
+`lus check` parses, lints, and compiles each file without running it. It prints each problem as `file:line:column: severity: message [code]`, where the code names the diagnostic. The following file has two problems.
+
+```lus
+local unused = 1
+local function area(w, h)
+    return w * h
+end
+total = area(4, 5)
+```
+
+`lus check` reports them as follows.
+
+```
+messy.lus:1:7: warning: unused local 'unused' [unused-local]
+messy.lus:5:1: warning: global 'total' is assigned without a 'global' declaration [implicit-global]
+```
+
+An _error_ is a program the compiler rejects, such as an assignment to a constant, a `goto` without a visible label, or a `continue` outside every loop. A _warning_ is a program that runs but probably does not do what its author meant, such as an unused local, a shadowed name, or unreachable code. A name that starts with an underscore is exempt from the unused checks. The exit status is 1 when `lus check` reports anything, warnings included.
+
+### Diagnostic codes
+
+Every diagnostic has a stable code, and `lus check --list` prints each code with its severity and summary. The codes are the following.
+
+| Code | Severity | Reports |
+| --- | --- | --- |
+| `unused-local` | warning | A local variable is never read. |
+| `unused-function` | warning | A local function is never used. |
+| `unused-param` | warning | A function parameter is never read. |
+| `unused-loop-var` | warning | A loop variable is never read. |
+| `unused-label` | warning | No `goto` jumps to a label. |
+| `shadowed-local` | warning | A local hides another visible local of the same name. |
+| `undefined-global` | warning | A free name is read but never defined in the file nor by the runtime. |
+| `implicit-global` | warning | A global is assigned without a `global` declaration. |
+| `unreachable-code` | warning | A statement follows a `break`, `continue`, or `goto` in the same block. |
+| `duplicate-key` | warning | A table constructor sets the same constant key twice. |
+| `self-assign` | warning | A variable or field is assigned to itself. |
+| `deprecated-pcall` | warning | `pcall` or `xpcall` is used where Lus has `catch`. |
+| `pledge-after-seal` | warning | A `pledge` follows `pledge("seal")` and has no effect. |
+| `use-from` | warning | Fields of one table are copied into same-named locals one by one. |
+| `use-optional-chain` | warning | Nested nil checks or an `and` chain spell out optional chaining. |
+| `use-if-assign` | warning | A local exists only for the truth test of the next `if`. |
+| `doc-unknown-param` | warning | A doc comment documents a parameter the function does not have. |
+| `assign-const` | error | A constant, a close variable, or a loop control variable is assigned. |
+| `undeclared-global` | error | A free name is used in the scope of a named `global` declaration. |
+| `undefined-label` | error | A `goto` names no visible label. |
+| `duplicate-label` | error | A label repeats a visible label of the same function. |
+| `continue-outside-loop` | error | A `continue` appears outside every loop. |
+| `continue-into-scope` | error | A `continue` in a `repeat` loop skips a local that the condition can see. |
+| `syntax` | error | The file does not parse. |
+| `compile` | error | The compiler rejects the file for another reason. |
+
+### Lua idioms with a Lus form
+
+Five warnings point at Lua idioms that a Lus feature expresses directly. Each one names the Lus form in its message.
+
+A `pledge` after `pledge("seal")` has no effect, because sealing freezes the [permissions](/manual/permissions).
+
+```lus
+pledge("fs")
+pledge("seal")
+pledge("network")  -- pledge() after pledge("seal") has no effect, permissions are frozen [pledge-after-seal]
+```
+
+Lus 2.0 defines neither `pcall` nor `xpcall`. `lus check` reports a reference to either and names the [`catch`](/manual/guide#error-handling) expression that takes their place.
+
+```lus nocheck
+local ok, err = pcall(risky)  -- 'pcall' no longer exists, use a 'catch' expression instead [deprecated-pcall]
+```
+
+The `catch` form reads as follows.
+
+```lus
+local function risky() error("failed", 0) end
+local ok, err = catch risky()
+print(ok, err)  --> false	failed
+```
+
+A local that exists only for the truth test of the next `if` moves into the condition with [if-assignment](/manual/guide#if-elseif-else).
+
+```lus
+local function lookup() return 42 end
+local value = lookup()
+if value then  -- local declaration can be moved to the if condition (use if-assignment) [use-if-assign]
+    print(value)
+end
+```
+
+The if-assignment form declares the local in the condition, where it stays in scope for the body of the `if`.
+
+```lus
+local function lookup() return 42 end
+if value = lookup() then
+    print(value)  --> 42
+end
+```
+
+An `and` chain that guards each step of a field access, and nested checks against `nil`, spell out [optional chaining](/manual/guide#optional-chaining).
+
+```lus
+local cfg = { server = { port = 8080 } }
+local port = cfg and cfg.server and cfg.server.port  -- and-chain can use optional chaining: x?.y?.z [use-optional-chain]
+if cfg ~= nil then  -- nested nil checks can use optional chaining: x?.y?.z [use-optional-chain]
+    if cfg.server ~= nil then
+        print(cfg.server.port)
+    end
+end
+```
+
+The optional chaining form reads as follows.
+
+```lus
+local cfg = { server = { port = 8080 } }
+print(cfg?.server?.port)  --> 8080
+```
+
+Fields of one table copied into locals of the same names, one by one, spell out [`from` destructuring](/manual/guide#table-destructuring).
+
+```lus
+local t = { a = 1, b = 2, c = 3 }
+local a, b, c = t.a, t.b, t.c  -- use 'from' destructuring: local ... from t [use-from]
+local x, y, z from { x = 1, y = 2, z = 3 }
+print(a, b, c, x, y, z)  --> 1	2	3	1	2	3
+```
+
+### Syntax hints
+
+A syntax error on a construct from another language names the Lus spelling, which helps people and coding agents who reach for the habits of other languages.
+
+```
+total.lus:2:3: error: syntax error near '+' (update a variable with 'x = x + y') [syntax]
+```
+
+The hints cover compound assignment such as `+=`, the increment `++`, the operators `!=`, `!`, `&&`, and `||`, and comments that start with `//`. A read of the undefined global `null` reports `undefined-global` with the hint `the absent value is written 'nil'`.
+
+### Test files and machine output
+
+A file whose name ends in `_test.lus` is checked as a [test file](/manual/testing). The helpers `snapshot`, `raises`, `same`, and `skip` and the global `TEST_DIR` count as defined. The top-level `NAME_test` functions and `NAME_cases` tables that the runner reads count as used.
+
+`--json` prints all diagnostics as one JSON array, for editors and other tools. Each object has the fields `file`, `line`, `column`, `endLine`, `endColumn`, `severity`, `code`, and `message`.
+
+```
+[
+  {"file": "messy.lus", "line": 1, "column": 7, "endLine": 1, "endColumn": 13, "severity": "warning", "code": "unused-local", "message": "unused local 'unused'"}
+]
+```
+
+## Documentation
+
+`lus doc` turns doc comments into reference documentation. A _doc comment_ is a run of `---` line comments, or one `--[[- ... ]]` long comment, that sits on its own lines and ends on the line directly above a declaration. Its text is Markdown, and lines that start with an annotation describe the declaration.
+
+```lus
+--- Joins strings with a separator.
+---
+--- The parts are converted with `tostring` first.
+--- @param sep string The separator.
+--- @param parts any The values to join.
+--- @return string The joined text.
+--- @since 2.0
+local function join(sep, ...parts)
+    local out = {}
+    for i, part in ipairs(parts) do
+        out[i] = tostring(part)
+    end
+    return table.concat(out, sep)
+end
+
+print(join(", ", 1, 2, 3))  --> 1, 2, 3
+```
+
+The annotations are the following.
+
+- `@param NAME TYPE DESCRIPTION` documents a parameter. A `?` after the name or after the type marks it optional. `...` documents unnamed variable arguments, and named variable arguments such as `...parts` are documented under their bare name.
+- `@return TYPE DESCRIPTION` documents one result, in order. `@returns` is the same annotation.
+- `@since VERSION` records the release in which the entry appeared.
+- `@stability LEVEL` records how settled the entry is.
+
+A line indented under an annotation continues its description. Every other line is free Markdown text.
+
+### Modules and entries
+
+Each file is one module, named after the file without its extension. A doc comment at the very start of the file that a blank line follows describes the module. When the file ends with `return NAME`, a doc comment on the declaration of the local `NAME` describes the module too.
+
+The documented entries are the top-level declarations: local, global, and field functions, locals, and globals, and the fields of the table that the module returns by name. Global functions and the functions stored in the returned table are public, so `lus doc` lists them even without a doc comment. Every other declaration is listed only when it has one.
+
+```lus
+local M = {}
+
+--- Opens a resource.
+--- @param path string The path to open.
+function M.open(path)
+    return path
+end
+
+function M.close() end
+
+local function helper() end
+
+return M
+```
+
+Entries in the returned table take the name of the module. For this module, saved as `res.lus`, `lus doc` lists `res.open` with its comment and `res.close` without one, and leaves the local `helper` out.
+
+### Output
+
+The default output is Markdown on standard output, which starts with the frontmatter of the module and has one section per entry. `--format json` writes a model whose entries carry the frontmatter fields of the [standard library specification](https://github.com/lus-lang/lus/tree/main/spec), `name`, `module`, `kind`, `params`, `vararg`, `returns`, `since`, `stability`, and `receiver`, plus `description`, `line`, and a description for each parameter. `-o DIR` writes one file per module into a directory, named `MODULE.md` or `MODULE.json`.
+
+```sh
+lus doc -o docs src/*.lus
+lus doc --format json strings.lus
+```
+
+The language server shows the same comments on hover, and `lus check` reports a `@param` that names no parameter as `doc-unknown-param`. One set of comments serves the editor, the checker, and the documentation.
+
+## Syntax trees
+
+A _syntax tree_ is the tree of nodes that the parser builds from source text. Lus exposes it in two forms: [`debug.parse`](/manual/api#debug.parse) returns it as nested tables, and `lus ast FILE` prints the same tree as JSON. Both serve static analysis, code transformation, and tooling. The JSON schema of the tree is `spec/language/ast.schema.json` in the repository.
+
+### `debug.parse`
+
+`debug.parse(code, chunkname, options)` parses a source string and returns the tree followed by `nil`. The optional `chunkname` names the chunk in error messages and defaults to `"=(parse)"`. The code may also be given as a vector of bytes.
+
+```lus
+local tree = debug.parse("local x = 1 + 2")
+print(tree.type, tree.line, tree.children[1].type)  --> chunk	1	local
+```
+
+The `options` table takes two boolean fields, both true by default. With `comments`, the root lists every comment in a `comments` array. With `recover`, a token that cannot start a statement becomes an `error_stat` node and parsing resumes at the next statement. A parse that stops at an error still returns the tree read so far, and every error is listed in the `errors` array of the root. With `recover` set to `false`, a source that does not parse returns `nil` and the error message.
+
+```lus
+local tree = debug.parse("local a = 1\n) 2\nlocal b = 3\n")
+for _, node in ipairs(tree.children) do
+    print(node.type, node.line)
+end
+--> local	1
+--> error_stat	2
+--> local	3
+print(debug.parse("local = 1", "input.lus", { recover = false }))
+--> nil	[string "input.lus"]:1: <name> expected near '='
+```
+
+### Nodes
+
+Each node is a table with the following fields.
+
+- `type` names the kind of node, such as `"chunk"`, `"local"`, or `"binop"`.
+- `line` and `column` give the position where the node starts. Both count from 1, and a column counts bytes.
+- `endline` and `endcolumn` give the position of the last token of the node, when the node has one.
+- The fields of the node depend on its type, such as `op`, `left`, and `right` for a `binop`.
+- `children` holds the statements of a block, the `elseif` and `else` nodes of an `if`, or the fields of a table. A list field is absent when the list is empty.
+
+The node types are the following.
+
+| Category | Types |
+| --- | --- |
+| Statements | `chunk`, `local`, `global`, `assign`, `if`, `elseif`, `else`, `while`, `repeat`, `fornum`, `forgen`, `funcstat`, `localfunc`, `return`, `callstat`, `break`, `continue`, `goto`, `label`, `catchstat`, `provide`, `do`, `error_stat` |
+| Expressions | `nil`, `true`, `false`, `number`, `string`, `vararg`, `name`, `index`, `field`, `binop`, `unop`, `table`, `tablefield`, `funcexpr`, `callexpr`, `methodcall`, `enum`, `doexpr`, `catchexpr`, `slice`, `interp` |
+| Queries | `query`, `qsource`, `qclause`, `qitem`, `qstar` |
+
+A few common nodes have the following shapes.
+
+```lus nocheck
+{type = "binop", line = 1, column = 13, op = "+", left = {...}, right = {...}}
+{type = "local", line = 1, column = 1, names = {...}, values = {...}, isfrom = false}
+{type = "callstat", line = 1, column = 1, func = {...}, args = {...}}
+{type = "if", line = 1, column = 1, cond = {...}, children = {...}}
+{type = "fornum", line = 1, column = 1, var = {...}, init = {...}, limit = {...}, step = {...}, children = {...}}
+```
+
+### Walking a tree
+
+A recursive function over `children` visits every statement. The following program prints the statements of a chunk with their lines.
+
+```lus
+local code = [[
+local x = 1 + 2
+print(x)
+]]
+
+local function walk(node, depth)
+    print(string.rep("  ", depth) .. node.type .. " (line " .. node.line .. ")")
+    for _, child in ipairs(node.children or {}) do
+        walk(child, depth + 1)
+    end
+end
+
+walk(debug.parse(code), 0)
+--> chunk (line 1)
+-->   local (line 1)
+-->   callstat (line 2)
+```
+
+The same walk supports simple lint rules. The following program reports every assignment to a bare name at the top level of a chunk.
+
+```lus
+local function check_globals(tree, filename)
+    for _, stat in ipairs(tree.children or {}) do
+        if stat.type == "assign" then
+            for _, target in ipairs(stat.lhs or {}) do
+                if target.type == "name" then
+                    print(`$(filename):$(stat.line): assignment to '$(target.value)'`)
+                end
+            end
+        end
+    end
+end
+
+check_globals(debug.parse("local a = 1\ncount = a\n"), "input.lus")
+--> input.lus:2: assignment to 'count'
+```
+
+### `lus ast`
+
+`lus ast FILE` prints the syntax tree of a file as JSON, with the fields of every node in a fixed order: `type`, `line`, `column`, the end position, the fields of the node, and then `children`. The root lists the comments of the file before its children. `--no-comments` leaves the comments out, and `--no-recover` stops at the first syntax error, prints it, and exits with status 1. Without `--no-recover`, a file with syntax errors still prints its tree with the `errors` array, and the exit status is 1.
+
+```sh
+lus ast app.lus > app.json
+```
+
+The command prints the following tree for the line `local x = 1 + 2`, shortened here to its first node.
+
+```json
+{
+  "type": "local",
+  "line": 1,
+  "column": 1,
+  "endline": 1,
+  "endcolumn": 15,
+  "names": [{ "type": "name", "line": 1, "column": 7, "value": "x" }],
+  "values": [
+    {
+      "type": "binop",
+      "line": 1,
+      "column": 13,
+      "endline": 1,
+      "endcolumn": 15,
+      "op": "+",
+      "left": { "type": "number", "line": 1, "column": 11, "endline": 1, "endcolumn": 11, "value": 1 },
+      "right": { "type": "number", "line": 1, "column": 15, "endline": 1, "endcolumn": 15, "value": 2 }
+    }
+  ],
+  "isfrom": false
+}
+```
+
+## Standalone executables
+
+`lus build SCRIPT` bundles a script and the modules it requires into one executable that runs without the source files. The executable is named after the script without its extension, with `.exe` added on Windows, and `-o FILE` names it explicitly.
+
+```sh
+lus build -o app main.lus
+./app first-argument
+```
+
+The command compiles the script, finds every `require` whose argument is a string literal, resolves those names through the module path, and compiles the modules it finds, recursively. `LUS_PATH` changes the module path, as it does for the interpreter. Names that resolve to no file, such as standard library modules, are left to the usual searchers at run time.
+
+### Including modules
+
+`--include` bundles a module that no literal `require` names, such as a module whose name the program computes. A file is bundled under its name without the extension.
+
+```sh
+lus build app.lus --include lib/utils.lus --include lib/config.lus
+```
+
+The program then loads the bundled modules by those names.
+
+```lus nocheck
+local utils = require("utils")    -- lib/utils.lus
+local config = require("config")  -- lib/config.lus
+```
+
+A suffix `:alias` bundles a file under another name.
+
+```sh
+lus build app.lus --include vendor/json.lus:json
+```
+
+A directory bundles every `.lus` and `.lua` file below it, recursively. Each module is named by its path from the directory's own name, with dots between the parts.
+
+```sh
+lus build app.lus --include lib
+```
+
+```lus nocheck
+local http = require("lib.http")       -- lib/http.lus
+local utils = require("lib.utils")     -- lib/utils.lus
+local sub = require("lib.sub.module")  -- lib/sub/module.lus
+```
+
+### Running the executable
+
+The executable is a copy of the running `lus` with the compiled chunks appended. Bundled modules are part of the program. `require` finds them before any file, so a bundled module takes precedence over a file of the same name in the working directory, and it loads them with no permission, as it does for [preincluded](/manual/guide#preincluded-modules) modules.
+
+The executable grants nothing implicitly. The program runs with exactly the permissions it pledges, plus those given with `-P` at build time, which apply every time it runs. [Compile-time flags](/manual/guide#compile-time-flags) given with `-F` fold into the bundled chunks.
+
+```sh
+lus build app.lus -P fs:read -P network -F release
+./app  # runs with fs:read and network, compiled with flags.release
+```
+
+Every command line argument goes to the script, including arguments that look like options of `lus`. The script reads them from `arg` and `...` as usual, and `arg[0]` is the path of the executable.
+
+```lus nocheck
+-- ./app foo bar
+print(arg[0])  --> ./app
+print(arg[1])  --> foo
+print(...)     --> foo	bar
+```
+
+## Binary chunks
+
+A _binary chunk_ is a compiled function in the serialized form that [`string.dump`](/manual/api#string.dump) writes. `lus compile SCRIPT` writes the compiled script as a binary chunk to `SCRIPT.lusc`, where `SCRIPT` is the script name without its extension, or to the file named by `-o`. `-s` leaves out debug information. `-F` defines compile-time flags as for `lus build`, so their branches fold into the chunk.
+
+```sh
+lus compile -o report.lusc report.lus
+lus report.lusc data.csv
+```
+
+`lus` runs a binary chunk directly, and `load` reads one in binary mode under the `load` permission. A binary chunk depends on the version of the runtime that wrote it, so it suits trusted storage and distribution.
+
+```lus
+local chunk = string.dump(function(n) return n * 2 end)
+local double = load(chunk, "double", "b")
+print(double(21))  --> 42
+```
+
+## Debugger
+
+`lus debug` runs a script under the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/), the protocol that VS Code and many other editors use to drive debuggers. The adapter is part of the interpreter, so any editor with a client for the protocol can set breakpoints in Lus code, step through it, and inspect its state with nothing installed beyond `lus`.
+
+### Running the adapter
+
+```
+lus debug [--stdio | --port N] [-P perm]... [SCRIPT [ARGS...]]
+```
+
+By default the adapter speaks the protocol on standard input and output, which is how editors launch it. `--port N` accepts one client on `127.0.0.1:N` instead, for clients that connect to a running adapter. The script comes from the command line or from the `program` field of the launch request. `-P` grants [permissions](/manual/permissions) to the program as `lus -P` does, so a debugging session runs under the same permissions as a real run.
+
+The standard output and standard error of the program reach the editor as output events. In stdio mode the standard input of the program reads as empty, because the protocol uses the real one.
+
+### Visual Studio Code
+
+The [Lus extension](/manual/ide-setup) registers the `lus` debugger type, so **Run and Debug** works on any `.lus` file. A launch configuration in `.vscode/launch.json` names the program and its options.
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lus",
+      "request": "launch",
+      "name": "Debug Lus File",
+      "program": "${file}",
+      "cwd": "${workspaceFolder}",
+      "args": [],
+      "pledges": ["fs:read=${workspaceFolder}/*"],
+      "stopOnEntry": false
+    }
+  ]
+}
+```
+
+The fields of a launch configuration are the following.
+
+| Field | Meaning |
+| --- | --- |
+| `program` | The Lus script to run. It is required. |
+| `args` | The arguments passed to the script. |
+| `cwd` | The working directory of the program. |
+| `stopOnEntry` | Stop at the first line of the program. The default is `false`. |
+| `pledges` | The permissions granted to the program, as with `lus -P`. |
+
+The extension starts the `lus` found on the `PATH`. The setting `lus.executablePath` names another executable, and a relative path with a directory part resolves against the workspace folder.
+
+### Breakpoints and stepping
+
+The adapter supports the debugging features that editors expose for most languages.
+
+- **Breakpoints** stop on any line. A breakpoint may carry a **condition**, a Lus expression that must be truthy for it to stop. It may carry a **hit count**, which is a number that stops on exactly that hit, or a number after one of the operators `>=`, `<=`, `>`, `<`, `==`, and `%`, where `%3` stops on every third hit. It may carry a **log message**, which prints instead of stopping and interpolates expressions written in braces, as in `x is {x}`.
+- **Error breakpoints** have two filters. _Uncaught Errors_, on by default, stops on an error that no `catch` captures. _All Raised Errors_ stops on every error at the point where it is raised, including errors that a `catch` captures.
+- **Stepping** covers step over, step in, and step out, plus **pause** while the program runs. New breakpoints take effect immediately, even while the program runs.
+- **Call stacks** follow coroutines. The frames of a coroutine stack on top of the frames of the code that resumed it, so stepping out of a coroutine lands in its resumer.
+- **Variables** appear in three scopes for each frame: its locals, its upvalues, and the globals. Tables, vectors, and other values expand in place.
+- **Evaluation** runs expressions in the context of the selected frame, from the debug console and on hover.
+
+### How the adapter works
+
+The adapter is written in Zig and runs no Lus code of its own inside the program. It attaches through a native hook in the interpreter. While debugging, every thread runs the hooked dispatch loop with line events, and the interpreter reports each error before it searches for a handler. Breakpoints, stepping, and pausing are decided on line events, which cost one hash lookup by source and one bit test when breakpoints exist. A program that runs without the debugger runs the unhooked loop and pays nothing.
+
+Stepping compares stack depths, where the depth of a thread counts its frames and the frames of every thread that resumed it. Step over stops at the next line at the same depth or shallower, step out at the next line strictly shallower, and step in at the next line anywhere.
+
+While the program runs, a reader thread queues incoming requests, and the line hook handles them between lines. While the program is stopped, the interpreter thread waits for requests and answers them, which is when the stack, the variables, and the expressions are inspected.
+
+## Standard library reference
+
+`lus help NAME` prints the signature, the permissions the call needs, the stability, and the description of a standard library entry. The reference is compiled into the executable, so it matches the running version. `lus help MODULE` lists a module with one line per entry, `lus help` lists the modules, and `lus help --search TEXT` lists the entries whose name or description mentions `TEXT`. When no entry has the given name, `lus help` lists the entries whose names contain it. When no name contains it either, the command exits with status 1.
+
+```
+$ lus help network.serve
+network.serve(host, port, handler, options?)
+needs network:server, network:tcp
+
+Serves HTTP/1.1 on `host` and `port` and calls `handler` for every request. ...
+```
+
+## Agent setup
+
+`lus agents init [DIR]` writes the agent skills of the running version into `DIR/.agents/skills`, the folder that coding agents across tools read. `DIR` defaults to the current directory. The command links `.claude/skills` to that folder, or links each skill into it when `.claude/skills` is already a directory, and copies the skills where the system refuses symbolic links. It then adds a short Lus section to `AGENTS.md`, creating the file if needed. Running it again updates the skills and leaves everything else as it is. [The agents page](/agents) lists the skills and the prompts to start from.
+
+## Related pages
+
+- The [CLI page](/manual/cli) lists every command and option of `lus`.
+- [Testing](/manual/testing) describes `lus test` and the conventions of test files.
+- [IDE setup](/manual/ide-setup) describes the editor extension and the language server.
+- [Compiling Lus](/manual/compiling) describes how to build the `lus` executable itself.

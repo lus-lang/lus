@@ -1,5 +1,5 @@
 --[[
-    Test suite for preinclusion (Acquis: preinclusion).
+    Test suite for preinclusion.
 
     --include path[:alias] parses modules at interpreter startup so that
     require() can load them without load/fs pledges. With --readonly-env,

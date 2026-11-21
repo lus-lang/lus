@@ -1,0 +1,379 @@
+---
+order: 50
+title: Text and bytes
+icon: type
+group: library
+shortdesc: "Strings as WTF-8 text indexed by character, vectors as byte buffers, and the transcoding and compression functions that move data between them."
+---
+
+Lus gives text and binary data a type each. A string holds text, and every string operation counts characters. A [`vector`](/manual/guide#vector) holds raw bytes, and every library function that produces or consumes bytes uses one. Conversions between the two are explicit calls: [`vector.fromstring`](/manual/api#vector.fromstring) and [`vector.tostring`](/manual/api#vector.tostring) for WTF-8, [`string.transcode`](/manual/api#string.transcode) for other encodings, and the [`vector.archive`](/manual/api#archive-library) compressors for compressed data.
+
+## Strings
+
+Every string is well formed WTF-8. _WTF-8_ is the superset of UTF-8 that also encodes lone surrogate code points, so it represents any sequence of Unicode code points, including the unpaired surrogates that occur in Windows file names and in UTF-16 data. Text from any of those sources round trips through a Lus string without loss.
+
+A _character_ is one Unicode code point, including a lone surrogate. Every string operation indexes and measures by character:
+
+- `#s` and [`string.len`](/manual/api#string.len) return the number of characters.
+- Positions in [`string.sub`](/manual/api#string.sub), [slices](/manual/guide#slices), [`string.find`](/manual/api#string.find), [`string.match`](/manual/api#string.match), [`string.gmatch`](/manual/api#string.gmatch), and [`string.gsub`](/manual/api#string.gsub) are character positions.
+- [`string.byte`](/manual/api#string.byte) returns code points, and [`string.char`](/manual/api#string.char) builds a string from code points.
+- [`string.reverse`](/manual/api#string.reverse) reverses characters.
+
+The following example measures, slices, searches, and reverses a string with two non-ASCII characters.
+
+```lus
+global print, string
+
+local s = "héllo, wörld"
+print(#s, s:sub(2, 2), s[2, 5])              --> 12  é  éllo
+print(s:find("ö"), s:reverse())              --> 9  dlröw ,olléh
+print(s:byte(2), string.char(233, 0x1F600))  --> 233  é😀
+```
+
+### Case and patterns
+
+[`string.upper`](/manual/api#string.upper) and [`string.lower`](/manual/api#string.lower) change the ASCII letters and leave every other character as it is.
+
+[Patterns](/manual/guide#string-patterns) match whole characters, and the pattern engine never splits a multi-byte character. The class `.` matches one character. A set such as `[éà]` may contain any characters, and a range such as `[α-ω]` compares code points. The classes `%a`, `%d`, `%l`, `%s`, `%u`, `%w`, `%x`, `%p`, and `%c` describe ASCII characters only, so `%a` does not match `é`.
+
+```lus
+global print
+
+print(("añb"):gsub(".", "%0-"))  --> a-ñ-b-  3
+print(("éa"):upper())            --> éA
+print(("αβγ"):find("[α-ω]+"))    --> 1  3
+print(("é1"):match("%a"))        --> nil
+```
+
+### String literals
+
+A string literal is text. The escapes `\xNN` and `\ddd` produce the bytes of a UTF-8 sequence, and the literal as a whole must decode as WTF-8, so `"\xC3\xA9"` is the string `"é"`. A literal whose bytes are not valid text is a compile error that rejects the whole chunk, and the message points to vectors for raw bytes. The escape `\u{XXXX}` writes any code point, including a surrogate.
+
+```lus
+global print, load, pledge
+
+pledge("load")
+
+print("\xC3\xA9" == "é")         --> true
+print(load("return '\\xFF'"))    --> nil  [string "return '\xFF'"]:1: invalid UTF-8 in string literal (use a vector for raw bytes)
+```
+
+### Surrogate pairs
+
+Concatenating a string that ends with a lead surrogate and a string that starts with a trail surrogate joins the pair into one supplementary character, as WTF-8 requires. Every other concatenation joins the two strings unchanged.
+
+```lus
+global print
+
+local joined = "a\u{D800}" .. "\u{DC00}b"
+print(joined, #joined)  --> a𐀀b  3
+```
+
+## Vectors
+
+A vector is a mutable, resizable buffer of bytes. A _byte_ is one element of a vector, an integer from 0 to 255. Vector offsets are zero based, and `#v` and [`vector.size`](/manual/api#vector.size) return the size in bytes. Two vectors are equal only when they are the same object.
+
+### Creating and resizing
+
+[`vector.create`](/manual/api#vector.create) makes a vector of a given size with every byte set to zero. Its optional second argument, the `fast` flag, is accepted for compatibility, and the bytes start at zero with or without it. [`vector.resize`](/manual/api#vector.resize) changes the size, keeps the bytes that fit in the new size, and sets new bytes to zero. [`vector.clone`](/manual/api#vector.clone) returns an independent copy.
+
+```lus
+global print, vector
+
+local v = vector.create(4)
+vector.set(v, 0, 255)
+vector.resize(v, 8)
+print(#v, vector.size(v), vector.get(v, 0), vector.get(v, 7))  --> 8  8  255  0
+
+local copy = vector.clone(v)
+vector.set(copy, 0, 1)
+print(vector.get(v, 0), vector.get(copy, 0))                   --> 255  1
+```
+
+### Single bytes
+
+[`vector.get`](/manual/api#vector.get) returns the byte at an offset, or `nil` when the offset lies outside the vector. [`vector.set`](/manual/api#vector.set) stores a byte. An offset outside the vector, or a value outside the range 0 to 255, raises an error, so a write past the end needs a `vector.resize` first.
+
+```lus
+global print, vector
+
+local v = vector.create(4)
+print(vector.get(v, 4))           --> nil
+print(catch vector.set(v, 4, 1))  --> false  ...: bad argument #2 to 'set' (offset out of bounds)
+print(catch vector.set(v, 0, 256))  --> false  ...: bad argument #3 to 'set' (byte out of range)
+```
+
+### Packed values
+
+[`vector.pack`](/manual/api#vector.pack) writes values into a vector at an offset, and [`vector.unpack`](/manual/api#vector.unpack) reads them back followed by the offset just past the last byte read. Both use the format strings of [`string.pack`](/manual/api#string.pack). A read that runs past the end of the vector raises the error `data too short`.
+
+```lus
+global print, vector
+
+local v = vector.create(12)
+vector.pack(v, 0, "<I4I4I4", 1, 2, 3)
+print(vector.unpack(v, 4, "<I4"))  --> 2  8
+```
+
+[`vector.unpackmany`](/manual/api#vector.unpackmany) returns an iterator that unpacks the same format again and again, starting at an offset. The loop ends when the vector holds no more bytes at the next offset. The optional fourth argument is a count, the largest number of iterations, not an end offset. An iteration whose format reaches past the end of the vector raises the error `unpack falls out of bounds`.
+
+```lus
+global io, print, vector
+
+local v = vector.create(12)
+vector.pack(v, 0, "<I4I4I4", 1, 2, 3)
+
+for n in vector.unpackmany(v, 0, "<I4") do
+    io.write(n, " ")
+end
+print()                                    --> 1 2 3
+
+for n in vector.unpackmany(v, 0, "<I4", 2) do
+    io.write(n, " ")
+end
+print()                                    --> 1 2
+```
+
+### Strings to bytes and back
+
+`vector.fromstring` returns a new vector that holds the WTF-8 bytes of a string. Given a vector, it returns a copy. `vector.tostring(v, i, j, mode)` decodes the bytes from offset `i` up to, but not including, offset `j`. `i` defaults to 0 and `j` to the size of the vector, and both are clamped to the vector. With `mode` set to `"strict"`, the default, input that is not valid WTF-8 raises an error that names the byte offset of the first invalid sequence. With `mode` set to `"lossy"`, each invalid sequence becomes U+FFFD.
+
+```lus
+global print, vector
+
+local v = vector.fromstring("héllo")
+print(#v, vector.get(v, 1), vector.get(v, 2))  --> 6  195  169
+print(vector.tostring(v))                      --> héllo
+print(vector.tostring(v, 0, 2, "lossy"))       --> h�
+print(catch vector.tostring(v, 0, 2))          --> false  ...: invalid UTF-8 at byte 1
+```
+
+String interpolation produces text, so interpolating a vector raises an error that points to `vector.tostring`. A program decodes the bytes explicitly and chooses between strict and lossy decoding.
+
+```lus
+global print, vector
+
+local v = vector.fromstring("abc")
+print(catch `$(v)`)                  --> false  ...: cannot interpolate a vector (decode it with vector.tostring)
+print(`$(vector.tostring(v))`)       --> abc
+```
+
+## Bytes in the standard library
+
+Every library function that produces raw bytes returns a vector, and every function that reads raw bytes accepts one:
+
+- [`string.pack`](/manual/api#string.pack) returns a vector, and [`string.unpack`](/manual/api#string.unpack) and `vector.unpack` read vectors.
+- The [compressors](#compression) accept a string or a vector and return a vector. The decompressors accept a vector or a string and return a vector.
+- [`string.transcode`](#transcoding) returns a vector when the target is a byte encoding and a string when the target is a text encoding. Its input may be either.
+- [`string.dump`](/manual/api#string.dump) returns a vector, and [`load`](/manual/api#load) accepts that vector as a binary chunk.
+- A file opened in binary mode reads vectors.
+- TCP and UDP reads and the body that `network.fetch` returns are vectors, as [Networking](/manual/network) describes.
+- A SQLite `BLOB` column reads back as a vector, as [SQLite](/manual/sqlite) describes.
+
+The following example packs two numbers, compresses text, and transcodes text into UTF-16, receiving a vector each time.
+
+```lus
+global print, string, vector
+
+local packed = string.pack("<i4d", 7, 0.5)
+print(#packed, string.unpack("<i4d", packed))                   --> 12  7  0.5  13
+
+local zipped = vector.archive.gzip.compress("hello hello hello")
+print(vector.tostring(vector.archive.gzip.decompress(zipped)))  --> hello hello hello
+
+local utf16 = string.transcode("hé", "utf-8", "utf-16le")
+print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))     --> 4  hé
+```
+
+### Files
+
+A file opened in binary mode, with `"b"` in its mode string, reads vectors. A file opened in text mode reads strings and validates them. A text read that meets invalid input raises an error that names the byte offset. Passing `{ lossy = true }` as the third argument of [`io.open`](/manual/api#io.open) replaces each invalid sequence with U+FFFD. Writing accepts strings and vectors in either mode.
+
+```lus
+global io, print, pledge, type, vector
+
+pledge("fs")
+
+local out = io.open("data.bin", "wb")
+out:write(vector.fromstring("bytes"), "and text")
+out:close()
+
+local bin <close> = io.open("data.bin", "rb")
+local all = bin:read("a")
+print(type(all), #all, vector.get(all, 0))  --> vector  13  98
+```
+
+Command line arguments, environment variables, and file system paths decode as WTF-8 on Windows and as UTF-8 with lossy replacement on other systems, so they are always strings.
+
+### Compiled chunks
+
+`string.dump` serializes a Lus function into a vector, and `load` accepts a vector as a binary chunk. A function with native code, such as `print`, raises the error `unable to dump given function`. The mode argument of `load` decides which kinds of chunk it accepts: `"t"` for text only, `"b"` for binary only, and `"bt"`, the default, for both. Loading code requires the `load` [permission](/manual/permissions). A binary chunk is a version-dependent build artifact for trusted storage, so text from an untrusted source belongs in mode `"t"`.
+
+```lus
+global print, string, load, pledge
+
+pledge("load")
+
+local chunk = string.dump(function(x) return x * 2 end)
+local double = load(chunk, "double", "b")
+print(double(21))                  --> 42
+print(load(chunk, "double", "t"))  --> nil  attempt to load a binary chunk (mode is 't')
+```
+
+## Transcoding
+
+`string.transcode(input, from, to, ignorebad)` converts `input` from the encoding `from` to the encoding `to`. The input may be a string or a vector. The result is a vector when `to` is a byte encoding and a string when `to` is a text encoding.
+
+The encodings divide into two groups:
+
+- **Byte encodings** produce vectors: `"utf-16le"`, `"utf-16be"`, `"utf-32le"`, `"utf-32be"`, `"iso-8859-1"` with the aliases `"latin1"` and `"latin-1"`, and `"binary"`, which stands for the raw bytes.
+- **Text encodings** produce strings: `"utf-8"`, `"utf-8bom"`, `"ascii"`, and the binary to text encodings `"base64"`, `"url"`, and `"hex"`.
+
+An unknown name raises the error `invalid source encoding` or `invalid target encoding` with the name.
+
+### Binary to text encodings
+
+Encoding to `"base64"`, `"url"`, or `"hex"` writes the bytes of the input as printable text. Decoding from one of them yields the raw bytes, which are then converted to `to`. URL encoding writes every byte outside the unreserved characters `A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, and `~` as a percent escape, and URL decoding reads `+` as a space. Hexadecimal output is lowercase, and hexadecimal input may use either case. Base64 input may omit its padding.
+
+```lus
+global print, string
+
+print(string.transcode("user:password", "utf-8", "base64"))  --> dXNlcjpwYXNzd29yZA==
+print(string.transcode("aGk", "base64", "utf-8"))            --> hi
+print(string.transcode("São Paulo", "utf-8", "url"))         --> S%C3%A3o%20Paulo
+print(string.transcode("a%3D1+b", "url", "utf-8"))           --> a=1 b
+print(string.transcode("é", "utf-8", "hex"))                 --> c3a9
+```
+
+Both sides of a conversion may be binary to text encodings, which converts directly between them. Decoding to `"binary"` returns the raw bytes as a vector.
+
+```lus
+global print, string, type
+
+print(string.transcode("SGVsbG8=", "base64", "hex"))  --> 48656c6c6f
+print(string.transcode("48656c6c6f", "hex", "url"))   --> Hello
+local raw = string.transcode("SGVsbG8=", "base64", "binary")
+print(type(raw), #raw)                                --> vector  5
+```
+
+### Character sets
+
+Conversions between character encodings go through Unicode code points. UTF-16 writes each character as one or two 16-bit code units, and a supplementary character such as U+1D306 becomes a surrogate pair.
+
+```lus
+global print, string, vector
+
+local utf16 = string.transcode("Hello 日本", "utf-8", "utf-16le")
+print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))  --> 16  Hello 日本
+
+local tetragram = string.transcode("𝌆", "utf-8", "utf-16le")
+print(string.format("%X %X", vector.unpack(tetragram, 0, "<I2I2")))  --> D834 DF06
+```
+
+ISO-8859-1 writes one byte per character, so it represents the code points from U+0000 to U+00FF. Reading a legacy file opened in binary mode and converting it from `"iso-8859-1"` to `"utf-8"` produces a string.
+
+```lus
+global print, string, vector
+
+local latin = string.transcode("café", "utf-8", "iso-8859-1")
+print(#latin, vector.get(latin, 3))                   --> 4  233
+print(string.transcode(latin, "iso-8859-1", "utf-8"))  --> café
+```
+
+The encoding `"utf-8bom"` adds the byte order mark U+FEFF when it is the target, and removes a leading byte order mark when it is the source. Since its output is a string, the mark appears as the character U+FEFF.
+
+```lus
+global print, string
+
+local marked = string.transcode("Hello", "utf-8", "utf-8bom")
+print(#marked, marked:byte(1))                           --> 6  65279
+print(string.transcode(marked, "utf-8bom", "utf-8"))     --> Hello
+```
+
+### Invalid input
+
+Invalid input raises an error, and so does a character that the target encoding cannot represent. The messages name the problem and, for malformed input, the position.
+
+```lus
+global print, string, vector
+
+print(catch string.transcode("!!invalid!!", "base64", "utf-8"))  --> false  ...: invalid base64 input
+print(catch string.transcode("日本語", "utf-8", "ascii"))         --> false  ...: codepoint U+65E5 cannot be encoded as ASCII
+
+local bytes = vector.create(2)
+vector.pack(bytes, 0, "BB", 0xFF, 0xFE)
+print(catch string.transcode(bytes, "utf-8", "utf-16le"))        --> false  ...: invalid UTF-8 sequence at position 1
+```
+
+When `ignorebad` is true, the conversion skips invalid sequences and characters that the target cannot represent, and returns the rest.
+
+```lus
+global print, string, vector
+
+print(string.transcode("Hello 日本", "utf-8", "ascii", true))                --> Hello
+print(vector.tostring(string.transcode("€100", "utf-8", "latin1", true)))   --> 100
+
+local bytes = vector.fromstring("valid--text")
+vector.pack(bytes, 5, "BB", 0xFF, 0xFE)
+print(string.transcode(bytes, "utf-8", "utf-8", true))                       --> validtext
+```
+
+## Compression
+
+The `vector.archive` library compresses and decompresses data with five formats. Every function accepts a string or a vector as input and returns a vector, since compressed and decompressed data are bytes. `vector.tostring` turns decompressed text back into a string.
+
+```lus
+global print, string, type, vector
+
+local text = string.rep("hello world ", 100)
+local packed = vector.archive.zstd.compress(text)
+print(type(packed), #packed < #text)                                  --> vector  true
+print(vector.tostring(vector.archive.zstd.decompress(packed)) == text)  --> true
+```
+
+Each format is a table with a `compress` and a `decompress` function. The optional second argument of `compress` sets the level, a trade between speed and ratio:
+
+| Format | Standard | Level | Default |
+|---|---|---|---|
+| [`gzip`](/manual/api#vector.archive.gzip.compress) | RFC 1952 | 0 to 9 | 6 |
+| [`deflate`](/manual/api#vector.archive.deflate.compress) | RFC 1951 | 0 to 9 | 6 |
+| [`zstd`](/manual/api#vector.archive.zstd.compress) | RFC 8878 | -131072 to 22 | 3 |
+| [`brotli`](/manual/api#vector.archive.brotli.compress) | RFC 7932 | 0 to 11 | 11 |
+| [`lz4`](/manual/api#vector.archive.lz4.compress) | LZ4 frame | 1 to 12 | 1 |
+
+The formats differ in their framing:
+
+- **gzip** wraps deflate data in a gzip header and a CRC32 checksum. Its level 0 stores the data without compression, and level 9 produces the smallest output. Decompression validates the header and the checksum.
+- **deflate** writes raw deflate data with no header and no checksum, for embedding in a container that carries its own. Decompression performs no header or checksum validation.
+- **zstd** writes Zstandard frames. Negative levels compress faster with a lower ratio, and level 22 produces the smallest output. Decompression validates the frame header and the optional content checksum.
+- **brotli** takes a third argument, `lgwin`, from 10 to 24 with a default of 22, which sets the LZ77 window to 2 to the power `lgwin` bytes.
+- **lz4** writes the current LZ4 frame format, and decompression validates the frame header and the optional checksum. [`vector.archive.lz4.decompress_hc`](/manual/api#vector.archive.lz4.decompress_hc) reads the legacy LZ4 frame format, identified by the magic number `0x184C2102`, which older LZ4 tools produced.
+
+```lus
+global print, string, vector
+
+local text = string.rep("abc", 1000)
+local small = vector.archive.brotli.compress(text, 11)
+local quick = vector.archive.brotli.compress(text, 3, 16)
+local stored = vector.archive.gzip.compress(text, 0)
+print(#stored > #text, vector.tostring(vector.archive.brotli.decompress(quick)) == text)  --> true  true
+```
+
+### Compression errors
+
+An input that is neither a string nor a vector, a level or window outside its range, and corrupted or truncated compressed data each raise an error. A number is converted to its textual form, as everywhere strings are expected.
+
+```lus
+global print, vector
+
+print(catch vector.archive.gzip.compress({}))                --> false  ...: bad argument #1 to 'compress' (string or vector expected, got table)
+print(catch vector.archive.gzip.compress("data", 15))        --> false  ...: bad argument #2 to 'compress' (compression level must be 0-9)
+print(catch vector.archive.gzip.decompress("not gzip data"))  --> false  ...: gzip decompress failed (BadZlibHeader)
+```
+
+## Related pages
+
+- [Data formats](/manual/data) parses and writes JSON and CSV, and covers the table and string helpers for data processing.
+- [SQLite](/manual/sqlite) stores strings as `TEXT` and vectors as `BLOB`.
+- [Filesystem](/manual/filesystem) covers the `fs` library and the permissions that file access needs.
+- The [guide](/manual/guide#string) describes string literals, interpolation, and the other value types.

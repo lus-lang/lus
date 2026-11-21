@@ -596,7 +596,7 @@ Four expression kinds produce a variable number of values: function calls, `...`
 
 ### 5.1 Catch
 
-**Source:** `syntax/parser.zig`, `compile/codegen.zig`, `vm/interp.zig`. **Manual:** `acquis-1.mdx`, `acquis-20.mdx`. **Tests:** `catchstat_test.lus`, `compile_errors_test.lus`.
+**Source:** `syntax/parser.zig`, `compile/codegen.zig`, `vm/interp.zig`. **Manual:** `guide.mdx`. **Tests:** `catchstat_test.lus`, `compile_errors_test.lus`.
 
 #### Syntax
 
@@ -658,7 +658,7 @@ catch cleanup()                             -- statement form
 
 ### 5.2 Optional chaining
 
-**Source:** `syntax/parser.zig` (suffix chains), `compile/codegen.zig` (chain evaluation). **Manual:** `acquis-2.mdx`. **Tests:** `optchain_test.lus`, `compile_errors_test.lus`, `syntax_interactions_test.lus`.
+**Source:** `syntax/parser.zig` (suffix chains), `compile/codegen.zig` (chain evaluation). **Manual:** `guide.mdx`. **Tests:** `optchain_test.lus`, `compile_errors_test.lus`, `syntax_interactions_test.lus`.
 
 #### Syntax
 
@@ -700,7 +700,7 @@ assert(s?.list[2,] == nil)                  -- the slice is skipped too
 
 ### 5.3 Slices
 
-**Source:** `syntax/parser.zig` (suffix chains), `vm/ext.zig` (the slice operation). **Manual:** `acquis-16.mdx`, `acquis-37.mdx`. **Tests:** `slices_test.lus`, `syntax_interactions_test.lus`, `compile_errors_test.lus`.
+**Source:** `syntax/parser.zig` (suffix chains), `vm/ext.zig` (the slice operation). **Manual:** `guide.mdx`, `text.mdx`. **Tests:** `slices_test.lus`, `syntax_interactions_test.lus`, `compile_errors_test.lus`.
 
 #### Syntax
 
@@ -747,7 +747,7 @@ local e = t[,]        -- shallow copy of the sequence
 
 ### 5.4 String interpolation
 
-**Source:** `syntax/lexer.zig`, `syntax/parser.zig`, `compile/codegen.zig`, `vm/ops.zig` (the conversion to string). **Manual:** `acquis-21.mdx`. **Tests:** `interp_test.lus`, `compile_errors_test.lus`, `syntax_limits_test.lus`, `syntax_interactions_test.lus`.
+**Source:** `syntax/lexer.zig`, `syntax/parser.zig`, `compile/codegen.zig`, `vm/ops.zig` (the conversion to string). **Manual:** `guide.mdx`. **Tests:** `interp_test.lus`, `compile_errors_test.lus`, `syntax_limits_test.lus`, `syntax_interactions_test.lus`.
 
 Lexing is described in section 1.8.
 
@@ -782,7 +782,7 @@ print(`$(nil) $(1.0)`)                -- nil 1.0
 
 ### 5.5 Enums
 
-**Source:** `syntax/parser.zig` (`enum` expressions), `compile/codegen.zig`, `vm/ext.zig`. **Manual:** `acquis-5.mdx`. **Tests:** `enum_test.lus`, `compile_errors_test.lus`, `syntax_limits_test.lus`.
+**Source:** `syntax/parser.zig` (`enum` expressions), `compile/codegen.zig`, `vm/ext.zig`. **Manual:** `guide.mdx`. **Tests:** `enum_test.lus`, `compile_errors_test.lus`, `syntax_limits_test.lus`.
 
 #### Syntax
 
@@ -826,7 +826,7 @@ assert(tonumber(color.blue) == 3)
 
 ### 5.6 `from` destructuring
 
-**Source:** `syntax/parser.zig`, `compile/codegen.zig` (`from` in local, global, assignment, and condition forms). **Manual:** `acquis-4.mdx`. **Tests:** `from_test.lus`, `compile_errors_test.lus`, `syntax_interactions_test.lus`, `groups_test.lus`.
+**Source:** `syntax/parser.zig`, `compile/codegen.zig` (`from` in local, global, assignment, and condition forms). **Manual:** `guide.mdx`. **Tests:** `from_test.lus`, `compile_errors_test.lus`, `syntax_interactions_test.lus`, `groups_test.lus`.
 
 #### Syntax
 
@@ -873,7 +873,7 @@ x, y from { x = 1, y = 2 }
 
 ### 5.7 Assignment conditions in `if`, `elseif`, and `while`
 
-**Source:** `syntax/parser.zig` (conditions), `compile/codegen.zig` (`ifStat`, `while` loops). **Manual:** `acquis-3.mdx`, `acquis-13.mdx`. **Tests:** `ifassign_test.lus`, `whileassign_test.lus`, `syntax_interactions_test.lus`, `compile_errors_test.lus`, `attrs2_test.lus`.
+**Source:** `syntax/parser.zig` (conditions), `compile/codegen.zig` (`ifStat`, `while` loops). **Manual:** `guide.mdx`. **Tests:** `ifassign_test.lus`, `whileassign_test.lus`, `syntax_interactions_test.lus`, `compile_errors_test.lus`, `attrs2_test.lus`.
 
 #### Syntax
 
@@ -929,7 +929,7 @@ if ok, value = catch risky() then use(value) else report(value) end
 
 ### 5.8 Do-expressions and `provide`
 
-**Source:** `syntax/parser.zig`, `compile/codegen.zig` (do-expressions and `provide`). **Manual:** `acquis-23.mdx`. **Tests:** `doexpr_test.lus`, `compile_errors_test.lus`, `syntax_interactions_test.lus`, `syntax_limits_test.lus`.
+**Source:** `syntax/parser.zig`, `compile/codegen.zig` (do-expressions and `provide`). **Manual:** `guide.mdx`. **Tests:** `doexpr_test.lus`, `compile_errors_test.lus`, `syntax_interactions_test.lus`, `syntax_limits_test.lus`.
 
 #### Syntax
 
@@ -979,7 +979,7 @@ A group initializer is a constructor or a group name (section 5.10), so `local x
 
 ### 5.9 Attributes
 
-**Source:** `syntax/parser.zig` (attribute lists), `compile/codegen.zig` (attribute checks and handler calls). **Manual:** `acquis-22.mdx`. **Tests:** `runtime_attrs_test.lus`, `attrs2_test.lus`, `compile_errors_test.lus`.
+**Source:** `syntax/parser.zig` (attribute lists), `compile/codegen.zig` (attribute checks and handler calls). **Manual:** `guide.mdx`. **Tests:** `runtime_attrs_test.lus`, `attrs2_test.lus`, `compile_errors_test.lus`.
 
 #### Syntax
 
@@ -1055,7 +1055,7 @@ local x <first, second> = 10 -- 22
 
 ### 5.10 Local groups
 
-**Source:** `syntax/parser.zig` (group constructors), `compile/codegen.zig` (`groupPath` and the group forms of the local, assignment, condition, and `from` statements). **Manual:** `acquis-18.mdx`. **Tests:** `groups_test.lus`, `compile_errors_test.lus`, `attrs2_test.lus`, `from_test.lus`.
+**Source:** `syntax/parser.zig` (group constructors), `compile/codegen.zig` (`groupPath` and the group forms of the local, assignment, condition, and `from` statements). **Manual:** `guide.mdx`. **Tests:** `groups_test.lus`, `compile_errors_test.lus`, `attrs2_test.lus`, `from_test.lus`.
 
 #### Syntax
 
@@ -1091,7 +1091,7 @@ local a, b from z                   -- group source
 
 ### 5.11 Flags and compile-time folding
 
-**Source:** `compile/codegen.zig` (`foldFlag`, `ifStat`, `discardBlock`), `main.zig` (option `-F`), `api.zig` (`setFlags`). **Manual:** `acquis-28.mdx`. **Tests:** `flags_test.lus`.
+**Source:** `compile/codegen.zig` (`foldFlag`, `ifStat`, `discardBlock`), `main.zig` (option `-F`), `api.zig` (`setFlags`). **Manual:** `guide.mdx`. **Tests:** `flags_test.lus`.
 
 #### The `flags` table
 
@@ -1139,7 +1139,7 @@ end
 
 ### 5.12 Queries
 
-**Source:** `syntax/parser.zig` (queries and clause expressions), `compile/query_gen.zig` (plan generation), `vm/query.zig` (the query value and engine). **Manual:** `acquis-34.mdx`. **Tests:** `query_test.lus`, `sqlite_test.lus`.
+**Source:** `syntax/parser.zig` (queries and clause expressions), `compile/query_gen.zig` (plan generation), `vm/query.zig` (the query value and engine). **Manual:** `guide.mdx`. **Tests:** `query_test.lus`, `sqlite_test.lus`.
 
 #### Syntax
 
@@ -1203,13 +1203,13 @@ A bare column is a valid clause expression. `where r.active` keeps the rows whos
 
 #### Dynamic semantics
 
-Evaluating a query expression evaluates the sources left to right, then the bound parameters and host closures in clause parse order, and builds a value of type `query` that holds them together with the plan. The query is lazy and does nothing further until run by the `query` iterator. Execution semantics (the fixed pipeline, provider push-down, nil and NaN ordering, aggregate rules) are a library concern documented in `acquis-34.mdx` and tested in `query_test.lus`.
+Evaluating a query expression evaluates the sources left to right, then the bound parameters and host closures in clause parse order, and builds a value of type `query` that holds them together with the plan. The query is lazy and does nothing further until run by the `query` iterator. Execution semantics (the fixed pipeline, provider push-down, nil and NaN ordering, aggregate rules) are a library concern documented in `guide.mdx` and tested in `query_test.lus`.
 
 **Tested** (`query_test.lus`): clause words work as ordinary locals, fields, and methods outside queries. `@` inside comments and strings is inert. Queries appear in every expression position. A query ends at the first unrelated name. Clause order is free. `return @` and `return @t as` (truncated) fail with `<name> expected near <eof>`. Each pair of query values built separately is distinct. A query is not closable, cannot cross a worker boundary, and survives `string.dump`.
 
 ### 5.13 `continue` and `range`
 
-**Source:** `syntax/parser.zig`, `compile/codegen.zig` (`patchContinues`), `lib/base.zig` (`range`). **Manual:** `acquis-35.mdx`.
+**Source:** `syntax/parser.zig`, `compile/codegen.zig` (`patchContinues`), `lib/base.zig` (`range`). **Manual:** `guide.mdx`.
 
 #### Syntax
 
@@ -1362,9 +1362,9 @@ The manual pages agree with the implementation on every point this reference cov
 
 | Manual | Statement | Section |
 | --- | --- | --- |
-| `acquis-2.mdx` | an optional chain is an expression, so a call kept for its effect is written `local _ = obj?:process()` | 5.2 |
-| `acquis-22.mdx` | runtime attributes follow the variable name | 5.9 |
-| `acquis-34.mdx` | a bare column filters by truthiness | 5.12 |
+| `guide.mdx` | an optional chain is an expression, so a call kept for its effect is written `local _ = obj?:process()` | 5.2 |
+| `guide.mdx` | runtime attributes follow the variable name | 5.9 |
+| `guide.mdx` | a bare column filters by truthiness | 5.12 |
 
 ---
 

@@ -16,7 +16,7 @@ returns:
     name: status
 ---
 
-Applies one host permission with the syntax of [`pledge`](/manual/acquis-10) and returns `LUS_OK`. A spec is `name`, `name:sub`, or either one followed by `=value`, such as `"network"`, `"fs:read=/srv/data/*"`, or `"env=HOME"`. A spec that starts with `~` rejects the capability like `lus_reject`, the spec `"seal"` seals the set like `lus_seal`, and the spec `"all"`, which only the host can grant, allows every capability.
+Applies one host permission with the syntax of [`pledge`](/manual/permissions) and returns `LUS_OK`. A spec is `name`, `name:sub`, or either one followed by `=value`, such as `"network"`, `"fs:read=/srv/data/*"`, or `"env=HOME"`. A spec that starts with `~` rejects the capability like `lus_reject`, the spec `"seal"` seals the set like `lus_seal`, and the spec `"all"`, which only the host can grant, allows every capability.
 
 Grants accumulate. A grant without a value allows every value of the capability, and each grant with a value adds one more allowed pattern. A grant of a base capability covers its subcapabilities, so `"network=example.com"` also allows `network:http` for that host. Values of path capabilities must be absolute or start with `.`, and they are resolved to canonical paths when they are granted.
 

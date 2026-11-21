@@ -1,8 +1,8 @@
 --[[
     Runtime Attributes: Failure and Interaction Semantics (attrs2)
 
-    This suite complements runtime-attrs.lus (which covers the happy path of
-    acquis-22) by driving the failure paths and cross-feature interactions:
+    This suite complements runtime-attrs.lus (which covers the happy path that
+    the guide describes) by driving the failure paths and cross-feature interactions:
     erroring handlers on init, on assignment, and mid-chain with the observed
     variable state after a caught error, non-callable attribute expressions,
     callable tables as handlers, unusual handler return values, coroutine
@@ -352,7 +352,7 @@ end
 -- The handler runs on assignments within the scope where the variable is
 -- declared. A value captured by a nested closure is written directly, so an
 -- upvalue write from that closure updates the variable without re-invoking the
--- handler. This is the documented contract in acquis-22.
+-- handler. This is the documented contract in the guide.
 local function an_upvalue_write_from_a_closure_updates_without_re_invoking_test()
     local seen = 0
     local function h(name, value) seen = seen + 1; return value end

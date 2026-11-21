@@ -15,16 +15,18 @@ interface HubRow {
 const groups: { label: string; rows: HubRow[] }[] = [
   { label: "Learn", rows: [] },
   { label: "Use", rows: [] },
+  { label: "Library", rows: [] },
   { label: "Reference", rows: [] },
 ]
 const byKey: Record<string, HubRow[]> = {
   learn: groups[0].rows,
   use: groups[1].rows,
-  reference: groups[2].rows,
+  library: groups[2].rows,
+  reference: groups[3].rows,
 }
 
 for (const page of manual
-  .filter((p) => !p.data.acquis && p.data.group)
+  .filter((p) => p.data.group)
   .toSorted((a, b) => a.data.order - b.data.order)) {
   byKey[page.data.group!].push({
     href: `/manual/${page.id}`,
@@ -47,7 +49,7 @@ byKey.reference.unshift(
   },
 )
 
-const skylinePages = manual.filter((p) => !p.data.acquis && p.data.group)
+const skylinePages = manual.filter((p) => p.data.group)
 const skylineHeights = skyline(skylinePages.map((p) => (p.body ?? "").length))
 const skylineLinks = skylinePages.map((p) => `/manual/${p.id}`)
 ---

@@ -1,5 +1,5 @@
 -- Bigint and decimal literals (spec/language/grammar.md section 1.5 and
--- acquis 36). Each case goes through load so that a malformed literal is
+-- the guide). Each case goes through load so that a malformed literal is
 -- a compile error the test can inspect.
 pledge("load")
 

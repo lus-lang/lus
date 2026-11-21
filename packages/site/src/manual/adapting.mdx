@@ -9,7 +9,7 @@ shortdesc: "What changes coming from Lua 5.5, and how lus check walks old code f
 
 While Lus seems familiar to the seasoned Lua programmer, there are certain differences that you should be aware of while writing Lus code or adapting existing Lua code. Some of these differences can be safely ignored, while others may require partially rewriting or amending your code to work with Lus. Running `lus check` over your code catches many of these automatically.
 
-This page is a concise migration reference. For full details on each feature, follow the links to the [Guide](/manual/guide) and the relevant Acquis pages.
+This page is a concise migration reference. For full details on each feature, follow the links to the [Guide](/manual/guide) and the topic pages.
 
 ## Use of `lus check`
 
@@ -19,13 +19,13 @@ This page is a concise migration reference. For full details on each feature, fo
 lus check myscript.lus
 ```
 
-See [Acquis 39](/manual/acquis-39) for the checker and the other developer tools.
+[Developer tools](/manual/tools) describes the checker and the other tools.
 
 ## Strings, bytes, and numbers
 
-Lus strings hold text. Every string is well formed WTF-8, and `#s`, `string.sub`, `string.byte`, `string.find`, and the other string functions count characters, so `#"héllo"` is 5. Raw bytes live in vectors: binary file reads, network reads, `string.pack`, the compressors, and `string.dump` produce vectors, and `vector.fromstring` and `vector.tostring` convert between the two. Code that treated strings as byte arrays moves that work to vectors. See [Acquis 37](/manual/acquis-37).
+Lus strings hold text. Every string is well formed WTF-8, and `#s`, `string.sub`, `string.byte`, `string.find`, and the other string functions count characters, so `#"héllo"` is 5. Raw bytes live in vectors: binary file reads, network reads, `string.pack`, the compressors, and `string.dump` produce vectors, and `vector.fromstring` and `vector.tostring` convert between the two. Code that treated strings as byte arrays moves that work to vectors. See [Text and bytes](/manual/text).
 
-Integers and floats behave as in Lua. Lus adds two exact subtypes of `number`: bigints, written `123n`, and decimals, written `1.50d`. See [Acquis 36](/manual/acquis-36).
+Integers and floats behave as in Lua. Lus adds two exact subtypes of `number`: bigints, written `123n`, and decimals, written `1.50d`. See [number](/manual/guide#number).
 
 ## Removed functions
 
@@ -36,10 +36,10 @@ A few Lua functions have Lus counterparts that replace them.
 | `pcall(f, ...)`, `xpcall(f, h, ...)` | `catch f(...)` and `catch[h] f(...)` |
 | `os.remove(path)` | `fs.remove(path)` |
 | `os.rename(from, to)` | `fs.move(from, to)` |
-| C modules loaded with `require` or `package.loadlib` | Native functions registered by a host through the [embedding API](/manual/acquis-41) |
+| C modules loaded with `require` or `package.loadlib` | Native functions registered by a host through the [embedding API](/manual/embedding) |
 | `LUA_INIT`, `LUA_PATH` | `-e` or `-l` on the command line, and `LUS_PATH` |
 
-`continue` is a reserved word in Lus, so Lua code that uses it as a variable name or a `goto` label renames it. The Lus `continue` statement usually replaces such a label. See [Acquis 35](/manual/acquis-35).
+`continue` is a reserved word in Lus, so Lua code that uses it as a variable name or a `goto` label renames it. The Lus `continue` statement usually replaces such a label. See [break, continue, and goto](/manual/guide#break-continue-and-goto).
 
 ## Permissions ("pledging")
 
@@ -72,7 +72,7 @@ local ok, result = catch riskyOp()
 local ok, err = catch[simplify] riskyOp()
 ```
 
-See [Error handling](/manual/guide#error-handling), [Catch handlers](/manual/guide#catch-handlers), and [Acquis 1](/manual/acquis-1).
+See [Error handling](/manual/guide#error-handling), and [Catch handlers](/manual/guide#catch-handlers).
 
 ## String interpolation
 
@@ -87,7 +87,7 @@ print(`Hello, $name! Age: $age`)
 print(`Result: $(x + y)`)
 ```
 
-See [string](/manual/guide#string) and [Acquis 21](/manual/acquis-21).
+See [string](/manual/guide#string).
 
 ## Optional chaining
 
@@ -103,7 +103,7 @@ local name = getUser(id)?:getName()
 local val = callback?()
 ```
 
-See [Optional chaining](/manual/guide#optional-chaining) and [Acquis 2](/manual/acquis-2).
+See [Optional chaining](/manual/guide#optional-chaining).
 
 ## If and while assignment
 
@@ -123,7 +123,7 @@ while line = file:read() do
 end
 ```
 
-See [if, elseif, else](/manual/guide#if-elseif-else), [while](/manual/guide#while), [Acquis 3](/manual/acquis-3), and [Acquis 13](/manual/acquis-13).
+See [if, elseif, else](/manual/guide#if-elseif-else), and [while](/manual/guide#while).
 
 ## Table destructuring
 
@@ -137,7 +137,7 @@ local x, y from point
 local insert, remove from require("table")
 ```
 
-See [Table destructuring](/manual/guide#table-destructuring) and [Acquis 4](/manual/acquis-4).
+See [Table destructuring](/manual/guide#table-destructuring).
 
 ## Slices
 
@@ -149,7 +149,7 @@ local sub = t[2, 4]     -- {20, 30, 40}
 local s = ("hello")[2, 4] -- "ell"
 ```
 
-See [Slices](/manual/guide#slices) and [Acquis 16](/manual/acquis-16).
+See [Slices](/manual/guide#slices).
 
 ## Table cloning
 
@@ -160,7 +160,7 @@ local shallow = table.clone(original)
 local deep = table.clone(original, true) -- circular refs preserved
 ```
 
-See [Table cloning](/manual/guide#table-cloning) and [Acquis 17](/manual/acquis-17).
+See [Table cloning](/manual/guide#table-cloning).
 
 ## Do expressions
 
@@ -173,7 +173,7 @@ local result = do
 end
 ```
 
-See [Do expressions](/manual/guide#do-expressions) and [Acquis 23](/manual/acquis-23).
+See [Do expressions](/manual/guide#do-expressions).
 
 ## Enums
 
@@ -186,7 +186,7 @@ print(Color.red == Color.red) --> true
 print(Color.red == Color.green) --> false
 ```
 
-See [enum](/manual/guide#enum) and [Acquis 5](/manual/acquis-5).
+See [enum](/manual/guide#enum).
 
 ## Local groups
 
@@ -198,7 +198,7 @@ pos.x = 10       -- ok
 pos = { y = 5 }  -- partial update
 ```
 
-See [Local groups](/manual/guide#local-groups) and [Acquis 18](/manual/acquis-18).
+See [Local groups](/manual/guide#local-groups).
 
 ## Variable attributes
 
@@ -212,7 +212,7 @@ local f <close> = io.open(path) -- auto-closed on scope exit
 local x <validator> = 10
 ```
 
-See [Variable attributes](/manual/guide#variable-attributes) and [Acquis 22](/manual/acquis-22).
+See [Variable attributes](/manual/guide#variable-attributes).
 
 ## Vectors
 
@@ -224,7 +224,7 @@ vector.pack(v, 0, "I4", 123456789)
 local x = vector.unpack(v, 0, "I4")
 ```
 
-See [vector](/manual/guide#vector) and [Acquis 15](/manual/acquis-15).
+See [vector](/manual/guide#vector) and [Text and bytes](/manual/text).
 
 ## New standard libraries
 
@@ -239,7 +239,7 @@ local t = fromjson('{"key": "value"}')
 local s = tojson(t)
 ```
 
-See [JSON](/manual/guide#json) and [Acquis 6](/manual/acquis-6).
+See [JSON](/manual/guide#json) and [Data formats](/manual/data).
 
 ### Filesystem
 
@@ -250,7 +250,7 @@ local entries = fs.list(".")
 local kind = fs.type("config.txt") -- "file", "directory", or nil
 ```
 
-See [Filesystem](/manual/guide#filesystem) and [Acquis 7](/manual/acquis-7).
+See [Filesystem](/manual/filesystem).
 
 ### Networking
 
@@ -260,7 +260,7 @@ The `network` library provides HTTP, TCP, and UDP support. Requires `pledge("net
 local status, body = network.fetch("https://example.com")
 ```
 
-See [Networking](/manual/guide#networking) and [Acquis 9](/manual/acquis-9).
+See [Network](/manual/network).
 
 ### Transcoding
 
@@ -270,7 +270,7 @@ See [Networking](/manual/guide#networking) and [Acquis 9](/manual/acquis-9).
 local utf16 = string.transcode(data, "utf-8", "utf-16le")  -- a vector
 ```
 
-See [Acquis 8](/manual/acquis-8).
+See [Text and bytes](/manual/text).
 
 ## Workers
 
@@ -283,7 +283,7 @@ while result = worker.receive(w) do
 end
 ```
 
-See [Workers](/manual/guide#workers) and [Acquis 11](/manual/acquis-11).
+See [Coroutines and workers](/manual/concurrency).
 
 ## AST access
 
@@ -293,7 +293,7 @@ Lus exposes its parser for programmatic access. `debug.parse(code)` returns the 
 lus ast myscript.lus
 ```
 
-See [Acquis 12](/manual/acquis-12).
+See [Developer tools](/manual/tools).
 
 ## Standalone binaries
 
@@ -303,8 +303,8 @@ Lus can bundle scripts and their dependencies into standalone executables with `
 lus build -o app app.lus --include lib/
 ```
 
-See [Search paths](/manual/guide#search-paths) and [Acquis 39](/manual/acquis-39).
+See [Search paths](/manual/guide#search-paths) and [Developer tools](/manual/tools).
 
 ## Testing
 
-`lus test` runs the functions ending in `_test` in every `*_test.lus` file, with no framework to install. See [Acquis 38](/manual/acquis-38).
+`lus test` runs the functions ending in `_test` in every `*_test.lus` file, with no framework to install. See [Testing](/manual/testing).

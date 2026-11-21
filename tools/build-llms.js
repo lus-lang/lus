@@ -42,9 +42,12 @@ const API_SECTIONS = [
   ["Time Library", (m) => m === "time"],
 ];
 
-// Manual pages in the order llms-full.txt reads them. Acquis follow in
-// numeric order, then the API reference.
+// Manual pages in the order llms-full.txt reads them. The topic pages
+// of the use and library groups follow in sidebar order, then the API
+// reference. Pages about the release process and the build stay out.
 const LEAD_PAGES = ["introduction", "getting-started", "adapting", "guide", "cli"];
+const FULL_GROUPS = ["use", "library"];
+const FULL_SKIP = new Set(["releases", "compiling", "ide-setup", "license"]);
 
 function compareText(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -207,17 +210,14 @@ function mdxToMarkdown(body, ctx = {}) {
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function acquisNumber(id) {
-  const m = id.match(/^acquis-(\d+)$/);
-  return m ? Number(m[1]) : null;
-}
-
-function acquisIndex(pages) {
+// Topic pages of the use and library groups in sidebar order.
+function topicPages(pages) {
   return pages
-    .filter((p) => acquisNumber(p.id) !== null)
-    .sort((a, b) => acquisNumber(a.id) - acquisNumber(b.id))
-    .map((p) => `- [${p.meta.title}](${SITE}/manual/${p.id}.md): ${p.meta.shortdesc}`)
-    .join("\n");
+    .filter((p) => FULL_GROUPS.includes(p.meta.group) && !LEAD_PAGES.includes(p.id) && !FULL_SKIP.has(p.id))
+    .sort((a, b) =>
+      FULL_GROUPS.indexOf(a.meta.group) - FULL_GROUPS.indexOf(b.meta.group) ||
+      Number(a.meta.order) - Number(b.meta.order))
+    .map((p) => p.id);
 }
 
 function renderPage(page, components) {
@@ -334,7 +334,7 @@ function renderBenchmarks(data) {
 function build(root = ROOT) {
   const stdlib = loadStdlib(root);
   const pages = loadManual(root);
-  const components = {AcquisList: acquisIndex(pages)};
+  const components = {};
   const files = new Map();
 
   const rendered = new Map();
@@ -364,13 +364,12 @@ function build(root = ROOT) {
 
   const order = [
     ...LEAD_PAGES,
-    ...pages.map((p) => p.id).filter((id) => acquisNumber(id) !== null)
-      .sort((a, b) => acquisNumber(a) - acquisNumber(b)),
+    ...topicPages(pages),
   ].filter((id) => rendered.has(id));
   const full = [
     "# Lus",
     "",
-    "> The complete Lus documentation for one release: the manual, every acquis, and the standard library reference. Headings are one level deeper than on the site, so each page starts with a second-level heading.",
+    "> The complete Lus documentation for one release: the manual and the standard library reference. Headings are one level deeper than on the site, so each page starts with a second-level heading.",
     "",
     ...order.map((id) => shiftHeadings(rendered.get(id))),
     shiftHeadings(api),

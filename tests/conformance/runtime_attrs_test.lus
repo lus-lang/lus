@@ -1,6 +1,6 @@
 --[[
     Runtime Attributes Test Suite
-    Tests for local variable runtime attributes feature (acquis-22)
+    Tests for local variable runtime attributes feature
 ]]
 
 pledge("load")

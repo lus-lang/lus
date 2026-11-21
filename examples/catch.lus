@@ -84,7 +84,7 @@ print("  safe_wrapper(-5):", safe_wrapper(-5))   --> 0
 print("  safe_wrapper(200):", safe_wrapper(200)) --> 0
 
 -- =============================================================================
--- Catch Handlers: Transform errors inline (Acquis 20)
+-- Catch Handlers: Transform errors inline
 -- =============================================================================
 
 print("\n--- Catch Handlers ---")

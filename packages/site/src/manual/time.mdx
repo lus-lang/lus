@@ -1,0 +1,230 @@
+---
+order: 80
+title: Time
+icon: clock
+group: library
+draft: true
+shortdesc: "Instants, zoned civil times, and durations, with exact and calendar arithmetic and an IANA time zone database built into the runtime."
+---
+
+The [`time`](/manual/api#time) library handles dates, times, and spans of time. It separates three kinds of value, so that the arithmetic a program performs follows from the value it holds, and it resolves time zones from an IANA database compiled into the runtime.
+
+## The three types
+
+The library has three immutable value types. Every operation returns a new value and leaves its operands unchanged.
+
+- An _instant_ is an absolute point on the UTC timeline, with nanosecond precision.
+- A _zoned_ value is a civil date and time, the reading of a wall clock, observed in a zone.
+- A _duration_ is a signed span of time, with nanosecond precision.
+
+Adding a duration to an instant is exact arithmetic in SI seconds. Calendar arithmetic, such as "the same wall-clock time tomorrow", is a separate operation on a zoned value, and across a daylight saving transition it may move 23 or 25 hours. The type of a value says which kind applies.
+
+```lus
+global print, time
+
+local i = time.instant(1782998100)
+print(i:iso(), i:epoch())                           --> 2026-07-02T13:15:00Z  1782998100
+
+local ny = time.zone("America/New_York")
+print(i:at(ny):iso())                               --> 2026-07-02T09:15:00-04:00
+print((i + time.hours(72)):iso())                   --> 2026-07-05T13:15:00Z
+```
+
+## Instants
+
+[`time.now()`](/manual/api#time.now) returns the current instant from the system wall clock. [`time.instant(seconds, nanos)`](/manual/api#time.instant) builds an instant from integer Unix seconds since 1970-01-01 UTC and an optional nanosecond fraction. Both arguments must be integers, and a float without an integer value raises an error.
+
+An instant has these methods:
+
+- `i:epoch()` returns the integer Unix seconds, and `i:nanos()` the nanosecond fraction.
+- `i:iso()` returns the ISO 8601 form in UTC, to the second.
+- `i:format(fmt)` formats the instant in UTC, as [Formatting](#formatting) describes.
+- `i:at(zone)` returns the zoned value that a zone observes at the instant. The argument is a zone or an integer offset in seconds east of UTC.
+
+Instants support `i + d` and `i - d` with a duration `d`, and `i - j` between instants, which returns a duration. They compare with `==`, `<`, and `<=`. Adding a number or another instant raises an error that names the expected duration.
+
+```lus
+global print, time
+
+local start = time.instant(1782998100)
+local later = start + time.days(3)
+local span = later - start
+print(span:seconds(), start < later)             --> 259200.0  true
+print(later == time.instant(1783257300))         --> true
+print(catch (start + 5))                         --> false  ...: bad argument #2 to 'add' (time.duration expected, got number)
+```
+
+## Durations
+
+[`time.duration(fields)`](/manual/api#time.duration) builds a duration from a table that sums any of the integer fields `days`, `hours`, `minutes`, `seconds`, `millis`, `micros`, and `nanos`. Each field is optional and may be negative. [`time.days`](/manual/api#time.days), [`time.hours`](/manual/api#time.hours), [`time.minutes`](/manual/api#time.minutes), [`time.seconds`](/manual/api#time.seconds), and [`time.millis`](/manual/api#time.millis) build a duration of a single unit from an integer.
+
+A duration has these methods:
+
+- `d:seconds()` returns the length in seconds as a float, and `d:millis()` in milliseconds as a float.
+- `d:parts()` returns a table with the fields `negative`, a boolean, and `days`, `hours`, `minutes`, `seconds`, and `nanos`, integers that break down the absolute length.
+
+Durations support `+`, `-`, unary `-`, and multiplication by an integer on either side, and they compare with `==`, `<`, and `<=`. A day is always 86,400 seconds.
+
+```lus
+global print, time
+
+local d = time.duration{ hours = 1, minutes = 30 }
+print(d:seconds(), d:millis())                            --> 5400.0  5400000.0
+print((time.hours(2) + time.minutes(15)):seconds())       --> 8100.0
+print((3 * time.seconds(10)) == time.seconds(30))         --> true
+
+local parts = (-time.seconds(90)):parts()
+print(parts.negative, parts.minutes, parts.seconds)       --> true  1  30
+```
+
+## Zones
+
+A _zone_ maps each instant to an offset from UTC. There are three kinds:
+
+- [`time.zone(name)`](/manual/api#time.zone) returns a named IANA zone such as `"America/New_York"` or `"Europe/Paris"`. An unknown name raises the error `unknown time zone`.
+- [`time.offset(seconds)`](/manual/api#time.offset) returns a fixed offset, in seconds east of UTC. Its offset never varies.
+- [`time.localzone()`](/manual/api#time.localzone) returns the zone of the system.
+
+A zone has the methods `z:name()`, which returns the IANA name or the formatted offset such as `"-05:00"`, and `z:offset(instant)`, which returns the offset in seconds that the zone observes at that instant.
+
+```lus
+global print, time
+
+local ny = time.zone("America/New_York")
+local summer = time.instant(1782998100)
+local winter = time.instant(1767355200)
+print(ny:offset(summer), ny:offset(winter))       --> -14400  -18000
+print(winter:at(ny):iso())                        --> 2026-01-02T07:00:00-05:00
+print(time.offset(-5 * 3600):name())              --> -05:00
+```
+
+Named zones resolve from a copy of the IANA tzdata database that is compiled into the runtime and decompressed from a Zstandard blob on first use. Zones therefore need no filesystem access and no `fs` [permission](/manual/permissions), they behave the same on every platform, Windows included, and their offsets follow the full history of daylight saving transitions in the database. [`time.tzdata_version()`](/manual/api#time.tzdata_version) returns the release of the embedded database, a string such as `"2026c"`. The script `scripts/update-tzdata.sh` regenerates the embedded copy.
+
+`time.localzone()` reads the environment variable `TZ` first. On Unix it then reads `/etc/localtime` and `/etc/timezone`, and on Windows it maps the current Windows time zone to its IANA name. When detection fails, it returns UTC. The zone it returns comes from the embedded database, so it carries the full history of its offsets.
+
+## Zoned times
+
+[`time.zoned(fields, zone)`](/manual/api#time.zoned) builds a zoned value from a table of the civil fields `year`, `month`, `day`, `hour`, `minute`, `second`, and `nanosecond`. Missing fields default to the start of 1970-01-01. The second argument chooses how the fields are read: a zone resolves them with its offset at that wall-clock time, an integer is a fixed offset in seconds east of UTC, and an absent argument means UTC. A field beyond its range carries into the next larger field, so day 30 of February is the 2nd of March, except that a month outside 1 to 12 raises the error `month out of range`.
+
+A zoned value exposes the read-only fields `year`, `month`, `day`, `hour`, `minute`, `second`, `nanosecond`, `weekday`, `yearday`, and `offset`, the offset in seconds east of UTC. It has the methods `z:instant()`, which returns the instant it denotes, `z:iso()`, and `z:format(fmt)`.
+
+```lus
+global print, time
+
+local ny = time.zone("America/New_York")
+local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9, minute = 15 }, ny)
+print(z:instant():iso(), z.offset)           --> 2026-07-02T13:15:00Z  -14400
+print(z.yearday, z:iso())                    --> 183  2026-07-02T09:15:00-04:00
+```
+
+The days of the week and the months are [enums](/manual/guide#enum). [`time.weekday`](/manual/api#time.weekday) runs from `monday` to `sunday` with ISO 8601 numbering, so `tonumber(time.weekday.monday)` is `1`. [`time.month`](/manual/api#time.month) runs from `january` to `december`. The `weekday` field of a zoned value is a `time.weekday` member. The `month` field is a plain integer from 1 to 12 for arithmetic, and a `time.month` member may be passed anywhere a month is expected.
+
+```lus
+global print, time, tonumber
+
+local christmas = time.zoned{ year = 2026, month = time.month.december, day = 25 }
+print(christmas.month, tonumber(christmas.weekday))       --> 12  5
+print(christmas.weekday == time.weekday.friday)           --> true
+```
+
+Two zoned values are equal only when they are the same object, and comparing them with `<` raises an error. To compare the points in time, compare their instants.
+
+### Calendar arithmetic
+
+A zoned value derives new values with two methods. Both work on the wall clock and resolve the offset of the result through the zone of the original.
+
+- `z:with(fields)` returns a copy with the named civil fields replaced. A field beyond its range carries, as in `time.zoned`.
+- `z:add(amounts)` returns a copy moved by the calendar amounts `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds`, and `nanos`, each of which may be negative. Adding months keeps the day when it exists and otherwise clamps it to the last day of the target month.
+
+On the day that daylight saving begins, adding one day to noon gives noon the next day, 23 hours later.
+
+```lus
+global print, time
+
+local ny = time.zone("America/New_York")
+local noon = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
+local tomorrow = noon:add{ days = 1 }
+print(tomorrow:iso())                                --> 2026-03-08T12:00:00-04:00
+print((tomorrow:instant() - noon:instant()):seconds()) --> 82800.0
+
+local jan31 = time.zoned({ year = 2026, month = 1, day = 31 }, ny)
+print(jan31:add{ months = 1 }:iso())               --> 2026-02-28T00:00:00-05:00
+print(noon:with{ hour = 8, minute = 5 }:iso())     --> 2026-03-07T08:05:00-05:00
+```
+
+A wall-clock time that a zone skips at the start of daylight saving, or repeats at its end, resolves to one of the offsets around the transition. Which offset it takes is unspecified.
+
+## Formatting
+
+`i:format(fmt)` and `z:format(fmt)` use the `strftime` specifiers of [`os.date`](/manual/api#os.date). An instant formats in UTC, and a zoned value formats its own fields, so `%Z` and `%z` give its zone abbreviation and offset. `iso()` is the ISO 8601 shortcut, to the second.
+
+```lus
+global print, time
+
+local i = time.instant(1782998100)
+local ny = time.zone("America/New_York")
+print(i:format("%Y-%m-%d %H:%M"))           --> 2026-07-02 13:15
+print(i:at(ny):format("%H:%M %Z %z"))       --> 09:15 EDT -0400
+print(i:format("%A %d %B"))                 --> Thursday 02 July
+```
+
+## Parsing
+
+[`time.parse(s, format)`](/manual/api#time.parse) reads a date and time. It returns a zoned value when the text carries an explicit numeric offset such as `-04:00` or `-0400`, and an instant when the text is in UTC, written with `Z`, or carries no offset, which reads as UTC.
+
+Without `format`, the text is ISO 8601: a date alone, which means midnight UTC, or a date and a time separated by `T` or a space, with optional seconds and fractional seconds to nanosecond precision. Text that is not ISO 8601 raises an error that quotes it.
+
+```lus
+global print, time
+
+local i = time.parse("2026-07-02T13:15:00Z")
+local z = time.parse("2026-07-02T09:15:00-04:00")
+print(z:iso(), z:instant() == i)                         --> 2026-07-02T09:15:00-04:00  true
+print(time.parse("2026-07-02"):iso())                    --> 2026-07-02T00:00:00Z
+print(time.parse("2026-07-02T13:15:00.25Z"):nanos())     --> 250000000
+print(catch time.parse("tomorrow"))                      --> false  ...: invalid ISO 8601 date in 'tomorrow'
+```
+
+With `format`, the text must match an explicit pattern built from the specifiers `%Y`, `%y`, `%m`, `%d`, `%e`, `%H`, `%M`, `%S`, `%z`, and `%%`. A space in the pattern matches a run of whitespace, and every other character matches itself. Text that does not match raises an error that quotes the text and the pattern. Parsing is the same on every platform.
+
+```lus
+global print, time
+
+local z = time.parse("02/07/2026 09:15 -0400", "%d/%m/%Y %H:%M %z")
+print(z:iso())                                           --> 2026-07-02T09:15:00-04:00
+```
+
+## Measuring elapsed time
+
+[`time.monotonic()`](/manual/api#time.monotonic) returns an instant from a monotonic clock. A monotonic reading never moves backwards and ignores changes to the wall clock, from NTP corrections or a user setting the time. It has no calendar meaning: subtracting two readings gives a duration, while formatting one, calling `:epoch()` on it, or subtracting a wall-clock instant from it raises an error.
+
+```lus
+global print, string, time
+
+local start = time.monotonic()
+local text = string.rep("x", 100000)
+local elapsed = time.monotonic() - start
+print(elapsed:seconds() >= 0, #text)       --> true  100000
+print(catch start:iso())                   --> false  ...: monotonic instants have no calendar representation
+```
+
+## Integer epochs
+
+[`os.time`](/manual/api#os.time), [`os.date`](/manual/api#os.date), and [`os.difftime`](/manual/api#os.difftime) work in integer Unix seconds, as in Lua. `time.instant(os.time())` turns such an epoch into an instant, and `i:epoch()` turns an instant back into one.
+
+```lus
+global os, print, time
+
+local now = os.time()
+print(time.instant(now):epoch() == now)  --> true
+```
+
+## Limits
+
+The library keeps no process-wide time zone state, and each interpreter state decompresses its own copy of the database, so [workers](/manual/concurrency) use it independently. Time values are userdata, so a worker message cannot carry them, and a program sends an epoch or an ISO string instead. For the same reason, `tojson` writes a time value as `null`.
+
+## Related pages
+
+- [Concurrency](/manual/concurrency) covers workers and detached coroutines.
+- [Data formats](/manual/data) covers JSON and CSV, where times travel as ISO strings or epochs.
+- The [API reference](/manual/api#time-library) lists every function of the `time` library.

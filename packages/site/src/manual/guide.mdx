@@ -95,6 +95,24 @@ x, y from otherPoint             -- assigns to existing variables
 global width, height from getDimensions()
 ```
 
+Each name reads its field with an ordinary indexed read, so the order of the names is free and an `__index` metamethod applies. A source of `nil` or another value that cannot be indexed raises the usual `attempt to index` error. The source can be any expression, including a call, a field chain, or a parenthesized conditional, and a call runs once however many names it fills:
+
+```lus
+local calls = 0
+local function config()
+    calls = calls + 1
+    return { host = "localhost", port = 8080 }
+end
+
+local port, host from config()
+print(host, port, calls)   --> localhost  8080  1
+
+local size from (false and { size = 10 } or { size = 50 })
+print(size)                --> 50
+```
+
+The bare assignment form requires each target to be a local, an upvalue, or a global name. A field such as `t.x` as a target is a compile error, `'from' requires simple variable names`.
+
 ### Variable attributes
 
 Local variables can carry _attributes_ that modify their behavior. There are two compile-time attributes and a runtime attribute system.
@@ -132,6 +150,59 @@ x = "hello"              -- ERROR: x must be a number, got string
 
 The attribute function is not called when assigning `nil`. Multiple runtime attributes can be chained with commas (`<first, second>`) and run in order. Compile-time attributes must come before runtime ones.
 
+An attribute runs on the initialization of the variable and on every assignment to it in the function that declares it. A declaration without an initializer skips it. A `nil` result keeps the value it received, and a `false` result stores `false`. In a chain, each attribute receives the result of the one before it, and the last result is stored:
+
+```lus
+local function first(name, value)
+    print("first", name, value)
+    return value + 1
+end
+
+local function second(name, value)
+    print("second", name, value)
+    return value * 2
+end
+
+local x <first, second> = 10   --> first  x  10, then second  x  11
+print(x)                       --> 22
+```
+
+An assignment made from a nested function through an upvalue stores the value as written, without running the attribute:
+
+```lus
+local function scale(name, value)
+    return value * 10
+end
+
+local x <scale> = 1
+local function set(v) x = v end
+set(2)
+print(x)   --> 2
+x = 3
+print(x)   --> 30
+```
+
+The attribute is any expression that evaluates to something callable, including a call written in the short string form. A function that returns an attribute makes the behavior a parameter, as in `<only "number">` below. The attribute expression runs once, at the declaration and before the initializer, and its value stays alive until the end of the enclosing block. An error raised by an attribute propagates from the assignment, and the variable keeps its previous value.
+
+```lus
+local function only(kind)
+    return function(name, value)
+        if type(value) ~= kind then
+            error(`$name must be a $kind`, 0)
+        end
+        return value
+    end
+end
+
+local n <only "number"> = 10
+local ok, err = catch do
+    n = "ten"
+end
+print(ok, err, n)   --> false  n must be a number  10
+```
+
+Runtime attributes apply to a `local` statement with one name. A `local` statement with several names, a `from` declaration, an assignment condition, a group field, or a `global` declaration rejects them with a compile error. Writing a runtime attribute before a compile-time one, as in `<check, const>`, fails with `compile-time attribute 'const' must come before runtime attributes`.
+
 ### Local groups
 
 The `<group>` attribute creates a stack-allocated named bundle of fields with dot access, without allocating a heap table:
@@ -142,11 +213,27 @@ print(pos.x)  --> 0
 pos.x = 10
 ```
 
-Groups are not first-class values, so they cannot be passed to functions or stored in tables. You also cannot add new fields after initialization. However, you can perform partial reassignment to update only specific fields:
+Groups are not first-class values, so they cannot be passed to functions or stored in tables. A group name is usable only as the prefix of a field path such as `pos.x`, as the target of an overwrite, as the initializer of another group, and as a `from` source. Anywhere else, including `print(pos)`, it is a compile error, `cannot pass local group`. You also cannot add new fields after initialization. However, you can perform partial reassignment to update only specific fields:
 
 ```lus
-pos = { x = 5 }  -- only updates x; y remains 0
+local pos <group> = { x = 0, y = 0 }
+pos = { x = 5 }    -- only updates x
+print(pos.x, pos.y)  --> 5  0
 ```
+
+The set of fields is fixed when the code is compiled. An overwrite that names a field the group lacks, such as `pos = { z = 1 }`, fails with `'z' is not a field of group 'pos'`. A new group declaration may take another group as its initializer, which copies the current field values. A field initializer is any expression, including a [do expression](#do-expressions):
+
+```lus
+local a <group> = {
+    x = 1,
+    y = do local t = 1 provide t + 1 end,
+}
+local b <group> = a   -- copies x and y
+b.x = 10
+print(a.x, b.x, b.y)  --> 1  10  2
+```
+
+Each field of a group is a local variable of its own, so a nested function that names a field captures it like any other local. Groups are always local, and `global g <group>` is a compile error.
 
 Groups can contain subgroups and `<const>` fields:
 
@@ -158,6 +245,8 @@ local player <group> = {
 player.pos.x = 10    -- ok
 player.name = "Bob"  -- ERROR: const field
 ```
+
+A subgroup is the field marked `<group>`. A field without that attribute whose value is a table constructor holds an ordinary table. A subgroup cannot be overwritten as a whole, so `player.pos = { x = 1 }` and `player = { pos = ... }` are compile errors, while its fields can be assigned one at a time.
 
 ## Values
 
@@ -181,7 +270,52 @@ print(2n ^ 100)                       --> 1267650600228229401496703205376
 print(0.1d + 0.2d == 0.3d)            --> true
 ```
 
-All four subtypes compare by mathematical value, so `1 == 1.0`, `1 == 1n`, and `1n == 1.00d` are all true, and a table key is normalized so that `t[1]`, `t[1.0]`, `t[1n]`, and `t[1d]` name the same slot. The global functions [`bigint`](/manual/api#bigint) and [`decimal`](/manual/api#decimal) convert other numbers and numeric strings. [Acquis 36](/manual/acquis-36) describes the exact subtypes in full.
+The table below lists the four subtypes.
+
+| Subtype | `math.type` | Representation | Literal |
+| --- | --- | --- | --- |
+| integer | `"integer"` | 64-bit two's complement | `42`, `0xff` |
+| float | `"float"` | IEEE 754 binary64 | `1.5`, `1e9` |
+| bigint | `"bigint"` | arbitrary precision integer | `42n`, `0xffn` |
+| decimal | `"decimal"` | arbitrary precision base 10 coefficient with a 32-bit exponent | `1.50d`, `3d`, `1e-2d` |
+
+A decimal or hexadecimal integer literal followed directly by `n` is a bigint. The `n` suffix applies only to integer literals, so `1.5n` and `1e3n` are malformed numbers. A numeric literal in decimal notation followed directly by `d` is a decimal, and it keeps its digits exactly as written, so `1.50d` has two fractional digits. Hexadecimal digits include `d`, so `0xffd` is the integer 4093, and a hexadecimal float such as `0x1p4` takes no suffix. An integer literal that overflows 64 bits without a suffix becomes a float, as in Lua.
+
+```lus
+print(0xffn, math.type(0xffn))   --> 255  bigint
+print(1.50d, 1e-2d, 3d)          --> 1.50  0.01  3
+print(0xffd)                     --> 4093
+```
+
+Integer arithmetic wraps around on overflow, as in Lua. A program that needs exact results beyond 64 bits uses bigints:
+
+```lus
+print(math.maxinteger + 1 == math.mininteger)  --> true
+print(bigint(math.maxinteger) + 1)             --> 9223372036854775808
+```
+
+All four subtypes compare by mathematical value, so `1 == 1.0`, `1 == 1n`, and `1n == 1.00d` are all true. A decimal also compares exactly with a float, so `0.5d == 0.5` is true and `0.1d == 0.1` is false. A number used as a table key is normalized first. A float or decimal with an integral value and a bigint that fits in 64 bits all become the matching integer key, so `t[1]`, `t[1.0]`, `t[1n]`, and `t[1d]` name the same slot.
+
+```lus
+local t = {}
+t[1] = "one"
+print(t[1.0], t[1n], t[1d])  --> one  one  one
+```
+
+Two global functions build exact numbers, and the standard conversions accept them:
+
+- [`bigint(x)`](/manual/api#bigint) converts an integer, an integral float, a decimal with an integral value, or a numeric string to a bigint. A number without an integer value raises `number has no integer representation`.
+- [`decimal(x)`](/manual/api#decimal) converts an integer, a bigint, or a numeric string to a decimal exactly. A float converts through the shortest decimal string that reads back as the same float, so `decimal(0.1)` is `0.1d`.
+- [`math.tointeger(x)`](/manual/api#math.tointeger) returns an integer when `x` has an integral value that fits in 64 bits, whatever its subtype.
+- `tostring` prints a bigint in decimal without a suffix, and a decimal with exactly its stored digits.
+
+```lus
+print(bigint("123456789012345678901234567890") * 2)  --> 246913578024691357802469135780
+print(decimal("2.50"), decimal(1 / 3))               --> 2.50  0.3333333333333333
+print(math.type(math.tointeger(5n)))                 --> integer
+```
+
+The [JSON](#json) functions carry bigints and decimals through a document with the option `{ exact = true }`. The rules of arithmetic between the subtypes are in [Arithmetic operators](#arithmetic-operators).
 
 ### `string`
 
@@ -210,6 +344,8 @@ print(`Multi-line:
   name = $name
   age  = $age`)
 ```
+
+A `$name` takes only the characters of one identifier, so `` `$t.x` `` interpolates `t` followed by the literal text `.x`. A `$(expr)` keeps only the first value of its expression. The parts are evaluated and converted from left to right. The conversion is the one that `tostring` performs, built into the runtime, so it works the same when the global `tostring` is replaced or `nil`. A `$` followed by a reserved word, as in `` `$nil` ``, is a compile error, and the value is written `` `$(nil)` ``.
 
 ### `table`
 
@@ -246,15 +382,28 @@ Userdata are pointers to arbitrary data. Like tables, they can receive a metatab
 
 Enums define a closed set of named constants. Each declaration creates one interned object per member. Name access such as `Color.Red` and 1-based numeric access such as `Color[1]` return those cached member objects.
 
-Members from one declaration order by declaration position. `Color.Red == Color.Red` is true, while members from different enum declarations remain distinct even when they share a name or position. An ordering comparison between different declarations raises an error. Duplicate member names are compile-time errors.
+Members from one declaration order by declaration position. `Color.Red == Color.Red` is true, while members from different enum declarations remain distinct even when they share a name or position. An ordering comparison between different declarations raises `attempt to compare members of different enums`. Duplicate member names are compile-time errors.
+
+An enum is declared with the `enum ... end` expression, which lists at least one comma-separated name and evaluates to the first member. Every member indexes the whole enum, so `e.x.y` is `e.y` and `e[1][3]` is `e.z`. A name or position outside the enum reads as `nil`. [`tonumber`](/manual/api#tonumber) returns the 1-based position of a member, and `type` returns `"enum"`:
+
+```lus
+local priority = enum low, medium, high end
+
+print(priority == priority.low)            --> true
+print(priority.low.high == priority[3])    --> true
+print(priority.medium < priority.high)     --> true
+print(tonumber(priority.high), type(priority.high))  --> 3  enum
+```
+
+Members work as table keys and stay distinct from strings and numbers, so `priority.low ~= "low"` and `priority.low ~= 1`. Arithmetic and length raise an error on a member. One `enum` expression yields the identical enum each time it is evaluated, for example in a loop or across calls of the same function, while two separate `enum` expressions always yield distinct enums. An enum holds at most 255 members.
 
 ### `vector`
 
-Vectors are resizable byte buffers, and they are the type of all raw binary data in Lus. Binary file reads, network reads, compressed data, the results of `string.pack`, byte encodings from `string.transcode`, and compiled chunks from `string.dump` are all vectors. Vector offsets are zero based. `vector.pack` and `vector.unpack` read and write values of various sizes at given offsets, `vector.get` and `vector.set` access single bytes, and `#v` is the size in bytes. `vector.fromstring` and `vector.tostring` convert between text and its WTF-8 bytes. [Acquis 37](/manual/acquis-37) describes how strings and vectors divide the work between text and bytes.
+Vectors are resizable byte buffers, and they are the type of all raw binary data in Lus. Binary file reads, network reads, compressed data, the results of `string.pack`, byte encodings from `string.transcode`, and compiled chunks from `string.dump` are all vectors. Vector offsets are zero based. `vector.pack` and `vector.unpack` read and write values of various sizes at given offsets, `vector.get` and `vector.set` access single bytes, and `#v` is the size in bytes. `vector.fromstring` and `vector.tostring` convert between text and its WTF-8 bytes. [Text and bytes](/manual/text) describes how strings and vectors divide the work between text and bytes.
 
 ### `query`
 
-Query values are compiled `@` query expressions: first-class, immutable descriptions of a filter, projection, and ordering over one or more sources. A query captures its sources and any values it references when it is built, and nothing runs until the [`query`](/manual/api#query) iterator consumes it, so queries can be stored, passed around, and rerun. Two query values are equal only when they are the same object. This feature is described in full in [Acquis 34](/manual/acquis-34).
+Query values are compiled `@` query expressions: first-class, immutable descriptions of a filter, projection, and ordering over one or more sources. A query captures its sources and any values it references when it is built, and nothing runs until the [`query`](/manual/api#query) iterator consumes it, so queries can be stored, passed around, and rerun. Two query values are equal only when they are the same object. [Queries](#queries) describes the query language and its evaluation.
 
 ## Operators
 
@@ -279,6 +428,27 @@ print(1.10d * 3)    --> 3.30
 print(10d / 4d)     --> 2.5
 ```
 
+The table below gives the subtype of the result of an arithmetic operation, where the rows and columns are the subtypes of the operands.
+
+| | integer | float | bigint | decimal |
+| --- | --- | --- | --- | --- |
+| **integer** | integer | float | bigint | decimal |
+| **float** | float | float | float | error |
+| **bigint** | bigint | float | bigint | decimal |
+| **decimal** | decimal | error | decimal | decimal |
+
+Decimal addition, subtraction, and multiplication are exact, so `0.1d + 0.2d == 0.3d` is true. The exponent of a decimal is a 32-bit integer, and an operation whose exact result needs an exponent beyond that range, such as `1e2147483647d * 1e2147483647d`, raises `decimal exponent out of range`. The error for an operation between a decimal and a float is `attempt to mix decimal and float in arithmetic`.
+
+The `/` operator produces a float for integers and bigints, as in Lua. For decimals its result rounds half to even. The `//` and `%` operators keep the subtype from the table and floor toward negative infinity for bigints, as they do for integers. Exponentiation produces a float, except that a decimal or bigint base with a non-negative integer exponent gives an exact result.
+
+```lus
+print(1.10d + 2.205d)        --> 3.305
+print(1d / 3d)               --> 0.3333333333333333333333333333333333
+print(-7n // 2n, -7n % 2n)   --> -4  1
+print(2d ^ 10)               --> 1024
+print(catch 1.5d + 1.5)      --> false  ...: attempt to mix decimal and float in arithmetic
+```
+
 ### Relational operators
 
 The relational operators are `==` (equal), `~=` (not equal), `<`, `>`, `<=`, and `>=`. They always produce a boolean. Equality (`==`) compares by value for numbers, strings, and booleans, but by _reference_ for tables, functions, and userdata. Two values of different types are never equal. Numbers compare by mathematical value whatever their subtype, so `1 == 1.0` and `1 == 1n` are true.
@@ -301,6 +471,19 @@ If the value before `?` is falsy, the entire remaining chain is skipped and that
 ```lus
 local timeout = config?.database?.timeout or 30
 ```
+
+The skipped part includes the argument expressions of later calls, which never run. The part of the chain before the first `?` evaluates normally, and a suffix with no `?` before it is unprotected, so `t?.a.b` raises if `t.a` is `nil`. The `?` tests only for `nil` and `false`, so with `local t = true`, `t?.x` raises `attempt to index a boolean value`.
+
+```lus
+local data = { items = { { name = "first" } } }
+print(data?.items?[1]?.name)   --> first
+print(data?.items?[2]?.name)   --> nil
+
+local flag = false
+print(flag?.field)             --> false
+```
+
+A call after the first `?` produces exactly one value in every context. A chain that contains a `?` is an expression. It cannot be the target of an assignment and it cannot stand alone as a statement, so `t?.a = 1` and `obj?:process()` on their own line are syntax errors. A call kept only for its effect is assigned, as in `local _ = obj?:process()`.
 
 ### Logical operators
 
@@ -401,6 +584,34 @@ end
 
 Multiple assignments work the same way, so the branch is taken only when every assigned value is truthy: `if a, b = getTwoValues() then`.
 
+The names in a condition are new local variables, so they shadow any outer variable of the same name until the `end` of the statement. A variable declared in the `if` condition or in an `elseif` condition is visible in its own block, in every later `elseif` condition and block, and in the `else` block. The expression list is evaluated in full and adjusted to the number of names, as in a `local` statement, before any value is tested. A call that returns fewer values than there are names leaves the extra names `nil`, which makes the condition false.
+
+```lus
+local x = "outer"
+if x = 5 then
+    print(x)          --> 5
+end
+print(x)              --> outer
+
+if a, b, c = 1, nil, 3 then
+    print("not reached")
+elseif d = 4 then
+    print(a, b, c, d) --> 1  nil  3  4
+end
+```
+
+An assignment condition composes with [`catch`](#error-handling), which keeps the status and the result or error object in scope for both branches:
+
+```lus
+if ok, value = catch tonumber("42") + 1 then
+    print(value)      --> 43
+else
+    print("failed", value)
+end
+```
+
+The names in a condition may carry the compile-time attributes `<const>`, `<close>`, and `<group>`. Runtime attributes there are a compile error. A condition may also use `from`, as in `if host, port from settings then`, which reads the fields as described in [Table destructuring](#table-destructuring).
+
 ### while
 
 The `while` loop repeats its body as long as the condition is truthy:
@@ -418,6 +629,15 @@ The same assignment syntax works in `while` conditions. The expression is evalua
 ```lus nocheck
 while line = file:read() do
   process(line)
+end
+```
+
+The rules of the `if` form apply: the names are new locals, the expression list is adjusted to the names, and the loop runs while every value is truthy. The condition variables are one binding that each iteration assigns again, so closures created in different iterations share them. A local declared in the body and copied from the condition variable gives each iteration its own value.
+
+```lus
+local queue = { "a", "b", "c" }
+while item = table.remove(queue, 1) do
+    print(item)       --> a, then b, then c
 end
 ```
 
@@ -462,7 +682,20 @@ for i in range(10, 1, -2) do  -- 10, 8, 6, 4, 2
 end
 ```
 
-Elsewhere `range` returns an ordinary iterator triple that any generic `for` can consume. [Acquis 35](/manual/acquis-35) covers `range` and `continue`.
+A direct call follows the rules of the numeric loop: the bounds and the step are evaluated once, the loop variable is local to the body, and an integer loop stays in integers. A negative step counts down, and a step of zero raises `bad argument #3 to 'range' (step must not be zero)`.
+
+Elsewhere `range` returns an ordinary iterator triple that any generic `for` can consume, so it can be stored and passed around. A local or global that shadows `range` is called like any other iterator.
+
+```lus
+local iter, state, control = range(2, 10, 2)
+for i in iter, state, control do
+    print(i)          --> 2, 4, 6, 8, 10
+end
+
+for i in range(3) do
+    print(i)          --> 1, 2, 3
+end
+```
 
 ### Generic for
 
@@ -502,6 +735,30 @@ for i = 1, 10 do
   print(i)
 end
 ```
+
+`continue` belongs to the innermost loop of the current function: a numeric `for`, a generic `for`, a `while`, or a `repeat`. In a `for` loop it advances to the next value, and in a `while` loop it evaluates the condition again. Before the next iteration starts, it closes the upvalues and to-be-closed variables of the blocks it leaves. Statements may follow it in the same block.
+
+```lus
+local attempts = 0
+repeat
+    attempts = attempts + 1
+    if attempts % 2 == 1 then continue end
+    print(`even attempt $attempts`)   --> even attempt 2, 4, 6
+until attempts >= 6
+```
+
+The `until` condition of a `repeat` loop can read the locals of the body. A `continue` that would skip the declaration of such a local is a compile error, because the condition would then read a variable that was never initialized. The loop below fails with `<continue> at line 4 jumps into the scope of 'done'`, and declaring `done` before the `continue` makes it valid:
+
+```lus nocheck
+local i = 0
+repeat
+    i = i + 1
+    if i < 3 then continue end
+    local done = true
+until done
+```
+
+A `continue` outside every loop raises `continue outside loop` at compile time. The same error applies to a `continue` inside a function literal nested in a loop, since the function body is not part of the loop. `continue` is a reserved word, so it cannot name a variable or a label.
 
 `goto` jumps to a named label within the same block. Labels are declared with `::name::`. A common use is to leave a nested loop in one step:
 
@@ -544,6 +801,25 @@ local ok, value = catch do
   provide riskyOperation()
 end
 ```
+
+A `do` in expression position is a do expression, and a `do` at the start of a statement is a plain block. A do expression is an atom, so it may stand anywhere an expression may, as in `1 + do provide 2 end * 3`, which is `7`. Its body is an ordinary scope, and its locals are invisible outside it.
+
+A `provide` may appear at any depth inside the body, including inside loops and `if` branches, and the innermost do expression of the same function receives its values. It ends its block, so a statement after it is a compile error. When it runs, Lus closes the upvalues and to-be-closed variables of the body and leaves the do expression with the provided values. A body that completes without a `provide` produces a single `nil`, and so does an empty `provide`:
+
+```lus
+local first = do
+    for i = 1, 10 do
+        if i * i > 20 then provide i end
+    end
+    provide -1
+end
+print(first)                       --> 5
+
+local none = do local unused = 1 end
+print(none)                        --> nil
+```
+
+A `provide` outside every do expression, including one in a plain `do` block or in a function literal nested in a do expression, fails with `'provide' outside do expression`. `break`, `continue`, `goto`, and `return` inside a do expression act as in any block, and the do expression then produces no value.
 
 ## Functions
 
@@ -735,6 +1011,16 @@ The full iterator protocol is covered in [Iterators](#iterators).
 local original = {1, 2, {3, 4}}
 local shallow  = table.clone(original)        -- inner table is shared
 local deep     = table.clone(original, true)  -- fully independent copy
+print(shallow[3] == original[3], deep[3] == original[3])  --> true  false
+```
+
+A deep copy reproduces the shape of the references, so a table that refers to itself produces a copy that refers to the copy:
+
+```lus
+local t = {}
+t.self = t
+local copy = table.clone(t, true)
+print(copy.self == copy, copy == t)   --> true  false
 ```
 
 ### Slices
@@ -748,6 +1034,35 @@ local b = t[, 3]    -- {10, 20, 30}
 
 local s = "hello"
 local c = s[2, 4]   -- "ell"
+```
+
+The object is evaluated first, then the start bound, then the end bound. A bound must be an integer, a float with an integral value, or a string that converts to one. Any other value raises `slice index must be an integer`. A slice is an expression, so it cannot be the target of an assignment.
+
+Strings and vectors follow the same rules. Positions are 1-based and inclusive, a string counts in characters, and a vector counts in bytes. A start below 1 rises to 1 and an end past the length falls to the length. If the end is below 1 or the start is past the length, the result is empty. If the start is greater than the end, the result runs backward from the start down to the end:
+
+```lus
+print(("héllo")[2, 3])        --> él
+print(("hello")[4, 2])        --> lle
+print(("hello")[0, 100])      --> hello
+local v = vector.fromstring("abcdef")
+print(vector.tostring(v[1, 3]))  --> abc
+```
+
+A table slice reads the positions from the start to the end, stepping backward if the start is greater, and stores them in a new table from index 1. The default end is the border `#t`. Table bounds are not clamped, and a position without a value leaves a hole in the result, so `({1, 2, 3})[0, 2]` holds `1` at index 2 and `2` at index 3. The slice reads each position raw, without `__index`, and copies no keys outside the integer positions. A span of more than 2^26 positions raises `slice span too large`.
+
+A value with a `__slice` metamethod, a table or any other type, calls it with the object and the two raw bounds, with `nil` for an omitted bound, and the first result is the slice. Any other value raises `attempt to slice a TYPE value`.
+
+```lus
+local evens = setmetatable({}, {
+    __slice = function(self, first, last)
+        local result = {}
+        for i = first or 1, last do
+            result[#result + 1] = i * 2
+        end
+        return result
+    end,
+})
+print(table.concat(evens[2, 4], " "))  --> 4 6 8
 ```
 
 ## Metatables and metamethods
@@ -970,6 +1285,122 @@ end
 
 See [Coroutines](#coroutines) for the full coroutine API.
 
+## Queries
+
+A _query_ is an expression, written with the `@` sigil, that describes a filter, a projection, grouping, and ordering over one or more sources in clauses that read like SQL. Building a query runs nothing. The [`query`](/manual/api#query) iterator evaluates it in memory over a plain table, or hands parts of it to a backend such as an [SQLite](#sqlite) database.
+
+### Query expressions
+
+The `@source` form begins a query and binds a _row variable_ named after the last name of the source, or after an `as` alias. A source is a name, a dot chain such as `db.users`, a chain with a literal bracket index, or a parenthesized expression. A source that ends in an index or is parenthesized requires `as`. Clauses follow the sources:
+
+```lus
+local people = {
+    { name = "Ada", age = 36 },
+    { name = "Linus", age = 17 },
+    { name = "Grace", age = 45 },
+}
+
+local adults =
+    @people as p
+    where p.age > 18
+    select p.name, p.age
+    order by p.age desc
+    limit 100
+
+for row in query(adults) do
+    print(row.name, row.age)   --> Grace  45, then Ada  36
+end
+```
+
+The clause keywords `where`, `select`, `order`, `by`, `limit`, `offset`, `group`, `having`, `as`, `distinct`, `asc`, and `desc`, and the aggregate names, are keywords only inside an `@` query. Outside a query they are ordinary names, so a local called `select` or `count` keeps working. Row variables exist only inside the clauses of their query. Clauses may appear in any order, each clause appears at most once, and the first name that is not a clause keyword ends the query.
+
+The `select` clause always produces a record. `select p.name` yields a record `{ name = ... }` keyed by the field name. Any other expression and every aggregate take a name with `as`, as in `select count(*) as n`. `select p` alone passes the whole source record through unchanged, and a query with no `select` does the same. `select distinct` removes duplicate records from the projection.
+
+Several sources separated by commas form a join whose condition is written in the `where` clause. A join requires a `select` clause:
+
+```lus
+local orders = { { cust_id = 1, total = 150 }, { cust_id = 2, total = 50 } }
+local customers = { { id = 1, name = "Ada" }, { id = 2, name = "Linus" } }
+
+local big = @orders as o, customers as c
+    where o.cust_id == c.id and o.total > 100
+    select c.name, o.total
+
+for row in query(big) do
+    print(row.name, row.total)   --> Ada  150
+end
+```
+
+The aggregates are `count`, `sum`, `avg`, `min`, and `max`. `count(*)` counts rows, and `count(expr)` counts the rows where `expr` is not `nil`. In a grouped query every projection must be an aggregate or a group key, so the result is the same with every provider. An `order by` item is an expression with an optional `asc` or `desc`, and the default is ascending. A bare name in `order by` refers to a projection alias, so the query below orders by the computed `total`:
+
+```lus
+local sales = {
+    { region = "north", amount = 600 },
+    { region = "north", amount = 700 },
+    { region = "south", amount = 100 },
+}
+
+local totals = @sales as s
+    select s.region, sum(s.amount) as total
+    group by s.region
+    having sum(s.amount) > 1000
+    order by total desc
+
+for row in query(totals) do
+    print(row.region, row.total)   --> north  1300
+end
+```
+
+### Captured values and host closures
+
+Inside a clause, literals, columns of a row variable, comparisons, boolean logic, arithmetic, string concatenation, and the aggregates become plan nodes that a backend can translate. A name from the enclosing scope, alone or as a dot chain such as `limits.adult`, is captured as a bound parameter. Its value is read once, when the query value is built, so a later assignment to the local leaves an already built query unchanged. The sources are also evaluated once, at build time, while the contents of a source table are read on each run:
+
+```lus
+local people = { { name = "Ada", age = 36 } }
+local minimum = 40
+local older = @people as p where p.age > minimum select p.name
+minimum = 0                                   -- the query keeps 40
+
+people[#people + 1] = { name = "Grace", age = 45 }
+for row in query(older) do
+    print(row.name)                           --> Grace
+end
+```
+
+Every other expression becomes a _host closure_ that runs in memory once per row: a call, a method call, a row chain deeper than one field such as `p.address.city`, or a constructor. A host closure is an ordinary Lus function, so it sees its upvalues live, and it receives the current row of every source. A bare column is a filter by truthiness, so `where r.active` keeps the rows whose `active` field is truthy.
+
+### Running a query
+
+A query is lazy and read-only. The `query` iterator runs it and is used like `pairs`. Each call to `query(q)` produces a fresh iterator, so a stored query runs again on each loop and observes changes to its sources. A count is written `select count(*) as n`, a single row `limit 1`, and a list is built inside the loop.
+
+The logical pipeline is fixed: fetch each source, join, `where`, `group by`, `having`, `select` and `distinct`, `order by`, then `limit` and `offset`. Every provider follows the same SQL-flavored rules, so the same query returns the same rows wherever it runs:
+
+- A comparison with a `nil` operand is false.
+- `nil` orders first in ascending order, and NaN keys order and group with `nil`.
+- Integer and float keys unify, so `1` and `1.0` form one group.
+- Aggregates skip `nil` values. Over zero rows an aggregate yields an absent field, except `count`, which yields `0`.
+- A `nil` value never becomes a field of a record.
+- Group and distinct keys must be primitive values, and an integer `sum` raises an error on overflow.
+
+### Sources and providers
+
+A _provider_ evaluates the sources of one kind. A plain table, meaning an array of records, is served by the built-in in-memory provider, which implements every clause. A database opened with [`io.sqlite`](/manual/api#io.sqlite) exposes its tables by indexing the handle, so `db.users` is a source. Any other value becomes a source by supplying a `__query` metamethod that returns an iterator over its rows.
+
+At execution time the engine splits the `where` clause at its top-level `and` into _conjuncts_ and offers each conjunct that names one source and contains no host closure to that source's provider. The SQLite provider translates each conjunct it accepts into a parameterized `SELECT`, and every literal and captured value travels as a bound parameter. It accepts only the shapes whose SQL meaning matches the in-memory engine exactly, so division, booleans in SQL positions, and `not` stay in memory. A join whose sources use different providers fetches each side with its own pushed conjuncts and joins the rows in memory. The engine performs `order by`, `limit`, and grouping in memory for every provider. [`debug.queryplan(q)`](/manual/api#debug.queryplan) returns a description of the split as a string, naming the provider of each source and where each conjunct runs.
+
+```lus nocheck
+@db.users as u
+    where u.age >= 18 and matches(u.name, "^A")
+    select u.name
+-- the comparison runs in SQLite, and matches() runs in memory
+-- on each returned row
+```
+
+### The query value
+
+A query value has type `query`. It holds its sources, captured parameters, and host closures, so a query keeps an otherwise unreachable source alive. Two query values are equal only when they are the same object, a query works as a table key, and `tostring` prints an address. Comparison, length, and arithmetic raise an error, and a query cannot be sent to a worker. A function that builds a query survives `string.dump`, and the plan is rebuilt when the chunk loads.
+
+A query holds at most 8 sources and 200 captured operands, and clause expressions nest at most 64 levels deep. Aggregates appear only in `select` and `having` and cannot nest. Bitwise operators, the length operator, a nested `@` query, and a suffix on a parenthesized clause expression are compile errors inside a clause.
 ## Coroutines
 
 Coroutines are cooperative threads of execution. Control transfers explicitly through `resume` and `yield`, giving one coroutine execution at a time within its interpreter state.
@@ -1062,7 +1493,7 @@ end
 print(table.concat(results, " "))  --> 1 4 9
 ```
 
-The error of a detached coroutine belongs to whoever resumes or closes it. When a detached coroutine fails and nothing collects its error, `lus` stops with that error and the traceback of the coroutine, either once the remaining coroutines have ended or when the collector frees the coroutine. [Acquis 43](/manual/acquis-43) describes detached coroutines in full.
+The error of a detached coroutine belongs to whoever resumes or closes it. When a detached coroutine fails and nothing collects its error, `lus` stops with that error and the traceback of the coroutine, either once the remaining coroutines have ended or when the collector frees the coroutine. [Coroutines and workers](/manual/concurrency) describes detached coroutines in full.
 
 ## String patterns
 
@@ -1189,6 +1620,63 @@ lus -Pfs -Pnetwork script.lus
 
 Coroutines start with the permissions of their creator. Later permission changes remain local to the parent or coroutine that makes them.
 
+### Readonly environment
+
+The `--readonly-env` option freezes the global environment and the standard library once the interpreter has loaded its libraries and created the `arg` table. It freezes tables to two levels below `_ENV`:
+
+- `_ENV` itself, the global table.
+- Every table stored in `_ENV`, such as `math`, `string`, `table`, `io`, `os`, `fs`, `network`, `worker`, and `arg`.
+- Every table stored in those tables, such as `network.tcp` and `network.udp`.
+
+A write to a frozen table, including one through `rawset`, raises `attempt to modify a readonly table`. A new global is such a write, so a program under `--readonly-env` keeps its state in locals. Tables that the program creates stay writable. `package.loaded` also stays writable, because `require` stores every module it loads there, and the global bindings stay frozen around it:
+
+```lus nocheck
+-- lus --readonly-env script.lus
+print(math.abs(-5))                  --> 5
+local t = { 1, 2, 3 }
+t[4] = 4                             -- a table of the program stays writable
+
+counter = 1                          -- ERROR: attempt to modify a readonly table
+math.abs = function(n) return n end  -- ERROR: attempt to modify a readonly table
+```
+
+Workers inherit the setting from the interpreter that creates them. The option and [`pledge`](/manual/api#pledge) are independent: a pledge limits the operations a program may perform, and `--readonly-env` keeps the environment that every function shares in place, so the two combine.
+
+### Compile-time flags
+
+The `flags` table holds the values given on the command line with `-F NAME` or `--flag NAME`. A flag without a value is `true`. A value after `=` that reads as a number becomes a number, and any other value, including an empty one, becomes a string. A repeated flag keeps its last value, and a flag that was not given reads as `nil`:
+
+```bash
+lus -Fdebug script.lus            # flags.debug == true
+lus -Fversion=1.5 script.lus      # flags.version == 1.5
+lus -Fname=alpha script.lus       # flags.name == "alpha"
+lus --flag channel=beta script.lus
+```
+
+The table always exists when `lus` runs a script, even without flags, and it is readonly. `flags` is a reserved name that needs no `global` declaration. Assigning to it raises `attempt to assign to const variable 'flags'` at compile time, declaring it with `global` raises `cannot declare 'flags' (reserved name)`, and writing a field raises `attempt to modify a readonly table` at run time. A local named `flags` shadows it like any other name.
+
+An `if` or `elseif` condition of exactly the form `flags.NAME`, `flags["NAME"]`, `not flags.NAME`, or `not flags["NAME"]` is decided while the chunk compiles. A branch that the flags rule out is still parsed and checked, so a syntax error in it is reported whichever flags are set, and then its code is discarded. When a condition is decided true, the later `elseif` and `else` branches are discarded the same way:
+
+```lus
+if flags.prerelease then
+    print("this is a pre-release build")   -- compiled only with -Fprerelease
+end
+
+if not flags.quiet then
+    print("starting up")
+end
+```
+
+Any other condition, such as a comparison, a parenthesized lookup, or an `and` or `or` chain, compiles normally and reads the table at run time with the same result. `while` and `repeat` conditions and expressions outside a condition never fold:
+
+```lus
+if flags.name == "alpha" then   -- read at run time
+    print("alpha channel")
+end
+```
+
+Workers see the same flags as the interpreter that created them, and chunks loaded with [`load`](/manual/api#load) fold against the same table. The flag values are fixed for the lifetime of the process, and the folding decisions are part of the compiled code, so a chunk written by [`string.dump`](/manual/api#string.dump) keeps them. `lus build` accepts `-F` and bakes the flags into the executable, so the bundled program folds with them and reads the same values at run time. `lus compile` folds with the flags of its own `-F` options. Without any, every folded condition is decided as if the flag were absent, whatever flags the interpreter that later runs the chunk has.
+
 ## Modules and require
 
 ### Using require
@@ -1231,13 +1719,38 @@ print(package.path)
 
 The `.lus` templates come before their `.lua` compatibility templates. When the environment variable `LUS_PATH` is set, its value becomes the initial `package.path`, and the `-E` option ignores it. Loading a module from a file requires the `load` permission and `fs:read` for the file. Custom searchers can be added to the [`package.searchers`](/manual/api#package.searchers) table.
 
-Modules given with `--include` are compiled when the interpreter starts, so `require` loads them from memory without `load` or `fs` permissions ([Acquis 29](/manual/acquis-29)). For distributing a self-contained program, `lus build` bundles a script and every module it requires by a literal name into a single executable ([Acquis 39](/manual/acquis-39)):
+Modules given with `--include` are compiled when the interpreter starts, so `require` loads them from memory without `load` or `fs` permissions, as [Preincluded modules](#preincluded-modules) describes. For distributing a self-contained program, `lus build` bundles a script and every module it requires by a literal name into a single executable, as [Developer tools](/manual/tools) describes:
 
 ```bash
 lus build -o app app.lus --include lib/
 ```
 
 Native code extends Lus through the [embedding API](#embedding-lus), where a host program registers its functions directly. A native module found on `package.cpath` reports that native C libraries are unavailable.
+
+### Preincluded modules
+
+A _preincluded module_ is a module file that the `--include` option names on the command line. The interpreter reads and compiles each one when it starts, before any code runs and before any permission restriction applies, and keeps the module loader in memory. `require` then loads the module without the `load` or `fs` permissions, so a program that seals its permissions can still use the modules it was launched with:
+
+```bash
+lus --include json_helpers.lus --include config.lus:cfg app.lus
+```
+
+```lus nocheck
+pledge("seal")
+
+local cfg = require("cfg")               -- preincluded, loads from memory
+assert(not catch require("other"))       -- any other module fails
+```
+
+The argument takes three forms:
+
+- `--include path/to/mod.lus` names the module after the file, here `mod`.
+- `--include path/to/mod.lus:alias` names the module `alias`.
+- `--include path/to/dir` includes every `.lus` and `.lua` file under the directory, recursively, named by its path from the directory, as in `dir.sub.file`.
+
+A missing or unparsable file, or two includes with the same module name, stops the interpreter at startup with an error that names the file or the module. A preincluded module takes part in the module system like any other. Its searcher comes right after `package.preload`, `package.loaded` caches its result, and repeated requires return the same value. Preincluded modules may require each other, and [workers](#workers) see the same preincluded modules as the interpreter that created them, loaded from memory. The module set is fixed by whoever builds the command line, so a sealed program can load exactly that set of modules and no other.
+
+Preincluded modules are compiled from source at startup, so they always match the running interpreter. A compiled chunk from `lus compile` or [`string.dump`](/manual/api#string.dump) carries a format version, and a runtime rejects a chunk of another format with `bad binary format (truncated or corrupted chunk)`.
 
 ## Error handling
 
@@ -1271,6 +1784,37 @@ If an error is not caught, it propagates up to the host program, which can handl
 
 An error object can have any type. Strings, tables, and other values pass through catch unchanged. A `nil` error payload becomes the string `"<no error object>"`.
 
+The error object keeps its identity, so a table raised with `error` is the same table that `catch` returns:
+
+```lus
+local marker = { code = 42 }
+local ok, err = catch error(marker)
+print(ok, err == marker, err.code)   --> false  true  42
+```
+
+The operand of `catch` is any expression, not only a call, so `catch t.x`, `catch 1 + 2`, and `catch do ... end` are all valid. `catch` extends as far to the right as an expression can, so `catch a + b` protects `a + b`. An operand that produces no values, such as a call to a function that returns nothing, gives one result, the `true` status. A failure always gives two results. The usual rules for expression lists still apply, so parentheses or a position other than the last truncate a catch to its first result:
+
+```lus
+local function values() return "a", "b", "c" end
+local function nothing() end
+
+print(catch values())              --> true  a  b  c
+print(select("#", catch nothing()))  --> 1
+print((catch error("e")))          --> false
+assert(not catch type())
+```
+
+On failure, the to-be-closed variables opened inside the operand are closed before `catch` returns. A yield inside the operand is allowed, and an error raised after the coroutine resumes is captured by the same `catch`.
+
+A `catch` at the start of a statement is a _catch statement_. It evaluates the operand, discards every result, and suppresses any error:
+
+```lus
+local log = {}
+catch error("ignored")
+catch table.insert(log, "ran")
+print(#log)   --> 1
+```
+
 Lus also provides a warning system through [`warn`](/manual/api#warn). Warnings emit a message while execution continues.
 
 ### Catch handlers
@@ -1287,6 +1831,42 @@ local ok, err = catch[simplify] divide(10, 0)
 ```
 
 When an error occurs, the handler is called with the raw error object and its first return value replaces the original error. Additional handler results are discarded. On success, the handler is not called. The handler can also be an inline anonymous function. If the handler itself throws, that error propagates to an outer catch or the host. The bracketed expression must evaluate to a function, and any other value raises an error at the catch site.
+
+The handler expression is evaluated first, before the operand and outside the protection. A value other than a Lus or C function, including a table with a `__call` metamethod, raises `attempt to use a TYPE value as a catch handler`. A handler result of `nil`, or no result, makes `nil` the error object, and failure still returns exactly `false` and one value. A catch statement with a handler runs the handler on failure and discards its result.
+
+```lus
+local ok, err = catch[function(e) return e:upper() end] error("oops", 0)
+print(ok, err)   --> false  OOPS
+
+local failed, issue = catch[function(e)
+    return { cause = e, operation = "load settings" }
+end] error("missing file", 0)
+print(failed, issue.operation, issue.cause)   --> false  load settings  missing file
+```
+
+The handler below normalizes errors from different sources into one shape:
+
+```lus
+local function normalize(err)
+    if type(err) == "table" then
+        return err
+    end
+    return { code = "UNKNOWN", message = tostring(err) }
+end
+
+local ok, err = catch[normalize] error("disk full", 0)
+print(err.code, err.message)   --> UNKNOWN  disk full
+```
+
+An error raised inside the handler escapes the inner `catch`, so an outer `catch` captures it:
+
+```lus
+local function failing(err)
+    error("handler failed", 0)
+end
+
+print(catch (catch[failing] error("original")))   --> false  handler failed
+```
 
 ### Errors in the embedding API
 
@@ -1336,7 +1916,7 @@ local json = tojson({name = "Bob", scores = {95, 87}})
 
 Integer JSON syntax preserves the integer subtype, while a decimal point or exponent produces a float. With the option `{ exact = true }`, integers beyond 64 bits become bigints and numbers with a fraction or exponent become decimals, and `tojson` writes both back with their exact digits. JSON null becomes an absent table field or an array hole because it maps to `nil`. A contiguous table key set from 1 through `n` serializes as an array. Other tables serialize as objects, which retain string keys and omit keys of other types. The empty table serializes as `[]`. JSON object member order is unspecified, so consumers should parse objects and access members by name.
 
-`tojson` accepts an optional filter function as a second argument for transforming or omitting fields. The filter first receives the root with a `nil` key, then integer array keys or string object keys. Tables with a `__json` metamethod can return any serializable replacement value. Special float values such as [`math.huge`](/manual/api#math.huge), negative infinity, and NaN serialize as `null`. Functions, threads, userdata, vectors, and enum values serialize as `null` at the root or in arrays, while object fields with these values are omitted. Shared acyclic tables serialize by value and circular references raise an error. [Acquis 6](/manual/acquis-6) gives the full mapping.
+`tojson` accepts an optional filter function as a second argument for transforming or omitting fields. The filter first receives the root with a `nil` key, then integer array keys or string object keys. Tables with a `__json` metamethod can return any serializable replacement value. Special float values such as [`math.huge`](/manual/api#math.huge), negative infinity, and NaN serialize as `null`. Functions, threads, userdata, vectors, and enum values serialize as `null` at the root or in arrays, while object fields with these values are omitted. Shared acyclic tables serialize by value and circular references raise an error. [Data formats](/manual/data) gives the full mapping.
 
 The [`fromcsv`](/manual/api#fromcsv) and [`tocsv`](/manual/api#tocsv) globals provide CSV parsing and serialization.
 
@@ -1378,13 +1958,13 @@ network.serve("127.0.0.1", 8080, function(req)
 end)
 ```
 
-`serve` blocks its caller while the server runs. A handler that raises an error answers 500, and the server reports the error through `warn` and closes that connection.
+`serve` blocks its caller while the server runs. A handler that raises an error answers 500 and closes that connection. The server passes the error to `options.on_error` when it is set, and otherwise writes `lus: network.serve: ` and the message to standard error.
 
-TCP sockets support `send`, `receive`, `settimeout`, and `close`. Every receive returns a vector. A numeric receive reads up to 1 MiB. `receive("*l", max_bytes)` reads a line with a 1 MiB default limit. `receive("*a", max_bytes)` reads through EOF with a 64 MiB default limit. Exceeding a line or all-data limit closes the connection and raises `"receive limit exceeded"`. TCP servers and UDP sockets expose `getsockname()` so a bind to port `0` can report the selected address and port. UDP receives default to 8 KiB and accept a maximum size of 1 MiB. [Acquis 9](/manual/acquis-9) documents the socket methods.
+TCP sockets support `send`, `receive`, `settimeout`, and `close`. Every receive returns a vector. A numeric receive reads up to 1 MiB. `receive("*l", max_bytes)` reads a line with a 1 MiB default limit. `receive("*a", max_bytes)` reads through EOF with a 64 MiB default limit. Exceeding a line or all-data limit closes the connection and raises `"receive limit exceeded"`. TCP servers and UDP sockets expose `getsockname()` so a bind to port `0` can report the selected address and port. UDP receives default to 8 KiB and accept a maximum size of 1 MiB. [Network](/manual/network) documents the socket methods.
 
 ### Workers
 
-[Workers](/manual/api#worker-library) are separate interpreter states running on a process-wide thread pool. They provide concurrency through serialized message passing. Arguments passed to [`worker.create`](/manual/api#worker.create) are deep-copied into the worker's state:
+[Workers](/manual/api#worker-library) are separate interpreter states, each running on its own operating system thread. They provide concurrency through serialized message passing. Arguments passed to [`worker.create`](/manual/api#worker.create) are deep-copied into the worker's state:
 
 ```lus nocheck
 local w = worker.create("task.lus", {data = "input"})
@@ -1411,7 +1991,7 @@ print(later:at(ny):iso())              -- civil wall clock, DST-aware
 
 Named zones resolve from an IANA tzdata database embedded in the runtime, so `time.zone` and `time.localzone` need no filesystem access and behave identically across platforms. `time.offset(seconds)` builds a fixed-offset zone, and `time.tzdata_version()` reports the embedded release.
 
-Formatting uses `strftime` specifiers (as in `os.date`), with `:iso()` as an ISO 8601 shortcut. Bridge to the legacy epoch API with `time.instant(os.time())` and `instant:epoch()`. `time.monotonic()` returns a separate monotonic reading for measuring elapsed time. This library is described in full in [Acquis 30](/manual/acquis-30).
+Formatting uses `strftime` specifiers (as in `os.date`), with `:iso()` as an ISO 8601 shortcut. Bridge to the legacy epoch API with `time.instant(os.time())` and `instant:epoch()`. `time.monotonic()` returns a separate monotonic reading for measuring elapsed time. [Time](/manual/time) describes this library in full.
 
 ### SQLite
 
@@ -1435,7 +2015,7 @@ end
 
 Opening a file-backed database checks the database path against `fs:read` and, for the default writable mode, `fs:write`. A per-connection pledge-aware VFS then authorizes every SQLite file operation, including access to `-journal`, `-wal`, and `-shm` sidecars when SQLite uses them. Read-only mode uses existing WAL and SHM state with `fs:read`, shared coordination locks, and read-only WAL-index access. A sidecar state that needs creation or recovery raises an `fs:write` permission error. The path-changing PRAGMAs `data_store_directory`, `temp_store_directory`, and `lock_proxy_file` are denied case-insensitively. A `":memory:"` database needs no filesystem pledge.
 
-Indexing a handle with a table name yields a query source, so `@db.users as u where u.age >= 18 select u.name` pushes down as a parameterized SELECT. This library is described in full in [Acquis 33](/manual/acquis-33).
+Indexing a handle with a table name yields a query source, so `@db.users as u where u.age >= 18 select u.name` pushes down as a parameterized SELECT. [SQLite](/manual/sqlite) describes this library in full.
 
 ### Other libraries
 
@@ -1480,15 +2060,15 @@ function errors_test()
 end
 ```
 
-[Acquis 38](/manual/acquis-38) describes the runner in full.
+[Testing](/manual/testing) describes the runner in full.
 
 ### Formatting, checking, and documentation
 
-`lus fmt` formats source files, `lus check` reports compile errors and lint warnings with stable codes, `lus doc` turns `---` doc comments into Markdown or JSON reference documentation, and `lus ast` prints the syntax tree of a file as JSON. `lus build` bundles a script and its modules into a standalone executable, and `lus compile` writes a script as a binary chunk. [Acquis 39](/manual/acquis-39) describes each tool.
+`lus fmt` formats source files, `lus check` reports compile errors and lint warnings with stable codes, `lus doc` turns `---` doc comments into Markdown or JSON reference documentation, and `lus ast` prints the syntax tree of a file as JSON. `lus build` bundles a script and its modules into a standalone executable, and `lus compile` writes a script as a binary chunk. [Developer tools](/manual/tools) describes each tool.
 
 ### Debugging
 
-`lus debug` runs a script under the Debug Adapter Protocol, with conditional breakpoints, log points, error breakpoints, stepping through coroutines, and inspection of locals, upvalues, and globals. The VS Code extension uses it for **Run and Debug**, and any editor with a DAP client can drive it. [Acquis 40](/manual/acquis-40) describes the debugger.
+`lus debug` runs a script under the Debug Adapter Protocol, with conditional breakpoints, log points, error breakpoints, stepping through coroutines, and inspection of locals, upvalues, and globals. The VS Code extension uses it for **Run and Debug**, and any editor with a DAP client can drive it. [Developer tools](/manual/tools) describes the debugger.
 
 ## Embedding Lus
 
@@ -1517,7 +2097,7 @@ int main(void) {
 }
 ```
 
-Every function that can fail returns a status, as described in [Errors in the embedding API](#errors-in-the-embedding-api). References keep values alive between calls, userdata carry host memory with a metatable, and extensions declare their own capabilities so scripts can pledge them. [Acquis 41](/manual/acquis-41) documents the interface, and the same interface is exported by the [WebAssembly module](/manual/acquis-42) that runs Lus in browsers and in the VS Code extension.
+Every function that can fail returns a status, as described in [Errors in the embedding API](#errors-in-the-embedding-api). References keep values alive between calls, userdata carry host memory with a metatable, and extensions declare their own capabilities so scripts can pledge them. [Embedding](/manual/embedding) documents the interface, and the same interface is exported by the [WebAssembly](/manual/webassembly) that runs Lus in browsers and in the VS Code extension.
 
 ## Internals
 
@@ -1527,7 +2107,7 @@ Lus is an _interpreted language_, meaning that it is not compiled to machine cod
 
 The Lus interpreter is a register-based virtual machine. Every instruction is 32 bits wide, and its operands name either a slot in the current frame or a constant of the running function. Each instruction maps closely to a language construct: `slice` implements the slice syntax (`t[i, j]`), `add` implements additive arithmetic (`a + b`), and so on.
 
-Generic instructions _quicken_ as the program runs: an instruction that observes integer operands, or a table field at a stable position, rewrites itself in place into a specialized variant with a short fast path. Calls between Lus functions never recurse on the native stack, and entering a `catch` costs nothing until an error occurs. Running with `--readonly-env` freezes `_ENV` and the module tables after startup, which lets the compiler and the interpreter rely on the standard library staying in place.
+Generic instructions _quicken_ as the program runs: an instruction that observes integer operands, or a table field at a stable position, rewrites itself in place into a specialized variant with a short fast path. Calls between Lus functions never recurse on the native stack, and entering a `catch` costs nothing until an error occurs. Running with [`--readonly-env`](#readonly-environment) freezes `_ENV` and the module tables after startup, which lets the compiler and the interpreter rely on the standard library staying in place.
 
 ### Memory management
 

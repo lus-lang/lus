@@ -1,0 +1,205 @@
+---
+order: 20
+title: Filesystem
+icon: folder
+group: library
+shortdesc: "The fs library: listing directories, inspecting, copying, moving, and removing files, symbolic links, and portable path functions."
+---
+
+The `fs` library works with files, directories, and symbolic links, and its `fs.path` table builds and takes apart paths for the platform the program runs on. Reading and writing the contents of a file belong to the [`io` library](/manual/api#io-library), and `fs` covers everything around them.
+
+Every `fs` function that touches the filesystem checks the `fs:read` or `fs:write` [permission](/manual/permissions) for each path it uses, and every one raises an error when it fails. A relative path resolves against the working directory of the process.
+
+## Listing a directory
+
+[`fs.list(path, glob)`](/manual/api#fs.list) returns an array with the name of every entry in the directory at `path`. The names carry no directory prefix, and the array leaves out `.` and `..`. The order of the names is unspecified.
+
+```lus
+fs.createdirectory("listing")
+io.open("listing/a.txt", "w"):close()
+io.open("listing/b.txt", "w"):close()
+
+local names = fs.list("listing")
+table.sort(names)
+print(table.concat(names, " "))   --> a.txt b.txt
+```
+
+The optional `glob` keeps only the names that match it. In a glob, `*` matches any sequence of characters, including the empty one, and `?` matches exactly one byte, which is one character in an ASCII name. A name that starts with `.` matches `*` like any other name.
+
+```lus
+fs.createdirectory("configs")
+for _, name in ipairs({"config1.json", "config22.json", "notes.md"}) do
+    io.open("configs/" .. name, "w"):close()
+end
+
+print(#fs.list("configs", "*.json"))           --> 2
+print(fs.list("configs", "config?.json")[1])   --> config1.json
+```
+
+`fs.list` requires `fs:read` for `path`. It raises `"cannot list directory PATH: No such file or directory"` when the directory does not exist and `"PATH is not a directory"` when `path` names a file.
+
+## Inspecting a path
+
+[`fs.type(path)`](/manual/api#fs.type) returns two values. The first is `"directory"` for a directory and `"file"` for anything else. The second is `true` when `path` is a symbolic link. A link reports the type of its target, and a link whose target does not exist reports `"file"`.
+
+```lus
+fs.createdirectory("inspect")
+io.open("inspect/data.txt", "w"):close()
+fs.createlink("inspect/shortcut", "data.txt")
+
+print(fs.type("inspect"))            --> directory  false
+print(fs.type("inspect/data.txt"))   --> file  false
+print(fs.type("inspect/shortcut"))   --> file  true
+```
+
+`fs.type` raises `"path 'PATH' does not exist"` when nothing exists at `path`. A program that tests for existence wraps the call in `catch`.
+
+```lus
+local exists = catch fs.type("no-such-file")
+print(exists)   --> false
+```
+
+[`fs.follow(path)`](/manual/api#fs.follow) returns the target of the symbolic link at `path` exactly as the link stores it, without resolving it further. It raises `"'PATH' is not a symbolic link"` for any other entry. Both functions require `fs:read` for `path`.
+
+## Creating directories
+
+[`fs.createdirectory(path, recursive)`](/manual/api#fs.createdirectory) creates a directory. Without `recursive`, the parent must exist and `path` must not. The call raises `"cannot create directory 'PATH': parent does not exist"` or `"cannot create directory 'PATH': already exists"` otherwise.
+
+```lus
+fs.createdirectory("single")
+print((catch fs.createdirectory("single")))          --> false
+print((catch fs.createdirectory("missing/child")))   --> false
+```
+
+With `recursive` set to `true`, the call creates every missing directory along `path`, in order, and succeeds when the whole path already exists. A component of `path` that exists as a file raises an error. A recursive `path` must not contain a `..` component, and one that does raises `"cannot create directory 'PATH': '..' is denied"`.
+
+```lus
+fs.createdirectory("tree/a/b/c", true)
+fs.createdirectory("tree/a/b/c", true)
+print(fs.type("tree/a/b/c"))   --> directory  false
+```
+
+`fs.createdirectory` requires `fs:write` for `path`. In recursive mode each directory it creates must also be covered by `fs:write`.
+
+## Copying and moving
+
+[`fs.copy(source, dest)`](/manual/api#fs.copy) copies the contents of the file at `source` into a new file at `dest`. It never replaces an existing file, and a `dest` that exists raises `"target 'DEST' already exists"`. The source must be a file, so a directory raises an error. If the copy fails partway, `fs.copy` removes the partial file at `dest` before it raises the error.
+
+```lus
+io.open("original.txt", "w"):write("contents"):close()
+fs.copy("original.txt", "backup.txt")
+print(io.open("backup.txt"):read("a"))              --> contents
+print((catch fs.copy("original.txt", "backup.txt")))   --> false
+```
+
+`fs.copy` requires `fs:read` for `source` and `fs:write` for `dest`.
+
+[`fs.move(source, dest)`](/manual/api#fs.move) renames a file or a directory, which also moves it to another directory on the same filesystem. Like `fs.copy`, it never replaces an existing entry, and a `dest` that exists raises `"cannot move to 'DEST': target already exists"`. A missing `source` raises `"cannot move 'SOURCE': source does not exist"`. A move across two filesystems raises an error that ends in `cross-device move`, and a program that needs one copies the file and removes the original.
+
+```lus
+fs.createdirectory("archive")
+io.open("draft.txt", "w"):close()
+fs.move("draft.txt", "final.txt")
+fs.move("final.txt", "archive/final.txt")
+print(fs.type("archive/final.txt"))   --> file  false
+```
+
+`fs.move` requires `fs:read` and `fs:write` for `source` and `fs:write` for `dest`.
+
+## Removing files and directories
+
+[`fs.remove(path, recursive)`](/manual/api#fs.remove) removes a file, a symbolic link, or an empty directory. A directory that still has entries raises `"cannot remove directory 'PATH': not empty"` unless `recursive` is `true`, in which case the directory and everything below it are removed. A missing `path` raises `"cannot remove 'PATH': path does not exist"`.
+
+```lus
+fs.createdirectory("scratch/deep", true)
+io.open("scratch/deep/file.txt", "w"):close()
+
+print((catch fs.remove("scratch")))   --> false
+fs.remove("scratch", true)
+print((catch fs.type("scratch")))     --> false
+```
+
+`fs.remove` never follows a symbolic link. Removing a link removes the link and leaves its target, and a recursive removal removes the links it meets inside the tree without entering them. The permission check follows the same rule. `fs.remove` requires `fs:write` for the location of `path` itself, so a grant that covers a link permits removing the link even when its target lies outside the grant.
+
+## Symbolic links
+
+[`fs.createlink(link, target)`](/manual/api#fs.createlink) creates a symbolic link at `link` that points to `target`. The link stores `target` as given, so a relative target resolves against the directory of the link when the link is used. `fs.follow` reads the stored target back.
+
+```lus
+fs.createdirectory("links")
+io.open("links/real.txt", "w"):close()
+fs.createlink("links/alias", "real.txt")
+
+print(fs.follow("links/alias"))   --> real.txt
+print(fs.type("links/alias"))     --> file  true
+```
+
+`fs.createlink` requires `fs:write` for both `link` and `target`, so a script cannot plant a link that leads outside the paths it may write. A failure raises an error of the form `"failed to create symlink 'LINK' -> 'TARGET': REASON"`.
+
+## Paths
+
+The functions of [`fs.path`](/manual/api#fs.path) work on path strings alone and never touch the filesystem, so they need no permission. They treat `/` as a separator on every platform and also `\` on Windows.
+
+[`fs.path.join(...)`](/manual/api#fs.path.join) joins its arguments with the platform separator. It skips empty arguments and adds no separator where one is already present. An absolute argument replaces everything before it.
+
+```lus
+print(fs.path.join("dir", "sub", "file.txt"))   --> dir/sub/file.txt on POSIX
+print(fs.path.join("relative", "/absolute"))   --> /absolute
+print(fs.path.join("a/", "", "b"))             --> a/b
+```
+
+[`fs.path.split(path)`](/manual/api#fs.path.split) returns an array of the components between the separators. An absolute path starts with an empty component, and a trailing separator adds none.
+
+```lus
+local parts = fs.path.split("/usr/local/bin")
+print(#parts, parts[1] == "", parts[2], parts[4])   --> 4  true  usr  bin
+```
+
+[`fs.path.name(path)`](/manual/api#fs.path.name) returns the part after the last separator, and [`fs.path.parent(path)`](/manual/api#fs.path.parent) returns the part before it. The parent of a path without a separator is `"."`, and the parent of an entry directly under the root is the root. A path that ends in a separator has the empty string as its name.
+
+```lus
+print(fs.path.name("/home/user/report.pdf"))     --> report.pdf
+print(fs.path.parent("/home/user/report.pdf"))   --> /home/user
+print(fs.path.parent("/etc"))                    --> /
+print(fs.path.parent("report.pdf"))              --> .
+```
+
+[`fs.path.separator`](/manual/api#fs.path.separator) is the separator of the platform, `"/"` on POSIX and `"\"` on Windows. [`fs.path.delimiter`](/manual/api#fs.path.delimiter) is the character that separates entries of a path list such as `PATH`, `":"` on POSIX and `";"` on Windows.
+
+## Errors
+
+Every failure raises an error object that is a string naming the operation, the path, and the reason. The reasons that the runtime writes itself, such as `already exists` and `not empty`, are the same on every platform. Other reasons come from the operating system, such as `No such file or directory`.
+
+```lus
+local ok, err = catch fs.remove("nonexistent")
+print(ok)                      --> false
+print(err:match("cannot.*"))   --> cannot remove 'nonexistent': path does not exist
+```
+
+A copy of a whole directory tree combines the functions above.
+
+```lus
+local function copytree(src, dst)
+    fs.createdirectory(dst)
+    for _, name in ipairs(fs.list(src)) do
+        local source = fs.path.join(src, name)
+        local target = fs.path.join(dst, name)
+        if fs.type(source) == "directory" then
+            copytree(source, target)
+        else
+            fs.copy(source, target)
+        end
+    end
+end
+
+fs.createdirectory("project/src", true)
+io.open("project/src/main.lus", "w"):write("print(1)"):close()
+copytree("project", "project-backup")
+print(fs.type("project-backup/src/main.lus"))   --> file  false
+```
+
+## Related pages
+
+- [Permissions](/manual/permissions) describes `fs:read` and `fs:write` and the path values that limit them.
+- The [`io` library](/manual/api#io-library) reads and writes the contents of files.
+- The [API reference](/manual/api#filesystem-library) lists every `fs` function.

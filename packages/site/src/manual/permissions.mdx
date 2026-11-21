@@ -1,0 +1,226 @@
+---
+order: 10
+title: Permissions
+icon: shield
+group: library
+shortdesc: "The pledge function, permission names and values, rejection, sealing, and how permissions pass to coroutines and workers."
+---
+
+A _permission_ is a capability such as `fs:read` or `network:http` that a sensitive operation checks before it runs. A chunk acquires permissions with [`pledge`](/manual/api#pledge), so a script states at its top what it reads, writes, runs, and contacts, and every operation outside that statement raises an error.
+
+## Granting permissions
+
+`pledge` takes one or more permission names and returns one boolean for each of them, in order. A result is `true` when the permission is granted and `false` when the grant is refused.
+
+```lus
+print(pledge("fs:read"))           --> true
+print(pledge("network:http", "env"))  --> true  true
+```
+
+An operation that needs a permission the chunk does not hold raises an error at the call. The `lus` command starts a script with no permissions, so the following script fails at its first line until it pledges `fs:read`.
+
+```lus nocheck
+local ok, err = catch fs.list(".")
+print(ok)    --> false
+print(err)   --> script.lus:1: permission "fs:read" denied for '.'
+
+pledge("fs:read")
+local files = fs.list(".")
+```
+
+The error object is a string of the form `permission "NAME" denied for 'VALUE'`, where the value is the path, URL, address, or variable name the operation asked for. An operation that has no value, such as `os.execute`, names itself in place of the value, as in `permission "exec" denied for os.execute`.
+
+A script that runs without `-P` may pledge any permission, and the grant always succeeds. `pledge` then records what the script declares it needs. A host that limits a script passes the permissions on the command line or through the embedding API, and the script may only pledge what the host granted, as [Granting from the command line](#granting-from-the-command-line) describes.
+
+## Permission names
+
+A permission name is a base capability, such as `fs`, or a base capability and one of its subcapabilities, such as `fs:read`. Granting the base capability grants every one of its subcapabilities.
+
+```lus
+pledge("fs")
+print(fs.type("."))   --> directory  false
+fs.createdirectory("made-by-fs")
+```
+
+The table below lists every permission that the standard library checks.
+
+| Permission | What it allows |
+| --- | --- |
+| `fs` | Every filesystem operation. |
+| `fs:read` | Reading files, listing directories, and inspecting paths. |
+| `fs:write` | Creating, changing, moving, and removing files, directories, and links. |
+| `load` | Running code that the program loads at run time. |
+| `exec` | Running external commands with `os.execute` and `io.popen`. |
+| `env` | Reading environment variables with `os.getenv`. |
+| `network` | Every network operation. |
+| `network:http` | HTTP and HTTPS requests with `network.fetch`. |
+| `network:tcp` | Connecting TCP sockets and binding TCP servers. |
+| `network:udp` | Opening, binding, and sending from UDP sockets. |
+| `network:server` | Serving HTTP with `network.serve`. |
+
+Several functions check more than one permission.
+
+- [`load`](/manual/api#load) requires `load`. [`loadfile`](/manual/api#loadfile), [`dofile`](/manual/api#dofile), and `require` of a file require `fs:read` for the file and `load` to run it. A `require` that may not read a candidate file skips it and reports the module as not found.
+- [`package.loadlib`](/manual/api#package.loadlib) requires `fs:read` and `load`.
+- [`io.open`](/manual/api#io.open) requires `fs:read` to read and `fs:write` to write, and a mode that does both requires both. [`io.tmpfile`](/manual/api#io.tmpfile) and [`os.tmpname`](/manual/api#os.tmpname) require `fs:write`.
+- [`worker.create`](/manual/api#worker.create) requires `load` and `fs:read` for the script of the worker.
+- [`network.serve`](/manual/api#network.serve) requires `network:server` for the address it serves and `network:tcp` to bind it.
+
+The runtime also declares `fs:exec`, `network:tls`, `ffi`, and `worker` for hosts and extensions. `pledge` accepts these names, and no standard library function checks them.
+
+`pledge` raises an error for a name it does not know, such as `"unknown permission: 'bogus'"`, and for a subcapability that the base capability does not have, such as `"invalid fs subpermission 'nope'"`. The name `"all"` grants every permission and is accepted only from the command line and the embedding API. A script that pledges it receives the error `permission "all" cannot be requested from scripts`.
+
+## Restricting a permission to values
+
+A permission may carry a value after `=`, which limits it to the paths, hosts, or names that match the value. In a value, `*` matches any sequence of characters, including `/` and the empty sequence, and `?` matches exactly one byte.
+
+A filesystem value is an absolute path or a path that starts with `.`, which resolves against the working directory. Any other value raises the error `filesystem permission values must be an absolute path or start with '.'`. A value without a wildcard matches that one path, and a value that ends in `/*` matches everything below the directory but not the directory itself.
+
+```lus
+fs.createdirectory("data/reports", true)
+io.open("data/reports/q1.txt", "w"):close()
+
+pledge("fs:read=./data", "fs:read=./data/*")
+print(fs.type("data"))                 --> directory  false
+print(fs.type("data/reports/q1.txt"))  --> file  false
+print((catch fs.list(".")))            --> false
+```
+
+Both sides of a filesystem match are made absolute and canonical before they are compared. The directory part of a granted value resolves through its symbolic links when the grant is made, and a requested path resolves through its links, or through its parent directory when the file does not exist yet. On macOS, `/tmp` therefore matches as `/private/tmp`. On Windows, paths match without regard to ASCII case, and `\` and `/` are both separators.
+
+A network value has the form `host[:port][/path]`, and the host may contain `*`. The host part matches the host of the requested URL or address, and the port part, when present, matches its port. A path part matches the path of a requested URL. A value that starts with `http://` or `https://` matches the whole requested URL. TCP and UDP operations request the value `host:port`, and `network.fetch` requests its URL.
+
+```lus nocheck
+pledge("network:http=api.example.com/v1/*")
+network.fetch("https://api.example.com/v1/users")   -- allowed
+network.fetch("https://api.example.com/admin")      -- permission error
+
+pledge("network:tcp=127.0.0.1:*")
+pledge("network:udp=*.internal.test")
+```
+
+An `env` value matches the name of the environment variable that [`os.getenv`](/manual/api#os.getenv) reads.
+
+```lus
+pledge("env=HOME")
+print((catch os.getenv("HOME")))   --> true
+print((catch os.getenv("PATH")))   --> false
+```
+
+Values accumulate. Each grant with a value adds that value, and a check succeeds when any of the values matches. Once a permission holds a value, it stays limited to its values. A later grant of the same permission without a value returns `true` and leaves it limited. A subcapability that holds values is also limited when its base capability was granted without one, so `pledge("fs")` followed by `pledge("fs:read=./data/*")` permits reads only below `data`.
+
+## Rejecting permissions
+
+A name with the prefix `~` rejects that permission permanently. Every later check of the permission fails, and a later `pledge` of the same name raises the error `permission "NAME" was rejected`. A rejection also takes effect when the permission was granted before it.
+
+```lus
+pledge("exec")
+pledge("~exec")
+print((catch os.execute("true")))   --> false
+print((catch pledge("exec")))        --> false
+```
+
+Rejecting a base capability denies every one of its subcapabilities. A later `pledge` of one of those subcapabilities returns `true`, and the checks still deny it because the base capability stays rejected.
+
+```lus
+pledge("~network")
+print(pledge("network:http"))   --> true
+print((catch network.fetch("http://127.0.0.1/")))   --> false
+```
+
+Rejecting a subcapability leaves the other subcapabilities of its base as they were.
+
+```lus
+pledge("fs", "~fs:write")
+print(fs.type("."))                          --> directory  false
+print((catch fs.createdirectory("nope")))    --> false
+```
+
+## Sealing permissions
+
+The name `"seal"` freezes the permission set of the chunk. After it, `pledge` returns `false` for every grant and every rejection, and the set never changes again. A name that `pledge` does not know still raises its error.
+
+```lus
+pledge("fs:read")
+pledge("seal")
+print(pledge("exec"))    --> false
+print(pledge("~fs"))     --> false
+print(fs.type("."))      --> directory  false
+```
+
+## Granting from the command line
+
+The `-P` option of `lus`, also written `--pledge`, grants a permission before the script runs. It accepts every form that `pledge` accepts, including values, rejections, and `all`, and it may repeat.
+
+```bash
+lus -Pfs script.lus
+lus --pledge=fs script.lus
+lus -Pfs:read=/srv/app/* -Pnetwork:http script.lus
+lus -P~exec script.lus
+lus -Pall script.lus
+```
+
+When the command line grants at least one permission, those grants are the limit of the script. A `pledge` in the script succeeds only for what the command line already allows, and returns `false` for anything else. The following script runs under `lus -Pfs:read=/srv/app/* script.lus`.
+
+```lus nocheck
+print(pledge("fs:read=/srv/app/*"))   --> true
+print(pledge("fs:write"))             --> false
+print(pledge("network"))              --> false
+```
+
+A command line that only rejects permissions, such as `lus -P~exec`, sets no limit. The script may then pledge anything except what the command line rejected. When the command line grants a filesystem permission, the script file itself must fall within the grant, and `lus` otherwise exits with the error `permission "fs:read" denied for 'script.lus'` before the script runs.
+
+## Permissions in coroutines
+
+A coroutine starts with the permissions of the coroutine that created it. From then on the two sets are independent, so a grant, a rejection, or a seal inside the coroutine stays inside it, and later changes in the creator do not reach the coroutine.
+
+```lus
+pledge("fs:read", "env")
+
+local co = coroutine.create(function()
+    pledge("~env")
+    return (catch os.getenv("HOME"))
+end)
+
+print(coroutine.resume(co))            --> true  false
+print((catch os.getenv("HOME")))       --> true
+```
+
+A function that runs code with fewer permissions creates a coroutine, rejects what the code must not use, and seals the set before it calls the code. The rejections and the seal last only as long as the coroutine.
+
+```lus
+pledge("fs", "network", "exec")
+io.open("notes.txt", "w"):close()
+
+local function run_restricted(fn, ...)
+    local co = coroutine.create(function(...)
+        pledge("~fs:write", "~network", "~exec", "seal")
+        return fn(...)
+    end)
+    return coroutine.resume(co, ...)
+end
+
+print(run_restricted(function(path)
+    local readable = catch fs.type(path)
+    local writable = catch fs.remove(path)
+    return readable, writable
+end, "notes.txt"))                     --> true  true  false
+print(fs.type("notes.txt"))            --> file  false
+```
+
+Each level of such nesting may narrow the set further, since every coroutine starts from the set of its creator.
+
+## Permissions in workers
+
+A [worker](/manual/concurrency#workers) starts with a sealed copy of the permissions of the state that created it. Code in the worker uses those permissions as they are. Every `pledge` in a worker returns `false`, rejections included, so a worker never holds more authority than its creator had when it created the worker.
+
+## Permissions in an embedding host
+
+A host program that [embeds Lus](/manual/embedding) sets the starting permissions of a state with `lus_grant`, `lus_reject`, and `lus_seal`, which accept the same names as `pledge`. A host may also install a request hook with `lus_onrequest`, which decides each script `pledge` of a permission that the host neither granted nor rejected, for example by asking the user. Extensions declare capabilities of their own with `lus_defcapability` and check them with `lus_require` and `lus_allowed`.
+
+## Related pages
+
+- [Filesystem](/manual/filesystem) lists the permission that each `fs` function checks.
+- [Network](/manual/network) describes the values that network operations request.
+- [Coroutines and workers](/manual/concurrency) describes the coroutines and workers that inherit permissions.
+- [Sandboxing](/manual/guide#sandboxing) in the guide shows how to limit the globals of loaded code.
