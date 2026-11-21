@@ -15,12 +15,14 @@ pub fn build(b: *std.Build) void {
         .op_profile = b.option(bool, "op-profile", "Count the opcode sequences the interpreter runs and print them at exit (default: false)") orelse false,
         .version = b.option([]const u8, "version", "The version the binary reports, such as 2.0.0-unstable.7 (default: the version in build.zig.zon)"),
         .fail_alloc = b.option(bool, "fail-alloc", "Fail the allocation that LUS_FAIL_ALLOC names, to test out of memory handling (default: false)") orelse false,
+        .coverage = b.option(bool, "coverage", "Instrument every edge and write the edges a run reached to LUS_COVERAGE (default: false)") orelse false,
         .fail_io = b.option(bool, "fail-io", "Fail or shorten the file and socket operation that LUS_FAIL_IO names, to test I/O error handling (default: false)") orelse false,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
     // ThreadSanitizer, for the parallel marker of the collector.
     const tsan = b.option(bool, "sanitize-thread", "Build the lus executable with ThreadSanitizer (default: false)") orelse false;
+    vendor_sanitize = b.option(bool, "sanitize-c", "Build the vendored C libraries in safe mode with the undefined behavior sanitizer (default: false)") orelse false;
 
     const lus_mod = b.createModule(.{
         .root_source_file = b.path("src/lus.zig"),
@@ -28,8 +30,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
         .sanitize_thread = if (tsan) true else null,
+        .fuzz = if (requested.coverage) true else null,
+        .sanitize_c = vendorSanitizeC(),
     });
     lus_mod.addOptions("build_options", options);
+    if (requested.coverage) lus_mod.addCSourceFile(.{ .file = b.path("src/coverage_tls.c") });
     lus_mod.addImport("agent_docs", agentDocsModule(b));
     linkSystemLibraries(lus_mod, target);
     if (features.archive) lus_mod.linkLibrary(compressionLibrary(b, target));
@@ -43,6 +48,10 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{.{ .name = "lus", .module = lus_mod }},
             .sanitize_thread = if (tsan) true else null,
+            .fuzz = if (requested.coverage) true else null,
+            // The vendored libraries call the sanitizer runtime, which the
+            // executable links when one of its own modules asks for it.
+            .sanitize_c = vendorSanitizeC(),
         }),
     });
     b.installArtifact(exe);
@@ -320,6 +329,7 @@ const Features = struct {
     version: ?[]const u8 = null,
     fail_alloc: bool = false,
     fail_io: bool = false,
+    coverage: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -346,6 +356,7 @@ const Features = struct {
         options.addOption(bool, "op_profile", f.op_profile);
         options.addOption(bool, "fail_alloc", f.fail_alloc);
         options.addOption(bool, "fail_io", f.fail_io);
+        options.addOption(bool, "coverage", f.coverage);
         // The version that `lus -v` and the User-Agent of network.fetch
         // report. A release of an unstable channel sets it with `-Dversion`,
         // and every other build takes the version in build.zig.zon.
@@ -392,13 +403,28 @@ fn wasmModule(b: *std.Build, requested: Features, optimize: std.builtin.Optimize
 /// `vector.archive`. The upstream libraries are mature and fuzzed, so they
 /// always build optimized and without the undefined behavior sanitizer,
 /// whatever mode the runtime itself uses.
+/// Set by `-Dsanitize-c=true`: the vendored C libraries build in safe mode
+/// with the undefined behavior sanitizer, which reports each finding with
+/// its place, for the nightly job that runs SQLite, Zstandard, and Brotli
+/// under it.
+var vendor_sanitize = false;
+
+fn vendorOptimize() std.builtin.OptimizeMode {
+    return if (vendor_sanitize) .ReleaseSafe else .ReleaseFast;
+}
+
+fn vendorSanitizeC() ?std.zig.SanitizeC {
+    return if (vendor_sanitize) .full else null;
+}
+
 fn compressionLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.Compile {
     const lib = b.addLibrary(.{
         .name = "lus_compress",
         .linkage = .static,
         .root_module = b.createModule(.{
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = vendorOptimize(),
+            .sanitize_c = vendorSanitizeC(),
             .link_libc = true,
             .pic = true,
         }),
@@ -408,7 +434,7 @@ fn compressionLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Buil
 }
 
 fn addCompressionSources(b: *std.Build, mod: *std.Build.Module) void {
-    const flags: []const []const u8 = &.{"-fno-sanitize=undefined"};
+    const flags: []const []const u8 = if (vendor_sanitize) &.{} else &.{"-fno-sanitize=undefined"};
 
     const brotli = b.dependency("brotli", .{});
     mod.addIncludePath(brotli.path("c/include"));
@@ -543,7 +569,8 @@ fn addSqliteSource(b: *std.Build, mod: *std.Build.Module, target: std.Build.Reso
 fn sqliteLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.Compile {
     const mod = b.createModule(.{
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = vendorOptimize(),
+        .sanitize_c = vendorSanitizeC(),
         .link_libc = true,
         .pic = true,
     });

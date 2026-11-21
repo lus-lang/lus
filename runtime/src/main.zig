@@ -17,6 +17,9 @@ const Thread = lus.vm.state.Thread;
 
 pub const version = api.version;
 
+/// Edge coverage, in a `-Dcoverage=true` build.
+const coverage = if (lus.vm.coverage_enabled) @import("coverage.zig") else struct {};
+
 const usage =
     \\usage: lus [options] [script [args]]
     \\       lus <command> [arguments]
@@ -230,6 +233,10 @@ fn badOption(opt: []const u8, what: []const u8) ?Cli {
 
 pub fn main(process_init: std.process.Init) !u8 {
     var init = process_init;
+    if (lus.vm.coverage_enabled) {
+        if (init.environ_map.get("LUS_COVERAGE_REPORT")) |dir| return coverage.report(init.io, init.gpa, dir, init.environ_map.get("LUS_COVERAGE_FILE"));
+        coverage.setup(init.environ_map);
+    }
     if (lus.vm.faultio.enabled) setupFailIo(&init);
     const gpa = init.gpa;
     if (lus.vm.heapcount.fail_alloc) setupFailAlloc(init);

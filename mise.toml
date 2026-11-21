@@ -69,6 +69,38 @@ description = "Fail and shorten sampled file and socket operations of every conf
 depends = ["build", "build:io"]
 run = ["LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --samples 20", "LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --short --samples 5"]
 
+[tasks."build:coverage"]
+description = "Build the runtime with edge coverage into runtime/zig-out-cov"
+dir = "runtime"
+run = "zig build -Doptimize=ReleaseSafe -Dcoverage=true --prefix zig-out-cov"
+
+[tasks.coverage]
+description = "Measure the edge coverage of src by the conformance suite in three JIT modes and the doc tests"
+depends = ["build:coverage"]
+dir = "runtime"
+run = [
+  "rm -rf zig-out-cov/runs && mkdir -p zig-out-cov/runs",
+  "LUS_JIT=off LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=opt-eager LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents",
+  "LUS_COVERAGE_REPORT=$PWD/zig-out-cov/runs zig-out-cov/bin/lus",
+]
+
+[tasks."build:sanitize"]
+description = "Build the runtime with the vendored C libraries under the undefined behavior sanitizer into runtime/zig-out-ubsan"
+dir = "runtime"
+run = "zig build -Doptimize=ReleaseSafe -Dsanitize-c=true --prefix zig-out-ubsan"
+
+[tasks.sanitize]
+description = "Run the conformance suite and the fuzz targets with the vendored C libraries under the undefined behavior sanitizer"
+depends = ["build:sanitize"]
+dir = "runtime"
+run = [
+  "zig-out-ubsan/bin/lus test ../tests/conformance",
+  "zig build test --fuzz=200K -Doptimize=ReleaseSafe -Dsanitize-c=true",
+]
+
 [tasks.oom]
 description = "Fail sampled allocations of every conformance test and check for crashes, leaks, and hangs"
 depends = ["build", "build:oom"]
