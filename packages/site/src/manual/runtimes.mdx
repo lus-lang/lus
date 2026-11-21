@@ -6,44 +6,27 @@ group: learn
 shortdesc: "How the design of Lus compares with Bun, Node.js, Python, Ruby, PHP, and LuaJIT, with the measurements behind each claim."
 ---
 
+import RuntimeTable from "../components/RuntimeTable.astro"
+
 Lus is a dynamic language for complete programs, the same niche as JavaScript on Bun and Node.js, Python, Ruby, and PHP. This page explains the design decisions that set Lus apart from those runtimes and from LuaJIT, and what each decision costs. Every claim about speed or memory rests on the cross-language suite described below.
 
 ## The measurements
 
-The suite in `tests/bench/compare` holds six programs, each written once per language in its idiomatic style with its standard library first, and an HTTP server. Every program generates the same input in process and prints a checksum, and the harness checks that every runtime prints the same line before it times anything. The figures below were measured on 20 November 2026 on an Apple M4 Max with 14 cores and 36 GB under macOS 27.2.1, best of 7 runs. Lus is a ReleaseFast build with its default JIT tiers, Ruby runs with YJIT, and PHP runs with opcache and its tracing JIT. The [benchmarks](/#benchmarks) on the home page and [benchmarks.md](/benchmarks.md) always show the latest run of the suite.
+The suite in `tests/bench/compare` holds six programs, each written once per language in its idiomatic style with its standard library first, and an HTTP server. Every program generates the same input in process and prints a checksum, and the harness checks that every runtime prints the same line before it times anything. Lus is a ReleaseFast build with its default JIT tiers, Ruby runs with YJIT, and PHP runs with opcache and its tracing JIT. Each cell keeps the best of several runs, and the best value of each row is in bold.
 
-The wall time of each program, in seconds, shows Lus first on five of the six programs and PHP first on `logs`.
+The tables show the latest run of the suite, as the [benchmarks](/#benchmarks) on the home page and [benchmarks.md](/benchmarks.md) do. The figures quoted in the prose of this page come from the run of 21 November 2026 on an Apple M4 Max with 14 cores and 36 GB under macOS 27.2.1, best of 7 runs.
 
-| Program | Lus | Bun | Node.js | PHP | LuaJIT | Python | Ruby |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| csv | **0.62** | 0.82 | 1.56 | 1.28 | 2.44 | 2.26 | 5.25 |
-| json | **0.49** | 0.60 | 0.92 | 0.84 | 4.21 | 2.19 | 1.81 |
-| logs | 0.72 | 0.90 | 1.28 | **0.55** | 1.42 | 1.80 | 1.95 |
-| lru | **0.88** | 0.94 | 1.32 | 1.12 | 1.48 | 2.86 | 1.90 |
-| template | **0.56** | 0.66 | 1.20 | 0.64 | 2.04 | 1.87 | 1.62 |
-| wordfreq | **1.00** | 1.92 | 2.72 | 1.15 | 1.06 | 4.47 | 3.68 |
+The first table gives the wall time of each program in seconds. In the run of 21 November, Lus was first on five of the six programs and PHP was first on `logs`.
 
-The peak resident memory of each program, in megabytes, shows Lus below Bun and Node.js on every program. Python, Ruby, PHP, and LuaJIT each use less memory than Lus on at least one program.
+<RuntimeTable metric="time" />
 
-| Program | Lus | Bun | Node.js | PHP | LuaJIT | Python | Ruby |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| csv | 510 | 1386 | 1008 | 993 | **484** | 1103 | 1104 |
-| json | **710** | 824 | 842 | 1670 | 942 | 1244 | 938 |
-| logs | 452 | 976 | 804 | 636 | 446 | **442** | 467 |
-| lru | 62 | 177 | 156 | **45** | 116 | **45** | 52 |
-| template | 752 | 1128 | 1127 | 1100 | 876 | 686 | **537** |
-| wordfreq | 331 | 1150 | 874 | 684 | 458 | 829 | **96** |
+The second table gives the peak resident memory of each program in megabytes. In the run of 21 November, Lus used the least memory on `csv`, `json`, and `logs`, and less than Bun and Node.js on every program.
+
+<RuntimeTable metric="memory" />
 
 The HTTP server answers each request with a JSON document built for that request, under 64 keep-alive connections. LuaJIT has no sockets in its standard library and takes part in the compute programs only.
 
-| Server | Requests per second | Median latency | 99th percentile | Peak memory |
-|---|---:|---:|---:|---:|
-| PHP | **170,880** | **0.40 ms** | 0.82 ms | 29.6 MB |
-| Lus, `network.serve` | 139,598 | 0.47 ms | **0.53 ms** | **8.1 MB** |
-| Bun, `Bun.serve` | 129,524 | 0.43 ms | 0.92 ms | 36.5 MB |
-| Node.js, `http` | 101,875 | 0.60 ms | 1.22 ms | 82.8 MB |
-| Ruby | 72,776 | 0.81 ms | 1.58 ms | 26.7 MB |
-| Python, `ThreadingHTTPServer` | 26,525 | 1.79 ms | 8.11 ms | 26.9 MB |
+<RuntimeTable metric="http" />
 
 ## A small language
 
@@ -67,28 +50,28 @@ Bun, Node.js, and Python mark a function that waits with `async`, and every call
 
 Parallelism comes from [workers](/manual/concurrency#workers). Each worker is a complete state with its own heap and collector on its own operating system thread, and workers exchange messages. Python holds a global interpreter lock in its default build, and Ruby holds a global VM lock, so threads in either share one core for interpreted code. Lus workers share nothing, so no lock exists to hold, and no collection stops more than one thread.
 
-The HTTP results show the effect. `network.serve` runs every connection in a detached coroutine on one thread, and its 99th percentile latency is the lowest of the six servers. PHP serves about 22 percent more requests per second, and Bun and PHP answer the median request faster.
+The HTTP results show the effect. `network.serve` runs every connection in a detached coroutine on one thread, and its 99th percentile latency is the lowest of the six servers. PHP serves about 21 percent more requests per second, and Bun and PHP answer the median request faster.
 
 ## Memory
 
-Lus uses less memory than Bun and Node.js on every program of the suite, between 1.2 and 3.5 times less than Bun. The runtime is laid out to hold data compactly:
+Lus uses less memory than Bun and Node.js on every program of the suite, between 1.3 and 4.3 times less than Bun, and the least of all seven runtimes on three of the six programs. The runtime is laid out to hold data compactly:
 
 - A value takes 16 bytes, and integers and floats live inside it, so a number never allocates.
 - A table header takes 48 bytes, and a table with a small known size keeps its parts in the same allocation.
 - Strings hold WTF-8, one byte per ASCII character, and short strings are interned, so a repeated key or word is stored once.
 - The collector is generational and non-moving, with pages sized by class, so a program that holds its data steadily stays close to the size of that data.
 
-The memory of the HTTP server follows from the same decisions. A suspended detached coroutine with its stack takes about 1.6 KB, and the server peaked at 8.1 MB under load, a quarter of PHP and a tenth of Node.js.
+The memory of the HTTP server follows from the same decisions. A suspended detached coroutine with its stack takes about 1.6 KB, and the server peaked at 11.2 MB under load, less than half of any other server and about an eighth of Node.js.
 
-Several runtimes use less memory than Lus on some programs. Ruby runs `wordfreq` in 96 MB against 331 MB for Lus. Python and PHP run `lru` in 45 MB against 62 MB. LuaJIT, whose values take 8 bytes, uses slightly less memory than Lus on `csv` and `logs`, and Python does on `logs` and `template`.
+Other runtimes use less memory than Lus on the other three programs. Ruby runs `wordfreq` in 96 MB against 267 MB for Lus, because its program appends every word to one preallocated string, where the Lus program collects the words in a table and joins them with `table.concat`. PHP, Python, and Ruby run `lru` in 46 to 52 MB against 53 MB for Lus. Ruby runs `template` in 537 MB against 538 MB.
 
 ## Speed
 
 Lus runs code in an interpreter, compiles hot functions with a baseline JIT, and compiles code that stays hot with an optimizing tier that keeps values unboxed in machine registers. Bun, Node.js, LuaJIT, Ruby with YJIT, and PHP with its tracing JIT compile to native code as well, and Python 3.14 runs in its interpreter by default. The tables above therefore compare compilers in every column but one.
 
-Lus is faster than Bun on all six programs, by 7 percent on `lru` and by 92 percent on `wordfreq`. It is faster than Node.js, Python, Ruby, and LuaJIT on all six. The JSON and CSV codecs and the string functions are written in Zig, the language of the runtime, so a program that spends its time in them runs compiled library code.
+Lus is faster than Bun on all six programs, by 15 percent on `template` and by 97 percent on `wordfreq`. It is faster than Node.js, Python, Ruby, and LuaJIT on all six. The JSON and CSV codecs and the string functions are written in Zig, the language of the runtime, so a program that spends its time in them runs compiled library code.
 
-PHP finishes `logs` in 0.55 seconds against 0.72 for Lus. That program parses each line with one regular expression, which PHP hands to PCRE, a regular expression library that compiles each pattern to native code.
+PHP finishes `logs` in 0.56 seconds against 0.74 for Lus. That program parses each line with one regular expression, which PHP hands to PCRE, a regular expression library that compiles each pattern to native code.
 
 ## Permissions
 

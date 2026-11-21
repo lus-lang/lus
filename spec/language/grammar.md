@@ -765,7 +765,7 @@ Parts are processed left to right. Each non-empty literal section becomes a stri
 - strings are used as is,
 - integers and floats use the standard number formatting (`1.0` stays `"1.0"`),
 - `nil`, `true`, and `false` become `"nil"`, `"true"`, `"false"`,
-- any other value with a `__tostring` metamethod calls it. A non-string result raises `'__tostring' must return a string`.
+- any other value with a `__tostring` metamethod calls it. A string result is used as is, and a number result is converted as above. Any other result raises `'__tostring' must return a string`.
 - any other value becomes `"TYPENAME: 0xADDRESS"`, where `TYPENAME` honors `__name`.
 
 The result is the concatenation of all parts in order. An empty interpolated string is `""`. A string with only literal text is that text.
@@ -1326,7 +1326,7 @@ A chunk that fails to compile produces a single string message. `load` returns `
 | `slice index must be an integer` | slice bound of the wrong type |
 | `slice span too large` | table slice over 2^26 elements |
 | `attempt to slice a TYPE value` | slice of a value without slice support |
-| `'__tostring' must return a string` | interpolation of a value whose `__tostring` returns a non-string |
+| `'__tostring' must return a string` | interpolation of a value whose `__tostring` returns neither a string nor a number |
 | `global 'X' already defined` | initializing `global` declaration or `global function` |
 | `attempt to compare members of different enums` | ordering comparison across two enums |
 | `corrupt query plan in bytecode` | a query plan in a loaded binary chunk that fails validation |

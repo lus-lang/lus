@@ -190,17 +190,19 @@ print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))     --> 4  hé
 A file opened in binary mode, with `"b"` in its mode string, reads vectors. A file opened in text mode reads strings and validates them. A text read that meets invalid input raises an error that names the byte offset. Passing `{ lossy = true }` as the third argument of [`io.open`](/manual/api#io.open) replaces each invalid sequence with U+FFFD. Writing accepts strings and vectors in either mode.
 
 ```lus
-global io, print, pledge, type, vector
+global fs, io, os, print, pledge, type, vector
 
 pledge("fs")
 
-local out = io.open("data.bin", "wb")
+local path = os.tmpname()
+local out = io.open(path, "wb")
 out:write(vector.fromstring("bytes"), "and text")
 out:close()
 
-local bin <close> = io.open("data.bin", "rb")
+local bin <close> = io.open(path, "rb")
 local all = bin:read("a")
 print(type(all), #all, vector.get(all, 0))  --> vector  13  98
+fs.remove(path)
 ```
 
 Command line arguments, environment variables, and file system paths decode as WTF-8 on Windows and as UTF-8 with lossy replacement on other systems, so they are always strings.

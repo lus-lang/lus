@@ -120,7 +120,7 @@ until done
 
 `continue` states the intent in one word and keeps the body of the loop flat, and the compile rule keeps the reason Lua left it out from becoming a bug.
 
-Lua writes counting loops with the numeric `for`, a statement form with its own grammar. Lus adds `range(start, limit, step)`, an ordinary iterator function. A direct call in a generic `for` compiles to the same numeric loop, and anywhere else `range` is a value that can be stored and passed.
+Lua writes counting loops with the numeric `for`, a statement form with its own grammar. Lus adds `range(start, limit, step)`, an ordinary iterator function, so a counting loop reads as a generic `for` and the iterator is a value that can be stored and passed.
 
 ## Enums
 

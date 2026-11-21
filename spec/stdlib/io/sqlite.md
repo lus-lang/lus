@@ -47,18 +47,21 @@ Indexing the handle with a key that is not a method yields a table reference for
 
 Temp structures live in memory. `ATTACH` and `VACUUM INTO` paths are denied. The path-changing PRAGMAs `data_store_directory`, `temp_store_directory`, and `lock_proxy_file` are denied case-insensitively. URI filenames are rejected at open, while a plain `VACUUM` remains available. A database handle lives in the interpreter state that opened it and cannot be sent to a worker, so a worker uses a database by opening the path itself.
 
-The following example pledges the database files, creates a table, and reads matching rows back with a named placeholder.
+Opening a database that SQLite cannot open, such as a file in a missing directory, raises an error of the form `"cannot open database 'PATH' (REASON)"`. A `mode` other than `"rw"` or `"r"` raises a `bad argument` error.
 
-```lus nocheck
-global io, pledge
+The following example pledges the database file and its sidecars in a temporary directory, creates a table, reads matching rows back with a named placeholder, and removes the file.
 
-pledge("fs:read=./app.db*", "fs:write=./app.db*", "seal")
-
-local db <close> = io.sqlite("app.db")
-db:exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)")
-db:run("INSERT INTO users (name) VALUES (?)", "Alice")
-for row in db:query("SELECT id, name FROM users WHERE name = :name",
-                    { name = "Alice" }) do
-    print(row.id, row.name)
+```lus
+pledge("env")
+local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-sqlite-example.db")
+pledge("fs:read=" .. path .. "*", "fs:write=" .. path .. "*", "seal")
+do
+    local db <close> = io.sqlite(path)
+    db:exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    db:run("INSERT INTO users (name) VALUES (?)", "Alice")
+    for row in db:query("SELECT id, name FROM users WHERE name = :name", { name = "Alice" }) do
+        print(row.id, row.name)   --> 1  Alice
+    end
 end
+fs.remove(path)
 ```

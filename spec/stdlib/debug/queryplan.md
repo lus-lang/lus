@@ -11,6 +11,27 @@ params:
 returns: string
 ---
 
-Renders the execution plan of the query `q` as a human-readable string without running it. The string gives tests and programs a direct observable for push-down decisions.
+Describes how a query would run, as a string, without running it.
 
-The plan lists each source with its provider (in-memory, `__query`, or native) and the number of conjuncts pushed down to it. It then reports the disposition of every `where` conjunct: pushed down, kept in memory as a host closure, or kept in memory as a translatable expression.
+- `q` is a query value, built with the `@` syntax.
+
+The function returns a string of several lines that ends with a newline. The first line gives the number of sources and of `where` conjuncts, where a _conjunct_ is one operand of a top-level `and` in the `where` clause. A line per source follows, naming its alias, its provider, and the number of conjuncts pushed down to it. The provider is `memory` for a plain table, `__query` for a value with a `__query` metamethod, and `native` for a backend such as an SQLite table. A line per conjunct then gives where it runs: `pushed down`, `in memory (host closure)` for a conjunct that calls a Lus function, or `in memory (translatable)` for one the provider declined.
+
+An argument that is not a query raises `bad argument #1 to 'queryplan' (query expected)`.
+
+The following example plans a query over an SQLite table. The first conjunct becomes part of the SQL statement, the second calls a Lus function, and the third uses division, which the SQLite provider leaves in memory.
+
+```lus
+local db = io.sqlite(":memory:")
+db:exec("CREATE TABLE users (name TEXT, age INTEGER)")
+local function adult(age) return age >= 18 end
+local q = @db.users as u where u.age >= 18 and adult(u.age) and u.age / 2 > 3 select u.name
+io.write(debug.queryplan(q))
+--> query: 1 source(s), 3 conjunct(s)
+-->   u: native, 1 pushed conjunct(s)
+-->   conjunct 1: pushed down
+-->   conjunct 2: in memory (host closure)
+-->   conjunct 3: in memory (translatable)
+```
+
+The plan gives tests a direct observation of push-down decisions, which change how a query runs but never which rows it returns. The [queries](/manual/guide#queries) section of the guide describes providers and push-down, and [`query`](/manual/api#query) runs a query.

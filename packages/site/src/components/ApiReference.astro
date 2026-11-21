@@ -1,6 +1,6 @@
 ---
 import ManualAPI from "./ManualAPI.astro"
-import { groupByKind, type ApiSection } from "../lib/api"
+import { groupByKind, summary, type ApiSection } from "../lib/api"
 
 interface Props {
   sections: ApiSection[]
@@ -76,7 +76,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
             <p>
               {groups.length > 1 && <span class="api-kind">{group.kind}s</span>}
               {group.entries.map(({ entry, from }) => (
-                <a href={`#${entry.data.name}`} data-from={from}>
+                <a href={`#${entry.data.name}`} data-from={from} title={summary(entry) || undefined}>
                   {entry.data.name}
                 </a>
               ))}

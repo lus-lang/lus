@@ -22,13 +22,13 @@ Lus is lexically scoped. The scope of a local variable begins at the first state
 ```lus
 local x = 10
 do
-  local x = x + 1   -- new 'x' initialized from outer 'x'
-  print(x)          --> 11
-  do
-    local x = x + 1
-    print(x)        --> 12
-  end
-  print(x)          --> 11
+    local x = x + 1   -- new 'x' initialized from outer 'x'
+    print(x)          --> 11
+    do
+        local x = x + 1
+        print(x)        --> 12
+    end
+    print(x)          --> 11
 end
 print(x)            --> 10 (the outer one)
 ```
@@ -51,9 +51,9 @@ Inside an explicit `global` declaration, every global name is declared explicitl
 ```lus nocheck
 x = 1               -- Ok, global by default
 do
-  global y          -- voids implicit declaration for this block
-  y = 1             -- Ok, y is declared
-  x = 1             -- ERROR: x not declared in this scope
+    global y          -- voids implicit declaration for this block
+    y = 1             -- Ok, y is declared
+    x = 1             -- ERROR: x not declared in this scope
 end
 x = 2               -- Ok, global by default again
 ```
@@ -67,11 +67,11 @@ local callbacks = {}
 local x = 20
 
 for i = 1, 3 do
-  local y = 0
-  callbacks[i] = function()
-    y = y + 1
-    return x + y
-  end
+    local y = 0
+    callbacks[i] = function()
+        y = y + 1
+        return x + y
+    end
 end
 ```
 
@@ -128,8 +128,8 @@ The `<close>` attribute marks a variable as _to-be-closed_. When the variable go
 
 ```lus
 do
-  local f <close> = io.open("data.txt", "r")
-  -- use f...
+    local f <close> = io.open("data.txt", "r")
+    -- use f...
 end  -- f:close() called automatically here
 ```
 
@@ -137,10 +137,10 @@ Runtime attributes use the `<attr>` syntax to attach a function that is called o
 
 ```lus nocheck
 local function typed(name, value)
-  if type(value) ~= "number" then
-    error(`$name must be a number, got $(type(value))`)
-  end
-  return value
+    if type(value) ~= "number" then
+        error(`$name must be a number, got $(type(value))`)
+    end
+    return value
 end
 
 local x <typed> = 10     -- ok
@@ -239,8 +239,8 @@ Groups can contain subgroups and `<const>` fields:
 
 ```lus nocheck
 local player <group> = {
-  name <const> = "Alice",
-  pos <group> = { x = 0, y = 0 }
+    name <const> = "Alice",
+    pos <group> = { x = 0, y = 0 }
 }
 player.pos.x = 10    -- ok
 player.name = "Bob"  -- ERROR: const field
@@ -341,8 +341,8 @@ local age = 30
 print(`Hello, $name!`)                 --> Hello, Alice!
 print(`Next year you'll be $(age+1).`) --> Next year you'll be 31.
 print(`Multi-line:
-  name = $name
-  age  = $age`)
+    name = $name
+    age  = $age`)
 ```
 
 A `$name` takes only the characters of one identifier, so `` `$t.x` `` interpolates `t` followed by the literal text `.x`. A `$(expr)` keeps only the first value of its expression. The parts are evaluated and converted from left to right. The conversion is the one that `tostring` performs, built into the runtime, so it works the same when the global `tostring` is replaced or `nil`. A `$` followed by a reserved word, as in `` `$nil` ``, is a compile error, and the value is written `` `$(nil)` ``.
@@ -562,11 +562,11 @@ The `if` statement executes a block when its condition is truthy. Optional `else
 
 ```lus nocheck
 if x > 0 then
-  print("positive")
+    print("positive")
 elseif x < 0 then
-  print("negative")
+    print("negative")
 else
-  print("zero")
+    print("zero")
 end
 ```
 
@@ -576,9 +576,9 @@ An `if` or `elseif` condition can include an assignment using `=`. The assigned 
 
 ```lus nocheck
 if user = findUser(id) then
-  print(user.name)
+    print(user.name)
 elseif guest = findGuest(id) then
-  print(guest.name)  -- 'user' still in scope here (nil)
+    print(guest.name)  -- 'user' still in scope here (nil)
 end
 ```
 
@@ -619,8 +619,8 @@ The `while` loop repeats its body as long as the condition is truthy:
 ```lus
 local i = 1
 while i <= 5 do
-  print(i)
-  i = i + 1
+    print(i)
+    i = i + 1
 end
 ```
 
@@ -628,7 +628,7 @@ The same assignment syntax works in `while` conditions. The expression is evalua
 
 ```lus nocheck
 while line = file:read() do
-  process(line)
+    process(line)
 end
 ```
 
@@ -648,8 +648,8 @@ The `repeat` loop executes its body at least once, then repeats until the condit
 ```lus
 local x = 0
 repeat
-  x = x + math.random(10)
-  local msg = `total is $x`
+    x = x + math.random(10)
+    local msg = `total is $x`
 until x > 50
 -- 'msg' was visible in the until condition
 ```
@@ -660,37 +660,35 @@ The numeric `for` loop iterates a variable from a start value to a stop value, w
 
 ```lus
 for i = 1, 5 do       -- 1, 2, 3, 4, 5
-  print(i)
+    print(i)
 end
 
 for i = 10, 1, -2 do  -- 10, 8, 6, 4, 2
-  print(i)
+    print(i)
 end
 ```
 
 The loop variable is local to the body and cannot be assigned. The start, stop, and step expressions are evaluated once before the loop begins.
 
-The global function [`range`](/manual/api#range) writes the same loop in the form of a generic `for`. `range(a, b, step)` counts from `a` to `b`, the step defaults to 1, and `range(n)` counts from 1 to `n`. When a `for` loop calls `range` directly, the compiler emits exactly the numeric loop above:
+The global function [`range`](/manual/api#range) counts in a generic `for`. `range(a, b, step)` counts from `a` to `b`, the step defaults to 1, and `range(n)` counts from 1 to `n`:
 
 ```lus
 for i in range(1, 5) do       -- 1, 2, 3, 4, 5
-  print(i)
+    print(i)
 end
 
 for i in range(10, 1, -2) do  -- 10, 8, 6, 4, 2
-  print(i)
+    print(i)
 end
 ```
 
-A direct call follows the rules of the numeric loop: the bounds and the step are evaluated once, the loop variable is local to the body, and an integer loop stays in integers. A negative step counts down, and a step of zero raises `bad argument #3 to 'range' (step must not be zero)`.
+`range` evaluates its bounds and its step once, when it is called, and returns an iterator function. A negative step counts down, a range whose start lies past its stop yields nothing, and a step of zero raises `bad argument #3 to 'range' (step must not be zero)`. An integer range stays in integers. The first value is `a` exactly as given, and each later value is the previous one plus the step, so `range(1, 2, 0.5)` yields `1`, `1.5`, and `2.0`, where the numeric loop yields `1.0`, `1.5`, and `2.0`.
 
-Elsewhere `range` returns an ordinary iterator triple that any generic `for` can consume, so it can be stored and passed around. A local or global that shadows `range` is called like any other iterator.
+The iterator is an ordinary function, so it can be stored, passed around, and called directly. It returns `nil` once the range is exhausted.
 
 ```lus
-local iter, state, control = range(2, 10, 2)
-for i in iter, state, control do
-    print(i)          --> 2, 4, 6, 8, 10
-end
+local next_odd = range(1, 5, 2)
+print(next_odd(), next_odd(), next_odd(), next_odd())   --> 1  3  5  nil
 
 for i in range(3) do
     print(i)          --> 1, 2, 3
@@ -704,11 +702,11 @@ The generic `for` loop iterates over values produced by an iterator function:
 ```lus
 local t = {a = 1, b = 2, c = 3}
 for key, value in pairs(t) do
-  print(key, value)
+    print(key, value)
 end
 
 for i, v in ipairs({10, 20, 30}) do
-  print(i, v)     --> 1 10, 2 20, 3 30
+    print(i, v)     --> 1 10, 2 20, 3 30
 end
 ```
 
@@ -720,10 +718,10 @@ The iterator protocol is covered in [Iterators](#iterators).
 
 ```lus
 for i = 1, 100 do
-  if i * i > 50 then
-    break
-  end
-  print(i)
+    if i * i > 50 then
+        break
+    end
+    print(i)
 end
 ```
 
@@ -731,8 +729,8 @@ end
 
 ```lus
 for i = 1, 10 do
-  if i % 3 == 0 then continue end
-  print(i)
+    if i % 3 == 0 then continue end
+    print(i)
 end
 ```
 
@@ -764,10 +762,10 @@ A `continue` outside every loop raises `continue outside loop` at compile time. 
 
 ```lus
 for i = 1, 3 do
-  for j = 1, 3 do
-    if i * j == 4 then goto done end
-    print(i, j)
-  end
+    for j = 1, 3 do
+        if i * j == 4 then goto done end
+        print(i, j)
+    end
 end
 ::done::
 ```
@@ -780,8 +778,8 @@ A `do`/`end` block is normally a plain scoping block (as seen in the [Variables]
 
 ```lus nocheck
 local result = do
-  local temp = compute()
-  provide temp * 2
+    local temp = compute()
+    provide temp * 2
 end
 ```
 
@@ -789,8 +787,8 @@ Multiple values can be provided for multiple assignment targets:
 
 ```lus nocheck
 local x, y = do
-  local p = getPoint()
-  provide p.x, p.y
+    local p = getPoint()
+    provide p.x, p.y
 end
 ```
 
@@ -798,7 +796,7 @@ Do expressions combine naturally with `catch` for inline error handling:
 
 ```lus
 local ok, value = catch do
-  provide riskyOperation()
+    provide riskyOperation()
 end
 ```
 
@@ -829,13 +827,13 @@ A function declaration is syntactic sugar for assigning a function value to a va
 
 ```lus
 function greet(name)
-  print(`Hello, $name!`)
+    print(`Hello, $name!`)
 end
 -- equivalent to: greet = function(name) ... end
 
 local function factorial(n)
-  if n <= 1 then return 1 end
-  return n * factorial(n - 1)
+    if n <= 1 then return 1 end
+    return n * factorial(n - 1)
 end
 -- equivalent to: local factorial; factorial = function(n) ... end
 ```
@@ -848,7 +846,7 @@ Extra arguments are discarded. Missing arguments become `nil`.
 
 ```lus
 local function f(a, b, c)
-  print(a, b, c)
+    print(a, b, c)
 end
 
 f(1, 2)        --> 1  2  nil
@@ -877,7 +875,7 @@ Functions declared with `...` accept a variable number of arguments:
 
 ```lus
 local function printf(fmt, ...)
-  io.write(string.format(fmt, ...))
+    io.write(string.format(fmt, ...))
 end
 
 printf("%s is %d years old\n", "Alice", 30)
@@ -893,7 +891,7 @@ The colon syntax is sugar for passing the receiver as the first argument:
 local obj = {name = "Alice"}
 
 function obj:greet(greeting)
-  print(greeting .. ", " .. self.name)
+    print(greeting .. ", " .. self.name)
 end
 
 obj:greet("Hello")  --> Hello, Alice
@@ -908,11 +906,11 @@ Every function is a closure that captures variables from its enclosing scope. Ea
 
 ```lus
 local function counter(start)
-  local n = start
-  return function()
-    n = n + 1
-    return n
-  end
+    local n = start
+    return function()
+        n = n + 1
+        return n
+    end
 end
 
 local c1 = counter(0)
@@ -929,9 +927,9 @@ A `return f(args)` in tail position does not consume a stack frame, allowing unb
 
 ```lus
 local function find(node, target)
-  if node == nil then return nil end
-  if node.value == target then return node end
-  return find(node.next, target)  -- tail call
+    if node == nil then return nil end
+    if node.value == target then return node end
+    return find(node.next, target)  -- tail call
 end
 ```
 
@@ -981,7 +979,7 @@ t.name = nil             -- remove a field
 
 -- test if a table has any entries
 if next(t) ~= nil then
-  print("not empty")
+    print("not empty")
 end
 ```
 
@@ -993,11 +991,11 @@ Use [`pairs`](/manual/api#pairs) to iterate over all entries (in no guaranteed o
 local t = {a = 1, b = 2, "x", "y"}
 
 for k, v in pairs(t) do    -- all entries
-  print(k, v)
+    print(k, v)
 end
 
 for i, v in ipairs(t) do   -- sequential: 1="x", 2="y"
-  print(i, v)
+    print(i, v)
 end
 ```
 
@@ -1105,15 +1103,15 @@ local Vec2 = {}
 Vec2.__index = Vec2
 
 function Vec2.new(x, y)
-  return setmetatable({x = x, y = y}, Vec2)
+    return setmetatable({x = x, y = y}, Vec2)
 end
 
 function Vec2:__add(other)
-  return Vec2.new(self.x + other.x, self.y + other.y)
+    return Vec2.new(self.x + other.x, self.y + other.y)
 end
 
 function Vec2:__tostring()
-  return `($(self.x), $(self.y))`
+    return `($(self.x), $(self.y))`
 end
 
 local a = Vec2.new(1, 2)
@@ -1143,14 +1141,14 @@ Lus supports many other metamethods:
 ```lus
 -- __call: make a table callable
 local Multiplier = setmetatable({}, {
-  __call = function(self, x) return x * self.factor end
+    __call = function(self, x) return x * self.factor end
 })
 Multiplier.factor = 3
 print(Multiplier(10))  --> 30
 
 -- __tostring: readable output
 local point = setmetatable({x = 1, y = 2}, {
-  __tostring = function(self) return `($(self.x), $(self.y))` end
+    __tostring = function(self) return `($(self.x), $(self.y))` end
 })
 print(point)  --> (1, 2)
 
@@ -1169,11 +1167,11 @@ local Animal = {}
 Animal.__index = Animal
 
 function Animal.new(name, sound)
-  return setmetatable({name = name, sound = sound}, Animal)
+    return setmetatable({name = name, sound = sound}, Animal)
 end
 
 function Animal:speak()
-  print(`$(self.name) says $(self.sound)!`)
+    print(`$(self.name) says $(self.sound)!`)
 end
 
 -- Inheritance
@@ -1181,11 +1179,11 @@ local Dog = setmetatable({}, {__index = Animal})
 Dog.__index = Dog
 
 function Dog.new(name)
-  return setmetatable(Animal.new(name, "woof"), Dog)
+    return setmetatable(Animal.new(name, "woof"), Dog)
 end
 
 function Dog:fetch(item)
-  print(`$(self.name) fetches the $item!`)
+    print(`$(self.name) fetches the $item!`)
 end
 
 local d = Dog.new("Rex")
@@ -1203,7 +1201,7 @@ The generic `for` loop calls an _iterator function_ on each iteration. The loop:
 
 ```lus nocheck
 for var1, var2 in iterator, state, initial do
-  -- body
+    -- body
 end
 ```
 
@@ -1215,11 +1213,11 @@ calls `iterator(state, control)` each cycle, where `control` starts as `initial`
 
 ```lus
 for k, v in pairs({a = 1, b = 2}) do
-  print(k, v)       -- unordered
+    print(k, v)       -- unordered
 end
 
 for i, v in ipairs({"x", "y", "z"}) do
-  print(i, v)       --> 1 x, 2 y, 3 z
+    print(i, v)       --> 1 x, 2 y, 3 z
 end
 ```
 
@@ -1229,17 +1227,17 @@ A stateless iterator relies only on the invariant state and the control variable
 
 ```lus
 local function squares_iter(limit, current)
-  current = current + 1
-  if current > limit then return nil end
-  return current, current * current
+    current = current + 1
+    if current > limit then return nil end
+    return current, current * current
 end
 
 local function squares(n)
-  return squares_iter, n, 0
+    return squares_iter, n, 0
 end
 
 for i, sq in squares(3) do
-  print(i, sq)  --> 1 1, 2 4, 3 9
+    print(i, sq)  --> 1 1, 2 4, 3 9
 end
 ```
 
@@ -1249,16 +1247,16 @@ A stateful iterator uses a closure to maintain internal state across calls:
 
 ```lus nocheck
 local function lines(filename)
-  local file = io.open(filename, "r")
-  return function()
-    local line = file:read("l")
-    if line == nil then file:close() end
-    return line
-  end
+    local file = io.open(filename, "r")
+    return function()
+        local line = file:read("l")
+        if line == nil then file:close() end
+        return line
+    end
 end
 
 for line in lines("data.txt") do
-  print(line)
+    print(line)
 end
 ```
 
@@ -1268,18 +1266,18 @@ end
 
 ```lus
 local function traverse(node)
-  if node == nil then return end
-  traverse(node.left)
-  coroutine.yield(node.value)
-  traverse(node.right)
+    if node == nil then return end
+    traverse(node.left)
+    coroutine.yield(node.value)
+    traverse(node.right)
 end
 
 local function inorder(tree)
-  return coroutine.wrap(function() traverse(tree) end)
+    return coroutine.wrap(function() traverse(tree) end)
 end
 
 for value in inorder(root) do
-  print(value)
+    print(value)
 end
 ```
 
@@ -1411,10 +1409,10 @@ Coroutines are cooperative threads of execution. Control transfers explicitly th
 
 ```lus
 local co = coroutine.create(function(x)
-  print("received", x)      --> received  10
-  local y = coroutine.yield(x + 1)
-  print("resumed with", y)  --> resumed with  20
-  return x + y
+    print("received", x)      --> received  10
+    local y = coroutine.yield(x + 1)
+    print("resumed with", y)  --> resumed with  20
+    return x + y
 end)
 
 local ok, a = coroutine.resume(co, 10)   -- ok=true, a=11
@@ -1438,11 +1436,11 @@ local ok, b = coroutine.resume(co, 20)   -- ok=true, b=30
 
 ```lus
 local next_id = coroutine.wrap(function()
-  local id = 0
-  while true do
-    id = id + 1
-    coroutine.yield(id)
-  end
+    local id = 0
+    while true do
+        id = id + 1
+        coroutine.yield(id)
+    end
 end)
 
 print(next_id())  --> 1
@@ -1550,7 +1548,7 @@ print(y, m, d)  --> 2026  03  04
 
 ```lus
 for word in string.gmatch("one two three", "%S+") do
-  print(word)
+    print(word)
 end
 --> one
 --> two
@@ -1760,10 +1758,10 @@ Use the [`error`](/manual/api#error) function to raise an error explicitly:
 
 ```lus
 local function divide(a, b)
-  if b == 0 then
-    error("division by zero")
-  end
-  return a / b
+    if b == 0 then
+        error("division by zero")
+    end
+    return a / b
 end
 ```
 
@@ -1772,9 +1770,9 @@ The `catch` expression evaluates a sub-expression and captures any error that oc
 ```lus
 local ok, result = catch divide(10, 0)
 if ok then
-  print("Result:", result)
+    print("Result:", result)
 else
-  print("Error:", result)  --> Error: script.lus:3: division by zero
+    print("Error:", result)  --> Error: script.lus:3: division by zero
 end
 ```
 
@@ -1823,7 +1821,7 @@ The `catch` expression supports an optional handler function that transforms err
 
 ```lus
 local function simplify(err)
-  return err:match("^[^:]+:[^:]+: (.+)") or err
+    return err:match("^[^:]+:[^:]+: (.+)") or err
 end
 
 local ok, err = catch[simplify] divide(10, 0)
@@ -1970,7 +1968,7 @@ TCP sockets support `send`, `receive`, `settimeout`, and `close`. Every receive 
 local w = worker.create("task.lus", {data = "input"})
 worker.send(w, "a message")
 while result = worker.receive(w) do
-  print(result)
+    print(result)
 end
 ```
 
@@ -2009,7 +2007,7 @@ Values always travel through `?` or named placeholders, and handles close throug
 local db <close> = io.sqlite("app.db")
 db:run("INSERT INTO users (name) VALUES (?)", name)
 for row in db:query("SELECT id, name FROM users WHERE age >= ?", 18) do
-  print(row.id, row.name)
+    print(row.id, row.name)
 end
 ```
 
@@ -2047,16 +2045,16 @@ The `lus` executable carries the tools of a Lus project as subcommands, all buil
 local function add(a, b) return a + b end
 
 local add_cases = {
-  { 1, 2, 3 },
-  { -1, 1, 0 },
+    { 1, 2, 3 },
+    { -1, 1, 0 },
 }
 
 local function add_test(a, b, want)
-  assert(add(a, b) == want)
+    assert(add(a, b) == want)
 end
 
 function errors_test()
-  raises(function() add(nil, 1) end, "arithmetic")
+    raises(function() add(nil, 1) end, "arithmetic")
 end
 ```
 

@@ -18,7 +18,13 @@ params:
     optional: true
 ---
 
-Serves HTTP/1.1 on `host` and `port` and calls `handler` for every request. `serve` blocks its caller for as long as the server runs. It accepts connections in a loop, and each connection runs in a coroutine of its own that the runtime resumes whenever its socket is ready (see `coroutine.detach`), so a slow client never holds up the others. Connections stay open between requests unless the client asks to close them.
+Serves HTTP/1.1 on `host` and `port`, calls `handler` for every request, and returns only when the server stops.
+
+`host` is a string and `port` an integer that name the address to listen on. `handler` is a function that receives one table per request and returns the response. `options` is an optional table described below. The second form, `network.serve(server, handler, options)`, serves on a server that [`network.tcp.bind`](/manual/api#network.tcp.bind) returned, which lets a program bind port `0` and read the chosen port with `getsockname` before it serves.
+
+`serve` blocks its caller for as long as the server runs and returns no values. It accepts connections in a loop, and each connection runs in a coroutine of its own that the runtime resumes whenever its socket is ready (see `coroutine.detach`), so a slow client never holds up the others. Connections stay open between requests unless the client asks to close them. A server that `serve` bound itself closes when `serve` ends, and a server passed to it stays open until the program closes it. `serve` ends when the coroutine that called it is closed, or when accepting a connection fails for a reason other than a shortage of file descriptors or memory.
+
+The call requires the `network:server` permission for the address it serves, and in the first form `network:tcp` to bind it. A failure to bind raises an error such as `"cannot bind to HOST:PORT: REASON"`.
 
 The handler receives one table per request:
 
@@ -30,9 +36,9 @@ The handler receives one table per request:
 | `headers` | A table from lowercase header names to their values. A header that repeats joins its values with `", "`. |
 | `body` | The request body as a vector, which is empty for a request without a body. |
 
-The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. The server adds `Date`, `Content-Length`, and `Connection: close` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
+The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
 
-When the handler raises an error, or returns values that make no response, the server answers 500, reports the error, and closes the connection. It writes the error to standard error, in the form `lus: network.serve: message`, or passes the error value to the `on_error` function of the options.
+When the handler raises an error, or returns values that make no response, such as a status that is not an integer, the server answers 500 with an empty body, reports the error, and closes that connection. The other connections continue. It writes the error to standard error, in the form `lus: network.serve: message`, or passes the error value to the `on_error` function of the options.
 
 `options` is a table with any of these fields:
 
@@ -48,17 +54,21 @@ While `max_connections` connections are open, further clients wait in the queue 
 
 The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines, and a request body to 16 MiB. A chunked body gives each chunk size as hexadecimal digits alone, and the line that starts a chunk is limited to 1 KiB. The framing of a chunked body, which is its chunk lines and its trailers, is limited to 64 KiB plus 8 bytes for every byte of the body. A request over a limit is answered with 431 or 413, and a malformed request with 400. The connection closes after each of these answers.
 
-`network.serve(server, handler, options)` serves on a server that `network.tcp.bind` returned. That form lets a program bind port `0` and read the selected port with `getsockname` before it serves. A server that `serve` bound itself closes when `serve` ends, which happens when the coroutine that called it is closed or when accepting a connection fails for a reason other than a shortage of descriptors or memory.
+The following example serves in a detached coroutine on a port that the system chooses, sends one request over a TCP socket, and stops the server.
 
-Requires the `network:server` permission for the address, and `network:tcp` to bind it.
-
-```lus nocheck
+```lus
 pledge("network")
-
-network.serve("127.0.0.1", 8080, function(req)
-    if req.path ~= "/" then
-        return 404, "not found\n"
-    end
-    return 200, "hello\n", { ["Content-Type"] = "text/plain" }
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    return 200, `hello from $(req.path)`, { ["Content-Type"] = "text/plain" }
 end)
+local sock <close> = network.tcp.connect("127.0.0.1", port)
+sock:send("GET /docs HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+local response = vector.tostring(sock:receive("*a"))
+print(response:match("\r\n\r\n(.*)$"))   --> hello from /docs
+coroutine.close(serving)
+server:close()
 ```
+
+The example talks to its server through a TCP socket because [`network.fetch`](/manual/api#network.fetch) blocks the whole state, the server coroutines included.

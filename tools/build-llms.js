@@ -24,28 +24,28 @@ const SMALL_TOKEN_BUDGET = 25000;
 
 // The API sections of the site, in the order of packages/site/src/lib/api.ts.
 const API_SECTIONS = [
-  ["Environment Functions", (m) => m === "base"],
-  ["Table Library", (m) => m === "table"],
-  ["String Library", (m) => m === "string"],
-  ["Math Library", (m) => m === "math"],
-  ["IO Library", (m) => m === "io"],
-  ["OS Library", (m) => m === "os"],
-  ["Debug Library", (m) => m === "debug"],
-  ["Coroutine Library", (m) => m === "coroutine"],
-  ["Package Library", (m) => m === "package"],
-  ["UTF-8 Library", (m) => m === "utf8"],
-  ["Filesystem Library", (m) => m === "fs" || m === "fs.path"],
-  ["Network Library", (m) => m === "network" || m === "network.tcp" || m === "network.udp"],
-  ["Vector Library", (m) => m === "vector"],
-  ["Archive Library", (m) => m.startsWith("vector.archive")],
-  ["Worker Library", (m) => m === "worker"],
-  ["Time Library", (m) => m === "time"],
+  ["Environment functions", (m) => m === "base"],
+  ["Table library", (m) => m === "table"],
+  ["String library", (m) => m === "string"],
+  ["Math library", (m) => m === "math"],
+  ["IO library", (m) => m === "io"],
+  ["OS library", (m) => m === "os"],
+  ["Debug library", (m) => m === "debug"],
+  ["Coroutine library", (m) => m === "coroutine"],
+  ["Package library", (m) => m === "package"],
+  ["UTF-8 library", (m) => m === "utf8"],
+  ["Filesystem library", (m) => m === "fs" || m === "fs.path"],
+  ["Network library", (m) => m === "network" || m === "network.tcp" || m === "network.udp"],
+  ["Vector library", (m) => m === "vector"],
+  ["Archive library", (m) => m.startsWith("vector.archive")],
+  ["Worker library", (m) => m === "worker"],
+  ["Time library", (m) => m === "time"],
 ];
 
 // Manual pages in the order llms-full.txt reads them. The topic pages
 // of the use and library groups follow in sidebar order, then the API
 // reference. Pages about the release process and the build stay out.
-const LEAD_PAGES = ["introduction", "getting-started", "adapting", "lua", "runtimes", "guide", "cli"];
+const LEAD_PAGES = ["introduction", "getting-started", "adapting", "lua", "runtimes", "patterns", "guide", "cli"];
 const FULL_GROUPS = ["use", "library"];
 const FULL_SKIP = new Set(["releases", "compiling", "ide-setup", "license"]);
 
@@ -201,7 +201,9 @@ function mdxToMarkdown(body, ctx = {}) {
     const component = line.match(/^\s*<([A-Z]\w*)\b[^>]*?(\/)?>\s*$/);
     if (component) {
       const [, name, selfClosing] = component;
-      if (ctx.components && ctx.components[name]) out.push(ctx.components[name]);
+      const replacement = ctx.components && ctx.components[name];
+      if (typeof replacement === "function") out.push(replacement(line));
+      else if (replacement) out.push(replacement);
       if (!selfClosing) skipping = name;
       continue;
     }
@@ -291,6 +293,30 @@ function renderAgents(prompts, skills) {
   return lines.join("\n");
 }
 
+// One table of the page Lus and other runtimes, as
+// packages/site/src/components/RuntimeTable.astro renders it.
+function renderRuntimeTable(data, metric) {
+  if (metric === "http") {
+    const servers = {lus: "Lus, network.serve", bun: "Bun, Bun.serve", node: "Node.js, http", python: "Python, ThreadingHTTPServer"};
+    const rows = Object.entries(data.http || {})
+      .filter(([, c]) => c.ok !== false && typeof c.rps === "number")
+      .sort(([, a], [, b]) => b.rps - a.rps)
+      .map(([id, c]) => `| ${servers[id] || data.runtimes[id].name} | ${Math.round(c.rps).toLocaleString("en-US")} | ${c.p50_ms.toFixed(2)} ms | ${c.p99_ms.toFixed(2)} ms | ${c.peak_rss_mb.toFixed(1)} MB |`);
+    return ["| Server | Requests per second | Median latency | 99th percentile | Peak memory |", "| --- | ---: | ---: | ---: | ---: |", ...rows].join("\n");
+  }
+  const key = metric === "time" ? "best_s" : "peak_rss_mb";
+  const fmt = (v) => (metric === "time" ? v.toFixed(2) : String(Math.round(v)));
+  const ids = ["lus", "bun", "node", "php", "luajit", "python", "ruby"].filter((id) => data.runtimes[id]);
+  const rows = Object.keys(data.programs).sort(compareText).map((program) => {
+    const cells = ids.map((id) => {
+      const c = data.programs[program][id];
+      return c && c.ok !== false && typeof c[key] === "number" ? fmt(c[key]) : "n/a";
+    });
+    return `| ${program} | ${cells.join(" | ")} |`;
+  });
+  return [`| Program | ${ids.map((id) => data.runtimes[id].name).join(" | ")} |`, `| --- |${ids.map(() => " ---: |").join("")}`, ...rows].join("\n");
+}
+
 function listText(items) {
   if (items.length <= 2) return items.join(" and ");
   return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
@@ -334,7 +360,11 @@ function renderBenchmarks(data) {
 function build(root = ROOT) {
   const stdlib = loadStdlib(root);
   const pages = loadManual(root);
-  const components = {};
+  const bench = path.join(root, "packages", "site", "src", "data", "benchmarks.json");
+  const benchData = JSON.parse(fs.readFileSync(bench, "utf8"));
+  const components = {
+    RuntimeTable: (line) => renderRuntimeTable(benchData, (line.match(/metric="(\w+)"/) || [])[1]),
+  };
   const files = new Map();
 
   const rendered = new Map();
@@ -359,8 +389,7 @@ function build(root = ROOT) {
     if (m) skills.push([m[1], text]);
   }
   files.set("agents.md", renderAgents(loadPrompts(root), skills));
-  const bench = path.join(root, "packages", "site", "src", "data", "benchmarks.json");
-  files.set("benchmarks.md", renderBenchmarks(JSON.parse(fs.readFileSync(bench, "utf8"))));
+  files.set("benchmarks.md", renderBenchmarks(benchData));
 
   const order = [
     ...LEAD_PAGES,

@@ -12,25 +12,29 @@ vararg: true
 returns: thread
 ---
 
-Hands the suspended coroutine `co` to the runtime and returns `co`. The runtime resumes the coroutine by itself: the first time with the extra arguments, and afterwards whenever what the coroutine waits for is ready. For a coroutine that has not started, the extra arguments are the arguments of its body. For a coroutine that already ran and yielded, they are the results of its pending `coroutine.yield`.
+`coroutine.detach(co, ...)` hands the suspended coroutine `co` to the runtime, which resumes it by itself from then on, and returns `co`.
 
-`detach` returns at once and the coroutine starts on its next turn. Detached coroutines take turns in the order in which they became ready. Inside a detached coroutine, a blocking operation such as `receive` on a socket suspends the coroutine while the other coroutines run, and `coroutine.yield` gives the next turn to the others.
+The parameter `co` is a suspended coroutine. The extra arguments are passed on the first resume. For a coroutine that has not started, they are the arguments of its body. For a coroutine that already ran and yielded, they are the results of its pending `coroutine.yield`.
 
-`coroutine.resume(co)` waits until a detached coroutine has ended and returns what `resume` returns for a coroutine that ends: `true` and the results of the body, or `false` and the error. `coroutine.close(co)` cancels it.
+`detach` returns at once, and the coroutine starts on its next turn. A _detached coroutine_ is one that `detach` handed to the runtime. Detached coroutines take turns in the order in which they became ready, and each runs until it waits, yields, or ends. Inside a detached coroutine, a blocking operation such as `receive` on a socket suspends the coroutine while the others run, and [`coroutine.yield`](/manual/api#coroutine.yield) gives the next turn to the others. When the main chunk returns, `lus` keeps running the detached coroutines until every one of them has ended.
 
-Raises an error when `co` is running, normal, dead, already detached, or the main thread.
+[`coroutine.resume`](/manual/api#coroutine.resume) on a detached coroutine waits until it has ended and returns `true` and the results of the body, or `false` and the error object. [`coroutine.close`](/manual/api#coroutine.close) cancels it. A detached coroutine whose error nothing collects stops the program with that error.
+
+Detaching raises an error when `co` is the main thread, or when it is running, normal, dead, or already detached. The messages are `cannot detach the main thread`, `cannot detach a running coroutine`, `cannot detach a normal coroutine`, `cannot detach a dead coroutine`, and `cannot detach a detached coroutine`. A detached coroutine keeps the last message after it has ended.
 
 ```lus
-local function worker(name, count)
-    for i = 1, count do
-        print(name, i)
+local log = {}
+local function worker(name)
+    for i = 1, 2 do
+        log[#log + 1] = name .. i
         coroutine.yield()
     end
     return name .. " is done"
 end
-
-local a = coroutine.detach(coroutine.create(worker), "a", 2)
-local b = coroutine.detach(coroutine.create(worker), "b", 2)
-print(coroutine.resume(a)) -- a 1, b 1, a 2, b 2, then: true  a is done
-print(coroutine.resume(b)) -- true  b is done
+local a = coroutine.detach(coroutine.create(worker), "a")
+local b = coroutine.detach(coroutine.create(worker), "b")
+print(coroutine.resume(a))      --> true  a is done
+print(table.concat(log, " "))   --> a1 b1 a2 b2
 ```
+
+[Coroutines and workers](/manual/concurrency) describes detached coroutines in full, including suspension points and errors that nothing collects.

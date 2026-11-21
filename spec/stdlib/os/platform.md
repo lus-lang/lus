@@ -8,4 +8,14 @@ origin: lus
 returns: string
 ---
 
-Returns a string identifying the current platform (e.g., `"linux"`, `"darwin"`, `"windows"`). The names are the lowercase `uname -s` style identifiers, so Apple platforms report `"darwin"`. The WebAssembly build reports `"wasi"`.
+Returns a lowercase string that names the operating system the runtime was built for.
+
+The function takes no arguments and requires no permission. The names are `uname -s` style identifiers: `"linux"`, `"darwin"` for every Apple platform, `"freebsd"`, `"netbsd"`, `"openbsd"`, `"sunos"` for illumos, `"windows"`, and `"wasi"` for the WebAssembly build. DragonFly BSD and Haiku report `"posix"`, and any other system reports `"unknown"`.
+
+```lus
+local name = os.platform()
+local separator = name == "windows" and "\\" or "/"
+print(separator == fs.path.separator)   --> true
+```
+
+[`fs.path.separator`](/manual/api#fs.path.separator) and [`fs.path.delimiter`](/manual/api#fs.path.delimiter) hold the path characters of the platform.

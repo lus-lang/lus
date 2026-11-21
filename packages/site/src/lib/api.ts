@@ -21,6 +21,7 @@ export interface SectionedEntry {
 export interface ApiSection {
   title: string
   id: string
+  page?: { href: string; title: string }
   entries: SectionedEntry[]
 }
 
@@ -42,41 +43,43 @@ function slug(title: string): string {
 
 interface SectionSpec {
   title: string
+  /** The manual page that explains the library, when one exists. */
+  page?: { href: string; title: string }
   filter: (d: ApiData, id: string) => boolean
 }
 
 const stdlibOrder: SectionSpec[] = [
-  { title: "Environment Functions", filter: (d) => d.module === "base" },
-  { title: "Table Library", filter: (d) => d.module === "table" },
-  { title: "String Library", filter: (d) => d.module === "string" },
-  { title: "Math Library", filter: (d) => d.module === "math" },
-  { title: "IO Library", filter: (d) => d.module === "io" },
-  { title: "OS Library", filter: (d) => d.module === "os" },
-  { title: "Debug Library", filter: (d) => d.module === "debug" },
-  { title: "Coroutine Library", filter: (d) => d.module === "coroutine" },
-  { title: "Package Library", filter: (d) => d.module === "package" },
-  { title: "UTF-8 Library", filter: (d) => d.module === "utf8" },
+  { title: "Environment functions", filter: (d) => d.module === "base" },
+  { title: "Table library", page: { href: "/manual/data#table-functions", title: "Table functions" }, filter: (d) => d.module === "table" },
+  { title: "String library", page: { href: "/manual/text#strings", title: "Strings" }, filter: (d) => d.module === "string" },
+  { title: "Math library", filter: (d) => d.module === "math" },
+  { title: "IO library", filter: (d) => d.module === "io" },
+  { title: "OS library", filter: (d) => d.module === "os" },
+  { title: "Debug library", page: { href: "/manual/tools#debugger", title: "Debugger" }, filter: (d) => d.module === "debug" },
+  { title: "Coroutine library", page: { href: "/manual/concurrency#detached-coroutines", title: "Detached coroutines" }, filter: (d) => d.module === "coroutine" },
+  { title: "Package library", page: { href: "/manual/guide#modules-and-require", title: "Modules and require" }, filter: (d) => d.module === "package" },
+  { title: "UTF-8 library", filter: (d) => d.module === "utf8" },
   {
-    title: "Filesystem Library",
+    title: "Filesystem library", page: { href: "/manual/filesystem", title: "Filesystem" },
     filter: (d) => d.module === "fs" || d.module === "fs.path",
   },
   {
-    title: "Network Library",
+    title: "Network library", page: { href: "/manual/network", title: "Network" },
     filter: (d) =>
       d.module === "network" ||
       d.module === "network.tcp" ||
       d.module === "network.udp",
   },
-  { title: "Vector Library", filter: (d) => d.module === "vector" },
+  { title: "Vector library", page: { href: "/manual/text#vectors", title: "Vectors" }, filter: (d) => d.module === "vector" },
   {
-    title: "Archive Library",
+    title: "Archive library", page: { href: "/manual/text#compression", title: "Compression" },
     filter: (d) => !!d.module?.startsWith("vector.archive"),
   },
   {
-    title: "Worker Library",
+    title: "Worker library", page: { href: "/manual/concurrency#workers", title: "Workers" },
     filter: (d) => d.module === "worker" && !d.header,
   },
-  { title: "Time Library", filter: (d) => d.module === "time" },
+  { title: "Time library", page: { href: "/manual/time", title: "Time" }, filter: (d) => d.module === "time" },
 ]
 
 /* C API entries are grouped by their directory under spec/capi. */
@@ -114,6 +117,7 @@ function sectionize(entries: ApiEntry[], order: SectionSpec[]): ApiSection[] {
       sections.push({
         title: spec.title,
         id: slug(spec.title),
+        page: spec.page,
         entries: matched.map((entry) => ({ entry, from: entryFrom(entry.data) })),
       })
     }
@@ -135,6 +139,19 @@ export async function getStdlibSections(): Promise<ApiSection[]> {
 
 export async function getCapiSections(): Promise<ApiSection[]> {
   return sectionize(await getCollection("capi"), capiOrder)
+}
+
+/** The first sentence of an entry body as plain text, for summaries. */
+export function summary(entry: ApiEntry): string {
+  const para = (entry.body ?? "").trim().split(/\n\s*\n/)[0] ?? ""
+  if (para.startsWith("```")) return ""
+  const text = para
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+  const end = text.search(/[.!?](\s|$)/)
+  return end >= 0 ? text.slice(0, end + 1) : text
 }
 
 /** Order in which kinds are grouped inside an index section. */
