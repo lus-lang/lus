@@ -4692,7 +4692,7 @@ print(headers["content-type"])   --> application/json
 local data = fromjson(vector.tostring(body))
 ```
 
-`fetch` blocks the whole state while it waits, the detached coroutines included, so a program cannot fetch from a [`network.serve`](/manual/api#network.serve) server that runs in the same state. A `HEAD` request raises `"truncated response body"` when the server reports a nonzero `Content-Length`, because `fetch` waits for a body that a `HEAD` response never carries.
+Outside a detached coroutine, `fetch` runs the detached coroutines while it waits for the response, so the main chunk can fetch from a [`network.serve`](/manual/api#network.serve) server that runs in the same state. Inside a detached coroutine, `fetch` blocks the whole state while it waits, the other detached coroutines included.
 
 **Requires pledge:** `network:http`]],
     kind = "function",

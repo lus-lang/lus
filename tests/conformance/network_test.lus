@@ -121,6 +121,20 @@ local function fetch_bodiless_statuses_read_no_body_test(status)
     assert(r.status == status and r.size == 0)
 end
 
+-- Outside a detached coroutine, fetch runs the coroutines while it waits,
+-- so the main code reaches a network.serve of the same state.
+local function fetch_reaches_a_serve_of_the_same_state_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local server = coroutine.detach(coroutine.create(function()
+        network.serve(listener, function(req) return 200, "hi " .. req.path end)
+    end))
+    local status, body = network.fetch(`http://127.0.0.1:$(port)/x`)
+    coroutine.close(server)
+    listener:close()
+    assert(status == 200 and txt(body) == "hi /x", txt(body))
+end
+
 -- ============================================================
 -- TCP loopback data path (bind-dependent)
 -- ============================================================

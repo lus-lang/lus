@@ -56,7 +56,7 @@ if not ok then
 end
 ```
 
-`network.fetch` blocks the whole state while it waits, the [detached coroutines](/manual/concurrency#detached-coroutines) included. The server coroutines of a `network.serve` in the same state do not run during a `fetch`, so a program sends requests to its own server through a TCP socket, as the example under [HTTP server](#http-server) does.
+Outside a detached coroutine, `network.fetch` runs the [detached coroutines](/manual/concurrency#detached-coroutines) while it waits for the response, so the main chunk can fetch from a `network.serve` that runs in the same state. Inside a detached coroutine, `network.fetch` blocks the whole state while it waits, the other detached coroutines included, so a coroutine sends requests to a server of the same state through a TCP socket, as the example under [HTTP server](#http-server) does.
 
 ## TCP clients
 
