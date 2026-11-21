@@ -222,9 +222,10 @@ pub fn release(l: *Thread) void {
 /// A sealed copy of the permission set of `l`, for a worker state. The
 /// worker runs with its creator's permissions and can never grant itself
 /// more. Sets are not shared across states, since each state frees its
-/// own.
+/// own. The copy belongs to no state yet, so it is made with the parent
+/// allocator, which `discard` frees it with.
 pub fn snapshot(l: *Thread) Allocator.Error!*anyopaque {
-    const gpa = l.g.gpa;
+    const gpa = l.g.parent_gpa;
     const n = if (setOf(l)) |s| try s.clone(gpa) else blk: {
         const n = try gpa.create(Set);
         n.* = .{};
@@ -234,10 +235,16 @@ pub fn snapshot(l: *Thread) Allocator.Error!*anyopaque {
     return n;
 }
 
-/// Installs a set made by `snapshot` as the permissions of `l`.
-pub fn adopt(l: *Thread, p: *anyopaque) void {
+/// Installs a copy of a set made by `snapshot` as the permissions of `l`,
+/// made with the allocator of `l` so that its bytes count toward that
+/// state, and frees the snapshot with `parent`. On failure the snapshot is
+/// left as it was.
+pub fn adopt(l: *Thread, p: *anyopaque, parent: Allocator) Allocator.Error!void {
+    const s: *Set = @ptrCast(@alignCast(p));
+    const own = try s.clone(l.g.gpa);
+    s.destroy(parent);
     release(l);
-    l.pledges = p;
+    l.pledges = own;
 }
 
 /// Frees a set made by `snapshot` that was never adopted.

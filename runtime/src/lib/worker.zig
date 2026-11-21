@@ -590,7 +590,7 @@ fn run(w: *Worker, msg: *?[]u8, val: *?*Packet) void {
     // The worker runs with its creator's permissions, sealed so that it
     // can never grant itself more.
     if (w.pledges) |p| {
-        pledge.adopt(l, p);
+        pledge.adopt(l, p, gpa) catch return fail(msg, gpa, "not enough memory");
         w.pledges = null;
     }
     g.ext.put(gpa, self_key, w) catch return fail(msg, gpa, "not enough memory");
