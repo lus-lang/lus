@@ -28,4 +28,4 @@ print(select(-1, "a", "b", "c"))    --> c
 print(select("#", "a", nil, nil))   --> 3
 ```
 
-`select("#", ...)` is the way to count the arguments of a variadic function that may receive `nil` values, as [Variadic functions](/manual/guide#variable-arguments) describes.
+`select("#", ...)` is the way to count the arguments of a variadic function that may receive `nil` values, as [Collecting arguments into a list](/manual/guide#collecting-arguments-into-a-list) describes.
