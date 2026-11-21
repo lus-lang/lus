@@ -6,7 +6,7 @@ This note is the server half of the design. The runtime half, which covers how `
 
 ## Goals
 
-1. **The URL is the dependency.** A program names a package by URL. It needs no manifest, no lockfile to get started, and no installer.
+1. **The URL is the dependency.** A program names a package by URL. It needs no manifest, no lockfile, and no installer. A pinned address such as `dates@1.4.1.lus` names one release when a program needs exactly that release.
 2. **A package is pegged to a Lus release line.** A _line_ is a Lus major and minor version, such as `2.0`. A package that works on `2.0` keeps working on every `2.0` patch release of Lus, because within a line an author may publish only patch versions of the package.
 3. **Everything is signed.** Authors sign what they publish with keys registered to their account. Atmosphere signs every release it serves. The runtime refuses anything else.
 4. **Quality is measured and shown.** Every push runs the checker, a permission analysis, and a compilation report. Failures block a stable release. The measurements rank search results, so the poorest packages stay out of prominent places.
@@ -15,15 +15,15 @@ This note is the server half of the design. The runtime half, which covers how `
 
 ## Names and addresses
 
-A package name has at most 64 characters from `a` to `z`, `0` to `9`, and `-`, and starts with a letter. It is the grammar of `@package` in `spec/design/modules.md`. Names are global to the registry and belong to the account that created them. Atmosphere reserves the names of the standard library modules, `lus`, `atmos`, `atmosphere`, `std`, and `test`.
+A package name is 2 to 40 characters from `a` to `z`, `0` to `9`, and `_`. It starts with a letter. The name is a valid Lus identifier, so a package that a program stores in a local of the same name reads naturally. Names are global to the registry and belong to the account that created them. Atmosphere reserves the names of the standard library modules, `lus`, `atmos`, `atmosphere`, `std`, and `test`.
 
 Every address of a package carries its line. The addresses of the package `dates` are the following.
 
 | Address | Content |
 | --- | --- |
-| `https://atmosp.here/2.0/dates.lus` | The newest release of `dates` for the `2.0` line: a signed manifest for `lus`, the source of the main module for any other client. |
-| `https://atmosp.here/unstable/dates.lus` | The newest commit on `main`, in the same two forms. |
-| `https://atmosp.here/2.0/dates@1.4.1.lus` | Release `1.4.1`, in the same two forms. The runtime never requests this address. It serves people and tools that inspect one release. |
+| `https://atmosp.here/2.0/dates.lus` | The release document of the newest release of `dates` for the `2.0` line. |
+| `https://atmosp.here/2.0/dates@1.4.1.lus` | The release document of release `1.4.1`. Only its `yanked` and `deprecated` fields ever change. |
+| `https://atmosp.here/unstable/dates.lus` | The release document of the newest commit on `main`. |
 | `https://atmosp.here/2.0/dates` | The documentation page of the package for the line. |
 | `https://atmosp.here/2.0/dates.md`, `.json` | The Markdown and JSON twins of that page. |
 | `https://atmosp.here/2.0/dates/llms.txt` | The agent documentation of the package. |
@@ -37,7 +37,7 @@ A package version is a strict semantic version, `MAJOR.MINOR.PATCH`, with no bui
 
 ### Lines and patches
 
-The first release of a package for a line fixes its major and minor version on that line. Every later release on the line must keep that major and minor version and raise the patch number. A push that breaks this rule is refused with a message that names the version the line allows next. For example, once `dates` publishes `1.4.0` for `2.0`, the next release for `2.0` must be `1.4.1` or a higher patch. The release for `2.1` may be `1.5.0` or `2.0.0`. The runtime enforces the same rule on its side, so a server that broke it would be caught by every client.
+The first release of a package for a line fixes its major and minor version on that line. Every later release on the line must keep that major and minor version and raise the patch number. A push that breaks this rule is refused with a message that names the version the line allows next. For example, once `dates` publishes `1.4.0` for `2.0`, the next release for `2.0` must be `1.4.1` or a higher patch. The release for `2.1` may be `1.5.0` or `2.0.0`. The runtime enforces the same rule for each line URL: it accepts a release document only with the major and minor version it saw first for that URL and a patch number that never decreases. The rule therefore also stops a replay of an older release document.
 
 The rule follows how Debian treats a stable release. A program that runs on Lus 2.0 receives fixes to its dependencies and never a change of their interface, so a program written today still runs when its dependencies publish new releases. A change of interface waits for the next line of Lus, which is the point at which a program changes anyway. The cost is that a feature reaches the users of an existing line only through `unstable` or through the next line.
 
@@ -51,13 +51,13 @@ A version with major version `0` may appear only on `unstable`. A push that publ
 
 The newest commit on `main` is published to the `unstable` line on every push. Its version is the header version followed by `-unstable.N`, where `N` is the number of pushes to `main` since the package was created, such as `0.3.0-unstable.42`. The version rules of the previous sections do not apply to `unstable`. The commit must still be signed. The quality checks run and are reported. They never block an unstable release.
 
-A stable package must not require an unstable one. The push that adds such a require is refused.
+An unstable release runs on the line that its `@lus` annotation names. A stable package must not require an unstable one. The push that adds such a require is refused.
 
 ### Yanking and deprecation
 
-An author _yanks_ a release that must not be used, for example one with a security flaw. The address of the line then resolves to the newest release that is not yanked, which may be an older patch. The pinned address of the yanked release still answers, so the release stays inspectable. Yanking never deletes a release.
+An author _yanks_ a release that must not be used, for example one with a security flaw. The address of the line then resolves to the newest release that is not yanked. The pinned address of the yanked release still answers, with `"yanked": true` in its release document, so a program pinned to it keeps running and the runtime prints a warning. Yanking never deletes a release.
 
-An author _deprecates_ a package or a single release with a message, such as the name of a replacement. The manifest carries the message in its `deprecated` field. The runtime prints it once per run. Deprecation changes nothing else.
+An author _deprecates_ a package or a single release with a message, such as the name of a replacement. The release document carries the message. The runtime prints it once per run. Deprecation changes nothing else.
 
 ## Publishing with git
 
@@ -80,35 +80,58 @@ git push origin main 2.0
 
 ## Signing
 
-Three signatures protect a release. The author signs the git commit or tag. Atmosphere signs the manifest. The author may also sign the bundle.
-
-### Git signatures
+### Author signatures
 
 An author registers public keys with their account: SSH keys of type `ssh-ed25519`, or OpenPGP keys. Git signs commits and tags with either kind. For each push, the server writes the keys of the authors of the package to an allowed signers file and a temporary keyring, then runs `git verify-commit` or `git verify-tag` for each ref it publishes. A signature by any other key, by a revoked key, or by a key registered after the signature was made refuses the ref.
 
 A commit that a web interface creates, such as a merge on GitHub, carries the signature of that service. Its key belongs to no author, so such a commit is refused as the tip of `main`. The author publishes by pushing a signed commit on top of it, which `atmos publish` does.
 
-### Registry signatures
+### Atmosphere signatures
 
-Atmosphere signs every manifest with an Ed25519 key, in the signed envelope of `spec/design/modules.md`. The `lus` binary embeds the public registry keys of `atmosp.here`. The server signs with one key and lists the next key in the runtime ahead of time, so a key changes without breaking any release of Lus that is still in use. The private key lives in a file that only the server process may read.
+Atmosphere signs every release document with Ed25519. The runtime embeds the public half of the atmosphere _root key_. The root key signs only the list of _signing keys_ at `https://atmosp.here/.well-known/atmos-keys.json`, a signed document whose `keys` field lists each key with `id`, `public`, `not_before`, and `not_after`. A release document names the signing key that signed it in `key` and the time of signing in `signed`. The runtime accepts a signature when the root key signed the list, the list holds that key, and `signed` falls within the key's period.
 
-### Bundle signatures
+Another server that implements this protocol publishes its root public key in the `root` field of its key list. The runtime pins that key the first time it contacts the host, so a private registry needs no release of Lus.
 
-The manifest has an `author` field that holds an Ed25519 signature by the author over the line `atmosphere-bundle 1 URL VERSION SHA256`. The runtime pins the author key of a URL on first use, so a release signed by another key fails even if the registry signed its manifest. `atmos publish` computes the bundle exactly as the server does and adds this signature when the author has an Ed25519 key. A release published with git alone has no `author` field, since only `atmos` can compute the bundle before the push. The runtime then requires the field on every later release of the URL only if the first release it pinned carried one. This is agreed with `spec/design/modules.md` pending the answer of its owner.
+The split lets atmosphere replace a signing key without a release of the runtime. The root key stays offline. It signs a new key list only when a signing key changes.
 
-## Manifests and bundles
+## Release documents and bundles
 
-`spec/design/modules.md` section 5 defines the protocol between `lus` and an atmosphere server: detection by the `Accept` header, the signed envelope, the fields of the manifest, the checks the runtime makes, the bundle format, and the search endpoint. The server implements that section exactly. This section records only what the server adds.
+A _release document_ describes one release. A _bundle_ holds its files. The runtime fetches the release document first, verifies it, and then fetches the bundle that it names.
 
-### Serving manifests
+### Release documents
 
-A request for a module address with the `Accept` header of the protocol returns the signed envelope with `Vary: Accept`. The manifest's `ttl` is 300 seconds for a line address and 86400 seconds for an unstable address, because an unstable package changes on every push and a client that wants each change revalidates with its ETag anyway. Any other request returns the source of the main module as `text/plain`, so a browser shows the code.
+A request for `https://atmosp.here/LINE/NAME.lus` or `https://atmosp.here/LINE/NAME@VERSION.lus` returns status 200 with the content type `application/vnd.atmos.release+json`. The body is canonical JSON: keys sorted by byte value, no insignificant whitespace, and UTF-8. The runtime verifies the signature over the bytes it received after it removes the `signature` member and the comma before it, so the server must emit exactly the canonical bytes it signed. Sorting never puts `signature` first, because `bundle` always precedes it. Its fields are the following.
 
-The server fills `lus` from `@lus`, `permissions` and `flags` from the header, and `requires` from the literal requires of atmosphere URLs in every file. The `deprecated` field carries the deprecation message when there is one.
+| Field | Value |
+| --- | --- |
+| `name` | The package name. |
+| `version` | The package version. |
+| `lus` | The line the release runs on, such as `"2.0"`. |
+| `lus_min` | The oldest Lus release that the release runs on, such as `"2.0.0"`. |
+| `main` | The path of the main module inside the bundle. |
+| `bundle` | The URL of the bundle. |
+| `sha256` | The SHA-256 of the bundle, in lowercase hexadecimal. |
+| `size` | The size of the bundle in bytes. |
+| `files` | A table from each path in the bundle to the SHA-256 of that file. |
+| `permissions` | The permissions that the package declares, as `pledge` strings. |
+| `flags` | The build flags that the package declares, each with `name`, `type`, and `default`. |
+| `requires` | The atmosphere URLs that the package requires. |
+| `commit` | The git commit of the release. |
+| `yanked` | `true` for a yanked release, otherwise `false`. |
+| `deprecated` | The deprecation message, or `null`. |
+| `key` | The identifier of the signing key. |
+| `signed` | The time of signing, in RFC 3339 form in UTC, such as `"2027-02-01T12:00:00Z"`. |
+| `signature` | The Ed25519 signature, in base64, of the canonical JSON of the document without its `signature` field. |
+
+The document for a line address may change with every release, so it is served with `Cache-Control: max-age=300`. The document for a pinned address is served with `Cache-Control: immutable` apart from its `yanked` and `deprecated` fields, which the runtime reads again when it revalidates.
+
+The runtime decides compatibility from the document alone. The line in the URL selects which document the server returns. The runtime never trusts it. The runtime accepts the document when its own major version equals the major version in `lus`, its own minor version is at least the minor version in `lus`, and its own version is at least `lus_min`. Otherwise `require` raises an error that names both versions. A package for `2.0` therefore runs on Lus 2.1. A package for `2.1` fails on Lus 2.0. Whether a package for `2.0` may run on Lus 2.1 is a question for the user, recorded in [Questions for review](#questions-for-review).
 
 ### Bundles
 
-A bundle is a ustar archive compressed with `vector.archive.zstd`, served at `https://atmosp.here/b/SHA256.tar.zst`. Its address is its hash, so a bundle never changes and every cache may keep it forever. It holds the package's `.lus` files except test files, together with `LICENSE`, `README.md`, and `AGENTS.md` when they exist. Every path is relative to the root of the repository. A push whose bundle would break a limit of the protocol, such as a path with a character outside the allowed set or more than 10000 entries, is refused.
+A bundle is a ustar archive compressed with `vector.archive.zstd`, served at `https://atmosp.here/b/SHA256.tar.zst`. Its address is its hash, so a bundle never changes and every cache may keep it forever. It holds the package's `.lus` files except test files, together with `LICENSE`, `README.md`, and `AGENTS.md` when they exist. Every path is relative to the root of the repository. A push whose bundle would break a limit of the runtime, such as a path with a character outside `A-Z a-z 0-9 . _ - /` or more than 10000 entries, is refused.
+
+A package keeps its other modules in a directory named after it, such as `dates/zones.lus`. Inside the bundle, `require("dates.zones")` resolves against the root of the bundle, so the same name works in the package's own repository.
 
 A bundle holds source code only. The runtime compiles each file with the build flags of the program, so a `-F` flag removes dead branches inside packages as it does in the program.
 
@@ -118,7 +141,7 @@ An error is a JSON object with the fields `error`, a stable code, and `message`.
 
 ## The package header
 
-The metadata of a package is a doc comment at the start of its main module. The main module of the package `dates` is `dates.lus` at the root of its repository. `lus doc` reads the header together with the rest of the module's documentation, so the description that a reader sees and the metadata that the registry reads are one text. `spec/design/modules.md` section 6 defines the annotations. The server adds the rules below.
+The metadata of a package is a doc comment at the start of its main module. The main module of the package `dates` is `dates.lus` at the root of its repository. `lus doc` reads the header together with the rest of the module's documentation, so the description that a reader sees and the metadata that the registry reads are one text.
 
 The following header declares a package that reads time zone data.
 
@@ -132,22 +155,28 @@ The following header declares a package that reads time zone data.
 --- @license 0BSD
 --- @repository https://github.com/example/dates
 --- @permission fs:read=/usr/share/zoneinfo/* Reads the system time zone database.
---- @flag tzdata Path of a time zone database to use in place of the system one.
+--- @flag tzdata string Path of a time zone database to use in place of the system one.
 
 local dates = {}
 
 return dates
 ```
 
-- `@package` must equal the name of the main module file and the name of the repository.
-- `@version` must follow the [version rules](#versions) of the line the push publishes to.
-- `@license` is required. The repository must also contain a `LICENSE` file.
-- `@permission` takes a string in the form that `pledge` accepts. The [permission analysis](#permissions) compares the declared permissions with the calls the code makes.
-- `@flag` declares a build flag. The checker reports a read of a field of `flags` that no `@flag` declares.
+The header annotations are the following. `@package`, `@version`, `@lus`, and `@license` are required.
+
+- `@package NAME` names the package. It must equal the file name and the repository name.
+- `@version VERSION` gives the package version.
+- `@lus LINE` gives the line. `@lus 2.0.3` also sets `lus_min` to `2.0.3`.
+- `@license SPDX` gives the license as an SPDX identifier, such as `0BSD` or `MIT`.
+- `@permission PLEDGE DESCRIPTION` declares one permission that the package needs, in the form that `pledge` accepts, with the reason. It repeats for each permission.
+- `@flag NAME TYPE DEFAULT DESCRIPTION` declares one build flag. `TYPE` is `boolean`, `number`, `string`, or a list of strings such as `"fast"|"small"`. `DEFAULT` is optional.
+- `@repository URL` and `@homepage URL` link to other places.
 
 ### Build flags of a package
 
-A build flag that a package reads is a name in the `flags` table that the program fills with `-F`. If two packages read the same name, one `-F` option sets it in both, so we propose that the runtime gives each package its own `flags` table. The program then passes `-F dates.tzdata=/opt/tz`, and inside the files of `dates`, `flags.tzdata` holds `"/opt/tz"`. The owner of `spec/design/modules.md` decides whether the runtime does this. Otherwise packages prefix their flag names with the package name, and the checker requires the prefix.
+A program passes a flag to a package by prefixing the flag with the package name, as in `lus -F dates.tzdata=/opt/tz main.lus`. Inside the files of `dates`, `flags.tzdata` holds `"/opt/tz"`. A package sees only its own flags. Its flags never appear as unprefixed names, so the flags of two packages never collide with each other or with the program's own flags. The checker reports a read of a flag that the header does not declare. The package page lists every declared flag with its type, default, and description.
+
+The runtime compiles each bundle with a `flags` table filtered by the package prefix, which also holds the declared defaults. `spec/design/modules.md` records that part.
 
 ## Quality checks
 
@@ -198,11 +227,11 @@ On every release, the server runs `lus doc --format json` over the package and s
 
 - **HTML** for a browser, at `https://atmosp.here/2.0/dates`. It shows the description, the entries, the permissions, the flags, the score, and the versions.
 - **Markdown** at the same address with `.md` appended, and in answer to `Accept: text/markdown`.
-- **JSON** at the same address with `.json` appended, and in answer to `Accept: application/json`. It contains the fields of the manifest and the `lus doc` output.
+- **JSON** at the same address with `.json` appended, and in answer to `Accept: application/json`. It contains the fields of the release document and the `lus doc` output.
 
 `https://atmosp.here/2.0/dates/llms.txt` lists the package's entries with one line each, in the format of the `llms.txt` that Lus builds for itself. `llms-full.txt` beside it holds the complete Markdown documentation of the package in one file. `https://atmosp.here/llms.txt` describes the registry, its addresses, and the search API, so an agent that knows only the domain finds everything else.
 
-The search API is `GET https://atmosp.here/api/1/search?q=QUERY&line=2.0`, which `spec/design/modules.md` defines. It returns a JSON array with one object per package. Each object has the fields of the protocol, `url`, `name`, `version`, and `description`, followed by the quality score and the declared permissions. The optional parameter `permission` keeps only packages whose declared permissions are covered by the given `pledge` string, so an agent can ask for "a JSON schema validator that needs no permissions". The parameter `hidden=1` includes hidden packages.
+The search API is `GET https://atmosp.here/api/v1/search?q=QUERY&lus=2.0`. It returns a JSON array with one object per package. Each object has the fields `url`, `name`, `version`, and `description`, which the language server reads through `atmos search --json`, followed by the quality score and the declared permissions. The optional parameter `permission` keeps only packages whose declared permissions are covered by the given `pledge` string, so an agent can ask for "a JSON schema validator that needs no permissions". The parameter `hidden=1` includes hidden packages.
 
 Nothing requires an account to read.
 
@@ -231,7 +260,7 @@ The server is one Lus program that answers both hosts, `atmosp.here` and `git.at
 
 ### Git
 
-The server authenticates every git request itself. It then runs `git http-backend` for the request, with the environment that the CGI interface defines and `REMOTE_USER` set to the account. A push runs `git receive-pack` inside `git http-backend`, which runs the hooks of the bare repository. The `pre-receive` hook is a Lus script that runs the [signature checks](#signing), the [version rules](#versions), and the [quality checks](#quality-checks) on each ref. It refuses the push when one fails. The `post-receive` hook records the new releases, builds their bundles and documentation, and signs their manifests.
+The server authenticates every git request itself. It then runs `git http-backend` for the request, with the environment that the CGI interface defines and `REMOTE_USER` set to the account. A push runs `git receive-pack` inside `git http-backend`, which runs the hooks of the bare repository. The `pre-receive` hook is a Lus script that runs the [signature checks](#signing), the [version rules](#versions), and the [quality checks](#quality-checks) on each ref. It refuses the push when one fails. The `post-receive` hook records the new releases, builds their bundles and documentation, and signs their release documents.
 
 A process call blocks the whole program, as do reads of files and SQLite. The server therefore runs git and the checks in a pool of workers. The request handler waits for the worker's reply in its detached coroutine. The request body reaches git through a file, because `io.popen` connects only one direction. `network.serve` limits a request body to 16 MiB, which limits one push to 16 MiB. A package that needs a larger push is far larger than a Lus package is expected to be.
 
@@ -243,9 +272,9 @@ The server keeps its state in one SQLite database. Its tables are `accounts`, `k
 
 The first deployment stores git repositories and bundles on GitHub, so the server needs no durable storage apart from its SQLite database.
 
-Each package has a repository `lus-lang/atmos-NAME` on GitHub. Only atmosphere writes to it, with a deploy credential of the `lus-lang` organization. A push to `git.atmosp.here` lands in a temporary bare repository that the server fetches from the GitHub repository first. The `pre-receive` hook validates it as usual. The `post-receive` hook pushes the accepted refs to GitHub, uploads each bundle as an asset of a GitHub release named after the version, and deletes the temporary repository. A clone of `git.atmosp.here/2.0/NAME.git` receives a redirect to GitHub. A request for `/b/SHA256.tar.zst` is answered by the server, which fetches the asset from GitHub once and keeps it in a local cache, because the runtime follows redirects only within the host of the module.
+Each package has a repository `lus-lang/atmos-NAME` on GitHub. Only atmosphere writes to it, with a deploy credential of the `lus-lang` organization. A push to `git.atmosp.here` lands in a temporary bare repository that the server fetches from the GitHub repository first. The `pre-receive` hook validates it as usual. The `post-receive` hook pushes the accepted refs to GitHub, uploads each bundle as an asset of a GitHub release named after the version, and deletes the temporary repository. A clone of `git.atmosp.here/2.0/NAME.git` and a fetch of `/b/SHA256.tar.zst` receive a redirect to GitHub. The runtime follows a redirect of a bundle to any `https` host.
 
-The manifests, the documentation, and every other part of the server stay on atmosphere, so the signature that the runtime verifies comes from atmosphere. The server checks the hash of every bundle it fetches from GitHub, so GitHub never needs to be trusted. When atmosphere gains its own storage, the server copies each repository and bundle from GitHub and stops redirecting. No address changes.
+The release documents, the documentation, and every other part of the server stay on atmosphere, so the signature that the runtime verifies comes from atmosphere. A bundle that GitHub serves is verified by its hash, so the redirect requires no trust in GitHub. When atmosphere gains its own storage, the server copies each repository and bundle from GitHub and stops redirecting. No address changes.
 
 ## The `atmos` command
 
@@ -269,7 +298,7 @@ atmos sync                       fetch from the upstream of a mirrored package
 atmos yank VERSION --reason TEXT
 atmos deprecate [VERSION] --message TEXT
 atmos undeprecate [VERSION]
-atmos search QUERY [--server URL] search the registry, as the language server does
+atmos search [--server URL] QUERY search the registry
 atmos info NAME                  show a package, its permissions, and its versions
 atmos docs NAME [ENTRY]          print the documentation of a package as Markdown
 atmos auth login | logout | status
@@ -285,9 +314,11 @@ atmos upgrade                    replace atmos with its newest release
 
 `atmos yank` and `atmos deprecate` push the [control tags](#publishing-with-git), so they work through git and leave a signed record.
 
-`atmos cache` lists, verifies, and removes the manifests and bundles in the cache of the runtime. The runtime owns the cache and its layout, which `spec/design/modules.md` describes.
+`atmos cache` lists, verifies, and removes the release documents and bundles in the cache of the runtime, which is `$LUS_HOME/cache`. The runtime owns the cache and its layout, which `spec/design/modules.md` describes.
 
-`atmos upgrade` fetches the manifest of `atmos` for the line of the running `lus`, verifies it as `require` does, and rebuilds the executable with `lus build`.
+`atmos search --json` prints an array of objects with the fields `url`, `name`, `version`, and `description`, which the language server reads to complete URLs inside `require`. `--server URL` searches another atmosphere server.
+
+`atmos upgrade` fetches the release document of `atmos` for the line of the running `lus`, verifies it as `require` does, and rebuilds the executable with `lus build`.
 
 ### `atmos init`
 
@@ -311,7 +342,7 @@ Lus treats coding agents as first-class users, so `atmos` checks for `AGENTS.md`
 
 This design needs the following from the runtime and the standard library.
 
-1. **`lus doc` reads the package header** and writes it as a `package` object in its JSON output, as `spec/design/modules.md` section 6 describes.
+1. **`lus doc` reads the package header** and writes it as a `package` object in its JSON output. `spec/design/modules.md` section 6 describes it.
 2. **A `flags` table per package**, as [Build flags of a package](#build-flags-of-a-package) describes, owned by `spec/design/modules.md`.
 3. **Cryptography.** SHA-256, Ed25519 signing and verification, Argon2id, and UUIDs come from the cryptography work. The server also needs HMAC-SHA256 for webhooks and a source of secure random bytes for tokens and invitations.
 4. **A process with two pipes**, whose reads and writes are suspension points like those of a socket. With it, git runs inside the request handler without a worker or a temporary file. The design works without it.
@@ -322,8 +353,8 @@ This design needs the following from the runtime and the standard library.
 1. A line tag is named after the line, such as `2.0`. Moving it publishes the next patch. This note reads "replacing a tag publishes" that way. The other reading is a tag per package version, such as `v1.4.1`, with the line taken from `@lus`.
 2. Only the tip of `main` must be signed, so contributors need no account. The stricter rule signs every commit on `main` by an author.
 3. A stable package may require only atmosphere URLs, so that every byte a program loads is signed. Allowing other `https` URLs would make the registry useful sooner and weaken that guarantee.
-4. On `unstable`, the runtime skips the bundle signature of the author. The server skips the version rules and never blocks on quality. This note reads "unstable skips author checks" that way. The tip commit of `main` must still carry a git signature.
-5. The bundle signature of the author is optional, so that a release published with git alone is valid. Making it mandatory would require `atmos` for every stable release.
+4. Unstable skips the version rules and never blocks on quality. This note reads "unstable skips author checks" that way. The tip commit of `main` must still carry a git signature.
+5. A package for the `2.0` line runs on Lus 2.1 and every later minor release of Lus 2, as `spec/design/modules.md` decides. The stricter reading runs it only on Lus 2.0 releases.
 
 ## Decisions
 
@@ -332,8 +363,8 @@ This design needs the following from the runtime and the standard library.
 | Metadata lives in a doc comment header of the main module. | The user chose it over a manifest file. One text serves `lus doc`, the registry, and the reader. |
 | The server runs the git binaries for the wire protocol. | The user chose it over implementing git in Lus. The Lus code handles accounts, validation, documentation, and bundles. |
 | Library versions are pegged to Lus lines, with patch releases only within a line. | The user chose Debian's model. A program on a line never sees a change of interface. |
-| Manifests are signed. Bundles are verified by hash. | One signature covers every file. Bundles may therefore be stored anywhere, including GitHub during the first deployment. |
-| The wire protocol is the one in `spec/design/modules.md`. | The runtime freezes it with Lus 2.0, so the server follows the runtime. |
+| Release documents are signed. Bundles are verified by hash. | One signature covers every file. Bundles may therefore come from any host, including GitHub during the first deployment. |
+| A root key signs the signing keys. | A signing key can change without a runtime release. |
 | Bundles hold source code. | Build flags fold dead branches in package code. One bundle serves every runtime of the line. |
 | Packages declare permissions and never restrict them. | The main program grants, loads, and then seals, so it controls its own permissions. |
 | `atmos` is optional. | Everything that it does is a git command or an API call that a person can make by hand. |
