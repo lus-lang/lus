@@ -8,7 +8,7 @@ shortdesc: "Install the binary and run your first program in five minutes."
 
 import InstallBlocks from "../components/InstallBlocks.astro"
 
-Lus is installed as a single executable named `lus`. The executable contains the runtime, the standard library, and the tools.
+Lus is installed as a single executable named `lus`, which contains the runtime, the standard library, and the tools.
 
 ## Install automatically
 
@@ -32,7 +32,7 @@ The installer puts Lus in `~/.lus`, where [`lus version`](/manual/cli#lus-versio
 
 ## Install manually
 
-To install without the script, download the release archive for your platform and unpack it. The interpreter is `bin/lus` inside the archive.
+To install without the script, download the release archive for your platform and unpack it. The interpreter is the file `bin/lus` inside the archive.
 
 <InstallBlocks />
 
@@ -53,7 +53,7 @@ Run the program with `lus`.
 lus hello.lus
 ```
 
-A string between backticks is an _interpolated string_. `$name` inserts the value of the variable `name` into it. The `-->` comment shows what the line prints.
+A string between backticks is an _interpolated string_, in which `$name` inserts the value of the variable `name`. The `-->` comment shows what the line prints.
 
 ## A first real program
 
@@ -88,7 +88,7 @@ The [guide](/manual/guide) explains in full the four features that this program 
 - `for _, item in ipairs(...)` runs its body once for each element of a list, in order.
 - `$(...)` inside an interpolated string inserts the value of any expression.
 
-Invalid input raises an error, which stops the program. `catch` runs an expression. If the expression raises an error, `catch` returns `false` and the error object, so the program can continue.
+Invalid input raises an error, which stops the program. `catch` runs an expression and, if the expression raises an error, returns `false` and the error object so that the program can continue.
 
 ```lus
 local ok, err = catch fromjson("{oops")
@@ -97,7 +97,7 @@ print(ok, err)   --> false  JSON parse error at position 2: expected string key 
 
 ## Asking for permission
 
-A Lus program starts with no access to files, the network, other processes, or environment variables. It acquires each kind of access by calling `pledge`. The following program reads the name of the current user from the environment, which requires the `env` permission.
+A Lus program starts with no access to files, the network, other processes, or environment variables and acquires each kind of access by calling `pledge`. The following program reads the name of the current user from the environment, which requires the `env` permission.
 
 ```lus
 pledge("env")
@@ -106,7 +106,7 @@ local user = os.getenv("USER") or "stranger"
 print(`Hello, $user!`)
 ```
 
-Without the `pledge` line, the program stops at `os.getenv` with the error `permission "env" denied for 'USER'`. Reading a file requires `pledge("fs:read")`. An HTTP request requires `pledge("network")`. The person who runs a script can also limit its permissions on the command line. A script started with `-P` options, as in `lus -Pfs:read=./data/* script.lus`, has only the permissions that those options grant. A script that you have not read can then reach only what you granted. [Permissions](/manual/permissions) describes every permission and how to narrow one to a single path or host.
+Without the `pledge` line, the program stops at `os.getenv` with the error `permission "env" denied for 'USER'`. Other kinds of access have their own permissions, such as `fs:read` for reading a file and `network` for an HTTP request. The person who runs a script can also limit its permissions on the command line. A script started with `-P` options, as in `lus -Pfs:read=./data/* script.lus`, has only the permissions that those options grant, so a script that you have not read can reach only what you granted. [Permissions](/manual/permissions) describes every permission and how to narrow one to a single path or host.
 
 ## Where next
 

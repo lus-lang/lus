@@ -1,0 +1,1105 @@
+-- Generates random Lus programs for differential testing.
+--
+-- A program is built from a typed model of the language. Every expression
+-- the generator emits has a known type, so most programs run to their end
+-- instead of stopping at the first type error. A program prints a trace of
+-- the values it computes through `P`, which renders every value without
+-- addresses and without depending on the order of `pairs`, so every
+-- configuration of the runtime must print the same trace.
+--
+-- The body of a program is a set of units, each a function called many
+-- times from a loop with arguments whose types change partway through the
+-- loop. That crosses the JIT thresholds in the middle of a run and makes
+-- optimized code leave through its guards. Each call runs under `catch`,
+-- so an error ends one call and the trace records its message.
+--
+-- The generator is a module for run.lus, and a script that prints one
+-- program: lus gen.lus SEED [SIZE]. It runs with LUS_JIT=off, and every
+-- program it makes runs in a process of its own, so a bug of the runtime
+-- under test cannot change what the generator makes.
+
+global arg, error, io, ipairs, math, package, pairs, string, table, tonumber, tostring, type
+
+local INT_EDGES = {
+    "0", "1", "-1", "2", "3", "7", "10", "-7", "255", "256", "65535", "2147483647", "-2147483648",
+    "4294967296", "math.maxinteger", "math.mininteger", "(math.maxinteger - 1)", "(math.mininteger + 1)",
+    "0x7f", "0xff", "1000000007",
+}
+local FLOAT_EDGES = {
+    "0.5", "-0.5", "1.5", "2.0", "-0.0", "0.1", "1e15", "1e300", "-1e300", "3.25", "1e-300",
+    "math.huge", "-math.huge", "(2^53)", "(2^63)", "(-(2^63))", "math.pi", "0.0", "1e16",
+}
+local BIG_EDGES = {
+    "0n", "1n", "-1n", "2n", "10n", "12345678901234567890n", "-98765432109876543210n",
+    "(2n ^ 64)", "(2n ^ 63)", "(-(2n ^ 63))", "9223372036854775807n", "9223372036854775808n", "7n",
+}
+local DEC_EDGES = {
+    "0d", "1d", "-1d", "0.1d", "0.2d", "1.50d", "2.25d", "-3.125d", "100d", "0.001d",
+    "12345678901234567890.5d", "1e10d", "7d", "0.3d",
+}
+local STR_EDGES = {
+    [[""]], [["a"]], [["abc"]], [["hello"]], [["héllo"]], [["日本語"]], [["a,b,c"]], [["  x  "]], [["10"]], [["0x10"]],
+    [["3.5"]], [["1e2"]], [["-7"]], [["\0"]], [["tab\tnl\n"]], [["\u{1F600}x"]], [["\u{D800}"]], [["%d"]], [["$"]],
+    [["AbC"]], [["zz"]], [["a.b"]], [["nan"]],
+}
+local ENUM_MEMBERS = { "Red", "Green", "Blue", "Cyan", "Magenta" }
+
+-- Types of the model. Parameters of units start as integers and become
+-- floats or numeric strings halfway through the driving loop, so integer
+-- typed code also runs on other values.
+local TYPES = { "int", "int", "int", "float", "big", "dec", "str", "str", "bool", "arr", "obj", "fn", "enum", "rec" }
+
+-- A 64-bit xorshift generator with a multiplier on its output. Integer
+-- arithmetic wraps, so the state stays exact.
+local function newRng(seed)
+    local s = seed * -7046029254386353131 + 1
+    if s == 0 then s = 1 end
+    local r = {}
+    function r.next()
+        s = s ~ (s >> 12)
+        s = s ~ (s << 25)
+        s = s ~ (s >> 27)
+        return ((s * 2685821657736338717) >> 11) * 2.0 ^ -53
+    end
+    function r.int(n) return math.floor(r.next() * n) end
+    function r.range(a, b) return a + r.int(b - a + 1) end
+    function r.chance(p) return r.next() < p end
+    function r.pick(list) return list[r.int(#list) + 1] end
+    -- Picks one of `pairs`, a list of { weight, value }, by weight.
+    function r.weighted(pairs)
+        local total = 0
+        for _, p in ipairs(pairs) do total = total + p[1] end
+        local x = r.next() * total
+        for _, p in ipairs(pairs) do
+            x = x - p[1]
+            if x < 0 then return p[2] end
+        end
+        return pairs[#pairs][2]
+    end
+    return r
+end
+
+-- The prelude defines the trace printer and the helpers that the units
+-- share: a metatable for objects, a factory of to-be-closed values, an
+-- enum, and rows for queries. It is the same for every program.
+local PRELUDE = [==[
+local __print, __type, __tostring, __mtype = print, type, tostring, math.type
+local __concat, __sort, __select, __next = table.concat, table.sort, select, next
+local S
+S = function(v, d)
+    local t = __type(v)
+    if t == "string" then return string.format("%q", v) end
+    if t == "number" then
+        if v ~= v then return "nan" end
+        return __mtype(v) .. ":" .. __tostring(v)
+    end
+    if t == "table" then
+        d = d or 0
+        if d > 2 then return "{...}" end
+        local parts = {}
+        for k, x in __next, v do parts[#parts + 1] = S(k, d + 1) .. "=" .. S(x, d + 1) end
+        __sort(parts)
+        return "{" .. __concat(parts, ",") .. "}"
+    end
+    if t == "enum" then return "enum:" .. __tostring(tonumber(v)) end
+    if t == "boolean" or t == "nil" then return __tostring(v) end
+    return t
+end
+local function P(...)
+    local n = __select("#", ...)
+    local parts = {}
+    for i = 1, n do parts[i] = S((__select(i, ...))) end
+    __print(__concat(parts, " "))
+end
+local MT = {}
+local function O(x) return setmetatable({ x = x }, MT) end
+MT.__add = function(a, b)
+    local ax = __type(a) == "table" and a.x or a
+    local bx = __type(b) == "table" and b.x or b
+    return O(ax + bx)
+end
+MT.__sub = function(a, b)
+    local ax = __type(a) == "table" and a.x or a
+    local bx = __type(b) == "table" and b.x or b
+    return O(ax - bx)
+end
+MT.__unm = function(a) return O(-a.x) end
+MT.__len = function(a) return a.x % 97 end
+MT.__eq = function(a, b) return a.x == b.x end
+MT.__lt = function(a, b) return a.x < b.x end
+MT.__le = function(a, b) return a.x <= b.x end
+MT.__call = function(self, y) return self.x * 2 + (y or 0) end
+MT.__concat = function(a, b)
+    local as = __type(a) == "table" and ("O" .. __tostring(a.x)) or __tostring(a)
+    local bs = __type(b) == "table" and ("O" .. __tostring(b.x)) or __tostring(b)
+    return as .. bs
+end
+MT.__index = function(self, k)
+    if k == "dbl" then return self.x * 2 end
+    return #__tostring(k)
+end
+local function C(tag)
+    return setmetatable({}, { __close = function(_, e) P("close", tag, e) end })
+end
+local E = enum Red, Green, Blue, Cyan, Magenta end
+local __detached = 0
+local __rows = function(n, k)
+    local t = {}
+    for i = 1, n do t[i] = { x = (i * k) % 11, y = "r" .. i, z = i % 3 } end
+    return t
+end]==]
+
+local function newScope(parent)
+    return { parent = parent, vars = {} }
+end
+
+local function scopeAll(scope, ty)
+    local out = {}
+    local s = scope
+    while s do
+        for _, v in ipairs(s.vars) do if v.type == ty then out[#out + 1] = v end end
+        s = s.parent
+    end
+    return out
+end
+
+local function push(scope, name, ty, fixed)
+    scope.vars[#scope.vars + 1] = { name = name, type = ty, fixed = fixed }
+end
+
+local function extend(ctx, changes)
+    local c = {}
+    for k, v in pairs(ctx) do c[k] = v end
+    for k, v in pairs(changes) do c[k] = v end
+    return c
+end
+
+local function quote(s)
+    return string.format("%q", s)
+end
+
+-- Makes one program. The generator keeps its state in the closure: the
+-- random source, the lines written so far, and the indentation.
+local function generate(seed, size)
+    size = size or 8
+    local r = newRng(seed)
+    local lines = {}
+    local indent = 0
+    local names = 0
+    local G = {}
+
+    local function fresh(prefix)
+        names = names + 1
+        return prefix .. names
+    end
+    local function emit(s)
+        lines[#lines + 1] = string.rep("    ", indent) .. s
+    end
+    local function varOf(scope, ty)
+        local vs = scopeAll(scope, ty)
+        if #vs == 0 then return nil end
+        return r.pick(vs).name
+    end
+
+    -- ----- expressions -----
+
+    local function literal(ty)
+        if ty == "int" then return r.chance(0.5) and tostring(r.range(-20, 100)) or r.pick(INT_EDGES) end
+        if ty == "float" then return r.chance(0.4) and (r.range(-50, 50) .. "." .. r.range(0, 99)) or r.pick(FLOAT_EDGES) end
+        if ty == "big" then return r.chance(0.4) and (r.range(-1000, 100000) .. "n") or r.pick(BIG_EDGES) end
+        if ty == "dec" then return r.chance(0.4) and (r.range(-100, 1000) .. "." .. r.range(0, 999) .. "d") or r.pick(DEC_EDGES) end
+        if ty == "str" then return r.pick(STR_EDGES) end
+        if ty == "bool" then return r.pick({ "true", "false" }) end
+        if ty == "arr" then
+            local items = {}
+            for i = 1, r.range(0, 6) do items[i] = literal("int") end
+            return "{ " .. table.concat(items, ", ") .. " }"
+        end
+        if ty == "obj" then return "O(" .. literal("int") .. ")" end
+        if ty == "fn" then return "function(q) return q + " .. literal("int") .. " end" end
+        if ty == "enum" then return "E." .. r.pick(ENUM_MEMBERS) end
+        if ty == "rec" then return "__rows(" .. r.range(0, 8) .. ", " .. r.range(1, 7) .. ")" end
+        error("unknown type " .. ty)
+    end
+
+    local X = {}
+
+    local function expr(scope, ty, depth)
+        depth = depth or 0
+        local leaf = depth > 3 or r.chance(0.3 + depth * 0.15)
+        local v = varOf(scope, ty)
+        if leaf then
+            if v and r.chance(0.65) then return v end
+            return literal(ty)
+        end
+        return X[ty](scope, depth + 1)
+    end
+
+    local function argsOf(scope, d)
+        local out = {}
+        for i = 1, r.range(0, 4) do
+            out[i] = r.chance(0.2) and "nil" or expr(scope, r.pick(TYPES), d + 1)
+        end
+        if #out == 0 then return "nil" end
+        return table.concat(out, ", ")
+    end
+
+    -- Each case of an expression is a function, so that only the chosen
+    -- one draws from the random source.
+    local function cases(list)
+        return r.weighted(list)()
+    end
+
+    X.int = function(scope, d)
+        local e = function(t) return expr(scope, t, d) end
+        return cases({
+            { 6, function() return "(" .. e("int") .. " " .. r.pick({ "+", "-", "*", "+", "-" }) .. " " .. e("int") .. ")" end },
+            { 2, function() return "(" .. e("int") .. " " .. r.pick({ "//", "%" }) .. " " .. e("int") .. ")" end },
+            { 2, function() return "(" .. e("int") .. " " .. r.pick({ "&", "|", "~", "<<", ">>" }) .. " " .. e("int") .. ")" end },
+            { 1, function() return "(~ " .. e("int") .. ")" end },
+            { 1, function() return "(- " .. e("int") .. ")" end },
+            { 2, function() return "#" .. e("str") end },
+            { 2, function() return "#" .. e("arr") end },
+            { 1, function() return "(math.tointeger(" .. e("float") .. ") or " .. e("int") .. ")" end },
+            { 2, function() return "(" .. e("fn") .. ")(" .. e("int") .. ")" end },
+            { 2, function() local a = e("arr") return "((" .. a .. ")[" .. e("int") .. " % 7 + 1] or " .. literal("int") .. ")" end },
+            { 1, function() return "(" .. e("bool") .. " and " .. e("int") .. " or " .. e("int") .. ")" end },
+            { 1, function() return "math." .. r.pick({ "max", "min" }) .. "(" .. e("int") .. ", " .. e("int") .. ")" end },
+            { 1, function() return "math.abs(" .. e("int") .. ")" end },
+            { 1, function() return "(string.find(" .. e("str") .. ", " .. e("str") .. ", 1, true) or -1)" end },
+            { 1, function() return "tonumber(" .. e("enum") .. ")" end },
+            { 1, function() return "(" .. e("obj") .. ").x" end },
+            { 1, function() return "#" .. e("obj") end },
+            { 1, function() return "(" .. e("obj") .. ")(" .. e("int") .. ")" end },
+            { 1, function() return "(" .. e("obj") .. ")." .. r.pick({ "dbl", "abc", "k" }) end },
+            { 1, function() return "(math.tointeger(" .. e("big") .. " % 1000n) or 0)" end },
+            { 1, function() return "(math.tointeger(" .. e("dec") .. " // 1d) or 0)" end },
+            { 1, function() return "do local t = " .. e("int") .. " if t > " .. e("int") .. " then provide t end provide -t end" end },
+            { 1, function() return "select(\"#\", " .. argsOf(scope, d) .. ")" end },
+            { 1, function() return "(" .. e("int") .. " * 31 + " .. e("int") .. ") % 1000003" end },
+            { 1, function() return "(utf8.len(" .. e("str") .. ") or 0)" end },
+            { 1, function() return "#(" .. e("rec") .. ")" end },
+            { 1, function() return "math.floor(" .. e("float") .. " % 1000)" end },
+            { 1, function() return "string.len(string.rep(" .. e("str") .. ", " .. r.range(0, 4) .. "))" end },
+        })
+    end
+
+    X.float = function(scope, d)
+        local e = function(t) return expr(scope, t, d) end
+        return cases({
+            { 4, function() return "(" .. e("float") .. " " .. r.pick({ "+", "-", "*", "/" }) .. " " .. e("float") .. ")" end },
+            { 3, function() return "(" .. e("int") .. " " .. r.pick({ "/", "+", "*", "-" }) .. " " .. e("float") .. ")" end },
+            { 2, function() return "(" .. e("int") .. " / " .. e("int") .. ")" end },
+            { 1, function() return "(" .. e("float") .. " " .. r.pick({ "//", "%", "^" }) .. " " .. e("float") .. ")" end },
+            { 1, function() return "math." .. r.pick({ "sqrt", "sin", "cos", "exp", "log" }) .. "(" .. e("float") .. ")" end },
+            { 1, function() return "(" .. e("int") .. " + 0.0)" end },
+            { 1, function() return "(tonumber(" .. e("big") .. ") + 0.5)" end },
+            { 1, function() return "(tonumber(" .. e("str") .. ") or 0.25)" end },
+            { 1, function() return "(- " .. e("float") .. ")" end },
+            { 1, function() return "math.fmod(" .. e("float") .. ", " .. e("float") .. ")" end },
+        })
+    end
+
+    X.big = function(scope, d)
+        local e = function(t) return expr(scope, t, d) end
+        return cases({
+            { 4, function() return "(" .. e("big") .. " " .. r.pick({ "+", "-", "*" }) .. " " .. e("big") .. ")" end },
+            { 2, function() return "(" .. e("big") .. " " .. r.pick({ "+", "-", "*", "//", "%" }) .. " " .. e("int") .. ")" end },
+            { 1, function() return "(" .. e("big") .. " " .. r.pick({ "//", "%" }) .. " " .. e("big") .. ")" end },
+            { 1, function() return "(" .. e("big") .. " " .. r.pick({ "&", "|", "~", "<<", ">>" }) .. " " .. r.range(0, 70) .. ")" end },
+            { 1, function() return "(" .. e("big") .. " ^ " .. r.range(0, 40) .. ")" end },
+            { 1, function() return "bigint(" .. e("int") .. ")" end },
+            { 1, function() return "(- " .. e("big") .. ")" end },
+        })
+    end
+
+    X.dec = function(scope, d)
+        local e = function(t) return expr(scope, t, d) end
+        return cases({
+            { 4, function() return "(" .. e("dec") .. " " .. r.pick({ "+", "-", "*" }) .. " " .. e("dec") .. ")" end },
+            { 2, function() return "(" .. e("dec") .. " " .. r.pick({ "+", "-", "*", "/" }) .. " " .. e("int") .. ")" end },
+            { 1, function() return "(" .. e("dec") .. " " .. r.pick({ "/", "//", "%" }) .. " " .. e("dec") .. ")" end },
+            { 1, function() return "(" .. e("dec") .. " + " .. e("big") .. ")" end },
+            { 1, function() return "decimal(" .. e("int") .. ")" end },
+            { 1, function() return "(- " .. e("dec") .. ")" end },
+            { 1, function() return "(" .. e("dec") .. " ^ " .. r.range(0, 6) .. ")" end },
+        })
+    end
+
+    X.str = function(scope, d)
+        local e = function(t) return expr(scope, t, d) end
+        return cases({
+            { 3, function() return "(" .. e("str") .. " .. " .. e("str") .. ")" end },
+            { 2, function() return "(" .. e("str") .. " .. " .. e(r.pick({ "int", "float", "big", "dec" })) .. ")" end },
+            { 2, function() return "tostring(" .. e(r.pick({ "int", "float", "big", "dec", "bool" })) .. ")" end },
+            { 2, function() return "`<$(" .. e("int") .. ")|$(" .. e("str") .. ")>`" end },
+            { 2, function() return "string.sub(" .. e("str") .. ", " .. e("int") .. ", " .. e("int") .. ")" end },
+            { 1, function() return "(" .. e("str") .. ")[" .. r.range(-3, 4) .. ", " .. r.range(-2, 6) .. "]" end },
+            { 1, function() return "string." .. r.pick({ "upper", "lower", "reverse" }) .. "(" .. e("str") .. ")" end },
+            { 1, function() return "string.rep(" .. e("str") .. ", " .. r.range(0, 3) .. ", " .. e("str") .. ")" end },
+            { 1, function() return "string.format(\"%d|%5.2f|%s|%x\", " .. e("int") .. ", " .. e("float") .. ", " .. e("str") .. ", " .. e("int") .. ")" end },
+            { 1, function() return "string.format(\"%q|%g|%10.3s\", " .. e("str") .. ", " .. e("float") .. ", " .. e("str") .. ")" end },
+            { 1, function() return "table.concat(" .. e("arr") .. ", " .. e("str") .. ")" end },
+            { 1, function()
+                local pat = r.pick({ [["a"]], [["%a"]], [["[%d.]+"]], [["(%w)(%w)"]], [["."]], [["%s+"]] })
+                local rep = r.pick({ [["<%0>"]], [["%2%1"]], [[""]], "string.upper" })
+                return "(string.gsub(" .. e("str") .. ", " .. pat .. ", " .. rep .. "))"
+            end },
+            { 1, function() return "(string.match(" .. e("str") .. ", " .. r.pick({ [["%a+"]], [["(%d+)"]], [["^(.-)$"]], [["[^,]+"]] }) .. ") or \"\")" end },
+            { 1, function() return "(" .. e("obj") .. " .. " .. e("str") .. ")" end },
+            { 1, function() return "(" .. e("bool") .. " and " .. e("str") .. " or " .. e("str") .. ")" end },
+            { 1, function() return "(utf8.char(" .. r.pick({ "65", "233", "0x65E5", "0x1F600", "0xD800" }) .. ") .. " .. e("str") .. ")" end },
+        })
+    end
+
+    X.bool = function(scope, d)
+        local e = function(t) return expr(scope, t, d) end
+        local cmp = function() return r.pick({ "<", "<=", ">", ">=", "==", "~=" }) end
+        return cases({
+            { 4, function() return "(" .. e("int") .. " " .. cmp() .. " " .. e("int") .. ")" end },
+            { 2, function() return "(" .. e("int") .. " " .. cmp() .. " " .. e("float") .. ")" end },
+            { 1, function() return "(" .. e("float") .. " " .. cmp() .. " " .. e("float") .. ")" end },
+            { 1, function() return "(" .. e("big") .. " " .. cmp() .. " " .. e("int") .. ")" end },
+            { 1, function() return "(" .. e("dec") .. " " .. cmp() .. " " .. e(r.pick({ "int", "big", "dec", "float" })) .. ")" end },
+            { 1, function() return "(" .. e("str") .. " " .. cmp() .. " " .. e("str") .. ")" end },
+            { 2, function() return "(not " .. e("bool") .. ")" end },
+            { 2, function() return "(" .. e("bool") .. " " .. r.pick({ "and", "or" }) .. " " .. e("bool") .. ")" end },
+            { 1, function() return "(" .. e("enum") .. " " .. cmp() .. " " .. e("enum") .. ")" end },
+            { 1, function() return "(" .. e("obj") .. " " .. r.pick({ "<", "<=", "==", "~=" }) .. " " .. e("obj") .. ")" end },
+            { 1, function() return "((" .. e("arr") .. ")[1] == nil)" end },
+            { 1, function() return "rawequal(" .. e("str") .. ", " .. e("str") .. ")" end },
+            { 1, function() return "(math.type(" .. e(r.pick({ "int", "float" })) .. ") == \"integer\")" end },
+        })
+    end
+
+    X.arr = function(scope, d)
+        local e = function(t) return expr(scope, t, d) end
+        return cases({
+            { 3, function() return literal("arr") end },
+            { 2, function() return "{ " .. e("int") .. ", " .. e("int") .. ", " .. e("int") .. " }" end },
+            { 1, function() return "table.clone(" .. e("arr") .. ")" end },
+            { 1, function() return "(" .. e("arr") .. ")[" .. r.range(1, 3) .. ", " .. r.range(0, 6) .. "]" end },
+            { 1, function() return "{ table.unpack(" .. e("arr") .. ") }" end },
+        })
+    end
+
+    X.obj = function(scope, d)
+        local e = function(t) return expr(scope, t, d) end
+        return cases({
+            { 2, function() return "O(" .. e("int") .. ")" end },
+            { 2, function() return "(" .. e("obj") .. " + " .. e(r.pick({ "obj", "int" })) .. ")" end },
+            { 1, function() return "(" .. e("obj") .. " - " .. e("int") .. ")" end },
+            { 1, function() return "(- " .. e("obj") .. ")" end },
+        })
+    end
+
+    X.fn = function(scope, d)
+        local inner = newScope(scope)
+        local q = fresh("q")
+        push(inner, q, "int")
+        return cases({
+            { 3, function() return "function(" .. q .. ") return " .. expr(inner, "int", d) .. " end" end },
+            { 1, function() return "function(" .. q .. ", ...) local t = { ... } return " .. q .. " + #t end" end },
+        })
+    end
+
+    X["enum"] = function()
+        return cases({
+            { 2, function() return "E." .. r.pick(ENUM_MEMBERS) end },
+            { 1, function() return "E[" .. r.range(1, 5) .. "]" end },
+            { 1, function() return "E." .. r.pick(ENUM_MEMBERS) .. "." .. r.pick(ENUM_MEMBERS) end },
+        })
+    end
+
+    X.rec = function(scope, d)
+        return "__rows(" .. r.range(0, 9) .. ", " .. expr(scope, "int", d) .. " % 13 + 1)"
+    end
+
+    -- ----- statements -----
+
+    local stmt
+
+    local function block(scope, budget, ctx)
+        local inner = newScope(scope)
+        for _ = 1, r.range(1, math.max(1, budget)) do stmt(inner, ctx) end
+        return inner
+    end
+
+    local function nested(header, scope, ctx, footer, setup)
+        emit(header)
+        indent = indent + 1
+        local inner = newScope(scope)
+        if setup then setup(inner) end
+        local c = extend(ctx, { depth = ctx.depth + 1 })
+        for _ = 1, r.range(1, 4) do stmt(inner, c) end
+        indent = indent - 1
+        emit(footer or "end")
+    end
+
+    local function declare(scope, ty, name)
+        name = name or fresh(ty:sub(1, 1))
+        emit("local " .. name .. " = " .. expr(scope, ty))
+        push(scope, name, ty)
+        return name
+    end
+
+    function G.loc(scope)
+        declare(scope, r.pick(TYPES))
+    end
+
+    function G.assign(scope)
+        local ty = r.pick(TYPES)
+        local vs = {}
+        for _, v in ipairs(scopeAll(scope, ty)) do if not v.fixed then vs[#vs + 1] = v end end
+        if #vs == 0 then return G.loc(scope) end
+        emit(r.pick(vs).name .. " = " .. expr(scope, ty))
+    end
+
+    function G.trace(scope)
+        local items = {}
+        for i = 1, r.range(1, 3) do items[i] = expr(scope, r.pick(TYPES)) end
+        emit("P(" .. quote(fresh("t")) .. ", " .. table.concat(items, ", ") .. ")")
+    end
+
+    function G.tostr(scope)
+        local ty = r.pick({ "int", "float", "big", "dec" })
+        emit("P(tostring(" .. expr(scope, ty) .. "), math.type(" .. expr(scope, ty) .. "))")
+    end
+
+    function G.arrpush(scope)
+        local a = varOf(scope, "arr")
+        if not a then return declare(scope, "arr") end
+        cases({
+            { 3, function() emit(a .. "[#" .. a .. " + 1] = " .. expr(scope, "int")) end },
+            { 1, function() emit("table.insert(" .. a .. ", " .. expr(scope, "int") .. ")") end },
+            { 1, function() emit("if #" .. a .. " > 0 then P(\"rm\", table.remove(" .. a .. ", 1)) end") end },
+            { 1, function() emit("table.sort(" .. a .. ", function(x, y) return x > y end)") end },
+            { 1, function() emit(a .. "[" .. r.range(1, 4) .. "] = " .. expr(scope, "int")) end },
+        })
+    end
+
+    function G.ifs(scope, ctx)
+        local c = extend(ctx, { depth = ctx.depth + 1 })
+        emit("if " .. expr(scope, "bool") .. " then")
+        indent = indent + 1
+        block(scope, 3, c)
+        indent = indent - 1
+        if r.chance(0.3) then
+            emit("elseif " .. expr(scope, "bool") .. " then")
+            indent = indent + 1
+            block(scope, 2, c)
+            indent = indent - 1
+        end
+        if r.chance(0.5) then
+            emit("else")
+            indent = indent + 1
+            block(scope, 2, c)
+            indent = indent - 1
+        end
+        emit("end")
+    end
+
+    function G.fors(scope, ctx)
+        local i = fresh("i")
+        local c = extend(ctx, { loop = true })
+        if r.chance(0.2) then
+            nested("for " .. i .. " = " .. r.pick({ "0.5", "1", "-1.5" }) .. ", " .. r.range(1, 6) .. ", " .. r.pick({ "0.5", "1", "0.25" }) .. " do", scope, c, "end",
+                function(s) push(s, i, "float", true) end)
+            return
+        end
+        local lo = r.range(-3, 3)
+        local hi = r.chance(0.3) and (expr(scope, "int") .. " % 50") or tostring(r.range(lo, lo + 40))
+        local step = r.weighted({ { 6, "" }, { 1, ", 2" }, { 1, ", -1" }, { 1, ", 3" } })
+        nested("for " .. i .. " = " .. lo .. ", " .. hi .. step .. " do", scope, c, "end",
+            function(s) push(s, i, "int", true) end)
+    end
+
+    function G.forin(scope, ctx)
+        local k, v = fresh("k"), fresh("v")
+        nested("for " .. k .. ", " .. v .. " in ipairs(" .. expr(scope, "arr") .. ") do", scope, extend(ctx, { loop = true }), "end", function(s)
+            push(s, k, "int", true)
+            push(s, v, "int", true)
+        end)
+    end
+
+    function G.whiles(scope, ctx)
+        local w = fresh("w")
+        emit("local " .. w .. " = 0")
+        nested("while " .. w .. " < " .. r.range(1, 30) .. " and " .. expr(scope, "bool") .. " do", scope, extend(ctx, { loop = true }), "end",
+            function() emit(w .. " = " .. w .. " + 1") end)
+    end
+
+    function G.repeats(scope, ctx)
+        -- A continue in a repeat loop would jump into the scope of the
+        -- locals that the until expression sees, so this body has none.
+        local w = fresh("w")
+        emit("local " .. w .. " = 0")
+        nested("repeat", scope, extend(ctx, { loop = false }), "until " .. w .. " >= " .. r.range(1, 20),
+            function() emit(w .. " = " .. w .. " + 1") end)
+    end
+
+    function G.continues(scope) emit("if " .. expr(scope, "bool") .. " then continue end") end
+    function G.breaks(scope) emit("if " .. expr(scope, "bool") .. " then break end") end
+
+    function G.returns(scope, ctx)
+        emit("if " .. expr(scope, "bool") .. " then return " .. expr(scope, ctx.ret or "int") .. " end")
+    end
+
+    function G.raise(scope)
+        cases({
+            { 2, function() emit("if " .. expr(scope, "bool") .. " then error(" .. expr(scope, "str") .. ") end") end },
+            { 1, function() emit("if " .. expr(scope, "bool") .. " then error({ code = " .. expr(scope, "int") .. " }) end") end },
+            { 1, function() emit("if " .. expr(scope, "bool") .. " then error(" .. expr(scope, "int") .. ", 0) end") end },
+            { 1, function() emit("if " .. expr(scope, "bool") .. " then local z = nil P(z.field) end") end },
+        })
+    end
+
+    function G.yield(scope)
+        emit("coroutine.yield(" .. expr(scope, r.pick(TYPES)) .. ")")
+    end
+
+    function G.func(scope, ctx)
+        local name = fresh("f")
+        local params = {}
+        for i = 1, r.range(0, 3) do params[i] = { name = fresh("p"), type = r.pick({ "int", "int", "str", "float", "arr" }) } end
+        local ret = r.pick({ "int", "int", "str", "float", "bool" })
+        local rec = r.chance(0.3)
+        if rec then params[#params + 1] = { name = fresh("depth"), type = "int", fixed = true } end
+        local pnames = {}
+        for i, p in ipairs(params) do pnames[i] = p.name end
+        emit("local function " .. name .. "(" .. table.concat(pnames, ", ") .. ")")
+        indent = indent + 1
+        local inner = newScope(scope)
+        for _, p in ipairs(params) do push(inner, p.name, p.type, p.fixed) end
+        if rec then
+            local dp = params[#params].name
+            local args = {}
+            for i = 1, #params - 1 do args[i] = expr(inner, params[i].type) end
+            args[#args + 1] = dp .. " - 1"
+            emit("if " .. dp .. " > 0 then P(\"rec\", " .. dp .. ", catch " .. name .. "(" .. table.concat(args, ", ") .. ")) end")
+        end
+        local c = extend(ctx, { func = true, loop = false, ret = ret, depth = ctx.depth + 1 })
+        for _ = 1, r.range(1, 4) do stmt(inner, c) end
+        emit("return " .. expr(inner, ret))
+        indent = indent - 1
+        emit("end")
+        for _ = 1, r.range(1, 3) do
+            local args = {}
+            for i, p in ipairs(params) do args[i] = p.fixed and tostring(r.range(0, 4)) or expr(scope, p.type) end
+            local out = fresh("r")
+            emit("local " .. out .. " = " .. name .. "(" .. table.concat(args, ", ") .. ")")
+            push(scope, out, ret)
+        end
+    end
+
+    function G.closure(scope)
+        local mk, c, f, get = fresh("mk"), fresh("cnt"), fresh("g"), fresh("get")
+        emit("local function " .. mk .. "(start)")
+        indent = indent + 1
+        emit("local " .. c .. " = start")
+        emit("return function(step) " .. c .. " = " .. c .. " + step return " .. c .. " end, function() return " .. c .. " end")
+        indent = indent - 1
+        emit("end")
+        emit("local " .. f .. ", " .. get .. " = " .. mk .. "(" .. expr(scope, "int") .. ")")
+        emit("for _ = 1, " .. r.range(1, 40) .. " do " .. f .. "(" .. expr(scope, "int") .. ") end")
+        emit("P(\"closure\", " .. get .. "())")
+        push(scope, f, "fn")
+    end
+
+    function G.catches(scope, ctx)
+        local ok, e = fresh("ok"), fresh("e")
+        local handler = r.chance(0.3) and "[function(m) return { wrapped = m } end]" or ""
+        emit("local " .. ok .. ", " .. e .. " = catch" .. handler .. " (function()")
+        indent = indent + 1
+        local inner = newScope(scope)
+        local c = extend(ctx, { func = true, loop = false, ret = "int", depth = ctx.depth + 1 })
+        for _ = 1, r.range(1, 4) do stmt(inner, c) end
+        if r.chance(0.5) then emit("error(" .. expr(inner, r.pick({ "str", "int", "obj" })) .. ", " .. r.pick({ "0", "1", "2" }) .. ")") end
+        emit("return " .. expr(inner, "int"))
+        indent = indent - 1
+        emit("end)()")
+        emit("P(\"catch\", " .. ok .. ", " .. e .. ")")
+    end
+
+    function G.close(scope, ctx)
+        local c = fresh("cl")
+        nested("do", scope, ctx, "end", function() emit("local " .. c .. " <close> = C(" .. quote(c) .. ")") end)
+    end
+
+    function G.coro(scope, ctx)
+        local co = fresh("co")
+        local wrap = r.chance(0.5)
+        emit("local " .. co .. " = coroutine." .. (wrap and "wrap" or "create") .. "(function(a1, a2)")
+        indent = indent + 1
+        local inner = newScope(scope)
+        push(inner, "a1", "int", true)
+        if r.chance(0.3) then emit("local cc <close> = C(" .. quote(co) .. ")") end
+        emit("for yi = 1, " .. r.range(1, 6) .. " do")
+        indent = indent + 1
+        local ii = newScope(inner)
+        push(ii, "yi", "int", true)
+        local c = extend(ctx, { coro = true, func = true, loop = true, ret = "int", depth = ctx.depth + 1 })
+        for _ = 1, r.range(1, 3) do stmt(ii, c) end
+        emit("coroutine.yield(yi, " .. expr(ii, r.pick(TYPES)) .. ")")
+        indent = indent - 1
+        emit("end")
+        emit("return \"done\", " .. expr(inner, "int"))
+        indent = indent - 1
+        emit("end)")
+        local steps = r.range(1, 9)
+        if wrap then
+            emit("for _ = 1, " .. steps .. " do P(\"wrap\", catch " .. co .. "(" .. expr(scope, "int") .. ")) end")
+        else
+            emit("for _ = 1, " .. steps .. " do P(\"resume\", coroutine.resume(" .. co .. ", " .. expr(scope, "int") .. ")) end")
+            emit("P(\"status\", coroutine.status(" .. co .. "))")
+            if r.chance(0.3) then emit("P(\"closeco\", coroutine.close(" .. co .. "))") end
+        end
+    end
+
+    function G.query(scope)
+        local src = fresh("src")
+        emit("local " .. src .. " = " .. expr(scope, "rec"))
+        local iv = varOf(scope, "int")
+        local operand = (iv and r.chance(0.5)) and iv or tostring(r.range(-2, 12))
+        local where = r.chance(0.7) and (" where p.x " .. r.pick({ ">", "<", ">=", "==", "~=" }) .. " " .. operand) or ""
+        local sel = r.pick({ "select p.x, p.y", "select p.x * 2 as dbl, p.y", "select p", "select p.z, count(*) as n group by p.z" })
+        local order = sel:find("group by", 1, true) and " order by p.z" or r.pick({ " order by p.x", " order by p.x desc, p.y", "" })
+        local limit = r.chance(0.3) and (" limit " .. r.range(0, 5)) or ""
+        local row = fresh("row")
+        emit("for " .. row .. " in query(@" .. src .. " as p" .. where .. " " .. sel .. order .. limit .. ") do P(\"q\", " .. row .. ") end")
+    end
+
+    function G.ifassign(scope, ctx)
+        local v = fresh("v")
+        local a = expr(scope, "arr")
+        nested("if " .. v .. " = (" .. a .. ")[" .. expr(scope, "int") .. " % 5 + 1] then", scope, ctx, "end",
+            function(s) push(s, v, "int", true) end)
+    end
+
+    function G.vararg(scope)
+        local f = fresh("va")
+        emit("local function " .. f .. "(...)")
+        indent = indent + 1
+        emit("local n = select(\"#\", ...)")
+        emit("local t = table.pack(...)")
+        emit("return n, t.n, select(" .. r.pick({ "1", "2", "-1", "\"#\"" }) .. ", ...)")
+        indent = indent - 1
+        emit("end")
+        emit("P(\"va\", catch " .. f .. "(" .. argsOf(scope, 0) .. "))")
+    end
+
+    function G.doexpr(scope)
+        local ty = r.pick(TYPES)
+        local name = fresh("dx")
+        emit("local " .. name .. " = do")
+        indent = indent + 1
+        emit("if " .. expr(scope, "bool") .. " then provide " .. expr(scope, ty) .. " end")
+        emit("provide " .. expr(scope, ty))
+        indent = indent - 1
+        emit("end")
+        push(scope, name, ty)
+    end
+
+    function G.multi(scope)
+        local ints = {}
+        for _, v in ipairs(scopeAll(scope, "int")) do if not v.fixed then ints[#ints + 1] = v end end
+        if #ints >= 2 then
+            local a, b = r.pick(ints).name, r.pick(ints).name
+            emit(a .. ", " .. b .. " = " .. b .. ", " .. a)
+        else
+            G.loc(scope)
+        end
+    end
+
+    function G.group(scope)
+        local g = fresh("grp")
+        emit("local " .. g .. " <group> = { a = " .. expr(scope, "int") .. ", b = " .. expr(scope, "int") .. " }")
+        emit(g .. ".a = " .. g .. ".a + " .. g .. ".b")
+        emit("P(\"grp\", " .. g .. ".a, " .. g .. ".b)")
+    end
+
+    function G.gotos(scope, ctx)
+        local l = fresh("L")
+        emit("do")
+        indent = indent + 1
+        emit("if " .. expr(scope, "bool") .. " then goto " .. l .. " end")
+        block(scope, 2, extend(ctx, { depth = ctx.depth + 1, loop = false }))
+        emit("::" .. l .. "::")
+        indent = indent - 1
+        emit("end")
+    end
+
+    -- A loop over an array whose elements change kind partway: integers,
+    -- then floats, then strings or nil. Code compiled for one kind of
+    -- array meets another.
+    function G.kernel(scope)
+        local a, acc, i = fresh("ka"), fresh("acc"), fresh("ki")
+        local n = r.range(1, 70)
+        local flip = r.range(1, n + 1)
+        local later = r.pick({ "i + 0.5", "i * 1.0", "-i", "i // 2", "tostring(i)", "math.maxinteger - i", "i * 2^40", "(i % 2 == 0) and i or i + 0.25", "2^53 + i", "nil" })
+        emit("local " .. a .. " = {}")
+        emit("for i = 1, " .. n .. " do " .. a .. "[i] = i < " .. flip .. " and (i * " .. r.range(1, 9) .. " - " .. r.range(0, 9) .. ") or " .. later .. " end")
+        emit("local " .. acc .. " = " .. r.pick({ "0", "0.0", "1", "math.maxinteger" }))
+        local op = r.pick({ "+", "-", "*", "+" })
+        emit("for " .. i .. " = 1, #" .. a .. " do")
+        indent = indent + 1
+        emit("local v = " .. a .. "[" .. i .. "]")
+        cases({
+            { 3, function() emit("if v then " .. acc .. " = " .. acc .. " " .. op .. " v end") end },
+            { 1, function() emit(acc .. " = " .. acc .. " " .. op .. " (v or 0) * " .. r.pick({ "2", "0.5", "-1" })) end },
+            { 1, function() emit("if v and v " .. r.pick({ "<", ">", "==", "<=" }) .. " " .. literal(r.pick({ "int", "float" })) .. " then " .. acc .. " = " .. acc .. " + 1 end") end },
+            { 1, function() emit(a .. "[" .. i .. "] = v and v " .. op .. " " .. literal("int") .. " or false") end },
+        })
+        indent = indent - 1
+        emit("end")
+        emit("P(\"kernel\", " .. acc .. ", #" .. a .. ", " .. a .. "[1], " .. a .. "[#" .. a .. "])")
+        if r.chance(0.5) then push(scope, acc, "int") end
+    end
+
+    -- Tables built with the same fields in different orders, read through
+    -- one site, so inline caches meet several shapes.
+    function G.shape()
+        local t, f = fresh("sh"), fresh("rd")
+        local n = r.range(2, 40)
+        emit("local function " .. f .. "(o) return (o.a or 0) + (o.b or 0) * 2 + (o.c or 0) * 3 end")
+        emit("local " .. t .. " = {}")
+        emit("for i = 1, " .. n .. " do")
+        indent = indent + 1
+        emit("local o = {}")
+        emit("if i % " .. r.range(2, 5) .. " == 0 then o.c = i o.a = 1 elseif i % 3 == 1 then o.a = i o.b = 2 o.c = 3 else o.b = i o.d = \"x\" end")
+        if r.chance(0.3) then emit("if i == " .. r.range(1, n) .. " then setmetatable(o, { __index = function(_, k) return #k end }) end") end
+        if r.chance(0.3) then emit("if i % 7 == 0 then o.a = nil end") end
+        if r.chance(0.3) then emit("if i % 5 == 0 then o." .. r.pick({ "a", "b", "c", "d" }) .. " = " .. r.pick({ "1.5", "\"s\"", "nil", "true" }) .. " end") end
+        emit(t .. "[#" .. t .. " + 1] = " .. f .. "(o)")
+        indent = indent - 1
+        emit("end")
+        emit("P(\"shape\", table.concat(" .. t .. ", \",\"))")
+    end
+
+    -- A value whose subtype changes between iterations.
+    function G.poly()
+        local x, acc = fresh("px"), fresh("pa")
+        emit("local " .. acc .. " = 0")
+        emit("for i = 1, " .. r.range(5, 80) .. " do")
+        indent = indent + 1
+        emit("local " .. x .. " = (i % " .. r.range(2, 6) .. " == 0) and " .. r.pick({ "i + 0.5", "i * 1.0", "\"7\"", "i * 1n", "math.maxinteger" }) .. " or i")
+        emit(acc .. " = " .. acc .. " " .. r.pick({ "+", "-", "*", "//", "%" }) .. " (" .. x .. " " .. r.pick({ "+", "*", "-", "//" }) .. " " .. r.pick({ "1", "2.0", "3", "i" }) .. ")")
+        if r.chance(0.5) then emit("if " .. x .. " " .. r.pick({ "<", "==", ">=" }) .. " " .. r.pick({ "10", "10.5", "i" }) .. " then " .. acc .. " = " .. acc .. " + 1 end") end
+        indent = indent - 1
+        emit("end")
+        emit("P(\"poly\", " .. acc .. ")")
+    end
+
+    -- Comparisons and conversions at the edges of the integer and float
+    -- ranges, where a fast path that converts one side is wrong.
+    function G.edgecmp()
+        local ints = { "math.maxinteger", "math.mininteger", "9007199254740993", "-9007199254740993", "(1 << 53)", "((1 << 53) + 1)", "0", "-1", "(math.maxinteger - 511)" }
+        local floats = { "2^63", "-2^63", "2^53", "(2^53 + 1)", "9007199254740992.0", "math.huge", "-math.huge", "(0/0)", "-0.0", "0.5", "9.2233720368547758e18", "1e308" }
+        local a, b = r.pick(ints), r.pick(floats)
+        local op = r.pick({ "<", "<=", "==", "~=", ">", ">=" })
+        local f = fresh("ec")
+        emit("local function " .. f .. "(x, y) return x " .. op .. " y, y " .. op .. " x, x == y, math.tointeger(y), x + 0.0 == y end")
+        emit("for _ = 1, " .. r.range(1, 20) .. " do P(\"edge\", " .. f .. "(" .. a .. ", " .. b .. ")) end")
+        if r.chance(0.5) then
+            emit("P(\"edgeconv\", math.tointeger(" .. b .. "), " .. b .. " // 1, catch " .. a .. " // " .. r.pick({ "0", "-1", "1" }) .. ", " .. a .. " % " .. r.pick({ "-1", "3", "-3", "math.mininteger" }) .. ", (" .. a .. ") * 2, " .. a .. " >> 1, " .. a .. " << 63)")
+        end
+        if r.chance(0.3) then
+            emit("P(\"fmt\", string.format(\"%.17g %d %5.1f\", " .. b .. ", " .. a .. ", " .. b .. "), tostring(" .. b .. "), " .. b .. " == " .. b .. ", catch math.floor(" .. b .. "))")
+        end
+    end
+
+    -- Numeric loops at the edges of the integer range and with float
+    -- steps, which must stop exactly where the interpreter stops.
+    function G.edgefor()
+        local i = fresh("e")
+        local forms = {
+            "math.maxinteger - 3, math.maxinteger", "math.mininteger, math.mininteger + 3", "math.mininteger + 2, math.mininteger, -1",
+            "1, 3, 0.75", "3, 1, -0.5", "0.1, 1, 0.3", "1, 0", "1, 1", "math.maxinteger - 1, math.maxinteger, 2",
+            "-3, 3, math.maxinteger", "1, 2.5", "1.0, 3", "2^53 - 2, 2^53 + 2", "1, 3, 1.0",
+        }
+        emit("P(\"ef\", catch (function() local n, s = 0, 0 for " .. i .. " = " .. r.pick(forms) .. " do n = n + 1 s = s + " .. i .. " if n > 50 then break end end return n, s end)())")
+    end
+
+    -- Arithmetic on strings that convert to numbers.
+    function G.coerce()
+        local ss = { [["10"]], [["0x10"]], [["1e2"]], [[" 7 "]], [["3.0"]], [["-0"]], [["9223372036854775807"]], [["9223372036854775808"]], [["abc"]], [["0x7fffffffffffffff"]], [["1n"]], [["2.5"]] }
+        local bs = table.clone(ss)
+        for _, x in ipairs({ "2", "0.5", "-3" }) do bs[#bs + 1] = x end
+        local a, b = r.pick(ss), r.pick(bs)
+        local op = r.pick({ "+", "-", "*", "/", "//", "%", "^", "&", "|", "<<", ".." })
+        local f = fresh("co")
+        emit("local function " .. f .. "(x, y) return x " .. op .. " y end")
+        emit("for _ = 1, " .. r.range(1, 10) .. " do P(\"coerce\", catch " .. f .. "(" .. a .. ", " .. b .. ")) end")
+        if r.chance(0.4) then emit("P(\"tonum\", tonumber(" .. a .. "), tonumber(" .. a .. ", " .. r.pick({ "16", "10", "2", "36" }) .. "), math.type(tonumber(" .. a .. ")))") end
+    end
+
+    -- Method calls on strings, objects, and tables with methods.
+    function G.method(scope)
+        local o = fresh("mo")
+        emit("local " .. o .. " = { n = " .. literal("int") .. ", add = function(self, k) self.n = self.n + k return self end, get = function(self) return self.n end }")
+        emit("for i = 1, " .. r.range(1, 40) .. " do " .. o .. ":add(i):add(" .. literal("int") .. ") end")
+        emit("P(\"method\", " .. o .. ":get(), (" .. expr(scope, "str") .. "):" .. r.pick({ "upper()", "len()", "rep(2)", "sub(2)", "byte(1)", "reverse()" }) .. ")")
+    end
+
+    -- Keys that normalize: floats with integral values, bigints, decimals,
+    -- negative and zero keys, and keys past the array part.
+    function G.keys()
+        local t = fresh("kt")
+        emit("local " .. t .. " = {}")
+        emit("for i = 1, " .. r.range(1, 30) .. " do " .. t .. "[i] = i end")
+        local keys = { "1.0", "2n", "3d", "0", "-1", "2^53", "1e300", "\"1\"", "100", "#" .. t .. " + 1", "0.5", "-0.0", "math.mininteger" }
+        for _ = 1, r.range(1, 5) do
+            local key = r.pick(keys)
+            if r.chance(0.5) then emit(t .. "[" .. key .. "] = " .. literal("int"))
+            else emit("P(\"key\", " .. t .. "[" .. key .. "], rawget(" .. t .. ", " .. key .. "))") end
+        end
+        emit("P(\"keys\", #" .. t .. " > 0, " .. t .. "[1], " .. t .. "[2], " .. t .. "[3])")
+    end
+
+    -- Recursion deep enough to grow the stack several times, and through
+    -- varargs and catch.
+    function G.deep()
+        local f = fresh("deep")
+        local depth = r.pick({ "50", "200", "1000", "3000", "190", "250" })
+        cases({
+            { 2, function() emit("local function " .. f .. "(n, ...) if n == 0 or n > 2000 then return select(\"#\", ...) end return " .. f .. "(n - 1, n, ...) end") end },
+            { 2, function() emit("local function " .. f .. "(n) if n == 0 then return 0 end return 1 + " .. f .. "(n - 1) end") end },
+            { 1, function() emit("local function " .. f .. "(n) if n == 0 then error(\"bottom\") end local ok, e = catch " .. f .. "(n - 1) return n end") end },
+            { 1, function() emit("local function " .. f .. "(n) if n == 0 then return 0 end return " .. f .. "(n - 1) end") end },
+            { 1, function() emit("local function " .. f .. "(n) if n <= 0 then return n end return " .. f .. "(n - 1000) end") end },
+        })
+        emit("P(\"deep\", catch " .. f .. "(" .. depth .. "))")
+    end
+
+    -- Concatenation of many operands of mixed types.
+    function G.concatn(scope)
+        local items = {}
+        for i = 1, r.range(2, 9) do items[i] = expr(scope, r.pick({ "str", "int", "float", "str", "big", "dec" })) end
+        emit("P(\"cat\", catch (" .. table.concat(items, " .. ") .. "))")
+    end
+
+    -- A chain of __index tables and a __newindex handler.
+    function G.chain()
+        local base, obj = fresh("base"), fresh("obj")
+        emit("local " .. base .. " = { k = " .. literal("int") .. ", m = function(self) return self.k end }")
+        emit("local " .. obj .. " = setmetatable({}, { __index = setmetatable({ j = 2 }, { __index = " .. base .. " }), __newindex = function(t, k, v) rawset(t, k, v * 2) end })")
+        emit("for i = 1, " .. r.range(1, 30) .. " do " .. obj .. ".k = (" .. obj .. ".k or 0) + i end")
+        emit("P(\"chain\", " .. obj .. ".k, " .. obj .. ".j, " .. obj .. ":m(), rawget(" .. obj .. ", \"j\"))")
+    end
+
+    -- A detached coroutine, which the scheduler runs after the main chunk
+    -- and resumes round-robin with the others at each yield. It captures
+    -- locals of the unit, whose upvalues are closed by then.
+    function G.detach(scope, ctx)
+        emit("if __detached < 8 then")
+        indent = indent + 1
+        emit("__detached = __detached + 1")
+        emit("coroutine.detach(coroutine.create(function(da)")
+        indent = indent + 1
+        emit("local ok, e = catch (function()")
+        indent = indent + 1
+        local inner = newScope(scope)
+        push(inner, "da", "int", true)
+        emit("for di = 1, " .. r.range(1, 4) .. " do")
+        indent = indent + 1
+        local ii = newScope(inner)
+        push(ii, "di", "int", true)
+        local c = extend(ctx, { coro = true, func = true, loop = true, ret = "int", depth = ctx.depth + 1 })
+        for _ = 1, r.range(1, 3) do stmt(ii, c) end
+        emit("P(\"detached\", da, di, " .. expr(ii, r.pick(TYPES)) .. ")")
+        emit("coroutine.yield()")
+        indent = indent - 1
+        emit("end")
+        emit("return " .. expr(inner, "int"))
+        indent = indent - 1
+        emit("end)()")
+        emit("P(\"detached end\", da, ok, e)")
+        indent = indent - 1
+        emit("end), " .. expr(scope, "int") .. ")")
+        indent = indent - 1
+        emit("end")
+    end
+
+    -- Closures made in a loop, each with its own copy of the loop
+    -- variable, and closures that share one upvalue and write it from a
+    -- hot loop.
+    function G.upvals()
+        local fs, shared, bump = fresh("fs"), fresh("sh"), fresh("bump")
+        emit("local " .. fs .. ", " .. shared .. " = {}, " .. literal(r.pick({ "int", "float" })))
+        emit("local function " .. bump .. "(k) " .. shared .. " = " .. shared .. " " .. r.pick({ "+", "-", "*" }) .. " k return " .. shared .. " end")
+        emit("for i = 1, " .. r.range(2, 40) .. " do")
+        indent = indent + 1
+        emit("local own = i * " .. r.range(1, 5))
+        emit(fs .. "[i] = function(d) own = own + d " .. shared .. " = " .. shared .. " + 1 return own end")
+        emit(bump .. "(" .. r.pick({ "i", "1", "i % 3", "0.5", "-i" }) .. ")")
+        if r.chance(0.5) then emit("if i % " .. r.range(2, 6) .. " == 0 then " .. shared .. " = " .. shared .. " " .. r.pick({ "+ 0.5", "* 1", "// 1", "- 1" }) .. " end") end
+        indent = indent - 1
+        emit("end")
+        emit("for i = 1, #" .. fs .. " do " .. shared .. " = " .. shared .. " + " .. fs .. "[i](i) end")
+        emit("P(\"upvals\", " .. shared .. ", " .. fs .. "[1](0), " .. fs .. "[#" .. fs .. "](0))")
+    end
+
+    -- Globals read and written in a loop, and a global function called
+    -- from it, through the inline caches of the globals table.
+    function G.globals(scope)
+        local g, gf = "G" .. r.range(1, 4), "GF" .. r.range(1, 3)
+        emit(gf .. " = " .. gf .. " or function(x) return (x or 0) " .. r.pick({ "+", "*", "-" }) .. " " .. r.range(1, 9) .. " end")
+        emit(g .. " = " .. r.pick({ "0", "0.0", "1", g .. " or 0" }))
+        emit("for i = 1, " .. r.range(1, 60) .. " do " .. g .. " = " .. gf .. "(" .. g .. ") " .. r.pick({ "+ i", "- 1", "+ 0.25", "% 1000" }) .. " end")
+        if r.chance(0.3) then emit(gf .. " = function(x) return x end") end
+        emit("P(\"global\", " .. g .. ", " .. gf .. "(" .. expr(scope, "int") .. "))")
+    end
+
+    -- A tail-recursive accumulator whose accumulator changes subtype.
+    function G.tail()
+        local f = fresh("tail")
+        emit("local function " .. f .. "(n, acc) if n <= 0 then return acc end return " .. f .. "(n - 1, acc " .. r.pick({ "+ n", "* 1.5", "+ 1n", "- n * 0.5", ".. ''" }) .. ") end")
+        emit("P(\"tail\", catch " .. f .. "(" .. r.range(0, 300) .. ", " .. literal(r.pick({ "int", "float", "big" })) .. "))")
+    end
+
+    -- Functions that return several values, used as the last argument, in
+    -- the middle, in a table constructor, and adjusted to one value.
+    function G.multiret(scope)
+        local f = fresh("mr")
+        local vals = {}
+        for i = 1, r.range(0, 4) do vals[i] = expr(scope, r.pick({ "int", "str", "float", "bool" })) end
+        local list = #vals > 0 and table.concat(vals, ", ") or "nil"
+        emit("local function " .. f .. "(k) if k % 2 == 0 then return " .. list .. " end return k, " .. list .. " end")
+        emit("for i = 1, " .. r.range(1, 20) .. " do")
+        indent = indent + 1
+        emit(r.pick({
+            "P(\"mr\", " .. f .. "(i))",
+            "P(\"mr\", (" .. f .. "(i)), " .. f .. "(i))",
+            "P(\"mr\", select(\"#\", " .. f .. "(i)), #{ " .. f .. "(i) }, { " .. f .. "(i), " .. f .. "(i) })",
+            "local a, b, c = " .. f .. "(i) P(\"mr\", a, b, c)",
+            "P(\"mr\", table.pack(" .. f .. "(i)).n, " .. f .. "(i + 1))",
+        }))
+        indent = indent - 1
+        emit("end")
+    end
+
+    -- A table that gains a metatable in the middle of a loop, so stores and
+    -- loads compiled for a plain table meet metamethods.
+    function G.metaflip()
+        local t = fresh("mf")
+        local n = r.range(2, 50)
+        local at = r.range(1, n)
+        emit("local " .. t .. " = { 1, 2, 3, x = 0 }")
+        emit("for i = 1, " .. n .. " do")
+        indent = indent + 1
+        emit("if i == " .. at .. " then setmetatable(" .. t .. ", { __index = function(_, k) return -1 end, __newindex = function(tt, k, v) rawset(tt, k, v) end" .. (r.chance(0.5) and ", __len = function() return 99 end" or "") .. " }) end")
+        emit(t .. ".x = " .. t .. ".x + (" .. t .. "[i + 3] or 0) + #" .. t)
+        if r.chance(0.5) then emit(t .. "[i + 10] = i") end
+        if r.chance(0.3) then emit("if i == " .. r.range(1, n) .. " then setmetatable(" .. t .. ", nil) end") end
+        indent = indent - 1
+        emit("end")
+        emit("P(\"metaflip\", " .. t .. ".x, #" .. t .. ", rawlen(" .. t .. "))")
+    end
+
+    -- A small function called from a hot loop, the case that direct calls
+    -- and inlining make fast, with arguments whose types change.
+    function G.hotcall(scope)
+        local f, acc = fresh("hc"), fresh("acc")
+        local inner = newScope(scope)
+        push(inner, "x", "int")
+        push(inner, "y", "int")
+        emit("local function " .. f .. "(x, y) return " .. expr(inner, "int", 2) .. " end")
+        emit("local " .. acc .. " = 0")
+        local arg = r.pick({ "i", "i * 1.0", "(i % 3 == 0) and i + 0.5 or i", "-i", "i // 2", "(i > " .. r.range(1, 60) .. ") and tostring(i) or i" })
+        emit("for i = 1, " .. r.range(10, 120) .. " do " .. acc .. " = " .. acc .. " + (" .. f .. "(" .. arg .. ", " .. literal("int") .. ") or 0) end")
+        emit("P(\"hotcall\", " .. acc .. ")")
+    end
+
+    -- A coroutine that yields from places a frame boundary could break:
+    -- inside catch, inside a block with a to-be-closed variable, inside a
+    -- metamethod, and inside a comparator of table.sort, which raises.
+    function G.yieldacross()
+        local co = fresh("ya")
+        local where = r.pick({ "catch", "close", "meta", "sort", "nested" })
+        emit("local " .. co .. " = coroutine.wrap(function(a)")
+        indent = indent + 1
+        if where == "catch" then
+            emit("local ok, e = catch (function() local v = coroutine.yield(a + 1) if v == " .. r.range(0, 4) .. " then error(\"after yield \" .. v) end return v end)()")
+            emit("coroutine.yield(ok, e)")
+        elseif where == "close" then
+            emit("do local c <close> = C(\"yield\") coroutine.yield(\"in close block\") " .. (r.chance(0.5) and "error(\"leaving\")" or "") .. " end")
+        elseif where == "meta" then
+            emit("local t = setmetatable({}, { __index = function(_, k) return coroutine.yield(k) end, __add = function(x, y) return coroutine.yield(\"add\") end })")
+            emit("coroutine.yield(\"got\", t.key, t + 1)")
+        elseif where == "sort" then
+            emit("local arr = { 3, 1, 2 }")
+            emit("coroutine.yield(catch table.sort(arr, function(x, y) coroutine.yield(\"cmp\") return x < y end))")
+        else
+            emit("local inner = coroutine.wrap(function() for i = 1, 3 do coroutine.yield(i) end end)")
+            emit("for i = 1, 3 do coroutine.yield(inner(), catch (function() return coroutine.yield(\"deep\" .. i) end)()) end")
+        end
+        emit("return \"done\"")
+        indent = indent - 1
+        emit("end)")
+        emit("for i = 1, " .. r.range(2, 8) .. " do P(\"ya\", catch " .. co .. "(i)) end")
+    end
+
+    stmt = function(scope, ctx)
+        local kinds = { { 6, "loc" }, { 4, "assign" }, { 5, "trace" }, { 1, "arrpush" } }
+        local function add(w, k) kinds[#kinds + 1] = { w, k } end
+        if ctx.depth < 3 then
+            for _, k in ipairs({
+                { 3, "ifs" }, { 3, "fors" }, { 1, "forin" }, { 1, "whiles" }, { 1, "repeats" }, { 1, "func" },
+                { 1, "closure" }, { 2, "catches" }, { 1, "close" }, { 1, "coro" }, { 1, "query" }, { 1, "ifassign" },
+                { 1, "vararg" }, { 1, "doexpr" }, { 1, "multi" }, { 1, "group" }, { 1, "tostr" }, { 1, "gotos" },
+                { 3, "kernel" }, { 2, "shape" }, { 1, "poly" }, { 1, "edgecmp" }, { 1, "edgefor" }, { 1, "coerce" },
+                { 1, "method" }, { 1, "keys" }, { 1, "deep" }, { 1, "concatn" }, { 1, "chain" }, { 1, "detach" },
+                { 2, "upvals" }, { 2, "globals" }, { 1, "tail" }, { 2, "multiret" }, { 1, "metaflip" }, { 2, "hotcall" },
+                { 2, "yieldacross" },
+            }) do add(k[1], k[2]) end
+            if ctx.coro then add(2, "yield") end
+        end
+        if ctx.loop then
+            add(1, "continues")
+            add(1, "breaks")
+        end
+        if ctx.func then add(1, "returns") end
+        if ctx.depth > 0 then add(1, "raise") end
+        G[r.weighted(kinds)](scope, ctx)
+    end
+
+    -- ----- program -----
+
+    local function unit(k)
+        local name = "u" .. k
+        local scope = newScope(nil)
+        local params, pnames = {}, {}
+        for i = 1, r.range(1, 3) do
+            params[i] = "a" .. k .. "_" .. (i - 1)
+            pnames[i] = params[i]
+            push(scope, params[i], "int")
+        end
+        emit("local function " .. name .. "(" .. table.concat(pnames, ", ") .. ")")
+        indent = indent + 1
+        for _ = 1, r.range(2, size) do stmt(scope, { depth = 0, func = true, ret = "int" }) end
+        emit("return " .. expr(scope, r.pick(TYPES)))
+        indent = indent - 1
+        emit("end")
+        -- The driving loop. Arguments start as integers and switch type
+        -- partway, so code compiled for integers meets other values.
+        local iters = r.range(3, 160)
+        local swap = r.range(1, iters)
+        local other = r.pick({ "it + 0.5", "it * 1.0", "tostring(it)", "-it", "it * 1000000007", "math.maxinteger - it", "it // 2" })
+        local args = {}
+        for i = 1, #params do
+            args[i] = i == 1 and ("(it < " .. swap .. " and it or " .. other .. ")") or ("(it * " .. r.range(1, 9) .. " - " .. r.range(0, 20) .. ")")
+        end
+        emit("for it = 1, " .. iters .. " do P(\"" .. name .. "\", it, catch " .. name .. "(" .. table.concat(args, ", ") .. ")) end")
+    end
+
+    lines[1] = PRELUDE
+    for k = 1, r.range(1, 4) do unit(k) end
+    return table.concat(lines, "\n") .. "\n"
+end
+
+-- Run as a script, the generator prints the program of one seed.
+if arg and arg[0] and arg[0]:find("gen%.lus$") and not package.loaded["gen"] then
+    io.write(generate(math.tointeger(tonumber(arg[1] or "1")), math.tointeger(tonumber(arg[2] or "8"))))
+end
+
+return { generate = generate, PRELUDE = PRELUDE }

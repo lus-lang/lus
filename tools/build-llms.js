@@ -40,6 +40,7 @@ const API_SECTIONS = [
   ["Archive library", (m) => m.startsWith("vector.archive")],
   ["Worker library", (m) => m === "worker"],
   ["Time library", (m) => m === "time"],
+  ["Crypto library", (m) => m === "crypto"],
 ];
 
 // Manual pages in the order llms-full.txt reads them. The topic pages

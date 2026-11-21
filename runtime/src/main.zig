@@ -212,6 +212,7 @@ fn badOption(opt: []const u8, what: []const u8) ?Cli {
 
 pub fn main(init: std.process.Init) !u8 {
     const gpa = init.gpa;
+    if (lus.vm.heapcount.fail_alloc) setupFailAlloc(init);
     var args_list: std.ArrayList([]const u8) = .empty;
     defer args_list.deinit(gpa);
     var it = try init.minimal.args.iterateAllocator(gpa);
@@ -241,17 +242,43 @@ pub fn main(init: std.process.Init) !u8 {
         const cmd = args[1];
         const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile", "help", "agents", "version" };
         for (tools) |t| {
-            if (std.mem.eql(u8, cmd, t)) return lus.tools.run(init, cmd, args[2..]);
+            if (std.mem.eql(u8, cmd, t)) {
+                defer reportAllocs();
+                return lus.tools.run(init, cmd, args[2..]);
+            }
         }
         if (std.mem.eql(u8, cmd, "run")) return profiled(runMain(init, args, 2, null));
     }
     return profiled(runMain(init, args, 1, null));
 }
 
+/// Reads `LUS_FAIL_ALLOC` in a `-Dfail-alloc=true` build. `N` fails the
+/// Nth allocation of the process, `N+` fails it and every later one, and
+/// `count` fails none and prints how many allocations the run made when it
+/// exits.
+fn setupFailAlloc(init: std.process.Init) void {
+    const inject = lus.vm.heapcount.inject;
+    const v = init.environ_map.get("LUS_FAIL_ALLOC") orelse return;
+    if (std.mem.eql(u8, v, "count")) {
+        report_allocs = true;
+        return;
+    }
+    const sticky = std.mem.endsWith(u8, v, "+");
+    inject.target = std.fmt.parseInt(usize, if (sticky) v[0 .. v.len - 1] else v, 10) catch return;
+    inject.sticky = sticky;
+}
+
+var report_allocs = false;
+
+fn reportAllocs() void {
+    if (report_allocs) std.debug.print("lus: {d} allocations\n", .{lus.vm.heapcount.inject.count.load(.monotonic)});
+}
+
 /// Prints the opcode sequences a run counted, in a build that counts
 /// them (`-Dop-profile=true`), and passes the result of the run on.
 fn profiled(result: anyerror!u8) anyerror!u8 {
     lus.vm.opprofile.dump();
+    reportAllocs();
     return exitAfterWorkers(result);
 }
 

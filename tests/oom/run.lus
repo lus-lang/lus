@@ -1,0 +1,206 @@
+-- Sweeps allocation failures over Lus programs.
+--
+-- The sweep needs a binary built with `zig build -Dfail-alloc=true`. For
+-- each file it counts the allocations of a clean run, then runs the file
+-- again once for each allocation number N in the sweep with
+-- `LUS_FAIL_ALLOC=N`, which fails that one allocation. A run may fail its
+-- tests or end with "not enough memory". It must not crash, panic, leak,
+-- or hang. Each distinct failure is reported once, with the smallest N
+-- that produced it, so the report reads as a list of bugs.
+--
+-- Test files run through `lus test --run-one`, the child mode of `lus
+-- test`, so that the failure lands in the process that runs the tests.
+-- Any other file runs as a script. The sweep itself runs interpreted in
+-- a normal build, and every run of the binary under test is a process of
+-- its own.
+--
+-- Usage: LUS_JIT=off lus run.lus [--lus PATH] [--samples K] [--sticky]
+--            [--jobs J] [--timeout SECONDS] [files or directories...]
+-- --samples 0 sweeps every N. The default samples 40 values of N per file.
+
+global arg, assert, io, ipairs, math, os, pairs, pledge, print, string, table, tonumber, tostring
+
+pledge("exec", "fs", "env")
+
+local here = arg[0]:match("^(.*)/[^/]*$") or "."
+local root = here .. "/../.."
+
+local opts, operands = {}, {}
+do
+    local i = 1
+    while arg[i] do
+        local a = arg[i]
+        if a == "--sticky" then
+            opts.sticky = true
+            i = i + 1
+        elseif a:sub(1, 2) == "--" then
+            opts[a:sub(3)] = arg[i + 1]
+            i = i + 2
+        else
+            operands[#operands + 1] = a
+            i = i + 1
+        end
+    end
+end
+
+local function quote(s)
+    return "'" .. tostring(s):gsub("'", [['\'']]) .. "'"
+end
+
+local function shell(cmd)
+    local p = assert(io.popen(cmd))
+    local out = p:read("a") or ""
+    p:close()
+    return out
+end
+
+local function absolute(p)
+    return (shell("cd " .. quote(p:match("^(.*)/[^/]*$") or ".") .. " && pwd"):gsub("\n$", "")) .. "/" .. (p:match("[^/]*$"))
+end
+
+local lus = absolute(opts.lus or (root .. "/runtime/zig-out-oom/bin/lus"))
+local samples = tonumber(opts.samples or "40")
+local jobs = tonumber(opts.jobs or "8")
+local seconds = tonumber(opts.timeout or "30")
+if #operands == 0 then operands[1] = root .. "/tests/conformance" end
+
+-- The .lus files below each operand, skipping fixtures.
+local files = {}
+for _, p in ipairs(operands) do
+    local list = shell("find " .. quote(p) .. " -name fixtures -prune -o -name '*.lus' -type f -print | sort")
+    for f in list:gmatch("[^\n]+") do files[#files + 1] = absolute(f) end
+end
+
+local tmp = (shell([[mktemp -d "${TMPDIR:-/tmp}/lus-oom.XXXXXX"]]):gsub("\n$", ""))
+
+local function readFile(path)
+    local f = io.open(path, "r", { lossy = true })
+    if not f then return "" end
+    local s = f:read("a") or ""
+    f:close()
+    return s
+end
+
+-- Runs a batch of { file, env } at once, each in a fresh directory, and
+-- returns their status codes and standard error. A status of 142 means the
+-- run was killed after `seconds`.
+local function runBatch(batch)
+    local parts = {}
+    for i, job in ipairs(batch) do
+        local base = tmp .. "/j" .. i
+        local argv = job.file:find("_test%.lus$") and ("test --run-one " .. quote(job.file)) or quote(job.file)
+        parts[#parts + 1] = "( mkdir -p " .. quote(base .. ".d") .. " && cd " .. quote(base .. ".d") .. " && env LUS_FAIL_ALLOC=" .. job.env
+            .. " perl -e 'alarm shift; exec @ARGV' " .. math.floor(seconds) .. " " .. quote(lus) .. " " .. argv
+            .. " > /dev/null 2> " .. quote(base .. ".err") .. "; echo $? > " .. quote(base .. ".code") .. "; cd / && rm -rf " .. quote(base .. ".d") .. " ) &"
+    end
+    os.execute(table.concat(parts, "\n") .. "\nwait")
+    local out = {}
+    for i = 1, #batch do
+        local base = tmp .. "/j" .. i
+        out[i] = { code = tonumber(readFile(base .. ".code"):match("%d+")) or -1, stderr = readFile(base .. ".err") }
+    end
+    return out
+end
+
+-- The kind of a bad run, with the place it happened, or nil for a run
+-- that ended cleanly. Status 2 is the test runner's own report of a file
+-- that could not load.
+local function verdict(res)
+    local where = ""
+    local file, fn = res.stderr:match("\n%S*src/([^%s:]+:%d+):%d+: 0x%x+ in (%S+)")
+    if file then where = " at " .. fn .. " (src/" .. file .. ")" end
+    if res.code == 142 then return "hang" end
+    if panic = res.stderr:match("panic: ([^\n]*)") then return "panic: " .. panic:gsub("%d%d%d+", "N") .. where end
+    if res.code >= 128 then return "signal " .. (res.code - 128) .. where end
+    if res.stderr:find("leaked", 1, true) then return "leak" .. where end
+    if res.code ~= 0 and res.code ~= 1 and res.code ~= 2 then return "exit " .. res.code .. where end
+    return nil
+end
+
+-- Up to `samples` allocation numbers from 1 through `count`: the first
+-- ten, which build the state, then numbers spread over the run.
+local function pick(count, seed)
+    local out = {}
+    if samples == 0 or count <= samples then
+        for i = 1, count do out[i] = i end
+        return out
+    end
+    local set = {}
+    for i = 1, math.min(10, count) do set[i] = true end
+    local n = math.min(10, count)
+    local s = seed * 2654435761 + count
+    while n < samples do
+        s = s ~ (s << 13)
+        s = s ~ (s >> 7)
+        s = s ~ (s << 17)
+        local k = 1 + (s & 0x7fffffffffffffff) % count
+        if not set[k] then
+            set[k] = true
+            n = n + 1
+        end
+    end
+    for k in pairs(set) do out[#out + 1] = k end
+    table.sort(out)
+    return out
+end
+
+local function batches(list, fn)
+    for i = 1, #list, jobs do
+        local batch = {}
+        for k = i, math.min(i + jobs - 1, #list) do batch[#batch + 1] = list[k] end
+        fn(batch, runBatch(batch))
+    end
+end
+
+-- Count the allocations of each file.
+local work = {}
+local counts = {}
+for i, f in ipairs(files) do counts[i] = { file = f, env = "count", index = i } end
+batches(counts, function(batch, results)
+    for k, res in ipairs(results) do
+        local job = batch[k]
+        local n = tonumber(res.stderr:match("lus: (%d+) allocations"))
+        local bad = verdict(res)
+        if bad or not n then
+            print(job.file:sub(#root + 2) .. ": the clean run " .. (bad or "printed no allocation count"))
+        else
+            for _, a in ipairs(pick(n, job.index)) do
+                work[#work + 1] = { file = job.file, n = a, env = opts.sticky and (a .. "+") or tostring(a) }
+            end
+        end
+    end
+end)
+
+-- Fail each sampled allocation.
+local bugs, order = {}, {}
+local runs = 0
+batches(work, function(batch, results)
+    for k, res in ipairs(results) do
+        runs = runs + 1
+        local job = batch[k]
+        if bad = verdict(res) then
+            local prev = bugs[bad]
+            if not prev then
+                bugs[bad] = { file = job.file, n = job.n, count = 1 }
+                order[#order + 1] = bad
+            else
+                prev.count = prev.count + 1
+                if job.n < prev.n then
+                    prev.n = job.n
+                    prev.file = job.file
+                end
+            end
+        end
+    end
+end)
+
+for _, what in ipairs(order) do
+    local b = bugs[what]
+    print("")
+    print(what)
+    print(`  $(b.count) runs, first: LUS_FAIL_ALLOC=$(b.n)$(opts.sticky and "+" or "") $(b.file:sub(#root + 2))`)
+end
+os.execute("rm -rf " .. quote(tmp))
+print("")
+print(`$(#files) files, $runs runs, $(#order) distinct failures`)
+os.exit(#order > 0 and 1 or 0)

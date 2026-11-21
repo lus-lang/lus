@@ -20,7 +20,7 @@ Write `.lus-rewrite/assessment.md` with these sections, in this order:
 3. **Where Lus improves it.** One row per finding: the file or area, the improvement, and the evidence. Look for each of the following.
    - Speed in interpreter-bound code: parsing, text processing, data transformation, request handling.
    - Permissions: a `pledge` line that states exactly what the program touches, sealed after startup.
-   - Dependencies the standard library replaces: JSON, CSV, SQLite, HTTP client and server, compression, time zones, test runner, formatter, linter.
+   - Dependencies the standard library replaces: JSON, CSV, SQLite, HTTP client and server, compression, hashing and signatures, password hashing, UUIDs, time zones, test runner, formatter, linter.
    - Concurrency: callback or async code that becomes plain sequential code in detached coroutines, and process pools that become workers.
    - Distribution: an installer, a container, or a runtime prerequisite that becomes one executable from `lus build`.
 4. **What gets harder.** Libraries with no Lus counterpart, platform features, team familiarity, unstable Lus features the port would rely on.

@@ -47,6 +47,7 @@ Lus ships the libraries most programs pull from a package manager. Use them befo
 | Database | `io.sqlite(path)` and queries |
 | Dates and zones | `time.now()`, `time.zone(name)` |
 | Bytes and compression | `vector`, `vector.archive.zstd`, `gzip`, `brotli`, `lz4`, `deflate` |
+| Hashing and signatures | `crypto.hash`, `crypto.hmac`, `crypto.sign`, `crypto.verify`, `crypto.hashpassword`, `crypto.uuid`. No permission needed. |
 | Exact numbers | `123n` bigints, `1.50d` decimals |
 | Standalone executable | `lus build app.lus -o app -P network` |
 

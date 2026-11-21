@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
         .jit = b.option(bool, "jit", "Include the baseline JIT on targets that have one (default: true)") orelse true,
         .op_profile = b.option(bool, "op-profile", "Count the opcode sequences the interpreter runs and print them at exit (default: false)") orelse false,
         .version = b.option([]const u8, "version", "The version the binary reports, such as 2.0.0-unstable.7 (default: the version in build.zig.zon)"),
+        .fail_alloc = b.option(bool, "fail-alloc", "Fail the allocation that LUS_FAIL_ALLOC names, to test out of memory handling (default: false)") orelse false,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -298,6 +299,7 @@ const Features = struct {
     jit: bool = true,
     op_profile: bool = false,
     version: ?[]const u8 = null,
+    fail_alloc: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -323,6 +325,7 @@ const Features = struct {
         options.addOption(bool, "jit", f.jit);
         options.addOption(bool, "op_profile", f.op_profile);
         options.addOption(?[]const u8, "version", f.version);
+        options.addOption(bool, "fail_alloc", f.fail_alloc);
         return options;
     }
 };

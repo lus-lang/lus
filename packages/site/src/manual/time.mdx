@@ -9,19 +9,19 @@ shortdesc: "Instants, zoned civil times, and durations, with exact and calendar 
 
 The [`time`](/manual/api#time) library has functions for dates and times. A program uses it to record when something happened, to show a time in the time zone of a reader, to compute a deadline, to read and write dates as text, and to measure how long an operation takes. The rules of the world's time zones are built into the runtime, so the results are the same on every machine.
 
-## The three types
+## Instants, dates, and durations
 
-The library has three types, one for each of three concepts that programs often confuse.
+The library has one type for each of the following concepts, which programs often confuse.
 
-- An _instant_ is a moment in time. It is the same moment everywhere in the world. The time of a log entry or of the last change to a file is an instant.
-- A _zoned_ value is a calendar date and a time of day in a time zone. It is what a calendar and a wall clock show in one place. "The 2nd of July 2026 at 09:15 in New York" is a zoned value.
+- An _instant_ is a moment in time that is the same everywhere in the world, such as the time of a log entry or of the last change to a file.
+- A _zoned_ value is a calendar date and a time of day in a time zone, which is what a calendar and a wall clock show in one place. "The 2nd of July 2026 at 09:15 in New York" is a zoned value.
 - A _duration_ is a length of time, such as 90 seconds or 3 days.
 
-The separation matters because arithmetic on an instant and arithmetic on a zoned value give different answers. Adding a duration of 24 hours to an instant gives the moment exactly 24 hours later. Adding one day to a zoned value gives the same time of day on the next date. That is 23 or 25 hours later on the days when clocks change for daylight saving time. The type of a value determines which arithmetic applies, so a program cannot confuse the two by accident.
+The separation matters because arithmetic on an instant and arithmetic on a zoned value give different answers. Adding a duration of 24 hours to an instant gives the moment exactly 24 hours later. Adding one day to a zoned value gives the same time of day on the next date, which is 23 or 25 hours later on the days when clocks change for daylight saving time. The type of a value determines which arithmetic applies, so a program cannot confuse the two by accident.
 
-Values of all three types never change. Every operation returns a new value.
+Values of these types never change, so every operation returns a new value.
 
-The following program takes one instant. It prints the date and time of that instant in UTC and in New York, then the instant 72 hours later.
+The following program prints the date and time of one instant in UTC and in New York, then the instant 72 hours later.
 
 ```lus
 global print, time
@@ -47,7 +47,7 @@ An instant has these methods:
 - `i:format(fmt)` returns the instant in UTC as text in a form that the program specifies. [Formatting](#formatting) describes the form.
 - `i:at(zone)` returns a zoned value with the date and time of day in a zone at that instant. The argument is a [zone](#zones) or an integer offset in seconds east of UTC.
 
-Arithmetic on instants uses durations. `i + d` is the instant a duration `d` after `i`. `i - d` is the instant `d` before `i`. `i - j` is the duration between two instants. The operators `==`, `<`, and `<=` compare instants. An earlier instant is less than a later one. Adding a number or another instant raises an error, so a program writes `i + time.seconds(5)` to add 5 seconds.
+Arithmetic on instants uses durations: `i + d` is the instant a duration `d` after `i`, `i - d` is the instant `d` before `i`, and `i - j` is the duration between two instants. The operators `==`, `<`, and `<=` compare instants, where an earlier instant is less than a later one. Adding a number or another instant raises an error, so a program writes `i + time.seconds(5)` to add 5 seconds.
 
 ```lus
 global print, time
@@ -64,14 +64,14 @@ print(catch (start + 5))                         --> false  ...: bad argument #2
 
 Durations are for timeouts, intervals, and the time between two instants. A duration includes its unit, which prevents the mistake of passing milliseconds where seconds are expected.
 
-[`time.days`](/manual/api#time.days), [`time.hours`](/manual/api#time.hours), [`time.minutes`](/manual/api#time.minutes), [`time.seconds`](/manual/api#time.seconds), and [`time.millis`](/manual/api#time.millis) each create a duration from an integer number of their unit. [`time.duration(fields)`](/manual/api#time.duration) creates a duration from a table. The duration is the sum of the integer fields `days`, `hours`, `minutes`, `seconds`, `millis`, `micros`, and `nanos`. Each field is optional and may be negative.
+[`time.days`](/manual/api#time.days), [`time.hours`](/manual/api#time.hours), [`time.minutes`](/manual/api#time.minutes), [`time.seconds`](/manual/api#time.seconds), and [`time.millis`](/manual/api#time.millis) each create a duration from an integer number of their unit. [`time.duration(fields)`](/manual/api#time.duration) creates a duration from a table as the sum of its integer fields `days`, `hours`, `minutes`, `seconds`, `millis`, `micros`, and `nanos`, each of which is optional and may be negative.
 
 A duration has these methods:
 
-- `d:seconds()` returns the length in seconds as a float. `d:millis()` returns it in milliseconds as a float.
-- `d:parts()` splits the length into units for display. It returns a table with the integer fields `days`, `hours`, `minutes`, `seconds`, and `nanos`. The integer fields describe the length without its sign. The boolean field `negative` is `true` for a negative duration.
+- `d:seconds()` and `d:millis()` return the length as a float, in seconds and in milliseconds.
+- `d:parts()` splits the length into units for display and returns a table with the integer fields `days`, `hours`, `minutes`, `seconds`, and `nanos`, which describe the length without its sign. The boolean field `negative` is `true` for a negative duration.
 
-Durations support `+`, `-`, negation, and multiplication by an integer on either side. The operators `==`, `<`, and `<=` compare them. A day in a duration is always 86,400 seconds. [Calendar arithmetic](#calendar-arithmetic) describes arithmetic that follows the calendar on the dates when the clocks change.
+Durations support `+`, `-`, negation, and multiplication by an integer on either side. The operators `==`, `<`, and `<=` compare them. A day in a duration is always 86,400 seconds. [Calendar arithmetic](#calendar-arithmetic) follows the calendar on the dates when the clocks change.
 
 ```lus
 global print, time
@@ -87,15 +87,15 @@ print(parts.negative, parts.minutes, parts.seconds)       --> true  1  30
 
 ## Zones
 
-A _zone_ is the rule that gives the difference between the clocks of a region and UTC at each instant. That difference is the _offset_ of the zone. New York is 5 hours behind UTC in winter and 4 hours behind in summer, so its offset is -18,000 seconds for some instants and -14,400 for others. A program needs a zone to convert an instant to a date and time of day in that region, or to convert a date and time of day to an instant.
+A _zone_ is the rule that gives the difference between the clocks of a region and UTC at each instant, a difference called the _offset_ of the zone. New York is 5 hours behind UTC in winter and 4 hours behind in summer, so its offset is -18,000 seconds for some instants and -14,400 for others. A program needs a zone to convert an instant to a date and time of day in that region, or to convert a date and time of day to an instant.
 
-Three functions return a zone:
+The following functions return a zone:
 
 - [`time.zone(name)`](/manual/api#time.zone) returns the zone of a region by its name in the IANA time zone database, such as `"America/New_York"` or `"Europe/Paris"`. An unknown name raises the error `unknown time zone`.
 - [`time.offset(seconds)`](/manual/api#time.offset) returns a zone with one fixed offset, in seconds east of UTC.
 - [`time.localzone()`](/manual/api#time.localzone) returns the time zone that the system is configured to use.
 
-A zone has two methods. `z:name()` returns the name of the zone. For a zone with a fixed offset, it returns the offset as text, such as `"-05:00"`. `z:offset(instant)` returns the offset of the zone at an instant, in seconds.
+`z:name()` returns the name of a zone, or the offset as text, such as `"-05:00"`, for a zone with a fixed offset. `z:offset(instant)` returns the offset of the zone at an instant, in seconds.
 
 ```lus
 global print, time
@@ -108,17 +108,17 @@ print(winter:at(ny):iso())                        --> 2026-01-02T07:00:00-05:00
 print(time.offset(-5 * 3600):name())              --> -05:00
 ```
 
-The _IANA time zone database_ is the public record of the time zone rules of every region, past and present. The Lus runtime contains a copy of it. `time.zone` therefore requires no file access and no [permission](/manual/permissions). Its zones give the same results on every platform. For an instant in the past, a zone returns the offset that was in force at that time. [`time.tzdata_version()`](/manual/api#time.tzdata_version) returns the release of the built-in database as a string, such as `"2026c"`.
+The _IANA time zone database_ is the public record of the time zone rules of every region, past and present. Because the Lus runtime contains a copy of it, `time.zone` requires no file access or [permission](/manual/permissions) and gives the same results on every platform. For an instant in the past, a zone returns the offset that was in force at that time. [`time.tzdata_version()`](/manual/api#time.tzdata_version) returns the release of the built-in database as a string, such as `"2026c"`.
 
-`time.localzone()` reads the environment variable `TZ` first. On Unix it then reads `/etc/localtime` and `/etc/timezone`. On Windows it uses the IANA name of the Windows time zone. If none of these sources gives a zone, it returns UTC.
+`time.localzone()` reads the environment variable `TZ` first, then `/etc/localtime` and `/etc/timezone` on Unix or the IANA name of the Windows time zone on Windows. If none of these sources gives a zone, it returns UTC.
 
 ## Zoned times
 
-Zoned values are for dates and times as people state them, such as a meeting at 15:00 in Paris or the first day of next month. A program creates a zoned value in two ways. `i:at(zone)` converts an instant to the date and time in a zone. [`time.zoned(fields, zone)`](/manual/api#time.zoned) creates a zoned value from a date and a time of day.
+Zoned values are for dates and times as people state them, such as a meeting at 15:00 in Paris or the first day of next month. A program creates a zoned value either with `i:at(zone)`, which converts an instant to the date and time in a zone, or with [`time.zoned(fields, zone)`](/manual/api#time.zoned), which builds one from a date and a time of day.
 
-The `fields` table of `time.zoned` holds `year`, `month`, `day`, `hour`, `minute`, `second`, and `nanosecond`. A missing field has the value that it has at the start of 1970-01-01, so a table with only a date means midnight. The second argument is the zone of the date and time. It is a zone or an integer offset in seconds east of UTC. Without it, the zone is UTC.
+The `fields` table of `time.zoned` holds `year`, `month`, `day`, `hour`, `minute`, `second`, and `nanosecond`. A missing field has the value that it has at the start of 1970-01-01, so a table with only a date means midnight. The second argument is the zone of the date and time, given as a zone or as an integer offset in seconds east of UTC. Without it, the zone is UTC.
 
-A `month` outside 1 to 12 raises the error `month out of range`. A `day` outside 1 to 31 raises the error `day out of range`. Any other value beyond its range carries into the next larger field. Day 30 of February is therefore the 2nd of March. Hour 25 is 01:00 on the next day.
+A `month` outside 1 to 12 raises the error `month out of range`. A `day` outside 1 to 31 raises the error `day out of range`. Any other value beyond its range carries into the next larger field, so day 30 of February 2026 is the 2nd of March and hour 25 is 01:00 on the next day.
 
 A zoned value has the fields `year`, `month`, `day`, `hour`, `minute`, `second`, `nanosecond`, `weekday`, `yearday`, and `offset`. `yearday` is the day of the year, where the 1st of January is day 1. `offset` is the offset from UTC in seconds. The fields are read-only. The method `z:instant()` returns the instant of the zoned value. `z:iso()` and `z:format(fmt)` return the zoned value as text.
 
@@ -142,7 +142,7 @@ print(moment:at(time.zone("America/New_York")):format("%A %H:%M"))   --> Thursda
 print(moment:at(time.zone("Asia/Tokyo")):format("%A %H:%M"))         --> Thursday 22:00
 ```
 
-The days of the week and the months have names, which are easier to read in code than numbers. The names are members of two [enums](/manual/guide#enums). [`time.weekday`](/manual/api#time.weekday) has the members `monday` to `sunday`. `tonumber` returns the position of a member, where Monday is 1. [`time.month`](/manual/api#time.month) has the members `january` to `december`. The `weekday` field of a zoned value is a member of `time.weekday`. The `month` field is an integer from 1 to 12. A function that expects a month also accepts a member of `time.month`.
+The days of the week and the months have names, which are easier to read in code than numbers. The names of the weekdays are the members `monday` to `sunday` of the [enum](/manual/guide#enums) [`time.weekday`](/manual/api#time.weekday), where `tonumber` returns the position of a member and Monday is 1. The names of the months are the members `january` to `december` of [`time.month`](/manual/api#time.month). The `weekday` field of a zoned value is a member of `time.weekday`, while the `month` field is an integer from 1 to 12. A function that expects a month also accepts a member of `time.month`.
 
 ```lus
 global print, time, tonumber
@@ -152,16 +152,16 @@ print(christmas.month, tonumber(christmas.weekday))       --> 12  5
 print(christmas.weekday == time.weekday.friday)           --> true
 ```
 
-`==` on two zoned values is true only when both are the same value. `<` on zoned values raises an error. A program compares two zoned values by their instants, as in `a:instant() < b:instant()`.
+`==` on two zoned values is true only when both are the same value. `<` on zoned values raises an error, so a program compares two zoned values by their instants, as in `a:instant() < b:instant()`.
 
 ### Calendar arithmetic
 
-_Calendar arithmetic_ changes a date as a person would: to the same time tomorrow, to the same day next month, or to 08:00 on the same date. Two methods of a zoned value do this. Each method first computes a new date and time of day. It then uses the offset that the zone of the original value has at that new date.
+_Calendar arithmetic_ changes a date as a person would: to the same time tomorrow, to the same day next month, or to 08:00 on the same date. The following methods of a zoned value do this. Each computes a new date and time of day, then uses the offset that the zone of the original value has at that new date.
 
 - `z:add(amounts)` returns a zoned value moved by the amounts `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds`, and `nanos`, each of which may be negative. Adding months keeps the day of the month when the target month has that day. Otherwise the result is the last day of the target month.
 - `z:with(fields)` returns a zoned value with the named fields replaced, such as the hour and the minute. The fields follow the rules of `time.zoned`.
 
-In New York the clocks moved forward one hour on the 8th of March 2026. The following program adds one day to noon on the 7th. The result is noon on the 8th, which is 23 hours later.
+The following program adds one day to noon on the 7th of March 2026 in New York, where the clocks moved forward one hour on the 8th. The result is noon on the 8th, which is 23 hours later.
 
 ```lus
 global print, time
@@ -177,11 +177,11 @@ print(jan31:add{ months = 1 }:iso())               --> 2026-02-28T00:00:00-05:00
 print(noon:with{ hour = 8, minute = 5 }:iso())     --> 2026-03-07T08:05:00-05:00
 ```
 
-When the clocks move forward, one hour of the day is skipped. When they move back, one hour occurs twice. A time in the skipped hour is moved forward by the length of the skip. On the day when the clocks of New York go from 02:00 to 03:00, 02:30 therefore becomes 03:30 with the offset `-04:00`. A time in the repeated hour has two possible instants. The result is the earlier one, which has the daylight saving offset.
+When the clocks move forward, one hour of the day is skipped. A time in that hour is moved forward by the length of the skip, so on the day when the clocks of New York go from 02:00 to 03:00, 02:30 becomes 03:30 with the offset `-04:00`. When the clocks move back, one hour occurs twice, so a time in that hour has two possible instants. The result is the earlier one, which has the daylight saving offset.
 
 ## Formatting
 
-`i:format(fmt)` and `z:format(fmt)` return a date and time as text for people to read. A _specifier_ is a `%` followed by a letter. The result is the string `fmt` with each specifier replaced by one part of the date or time. The following table lists the most common specifiers. The entry for [`os.date`](/manual/api#os.date) lists all of them.
+`i:format(fmt)` and `z:format(fmt)` return a date and time as text for people to read. The result is the string `fmt` with each _specifier_, a `%` followed by a letter, replaced by one part of the date or time. The following table lists the most common specifiers. The entry for [`os.date`](/manual/api#os.date) lists all of them.
 
 | Specifier | Replaced by | Example |
 | --- | --- | --- |
@@ -197,7 +197,7 @@ When the clocks move forward, one hour of the day is skipped. When they move bac
 | `%z` | The offset from UTC | `-0400` |
 | `%%` | A percent sign | `%` |
 
-`i:format` writes the date and time of an instant in UTC. `z:format` writes the date and time of the zoned value. A program that shows a time to a reader therefore converts the instant with `at` first. Use `iso()` for text that other programs read, because most of them expect ISO 8601.
+`i:format` writes the date and time of an instant in UTC, while `z:format` writes those of the zoned value. A program that shows a time to a reader therefore converts the instant with `at` first. Use `iso()` for text that other programs read, because most of them expect ISO 8601.
 
 ```lus
 global print, time
@@ -211,9 +211,9 @@ print(i:format("%A %d %B"))                 --> Thursday 02 July
 
 ## Parsing
 
-[`time.parse(s, format)`](/manual/api#time.parse) converts text to a time value. Programs use it for dates in files, in JSON, and in user input. The type of the result depends on the offset in the text. Text with a numeric offset, such as `-04:00` or `-0400`, gives a zoned value with that offset. Text that ends in `Z` means UTC and gives an instant. Text without any offset is read as UTC and also gives an instant.
+[`time.parse(s, format)`](/manual/api#time.parse) converts text, such as a date in a file, in JSON, or in user input, to a time value whose type depends on the offset in the text. Text with a numeric offset, such as `-04:00` or `-0400`, gives a zoned value with that offset. Text that ends in `Z` or has no offset is read as UTC and gives an instant.
 
-Without `format`, the text must be in the ISO 8601 form. This form is either a date, as in `2026-07-02`, or a date and a time separated by `T` or a space. A date without a time means midnight. The seconds are optional and may have a fraction, which is kept to the nanosecond. Any other text raises an error that quotes the text.
+Without `format`, the text must be in the ISO 8601 form, which is either a date, as in `2026-07-02`, or a date and a time separated by `T` or a space. A date without a time means midnight. The seconds are optional and may have a fraction, which is kept to the nanosecond. Any other text raises an error that quotes the text.
 
 ```lus
 global print, time
@@ -226,7 +226,7 @@ print(time.parse("2026-07-02T13:15:00.25Z"):nanos())     --> 250000000
 print(catch time.parse("tomorrow"))                      --> false  ...: invalid ISO 8601 date in 'tomorrow'
 ```
 
-With `format`, `parse` reads text in another form. `format` describes that form with the specifiers of [Formatting](#formatting). `parse` accepts `%Y`, `%y` for a year of two digits, `%m`, `%d`, `%e` for a day without a leading zero, `%H`, `%M`, `%S`, `%z`, and `%%`. A space in `format` matches any amount of whitespace. Every other character matches itself. Text that does not match raises an error that quotes the text and the format. `parse` reads as much text as `format` describes and ignores the rest.
+With `format`, `parse` reads text in another form, which `format` describes with the specifiers of [Formatting](#formatting). `parse` accepts `%Y`, `%y` for a year of two digits, `%m`, `%d`, `%e` for a day without a leading zero, `%H`, `%M`, `%S`, `%z`, and `%%`. A space in `format` matches any amount of whitespace, while every other character matches itself. Text that does not match raises an error that quotes the text and the format. `parse` reads as much text as `format` describes and ignores the rest.
 
 The following program parses a date that is written with the day first.
 
@@ -239,9 +239,9 @@ print(z:iso())                                           --> 2026-07-02T09:15:00
 
 ## Measuring elapsed time
 
-The clock that `time.now()` reads can jump forward or backward, because the system corrects it and a user can set it. The difference between two calls to `time.now()` is therefore unreliable as a measure of how long an operation took. [`time.monotonic()`](/manual/api#time.monotonic) returns an instant from a clock that only moves forward at a steady rate. Subtracting two such instants gives the duration between them.
+The clock that `time.now()` reads can jump forward or backward, because the system corrects it and a user can set it. The difference between two calls to `time.now()` is therefore unreliable as a measure of how long an operation took. [`time.monotonic()`](/manual/api#time.monotonic) returns an instant from a clock that only moves forward at a steady rate, so subtracting two such instants gives the duration between them.
 
-An instant from this clock has no date. Formatting it, calling `epoch` on it, or subtracting an instant of `time.now()` from it raises an error.
+An instant from this clock has no date, so formatting it, calling `epoch` on it, or subtracting an instant of `time.now()` from it raises an error.
 
 ```lus
 global print, string, time
@@ -255,7 +255,7 @@ print(catch start:iso())                   --> false  ...: monotonic instants ha
 
 ## Integer epochs
 
-The functions [`os.time`](/manual/api#os.time), [`os.date`](/manual/api#os.date), and [`os.difftime`](/manual/api#os.difftime), which Lus keeps from Lua, work with Unix times as integers. Databases and file formats often store Unix times too. `time.instant(seconds)` converts a Unix time to an instant. `i:epoch()` converts an instant to a Unix time.
+The functions [`os.time`](/manual/api#os.time), [`os.date`](/manual/api#os.date), and [`os.difftime`](/manual/api#os.difftime), which Lus keeps from Lua, work with Unix times as integers. Databases and file formats often store Unix times too. `time.instant(seconds)` and `i:epoch()` convert between such a Unix time and an instant.
 
 ```lus
 global os, print, time
@@ -266,7 +266,7 @@ print(time.instant(now):epoch() == now)  --> true
 
 ## Limits
 
-Instants, zoned values, durations, and zones exist only inside the program that created them. A message to a [worker](/manual/concurrency#workers) cannot contain one. `tojson` has no JSON form for one. A program sends or stores a time as a Unix time from `epoch()` or as text from `iso()`. The receiver converts it back with `time.instant` or `time.parse`. Every worker can call the `time` library itself.
+Instants, zoned values, durations, and zones exist only inside the program that created them, so a message to a [worker](/manual/concurrency#workers) cannot contain one and `tojson` has no JSON form for one. A program sends or stores a time as a Unix time from `epoch()` or as text from `iso()`, which the receiver converts back with `time.instant` or `time.parse`. Every worker can call the `time` library itself.
 
 ## Related pages
 

@@ -8,7 +8,7 @@ shortdesc: "Downloads, release archives, versioning, and integrity checks."
 
 import ReleaseStrip from "../components/ReleaseStrip.astro"
 
-A Lus release consists of prebuilt archives for six targets, a Windows installer, a WebAssembly module, the VSCode extension, and a checksum manifest.
+A Lus release consists of prebuilt archives for each supported target, a Windows installer, a WebAssembly module, the VSCode extension, and a checksum manifest.
 
 ## Downloads
 
@@ -16,7 +16,7 @@ A Lus release consists of prebuilt archives for six targets, a Windows installer
 
 ### Release channels
 
-Releases come in two channels. The download strip shows the latest release of each. The _stable_ channel holds the full releases. A production deployment runs a stable release. The _unstable_ channel holds prereleases. The tag of a prerelease has a suffix, as in `v2.0.0-rc.1`. A prerelease lets people try the next version before it becomes stable. The features that it adds may still change. A prerelease includes every archive and `lus.wasm`. It omits the VSCode extension. A manual page that documents a feature of the unstable channel says so at its top.
+The download strip shows the latest release of each release channel. The _stable_ channel holds the full releases, which a production deployment runs. The _unstable_ channel holds prereleases, whose tags have a suffix, as in `v2.0.0-rc.1`. A prerelease lets people try the next version before it becomes stable, while the features that it adds may still change. A prerelease includes every archive and `lus.wasm` but omits the VSCode extension. A manual page that documents a feature of the unstable channel says so at its top.
 
 Every archive holds the `lus` interpreter, the embedding libraries, and the `lus.h` header, so the same download runs scripts and [embeds Lus](/manual/embedding) in a host program. The name of an archive contains the release tag and the target.
 
@@ -37,10 +37,10 @@ Both installers lay the files out as [`lus version`](/manual/cli#lus-version) ex
 
 ## Archive layout
 
-An archive unpacks into three directories.
+An archive unpacks into the following directories.
 
-- `bin/lus` is the interpreter. On Windows it is `bin/lus.exe`. On Windows `bin/` also holds the shared library `lus.dll`.
-- `lib/` holds the static and the shared embedding library. On Linux these are `liblus.a` and `liblus.so`. On macOS they are `liblus.a` and `liblus.dylib`. On Windows `lib/` holds the static library `lus_static.lib` and `lus.lib`, which is the import library for `bin/lus.dll`.
+- `bin/lus` is the interpreter. On Windows it is `bin/lus.exe`, next to the shared library `lus.dll`.
+- `lib/` holds the static and the shared embedding library. On Linux these are `liblus.a` and `liblus.so`, on macOS `liblus.a` and `liblus.dylib`. On Windows `lib/` holds the static library `lus_static.lib` and `lus.lib`, which is the import library for `bin/lus.dll`.
 - `include/lus.h` is the header of the [C API](/manual/api/c).
 
 The following command builds a host program on Linux or macOS against an archive unpacked into `lus/`.
@@ -53,7 +53,7 @@ Each library includes the C code of SQLite, Zstandard, and Brotli, so a host lin
 
 ## WebAssembly
 
-The release also includes `lus.wasm`, the runtime built for `wasm32-wasi`. It exports every function of `lus.h`, as [WebAssembly](/manual/webassembly) describes. The [playground](/playground) runs this module.
+The release also includes `lus.wasm`, the runtime built for `wasm32-wasi`, which exports every function of `lus.h` as [WebAssembly](/manual/webassembly) describes. The [playground](/playground) runs this module.
 
 ## Checking download integrity
 
@@ -70,7 +70,7 @@ A matching digest proves that the download is complete and is the file that the 
 
 ## How a release is made
 
-Every release is built from a version tag by the continuous integration of the repository. The build runs the full test suite, including the conformance suite and the documentation examples, before it compiles any target. It then cross-compiles every archive and builds `lus.wasm` and the Windows installer. It tests that the installer installs and uninstalls. Last, it writes `SHA256SUMS`. The result is a draft release. A maintainer reviews the draft before publishing it.
+Every release is built from a version tag by the continuous integration of the repository. The build runs the full test suite, including the conformance suite and the documentation examples, before it compiles any target. It then cross-compiles every archive, builds `lus.wasm` and the Windows installer, tests that the installer installs and uninstalls, and writes `SHA256SUMS`. The result is a draft release, which a maintainer reviews before publishing it.
 
 ## Versioning
 

@@ -140,7 +140,7 @@ The page reads in this order: the masthead with the agent prompt and the news, t
 
 **Heading:** Everything in one binary
 **Line:** The libraries most projects install come with the runtime.
-**Evidence:** A dense list: JSON · CSV · SQLite · HTTP client and server · TCP · UDP · TLS · gzip · zstd · brotli · lz4 · time zones · bigints and decimals · workers · test runner · formatter · checker · debugger · bundler.
+**Evidence:** A dense list: JSON · CSV · SQLite · HTTP client and server · TCP · UDP · TLS · gzip · zstd · brotli · lz4 · hashes and signatures · time zones · bigints and decimals · workers · test runner · formatter · checker · debugger · bundler.
 
 ### Permissions
 

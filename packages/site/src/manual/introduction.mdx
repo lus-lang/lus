@@ -8,31 +8,31 @@ shortdesc: "What Lus is, the sovereignty thesis, and the project's dedication."
 
 import Dedication from "../components/Dedication.astro"
 
-Lus is a small programming language for general-purpose programs. Its syntax is short and readable. Its standard library is large. One executable holds the runtime, the library, and the tools.
+Lus is a small programming language for general-purpose programs, with a short, readable syntax and a large standard library. One executable holds the runtime, the library, and the tools.
 
-A Lus program needs only the `lus` executable for most tasks. The standard library includes files, networking, JSON and CSV, compression, time, and SQLite. The `lus` command includes a test runner, a formatter, a checker, and a debugger. This property is called [sovereignty](#sovereignty).
+For most tasks, a Lus program needs only the `lus` executable, whose standard library includes files, networking, JSON and CSV, compression, time, and SQLite. The `lus` command also includes a test runner, a formatter, a checker, and a debugger. This property is called [sovereignty](#sovereignty).
 
 ## Background
 
-Lus is derived from Lua 5.5. It keeps Lua's syntax and its minimalism. Lus is a complete language with its own runtime. The runtime runs Lus source directly and compiles the code that runs often to machine code. [Lus for Lua programmers](/manual/lua) lists the changes that existing Lua code needs and explains why the two languages differ.
+Lus is derived from Lua 5.5 and keeps Lua's syntax and minimalism. It is a complete language with its own runtime, which runs Lus source directly and compiles the code that runs often to machine code. [Lus for Lua programmers](/manual/lua) lists the changes that existing Lua code needs and explains why the two languages differ.
 
-Lus was developed to bring Lua to general-purpose programming. Lua is designed first for embedding in a host program, so its standard library is small. A standalone Lua program depends on third-party packages for tasks such as reading a directory or opening a socket. The standard library of Lus includes those tasks. Lus keeps Lua's conciseness.
+Lus was developed to bring Lua to general-purpose programming. Lua is designed first for embedding in a host program, so its standard library is small. A standalone Lua program uses third-party packages for tasks such as reading a directory or opening a socket. Lus keeps Lua's conciseness and adds those tasks to its standard library.
 
-Lus is a personal project of [Louka Ménard Blondin](https://louka.sh). It is maintained on a best-effort basis.
+Lus is a personal project of [Louka Ménard Blondin](https://louka.sh), maintained on a best-effort basis.
 
 ## Sovereignty
 
 _Language sovereignty_ is how much a programmer can do with the language alone. It has three parts.
 
 - **Implementation.** A sovereign language behaves the same in every environment that it runs in. The standard library of Lus is cross-platform.
-- **Use.** A program in a sovereign language rarely needs a third-party library. The standard library of Lus covers complete programs.
+- **Use.** A program in a sovereign language rarely needs a third-party library. The standard library of Lus covers what command line tools and network services need.
 - **Adoption.** A sovereign language takes little effort to learn and use. Lus has the small, readable syntax of Lua.
 
 ## Goals
 
-The design of Lus has eight goals.
+The design of Lus has the following goals.
 
-- **Boring is good.** Lus adopts an idea once the idea has proven useful in practice. The latest trends in programming language theory are left to other languages.
+- **Boring is good.** Lus adopts an idea once it has proven useful in practice and leaves the latest trends in programming language theory to other languages.
 
 - **Use-first approach.** The language is easy to find, install, and use.
 
@@ -42,25 +42,25 @@ The design of Lus has eight goals.
 
 - **Minimalism.** Lus has a concise, readable syntax and few keywords, as Lua does, so it is quick to adopt.
 
-- **Explicit permissions.** A script starts with no access to files, the network, processes, or environment variables. It [pledges](/manual/permissions) a permission for each kind of access that it uses. A program can also give up permissions permanently, which limits what a bug or a loaded module can reach.
+- **Explicit permissions.** A script starts with no access to files, the network, processes, or environment variables and [pledges](/manual/permissions) a permission for each kind of access that it uses. A program can also give up permissions permanently, which limits what a bug or a loaded module can reach.
 
-- **Strong release engineering.** The language has stable, tested releases. Its design changes deliberately.
+- **Strong release engineering.** The language has stable, tested releases and a design that changes deliberately.
 
 - **Backwards _embeddability_.** Lua was engineered to be embedded in other programs. Lus keeps that ease of integration, although standalone use has priority. The runtime is written in Zig and has a C interface, `lus.h`, so a host program [embeds Lus](/manual/embedding) much as it embeds Lua. The same runtime also runs in the browser as a [WebAssembly](/manual/webassembly) module.
 
-The design also has four **non-goals**, which Lus leaves to other languages.
+The design also has the following **non-goals**, which Lus leaves to other languages.
 
 - **Strong typing.** Lus keeps Lua's dynamic typing.
 
 - **_Other language syndrome._** Developers often solve problems with patterns from the languages they already know. A feature of Lus is designed to suit Lus, even when another language solves the same problem in another way.
 
-- **Modules.** The `require` function loads code from other files. A name declared with `local` is private to its file. Lus organizes programs with these two features alone.
+- **Modules.** Lus organizes programs with `require` and `local` alone: `require` loads code from other files, while `local` makes a name private to its file.
 
-- **Bureaucracy.** Lus is a single-repository project dedicated to the public domain. Its author decides every change to the language. The project is maintained with as little process as possible.
+- **Bureaucracy.** Lus is a single-repository project dedicated to the public domain, whose author decides every change to the language. The project is maintained with as little process as possible.
 
 ## Contributing
 
-Bug fixes, optimizations, and test cases are welcome, because they make the language better at what it already does. Most feature requests are declined. Design decisions stay with the author, which keeps the language coherent. Contributors need a working knowledge of Zig, Lua, and Lus. They also need to understand how an interpreter and a garbage collector work.
+Bug fixes, optimizations, and test cases are welcome, because they make the language better at what it already does. Most feature requests are declined. Design decisions stay with the author, which keeps the language coherent. Contributors need a working knowledge of Zig, Lua, and Lus, along with an understanding of how an interpreter and a garbage collector work.
 
 LLM use is permitted when the operator knows Lus and the implementation languages and understands the complete change. The operator must carefully review everything that gets pushed. A person examines every contribution thoroughly before it enters the repository.
 

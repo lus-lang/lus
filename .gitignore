@@ -5,6 +5,7 @@
 *.vsix
 node_modules/
 zig-out/
+zig-out-*/
 .zig-cache/
 zig-pkg/
 packaging/install/archive/

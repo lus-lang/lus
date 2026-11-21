@@ -105,9 +105,23 @@ pub fn closeForExit(l: *Thread) void {
 /// Set by `closeForExit` when a worker did not stop in time.
 pub var workers_abandoned = false;
 
-/// Compiles `src` and pushes the resulting function. On a syntax error,
-/// pushes the message string and returns error.LusError.
+/// Compiles `src` and pushes the resulting function. On any error, a
+/// syntax error or running out of memory, pushes the error value and
+/// returns error.LusError, so callers find the message on the stack top.
 pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
+    const top = l.top;
+    loadRaw(l, src, chunkname) catch |e| {
+        l.top = top;
+        // The stack keeps spare slots above its top, so this push only
+        // fails when the thread has no stack at all.
+        l.push(l.err) catch {};
+        return e;
+    };
+}
+
+/// Compiles `src` and pushes the resulting function, or sets `l.err` and
+/// returns error.LusError.
+fn loadRaw(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
     const g = l.g;
     if (dump.isBinary(src)) {
         const was_stopped = g.gc_stopped;
@@ -117,7 +131,6 @@ pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
             error.OutOfMemory => return l.raiseMem(),
             error.Malformed => {
                 const s = try l.newString("bad binary format (truncated or corrupted chunk)");
-                try l.push(Value.obj(.string, s));
                 l.err = Value.obj(.string, s);
                 return error.LusError;
             },
@@ -131,7 +144,6 @@ pub fn load(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
         .err => |msg| {
             defer g.gpa.free(msg);
             const s = try l.newString(msg);
-            try l.push(Value.obj(.string, s));
             l.err = Value.obj(.string, s);
             return error.LusError;
         },
@@ -252,6 +264,12 @@ pub fn setFlags(l: *Thread, specs: []const []const u8) !void {
     const g = l.g;
     const map = try g.gpa.create(std.StringHashMapUnmanaged(Value));
     map.* = .empty;
+    // Until the state's extension table holds the map, it is ours to free.
+    var owned = true;
+    errdefer if (owned) {
+        map.deinit(g.gpa);
+        g.gpa.destroy(map);
+    };
     for (specs) |spec| {
         var name = spec;
         var v: Value = .true;
@@ -271,6 +289,7 @@ pub fn setFlags(l: *Thread, specs: []const []const u8) !void {
         try map.put(g.gpa, name, v);
     }
     try g.ext.put(g.gpa, "flags.compile", map);
+    owned = false;
     // The runtime view is a read-only table holding every flag.
     const data = try l.newTable(0, map.count());
     try l.push(Value.obj(.table, data));

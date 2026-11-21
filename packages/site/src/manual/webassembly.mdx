@@ -6,9 +6,9 @@ group: use
 shortdesc: "The runtime as a WASI module and the lus-wasm JavaScript host that runs it in browsers, web workers, and Node."
 ---
 
-The WebAssembly build runs Lus in places where the native `lus` executable cannot run, such as a web page, a web worker, or a JavaScript application. With it, a web page can run Lus code that its visitors type. A tool can ship one build of Lus that runs on every platform. A JavaScript program can use Lus as its scripting language.
+The WebAssembly build runs Lus in places where the native `lus` executable cannot run, such as a web page, a web worker, or a JavaScript application. With it, a web page can run Lus code that its visitors type, a tool can ship one build of Lus that runs on every platform, and a JavaScript program can use Lus as its scripting language.
 
-The Lus runtime compiles to a WebAssembly module for the target `wasm32-wasi`. The `lus-wasm` package contains the module and a small JavaScript host. The host loads the module and runs programs in browsers, web workers, and Node. The [playground](/playground) and the [VS Code extension](/manual/ide-setup) both use this package, so they run the same runtime as the native interpreter.
+The Lus runtime compiles to a WebAssembly module for the target `wasm32-wasi`. The `lus-wasm` package contains the module and a small JavaScript host that loads it and runs programs in browsers, web workers, and Node. The [playground](/playground) and the [VS Code extension](/manual/ide-setup) both use this package, so they run the same runtime as the native interpreter.
 
 ## The module
 
@@ -19,15 +19,15 @@ cd runtime
 zig build wasm
 ```
 
-The build writes `zig-out/wasm/lus.wasm`. It keeps the safety checks of a ReleaseSafe build, because the playground runs code from strangers and a failed check must stop the program in a defined way. `-Dwasm-optimize=small` produces a smaller module without the checks.
+The build writes `zig-out/wasm/lus.wasm` and keeps the safety checks of a ReleaseSafe build, because the playground runs code from strangers and a failed check must stop the program in a defined way. `-Dwasm-optimize=small` produces a smaller module without the checks.
 
-The module is a _WASI reactor_. A reactor exports functions for its host to call and has no `main` function. The module exports every function of the [embedding interface](/manual/embedding) in `lus.h`, a few helpers for the JavaScript host, and its memory. Its only imports are WASI functions, so any WASI runtime, such as wasmtime, can load it.
+The module is a _WASI reactor_, a module that exports functions for its host to call and has no `main` function. The module exports every function of the [embedding interface](/manual/embedding) in `lus.h`, a few helpers for the JavaScript host, and its memory. Its only imports are WASI functions, so any WASI runtime, such as wasmtime, can load it.
 
 The module includes SQLite and the [`vector.archive`](/manual/text#compression) codecs. WASI provides neither sockets nor threads, so the module has no `network` and no `worker` library. It cannot start processes either, so `io.popen` and `os.execute` raise an error that ends in `not available on this platform`.
 
 ## Running programs
 
-`Lus.load` compiles the module and returns a _host_, which is the JavaScript object that runs Lus programs. In a browser or a worker, `Lus.load` takes the module as bytes, a compiled `WebAssembly.Module`, a `Response`, or a URL. In Node, `loadLus` from `lus-wasm` reads the packaged module from disk. The following page script loads the module from a URL and runs a program that prints the Lus version. The comment shows the result of the run.
+`Lus.load` compiles the module and returns a _host_, which is the JavaScript object that runs Lus programs. In a browser or a worker, `Lus.load` takes the module as bytes, a compiled `WebAssembly.Module`, a `Response`, or a URL. In Node, `loadLus` from `lus-wasm` reads the packaged module from disk. The following page script loads the module from a URL and runs a program that prints the Lus version, with the result of the run in the comment.
 
 ```js
 import { Lus } from "lus-wasm/browser";
@@ -38,7 +38,7 @@ const result = lus.run('print("hello from " .. _VERSION)');
 //   error: null, traceback: null, exitCode: 0, truncated: false }
 ```
 
-`run(source, options)` runs a whole program in a new state and closes the state afterwards. The variables of one run are therefore gone before the next. Like the `lus` command, `run` returns only after every coroutine that the program detached has ended. `run` accepts the following options.
+`run(source, options)` runs a whole program in a new state and closes the state afterwards, so the variables of one run are gone before the next. Like the `lus` command, `run` returns only after every coroutine that the program detached has ended. `run` accepts the following options.
 
 | Option | Meaning |
 | --- | --- |
@@ -71,9 +71,9 @@ const r = lus.run('error("boom")');
 
 ## Files and environment
 
-A program in a browser has no disk, so the host provides a file system that exists only in memory. JavaScript code writes files to it before a run. After the run, it reads the files that the program wrote. One host holds any number of states. All of them share the file system and one set of environment variables.
+A program in a browser has no disk, so the host provides a file system that exists only in memory. JavaScript code writes files to it before a run, then reads the files that the program wrote. One host holds any number of states, which all share the file system and one set of environment variables.
 
-`lus.fs` is the file system. Its methods `writeFile`, `readFile`, `exists`, `readdir`, `mkdir`, and `remove` operate on single files and directories. `mount` writes a whole set of files under a path prefix. `lus.env` holds the environment variables. A Lus program reads them with `os.getenv`, which requires the `env` permission. A Lus program opens the files with the `io` and `fs` functions, which require the same [permissions](/manual/permissions) as on a real disk. The following script writes a file from JavaScript. The Lus program then reads the file and prints each line with its length.
+`lus.fs` is the file system. Its methods `writeFile`, `readFile`, `exists`, `readdir`, `mkdir`, and `remove` operate on single files and directories, while `mount` writes a whole set of files under a path prefix. A Lus program opens these files with the `io` and `fs` functions, which require the same [permissions](/manual/permissions) as on a real disk. `lus.env` holds the environment variables, which a Lus program reads with `os.getenv` under the `env` permission. In the following script, JavaScript writes a file that the Lus program then reads, printing each line with its length.
 
 ```js
 lus.fs.writeFile("/data.txt", "one\ntwo\n");
@@ -83,13 +83,13 @@ const r = lus.run(`for line in io.lines("/data.txt") do print(#line, line) end`,
 console.log(r.output); // "3\tone\n3\ttwo\n"
 ```
 
-`Lus.load` takes an optional second argument, which is an object with three fields. `fs` is a file system to share between hosts. `env` holds the initial environment variables. [The JIT](#the-jit) describes `jit`.
+`Lus.load` takes an optional second argument, which is an object with the following fields. `fs` is a file system to share between hosts. `env` holds the initial environment variables. [The JIT](#the-jit) describes `jit`.
 
 The host implements WASI in JavaScript and has no dependencies. It captures standard output and standard error, supplies standard input, and keeps files in memory with `/` as the only preopened directory. It also provides the environment variables, the clocks, random numbers, and sleeping. In Node and in web workers, a sleep blocks the thread with `Atomics.wait`.
 
 ## Long-lived states
 
-An interactive console needs a state that keeps the variables of earlier inputs. `create(options)` returns such a state, with the standard libraries open. The state keeps its globals between calls. `destroy(state)` closes it. The option `pledges` grants permissions to the state. `execute(state, code)` runs one input as the playground does. If the input is an expression, `execute` prints its values. Any other input runs as a chunk. `execute` returns the output followed by any error message, limited to 256 KiB. Like `run`, `execute` returns only after the detached coroutines have ended. The following code assigns a global in one input and reads it in the next.
+An interactive console needs a state that keeps the variables of earlier inputs. `create(options)` returns such a state, which has the standard libraries open, holds the permissions that the option `pledges` grants, and keeps its globals between calls until `destroy(state)` closes it. `execute(state, code)` runs one input as the playground does, printing the values of an expression or running any other input as a chunk. It returns the output followed by any error message, limited to 256 KiB. Like `run`, `execute` returns only after the detached coroutines have ended. The following code assigns a global in one input and reads it in the next.
 
 ```js
 const state = lus.create();
@@ -98,19 +98,19 @@ lus.execute(state, "x * 2");    // "20\n"
 lus.destroy(state);
 ```
 
-The language server of Lus is written in Lus, so a state can run it. An editor in a browser gets completions and diagnostics this way. `loadLsp(state, source)` loads the server. It returns an empty string on success and an error message on failure. `handleMessage(state, json)` processes one JSON-RPC body. `handleFrame(state, frame)` processes one complete `Content-Length` frame. Both return the framed responses as a string. The VS Code extension runs the server with these functions and needs no native `lus`. In Node, `mountLanguageServer(lus, dir)` copies the language server sources into the file system of a host.
+The language server of Lus is written in Lus, so a state can run it to give an editor in a browser completions and diagnostics. `loadLsp(state, source)` loads the server and returns an empty string on success or an error message on failure. `handleMessage(state, json)` processes one JSON-RPC body and `handleFrame(state, frame)` one complete `Content-Length` frame. Both return the framed responses as a string. The VS Code extension runs the server with these functions and needs no native `lus`. In Node, `mountLanguageServer(lus, dir)` copies the language server sources into the file system of a host.
 
 `lus.exports` contains every function of `lus.h`, for hosts that call the C interface directly.
 
 ## Exits and traps
 
-A WebAssembly instance cannot continue after the program calls `os.exit` or after a safety check fails. WebAssembly calls such a failure a _trap_. `lus.dead` is `true` after either event. On the next call, the host starts a new instance with the same file system. Every state of the earlier instance is then invalid. `run` reports a trap as an error with exit code 134. The other calls throw a JavaScript exception.
+A WebAssembly instance cannot continue after the program calls `os.exit` or after a safety check fails, which WebAssembly calls a _trap_. `lus.dead` is `true` after either event. On the next call, the host starts a new instance with the same file system, which leaves every state of the earlier instance invalid. `run` reports a trap as an error with exit code 134, while the other calls throw a JavaScript exception.
 
 ## The JIT
 
-The native runtime compiles the functions that run often to machine code. A WebAssembly module cannot generate machine code, so the WebAssembly build compiles those functions to WebAssembly, which the JavaScript engine then compiles to machine code. The runtime emits a small module for each such function. The host compiles the module and adds its function to the function table of the runtime. A module of up to 4 MiB compiles immediately. A larger module compiles in the background while the interpreter keeps running the function. `lus.jit` holds the statistics of the compiler. It is `null` when the options of `Lus.load` turned the JIT off or when the module was built without one.
+The native runtime compiles the functions that run often to machine code. A WebAssembly module cannot generate machine code, so the WebAssembly build compiles those functions to WebAssembly, which the JavaScript engine then compiles to machine code. The runtime emits a small module for each such function, which the host compiles before it adds the function to the function table of the runtime. A module of up to 4 MiB compiles immediately, while a larger module compiles in the background as the interpreter keeps running the function. `lus.jit` holds the statistics of the compiler, or `null` when the options of `Lus.load` turned the JIT off or when the module was built without one.
 
-The variable `LUS_JIT` in `lus.env` sets the JIT mode of each state, as the environment variable of the same name does for the native runtime. The default is `on`. `off` interprets every function. `eager` compiles every function on its first call. `LUS_JIT_THRESHOLD` sets the number of times a function runs before it compiles. The option `jit: false` of `Lus.load` creates a host without a compiler, so the module interprets every function.
+The variable `LUS_JIT` in `lus.env` sets the JIT mode of each state, as the environment variable of the same name does for the native runtime. The default is `on`, while `off` interprets every function and `eager` compiles every function on its first call. `LUS_JIT_THRESHOLD` sets the number of times a function runs before it compiles. The option `jit: false` of `Lus.load` creates a host without a compiler, so the module interprets every function.
 
 ## Related pages
 

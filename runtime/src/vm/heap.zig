@@ -367,6 +367,7 @@ inline fn segmentOf(p: *Page) *Segment {
 
 fn newSegment(g: *Global) Allocator.Error!void {
     const h = &g.heap;
+    if (@import("heapcount.zig").inject.fail()) return error.OutOfMemory;
     const block = g.parent_gpa.rawAlloc(block_size, block_align, @returnAddress()) orelse return error.OutOfMemory;
     const start = std.mem.alignForward(usize, @intFromPtr(block), segment_size);
     const seg: *Segment = @ptrFromInt(start);

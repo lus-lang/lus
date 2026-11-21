@@ -63,14 +63,7 @@ pub fn open(l: *Thread) Error!void {
 
 /// The bytes of a string or vector argument. Numbers convert to strings,
 /// as they do for every string parameter.
-fn checkInput(l: *Thread, i: u32) Error![]const u8 {
-    const v = l.arg(i);
-    return switch (v.tag) {
-        .string => v.as(object.String).bytes(),
-        .vector => (try vector.checkVector(l, i)).bytes.items,
-        else => if (v.isNumber()) try aux.checkBytes(l, i) else aux.typeError(l, i, "string or vector"),
-    };
-}
+const checkInput = vector.checkData;
 
 /// Moves `list` into a new vector and returns it as the single result.
 fn retBytes(l: *Thread, list: *std.ArrayList(u8)) Error!u32 {

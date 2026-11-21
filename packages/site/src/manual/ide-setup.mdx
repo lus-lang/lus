@@ -6,11 +6,11 @@ group: use
 shortdesc: "Editor support: the VSCode extension, the language server, and syntax highlighting in other editors."
 ---
 
-Editor support shows mistakes while you type, completes names, and shows the documentation of a function when the pointer rests on it. Lus provides an extension for VSCode-based editors. For every other editor, Lus provides a language server, which any editor with a Language Server Protocol client can start.
+Editor support shows mistakes while you type, completes names, and shows the documentation of a function when the pointer rests on it. Lus provides an extension for VSCode-based editors and, for every other editor, a language server that any editor with a Language Server Protocol client can start.
 
 ## VSCode-based editors
 
-The [Lus extension](https://open-vsx.org/extension/lus/lus) provides syntax highlighting, diagnostics, code completion, hover information, go-to-definition, references, and formatting. The extension contains the language server and the Lus runtime as a WebAssembly module, so these features work without a local installation of `lus`. Only [debugging](#debugging) needs one. The extension reads every `.lus` and `.lua` file of the workspace, so it finds definitions and references in other files.
+The [Lus extension](https://open-vsx.org/extension/lus/lus) provides syntax highlighting, diagnostics, code completion, hover information, go-to-definition, references, and formatting. The extension contains the language server and the Lus runtime as a WebAssembly module, so these features work without a local installation of `lus`, which only [debugging](#debugging) needs. The extension reads every `.lus` and `.lua` file of the workspace, so it finds definitions and references in other files.
 
 The extension runs in the Node-based extension host of VS Code, so it also works in remote workspaces.
 
@@ -34,7 +34,7 @@ code --install-extension lus-version.vsix
 
 ### Debugging
 
-The extension registers the `lus` debugger, so **Run and Debug** works on any `.lus` file. The debugger runs the program with a local installation of `lus`, which it starts as `lus debug`. The `lus.executablePath` setting names the command to start. Its default is `lus`, which must then be in a directory of the `PATH`. A launch configuration in `.vscode/launch.json` sets the program, its arguments, its working directory, and the permissions it receives:
+The extension registers the `lus` debugger, so **Run and Debug** works on any `.lus` file. The debugger runs the program with a local installation of `lus`, which it starts as `lus debug`. The `lus.executablePath` setting names the command to start and defaults to `lus`, which must then be in a directory of the `PATH`. A launch configuration in `.vscode/launch.json` sets the program, its arguments, its working directory, and the permissions it receives:
 
 ```json
 {
@@ -50,14 +50,14 @@ Breakpoints can have conditions, hit counts, and log messages. The debugger stop
 
 ## Other editors
 
-The language server is a Lus program, so every other editor runs it with a local installation of `lus`. Its source is the directory `packages/language-server` of the [repository](https://github.com/lus-lang/lus). Its files load each other with `require` under the module name `lus-language`, so the directory must be named `lus-language`. Copy or link it under that name:
+The language server is a Lus program, so every other editor runs it with a local installation of `lus`. Its source is the directory `packages/language-server` of the [repository](https://github.com/lus-lang/lus). The files in that directory load each other with `require` under the module name `lus-language`, so the directory must have that name. Copy or link it under that name:
 
 ```bash
 git clone https://github.com/lus-lang/lus.git
 ln -s "$PWD/lus/packages/language-server" /path/to/lus-language
 ```
 
-The editor then starts the server with the following command. The `--include` option compiles the modules of a directory when `lus` starts and names them after the directory. `require` then finds them from any working directory.
+The editor then starts the server with the following command. Its `--include` option compiles the modules of a directory when `lus` starts and names them after the directory, so that `require` finds them from any working directory.
 
 ```bash
 lus --include /path/to/lus-language /path/to/lus-language/main.lus
@@ -65,11 +65,11 @@ lus --include /path/to/lus-language /path/to/lus-language/main.lus
 
 The server reads Language Server Protocol messages from standard input and writes its replies to standard output. In the configuration of each editor, replace `/path/to/lus-language` with the path of the directory you created.
 
-Most editors do not recognize `.lus` files, so the instructions for each editor also give those files a file type. Lus extends the syntax of Lua, so each configuration highlights Lus with the Lua support of the editor. This colors most Lus code correctly. An editor that reads TextMate grammars can use the Lus grammar, which is [`packages/textmate/lus.tmLanguage.json`](https://github.com/lus-lang/lus/blob/main/packages/textmate/lus.tmLanguage.json) in the repository. Its scope is `source.lus`.
+Most editors do not recognize `.lus` files, so the instructions for each editor also give those files a file type. Lus extends the syntax of Lua, so each configuration highlights Lus with the Lua support of the editor, which colors most Lus code correctly. An editor that reads TextMate grammars can use the Lus grammar, [`packages/textmate/lus.tmLanguage.json`](https://github.com/lus-lang/lus/blob/main/packages/textmate/lus.tmLanguage.json) in the repository, whose scope is `source.lus`.
 
 ### Neovim
 
-Add the following to the Neovim configuration. It registers the `lus` file type for `.lus` files and highlights them with the Lua parser. It also starts the server for every buffer of that file type:
+Add the following to the Neovim configuration, which registers the `lus` file type for `.lus` files, highlights them with the Lua parser, and starts the server for every buffer of that file type:
 
 ```lua
 vim.filetype.add({ extension = { lus = "lus" } })
@@ -108,7 +108,7 @@ args = ["--include", "/path/to/lus-language", "/path/to/lus-language/main.lus"]
 
 ### Sublime Text
 
-Sublime Text highlights `.lus` files with its Lua syntax once you select it. Open a `.lus` file and choose **View > Syntax > Open all with current extension as... > Lua**. Then install [LSP for Sublime Text](https://github.com/sublimelsp/LSP) and add the following to its settings. The selector matches Lua files, so the server also starts for `.lua` files and reads them as Lus:
+To highlight `.lus` files with the Lua syntax of Sublime Text, open a `.lus` file and choose **View > Syntax > Open all with current extension as... > Lua**. Then install [LSP for Sublime Text](https://github.com/sublimelsp/LSP) and add the following to its settings. The selector matches Lua files, so the server also starts for `.lua` files and reads them as Lus:
 
 ```json
 {
@@ -124,7 +124,7 @@ Sublime Text highlights `.lus` files with its Lua syntax once you select it. Ope
 
 ### Emacs
 
-Install [lsp-mode](https://github.com/emacs-lsp/lsp-mode) and [lua-mode](https://github.com/immerrr/lua-mode). Then add the following to the Emacs configuration. It defines `lus-mode` for `.lus` files as a mode derived from `lua-mode`. It also registers the server for `lus-mode`:
+Install [lsp-mode](https://github.com/emacs-lsp/lsp-mode) and [lua-mode](https://github.com/immerrr/lua-mode), then add the following to the Emacs configuration. It defines `lus-mode` for `.lus` files as a mode derived from `lua-mode` and registers the server for `lus-mode`:
 
 ```elisp
 (define-derived-mode lus-mode lua-mode "Lus")
