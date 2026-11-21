@@ -6,7 +6,7 @@ group: use
 shortdesc: "Every lus command and option: run, test, fmt, check, doc, ast, build, compile, debug, help, and agents."
 ---
 
-The `lus` executable runs Lus programs. Its commands are the tools of a Lus project, such as the test runner, the formatter, and the checker. [Testing](/manual/testing) and [Developer tools](/manual/tools) describe how to use the tools.
+The `lus` executable runs Lus programs and provides the tools of a Lus project as commands, such as the test runner, the formatter, and the checker. [Testing](/manual/testing) and [Developer tools](/manual/tools) describe how to use the tools.
 
 ## lus
 
@@ -15,7 +15,7 @@ lus [options] [script [args]]
 lus <command> [arguments]
 ```
 
-`lus script.lus` runs a script and passes the arguments after its name to it. The script reads them from `...` and from the table `arg`. With no script and no `-e`, `lus` starts an interactive session that runs each line as it is entered. When the first argument is the name of a command, `lus` runs that command.
+`lus script.lus` runs a script and passes it the arguments after its name, which the script reads from `...` and from the table `arg`. With no script and no `-e`, `lus` starts an interactive session that runs each line as it is entered. When the first argument is the name of a command, `lus` runs that command.
 
 | Command | Purpose |
 | --- | --- |
@@ -33,7 +33,7 @@ lus <command> [arguments]
 
 ### Options
 
-The options come before the script name. `lus` passes everything after the script name to the script.
+The options come before the script name, because `lus` passes everything after the script name to the script.
 
 | Option | Effect |
 | --- | --- |
@@ -73,7 +73,7 @@ The options come before the script name. `lus` passes everything after the scrip
 lus test [options] [path ...]
 ```
 
-Runs the tests in the named files, or in every `*_test.lus` file inside the named directories. With no path, it searches the current directory. Each file runs in its own process and temporary directory. Files run in parallel. [Testing](/manual/testing) describes how to write tests.
+Runs the tests in the named files, or in every `*_test.lus` file inside the named directories. With no path, it searches the current directory. Files run in parallel, each in its own process and temporary directory. [Testing](/manual/testing) describes how to write tests.
 
 | Option | Effect |
 | --- | --- |
@@ -86,7 +86,7 @@ Runs the tests in the named files, or in every `*_test.lus` file inside the name
 | `--timeout S` | Stop a file that writes no output for S seconds. The default is 60. |
 | `--file-timeout S` | Stop a file that runs longer than S seconds in all. The default is ten times the timeout. |
 
-The exit status is 0 when every file passes. It is 1 when a test fails or a file cannot run. It is 2 when a named path does not exist.
+The exit status is 0 when every file passes, 1 when a test fails or a file cannot run, and 2 when a named path does not exist.
 
 ## lus fmt
 
@@ -108,7 +108,7 @@ Gives source files one standard layout. With no option, it prints the formatted 
 lus check [--json] [--list] [path ...]
 ```
 
-Finds errors and likely mistakes without running the code. It parses, lints, and compiles each file. It prints each problem as `file:line:column: severity: message [code]`. For a directory, it checks every `.lus` file inside it. Files named `*_test.lus` are checked with the conventions of `lus test`. The exit status is 1 when anything is reported. [Checking](/manual/tools#checking) lists the diagnostics.
+Finds errors and likely mistakes without running the code. It parses, lints, and compiles each file, then prints each problem as `file:line:column: severity: message [code]`. For a directory, it checks every `.lus` file inside it. Files named `*_test.lus` are checked with the conventions of `lus test`. The exit status is 1 when anything is reported. [Checking](/manual/tools#checking) lists the diagnostics.
 
 | Option | Effect |
 | --- | --- |
@@ -162,7 +162,7 @@ Bundles a script and the modules it requires into one executable, which runs on 
 lus compile [options] script
 ```
 
-Compiles a script to a binary chunk. `lus` runs a binary chunk as it runs a script. `load` reads one in binary mode. Loading a binary chunk skips parsing. A binary chunk can be distributed without its source. The default output is the script name with the extension `.lusc`. [Binary chunks](/manual/tools#binary-chunks) describes the format.
+Compiles a script to a binary chunk, which `lus` runs as it runs a script and `load` reads in binary mode. Loading a binary chunk skips parsing. A binary chunk can be distributed without its source. The default output is the script name with the extension `.lusc`. [Binary chunks](/manual/tools#binary-chunks) describes the format.
 
 | Option | Effect |
 | --- | --- |
@@ -202,7 +202,7 @@ Prints the reference of the standard library in the terminal. The reference is p
 lus agents init [dir]
 ```
 
-Adds instructions for writing and testing Lus to a project, where coding agents read them. The command writes the agent skills of the running version into `dir/.agents/skills` and links `.claude/skills` to them. It also adds a Lus section to `AGENTS.md`. `dir` defaults to the current directory. Running the command again updates the skills. The [agents page](/agents) lists the skills and the prompts to start from.
+Adds instructions for writing and testing Lus to a project, where coding agents read them. The command writes the agent skills of the running version into `dir/.agents/skills` and links `.claude/skills` to them, then adds a Lus section to `AGENTS.md`. `dir` defaults to the current directory. Running the command again updates the skills. The [agents page](/agents) lists the skills and the prompts to start from.
 
 ## Related pages
 

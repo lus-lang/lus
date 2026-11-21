@@ -8,12 +8,12 @@ shortdesc: "Build the interpreter, the embedding library, and the WebAssembly mo
 
 Build Lus from source for a platform without a prebuilt archive, for a host that needs a library with parts removed, or to work on the runtime. In every other case, install a release, as [Getting Started](/manual/getting-started) describes.
 
-The Lus runtime is written in Zig. The Zig compiler is the only tool that the build needs. The build produces the `lus` executable, the `liblus` embedding library with its header `lus.h`, and the `lus.wasm` WebAssembly module. SQLite, Zstandard, and Brotli are compiled from source as part of the build, so the build needs no system libraries.
+The Lus runtime is written in Zig, whose compiler is the only tool that the build needs. The build produces the `lus` executable, the `liblus` embedding library with its header `lus.h`, and the `lus.wasm` WebAssembly module. SQLite, Zstandard, and Brotli are compiled from source as part of the build, so the build needs no system libraries.
 
 The build requires the following:
 
 - The Lus source code from its [repository](https://github.com/lus-lang/lus).
-- [Zig](https://ziglang.org/download/) 0.17.1. The repository pins this version in `mise.toml`, so `mise install` provides it.
+- The version of [Zig](https://ziglang.org/download/) that the repository pins in `mise.toml`, which `mise install` provides.
 - Network access on the first build, which fetches the pinned Zstandard and Brotli sources listed in `runtime/build.zig.zon`.
 
 ## Building
@@ -26,11 +26,11 @@ cd lus/runtime
 zig build -Doptimize=ReleaseSafe
 ```
 
-The build writes the `lus` executable to `zig-out/bin`. `ReleaseSafe` optimizes the code and keeps the safety checks of the runtime, so a failed check stops the program with a message. Use it for work on the runtime, where those checks find mistakes. `-Doptimize=ReleaseFast` removes the checks, which makes the runtime faster. The release archives are built in this mode. A build without `-Doptimize` is a debug build, which runs much slower.
+The build writes the `lus` executable to `zig-out/bin`. `ReleaseSafe` optimizes the code and keeps the safety checks of the runtime, so a failed check stops the program with a message. Use it for work on the runtime, where those checks find mistakes. `-Doptimize=ReleaseFast`, the mode of the release archives, removes the checks to make the runtime faster. A build without `-Doptimize` is a debug build, which runs much slower.
 
 ### Optional libraries
 
-A build can omit a library that its host never uses, such as the `network` library for a host that never opens a socket. This makes the executable smaller. Each of the following options defaults to `true`. With `false`, the build omits the code of the library, so the name of the library holds `nil` in a program.
+A build can omit a library that its host never uses, such as the `network` library for a host that never opens a socket, which makes the executable smaller. Each of the following options defaults to `true`. Set to `false`, it omits the code of the library, so the name of the library holds `nil` in a program.
 
 | Option | Library |
 | --- | --- |
@@ -39,7 +39,7 @@ A build can omit a library that its host never uses, such as the `network` libra
 | `-Dsqlite=false` | `io.sqlite`. |
 | `-Darchive=false` | The `vector.archive` compression codecs. |
 
-`-Djit=false` builds a runtime that interprets every function. Use it on a system that forbids memory that is both writable and executable. It also makes the executable smaller.
+`-Djit=false` builds a smaller runtime that interprets every function, for a system that forbids memory that is both writable and executable.
 
 ### Verification
 
@@ -50,7 +50,7 @@ The following commands print the version of the new executable and run the unit 
 zig build test
 ```
 
-Three further steps test other parts. `zig build test-embed` tests the C embedding interface. `zig build test-bundle` tests standalone executables. `zig build test-debug` tests the debugger and needs Node. The following command runs the conformance suite of the language with `lus test`.
+Further steps test other parts. `zig build test-embed` tests the C embedding interface. `zig build test-bundle` tests standalone executables. `zig build test-debug` tests the debugger and needs Node. The following command runs the conformance suite of the language with `lus test`.
 
 ```bash
 ./zig-out/bin/lus test ../tests/conformance
@@ -63,7 +63,7 @@ Copy `zig-out/bin/lus` to a directory on your `PATH`:
 - On macOS and Linux, `/usr/local/bin` is the usual choice.
 - On Windows, create a directory for Lus and add that directory to your user `PATH` in Windows Settings.
 
-The executable depends on no other file. It contains the standard library, the IANA time zone database, and every tool described in the [CLI](/manual/cli) reference.
+The executable depends on no other file, because it contains the standard library, the IANA time zone database, and every tool described in the [CLI](/manual/cli) reference.
 
 ## Embedding Lus
 

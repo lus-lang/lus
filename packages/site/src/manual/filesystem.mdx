@@ -12,9 +12,9 @@ Every `fs` function that touches the filesystem requires the `fs:read` or `fs:wr
 
 ## Reading and writing files
 
-[`io.open(path, mode)`](/manual/api#io.open) opens a file and returns a file handle. The mode `"r"`, the default, reads. The mode `"w"` creates the file or empties it and then writes. The mode `"a"` writes at the end of the file. A handle declared with the `<close>` attribute closes when its block ends, including when an error ends the block.
+[`io.open(path, mode)`](/manual/api#io.open) opens a file and returns a file handle. The mode `"r"`, the default, reads, `"w"` creates the file or empties it and then writes, and `"a"` writes at the end of the file. A handle declared with the `<close>` attribute closes when its block ends, including when an error ends the block.
 
-The following program writes two lines to a file. It then reads the file once as a whole and once line by line.
+The following program writes two lines to a file, then reads the file once as a whole and once line by line.
 
 ```lus
 pledge("fs")
@@ -38,15 +38,15 @@ end
 fs.remove(path)
 ```
 
-`io.open` returns `nil` and a message when it cannot open the file, which is why the example wraps it in `assert`. `read("a")` returns the whole file. [`io.lines`](/manual/api#io.lines) reads a file line by line and closes it after the last line. Reading requires `fs:read` for the path. Writing requires `fs:write`. [Files](/manual/text#files) describes reading bytes and text in other encodings.
+`io.open` returns `nil` and a message when it cannot open the file, which is why the example wraps it in `assert`. `read("a")` returns the whole file. [`io.lines`](/manual/api#io.lines) reads a file line by line and closes it after the last line. Reading requires `fs:read` for the path and writing requires `fs:write`. [Files](/manual/text#files) describes reading bytes and text in other encodings.
 
-[`os.tmpname()`](/manual/api#os.tmpname) creates an empty temporary file and returns its path. A temporary file is for data that a program keeps only while it runs. The program removes the file with `fs.remove` when it is done.
+[`os.tmpname()`](/manual/api#os.tmpname) creates an empty temporary file and returns its path. A temporary file holds data that a program keeps only while it runs, so the program removes the file with `fs.remove` when it is done.
 
 ## Listing a directory
 
 [`fs.list(path, glob)`](/manual/api#fs.list) returns an array with the name of every entry in the directory at `path`. Each name is the name alone, without the directory, so a program joins each one to `path` before it uses it. The array excludes `.` and `..`. The order of the names is unspecified.
 
-The following program creates a directory with two files and lists it. It sorts the names because their order is unspecified.
+The following program creates a directory with two files and lists it, sorting the names because their order is unspecified.
 
 ```lus
 pledge("fs")
@@ -64,7 +64,7 @@ fs.remove(dir, true)
 fs.remove(base)
 ```
 
-With a `glob`, `fs.list` returns only the names that match it. A glob selects files by extension or by prefix. In a glob, `*` matches any sequence of characters, including the empty one. `?` matches exactly one byte, which is one character in an ASCII name. Every other character matches itself. A name that starts with `.` matches `*` like any other name.
+A _glob_ is a pattern that selects files by extension or by prefix. With a `glob`, `fs.list` returns only the names that match it. In a glob, `*` matches any sequence of characters, including the empty one, while `?` matches exactly one byte, which is one character in an ASCII name. Every other character matches itself. A name that starts with `.` matches `*` like any other name.
 
 The following program counts the JSON files in a directory and finds the configuration file whose number has one digit.
 
@@ -88,7 +88,7 @@ fs.remove(base)
 
 ## Inspecting a path
 
-[`fs.type(path)`](/manual/api#fs.type) reports whether `path` is a directory or a file. A program needs this before it lists or opens an entry. `fs.type` returns two values. The first is `"directory"` for a directory and `"file"` for anything else. The second is `true` when `path` is a symbolic link. For a link, the first value is the type of its target. For a link whose target does not exist, the first value is `"file"`.
+[`fs.type(path)`](/manual/api#fs.type) reports whether `path` is a directory or a file, which a program needs to know before it lists or opens an entry. It returns two values. The first is `"directory"` for a directory and `"file"` for anything else. The second is `true` when `path` is a symbolic link, in which case the first value is the type of its target, or `"file"` when the target does not exist.
 
 The following program inspects a directory, a file, and a link to that file.
 
@@ -126,7 +126,7 @@ print(exists("."), exists("no-such-file"))   --> true  false
 
 [`fs.createdirectory(path, recursive)`](/manual/api#fs.createdirectory) creates a directory. Without `recursive`, the parent must exist and `path` must not. Otherwise the call raises `"cannot create directory 'PATH': parent does not exist"` or `"cannot create directory 'PATH': already exists"`.
 
-Both calls under `catch` in the following program fail. The first names a directory that exists. The second names a directory whose parent is missing.
+Both calls under `catch` in the following program fail, the first because the directory exists and the second because its parent is missing.
 
 ```lus
 pledge("fs")
@@ -140,9 +140,9 @@ fs.remove(dir)
 fs.remove(base)
 ```
 
-With `recursive` set to `true`, the call creates every missing directory along `path` and succeeds when the whole path already exists. This is the form for a program that needs a directory to exist before it writes into it, such as an output or cache directory. A component of `path` that exists as a file raises an error. A recursive `path` must not contain a `..` component. A path that contains one raises `"cannot create directory 'PATH': '..' is denied"`.
+With `recursive` set to `true`, the call creates every missing directory along `path` and succeeds when the whole path already exists. This is the form for a program that needs a directory to exist before it writes into it, such as an output or cache directory. A component of `path` that exists as a file raises an error. A `..` component in a recursive `path` raises `"cannot create directory 'PATH': '..' is denied"`.
 
-The following program creates a tree of three directories. The second call finds the tree in place and succeeds.
+The following program creates a tree of three directories, then calls `fs.createdirectory` again, which finds the tree in place and succeeds.
 
 ```lus
 pledge("fs")
@@ -162,7 +162,7 @@ fs.remove(base)
 
 [`fs.copy(source, dest)`](/manual/api#fs.copy) copies the contents of the file at `source` into a new file at `dest`. It never replaces an existing file, so a copy cannot destroy data. A `dest` that exists raises `"target 'DEST' already exists"`. The source must be a file. A source that is a directory raises an error. If the copy fails partway, `fs.copy` removes the partial file at `dest` before it raises the error.
 
-The following program makes a backup of a file. The second copy fails because the backup exists.
+The following program makes a backup of a file, then copies it again, which fails because the backup exists.
 
 ```lus
 pledge("fs")
@@ -181,7 +181,7 @@ fs.remove(backup)
 
 `fs.copy` requires `fs:read` for `source` and `fs:write` for `dest`.
 
-[`fs.move(source, dest)`](/manual/api#fs.move) renames a file or a directory. A `dest` in another directory of the same filesystem moves the entry there. Like `fs.copy`, it never replaces an existing entry. A `dest` that exists raises `"cannot move to 'DEST': target already exists"`. A missing `source` raises `"cannot move 'SOURCE': source does not exist"`. A move between two filesystems, such as two disks, raises an error that ends in `cross-device move`. A program that needs such a move copies the file and removes the original.
+[`fs.move(source, dest)`](/manual/api#fs.move) renames a file or a directory, which moves the entry when `dest` is in another directory of the same filesystem. Like `fs.copy`, it never replaces an existing entry, so a `dest` that exists raises `"cannot move to 'DEST': target already exists"`. A missing `source` raises `"cannot move 'SOURCE': source does not exist"`. A move between two filesystems, such as two disks, raises an error that ends in `cross-device move`, so a program that needs such a move copies the file and removes the original.
 
 The following program renames a file and then moves it into an archive directory.
 
@@ -201,9 +201,9 @@ fs.remove(archive, true)
 
 ## Removing files and directories
 
-[`fs.remove(path, recursive)`](/manual/api#fs.remove) removes a file, a symbolic link, or an empty directory. A directory that still has entries raises `"cannot remove directory 'PATH': not empty"` unless `recursive` is `true`. A recursive call removes the directory and everything below it. A missing `path` raises `"cannot remove 'PATH': path does not exist"`.
+[`fs.remove(path, recursive)`](/manual/api#fs.remove) removes a file, a symbolic link, or an empty directory. A directory that still has entries raises `"cannot remove directory 'PATH': not empty"` unless `recursive` is `true`, in which case the call removes the directory and everything below it. A missing `path` raises `"cannot remove 'PATH': path does not exist"`.
 
-The following program removes a directory that holds a file. The plain call fails. The recursive call succeeds.
+In the following program, the plain call fails to remove a directory that holds a file, then the recursive call succeeds.
 
 ```lus
 pledge("fs")
@@ -219,13 +219,13 @@ print((catch fs.type(scratch)))     --> false
 fs.remove(base)
 ```
 
-`fs.remove` never follows a symbolic link. Removing a link removes the link and leaves its target. A recursive removal removes each link inside the tree and leaves the target of that link in place. A recursive removal therefore never deletes files outside the tree it was given.
+`fs.remove` never follows a symbolic link, so removing a link leaves its target in place. A recursive removal removes each link inside the tree without touching its target, so it never deletes files outside the tree it was given.
 
 The permission check follows the same rule. `fs.remove` requires `fs:write` for the location of `path` itself, so a grant that covers a link permits removing the link even when its target lies outside the grant.
 
 ## Symbolic links
 
-A _symbolic link_ is an entry that points to another path, so that opening the link opens its target. [`fs.createlink(link, target)`](/manual/api#fs.createlink) creates a symbolic link at `link` that points to `target`. The link stores `target` as given. A relative target is therefore resolved against the directory of the link when the link is used. `fs.follow` returns the stored target.
+A _symbolic link_ is an entry that points to another path, so that opening the link opens its target. [`fs.createlink(link, target)`](/manual/api#fs.createlink) creates a symbolic link at `link` that points to `target`. The link stores `target` as given, so a relative target is resolved against the directory of the link when the link is used. `fs.follow` returns the stored target.
 
 The following program creates a link named `alias` to a file in the same directory.
 
@@ -249,9 +249,9 @@ fs.remove(base)
 
 ## Paths
 
-POSIX systems separate the parts of a path with `/` and Windows separates them with `\`, so a path built with `dir .. "/" .. name` is correct on only some systems. The functions of [`fs.path`](/manual/api#fs.path) build and split paths with the separator of the platform the program runs on. They compute on the path strings alone, so they require no permission. They accept `/` as a separator on every platform. On Windows they also accept `\`.
+POSIX systems separate the parts of a path with `/` and Windows separates them with `\`, so a path built with `dir .. "/" .. name` is correct on only some systems. The functions of [`fs.path`](/manual/api#fs.path) build and split paths with the separator of the platform the program runs on. They compute on the path strings alone, so they require no permission. They accept `/` as a separator on every platform and `\` on Windows as well.
 
-[`fs.path.join(...)`](/manual/api#fs.path.join) joins its arguments with the platform separator. It skips empty arguments and adds no separator where one is already present. An absolute argument replaces everything before it. The following calls show the results on a POSIX system.
+[`fs.path.join(...)`](/manual/api#fs.path.join) joins its arguments with the platform separator, skipping empty arguments and adding no separator where one is already present. An absolute argument replaces everything before it. The following calls show the results on a POSIX system.
 
 ```lus
 print(fs.path.join("dir", "sub", "file.txt"))   --> dir/sub/file.txt
@@ -266,7 +266,7 @@ local parts = fs.path.split("/usr/local/bin")
 print(#parts, parts[1] == "", parts[2], parts[4])   --> 4  true  usr  bin
 ```
 
-[`fs.path.name(path)`](/manual/api#fs.path.name) returns the part after the last separator, which is the file name. [`fs.path.parent(path)`](/manual/api#fs.path.parent) returns the part before it, which is the directory that holds the entry. The parent of a path without a separator is `"."`. The parent of an entry directly under the root is the root. A path that ends in a separator has the empty string as its name.
+[`fs.path.name(path)`](/manual/api#fs.path.name) returns the part after the last separator, which is the file name. [`fs.path.parent(path)`](/manual/api#fs.path.parent) returns the part before it, which is the directory that holds the entry. The parent of a path without a separator is `"."`, while the parent of an entry directly under the root is the root. A path that ends in a separator has the empty string as its name.
 
 ```lus
 print(fs.path.name("/home/user/report.pdf"))     --> report.pdf
@@ -279,7 +279,7 @@ print(fs.path.parent("report.pdf"))              --> .
 
 ## Errors
 
-Every failure of an `fs` function raises an error object that is a string. The string names the operation, the path, and the reason. The reasons that the runtime writes itself, such as `already exists` and `not empty`, are the same on every platform. Other reasons come from the operating system, such as `No such file or directory`. The message starts with the position of the call. The following example removes the position with `match`.
+Every failure of an `fs` function raises an error object that is a string naming the operation, the path, and the reason. The reasons that the runtime writes itself, such as `already exists` and `not empty`, are the same on every platform, while other reasons, such as `No such file or directory`, come from the operating system. The message starts with the position of the call, which the following example removes with `match`.
 
 ```lus
 pledge("fs")
@@ -291,7 +291,7 @@ print(err:match("cannot.*"))   --> cannot remove 'nonexistent': path does not ex
 
 ## Copying a directory tree
 
-`fs.copy` copies one file. The following function copies a whole directory by combining `fs.list`, `fs.type`, `fs.path.join`, and `fs.copy`. It calls itself for each directory it finds.
+`fs.copy` copies one file. The following function copies a whole directory by combining `fs.list`, `fs.type`, `fs.path.join`, and `fs.copy`, calling itself for each directory it finds.
 
 ```lus
 local function copytree(src, dst)
