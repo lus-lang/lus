@@ -478,17 +478,41 @@ fn insertNew(t: *Table, k: Value, val: Value) void {
 
 /// Recomputes the sizes of both parts so that the array part is the
 /// largest power of two that is more than half full, then reinserts every
-/// live entry. `extra` is the key about to be inserted.
+/// live entry. `extra` is the key about to be inserted. A large array
+/// part whose keys run without gaps from 1 grows by half instead
+/// (`dense_growth`).
 fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void {
     // nums[b] counts integer keys k with 2^(b-1) < k <= 2^b.
     var nums: [64]u32 = @splat(0);
     var total_int: u32 = 0;
     var total: u32 = 0;
-    for (0..t.asize) |idx| {
-        if (!arrayIsNil(t, idx)) {
-            nums[ceilLog2(idx + 1)] += 1;
-            total_int += 1;
+    // The largest integer key, which tells whether the keys are dense.
+    var max_int: usize = 0;
+    if (t.kind == .boxed) {
+        for (0..t.asize) |idx| {
+            if (!arrayIsNil(t, idx)) {
+                nums[ceilLog2(idx + 1)] += 1;
+                total_int += 1;
+                max_int = idx + 1;
+            }
         }
+    } else {
+        // An unboxed part is counted one range of keys at a time, in a
+        // loop without branches.
+        const w = t.words();
+        var lo: usize = 0;
+        var b: usize = 0;
+        while (lo < w.len) : (b += 1) {
+            const hi = @min(w.len, @as(usize, 1) << @intCast(b));
+            var c: u32 = 0;
+            for (w[lo..hi]) |x| c += @intFromBool(x != hole);
+            nums[b] = c;
+            total_int += c;
+            lo = hi;
+        }
+        var top = w.len;
+        while (top > 0 and w[top - 1] == hole) top -= 1;
+        max_int = top;
     }
     for (0..t.hash_len) |h| {
         if (t.keyTag(h) == .nil or t.valTag(h) == .nil) continue;
@@ -498,6 +522,7 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void 
             if (k >= 1 and k <= 1 << 40) {
                 nums[ceilLog2(@intCast(k))] += 1;
                 total_int += 1;
+                max_int = @max(max_int, @as(usize, @intCast(k)));
             }
         }
     }
@@ -506,6 +531,7 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void 
         if (k >= 1 and k <= 1 << 40) {
             nums[ceilLog2(@intCast(k))] += 1;
             total_int += 1;
+            max_int = @max(max_int, @as(usize, @intCast(k)));
         }
     }
     total += 1; // the extra key
@@ -523,9 +549,24 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void 
         }
         twotoi *= 2;
     }
+    // A power of two that a list of n values outgrew holds up to 2n
+    // slots, and a list just past a power of two leaves half of its part
+    // empty. A large list grows by half of its length instead, which
+    // leaves at most a third empty. Every integer key then still lands in
+    // the array part.
+    if (best >= dense_growth and max_int == total_int) {
+        const want = std.mem.alignForward(usize, max_int + max_int / 2, 1024);
+        if (want < best) {
+            best = want;
+            na = total_int;
+        }
+    }
     const hash_count = total + countArray(t) - @as(u32, @intCast(na));
     try resizeWith(gpa, t, best, hash_count, extra, extra_val);
 }
+
+/// The array size from which a list grows by half instead of doubling.
+const dense_growth = 1 << 16;
 
 fn countArray(t: *Table) u32 {
     var n: u32 = 0;
