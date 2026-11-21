@@ -241,7 +241,7 @@ fn promote(g: *Global, v: Value) void {
 /// Appends `h` to a gray list, without a call while the list has room.
 inline fn pushGray(g: *Global, list: *GrayList, h: *Header) void {
     if (list.items.len < list.capacity) return list.appendAssumeCapacity(h);
-    list.append(g.gpa, h) catch {
+    list.append(gcpar.stack_alloc, h) catch {
         g.gcs.overflow = true;
     };
 }
@@ -261,7 +261,7 @@ fn barrierSlow(g: *Global, h: *Header) void {
     if (!isMarked(h)) return;
     // When the list cannot grow, the end of the mark phase traces every
     // marked object again instead.
-    s.grayagain.append(g.gpa, h) catch {
+    s.grayagain.append(gcpar.stack_alloc, h) catch {
         s.overflow = true;
     };
 }
@@ -358,8 +358,8 @@ pub const State = struct {
     majorminor: usize = 50,
 
     pub fn deinit(s: *State, gpa: Allocator) void {
-        s.gray.deinit(gpa);
-        s.grayagain.deinit(gpa);
+        s.gray.deinit(gcpar.stack_alloc);
+        s.grayagain.deinit(gcpar.stack_alloc);
         s.weak.deinit(gpa);
         s.all_weak.deinit(gpa);
         s.ephemerons.deinit(gpa);
@@ -638,8 +638,8 @@ fn finishMark(g: *Global, m: *Marker, major: bool) void {
     std.debug.assert(s.gray.items.len == 0 and s.grayagain.items.len == 0);
     // The gray stack holds an entry per reference while it drains, so a
     // heap with many references grows it far past what a later cycle
-    // needs. Its memory is counted as heap, so a large one is freed.
-    if (s.gray.capacity > gray_keep) s.gray.clearAndFree(g.gpa);
+    // needs, and a large one is freed.
+    if (s.gray.capacity > gray_keep) s.gray.clearAndFree(gcpar.stack_alloc);
     s.heap_at_mark = g.counter.bytes;
     s.swept = 0;
     s.last_major = major;
@@ -1015,8 +1015,8 @@ const prefetch_distance = 8;
 pub const GrayList = std.ArrayList(*align(1) Header);
 
 /// The gray stack capacity, in entries, that survives the end of a mark
-/// phase (512 KB on 64-bit targets).
-pub const gray_keep = 64 * 1024;
+/// phase (2 MB on 64-bit targets).
+pub const gray_keep = 256 * 1024;
 
 /// Set in a gray stack entry whose object was not marked when it was
 /// pushed (`Marker.markValue`).
@@ -1075,11 +1075,6 @@ fn MarkerOf(comptime par: bool) type {
             return .{ .g = d.g, .gray = stack, .drain = d };
         }
 
-        /// The allocator of the gray stack.
-        inline fn grayAlloc(m: *M) Allocator {
-            return if (par) gcpar.stack_alloc else m.g.gpa;
-        }
-
         inline fn isMarkedM(h: *const Header) bool {
             return if (par) isMarkedAtomic(h) else isMarked(h);
         }
@@ -1114,7 +1109,7 @@ fn MarkerOf(comptime par: bool) type {
                 gray.appendAssumeCapacity(h);
                 return true;
             }
-            gray.append(m.grayAlloc(), h) catch return false;
+            gray.append(gcpar.stack_alloc, h) catch return false;
             return true;
         }
 

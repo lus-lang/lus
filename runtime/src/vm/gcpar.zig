@@ -31,9 +31,12 @@ const chunk_len = 1024;
 /// The most threads that mark together, the calling thread included.
 const max_workers = 8;
 
-/// Gray stacks of helper threads live in the C heap, which every thread
-/// may use. The heap of the state counts its bytes without locking.
-pub const stack_alloc: Allocator = if (builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
+/// Gray stacks live outside the heap of the state, which counts its
+/// bytes without locking, in memory that every thread may use. On
+/// systems with virtual memory they take pages of their own, so a stack
+/// that a large table grew returns its memory to the system when it is
+/// freed. The C heap would keep such a block for later use.
+pub const stack_alloc: Allocator = if (builtin.cpu.arch.isWasm()) (if (builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator) else std.heap.page_allocator;
 
 const Chunk = struct {
     next: ?*Chunk = null,
