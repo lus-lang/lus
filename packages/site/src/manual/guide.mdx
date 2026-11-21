@@ -1335,51 +1335,6 @@ print(count, total)  --> 3  18.75
 
 The body of a `pairs` loop may assign to keys that the table already has. It may also remove such a key by assigning `nil`. If the body adds a new key to the table, the keys that the rest of the loop produces are unpredictable.
 
-### Counting with range
-
-[`range`](/manual/api#range) produces a sequence of numbers. `range(n)` counts from 1 to `n`. `range(first, last)` counts from `first` to `last`. A third argument is the step. A negative step counts down. The arguments must be numbers.
-
-```lus
-for lap in range(3) do
-    print(`lap $lap`)
-end
---> lap 1
---> lap 2
---> lap 3
-
-local countdown = {}
-for i in range(10, 1, -3) do
-    countdown[#countdown + 1] = i
-end
-print(table.concat(countdown, " "))  --> 10 7 4 1
-```
-
-A `for` loop over a call to `range` behaves exactly like the [numeric `for`](#numeric-for-loops) loop with the same numbers. It also runs at the same speed. A float start or step makes every value a float, so `range(1, 2, 0.5)` counts `1.0`, `1.5`, and `2.0`. The choice between the two loops is a matter of style.
-
-`range` is necessary when the sequence is a value that the program passes on or stores. Outside a `for` loop, a call to `range` returns an iterator. Each call of the iterator returns the next number. After the last number, the iterator returns `nil`. The following `squares` function squares every number that its argument produces. Each call of `squares` passes a different sequence.
-
-```lus
-local function squares(numbers)
-    local result = {}
-    for n in numbers do
-        result[#result + 1] = n * n
-    end
-    return result
-end
-
-print(table.concat(squares(range(4)), " "))           --> 1 4 9 16
-print(table.concat(squares(range(10, 30, 10)), " "))  --> 100 400 900
-```
-
-A program can also store the iterator and call it whenever it needs the next number. The following program gives out three seat numbers, one per call. The fourth call returns `nil` because every seat is taken.
-
-```lus
-local free_seats = range(1, 3)
-
-print(free_seats(), free_seats())  --> 1  2
-print(free_seats(), free_seats())  --> 3  nil
-```
-
 ### Writing an iterator with a function
 
 The generic `for` loop calls its [iterator](#iteration) before each pass. It assigns the results of the call to the loop variables. The loop ends when the first result is `nil`. An iterator therefore returns the values of the next item on each call. When no item is left, it returns `nil`.

@@ -145,7 +145,7 @@ print((catch fs.remove(path .. ".bak")))   --> false
 
 ### New global names
 
-Lus adds the following globals: `bigint`, `decimal`, `flags`, `fromcsv`, `fromjson`, `fs`, `network`, `pledge`, `query`, `range`, `time`, `tocsv`, `tojson`, `vector`, and `worker`. A Lua program that assigns to a global with one of these names replaces the Lus value for the whole program. The program then cannot use that Lus library. A local variable with one of these names shadows the global, as in Lua. The exception is `flags`, which is readonly. Assigning to the global `flags` is a compile error.
+Lus adds the following globals: `bigint`, `decimal`, `flags`, `fromcsv`, `fromjson`, `fs`, `network`, `pledge`, `query`, `time`, `tocsv`, `tojson`, `vector`, and `worker`. A Lua program that assigns to a global with one of these names replaces the Lus value for the whole program. The program then cannot use that Lus library. A local variable with one of these names shadows the global, as in Lua. The exception is `flags`, which is readonly. Assigning to the global `flags` is a compile error.
 
 ### Reserved words
 
@@ -448,44 +448,6 @@ repeat
     local done = true
 until done
 ```
-
-### `range`
-
-Lua counts with the numeric `for` statement, which is unchanged in Lus. Because it is a statement, its sequence of numbers cannot be stored in a variable or passed to a function. A Lua program that needs to pass such a sequence defines an iterator function.
-
-```lua
-local function range(first, last, step)
-    step = step or 1
-    local i = first - step
-    return function()
-        i = i + step
-        if (step > 0 and i <= last) or (step < 0 and i >= last) then
-            return i
-        end
-    end
-end
-```
-
-In Lus, this function is the global [`range`](/manual/guide#counting-with-range). `range(n)` counts from 1 to `n`. `range(first, last, step)` counts from `first` to `last` inclusive in steps of `step`. The step is 1 by default and may be negative. The arguments must be numbers. `range` returns an iterator function for a generic `for`. The iterator is a value, so it can be stored in a variable or passed to a function that accepts any iterator. A `for` loop that calls `range` directly in its header runs as the numeric `for` does, at the same speed and with the same rules. Both forms are therefore suitable for a plain counting loop. In the following example, the function `sum` accepts any iterator, including one that `range` returns.
-
-```lus
-local function sum(iter)
-    local total = 0
-    for n in iter do
-        total = total + n
-    end
-    return total
-end
-
-print(sum(range(1, 10, 3)), sum(range(4)))   --> 22  10
-
-local countdown = range(3, 1, -1)
-print(countdown(), countdown(), countdown(), countdown())   --> 3  2  1  nil
-
-print((catch range(1, 5, 0)))          --> false
-```
-
-A step of zero raises an error. The Lua iterator shown earlier returns no values for a step of zero and reports nothing.
 
 ### Enums
 
