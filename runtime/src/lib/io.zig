@@ -110,8 +110,9 @@ fn newHandle(l: *Thread, h: Handle) Error!Value {
     u.metatable = mt;
     const hp: *Handle = @ptrCast(@alignCast(u.data()));
     hp.* = h;
-    // Regular files get closed by the collector.
-    if (h.kind == .file or h.kind == .pipe) try @import("base.zig").registerFinalizer(l, &u.hdr, mt);
+    // The collector closes files and pipes, and frees the read buffer of
+    // every handle, the standard ones included.
+    try @import("base.zig").registerFinalizer(l, &u.hdr, mt);
     return Value.obj(.userdata, u);
 }
 
@@ -519,6 +520,12 @@ fn fClose(l: *Thread) Error!u32 {
 fn fGc(l: *Thread) Error!u32 {
     const h = toHandle(l, l.arg(1)) orelse return 0;
     if (!h.closed and (h.kind == .file or h.kind == .pipe)) _ = try closeHandle(l, h);
+    // A standard handle never closes, but its read buffer goes with it.
+    if (h.kind == .stdin or h.kind == .stdout or h.kind == .stderr) {
+        h.rbuf.deinit(l.g.gpa);
+        h.rbuf = .empty;
+        h.rstart = 0;
+    }
     return 0;
 }
 

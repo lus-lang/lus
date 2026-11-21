@@ -856,8 +856,9 @@ end
 -- tojson of 0.1 keeps enough digits to round-trip
 local function tojson_of_0_1_keeps_enough_digits_to_round_trip_test()
     local s = tojson(0.1)
-    -- The exact textual form is the shortest %.17g rendering.
-    assert(s == "0.10000000000000001")
+    -- The textual form has the fewest digits that read back as 0.1.
+    assert(s == "0.1")
+    assert(tojson(1 / 3) == "0.3333333333333333" and fromjson(tojson(1 / 3)) == 1 / 3)
     assert(fromjson(s) == 0.1)
 end
 
@@ -873,7 +874,7 @@ local function json_numbers_keep_a_dot_radix_under_a_comma_locale_test()
     if selected and string.format("%.1f", 1.5):find(",", 1, true) then
         local ok, err = catch (function()
             assert(tojson(1.5) == "1.5")
-            assert(tojson(0.1) == "0.10000000000000001")
+            assert(tojson(0.1) == "0.1")
             assert(fromjson("1.5") == 1.5)
             assert(fromjson("1.5e2") == 150.0)
         end)()

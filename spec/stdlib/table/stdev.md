@@ -26,7 +26,7 @@ An `array` that is not a table raises `bad argument #1 to 'table.stdev' (table e
 ```lus
 local data = {2, 4, 4, 4, 5, 5, 7, 9}
 print(table.stdev(data))          --> 2.0
-print(table.stdev(data, true))    --> 2.1380899352993952
+print(table.stdev(data, true))    --> 2.138089935299395
 print(table.stdev({5}), table.stdev({5}, true))  --> 0.0  nan
 ```
 

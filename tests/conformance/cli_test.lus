@@ -421,6 +421,17 @@ local function temporary_files_need_a_grant_that_covers_them_test()
     assert(ok == "./lua_\n", ok)
 end
 
+-- A safe build checks at exit that every allocation was freed, and the
+-- read buffer of standard input counts too.
+local function reading_standard_input_frees_its_buffer_test()
+    if windows then skip("POSIX shell pipe") end
+    write_file("stdin_read.lus", "print(io.read())\nprint(io.stdin:read('a'))\n")
+    local ok, out = run_command("printf 'one\\ntwo\\n' | " .. lus_cmd .. " stdin_read.lus")
+    fs.remove("stdin_read.lus")
+    assert(ok, out)
+    assert(out == "one\ntwo\n\n", out)
+end
+
 local function disassembly_folds_compile_time_flags_as_running_does_test()
     write_file("dis_flags.lus", 'if flags.FAST then\n    print("fast")\nelse\n    print("slow")\nend\n')
     local _, ran = run_command(lus_cmd .. " -F FAST dis_flags.lus")

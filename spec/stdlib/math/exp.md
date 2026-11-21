@@ -22,7 +22,7 @@ An argument that is not a number raises `bad argument #1 to 'math.exp' (number e
 
 ```lus
 print(math.exp(0))     --> 1.0
-print(math.exp(1))     --> 2.7182818284590451
+print(math.exp(1))     --> 2.718281828459045
 print(math.exp(710))   --> inf
 ```
 

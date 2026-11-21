@@ -245,6 +245,7 @@ local function division_edge_cases_test()
 
     local ok2, err2 = catch (function() return 1 % 0 end)()
     assert(not ok2, "modulo by zero should error")
+    assert(string.find(err2, "attempt to perform 'n%0'", 1, true), err2)
 end
 
 -- NaN propagation

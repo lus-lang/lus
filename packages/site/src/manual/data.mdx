@@ -92,13 +92,13 @@ Numbers serialize as follows:
 
 - An integer, a bigint, or a decimal is written with its exact digits.
 - A float with a whole value is written without a decimal point, so it parses back as an integer.
-- Any other float is written with 17 significant digits, which parse back to the same float.
+- Any other float is written with the fewest significant digits, from 14 up to 17, that parse back to the same float, so `0.1` stays `0.1`.
 - An infinity or NaN becomes `null`.
 
 ```lus
 global math, print, tojson
 
-print(tojson(3.0), tojson(0.1))               --> 3  0.10000000000000001
+print(tojson(3.0), tojson(0.1))               --> 3  0.1
 print(tojson(math.huge), tojson(0 / 0))       --> null  null
 ```
 
@@ -276,7 +276,7 @@ print(table.mean({10, 20}), table.median({5, 1, 3, 2, 4}))      --> 15.0  3.0
 print(table.median({1, 2, 3, 4}), table.mean({}))               --> 2.5  nan
 
 local values = {2, 4, 4, 4, 5, 5, 7, 9}
-print(table.stdev(values), table.stdev(values, true))           --> 2.0  2.1380899352993952
+print(table.stdev(values), table.stdev(values, true))           --> 2.0  2.138089935299395
 ```
 
 The sums inside `table.sum`, `table.mean`, and `table.stdev` add in a fixed order through eight accumulators, so the result is the same on every platform and for every way the table is stored. The API entries give the order.
