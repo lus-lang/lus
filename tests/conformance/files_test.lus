@@ -120,7 +120,9 @@ end
 -- program.
 local function popen_lines_then_close_returns_the_status_test()
     if not os.execute() then skip("no shell") end
-    local p = assert(io.popen("printf 'x\\ny\\n'; exit 3"))
+    -- cmd.exe on Windows, /bin/sh elsewhere.
+    local windows = package.config:sub(1, 1) == "\\"
+    local p = assert(io.popen(windows and "(echo x& echo y& exit 3)" or "printf 'x\\ny\\n'; exit 3"))
     local k = 0
     for _ in p:lines() do k = k + 1 end
     assert(k == 2)

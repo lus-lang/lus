@@ -894,3 +894,19 @@ local function tcp_all_data_receive_enforces_its_default_64_mib_limit_test()
     conn:close()
     server:close()
 end
+
+-- A receive smaller than the datagram returns its first bytes and drops
+-- the rest, on every platform. Windows fails a short receive buffer, so
+-- the runtime receives into a buffer that holds any datagram.
+local function udp_receive_truncates_a_large_datagram_test()
+    local receiver = udp_open(0, "127.0.0.1")
+    local sender = udp_open()
+    local _, port = receiver:getsockname()
+    sender:sendto(string.rep("a", 3000), "127.0.0.1", port)
+    sender:sendto("next", "127.0.0.1", port)
+    local data, address = receiver:receive(5)
+    assert(txt(data) == "aaaaa" and address == "127.0.0.1")
+    assert(txt(receiver:receive()) == "next")
+    receiver:close()
+    sender:close()
+end
