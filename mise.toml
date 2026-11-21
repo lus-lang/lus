@@ -30,9 +30,44 @@ depends = ["build"]
 run = "node --test packaging/install/install.test.mjs"
 
 [tasks.fuzz]
-description = "Fuzz the lexer, parser, compiler, formatter, and chunk loader"
+description = "Fuzz the front end, the chunk loader, and the parsers and formatters of the standard library"
 dir = "runtime"
 run = "zig build test --fuzz=1M -Doptimize=ReleaseSafe"
+
+[tasks.diff]
+description = "Run 200 generated programs under every JIT mode and compare their output"
+depends = ["build"]
+run = "node tests/diff/run.mjs --count 200 --start 1 --timeout 60000"
+
+[tasks."diff:long"]
+description = "Generate programs until stopped, under every JIT mode, the gc-stress build, and the x86-64 build"
+depends = ["build", "build:stress", "build:x64"]
+run = "node tests/diff/run.mjs --forever --reduce --timeout 60000 --stress runtime/zig-out-stress/bin/lus --x64 runtime/zig-out-x64/bin/lus"
+
+[tasks."build:stress"]
+description = "Build the gc-stress and gc-verify runtime into runtime/zig-out-stress"
+dir = "runtime"
+run = "zig build -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress"
+
+[tasks."build:x64"]
+description = "Build the runtime for x86-64 macOS into runtime/zig-out-x64, which runs under Rosetta"
+dir = "runtime"
+run = "zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-macos --prefix zig-out-x64"
+
+[tasks."build:oom"]
+description = "Build the runtime with allocation failure injection into runtime/zig-out-oom"
+dir = "runtime"
+run = "zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom"
+
+[tasks.oom]
+description = "Fail sampled allocations of every conformance test and check for crashes, leaks, and hangs"
+depends = ["build:oom"]
+run = "node tests/oom/run.mjs --samples 8"
+
+[tasks."oom:long"]
+description = "Fail 400 sampled allocations of every conformance test, once and from that point on"
+depends = ["build:oom"]
+run = ["node tests/oom/run.mjs --samples 400", "node tests/oom/run.mjs --samples 100 --sticky"]
 
 [tasks.wasm]
 description = "Build lus.wasm for wasm32-wasi into packages/wasm/dist"

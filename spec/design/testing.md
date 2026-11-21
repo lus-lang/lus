@@ -31,23 +31,29 @@ The parts below are listed in the order of the bugs we expect them to find. Each
 
 ### 1. Differential testing across tiers
 
-The runtime runs one program in seven ways: the interpreter, the baseline JIT that compiles a function on its first call, the baseline JIT that compiles after a few calls, the optimizing tier on the first call, the optimizing tier after a few calls, the WebAssembly build, and the gc-stress build. These seven must agree on the output of every program and on every error it raises. That agreement is an oracle that needs no expected output, the same oracle as the SQL Logic Test.
+The runtime runs one program in many ways: the interpreter, the default tiering, the baseline JIT that compiles a function on its first call, the baseline JIT that compiles after two calls, the optimizing tier on the first call, the optimizing tier after three calls, the optimizing tier with short chains of direct calls, the gc-stress build under both JIT tiers, and the x86-64 build, whose JIT is a second backend. These configurations must agree on the output of every program and on every error it raises. That agreement is an oracle that needs no expected output, the same oracle as the SQL Logic Test. Each configuration compares with the interpreter of its own architecture, since arm64 and x86-64 differ in their math libraries and in the sign of a NaN. One more configuration formats the program with `lus fmt` first, which must keep its meaning.
 
-The generator lives in `tests/diff` and is written in JavaScript, so that a bug in the runtime cannot hide a bug in its own test. It builds programs from a typed model of the language. Each expression it emits has a known type, so most programs run to the end instead of stopping at the first type error. It composes the features that interact: closures and upvalues, varargs and multiple returns, `catch` with and without handlers, `<close>` variables across yields and errors, coroutines and detached coroutines, metamethods on tables, enums, groups, do-expressions, `continue`, slices, string interpolation, optional chaining, queries over tables, integer overflow, float edge cases, bigints and decimals, and string functions on WTF-8 text. Loops run long enough to cross the JIT thresholds in the middle, which exercises the hand-over between the tiers.
+The generator lives in `tests/diff` and is written in JavaScript, so that a bug in the runtime cannot hide a bug in its own test. It builds programs from a typed model of the language. Each expression it emits has a known type, so most programs run to the end instead of stopping at the first type error. It composes the features that interact: closures and upvalues, varargs and multiple returns, `catch` with and without handlers, `<close>` variables across yields and errors, coroutines and detached coroutines, metamethods on tables, enums, groups, do-expressions, `continue`, slices, string interpolation, optional chaining, queries over tables, integer overflow, float edge cases, bigints and decimals, and string functions on WTF-8 text. The body of a program is a few units, each a function called up to 160 times from a loop whose arguments change type partway, from integers to floats, numeric strings, or values near the edges of the integer range. Code compiled for one type then meets another and leaves through its guards. Other statements change the element kind of an array in the middle of a loop, read tables of several shapes through one site, compare integers and floats near 2^53 and 2^63, and run numeric loops at the ends of the integer range.
 
 A program prints a trace of the values it computes. The trace leaves out what the language leaves open: table addresses and the order of `pairs`. An error is printed by its message, which includes the line, so the tiers must also agree on positions.
 
-A run that disagrees, crashes, or hangs goes to the reducer, which deletes statements, blocks, and expressions while the disagreement stays, in the manner of delta debugging. The small program it ends with goes into `tests/conformance/diff_regress_test.lus` once the bug is fixed.
+A run that disagrees, crashes, or hangs goes to the reducer, which reads the program as a tree of lines by indentation and deletes statements, unwraps blocks, and replaces parenthesized expressions with literals while the disagreement stays, in the manner of hierarchical delta debugging. It took the first finding from 230 lines to 21 in three seconds. The small program it ends with goes into `tests/conformance/diff_regress_test.lus` once the bug is fixed, or into `tests/diff/OPEN.md` while it is open.
 
-`mise run diff` runs 300 programs as a gate. `mise run diff:long` runs until stopped and saves every finding under `tests/diff/findings`.
+`mise run diff` runs the same 200 programs on every change. `mise run diff:long` runs fresh seeds until stopped, and the nightly job runs it for 80 minutes on Linux and macOS.
+
+The first 5,000 programs found two bugs. A `__close` handler that raised while `catch` unwound could move the frame list under the handler, which then wrote through a stale pointer (fixed). The optimizing tier loses one call of a closure that increments an upvalue in a loop (open).
 
 ### 2. Deeper fuzzing
 
-The fuzz targets in `runtime/src/fuzz.zig` grow to the code that reads untrusted text at run time: `fromjson` and `tojson`, `fromcsv` and `tocsv`, pattern matching, `string.format`, `time.parse`, the parsers of bigint and decimal literals and of `tonumber`, `string.pack` and `string.unpack`, and the archive codecs. Each target checks a property and not only the absence of a crash. A JSON value that `fromjson` accepts must survive a round trip through `tojson`, and a pattern that compiles must match without a fault. A target for the compiler runs the compiled chunk as well, with an instruction limit. The seed corpus lives in the repository under `runtime/fuzz/corpus`, one directory per target, and every crash becomes a seed.
+The fuzz targets in `runtime/src/fuzzlib.zig` reach the code that reads untrusted text at run time: `fromjson` and `tojson`, `fromcsv` and `tocsv`, pattern matching, `string.format`, `time.parse`, `tonumber`, `bigint`, and `decimal`, `string.pack`, `string.unpack`, and their vector forms, every archive codec, and the string functions on arbitrary text. Each target runs a property written in Lus over the input, so it checks behavior and not only the absence of a crash. JSON and CSV that parse must format to text that parses to the same value, a number must print to text that reads back as the same number, `string.gsub(s, p, "%0")` must return `s` for any valid pattern, and each codec must decompress its own output. The seeds live next to each target, and every crash becomes a seed.
+
+The JSON target found that an array with a `null` element formats as `{}`, which follows the specification of both functions but loses data (`tests/diff/OPEN.md`).
 
 ### 3. Out of memory injection
 
-A build option `-Dfail-alloc=true` adds a countdown to the counting allocator that every state allocates through, and to the allocation of heap pages. `LUS_FAIL_ALLOC=N` makes the Nth allocation fail and every later one succeed. A runner counts the allocations of a test file, then runs the file with each N in a sweep and checks four things: the process does not crash or panic, the error it reports is "not enough memory" or a clean test failure, the leak checker of the safe build reports nothing, and a gc-verify build finds the heap consistent. The quick version samples 50 values of N over a few files, and the long version sweeps every N over the whole suite.
+A build option `-Dfail-alloc=true` numbers every allocation of every state and every heap segment. `LUS_FAIL_ALLOC=N` makes the Nth allocation fail and every later one succeed, `N+` makes every allocation from the Nth on fail, and `count` prints how many allocations a run made. `tests/oom/run.mjs` counts the allocations of each conformance file, then runs the file once for each sampled N and checks three things: the process does not crash or panic, the leak checker of the safe build reports nothing, and the run ends in bounded time. A test may fail and a run may end with "not enough memory". Each distinct failure is reported once, with the smallest N that produced it. `mise run oom` samples 8 values of N per file on every change, and the nightly job samples 400, then 100 with every later allocation failing too.
+
+The first sweeps found nine bugs, all fixed: panics in `print` and in the permission registry, an index below the stack in a worker whose script failed to compile for lack of memory, a panic while canonicalizing a path permission, and leaks in `-F` flags, `pledge`, and the copy of a permission set for a worker.
 
 ### 4. I/O fault injection
 
@@ -61,18 +67,19 @@ A build with coverage instrumentation runs the conformance suite and reports bra
 
 Some results have an oracle other than another tier. These tests live in `tests/conformance/props_test.lus` and draw their inputs from a seeded generator, so a failure prints the seed that reproduces it.
 
-- Bigint and decimal arithmetic agree with a reference written in JavaScript on random operands.
+- Integer, bigint, and decimal arithmetic agree on random operands where all three are exact, bigints agree with decimals past 64 bits, and integer arithmetic wraps exactly where bigint arithmetic reduced to 64 bits says it does.
 - `fromjson(tojson(v))` and `fromcsv(tocsv(rows))` return a value equal to `v` and `rows`.
 - Random WTF-8 strings keep the string invariants: `#s` equals the count of `utf8.codes`, `s:sub(i, j) .. s:sub(j + 1)` equals `s:sub(i)`, and slices agree with `string.sub`.
-- A query returns the same rows as a hand-written loop over the same table, and the same rows from a table source as from SQLite.
-- `lus fmt` is idempotent and keeps the meaning of a program: a generated program prints the same trace before and after formatting.
+- A query returns the same rows as a hand-written loop over the same table, and its groups partition the rows.
+- `table.sort` agrees with an insertion sort.
+- `lus fmt` keeps the meaning of a program, which the `fmt` configuration of the differential tester checks on every generated program.
 
 ### 7. Sanitizers and stress in CI
 
-The nightly job runs the conformance suite in a `-Dgc-stress=1 -Dgc-verify=true` build, which collects at every allocation, and the differential and fuzzing long runs. The vendored C libraries (SQLite, Zstandard, and Brotli) build with the address and undefined behavior sanitizers in a separate job.
+The nightly workflow runs the conformance suite in a `-Dgc-stress=1 -Dgc-verify=true` build, which collects at every allocation, on Linux and macOS with the JIT off, eager, and optimizing. It also runs the long versions of the differential tests, the allocation sweep, and the fuzz targets, and uploads each finding. Building the vendored C libraries (SQLite, Zstandard, and Brotli) with the address and undefined behavior sanitizers comes next.
 
 ## Gates and findings
 
-Every bug found gets a regression test in `tests/conformance` before its fix. A bug left open is recorded in `tests/diff/OPEN.md` with its smallest reproducer, so the next person to touch that code finds it.
+Every bug found gets a regression test in `tests/conformance` before its fix, except bugs of allocation failure, which the sweep itself keeps finding. A bug left open is recorded in `tests/diff/OPEN.md` with its smallest reproducer, so the next person to touch that code finds it.
 
-The quick versions run in `mise run test` and in CI on every change: 300 differential programs, every fuzz target over its corpus, and a sample of the allocation sweep. The long versions run in a nightly workflow, `.github/workflows/nightly.yml`.
+The quick versions run in CI on every change: 200 differential programs, every fuzz target over its seeds as part of `zig build test`, the property tests as part of the conformance suite, and 8 sampled allocation failures per conformance file. The long versions run in `.github/workflows/nightly.yml`. I/O fault injection and coverage, parts 4 and 5, come after the parts above have run long enough to stop finding bugs.

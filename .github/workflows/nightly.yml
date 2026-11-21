@@ -1,0 +1,131 @@
+name: Nightly
+
+# The long versions of the tests in spec/design/testing.md. Each job runs
+# on the rewrite branch once a day and can be started by hand.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: "0.17.1"
+  NODE_VERSION: "24.7.0"
+
+jobs:
+  stress:
+    name: Collect at every allocation (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dgc-stress=1 -Dgc-verify=true
+      - name: Conformance tests interpreted
+        timeout-minutes: 110
+        working-directory: runtime
+        env:
+          LUS_JIT: "off"
+        run: zig-out/bin/lus test ../tests/conformance
+      - name: Conformance tests in native code
+        timeout-minutes: 110
+        working-directory: runtime
+        env:
+          LUS_JIT: eager
+        run: zig-out/bin/lus test ../tests/conformance
+      - name: Conformance tests in optimized code
+        timeout-minutes: 110
+        working-directory: runtime
+        env:
+          LUS_JIT: opt-eager
+        run: zig-out/bin/lus test ../tests/conformance
+
+  differential:
+    name: Differential tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build
+        working-directory: runtime
+        run: |
+          zig build -Doptimize=ReleaseSafe
+          zig build -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress
+      - name: Generate and compare programs for 80 minutes
+        timeout-minutes: 95
+        run: node tests/diff/run.mjs --forever --minutes 80 --reduce --timeout 120000 --stress runtime/zig-out-stress/bin/lus --out findings
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: diff-findings-${{ matrix.os }}
+          path: findings
+
+  oom:
+    name: Allocation failure sweep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom
+      - name: Fail one allocation
+        timeout-minutes: 120
+        run: node tests/oom/run.mjs --samples 400 --timeout 120000
+      - name: Fail every allocation from one point on
+        timeout-minutes: 60
+        run: node tests/oom/run.mjs --samples 100 --sticky --timeout 120000
+
+  fuzz:
+    name: Fuzzing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Fuzz every target
+        timeout-minutes: 180
+        working-directory: runtime
+        run: zig build test --fuzz=20M -Doptimize=ReleaseSafe
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: fuzz-crash
+          path: runtime/.zig-cache/f/crash
