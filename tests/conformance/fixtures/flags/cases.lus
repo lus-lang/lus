@@ -131,6 +131,86 @@ case("dead_branches_are_still_syntax_checked", function()
 end)
 
 -- ============================================
+-- Folding comparisons
+-- ============================================
+
+-- a chunk folds when its dump drops the dead branch
+local function folds(cond)
+    local body = string.rep("tostring(1) ", 200)
+    local f = load("if " .. cond .. " then return 'then' else " .. body .. " return 'else' end")
+    local g = load("if " .. cond .. " then " .. body .. " return 'then' else return 'else' end")
+    return f, g
+end
+
+local function assert_folds(cond, expected)
+    local f, g = folds(cond)
+    assert(f() == expected and g() == expected, cond .. " should be " .. expected)
+    local small = expected == "then" and f or g
+    local large = expected == "then" and g or f
+    assert(#string.dump(small, true) * 4 < #string.dump(large, true), cond .. " should fold")
+end
+
+-- comparisons with literals fold
+case("comparisons_with_literals_fold", function()
+    assert_folds('flags.name == "alpha"', "then")
+    assert_folds('flags.name ~= "alpha"', "else")
+    assert_folds("flags.count == 3", "then")
+    assert_folds("flags.count == 3.0", "then")
+    assert_folds("flags.version > 1", "then")
+    assert_folds("flags.version >= 1.5", "then")
+    assert_folds("flags.version < 1.5", "else")
+    assert_folds("flags.count <= 2", "else")
+    assert_folds("3 <= flags.count", "then")
+    assert_folds("flags.count > -1", "then")
+    assert_folds("flags.debug == true", "then")
+    assert_folds("flags.debug ~= false", "then")
+    assert_folds("flags.absent == nil", "then")
+    assert_folds('flags.absent == "alpha"', "else")
+    assert_folds('flags.name < "beta"', "then")
+    assert_folds('flags["name"] == "alpha"', "then")
+    assert_folds("(flags.count) == (3)", "then")
+end)
+
+-- and, or and not combine folded conditions
+case("and_or_not_combine_folds", function()
+    assert_folds('flags.debug and flags.name == "alpha"', "then")
+    assert_folds("flags.debug and flags.count > 5", "else")
+    assert_folds("flags.absent or flags.count >= 3", "then")
+    assert_folds("not (flags.count == 3)", "else")
+    assert_folds('not flags.absent and (flags.version < 2 or flags.name == "x")', "then")
+end)
+
+-- the left operand of and or or decides alone
+case("deciding_left_operand_folds_alone", function()
+    local calls = 0
+    function bump() calls = calls + 1 return true end
+    assert_folds("flags.absent and bump()", "else")
+    assert_folds("flags.debug or bump()", "then")
+    assert(calls == 0)
+end)
+
+-- comparisons that raise or depend on run time do not fold
+case("unfoldable_comparisons_keep_run_time_behavior", function()
+    local ok, err = catch load("if flags.absent < 3 then return 1 end return 0")()
+    assert(ok == false and tostring(err):find("compare") ~= nil)
+    ok, err = catch load("if flags.name < 3 then return 1 end return 0")()
+    assert(ok == false and tostring(err):find("compare") ~= nil)
+    local n = 4
+    local f = load("local n = ... if flags.count < n then return 'lt' end return 'ge'")
+    assert(f(4) == "lt" and f(2) == "ge")
+    local calls = 0
+    function bump() calls = calls + 1 return false end
+    assert(load("if flags.debug and bump() then return 1 end return 0")() == 0)
+    assert(calls == 1)
+end)
+
+-- operands skipped by folding still report compile errors
+case("skipped_operands_are_still_checked", function()
+    local f, err = load("if flags.absent and function() goto nowhere end then end")
+    assert(f == nil and tostring(err):find("nowhere") ~= nil)
+end)
+
+-- ============================================
 -- Rewind integrity
 -- ============================================
 

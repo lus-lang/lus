@@ -13,7 +13,10 @@ local M = {}
 -- `-Dgc-stress` and `-Dgc-verify`, `x64` a binary built for x86-64, which
 -- runs its own JIT backend, and `wasm` the WebAssembly build, which runs
 -- through `wasm.mjs` in Node. The `fmt` configuration runs the program
--- after `lus fmt`, which must keep its meaning.
+-- after `lus fmt`, which must keep its meaning. The `nofold` configuration
+-- runs the program with every `flags.` read through the local `__F`, so
+-- the compiler folds no condition on a flag, and every fold must agree
+-- with evaluation at run time.
 M.CONFIGS = {
     { name = "off", env = { LUS_JIT = "off" } },
     { name = "default", env = {} },
@@ -23,6 +26,7 @@ M.CONFIGS = {
     { name = "opt-hot", env = { LUS_JIT_THRESHOLD = "2", LUS_JIT_OPT_THRESHOLD = "3" } },
     { name = "opt-direct", env = { LUS_JIT = "opt-eager", LUS_JIT_DIRECT = "1024" } },
     { name = "fmt", env = { LUS_JIT = "off" }, fmt = true },
+    { name = "nofold", env = { LUS_JIT = "off" }, nofold = true },
     { name = "stress-eager", env = { LUS_JIT = "eager" }, binary = "stress" },
     { name = "stress-opt", env = { LUS_JIT_THRESHOLD = "2", LUS_JIT_OPT_THRESHOLD = "3" }, binary = "stress" },
     { name = "x64-off", env = { LUS_JIT = "off" }, binary = "x64" },
@@ -86,6 +90,10 @@ end
 
 local JIT_VARS = { "LUS_JIT", "LUS_JIT_THRESHOLD", "LUS_JIT_OPT_THRESHOLD", "LUS_JIT_DIRECT" }
 
+-- The build flags of every native run. The WebAssembly host takes no
+-- flags, and its configurations compare only with each other.
+M.FLAGS = "-Fdebug -Flevel=3 -Fratio=1.5 -Fchannel=beta"
+
 -- The shell command that runs `file` under `config`, killed by SIGALRM
 -- after `seconds`, with its outputs in `base`.out and `base`.err and its
 -- status in `base`.code. A status of 128 plus N means signal N.
@@ -97,6 +105,9 @@ local function command(file, config, binaries, seconds, base)
     if config.fmt then
         target = base .. ".fmt.lus"
         prep = quote(binaries.lus) .. " fmt " .. quote(file) .. " > " .. quote(target) .. " 2> " .. quote(base .. ".err") .. " && "
+    elseif config.nofold then
+        target = base .. ".nofold.lus"
+        prep = "sed 's/flags\\./__F./g' " .. quote(file) .. " > " .. quote(target) .. " 2> " .. quote(base .. ".err") .. " && "
     end
     local run
     if config.binary == "wasm" then
@@ -107,7 +118,7 @@ local function command(file, config, binaries, seconds, base)
         local sets = {}
         for k, v in pairs(config.env) do sets[#sets + 1] = k .. "=" .. v end
         table.sort(sets)
-        run = "env " .. table.concat(env, " ") .. " " .. table.concat(sets, " ") .. " " .. quote(binaries[config.binary or "lus"]) .. " " .. quote(target)
+        run = "env " .. table.concat(env, " ") .. " " .. table.concat(sets, " ") .. " " .. quote(binaries[config.binary or "lus"]) .. " " .. M.FLAGS .. " " .. quote(target)
     end
     return "( " .. prep .. "perl -e 'alarm shift; exec @ARGV' " .. math.floor(seconds) .. " " .. run
         .. " > " .. quote(base .. ".out") .. " 2>> " .. quote(base .. ".err") .. "; echo $? > " .. quote(base .. ".code") .. " )"
@@ -131,6 +142,7 @@ function M.runAll(file, configs, binaries, seconds, dir)
             config = c.name,
             binary = c.binary or "lus",
             fmt = c.fmt,
+            renamed = c.nofold,
             code = code,
             timeout = code == 142,
             stdout = M.readFile(base .. ".out"),
@@ -164,11 +176,20 @@ local function maskPositions(s)
     return (s:gsub("[^%s\"]*%.lus:%d+:", "@:"))
 end
 
+-- A program rewritten line for line keeps its positions but not its name.
+local function maskPaths(s)
+    return (s:gsub("[^%s\"]*%.lus:(%d+):", "@:%1:"))
+end
+
 -- The first line where two results differ, or nil when they agree.
 function M.firstDifference(a, b)
     local function whole(r)
         local s = r.stdout .. "\n--stderr--\n" .. r.stderr .. "\n--exit " .. r.code
-        if a.fmt or b.fmt then s = maskPositions(s) end
+        if a.fmt or b.fmt then
+            s = maskPositions(s)
+        elseif a.renamed or b.renamed then
+            s = maskPaths(s)
+        end
         return s
     end
     local x, y = whole(a), whole(b)

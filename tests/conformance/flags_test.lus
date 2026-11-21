@@ -104,6 +104,26 @@ local function dead_branches_are_still_syntax_checked_test()
     check("dead_branches_are_still_syntax_checked")
 end
 
+local function comparisons_with_literals_fold_test()
+    check("comparisons_with_literals_fold")
+end
+
+local function and_or_not_combine_folds_test()
+    check("and_or_not_combine_folds")
+end
+
+local function deciding_left_operand_folds_alone_test()
+    check("deciding_left_operand_folds_alone")
+end
+
+local function unfoldable_comparisons_keep_run_time_behavior_test()
+    check("unfoldable_comparisons_keep_run_time_behavior")
+end
+
+local function skipped_operands_are_still_checked_test()
+    check("skipped_operands_are_still_checked")
+end
+
 local function line_numbers_stay_correct_after_folded_branches_test()
     check("line_numbers_stay_correct_after_folded_branches")
 end

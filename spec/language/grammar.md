@@ -1091,7 +1091,7 @@ local a, b from z                   -- group source
 
 ### 5.11 Flags and compile-time folding
 
-**Source:** `compile/codegen.zig` (`foldFlag`, `ifStat`, `discardBlock`), `main.zig` (option `-F`), `api.zig` (`setFlags`). **Manual:** `guide.mdx`. **Tests:** `flags_test.lus`.
+**Source:** `compile/codegen.zig` (`foldFlag`, `foldFlagCond`, `ifStat`, `discardBlock`, `discardCond`), `main.zig` (option `-F`), `api.zig` (`setFlags`). **Manual:** `guide.mdx`. **Tests:** `flags_test.lus`.
 
 #### The `flags` table
 
@@ -1112,30 +1112,42 @@ Folding applies to the condition of an `if` or `elseif` clause when all of the f
 - the condition is a plain expression (not an assignment condition),
 - no AST is being built (tools such as `debug.parse` and the language server always see the full tree),
 - the compiling state has a flags table (`lus`, `lus build`, and `lus compile` create one, and a bare embedding has none),
-- the condition is exactly `flags.NAME`, `flags["NAME"]`, `not flags.NAME`, or `not flags["NAME"]`, where `flags` is the free reserved name.
+- `flags` is the free reserved name in the condition,
+- the condition is a foldable condition that reads at least one flag.
 
-Any other shape compiles normally and reads the table at runtime, including parenthesized lookups, comparisons, and `and`/`or` chains. `while`, `repeat`, and expressions outside conditions never fold.
+A foldable condition is one of the following, where a flag read is `flags.NAME` or `flags["NAME"]` and a literal is `nil`, `true`, `false`, a string, an integer, a float, or a negated integer or float:
 
-A folded condition is true when the flag is present and truthy, negated for the `not` form. An absent flag is `nil`, so it is false.
+- a flag read, which is true when the flag is present and truthy,
+- `true`, `false`, or `nil`,
+- a comparison with `==`, `~=`, `<`, `<=`, `>`, or `>=` whose two operands are flag reads or literals,
+- `not C`, `(C)`, `C1 and C2`, or `C1 or C2` where the operands are foldable conditions.
 
+A comparison folds to the result the interpreter would compute. Equality follows raw equality, so `flags.count == 3.0` is true for the flag value `3`. Ordering folds only between two numbers or two strings, which compare by their bytes. Any other ordering, such as `flags.absent < 3`, raises an error at runtime, so it does not fold and runs normally.
+
+An `and` folds when its left operand folds false, or when both operands fold. An `or` folds when its left operand folds true, or when both operands fold. A right operand that folding skips would not run at runtime either, so folding never removes an evaluation that a run performs. A condition whose left operand folds and does not decide the result, such as `flags.debug and verbose` with the flag set, compiles normally. So does any condition that reads no flag, such as `if true then`. `while`, `repeat`, and expressions outside conditions never fold.
+
+- A folded condition is compiled for checking and then discarded, so an operand that folding skipped still reports its compile errors.
 - If a clause folds false, its block is fully parsed and checked and then its generated code is discarded. Evaluation continues with the next clause.
 - If a clause folds true, its block is compiled normally and every later `elseif` and `else` clause is fully parsed and checked and then discarded.
 - Discarded code leaves no trace: no instructions, no pending `break` or `goto` targets, no labels, no nested prototypes, no debug locals, and correct line information afterwards. Constants and upvalues created while parsing a discarded block may remain in the function (this is invisible to programs).
 - Folding decisions are made at compile time with the flags of the compiling process and are baked into dumped bytecode.
 
 ```lus nocheck
--- lus -Fdebug script.lus
+-- lus -Fdebug -Fchannel=beta -Flevel=3 script.lus
 if flags.debug then
     enableTracing()        -- compiled
 else
     quiet()                -- parsed, checked, discarded
 end
-if flags.name == "alpha" then   -- not foldable, runtime read
-    print("alpha")
+if flags.channel == "beta" and flags.level >= 2 then
+    print("beta")          -- compiled without a test
+end
+if flags.debug and verbose then   -- not foldable, runtime test of verbose
+    print("verbose")
 end
 ```
 
-**Tested** (`flags_test.lus`): dead branches are still syntax checked, line numbers stay correct after folded branches, a `break` inside a dead branch does not affect the loop, closures and `<close>` locals in dead branches do not disturb live code, a `goto` in a dead branch is dropped, nested folds work, and the folded chunk is much smaller than the unfolded control.
+**Tested** (`flags_test.lus`): dead branches are still syntax checked, line numbers stay correct after folded branches, a `break` inside a dead branch does not affect the loop, closures and `<close>` locals in dead branches do not disturb live code, a `goto` in a dead branch is dropped, nested folds work, the folded chunk is much smaller than the unfolded control, comparisons with literals fold, `and`, `or`, and `not` combine folds, a deciding left operand folds alone and skips the right one, comparisons that raise or depend on runtime values keep their runtime behavior, and operands skipped by folding are still checked. The differential tester (`tests/diff`) runs every generated program with fixed flags and again with every flag read through a local, which never folds, and the two runs must agree.
 
 ### 5.12 Queries
 
