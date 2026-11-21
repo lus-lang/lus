@@ -90,13 +90,41 @@ The parts that trail a table in its cell belong to the cell. Sweeping a dead tab
 
 `table.sum`, `table.mean`, and `table.stdev` add their terms in a fixed order. The term for index i goes into accumulator (i - 1) % 8, and the eight accumulators combine pairwise: accumulator j with j + 4, then the first two of those sums with the last two, then the final pair. Integer and float array parts run this order eight slots at a time with Zig vector operations, and the nil word masks out holes. Boxed parts, tables with metatables, and keys beyond the array part follow the same order one element at a time. The results are therefore identical bit for bit across kinds and platforms, and the order is part of the specification of each function.
 
+## Shapes
+
+A table whose hash part holds only short string keys keeps those keys in a shape that every table with the same keys shares, and keeps only the values in its own storage. A record with four fields then takes 88 bytes where a four-node hash part made it 120, and with three fields 80 bytes where it took 120. Records are the bulk of the heap of most programs, so the saving counts once per record: `lru` holds two records per cache entry.
+
+A shape is an ordered list of keys. Slot i of a table holds the value of key i of its shape. Every table starts with the empty shape. Storing a key that the shape lacks moves the table to the child shape that adds that key at the next slot, creating the child the first time. Shapes therefore form a tree rooted at the empty shape, and tables that receive the same keys in the same order share one shape. A shape keeps its keys in an array for its slots and finds a key through a small index of its own, a linear scan up to eight keys and a hash index past that, so a lookup costs about what a probe of a hash part costs.
+
+Shapes live outside the collected heap and are never freed. Each one has a 16-bit id, and a table of the registry maps the id to the shape. The interned strings that shapes use as keys are fixed, so they stay alive with their shapes. To keep that memory bounded, a shape holds at most 32 keys, has at most 32 children, and the registry holds at most 65,534 shapes. A store that would pass a limit turns the table into a dictionary instead.
+
+### Layout of a shaped table
+
+A shaped table keeps the 48-byte header. `hash_used` holds the id of its shape with its top bit set, which no count of a hash part reaches, so one comparison tells a shaped table from a dictionary and names its shape. `hash_ptr` points to the values, one word for each slot, and the tag of slot i is the byte `i + 1` below the first value, in a tag area rounded to 8 bytes. `hash_len` is the number of slots the storage holds, which is at least the number of keys of the shape. The storage lives in the cell of the table when the constructor knows its size, as a hash part does, and in the backing allocator otherwise.
+
+A slot whose tag is nil holds no value. Assigning nil to a field sets the tag of its slot to nil and keeps the shape, so the key keeps its slot and a later store of the same key fills it again. This matches the dead nodes of a hash part, and `next` stays valid while a traversal clears fields.
+
+### Dictionary mode
+
+A table leaves shapes for good, and becomes a dictionary with the hash part described above, when it receives a key that is not a short string outside its array part, when a store would pass a shape limit, when a metatable with `__mode` is set on it, and when the collector or the lookup through `__index` finds that it serves as a metatable or as the table that `__index` names. The conversion builds a hash part for the keys that hold values and moves them over. Metatables and the tables behind `__index` are few, and keeping them dictionaries leaves the caches of inherited lookups, which predict a node in each of them, exactly as they are.
+
+### Iteration order
+
+`next` walks the array part, then the slots of a shaped table in order, skipping slots without a value. A shaped table therefore yields its keys in the order its shape added them, which is the order in which keys were first stored into the tables that share the shape. A dictionary yields its keys in the order of its hash part, as before. The order stays the same while a traversal assigns to existing fields or clears them.
+
+### Caches
+
+The inline cache entry of a field access keeps the slot of its own lookup in `own` and the id of the shape it saw in the 16 bits that were padding. A hit compares `hash_used` with the cached id and loads the slot, one comparison where a dictionary hit compares the key and its tag. When `hash_used` names another shape or no shape, the access tries the node prediction of a dictionary, and then the general path, which updates the entry. A site that sees many shapes keeps the last one, and it pays a shape lookup on each miss, as a dictionary site pays a probe.
+
+A constructor learns the shape its tables reach, as it learns their sizes. When the last table that a `newtable` instruction made moves to a child shape before the collection cycle ends, the instruction records that shape, and the next tables start with it and with nil in every slot. A record built as `{key = k, value = v}` followed by stores into `prev` and `next` then takes its four slots in its cell at construction, and each of its stores hits an existing slot.
+
+The optimizing tier guards the shape id that the sample table has. The guard proves both where a key lives and that a key is absent, so a field load needs one guard where a node prediction needed three, and a load of an absent key needs one guard where the walk of a probe sequence needed several. A table that the tier builds without allocating gets its shape at compile time by following the same transitions.
+
+### The collector
+
+Tracing a shaped table marks the values its slots hold. Its keys are fixed strings, so they need no marking. A shaped table is never weak, since a weak mode turns it into a dictionary.
+
 ## Designs measured and kept out
-
-### Hidden-class shapes
-
-The interpreter caches string-keyed field accesses by predicting the hash node that held the key last time. A hit compares the key pointer in the predicted node and loads the value next to it. A shape design would compare a shape pointer and load a fixed slot, which costs the same on a hit. Shapes would win only where the prediction misses.
-
-Counting the cache outcomes on the benchmarks shows that the prediction almost never misses on keys that exist. On `tables.lus` the field loads hit 5,999,998 times and miss 3 times. On `methods.lus` they hit 39,999,994 times and miss 5,000,013 times, and every miss there is the lookup of a method name in the instance itself, a key the instance never holds, before the cache finds it through `__index`. On a microbenchmark a field load costs about 0.5 ns over an empty loop iteration, and a load through `__index` costs about 3.5 ns. A shape that also cached absence could save at most about 3 ns on each of the 5,000,000 inherited lookups of `methods.lus`, under 15 ms of a run of about 300 ms, and it would add transition trees, shape objects for the collector to trace, and a dictionary mode for tables with deletes or non-string keys. The measured cost of the constructor stores pointed to the allocation of the parts, not to finding the slots, and storing small parts in the table cell removed most of it. Lus therefore keeps the slot-prediction caches as its field caches.
 
 ### Template constructors
 
