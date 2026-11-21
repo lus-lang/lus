@@ -1,4 +1,4 @@
-//! The `crypto` library: SHA-2 and SHA-1 digests, HMAC, Ed25519
+//! The `crypto` library: SHA-256, SHA-384, SHA-512, and SHA-1 digests, HMAC, Ed25519
 //! signatures, secure random bytes, constant-time comparison, Argon2id
 //! password hashing, and UUID and ULID generation
 //! (spec/design/crypto.md).
@@ -13,15 +13,17 @@ const value = @import("../vm/value.zig");
 const object = @import("../vm/object.zig");
 const state = @import("../vm/state.zig");
 const ops = @import("../vm/ops.zig");
+const gc = @import("../vm/gc.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
-const transcode = @import("transcode.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
 const Table = object.Table;
+const Userdata = object.Userdata;
 
 const Sha256 = std.crypto.hash.sha2.Sha256;
+const Sha384 = std.crypto.hash.sha2.Sha384;
 const Sha512 = std.crypto.hash.sha2.Sha512;
 const Sha1 = std.crypto.hash.Sha1;
 const Ed25519 = std.crypto.sign.Ed25519;
@@ -30,6 +32,7 @@ const phc = std.crypto.pwhash.phc_format;
 
 const funcs = [_]aux.Reg{
     .{ .name = "hash", .func = hash },
+    .{ .name = "hasher", .func = hasher },
     .{ .name = "hmac", .func = hmac },
     .{ .name = "random", .func = random },
     .{ .name = "equal", .func = equal },
@@ -42,9 +45,47 @@ const funcs = [_]aux.Reg{
     .{ .name = "ulid", .func = ulid },
 };
 
+const hasher_key = "crypto.hasher";
+
+const hasher_methods = [_]aux.Reg{
+    .{ .name = "update", .func = hasherUpdate },
+    .{ .name = "digest", .func = hasherDigest },
+};
+
 pub fn open(l: *Thread) Error!void {
+    const mt = try l.newTable(0, 3);
+    try l.push(Value.obj(.table, mt));
+    defer l.top -= 1;
+    const m = try aux.newLib(l, &hasher_methods);
+    try aux.setField(l, mt, "__index", Value.obj(.table, m));
+    try aux.setField(l, mt, "__name", try l.newStringValue(hasher_key));
+    // Hide the metatable from getmetatable and setmetatable.
+    try aux.setField(l, mt, "__metatable", .false);
+    try aux.setField(l, l.g.registry.as(Table), hasher_key, Value.obj(.table, mt));
+    l.g.ext.put(l.g.gpa, hasher_key, mt) catch return l.raiseMem();
     const t = try aux.newLib(l, &funcs);
     try aux.setGlobal(l, "crypto", Value.obj(.table, t));
+}
+
+// ---------------------------------------------------------------------
+// Zig interface
+//
+// The runtime verifies release archives and remote module bundles with
+// these functions, which are the same primitives the Lus functions use.
+
+/// The SHA-256 digest of `data`.
+pub fn sha256(data: []const u8) [32]u8 {
+    var out: [32]u8 = undefined;
+    Sha256.hash(data, &out, .{});
+    return out;
+}
+
+/// True when `sig` is a valid Ed25519 signature of `msg` by `public`,
+/// under the same strict verification as `crypto.verify`.
+pub fn ed25519Verify(public: [32]u8, msg: []const u8, sig: [64]u8) bool {
+    const pk = Ed25519.PublicKey.fromBytes(public) catch return false;
+    Ed25519.Signature.fromBytes(sig).verifyStrict(msg, pk) catch return false;
+    return true;
 }
 
 // ---------------------------------------------------------------------
@@ -66,21 +107,15 @@ fn checkSized(l: *Thread, i: u32, comptime n: usize) Error!*const [n]u8 {
     return aux.argError(l, i, std.fmt.comptimePrint("{d}-byte vector expected", .{n}), .{});
 }
 
-const Algorithm = enum { sha256, sha512, sha1 };
-const algorithm_names = [_][]const u8{ "sha256", "sha512", "sha1" };
+const Algorithm = enum { sha256, sha384, sha512, sha1 };
+const algorithm_names = [_][]const u8{ "sha256", "sha384", "sha512", "sha1" };
 
 fn checkAlgorithm(l: *Thread, i: u32) Error!Algorithm {
     return @fromBackingInt(@intCast(try aux.checkOption(l, i, null, &algorithm_names)));
 }
 
-/// Returns `bytes` as a vector, or as text in the encoding argument `i`.
-fn retDigest(l: *Thread, bytes: []const u8, i: u32) Error!u32 {
-    if (l.arg(i).isNil()) return aux.ret(l, Value.obj(.vector, try vector.newVector(l, bytes)));
-    const which = try aux.checkOption(l, i, null, &.{ "hex", "base64" });
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(l.g.gpa);
-    (if (which == 0) transcode.encodeHex(l.g.gpa, &out, bytes) else transcode.encodeBase64(l.g.gpa, &out, bytes)) catch return l.raiseMem();
-    return aux.retStr(l, out.items);
+fn retBytes(l: *Thread, bytes: []const u8) Error!u32 {
+    return aux.ret(l, Value.obj(.vector, try vector.newVector(l, bytes)));
 }
 
 // ---------------------------------------------------------------------
@@ -95,6 +130,10 @@ fn hash(l: *Thread) Error!u32 {
             Sha256.hash(data, out[0..Sha256.digest_length], .{});
             break :blk Sha256.digest_length;
         },
+        .sha384 => blk: {
+            Sha384.hash(data, out[0..Sha384.digest_length], .{});
+            break :blk Sha384.digest_length;
+        },
         .sha512 => blk: {
             Sha512.hash(data, out[0..Sha512.digest_length], .{});
             break :blk Sha512.digest_length;
@@ -104,7 +143,69 @@ fn hash(l: *Thread) Error!u32 {
             break :blk Sha1.digest_length;
         },
     };
-    return retDigest(l, out[0..n], 3);
+    return retBytes(l, out[0..n]);
+}
+
+/// The state of a streaming digest, the payload of a `crypto.hasher`
+/// userdata. It holds no heap memory, so the userdata needs no finalizer.
+const Hasher = union(Algorithm) {
+    sha256: Sha256,
+    sha384: Sha384,
+    sha512: Sha512,
+    sha1: Sha1,
+};
+
+fn hasher(l: *Thread) Error!u32 {
+    const alg = try checkAlgorithm(l, 1);
+    const mt: *Table = @ptrCast(@alignCast(l.g.ext.get(hasher_key).?));
+    gc.maybeCollect(l.g);
+    const u = gc.alloc(l.g, Userdata, .userdata, Userdata.allocSize(@sizeOf(Hasher), 0)) catch return l.raiseMem();
+    u.size = @sizeOf(Hasher);
+    u.nuser = 0;
+    u.metatable = mt;
+    const h: *Hasher = @ptrCast(@alignCast(u.data()));
+    h.* = switch (alg) {
+        .sha256 => .{ .sha256 = Sha256.init(.{}) },
+        .sha384 => .{ .sha384 = Sha384.init(.{}) },
+        .sha512 => .{ .sha512 = Sha512.init(.{}) },
+        .sha1 => .{ .sha1 = Sha1.init(.{}) },
+    };
+    return aux.ret(l, Value.obj(.userdata, u));
+}
+
+fn checkHasher(l: *Thread) Error!*Hasher {
+    const v = l.arg(1);
+    if (v.tag == .userdata) {
+        const u = v.as(Userdata);
+        if (u.metatable == @as(*Table, @ptrCast(@alignCast(l.g.ext.get(hasher_key).?)))) return @ptrCast(@alignCast(u.data()));
+    }
+    return aux.typeError(l, 1, hasher_key);
+}
+
+/// `hasher:update(data)` adds bytes and returns the hasher.
+fn hasherUpdate(l: *Thread) Error!u32 {
+    const h = try checkHasher(l);
+    const data = try vector.checkData(l, 2);
+    switch (h.*) {
+        inline else => |*st| st.update(data),
+    }
+    return aux.ret(l, l.arg(1));
+}
+
+/// `hasher:digest()` returns the digest of every byte added so far. It
+/// finishes a copy of the state, so the hasher accepts more data after.
+fn hasherDigest(l: *Thread) Error!u32 {
+    const h = try checkHasher(l);
+    var out: [Sha512.digest_length]u8 = undefined;
+    const n: usize = switch (h.*) {
+        inline else => |st| blk: {
+            var copy = st;
+            const T = @TypeOf(st);
+            copy.final(out[0..T.digest_length]);
+            break :blk T.digest_length;
+        },
+    };
+    return retBytes(l, out[0..n]);
 }
 
 fn hmac(l: *Thread) Error!u32 {
@@ -116,6 +217,7 @@ fn hmac(l: *Thread) Error!u32 {
         inline else => |a| blk: {
             const H = std.crypto.auth.hmac.Hmac(switch (a) {
                 .sha256 => Sha256,
+                .sha384 => Sha384,
                 .sha512 => Sha512,
                 .sha1 => Sha1,
             });
@@ -123,7 +225,7 @@ fn hmac(l: *Thread) Error!u32 {
             break :blk H.mac_length;
         },
     };
-    return retDigest(l, out[0..n], 4);
+    return retBytes(l, out[0..n]);
 }
 
 // ---------------------------------------------------------------------
@@ -189,10 +291,7 @@ fn verify(l: *Thread) Error!u32 {
     const public = try checkSized(l, 1, 32);
     const msg = try vector.checkData(l, 2);
     const sig_bytes = try checkSized(l, 3, 64);
-    const pk = Ed25519.PublicKey.fromBytes(public.*) catch return aux.retBool(l, false);
-    const sig = Ed25519.Signature.fromBytes(sig_bytes.*);
-    sig.verifyStrict(msg, pk) catch return aux.retBool(l, false);
-    return aux.retBool(l, true);
+    return aux.retBool(l, ed25519Verify(public.*, msg, sig_bytes.*));
 }
 
 // ---------------------------------------------------------------------
@@ -359,6 +458,18 @@ fn ulid(l: *Thread) Error!u32 {
 test "uuid text form" {
     const b = [16]u8{ 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef };
     try std.testing.expectEqualStrings("01234567-89ab-cdef-0123-456789abcdef", &formatUuid(b));
+}
+
+test "zig interface" {
+    var want: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&want, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    try std.testing.expectEqual(want, sha256("abc"));
+    var pk: [32]u8 = undefined;
+    var sig: [64]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&pk, "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+    _ = try std.fmt.hexToBytes(&sig, "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b");
+    try std.testing.expect(ed25519Verify(pk, "", sig));
+    try std.testing.expect(!ed25519Verify(pk, "x", sig));
 }
 
 test "constant-time comparison" {

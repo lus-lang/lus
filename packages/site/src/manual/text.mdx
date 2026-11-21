@@ -257,9 +257,10 @@ An unknown name raises the error `invalid source encoding` or `invalid target en
 
 ### Binary to text encodings
 
-Encoding to `"base64"`, `"url"`, or `"hex"` writes the bytes of the input as printable text. A program can then put binary data in a format that holds only text. Decoding from one of the three recovers the bytes, which `string.transcode` then converts to the encoding `to`.
+Encoding to `"base64"`, `"base64url"`, `"url"`, or `"hex"` writes the bytes of the input as printable text. A program can then put binary data in a format that holds only text. Decoding from one of the four recovers the bytes, which `string.transcode` then converts to the encoding `to`.
 
 - Base64 writes every 3 bytes as 4 printable characters. Base64 input may omit its `=` padding.
+- Base64url is base64 with `-` and `_` in place of `+` and `/`, written without padding, so its output is safe in a URL or a file name. JSON Web Tokens use it. Its input may carry padding.
 - URL encoding keeps the characters `A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, and `~`. It writes every other byte as `%` followed by two hexadecimal digits. URL decoding also reads `+` as a space.
 - Hexadecimal writes every byte as two digits. Its output is lowercase. Its input may use either case.
 
@@ -268,12 +269,13 @@ global print, string
 
 print(string.transcode("user:password", "utf-8", "base64"))  --> dXNlcjpwYXNzd29yZA==
 print(string.transcode("aGk", "base64", "utf-8"))            --> hi
+print(string.transcode("hi?", "utf-8", "base64url"))         --> aGk_
 print(string.transcode("São Paulo", "utf-8", "url"))         --> S%C3%A3o%20Paulo
 print(string.transcode("a%3D1+b", "url", "utf-8"))           --> a=1 b
 print(string.transcode("é", "utf-8", "hex"))                 --> c3a9
 ```
 
-When both `from` and `to` are among these three encodings, the call converts directly from one to the other. Decoding to `"binary"` returns the raw bytes as a vector.
+When both `from` and `to` are among these four encodings, the call converts directly from one to the other. Decoding to `"binary"` returns the raw bytes as a vector.
 
 ```lus
 global print, string, type

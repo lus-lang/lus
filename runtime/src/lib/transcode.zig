@@ -1,7 +1,7 @@
 //! `string.transcode(input, from, to [, ignorebad])`: conversion between
 //! character encodings and binary to text encodings. Byte encodings
 //! (UTF-16, UTF-32, ISO-8859-1, and `"binary"`, the raw bytes) produce
-//! vectors. Text encodings (UTF-8, ASCII, base64, URL, and hex text)
+//! vectors. Text encodings (UTF-8, ASCII, base64, base64url, URL, and hex text)
 //! produce strings (spec/design/strings.md). The input may be a string or
 //! a vector in either case.
 
@@ -28,11 +28,12 @@ const Enc = enum {
     latin1,
     binary,
     base64,
+    base64url,
     url,
     hex,
 
     fn isBinaryToText(e: Enc) bool {
-        return e == .base64 or e == .url or e == .hex;
+        return e == .base64 or e == .base64url or e == .url or e == .hex;
     }
 
     /// Whether values in this encoding are vectors.
@@ -67,6 +68,7 @@ const names = [_]struct { []const u8, Enc }{
     .{ "latin1", .latin1 },
     .{ "binary", .binary },
     .{ "base64", .base64 },
+    .{ "base64url", .base64url },
     .{ "url", .url },
     .{ "hex", .hex },
 };
@@ -110,7 +112,8 @@ fn transcode(l: *Thread) Error!u32 {
     // A binary to text source decodes to raw bytes first.
     if (from.isBinaryToText()) {
         const ok = switch (from) {
-            .base64 => decodeBase64(gpa, &raw, src),
+            .base64 => decodeBase64(gpa, &raw, src, std.base64.standard_no_pad.Decoder),
+            .base64url => decodeBase64(gpa, &raw, src, std.base64.url_safe_no_pad.Decoder),
             .url => decodeUrl(gpa, &raw, src),
             else => decodeHex(gpa, &raw, src),
         } catch return l.raiseMem();
@@ -128,7 +131,8 @@ fn transcode(l: *Thread) Error!u32 {
     // A binary to text target encodes the bytes as they are.
     if (to.isBinaryToText()) {
         const done = switch (to) {
-            .base64 => encodeBase64(gpa, &out, data),
+            .base64 => encodeBase64(gpa, &out, data, std.base64.standard.Encoder),
+            .base64url => encodeBase64(gpa, &out, data, std.base64.url_safe_no_pad.Encoder),
             .url => encodeUrl(gpa, &out, data),
             else => encodeHex(gpa, &out, data),
         };
@@ -283,9 +287,10 @@ fn write16(gpa: std.mem.Allocator, out: *ArrayList, v: u16, le: bool) !void {
 // ---------------------------------------------------------------------
 // Binary to text encodings
 
-/// Decodes base64, skipping whitespace and stopping at the first padding
-/// character. Returns false on malformed input.
-fn decodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool {
+/// Decodes base64 with the alphabet of `dec`, skipping whitespace and
+/// stopping at the first padding character. Returns false on malformed
+/// input.
+fn decodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8, dec: std.base64.Base64Decoder) !bool {
     var clean: ArrayList = .empty;
     defer clean.deinit(gpa);
     for (src) |c| {
@@ -293,7 +298,6 @@ fn decodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool 
         if (c == '=') break;
         try clean.append(gpa, c);
     }
-    const dec = std.base64.standard_no_pad.Decoder;
     const n = dec.calcSizeForSlice(clean.items) catch return false;
     try out.ensureUnusedCapacity(gpa, n);
     dec.decode(out.unusedCapacitySlice()[0..n], clean.items) catch return false;
@@ -301,8 +305,7 @@ fn decodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool 
     return true;
 }
 
-pub fn encodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void {
-    const enc = std.base64.standard.Encoder;
+fn encodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8, enc: std.base64.Base64Encoder) !void {
     const n = enc.calcSize(src.len);
     try out.ensureUnusedCapacity(gpa, n);
     _ = enc.encode(out.unusedCapacitySlice()[0..n], src);
@@ -349,7 +352,7 @@ fn decodeHex(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool {
     return true;
 }
 
-pub fn encodeHex(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void {
+fn encodeHex(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void {
     const digits = "0123456789abcdef";
     for (src) |c| try out.appendSlice(gpa, &.{ digits[c >> 4], digits[c & 15] });
 }

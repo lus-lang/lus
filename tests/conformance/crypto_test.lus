@@ -26,6 +26,9 @@ local hash_cases = {
     { "sha256", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" },
     { "sha256", two_blocks, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1" },
     { "sha256", string.rep("a", 1000000), "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0" },
+    { "sha384", "", "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b" },
+    { "sha384", "abc", "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7" },
+    { "sha384", two_blocks, "3391fdddfc8dc7393707a65b1b4709397cf8b1d162af05abfe8f450de5f36bc6b0455a8520bc4e6f5fe95b1fe3c8452b" },
     { "sha512", "", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e" },
     { "sha512", "abc", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f" },
     { "sha1", "", "da39a3ee5e6b4b0d3255bfef95601890afd80709" },
@@ -35,20 +38,70 @@ local hash_cases = {
 }
 
 local function hash_test(alg, input, want)
-    assert(crypto.hash(alg, input, "hex") == want)
     local v = crypto.hash(alg, input)
     assert(type(v) == "vector")
     assert(hex(v) == want)
-    assert(crypto.hash(alg, vector.fromstring(input), "hex") == want)
+    assert(hex(crypto.hash(alg, vector.fromstring(input))) == want)
 end
 
-local function hash_base64_test()
-    assert(crypto.hash("sha256", "", "base64") == "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=")
-    assert(crypto.hash("sha1", "abc", "base64") == string.transcode(crypto.hash("sha1", "abc"), "binary", "base64"))
+-- A hasher gives the digest of the whole input however it is split.
+local function hasher_test(alg, input, want)
+    local h = crypto.hasher(alg)
+    assert(hex(h:digest()) == hex(crypto.hash(alg, "")))
+    local i = 1
+    local step = 1
+    while i <= #input do
+        h:update(input:sub(i, i + step - 1))
+        i = i + step
+        step = step * 3 + 1
+    end
+    assert(hex(h:digest()) == want)
+    -- digest leaves the hasher unchanged.
+    assert(hex(h:digest()) == want)
+end
+
+local hasher_cases = hash_cases
+
+local function hasher_continues_after_digest_test()
+    local h = crypto.hasher("sha256")
+    assert(h:update("a") == h)
+    h:update(vector.fromstring("b"))
+    assert(crypto.equal(h:digest(), crypto.hash("sha256", "ab")))
+    h:update("c")
+    assert(hex(h:digest()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+end
+
+local function hasher_random_splits_test()
+    for _ = 1, 30 do
+        local data = crypto.random(math.random(0, 5000))
+        for _, alg in ipairs({ "sha256", "sha384", "sha512", "sha1" }) do
+            local h = crypto.hasher(alg)
+            local pos = 0
+            while pos < #data do
+                local n = math.random(1, 700)
+                local len = math.min(n, #data - pos)
+                local part = vector.create(len)
+                for k = 0, len - 1 do vector.set(part, k, vector.get(data, pos + k)) end
+                h:update(part)
+                pos = pos + len
+            end
+            assert(crypto.equal(h:digest(), crypto.hash(alg, data)))
+        end
+    end
+end
+
+local function hasher_errors_test()
+    raises(function() crypto.hasher("md5") end, "bad argument #1 to 'hasher' %(invalid option 'md5'%)")
+    local h = crypto.hasher("sha1")
+    raises(function() h:update({}) end, "bad argument #1 to 'update' %(string or vector expected")
+    raises(function() h.update({}, "x") end, "bad argument #1 to 'update' %(crypto.hasher expected")
+    raises(function() h.digest(vector.create(4)) end, "bad argument #1 to 'digest' %(crypto.hasher expected")
+    assert(tostring(h):find("^crypto.hasher"))
 end
 
 local function hash_sizes_test()
     assert(#crypto.hash("sha256", "x") == 32)
+    assert(#crypto.hash("sha384", "x") == 48)
     assert(#crypto.hash("sha512", "x") == 64)
     assert(#crypto.hash("sha1", "x") == 20)
 end
@@ -57,14 +110,13 @@ local function hash_reads_wtf8_bytes_test()
     -- A string contributes its WTF-8 bytes, so a string and the vector of
     -- its bytes hash alike, and a number hashes as its text.
     local s = "héllo 日本"
-    assert(crypto.hash("sha256", s, "hex") == crypto.hash("sha256", vector.fromstring(s), "hex"))
-    assert(crypto.hash("sha256", 42, "hex") == crypto.hash("sha256", "42", "hex"))
+    assert(crypto.equal(crypto.hash("sha256", s), crypto.hash("sha256", vector.fromstring(s))))
+    assert(crypto.equal(crypto.hash("sha256", 42), crypto.hash("sha256", "42")))
 end
 
 local function hash_errors_test()
     raises(function() crypto.hash("md5", "x") end, "bad argument #1 to 'hash' %(invalid option 'md5'%)")
     raises(function() crypto.hash("sha256", {}) end, "bad argument #2 to 'hash' %(string or vector expected")
-    raises(function() crypto.hash("sha256", "x", "base32") end, "bad argument #3 to 'hash' %(invalid option 'base32'%)")
 end
 
 -- ============================================================
@@ -75,6 +127,8 @@ local hmac_cases = {
     { "sha256", rep(0x0b, 20), "Hi There", "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7" },
     { "sha512", rep(0x0b, 20), "Hi There", "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854" },
     { "sha256", "Jefe", "what do ya want for nothing?", "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" },
+    { "sha384", rep(0x0b, 20), "Hi There", "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6" },
+    { "sha384", "Jefe", "what do ya want for nothing?", "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649" },
     { "sha512", "Jefe", "what do ya want for nothing?", "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737" },
     { "sha256", rep(0xaa, 131), "Test Using Larger Than Block-Size Key - Hash Key First", "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54" },
     { "sha1", rep(0x0b, 20), "Hi There", "b617318655057264e28bc0b6fb378c8ef146be00" },
@@ -82,8 +136,9 @@ local hmac_cases = {
 }
 
 local function hmac_test(alg, key, data, want)
-    assert(crypto.hmac(alg, key, data, "hex") == want)
-    assert(hex(crypto.hmac(alg, key, data)) == want)
+    local mac = crypto.hmac(alg, key, data)
+    assert(type(mac) == "vector")
+    assert(hex(mac) == want)
 end
 
 local function hmac_errors_test()

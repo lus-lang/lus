@@ -609,6 +609,7 @@ In a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach), `yie
     children = {
       "crypto.equal",
       "crypto.hash",
+      "crypto.hasher",
       "crypto.hashpassword",
       "crypto.hmac",
       "crypto.keypair",
@@ -620,14 +621,14 @@ In a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach), `yie
       "crypto.verifypassword",
     },
     description = [[
-The `crypto` module computes SHA-2 and SHA-1 digests and HMACs, signs and verifies with Ed25519, reads secure random bytes, compares secrets in constant time, hashes passwords with Argon2id, and generates UUIDs and ULIDs.
+The `crypto` module computes SHA-256, SHA-384, SHA-512, and SHA-1 digests, in one call or streamed, and HMACs, signs and verifies with Ed25519, reads secure random bytes, compares secrets in constant time, hashes passwords with Argon2id, and generates UUIDs and ULIDs.
 
-Digests, keys, signatures, and random output are raw bytes, so the module returns them as vectors. Messages, HMAC keys, and passwords may be strings or vectors. A string contributes its WTF-8 bytes. [`crypto.hash`](/manual/api#crypto.hash) and [`crypto.hmac`](/manual/api#crypto.hmac) also return hex or base64 text on request, and [`string.transcode`](/manual/api#string.transcode) converts keys and signatures between vectors and text.
+Digests, keys, signatures, and random output are raw bytes, so the module returns them as vectors. Messages, HMAC keys, and passwords may be strings or vectors. A string contributes its WTF-8 bytes. [`string.transcode`](/manual/api#string.transcode) converts vectors to hex, base64, or base64url text and back.
 
 The following example prints a SHA-256 digest in hex, then signs a message and checks the signature.
 
 ```lus
-print(crypto.hash("sha256", "abc", "hex"))
+print(string.transcode(crypto.hash("sha256", "abc"), "binary", "hex"))
 --> ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
 
 local secret, public = crypto.keypair()
@@ -690,27 +691,30 @@ print(crypto.equal("token", "tok"))                        --> false
   ["crypto.hash"] = {
     children = {},
     description = [[
-Returns the digest of `data` under a hash function.
+Returns the digest of `data` under a hash function, as a vector.
 
-- `algorithm` is `"sha256"`, `"sha512"`, or `"sha1"`.
+- `algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, or `"sha1"`.
 - `data` is the input. A string contributes its WTF-8 bytes. A number is converted to its textual form first.
-- `encoding` is `"hex"` or `"base64"`. When it is absent, the result is a vector.
 
-The result is a vector of 32 bytes for SHA-256, 64 bytes for SHA-512, and 20 bytes for SHA-1. With `encoding`, the result is that vector written as a string of lowercase hex digits or of base64 with padding. SHA-1 is broken for collision resistance, so it is for formats that require it, such as git object names, and never for new signatures.
+The result is a vector of 32 bytes for SHA-256, 48 bytes for SHA-384, 64 bytes for SHA-512, and 20 bytes for SHA-1. [`string.transcode`](/manual/api#string.transcode) writes it as hex or base64 text. SHA-1 is broken for collision resistance, so it is for formats that require it, such as git object names, and never for new signatures.
 
 An unknown algorithm raises `bad argument #1 to 'hash' (invalid option 'md5')`. A `data` that is neither a string, a number, nor a vector raises `bad argument #2 to 'hash' (string or vector expected, got table)` with its type.
 
-The following example hashes the test message of FIPS 180 with each algorithm.
+The following example hashes the test message of FIPS 180 with each algorithm and writes the digests as text.
 
 ```lus
-print(crypto.hash("sha256", "abc", "hex"))
+local function hex(v)
+    return string.transcode(v, "binary", "hex")
+end
+print(hex(crypto.hash("sha256", "abc")))
 --> ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
-print(crypto.hash("sha1", "abc", "hex"))     --> a9993e364706816aba3e25717850c26c9cd0d89d
+print(hex(crypto.hash("sha1", "abc")))       --> a9993e364706816aba3e25717850c26c9cd0d89d
 print(#crypto.hash("sha512", "abc"))         --> 64
-print(crypto.hash("sha256", "", "base64"))   --> 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
+print(string.transcode(crypto.hash("sha256", ""), "binary", "base64"))
+--> 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
 ```
 
-[`crypto.hmac`](/manual/api#crypto.hmac) computes a keyed digest with the same algorithms.]],
+[`crypto.hasher`](/manual/api#crypto.hasher) computes the same digests over data that arrives in pieces. [`crypto.hmac`](/manual/api#crypto.hmac) computes a keyed digest with the same algorithms.]],
     kind = "function",
     module = "crypto",
     name = "crypto.hash",
@@ -724,21 +728,65 @@ print(crypto.hash("sha256", "", "base64"))   --> 47DEQpj8HBSa+/TImW+5JCeuQeRkm5N
         name = "data",
         type = "string|vector",
       },
+    },
+    parent = "crypto",
+    returns = {
       {
-        name = "encoding",
-        optional = true,
+        type = "vector",
+      },
+    },
+    short_name = "hash",
+    since = "2.0.0",
+    source = "stdlib/crypto/hash.md",
+    stability = "unstable",
+  },
+  ["crypto.hasher"] = {
+    children = {},
+    description = [[
+Returns a new hasher, a userdata that computes a digest over data added in pieces.
+
+- `algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, or `"sha1"`, as for [`crypto.hash`](/manual/api#crypto.hash).
+
+A hasher has two methods.
+
+- `hasher:update(data)` adds the bytes of `data`, a string or a vector, and returns the hasher, so calls chain. A string contributes its WTF-8 bytes. A `data` that is neither a string, a number, nor a vector raises `bad argument #1 to 'update' (string or vector expected, got table)` with its type.
+- `hasher:digest()` returns the digest of every byte added so far, as a vector. It leaves the hasher unchanged, so more data may follow and a later `digest` covers all of it.
+
+The digest of data added in any number of pieces equals the digest that `crypto.hash` returns for the same bytes in one string or vector. A program reads a large file in blocks and feeds each block to a hasher, so it never holds the whole file in memory. Calling a method on a value that is not a hasher raises `bad argument #1 to 'update' (crypto.hasher expected, got number)` with its type, or the same error for `digest`. An unknown algorithm raises `bad argument #1 to 'hasher' (invalid option 'md5')`. A hasher is userdata, so a worker message cannot carry it.
+
+The following example hashes a message in two pieces, then adds a third piece and hashes again.
+
+```lus
+local h = crypto.hasher("sha256")
+h:update("a"):update(vector.fromstring("b"))
+local whole = crypto.hash("sha256", "ab")
+print(crypto.equal(h:digest(), whole))   --> true
+
+h:update("c")
+print(string.transcode(h:digest(), "binary", "hex"))
+--> ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+```
+
+The [cryptography](/manual/crypto#digests) page shows a hasher that checks a file read in blocks.]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.hasher",
+    origin = "lus",
+    params = {
+      {
+        name = "algorithm",
         type = "string",
       },
     },
     parent = "crypto",
     returns = {
       {
-        type = "vector|string",
+        type = "userdata",
       },
     },
-    short_name = "hash",
+    short_name = "hasher",
     since = "2.0.0",
-    source = "stdlib/crypto/hash.md",
+    source = "stdlib/crypto/hasher.md",
     stability = "unstable",
   },
   ["crypto.hashpassword"] = {
@@ -749,7 +797,7 @@ Hashes a password with Argon2id and returns the hash in PHC string format.
 - `password` is a string or a vector. A string contributes its WTF-8 bytes.
 - `options` is a table with the optional integer fields `memory`, the memory cost in KiB, `time`, the number of passes, and `parallelism`, the number of lanes.
 
-The defaults are the recommendation of OWASP: `memory = 19456`, `time = 2`, and `parallelism = 1`. Higher costs make each guess of an attacker slower and the hash slower to compute. `parallelism` must be from 1 to 255, `time` from 1 to 65536, and `memory` from 8 times `parallelism` to 4194304. A value outside its range raises `bad argument #2 to 'hashpassword' (option 'memory' out of range)` with the name of the option, and a value that is not an integer raises `bad argument #2 to 'hashpassword' (option 'memory' must be an integer)`.
+The defaults are the recommendation of OWASP: `memory = 19456`, `time = 2`, and `parallelism = 1`. Higher costs make each guess of an attacker slower and the hash slower to compute. `parallelism` must be from 1 to 255, `time` from 1 to 65536, and `memory` from 8 times `parallelism` to 4194304. A value outside its range raises `bad argument #2 to 'hashpassword' (option 'memory' out of range)` with the name of the option. A value that is not an integer raises `bad argument #2 to 'hashpassword' (option 'memory' must be an integer)`.
 
 Each call draws a new salt of 16 bytes from the secure random source, so hashing the same password twice gives two different strings. The result has the form `$argon2id$v=19$m=19456,t=2,p=1$` followed by the salt and a hash of 32 bytes, both in base64 without padding. It records every parameter, so [`crypto.verifypassword`](/manual/api#crypto.verifypassword) needs only the password and the string. Store the string as it is.
 
@@ -790,25 +838,24 @@ print(crypto.verifypassword("Tr0ub4dor&3", stored))                    --> false
   ["crypto.hmac"] = {
     children = {},
     description = [[
-Returns the HMAC of `data` under `key`, as defined by RFC 2104.
+Returns the HMAC of `data` under `key`, as defined by RFC 2104, as a vector.
 
-- `algorithm` is `"sha256"`, `"sha512"`, or `"sha1"`.
+- `algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, or `"sha1"`.
 - `key` is the secret key, a string or a vector of any length.
 - `data` is the message, a string or a vector.
-- `encoding` is `"hex"` or `"base64"`. When it is absent, the result is a vector.
 
-The result has the size of a digest of `algorithm`: 32 bytes for SHA-256, 64 bytes for SHA-512, and 20 bytes for SHA-1. A string `key` or `data` contributes its WTF-8 bytes, and a number is converted to its textual form first. The errors are those of [`crypto.hash`](/manual/api#crypto.hash), with `key` as argument 2 and `data` as argument 3.
+The result has the size of a digest of `algorithm`: 32 bytes for SHA-256, 48 bytes for SHA-384, 64 bytes for SHA-512, and 20 bytes for SHA-1. A string `key` or `data` contributes its WTF-8 bytes. A number is converted to its textual form first. The errors are those of [`crypto.hash`](/manual/api#crypto.hash), with `key` as argument 2 and `data` as argument 3.
 
 An HMAC proves that a message comes from a holder of the key, such as the signature of a webhook or of a JSON Web Token. Compare a received HMAC with the expected one through [`crypto.equal`](/manual/api#crypto.equal), whose running time reveals nothing about where they differ.
 
-The following example computes an HMAC and checks a received value against it.
+The following example computes an HMAC and checks a received hex value against it.
 
 ```lus
-local mac = crypto.hmac("sha256", "key", "The quick brown fox jumps over the lazy dog", "hex")
-print(mac)   --> f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
+local mac = crypto.hmac("sha256", "key", "The quick brown fox jumps over the lazy dog")
+print(#mac)   --> 32
 
 local received = "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
-print(crypto.equal(mac, received))   --> true
+print(crypto.equal(mac, string.transcode(received, "hex", "binary")))   --> true
 ```]],
     kind = "function",
     module = "crypto",
@@ -827,16 +874,11 @@ print(crypto.equal(mac, received))   --> true
         name = "data",
         type = "string|vector",
       },
-      {
-        name = "encoding",
-        optional = true,
-        type = "string",
-      },
     },
     parent = "crypto",
     returns = {
       {
-        type = "vector|string",
+        type = "vector",
       },
     },
     short_name = "hmac",
@@ -7749,7 +7791,7 @@ Converts `input` from the encoding `from` to the encoding `to` and returns the r
 
 `input` is a string or a vector. A number is converted to its textual form first. `from` and `to` name encodings, and the names are case sensitive. `ignorebad` defaults to false. When it is true, invalid input sequences and characters that `to` cannot represent are skipped.
 
-The byte encodings are `"utf-16le"`, `"utf-16be"`, `"utf-32le"`, `"utf-32be"`, `"iso-8859-1"` (also `"latin1"` and `"latin-1"`), and `"binary"`, which stands for the raw bytes. The text encodings are `"utf-8"`, `"utf-8bom"`, `"ascii"`, and the binary to text encodings `"base64"`, `"url"`, and `"hex"`. Decoding `"base64"`, `"url"`, or `"hex"` input yields its raw bytes, which are then converted to `to`.
+The byte encodings are `"utf-16le"`, `"utf-16be"`, `"utf-32le"`, `"utf-32be"`, `"iso-8859-1"` (also `"latin1"` and `"latin-1"`), and `"binary"`, which stands for the raw bytes. The text encodings are `"utf-8"`, `"utf-8bom"`, `"ascii"`, and the binary to text encodings `"base64"`, `"base64url"`, `"url"`, and `"hex"`. Decoding `"base64"`, `"base64url"`, `"url"`, or `"hex"` input yields its raw bytes, which are then converted to `to`.
 
 The result is a new vector when `to` is a byte encoding and a string when `to` is a text encoding.
 
@@ -7760,10 +7802,11 @@ local bytes = string.transcode("hé", "utf-8", "utf-16le")
 print(type(bytes), #bytes)                            --> vector  4
 print(string.transcode(bytes, "utf-16le", "utf-8"))   --> hé
 print(string.transcode("hi", "utf-8", "base64"))      --> aGk=
+print(string.transcode("hi?", "utf-8", "base64url"))  --> aGk_
 print(string.transcode("Hello 日本", "utf-8", "ascii", true))  --> Hello
 ```
 
-`"utf-8bom"` adds the byte order mark U+FEFF as a target and removes a leading one as a source. Base64 input may omit its padding, and URL decoding reads `+` as a space. [Text and bytes](/manual/text#transcoding) describes every encoding with examples. [`vector.fromstring`](/manual/api#vector.fromstring) and [`vector.tostring`](/manual/api#vector.tostring) convert between a string and its WTF-8 bytes.]],
+`"utf-8bom"` adds the byte order mark U+FEFF as a target and removes a leading one as a source. Base64 input may omit its padding. `"base64url"` is the URL-safe alphabet of RFC 4648, with `-` and `_` in place of `+` and `/`, and it writes no padding. Its input may carry padding. URL decoding reads `+` as a space. [Text and bytes](/manual/text#transcoding) describes every encoding with examples. [`vector.fromstring`](/manual/api#vector.fromstring) and [`vector.tostring`](/manual/api#vector.tostring) convert between a string and its WTF-8 bytes.]],
     kind = "function",
     module = "string",
     name = "string.transcode",

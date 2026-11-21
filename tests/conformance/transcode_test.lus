@@ -89,6 +89,43 @@ local function ignorebad_skips_invalid_base64_test()
   assert(result == "")
 end
 
+-- Group: base64url, the URL-safe alphabet of RFC 4648 without padding
+
+local base64url_cases = {
+  { "", "" },
+  { "f", "Zg" },
+  { "fo", "Zm8" },
+  { "foo", "Zm9v" },
+  { "foob", "Zm9vYg" },
+  { "fooba", "Zm9vYmE" },
+  { "foobar", "Zm9vYmFy" },
+  { '{"alg":"HS256","typ":"JWT"}', "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" },
+}
+
+local function base64url_test(text, encoded)
+  assert(string.transcode(text, "utf-8", "base64url") == encoded)
+  assert(string.transcode(encoded, "base64url", "utf-8") == text)
+end
+
+local function base64url_alphabet_test()
+  local raw = string.transcode("fbffbf", "hex", "binary")
+  assert(string.transcode(raw, "binary", "base64") == "+/+/")
+  assert(string.transcode(raw, "binary", "base64url") == "-_-_")
+  local back = string.transcode("-_-_", "base64url", "binary")
+  assert(type(back) == "vector")
+  assert(string.transcode(back, "binary", "hex") == "fbffbf")
+end
+
+local function base64url_accepts_padding_test()
+  assert(string.transcode("Zg==", "base64url", "utf-8") == "f")
+  assert(string.transcode("Zm8=", "base64url", "utf-8") == "fo")
+end
+
+local function errors_on_invalid_base64url_test()
+  checkerror("invalid base64url", string.transcode, "+/+/", "base64url", "binary")
+  checkerror("invalid base64url", string.transcode, "a", "base64url", "binary")
+end
+
 -- ============================================
 -- URL encoding tests
 -- ============================================

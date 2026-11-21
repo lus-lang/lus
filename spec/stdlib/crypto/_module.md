@@ -7,14 +7,14 @@ stability: unstable
 origin: lus
 ---
 
-The `crypto` module computes SHA-2 and SHA-1 digests and HMACs, signs and verifies with Ed25519, reads secure random bytes, compares secrets in constant time, hashes passwords with Argon2id, and generates UUIDs and ULIDs.
+The `crypto` module computes SHA-256, SHA-384, SHA-512, and SHA-1 digests, in one call or streamed, and HMACs, signs and verifies with Ed25519, reads secure random bytes, compares secrets in constant time, hashes passwords with Argon2id, and generates UUIDs and ULIDs.
 
-Digests, keys, signatures, and random output are raw bytes, so the module returns them as vectors. Messages, HMAC keys, and passwords may be strings or vectors. A string contributes its WTF-8 bytes. [`crypto.hash`](/manual/api#crypto.hash) and [`crypto.hmac`](/manual/api#crypto.hmac) also return hex or base64 text on request, and [`string.transcode`](/manual/api#string.transcode) converts keys and signatures between vectors and text.
+Digests, keys, signatures, and random output are raw bytes, so the module returns them as vectors. Messages, HMAC keys, and passwords may be strings or vectors. A string contributes its WTF-8 bytes. [`string.transcode`](/manual/api#string.transcode) converts vectors to hex, base64, or base64url text and back.
 
 The following example prints a SHA-256 digest in hex, then signs a message and checks the signature.
 
 ```lus
-print(crypto.hash("sha256", "abc", "hex"))
+print(string.transcode(crypto.hash("sha256", "abc"), "binary", "hex"))
 --> ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
 
 local secret, public = crypto.keypair()
