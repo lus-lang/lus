@@ -14,11 +14,19 @@
 -- crashes is split in halves until the input that crashes it stands
 -- alone.
 --
+-- The TLS targets corrupt the hello of a client, which a TLS server of
+-- `network.serve` parses, and the first flight of a server, which
+-- `network.tls.connect` parses. Every handshake differs, so the driver
+-- records one when it starts and hands it to its children in the file
+-- that LUS_CORRUPT_TLS names. The targets need the openssl command for
+-- the certificate of the server, and the driver leaves them out without
+-- it.
+--
 -- Usage: lus run.lus [--lus BIN] [--only TARGET] [--batch N] [--timeout S]
 
-global arg, assert, bigint, decimal, error, fromcsv, fromjson, getmetatable, io, ipairs, load, math, os, pairs, pledge, print, select, string, table, time, tocsv, tojson, tonumber, tostring, type, vector
+global arg, assert, bigint, coroutine, crypto, decimal, error, fromcsv, fromjson, fs, getmetatable, io, ipairs, load, math, network, os, pairs, pledge, print, select, string, table, time, tocsv, tojson, tonumber, tostring, type, vector
 
-pledge("exec", "load", "fs:read")
+pledge("exec", "load", "fs:read", "fs:write", "env", "network")
 
 local SAMPLE = 4096
 local LONG = 512
@@ -156,6 +164,166 @@ for _, c in ipairs({
         end,
     }
 end
+
+-- The containers. ZIP carries a CRC-32 of every entry, so a read must
+-- return the original data or raise. A tar archive checks its headers
+-- only, so a flipped bit in an entry's data reads back changed.
+local container_entries = {
+    { name = "dir", kind = "directory" },
+    { name = "dir/text.txt", data = text, mtime = 1700000000 },
+    { name = "link", kind = "symlink", target = "dir/text.txt" },
+    { name = "stored.txt", data = "stored", method = "store" },
+    { name = string.rep("long/", 30) .. "name.txt", data = "long" },
+}
+for _, fmt in ipairs({ "zip", "tar" }) do
+    local c = vector.archive[fmt]
+    targets[#targets + 1] = {
+        name = "vector.archive." .. fmt,
+        seeds = { c.pack(container_entries) },
+        run = function(v)
+            local ok, list = catch c.list(v)
+            if not ok then return nil end
+            for _, e in ipairs(list) do
+                local okr, data = catch c.read(v, e.name, 1 << 20)
+                if okr and data and fmt == "zip" then
+                    for _, orig in ipairs(container_entries) do
+                        if orig.data and orig.name == e.name and vector.tostring(data) ~= orig.data then
+                            return "read other data without an error"
+                        end
+                    end
+                end
+            end
+-- ===== TLS =====
+
+-- The contents of a file: text, or a vector in binary mode.
+local function readAll(path, mode)
+    local f <close> = assert(io.open(path, mode or "r"))
+    return f:read("a")
+end
+
+local function writeAll(path, data)
+    local f <close> = assert(io.open(path, "wb"))
+    f:write(data)
+end
+
+-- Reads what `sock` receives until the peer closes it or stays silent
+-- for `wait` seconds, as a vector.
+local function drain(sock, wait)
+    sock:settimeout(wait)
+    -- A receive of a count waits for all of it, so the bytes come one at
+    -- a time, from the buffer of the socket.
+    local bytes = {}
+    while true do
+        local ok, got = catch sock:receive(1)
+        if not ok or got == nil or vector.size(got) == 0 then break end
+        bytes[#bytes + 1] = vector.get(got, 0)
+    end
+    local v = vector.create(#bytes)
+    for i, b in ipairs(bytes) do vector.set(v, i - 1, b) end
+    return v
+end
+
+-- Makes a certificate with openssl and records one handshake: the hello
+-- of a client and the flight that a server answers it with. Returns the
+-- directory that holds them, or nil without openssl.
+local function recordTls()
+    local p = io.popen("openssl version 2>&1")
+    p:read("a")
+    local ok = p:close()
+    if ok ~= true and ok ~= 0 then return nil end
+    local dir = os.tmpname()
+    fs.remove(dir)
+    fs.createdirectory(dir)
+    local key, cert = dir .. "/key.pem", dir .. "/cert.pem"
+    local cnf = dir .. "/req.cnf"
+    local f = assert(io.open(cnf, "w"))
+    f:write("[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = localhost\n")
+    f:close()
+    assert(os.execute(string.format("openssl ecparam -name prime256v1 -genkey -noout -out '%s' 2>/dev/null", key)))
+    assert(os.execute(string.format("openssl req -x509 -new -key '%s' -sha256 -days 2 -subj /CN=localhost -config '%s' -out '%s' 2>/dev/null", key, cnf, cert)))
+    local identity = { cert = readAll(cert), key = readAll(key) }
+    -- The hello of a client, caught by a plain server.
+    local catcher = network.tcp.bind("127.0.0.1", 0)
+    local _, cport = catcher:getsockname()
+    local hello
+    local co = coroutine.detach(coroutine.create(function()
+        local c <close> = catcher:accept()
+        hello = drain(c, 0.3)
+    end))
+    local _ = catch network.tls.connect("127.0.0.1", cport, { verify = false, timeout = 1 })
+    while coroutine.status(co) ~= "dead" do coroutine.resume(coroutine.detach(coroutine.create(coroutine.yield))) end
+    catcher:close()
+    -- The flight that a TLS server answers that hello with.
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, sport = server:getsockname()
+    local serving = coroutine.detach(coroutine.create(network.serve), server, function() return 200 end, { tls = identity })
+    local sock <close> = network.tcp.connect("127.0.0.1", sport)
+    sock:send(hello)
+    local flight = drain(sock, 0.5)
+    coroutine.close(serving)
+    server:close()
+    writeAll(dir .. "/hello.bin", hello)
+    writeAll(dir .. "/flight.bin", flight)
+    return dir
+end
+
+local tls_path = os.getenv("LUS_CORRUPT_TLS")
+if not tls_path and arg[1] ~= "--child" then
+    tls_path = recordTls()
+    if tls_path then os.setenv("LUS_CORRUPT_TLS", tls_path) end
+end
+
+if tls_path then
+    local cert, key = readAll(tls_path .. "/cert.pem"), readAll(tls_path .. "/key.pem")
+    local hello, flight = readAll(tls_path .. "/hello.bin", "rb"), readAll(tls_path .. "/flight.bin", "rb")
+    local tls_server, tls_port
+    targets[#targets + 1] = {
+        name = "tls.clienthello",
+        seeds = { hello },
+        run = function(v)
+            if not tls_server then
+                tls_server = network.tcp.bind("127.0.0.1", 0)
+                tls_port = select(2, tls_server:getsockname())
+                coroutine.detach(coroutine.create(network.serve), tls_server, function() return 200 end,
+                    { tls = { cert = cert, key = key }, idle_timeout = 1 })
+            end
+            local sock <close> = network.tcp.connect("127.0.0.1", tls_port)
+            sock:send(v)
+            drain(sock, 0.05)
+        end,
+    }
+    targets[#targets + 1] = {
+        name = "tls.serverflight",
+        seeds = { flight },
+        run = function(v)
+            local server <close> = network.tcp.bind("127.0.0.1", 0)
+            local _, port = server:getsockname()
+            local co = coroutine.detach(coroutine.create(function()
+                local c <close> = server:accept()
+                c:settimeout(1)
+                local _ = catch c:receive(1)
+                c:send(v)
+            end))
+            local _ = catch network.tls.connect("127.0.0.1", port, { verify = false, timeout = 1 })
+            coroutine.close(co)
+        end,
+    }
+end
+
+-- The key parser of the crypto library reads DER in every layout. A
+-- corrupted key must import as some valid key or raise.
+targets[#targets + 1] = {
+    name = "crypto.importkey",
+    seeds = {
+        crypto.keypair("P-256"):export("der"),
+        (crypto.keypair("P-384")):public():export("der"),
+        crypto.importkey("-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\n-----END PRIVATE KEY-----\n"):export("der"),
+    },
+    run = function(v)
+        local ok, key = catch crypto.importkey(v)
+        if ok and not crypto.importkey(key:export("der")) then return "an imported key does not export" end
+    end,
+}
 
 local function targetNamed(name)
     for _, t in ipairs(targets) do

@@ -1,0 +1,9 @@
+--- Reads a whole file.
+--- @param path string The file to read.
+--- @return string The contents.
+--- @raise `"cannot open PATH"` when the file does not exist.
+--- @raises `"permission denied"` when the program may not read the file,
+---     which the pledge of the program decides.
+global function slurp(path)
+    return path
+end

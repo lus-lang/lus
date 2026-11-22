@@ -62,6 +62,7 @@ pub const Entry = struct {
     params: []Param = &.{},
     vararg: bool = false,
     returns: []doccomment.Return = &.{},
+    raises: []const []const u8 = &.{},
     since: ?[]const u8 = null,
     stability: ?[]const u8 = null,
     description: []const u8 = "",
@@ -203,6 +204,7 @@ const Extractor = struct {
             e.since = d.since;
             e.stability = d.stability;
             e.returns = d.returns;
+            e.raises = d.raises;
         }
         if (value) |v| if (v.kind == .function) {
             const f = v.kind.function;
@@ -426,6 +428,10 @@ fn writeMarkdown(w: *std.Io.Writer, m: Module) std.Io.Writer.Error!void {
                 try w.writeAll("\n");
             }
         }
+        if (e.raises.len > 0) {
+            try w.writeAll("\n**Raises**\n\n");
+            for (e.raises) |r| try w.print("- {s}\n", .{r});
+        }
         if (e.since != null or e.stability != null) {
             try w.writeAll("\n");
             if (e.since) |s| try w.print("*Since {s}.*", .{s});
@@ -578,6 +584,14 @@ fn writeJson(w: *std.Io.Writer, m: Module) std.Io.Writer.Error!void {
                 try w.writeAll("}");
             }
             try w.writeAll("]");
+            if (e.raises.len > 0) {
+                try w.writeAll(", \"raises\": [");
+                for (e.raises, 0..) |r, j| {
+                    if (j > 0) try w.writeAll(", ");
+                    try str(w, r);
+                }
+                try w.writeAll("]");
+            }
         }
         try w.print(", \"line\": {d}, \"description\": ", .{e.line});
         try str(w, e.description);

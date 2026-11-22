@@ -5,8 +5,9 @@
 -- The program runs an HTTP server, a client that talks to it over TCP, a
 -- coroutine that waits for the client, and a coroutine that waits for a
 -- message from a worker. Each coroutine declares two `<close>` variables
--- that log when they close, and catches the errors of its operations, so
--- it ends by returning or by the cancellation. For every suspension N the checker asserts
+-- that log when they close. A coroutine ends by returning, by failing,
+-- since a cancellation can take away the peer it talks to, or by the
+-- cancellation, and its variables close in each case. For every suspension N the checker asserts
 -- that the run ends within its time limit, so no coroutine is left
 -- waiting for one that was cancelled, that every `<close>` variable that
 -- was declared closed exactly once, in the reverse order of the
@@ -53,12 +54,11 @@ local _, port = server:getsockname()
 local serving = coroutine.detach(coroutine.create(function()
     local a <close> = mark("server", 1)
     local b <close> = mark("server", 2)
-    return catch network.serve(server, function(req) return 200, "hello" end, { idle_timeout = 2 })
+    network.serve(server, function(req) return 200, "hello" end, { idle_timeout = 2 })
 end))
 
--- The client catches its own errors, so it ends by returning or by a
--- cancellation, and every variable it declared closes either way.
-local function talk()
+local client = coroutine.detach(coroutine.create(function()
+    local a <close> = mark("client", 1)
     local sock <close> = network.tcp.connect("127.0.0.1", port)
     sock:settimeout(2)
     local b <close> = mark("client", 2)
@@ -72,10 +72,6 @@ local function talk()
         assert(vector.tostring(body) == "hello")
     end
     return "client done"
-end
-local client = coroutine.detach(coroutine.create(function()
-    local a <close> = mark("client", 1)
-    return catch talk()
 end))
 
 local joiner = coroutine.detach(coroutine.create(function()
@@ -88,7 +84,7 @@ local w = worker.create("worker.lus")
 local listener = coroutine.detach(coroutine.create(function()
     local a <close> = mark("listener", 1)
     local b <close> = mark("listener", 2)
-    return catch worker.receive(w)
+    return worker.receive(w)
 end))
 
 print("joiner", coroutine.resume(joiner))

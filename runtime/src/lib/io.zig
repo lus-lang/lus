@@ -121,7 +121,7 @@ fn newHandle(l: *Thread, h: Handle) Error!Value {
     return Value.obj(.userdata, u);
 }
 
-fn toHandle(l: *Thread, v: Value) ?*Handle {
+pub fn toHandle(l: *Thread, v: Value) ?*Handle {
     if (v.tag != .userdata) return null;
     const u = v.as(Userdata);
     const mt: *Table = @ptrCast(@alignCast(l.g.ext.get("io.mt").?));
@@ -176,6 +176,16 @@ fn pending(h: *Handle) []const u8 {
 
 fn ioError(l: *Thread, e: anyerror) Error {
     return l.raiseFmt("{s}", .{@import("os.zig").errnoOf(e).msg});
+}
+
+/// Returns `nil`, the message, and the error number of a write, a flush,
+/// or a sync that the system refused, as Lua does.
+fn ioFail(l: *Thread, e: anyerror) Error!u32 {
+    const info = @import("os.zig").errnoOf(e);
+    try l.push(.nil);
+    try l.push(try l.newStringValue(info.msg));
+    try l.push(Value.int(info.errno));
+    return 3;
 }
 
 /// Wraps read bytes as a string (text mode, validated) or vector.
@@ -343,29 +353,32 @@ fn doWrite(l: *Thread, h: *Handle, first: u32, self: Value) Error!u32 {
             ops.numberToBuf(l.g.gpa, &buf, v) catch return l.raiseMem();
         } else return aux.typeError(l, i, "string");
     }
-    try writeBytes(l, h, buf.items);
+    if (writeBytes(l, h, buf.items)) |e| return ioFail(l, e);
     return aux.ret(l, self);
 }
 
-fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) Error!void {
+/// Writes `bytes` to the handle. Returns the error of a write that the
+/// system refused.
+fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) ?anyerror {
     switch (h.kind) {
         .stdout => {
             const o = out.stdout(l.g);
             o.write(l.g, bytes);
-            if (o.takeError()) |e| return ioError(l, e);
+            if (o.takeError()) |e| return e;
         },
         .stderr => out.stderr(l.g, bytes),
         .file => {
             if (h.append) h.pos = h.file.length(l.g.io) catch h.pos;
-            h.file.writePositionalAll(l.g.io, bytes, h.pos) catch |e| return ioError(l, e);
+            h.file.writePositionalAll(l.g.io, bytes, h.pos) catch |e| return e;
             h.pos += bytes.len;
             // Buffered read-ahead is stale after a write.
             h.rbuf.clearRetainingCapacity();
             h.rstart = 0;
             h.eof = false;
         },
-        else => h.file.writeStreamingAll(l.g.io, bytes) catch |e| return ioError(l, e),
+        else => h.file.writeStreamingAll(l.g.io, bytes) catch |e| return e,
     }
+    return null;
 }
 
 // ---------------------------------------------------------------------
@@ -576,7 +589,7 @@ fn fFlush(l: *Thread) Error!u32 {
     if (h.kind == .stdout) {
         const o = out.stdout(l.g);
         o.flush(l.g);
-        if (o.takeError()) |e| return ioError(l, e);
+        if (o.takeError()) |e| return ioFail(l, e);
     }
     return aux.ret(l, l.arg(1));
 }
@@ -588,12 +601,12 @@ fn fSync(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
     switch (h.kind) {
         .file => {
-            syncFile(l.g.io, h.file) catch |e| return ioError(l, e);
+            syncFile(l.g.io, h.file) catch |e| return ioFail(l, e);
         },
         .stdout => {
             const o = out.stdout(l.g);
             o.flush(l.g);
-            if (o.takeError()) |e| return ioError(l, e);
+            if (o.takeError()) |e| return ioFail(l, e);
         },
         .pipe, .stdin, .stderr => {},
     }
@@ -615,7 +628,7 @@ fn ioFlush(l: *Thread) Error!u32 {
     if (h.kind == .stdout) {
         const o = out.stdout(l.g);
         o.flush(l.g);
-        if (o.takeError()) |e| return ioError(l, e);
+        if (o.takeError()) |e| return ioFail(l, e);
     }
     return aux.retBool(l, true);
 }

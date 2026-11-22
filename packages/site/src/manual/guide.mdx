@@ -1272,6 +1272,16 @@ print(("hello world")[1, 5])             --> hello
 
 A slice of a list is a new list, so changing it leaves the original list unchanged.
 
+When the first position is larger than the second, the slice runs backward. It contains the items from the first position down to the second, so `s[5, 4]` holds two items, the fifth and then the fourth. A slice with equal positions holds one item.
+
+```lus
+local letters = { "a", "b", "c", "d", "e" }
+
+print(table.concat(letters[5, 4], " "))  --> e d
+print(table.concat(letters[3, 3], " "))  --> c
+print(("hello")[5, 2])                   --> olle
+```
+
 ### Copying tables
 
 An assignment copies a [reference](#variables-refer-to-tables) to a table, so a program that changes a table and also needs the original must copy the table itself. [`table.clone`](/manual/api#table.clone) returns a new table with the same keys and values.

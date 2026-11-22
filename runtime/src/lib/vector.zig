@@ -27,6 +27,8 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "resize", .func = resize },
     .{ .name = "get", .func = get },
     .{ .name = "set", .func = set },
+    .{ .name = "find", .func = find },
+    .{ .name = "copy", .func = copy },
 };
 
 pub fn open(l: *Thread) Error!void {
@@ -214,6 +216,43 @@ fn set(l: *Thread) Error!u32 {
     if (off < 0 or off >= v.bytes.items.len) return aux.argError(l, 2, "offset out of bounds", .{});
     if (b < 0 or b > 255) return aux.argError(l, 3, "byte out of range", .{});
     v.bytes.items[@intCast(off)] = @intCast(b);
+    return 0;
+}
+
+/// vector.find(v, pattern [, init]): the zero-based offset of the first
+/// occurrence of the bytes of `pattern` at or after `init`, or nil. The
+/// search is plain, so no byte of the pattern is special.
+fn find(l: *Thread) Error!u32 {
+    const v = try checkVector(l, 1);
+    const needle = try checkData(l, 2);
+    const hay = v.bytes.items;
+    const init = try aux.optInt(l, 3, 0);
+    if (init < 0 or init > hay.len) return aux.retNil(l);
+    const at = std.mem.indexOfPos(u8, hay, @intCast(init), needle) orelse return aux.retNil(l);
+    return aux.retInt(l, @intCast(at));
+}
+
+/// vector.copy(dst, dstoff, src [, srcoff [, len]]): copies `len` bytes of
+/// `src` from `srcoff` into `dst` at `dstoff`. The ranges may overlap,
+/// including when `dst` and `src` are the same vector.
+fn copy(l: *Thread) Error!u32 {
+    const dst = try checkVectorMut(l, 1);
+    const doff = try aux.checkInt(l, 2);
+    const src = try checkVector(l, 3);
+    const slen: i64 = @intCast(src.bytes.items.len);
+    const soff = try aux.optInt(l, 4, 0);
+    if (soff < 0 or soff > slen) return aux.argError(l, 4, "offset out of bounds", .{});
+    const n = try aux.optInt(l, 5, slen - soff);
+    if (n < 0 or n > slen - soff) return aux.argError(l, 5, "length out of bounds", .{});
+    const dlen: i64 = @intCast(dst.bytes.items.len);
+    if (doff < 0 or doff > dlen or n > dlen - doff) return aux.argError(l, 2, "offset out of bounds", .{});
+    const d = dst.bytes.items[@intCast(doff)..][0..@intCast(n)];
+    const s = src.bytes.items[@intCast(soff)..][0..@intCast(n)];
+    if (@intFromPtr(d.ptr) <= @intFromPtr(s.ptr)) {
+        std.mem.copyForwards(u8, d, s);
+    } else {
+        std.mem.copyBackwards(u8, d, s);
+    }
     return 0;
 }
 

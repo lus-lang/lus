@@ -924,3 +924,41 @@ local function unpackmany_with_offset_test()
   end
   assert(sum == 2 + 3 + 4, "should unpack from offset 4: " .. sum)
 end
+
+-- vector.find searches plain bytes from a zero-based offset.
+local function find_test()
+  local v = vector.fromstring("--b\r\nhello--b\r\nworld--b--")
+  assert(vector.find(v, "--b") == 0)
+  assert(vector.find(v, "--b", 1) == 10)
+  assert(vector.find(v, vector.fromstring("--b--")) == 20)
+  assert(vector.find(v, "zz") == nil)
+  assert(vector.find(v, "") == 0)
+  assert(vector.find(v, "", 5) == 5)
+  assert(vector.find(v, "", #v) == #v)
+  assert(vector.find(v, "x", #v + 1) == nil)
+  assert(vector.find(v, "--", -1) == nil)
+  -- Pattern characters have no special meaning.
+  assert(vector.find(vector.fromstring("a.b%c"), "%c") == 3)
+  assert(vector.find(vector.fromstring("a.b%c"), ".") == 1)
+  raises(function() vector.find("abc", "a") end, "vector expected")
+  raises(function() vector.find(v, {}) end, "string or vector expected")
+end
+
+-- vector.copy moves a range within or between vectors, overlapping or not.
+local function copy_test()
+  local d = vector.fromstring("0123456789")
+  vector.copy(d, 2, d, 0, 5)
+  assert(vector.tostring(d) == "0101234789")
+  d = vector.fromstring("0123456789")
+  vector.copy(d, 0, d, 3)
+  assert(vector.tostring(d) == "3456789789")
+  local dst = vector.create(6)
+  vector.copy(dst, 1, vector.fromstring("abcdef"), 2, 3)
+  assert(vector.tostring(dst, 1, 4) == "cde")
+  assert(vector.get(dst, 0) == 0 and vector.get(dst, 4) == 0)
+  vector.copy(dst, 6, vector.create(0))
+  raises(function() vector.copy(dst, 4, vector.fromstring("abc")) end, "offset out of bounds")
+  raises(function() vector.copy(dst, -1, vector.fromstring("a")) end, "offset out of bounds")
+  raises(function() vector.copy(dst, 0, vector.fromstring("abc"), 4) end, "offset out of bounds")
+  raises(function() vector.copy(dst, 0, vector.fromstring("abc"), 1, 3) end, "length out of bounds")
+end

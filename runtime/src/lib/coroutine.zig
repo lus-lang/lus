@@ -268,6 +268,22 @@ inline fn runCo(co: *Thread, mode: sched.Entry, nargs: u32) Outcome {
             if (co.hook_mask & Thread.hook_call != 0) interp.callHook(co, "call", null) catch |e| return handleStop(co, e);
         },
         .results => {
+            // A generator native that yielded runs again for the next
+            // value (`state.Native.generator`).
+            if (co.frame().native) |nat| {
+                if (nat.generator) {
+                    interp.rerunGenerator(co, nargs) catch |e| return handleStop(co, e);
+                    if (co.frames.items.len == 0) {
+                        co.transfer = co.top;
+                        return .returned;
+                    }
+                    if (co.frames.items.len > 0) {
+                        interp.execute(co, 0) catch |e| return handleStop(co, e);
+                    }
+                    co.transfer = co.top;
+                    return .returned;
+                }
+            }
             // Finish the pending `yield` call: its results are the resume
             // arguments now at the top of the stack.
             const fr = co.frame();
@@ -403,6 +419,26 @@ fn @"resume"(l: *Thread) Error!u32 {
     l.stack[l.top - n] = .true;
     l.top += 1;
     return n + 1;
+}
+
+/// Yields the top `n` values of `l` from inside a native, as
+/// `coroutine.yield` does. A generator native returns its result.
+pub fn yieldValues(l: *Thread, n: u32) Error {
+    if (l == l.g.main_thread or l.resumer == null) {
+        return l.raiseFmt("attempt to yield from outside a coroutine", .{});
+    }
+    l.transfer = n;
+    l.yielding = true;
+    l.status = .suspended;
+    return error.LusError;
+}
+
+pub fn resumeNative(l: *Thread) Error!u32 {
+    return @"resume"(l);
+}
+
+pub fn statusNative(l: *Thread) Error!u32 {
+    return status(l);
 }
 
 fn yield(l: *Thread) Error!u32 {

@@ -9,6 +9,7 @@ are compiled into them. The complete license texts ship beside this notice.
 | Brotli | `LICENSE.BROTLI.txt` |
 | IANA time zone database | `LICENSE.TZDATA.txt` |
 | Lua | `LICENSE.LUA.txt` |
+| Mbed TLS | `LICENSE.MBEDTLS.txt` |
 | musl libc (Linux musl archives) | `LICENSE.MUSL.txt` |
 | SQLite | `LICENSE.SQLITE.txt` |
 | Unicode and CLDR data | `LICENSE.UNICODE.txt` |

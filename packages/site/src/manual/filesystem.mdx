@@ -297,8 +297,8 @@ After a crash at any point, the target holds either its complete old contents or
 local function replace(path, contents)
     local tmp = path .. ".tmp"
     local f = assert(io.open(tmp, "w"))
-    f:write(contents)
-    f:sync()
+    assert(f:write(contents))
+    assert(f:sync())
     f:close()
     fs.move(tmp, path, { replace = true })
     fs.sync(fs.path.parent(path))
