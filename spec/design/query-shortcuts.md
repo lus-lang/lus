@@ -22,13 +22,13 @@ Each shortcut is a separate experiment with its own verdict.
 Every shortcut keeps the rows, their order, and the errors a query raises.
 
 - **Row order.** The indexed odometer visits matching rows of source `i` in ascending list position for each tuple of the earlier sources, which is the order the full odometer visits them in. The heap breaks ties between equal keys by arrival position, which is what the stable sort does.
-- **Equality.** The index holds a row only when its key is a number, a string, or a boolean. Integers and floats with equal values share one entry through the same key normalization tables use, and NaN and nil match nothing, which agrees with the rule that a comparison with nil is false. When any key on the indexed side is another kind of value, the executor walks the full product for that run, so `__eq` metamethods keep their behavior. A probe key of another kind matches no primitive key, which is also what `==` gives.
+- **Equality.** The executor indexes a join only when every value of the joined columns, on both sides, is nil, a number, a string, or a boolean. Integers and floats with equal values share one entry through the same key normalization tables use, and NaN and nil match nothing, which agrees with the rule that a comparison with nil is false. When a joined column holds another kind of value, the executor walks the full product for that run, so `__eq` metamethods keep their behavior.
 - **Conjunct order.** The step function evaluates conjuncts left to right and stops at the first false one, and a conjunct can raise an error or call a host function. The executor indexes a conjunct only when every conjunct before it is a column equality, so the tuples it skips are exactly the tuples the step function would have rejected before reaching anything that can raise or call out. The step function still evaluates the indexed conjunct, which holds for every tuple the index yields.
-- **Column reads.** The step function reads a column with an ordinary index, which consults `__index`. The executor indexes a source only when every row on its indexed side is a table without a metatable, and walks the full product otherwise.
+- **Column reads.** The step function reads a column with an ordinary index, which consults `__index`. The executor indexes a join only when every row that the joins up to it read is a table without a metatable, and walks the full product otherwise.
 - **Plan format.** The compiler records each column equality between two sources in the plan string as a new conjunct shape. Plan strings live in compiled chunks, so the change bumps the chunk format version in `compile/dump.zig`.
-- **Order errors.** Sorting raises `cannot order rows on a ... value` whenever two order keys fall in different classes, because a comparison sort compares across any two classes it holds. The heap tracks the class of each key column as records arrive and raises the same error.
+- **Order errors.** With one order key, sorting raises `cannot order rows on a ... value` exactly when the non-nil keys span two classes or hold two values that do not order, because a comparison sort compares across any two classes it holds. The heap tracks those classes as records arrive and keeps every key, and when they show that the sort raises, the executor sorts all the keys as before, which raises the same error from the same pair. With several order keys, the heap applies only when the keys of each position share one class.
 
-Host calls in a where clause run fewer times under an indexed join, once per tuple that reaches them. The guide says the where clause is evaluated for each row, so the guide and the `query` spec will say that it is evaluated for each row the earlier conjuncts accept.
+Host calls in a where clause run as often as before. A host call before a join keeps the full product, and a host call after it runs for the tuples that the join accepts, in both cases. The guide and the `query` spec describe the behavior as it stands.
 
 ## Measurement
 
@@ -69,3 +69,21 @@ A killed shortcut leaves the code as it was and its verdict is recorded in this 
 ## Gates
 
 Anything that ships passes conformance under every JIT mode, the gc-stress build with verification, `mise run diff`, the Linux VM gate, and the WebAssembly build and conformance run.
+
+## Results
+
+The measurements ran on one Apple silicon machine in one session, with ReleaseFast builds of `rewrite` at `5fcd4ca1` and of the change, alternating between the two. `tests/bench/queries.lus` joins lists of 6000 records, larger than planned, so that the joins run for about a second before the change. Each figure is the best run of a batch, and the checksums match in every case.
+
+| Shortcut | Case | Before | After | Verdict |
+| --- | --- | --- | --- | --- |
+| Indexed joins | `join-2x6000` | 786 to 805 ms | 3.5 to 6 ms | ships |
+| Indexed joins | `join-3-range` | 995 to 1000 ms | 3.3 to 6.3 ms | ships |
+| Top k ordering | `order-limit-10` | 38 to 39 ms | 8.3 to 9.6 ms | ships |
+| Leaner grouping | `group-100` | 9.5 ms | | stopped after the profile |
+| Remembered indexes | | | | stopped after the study |
+
+The shortcuts that ship cost nothing measurable elsewhere. `filter` and `group-100` stay within the spread of their runs, with best times of 9.18 ms before and 9.36 ms after for `filter`, and 6.42 ms before and 6.46 ms after for `group-100`. Two alternating runs of the compare suite land within run to run spread in both directions for every program, in wall time and in peak memory. The bytecode of the 37 files of `packages/language-server` is 606549 bytes with and without the change, and `lus check` over them takes 19.3 ms in both builds.
+
+The profile of grouping shows the step calls alone taking 6.5 to 7 ms of the 9.5 ms that `group-100` takes. A grouping path with no cost at all would make the case about 1.5 times faster, so the shortcut cannot reach its target, and making the step calls cheaper belongs to another experiment.
+
+The study of remembered indexes measured what an index costs to build. Indexing 6000 rows takes under 0.15 ms of the 2.1 ms that the join of two lists of 6000 records takes, and the rest goes to the step calls and the records of the matches. Keeping the index across runs would save at most 7 percent of a repeated join, and keeping it valid needs a signal on every table write, including the stores that compiled code makes inline on every target, which would cost every program.
