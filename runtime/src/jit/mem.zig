@@ -175,6 +175,8 @@ pub fn install(block: []u8, code: []const u8) void {
         // The instruction caches of LoongArch64 follow stores in hardware,
         // and ibar orders the stores before the next instruction fetch.
         asm volatile ("ibar 0");
+    } else if (builtin.cpu.arch == .powerpc64le) {
+        syncCodePower(@intFromPtr(block.ptr), @intFromPtr(block.ptr) + code.len);
     }
 }
 
@@ -192,6 +194,28 @@ fn installWindows(block: []u8, code: []const u8) void {
     @memcpy(block[0..code.len], code);
     if (VirtualProtect(@ptrFromInt(start), end - start, page_execute_read, &old) == 0) @panic("VirtualProtect failed");
     _ = FlushInstructionCache(GetCurrentProcess(), block.ptr, code.len);
+}
+
+/// Makes the bytes just written to `start..end` visible to instruction
+/// fetch on POWER: every data cache line is stored, a barrier follows,
+/// every instruction cache line is invalidated, and a barrier and an
+/// instruction barrier follow. The stride is 32 bytes, the smallest cache
+/// line of the processors the ISA describes.
+fn syncCodePower(start: usize, end: usize) void {
+    const line = 32;
+    var addr = start & ~@as(usize, line - 1);
+    while (addr < end) : (addr += line) asm volatile ("dcbst 0, %[a]"
+        :
+        : [a] "r" (addr),
+    );
+    asm volatile ("sync");
+    addr = start & ~@as(usize, line - 1);
+    while (addr < end) : (addr += line) asm volatile ("icbi 0, %[a]"
+        :
+        : [a] "r" (addr),
+    );
+    asm volatile ("sync");
+    asm volatile ("isync");
 }
 
 /// Makes every core fetch the bytes just written to `start..end`, on an
@@ -252,7 +276,7 @@ test "arena reuses and merges blocks" {
 }
 
 test "installed code runs" {
-    if (!(builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .riscv64 or builtin.cpu.arch == .loongarch64)) return error.SkipZigTest;
+    if (!(builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .riscv64 or builtin.cpu.arch == .loongarch64 or builtin.cpu.arch == .powerpc64le)) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var a: Arena = .{};
     defer a.deinit(gpa);
@@ -263,6 +287,8 @@ test "installed code runs" {
         .riscv64 => &.{ 0x13, 0x05, 0xA0, 0x02, 0x67, 0x80, 0x00, 0x00 },
         // addi.d $a0, $zero, 42; jirl $zero, $ra, 0
         .loongarch64 => &.{ 0x04, 0xA8, 0xC0, 0x02, 0x20, 0x00, 0x00, 0x4C },
+        // li 3, 42; blr
+        .powerpc64le => &.{ 0x2A, 0x00, 0x60, 0x38, 0x20, 0x00, 0x80, 0x4E },
         else => &.{ 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 },
     };
     const block = a.alloc(gpa, code.len) orelse return error.SkipZigTest;

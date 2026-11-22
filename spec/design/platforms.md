@@ -29,6 +29,7 @@ Four facts from the table shape our order.
 | aarch64 Linux | yes | yes | yes | yes, static musl |
 | riscv64 Linux | yes | yes | yes | not yet |
 | loong64 Linux | yes | yes | yes | not yet |
+| ppc64le Linux | yes | yes | yes | not yet |
 | x86-64 Linux | yes | yes | yes | yes, static musl |
 | x86-64 Windows | yes | | | yes |
 | arm64 Windows | yes | | | yes |
@@ -78,13 +79,14 @@ loong64 is little-endian and 64-bit, with fixed-width instructions and compare-a
 
 ## ppc64le
 
-ppc64le gets `jit/ppc64.zig` for the ELFv2 convention. Three properties need work beyond the encodings.
+ppc64le gets `jit/ppc64.zig` for POWER8, the oldest processor that runs a little-endian distribution, and the ELFv2 convention. Four properties of the target shape it.
 
-- **Calls.** A routine of the runtime expects its own address in `r12`, from which its global entry computes the table of contents in `r2`. Native code calls every routine through `mtctr r12` and `bctrl`. It never changes `r2`, which is the table of contents of the runtime itself.
-- **Branch range.** A conditional branch reaches 32 KB, so a far conditional branch is the inverted branch over `b`, which reaches 32 MB, as on riscv64.
-- **Condition registers.** A comparison writes a field of the condition register that the branch reads, so `jumpIf` emits a `cmpd` or `cmpld` into field 0 followed by `bc`.
+- **Calls.** A routine of the runtime expects its own address in `r12`, from which its global entry computes the table of contents in `r2`. Native code calls every routine through `r12`, `mtctr`, and `bctrl`, and it never changes `r2`, which is the table of contents of the runtime itself.
+- **The frame header.** A called routine stores the link register, and may store the condition register, into the 32-byte header at the bottom of the frame of its caller. The stack pointer that the emitter and the code generator see sits 32 bytes above `r1`, so every frame that native code opens keeps its header free for the routines it calls. Every use of the stack pointer goes through a memory operand, `leaSp`, `setSp`, `moveSp`, or `saveLink`, so the offset lives in the assembler alone.
+- **Registers.** The convention leaves too few volatile registers outside the six arguments, so the temporaries of the baseline tier are the callee-saved `r21` to `r27`, which the entry sequence saves with the pinned registers. The optimizing tier allocates 15 integer registers, `r3` to `r10` and `r21` to `r27`, and 11 float registers. `r0` reads as zero as a base, so it serves only the link register moves and one multiplication.
+- **Branch range.** A conditional branch reaches 32 KB, so a branch to a label that is unbound or out of reach is the inverted branch over `b`, which reaches 32 MB, as on loong64. A comparison writes condition field 0, and the branch reads one of its bits.
 
-New code becomes visible to instruction fetch after `dcbst`, `sync`, `icbi`, and `isync` over its cache lines.
+POWER8 has no pc-relative load, so a constant builds in place in at most five instructions and the assembler keeps no pool. It has no remainder instruction either, so a remainder is a division, a multiplication, and a subtraction. Integer and float conversions use `mtvsrd`, `mfvsrd`, `fcfid`, and `fctidz`. New code becomes visible to instruction fetch after `dcbst`, `sync`, `icbi`, `sync`, and `isync` over its cache lines.
 
 ## 32-bit ARM
 
@@ -175,7 +177,7 @@ iOS and the game consoles refuse executable memory to ordinary programs, so the 
 
 ## Testing each target
 
-`tools/test-linux.sh --riscv64 --loong64` runs the riscv64 and loong64 gates. Every Linux target is gated locally by a static musl build under qemu-user in the lima VM "boring", with the conformance suite under `LUS_JIT` set to `off`, the default, `eager`, `baseline`, and `opt-eager`, and with a `-Dgc-stress=97 -Dgc-verify=true` build under `eager` and `opt-eager`. CI cross-builds every target on every pull request. A nightly Linux job runs the same suite under `qemu-user-static` for each of them. The encodings of each assembler get byte-level unit tests against the output of a system assembler, as `a64.zig` and `x64.zig` have.
+`tools/test-linux.sh --riscv64 --loong64 --ppc64le` runs the gates of those three targets. Every Linux target is gated locally by a static musl build under qemu-user in the lima VM "boring", with the conformance suite under `LUS_JIT` set to `off`, the default, `eager`, `baseline`, and `opt-eager`, and with a `-Dgc-stress=97 -Dgc-verify=true` build under `eager` and `opt-eager`. CI cross-builds every target on every pull request. A nightly Linux job runs the same suite under `qemu-user-static` for each of them. The encodings of each assembler get byte-level unit tests against the output of a system assembler, as `a64.zig` and `x64.zig` have.
 
 | target | local gate | CI |
 |---|---|---|

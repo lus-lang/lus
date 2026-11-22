@@ -49,6 +49,9 @@ pub const gpr_pool: []const A.Reg = switch (builtin.cpu.arch) {
     // a0 to a7 and t0 to t6. t7 and t8 are the scratch registers of the
     // assembler.
     .loongarch64 => &.{ .r4, .r5, .r6, .r7, .r8, .r9, .r10, .r11, .r12, .r13, .r14, .r15, .r16, .r17, .r18 },
+    // r3 to r10 and the temporaries r21 to r27, which the entry sequence
+    // saves.
+    .powerpc64le => &.{ .r3, .r4, .r5, .r6, .r7, .r8, .r9, .r10, .r21, .r22, .r23, .r24, .r25, .r26, .r27 },
     else => unreachable,
 };
 pub const fpr_pool: []const A.FReg = switch (builtin.cpu.arch) {
@@ -58,16 +61,19 @@ pub const fpr_pool: []const A.FReg = switch (builtin.cpu.arch) {
     .riscv64 => &.{ .f10, .f11, .f12, .f13, .f14, .f15, .f16, .f17, .f0, .f1, .f2, .f3, .f4, .f5, .f6, .f7 },
     // fa0 to fa7 and ft0 to ft7.
     .loongarch64 => &.{ .f0, .f1, .f2, .f3, .f4, .f5, .f6, .f7, .f8, .f9, .f10, .f11, .f12, .f13, .f14, .f15 },
+    // f1 to f11. f0 is the scratch register of the assembler.
+    .powerpc64le => &.{ .f1, .f2, .f3, .f4, .f5, .f6, .f7, .f8, .f9, .f10, .f11 },
     else => unreachable,
 };
-/// Scratch registers of the code generator. On x86-64, riscv64, and
-/// loong64 they are callee-saved registers that the entry sequence saves
+/// Scratch registers of the code generator. On every target except
+/// aarch64 they are callee-saved registers that the entry sequence saves
 /// and baseline code leaves alone.
 const sc0: A.Reg = switch (builtin.cpu.arch) {
     .aarch64 => .x13,
     .x86_64 => .rbp,
     .riscv64 => .x21,
     .loongarch64 => .r27,
+    .powerpc64le => .r18,
     else => unreachable,
 };
 const sc1: A.Reg = switch (builtin.cpu.arch) {
@@ -75,6 +81,7 @@ const sc1: A.Reg = switch (builtin.cpu.arch) {
     .x86_64 => .r13,
     .riscv64 => .x22,
     .loongarch64 => .r28,
+    .powerpc64le => .r19,
     else => unreachable,
 };
 const sc2: A.Reg = switch (builtin.cpu.arch) {
@@ -82,6 +89,7 @@ const sc2: A.Reg = switch (builtin.cpu.arch) {
     .x86_64 => .r13,
     .riscv64 => .x23,
     .loongarch64 => .r29,
+    .powerpc64le => .r20,
     else => unreachable,
 };
 const fsc0: A.FReg = switch (builtin.cpu.arch) {
@@ -89,6 +97,7 @@ const fsc0: A.FReg = switch (builtin.cpu.arch) {
     .x86_64 => .xmm13,
     .riscv64 => .f31,
     .loongarch64 => .f23,
+    .powerpc64le => .f13,
     else => unreachable,
 };
 const fsc1: A.FReg = switch (builtin.cpu.arch) {
@@ -96,6 +105,7 @@ const fsc1: A.FReg = switch (builtin.cpu.arch) {
     .x86_64 => .xmm12,
     .riscv64 => .f30,
     .loongarch64 => .f22,
+    .powerpc64le => .f12,
     else => unreachable,
 };
 const fret: A.FReg = switch (builtin.cpu.arch) {
@@ -103,6 +113,7 @@ const fret: A.FReg = switch (builtin.cpu.arch) {
     .x86_64 => .xmm0,
     .riscv64 => .f10,
     .loongarch64 => .f0,
+    .powerpc64le => .f1,
     else => unreachable,
 };
 
