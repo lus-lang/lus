@@ -8468,7 +8468,7 @@ print(string.transcode("hi?", "utf-8", "base64url"))  --> aGk_
 print(string.transcode("Hello 日本", "utf-8", "ascii", true))  --> Hello
 ```
 
-`"utf-8bom"` adds the byte order mark U+FEFF as a target and removes a leading one as a source. Base64 input may omit its padding. `"base64url"` is the URL-safe alphabet of RFC 4648, with `-` and `_` in place of `+` and `/`, and it writes no padding. Its input may carry padding. `"base32"` is the alphabet of RFC 4648, written in uppercase with padding, as TOTP secrets use it. Its input may be in either case, may omit padding, and may hold spaces. URL decoding reads `+` as a space. [Text and bytes](/manual/text#transcoding) describes every encoding with examples. [`vector.fromstring`](/manual/api#vector.fromstring) and [`vector.tostring`](/manual/api#vector.tostring) convert between a string and its WTF-8 bytes.]],
+`"utf-8bom"` adds the byte order mark U+FEFF as a target and removes a leading one as a source. Base64 input may omit its padding. `"base64url"` is the URL-safe alphabet of RFC 4648, with `-` and `_` in place of `+` and `/`, and it writes no padding. Its input may carry padding. `"base32"` is the alphabet of RFC 4648, written in uppercase with padding, as TOTP secrets use it. Its input may be in either case, may omit padding, and may hold spaces. URL decoding reads `+` as a space. With `ignorebad`, URL decoding keeps a `%` that does not start two hexadecimal digits as it is and decodes the rest, so `string.transcode("a%zz%41", "url", "utf-8", true)` returns `a%zzA`. [Text and bytes](/manual/text#transcoding) describes every encoding with examples. [`vector.fromstring`](/manual/api#vector.fromstring) and [`vector.tostring`](/manual/api#vector.tostring) convert between a string and its WTF-8 bytes.]],
     kind = "function",
     module = "string",
     name = "string.transcode",
@@ -10322,6 +10322,8 @@ With `format`, the text must match a pattern built from these specifiers:
 
 - `%Y` reads a year of one to four digits, and `%y` reads one or two digits and adds 2000, giving a year from 2000 to 2099.
 - `%m`, `%d`, `%H`, `%M`, and `%S` read one or two digits of the month, day, hour, minute, and second. `%e` is the same as `%d`, and both skip leading spaces.
+- `%b`, `%h`, and `%B` read the English name of a month, in full or as its first three letters, in any case, so each reads both `Nov` and `November`.
+- `%a` and `%A` read the English name of a weekday in the same way. The weekday must be the weekday of the date, so `time.parse("Mon, 22 Nov 2026", "%a, %d %b %Y")` raises `'Mon, 22 Nov 2026' names Monday, but the date falls on a Sunday`.
 - `%z` reads `Z`, or an offset `+HH`, `+HHMM`, or `+HH:MM` with either sign.
 - `%%` reads a literal `%`.
 
@@ -10336,6 +10338,8 @@ local z = time.parse("2026-07-02T09:15:00-04:00")
 print(z.offset, z:instant() == i)               --> -14400  true
 local p = time.parse("02/07/2026 09:15 -0400", "%d/%m/%Y %H:%M %z")
 print(p:iso())                                  --> 2026-07-02T09:15:00-04:00
+local h = time.parse("Sun, 22 Nov 2026 10:00:00 GMT", "%a, %d %b %Y %H:%M:%S GMT")
+print(h:iso())                                  --> 2026-11-22T10:00:00Z
 print(catch time.parse("2026-13-01"))           --> false  ...: ISO 8601 date out of range in '2026-13-01'
 ```
 

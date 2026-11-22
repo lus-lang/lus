@@ -266,6 +266,7 @@ The annotations are the following.
 
 - `@param NAME TYPE DESCRIPTION` documents a parameter. A `?` after the name or after the type makes the parameter optional. `...` documents unnamed variable arguments, while named variable arguments such as `...parts` are documented under their name without the dots.
 - `@return TYPE DESCRIPTION` documents one result, in order. `@returns` is the same annotation.
+- `@raise DESCRIPTION` documents an error that the function raises, such as its message and when it occurs. Each error takes an annotation of its own, and `@raises` is the same annotation. The output lists them under **Raises** and in the `raises` field of the JSON.
 - `@since VERSION` records the release in which the entry appeared.
 - `@stability LEVEL` records how settled the entry is.
 

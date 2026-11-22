@@ -1,11 +1,15 @@
 -- Jumps of the real clock (`LUS_CLOCK`, `runtime/src/vm/faultio.zig`).
 --
--- The first scenario sets the clock two seconds before New York starts
--- daylight saving and lets it run across the change, then does the same
--- for the end of daylight saving. The checker asserts that the readings
--- of `time.now` advance with the elapsed time, that the zoned values and
--- `os.date` show the offsets of the zone on each side, and that a zoned
--- value turns back into the instant it came from.
+-- The first scenario sets the clock two seconds before a change of
+-- daylight saving and lets it run across the change, for the start and
+-- the end of daylight saving in New York, Paris, and Sydney, zones west
+-- and east of UTC in both hemispheres. The checker asserts that the
+-- readings of `time.now` advance with the elapsed time, that the zoned
+-- values and `os.date` show the offsets of the zone on each side, and
+-- that a zoned value turns back into the instant it came from. It also
+-- builds a zoned value from the wall clock fields of each reading: a time
+-- that the end of daylight saving repeats resolves to the earlier
+-- instant, and every other time to the reading itself.
 --
 -- The second scenario moves the clock back an hour, then forward a day,
 -- between readings. The checker asserts that `time.now` and `os.time`
@@ -38,27 +42,38 @@ if package.config:sub(1, 1) == "\\" then
     os.exit(0)
 end
 
--- 2026-03-08T06:59:58Z is 01:59:58 in New York, two seconds before the
--- clocks there move from 02:00 to 03:00. 2026-11-01T05:59:58Z is 01:59:58
--- daylight time, two seconds before the clocks move from 02:00 back to
--- 01:00.
-local SPRING = 1772953198
-local AUTUMN = 1793512798
+-- Each crossing starts two seconds before a change: the zone, the
+-- instant, the offsets before and after the change in seconds, and the
+-- local hour right after it. New York moves from 02:00 to 03:00 on
+-- 2026-03-08 and from 02:00 back to 01:00 on 2026-11-01. Paris moves from
+-- 02:00 to 03:00 on 2026-03-29 and from 03:00 back to 02:00 on 2026-10-25.
+-- Sydney moves from 03:00 back to 02:00 on 2026-04-05 and from 02:00 to
+-- 03:00 on 2026-10-04.
+local CROSSINGS = {
+    { "America/New_York", 1772953198, -18000, -14400, 3 },
+    { "America/New_York", 1793512798, -14400, -18000, 1 },
+    { "Europe/Paris", 1774745998, 3600, 7200, 3 },
+    { "Europe/Paris", 1792889998, 7200, 3600, 2 },
+    { "Australia/Sydney", 1775318398, 39600, 36000, 2 },
+    { "Australia/Sydney", 1791043198, 36000, 39600, 3 },
+}
 -- An ordinary day, 2026-06-01T12:00:00Z.
 local BASE = 1780315200
 
 -- Reads the real clock once a quarter of a second until it has moved four
 -- seconds, printing each reading.
 local DST = [[
-local ny = time.zone("America/New_York")
+local zone = time.zone(arg[1])
 local first = time.now()
 local start = time.monotonic()
 while true do
     local now = time.now()
-    local z = now:at(ny)
+    local z = now:at(zone)
     local elapsed = (time.monotonic() - start):seconds()
-    print(string.format("reading %d %.3f %s %d %s %s", now:epoch(), elapsed, z:iso(), z.offset,
-        tostring(z:instant() == now), os.date("%H:%M:%S")))
+    local fields = { year = z.year, month = z.month, day = z.day, hour = z.hour, minute = z.minute, second = z.second }
+    local resolved = time.zoned(fields, zone):instant():epoch()
+    print(string.format("reading %d %.3f %s %d %s %s %d", now:epoch(), elapsed, z:iso(), z.offset,
+        tostring(z:instant() == now), os.date("%H:%M:%S"), resolved))
     if (now - first):seconds() >= 4 then break end
     local until_ = time.monotonic() + time.millis(250)
     while time.monotonic() < until_ do end
@@ -105,9 +120,10 @@ local function quote(s)
     return "'" .. s:gsub("'", "'\\''") .. "'"
 end
 
-local function run(spec, name)
-    local cmd = string.format("cd %s && TZ=America/New_York LUS_CLOCK=%s perl -e 'alarm %d; exec @ARGV' %s %s 2>&1",
-        quote(dir), spec, opts.timeout, quote(fs.path.join(os.getenv("PWD"), opts.lus)), name)
+local function run(spec, name, zone)
+    zone = zone or "America/New_York"
+    local cmd = string.format("cd %s && TZ=%s LUS_CLOCK=%s perl -e 'alarm %d; exec @ARGV' %s %s %s 2>&1",
+        quote(dir), zone, spec, opts.timeout, quote(fs.path.join(os.getenv("PWD"), opts.lus)), name, zone)
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     local _, _, code = p:close()
@@ -120,15 +136,21 @@ local function problem(fmt, ...)
     problems[#problems + 1] = string.format(fmt, ...)
 end
 
--- The readings of a crossing of a change of daylight saving that starts
--- at `at`. `before` and `after` are the offsets of New York in seconds,
--- and `hour_after` the local hour right after the change.
-local function crossing(label, at, before, after, hour_after)
-    local out = run("1:=" .. at, "dst.lus")
+-- The readings of a crossing of a change of daylight saving in `zone`
+-- that starts at `at`. `before` and `after` are the offsets of the zone
+-- in seconds, and `hour_after` the local hour right after the change.
+local function crossing(zone, at, before, after, hour_after)
+    local label = string.format("%s at %d", zone, at)
+    local out = run("1:=" .. at, "dst.lus", zone)
     local seen_before, seen_after, readings = false, false, 0
-    for epoch_text, elapsed_text, iso, offset_text, same, local_time in out:gmatch("reading (%d+) ([%d.]+) (%S+) (%-?%d+) (%a+) (%S+)") do
+    for epoch_text, elapsed_text, iso, offset_text, same, local_time, resolved_text in out:gmatch("reading (%d+) ([%d.]+) (%S+) (%-?%d+) (%a+) (%S+) (%d+)") do
         readings = readings + 1
-        local epoch, elapsed, offset = tonumber(epoch_text), tonumber(elapsed_text), tonumber(offset_text)
+        local epoch, elapsed, offset, resolved = tonumber(epoch_text), tonumber(elapsed_text), tonumber(offset_text), tonumber(resolved_text)
+        -- After the end of daylight saving the wall clock repeats the
+        -- hour it just showed, and its fields resolve to the earlier pass.
+        local expect_resolved = epoch
+        if offset == after and before > after then expect_resolved = epoch - (before - after) end
+        if resolved ~= expect_resolved then problem("%s: the fields of %s resolve to %d, expected %d", label, iso, resolved, expect_resolved) end
         -- The scripted clock runs with the real one from its first read.
         if math.abs(epoch - at - elapsed) > 1.5 then problem("%s: reading %d is %d seconds after the start, after %.3f seconds", label, epoch, epoch - at, elapsed) end
         if same ~= "true" then problem("%s: %s does not turn back into its instant", label, iso) end
@@ -144,8 +166,10 @@ local function crossing(label, at, before, after, hour_after)
     return readings
 end
 
-local spring = crossing("spring", SPRING, -18000, -14400, 3)
-local autumn = crossing("autumn", AUTUMN, -14400, -18000, 1)
+local readings = 0
+for _, c in ipairs(CROSSINGS) do
+    readings = readings + crossing(c[1], c[2], c[3], c[4], c[5])
+end
 
 -- The jumps, placed after the reads that the runtime makes as it starts.
 local startup = tonumber(run("count", "empty.lus"):match("lus: (%d+) reads of the real clock"))
@@ -173,6 +197,6 @@ waited = tonumber(waited)
 if what ~= "receive" or not waited or waited < 0.15 or waited > 2 then problem("jumps: the timeout of 0.2 seconds ended with %s after %s seconds", tostring(what), tostring(waited)) end
 
 fs.remove(dir, true)
-print(string.format("spring %d readings, autumn %d readings, 6 loops with 2 jumps, %d problems", spring, autumn, #problems))
+print(string.format("%d crossings with %d readings, 6 loops with 2 jumps, %d problems", #CROSSINGS, readings, #problems))
 for _, p in ipairs(problems) do print("  " .. p) end
 if #problems > 0 then os.exit(1) end

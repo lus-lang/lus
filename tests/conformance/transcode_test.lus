@@ -453,3 +453,21 @@ local function handles_high_iso_8859_1_characters_test()
   local back = string.transcode(utf8, "utf-8", "iso-8859-1")
   assert(same_bytes(back, s))
 end
+
+-- Lax URL decoding keeps a malformed escape as it is and decodes the rest,
+-- and strict decoding raises.
+local lax_url_decoding_keeps_malformed_escapes_cases = {
+  { "%zz", "%zz" },
+  { "a%", "a%" },
+  { "%4", "%4" },
+  { "a%zz%41+b", "a%zzA b" },
+  { "100%", "100%" },
+  { "%%41", "%A" },
+  { "%4g%20", "%4g " },
+}
+
+local function lax_url_decoding_keeps_malformed_escapes_test(input, expected)
+  assert(string.transcode(input, "url", "utf-8", true) == expected, input)
+  local ok, e = catch string.transcode(input, "url", "utf-8")
+  assert(not ok and string.find(e, "invalid url input", 1, true), tostring(e))
+end
