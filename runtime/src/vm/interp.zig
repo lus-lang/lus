@@ -860,7 +860,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         .concat => {
             const a = opc.a(ins);
             c.fr.pc = pc;
-            const r = try ops.concat(l, c.fr.base + a, opc.b(ins));
+            const r = try metaConcat(l, c.fr.base + a, opc.b(ins));
             c.refresh(l, mode);
             c.bp[a] = r;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -1690,6 +1690,16 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
             c.fr.pc = pc.*;
             if (keep_top) l.top = dst;
         },
+        .concat => |k| {
+            const a = opc.a(c.code[pc.* - 1]);
+            c.bp[a + k - 1] = l.stack[dst];
+            if (k > 1) {
+                l.top = c.fr.base + c.cl().proto.max_stack;
+                const r = try metaConcat(l, c.fr.base + a, k);
+                c.* = load(l);
+                c.bp[a] = r;
+            }
+        },
     }
     // Fixed result counts restore the caller's register window top.
     if (fr.want >= 0) l.top = c.fr.base + c.cl().proto.max_stack;
@@ -2287,6 +2297,14 @@ fn metaLength(l: *Thread, v: Value, dest: u8) Error!Value {
     l.meta_finish = .{ .store = dest };
     defer l.meta_finish = null;
     return ops.length(l, v);
+}
+
+/// Any finish marks the call as made by the interpreter. `ops.concat`
+/// sets the one that each metamethod frame needs.
+fn metaConcat(l: *Thread, first: u32, n: u32) Error!Value {
+    l.meta_finish = .discard;
+    defer l.meta_finish = null;
+    return ops.concat(l, first, n);
 }
 
 fn metaCompare(l: *Thread, comptime which: enum { eq, lt, le }, x: Value, y: Value, k: bool) Error!bool {
