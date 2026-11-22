@@ -34,7 +34,8 @@ Four facts from the table shape our order.
 | x86-64 Windows | yes | | | yes |
 | arm64 Windows | yes | | | yes |
 | 32-bit ARM Linux | yes | | | not yet |
-| s390x Linux | yes | | | not yet |
+| s390x Linux | yes | yes | yes | not yet |
+| FreeBSD (aarch64, x86-64) | yes | yes | yes | not yet |
 | wasm32 WASI | yes | WebAssembly modules | | the npm package |
 
 The native tiers depend on the target in six places.
@@ -119,7 +120,14 @@ s390x is big-endian. The runtime assumes little-endian in two kinds of places.
 - **Words written whole and read by field.** `Value.make` writes a value as two 64-bit words, and the tag is the first byte of the second word, so `Value.tagWord` puts the tag in the low byte of that word on a little-endian target and in its high byte on a big-endian one. The flags of a plain call are the last two bytes of the flags word of a frame, so `CallFlags.frameFlags` shifts them to the top of the word on a little-endian target and swaps them into its bottom on a big-endian one. `Frame.flagMask` reads its mask in the byte order of the target, because a cast of a byte array to an integer at compile time reads it little-endian.
 - **Bytes that leave the process.** Binary chunks, bundles, `pack`, `vector`, hashing, and the network code pass their conformance tests on s390x unchanged, so the byte order of what they read and write does not depend on the target.
 
-The interpreter passes the conformance suite under `qemu-s390x` with those three changes, and `tools/test-linux.sh --s390x` runs it. `jit/s390x.zig` then targets z/Architecture as of z13. Every call reserves the 160-byte register save area that the convention gives each callee, which the entry sequence allocates once. Relative branches reach 64 KB. `brcl` reaches 4 GB, so far branches use it. The instruction fetch of z/Architecture is coherent with stores, so installing code needs no cache maintenance.
+The interpreter passes the conformance suite under `qemu-s390x` with those three changes, and `tools/test-linux.sh --s390x` runs it. `jit/s390x.zig` targets z/Architecture and its ELF convention, with the register roles of `x64.zig`: the temporaries share the argument registers, and the optimizing tier allocates the seven temporaries in the order of the x86-64 pool, so that its registers overlap the argument registers as they do there. Four properties of the target shape it.
+
+- **The save area.** Every call gives the routine it calls a register save area of 160 bytes at the bottom of the frame of the caller. The stack pointer that native code sees sits 160 bytes above `r15`, as on ppc64le with its 32-byte header.
+- **Results of two words.** A routine that returns a structure of more than 8 bytes, such as `jit.Target`, returns it through memory whose address its caller passes in `r2`. The interface gains `callPair`, which is `call` on every other target. On s390x it moves the arguments up a register, passes 16 bytes of new frame, and loads the two words into the result registers.
+- **Register 0.** `r0` reads as zero as a base or an index, so it serves only as data. A call loads its target into `r14`, the link register, and calls through it, so the assembler needs no base register of its own. A division uses the pair `r0` and `r1`, and `r1` is the scratch register of the optimizing tier, which every target lets a call clobber.
+- **Branches.** A compare-and-branch instruction reaches 64 KB, and a comparison followed by `brcl` reaches 4 GB, which covers every function, so no branch needs an island. `jmp` is always `brcl`, which gives the jump after a call entry the fixed length that `linkPastJump` counts.
+
+The templates write a tag in three ways. On a big-endian target the tag belongs in the high byte of its word. A constant tag goes through `Value.tagWord`. A tag in a register goes through `storeTag`, and a payload and a tag through `storeValue`, which are `store64` and `storePair64` on a little-endian target and store the tag byte at the start of its word on s390x. A tag that native code passes to the runtime is loaded as its byte. Frames need no change, because native code writes their fields one by one or as words that the runtime computes in the byte order of the target. The instruction fetch of z/Architecture follows stores, so installing code needs no cache maintenance.
 
 ## Windows on x86-64
 
@@ -173,7 +181,7 @@ CI adds a `windows-11-arm` runner to the runtime matrix with the same steps as `
 
 ## FreeBSD and Android
 
-FreeBSD and Android run the instruction sets that already have backends. The gate opens for them with the stack query of each system in `stackBounds`: `pthread_attr_get_np` on FreeBSD and `pthread_getattr_np` in the C library of Android. The executable memory path of Linux works on both. FreeBSD is checked in CI by a job that runs the conformance suite in a FreeBSD virtual machine on a Linux runner. Android is cross-built in CI and checked on an emulator image when one is available to the runner.
+FreeBSD and Android run the instruction sets that already have backends. FreeBSD maps memory writable and executable by default, so its gate opens with its stack query, `pthread_attr_get_np`, in `stackBounds`. Zig treats Android as Linux with the Android ABI, so it takes the Linux gate and the `pthread_getattr_np` of bionic as they are. The x86-64 FreeBSD build compiles, and the suite has not run on FreeBSD yet. A CI job that runs it in a FreeBSD virtual machine on a Linux runner needs a pinned action for that machine. Android is cross-built, and checked on an emulator image when one is available to a runner.
 
 iOS and the game consoles refuse executable memory to ordinary programs, so the only native code they can run is code compiled ahead of time.
 

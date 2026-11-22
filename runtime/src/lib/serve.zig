@@ -256,7 +256,7 @@ const Options = struct {
 fn defaultMaxConnections() u32 {
     if (comptime @import("builtin").os.tag == .windows) return 8192;
     const limit = std.posix.getrlimit(.NOFILE) catch return 512;
-    return @intCast(std.math.clamp(limit.cur / 2, 16, default_max_connections));
+    return @intCast(std.math.clamp(@divTrunc(limit.cur, 2), 16, default_max_connections));
 }
 
 /// Reads the options table in argument `i`, when there is one.

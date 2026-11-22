@@ -58,7 +58,10 @@ pub const Value = extern struct {
     }
     /// The second word of a value with tag `tag` and no auxiliary bits.
     pub inline fn tagWord(tag: Tag) u64 {
-        const t: u64 = @backingInt(tag);
+        return tagWordOf(@backingInt(tag));
+    }
+    /// The second word of a value whose tag has the number `t`.
+    pub inline fn tagWordOf(t: u64) u64 {
         return if (@import("builtin").cpu.arch.endian() == .little) t else t << 56;
     }
     pub inline fn int(v: i64) Value {

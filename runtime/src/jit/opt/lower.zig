@@ -30,6 +30,7 @@ const Closure = object.Closure;
 const Table = object.Table;
 const String = object.String;
 const Value = value.Value;
+const big_endian = @import("builtin").cpu.arch.endian() == .big;
 const Tag = value.Tag;
 const Ref = ir.Ref;
 const Ty = ir.Ty;
@@ -622,7 +623,12 @@ pub const Lower = struct {
             .boolean => {
                 _ = try b.store(base, disp, try b.kint(0), 8, cls, fresh);
                 const tag = try b.pure(.{ .op = .addi, .ty = .int, .a = v, .imm = @backingInt(Tag.false) });
-                tag_store = try b.store(base, tdisp, tag, tsize, cls, fresh);
+                if (tsize == 8 and big_endian) {
+                    // The tag is the high byte of its word here, so the
+                    // word is cleared and the tag goes in as its byte.
+                    _ = try b.store(base, tdisp, try b.kint(0), 8, cls, fresh);
+                    tag_store = try b.store(base, tdisp, tag, 1, cls, fresh);
+                } else tag_store = try b.store(base, tdisp, tag, tsize, cls, fresh);
                 // The payload word is not the boolean.
                 const stale: Inst = .{ .op = .load, .ty = .int, .size = 8, .cls = cls, .a = base, .imm = disp };
                 _ = b.cse.remove(b.keyOf(&stale));
@@ -631,7 +637,8 @@ pub const Lower = struct {
             else => {
                 // The payload first, so that the tag store leaves its
                 // load known.
-                tag_store = try b.store(base, tdisp, try b.kint(@backingInt(ty)), tsize, cls, fresh);
+                const word: u64 = if (tsize == 8) Value.tagWordOf(@backingInt(ty)) else @backingInt(ty);
+                tag_store = try b.store(base, tdisp, try b.kint(@bitCast(word)), tsize, cls, fresh);
                 _ = try b.store(base, disp, v, 8, cls, fresh);
             },
         }

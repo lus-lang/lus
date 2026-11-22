@@ -345,6 +345,15 @@ pub const Assembler = struct {
         a.byte(0xF2);
         a.opRM(false, &.{ 0x0F, 0x11 }, src.n(), m);
     }
+    /// Stores a tag held as a small integer as the whole tag word at `m`.
+    /// The tag is the low byte of its word on this little-endian target.
+    pub fn storeTag(a: *Assembler, tag: Reg, m: Mem) void {
+        a.store64(tag, m);
+    }
+    /// Stores a payload and a tag held as a small integer as a value.
+    pub fn storeValue(a: *Assembler, payload: Reg, tag: Reg, m: Mem) void {
+        a.storePair64(payload, tag, m);
+    }
     /// Stores a 64-bit constant.
     pub fn storeImm64(a: *Assembler, m: Mem, v: u64) void {
         const sv: i64 = @bitCast(v);
@@ -777,6 +786,11 @@ pub const Assembler = struct {
     pub fn call(a: *Assembler, addr: usize) void {
         a.movImm(.rax, addr);
         a.bytes(&.{ 0xFF, 0xD0 });
+    }
+    /// Calls a routine that returns two words in the two result
+    /// registers, such as `jit.Target`.
+    pub fn callPair(a: *Assembler, addr: usize) void {
+        a.call(addr);
     }
     /// Calls a routine in the same code, which ends with `leaveLocal`.
     pub fn callLocal(a: *Assembler, l: Label) void {

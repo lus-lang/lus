@@ -18,6 +18,7 @@ const emit = @import("../emit.zig");
 const state = @import("../../vm/state.zig");
 const object = @import("../../vm/object.zig");
 const value = @import("../../vm/value.zig");
+const Value = value.Value;
 const table = @import("../../vm/table.zig");
 const gc = @import("../../vm/gc.zig");
 const interp = @import("../../vm/interp.zig");
@@ -52,6 +53,9 @@ pub const gpr_pool: []const A.Reg = switch (builtin.cpu.arch) {
     // r3 to r10 and the temporaries r21 to r27, which the entry sequence
     // saves.
     .powerpc64le => &.{ .r3, .r4, .r5, .r6, .r7, .r8, .r9, .r10, .r21, .r22, .r23, .r24, .r25, .r26, .r27 },
+    // The temporaries t0 to t6 in order, as on x86-64, so that the pool
+    // overlaps the argument registers as it does there.
+    .s390x => &.{ .r11, .r5, .r4, .r3, .r2, .r6, .r12 },
     else => unreachable,
 };
 pub const fpr_pool: []const A.FReg = switch (builtin.cpu.arch) {
@@ -63,17 +67,21 @@ pub const fpr_pool: []const A.FReg = switch (builtin.cpu.arch) {
     .loongarch64 => &.{ .f0, .f1, .f2, .f3, .f4, .f5, .f6, .f7, .f8, .f9, .f10, .f11, .f12, .f13, .f14, .f15 },
     // f1 to f11. f0 is the scratch register of the assembler.
     .powerpc64le => &.{ .f1, .f2, .f3, .f4, .f5, .f6, .f7, .f8, .f9, .f10, .f11 },
+    // f0 to f7, which a call may clobber.
+    .s390x => &.{ .f0, .f1, .f2, .f3, .f4, .f5, .f6, .f7 },
     else => unreachable,
 };
 /// Scratch registers of the code generator. On every target except
-/// aarch64 they are callee-saved registers that the entry sequence saves
-/// and baseline code leaves alone.
+/// aarch64 and s390x they are callee-saved registers that the entry
+/// sequence saves and baseline code leaves alone. On s390x the second and
+/// third are r1, which a call may clobber, as on aarch64.
 const sc0: A.Reg = switch (builtin.cpu.arch) {
     .aarch64 => .x13,
     .x86_64 => .rbp,
     .riscv64 => .x21,
     .loongarch64 => .r27,
     .powerpc64le => .r18,
+    .s390x => .r13,
     else => unreachable,
 };
 const sc1: A.Reg = switch (builtin.cpu.arch) {
@@ -82,6 +90,7 @@ const sc1: A.Reg = switch (builtin.cpu.arch) {
     .riscv64 => .x22,
     .loongarch64 => .r28,
     .powerpc64le => .r19,
+    .s390x => .r1,
     else => unreachable,
 };
 const sc2: A.Reg = switch (builtin.cpu.arch) {
@@ -90,6 +99,7 @@ const sc2: A.Reg = switch (builtin.cpu.arch) {
     .riscv64 => .x23,
     .loongarch64 => .r29,
     .powerpc64le => .r20,
+    .s390x => .r1,
     else => unreachable,
 };
 const fsc0: A.FReg = switch (builtin.cpu.arch) {
@@ -98,6 +108,7 @@ const fsc0: A.FReg = switch (builtin.cpu.arch) {
     .riscv64 => .f31,
     .loongarch64 => .f23,
     .powerpc64le => .f13,
+    .s390x => .f8,
     else => unreachable,
 };
 const fsc1: A.FReg = switch (builtin.cpu.arch) {
@@ -106,6 +117,7 @@ const fsc1: A.FReg = switch (builtin.cpu.arch) {
     .riscv64 => .f30,
     .loongarch64 => .f22,
     .powerpc64le => .f12,
+    .s390x => .f9,
     else => unreachable,
 };
 const fret: A.FReg = switch (builtin.cpu.arch) {
@@ -114,6 +126,7 @@ const fret: A.FReg = switch (builtin.cpu.arch) {
     .riscv64 => .f10,
     .loongarch64 => .f0,
     .powerpc64le => .f1,
+    .s390x => .f0,
     else => unreachable,
 };
 
@@ -333,12 +346,12 @@ pub const Codegen = struct {
             // The runtime builds the frame of every direct call that
             // is running, and the native stack returns to where the
             // entry sequence left it.
-            a.call(@intFromPtr(&opt.rt.deoptDirect));
+            a.callPair(@intFromPtr(&opt.rt.deoptDirect));
             a.load64(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
             a.load64(sc0, .{ .base = sc0, .disp = @intCast(@intFromPtr(&c.l.g.jit.exit_sp) - @intFromPtr(c.l.g)) });
             a.setSp(sc0);
         } else {
-            a.call(@intFromPtr(&opt.rt.deopt));
+            a.callPair(@intFromPtr(&opt.rt.deopt));
             a.moveSp(save_bytes + c.frame);
         }
         a.bind(l_continue);
@@ -363,7 +376,7 @@ pub const Codegen = struct {
             a.mov(A.args[2], sc0);
             a.movImm(A.args[1], @intFromPtr(c.unit));
             a.leaSp(A.args[3], 0);
-            a.call(@intFromPtr(&opt.rt.deopt));
+            a.callPair(@intFromPtr(&opt.rt.deopt));
             a.moveSp(save_bytes);
             a.jmp(l_continue);
         }
@@ -387,7 +400,7 @@ pub const Codegen = struct {
         a.jumpIfMem(.ls, sc0, .{ .base = A.thread, .disp = lay.frames_cap }, ok);
         a.bind(bail);
         a.mov(A.args[0], A.thread);
-        a.call(@intFromPtr(&opt.rt.bail));
+        a.callPair(@intFromPtr(&opt.rt.bail));
         const l_interp = a.newLabel();
         a.jumpIfImm(.eq, A.ret0, 0, l_interp);
         a.mov(A.base, A.ret1);
@@ -537,7 +550,7 @@ pub const Codegen = struct {
         a.addScaled(A.t5, A.t5, A.t6, 4);
         a.jumpIfImm(.eq, dret_tag, @intCast(no_result), zero);
         a.store64(dret_payload, .{ .base = A.t5, .disp = -16 });
-        a.store64(dret_tag, .{ .base = A.t5, .disp = -8 });
+        a.storeTag(dret_tag, .{ .base = A.t5, .disp = -8 });
         a.movImm(A.t6, 1);
         a.jmp(fin);
         a.bind(zero);
@@ -589,7 +602,7 @@ pub const Codegen = struct {
 
         a.jumpIfImm(.eq, dret_tag, @intCast(no_result), zero);
         a.store64(dret_payload, slot(0));
-        a.store64(dret_tag, tagOf(0));
+        a.storeTag(dret_tag, tagOf(0));
         c.em.leanReturnOr(1, 0, slow1);
         a.bind(slow1);
         c.stepReturn(.ret1);
@@ -1360,16 +1373,16 @@ pub const Codegen = struct {
         switch (v.ty) {
             .nil => {
                 a.storeImm64(m, 0);
-                a.storeImm64(tag_m, @backingInt(Tag.nil));
+                a.storeImm64(tag_m, Value.tagWord(.nil));
             },
             .boolean => {
                 a.storeImm64(m, 0);
                 if (v.op == .kbool) {
-                    a.storeImm64(tag_m, @as(u64, @backingInt(Tag.false)) + @as(u64, @bitCast(v.imm)));
+                    a.storeImm64(tag_m, Value.tagWordOf(@as(u64, @backingInt(Tag.false)) + @as(u64, @bitCast(v.imm))));
                 } else {
                     const x = c.g(r, sc0);
                     a.addImm3(sc1, x, @backingInt(Tag.false));
-                    a.store64(sc1, tag_m);
+                    a.storeTag(sc1, tag_m);
                 }
             },
             .float => {
@@ -1379,7 +1392,7 @@ pub const Codegen = struct {
                     .f => |x| a.storeF(x, m),
                     else => a.store64(c.g(r, sc0), m),
                 }
-                a.storeImm64(tag_m, @backingInt(Tag.float));
+                a.storeImm64(tag_m, Value.tagWord(.float));
             },
             else => {
                 if (v.isConst()) {
@@ -1387,7 +1400,7 @@ pub const Codegen = struct {
                 } else {
                     a.store64(c.g(r, sc0), m);
                 }
-                a.storeImm64(tag_m, @backingInt(v.ty));
+                a.storeImm64(tag_m, Value.tagWordOf(@backingInt(v.ty)));
             },
         }
     }
@@ -1496,7 +1509,7 @@ pub const Codegen = struct {
                         c.parallel(buf[0..n]);
                         const sl: i64 = @intCast(i.aux >> 8);
                         a.load64(A.args[2], slot(sl));
-                        a.load64(A.args[3], tagOf(sl));
+                        a.load8(A.args[3], tagOf(sl));
                         a.movImm(A.args[4], @bitCast(i.imm));
                         a.mov(A.args[0], A.thread);
                         a.call(@intFromPtr(&opt.rt.barrierTable));
