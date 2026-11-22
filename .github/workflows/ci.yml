@@ -104,6 +104,14 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: runtime
         run: zig build -Doptimize=ReleaseSafe -Dtarget=riscv64-linux-musl --prefix zig-out-riscv64
+      - name: Native code runs
+        timeout-minutes: 5
+        # Every runner of this job has the JIT. A silent fall back to the
+        # interpreter would pass every other step.
+        working-directory: runtime
+        env:
+          LUS_JIT: eager
+        run: zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
       - name: Conformance tests
         timeout-minutes: 20
         working-directory: runtime
@@ -129,6 +137,23 @@ jobs:
         env:
           LUS_JIT: opt-eager
         run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in baseline code
+        timeout-minutes: 20
+        if: runner.os == 'Windows'
+        working-directory: runtime
+        env:
+          LUS_JIT: baseline
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests with short chains of direct calls
+        timeout-minutes: 20
+        # Every chain of direct calls in optimized code ends after a few
+        # activations, which exercises the exits and the stack probes.
+        if: runner.os == 'Windows'
+        working-directory: runtime
+        env:
+          LUS_JIT: opt-eager
+          LUS_JIT_DIRECT: "1024"
+        run: zig-out/bin/lus test ../tests/conformance
       - name: Documentation examples
         timeout-minutes: 10
         working-directory: runtime

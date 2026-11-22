@@ -16,13 +16,13 @@ const Op = opc.Op;
 /// 32-bit argument to 64 bits in a way that depends on its type, and the
 /// callee relies on it, so a 32-bit parameter would make every caller in
 /// native code extend each value the way its own target requires.
-pub const StepFn = *const fn (l: *Thread, pc: usize, stop: usize, ins: usize) callconv(.c) usize;
+pub const StepFn = *const fn (l: *Thread, pc: usize, stop: usize, ins: usize) callconv(jit.cc) usize;
 
 fn StepOf(comptime o: Op) type {
     return struct {
         /// Runs the instruction `ins`, which is the one before `pc` in
         /// the top frame, and returns an `interp.Step` code.
-        fn step(l: *Thread, pc: usize, stop: usize, ins: usize) callconv(.c) usize {
+        fn step(l: *Thread, pc: usize, stop: usize, ins: usize) callconv(jit.cc) usize {
             l.frames.items[l.frames.items.len - 1].pc = @truncate(pc);
             return interp.run(l, stop, .{ .step = o }, @truncate(ins)) catch |e| {
                 l.meta_finish = null;
@@ -65,7 +65,7 @@ const Closure = object.Closure;
 /// integers (`ops.joinShort`), written to `r[0]`. Returns 1 when it ran
 /// and 0 when the step routine must run the instruction, which also
 /// raises any error.
-pub fn concatShort(l: *Thread, r: [*]Value, n: usize) callconv(.c) usize {
+pub fn concatShort(l: *Thread, r: [*]Value, n: usize) callconv(jit.cc) usize {
     if (n == 0) return 0;
     const v = (ops.joinShort(l, r[0 .. n - 1], r[n - 1]) catch return 0) orelse return 0;
     r[0] = v;
@@ -74,44 +74,44 @@ pub fn concatShort(l: *Thread, r: [*]Value, n: usize) callconv(.c) usize {
 
 /// A step of a generic `for` over `next` or `ipairs` (`interp.stepIterator`).
 /// Returns 1 when it ran and 0 when the step routine must make the call.
-pub fn tforStep(l: *Thread, rp: [*]Value, want: usize) callconv(.c) usize {
+pub fn tforStep(l: *Thread, rp: [*]Value, want: usize) callconv(jit.cc) usize {
     return @intFromBool(interp.stepIterator(l, rp, @intCast(want)));
 }
 
-pub fn getStr(l: *Thread, t: *const Value, key: *const Value, ic: *IcEntry, out: *Value) callconv(.c) usize {
+pub fn getStr(l: *Thread, t: *const Value, key: *const Value, ic: *IcEntry, out: *Value) callconv(jit.cc) usize {
     return @intFromBool(!interp.fast.getStr(l, ic, t, key, out));
 }
 
-pub fn setStr(l: *Thread, t: *const Value, key: *const Value, ic: *IcEntry, v: *const Value) callconv(.c) usize {
+pub fn setStr(l: *Thread, t: *const Value, key: *const Value, ic: *IcEntry, v: *const Value) callconv(jit.cc) usize {
     return @intFromBool(!interp.fast.setStr(l, ic, t, key, v));
 }
 
 /// out = tab[i] for an integer key.
-pub fn getArray(tab: *object.Table, i: i64, out: *Value) callconv(.c) usize {
+pub fn getArray(tab: *object.Table, i: i64, out: *Value) callconv(jit.cc) usize {
     return @intFromBool(!interp.fast.getArray(tab, i, out));
 }
 
 /// tab[i] = v for an integer key.
-pub fn setArray(l: *Thread, tab: *object.Table, i: i64, v: *const Value) callconv(.c) usize {
+pub fn setArray(l: *Thread, tab: *object.Table, i: i64, v: *const Value) callconv(jit.cc) usize {
     return @intFromBool(!interp.fast.setArray(l, tab, i, v));
 }
 
-pub fn getIndex(t: *const Value, i: usize, out: *Value) callconv(.c) usize {
+pub fn getIndex(t: *const Value, i: usize, out: *Value) callconv(jit.cc) usize {
     return @intFromBool(!interp.fast.getIndex(t, @intCast(i), out));
 }
 
-pub fn length(x: *const Value, out: *Value) callconv(.c) usize {
+pub fn length(x: *const Value, out: *Value) callconv(jit.cc) usize {
     return @intFromBool(!interp.fast.length(x, out));
 }
 
 /// The slow part of the write barrier, for a store native code made.
-pub fn barrier(l: *Thread, h: *gc.Header) callconv(.c) void {
+pub fn barrier(l: *Thread, h: *gc.Header) callconv(jit.cc) void {
     gc.barrierBack(l.g, h);
 }
 
 /// The slow part of the table write barrier, for a store native code
 /// made into `tab`. `key` is null when the key was already present.
-pub fn barrierTable(l: *Thread, tab: *object.Table, key: ?*const Value, v: *const Value) callconv(.c) void {
+pub fn barrierTable(l: *Thread, tab: *object.Table, key: ?*const Value, v: *const Value) callconv(jit.cc) void {
     gc.barrierTable(l.g, tab, if (key) |k| k.* else .nil, v.*);
 }
 
@@ -120,7 +120,7 @@ pub fn barrierTable(l: *Thread, tab: *object.Table, key: ?*const Value, v: *cons
 /// that could fail made before anything changes. Returns where the
 /// callee starts. A zero address means the step routine must make the
 /// call.
-pub fn tailcall(l: *Thread, bp: [*]Value, ins_word: usize, pc_word: usize) callconv(.c) jit.Target {
+pub fn tailcall(l: *Thread, bp: [*]Value, ins_word: usize, pc_word: usize) callconv(jit.cc) jit.Target {
     const ins: u32 = @truncate(ins_word);
     const pc: u32 = @truncate(pc_word);
     const none: jit.Target = .{ .addr = 0, .base = 0 };
@@ -167,7 +167,7 @@ pub const retry: usize = 7;
 /// `call`. Returns `interp.Step.next` when the call completed, another
 /// `interp.Step` code when it raised, yielded, or set a hook, and `retry`
 /// when the callee is something else or finalizers are pending.
-pub fn callNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(.c) usize {
+pub fn callNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(jit.cc) usize {
     const ins: u32 = @truncate(ins_word);
     const pc: u32 = @truncate(pc_word);
     const fr = l.frame();
@@ -201,7 +201,7 @@ pub fn callNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(.c) usiz
 /// register of the callee and run up to the stack top when this returns
 /// `interp.Step.next`. It returns `retry`, with nothing changed, when the
 /// callee is something else.
-pub fn tailNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(.c) usize {
+pub fn tailNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(jit.cc) usize {
     const ins: u32 = @truncate(ins_word);
     const pc: u32 = @truncate(pc_word);
     const fr = l.frame();
@@ -226,7 +226,7 @@ pub fn tailNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(.c) usiz
 /// Returns every value from the register of the callee of the tail call
 /// `ins` up to the stack top, as the interpreter does after a native
 /// that was called in tail position.
-pub fn returnAll(l: *Thread, stop: usize, ins_word: usize) callconv(.c) usize {
+pub fn returnAll(l: *Thread, stop: usize, ins_word: usize) callconv(jit.cc) usize {
     const ins: u32 = @truncate(ins_word);
     const func = l.frame().base + opc.a(ins);
     return interp.returnStep(l, func, l.top - func, stop) catch |e| {

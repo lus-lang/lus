@@ -25,14 +25,28 @@ const Error = state.Error;
 /// backend and a way to map executable memory, or on WebAssembly a host
 /// that instantiates modules.
 pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
-    .aarch64, .x86_64 => switch (builtin.os.tag) {
+    .aarch64 => switch (builtin.os.tag) {
         .macos, .linux => true,
+        else => false,
+    },
+    .x86_64 => switch (builtin.os.tag) {
+        .macos, .linux, .windows => true,
         else => false,
     },
     .riscv64 => builtin.os.tag == .linux,
     .wasm32 => builtin.os.tag == .wasi,
     else => false,
 };
+
+/// The calling convention of every routine that native code calls, and of
+/// the entry sequence. Native code follows the System V convention on
+/// x86-64, which on Windows makes Zig compile these routines, and the
+/// calls into native code, with that convention too. The rest of the
+/// runtime keeps the convention of the system.
+pub const cc: std.builtin.CallingConvention = if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64)
+    .{ .x86_64_sysv = .{} }
+else
+    .c;
 
 /// Whether the backend emits WebAssembly modules rather than machine code.
 pub const is_wasm = builtin.cpu.arch == .wasm32;
@@ -365,7 +379,7 @@ pub const Target = extern struct {
 
 /// Finds the native code for the top frame. Native code calls this after
 /// every step that changed the frame or the pc.
-pub fn dispatch(l: *Thread) callconv(.c) Target {
+pub fn dispatch(l: *Thread) callconv(cc) Target {
     const fr = l.frame();
     const none: Target = .{ .addr = 0, .base = 0 };
     const cl = fr.closure orelse return none;
@@ -387,7 +401,7 @@ pub fn dispatch(l: *Thread) callconv(.c) Target {
     return .{ .addr = code.base + code.offs[fr.pc], .base = fr.base };
 }
 
-const Enter = *const fn (l: *Thread, stop: usize, addr: usize, base: usize) callconv(.c) usize;
+const Enter = *const fn (l: *Thread, stop: usize, addr: usize, base: usize) callconv(cc) usize;
 
 /// Runs frames in native code, starting with the top frame, until the
 /// frame count drops to `stop` or a frame needs the interpreter.
@@ -437,10 +451,19 @@ threadlocal var thread_bounds: ?Bounds = null;
 
 /// The native stack of the running thread, or zeros when the system
 /// does not tell. A thread asks once.
+extern "kernel32" fn GetCurrentThreadStackLimits(low: *usize, high: *usize) callconv(.winapi) void;
+
 fn stackBounds() Bounds {
     if (thread_bounds) |b| return b;
     var b: Bounds = .{};
-    if (builtin.link_libc) switch (builtin.os.tag) {
+    if (builtin.os.tag == .windows) {
+        // The limits span the whole reservation of the stack, which the
+        // system commits a page at a time as the stack grows.
+        var low: usize = 0;
+        var high: usize = 0;
+        GetCurrentThreadStackLimits(&low, &high);
+        if (high > low) b = .{ .low = low, .high = high };
+    } else if (builtin.link_libc) switch (builtin.os.tag) {
         .macos => {
             const self = std.c.pthread_self();
             const high = @intFromPtr(pthread_get_stackaddr_np(self));
