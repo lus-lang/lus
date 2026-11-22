@@ -545,7 +545,7 @@ lus compile -o report.lusc report.lus
 lus report.lusc data.csv
 ```
 
-`lus` runs a binary chunk as it runs a script. `load` reads a binary chunk in binary mode, which requires the `load` permission. A binary chunk works only with the version of the runtime that wrote it, so keep the source and compile it again for each release of Lus. The following program compiles a function to a binary chunk with `string.dump`, then loads the chunk and calls the result.
+`lus` runs a binary chunk as it runs a script. `load` reads a binary chunk in binary mode, which requires the `load` permission. A binary chunk works only with the version of the runtime that wrote it, so keep the source and compile it again for each release of Lus. A binary chunk is trusted input. `load` checks the header and the structure of a chunk, so a damaged chunk raises an error or loads. It does not check that the code of a chunk is safe to run. A program that loads code from an untrusted source passes the mode `"t"`, which rejects binary chunks. The following program compiles a function to a binary chunk with `string.dump`, then loads the chunk and calls the result.
 
 ```lus
 pledge("load")

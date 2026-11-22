@@ -21,10 +21,16 @@ pub const inject = struct {
     /// allocation, to find where a sweep finding starts.
     pub var trace: bool = false;
     pub var count: std.atomic.Value(usize) = .init(0);
+    /// Set by `LUS_FAIL_ALLOC_SCOPE=worker`: only the allocations of worker
+    /// threads take a number, so a sweep fails each step of a worker.
+    pub var workers_only: bool = false;
+    /// Set on the thread of a worker (`lib/worker.zig`).
+    pub threadlocal var in_worker: bool = false;
 
     /// Whether the allocation being made must fail.
     pub inline fn fail() bool {
         if (!fail_alloc) return false;
+        if (workers_only and !in_worker) return false;
         const n = count.fetchAdd(1, .monotonic) + 1;
         if (target == 0) return false;
         const hit = if (sticky) n >= target else n == target;
