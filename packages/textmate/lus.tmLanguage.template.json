@@ -382,6 +382,13 @@
           "name": "string.quoted.template.lus",
           "patterns": [
             {
+              "match": "\\\\[`$]",
+              "name": "constant.character.escape.lus"
+            },
+            {
+              "include": "#escaped_char"
+            },
+            {
               "match": "\\$\\$",
               "name": "constant.character.escape.lus"
             },

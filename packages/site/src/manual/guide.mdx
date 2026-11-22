@@ -127,6 +127,14 @@ print("Name:\tAda\nRole:\tEngineer")
 --> Role:  Engineer
 ```
 
+Strings in backticks take the same escape sequences, together with `` \` `` for a backtick and `\$` for a dollar sign. A string in backticks can also contain another one inside `$( )`. The following line colors a word for a terminal, where `\27` is the escape character that starts a color code.
+
+```lus
+local word = "done"
+print(`status: \27[32m$word\27[0m`)   --> status: done
+print(`$(`nested $word`) twice`)      --> nested done twice
+```
+
 A long string is written between `[[` and `]]`, can span several lines, and keeps its text exactly as written. The help text of a command line tool is a typical long string.
 
 ```lus

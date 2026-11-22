@@ -209,17 +209,14 @@ The lexer keeps a stack of modes. The bottom mode is ordinary code. Each `$(` pu
    - End of input raises `unfinished interpolated string near <eof>`.
 4. In a pushed code mode, the lexer produces ordinary tokens. Each `(` increments the depth of that mode and each `)` decrements it. A `)` at depth 0 closes the interpolation. The lexer consumes it, pops the mode, reads the next section (step 2), and returns that section's `interp_mid` or `interp_end` token in the position of the `)`. Parentheses inside string literals and comments within the expression are part of those tokens and do not affect the depth. A backtick inside the expression opens a nested interpolated string.
 
-The escapes inside interpolated sections are a separate, smaller set:
+An interpolated section takes every escape of a quoted string (section 1.6), with the same meaning and the same errors, so `` `\27[1m` ``, `` `\x41` ``, `` `\u{e9}` ``, and `` `\z` `` followed by spaces mean what they mean between quotes. Two escapes belong to interpolated strings alone:
 
 | Escape | Meaning |
 | --- | --- |
 | `` \` `` | literal backtick |
 | `\$` | literal `$` |
-| `\n` `\t` `\r` | newline, tab, carriage return |
-| `\\` | literal backslash |
-| `\` followed by a line break | a single `\n` |
 
-Any other escape raises `invalid escape sequence in interpolated string`. Quotes need no escaping inside backticks (`` `a'b"c` `` is `a'b"c`). The escapes `\x`, `\u`, `\z`, `\ddd`, `\a`, `\b`, `\f`, `\v`, `\"`, and `\'` are all errors inside backticks.
+Quotes need no escaping inside backticks (`` `a'b"c` `` is `a'b"c`), and `\"` and `\'` still mean a quote. An escape that a quoted string rejects, such as `\q`, raises `invalid escape sequence near ...`.
 
 #### 1.8.2 Parsing
 

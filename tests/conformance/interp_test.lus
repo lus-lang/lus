@@ -165,6 +165,33 @@ local function backslash_escape_test()
     assert(s == "path: C:\\Users")
 end
 
+-- A backtick string takes every escape of a quoted string.
+local function escapes_of_quoted_strings_test()
+    local code = 31
+    assert(`\27[$(code)m` == "\27[" .. code .. "m")
+    assert(`\x41\65\u{e9}` == "AA\u{e9}")
+    assert(`\a\b\f\v` == "\a\b\f\v")
+    assert(`\"\'` == "\"'")
+    assert(`a\0b` == "a\0b")
+    assert(`a\z
+          b` == "ab")
+end
+
+local function escapes_keep_their_errors_test()
+    assert(not load("return `\\q`"))
+    assert(not load("return `\\x4`"))
+    assert(not load("return `\\256`"))
+    assert(not load("return `\\u{110000}`"))
+end
+
+-- A backtick string nests inside $( ) to any depth.
+local function backticks_nest_inside_expressions_test()
+    local x = 3
+    assert(`a $(`b $x c`) d` == "a b 3 c d")
+    assert(`$(`$(`deep`)`)` == "deep")
+    assert(`[$(`\27[1m$(x)\27[0m`)]` == "[\27[1m3\27[0m]")
+end
+
 -- ============================================
 -- Multiline Interpolated Strings
 -- ============================================

@@ -917,19 +917,32 @@ const Formatter = struct {
 
     /// Literal text of an interpolated string, with `$`, the backtick, and
     /// the backslash escaped. A carriage return is written as `\r`,
-    /// because a raw one would read back as a line break.
+    /// because a raw one would read back as a line break. Other control
+    /// characters and bytes outside any UTF-8 sequence are written as
+    /// `\xXX`, which backtick strings accept like quoted strings.
     fn interpText(f: *Formatter, s: []const u8) Error!void {
-        for (s) |c| {
+        var i: usize = 0;
+        while (i < s.len) {
+            const c = s[i];
             switch (c) {
-                '$' => try f.putc('$'),
-                '`', '\\' => try f.putc('\\'),
-                '\r' => {
-                    try f.put("\\r");
-                    continue;
+                '$' => try f.put("$$"),
+                '`' => try f.put("\\`"),
+                '\\' => try f.put("\\\\"),
+                '\r' => try f.put("\\r"),
+                '\n', '\t' => try f.putc(c),
+                else => {
+                    if (c < 32 or c == 0x7f) {
+                        try f.hexByte(c);
+                    } else if (c < 0x80) {
+                        try f.putc(c);
+                    } else if (wtf8.decodeAt(s, i)) |d| {
+                        try f.put(s[i .. i + d.len]);
+                        i += d.len;
+                        continue;
+                    } else try f.hexByte(c);
                 },
-                else => {},
             }
-            try f.putc(c);
+            i += 1;
         }
     }
 
@@ -1276,6 +1289,11 @@ test "format statements and comments" {
 
 test "format escapes a carriage return in interpolated strings" {
     try expectFormat("x = `a\\r\\n$(b)`", "x = `a\\r\n$b`\n");
+}
+
+test "format writes control characters of interpolated strings as escapes" {
+    try expectFormat("x = `\\27[$(code)m \\u{e9}\\x07 $$`", "x = `\\x1b[$(code)m \u{e9}\\x07 $$`\n");
+    try expectFormat("x = `a $(`b $(c)`) d`", "x = `a $(`b $c`) d`\n");
 }
 
 test "format keeps comment markers and long comments as written" {
