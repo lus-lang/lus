@@ -65,7 +65,21 @@ The first sweeps found no crash or leak. They found that an error the system mes
 
 ### 5. Coverage
 
-A build with coverage instrumentation runs the conformance suite and reports branch coverage of `src/vm`, `src/compile`, `src/jit`, and `src/syntax` as one number per directory. The number is published by the nightly job. Uncovered branches in the interpreter, the collector, and the compiler get tests first, since they run in every program.
+A build with `-Dcoverage=true` instruments the runtime with the pass that the fuzzer of `zig build test --fuzz` uses (`runtime/src/coverage.zig`). LLVM gives every edge of the control flow graph a counter, and edge coverage counts both sides of every branch, so the share of edges covered is the branch coverage of the code. `LUS_COVERAGE=DIR` makes every process write the edges it reached to a file of its own, so the processes that `lus test` starts all count. `LUS_COVERAGE_REPORT=DIR` merges the files and maps each edge to its source file through the debug information of the binary, so the report needs no tool outside the runtime. `LUS_COVERAGE_FILE` lists the lines of one file that hold an uncovered edge. Inlining in an optimized build moves some covered edges of a line to the lines it inlined, so that list is a guide to read, while the totals per directory are exact.
+
+The conformance suite under the interpreter, the default tiers, and `opt-eager`, together with the doc tests, covers these edges of `runtime/src`, measured on an Apple M4 Max.
+
+| Directory | Edges covered |
+|---|---|
+| `vm` | 56.9% of 24,472 |
+| `jit` | 73.6% of 5,154 |
+| `compile` | 53.1% of 2,877 |
+| `syntax` | 42.4% of 5,078 |
+| `lib` | 60.3% of 12,709 |
+| `tools` | 11.0% of 4,538 |
+| all of `src` | 53.3% of 56,242 |
+
+The edges of a safe build include the failing side of every bounds and overflow check, which a correct program never takes, so no suite reaches 100%. The tools have their own suites in `zig build test-check`, `test-doc`, and `test-debug`, which this measurement leaves out. `mise run coverage` prints the report, and the nightly job publishes it in its summary. Tests for the uncovered branches of the interpreter, the collector, and the compiler come next, since those run in every program.
 
 ### 6. Properties and metamorphic tests
 
@@ -80,7 +94,9 @@ Some results have an oracle other than another tier. These tests live in `tests/
 
 ### 7. Sanitizers and stress in CI
 
-The nightly workflow runs the conformance suite in a `-Dgc-stress=1 -Dgc-verify=true` build, which collects at every allocation, on Linux and macOS with the JIT off, eager, and optimizing. It also runs the long versions of the differential tests, the allocation sweep, and the fuzz targets, and uploads each finding. Building the vendored C libraries (SQLite, Zstandard, and Brotli) with the address and undefined behavior sanitizers comes next.
+The nightly workflow runs the conformance suite in a `-Dgc-stress=1 -Dgc-verify=true` build, which collects at every allocation, on Linux and macOS with the JIT off, eager, and optimizing. It also runs the long versions of the differential tests, the allocation and I/O sweeps, and the fuzz targets, and uploads each finding.
+
+A build with `-Dsanitize-c=true` compiles the vendored C libraries (SQLite, Zstandard, and Brotli) in safe mode with the undefined behavior sanitizer, which reports each finding with its place. Zig offers no address sanitizer, so the safe build of the Zig code and the leak checker of its allocator stand in for it there. The conformance suite and 30,000 runs of every fuzz target, including the round trips of every archive codec, found nothing under the sanitizer. A longer run stalled on a decimal with a huge exponent, whose exact sums take time quadratic in the exponent (`tests/diff/OPEN.md`), and found that a decimal zero with a positive exponent printed one zero per digit of the exponent, which is fixed. `mise run sanitize` runs both, and the nightly job runs the fuzz targets for 5 million runs under it.
 
 ## Gates and findings
 
