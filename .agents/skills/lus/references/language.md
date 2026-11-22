@@ -141,6 +141,26 @@ assert(MODE == "release")
 
 An initializer that reads a file pledges like any chunk, and the pledge succeeds only for permissions that the command grants with `-P`. `lus check` and `lus fmt` never run initializers.
 
+## Values computed on first use
+
+A `<lazy>` local runs its initializer the first time the program reads it, and later reads return the same value. A lazy local that is never read never runs its initializer, so an expensive default costs nothing in the runs that skip it. The initializer sees other variables as they are at the first read, as code in a function does. A lazy local is read-only like `<const>`. If the initializer raises an error, that read raises it, and the next read runs the initializer again.
+
+```lus
+local loads = 0
+local function load_settings()
+    loads = loads + 1
+    return { port = 8080 }
+end
+
+local settings <lazy> = load_settings()
+assert(loads == 0)
+assert(settings.port == 8080)
+assert(settings.port == 8080)
+assert(loads == 1)
+```
+
+`<lazy, close>` opens a resource on first use and closes it at the end of the block only if the program read it. A field of a local group can be lazy too, as in `median <lazy> = table.median(rows)`.
+
 ## Globals and permissions
 
 A file that names its globals with a `global` declaration gets an error for every other free name, which catches typos at compile time. Write the declaration at the top of the file, then pledge.

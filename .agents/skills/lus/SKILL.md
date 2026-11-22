@@ -62,6 +62,7 @@ Lus ships the libraries most programs pull from a package manager. Use them befo
 - Backtick strings interpolate: `` `$name is $(age + 1)` ``.
 - `continue` skips to the next iteration of a loop.
 - `local T <meta> = expr` computes a constant value, such as a lookup table, when the file is compiled. An `if` on `flags`, literals, and `<meta>` locals keeps only the clause that is true, so `if flags.debug then` blocks vanish from builds without `-Fdebug`.
+- `local x <lazy> = expensive()` runs the initializer on the first read of `x`, so declare costly values once at the top of the file. `<lazy, close>` opens a resource on first use.
 - Strings are text indexed by character. Raw bytes are vectors, and network and binary file reads return vectors. Decode with `vector.tostring`.
 
 ## Testing
