@@ -1086,26 +1086,32 @@ const Rewrite = struct {
         if (e.kind != .call) return;
         const c = e.kind.call;
         if (c.callee.kind != .name or !std.mem.eql(u8, c.callee.kind.name.text, "assert")) return;
-        if (c.args.len < 1 or c.args.len > 2) return;
+        if (c.args.len < 1) return;
         const subject = c.args[0];
         const text = rw.src[subject.span.start..@min(subject.span.end, rw.src.len)];
         const src_lit = try mkLine(rw.arena, subject, .{ .string = text });
         var args: std.ArrayList(*ast.Expr) = .empty;
+        // The arguments after the subject follow unchanged, so the values of
+        // a call in the last position all arrive, and the assert returns
+        // what the standard one returns. A subject that is the only
+        // argument comes last for the same reason.
         var callee_name: []const u8 = "__lus_assert";
-        if (subject.kind == .binop) {
+        const cmp = subject.kind == .binop and switch (subject.kind.binop.op) {
+            .eq, .ne, .lt, .le, .gt, .ge => true,
+            else => false,
+        };
+        if (cmp) {
             const b = subject.kind.binop;
-            switch (b.op) {
-                .eq, .ne, .lt, .le, .gt, .ge => {
-                    callee_name = "__lus_assert_cmp";
-                    try args.append(rw.arena, b.lhs);
-                    try args.append(rw.arena, b.rhs);
-                    try args.append(rw.arena, try mkLine(rw.arena, subject, .{ .string = b.op.symbol() }));
-                },
-                else => try args.append(rw.arena, subject),
-            }
-        } else try args.append(rw.arena, subject);
-        try args.append(rw.arena, src_lit);
-        if (c.args.len == 2) try args.append(rw.arena, c.args[1]);
+            callee_name = "__lus_assert_cmp";
+            try args.append(rw.arena, b.lhs);
+            try args.append(rw.arena, b.rhs);
+            try args.append(rw.arena, try mkLine(rw.arena, subject, .{ .string = b.op.symbol() }));
+            try args.append(rw.arena, src_lit);
+        } else {
+            try args.append(rw.arena, src_lit);
+            try args.append(rw.arena, subject);
+        }
+        try args.appendSlice(rw.arena, c.args[1..]);
         const callee = try mkLine(rw.arena, c.callee, .{ .name = .{ .text = callee_name, .span = c.callee.span } });
         e.kind = .{ .call = .{ .callee = callee, .args = try args.toOwnedSlice(rw.arena), .args_kind = .parens } };
     }
@@ -1230,13 +1236,16 @@ fn repr(l: *Thread, buf: *std.ArrayList(u8), v: Value, depth: u32) Error!void {
     }
 }
 
+/// `__lus_assert(source, value, ...)`: on success returns `value` and the
+/// arguments after it, as the standard assert does.
 fn powerAssert(l: *Thread) Error!u32 {
-    const v = l.arg(1);
-    if (v.truthy()) return aux.ret(l, v);
+    const n = l.argCount();
+    const v = l.arg(2);
+    if (v.truthy()) return n - 1;
     const gpa = l.g.gpa;
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
-    buf.print(gpa, "assertion failed: {s}", .{(try aux.checkString(l, 2)).bytes()}) catch return l.raiseMem();
+    buf.print(gpa, "assertion failed: {s}", .{(try aux.checkString(l, 1)).bytes()}) catch return l.raiseMem();
     if (!l.arg(3).isNil()) {
         buf.appendSlice(gpa, "\n  message: ") catch return l.raiseMem();
         try repr(l, &buf, l.arg(3), 0);
@@ -1246,12 +1255,22 @@ fn powerAssert(l: *Thread) Error!u32 {
     return l.raiseFmt("{s}", .{buf.items});
 }
 
+/// `__lus_assert_cmp(lhs, rhs, op, source, ...)`: on success returns true
+/// and the arguments after `source`, as the standard assert returns the
+/// result of the comparison and its other arguments.
 fn powerAssertCmp(l: *Thread) Error!u32 {
     const a = l.arg(1);
     const b = l.arg(2);
     const op = (try aux.checkString(l, 3)).bytes();
     const ok = if (std.mem.eql(u8, op, "==")) try ops.equal(l, a, b) else if (std.mem.eql(u8, op, "~=")) !(try ops.equal(l, a, b)) else if (std.mem.eql(u8, op, "<")) try ops.lessThan(l, a, b) else if (std.mem.eql(u8, op, "<=")) try ops.lessEqual(l, a, b) else if (std.mem.eql(u8, op, ">")) try ops.lessThan(l, b, a) else try ops.lessEqual(l, b, a);
-    if (ok) return aux.ret(l, .true);
+    if (ok) {
+        const n = l.argCount();
+        // The slot of the source becomes the result, followed by the
+        // arguments after it.
+        l.top = l.base() + n;
+        l.stack[l.base() + 3] = .true;
+        return n - 3;
+    }
     const gpa = l.g.gpa;
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);

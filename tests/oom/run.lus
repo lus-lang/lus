@@ -104,7 +104,7 @@ local function runBatch(batch)
     for i, job in ipairs(batch) do
         local base = tmp .. "/j" .. i
         local argv = job.file:find("_test%.lus$") and ("test --run-one " .. quote(job.file)) or quote(job.file)
-        parts[#parts + 1] = "( mkdir -p " .. quote(base .. ".d") .. " && cd " .. quote(base .. ".d") .. " && env " .. variable .. "=" .. job.env
+        parts[#parts + 1] = "( mkdir -p " .. quote(base .. ".d") .. " && cd " .. quote(base .. ".d") .. " && env " .. (job.extra or "") .. variable .. "=" .. job.env
             .. " perl -e 'alarm shift; exec @ARGV' " .. math.floor(seconds) .. " " .. quote(lus) .. " " .. argv
             .. " > /dev/null 2> " .. quote(base .. ".err") .. "; echo $? > " .. quote(base .. ".code") .. "; cd / && rm -rf " .. quote(base .. ".d") .. " ) &"
     end
@@ -190,6 +190,27 @@ end)
 -- timing of worker threads, so under the load of the sweep one number can
 -- land in a different place than it does alone. A hang that does not come
 -- back in three runs of its own is counted apart from the failures.
+--
+-- A hang that comes back runs again with LUS_FAIL_ALLOC_TRACE, which
+-- prints the stack of the failing allocation. When that allocation was
+-- made while the scheduler ran a detached coroutine, or on the thread of
+-- a worker, the failure stopped that coroutine or worker, and a peer that
+-- waits for it without a timeout hangs by construction, as in the I/O
+-- sweep. The sweep lists such hangs and does not count them as failures.
+-- A failure anywhere else that leads to a hang counts.
+local function stoppedPeer(job)
+    local traced = { file = job.file, n = job.n, env = job.env, extra = "LUS_FAIL_ALLOC_TRACE=1 " }
+    -- The hang depends on the timing of threads, so the traced run may
+    -- take a few tries to hang again. When none hangs, the trace of the
+    -- last one still shows where that allocation number lands.
+    local trace = ""
+    for _ = 1, 3 do
+        local res = runBatch({ traced })[1]
+        trace = res.stderr:match("failing allocation.*") or ""
+        if verdict(res) == "hang" then break end
+    end
+    return trace:find("src/vm/sched.zig", 1, true) ~= nil or trace:find("src/lib/worker.zig", 1, true) ~= nil
+end
 local bugs, order = {}, {}
 local runs = 0
 local unrepeated = 0
@@ -209,6 +230,8 @@ batches(work, function(batch, results)
             if not again then
                 unrepeated = unrepeated + 1
                 bad = nil
+            elseif not opts.io and stoppedPeer(job) then
+                bad = "hang, from a peer that waits for a coroutine or a worker that the failure stopped"
             end
         end
         if bad then
@@ -237,6 +260,8 @@ for _, what in ipairs(order) do
     print("")
     if opts.io and what == "hang" then
         print("hang, from a peer that waits for a failed operation")
+    elseif what:find("^hang, from a peer") then
+        print(what)
     else
         print(what)
         failures = failures + 1

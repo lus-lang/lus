@@ -114,11 +114,11 @@ fn transcode(l: *Thread) Error!u32 {
     // A binary to text source decodes to raw bytes first.
     if (from.isBinaryToText()) {
         const ok = switch (from) {
-            .base64 => decodeBase64(gpa, &raw, src, std.base64.standard_no_pad.Decoder),
-            .base64url => decodeBase64(gpa, &raw, src, std.base64.url_safe_no_pad.Decoder),
-            .base32 => decodeBase32(gpa, &raw, src),
+            .base64 => decodeBase64(gpa, &raw, src, std.base64.standard_no_pad.Decoder, std.base64.standard_alphabet_chars, ignorebad),
+            .base64url => decodeBase64(gpa, &raw, src, std.base64.url_safe_no_pad.Decoder, std.base64.url_safe_alphabet_chars, ignorebad),
+            .base32 => decodeBase32(gpa, &raw, src, ignorebad),
             .url => decodeUrl(gpa, &raw, src, ignorebad),
-            else => decodeHex(gpa, &raw, src),
+            else => decodeHex(gpa, &raw, src, ignorebad),
         } catch return l.raiseMem();
         if (!ok) {
             if (!ignorebad) return l.raiseFmt("invalid {s} input", .{from_name});
@@ -164,12 +164,16 @@ fn convert(l: *Thread, out: *ArrayList, src_in: []const u8, from_in: Enc, to_in:
         .utf32le, .utf32be => 4,
         else => 1,
     };
+    // With ignorebad, the bytes after the last whole unit become one
+    // U+FFFD at the end, as the WHATWG decoders of UTF-16 emit it.
+    var partial_unit = false;
     if (src.len % unit != 0) {
         if (!ignorebad) {
             if (unit == 2) return l.raiseFmt("invalid {s} input: odd byte count", .{from.label()});
             return l.raiseFmt("invalid {s} input: byte count not a multiple of 4", .{from.label()});
         }
         src = src[0 .. src.len - src.len % unit];
+        partial_unit = true;
     }
 
     var p: usize = 0;
@@ -189,10 +193,8 @@ fn convert(l: *Thread, out: *ArrayList, src_in: []const u8, from_in: Enc, to_in:
             .ascii => {
                 if (src[p] > 127) {
                     if (!ignorebad) return l.raiseFmt("invalid ASCII byte 0x{X:0>2} at position {d}", .{ src[p], pos });
-                    p += 1;
-                    continue;
-                }
-                cp = src[p];
+                    cp = replacement;
+                } else cp = src[p];
                 p += 1;
             },
             .latin1 => {
@@ -203,11 +205,12 @@ fn convert(l: *Thread, out: *ArrayList, src_in: []const u8, from_in: Enc, to_in:
                 const d = wtf8.decodeAt(src, p);
                 if (d == null or (d.?.cp >= 0xD800 and d.?.cp <= 0xDFFF)) {
                     if (!ignorebad) return l.raiseFmt("invalid UTF-8 sequence at position {d}", .{pos});
-                    p += 1;
-                    continue;
+                    cp = replacement;
+                    p += wtf8.maximalSubpart(src[p..]);
+                } else {
+                    cp = d.?.cp;
+                    p += d.?.len;
                 }
-                cp = d.?.cp;
-                p += d.?.len;
             },
             .utf16le, .utf16be => {
                 const le = from == .utf16le;
@@ -220,8 +223,8 @@ fn convert(l: *Thread, out: *ArrayList, src_in: []const u8, from_in: Enc, to_in:
                     p += 4;
                 } else {
                     if (!ignorebad) return l.raiseFmt("invalid {s} sequence at position {d}", .{ from.label(), pos });
+                    cp = replacement;
                     p += 2;
-                    continue;
                 }
             },
             .utf32le, .utf32be => {
@@ -229,52 +232,62 @@ fn convert(l: *Thread, out: *ArrayList, src_in: []const u8, from_in: Enc, to_in:
                 const v: u32 = if (from == .utf32le) std.mem.readInt(u32, b, .little) else std.mem.readInt(u32, b, .big);
                 if (v > 0x10FFFF or (v >= 0xD800 and v <= 0xDFFF)) {
                     if (!ignorebad) return l.raiseFmt("invalid {s} sequence at position {d}", .{ from.label(), pos });
-                    p += 4;
-                    continue;
-                }
-                cp = @intCast(v);
+                    cp = replacement;
+                } else cp = @intCast(v);
                 p += 4;
             },
             else => unreachable,
         }
 
-        switch (to) {
-            .ascii => {
-                if (cp > 127) {
-                    if (!ignorebad) return l.raiseFmt("codepoint U+{X:0>4} cannot be encoded as ASCII", .{cp});
-                    continue;
-                }
-                out.append(gpa, @intCast(cp)) catch return l.raiseMem();
-            },
-            .latin1 => {
-                if (cp > 255) {
-                    if (!ignorebad) return l.raiseFmt("codepoint U+{X:0>4} cannot be encoded as ISO-8859-1", .{cp});
-                    continue;
-                }
-                out.append(gpa, @intCast(cp)) catch return l.raiseMem();
-            },
-            .utf8 => {
-                var buf: [4]u8 = undefined;
-                const n = wtf8.encode(cp, &buf);
-                out.appendSlice(gpa, buf[0..n]) catch return l.raiseMem();
-            },
-            .utf16le, .utf16be => {
-                const le = to == .utf16le;
-                if (cp < 0x10000) {
-                    write16(gpa, out, @intCast(cp), le) catch return l.raiseMem();
-                } else {
-                    const adj = cp - 0x10000;
-                    write16(gpa, out, @intCast(0xD800 + (adj >> 10)), le) catch return l.raiseMem();
-                    write16(gpa, out, @intCast(0xDC00 + (adj & 0x3FF)), le) catch return l.raiseMem();
-                }
-            },
-            .utf32le, .utf32be => {
-                var b: [4]u8 = undefined;
-                std.mem.writeInt(u32, &b, cp, if (to == .utf32le) .little else .big);
-                out.appendSlice(gpa, &b) catch return l.raiseMem();
-            },
-            else => unreachable,
-        }
+        try emit(l, out, cp, to, ignorebad);
+    }
+    if (partial_unit) try emit(l, out, replacement, to, ignorebad);
+}
+
+/// The character that stands for an invalid input sequence under
+/// ignorebad.
+const replacement: u21 = 0xFFFD;
+
+/// Encodes one code point into `to`. A character that `to` cannot
+/// represent raises, or with ignorebad is skipped.
+fn emit(l: *Thread, out: *ArrayList, cp: u21, to: Enc, ignorebad: bool) Error!void {
+    const gpa = l.g.gpa;
+    switch (to) {
+        .ascii => {
+            if (cp > 127) {
+                if (!ignorebad) return l.raiseFmt("codepoint U+{X:0>4} cannot be encoded as ASCII", .{cp});
+                return;
+            }
+            out.append(gpa, @intCast(cp)) catch return l.raiseMem();
+        },
+        .latin1 => {
+            if (cp > 255) {
+                if (!ignorebad) return l.raiseFmt("codepoint U+{X:0>4} cannot be encoded as ISO-8859-1", .{cp});
+                return;
+            }
+            out.append(gpa, @intCast(cp)) catch return l.raiseMem();
+        },
+        .utf8 => {
+            var buf: [4]u8 = undefined;
+            const n = wtf8.encode(cp, &buf);
+            out.appendSlice(gpa, buf[0..n]) catch return l.raiseMem();
+        },
+        .utf16le, .utf16be => {
+            const le = to == .utf16le;
+            if (cp < 0x10000) {
+                write16(gpa, out, @intCast(cp), le) catch return l.raiseMem();
+            } else {
+                const adj = cp - 0x10000;
+                write16(gpa, out, @intCast(0xD800 + (adj >> 10)), le) catch return l.raiseMem();
+                write16(gpa, out, @intCast(0xDC00 + (adj & 0x3FF)), le) catch return l.raiseMem();
+            }
+        },
+        .utf32le, .utf32be => {
+            var b: [4]u8 = undefined;
+            std.mem.writeInt(u32, &b, cp, if (to == .utf32le) .little else .big);
+            out.appendSlice(gpa, &b) catch return l.raiseMem();
+        },
+        else => unreachable,
     }
 }
 
@@ -294,18 +307,38 @@ fn write16(gpa: std.mem.Allocator, out: *ArrayList, v: u16, le: bool) !void {
 /// Decodes base64 with the alphabet of `dec`, skipping whitespace and
 /// stopping at the first padding character. Returns false on malformed
 /// input.
-fn decodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8, dec: std.base64.Base64Decoder) !bool {
+/// Decodes base64. With `lax`, a character outside the alphabet and an
+/// incomplete last group are skipped, and the rest decodes.
+fn decodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8, dec: std.base64.Base64Decoder, alphabet: [64]u8, lax: bool) !bool {
     var clean: ArrayList = .empty;
     defer clean.deinit(gpa);
-    for (src) |c| {
+    for (src, 0..) |c, i| {
         if (c == ' ' or c == '\t' or c == '\n' or c == '\r') continue;
-        if (c == '=') break;
+        if (lax) {
+            if (std.mem.indexOfScalar(u8, &alphabet, c) != null) try clean.append(gpa, c);
+            continue;
+        }
+        if (c == '=') {
+            if (!onlyPadding(src[i..])) return false;
+            break;
+        }
         try clean.append(gpa, c);
     }
+    if (lax and clean.items.len % 4 == 1) clean.items.len -= 1;
     const n = dec.calcSizeForSlice(clean.items) catch return false;
     try out.ensureUnusedCapacity(gpa, n);
     dec.decode(out.unusedCapacitySlice()[0..n], clean.items) catch return false;
     out.items.len += n;
+    return true;
+}
+
+/// Whether `rest`, which starts at the first `=`, holds only padding and
+/// whitespace. Padding ends the data, so nothing else may follow it.
+fn onlyPadding(rest: []const u8) bool {
+    for (rest) |c| switch (c) {
+        '=', ' ', '\t', '\n', '\r' => {},
+        else => return false,
+    };
     return true;
 }
 
@@ -339,15 +372,24 @@ fn encodeBase32(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void 
 /// Decodes base32 in either case, skipping whitespace and stopping at the
 /// first padding character. A group of 1, 3, or 6 characters cannot hold
 /// whole bytes, so it is malformed. Returns false on malformed input.
-fn decodeBase32(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool {
+/// Decodes base32. With `lax`, a character outside the alphabet is
+/// skipped, and an incomplete last group adds nothing.
+fn decodeBase32(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8, lax: bool) !bool {
     var acc: u64 = 0;
     var nbits: u6 = 0;
     var count: usize = 0;
-    for (src) |c| {
+    for (src, 0..) |c, i| {
         if (c == ' ' or c == '\t' or c == '\n' or c == '\r') continue;
-        if (c == '=') break;
+        if (c == '=') {
+            if (lax) continue;
+            if (!onlyPadding(src[i..])) return false;
+            break;
+        }
         const up = std.ascii.toUpper(c);
-        const d = std.mem.indexOfScalar(u8, base32_alphabet, up) orelse return false;
+        const d = std.mem.indexOfScalar(u8, base32_alphabet, up) orelse {
+            if (lax) continue;
+            return false;
+        };
         acc = (acc << 5) | d;
         nbits += 5;
         count += 1;
@@ -358,7 +400,7 @@ fn decodeBase32(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool 
         }
     }
     return switch (count % 8) {
-        1, 3, 6 => false,
+        1, 3, 6 => lax,
         else => true,
     };
 }
@@ -399,12 +441,15 @@ fn encodeUrl(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void {
     }
 }
 
-fn decodeHex(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool {
-    if (src.len % 2 != 0) return false;
+/// Decodes pairs of hexadecimal digits. With `lax`, a pair that holds
+/// another character and a lone last digit are skipped, and the rest
+/// decodes.
+fn decodeHex(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8, lax: bool) !bool {
+    if (src.len % 2 != 0 and !lax) return false;
     var i: usize = 0;
-    while (i < src.len) : (i += 2) {
-        const h1 = std.fmt.charToDigit(src[i], 16) catch return false;
-        const h2 = std.fmt.charToDigit(src[i + 1], 16) catch return false;
+    while (i + 1 < src.len) : (i += 2) {
+        const h1 = std.fmt.charToDigit(src[i], 16) catch if (lax) continue else return false;
+        const h2 = std.fmt.charToDigit(src[i + 1], 16) catch if (lax) continue else return false;
         try out.append(gpa, (h1 << 4) | h2);
     }
     return true;

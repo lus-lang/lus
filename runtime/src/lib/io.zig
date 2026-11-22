@@ -43,6 +43,9 @@ pub const Handle = struct {
     rbuf: std.ArrayList(u8) = .empty,
     rstart: usize = 0,
     eof: bool = false,
+    /// The error of the read that the system last refused, which
+    /// `file:read` returns as a result while the lines iterators raise it.
+    read_err: ?anyerror = null,
     child: ?std.process.Child = null,
 };
 
@@ -153,10 +156,10 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
         const dst = h.rbuf.unusedCapacitySlice();
         var bufs = [_][]u8{dst};
         const got = switch (h.kind) {
-            .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return ioError(l, e),
+            .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return readError(l, h, e),
             else => h.file.readStreaming(l.g.io, &bufs) catch |e| switch (e) {
                 error.EndOfStream => 0,
-                else => |x| return ioError(l, x),
+                else => |x| return readError(l, h, x),
             },
         };
         if (got == 0) h.eof = true;
@@ -172,6 +175,13 @@ fn consume(h: *Handle, n: usize) void {
 
 fn pending(h: *Handle) []const u8 {
     return h.rbuf.items[h.rstart..];
+}
+
+/// Raises the error of a read that the system refused, and records it on
+/// the handle for `doRead`.
+fn readError(l: *Thread, h: *Handle, e: anyerror) Error {
+    h.read_err = e;
+    return ioError(l, e);
 }
 
 fn ioError(l: *Thread, e: anyerror) Error {
@@ -289,7 +299,21 @@ fn readNumber(l: *Thread, h: *Handle) Error!?Value {
     return null;
 }
 
+/// Reads the formats from argument `first` on. A read that the system
+/// refuses returns `nil`, the message, and the number of the error, as in
+/// Lua, in place of every result.
 fn doRead(l: *Thread, h: *Handle, first: u32) Error!u32 {
+    h.read_err = null;
+    return readFormats(l, h, first) catch |e| {
+        if (h.read_err) |re| {
+            h.read_err = null;
+            return ioFail(l, re);
+        }
+        return e;
+    };
+}
+
+fn readFormats(l: *Thread, h: *Handle, first: u32) Error!u32 {
     if (!h.readable) return failResult(l, "file not opened for reading");
     const nargs = l.argCount();
     if (nargs < first) {
@@ -601,7 +625,11 @@ fn fSync(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
     switch (h.kind) {
         .file => {
-            syncFile(l.g.io, h.file) catch |e| return ioFail(l, e);
+            // Windows flushes only through a handle with write access, and a
+            // handle opened for reading has written nothing to flush.
+            if (builtin.os.tag != .windows or h.writable) {
+                syncFile(l.g.io, h.file) catch |e| return ioFail(l, e);
+            }
         },
         .stdout => {
             const o = out.stdout(l.g);

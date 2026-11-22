@@ -193,3 +193,53 @@ local function io_write_to_a_refusing_output_returns_nil_and_a_message_test()
     f:close()
     assert(ok == nil and msg == "No space left on device" and code == 28, `$(ok) $(msg) $(code)`)
 end
+
+-- A read that the system refuses returns nil, the message, and the error
+-- number, as in Lua, while the lines iterators raise the message. A
+-- directory opens on POSIX systems and refuses every read.
+local function a_refused_read_returns_nil_and_a_message_test()
+    if windows then skip("Windows opens no directory as a file") end
+    local f = io.open(".", "r")
+    if f == nil then skip("this system does not open a directory as a file") end
+    local ok, msg, code = f:read("a")
+    assert(ok == nil and msg == "Is a directory" and code == 21, `$(ok) $(msg) $(code)`)
+    ok, msg, code = f:read("l", "n", 4)
+    assert(ok == nil and msg == "Is a directory" and code == 21, `$(ok) $(msg) $(code)`)
+    local saved = io.input()
+    io.input(f)
+    ok, msg, code = io.read()
+    io.input(saved)
+    assert(ok == nil and msg == "Is a directory" and code == 21, `$(ok) $(msg) $(code)`)
+    local raised, err = catch f:lines()()
+    assert(not raised and string.find(err, "Is a directory", 1, true), tostring(err))
+    f:close()
+end
+
+local function the_lines_loop_raises_a_refused_read_and_closes_the_file_test()
+    if windows then skip("Windows opens no directory as a file") end
+    local probe = io.open(".", "r")
+    if probe == nil then skip("this system does not open a directory as a file") end
+    probe:close()
+    local handle
+    local ok, err = catch (function()
+        for line in io.lines(".") do
+            handle = line
+        end
+    end)()
+    assert(not ok and string.find(err, "Is a directory", 1, true), tostring(err))
+    assert(handle == nil)
+end
+
+-- The end of a file still returns a plain nil.
+local function the_end_of_a_file_returns_a_plain_nil_test()
+    local name = os.tmpname()
+    local f = assert(io.open(name, "w"))
+    assert(f:write("one\n"))
+    f:close()
+    f = assert(io.open(name, "r"))
+    assert(f:read("l") == "one")
+    local results = table.pack(f:read("l"))
+    assert(results.n == 1 and results[1] == nil, tostring(results.n))
+    f:close()
+    fs.remove(name)
+end
