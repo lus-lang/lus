@@ -31,7 +31,7 @@ Lus has an advantage most languages lack: the documentation, the checker, and th
 | `llms-full.txt` | the guide, the CLI page, the topic pages, and the API reference from `spec/stdlib` | `tools/build-llms.js` | `lus.dev/llms-full.txt` |
 | `llms-small.txt` | `.agents/skills/lus/references/language.md` and one line per stdlib function: signature, permissions, stability | `tools/build-llms.js` | `lus.dev/llms-small.txt` |
 | Markdown pages | every manual page with MDX components rendered to Markdown | `tools/build-llms.js` | `lus.dev/manual/NAME.md` |
-| Skills `lus` and `lus-rewrite` | `.agents/skills/` | copied as is | `lus.dev/agents/skills/`, the GitHub repository, and inside the `lus` binary |
+| Skills `lus`, `lus-rewrite`, and `lus-writing` | `.agents/skills/` | copied as is | `lus.dev/agents/skills/`, the GitHub repository, and inside the `lus` binary |
 | Agent entry page | `.agents/prompt.md` and a short intro | site build | `lus.dev/agents` and `lus.dev/agents.md` |
 | `context7.json` | repository root | by hand | read by Context7 |
 
@@ -49,6 +49,7 @@ The `.agents/` folder at the repository root holds everything agents consume dir
 
 - [`.agents/skills/lus/SKILL.md`](../../.agents/skills/lus/SKILL.md) teaches the check, format, and test loop, the file header with `global` and `pledge`, the standard library map, and the idioms the checker expects. [`references/language.md`](../../.agents/skills/lus/references/language.md) lists every difference from Lua that changes generated code, with runnable examples.
 - [`.agents/skills/lus-rewrite/`](../../.agents/skills/lus-rewrite/SKILL.md) is the rewrite skill from part 2.
+- [`.agents/skills/lus-writing/`](../../.agents/skills/lus-writing/SKILL.md) carries the prose style guide of `spec/design/style.md` to other repositories. `tools/build-skills.js` generates its reference file from that note.
 - [`.agents/llms.txt`](../../.agents/llms.txt) is the index, grouped by task.
 - [`.agents/prompt.md`](../../.agents/prompt.md) holds the prompts for part 3.
 
