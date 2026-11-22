@@ -538,10 +538,11 @@ fn freeExp(fs: *FuncState, e: *const ExpDesc) void {
     if (e.kind == .nonreloc) freeReg(fs, e.info);
 }
 
+/// Frees the registers of two operands, which every caller has put in
+/// registers with `exp2anyreg`.
 fn freeExps(fs: *FuncState, e1: *const ExpDesc, e2: *const ExpDesc) void {
-    const r1: i32 = if (e1.kind == .nonreloc) e1.info else -1;
-    const r2: i32 = if (e2.kind == .nonreloc) e2.info else -1;
-    if (r1 >= 0 and r2 >= 0) freeRegs(fs, r1, r2) else if (r1 >= 0) freeReg(fs, r1) else if (r2 >= 0) freeReg(fs, r2);
+    inv.assert(e1.kind == .nonreloc and e2.kind == .nonreloc);
+    freeRegs(fs, e1.info, e2.info);
 }
 
 // ---------------------------------------------------------------------
@@ -1289,7 +1290,8 @@ fn leaveBlock(fs: *FuncState) Error!void {
         try moveGotosOut(fs, bl, p);
     } else if (bl.first_goto < c.gotos.items.len) {
         const g = c.gotos.items[bl.first_goto];
-        if (std.mem.eql(u8, g.name, "break")) return c.err(g.line, "break outside loop", .{});
+        // The parser rejects a break outside a loop.
+        if (inv.never(std.mem.eql(u8, g.name, "break"))) return c.err(g.line, "break outside loop", .{});
         if (std.mem.eql(u8, g.name, "continue")) return c.err(g.line, "continue outside loop", .{});
         return c.err(g.line, "no visible label '{s}' for <goto> at line {d}", .{ g.name, g.line });
     }
@@ -2449,7 +2451,8 @@ fn localGroup(fs: *FuncState, names: []ast.AttName, inits: []ast.GroupInit, line
     for (names) |an| {
         const k = try attribKind(fs, an, line, true);
         if (k != .group) return fs.c.err(line, "cannot mix <group> with non-group variables", .{});
-        if (an.has(.close)) return fs.c.err(line, "cannot use <close> with <group> variables", .{});
+        // The parser rejects <close> beside <group> as conflicting.
+        if (inv.never(an.has(.close))) return fs.c.err(line, "cannot use <close> with <group> variables", .{});
     }
     if (inits.len != names.len) return fs.c.err(line, "'=' expected", .{});
     for (names, inits) |an, init| {
@@ -2958,7 +2961,8 @@ fn condition(fs: *FuncState, cond: ast.Cond, line: u32) Error!i32 {
                     if (toclose != null) return fs.c.err(line, "multiple to-be-closed variables in condition", .{});
                     toclose = @intCast(i);
                 }
-                if (k == .group) return fs.c.err(line, "cannot mix <group> with non-group variables in condition", .{});
+                // The parser makes a condition that names a group a group condition.
+                if (inv.never(k == .group)) return fs.c.err(line, "cannot mix <group> with non-group variables in condition", .{});
             }
             const first = fs.nactvar;
             const base = fs.freereg;
@@ -3883,13 +3887,14 @@ const DiscardMark = struct {
         var b = fs.bl;
         var i: usize = 0;
         while (b) |bb| : (b = bb.parent) {
-            if (i < m.continues.len) bb.continues.items.len = m.continues[i];
+            // The mark was taken in the same block, so the chains match.
+            if (inv.always(i < m.continues.len)) bb.continues.items.len = m.continues[i];
             i += 1;
         }
         var d = fs.do_ctx;
         i = 0;
         while (d) |dd| : (d = dd.parent) {
-            if (i < m.exits.len) dd.exits = m.exits[i];
+            if (inv.always(i < m.exits.len)) dd.exits = m.exits[i];
             i += 1;
         }
         if (fs.last_target > pc(fs)) fs.last_target = pc(fs);
