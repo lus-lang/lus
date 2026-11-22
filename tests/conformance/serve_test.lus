@@ -1656,7 +1656,8 @@ local function a_server_that_serve_bound_stops_listening_when_closed_test()
     assert(exchange(sock, get("/")).body == "ok")
     assert(close(co))
     assert(at_end(sock))
-    assert(not catch network.tcp.connect("127.0.0.1", port))
+    local refused, err = network.tcp.connect("127.0.0.1", port)
+    assert(refused == nil and err.code == "refused", tostring(err))
 end
 
 -- ===== serve itself =====
