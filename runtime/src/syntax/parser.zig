@@ -652,6 +652,9 @@ pub const Parser = struct {
             } else if (p.isName("lazy")) {
                 _ = p.advance();
                 a = .lazy;
+            } else if (p.isName("observe")) {
+                _ = p.advance();
+                a = .observe;
             } else {
                 a = .{ .runtime = try p.subExpr(3) };
             }
@@ -659,7 +662,7 @@ pub const Parser = struct {
                 if (seen_runtime) return p.errSem("compile-time attribute '{s}' must come before runtime attributes", .{@tagName(a)});
                 // `<meta>` and `<lazy>` combine with the others, and the
                 // compiler reports the combinations it rejects.
-                if (a != .meta and a != .lazy) {
+                if (a != .meta and a != .lazy and a != .observe) {
                     if (kind) |k| {
                         if (k != a) return p.errSem("conflicting attributes", .{});
                     }

@@ -628,6 +628,25 @@ local function generate(seed, size)
         push(scope, name, "int", true)
     end
 
+    -- An observed source, which later statements may assign from any
+    -- function, and a derived variable whose initializer reads it and
+    -- prints when it runs. Every configuration must update in the same
+    -- order and print the same trace.
+    function G.observe(scope)
+        local src = fresh("os")
+        -- A literal keeps the source free of observed names, which would
+        -- make it a derived variable that no statement may assign.
+        emit("local " .. src .. " <observe> = " .. literal("int"))
+        push(scope, src, "int")
+        local der = fresh("od")
+        emit("local " .. der .. " <observe> = do P(\"obs\", \"" .. der .. "\") provide " .. src .. " + " .. expr(scope, "int", 2) .. " end")
+        push(scope, der, "int", true)
+        if r.chance(0.5) then
+            emit(src .. " = " .. src .. " + " .. literal("int"))
+            emit("P(\"od\", " .. der .. ")")
+        end
+    end
+
     function G.flagif(scope)
         local tag = fresh("fl")
         emit("if " .. flagCond(scope, 0) .. " then P(\"" .. tag .. "\", 1)")
@@ -1148,7 +1167,7 @@ local function generate(seed, size)
                 { 3, "kernel" }, { 2, "shape" }, { 1, "poly" }, { 1, "edgecmp" }, { 1, "edgefor" }, { 1, "coerce" },
                 { 1, "method" }, { 1, "keys" }, { 1, "deep" }, { 1, "concatn" }, { 1, "chain" }, { 1, "detach" },
                 { 2, "upvals" }, { 2, "globals" }, { 1, "tail" }, { 2, "multiret" }, { 1, "metaflip" }, { 2, "hotcall" },
-                { 2, "yieldacross" }, { 1, "flagif" }, { 1, "forfrom" }, { 1, "meta" }, { 2, "lazy" },
+                { 2, "yieldacross" }, { 1, "flagif" }, { 1, "forfrom" }, { 1, "meta" }, { 2, "lazy" }, { 2, "observe" },
             }) do add(k[1], k[2]) end
             if ctx.coro then add(2, "yield") end
         end

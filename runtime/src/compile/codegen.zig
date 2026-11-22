@@ -108,6 +108,11 @@ const VarDesc = struct {
     /// function (`lazyLocal`).
     lazy_store: []const u8 = "",
     lazy_force: []const u8 = "",
+    /// For an `<observe>` local: whether it is a source or a derived
+    /// variable, and the name of the hidden local that holds the list of
+    /// its dependents (`observeLocal`).
+    observe: enum { none, source, derived } = .none,
+    observers: []const u8 = "",
 };
 
 const Group = struct {
@@ -231,6 +236,10 @@ pub const Compiler = struct {
     /// Above zero while a discarded block or condition compiles. Such code
     /// is checked, never evaluated at compile time.
     discarding: u32 = 0,
+    /// The assignment targets of the update functions of derived
+    /// observed variables, which write those variables without the checks
+    /// of a user assignment.
+    observe_internal: std.AutoHashMapUnmanaged(*const ast.Expr, void) = .empty,
     actvars: std.ArrayList(VarDesc) = .empty,
     labels: std.ArrayList(LabelDesc) = .empty,
     gotos: std.ArrayList(LabelDesc) = .empty,
@@ -2151,8 +2160,16 @@ fn statement(fs: *FuncState, s: *ast.Stat) Error!void {
             fs.freereg = @intCast(v.info);
         },
         .assign => |a| try assignStat(fs, a.targets, a.values, s.line),
-        .assign_from => |a| try assignFrom(fs, a.targets, a.source, s.line),
-        .function => |f| try functionStat(fs, f.path, f.method, f.func, s.line),
+        .assign_from => |a| {
+            for (a.targets) |t| try rejectObserved(fs, t, s.line);
+            try assignFrom(fs, a.targets, a.source, s.line);
+        },
+        .function => |f| {
+            if (f.path.len == 1 and f.method == null) if (knownLocal(fs, f.path[0].text)) |vd| if (vd.observe != .none) {
+                return fs.c.err(s.line, "cannot assign observed variable '{s}' with a function statement", .{vd.name});
+            };
+            try functionStat(fs, f.path, f.method, f.func, s.line);
+        },
         .do_ => |b| try block(fs, b),
         .while_ => |w| try whileStat(fs, w.cond, w.body, s.line),
         .repeat_ => |r| try repeatStat(fs, r.body, r.cond, s.line),
@@ -2187,6 +2204,7 @@ fn attribKind(fs: *FuncState, an: ast.AttName, line: u32, allow_runtime: bool) E
         // so any other declaration rejects them.
         .meta => return fs.c.err(line, "cannot use <meta> in this declaration", .{}),
         .lazy => return fs.c.err(line, "cannot use <lazy> in this declaration", .{}),
+        .observe => return fs.c.err(line, "cannot use <observe> in this declaration", .{}),
         .runtime => if (!allow_runtime) return fs.c.err(line, "runtime attributes not supported in this context", .{}),
     };
     return k;
@@ -2232,6 +2250,7 @@ fn explist(fs: *FuncState, exprs: []*ast.Expr, last: *ExpDesc) Error!u32 {
 fn localStat(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
     for (names) |an| if (an.has(.meta)) return metaLocal(fs, names, values, line);
     for (names) |an| if (an.has(.lazy)) return lazyLocal(fs, names, values, line);
+    for (names) |an| if (an.has(.observe)) return observeLocal(fs, names, values, line);
     var toclose: ?u32 = null;
     var has_runtime = false;
     for (names, 0..) |an, i| {
@@ -2497,6 +2516,7 @@ fn globalKind(fs: *FuncState, attribs: []const ast.Attrib, line: u32) Error!bool
         .group => return fs.c.err(line, "global variables cannot be groups", .{}),
         .meta => return fs.c.err(line, "global variables cannot be <meta>", .{}),
         .lazy => return fs.c.err(line, "global variables cannot be <lazy>", .{}),
+        .observe => return fs.c.err(line, "global variables cannot be <observe>", .{}),
         .runtime => return fs.c.err(line, "runtime attributes not supported in this context", .{}),
     };
     return readonly;
@@ -2588,6 +2608,20 @@ fn assignStat(fs: *FuncState, targets: []*ast.Expr, values: []*ast.Expr, line: u
         try singleVarAux(fs, targets[0].kind.name.text, &rv, true);
         if (rv.kind == .void_ and rv.info == -3) return groupOverwrite(fs, targets[0], values, line);
     }
+    // Observed sources among the targets: each assignment checks that no
+    // update runs, then updates the dependents after the stores.
+    // Names, not descriptors: compiling the values may declare locals,
+    // which moves the descriptors.
+    var sources: std.ArrayList(ObservedName) = .empty;
+    for (targets) |t| {
+        if (t.kind != .name) continue;
+        const vd = knownLocal(fs, t.kind.name.text) orelse continue;
+        switch (vd.observe) {
+            .none => {},
+            .derived => if (!fs.c.observe_internal.contains(t)) return fs.c.err(line, "attempt to assign to const variable '{s}'", .{vd.name}),
+            .source => try sources.append(fs.c.arena, .{ .name = vd.name, .observers = vd.observers }),
+        }
+    }
     // Evaluate target prefixes (table and key registers) left to right,
     // then values, then store right to left.
     var descs = try fs.c.arena.alloc(ExpDesc, targets.len);
@@ -2606,9 +2640,14 @@ fn assignStat(fs: *FuncState, targets: []*ast.Expr, values: []*ast.Expr, line: u
     const nexps = try explist(fs, values, &e);
     if (nexps != targets.len or e.isMulti()) {
         try adjustAssign(fs, @intCast(targets.len), nexps, &e);
+        for (sources.items) |o| try observeCheck(fs, o);
     } else {
         // Single exact match: store the last value directly.
         try setOneRet(fs, &e);
+        if (sources.items.len > 0) {
+            try exp2nextreg(fs, &e);
+            for (sources.items) |o| try observeCheck(fs, o);
+        }
         const last = targets.len - 1;
         try storeTarget(fs, &descs[last], &e, targets[last]);
         var i = last;
@@ -2617,6 +2656,7 @@ fn assignStat(fs: *FuncState, targets: []*ast.Expr, values: []*ast.Expr, line: u
             var ve = ExpDesc.init(.nonreloc, fs.freereg - 1);
             try storeTarget(fs, &descs[i], &ve, targets[i]);
         }
+        for (sources.items) |o| try observeNotify(fs, o, line);
         return;
     }
     var i = targets.len;
@@ -2625,6 +2665,50 @@ fn assignStat(fs: *FuncState, targets: []*ast.Expr, values: []*ast.Expr, line: u
         var ve = ExpDesc.init(.nonreloc, fs.freereg - 1);
         try storeTarget(fs, &descs[i], &ve, targets[i]);
     }
+    for (sources.items) |o| try observeNotify(fs, o, line);
+}
+
+/// Observed variables accept only plain assignments, which update their
+/// dependents.
+fn rejectObserved(fs: *FuncState, target: *const ast.Expr, line: u32) Error!void {
+    if (target.kind != .name) return;
+    const vd = knownLocal(fs, target.kind.name.text) orelse return;
+    if (vd.observe != .none) return fs.c.err(line, "cannot assign observed variable '{s}' with 'from'", .{vd.name});
+}
+
+/// Calls the builtin `n` with the arguments already placed after it, at
+/// a fresh register, and drops the results.
+fn callBuiltin(fs: *FuncState, n: u8, args: []const []const u8) Error!void {
+    const base = fs.freereg;
+    try reserveRegs(fs, @intCast(1 + args.len));
+    _ = try emitABx(fs, .loadk, base, try valueK(fs, try lazy.get(fs.c.g, n)));
+    for (args, 0..) |a, i| _ = try emitABx(fs, .loadk, base + 1 + @as(u32, @intCast(i)), try stringK(fs, a));
+    try codeABC(fs, .call, base, @intCast(1 + args.len), 1);
+    fs.freereg = base;
+}
+
+/// Raises when an update of observed variables runs, before a store to
+/// the observed source `vd`.
+fn observeCheck(fs: *FuncState, o: ObservedName) Error!void {
+    try callBuiltin(fs, lazy.number("obscheck").?, &.{o.name});
+}
+
+/// An observed local by its name and the name of its list of dependents.
+const ObservedName = struct { name: []const u8, observers: []const u8, source: bool = true };
+
+/// After a store to the observed source `vd`: runs the update of its
+/// dependents when it has any.
+fn observeNotify(fs: *FuncState, o: ObservedName, line: u32) Error!void {
+    var l: ExpDesc = .{};
+    try singleVar(fs, o.observers, line, &l);
+    const base = fs.freereg;
+    try reserveRegs(fs, 1);
+    _ = try emitABx(fs, .loadk, base, try valueK(fs, try lazy.get(fs.c.g, lazy.number("obsrun").?)));
+    try exp2nextreg(fs, &l);
+    const skip = try condJump(fs, .test_, base + 1, 0, 0);
+    try codeABC(fs, .call, base, 2, 1);
+    try patchToHere(fs, skip);
+    fs.freereg = base;
 }
 
 fn storeTarget(fs: *FuncState, v: *ExpDesc, ex: *ExpDesc, target: *ast.Expr) Error!void {
@@ -3320,6 +3404,7 @@ fn metaLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u3
     if (an.has(.close)) return c.err(line, "cannot combine <meta> with <close>", .{});
     if (an.has(.group)) return c.err(line, "cannot combine <meta> with <group>", .{});
     if (an.has(.lazy)) return c.err(line, "cannot combine <meta> with <lazy>", .{});
+    if (an.has(.observe)) return c.err(line, "cannot combine <meta> with <observe>", .{});
     if (hasRuntimeAttribs(an)) return c.err(line, "cannot combine <meta> with runtime attributes", .{});
     if (values.len != 1) return c.err(line, "a <meta> variable needs one initializer", .{});
     if (c.discarding > 0 or !c.opts.meta_eval) {
@@ -3476,6 +3561,7 @@ fn lazyLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u3
     if (names.len != 1) return c.err(line, "a <lazy> declaration names one variable", .{});
     const an = names[0];
     if (an.has(.group)) return c.err(line, "cannot combine <lazy> with <group>", .{});
+    if (an.has(.observe)) return c.err(line, "cannot combine <lazy> with <observe>", .{});
     if (values.len != 1) return c.err(line, "a <lazy> variable needs one initializer", .{});
     const a = c.arena;
     const x = an.name.text;
@@ -3556,6 +3642,99 @@ fn lazyLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u3
     vd.lazy_store = store;
     vd.lazy_force = force;
     try adjustLocalVars(fs, 1);
+}
+
+// ---------------------------------------------------------------------
+// Observed locals (`spec/design/observe.md`)
+
+/// Collects the observed locals that an initializer names.
+const ObserveDeps = struct {
+    fs: *FuncState,
+    list: std.ArrayList(ObservedName) = .empty,
+
+    fn visit(d: *ObserveDeps, slot: **ast.Expr) anyerror!void {
+        const e = slot.*;
+        if (e.kind != .name) return;
+        const vd = knownLocal(d.fs, e.kind.name.text) orelse return;
+        if (vd.observe == .none) return;
+        for (d.list.items) |x| if (std.mem.eql(u8, x.observers, vd.observers)) return;
+        try d.list.append(d.fs.c.arena, .{ .name = vd.name, .observers = vd.observers, .source = vd.observe == .source });
+    }
+};
+
+/// `local name <observe> = exp`. Without an observed name in `exp` the
+/// local is a source: an ordinary local with a hidden list of dependents,
+/// created by the first dependent. Otherwise it is a derived variable: it
+/// gets a list of its own, an update function that recomputes it, and a
+/// record of that function in the list of each of its dependencies, which
+/// a to-be-closed guard removes when its scope ends.
+fn observeLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
+    const c = fs.c;
+    if (names.len != 1) return c.err(line, "an <observe> declaration names one variable", .{});
+    const an = names[0];
+    for (an.attribs) |at| switch (at) {
+        .observe => {},
+        .@"const" => return c.err(line, "cannot combine <observe> with <const>", .{}),
+        .close => return c.err(line, "cannot combine <observe> with <close>", .{}),
+        .group => return c.err(line, "cannot combine <observe> with <group>", .{}),
+        .runtime => return c.err(line, "cannot combine <observe> with runtime attributes", .{}),
+        .meta, .lazy => unreachable,
+    };
+    if (values.len != 1) return c.err(line, "an <observe> variable needs one initializer", .{});
+    const a = c.arena;
+    const x = an.name.text;
+    const g: Gen = .{ .a = a, .line = line, .span = an.name.span };
+    const observers = try std.fmt.allocPrint(a, "(observers {s})", .{x});
+
+    var deps: ObserveDeps = .{ .fs = fs };
+    const v: @import("../syntax/walk.zig").Visitor(*ObserveDeps) = .{ .ctx = &deps, .func = ObserveDeps.visit };
+    var root = values[0];
+    v.slot(&root) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => unreachable,
+    };
+
+    if (deps.list.items.len == 0) {
+        try statement(fs, try g.local(&.{observers}, &.{}, null));
+        try statement(fs, try g.local(&.{x}, &.{}, values[0]));
+        const vd = getLocalVar(fs, fs.nactvar - 1);
+        vd.observe = .source;
+        vd.observers = observers;
+        return;
+    }
+
+    // A source gets its list when its first dependent registers.
+    for (deps.list.items) |d| if (d.source) {
+        try statement(fs, try g.ifThen(try g.ex(.{ .unop = .{ .op = .not, .operand = try g.name(d.observers) } }), &.{
+            try g.assign(d.observers, try g.ex(.{ .table = &.{} })),
+        }, null));
+    };
+    try statement(fs, try g.local(&.{x}, &.{}, values[0]));
+    const xvd_index = fs.nactvar - 1;
+    try statement(fs, try g.local(&.{observers}, &.{}, try g.ex(.{ .table = &.{} })));
+    {
+        const xvd = getLocalVar(fs, xvd_index);
+        xvd.observe = .derived;
+        xvd.observers = observers;
+        xvd.readonly = false;
+    }
+    // The update function writes the variable without the checks of a
+    // user assignment.
+    const upd = try g.assign(x, values[0]);
+    try c.observe_internal.put(a, upd.kind.assign.targets[0], {});
+    const func = try a.create(ast.Function);
+    func.* = .{ .params = &.{}, .is_vararg = false, .body = try g.block(&.{upd}), .line = line, .end_line = line, .span = g.span, .name = x };
+    var args: std.ArrayList(*ast.Expr) = .empty;
+    try args.append(a, try g.ex(.{ .function = func }));
+    try args.append(a, try g.name(observers));
+    for (deps.list.items) |d| try args.append(a, try g.name(d.observers));
+    const rec = try std.fmt.allocPrint(a, "(observe record {s})", .{x});
+    try statement(fs, try g.local(&.{rec}, &.{}, try g.call(try g.name(lazy.prefix ++ "obsregister"), args.items)));
+    const unreg = try g.st(.{ .expr = try g.call(try g.name(lazy.prefix ++ "obsunregister"), &.{try g.name(rec)}) });
+    const uf = try a.create(ast.Function);
+    uf.* = .{ .params = &.{}, .is_vararg = false, .body = try g.block(&.{unreg}), .line = line, .end_line = line, .span = g.span, .name = x };
+    const guard = try std.fmt.allocPrint(a, "(observe guard {s})", .{x});
+    try statement(fs, try g.local(&.{guard}, &.{.close}, try g.call(try g.name(lazy.prefix ++ "closer"), &.{try g.ex(.{ .function = uf })})));
 }
 
 fn ifStat(fs: *FuncState, clauses: []ast.IfClause, else_block: ?*ast.Block, line: u32) Error!void {

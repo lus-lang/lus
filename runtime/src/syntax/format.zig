@@ -601,6 +601,7 @@ const Formatter = struct {
                 .group => "group",
                 .meta => "meta",
                 .lazy => "lazy",
+                .observe => "observe",
                 .runtime => null,
             };
             if (word) |w| {

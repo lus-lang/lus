@@ -1,6 +1,6 @@
 # Observed variables
 
-_Status: design for review. Nothing in this note is implemented yet. The open questions at the end each list choices with a recommendation._
+_Status: implemented._
 
 An _observed variable_ is a local declared with the `<observe>` attribute. An observed variable whose initializer reads other observed variables is a _derived_ variable, and the observed variables it reads are its _dependencies_. An observed variable with no observed dependency is a _source_. When a program assigns a source, from the declaring function or from any nested function, every derived variable that depends on it, directly or through other derived variables, is computed again from its initializer.
 
@@ -58,7 +58,9 @@ a = 5
 assert(d == 16)
 ```
 
-An initializer runs in the coroutine that made the assignment. An assignment to an observed variable while an update is running raises `cannot assign observed variable 'a' while its dependents update`, because the update would otherwise read a source that changes under it. A yield inside an initializer during an update raises `attempt to yield inside an observed update`.
+An initializer runs in the coroutine that made the assignment. An assignment to an observed variable while an update is running raises `cannot assign observed variable 'a' while its dependents update`, from any coroutine, because the update would otherwise read a source that changes under it.
+
+An initializer may yield during an update. The update then pauses with the coroutine, and it resumes with the next dependent in declaration order when the coroutine resumes. While it is paused, the update still counts as running, so an assignment to an observed variable in any coroutine raises the error above. A reader in another coroutine sees the dependents that the paused update already computed with their new values and the others with their previous values. If the paused coroutine is closed, the update ends there: the dependents it did not reach keep their previous values, and observed variables accept assignments again.
 
 If an initializer raises an error during an update, the error propagates from the assignment that started the update. The source keeps its new value. The derived variables computed before the error have their new values, and the failing variable and those after it keep their previous values.
 
@@ -66,27 +68,27 @@ If an initializer raises an error during an update, the error propagates from th
 
 The compiler resolves every name lexically, so it knows at each assignment whether the target is a source. Every decision below is made at compile time, which keeps code that never declares an observed variable exactly as it is today.
 
-**Sources.** A source has a hidden companion local, its _dependents list_, declared next to it. The list starts empty. An assignment to the source compiles to the store followed by a `notify` instruction on the companion. `notify` tests whether the list is empty and returns when it is.
+**Sources.** A source has a hidden companion local, `(observers x)`, its list of dependents. It holds `nil` until the first dependent registers, which stores a fresh list in it. An assignment to the source compiles to a call of the builtin `obscheck`, which raises when an update runs, then the store, then a test of the companion. When the companion holds a list, the assignment calls the builtin `obsrun` with it.
 
-**Captured sources.** A nested function that assigns a source captures the companion along with the source, as one more upvalue. Its assignment compiles to the store into the upvalue followed by `notify` on the captured companion. A nested function that only reads the source captures the source alone.
+**Captured sources.** A nested function that assigns a source captures the companion along with the source, as one more upvalue, and its assignment compiles the same way. A nested function that only reads the source captures the source alone.
 
-**Derived variables.** A derived variable compiles to a register or upvalue like any local, plus a hidden _update function_ that evaluates the initializer and stores the result in the variable. Executing the declaration evaluates the initializer, creates the update function, gives it the next number of the state's declaration counter, and adds it to the dependents list of each dependency. A derived variable that is itself a dependency has a dependents list of its own. Leaving the scope removes the update function from each list, through the same mechanism that closes `<close>` variables.
+**Derived variables.** A derived variable compiles to a register or upvalue like any local, plus a list of its own, created at the declaration, and an update function that evaluates the initializer and stores the result in the variable. Executing the declaration evaluates the initializer, then calls the builtin `obsregister`, which numbers the update function with the next value of the state's declaration counter and adds a record of it to the list of each dependency. A to-be-closed guard calls `obsunregister` when the scope ends, which removes the record from those lists.
 
-**Update.** `notify` on a non-empty list collects the update functions of the list and, transitively, of the lists of the derived variables they update. It sorts the collected functions by their numbers, removes duplicates, then calls each one in that order.
+**Update.** `obsrun` collects the records of the list and, transitively, of the lists of the derived variables they update. It sorts them by their numbers, then calls each update function once in that order. It is written in Lus, so an initializer may yield, and a to-be-closed guard marks the end of the update however it ends: by finishing, by an error, or by the close of a paused coroutine. The builtins reach compiled code as constants that binary chunks store by number (`lazy.md`, section 7).
 
 ## 4. Cost
 
+`tests/bench/observe.lus` measures the following, with a ReleaseFast build on an Apple silicon Mac.
+
 | operation | cost |
 | --- | --- |
-| any code without observed variables | none, the compiler emits the same instructions as today |
-| read of an observed variable | a read of a local or an upvalue |
-| assignment to a source without dependents | the store, then one test of an empty list |
-| assignment to a source with dependents | the store, a collection and sort of the dependents, and one call of each update function |
-| assignment to a source from a nested function | the same, plus one upvalue in that function for the companion |
-| declaration of a derived variable | one evaluation of the initializer, one closure, and one list insertion per dependency |
-| end of the scope of a derived variable | one list removal per dependency |
+| any code without observed variables | none, the compiler emits the same instructions as before |
+| read of an observed variable | the same as a read of a local: 0.010 s for five million reads in both cases, interpreted |
+| assignment to a source without dependents | the store and one call of `obscheck`: 0.057 s against 0.009 s for five million assignments, interpreted, and 0.046 s against 0.003 s under the JIT |
+| assignment to a source with one dependent | about 300 ns, most of it the collection and sort in `obsrun` and the guard it creates |
+| declaration of a derived variable | one evaluation of the initializer, the update function, a record, and a guard |
 
-The JIT compiles `notify` as a call to a runtime routine behind the test of an empty list. Assignments to plain variables and plain upvalues compile unchanged in every tier, because `notify` exists only after assignments to sources.
+The call of `obscheck` keeps the decision of section 6 that any assignment during an update raises, including an assignment to a source without dependents. Observed variables belong in code that reacts to changes, such as the state of a user interface, rather than in hot loops.
 
 ## 5. Interaction with other features
 
@@ -94,22 +96,12 @@ The JIT compiles `notify` as a call to a runtime routine behind the test of an e
 - `<lazy>` and `<observe>` together are a compile error. A lazy variable computes at its first read and an observed one at each change, and the motivating example gives 14 with `<observe>` where a recomputation at read time would give 24.
 - `<close>`, `<group>`, and runtime attributes on an observed variable are compile errors. A field of a local group cannot be observed.
 - A global cannot be observed, because a global is a field of the global table and its assignments are table writes.
-- `debug.setlocal` and `debug.setupvalue` store without `notify`, as they bypass every other attribute.
+- `debug.setlocal` and `debug.setupvalue` store without an update, as they bypass every other attribute.
+- An observed variable accepts only plain assignments. `x, y from t` and `function x() end` on an observed local are compile errors, `cannot assign observed variable 'x' with 'from'` and `cannot assign observed variable 'x' with a function statement`.
 - An observed variable passed to a function passes its current value. The callee receives no link to the variable.
 
-## 6. Open questions
+## 6. Decisions
 
-**Q1. What happens when an initializer raises an error during an update?**
-
-- **(a) The error propagates from the assignment, and the variables after the failing one keep their previous values (recommended).** The update stops where the error happened, like any sequence of statements.
-- (b) The update computes every variable it can, skips the failing one and those that depend on it, then raises the first error.
-
-**Q2. What happens when code assigns an observed variable while an update is running?**
-
-- **(a) It raises an error (recommended).** An update never sees a source change under it.
-- (b) The assignment is queued, and its update runs after the current one ends. A program that assigns on every update then loops forever.
-
-**Q3. May an initializer yield during an update?**
-
-- **(a) No, a yield raises an error (recommended).** An update ends before any other coroutine runs, so no coroutine sees half an update.
-- (b) Yes. Another coroutine that assigns an observed variable during the yield raises the error of Q2.
+- An error in an initializer during an update raises at the assignment, and the dependents not yet updated keep their previous values (section 2).
+- An assignment to an observed variable during an update raises an error.
+- An initializer may yield during an update, with the behavior of section 2.

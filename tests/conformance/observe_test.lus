@@ -1,0 +1,171 @@
+pledge("load")
+
+global print, assert, load, string, table, tostring, error, coroutine, select
+
+--[[
+    Tests for `<observe>` locals (spec/design/observe.md). A derived
+    observed variable recomputes when an observed variable its initializer
+    names is assigned, in declaration order, from any function.
+]]
+
+local function compile_error(src)
+    local f, err = load(src)
+    assert(f == nil, "expected a compile error for: " .. src)
+    return err
+end
+
+local function the_motivating_example_test()
+    local z = 10
+    local a <observe> = 1
+    local b <observe> = 2
+    local c <observe> = z + a + b
+    b = 3
+    z = 20
+    assert(c == 14)
+end
+
+local function diamond_updates_once_in_order_test()
+    local runs = 0
+    local a <observe> = 1
+    local b <observe> = a * 2
+    local c <observe> = a + 1
+    local d <observe> = do runs = runs + 1 provide b + c end
+    runs = 0
+    a = 5
+    assert(d == 16 and runs == 1)
+end
+
+local function chains_update_transitively_test()
+    local a <observe> = 1
+    local b <observe> = a + 1
+    local c <observe> = b * 10
+    a = 4
+    assert(b == 5 and c == 50)
+end
+
+local function nested_functions_update_dependents_test()
+    local clicks <observe> = 0
+    local label <observe> = `clicked $clicks times`
+    local function on_click() clicks = clicks + 1 end
+    on_click()
+    on_click()
+    assert(label == "clicked 2 times")
+end
+
+local function writer_defined_before_the_dependent_test()
+    local n <observe> = 1
+    local function bump() n = n + 1 end
+    local double <observe> = n * 2
+    bump()
+    assert(double == 4)
+end
+
+local function dependents_stop_at_the_end_of_their_scope_test()
+    local runs = 0
+    local a <observe> = 1
+    do
+        local d <observe> = do runs = runs + 1 provide a * 2 end
+        a = 2
+        assert(d == 4 and runs == 2)
+    end
+    a = 3
+    assert(runs == 2)
+end
+
+local function multiple_assignment_test()
+    local a <observe> = 1
+    local b <observe> = 2
+    local s <observe> = a + b
+    a, b = 10, 20
+    assert(s == 30)
+end
+
+local function derived_is_read_only_test()
+    assert(compile_error("local a <observe> = 1 local b <observe> = a + 1 b = 5"):find("const variable 'b'", 1, true))
+    assert(compile_error("local a <observe> = 1 local b <observe> = a + 1 local function f() b = 5 end"):find("const variable 'b'", 1, true))
+end
+
+local function rejected_forms_test()
+    assert(compile_error("local a, b <observe> = 1, 2"):find("names one variable", 1, true))
+    assert(compile_error("local a <observe>"):find("one initializer", 1, true))
+    assert(compile_error("local a <observe, const> = 1"):find("cannot combine <observe> with <const>", 1, true))
+    assert(compile_error("local a <observe, close> = nil"):find("cannot combine <observe> with <close>", 1, true))
+    assert(compile_error("local a <observe, lazy> = 1"):find("cannot combine <lazy> with <observe>", 1, true))
+    assert(compile_error("global a <observe> = 1"):find("cannot be <observe>", 1, true))
+    assert(compile_error("local g <group> = { a <observe> = 1 }"):find("cannot use <observe>", 1, true))
+    assert(compile_error("local a <observe> = 1 a from { a = 2 }"):find("with 'from'", 1, true))
+    assert(compile_error("local a <observe> = 1 function a() end"):find("function statement", 1, true))
+end
+
+local function error_in_an_update_test()
+    local a <observe> = 1
+    local b <observe> = a + 1
+    local c <observe> = do
+        if a == 7 then error("bad a", 0) end
+        provide a * 10
+    end
+    local d <observe> = a + 100
+    local ok, err = catch do a = 7 end
+    assert(ok == false and err == "bad a")
+    assert(a == 7 and b == 8 and c == 10 and d == 101)
+    a = 2
+    assert(b == 3 and c == 20 and d == 102)
+end
+
+local function assignment_during_an_update_raises_test()
+    local a <observe> = 1
+    local other <observe> = 0
+    local function poke() other = 1 end
+    local b <observe> = do
+        if a == 2 then poke() end
+        provide a
+    end
+    local ok, err = catch do a = 2 end
+    assert(ok == false and tostring(err):find("cannot assign observed variable 'other' while its dependents update", 1, true))
+    a = 3
+    assert(b == 3)
+end
+
+local function yield_during_an_update_test()
+    local a <observe> = 1
+    local b <observe> = do
+        if a == 2 then coroutine.yield("paused") end
+        provide a * 10
+    end
+    local c <observe> = a + 1
+    local co = coroutine.create(function() a = 2 end)
+    local ok, what = coroutine.resume(co)
+    assert(ok and what == "paused")
+    -- paused: b not yet recomputed, c not reached
+    assert(b == 10 and c == 2)
+    local aok, err = catch do a = 5 end
+    assert(aok == false and tostring(err):find("while its dependents update", 1, true))
+    assert(coroutine.resume(co))
+    assert(b == 20 and c == 3)
+    a = 4
+    assert(b == 40 and c == 5)
+end
+
+local function closing_a_paused_update_ends_it_test()
+    local a <observe> = 1
+    local b <observe> = do
+        if a == 2 then coroutine.yield() end
+        provide a * 10
+    end
+    local co = coroutine.create(function() a = 2 end)
+    coroutine.resume(co)
+    coroutine.close(co)
+    assert(b == 10)
+    a = 3
+    assert(b == 30)
+end
+
+local function survives_string_dump_test()
+    local f = load(string.dump(function()
+        local a <observe> = 1
+        local b <observe> = a + 1
+        a = 41
+        return b
+    end))
+    assert(f() == 42)
+end
