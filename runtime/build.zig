@@ -502,8 +502,10 @@ fn linkObjectInput(b: *std.Build, f: Features, target: std.Build.ResolvedTarget,
 fn linkSystemLibraries(mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     if (target.result.os.tag == .windows) {
         mod.linkSystemLibrary("crypt32", .{});
-        // The TLS layer reads random bytes through RtlGenRandom.
+        // The TLS layer reads random bytes through RtlGenRandom, and Mbed
+        // TLS parses the addresses of certificates with inet_pton.
         mod.linkSystemLibrary("advapi32", .{});
+        mod.linkSystemLibrary("ws2_32", .{});
     }
 }
 
