@@ -2019,38 +2019,27 @@ fn fetch(l: *Thread) Error!u32 {
 const input_port = state.Port{ .step = inputStep };
 const output_port = state.Port{ .step = outputStep, .close = outputClose };
 
-/// Replaces the `__index` table of sockets with a native that finds the
-/// ports of the socket and then the methods.
+/// Registers the fields `input` and `output` of sockets, which a lookup
+/// finds after the methods.
 fn portIndex(l: *Thread) Error!void {
-    const mt = metatableOf(l, socket_name);
-    const methods = table.getStr(mt, try l.newString("__index"));
-    try l.push(methods);
-    defer l.top -= 1;
-    const n = state.newNative(l.g, socketIndex, "index", 1) catch return l.raiseMem();
-    n.upvalues()[0] = methods;
-    try aux.setField(l, mt, "__index", Value.obj(.native, n));
+    const g = l.g;
+    g.fields.put(g.gpa, metatableOf(l, socket_name), socketField) catch return l.raiseMem();
 }
 
-fn socketIndex(l: *Thread) Error!u32 {
-    const key = l.arg(2);
-    if (key.tag == .string) {
-        const name = key.as(object.String).bytes();
-        const which: ?usize = if (std.mem.eql(u8, name, "input")) 0 else if (std.mem.eql(u8, name, "output")) 1 else null;
-        if (which) |w| {
-            const v = l.arg(1);
-            if (toObject(l, Socket, socket_name, v) == null) return aux.typeError(l, 1, socket_name);
-            const u = v.as(Userdata);
-            const slot = &u.userValues()[w];
-            if (slot.isNil()) {
-                const co = try coroutine.newPort(l, if (w == 0) &input_port else &output_port, v);
-                slot.* = Value.obj(.thread, co);
-                gc.barrierBack(l.g, &u.hdr);
-            }
-            return aux.ret(l, u.userValues()[w]);
-        }
+fn socketField(l: *Thread, v: Value, key: Value) Error!?Value {
+    if (key.tag != .string) return null;
+    const name = key.as(object.String).bytes();
+    const w: usize = if (std.mem.eql(u8, name, "input")) 0 else if (std.mem.eql(u8, name, "output")) 1 else return null;
+    if (toObject(l, Socket, socket_name, v) == null) return null;
+    const u = v.as(Userdata);
+    const slot = &u.userValues()[w];
+    if (slot.isNil()) {
+        const co = try coroutine.newPort(l, if (w == 0) &input_port else &output_port, v);
+        l.top -= 1;
+        slot.* = Value.obj(.thread, co);
+        gc.barrierBack(l.g, &u.hdr);
     }
-    const methods = l.frame().native.?.upvalues()[0];
-    return aux.ret(l, table.get(methods.as(Table), key));
+    return slot.*;
 }
 
 /// resume(conn.input, pattern, max_bytes): the next piece of input, read

@@ -44,6 +44,13 @@ pub fn index(l: *Thread, obj: Value, key: Value) Error!Value {
         } else {
             tm = l.metamethod(t, .index);
             if (tm.isNil()) return indexError(l, t, key);
+            if (t.tag == .userdata and tm.tag == .table and l.g.fields.count() > 0) {
+                const v = table.get(tm.as(Table), try normKey(l, key));
+                if (!v.isNil()) return v;
+                if (l.g.fields.get(l.metatable(t).?)) |getter| {
+                    if (try getter(l, t, key)) |f| return f;
+                }
+            }
         }
         if (tm.tag == .closure or tm.tag == .native) {
             return callMeta(l, tm, &.{ t, key });

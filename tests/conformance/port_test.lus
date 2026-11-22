@@ -152,3 +152,14 @@ local function ports_wait_inside_detached_coroutines_test()
     assert(close(acceptor))
     server:close()
 end
+
+local function ports_and_methods_resolve_in_hot_loops_test()
+    local client, conn = pair()
+    local _c <close> = client
+    local _d <close> = conn
+    local input = conn.input
+    for _ = 1, 2000 do
+        assert(conn.input == input and conn.output ~= input)
+        assert(type(conn.send) == "function" and conn.missing == nil)
+    end
+end

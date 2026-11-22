@@ -75,6 +75,10 @@ pub const Finish = union(enum) {
 
 pub const NativeFn = *const fn (l: *Thread) Error!u32;
 
+/// Returns the field `key` of the userdata `obj`, or null when it has
+/// none. It must not call Lus code.
+pub const FieldGetter = *const fn (l: *Thread, obj: Value, key: Value) Error!?Value;
+
 /// The behavior of a port. `step` runs with the arguments of `resume` in
 /// its frame, the port first, and returns its results like a native. It
 /// ends the port by setting the status of the port to dead. `close` runs
@@ -387,6 +391,10 @@ pub const Global = struct {
     blobs: std.AutoHashMapUnmanaged(*String, *@import("blob.zig").Blob) = .empty,
     /// Hooks installed by library modules (pledge state, worker hosts...).
     ext: std.StringHashMapUnmanaged(*anyopaque) = .empty,
+    /// Fields of userdata that no `__index` table holds, by metatable. A
+    /// lookup consults the getter of the metatable after its `__index`
+    /// table missed, so method lookups never reach it (`ops.index`).
+    fields: std.AutoHashMapUnmanaged(*Table, FieldGetter) = .empty,
     /// Program arguments and environment, provided by the host.
     args: []const []const u8 = &.{},
     environ: ?*std.process.Environ.Map = null,
@@ -1354,6 +1362,7 @@ pub fn destroy(g: *Global) void {
     g.finobj.deinit(gpa);
     g.tobefnz.deinit(gpa);
     g.ext.deinit(gpa);
+    g.fields.deinit(gpa);
     g.shapes.deinit(g.gpa);
     g.parent_gpa.destroy(g);
 }
