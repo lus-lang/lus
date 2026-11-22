@@ -1,0 +1,24 @@
+-- Runs every case of cases.lus in this process and prints the best time
+-- of several runs of the slow and the suggested form, with their ratio.
+-- Usage, from the repository root:
+--   lus -Pload -Pfs:read tests/bench/hints/run.lus [runs]
+local dir = arg[0]:match("^(.*)/[^/]*$") or "."
+local cases = dofile(dir .. "/cases.lus")
+local runs = tonumber(arg[1]) or 5
+local function best(f)
+    local b = math.huge
+    for _ = 1, runs do
+        collectgarbage()
+        local t0 = os.clock()
+        f()
+        local dt = os.clock() - t0
+        if dt < b then b = dt end
+    end
+    return b
+end
+for _, c in ipairs(cases) do
+    local s = best(c.slow)
+    local f = best(c.fast)
+    assert(c.check == nil or c.check(), c.name)
+    print(string.format("%-22s slow %8.2f ms  suggested %8.2f ms  ratio %6.2f", c.name, s * 1000, f * 1000, s / f))
+end
