@@ -445,6 +445,18 @@ fn block(l: *Thread, t: *Task) Error!bool {
 
 /// Forgets what the thread of `t` waited for, once its native returned
 /// or its wait is abandoned.
+/// Ends the wait of `t` and keeps its `ctx`, for a generator native that
+/// yields a value after it waited (`state.Native.generator`). The thread
+/// that resumed it then takes the value in place of waiting again.
+pub fn endWait(t: *Task) void {
+    t.kind = .none;
+    t.target = null;
+    t.wake = .none;
+    t.deadline = 0;
+    t.op_deadline = 0;
+    t.progress = 0;
+}
+
 pub fn clearWait(g: *Global, t: *Task) void {
     if (t.ctx) |ctx| {
         t.ctx = null;

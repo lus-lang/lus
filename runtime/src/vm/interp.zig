@@ -1508,6 +1508,30 @@ pub fn restartNative(l: *Thread) (Error || YieldError)!void {
     }
 }
 
+/// Runs the generator native of the top frame of `l` again, after a
+/// resume of the coroutine that it yielded from (`state.Native.generator`).
+/// The resume arguments are dropped, so the native sees the arguments it
+/// started with. The call ends the way `restartNative` ends it.
+pub fn rerunGenerator(l: *Thread, nresume: u32) (Error || YieldError)!void {
+    const fr = l.frame();
+    const nat = fr.native.?;
+    const want = fr.want;
+    l.top -= nresume;
+    l.top = @max(l.top, fr.base);
+    l.meta_finish = null;
+    const nres = nat.func(l) catch |e| {
+        if (l.status == .suspended and l.yielding) return error.Yield;
+        if (l.g.debugger) |d| d.raised(d.ctx, l);
+        if (!handleError(l, 0)) return e;
+        return;
+    };
+    try poscall(l, nres);
+    if (want >= 0 and l.frames.items.len > 0) {
+        const caller = l.frame();
+        if (caller.closure) |cl| l.top = caller.base + cl.proto.max_stack;
+    }
+}
+
 /// Pushes a frame for a call to a Lus function with fixed parameters. The
 /// callee and its `nargs` arguments are at `func`.
 pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) Error!void {

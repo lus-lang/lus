@@ -1,7 +1,8 @@
-//! The `network` library: TCP client and server sockets, UDP sockets,
-//! `network.fetch`, an HTTP and HTTPS client, and `network.serve`, an HTTP
-//! server (`serve.zig`). Sockets are userdata. Every operation blocks its
-//! caller, optionally bounded by a timeout set with `settimeout`.
+//! The `network` library: TCP client and server sockets, TLS over them
+//! (`tls.zig`), UDP sockets, `network.fetch`, an HTTP and HTTPS client
+//! (`http.zig`), and `network.serve`, an HTTP server (`serve.zig`).
+//! Sockets are userdata. Every operation blocks its caller, optionally
+//! bounded by a timeout set with `settimeout`.
 //!
 //! TCP connect, accept, send, and receive and UDP receive and sendto are
 //! suspension points (`spec/design/coroutines.md`). Inside a detached
@@ -16,10 +17,9 @@
 //! Data received from the network are vectors, and every send accepts a
 //! string or a vector (spec/design/strings.md).
 //!
-//! Host names resolve through `std.Io.net.HostName.lookup`. HTTPS uses
-//! `std.crypto.tls.Client` and verifies the server against the system
-//! certificate bundle. The standard library has no TLS server, so there is
-//! no server side TLS.
+//! Host names resolve through `std.Io.net.HostName.lookup`. A TLS socket
+//! is a socket whose `tls` field holds a connection of `tls.zig`, and its
+//! receives and sends carry plain text through it.
 //!
 //! On Windows an operation asks `WSAPoll` whether the socket is ready
 //! before it runs its blocking call, and it blocks in that call when the
@@ -40,6 +40,8 @@ const faultio = @import("../vm/faultio.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
+pub const tls = @import("tls.zig");
+const http = @import("http.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -84,6 +86,13 @@ pub const Socket = struct {
     /// coroutine of the connection keeps that server alive, and the
     /// socket leaves the count of the server when it closes.
     owner: ?*Server = null,
+    /// The TLS connection over this socket (`tls.zig`). Every receive and
+    /// send then carries plain text through it.
+    tls: ?*tls.Tls = null,
+    /// The body that the connection carries now, and the state of a
+    /// `network.fetch` on it (`http.zig`).
+    body: ?*http.Body = null,
+    fetch: ?*http.Fetch = null,
 };
 
 /// A listening TCP socket.
@@ -101,6 +110,9 @@ pub const Server = struct {
     /// True while it waits for a connection to close before it accepts
     /// the next one.
     full: bool = false,
+    /// The TLS configuration that every connection it accepts starts
+    /// TLS under, for `network.serve` with the `tls` option.
+    tls_config: ?*tls.Config = null,
 };
 
 /// A UDP socket. An unbound socket holds a placeholder bound to an
@@ -120,6 +132,8 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "settimeout", .func = socketSettimeout },
         .{ .name = "getsockname", .func = socketGetsockname },
         .{ .name = "getpeername", .func = socketGetpeername },
+        .{ .name = "starttls", .func = socketStarttls },
+        .{ .name = "tlsinfo", .func = socketTlsinfo },
     }, socketGc, socketTostring);
     try makeMetatable(l, server_name, &.{
         .{ .name = "accept", .func = serverAccept },
@@ -135,10 +149,13 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "close", .func = udpClose },
         .{ .name = "settimeout", .func = udpSettimeout },
     }, udpGc, udpTostring);
+    try makeMetatable(l, http.reader_name, &.{}, http.readerGc, http.readerTostring);
+    try http.registerLines(l);
 
     const t = try aux.newLib(l, .fields, "network", &.{
-        .{ .name = "fetch", .func = fetch },
+        .{ .name = "fetch", .func = http.fetch },
         .{ .name = "serve", .func = @import("serve.zig").serve },
+        .{ .name = "lines", .func = http.lines },
     });
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
@@ -147,6 +164,10 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "bind", .func = tcpBind },
     });
     try aux.setField(l, t, "tcp", Value.obj(.table, tcp));
+    const tls_lib = try aux.newLib(l, .fields, "network.tls", &.{
+        .{ .name = "connect", .func = tlsConnect },
+    });
+    try aux.setField(l, t, "tls", Value.obj(.table, tls_lib));
     const udp = try aux.newLib(l, .fields, "network.udp", &.{.{ .name = "open", .func = udpOpen }});
     try aux.setField(l, t, "udp", Value.obj(.table, udp));
     try aux.setGlobal(l, "network", Value.obj(.table, t));
@@ -284,6 +305,7 @@ pub fn errText(err: anyerror) []const u8 {
         error.InvalidHostName, error.NameTooLong => "Invalid host name",
         error.NameServerFailure => "Name server failure",
         error.Canceled => "Operation canceled",
+        error.TlsFailure => tls.lastMessage(),
         else => @errorName(err),
     };
 }
@@ -361,8 +383,27 @@ fn unblock(s: *Socket) void {
     s.nonblocking = true;
 }
 
-/// Reads what the socket holds now, at most `dst.len` bytes.
+/// Reads what the socket holds now, at most `dst.len` bytes. A TLS socket
+/// returns plain text.
 pub fn tryRecv(l: *Thread, s: *Socket, dst: []u8) Try {
+    if (s.tls != null) return tls.recv(l, s, dst);
+    return rawRecv(l, s, dst);
+}
+
+/// Writes what the socket takes now of `data`. A TLS socket encrypts it.
+pub fn trySend(l: *Thread, s: *Socket, data: []const u8) Try {
+    if (s.tls != null) return tls.send(l, s, data);
+    return rawSend(l, s, data);
+}
+
+/// The direction that an operation on `s` that could not finish waits
+/// for: `default`, or the direction that TLS asked for.
+pub fn againDir(s: *Socket, default: sched.Dir) sched.Dir {
+    return tls.waitDir(s, default);
+}
+
+/// Reads the bytes of the socket itself, without TLS.
+pub fn rawRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     const handle = s.stream.socket.handle;
     if (faultio.netStep(faultio.receive_steps)) |k| return if (k == .eof) .{ .n = 0 } else .{ .fail = error.ConnectionResetByPeer };
     if (comptime is_windows) {
@@ -382,8 +423,8 @@ pub fn tryRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     }
 }
 
-/// Writes what the socket takes now of `data`.
-pub fn trySend(l: *Thread, s: *Socket, data: []const u8) Try {
+/// Writes bytes to the socket itself, without TLS.
+pub fn rawSend(l: *Thread, s: *Socket, data: []const u8) Try {
     const handle = s.stream.socket.handle;
     if (faultio.netStep(faultio.send_steps) != null) return .{ .fail = error.ConnectionResetByPeer };
     if (comptime is_windows) {
@@ -459,6 +500,8 @@ const Connecting = struct {
     i: usize = 0,
     fd: posix.fd_t = -1,
     last: anyerror = error.ConnectionRefused,
+    /// When the attempt gives up, on the clock of `sched.now`, or zero.
+    deadline: u64 = 0,
 
     fn release(g: *state.Global, ctx: *anyopaque) void {
         const c: *Connecting = @ptrCast(@alignCast(ctx));
@@ -518,7 +561,7 @@ fn connectResult(fd: posix.fd_t) ?anyerror {
 
 /// `connectHost` for a thread that shares the state with detached
 /// coroutines: the attempt waits through the scheduler.
-fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+fn connectScheduled(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
     const g = l.g;
     const t = try sched.ensureTask(l);
     var c: *Connecting = undefined;
@@ -526,7 +569,7 @@ fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.
         c = @ptrCast(@alignCast(t.ctx.?));
     } else {
         c = g.gpa.create(Connecting) catch return l.raiseMem();
-        c.* = .{};
+        c.* = .{ .deadline = limit.deadline(g) };
         errdefer g.gpa.destroy(c);
         c.n = (try resolve(l, host, port, null, &c.addrs)).len;
         t.ctx = c;
@@ -551,7 +594,8 @@ fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.
         }
         if (!done) {
             if (!sched.readyNow(c.fd, .write)) {
-                _ = try sched.waitIo(l, c.fd, .write, -1);
+                const left = limit.left(g, c.deadline) orelse return limit.raise(l, host, port);
+                _ = try sched.waitIo(l, c.fd, .write, left);
                 continue;
             }
             if (connectResult(c.fd)) |e| {
@@ -781,6 +825,7 @@ const afd = if (is_windows) struct {
         iosb: w.IO_STATUS_BLOCK = undefined,
         target: Target = .{ .address = undefined },
         local: net.IpAddress = undefined,
+        deadline: u64 = 0,
 
         fn release(g: *state.Global, ctx: *anyopaque) void {
             const c: *Attempt = @ptrCast(@alignCast(ctx));
@@ -858,7 +903,7 @@ const afd = if (is_windows) struct {
     /// address whose request cannot be made this way, or ends in a way
     /// the driver does not explain, connects through the standard
     /// library, which waits in the call.
-    fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+    fn connectScheduled(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
         const g = l.g;
         const io = g.io;
         const t = try sched.ensureTask(l);
@@ -867,7 +912,7 @@ const afd = if (is_windows) struct {
             c = @ptrCast(@alignCast(t.ctx.?));
         } else {
             c = g.gpa.create(Attempt) catch return l.raiseMem();
-            c.* = .{};
+            c.* = .{ .deadline = limit.deadline(g) };
             errdefer g.gpa.destroy(c);
             c.n = (try resolve(l, host, port, null, &c.addrs)).len;
             t.ctx = c;
@@ -887,6 +932,7 @@ const afd = if (is_windows) struct {
             };
             if (failed == null) {
                 if (!c.done()) {
+                    if (limit.left(g, c.deadline) == null) return limit.raise(l, host, port);
                     // Each wait is short and has a deadline of its own.
                     sched.opDone(l);
                     _ = try sched.waitIo(l, c.handle.?, .write, connect_tick_ms);
@@ -1010,10 +1056,45 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
 
 /// Connects to the first address of `host` that accepts, raising "cannot
 /// connect" when none does.
-fn connectHost(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
-    if (sched.active(l.g) or sched.restarted(l)) {
-        if (comptime is_windows) return afd.connectScheduled(l, host, port);
-        return connectScheduled(l, host, port);
+/// How long a connection may take: `timeout_ms` for all the addresses
+/// of the host, or no limit when it is negative. A connection that runs
+/// out of time raises "`prefix`timeout while connecting to HOST:PORT".
+pub const ConnectLimit = struct {
+    timeout_ms: i32 = -1,
+    prefix: []const u8 = "",
+
+    fn deadline(c: ConnectLimit, g: *state.Global) u64 {
+        if (c.timeout_ms < 0) return 0;
+        return sched.now(g) + @as(u64, @intCast(c.timeout_ms)) * std.time.ns_per_ms;
+    }
+
+    /// The milliseconds left before `at`, -1 without a deadline, or null
+    /// once it passed.
+    fn left(c: ConnectLimit, g: *state.Global, at: u64) ?i32 {
+        _ = c;
+        if (at == 0) return -1;
+        const n = sched.now(g);
+        if (n >= at) return null;
+        return @intCast(@min((at - n + std.time.ns_per_ms - 1) / std.time.ns_per_ms, std.math.maxInt(i32)));
+    }
+
+    fn raise(c: ConnectLimit, l: *Thread, host: []const u8, port: u16) Error {
+        return l.raiseFmt("{s}timeout while connecting to {s}:{d}", .{ c.prefix, host, port });
+    }
+};
+
+/// Connects to `host` and `port` within `limit`, waiting through the
+/// scheduler.
+pub fn connectTo(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
+    return connectHost(l, host, port, limit);
+}
+
+fn connectHost(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
+    // A connection with a limit waits through the scheduler, which bounds
+    // the wait, also where no detached coroutine runs.
+    if (sched.active(l.g) or sched.restarted(l) or limit.timeout_ms >= 0) {
+        if (comptime is_windows) return afd.connectScheduled(l, host, port, limit);
+        return connectScheduled(l, host, port, limit);
     }
     var addrs: [max_addresses]net.IpAddress = undefined;
     const list = try resolve(l, host, port, null, &addrs);
@@ -1044,10 +1125,84 @@ fn tcpConnect(l: *Thread) Error!u32 {
     const port = try checkPort(l, 2, false);
     var hp: [512]u8 = undefined;
     try pledge.require(l, "network:tcp", hostPort(&hp, host, port));
-    const stream, const peer = try connectHost(l, host, port);
+    const stream, const peer = try connectHost(l, host, port, .{});
     errdefer stream.close(l.g.io);
     _ = try newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer });
     return 1;
+}
+
+/// Runs the handshake of a TLS socket. A failure that does not suspend
+/// closes the socket, which then can carry nothing.
+fn handshakeOrClose(l: *Thread, s: *Socket) Error!void {
+    const done = tls.handshake(l, s, 0) catch |e| {
+        if (!l.yielding) releaseSocket(l, s);
+        return e;
+    };
+    if (!done) {
+        releaseSocket(l, s);
+        return l.raiseFmt("TLS handshake timeout", .{});
+    }
+}
+
+/// network.tls.connect(host, port, options): a TCP connection with TLS
+/// over it, once the handshake ends.
+fn tlsConnect(l: *Thread) Error!u32 {
+    const b = l.base();
+    // A connection that waited in its handshake is the fourth slot.
+    if (sched.restarted(l) and l.top == b + 4) {
+        if (toObject(l, Socket, socket_name, l.stack[b + 3])) |s| {
+            try stillOpen(l, s);
+            try handshakeOrClose(l, s);
+            return 1;
+        }
+    }
+    try l.ensure(4);
+    while (l.top < b + 3) : (l.top += 1) l.stack[l.top] = .nil;
+    l.top = b + 3;
+    const host = try aux.checkBytes(l, 1);
+    const port = try checkPort(l, 2, false);
+    var hp: [512]u8 = undefined;
+    try pledge.require(l, "network:tcp", hostPort(&hp, host, port));
+    var o: tls.ClientOptions = .{};
+    const cfg = try tls.clientConfig(l, 3, host, true, &o);
+    defer tls.freeConfig(cfg);
+    const stream, const peer = try connectHost(l, host, port, .{ .timeout_ms = o.timeout_ms orelse -1 });
+    const s = newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer }) catch |e| {
+        stream.close(l.g.io);
+        return e;
+    };
+    s.timeout_ms = o.timeout_ms orelse -1;
+    tls.attach(l, s, cfg, o.servername) catch |e| {
+        releaseSocket(l, s);
+        return e;
+    };
+    try handshakeOrClose(l, s);
+    return 1;
+}
+
+/// sock:starttls(options): starts TLS over a connected socket and returns
+/// the socket, once the handshake ends.
+fn socketStarttls(l: *Thread) Error!u32 {
+    const s = try checkSocket(l, 1);
+    if (s.tls) |t| {
+        if (!sched.restarted(l) or t.handshaken) return l.raiseFmt("the socket already uses TLS", .{});
+    } else {
+        // Bytes that arrived before the handshake would pass for bytes of
+        // the protected stream.
+        if (s.buf.items.len > 0) return l.raiseFmt("starttls: the socket holds data received before TLS started", .{});
+        var o: tls.ClientOptions = .{};
+        const cfg = try tls.clientConfig(l, 2, null, false, &o);
+        defer tls.freeConfig(cfg);
+        try tls.attach(l, s, cfg, o.servername);
+    }
+    try handshakeOrClose(l, s);
+    l.top = l.base() + 1;
+    return 1;
+}
+
+fn socketTlsinfo(l: *Thread) Error!u32 {
+    const s = try checkSocket(l, 1);
+    return tls.pushInfo(l, s);
 }
 
 fn tcpBind(l: *Thread) Error!u32 {
@@ -1084,7 +1239,7 @@ fn socketSend(l: *Thread) Error!u32 {
     var total: usize = @min(sched.progress(l), data.len);
     while (total < data.len) {
         const chunk = @min(data.len - total, std.math.maxInt(i32));
-        if (!s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
+        if (s.tls == null and !s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
             total += writeSome(io, h, data[total..][0..chunk]) catch |e| return failResult(l, "send", e);
             continue;
         }
@@ -1095,7 +1250,7 @@ fn socketSend(l: *Thread) Error!u32 {
             },
             .again => {
                 try sched.saveProgress(l, total);
-                try awaitIo(l, h, .write, s.timeout_ms, "send");
+                try awaitIo(l, h, againDir(s, .write), s.timeout_ms, "send");
                 try stillOpen(l, s);
             },
             .fail => |e| return failResult(l, "send", e),
@@ -1118,7 +1273,7 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
     s.buf.ensureUnusedCapacity(l.g.gpa, max) catch return l.raiseMem();
     const dst = s.buf.unusedCapacitySlice()[0..max];
     var n: usize = 0;
-    if (!s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
+    if (s.tls == null and !s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
         n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
     } else while (true) {
         switch (tryRecv(l, s, dst)) {
@@ -1130,7 +1285,7 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
             // The bytes already read stay in the buffer of the socket, so
             // the receive that runs again continues from them.
             .again => {
-                if (!try sched.waitIo(l, s.stream.socket.handle, .read, s.timeout_ms)) return null;
+                if (!try sched.waitIo(l, s.stream.socket.handle, againDir(s, .read), s.timeout_ms)) return null;
                 try stillOpen(l, s);
                 // The buffer may have moved while other coroutines ran.
                 return tryFill(l, s, max);
@@ -1226,9 +1381,17 @@ fn socketReceive(l: *Thread) Error!u32 {
 
 /// Closes a connection gracefully: sends FIN, then discards pending input
 /// so the close does not reset the connection.
+/// Closes a socket as `close` does.
+pub fn closeSocketOf(l: *Thread, s: *Socket) void {
+    closeSocket(l, s);
+}
+
 fn closeSocket(l: *Thread, s: *Socket) void {
     if (s.closed) return;
     const io = l.g.io;
+    // A TLS connection tells its peer that it closes, and the rest of
+    // the close works on the socket itself.
+    tls.detach(l, s);
     s.stream.shutdown(io, .send) catch {};
     if (!is_windows) {
         var tmp: [1024]u8 = undefined;
@@ -1251,7 +1414,8 @@ fn closeSocket(l: *Thread, s: *Socket) void {
 
 /// Closes the handle of a socket and frees what the socket holds.
 /// Coroutines that wait for the socket run again and find it closed.
-fn releaseSocket(l: *Thread, s: *Socket) void {
+pub fn releaseSocket(l: *Thread, s: *Socket) void {
+    tls.drop(l, s);
     sched.forget(l.g, s.stream.socket.handle);
     s.stream.close(l.g.io);
     if (s.owner) |server| {
@@ -1265,6 +1429,7 @@ fn releaseSocket(l: *Thread, s: *Socket) void {
     }
     s.buf.deinit(l.g.gpa);
     s.buf = .empty;
+    http.freeState(l.g.gpa, s);
     if (s.http) |h| {
         h.deinit(l.g.gpa);
         l.g.gpa.destroy(h);
@@ -1351,6 +1516,11 @@ pub fn closeServerIn(g: *state.Global, s: *Server) void {
     sched.forget(g, s.server.socket.handle);
     s.server.socket.close(g.io);
     s.closed = true;
+    // Connections that are still open keep the configuration alive.
+    if (s.tls_config) |cfg| {
+        tls.freeConfig(cfg);
+        s.tls_config = null;
+    }
     // A `network.serve` that waits for a free place finds the server
     // closed.
     if (s.full) {
@@ -1515,492 +1685,4 @@ fn udpGc(l: *Thread) Error!u32 {
 fn udpTostring(l: *Thread) Error!u32 {
     const s = toObject(l, Udp, udp_name, l.arg(1)) orelse return aux.typeError(l, 1, udp_name);
     return objectTostring(l, "udpsocket", s.closed);
-}
-
-// ---------------------------------------------------------------------
-// network.fetch
-
-const ParsedUrl = struct {
-    https: bool,
-    host: []const u8,
-    port: u16,
-    path: []const u8,
-};
-
-fn parseUrl(url: []const u8) ?ParsedUrl {
-    const sep = std.mem.indexOf(u8, url, "://") orelse return null;
-    const scheme = url[0..sep];
-    var r: ParsedUrl = undefined;
-    if (std.mem.eql(u8, scheme, "http")) {
-        r.https = false;
-        r.port = 80;
-    } else if (std.mem.eql(u8, scheme, "https")) {
-        r.https = true;
-        r.port = 443;
-    } else return null;
-    const rest = url[sep + 3 ..];
-    const host_end = std.mem.indexOfAny(u8, rest, "/:") orelse rest.len;
-    if (host_end == 0 or host_end >= 256) return null;
-    r.host = rest[0..host_end];
-    var i = host_end;
-    if (i < rest.len and rest[i] == ':') {
-        const pstart = i + 1;
-        var j = pstart;
-        while (j < rest.len and std.ascii.isDigit(rest[j])) j += 1;
-        if (j == pstart or (j < rest.len and rest[j] != '/')) return null;
-        const port = std.fmt.parseInt(u32, rest[pstart..j], 10) catch return null;
-        if (port == 0 or port > 65535) return null;
-        r.port = @intCast(port);
-        i = j;
-    }
-    r.path = if (i < rest.len) rest[i..] else "/";
-    if (r.path.len >= 2048) return null;
-    return r;
-}
-
-/// A socket reader that waits at most `timeout_ms` for each read. A
-/// timeout or socket error is kept in `err` and reported as ReadFailed.
-const TimedReader = struct {
-    io: Io,
-    stream: net.Stream,
-    timeout_ms: i32,
-    interface: Io.Reader,
-    err: ?anyerror = null,
-    /// The thread that reads, which waits through the scheduler when it
-    /// is set.
-    thread: ?*Thread = null,
-
-    fn init(io: Io, stream: net.Stream, timeout_ms: i32, buffer: []u8) TimedReader {
-        return .{
-            .io = io,
-            .stream = stream,
-            .timeout_ms = timeout_ms,
-            .interface = .{
-                .vtable = &.{ .stream = streamImpl, .readVec = readVec },
-                .buffer = buffer,
-                .seek = 0,
-                .end = 0,
-            },
-        };
-    }
-
-    fn streamImpl(io_r: *Io.Reader, io_w: *Io.Writer, limit: Io.Limit) Io.Reader.StreamError!usize {
-        const dest = limit.slice(try io_w.writableSliceGreedy(1));
-        var data: [1][]u8 = .{dest};
-        const n = try readVec(io_r, &data);
-        io_w.advance(n);
-        return n;
-    }
-
-    fn readVec(io_r: *Io.Reader, data: [][]u8) Io.Reader.Error!usize {
-        const r: *TimedReader = @alignCast(@fieldParentPtr("interface", io_r));
-        const wait: Wait = if (r.thread) |l| blk: {
-            // With detached coroutines alive, a caller that cannot suspend
-            // runs the scheduler while it waits, so a `network.serve` of
-            // the same state answers.
-            if (!sched.active(l.g) or sched.canSuspend(l)) break :blk waitHandle(r.stream.socket.handle, false, r.timeout_ms);
-            // The poller of the scheduler reports edges, and the edge of data
-            // that is already waiting, or of an end of stream that arrived
-            // with the last bytes, has passed.
-            if (sched.readyNow(r.stream.socket.handle, .read)) break :blk .ready;
-            const ready = sched.waitIo(l, r.stream.socket.handle, .read, r.timeout_ms) catch break :blk .failed;
-            break :blk if (ready) .ready else .timeout;
-        } else waitHandle(r.stream.socket.handle, false, r.timeout_ms);
-        switch (wait) {
-            .ready => {},
-            .timeout => {
-                r.err = error.Timeout;
-                return error.ReadFailed;
-            },
-            .failed => {
-                r.err = error.Unexpected;
-                return error.ReadFailed;
-            },
-        }
-        var iovecs: [8][]u8 = undefined;
-        const dest_n, const data_size = try io_r.writableVector(&iovecs, data);
-        const n = r.stream.read(r.io, iovecs[0..dest_n]) catch |e| {
-            r.err = e;
-            return error.ReadFailed;
-        };
-        if (n == 0) return error.EndOfStream;
-        if (n > data_size) {
-            io_r.end += n - data_size;
-            return data_size;
-        }
-        return n;
-    }
-};
-
-const tls_len = std.crypto.tls.Client.min_buffer_len;
-
-/// The connection of one fetch, heap allocated because the TLS client
-/// keeps pointers to the socket reader and writer.
-const FetchConn = struct {
-    stream: net.Stream,
-    sr: TimedReader,
-    sw: net.Stream.Writer,
-    tls: std.crypto.tls.Client,
-    use_tls: bool,
-    sr_buf: [tls_len]u8,
-    sw_buf: [tls_len]u8,
-    tls_read: [tls_len]u8,
-    tls_write: [tls_len]u8,
-
-    fn reader(c: *FetchConn) *Io.Reader {
-        return if (c.use_tls) &c.tls.reader else &c.sr.interface;
-    }
-
-    fn writer(c: *FetchConn) *Io.Writer {
-        return if (c.use_tls) &c.tls.writer else &c.sw.interface;
-    }
-
-    fn sendAll(c: *FetchConn, data: []const u8) bool {
-        const w = c.writer();
-        w.writeAll(data) catch return false;
-        w.flush() catch return false;
-        if (c.use_tls) c.sw.interface.flush() catch return false;
-        return true;
-    }
-};
-
-/// Raises `what` followed by the error of the socket that made the
-/// connection fail, when the socket recorded one. `error.EndOfStream`
-/// names a server that closed the connection.
-fn fetchFailed(l: *Thread, c: *FetchConn, what: []const u8) Error {
-    return fetchFailedWith(l, c, what, error.ReadFailed);
-}
-
-fn fetchFailedWith(l: *Thread, c: *FetchConn, what: []const u8, err: anyerror) Error {
-    if (err == error.EndOfStream) return l.raiseFmt("{s}: Connection closed by peer", .{what});
-    const cause: ?anyerror = c.sr.err orelse if (c.sw.err) |e| e else null;
-    if (cause) |e| return l.raiseFmt("{s}: {s}", .{ what, errText(e) });
-    return l.raiseFmt("{s}", .{what});
-}
-
-/// Reads one LF terminated line into `buf`, without the LF and an optional
-/// CR before it. A line longer than the buffer returns its first part and
-/// leaves the rest for the next read. The end of the stream before the
-/// LF returns `error.EndOfStream`, since a response always ends its lines.
-fn readHttpLine(r: *Io.Reader, buf: []u8) error{ ReadFailed, EndOfStream }!usize {
-    var pos: usize = 0;
-    while (true) {
-        const b = try r.takeByte();
-        if (b == '\n') {
-            if (pos > 0 and buf[pos - 1] == '\r') pos -= 1;
-            return pos;
-        }
-        buf[pos] = b;
-        pos += 1;
-        if (pos >= buf.len - 1) return pos;
-    }
-}
-
-/// Reads up to `dst.len` bytes. Returns 0 at the end of the stream and
-/// null on a read error.
-fn readBody(r: *Io.Reader, dst: []u8) ?usize {
-    return r.readSliceShort(dst) catch null;
-}
-
-fn trimSpaces(s: []const u8) []const u8 {
-    return std.mem.trim(u8, s, " \t");
-}
-
-fn parseContentLength(s: []const u8) ?usize {
-    const t = trimSpaces(s);
-    if (t.len == 0) return null;
-    for (t) |c| if (!std.ascii.isDigit(c)) return null;
-    return std.fmt.parseInt(usize, t, 10) catch null;
-}
-
-fn parseChunkSize(s: []const u8) ?usize {
-    const t = std.mem.trimStart(u8, s, " \t");
-    var end: usize = 0;
-    while (end < t.len and std.ascii.isHex(t[end])) end += 1;
-    if (end == 0) return null;
-    const after = std.mem.trimStart(u8, t[end..], " \t");
-    if (after.len > 0 and after[0] != ';') return null;
-    return std.fmt.parseInt(usize, t[0..end], 16) catch null;
-}
-
-/// Parses the status code of "HTTP/<major>.<minor> <code>".
-fn parseStatus(line: []const u8) ?i64 {
-    if (!std.mem.startsWith(u8, line, "HTTP/")) return null;
-    var i: usize = 5;
-    const digits = struct {
-        fn run(s: []const u8, start: usize) usize {
-            var j = start;
-            while (j < s.len and std.ascii.isDigit(s[j])) j += 1;
-            return j;
-        }
-    }.run;
-    var j = digits(line, i);
-    if (j == i or j >= line.len or line[j] != '.') return null;
-    i = j + 1;
-    j = digits(line, i);
-    if (j == i) return null;
-    i = j;
-    while (i < line.len and std.ascii.isWhitespace(line[i])) i += 1;
-    var neg = false;
-    if (i < line.len and (line[i] == '-' or line[i] == '+')) {
-        neg = line[i] == '-';
-        i += 1;
-    }
-    j = digits(line, i);
-    if (j == i) return null;
-    const n = std.fmt.parseInt(i64, line[i..@min(j, i + 18)], 10) catch return null;
-    return if (neg) -n else n;
-}
-
-/// Stores one response header in `t`, decoding invalid UTF-8 lossily.
-/// Stores a response header in `t`. A header that repeats joins its
-/// earlier values with ", ", as HTTP allows for a field that appears more
-/// than once.
-fn setHeader(l: *Thread, t: *Table, key: []const u8, val: []const u8) Error!void {
-    const gpa = l.g.gpa;
-    var tmp: std.ArrayList(u8) = .empty;
-    defer tmp.deinit(gpa);
-    {
-        var kb: std.ArrayList(u8) = .empty;
-        defer kb.deinit(gpa);
-        wtf8.appendLossy(gpa, &kb, key) catch return l.raiseMem();
-        const prev = table.getStr(t, try l.newString(kb.items));
-        if (prev.tag == .string) {
-            tmp.appendSlice(gpa, prev.as(object.String).bytes()) catch return l.raiseMem();
-            tmp.appendSlice(gpa, ", ") catch return l.raiseMem();
-        }
-    }
-    wtf8.appendLossy(gpa, &tmp, val) catch return l.raiseMem();
-    try l.push(try l.newStringValue(tmp.items));
-    defer l.top -= 1;
-    tmp.clearRetainingCapacity();
-    wtf8.appendLossy(gpa, &tmp, key) catch return l.raiseMem();
-    const k = try l.newStringValue(tmp.items);
-    try l.push(k);
-    defer l.top -= 1;
-    try ops.rawSet(l, t, k, l.stack[l.top - 2]);
-}
-
-/// Appends the bytes of a header name or value: a string, or a number
-/// converted to a string. Returns false for any other value.
-fn headerText(l: *Thread, v: Value, buf: *std.ArrayList(u8)) Error!bool {
-    const s = switch (v.tag) {
-        .string => v.as(object.String),
-        else => if (v.isNumber()) try ops.toString(l, v) else return false,
-    };
-    buf.appendSlice(l.g.gpa, s.bytes()) catch return l.raiseMem();
-    return true;
-}
-
-/// The default User-Agent header: `Lus/` and the version of the build.
-const user_agent = "User-Agent: Lus/" ++ @import("build_options").version ++ "\r\n";
-
-fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: ParsedUrl, body: ?[]const u8) Error!void {
-    const gpa = l.g.gpa;
-    const default_port: u16 = if (u.https) 443 else 80;
-    req.print(gpa, "{s} {s} HTTP/1.1\r\n", .{ method, u.path }) catch return l.raiseMem();
-    // The headers of the caller come after the request line, and a default
-    // header that the caller also names is left out.
-    var own: std.ArrayList(u8) = .empty;
-    defer own.deinit(gpa);
-    var has_host = false;
-    var has_conn = false;
-    var has_agent = false;
-    if (l.arg(3).tag == .table) {
-        const ht = l.arg(3).as(Table);
-        var key: Value = .nil;
-        var name: std.ArrayList(u8) = .empty;
-        defer name.deinit(gpa);
-        var val: std.ArrayList(u8) = .empty;
-        defer val.deinit(gpa);
-        while (table.next(ht, key) catch null) |kv| {
-            key = kv.key;
-            name.clearRetainingCapacity();
-            val.clearRetainingCapacity();
-            if (!try headerText(l, kv.key, &name)) continue;
-            if (std.mem.indexOfAny(u8, name.items, "\r\n") != null)
-                return l.raiseFmt("invalid characters in HTTP header", .{});
-            // A list sends one header line for each of its values.
-            const list: ?*Table = if (kv.val.tag == .table) kv.val.as(Table) else null;
-            const n: i64 = if (list) |t| table.length(t) else 1;
-            var i: i64 = 1;
-            while (i <= n) : (i += 1) {
-                val.clearRetainingCapacity();
-                const v = if (list) |t| table.getInt(t, i) else kv.val;
-                if (!try headerText(l, v, &val)) continue;
-                if (std.mem.indexOfAny(u8, val.items, "\r\n") != null)
-                    return l.raiseFmt("invalid characters in HTTP header", .{});
-                if (std.ascii.eqlIgnoreCase(name.items, "host")) has_host = true;
-                if (std.ascii.eqlIgnoreCase(name.items, "connection")) has_conn = true;
-                if (std.ascii.eqlIgnoreCase(name.items, "user-agent")) has_agent = true;
-                own.print(gpa, "{s}: {s}\r\n", .{ name.items, val.items }) catch return l.raiseMem();
-            }
-        }
-    }
-    if (!has_host) {
-        if (u.port != default_port)
-            req.print(gpa, "Host: {s}:{d}\r\n", .{ u.host, u.port }) catch return l.raiseMem()
-        else
-            req.print(gpa, "Host: {s}\r\n", .{u.host}) catch return l.raiseMem();
-    }
-    if (!has_conn) req.appendSlice(gpa, "Connection: close\r\n") catch return l.raiseMem();
-    if (!has_agent) req.appendSlice(gpa, user_agent) catch return l.raiseMem();
-    req.appendSlice(gpa, own.items) catch return l.raiseMem();
-    if (body) |b| if (b.len > 0) {
-        req.print(gpa, "Content-Length: {d}\r\n", .{b.len}) catch return l.raiseMem();
-    };
-    req.appendSlice(gpa, "\r\n") catch return l.raiseMem();
-    if (body) |b| req.appendSlice(gpa, b) catch return l.raiseMem();
-}
-
-fn fetch(l: *Thread) Error!u32 {
-    const url = try aux.checkBytes(l, 1);
-    const method = (try aux.optString(l, 2, "GET")).?;
-    const body: ?[]const u8 = if (l.arg(4).isNil()) null else try checkData(l, 4);
-    if (std.mem.indexOfAny(u8, method, "\r\n") != null) return l.raiseFmt("invalid characters in HTTP method", .{});
-    if (std.mem.indexOfAny(u8, url, "\r\n") != null) return l.raiseFmt("invalid characters in URL", .{});
-    try pledge.require(l, "network:http", url);
-    const u = parseUrl(url) orelse return l.raiseFmt("invalid URL: {s}", .{url});
-
-    const g = l.g;
-    const gpa = g.gpa;
-    const io = g.io;
-
-    var req: std.ArrayList(u8) = .empty;
-    defer req.deinit(gpa);
-    try buildRequest(l, &req, method, u, body);
-
-    const stream, _ = try connectHost(l, u.host, u.port);
-    // The reader may have waited for the socket through the scheduler,
-    // whose poller keeps a registration until it hears of the close. A
-    // later socket with the same descriptor would otherwise never be
-    // armed.
-    defer {
-        sched.forget(g, stream.socket.handle);
-        stream.close(io);
-    }
-
-    const c = gpa.create(FetchConn) catch return l.raiseMem();
-    defer gpa.destroy(c);
-    c.stream = stream;
-    c.use_tls = false;
-    c.sr = .init(io, stream, fetch_timeout_ms, &c.sr_buf);
-    c.sr.thread = l;
-    c.sw = stream.writer(io, &c.sw_buf);
-
-    if (u.https) {
-        var bundle: std.crypto.Certificate.Bundle = .empty;
-        defer bundle.deinit(gpa);
-        const now = Io.Clock.real.now(io);
-        bundle.rescan(gpa, io, now) catch |e| return l.raiseFmt("cannot load system certificates: {s}", .{@errorName(e)});
-        var lock: Io.RwLock = .init;
-        var entropy: [std.crypto.tls.Client.Options.entropy_len]u8 = undefined;
-        io.random(&entropy);
-        c.tls = std.crypto.tls.Client.init(&c.sr.interface, &c.sw.interface, .{
-            .host = .{ .explicit = u.host },
-            .ca = .{ .bundle = .{ .gpa = gpa, .io = io, .lock = &lock, .bundle = &bundle } },
-            .read_buffer = &c.tls_read,
-            .write_buffer = &c.tls_write,
-            .entropy = &entropy,
-            .realtime_now = now,
-            // HTTP framing detects truncated bodies through Content-Length
-            // and chunk sizes, as with the legacy runtime.
-            .allow_truncation_attacks = true,
-        }) catch |e| {
-            const name = @errorName(e);
-            if (std.mem.indexOf(u8, name, "Certificate") != null)
-                return l.raiseFmt("SSL certificate verification failed for {s}", .{u.host});
-            const cause: anyerror = switch (e) {
-                error.ReadFailed => c.sr.err orelse e,
-                error.WriteFailed => c.sw.err orelse e,
-                else => e,
-            };
-            return l.raiseFmt("SSL handshake failed: {s}", .{errText(cause)});
-        };
-        c.use_tls = true;
-    }
-
-    if (!c.sendAll(req.items)) return fetchFailed(l, c, "failed to send request");
-
-    const r = c.reader();
-    var line: [4096]u8 = undefined;
-    const status_len = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response", e);
-    const status = parseStatus(line[0..status_len]) orelse return l.raiseFmt("invalid HTTP response: {s}", .{line[0..status_len]});
-
-    const headers = try l.newTable(0, 8);
-    try l.push(Value.obj(.table, headers));
-    const headers_idx = l.top - 1;
-    var content_length: ?usize = null;
-    var chunked = false;
-    while (true) {
-        const n = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response headers", e);
-        if (n == 0) break;
-        const hl = line[0..n];
-        const colon = std.mem.indexOfScalar(u8, hl, ':') orelse continue;
-        const key = hl[0..colon];
-        for (key) |*ch| ch.* = std.ascii.toLower(ch.*);
-        const val = std.mem.trimStart(u8, hl[colon + 1 ..], " ");
-        try setHeader(l, headers, key, val);
-        if (std.mem.eql(u8, key, "content-length")) {
-            const len = parseContentLength(val) orelse return l.raiseFmt("invalid Content-Length", .{});
-            if (len > fetch_max_body) return l.raiseFmt("invalid Content-Length", .{});
-            content_length = len;
-        } else if (std.mem.eql(u8, key, "transfer-encoding")) {
-            if (std.mem.indexOf(u8, val, "chunked") != null) chunked = true;
-        }
-    }
-
-    var resp: std.ArrayList(u8) = .empty;
-    defer resp.deinit(gpa);
-    var buf: [4096]u8 = undefined;
-    // A response to HEAD, and a 1xx, 204 or 304 response, ends after its
-    // headers, whatever Content-Length says (RFC 9112, section 6.3).
-    const no_body = std.ascii.eqlIgnoreCase(method, "HEAD") or status == 204 or status == 304 or (status >= 100 and status < 200);
-    if (no_body) {} else if (chunked) {
-        while (true) {
-            const n = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response body", e);
-            const size = parseChunkSize(line[0..n]) orelse return l.raiseFmt("invalid chunk size", .{});
-            if (size > fetch_max_body - resp.items.len) return l.raiseFmt("invalid chunk size", .{});
-            if (size == 0) break;
-            var remaining = size;
-            while (remaining > 0) {
-                const want = @min(remaining, buf.len);
-                const got = readBody(r, buf[0..want]) orelse return fetchFailed(l, c, "failed to read response body");
-                if (got == 0) return l.raiseFmt("truncated response body", .{});
-                resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
-                remaining -= got;
-            }
-            const t = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response body", e);
-            if (t != 0) return l.raiseFmt("invalid chunk terminator", .{});
-        }
-    } else if (content_length) |len| {
-        var remaining = len;
-        while (remaining > 0) {
-            const want = @min(remaining, buf.len);
-            const got = readBody(r, buf[0..want]) orelse return fetchFailed(l, c, "failed to read response body");
-            if (got == 0) return l.raiseFmt("truncated response body", .{});
-            resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
-            remaining -= got;
-        }
-    } else {
-        while (true) {
-            const got = readBody(r, &buf) orelse return fetchFailed(l, c, "failed to read response body");
-            if (got == 0) break;
-            if (got > fetch_max_body - resp.items.len) return l.raiseFmt("response body too large", .{});
-            resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
-            if (got < buf.len) break;
-        }
-    }
-
-    if (c.use_tls) {
-        c.tls.end() catch {};
-        c.sw.interface.flush() catch {};
-    }
-
-    const vec = try vector.newVectorFrom(l, &resp);
-    try l.push(Value.obj(.vector, vec));
-    const ht = l.stack[headers_idx];
-    l.stack[headers_idx] = Value.int(status);
-    try l.push(ht);
-    return 3;
 }

@@ -12,6 +12,10 @@
             .url = "https://codeload.github.com/facebook/zstd/tar.gz/refs/tags/v1.5.7",
             .hash = "N-V-__8AAPZ7fwBg4JoCzM_0o2A8wxH2hsUUeiU1iuZv53L5",
         },
+        .mbedtls = .{
+            .url = "https://codeload.github.com/Mbed-TLS/mbedtls/tar.gz/refs/tags/v3.6.8",
+            .hash = "N-V-__8AAJiVmgK8m52FlgB-3nQfNv4JiOPOA4rdnbtfFuq8",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },
 }
