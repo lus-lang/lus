@@ -1770,10 +1770,7 @@ fn fmtFloat(b: *Builder, spec: Spec, conv: u8, f: f64) Error!void {
 fn fmtExactDecimal(b: *Builder, spec: Spec, conv: u8, v: *const numeric.Decimal) Error!void {
     const l = b.l;
     const gpa = l.g.gpa;
-    var m = v.coef().toManaged(gpa) catch return l.raiseMem();
-    defer m.deinit();
-    m.abs();
-    const digits = m.toString(gpa, 10, .lower) catch return l.raiseMem();
+    const digits = numeric.radix.toDecimal(gpa, v.coef().abs()) catch return l.raiseMem();
     var d = Decimal.fromCoefficient(gpa, digits, v.exponent);
     defer d.deinit(gpa);
     const prefix = signPrefix(spec, !v.positive and !d.isZero());

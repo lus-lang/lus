@@ -18,6 +18,7 @@ pub const vm = struct {
     pub const gc = @import("vm/gc.zig");
     pub const state = @import("vm/state.zig");
     pub const heapcount = @import("vm/heapcount.zig");
+    pub const radix = @import("vm/radix.zig");
     pub const faultio = @import("vm/faultio.zig");
     /// Set by `-Dcoverage=true` (`coverage.zig`).
     pub const coverage_enabled = @import("build_options").coverage;
@@ -85,6 +86,7 @@ test {
     _ = vm.pledge;
     _ = @import("jit/jit.zig");
     _ = @import("vm/heapcount.zig");
+    _ = @import("vm/radix.zig");
     _ = @import("vm/sched.zig");
     _ = @import("fuzz.zig");
     _ = @import("fuzzlib.zig");

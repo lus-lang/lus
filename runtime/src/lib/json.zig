@@ -289,7 +289,11 @@ const Parser = struct {
             _ = save;
             return p.fail("number out of range", .{});
         }
-        if (p.exact) return Value.obj(.decimal, numeric.parseDecimalLiteral(g, text) catch return p.fail("invalid number", .{}));
+        if (p.exact) return Value.obj(.decimal, numeric.parseDecimalLiteral(g, text) catch |e| switch (e) {
+            error.OutOfRange => return p.fail("number out of range", .{}),
+            error.OutOfMemory => return p.l.raiseMem(),
+            else => return p.fail("invalid number", .{}),
+        });
         const f = std.fmt.parseFloat(f64, text) catch return p.fail("invalid number", .{});
         if (std.math.isInf(f)) {
             p.i = start;

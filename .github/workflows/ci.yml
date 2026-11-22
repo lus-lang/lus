@@ -181,6 +181,16 @@ jobs:
         env:
           LUS_JIT: "off"
         run: runtime/zig-out/bin/lus tests/diff/run.lus --count 200 --start 1 --jobs 4 --timeout 120 --out "$RUNNER_TEMP/diff-findings"
+      - name: Differential tests on Windows
+        timeout-minutes: 15
+        # A short run of the same programs through cmd.exe. Windows gives a
+        # shell command no time limit, so the limit of this step stops a
+        # program that never ends.
+        if: runner.os == 'Windows'
+        env:
+          LUS_JIT: "off"
+        shell: pwsh
+        run: runtime\zig-out\bin\lus.exe tests/diff/run.lus --count 40 --start 1 --jobs 4 --lus runtime\zig-out\bin\lus.exe --out "$env:RUNNER_TEMP\diff-findings"
       - name: Allocation failure sweep
         timeout-minutes: 25
         if: runner.os == 'Linux'

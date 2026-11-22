@@ -6,6 +6,7 @@
 const std = @import("std");
 const value = @import("value.zig");
 const gc = @import("gc.zig");
+pub const radix = @import("radix.zig");
 const state = @import("state.zig");
 const big = std.math.big.int;
 const Value = value.Value;
@@ -126,7 +127,77 @@ pub fn parseBigLiteral(g: *Global, digits: []const u8) !*BigInt {
     return newBigFromConst(g, m.toConst());
 }
 
-/// Parses decimal text such as "1.50", "3", "1e-2", "-0.5E+3".
+/// The most digits a decimal holds before its point, and after it. Sums,
+/// differences, and products stay exact, and every operation checks its
+/// result against these limits, so the work of one operation stays
+/// bounded (`spec/design/numbers.md`, "Limits of decimals").
+pub const max_int_digits = 131072;
+pub const max_frac_digits = 16383;
+
+pub const Range = enum { ok, before, after };
+
+const log10_2 = 0.30102999566398119521;
+
+/// The number of decimal digits of `c`, 1 for zero. The bit length bounds
+/// the count within one digit, and only a count at the edge computes a
+/// power of ten to settle it, so a huge number never prints to be counted.
+fn digitsOf(gpa: Allocator, c: big.Const) !usize {
+    if (c.eqlZero()) return 1;
+    const bits = c.bitCountAbs();
+    const lo: usize = @as(usize, @intFromFloat(@floor(@as(f64, @floatFromInt(bits - 1)) * log10_2))) + 1;
+    const hi: usize = @as(usize, @intFromFloat(@floor(@as(f64, @floatFromInt(bits)) * log10_2))) + 1;
+    if (lo == hi) return lo;
+    var p = try M.initSet(gpa, 10);
+    defer p.deinit();
+    try p.pow(&p, @intCast(hi - 1));
+    return if (c.orderAbs(p.toConst()) == .lt) lo else hi;
+}
+
+/// Whether a coefficient and an exponent fit the limits of a decimal. A
+/// zero counts as one digit, so its exponent is bounded too.
+pub fn decRange(gpa: Allocator, c: big.Const, exp: i64) !Range {
+    if (exp < -@as(i64, max_frac_digits)) return .after;
+    if (exp > max_int_digits) return .before;
+    // Without a power of ten at the edge, a coefficient below the bound
+    // in bits needs no exact count.
+    const bits = c.bitCountAbs();
+    const most: i64 = @as(i64, @intFromFloat(@floor(@as(f64, @floatFromInt(bits)) * log10_2))) + 1;
+    if (most + exp <= max_int_digits) return .ok;
+    const d: i64 = @intCast(try digitsOf(gpa, c));
+    return if (d + exp > max_int_digits) .before else .ok;
+}
+
+/// Raises the error of a decimal past its limits.
+pub fn raiseRange(l: *Thread, r: Range) Error {
+    return switch (r) {
+        .before => l.raiseFmt("decimal out of range: more than {d} digits before the point", .{max_int_digits}),
+        .after => l.raiseFmt("decimal out of range: more than {d} digits after the point", .{max_frac_digits}),
+        .ok => unreachable,
+    };
+}
+
+/// Which limit a numeral past the limits crosses, for the error of
+/// `decimal(s)`: the digits after the point when its exponent leaves too
+/// many, and the digits before it otherwise.
+pub fn rangeOfText(text: []const u8) Range {
+    var frac: i64 = 0;
+    var e: i64 = 0;
+    if (std.mem.indexOfScalar(u8, text, '.')) |dot| {
+        var i = dot + 1;
+        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) frac += 1;
+    }
+    if (std.mem.indexOfAny(u8, text, "eE")) |at| e = std.fmt.parseInt(i64, text[at + 1 ..], 10) catch 0;
+    return if (frac - e > max_frac_digits) .after else .before;
+}
+
+fn checkDec(l: *Thread, c: big.Const, exp: i64) Error!void {
+    const r = decRange(l.g.gpa, c, exp) catch return l.raiseMem();
+    if (r != .ok) return raiseRange(l, r);
+}
+
+/// Parses decimal text such as "1.50", "3", "1e-2", "-0.5E+3". Text past
+/// the limits of a decimal returns error.OutOfRange before any digit
+/// converts, so a long numeral costs no more than reading it.
 pub fn parseDecimalLiteral(g: *Global, text: []const u8) !*Decimal {
     var digits: std.ArrayList(u8) = .empty;
     defer digits.deinit(g.gpa);
@@ -158,7 +229,11 @@ pub fn parseDecimalLiteral(g: *Global, text: []const u8) !*Decimal {
         i = text.len;
     }
     if (i != text.len) return error.InvalidCharacter;
-    if (exp > std.math.maxInt(i32) or exp < std.math.minInt(i32)) return error.Overflow;
+    if (exp > std.math.maxInt(i32) or exp < std.math.minInt(i32)) return error.OutOfRange;
+    if (exp < -@as(i64, max_frac_digits)) return error.OutOfRange;
+    var lead: usize = 0;
+    while (lead + 1 < digits.items.len and digits.items[lead] == '0') lead += 1;
+    if (@as(i64, @intCast(digits.items.len - lead)) + exp > max_int_digits) return error.OutOfRange;
     var m = try M.init(g.gpa);
     defer m.deinit();
     try m.setString(10, digits.items);
@@ -231,16 +306,11 @@ fn mulPow10(m: *M, n: u32) !void {
 }
 
 pub fn bigToString(gpa: Allocator, b: *const BigInt) ![]u8 {
-    var m = try b.toConst().toManaged(gpa);
-    defer m.deinit();
-    return m.toString(gpa, 10, .lower);
+    return radix.toDecimal(gpa, b.toConst());
 }
 
 pub fn decimalToString(gpa: Allocator, d: *const Decimal) ![]u8 {
-    var m = try d.coef().toManaged(gpa);
-    defer m.deinit();
-    m.abs();
-    const digits = try m.toString(gpa, 10, .lower);
+    const digits = try radix.toDecimal(gpa, d.coef().abs());
     defer gpa.free(digits);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
@@ -444,6 +514,8 @@ fn decExp(l: *Thread, e: i64) Error!i32 {
 fn decArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
     const g = l.g;
     const gpa = g.gpa;
+    // A bigint operand must fit a decimal before it takes part.
+    inline for (.{ a, b }) |v| if (v.tag == .bigint) try checkDec(l, v.as(BigInt).toConst(), 0);
     var pa = toDecParts(gpa, a) catch return l.raiseMem();
     defer pa[0].deinit();
     var pb = toDecParts(gpa, b) catch return l.raiseMem();
@@ -491,6 +563,18 @@ fn decArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
                 return l.raiseFmt("decimal exponent must be an integer", .{});
             }
             const n = pb[0].toConst().toInt(i32) catch return l.raiseFmt("exponent too large", .{});
+            // The power must fit before it is computed. Its digits after
+            // the point are n times those of the base. A coefficient of b
+            // bits is at least 2^(b-1), so log10 of the base is at least
+            // (b - 1) * log10(2) + exponent, and the power has more than n
+            // times that many digits before the point.
+            if (!pa[0].eqlZero()) {
+                const an: f64 = @floatFromInt(@abs(n));
+                if (pa[1] < 0 and -@as(f64, @floatFromInt(pa[1])) * an > max_frac_digits) return raiseRange(l, .after);
+                const bits: f64 = @floatFromInt(pa[0].toConst().bitCountAbs());
+                const low_log = (bits - 1) * log10_2 + @as(f64, @floatFromInt(pa[1]));
+                if (low_log > 0 and low_log * an > max_int_digits) return raiseRange(l, .before);
+            }
             exp = try decExp(l, @as(i64, pa[1]) * @abs(n));
             r.pow(&pa[0], @abs(n)) catch return l.raiseMem();
             if (n < 0) {
@@ -506,14 +590,12 @@ fn decArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
         },
         else => return null,
     }
+    try checkDec(l, r.toConst(), exp);
     return Value.obj(.decimal, newDecFromConst(g, r.toConst(), try decExp(l, exp)) catch return l.raiseMem());
 }
 
 fn digitCount(gpa: Allocator, m: *const M) !usize {
-    if (m.eqlZero()) return 1;
-    const s = try m.toString(gpa, 10, .lower);
-    defer gpa.free(s);
-    return if (s[0] == '-') s.len - 1 else s.len;
+    return digitsOf(gpa, m.toConst());
 }
 
 /// Decimal division rounded half to even to `div_precision` significant
@@ -529,32 +611,36 @@ fn divDecimal(gpa: Allocator, q: *M, exp: *i64, ca: *M, ea: i32, cb: *M, eb: i32
     defer rem.deinit();
     try M.divTrunc(q, &rem, &num, cb);
     var e: i64 = @as(i64, ea) - eb - shift;
-    // Round to div_precision digits.
-    var dq = try digitCount(gpa, q);
-    var sticky = !rem.eqlZero();
-    while (dq > div_precision) {
-        var ten = try M.initSet(gpa, 10);
-        defer ten.deinit();
+    // Round to div_precision digits in one step: divide by 10^k for the k
+    // excess digits, and round half to even on the remainder.
+    const dq = try digitCount(gpa, q);
+    if (dq > div_precision) {
+        const k: u32 = @intCast(dq - div_precision);
+        var p = try M.initSet(gpa, 10);
+        defer p.deinit();
+        try p.pow(&p, k);
         var r = try M.init(gpa);
         defer r.deinit();
         var nq = try M.init(gpa);
         defer nq.deinit();
-        try M.divTrunc(&nq, &r, q, &ten);
-        const digit = @abs(try r.toConst().toInt(i64));
-        const extra = dq - 1 > div_precision;
-        if (extra) {
-            sticky = sticky or digit != 0;
-        } else {
-            const round_up = digit > 5 or (digit == 5 and (sticky or nq.isOdd()));
-            if (round_up) {
-                var one = try M.initSet(gpa, @as(i64, if (nq.isPositive()) 1 else -1));
-                defer one.deinit();
-                try nq.add(&nq, &one);
-            }
+        try M.divTrunc(&nq, &r, q, &p);
+        // Compare twice the remainder with the divisor.
+        r.abs();
+        var twice = try M.init(gpa);
+        defer twice.deinit();
+        try twice.add(&r, &r);
+        const order = twice.toConst().orderAbs(p.toConst());
+        // A remainder of the first division means the true value lies past
+        // the halfway point, so only an exact half rounds to even.
+        const sticky = !rem.eqlZero();
+        const round_up = order == .gt or (order == .eq and (sticky or nq.isOdd()));
+        if (round_up) {
+            var one = try M.initSet(gpa, @as(i64, if (q.isPositive()) 1 else -1));
+            defer one.deinit();
+            try nq.add(&nq, &one);
         }
         q.swap(&nq);
-        e += 1;
-        dq -= 1;
+        e += k;
     }
     // Strip trailing zeros down to the ideal exponent.
     const ideal = @as(i64, ea) - eb;

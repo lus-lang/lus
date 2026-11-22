@@ -18,7 +18,7 @@ global arg, assert, io, ipairs, math, os, package, pledge, print, require, strin
 
 pledge("exec", "fs", "env", "load")
 
-local here = arg and arg[0] and arg[0]:match("^(.*)/[^/]*$") or "."
+local here = arg and arg[0] and arg[0]:match("^(.*)[/\\][^/\\]*$") or "."
 package.path = here .. "/?.lus;" .. package.path
 local lib = require("lib")
 
@@ -227,7 +227,7 @@ if arg and arg[0] and arg[0]:find("reduce%.lus$") and not package.loaded["reduce
     for i = 2, #arg, 2 do opts[arg[i]:sub(3)] = arg[i + 1] end
     local root = here .. "/../.."
     local binaries = {
-        lus = opts.lus or (root .. "/runtime/zig-out/bin/lus"),
+        lus = opts.lus or (root .. "/runtime/zig-out/bin/lus" .. (os.platform() == "windows" and ".exe" or "")),
         stress = opts.stress, x64 = opts.x64, wasm = opts.wasm,
         wasmRunner = here .. "/wasm.mjs",
     }
