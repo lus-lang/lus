@@ -5615,9 +5615,9 @@ server:close()
   ["network.lines"] = {
     children = {},
     description = [[
-Returns an iterator for a generic `for` over the lines of the text that a coroutine yields in parts.
+Returns an iterator over the lines of the text that a coroutine yields in parts, for a generic `for` or for calls of its own.
 
-`stream` is a coroutine that yields strings or vectors, such as the body of a response that [`network.fetch`](/manual/api#network.fetch) streams or the `reader` of a request of [`network.serve`](/manual/api#network.serve). The iterator resumes `stream` whenever it needs more text, and a line may span several parts. Each step yields one line as a vector without its line end. A line ends with LF, and a CR before the LF goes too. The last line may lack a line end. The loop ends when the coroutine ends, and a part of `nil` that a coroutine yields without ending adds nothing.
+`stream` is a coroutine that yields strings or vectors, such as the body of a response that [`network.fetch`](/manual/api#network.fetch) streams or the `reader` of a request of [`network.serve`](/manual/api#network.serve). The iterator resumes `stream` whenever it needs more text, and a line may span several parts. Each call of the iterator returns one line as a vector without its line end, and `nil` once the lines ran out. The iterator holds its state, so `local nextline = network.lines(co)` works without a loop. A line ends with LF, and a CR before the LF goes too. The last line may lack a line end. The loop ends when the coroutine ends, and a part of `nil` that a coroutine yields without ending adds nothing.
 
 `max_bytes` is a positive integer that limits a line and defaults to 1 MiB. A longer line raises `"line too long"`. An error that the coroutine raises comes out of the step that resumed it, and a part that is neither a string, a vector, nor `nil` raises an error that names its type. A `max_bytes` that is not positive raises a `bad argument` error. The function needs no permission.
 
@@ -5698,7 +5698,7 @@ The server calls the handler once the request line and the headers arrived, and 
 
 The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string, a vector, a coroutine, or a function, and defaults to an empty body. `headers` is a table from header names to strings or integers. A header value may also be a list of strings and integers, which sends one header line for each element in order, so a response can set several cookies with `{ ["Set-Cookie"] = { "a=1", "b=2" } }`. An empty list sends no line. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
 
-A coroutine or a function body streams the response. The server sends the status and the headers, then resumes the coroutine again and again, or calls the function again and again. Each chunk that the coroutine yields or the function returns is a string or a vector, and the server sends it before the next resume or call, so each chunk leaves as soon as it exists. The coroutine ends the body by ending, after a chunk that it returns at its end, and the function ends it by returning `nil`. An empty chunk, and a `nil` that a coroutine yields without ending, send nothing. The coroutine of `req.reader` is such a body, so a handler that returns it sends the request body back as it arrives. The server sends the chunks with `Transfer-Encoding: chunked` and keeps the connection open for the next request. When the handler sets `Content-Length`, or the client speaks HTTP/1.0, the chunks go out as they are and the connection closes after the last one. The coroutine and the function may wait on sockets and suspend between chunks, so a handler that waits for events streams them as they come. A response to `HEAD`, and a status that carries no body, send the headers and never resume the coroutine or call the function. When the coroutine or the function raises an error or produces a value other than a string, a vector, or `nil`, the server reports the error and closes the connection after the chunks it sent, so the client sees a body that ended early.
+A coroutine or a function body streams the response. The server sends the status and the headers, then resumes the coroutine again and again, or calls the function again and again. Each chunk that the coroutine yields or the function returns is a string or a vector, and the server sends it before the next resume or call, so each chunk leaves as soon as it exists. The coroutine ends the body by ending, after a chunk that it returns at its end, and the function ends it by returning `nil`. An empty chunk, and a `nil` that a coroutine yields without ending, send nothing. The server closes a coroutine body with `coroutine.close` when the response ends, however it ends, so the to-be-closed variables of the coroutine run at once: after the last chunk, when the client leaves, after an error, and for a response that never resumes it. The coroutine of `req.reader` is such a body, so a handler that returns it sends the request body back as it arrives. The server sends the chunks with `Transfer-Encoding: chunked` and keeps the connection open for the next request. When the handler sets `Content-Length`, the chunks go out as they are, and the connection stays open when they add up to that length and closes when they fall short. A chunk past the length raises an error. A client of HTTP/1.0 gets the chunks as they are, and the connection closes after the last one. The coroutine and the function may wait on sockets and suspend between chunks, so a handler that waits for events streams them as they come. A response to `HEAD`, and a status that carries no body, send the headers and never resume the coroutine or call the function. When the coroutine or the function raises an error or produces a value other than a string, a vector, or `nil`, the server reports the error and closes the connection after the chunks it sent, so the client sees a body that ended early.
 
 The following example streams server-sent events. Each event is a `data:` line and an empty line, and the response has the content type `text/event-stream`.
 
@@ -5765,7 +5765,7 @@ With the `tls` option the server serves HTTPS. Every connection runs a TLS hands
 
 While `max_connections` connections are open, further clients wait in the queue of the system, and the server accepts the next one when a connection closes. When the system has no file descriptor or no memory left for a new connection, the server waits for a connection to close, or for a moment, and accepts again.
 
-The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines. A chunked body gives each chunk size as hexadecimal digits alone, and the line that starts a chunk is limited to 1 KiB. The framing of a chunked body, which is its chunk lines and its trailers, is limited to 64 KiB plus 8 bytes for every byte of the body. A head over a limit is answered with 431, and a malformed head with 400, before the handler runs. `req.body` holds at most 16 MiB, and `req.reader` yields a body of any size. A body that breaks its framing or its limit while the handler reads it raises an error in the handler. When the handler lets that error end it, the server answers 400, 413, or 431 in place of 500. Whatever the handler returns, a connection whose body broke closes after the response, and so does a connection whose unread body is over 16 MiB or waits for a `100 Continue` that the server never sent.
+The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines. A chunked body gives each chunk size as hexadecimal digits alone, and the line that starts a chunk is limited to 1 KiB. The framing of a chunked body, which is its chunk lines and its trailers, is limited to 64 KiB plus 8 bytes for every byte of the body. A head over a limit is answered with 431, and a malformed head with 400, before the handler runs. `req.body` holds at most 16 MiB, and `req.reader` yields a body of any size. A body that breaks its framing or its limit while the handler reads it raises an error in the handler. The error is a table with the field `status`, the status of the refusal, and the field `message`, and its `__tostring` gives the message, so a framework that catches it answers with that status. When the handler lets that error end it, the server answers 400, 408, 413, or 431 in place of 500. Whatever the handler returns, a connection whose body broke closes after the response, and so does a connection whose unread body is over 16 MiB or waits for a `100 Continue` that the server never sent.
 
 The following example serves in a detached coroutine on a port that the system chooses, sends one request over a TCP socket, and stops the server.
 
@@ -5829,9 +5829,9 @@ The example talks to its server through a TCP socket so that every byte on the w
     description = [[
 The `network.tcp` table opens TCP connections with [`network.tcp.connect`](/manual/api#network.tcp.connect) and listens for them with [`network.tcp.bind`](/manual/api#network.tcp.bind).
 
-A TCP socket has the methods `send(data)`, `receive(pattern, max_bytes)`, `settimeout(seconds)`, `getsockname()`, `getpeername()`, `starttls(options)`, `tlsinfo()`, and `close()`. [`network.tls`](/manual/api#network.tls) describes the sockets that carry TLS. A server has the methods `accept()`, `settimeout(seconds)`, `getsockname()`, and `close()`, and `accept` returns a socket. A method other than `close` on a closed socket raises `"attempt to use a closed socket"`, and on a closed server `"attempt to use a closed server"`. A second `close` does nothing. The collector closes a socket or a server that nothing refers to any more, and one declared with the `<close>` attribute closes when its variable goes out of scope.
+A TCP socket has the methods `send(data, i, j)`, `receive(pattern, max_bytes)`, `settimeout(seconds)`, `getsockname()`, `getpeername()`, `starttls(options)`, `tlsinfo()`, `reader(max_bytes)`, and `close()`. [`network.tls`](/manual/api#network.tls) describes the sockets that carry TLS. A server has the methods `accept()`, `settimeout(seconds)`, `getsockname()`, and `close()`, and `accept` returns a socket. A method other than `close` on a closed socket raises `"attempt to use a closed socket"`, and on a closed server `"attempt to use a closed server"`. A second `close` does nothing. The collector closes a socket or a server that nothing refers to any more, and one declared with the `<close>` attribute closes when its variable goes out of scope.
 
-`connect`, `accept`, `send`, and `receive` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and the other detached coroutines run in the meantime. Anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait in both cases, and an operation whose timeout runs out raises `"receive timeout"`, `"send timeout"`, or `"accept timeout"` and leaves the socket usable.
+`connect`, `accept`, `send`, and `receive` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and the other detached coroutines run in the meantime. Anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait in both cases. `settimeout(nil)` and a negative value remove the timeout, and `settimeout(0)` makes an operation that cannot finish at once fail at once, and an operation whose timeout runs out raises `"receive timeout"`, `"send timeout"`, or `"accept timeout"` and leaves the socket usable.
 
 ```lus
 pledge("network")
@@ -5914,7 +5914,7 @@ Opens a TCP connection to `host` and `port` and returns the connected socket.
 
 `host` is a host name or a numeric address. `port` is an integer from 1 through 65535. `options` is a table whose one field, `timeout`, is a number of seconds. The call waits until the connection is established, as described in [`network.tcp`](/manual/api#network.tcp). With `timeout`, the connection must be established within that time, which counts the attempts at every address of the host, and the socket then keeps `timeout` as the timeout of its operations, as `settimeout` sets it. A negative `timeout` waits without limit.
 
-On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, `starttls`, `tlsinfo`, and `close`. `send(data)` sends a string or a vector in full and returns the number of bytes sent. Every failure to connect raises an error, such as `"cannot connect to 127.0.0.1:1: Connection refused"` or `"cannot resolve 'HOST': Domain name not found"`. A connection that runs out of time raises `"timeout while connecting to HOST:PORT"`. A port out of range, an unknown option, and a `timeout` that is not a number raise a `bad argument` error. The call requires `network:tcp` for `host:port`.
+On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, `starttls`, `tlsinfo`, `reader`, and `close`. `send(data, i, j)` sends a string or a vector in full and returns the position of its last element, which for a string is its number of characters and for a vector its number of bytes. With `i` and `j` it sends the part from position `i` to position `j`, which count characters of a string and bytes of a vector as `string.sub` counts them, and returns `j` as `string.sub` clips it, or 0 for an empty part. Every failure to connect raises an error, such as `"cannot connect to 127.0.0.1:1: Connection refused"` or `"cannot resolve 'HOST': Domain name not found"`. A connection that runs out of time raises `"timeout while connecting to HOST:PORT"`. A port out of range, an unknown option, and a `timeout` that is not a number raise a `bad argument` error. The call requires `network:tcp` for `host:port`.
 
 The following example connects to a local server and reads the addresses of both ends.
 
@@ -9654,6 +9654,7 @@ A connected socket has `getsockname` for its own end and `getpeername` for the o
   },
   ["tcp_socket"] = {
     children = {
+      "tcp_socket:reader",
       "tcp_socket:receive",
       "tcp_socket:starttls",
       "tcp_socket:tlsinfo",
@@ -9666,14 +9667,61 @@ A connected socket has `getsockname` for its own end and `getpeername` for the o
     short_name = "tcp_socket",
     synthetic = true,
   },
+  ["tcp_socket:reader"] = {
+    children = {},
+    description = [[
+Returns a coroutine that reads the socket: each resume yields what has arrived, and the coroutine ends at the end of the stream.
+
+`max_bytes` is a positive integer that limits each part and defaults to 65536. Each resume returns `true` and a vector of between 1 and `max_bytes` bytes as soon as the socket holds any, so a relay moves bytes as they come rather than one at a time. When the peer ends the stream, the resume returns `true` alone and the coroutine is dead. A TLS socket yields plain text. The coroutine waits as `receive` does: inside a detached coroutine the wait suspends, anywhere else it runs the detached coroutines, and the timeout of the socket bounds it. A wait that runs out makes the resume return `false` and `"receive timeout"`, a failure of the connection returns `false` and a message such as `"receive: Connection reset by peer"`, and a closed socket returns `false` and `"attempt to use a closed socket"`. Closing the coroutine leaves the socket open. A `max_bytes` that is not positive raises a `bad argument` error. The method needs no permission.
+
+The coroutine has the shape of the streamed bodies of the network library, so [`network.lines`](/manual/api#network.lines) reads it line by line, a handler of [`network.serve`](/manual/api#network.serve) may return it as a body, and [`network.fetch`](/manual/api#network.fetch) sends it as a request body.
+
+```lus
+pledge("network")
+local server <close> = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local writer = coroutine.detach(coroutine.create(function()
+    local conn <close> = server:accept()
+    conn:send("+OK one\r\n+OK two\r\n")
+end))
+local sock <close> = network.tcp.connect("127.0.0.1", port)
+for line in network.lines(sock:reader()) do
+    print(vector.tostring(line))
+end
+--> +OK one
+--> +OK two
+```]],
+    kind = "function",
+    module = "network.tcp",
+    name = "tcp_socket:reader",
+    origin = "lus",
+    params = {
+      {
+        name = "max_bytes",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "tcp_socket",
+    receiver = "tcp_socket",
+    returns = {
+      {
+        type = "thread",
+      },
+    },
+    short_name = "reader",
+    since = "2.0.0",
+    source = "stdlib/network/tcp/reader.md",
+    stability = "stable",
+  },
   ["tcp_socket:receive"] = {
     children = {},
     description = [[
 Receives data from a TCP socket according to `pattern` and returns it as a vector.
 
-`pattern` defaults to `"*l"`, which reads one line and removes its trailing LF and an optional CR before it. `"*a"` reads everything up to the end of the connection. A positive integer reads exactly that many bytes, or the bytes that remain when the connection ends first, and it may be at most 1 MiB. `max_bytes` is an optional positive integer that sets the limit of `"*l"` and `"*a"`, which defaults to 1 MiB for a line and 64 MiB for `"*a"`.
+`pattern` defaults to `"*l"`, which reads one line and removes its trailing LF and an optional CR before it. `"*a"` reads everything up to the end of the connection. A positive integer reads exactly that many bytes, or the bytes that remain when the connection ends first. `max_bytes` is an optional positive integer that sets the limit of `"*l"` and `"*a"`, which defaults to 1 MiB for a line and 64 MiB for `"*a"`.
 
-On success the call returns one vector. At the end of the connection every pattern returns the bytes that remain, which is an empty vector once nothing remains. A failure of the connection itself, such as a reset by the other end, returns `nil` and a message such as `"receive: Connection reset by peer"`. An integer that is zero, negative, or over 1 MiB raises `"invalid receive size: N"`, and any other pattern raises `"invalid receive pattern: PATTERN"`. A `max_bytes` that is not positive raises a `bad argument` error. A line or a stream that exceeds its limit closes the socket and raises `"receive limit exceeded"`. A closed socket raises `"attempt to use a closed socket"`, and a timeout set with `settimeout` that runs out raises `"receive timeout"`. The method needs no permission.
+On success the call returns one vector. At the end of the connection every pattern returns the bytes that remain, which is an empty vector once nothing remains. A failure of the connection itself, such as a reset by the other end, returns `nil` and a message such as `"receive: Connection reset by peer"`. An integer that is zero or negative raises `"invalid receive size: N"`, and any other pattern raises `"invalid receive pattern: PATTERN"`. A `max_bytes` that is not positive raises a `bad argument` error. A line or a stream that exceeds its limit closes the socket and raises `"receive limit exceeded"`. A closed socket raises `"attempt to use a closed socket"`, and a timeout set with `settimeout` that runs out raises `"receive timeout"`. The method needs no permission.
 
 The following example reads one message with each pattern after the sender has closed its end.
 
@@ -9729,7 +9777,7 @@ Protocols such as SMTP, IMAP, PostgreSQL, and Redis open a plain connection and 
 
 For the client role, `options` is the table of client options that [`network.tls`](/manual/api#network.tls) describes, without `timeout`. `servername` has no default here, so a socket that verifies the server must name it.
 
-For the server role, `options` holds `server = true` and the certificate of the server: `cert` and `key`, PEM text of its certificate chain and of its private key, with `password` for an encrypted key, or `certs`, a list of tables with `cert`, `key`, and `password`, one for each name. The server picks the certificate whose DNS names, or whose common name when it lists none, match the name that the client sends through SNI, and the first certificate for a client that sends none or a name that none carries. `alpn` lists the protocols that the server accepts, and the server chooses the first protocol of the client that it accepts. A server that serves TLS from its first byte calls `starttls` right after `accept`. The server reads the certificates once for each options table, so a server that passes the same table to every connection parses them once, and a new table loads new certificates. [`tcp_socket:tlsinfo`](/manual/api#tcp_socket:tlsinfo) of a server socket reports the name that the client asked for.
+For the server role, `options` holds `server = true` and the certificate of the server: `cert` and `key`, PEM text of its certificate chain and of its private key, with `password` for an encrypted key, or `certs`, a list of tables with `cert`, `key`, and `password`, one for each name. The server picks the certificate whose DNS names, or whose common name when it lists none, match the name that the client sends through SNI, and the first certificate for a client that sends none or a name that none carries. `alpn` lists the protocols that the server accepts, in its order of preference, and the server chooses the first of them that the client offers. A server that serves TLS from its first byte calls `starttls` right after `accept`. The server reads the certificates once for each options table, so a server that passes the same table to every connection parses them once, and a new table loads new certificates. [`tcp_socket:tlsinfo`](/manual/api#tcp_socket:tlsinfo) of a server socket reports the name that the client asked for.
 
 On success the call returns the socket, whose `send` and `receive` then carry plain text through TLS. The socket must hold no received byte that no `receive` returned yet, since such bytes came before TLS and would read as protected data. A socket that holds one raises `"starttls: the socket holds data received before TLS started"`, and a socket that already uses TLS raises `"the socket already uses TLS"`. A missing `servername` with verification, a server without a certificate, a certificate or a key that does not parse, and an unknown option raise a `bad argument` error. A failed handshake raises the errors that `network.tls` lists and closes the socket. The method needs no permission beyond the one that opened the connection.
 

@@ -437,6 +437,10 @@ pub fn resumeNative(l: *Thread) Error!u32 {
     return @"resume"(l);
 }
 
+pub fn closeNative(l: *Thread) Error!u32 {
+    return close(l);
+}
+
 pub fn statusNative(l: *Thread) Error!u32 {
     return status(l);
 }

@@ -134,6 +134,7 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "getpeername", .func = socketGetpeername },
         .{ .name = "starttls", .func = socketStarttls },
         .{ .name = "tlsinfo", .func = socketTlsinfo },
+        .{ .name = "reader", .func = http.socketReader },
     }, socketGc, socketTostring);
     try makeMetatable(l, server_name, &.{
         .{ .name = "accept", .func = serverAccept },
@@ -263,6 +264,8 @@ fn checkData(l: *Thread, i: u32) Error![]const u8 {
 }
 
 fn timeoutArg(l: *Thread, i: u32) Error!i32 {
+    // nil, like a negative number, waits without limit.
+    if (!l.hasArg(i) or l.arg(i).isNil()) return -1;
     const secs = try aux.checkFloat(l, i);
     if (std.math.isNan(secs) or secs < 0) return -1;
     if (secs == 0) return 0;
@@ -1265,9 +1268,32 @@ pub fn bindServer(l: *Thread, host: []const u8, port: u16, backlog: i64) Error!*
     return newObject(l, Server, server_name, .{ .server = server });
 }
 
+/// sock:send(data, i, j): sends the part of `data` from position `i` to
+/// position `j`, characters of a string or bytes of a vector, which
+/// default to the whole, and returns the position of the last one sent.
 fn socketSend(l: *Thread) Error!u32 {
     const s = try checkSocket(l, 1);
-    const data = try checkData(l, 2);
+    const whole = try checkData(l, 2);
+    const i = try aux.optInt(l, 3, 1);
+    const j = try aux.optInt(l, 4, -1);
+    var data = whole;
+    var last: usize = whole.len;
+    if (l.arg(2).tag == .string) {
+        const str_mod = @import("string.zig");
+        const part, last = str_mod.subPositions(l, l.arg(2).as(object.String), i, j) catch return l.raiseMem();
+        // The part stays on the stack while the send waits, above the
+        // four arguments.
+        try l.ensure(6);
+        const b = l.base();
+        while (l.top < b + 4) : (l.top += 1) l.stack[l.top] = .nil;
+        l.top = b + 4;
+        try l.push(part);
+        data = part.as(object.String).bytes();
+    } else {
+        const r = @import("string.zig").byteRange(i, j, whole.len);
+        data = whole[r.from..r.to];
+        last = if (r.to > r.from) r.to else 0;
+    }
     const io = l.g.io;
     const h = s.stream.socket.handle;
     // A send that waited continues after the bytes it already wrote.
@@ -1291,7 +1317,7 @@ fn socketSend(l: *Thread) Error!u32 {
             .fail => |e| return failResult(l, "send", e),
         }
     }
-    return aux.retInt(l, @intCast(total));
+    return aux.retInt(l, @intCast(last));
 }
 
 pub const Fill = union(enum) { got: usize, eof, fail: anyerror };
@@ -1405,7 +1431,7 @@ fn socketReceive(l: *Thread) Error!u32 {
     const s = try checkSocket(l, 1);
     if (l.arg(2).isNumber()) {
         const n = try aux.checkInt(l, 2);
-        if (n <= 0 or n > max_recv_size) return l.raiseFmt("invalid receive size: {d}", .{n});
+        if (n <= 0) return l.raiseFmt("invalid receive size: {d}", .{n});
         return recvBytes(l, s, @intCast(n));
     }
     const pattern = (try aux.optString(l, 2, "*l")).?;

@@ -253,10 +253,45 @@ fn consume(s: *net.Socket, n: usize) void {
     s.buf.items.len = rest;
 }
 
-/// The failure of a body as an error of Lus code.
+/// The failure of a body as an error of Lus code. A request body that the
+/// server refuses raises an error object (`raiseRefusal`).
 fn raiseBad(l: *Thread, b: *Body) Error {
-    if (b.request) return l.raiseFmt("invalid request body: {s}", .{b.bad_msg});
+    if (b.request) return raiseRefusal(l, b.bad, b.bad_msg);
     return l.raiseFmt("{s}", .{b.bad_msg});
+}
+
+const refusal_name = "network.refusal";
+
+fn refusalTostring(l: *Thread) Error!u32 {
+    if (l.arg(1).tag != .table) return aux.retStr(l, "request refused");
+    const m = try aux.getField(l, l.arg(1).as(Table), "message");
+    return aux.ret(l, m);
+}
+
+/// Raises the error object of a request body that the server refuses with
+/// `status`: a table with `status` and `message`, whose `__tostring` gives
+/// the message, so a framework maps it to a response.
+fn raiseRefusal(l: *Thread, status: u16, msg: []const u8) Error {
+    const g = l.g;
+    const mt: *Table = blk: {
+        if (g.ext.get(refusal_name)) |p| break :blk @ptrCast(@alignCast(p));
+        const t = try l.newTable(0, 2);
+        try l.push(Value.obj(.table, t));
+        defer l.top -= 1;
+        try aux.setField(l, t, "__tostring", try aux.native(l, refusalTostring, "tostring"));
+        try aux.setField(l, t, "__name", try l.newStringValue(refusal_name));
+        try aux.setField(l, g.registry.as(Table), refusal_name, Value.obj(.table, t));
+        g.ext.put(g.gpa, refusal_name, t) catch return l.raiseMem();
+        break :blk t;
+    };
+    const err = try l.newTable(0, 2);
+    try l.push(Value.obj(.table, err));
+    defer l.top -= 1;
+    try aux.setField(l, err, "status", Value.int(status));
+    try aux.setField(l, err, "message", try l.newStringValue(msg));
+    err.metatable = mt;
+    gc.barrierBack(g, &err.hdr);
+    return l.raise(Value.obj(.table, err));
 }
 
 /// Reads more bytes of `b` into the buffer of `s`, waiting as needed. The
@@ -273,8 +308,8 @@ fn refill(l: *Thread, s: *net.Socket, b: *Body) Error!void {
         if (b.request) {
             b.bad = 408;
             b.bad_msg = "request timeout";
+            return raiseRefusal(l, 408, "request timeout");
         }
-        if (b.request) return l.raiseFmt("receive timeout", .{});
         return l.raiseFmt("fetch timeout while reading the body", .{});
     };
     switch (got) {
@@ -476,6 +511,7 @@ fn tooLarge(l: *Thread, s: *net.Socket, comptime msg: []const u8) Error {
         if (b.request) {
             b.bad = 413;
             b.bad_msg = "request body too large";
+            return raiseRefusal(l, 413, "request body too large");
         }
     }
     return l.raiseFmt(msg, .{});
@@ -492,6 +528,55 @@ pub fn readerGc(l: *Thread) Error!u32 {
     const r = toReader(l, l.arg(1)) orelse return 0;
     closeReader(l.g, r);
     return 0;
+}
+
+// ---------------------------------------------------------------------
+// Socket readers
+
+/// sock:reader(max_bytes): a coroutine that yields what the socket
+/// received, between 1 and `max_bytes` bytes, on each resume, and ends at
+/// the end of the stream.
+pub fn socketReader(l: *Thread) Error!u32 {
+    const s = try net.checkSocket(l, 1);
+    _ = s;
+    const max = try aux.optInt(l, 2, stream_chunk);
+    if (max <= 0) return aux.argError(l, 2, "max_bytes must be positive", .{});
+    const g = l.g;
+    const n = state.newNative(g, socketNext, "reader", 2) catch return l.raiseMem();
+    n.generator = true;
+    n.upvalues()[0] = l.arg(1);
+    n.upvalues()[1] = Value.int(@min(max, 16 * 1024 * 1024));
+    gc.barrierBack(g, &n.hdr);
+    l.top = l.base() + 2;
+    try l.push(Value.obj(.native, n));
+    const co = try @import("coroutine.zig").newCoroutine(l, l.stack[l.top - 1]);
+    l.stack[l.top - 1] = Value.obj(.thread, co);
+    return 1;
+}
+
+/// The body of a socket reader (`state.Native.generator`): yields the
+/// bytes that the socket holds, waiting for some when it holds none, and
+/// returns nothing at the end of the stream.
+fn socketNext(l: *Thread) Error!u32 {
+    const up = l.frame().native.?.upvalues();
+    const s = net.toObject(l, net.Socket, net.socket_name, up[0]).?;
+    const max: usize = @intCast(up[1].asInt());
+    if (s.closed) return l.raiseFmt("attempt to use a closed socket", .{});
+    if (s.buf.items.len == 0) {
+        const got = (try net.tryFill(l, s, @min(max, 65536))) orelse return l.raiseFmt("receive timeout", .{});
+        switch (got) {
+            .got => {},
+            .eof => return 0,
+            .fail => |e| return l.raiseFmt("receive: {s}", .{net.errText(e)}),
+        }
+    }
+    const n = @min(max, s.buf.items.len);
+    const v = try vector.newVector(l, s.buf.items[0..n]);
+    consume(s, n);
+    try l.push(Value.obj(.vector, v));
+    // A part that came after a wait is a value, not another wait.
+    if (sched.taskOf(l)) |t| sched.endWait(t);
+    return @import("coroutine.zig").yieldValues(l, 1);
 }
 
 // ---------------------------------------------------------------------
@@ -517,8 +602,9 @@ pub fn linesGc(l: *Thread) Error!u32 {
     return 0;
 }
 
-/// network.lines(stream, max_bytes): an iterator for a generic `for` over
-/// the lines of the parts that a coroutine yields.
+/// network.lines(stream, max_bytes): an iterator over the lines of the
+/// parts that a coroutine yields, for a generic `for` or for calls of its
+/// own.
 pub fn lines(l: *Thread) Error!u32 {
     const g = l.g;
     if (l.arg(1).tag != .thread) return aux.typeError(l, 1, "coroutine");
@@ -538,24 +624,25 @@ pub fn lines(l: *Thread) Error!u32 {
     try l.push(Value.obj(.userdata, u));
     gc.barrierBack(g, &u.hdr);
     try @import("base.zig").registerFinalizer(l, &u.hdr, mt);
-    const next = try aux.native(l, linesNext, "lines");
-    const state_v = l.stack[l.top - 1];
-    l.stack[l.top - 1] = next;
-    try l.push(state_v);
-    return 2;
+    // The iterator holds its state, so it works alone as well as in a
+    // generic `for`.
+    const next = state.newNative(g, linesNext, "lines", 1) catch return l.raiseMem();
+    next.upvalues()[0] = l.stack[l.top - 1];
+    gc.barrierBack(g, &next.hdr);
+    l.stack[l.top - 1] = Value.obj(.native, next);
+    return 1;
 }
 
 /// The step of `network.lines`: the next line without its line end, or
 /// nil at the end of the parts.
 fn linesNext(l: *Thread) Error!u32 {
-    const v = l.arg(1);
-    if (v.tag != .userdata) return aux.typeError(l, 1, "lines state");
+    const v = l.frame().native.?.upvalues()[0];
     const u = v.as(Userdata);
     const st: *Lines = @ptrCast(@alignCast(u.data()));
     const co = u.userValues()[0].as(Thread);
     const limit: usize = @intCast(u.userValues()[1].asInt());
     const gpa = l.g.gpa;
-    l.top = l.base() + 1;
+    l.top = l.base();
     while (true) {
         if (std.mem.indexOfScalar(u8, st.pending.items, '\n')) |nl| {
             var len = nl;

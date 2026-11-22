@@ -275,7 +275,7 @@ end
 local function implicit_tls_on_an_accepted_socket_test()
     local c = make_certs()
     accepting(function(conn)
-        conn:starttls({ server = true, certs = { c.server, c.other }, alpn = { "redis" } })
+        conn:starttls({ server = true, certs = { c.server, c.other }, alpn = { "postgresql", "redis" } })
         conn:send(`$(conn:tlsinfo().servername) $(conn:tlsinfo().alpn)\n`)
     end, function(port)
         local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "other.test", alpn = { "redis" } })
@@ -285,6 +285,20 @@ local function implicit_tls_on_an_accepted_socket_test()
 end
 
 -- A server reads the certificates once for each options table.
+local function a_socket_reader_reads_over_tls_test()
+    local c = make_certs()
+    accepting(function(conn)
+        conn:starttls({ server = true, cert = c.server.cert, key = c.server.key })
+        conn:send("over\n")
+        conn:send("tls\n")
+    end, function(port)
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost" })
+        local lines = {}
+        for line in network.lines(sock:reader()) do lines[#lines + 1] = txt(line) end
+        assert(table.concat(lines, " ") == "over tls", table.concat(lines, " "))
+    end)
+end
+
 local function a_server_reuses_its_options_test()
     local c = make_certs()
     local opts = { server = true, cert = c.server.cert, key = c.server.key }
