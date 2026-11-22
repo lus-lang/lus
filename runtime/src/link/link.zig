@@ -318,7 +318,7 @@ const Linker = struct {
     fn write(l: *Linker) Error![]u8 {
         const o = l.o;
         const size = l.seg[2].addr + l.seg[2].filesz - l.base;
-        const out = try l.gpa.alloc(u8, size);
+        const out = try l.gpa.alloc(u8, std.math.cast(usize, size) orelse return error.OutOfMemory);
         errdefer l.gpa.free(out);
         @memset(out, 0);
         for (o.atoms, 0..) |a, i| {
