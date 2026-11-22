@@ -121,7 +121,7 @@ A `-Dinvariants=true` build runs the checks of `inv.assert` in a release build. 
 
 `mise run mutate` samples mutants of the code that every program runs (`tests/mutate`), builds each, and lists the ones that nothing kills: the conformance files interpreted and in optimized code, the differential programs, and the unit tests. `MUTANTS` sets the count. A survivor either gets a test that kills it or, when it cannot change behavior, a line in `tests/mutate/equivalent.txt`.
 
-`mise run mcdc` measures modified condition and decision coverage. It copies the runtime to `zig-out-mcdc`, rewrites every decision of two or more conditions with `tests/coverage/mcdc/transform.zig` so that it records which conditions ran and the outcome, builds the copy, runs the conformance suite, and prints the share of conditions that a pair of recorded vectors shows to change the outcome on its own.
+`mise run mcdc` measures modified condition and decision coverage. It copies the runtime to `zig-out-mcdc`, rewrites every decision of two or more conditions with `tests/coverage/mcdc/transform.zig` so that it records which conditions ran and the outcome, builds the copy, runs the conformance suite and the unit tests, and prints the share of conditions that a pair of recorded vectors shows to change the outcome on its own. The decisions inside the arguments of `inv.assert`, `inv.always`, and `inv.never`, and inside the functions that only invariant checks call, stay out of the measure, since the shipped build leaves the checks out.
 
 ## Fuzzing
 
