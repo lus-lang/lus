@@ -36,7 +36,6 @@ const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const pledge = @import("../vm/pledge.zig");
 const sched = @import("../vm/sched.zig");
-const faultio = @import("../vm/faultio.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
@@ -405,11 +404,8 @@ pub fn againDir(s: *Socket, default: sched.Dir) sched.Dir {
     return tls.waitDir(s, default);
 }
 
-/// Reads the bytes of the socket itself, without TLS. A runtime built with
-/// `-Dfail-io=true` counts the call as an operation that `LUS_FAIL_IO`
-/// may fail (`vm/faultio.zig`).
+/// Reads the bytes of the socket itself, without TLS.
 pub fn rawRecv(l: *Thread, s: *Socket, dst: []u8) Try {
-    if (faultio.enabled and faultio.step()) return .{ .fail = error.ConnectionResetByPeer };
     const handle = s.stream.socket.handle;
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .read)) return .again;
@@ -428,9 +424,8 @@ pub fn rawRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     }
 }
 
-/// Writes bytes to the socket itself, without TLS, counted like `rawRecv`.
+/// Writes bytes to the socket itself, without TLS.
 pub fn rawSend(l: *Thread, s: *Socket, data: []const u8) Try {
-    if (faultio.enabled and faultio.step()) return .{ .fail = error.ConnectionResetByPeer };
     const handle = s.stream.socket.handle;
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .write)) return .again;
