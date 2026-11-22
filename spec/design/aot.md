@@ -22,7 +22,9 @@ Startup and peak speed on systems that have a JIT are not among the reasons. `wa
 
 Compiling in the training process keeps every prediction exactly as the JIT made it, so no profile format has to describe types, shapes, call targets, or exits. The builder serializes the code that already exists.
 
-The predictions that name hash nodes depend on the hash seed of the state, which mixes in the address of the state (`warmstart.md`). An executable compiled ahead of time therefore runs with the seed of its training run, which the builder records. A table that the program builds in the same order then puts its keys in the same nodes, so the predictions hold. Any other table fails the guard and runs the instruction in baseline code or the interpreter, which is slower and still correct. A fixed seed per executable weakens the defense against hash flooding that a random seed gives, so the builder draws a fresh seed for every build. `--aot-seed=random` keeps a random seed per process at the cost of node predictions.
+The predictions that name hash nodes depend on the hash seed of the state, which mixes in the address of the state (`warmstart.md`). An executable compiled ahead of time therefore runs with the seed of its training run, which the builder draws fresh for every build and records in the executable. A table that the program builds in the same order then puts its keys in the same nodes, so every node prediction holds. Any other table fails the guard and runs the instruction in the interpreter, which is slower and still correct.
+
+The recorded seed has a cost. Every process of one executable hashes with the same seed, so an attacker who learns it, from the executable or from the timing of one process, can choose keys that collide in every process of that executable. A random seed per process would defend against that and give up the node predictions. Executables that hash keys from untrusted input, such as a server that parses request headers into tables, should take that into account.
 
 ## Code objects and relocations
 
@@ -48,11 +50,11 @@ The executable is a prebuilt runtime, built with `-Dcompiler=false`, followed by
 
 At startup the runtime loads the chunks as `lus build` does, maps the code section, applies the relocations, makes the pages executable, and points each function at its code. On a target without executable memory, the code section lives in the executable image itself, linked at build time against the prebuilt runtime as a static library, which keeps the image signed as one piece. The relocations are then resolved by the system loader.
 
-On a target with a JIT, the runtime keeps both tiers by default, so code that the training run never reached still compiles. `--aot-no-jit` leaves them out for the smallest executable.
+The runtime leaves out both JIT tiers by default, so code that the training run never reached runs in the interpreter. On a target that allows executable memory, `--aot-keep-jit` keeps them, so that code compiles at run time as it does under `lus build`.
 
 ## Leaving out libraries
 
-A library can go only when no path of the program reaches it. The builder proves that from the bytecode, conservatively. A program qualifies when every global access names a constant, `_ENV` is never read as a value, the debug library is not reached, and every `require` names a constant module. The builder then keeps the libraries that those constants name. Any other program keeps every library. `--strip-libs` asks for the analysis and fails the build when the program does not qualify, so the result never depends on a guess.
+A library can go only when no path of the program reaches it. The builder proves that from the bytecode, conservatively. A program qualifies when every global access names a constant, `_ENV` is never read as a value, the debug library is not reached, and every `require` names a constant module. The builder then keeps the libraries that those constants name. It leaves out the others by default. When the proof fails, the builder keeps every library and prints the first access that the proof could not name, so the result never depends on a guess.
 
 ## Measurements before building
 
@@ -61,7 +63,7 @@ Each part below is built only when its measurement supports it, as `snapshot.md`
 1. **Startup.** The time from exec to the first line of output of `lus build` executables for the programs in `tests/bench`, against the same programs with every function compiled at load. This bounds what code in place can save.
 2. **Time to steady state.** The time each benchmark spends before its last compilation, from `LUS_JIT_DUMP` timestamps. Ahead-of-time code saves this time, so only programs whose runs are short compared to it gain.
 3. **Peak speed.** The benchmarks under the JIT against the same code relocated from a code object. Relocated addresses cost nothing at run time, so the two must agree within the noise of the measurement.
-4. **Size.** The executable of `lus build` against one from a runtime built with `-Dcompiler=false`, and against one with `--strip-libs` for the programs that qualify.
+4. **Size.** The executable of `lus build` against one from a runtime built with `-Dcompiler=false`, and against one without the libraries that the proof leaves out, for the programs that qualify.
 5. **Targets without a JIT.** The benchmarks in the interpreter against the same programs with code compiled ahead of time, under an executable-memory policy that refuses mappings, which stands in for iOS on macOS.
 
 Measurement 5 decides whether the work happens at all. The others decide which options are worth their code.
@@ -76,8 +78,8 @@ Measurement 5 decides whether the work happens at all. The others decide which o
 
 The equality saturation pass of the speed workstream plugs into step 3 as a pass that only the training run's compile enables.
 
-## Open questions
+## Decisions
 
-- Whether the executable records the seed of its training run by default, or keeps a random seed and gives up node predictions.
-- Whether the runtime keeps the JIT by default on targets that have one.
-- Whether `--strip-libs` is opt-in, as described, or the default when the program qualifies.
+- The executable records a seed per build, so every node prediction holds, at the cost described in "The training run".
+- The runtime leaves out the JIT by default. `--aot-keep-jit` keeps it.
+- Library stripping is the default whenever the proof succeeds.
