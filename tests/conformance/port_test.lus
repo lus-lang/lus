@@ -1,0 +1,154 @@
+-- Ports (spec/design/coroutine-io.md). A TCP socket has two ports:
+-- `conn.input`, a source whose resume returns the next piece of input,
+-- and `conn.output`, a sink whose resume sends its argument. A port is a
+-- coroutine, so `coroutine.status`, `coroutine.close`, and the results of
+-- `coroutine.resume` mean what they mean for any coroutine. Every test
+-- binds port 0 on the loopback interface.
+pledge("network")
+
+local create, detach, resume = coroutine.create, coroutine.detach, coroutine.resume
+local status, close = coroutine.status, coroutine.close
+
+local function txt(v)
+    if type(v) == "vector" then
+        return vector.tostring(v)
+    end
+    return v
+end
+
+local function denied(err)
+    local text = tostring(err)
+    return string.find(text, "ermission denied", 1, true) or string.find(text, "not permitted", 1, true)
+        or string.find(text, "EPERM", 1, true)
+end
+
+-- A connected pair: the client socket and the accepted one.
+local function pair()
+    local ok, server = catch network.tcp.bind("127.0.0.1", 0)
+    if not ok then
+        if denied(server) then
+            skip("loopback sockets unavailable")
+        end
+        error(server, 0)
+    end
+    local client = network.tcp.connect(server:getsockname())
+    local conn = server:accept()
+    server:close()
+    client:settimeout(10)
+    conn:settimeout(10)
+    return client, conn
+end
+
+local function a_socket_has_one_input_and_one_output_port_test()
+    local client, conn = pair()
+    local _c <close> = client
+    local _d <close> = conn
+    assert(type(conn.input) == "thread" and type(conn.output) == "thread")
+    assert(conn.input == conn.input and conn.output == conn.output)
+    assert(conn.input ~= conn.output and conn.input ~= client.input)
+    assert(status(conn.input) == "suspended" and status(conn.output) == "suspended")
+    -- The methods are still there.
+    assert(type(conn.receive) == "function" and conn.nothing == nil)
+end
+
+local function the_input_port_returns_lines_and_ends_with_the_connection_test()
+    local client, conn = pair()
+    local _c <close> = client
+    local _d <close> = conn
+    assert(resume(client.output, "first\r\n\nthird\nrest"))
+    client:close()
+    local got = {}
+    while true do
+        local ok, line = resume(conn.input)
+        assert(ok, line)
+        if line == nil then break end
+        got[#got + 1] = txt(line)
+    end
+    -- The empty line is a line. The end of the connection ends the port.
+    assert(table.concat(got, "|") == "first||third|rest", table.concat(got, "|"))
+    assert(status(conn.input) == "dead")
+    local ok, err = resume(conn.input)
+    assert(not ok and err == "cannot resume dead coroutine")
+end
+
+local function the_input_port_takes_the_patterns_of_receive_test()
+    local client, conn = pair()
+    local _c <close> = client
+    local _d <close> = conn
+    client:send("abcdefgh\nall the rest")
+    client:close()
+    local _, four = resume(conn.input, 4)
+    local _, line = resume(conn.input, "*l")
+    local _, rest = resume(conn.input, "*a")
+    assert(txt(four) == "abcd" and txt(line) == "efgh" and txt(rest) == "all the rest")
+end
+
+local function errors_of_a_port_come_back_from_resume_test()
+    local client, conn = pair()
+    local _c <close> = client
+    local _d <close> = conn
+    local ok, err = resume(conn.input, "*x")
+    assert(not ok and string.find(err, "invalid receive pattern", 1, true), err)
+    -- An error leaves the port usable.
+    assert(status(conn.input) == "suspended")
+    conn:close()
+    ok, err = resume(conn.output, "late")
+    assert(not ok and string.find(err, "closed socket", 1, true), err)
+end
+
+local function closing_the_output_port_ends_the_input_of_the_peer_test()
+    local client, conn = pair()
+    local _c <close> = client
+    local _d <close> = conn
+    resume(client.output, "bye\n")
+    assert(close(client.output))
+    assert(status(client.output) == "dead")
+    local _, line = resume(conn.input)
+    assert(txt(line) == "bye")
+    local ok, none = resume(conn.input)
+    assert(ok and none == nil and status(conn.input) == "dead")
+end
+
+local function ports_wait_inside_detached_coroutines_test()
+    local ok, server = catch network.tcp.bind("127.0.0.1", 0)
+    if not ok then
+        if denied(server) then skip("loopback sockets unavailable") end
+        error(server, 0)
+    end
+    local _, port = server:getsockname()
+    -- An echo server on ports.
+    local acceptor = detach(create(function()
+        while true do
+            local conn = server:accept()
+            detach(create(function()
+                local input, output = conn.input, conn.output
+                while true do
+                    local _, line = resume(input)
+                    if not line then break end
+                    resume(output, `$(txt(line))\n`)
+                end
+                conn:close()
+            end))
+        end
+    end))
+    local clients = {}
+    for i = 1, 16 do
+        clients[i] = detach(create(function()
+            local sock <close> = network.tcp.connect("127.0.0.1", port)
+            local replies = {}
+            for round = 1, 5 do
+                resume(sock.output, `client $i round $round\n`)
+                local _, line = resume(sock.input)
+                replies[round] = txt(line)
+            end
+            return table.concat(replies, "|")
+        end))
+    end
+    for i = 1, 16 do
+        local done, text = resume(clients[i])
+        assert(done, text)
+        assert(text == `client $i round 1|client $i round 2|client $i round 3|client $i round 4|client $i round 5`, text)
+    end
+    assert(close(acceptor))
+    server:close()
+end

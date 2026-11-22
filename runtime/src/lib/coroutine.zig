@@ -73,8 +73,27 @@ pub fn resumeCo(l: *Thread, co: *Thread, nargs: u32) Error!u32 {
         @branchHint(.unlikely);
         return resumeScheduled(l, co, nargs, t);
     }
+    if (co.port) |p| return resumePort(l, co, p, nargs);
     if (co.status != .suspended) return notSuspended(l, co, nargs);
     return resumeWith(l, co, nargs, if (co.frames.items.len == 0) .fresh else .results);
+}
+
+/// Creates a port over `ctx` and pushes it.
+pub fn newPort(l: *Thread, port: *const state.Port, ctx: Value) Error!*Thread {
+    gc.maybeCollect(l.g);
+    const co = state.newPortThread(l.g, port, ctx) catch return l.raiseMem();
+    try l.push(Value.obj(.thread, co));
+    return co;
+}
+
+/// Resumes a port: its native runs on `l` with the arguments of the
+/// `resume` call in the frame. A wait inside the native suspends `l`, and
+/// the scheduler calls `resume` again, which calls the native again.
+inline fn resumePort(l: *Thread, co: *Thread, p: *const state.Port, nargs: u32) Error!u32 {
+    if (co.status != .suspended) return notSuspended(l, co, nargs);
+    // The results are the top values. The arguments below them stay in
+    // the frame of `resume`, which drops them when it returns.
+    return p.step(l);
 }
 
 fn notSuspended(l: *Thread, co: *Thread, nargs: u32) Error {
@@ -488,6 +507,13 @@ fn close(l: *Thread) Error!u32 {
         try interp.closeTbc(co, 0, null);
         co.self_closed = true;
         return error.LusError;
+    }
+    if (co.port) |p| {
+        if (co.status == .suspended) {
+            co.status = .dead;
+            if (p.close) |c| c(l, co);
+        }
+        return aux.ret(l, .true);
     }
     switch (co.status) {
         .suspended, .dead, .err => {},

@@ -178,6 +178,102 @@ const connection_src =
     \\end
 ;
 
+/// The connection function in coroutine form: requests come from the
+/// source `input` and responses go to the sink `output`. `open` makes
+/// the two from the socket. Experiment: `LUS_CIO=naive` makes them plain
+/// coroutines around the natives, `LUS_CIO=port` makes them ports.
+const connection_co_src =
+    \\local readrequest, respond, stderr, open = ...
+    \\local resume = coroutine.resume
+    \\local function report(on_error, err)
+    \\    if on_error then
+    \\        local ok, failure = catch on_error(err)
+    \\        if ok then return end
+    \\        stderr(failure)
+    \\    end
+    \\    stderr(err)
+    \\end
+    \\local function exchange(conn, input, output, handler, on_error)
+    \\    while true do
+    \\        local got, req, keep, head = resume(input)
+    \\        if not got then error(req, 0) end
+    \\        if not req then
+    \\            if keep then resume(output, keep, nil, nil, false, false) end
+    \\            return
+    \\        end
+    \\        local ok, status, body, headers = catch handler(req)
+    \\        if not ok then
+    \\            report(on_error, status)
+    \\            resume(output, 500, nil, nil, false, false)
+    \\            return
+    \\        end
+    \\        if status == 101 then
+    \\            local valid, alive = resume(output, status, body, headers, true, false, req.headers["sec-websocket-key"])
+    \\            if not valid then
+    \\                report(on_error, alive)
+    \\                resume(output, 500, nil, nil, false, false)
+    \\                return
+    \\            end
+    \\            if alive then
+    \\                local ran, err = catch body(conn)
+    \\                if not ran then report(on_error, err) end
+    \\            end
+    \\            return
+    \\        end
+    \\        local valid, alive = resume(output, status, body, headers, keep, head)
+    \\        if not valid then
+    \\            report(on_error, alive)
+    \\            resume(output, 500, nil, nil, false, false)
+    \\            return
+    \\        end
+    \\        if not (alive and keep) then return end
+    \\    end
+    \\end
+    \\if open == "naive" then
+    \\    local yield = coroutine.yield
+    \\    open = function(conn)
+    \\        local input = coroutine.create(function()
+    \\            while true do yield(readrequest(conn)) end
+    \\        end)
+    \\        local output = coroutine.create(function(...)
+    \\            local status, body, headers, keep, head, key = ...
+    \\            while true do
+    \\                status, body, headers, keep, head, key = yield(respond(conn, status, body, headers, keep, head, key))
+    \\            end
+    \\        end)
+    \\        return input, output
+    \\    end
+    \\end
+    \\return function(sock, handler, on_error)
+    \\    local conn <close> = sock
+    \\    local input, output = open(conn)
+    \\    local ok, err = catch exchange(conn, input, output, handler, on_error)
+    \\    if not ok then report(on_error, err) end
+    \\end
+;
+
+const request_port = state.Port{ .step = readRequest };
+const response_port = state.Port{ .step = respond };
+
+/// open(conn): the request source and the response sink of a connection,
+/// as ports.
+fn openPorts(l: *Thread) Error!u32 {
+    const conn = l.arg(1);
+    _ = try coroutine.newPort(l, &request_port, conn);
+    _ = try coroutine.newPort(l, &response_port, conn);
+    return 2;
+}
+
+/// The variant of the connection function that `LUS_CIO` picks.
+const Variant = enum { off, naive, port };
+fn variant() Variant {
+    const v = std.c.getenv("LUS_CIO") orelse return .off;
+    const name = std.mem.span(v);
+    if (std.mem.eql(u8, name, "naive")) return .naive;
+    if (std.mem.eql(u8, name, "port")) return .port;
+    return .off;
+}
+
 /// stderr(err): writes an error of a handler to standard error, in the
 /// form that `lus` gives the error that ends a program.
 fn reportError(l: *Thread) Error!u32 {
@@ -195,7 +291,8 @@ fn connectionFn(l: *Thread) Error!Value {
     if (g.ext.get(connection_key)) |p| return Value.obj(.closure, @as(*object.Closure, @ptrCast(@alignCast(p))));
     const top = l.top;
     defer l.top = top;
-    api.load(l, connection_src, "=network.serve") catch return l.raise(l.err);
+    const which = variant();
+    api.load(l, if (which == .off) connection_src else connection_co_src, "=network.serve") catch return l.raise(l.err);
     const chunk = l.stack[l.top - 1];
     const read = try aux.native(l, readRequest, "readrequest");
     try l.push(read);
@@ -203,7 +300,13 @@ fn connectionFn(l: *Thread) Error!Value {
     try l.push(write);
     const report = try aux.native(l, reportError, "stderr");
     try l.push(report);
-    const f = try ops.call1(l, chunk, &.{ read, write, report });
+    const open: Value = switch (which) {
+        .off => .nil,
+        .naive => try l.newStringValue("naive"),
+        .port => try aux.native(l, openPorts, "open"),
+    };
+    try l.push(open);
+    const f = try ops.call1(l, chunk, &.{ read, write, report, open });
     try l.push(f);
     try aux.setField(l, g.registry.as(Table), connection_key, f);
     g.ext.put(g.gpa, connection_key, f.as(object.Closure)) catch return l.raiseMem();

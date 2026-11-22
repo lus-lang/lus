@@ -75,6 +75,15 @@ pub const Finish = union(enum) {
 
 pub const NativeFn = *const fn (l: *Thread) Error!u32;
 
+/// The behavior of a port. `step` runs with the arguments of `resume` in
+/// its frame, the port first, and returns its results like a native. It
+/// ends the port by setting the status of the port to dead. `close` runs
+/// when `coroutine.close` closes the port.
+pub const Port = struct {
+    step: NativeFn,
+    close: ?*const fn (l: *Thread, co: *Thread) void = null,
+};
+
 /// The common case of a native, run without a frame of its own. It reads
 /// its `nargs` arguments at `args` before it allocates anything, and it
 /// returns the single result, or `leaf_miss` when the call needs the full
@@ -570,6 +579,12 @@ pub const Thread = struct {
     resumer: ?*Thread = null,
     /// The scheduler record of a thread that waited or was detached.
     task: ?*@import("sched.zig").Task = null,
+    /// What a port runs when it is resumed. A port is a coroutine with no
+    /// stack of its own: `resume` calls its native on the resuming thread
+    /// (`lib/coroutine.zig`).
+    port: ?*const Port = null,
+    /// The object a port reads from or writes to.
+    port_ctx: Value = .nil,
     /// Values passed across resume and yield.
     transfer: u32 = 0,
     /// Set by `coroutine.yield` so the call machinery unwinds to `resume`.
@@ -632,6 +647,7 @@ pub const Thread = struct {
         m.mark(l.err);
         if (l.err_traceback) |s| m.markHeader(&s.hdr);
         if (l.resumer) |r| m.markHeader(&r.hdr);
+        m.mark(l.port_ctx);
     }
 
     // -----------------------------------------------------------------
@@ -1186,6 +1202,15 @@ pub fn newThread(g: *Global) Allocator.Error!*Thread {
     gc.addThread(g, l);
     l.stack = try g.gpa.alloc(Value, 64);
     @memset(l.stack, Value.nil);
+    return l;
+}
+
+/// A thread with no stack, for a port, which never runs code of its own.
+pub fn newPortThread(g: *Global, port: *const Port, ctx: Value) Allocator.Error!*Thread {
+    try g.gcs.threads.ensureUnusedCapacity(g.gpa, 1);
+    const l = try gc.allocUninit(g, Thread, .thread, @sizeOf(Thread));
+    l.* = .{ .hdr = l.hdr, .g = g, .status = .suspended, .port = port, .port_ctx = ctx };
+    gc.addThread(g, l);
     return l;
 }
 

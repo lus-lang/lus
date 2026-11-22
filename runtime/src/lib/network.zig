@@ -40,6 +40,7 @@ const faultio = @import("../vm/faultio.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
+const coroutine = @import("coroutine.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -84,6 +85,8 @@ pub const Socket = struct {
     /// coroutine of the connection keeps that server alive, and the
     /// socket leaves the count of the server when it closes.
     owner: ?*Server = null,
+    /// Set once a read found the end of the connection.
+    eof: bool = false,
 };
 
 /// A listening TCP socket.
@@ -121,6 +124,7 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "getsockname", .func = socketGetsockname },
         .{ .name = "getpeername", .func = socketGetpeername },
     }, socketGc, socketTostring);
+    try portIndex(l);
     try makeMetatable(l, server_name, &.{
         .{ .name = "accept", .func = serverAccept },
         .{ .name = "close", .func = serverClose },
@@ -175,12 +179,17 @@ fn metatableOf(l: *Thread, comptime name: []const u8) *Table {
 
 /// Creates a userdata holding `init` and pushes it.
 pub fn newObject(l: *Thread, comptime T: type, comptime name: []const u8, init: T) Error!*T {
+    return newObjectUser(l, T, name, init, if (T == Socket) 2 else 0);
+}
+
+fn newObjectUser(l: *Thread, comptime T: type, comptime name: []const u8, init: T, nuser: u16) Error!*T {
     const g = l.g;
     gc.maybeCollect(g);
     const mt = metatableOf(l, name);
-    const u = gc.alloc(g, Userdata, .userdata, Userdata.allocSize(@sizeOf(T), 0)) catch return l.raiseMem();
+    const u = gc.alloc(g, Userdata, .userdata, Userdata.allocSize(@sizeOf(T), nuser)) catch return l.raiseMem();
     u.size = @sizeOf(T);
-    u.nuser = 0;
+    u.nuser = nuser;
+    for (u.userValues()) |*v| v.* = .nil;
     u.metatable = mt;
     const p: *T = @ptrCast(@alignCast(u.data()));
     p.* = init;
@@ -197,7 +206,10 @@ pub fn toObject(l: *Thread, comptime T: type, comptime name: []const u8, v: Valu
 }
 
 pub fn checkSocket(l: *Thread, i: u32) Error!*Socket {
-    const s = toObject(l, Socket, socket_name, l.arg(i)) orelse return aux.typeError(l, i, socket_name);
+    var v = l.arg(i);
+    // A port of a socket stands for the socket.
+    if (v.tag == .thread and v.as(Thread).port != null) v = v.as(Thread).port_ctx;
+    const s = toObject(l, Socket, socket_name, v) orelse return aux.typeError(l, i, socket_name);
     if (s.closed) return l.raiseFmt("attempt to use a closed socket", .{});
     return s;
 }
@@ -1138,7 +1150,10 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
             .fail => |e| return .{ .fail = e },
         }
     }
-    if (n == 0) return .eof;
+    if (n == 0) {
+        s.eof = true;
+        return .eof;
+    }
     s.buf.items.len += n;
     return .{ .got = n };
 }
@@ -1996,4 +2011,71 @@ fn fetch(l: *Thread) Error!u32 {
     l.stack[headers_idx] = Value.int(status);
     try l.push(ht);
     return 3;
+}
+
+// ---------------------------------------------------------------------
+// Ports: `conn.input` and `conn.output`
+
+const input_port = state.Port{ .step = inputStep };
+const output_port = state.Port{ .step = outputStep, .close = outputClose };
+
+/// Replaces the `__index` table of sockets with a native that finds the
+/// ports of the socket and then the methods.
+fn portIndex(l: *Thread) Error!void {
+    const mt = metatableOf(l, socket_name);
+    const methods = table.getStr(mt, try l.newString("__index"));
+    try l.push(methods);
+    defer l.top -= 1;
+    const n = state.newNative(l.g, socketIndex, "index", 1) catch return l.raiseMem();
+    n.upvalues()[0] = methods;
+    try aux.setField(l, mt, "__index", Value.obj(.native, n));
+}
+
+fn socketIndex(l: *Thread) Error!u32 {
+    const key = l.arg(2);
+    if (key.tag == .string) {
+        const name = key.as(object.String).bytes();
+        const which: ?usize = if (std.mem.eql(u8, name, "input")) 0 else if (std.mem.eql(u8, name, "output")) 1 else null;
+        if (which) |w| {
+            const v = l.arg(1);
+            if (toObject(l, Socket, socket_name, v) == null) return aux.typeError(l, 1, socket_name);
+            const u = v.as(Userdata);
+            const slot = &u.userValues()[w];
+            if (slot.isNil()) {
+                const co = try coroutine.newPort(l, if (w == 0) &input_port else &output_port, v);
+                slot.* = Value.obj(.thread, co);
+                gc.barrierBack(l.g, &u.hdr);
+            }
+            return aux.ret(l, u.userValues()[w]);
+        }
+    }
+    const methods = l.frame().native.?.upvalues()[0];
+    return aux.ret(l, table.get(methods.as(Table), key));
+}
+
+/// resume(conn.input, pattern, max_bytes): the next piece of input, read
+/// as `receive` reads it. At the end of the connection the port ends.
+fn inputStep(l: *Thread) Error!u32 {
+    const co = l.arg(1).as(Thread);
+    const s = try checkSocket(l, 1);
+    const n = try socketReceive(l);
+    if (n == 1 and s.eof and s.buf.items.len == 0) {
+        const r = l.stack[l.top - 1];
+        if (r.tag == .vector and r.as(object.Vector).bytes.items.len == 0) {
+            co.status = .dead;
+            l.top -= 1;
+            return 0;
+        }
+    }
+    return n;
+}
+
+/// resume(conn.output, data): sends data as `send` does.
+fn outputStep(l: *Thread) Error!u32 {
+    return socketSend(l);
+}
+
+fn outputClose(l: *Thread, co: *Thread) void {
+    const s = toObject(l, Socket, socket_name, co.port_ctx) orelse return;
+    if (!s.closed) s.stream.shutdown(l.g.io, .send) catch {};
 }
