@@ -1,0 +1,74 @@
+-- Each hint of spec/design/hints.md, then the form it suggests, which
+-- gets no hint.
+global print, table, select, string, tostring, pairs, ipairs
+
+local function report(items)
+    local text = ""
+    for _, item in ipairs(items) do
+        text = text .. item .. "\n"
+    end
+    local parts = {}
+    for _, item in ipairs(items) do
+        parts[#parts + 1] = item
+    end
+    return text, table.concat(parts, "\n")
+end
+
+local function reversed(items)
+    local out = {}
+    for _, item in ipairs(items) do
+        table.insert(out, 1, item)
+    end
+    return out
+end
+
+local function handlers(n)
+    local list = {}
+    for i = 1, n do
+        list[i] = function(x) return x * 2 end
+        list[#list + 1] = function() return i end
+    end
+    return list
+end
+
+local function sum(...)
+    local total = 0
+    for i = 1, select("#", ...) do
+        total = total + select(i, ...)
+    end
+    return total
+end
+
+local function centroid(points)
+    local acc = { x = 0, y = 0 }
+    for _, p in ipairs(points) do
+        acc.x = acc.x + p.x
+        acc.y = acc.y + p.y
+    end
+    return acc.x / #points, acc.y / #points
+end
+
+local function total(prices)
+    local list = { 3, 5 }
+    list[#list + 1] = 8
+    local n = 0
+    for _, v in pairs(list) do n = n + v end
+    for _, v in pairs(prices) do n = n + v end
+    return n
+end
+
+local function labels(name, count)
+    print(string.format("%s has %s", name, count))
+    print(string.format("%s has %d", name, count))
+    for i = 1, count do print("item " .. tostring(i)) end
+    print("total: " .. count .. " items")
+end
+
+local function names(records)
+    for r in records do
+        local name, age = r.name, r.age
+        print(name, age)
+    end
+end
+
+print(report, reversed, handlers, sum, centroid, total, labels, names)

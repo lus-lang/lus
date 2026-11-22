@@ -223,7 +223,11 @@ fn fixtureSuite(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
             run.addArg(name);
             run.addFileInput(b.path(b.fmt("{s}/{s}", .{ rel, name })));
             run.expectStdOutEqual(expected);
-            const failing = std.mem.eql(u8, command, "check") and expected.len > 0;
+            // `lus check` fails on an error or a warning. Hints alone
+            // leave the exit status at zero.
+            const failing = std.mem.eql(u8, command, "check") and
+                (std.mem.indexOf(u8, expected, ": error: ") != null or std.mem.indexOf(u8, expected, ": warning: ") != null or
+                    std.mem.indexOf(u8, expected, "\"severity\": \"error\"") != null or std.mem.indexOf(u8, expected, "\"severity\": \"warning\"") != null);
             run.expectExitCode(if (failing) 1 else 0);
             step.dependOn(&run.step);
         }

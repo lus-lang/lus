@@ -5,8 +5,9 @@
 //! Errors are programs the compiler rejects: assignments to constants,
 //! undeclared names in the scope of a global declaration, missing or
 //! duplicate labels, and misplaced `continue`. Warnings are programs that
-//! run but probably do not do what their author meant, and idioms that a
-//! Lus feature expresses directly.
+//! run but probably do not do what their author meant. Hints suggest a
+//! faster or shorter form of correct code, each backed by a measured case
+//! in `tests/bench/hints/cases.lus` (`spec/design/hints.md`).
 
 const std = @import("std");
 const ast = @import("ast.zig");
@@ -18,6 +19,9 @@ const Span = ast.Span;
 pub const Severity = enum {
     @"error",
     warning,
+    /// A faster or shorter form of correct code (`spec/design/hints.md`).
+    /// A hint never changes the exit status of `lus check`.
+    hint,
 
     pub fn label(s: Severity) []const u8 {
         return @tagName(s);
@@ -63,9 +67,19 @@ pub const codes = [_]struct { code: []const u8, severity: Severity, summary: []c
     .{ .code = "self-assign", .severity = .warning, .summary = "A variable or field is assigned to itself." },
     .{ .code = "deprecated-pcall", .severity = .warning, .summary = "'pcall' or 'xpcall' is used where Lus has 'catch'." },
     .{ .code = "pledge-after-seal", .severity = .warning, .summary = "A pledge follows pledge(\"seal\") and has no effect." },
-    .{ .code = "use-from", .severity = .warning, .summary = "Fields of one table are copied into same-named locals one by one." },
-    .{ .code = "use-optional-chain", .severity = .warning, .summary = "Nested nil checks or an and-chain spell out optional chaining." },
-    .{ .code = "use-if-assign", .severity = .warning, .summary = "A local exists only for the truth test of the next if." },
+    .{ .code = "use-from", .severity = .hint, .summary = "Fields of one table are copied into same-named locals one by one." },
+    .{ .code = "use-optional-chain", .severity = .hint, .summary = "Nested nil checks or an and-chain spell out optional chaining." },
+    .{ .code = "use-if-assign", .severity = .hint, .summary = "A local exists only for the truth test of the next if." },
+    .{ .code = "use-interpolation", .severity = .hint, .summary = "A chain of three or more concatenations mixes literals and values." },
+    .{ .code = "use-for-from", .severity = .hint, .summary = "A generic for copies fields of its only loop variable into same-named locals." },
+    .{ .code = "concat-in-loop", .severity = .hint, .summary = "A string grows by concatenation in a loop, which copies it on every pass." },
+    .{ .code = "insert-front-in-loop", .severity = .hint, .summary = "table.insert(t, 1, v) in a loop moves the whole list on every pass." },
+    .{ .code = "closure-in-loop", .severity = .hint, .summary = "A function created in a loop captures nothing the loop declares." },
+    .{ .code = "select-in-loop", .severity = .hint, .summary = "select(i, ...) in a loop copies the arguments on every pass." },
+    .{ .code = "table-to-group", .severity = .hint, .summary = "A table that never leaves its function holds only named fields." },
+    .{ .code = "pairs-over-list", .severity = .hint, .summary = "pairs iterates a table built as a list." },
+    .{ .code = "format-to-interpolation", .severity = .hint, .summary = "string.format has a format of literal text and %s only." },
+    .{ .code = "redundant-tostring", .severity = .hint, .summary = "tostring of a number is an operand of a concatenation." },
     .{ .code = "doc-unknown-param", .severity = .warning, .summary = "A doc comment documents a parameter the function does not have." },
     .{ .code = "package-flag", .severity = .warning, .summary = "A package reads a flag that its header does not declare." },
     .{ .code = "package-pledge", .severity = .warning, .summary = "A package calls pledge at the top level, which acts on the permissions of the program." },
@@ -280,7 +294,7 @@ const Linter = struct {
                 if (!std.mem.eql(u8, bn, obj.kind.name.text)) return;
             } else base = obj.kind.name.text;
         }
-        try l.report(s.span, .warning, "use-from", "use 'from' destructuring: local ... from {s}", .{base.?});
+        try l.report(s.span, .hint, "use-from", "use 'from' destructuring: local ... from {s}", .{base.?});
     }
 
     fn selfAssign(l: *Linter, targets: []*ast.Expr, values: []*ast.Expr) Allocator.Error!void {
@@ -313,7 +327,7 @@ const Linter = struct {
             cur = body[0];
         }
         if (depth >= 2) {
-            try l.report(s.span, .warning, "use-optional-chain", "nested nil checks can use optional chaining: x?.y?.z", .{});
+            try l.report(s.span, .hint, "use-optional-chain", "nested nil checks can use optional chaining: x?.y?.z", .{});
         }
     }
 
@@ -354,7 +368,7 @@ const Linter = struct {
             const b = l.bindingAt(n.name.span) orelse return;
             if (b.last_use > next.span.end) return;
         }
-        try l.report(s.span, .warning, "use-if-assign", "local declaration can be moved to the if condition (use if-assignment)", .{});
+        try l.report(s.span, .hint, "use-if-assign", "local declaration can be moved to the if condition (use if-assignment)", .{});
     }
 
     /// Collects the names of `a and b and c`. False for any other shape.
@@ -499,7 +513,7 @@ const Linter = struct {
             } else break;
         }
         if (depth >= 2) {
-            try l.report(e.span, .warning, "use-optional-chain", "and-chain can use optional chaining: x?.y?.z", .{});
+            try l.report(e.span, .hint, "use-optional-chain", "and-chain can use optional chaining: x?.y?.z", .{});
         }
     }
 
@@ -556,6 +570,577 @@ const Linter = struct {
         for (l.flag_reads.items) |e| {
             const name = e.kind.index.key.kind.string;
             if (pkg.flag(name) == null) try l.report(e.span, .warning, "package-flag", "the package header declares no flag '{s}'", .{name});
+        }
+    }
+};
+
+// ---------------------------------------------------------------------
+// Hints (`spec/design/hints.md`)
+
+/// Walks the tree once for the hints, knowing the innermost loop body of
+/// the current function. A function body starts outside every loop, since
+/// creating a function does not run it.
+const Hints = struct {
+    l: *Linter,
+    /// The body of the innermost loop of the current function.
+    loop: ?Span = null,
+    /// The whole statement of that loop, which also holds the variables
+    /// its header declares.
+    loop_stat: ?Span = null,
+    /// The span of the current function, or the whole chunk.
+    func: ?Span = null,
+    /// Concatenations that are the right operand of another one, which
+    /// the outermost one reports.
+    inner_concats: std.AutoHashMapUnmanaged(*const ast.Expr, void) = .empty,
+    /// Every function span, computed on first use.
+    funcs: ?[]Span = null,
+    /// The control variables of numeric loops, by the start of their span.
+    numeric_vars: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// The initializer of each local declared alone, by its span start.
+    inits: std.AutoHashMapUnmanaged(u32, *ast.Expr) = .empty,
+    /// Locals used in a way that may make them something other than a
+    /// list, and the count of reads that keep a list a list.
+    not_list: std.AutoHashMapUnmanaged(*resolve.Binding, void) = .empty,
+    list_reads: std.AutoHashMapUnmanaged(*resolve.Binding, u32) = .empty,
+    /// `for ... in pairs(t)` loops, judged once the walk has seen every
+    /// use of `t`.
+    pairs_loops: std.ArrayList(struct { span: Span, b: *resolve.Binding }) = .empty,
+
+    fn run(h: *Hints) Allocator.Error!void {
+        try h.block(h.l.chunk.block);
+        try h.judgePairs();
+    }
+
+    fn block(h: *Hints, b: *ast.Block) Allocator.Error!void {
+        for (b.stats) |s| try h.stat(s);
+    }
+
+    fn loopBody(h: *Hints, b: *ast.Block, stat_span: Span) Allocator.Error!void {
+        const saved = h.loop;
+        const saved_stat = h.loop_stat;
+        h.loop = b.span;
+        h.loop_stat = stat_span;
+        defer {
+            h.loop = saved;
+            h.loop_stat = saved_stat;
+        }
+        try h.block(b);
+    }
+
+    fn function(h: *Hints, f: *ast.Function) Allocator.Error!void {
+        const sl = h.loop;
+        const sls = h.loop_stat;
+        const sf = h.func;
+        h.loop = null;
+        h.loop_stat = null;
+        h.func = f.span;
+        defer {
+            h.loop = sl;
+            h.loop_stat = sls;
+            h.func = sf;
+        }
+        try h.block(f.body);
+    }
+
+    fn exprs(h: *Hints, list: []*ast.Expr) Allocator.Error!void {
+        for (list) |e| try h.expr(e);
+    }
+
+    fn cond(h: *Hints, c: ast.Cond) Allocator.Error!void {
+        switch (c) {
+            .expr => |e| try h.expr(e),
+            .assign => |a| try h.exprs(a.values),
+            .from => |f| try h.expr(f.source),
+            .group => |g| for (g.inits) |init| switch (init) {
+                .ctor => |fields| try h.groupFields(fields),
+                .copy => {},
+            },
+        }
+    }
+
+    fn groupFields(h: *Hints, fields: []ast.GroupField) Allocator.Error!void {
+        for (fields) |f| switch (f.value) {
+            .expr => |e| try h.expr(e),
+            .group => |sub| try h.groupFields(sub),
+        };
+    }
+
+    fn stat(h: *Hints, s: *ast.Stat) Allocator.Error!void {
+        switch (s.kind) {
+            .empty, .break_, .continue_, .goto_, .label, .recovered => {},
+            .expr => |e| try h.expr(e),
+            .local => |loc| {
+                if (loc.names.len == 1 and loc.values.len == 1) try h.inits.put(h.l.arena, loc.names[0].name.span.start, loc.values[0]);
+                try h.exprs(loc.values);
+                try h.tableToGroup(loc.names, loc.values);
+            },
+            .local_from => |loc| try h.expr(loc.source),
+            .local_group => |loc| for (loc.inits) |init| switch (init) {
+                .ctor => |fields| try h.groupFields(fields),
+                .copy => {},
+            },
+            .local_function => |f| {
+                try h.closureInLoop(f.func, s.span);
+                try h.function(f.func);
+            },
+            .global => |g| if (g.values) |vals| try h.exprs(vals),
+            .global_from => |g| try h.expr(g.source),
+            .global_function => |g| try h.function(g.func),
+            .assign => |a| {
+                for (a.targets) |t| try h.listStore(t);
+                try h.exprs(a.targets);
+                try h.exprs(a.values);
+                try h.concatInLoop(a.targets, a.values, s.span);
+            },
+            .assign_from => |a| {
+                try h.exprs(a.targets);
+                try h.expr(a.source);
+            },
+            .function => |f| try h.function(f.func),
+            .do_ => |b| try h.block(b),
+            .while_ => |w| {
+                try h.cond(w.cond);
+                try h.loopBody(w.body, s.span);
+            },
+            .repeat_ => |r| {
+                try h.loopBody(r.body, s.span);
+                try h.expr(r.cond);
+            },
+            .if_ => |i| {
+                for (i.clauses) |cl| {
+                    try h.cond(cl.cond);
+                    try h.block(cl.body);
+                }
+                if (i.else_) |b| try h.block(b);
+            },
+            .numeric_for => |f| {
+                try h.numeric_vars.put(h.l.arena, f.name.span.start, {});
+                try h.expr(f.start);
+                try h.expr(f.limit);
+                if (f.step) |st| try h.expr(st);
+                try h.loopBody(f.body, s.span);
+            },
+            .generic_for => |f| {
+                try h.exprs(f.exprs);
+                try h.pairsOverList(f.exprs, s.span);
+                try h.forFrom(f.names, f.body, f.from, s.span);
+                try h.loopBody(f.body, s.span);
+            },
+            .return_ => |vals| try h.exprs(vals),
+            .provide => |vals| try h.exprs(vals),
+            .catch_ => |c| {
+                if (c.handler) |hd| try h.expr(hd);
+                try h.expr(c.body);
+            },
+        }
+    }
+
+    fn expr(h: *Hints, e: *ast.Expr) Allocator.Error!void {
+        switch (e.kind) {
+            .nil, .true, .false, .vararg, .integer, .float, .bigint, .decimal, .string, .name, .enum_ => {},
+            .interp => |parts| for (parts) |p| switch (p) {
+                .text => {},
+                .expr => |x| try h.expr(x),
+            },
+            .function => |f| {
+                try h.closureInLoop(f, e.span);
+                try h.function(f);
+            },
+            .table => |fields| for (fields) |f| switch (f.kind) {
+                .positional => |x| try h.expr(x),
+                .named => |n| try h.expr(n.value),
+                .keyed => |k| {
+                    try h.expr(k.key);
+                    try h.expr(k.value);
+                },
+            },
+            .binop => |b| {
+                if (b.op == .concat) try h.concat(e);
+                try h.expr(b.lhs);
+                try h.expr(b.rhs);
+            },
+            .unop => |u| {
+                if (u.op == .len) if (h.localOf(unparen(u.operand))) |b| try h.listRead(b);
+                try h.expr(u.operand);
+            },
+            .paren => |p| try h.expr(p),
+            .index => |ix| {
+                if (h.localOf(unparen(ix.obj))) |b| {
+                    if (ix.dot) try h.not_list.put(h.l.arena, b, {}) else try h.listRead(b);
+                }
+                try h.expr(ix.obj);
+                try h.expr(ix.key);
+            },
+            .call => |c| {
+                if (c.args.len == 1 and (h.l.isFree(c.callee, "pairs") or h.l.isFree(c.callee, "ipairs"))) {
+                    if (h.localOf(unparen(c.args[0]))) |b| try h.listRead(b);
+                }
+                try h.callHints(e);
+                try h.expr(c.callee);
+                try h.exprs(c.args);
+            },
+            .method => |m| {
+                try h.methodHints(e);
+                try h.expr(m.obj);
+                try h.exprs(m.args);
+            },
+            .slice => |sl| {
+                try h.expr(sl.obj);
+                if (sl.from) |f| try h.expr(f);
+                if (sl.to) |t| try h.expr(t);
+            },
+            .optional => |o| try h.expr(o),
+            .chain => |c| try h.expr(c),
+            .catch_ => |c| {
+                if (c.handler) |hd| try h.expr(hd);
+                try h.expr(c.body);
+            },
+            .do_ => |b| try h.block(b),
+            .query => |q| for (q.sources) |src| try h.expr(src.expr),
+        }
+    }
+
+    fn report(h: *Hints, span: Span, code: []const u8, comptime fmt: []const u8, args: anytype) Allocator.Error!void {
+        try h.l.report(span, .hint, code, fmt, args);
+    }
+
+    fn inLoop(h: *Hints) bool {
+        return h.loop != null;
+    }
+
+    fn contains(outer: Span, inner: Span) bool {
+        return outer.start <= inner.start and inner.end <= outer.end;
+    }
+
+    /// The local binding a name refers to, or null for a global.
+    fn localOf(h: *Hints, e: *const ast.Expr) ?*resolve.Binding {
+        if (e.kind != .name) return null;
+        const ref = h.l.res.refAt(e.kind.name.span.start) orelse return null;
+        const b = ref.binding orelse return null;
+        return switch (b.kind) {
+            .local, .param, .loop_var, .function => b,
+            else => null,
+        };
+    }
+
+    /// Whether `e` names the global library function `lib.name`.
+    fn isLibCall(h: *Hints, callee: *const ast.Expr, lib: []const u8, name: []const u8) bool {
+        if (callee.kind != .index) return false;
+        const ix = callee.kind.index;
+        if (ix.key.kind != .string or !std.mem.eql(u8, ix.key.kind.string, name)) return false;
+        return h.l.isFree(ix.obj, lib);
+    }
+
+    // --- speed ---------------------------------------------------------
+
+    /// `s = s .. x` in a loop, with `s` a local declared outside the loop.
+    fn concatInLoop(h: *Hints, targets: []*ast.Expr, values: []*ast.Expr, span: Span) Allocator.Error!void {
+        if (h.loop == null) return;
+        const loop = h.loop_stat.?;
+        if (targets.len != 1 or values.len != 1) return;
+        const t = targets[0];
+        const v = unparen(values[0]);
+        if (t.kind != .name or v.kind != .binop or v.kind.binop.op != .concat) return;
+        const first = unparen(v.kind.binop.lhs);
+        if (first.kind != .name or !std.mem.eql(u8, first.kind.name.text, t.kind.name.text)) return;
+        const b = h.localOf(t) orelse return;
+        if (contains(loop, b.span)) return;
+        try h.report(span, "concat-in-loop", "'{s}' grows by concatenation in a loop: collect the parts in a list and call table.concat once", .{t.kind.name.text});
+    }
+
+    /// A function created in a loop that reads nothing the loop declares.
+    fn closureInLoop(h: *Hints, f: *ast.Function, span: Span) Allocator.Error!void {
+        if (h.loop == null) return;
+        const loop = h.loop_stat.?;
+        for (h.l.res.refs) |ref| {
+            if (!contains(f.span, ref.span)) continue;
+            const b = ref.binding orelse continue;
+            if (contains(f.span, b.span)) continue;
+            if (contains(loop, b.span)) return;
+        }
+        try h.report(span, "closure-in-loop", "this function captures nothing the loop declares: create it once before the loop", .{});
+    }
+
+    fn callHints(h: *Hints, e: *ast.Expr) Allocator.Error!void {
+        const c = e.kind.call;
+        if (h.inLoop()) {
+            if (h.isLibCall(c.callee, "table", "insert") and c.args.len == 3 and c.args[1].kind == .integer and c.args[1].kind.integer == 1) {
+                try h.report(e.span, "insert-front-in-loop", "table.insert(t, 1, v) in a loop moves every element on each pass: append, then reverse the list once", .{});
+            }
+            if (h.l.isFree(c.callee, "select") and c.args.len == 2 and c.args[1].kind == .vararg and !(c.args[0].kind == .string and std.mem.eql(u8, c.args[0].kind.string, "#"))) {
+                try h.report(e.span, "select-in-loop", "select(i, ...) in a loop copies the arguments on each pass: call table.pack(...) once and index it", .{});
+            }
+        }
+        if (h.isLibCall(c.callee, "string", "format") and c.args.len >= 1) try h.formatHint(e, c.args[0], c.args.len - 1);
+    }
+
+    fn methodHints(h: *Hints, e: *ast.Expr) Allocator.Error!void {
+        const m = e.kind.method;
+        if (std.mem.eql(u8, m.name.text, "format")) {
+            const obj = unparen(m.obj);
+            if (obj.kind == .string) try h.formatHint(e, obj, m.args.len);
+        }
+    }
+
+    /// `string.format` with a literal format of text and `%s` only.
+    fn formatHint(h: *Hints, e: *ast.Expr, fmt: *const ast.Expr, nargs: usize) Allocator.Error!void {
+        const f = unparen(fmt);
+        if (f.kind != .string) return;
+        const text = f.kind.string;
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < text.len) : (i += 1) {
+            if (text[i] != '%') continue;
+            if (i + 1 >= text.len) return;
+            switch (text[i + 1]) {
+                's' => n += 1,
+                '%' => {},
+                else => return,
+            }
+            i += 1;
+        }
+        if (n == 0 or n != nargs) return;
+        try h.report(e.span, "format-to-interpolation", "this format holds only %s: a string with interpolation is faster", .{});
+    }
+
+    /// `local t = { a = ..., b = ... }` in a function, where every use of
+    /// `t` reads or writes one of those fields with a dot.
+    fn tableToGroup(h: *Hints, names: []ast.AttName, values: []*ast.Expr) Allocator.Error!void {
+        if (h.func == null or names.len != 1 or values.len != 1) return;
+        if (names[0].attribs.len != 0) return;
+        const ctor = unparen(values[0]);
+        if (ctor.kind != .table or ctor.kind.table.len == 0) return;
+        for (ctor.kind.table) |f| if (f.kind != .named) return;
+        const b = h.l.bindingAt(names[0].name.span) orelse return;
+        if (b.writes != 0 or b.reads == 0) return;
+        const func = h.func.?;
+        var uses: Uses = .{ .h = h, .b = b, .ctor = ctor, .func = func };
+        const v: @import("walk.zig").Visitor(*Uses) = .{ .ctx = &uses, .func = Uses.visit };
+        v.block(h.l.chunk.block) catch return error.OutOfMemory;
+        if (uses.bad or uses.dotted != b.reads) return;
+        try h.report(names[0].name.span, "table-to-group", "'{s}' never leaves this function: declare it <group> to keep its fields in locals", .{b.name});
+    }
+
+    const Uses = struct {
+        h: *Hints,
+        b: *resolve.Binding,
+        ctor: *const ast.Expr,
+        func: Span,
+        dotted: u32 = 0,
+        bad: bool = false,
+
+        fn visit(u: *Uses, slot: **ast.Expr) anyerror!void {
+            const e = slot.*;
+            if (e.kind != .index or !e.kind.index.dot) return;
+            const obj = e.kind.index.obj;
+            if (obj.kind != .name) return;
+            const ref = u.h.l.res.refAt(obj.kind.name.span.start) orelse return;
+            if (ref.binding != u.b) return;
+            // A use in a nested function captures the table.
+            if (u.h.innermostFunction(ref.span)) |fs| if (fs.start != u.func.start) {
+                u.bad = true;
+            };
+            const key = e.kind.index.key.kind.string;
+            var known = false;
+            for (u.ctor.kind.table) |f| if (std.mem.eql(u8, f.kind.named.name.text, key)) {
+                known = true;
+            };
+            if (!known) u.bad = true;
+            u.dotted += 1;
+        }
+    };
+
+    /// The span of the innermost function that contains `span`.
+    fn innermostFunction(h: *Hints, span: Span) ?Span {
+        if (h.funcs == null) {
+            var f: FuncFinder = .{ .arena = h.l.arena };
+            const v: @import("walk.zig").Visitor(*FuncFinder) = .{ .ctx = &f, .func = FuncFinder.visit };
+            v.block(h.l.chunk.block) catch {};
+            for (h.l.chunk.block.stats) |s| f.stat(s);
+            h.funcs = f.spans.items;
+        }
+        var best: ?Span = null;
+        for (h.funcs.?) |fs| {
+            if (!contains(fs, span)) continue;
+            if (best) |b| if (b.end - b.start <= fs.end - fs.start) continue;
+            best = fs;
+        }
+        return best;
+    }
+
+    const FuncFinder = struct {
+        arena: Allocator,
+        spans: std.ArrayList(Span) = .empty,
+
+        fn consider(f: *FuncFinder, span: Span) void {
+            f.spans.append(f.arena, span) catch {};
+        }
+        fn visit(f: *FuncFinder, slot: **ast.Expr) anyerror!void {
+            if (slot.*.kind == .function) f.consider(slot.*.kind.function.span);
+        }
+        fn stat(f: *FuncFinder, s: *ast.Stat) void {
+            switch (s.kind) {
+                .local_function => |x| f.consider(x.func.span),
+                .global_function => |x| f.consider(x.func.span),
+                .function => |x| f.consider(x.func.span),
+                else => {},
+            }
+            switch (s.kind) {
+                .local_function => |x| for (x.func.body.stats) |c| f.stat(c),
+                .global_function => |x| for (x.func.body.stats) |c| f.stat(c),
+                .function => |x| for (x.func.body.stats) |c| f.stat(c),
+                .do_ => |b| for (b.stats) |c| f.stat(c),
+                .while_ => |w| for (w.body.stats) |c| f.stat(c),
+                .repeat_ => |r| for (r.body.stats) |c| f.stat(c),
+                .numeric_for => |n| for (n.body.stats) |c| f.stat(c),
+                .generic_for => |g| for (g.body.stats) |c| f.stat(c),
+                .if_ => |i| {
+                    for (i.clauses) |cl| for (cl.body.stats) |c| f.stat(c);
+                    if (i.else_) |b| for (b.stats) |c| f.stat(c);
+                },
+                else => {},
+            }
+        }
+    };
+
+    fn listRead(h: *Hints, b: *resolve.Binding) Allocator.Error!void {
+        const gop = try h.list_reads.getOrPut(h.l.arena, b);
+        if (!gop.found_existing) gop.value_ptr.* = 0;
+        gop.value_ptr.* += 1;
+    }
+
+    /// A store into `t[k]` keeps `t` a list only when `k` is `#t + 1`.
+    fn listStore(h: *Hints, target: *const ast.Expr) Allocator.Error!void {
+        if (target.kind != .index) return;
+        const b = h.localOf(unparen(target.kind.index.obj)) orelse return;
+        if (!isLenPlusOne(target.kind.index.key, target.kind.index.obj)) try h.not_list.put(h.l.arena, b, {});
+    }
+
+    /// `pairs(t)` where `t` is a local list: built by a constructor of
+    /// positional items and grown only by `t[#t + 1] = v`.
+    fn pairsOverList(h: *Hints, exprs_: []*ast.Expr, span: Span) Allocator.Error!void {
+        if (exprs_.len != 1) return;
+        const call = unparen(exprs_[0]);
+        if (call.kind != .call or !h.l.isFree(call.kind.call.callee, "pairs") or call.kind.call.args.len != 1) return;
+        const b = h.localOf(unparen(call.kind.call.args[0])) orelse return;
+        if (b.kind != .local or b.writes != 0) return;
+        try h.pairs_loops.append(h.l.arena, .{ .span = span, .b = b });
+    }
+
+    /// Reports the `pairs` loops over lists. Every read of the list must
+    /// index it, take its length, or pass it to `pairs` or `ipairs`, since
+    /// any other use, such as passing it to a function, may add keys.
+    fn judgePairs(h: *Hints) Allocator.Error!void {
+        for (h.pairs_loops.items) |pl| {
+            const init = h.inits.get(pl.b.span.start) orelse continue;
+            const ctor = unparen(init);
+            if (ctor.kind != .table) continue;
+            var positional = true;
+            for (ctor.kind.table) |f| if (f.kind != .positional) {
+                positional = false;
+            };
+            if (!positional or h.not_list.contains(pl.b)) continue;
+            if ((h.list_reads.get(pl.b) orelse 0) != pl.b.reads) continue;
+            try h.report(pl.span, "pairs-over-list", "'{s}' is a list: ipairs walks it faster and in order", .{pl.b.name});
+        }
+    }
+
+    fn isLenPlusOne(key: *const ast.Expr, obj: *const ast.Expr) bool {
+        const k = unparen(key);
+        if (k.kind != .binop or k.kind.binop.op != .add) return false;
+        const l = unparen(k.kind.binop.lhs);
+        const r = unparen(k.kind.binop.rhs);
+        if (r.kind != .integer or r.kind.integer != 1) return false;
+        if (l.kind != .unop or l.kind.unop.op != .len) return false;
+        return exprEqual(l.kind.unop.operand, obj);
+    }
+
+    // --- concatenation -------------------------------------------------
+
+    /// The outermost node of a concatenation chain reports both
+    /// concatenation hints.
+    fn concat(h: *Hints, e: *ast.Expr) Allocator.Error!void {
+        if (h.inner_concats.contains(e)) return;
+        var operands: std.ArrayList(*ast.Expr) = .empty;
+        try h.flattenConcat(e, &operands);
+        var literals: usize = 0;
+        var values: usize = 0;
+        for (operands.items) |op| {
+            const x = unparen(op);
+            if (x.kind == .string) literals += 1 else values += 1;
+            if (x.kind == .call and h.l.isFree(x.kind.call.callee, "tostring") and x.kind.call.args.len == 1 and h.isNumber(x.kind.call.args[0])) {
+                try h.report(x.span, "redundant-tostring", "concatenation converts the number itself: tostring is redundant here", .{});
+            }
+        }
+        if (operands.items.len >= 3 and literals > 0 and values > 0) {
+            try h.report(e.span, "use-interpolation", "a string with interpolation writes this concatenation in one piece", .{});
+        }
+    }
+
+    fn flattenConcat(h: *Hints, e: *ast.Expr, out: *std.ArrayList(*ast.Expr)) Allocator.Error!void {
+        if (e.kind == .binop and e.kind.binop.op == .concat) {
+            const b = e.kind.binop;
+            try h.flattenConcat(b.lhs, out);
+            if (b.rhs.kind == .binop and b.rhs.kind.binop.op == .concat) try h.inner_concats.put(h.l.arena, b.rhs, {});
+            if (b.lhs.kind == .binop and b.lhs.kind.binop.op == .concat) try h.inner_concats.put(h.l.arena, b.lhs, {});
+            try h.flattenConcat(b.rhs, out);
+            return;
+        }
+        try out.append(h.l.arena, e);
+    }
+
+    /// Whether `e` is known to be a number: a numeral, arithmetic, or a
+    /// numeric `for` variable.
+    fn isNumber(h: *Hints, e: *const ast.Expr) bool {
+        const x = unparen(e);
+        return switch (x.kind) {
+            .integer, .float => true,
+            .binop => |b| switch (b.op) {
+                .add, .sub, .mul, .div, .idiv, .mod, .pow, .band, .bor, .bxor, .shl, .shr => true,
+                else => false,
+            },
+            .unop => |u| u.op == .neg or u.op == .len or u.op == .bnot,
+            .name => blk: {
+                const b = h.localOf(x) orelse break :blk false;
+                break :blk b.kind == .loop_var and h.isNumericForVar(b);
+            },
+            else => false,
+        };
+    }
+
+    fn isNumericForVar(h: *Hints, b: *resolve.Binding) bool {
+        return h.numeric_vars.contains(b.span.start);
+    }
+
+    // --- concise code --------------------------------------------------
+
+    /// `for r in it do local a, b = r.a, r.b ... end`, where `r` serves
+    /// only those copies.
+    fn forFrom(h: *Hints, names: []ast.Name, body: *ast.Block, from: bool, span: Span) Allocator.Error!void {
+        if (from or names.len != 1 or body.stats.len == 0) return;
+        const first = body.stats[0];
+        const loc = switch (first.kind) {
+            .local => |x| x,
+            else => return,
+        };
+        if (loc.names.len == 0 or loc.names.len != loc.values.len) return;
+        for (loc.names, loc.values) |n, v| {
+            if (n.attribs.len != 0) return;
+            if (v.kind != .index or !v.kind.index.dot) return;
+            const obj = v.kind.index.obj;
+            if (obj.kind != .name or !std.mem.eql(u8, obj.kind.name.text, names[0].text)) return;
+            if (!std.mem.eql(u8, v.kind.index.key.kind.string, n.name.text)) return;
+        }
+        const b = h.l.bindingAt(names[0].span) orelse return;
+        if (b.reads != loc.names.len or b.writes != 0) return;
+        try h.report(span, "use-for-from", "the loop copies fields of '{s}' into locals: for ... from reads them directly", .{names[0].text});
+        // The same copy also matches use-from, which this hint replaces.
+        var i: usize = 0;
+        while (i < h.l.out.items.len) {
+            const d = h.l.out.items[i];
+            if (std.mem.eql(u8, d.code, "use-from") and d.span.start == first.span.start) {
+                _ = h.l.out.orderedRemove(i);
+            } else i += 1;
         }
     }
 };
@@ -680,6 +1265,8 @@ pub fn lint(arena: Allocator, chunk: ast.Chunk, opts: Options) Allocator.Error![
         const n = l.nested.items[i];
         try l.block(n.block, n.in_loop);
     }
+    var hw: Hints = .{ .l = &l };
+    try hw.run();
 
     locate(chunk.source, l.out.items);
     std.mem.sort(Diagnostic, l.out.items, {}, struct {
