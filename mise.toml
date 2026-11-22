@@ -4,7 +4,10 @@ node = "24.7.0"
 pnpm = "10.18.0"
 
 [env]
-ZIG_GLOBAL_CACHE_DIR = "{{config_root}}/runtime/.zig-cache/global"
+# Every checkout and worktree shares one Zig cache, which
+# tools/prune-zig-cache.sh keeps under its cap.
+ZIG_GLOBAL_CACHE_DIR = "{{env.HOME}}/.cache/lus-zig/global"
+ZIG_LOCAL_CACHE_DIR = "{{env.HOME}}/.cache/lus-zig/local"
 
 [tasks.build]
 description = "Build the Zig runtime"

@@ -11,13 +11,18 @@
 # Builds still run one at a time, with -j1 for wasm and cross builds and
 # -j2 otherwise.
 #
-# It first keeps the Zig cache under its cap with tools/prune-zig-cache.sh,
-# and refuses to start a build while the disk has less than
+# It first keeps the shared Zig cache under its cap with
+# tools/prune-zig-cache.sh, removes the checkout's own cache once the shared
+# one is in use, and refuses to start a build while the disk has less than
 # LUS_MIN_FREE_DISK_GB gigabytes free, 20 by default.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 sh "$here/prune-zig-cache.sh"
+# A checkout that builds into the shared cache no longer uses its own.
+if grep -q "^ZIG_LOCAL_CACHE_DIR" "$here/../mise.toml" 2>/dev/null && [ -d "$here/../runtime/.zig-cache" ]; then
+    rm -rf "$here/../runtime/.zig-cache"
+fi
 min_gb=${LUS_MIN_FREE_DISK_GB:-20}
 free_kb=$(df -k "$here" | awk 'NR == 2 { print $4 }')
 if [ -n "$free_kb" ] && [ "$free_kb" -lt $((min_gb * 1024 * 1024)) ]; then
