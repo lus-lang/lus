@@ -33,6 +33,7 @@ pub const A = switch (builtin.cpu.arch) {
     .aarch64 => @import("a64.zig"),
     .x86_64 => @import("x64.zig"),
     .riscv64 => @import("rv64.zig"),
+    .loongarch64 => @import("la64.zig"),
     else => @compileError("the JIT has no backend for this target"),
 };
 const Mem = A.Mem;

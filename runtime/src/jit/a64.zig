@@ -4,6 +4,7 @@
 //! each opcode once for both architectures.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Reg = enum(u5) {
     x0,
@@ -646,7 +647,16 @@ pub const Assembler = struct {
     }
     /// Moves the native stack pointer by `v` bytes.
     pub fn moveSp(a: *Assembler, v: i32) void {
+        if (v < 0) a.probe(-v);
         a.addImm(.sp, v);
+    }
+    /// Touches each page of the `size` bytes below the stack pointer in
+    /// order, on Windows, where the system commits the stack of a thread
+    /// one guard page at a time.
+    fn probe(a: *Assembler, size: i32) void {
+        if (builtin.os.tag != .windows) return;
+        var off: i32 = 4096;
+        while (off <= size) : (off += 4096) a.load64(s0, .{ .base = .sp, .disp = -off });
     }
 
     // -----------------------------------------------------------------
@@ -747,6 +757,7 @@ pub const Assembler = struct {
     /// Opens a native frame of `size` bytes whose top word holds the
     /// return address of the running routine.
     pub fn saveLink(a: *Assembler, size: i32) void {
+        a.probe(size);
         a.addImm(.sp, -size);
         a.store64(.x30, .{ .base = .sp, .disp = size - 8 });
     }
@@ -808,6 +819,8 @@ pub const Assembler = struct {
 
 comptime {
     std.debug.assert(frame_size == 64);
+    // macOS and Windows reserve x18 for the system.
+    for ([_]Reg{ thread, bp, base, stop, t0, t1, t2, t3, t4, t5, t6, s0, s1, entry_target } ++ args) |r| std.debug.assert(r != .x18);
 }
 
 fn expectWords(a: *Assembler, expected: []const u32) !void {

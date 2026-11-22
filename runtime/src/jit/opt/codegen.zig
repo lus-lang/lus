@@ -46,6 +46,9 @@ pub const gpr_pool: []const A.Reg = switch (builtin.cpu.arch) {
     // a0 to a5 and t0 to t6. a6 and a7 are the scratch registers of the
     // assembler.
     .riscv64 => &.{ .x10, .x11, .x12, .x13, .x14, .x15, .x5, .x6, .x7, .x28, .x29, .x30, .x31 },
+    // a0 to a7 and t0 to t6. t7 and t8 are the scratch registers of the
+    // assembler.
+    .loongarch64 => &.{ .r4, .r5, .r6, .r7, .r8, .r9, .r10, .r11, .r12, .r13, .r14, .r15, .r16, .r17, .r18 },
     else => unreachable,
 };
 pub const fpr_pool: []const A.FReg = switch (builtin.cpu.arch) {
@@ -53,47 +56,60 @@ pub const fpr_pool: []const A.FReg = switch (builtin.cpu.arch) {
     .x86_64 => &.{ .xmm0, .xmm1, .xmm2, .xmm3, .xmm4, .xmm5, .xmm6, .xmm7 },
     // fa0 to fa7 and ft0 to ft7.
     .riscv64 => &.{ .f10, .f11, .f12, .f13, .f14, .f15, .f16, .f17, .f0, .f1, .f2, .f3, .f4, .f5, .f6, .f7 },
+    // fa0 to fa7 and ft0 to ft7.
+    .loongarch64 => &.{ .f0, .f1, .f2, .f3, .f4, .f5, .f6, .f7, .f8, .f9, .f10, .f11, .f12, .f13, .f14, .f15 },
     else => unreachable,
 };
-/// Scratch registers of the code generator. On x86-64 and riscv64 they
-/// are callee-saved registers that the entry sequence saves and baseline
-/// code leaves alone.
+/// Scratch registers of the code generator. On x86-64, riscv64, and
+/// loong64 they are callee-saved registers that the entry sequence saves
+/// and baseline code leaves alone.
 const sc0: A.Reg = switch (builtin.cpu.arch) {
     .aarch64 => .x13,
     .x86_64 => .rbp,
     .riscv64 => .x21,
+    .loongarch64 => .r27,
     else => unreachable,
 };
 const sc1: A.Reg = switch (builtin.cpu.arch) {
     .aarch64 => .x14,
     .x86_64 => .r13,
     .riscv64 => .x22,
+    .loongarch64 => .r28,
     else => unreachable,
 };
 const sc2: A.Reg = switch (builtin.cpu.arch) {
     .aarch64 => .x15,
     .x86_64 => .r13,
     .riscv64 => .x23,
+    .loongarch64 => .r29,
     else => unreachable,
 };
 const fsc0: A.FReg = switch (builtin.cpu.arch) {
     .aarch64 => .v30,
     .x86_64 => .xmm13,
     .riscv64 => .f31,
+    .loongarch64 => .f23,
     else => unreachable,
 };
 const fsc1: A.FReg = switch (builtin.cpu.arch) {
     .aarch64 => .v29,
     .x86_64 => .xmm12,
     .riscv64 => .f30,
+    .loongarch64 => .f22,
     else => unreachable,
 };
 const fret: A.FReg = switch (builtin.cpu.arch) {
     .aarch64 => .v0,
     .x86_64 => .xmm0,
     .riscv64 => .f10,
+    .loongarch64 => .f0,
     else => unreachable,
 };
+
+comptime {
+    // macOS and Windows reserve x18 for the system.
+    if (is_a64) for (gpr_pool ++ [_]A.Reg{ sc0, sc1, sc2 }) |r| std.debug.assert(r != .x18);
+}
 
 /// The registers of a direct call. The closure travels in the first
 /// pool register and the parameters in the ones after it, each as its

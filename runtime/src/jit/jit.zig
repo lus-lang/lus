@@ -25,6 +25,8 @@ const Error = state.Error;
 /// backend and a way to map executable memory, or on WebAssembly a host
 /// that instantiates modules.
 pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
+    // Windows on arm64 compiles with everything it needs, and its gate
+    // opens once CI has a runner for it (spec/design/platforms.md).
     .aarch64 => switch (builtin.os.tag) {
         .macos, .linux => true,
         else => false,
@@ -33,7 +35,7 @@ pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
         .macos, .linux, .windows => true,
         else => false,
     },
-    .riscv64 => builtin.os.tag == .linux,
+    .riscv64, .loongarch64 => builtin.os.tag == .linux,
     .wasm32 => builtin.os.tag == .wasi,
     else => false,
 };
@@ -582,6 +584,7 @@ test {
     _ = @import("a64.zig");
     _ = @import("x64.zig");
     _ = @import("rv64.zig");
+    _ = @import("la64.zig");
     if (enabled) {
         _ = mem;
         _ = emit;
