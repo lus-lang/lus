@@ -394,12 +394,12 @@ const Reader = struct {
             .string => Value.obj(.string, (try r.str()) orelse return error.Malformed),
             .bigint => blk: {
                 const s = try r.take(try r.len());
-                const b = vm.numeric.parseBigLiteral(g, s) catch return error.Malformed;
+                const b = vm.numeric.parseBigLiteral(g, s) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else error.Malformed;
                 break :blk Value.obj(.bigint, b);
             },
             .decimal => blk: {
                 const s = try r.take(try r.len());
-                const d = vm.numeric.parseDecimalLiteral(g, s) catch return error.Malformed;
+                const d = vm.numeric.parseDecimalLiteral(g, s) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else error.Malformed;
                 break :blk Value.obj(.decimal, d);
             },
             .enumeration => blk: {
