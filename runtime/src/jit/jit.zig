@@ -456,14 +456,6 @@ fn stackBounds() Bounds {
                     b = .{ .low = @intFromPtr(addr), .high = @intFromPtr(addr) + size };
                 }
                 _ = std.c.pthread_attr_destroy(&attr);
-                // The stack of the main thread grows on demand up to
-                // RLIMIT_STACK. Some C libraries and emulators report the
-                // whole mapping that may hold it, which is larger.
-                if (b.high != 0 and std.os.linux.gettid() == std.os.linux.getpid()) {
-                    if (std.posix.getrlimit(.STACK)) |rl| {
-                        if (rl.cur != std.posix.RLIM.INFINITY and b.high - b.low > rl.cur) b.low = b.high - rl.cur;
-                    } else |_| {}
-                }
             }
         },
         else => {},
