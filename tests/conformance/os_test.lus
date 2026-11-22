@@ -19,7 +19,7 @@ pledge("load")
 -- os.tmpname creates its file in TMPDIR, which differs between hosts, so
 -- reading it back needs fs:read wherever that is.
 pledge("fs:read", "fs:write",
-    "env=LC_*", "env=PATH", "env=LUS_TEST_*", "env=LUS_SET_*", "env:write=LUS_SET_*")
+    "env:read=LC_*", "env:read=PATH", "env:read=LUS_TEST_*", "env:read=LUS_SET_*", "env:write=LUS_SET_*")
 
 
 -- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.

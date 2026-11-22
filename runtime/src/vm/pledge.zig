@@ -624,8 +624,8 @@ fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, 
         } else {
             for (e.link_values.items) |v| if (valueMatches(cap, v, req, canon_link)) return true;
         }
-        // A specific sub-permission entry decides on its own.
-        if (ci == 0) return false;
+        // A grant only adds access, so a part whose values do not match
+        // still allows what its base permission grants.
     }
     if (s.find("all")) |e| if (e.unrestricted) return true;
     return false;
@@ -739,8 +739,10 @@ fn record(l: *Thread, set: *Set, name: []const u8, val: ?[]const u8, reject: boo
         e.rejected = true;
         return;
     }
-    // A valueless re-pledge keeps an existing scoped grant as it is.
-    if (val == null and e.values.items.len > 0) return;
+    // A grant only adds access. A grant without a value covers every
+    // value, whatever values the permission already holds, and a value
+    // added after it changes nothing.
+    if (e.unrestricted) return;
     if (val) |v| {
         const cap = findCap(g, split(name)[0]);
         const is_path = cap != null and cap.?.kind == .path;
