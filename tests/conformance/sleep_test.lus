@@ -1,0 +1,85 @@
+-- `coroutine.sleep`: a coroutine whose resume waits for a time to pass
+-- (spec/stdlib/coroutine/sleep.md).
+pledge("fs")
+
+local function elapsed(f)
+    local start = time.monotonic()
+    f()
+    return (time.monotonic() - start):seconds()
+end
+
+local function a_resume_waits_for_the_time_test()
+    local t = elapsed(function()
+        assert(coroutine.resume(coroutine.sleep(0.1)) == true)
+    end)
+    assert(t >= 0.1 and t < 2, t)
+end
+
+local function the_time_runs_from_the_first_resume_test()
+    local s = coroutine.sleep(0.1)
+    coroutine.resume(coroutine.sleep(0.15))
+    local t = elapsed(function()
+        coroutine.resume(s)
+    end)
+    assert(t >= 0.1, t)
+end
+
+local function a_duration_is_accepted_test()
+    local t = elapsed(function()
+        coroutine.resume(coroutine.sleep(time.millis(60)))
+    end)
+    assert(t >= 0.06, t)
+end
+
+local function a_finished_sleep_is_dead_test()
+    local s = coroutine.sleep(0)
+    local ok, extra = coroutine.resume(s)
+    assert(ok and extra == nil)
+    assert(coroutine.status(s) == "dead")
+    local again, err = coroutine.resume(s)
+    assert(not again and err == "cannot resume dead coroutine")
+end
+
+local function detached_sleeps_run_side_by_side_test()
+    local order = {}
+    local slow = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.15))
+        order[#order + 1] = "slow"
+    end))
+    local fast = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        order[#order + 1] = "fast"
+    end))
+    local t = elapsed(function()
+        coroutine.resume(slow)
+        coroutine.resume(fast)
+    end)
+    assert(table.concat(order, " ") == "fast slow")
+    assert(t < 0.3, t)
+end
+
+local function closing_a_waiter_ends_the_sleep_test()
+    local sleeper = coroutine.sleep(30)
+    local task = coroutine.detach(coroutine.create(function()
+        coroutine.resume(sleeper)
+    end))
+    coroutine.resume(coroutine.sleep(0.02))
+    local t = elapsed(function()
+        coroutine.close(task)
+    end)
+    assert(coroutine.status(sleeper) == "dead")
+    assert(t < 1)
+end
+
+local function closing_a_sleep_ends_it_test()
+    local s = coroutine.sleep(30)
+    assert(coroutine.close(s))
+    assert(coroutine.status(s) == "dead")
+end
+
+local function bad_times_raise_test()
+    assert(not catch coroutine.sleep())
+    assert(not catch coroutine.sleep("1"))
+    assert(not catch coroutine.sleep(-1))
+    assert(not catch coroutine.sleep(0 / 0))
+end

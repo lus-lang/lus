@@ -9,10 +9,7 @@ local ROOT
 local count = 0
 
 local function pause(seconds)
-    local start = time.monotonic()
-    while (time.monotonic() - start):seconds() < seconds do
-        coroutine.yield()
-    end
+    coroutine.resume(coroutine.sleep(seconds))
 end
 
 local function write(path, text)

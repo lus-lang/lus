@@ -134,6 +134,28 @@ end))
 print(coroutine.resume(task))   --> true  1,2,3
 ```
 
+### Sleeping
+
+[`coroutine.sleep(seconds)`](/manual/api#coroutine.sleep) returns a coroutine whose resume waits until `seconds` have passed, counted from that resume, then ends it. A wait of ten seconds is therefore `coroutine.resume(coroutine.sleep(10))`. The time is a number of seconds, fractions included, or a [duration](/manual/time). Inside a detached coroutine the wait suspends the coroutine, and the other coroutines run until the time is up.
+
+The following program runs two tasks that sleep for different times, so the one with the shorter sleep finishes first.
+
+```lus
+local log = {}
+local function task(name, seconds)
+    coroutine.resume(coroutine.sleep(seconds))
+    log[#log + 1] = name
+end
+
+local slow = coroutine.detach(coroutine.create(task), "slow", 0.2)
+local fast = coroutine.detach(coroutine.create(task), "fast", 0.1)
+coroutine.resume(slow)
+coroutine.resume(fast)
+print(table.concat(log, " "))   --> fast slow
+```
+
+Closing a detached coroutine while it sleeps ends the sleep too, as [Cancelling](#cancelling) describes.
+
 ### Waiting for a detached coroutine
 
 A program waits for a detached coroutine and gets its result with [`coroutine.resume(co)`](/manual/api#coroutine.resume). On a detached coroutine, `resume` waits until `co` has ended, then returns `true` and the results of the function, or `false` and the error object. Extra arguments passed to `resume` are ignored.
@@ -186,6 +208,8 @@ print(log[#log], coroutine.status(ticker))      --> cleaned up  dead
 
 Closing a detached coroutine that already failed returns `false` and its error object, which counts as collecting that error.
 
+A detached coroutine that waits in a resume of a coroutine that the runtime made to hand over events, which are [`coroutine.sleep`](#sleeping), the `exit` coroutine of a process, [`os.signal`](/manual/api#os.signal), and [`fs.watch`](/manual/api#fs.watch), closes that coroutine as well when it is closed. A cancelled task therefore ends its sleep or stops its watch, and the program does not wait for a sleep that nothing needs.
+
 ### Suspension points
 
 A _suspension point_ is an operation that waits for something outside the program and lets the other coroutines run during the wait. The following operations are suspension points.
@@ -197,7 +221,7 @@ A _suspension point_ is an operation that waits for something outside the progra
 - [`worker.receive`](/manual/api#worker.receive).
 - [`worker.peek`](/manual/api#worker.peek) inside a worker.
 - `read` and `write` on the pipes of a process that [`os.spawn`](/manual/processes) started.
-- Resuming a coroutine that waits for an event: the exit of a process (`p:wait()`), a signal ([`os.signal`](/manual/api#os.signal)), or a change to a file ([`fs.watch`](/manual/api#fs.watch)).
+- Resuming a coroutine that waits for an event: the exit of a process (`p.exit`), a signal ([`os.signal`](/manual/api#os.signal)), a change to a file ([`fs.watch`](/manual/api#fs.watch)), or the end of a time ([`coroutine.sleep`](/manual/api#coroutine.sleep)).
 
 Inside a detached coroutine, a suspension point suspends the coroutine until it can continue. During the wait, `coroutine.status` reports `"suspended"` for it. In the main chunk, or in a plain coroutine that no detached coroutine resumed, the same operation blocks its caller while the detached coroutines run. In the server example of [Detached coroutines](#detached-coroutines), the acceptor and the connections run during the `receive` calls of the main chunk.
 

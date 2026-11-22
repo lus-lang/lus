@@ -76,7 +76,7 @@ fn unlock() void {
 
 /// The number of times `s` arrived so far.
 pub fn count(s: Sig) u64 {
-    return counts[@intFromEnum(s)].load(.acquire);
+    return counts[@backingInt(s)].load(.acquire);
 }
 
 /// Makes `g` receive a `sched.notify` whenever a signal it may wait for
@@ -115,7 +115,7 @@ fn notifyAll() void {
 /// that may lock (never from a signal handler).
 pub fn deliver(s: Sig) void {
     if (s == .interrupt and handling_interrupt.load(.acquire)) std.process.exit(130);
-    _ = counts[@intFromEnum(s)].fetchAdd(1, .acq_rel);
+    _ = counts[@backingInt(s)].fetchAdd(1, .acq_rel);
     notifyAll();
 }
 
@@ -127,7 +127,7 @@ fn onSignal(sig: std.posix.SIG, info: *const std.posix.siginfo_t, ctx: ?*anyopaq
     _ = ctx;
     const errno_saved = std.c._errno().*;
     defer std.c._errno().* = errno_saved;
-    const b: u8 = @intCast(@intFromEnum(sig));
+    const b: u8 = @intCast(@backingInt(sig));
     _ = std.c.write(pipe_fds[1], @ptrCast(&b), 1);
 }
 
@@ -136,12 +136,12 @@ fn watcher() void {
     while (true) {
         const n = std.c.read(pipe_fds[0], &buf, buf.len);
         if (n <= 0) {
-            if (n < 0 and std.c._errno().* == @intFromEnum(std.c.E.INTR)) continue;
+            if (n < 0 and std.c._errno().* == @backingInt(std.c.E.INTR)) continue;
             return;
         }
         for (buf[0..@intCast(n)]) |b| {
             inline for (comptime std.enums.values(Sig)) |s| {
-                if (b == @intFromEnum(s.posixSig())) {
+                if (b == @backingInt(s.posixSig())) {
                     if (s == .child) reapOrphans();
                     deliver(s);
                 }
@@ -196,7 +196,7 @@ fn install(s: Sig) void {
         .mask = std.posix.sigemptyset(),
         .flags = @as(@FieldType(std.posix.Sigaction, "flags"), std.posix.SA.SIGINFO | std.posix.SA.RESTART) | @as(@FieldType(std.posix.Sigaction, "flags"), if (s == .child) std.posix.SA.NOCLDSTOP else 0),
     };
-    std.posix.sigaction(s.posixSig(), &act, &saved[@intFromEnum(s)]);
+    std.posix.sigaction(s.posixSig(), &act, &saved[@backingInt(s)]);
 }
 
 /// Hands the child `pid`, whose object was collected while it ran, to the
@@ -224,7 +224,7 @@ pub fn hold(s: Sig) bool {
         if (s == .hangup) return false;
         lock();
         defer unlock();
-        handlers[@intFromEnum(s)] += 1;
+        handlers[@backingInt(s)] += 1;
         if (!win_installed) {
             win_installed = SetConsoleCtrlHandler(onConsole, .TRUE).toBool();
         }
@@ -232,8 +232,8 @@ pub fn hold(s: Sig) bool {
     }
     lock();
     defer unlock();
-    handlers[@intFromEnum(s)] += 1;
-    if (handlers[@intFromEnum(s)] == 1) install(s);
+    handlers[@backingInt(s)] += 1;
+    if (handlers[@backingInt(s)] == 1) install(s);
     return true;
 }
 
@@ -243,7 +243,7 @@ pub fn release(s: Sig) void {
     if (!supported) return;
     lock();
     defer unlock();
-    const i = @intFromEnum(s);
+    const i = @backingInt(s);
     if (handlers[i] == 0) return;
     handlers[i] -= 1;
     if (handlers[i] > 0) return;
@@ -270,7 +270,7 @@ fn onConsole(kind: u32) callconv(.winapi) BOOL {
         else => return .FALSE,
     };
     lock();
-    const handled = handlers[@intFromEnum(s)] > 0;
+    const handled = handlers[@backingInt(s)] > 0;
     unlock();
     if (!handled) return .FALSE;
     deliver(s);

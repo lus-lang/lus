@@ -13,7 +13,7 @@ local function child(code)
 end
 
 local function exit_of(p)
-    local _, success, how, code = coroutine.resume(p:wait())
+    local _, success, how, code = coroutine.resume(p.exit)
     return success, how, code
 end
 
@@ -45,7 +45,7 @@ local function signals_between_resumes_are_counted_test()
     -- The system merges a signal that arrives while the same one is still
     -- pending, so the second follows after a moment.
     p:kill("hangup")
-    coroutine.resume(os.spawn({ lus_bin, "-e", "local t = os.time() + 0.2 while os.time() < t do end" }):wait())
+    coroutine.resume(coroutine.sleep(0.2))
     p:kill("hangup")
     p.stdin:write("go\n")
     assert(p.stdout:read("l") == "hangup\thangup")

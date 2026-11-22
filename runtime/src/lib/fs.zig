@@ -36,6 +36,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "createlink", .func = createLink },
     .{ .name = "createdirectory", .func = createDirectory },
     .{ .name = "walk", .func = walk.walk },
+    .{ .name = "stat", .func = stat },
 };
 
 pub const path_funcs = [_]aux.Reg{
@@ -332,6 +333,40 @@ fn fsType(l: *Thread) Error!u32 {
     try l.push(try l.newStringValue(if (kind == .directory) "directory" else "file"));
     try l.push(Value.boolean(is_link));
     return 2;
+}
+
+/// `fs.stat(path [, options])` returns `{size, modified, kind}`.
+fn stat(l: *Thread) Error!u32 {
+    const path = try aux.checkBytes(l, 1);
+    var follow_links = true;
+    if (!l.arg(2).isNil()) {
+        const t = try aux.checkTable(l, 2);
+        const f = try aux.getField(l, t, "follow");
+        if (!f.isNil()) {
+            if (f.tag != .true and f.tag != .false) return aux.argError(l, 2, "option 'follow' must be a boolean", .{});
+            follow_links = f.tag == .true;
+        }
+    }
+    try pledge.require(l, "fs:read", path);
+    const st = Dir.cwd().statFile(l.g.io, path, .{ .follow_symlinks = follow_links }) catch |e| switch (e) {
+        error.FileNotFound => return l.raiseFmt("path '{s}' does not exist", .{path}),
+        else => return l.raiseFmt("cannot stat '{s}': {s}", .{ path, errMsg(e) }),
+    };
+    const t = try l.newTable(0, 3);
+    try l.push(Value.obj(.table, t));
+    try aux.setField(l, t, "size", Value.int(@intCast(@min(st.size, std.math.maxInt(i64)))));
+    const kind: []const u8 = switch (st.kind) {
+        .directory => "directory",
+        .file => "file",
+        .sym_link => "link",
+        else => "other",
+    };
+    try aux.setField(l, t, "kind", try l.newStringValue(kind));
+    const ns: i128 = st.mtime.nanoseconds;
+    try @import("time.zig").pushWallInstant(l, @intCast(@divFloor(ns, std.time.ns_per_s)), @intCast(@mod(ns, std.time.ns_per_s)));
+    try aux.setField(l, t, "modified", l.stack[l.top - 1]);
+    l.top -= 1;
+    return 1;
 }
 
 fn follow(l: *Thread) Error!u32 {

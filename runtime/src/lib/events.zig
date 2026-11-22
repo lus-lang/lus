@@ -89,7 +89,57 @@ fn make(l: *Thread, which: i64, wait: state.NativeFn, name: []const u8, handle: 
     const w = try aux.native(l, wait, name);
     try l.push(w);
     const r = try ops.call1(l, f, &.{ w, handle });
+    r.as(Thread).event = true;
     l.top -= 1;
     try l.push(r);
     return r;
+}
+
+// ---------------------------------------------------------------------
+// coroutine.sleep
+
+const sched = @import("../vm/sched.zig");
+const gc = @import("../vm/gc.zig");
+const Userdata = object.Userdata;
+
+/// The state of one sleep: its length, and the time it ends once the first
+/// resume started it.
+const Sleep = struct { ns: u64, deadline: u64 = 0 };
+
+/// `coroutine.sleep(seconds)` returns a coroutine whose resume waits until
+/// `seconds` have passed and then ends it.
+pub fn sleep(l: *Thread) Error!u32 {
+    const v = l.arg(1);
+    const secs: f64 = switch (v.tag) {
+        .integer => @floatFromInt(v.asInt()),
+        .float => v.asFloat(),
+        else => @import("time.zig").durationSeconds(l, v) orelse return aux.typeError(l, 1, "number or duration"),
+    };
+    if (std.math.isNan(secs) or secs < 0) return aux.argError(l, 1, "the time must not be negative", .{});
+    const ns: u64 = if (secs >= 1e10) std.math.maxInt(u64) / 2 else @intFromFloat(secs * 1e9);
+    gc.maybeCollect(l.g);
+    const u = gc.alloc(l.g, Userdata, .userdata, Userdata.allocSize(@sizeOf(Sleep), 0)) catch return l.raiseMem();
+    u.size = @sizeOf(Sleep);
+    u.nuser = 0;
+    u.metatable = null;
+    const st: *Sleep = @ptrCast(@alignCast(u.data()));
+    st.* = .{ .ns = ns };
+    const uv = Value.obj(.userdata, u);
+    try l.push(uv);
+    _ = try once(l, sleepWait, "sleep", uv);
+    return 1;
+}
+
+fn sleepWait(l: *Thread) Error!u32 {
+    const v = l.arg(1);
+    if (v.tag != .userdata) return 0;
+    const st: *Sleep = @ptrCast(@alignCast(v.as(Userdata).data()));
+    const g = l.g;
+    if (st.deadline == 0) st.deadline = sched.now(g) + st.ns;
+    while (true) {
+        const at = sched.now(g);
+        if (at >= st.deadline) return 0;
+        const left = (st.deadline - at + std.time.ns_per_ms - 1) / std.time.ns_per_ms;
+        try sched.waitNotifyFor(l, @intCast(@min(left, std.math.maxInt(i32))));
+    }
 }

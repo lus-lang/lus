@@ -3,7 +3,7 @@
 //! as written and against the path it resolves to, and the child gets
 //! pipes, files, or the streams of the parent as its standard streams.
 //! The pipe ends of the parent are io handles in non-blocking mode, whose
-//! reads and writes wait through the scheduler, and `p:wait()` returns a
+//! reads and writes wait through the scheduler, and `p.exit` is a
 //! coroutine that waits for the exit (lib/events.zig).
 //!
 //! On POSIX systems the exit of a child arrives as SIGCHLD through
@@ -59,7 +59,6 @@ pub fn open(l: *Thread, os_t: *Table) Error!void {
     try l.push(Value.obj(.table, mt));
     defer l.top -= 1;
     const methods = try aux.newLib(l, .methods, "os:process", &.{
-        .{ .name = "wait", .func = pWait },
         .{ .name = "kill", .func = pKill },
         .{ .name = "poll", .func = pPoll },
     });
@@ -356,12 +355,12 @@ fn spawnResolved(l: *Thread, exe: []const u8, argv: []const []const u8, cwd: ?[]
 fn pushProcess(l: *Thread, pid: Pid, id: i64, ends: Ends) Error!u32 {
     const mt = processMt(l);
     gc.maybeCollect(l.g);
-    const u = gc.alloc(l.g, Userdata, .userdata, Userdata.allocSize(@sizeOf(Process), 3)) catch {
+    const u = gc.alloc(l.g, Userdata, .userdata, Userdata.allocSize(@sizeOf(Process), 4)) catch {
         closeEnds(l, ends);
         return l.raiseMem();
     };
     u.size = @sizeOf(Process);
-    u.nuser = 3;
+    u.nuser = 4;
     u.metatable = mt;
     for (u.userValues()) |*v| v.* = .nil;
     const p: *Process = @ptrCast(@alignCast(u.data()));
@@ -382,6 +381,9 @@ fn pushProcess(l: *Thread, pid: Pid, id: i64, ends: Ends) Error!u32 {
         return e;
     };
     if (ends.stderr) |f| u.userValues()[2] = try io_lib.newPipeHandle(l, f, true, nb);
+    // The coroutine that waits for the exit.
+    u.userValues()[3] = try events.once(l, waitNative, "exit", uv);
+    l.top -= 1;
     return 1;
 }
 
@@ -431,7 +433,7 @@ fn waitExit(l: *Thread, p: *Process) Error!shell.Status {
                 p.status = decode(st);
                 break;
             }
-            if (r < 0 and std.c._errno().* == @intFromEnum(std.c.E.INTR)) continue;
+            if (r < 0 and std.c._errno().* == @backingInt(std.c.E.INTR)) continue;
             p.status = .{ .exited = 0 };
             break;
         }
@@ -444,13 +446,6 @@ fn waitNative(l: *Thread) Error!u32 {
     const p = try checkProcess(l, 1);
     const st = try waitExit(l, p);
     return io_lib.pushStatus(l, st);
-}
-
-/// `p:wait()` returns a coroutine that waits for the exit.
-fn pWait(l: *Thread) Error!u32 {
-    _ = try checkProcess(l, 1);
-    _ = try events.once(l, waitNative, "wait", l.arg(1));
-    return 1;
 }
 
 fn pPoll(l: *Thread) Error!u32 {
@@ -470,7 +465,7 @@ fn pKill(l: *Thread) Error!u32 {
     if (tryReap(p)) return aux.retBool(l, false);
     if (comptime windows) return aux.retBool(l, win.terminate(p));
     if (sig < 0 or sig > 64) return aux.argError(l, 2, "signal number out of range", .{});
-    const r = std.c.kill(p.pid, @enumFromInt(@as(u32, @intCast(sig))));
+    const r = std.c.kill(p.pid, @fromBackingInt(@intCast(@as(u32, @intCast(sig)))));
     return aux.retBool(l, r == 0);
 }
 
@@ -484,6 +479,7 @@ fn pIndex(l: *Thread) Error!u32 {
         if (std.mem.eql(u8, s, "stdin")) return aux.ret(l, u.userValues()[0]);
         if (std.mem.eql(u8, s, "stdout")) return aux.ret(l, u.userValues()[1]);
         if (std.mem.eql(u8, s, "stderr")) return aux.ret(l, u.userValues()[2]);
+        if (std.mem.eql(u8, s, "exit")) return aux.ret(l, u.userValues()[3]);
     }
     const methods = (try aux.getField(l, processMt(l), "__methods")).as(Table);
     return aux.ret(l, try ops.index(l, Value.obj(.table, methods), k));

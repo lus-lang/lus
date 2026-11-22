@@ -29,8 +29,8 @@ The process object has these fields and methods.
 
 - `p.pid` is the integer that the system gives the process.
 - `p.stdin`, `p.stdout`, and `p.stderr` are the pipe ends of the streams opened with `"pipe"`, and `nil` for the others. They are files with the methods of `io.open` files: `p.stdin` is written with `write` and closed with `close`, and `p.stdout` and `p.stderr` are read with `read` and `lines`. A read or a write that cannot proceed waits, which suspends a detached coroutine and lets the other detached coroutines run while any other thread waits.
-- `p:wait()` returns a coroutine that waits for the process to end. Resuming it returns `true` followed by the three values of `os.execute`: `true` or `nil`, then `"exit"` or `"signal"`, then the exit status or the signal number. Every call returns a new coroutine, and once the process has ended each new coroutine returns the same status at once.
-- `p:poll()` returns the same three values when the process has ended, and nothing while it runs.
+- `p.exit` is a coroutine that waits for the process to end, made together with the process. Resuming it returns `true` followed by the three values of `os.execute`: `true` or `nil`, then `"exit"` or `"signal"`, then the exit status or the signal number. The coroutine is then dead, so a second resume returns `false` and `"cannot resume dead coroutine"`. Closing a detached coroutine that waits in a resume of `p.exit` closes `p.exit` as well, which ends the wait.
+- `p:poll()` returns the same three values when the process has ended, and nothing while it runs. It never waits, and it reads the status also after `p.exit` returned it.
 - `p:kill(signal)` sends a signal to the process and returns `true`, or returns `false` when the process has already ended. `signal` is `"terminate"`, the default, `"kill"`, `"interrupt"`, `"hangup"`, or a signal number. On Windows every signal ends the process with exit code 1.
 
 Leaving the scope of a process in a `<close>` variable closes its pipes and then waits for it to end, so a child that reads its input to the end sees the end and exits. A process object that the collector reclaims while the process runs leaves it running, and the runtime collects its exit status so that it never remains a zombie. A child keeps running after the program ends.
@@ -52,7 +52,7 @@ print(p.stdout:read("a"))
 --> apple
 --> fig
 --> pear
-print(coroutine.resume(p:wait()))   --> true  true  exit  0
+print(coroutine.resume(p.exit))   --> true  true  exit  0
 ```
 
 Two pipes that both fill can hold a child and the program in a deadlock when one thread reads them in turn. A detached coroutine for each pipe avoids that, as the following POSIX example shows with a child that writes to both streams.
@@ -67,7 +67,7 @@ end))
 local output = p.stdout:read("a")
 coroutine.resume(reader)
 print(output:sub(1, -2), errors:sub(1, -2))      --> out  err
-print(select(4, coroutine.resume(p:wait())))   --> 0
+print(select(4, coroutine.resume(p.exit)))   --> 0
 ```
 
 [`os.execute`](/manual/api#os.execute) runs a command line in the system shell. [`os.signal`](/manual/api#os.signal) handles the signals that the program itself receives.

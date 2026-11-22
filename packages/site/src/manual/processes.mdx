@@ -34,7 +34,7 @@ The pipe ends are files with the methods of files from `io.open`. The program wr
 
 ## Waiting for a program
 
-`p:wait()` returns a coroutine that waits for the program to end. Resuming it returns `true` followed by the same three values as [`os.execute`](/manual/api#os.execute): `true` for a successful exit or `nil` otherwise, then `"exit"` or `"signal"`, then the exit status or the number of the signal that ended the program. `p:poll()` returns those three values without waiting, or nothing while the program runs, and `p:kill()` asks the program to stop.
+`p.exit` is a coroutine that waits for the program to end. Resuming it returns `true` followed by the same three values as [`os.execute`](/manual/api#os.execute): `true` for a successful exit or `nil` otherwise, then `"exit"` or `"signal"`, then the exit status or the number of the signal that ended the program. Once it has returned them the coroutine is dead, like any coroutine that ended. `p:poll()` returns those three values without waiting, or nothing while the program runs, and `p:kill()` asks the program to stop.
 
 The following program runs a compiler and reports how it ended.
 
@@ -43,7 +43,7 @@ pledge("exec=cc")
 
 local p = os.spawn({"cc", "-o", "app", "app.c"}, {stderr = "pipe"})
 local messages = p.stderr:read("a")
-local _, ok, how, code = coroutine.resume(p:wait())
+local _, ok, how, code = coroutine.resume(p.exit)
 if not ok then
     print("cc failed with " .. how .. " " .. code)
     print(messages)
@@ -107,7 +107,7 @@ The `drain_timeout` option of `network.serve` limits how long the requests in pr
 
 ## Events as coroutines
 
-`p:wait()`, `os.signal`, and [`fs.watch`](/manual/filesystem#watching-for-changes) follow one rule. A function that waits for something to happen returns a coroutine whose resume waits for the next occurrence. A coroutine that hands over a series of events, such as signals or file changes, gives one per resume. One loop over `coroutine.resume` therefore serves for every kind of event, and a detached coroutine that resumes it waits without holding up the others.
+`p.exit`, `os.signal`, [`fs.watch`](/manual/filesystem#watching-for-changes), and [`coroutine.sleep`](/manual/concurrency#sleeping) follow one rule. A function that waits for something to happen returns a coroutine whose resume waits for the next occurrence. A coroutine that hands over a series of events, such as signals or file changes, gives one per resume. One loop over `coroutine.resume` therefore serves for every kind of event, and a detached coroutine that resumes it waits without holding up the others. Closing a detached coroutine while it waits in such a resume closes the event coroutine too, so a cancelled task stops its sleep, its watch, or its wait for a signal.
 
 ## Related pages
 

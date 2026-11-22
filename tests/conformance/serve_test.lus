@@ -1115,12 +1115,9 @@ end
 
 -- ===== Draining =====
 
--- Waits `seconds` through the scheduler, so the other coroutines run.
+-- Waits `seconds` while the other coroutines run.
 local function pause(seconds)
-    local s = network.tcp.bind("127.0.0.1", 0)
-    s:settimeout(seconds)
-    catch s:accept()
-    s:close()
+    coroutine.resume(coroutine.sleep(seconds))
 end
 
 local function closing_serve_closes_idle_connections_test()

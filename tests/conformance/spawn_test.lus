@@ -18,7 +18,7 @@ local function lus(code, options, grants)
 end
 
 local function exit_of(p)
-    local ok, success, how, code = coroutine.resume(p:wait())
+    local ok, success, how, code = coroutine.resume(p.exit)
     assert(ok, success)
     return success, how, code
 end
@@ -45,13 +45,27 @@ local function wait_returns_the_exit_status_test()
     assert(success == true and how == "exit" and code == 0)
 end
 
-local function every_wait_coroutine_sees_the_status_test()
+local function the_exit_coroutine_ends_with_the_status_test()
     local p = lus("os.exit(5)")
-    local a, b = p:wait(), p:wait()
-    assert(select(4, coroutine.resume(a)) == 5)
-    assert(select(4, coroutine.resume(b)) == 5)
-    assert(select(4, coroutine.resume(p:wait())) == 5)
-    assert(coroutine.status(a) == "dead")
+    assert(coroutine.status(p.exit) == "suspended")
+    assert(p.exit == p.exit)
+    assert(select(4, coroutine.resume(p.exit)) == 5)
+    assert(coroutine.status(p.exit) == "dead")
+    local ok, err = coroutine.resume(p.exit)
+    assert(not ok and err == "cannot resume dead coroutine")
+    assert(select(3, p:poll()) == 5)
+end
+
+local function closing_a_waiter_closes_the_exit_coroutine_test()
+    local p = lus('io.read("a")', { stdin = "pipe" })
+    local waiter = coroutine.detach(coroutine.create(function()
+        coroutine.resume(p.exit)
+    end))
+    coroutine.resume(coroutine.sleep(0.05))
+    coroutine.close(waiter)
+    assert(coroutine.status(p.exit) == "dead")
+    assert(p:poll() == nil)
+    p:kill()
 end
 
 local function poll_reports_a_running_child_test()

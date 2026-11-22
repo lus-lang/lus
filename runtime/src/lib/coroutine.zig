@@ -32,6 +32,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "wrap", .func = wrap },
     .{ .name = "close", .func = close },
     .{ .name = "detach", .func = detach },
+    .{ .name = "sleep", .func = @import("events.zig").sleep },
 };
 
 pub fn open(l: *Thread) Error!void {
@@ -329,6 +330,12 @@ fn handleStop(co: *Thread, e: anyerror) Outcome {
 /// variables with the pending error (if any) and marks it dead. Returns
 /// the final error, or null when everything closed cleanly.
 fn closeThread(co: *Thread) ?Value {
+    // A coroutine that waits for an event coroutine of the runtime, such as
+    // a sleep or a watch, cancels that wait with it.
+    const event: ?*Thread = if (co.task) |t| (if (t.kind == .inner and t.target != null and t.target.?.event) t.target else null) else null;
+    defer if (event) |e| {
+        if (e.status == .suspended) _ = closeThread(e);
+    };
     sched.abandonWait(co);
     // The results or the error that waiters still read. The end of a
     // detached coroutine woke them, and they run after this close.

@@ -66,7 +66,7 @@ fn close(l: *Thread) Error!u32 {
     const h = toHandle(l, l.arg(1)) orelse return 0;
     if (!h.open) return 0;
     h.open = false;
-    for (h.mask, 0..) |on, i| if (on) sigwatch.release(@enumFromInt(i));
+    for (h.mask, 0..) |on, i| if (on) sigwatch.release(@fromBackingInt(@intCast(i)));
     return 0;
 }
 
@@ -79,7 +79,7 @@ fn signal(l: *Thread) Error!u32 {
         const s = try aux.checkBytes(l, i);
         const sig: Sig = if (std.mem.eql(u8, s, "interrupt")) .interrupt else if (std.mem.eql(u8, s, "terminate")) .terminate else if (std.mem.eql(u8, s, "hangup")) .hangup else return aux.argError(l, i, "unknown signal '{s}' (expected \"interrupt\", \"terminate\", or \"hangup\")", .{s});
         if (sig == .hangup and builtin.os.tag == .windows) return aux.argError(l, i, "the signal 'hangup' does not exist on Windows", .{});
-        mask[@intFromEnum(sig)] = true;
+        mask[@backingInt(sig)] = true;
     }
     if (!sigwatch.subscribe(l.g)) return l.raiseFmt("signals cannot be delivered on this system", .{});
     gc.maybeCollect(l.g);
@@ -93,7 +93,7 @@ fn signal(l: *Thread) Error!u32 {
     try l.push(uv);
     try base_lib.registerFinalizer(l, &u.hdr, handleMt(l));
     for (mask, 0..) |on, j| if (on) {
-        const sig: Sig = @enumFromInt(j);
+        const sig: Sig = @fromBackingInt(@intCast(j));
         if (!sigwatch.hold(sig)) {
             _ = try closeValue(l, uv);
             return l.raiseFmt("the signal '{s}' cannot be handled on this system", .{sig.name()});
@@ -112,7 +112,7 @@ fn closeValue(l: *Thread, v: Value) Error!u32 {
     const h = toHandle(l, v).?;
     if (!h.open) return 0;
     h.open = false;
-    for (h.mask, 0..) |on, i| if (on) sigwatch.release(@enumFromInt(i));
+    for (h.mask, 0..) |on, i| if (on) sigwatch.release(@fromBackingInt(@intCast(i)));
     return 0;
 }
 
@@ -123,7 +123,7 @@ fn wait(l: *Thread) Error!u32 {
         if (!h.open) return l.raiseFmt("the signal handler is closed", .{});
         for (h.mask, 0..) |on, i| {
             if (!on) continue;
-            const sig: Sig = @enumFromInt(i);
+            const sig: Sig = @fromBackingInt(@intCast(i));
             if (sigwatch.count(sig) > h.seen[i]) {
                 h.seen[i] += 1;
                 if (sig == .interrupt) sigwatch.handling_interrupt.store(true, .release);
@@ -132,7 +132,7 @@ fn wait(l: *Thread) Error!u32 {
         }
         // A wait for an interrupt starts, so the program handles the next
         // one again.
-        if (h.mask[@intFromEnum(Sig.interrupt)]) sigwatch.handling_interrupt.store(false, .release);
+        if (h.mask[@backingInt(Sig.interrupt)]) sigwatch.handling_interrupt.store(false, .release);
         try sched.waitNotify(l);
     }
 }

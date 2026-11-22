@@ -207,6 +207,7 @@ print(collectgarbage())                     --> 0
       "coroutine.isyieldable",
       "coroutine.resume",
       "coroutine.running",
+      "coroutine.sleep",
       "coroutine.status",
       "coroutine.wrap",
       "coroutine.yield",
@@ -479,6 +480,47 @@ print(coroutine.resume(co))               --> true  running  false
     since = "0.1.0",
     source = "stdlib/coroutine/running.md",
     stability = "stable",
+  },
+  ["coroutine.sleep"] = {
+    children = {},
+    description = [[
+Returns a coroutine whose resume waits until `seconds` have passed and then ends it.
+
+`seconds` is a number of seconds, which may have a fraction, or a `duration` from the `time` library. The time runs from the first resume, not from the call, so a coroutine made early waits its whole time when the program resumes it. Resuming it returns `true` once the time has passed, with no other values. The coroutine is then dead, so a second resume returns `false` and `"cannot resume dead coroutine"`. A time of zero returns at the first resume.
+
+Resumed from a detached coroutine, the wait suspends that coroutine while the other detached coroutines run. Resumed anywhere else, it blocks while the detached coroutines run. Closing the coroutine with `coroutine.close` ends the sleep. Closing a detached coroutine that waits in a resume of the sleep closes the sleep too, so a cancelled task never keeps the program waiting for its sleep.
+
+A negative or NaN time raises `bad argument #1 to 'sleep' (the time must not be negative)`, and a value that is neither a number nor a duration raises a bad argument error.
+
+The following example measures a sleep of 50 milliseconds.
+
+```lus
+local start = time.monotonic()
+print(coroutine.resume(coroutine.sleep(0.05)))            --> true
+print((time.monotonic() - start):seconds() >= 0.05)       --> true
+```
+
+[`coroutine.detach`](/manual/api#coroutine.detach) runs tasks that sleep side by side.]],
+    kind = "function",
+    module = "coroutine",
+    name = "coroutine.sleep",
+    origin = "lus",
+    params = {
+      {
+        name = "seconds",
+        type = "number|duration",
+      },
+    },
+    parent = "coroutine",
+    returns = {
+      {
+        type = "thread",
+      },
+    },
+    short_name = "sleep",
+    since = "2.0.0",
+    source = "stdlib/coroutine/sleep.md",
+    stability = "unstable",
   },
   ["coroutine.status"] = {
     children = {},
@@ -2670,6 +2712,7 @@ print(math.type(n), n)                                       --> decimal  19.90
       "fs.move",
       "fs.path",
       "fs.remove",
+      "fs.stat",
       "fs.sync",
       "fs.type",
       "fs.walk",
@@ -3280,6 +3323,63 @@ print((catch fs.type(dir)))           --> false
     source = "stdlib/fs/remove.md",
     stability = "stable",
   },
+  ["fs.stat"] = {
+    children = {},
+    description = [[
+Returns a table that describes the file, directory, or link at `path`.
+
+The table has three fields. `size` is the size in bytes as an integer. `modified` is the time of the last change to the contents, as a wall-clock `instant` of the `time` library. `kind` is `"file"`, `"directory"`, `"link"`, or `"other"` for a device, a socket, or a named pipe.
+
+`options` is a table with one optional field, `follow`. With `follow` true, the default, a symbolic link is followed and the table describes its target, as the first result of [`fs.type`](/manual/api#fs.type) does, so `kind` is never `"link"`. With `follow` false the table describes the link itself, and `kind` is `"link"`.
+
+Every failure raises an error. A `path` that does not exist, or a link whose target does not exist when `follow` is true, raises `"path 'PATH' does not exist"`, and any other failure raises `"cannot stat 'PATH': REASON"`. A `follow` that is not a boolean raises a bad argument error. The call requires `fs:read` for `path`.
+
+The following example writes a file and reads its size and the age of its contents.
+
+```lus
+pledge("env", "fs")
+local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-stat-example.txt")
+local f = io.open(path, "w")
+f:write("hello")
+f:close()
+local info = fs.stat(path)
+print(info.kind, info.size)                        --> file  5
+print((time.now() - info.modified):seconds() < 60)   --> true
+fs.remove(path)
+```
+
+[`fs.type`](/manual/api#fs.type) tells files and directories apart without the other fields.
+
+**Requires pledge:** `fs:read`]],
+    kind = "function",
+    module = "fs",
+    name = "fs.stat",
+    origin = "lus",
+    params = {
+      {
+        name = "path",
+        type = "string",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "fs",
+    pledges = {
+      "fs:read",
+    },
+    returns = {
+      {
+        type = "table",
+      },
+    },
+    short_name = "stat",
+    since = "2.0.0",
+    source = "stdlib/fs/stat.md",
+    stability = "unstable",
+  },
   ["fs.sync"] = {
     children = {},
     description = [[
@@ -3398,7 +3498,7 @@ Each step gives three values: the path of the entry joined to `dir`, then `"dire
 - `links` is `"list"`, the default, or `"follow"`. With `"list"` a symbolic link is reported with the type of its target and the walk does not enter it. With `"follow"` the walk enters links to directories, except a link to a directory that the walk is already inside, which would never end.
 - `errors` is `"raise"`, the default, or `"skip"`. With `"skip"` a subdirectory that cannot be read, such as one without read permission, is left out. A `dir` that cannot be read raises in both modes.
 
-The call requires `fs:read` for `dir` and raises at once without it. The walk reports the entries of every directory it reads, and it enters a subdirectory only when `fs:read` covers it. A `dir` that does not exist raises `"cannot list directory DIR: No such file or directory"` at the first step, and a `dir` that names a file raises `"DIR is not a directory"`. An option of the wrong type or value raises a bad argument error.
+The call requires `fs:read` for `dir` and raises at once without it. The walk reports the entries of every directory it reads but enters a subdirectory only when `fs:read` covers it. A `dir` that does not exist raises `"cannot list directory DIR: No such file or directory"` at the first step, and a `dir` that names a file raises `"DIR is not a directory"`. An option of the wrong type or value raises a bad argument error.
 
 The iterator closes when the loop ends, also through `break` or an error, because the call returns a closing value as the fourth result of the generic `for`.
 
@@ -3468,18 +3568,18 @@ Resuming the coroutine waits for the next change, then returns `true` and an eve
 
 Events of one path that follow each other within 50 milliseconds merge into one, so an editor that saves a file in several steps produces one `"modify"`. A creation followed by changes stays a `"create"`, a creation followed by a removal produces nothing, and a removal followed by a creation becomes a `"modify"`. An event is therefore delivered at least 50 milliseconds after it happened. Changes that happen while the program does other work wait in a queue for the next resume.
 
-Resumed from a detached coroutine, the wait suspends that coroutine, and resumed anywhere else it blocks while the detached coroutines run. Closing the coroutine with `coroutine.close` stops the watch, as does the collection of a coroutine that nothing references.
+Resumed from a detached coroutine, the wait suspends that coroutine. Resumed anywhere else, it blocks while the detached coroutines run. Closing the coroutine with `coroutine.close` stops the watch, as does the collection of a coroutine that nothing references.
 
 `options` is a table with these optional fields.
 
 - `recursive` is a boolean. With `true` the watch covers every directory below `path`, including directories created during the watch. Without it a directory watch covers the entries of `path` itself.
-- `glob` keeps only the events whose path matches it, in the glob syntax of [`fs.list`](/manual/api#fs.list). A glob without `/` and `**` matches the name of the file, and any other glob matches the path relative to `path`, with `/` between its segments.
+- `glob` keeps only the events whose path matches it, in the glob syntax of [`fs.list`](/manual/api#fs.list). A glob without `/` and `**` matches the name of the file. Any other glob matches the path relative to `path`, with `/` between its segments.
 
 A watch of a file reports the changes of that file only.
 
 The call requires `fs:read` for `path`. An event of a path that `fs:read` does not cover is never delivered. A `path` that does not exist raises `"cannot watch 'PATH': No such file or directory"`. A system that refuses the watch, such as a sandbox without access to the notification service, raises an error that starts with `"cannot watch 'PATH'"`. An option of the wrong type raises a bad argument error.
 
-The notifications come from inotify on Linux, FSEvents on macOS, and `ReadDirectoryChangesW` on Windows. inotify keeps one watch for each directory of a recursive watch, and the system limits how many a user may hold (`/proc/sys/fs/inotify/max_user_watches`).
+The notifications come from inotify on Linux, FSEvents on macOS, and `ReadDirectoryChangesW` on Windows. inotify keeps one watch for each directory of a recursive watch, which counts against the number of watches that the system allows each user (`/proc/sys/fs/inotify/max_user_watches`).
 
 The following example reloads a configuration file whenever it changes.
 
@@ -6496,13 +6596,13 @@ Each argument names a signal.
 
 - `"interrupt"` is SIGINT, which Ctrl-C sends from a terminal. On Windows it is the Ctrl-C and Ctrl-Break events of the console.
 - `"terminate"` is SIGTERM, which service managers and `kill` send to stop a program. On Windows it is the close, logoff, and shutdown events of the console.
-- `"hangup"` is SIGHUP. Windows has no such signal, and the name raises an error there.
+- `"hangup"` is SIGHUP. Windows has no such signal, so the name raises an error there.
 
-While a coroutine of `os.signal` handles a signal, the signal no longer ends the program. Resuming the coroutine waits until one of its signals arrives, then returns `true` and the name of the signal. Each signal that arrives after the call is counted, so a signal that arrives while the program does other work is returned by the next resume. The system itself merges a signal into one that is still pending, so two identical signals sent at the same moment may arrive as one. Resumed from a detached coroutine, the wait suspends that coroutine, and resumed anywhere else it blocks while the detached coroutines run.
+While a coroutine of `os.signal` handles a signal, the signal no longer ends the program. Resuming the coroutine waits until one of its signals arrives, then returns `true` and the name of the signal. Each signal that arrives after the call is counted, so a signal that arrives while the program does other work is returned by the next resume. The system itself merges a signal into one that is still pending, so two identical signals sent at the same moment may arrive as one. Resumed from a detached coroutine, the wait suspends that coroutine. Resumed anywhere else, it blocks while the detached coroutines run.
 
 When an interrupt was returned and a second interrupt arrives before any coroutine waits for interrupts again, the program ends at once with exit status 130. A program whose shutdown hangs therefore still stops on the second Ctrl-C.
 
-Closing the coroutine with `coroutine.close` stops handling its signals, as does the collection of a coroutine that nothing references. A signal that no other coroutine handles then gets the action it had before the call, which for these signals ends the program. Several coroutines may handle the same signal, and every one of them receives it.
+Closing the coroutine with `coroutine.close` stops handling its signals, as does the collection of a coroutine that nothing references. A signal that no other coroutine handles then gets the action it had before the call, which for these signals ends the program. When several coroutines handle the same signal, every one of them receives it.
 
 On Windows a close, logoff, or shutdown event ends the process as soon as its handler returns, so the runtime holds the event until the process ends by itself or until the system ends it, about five seconds later.
 
@@ -6565,15 +6665,15 @@ The process object has these fields and methods.
 
 - `p.pid` is the integer that the system gives the process.
 - `p.stdin`, `p.stdout`, and `p.stderr` are the pipe ends of the streams opened with `"pipe"`, and `nil` for the others. They are files with the methods of `io.open` files: `p.stdin` is written with `write` and closed with `close`, and `p.stdout` and `p.stderr` are read with `read` and `lines`. A read or a write that cannot proceed waits, which suspends a detached coroutine and lets the other detached coroutines run while any other thread waits.
-- `p:wait()` returns a coroutine that waits for the process to end. Resuming it returns `true` followed by the three values of `os.execute`: `true` or `nil`, then `"exit"` or `"signal"`, then the exit status or the signal number. Every call returns a new coroutine, and once the process has ended each new coroutine returns the same status at once.
-- `p:poll()` returns the same three values when the process has ended, and nothing while it runs.
+- `p.exit` is a coroutine that waits for the process to end, made together with the process. Resuming it returns `true` followed by the three values of `os.execute`: `true` or `nil`, then `"exit"` or `"signal"`, then the exit status or the signal number. The coroutine is then dead, so a second resume returns `false` and `"cannot resume dead coroutine"`. Closing a detached coroutine that waits in a resume of `p.exit` closes `p.exit` as well, which ends the wait.
+- `p:poll()` returns the same three values when the process has ended, and nothing while it runs. It never waits, and it reads the status also after `p.exit` returned it.
 - `p:kill(signal)` sends a signal to the process and returns `true`, or returns `false` when the process has already ended. `signal` is `"terminate"`, the default, `"kill"`, `"interrupt"`, `"hangup"`, or a signal number. On Windows every signal ends the process with exit code 1.
 
 Leaving the scope of a process in a `<close>` variable closes its pipes and then waits for it to end, so a child that reads its input to the end sees the end and exits. A process object that the collector reclaims while the process runs leaves it running, and the runtime collects its exit status so that it never remains a zombie. A child keeps running after the program ends.
 
 The call requires the `exec` permission for the program. A grant without a value covers every program. A value without a separator is a glob over the name as `argv[1]` writes it, so `pledge("exec=git")` allows `{"git", ...}`. A value with a separator is a path glob over the absolute path the name resolves to, which resolves through symbolic links like a grant of `fs:read`, so `pledge("exec=/usr/bin/*")` allows every program found there. A denied program raises `permission "exec" denied for 'NAME'`. Since a shell runs any program, `os.execute` and `io.popen` need the grant without a value.
 
-On Windows the arguments are quoted for the rules that the C runtime uses to split a command line, so a program built with any common compiler receives them unchanged. A `.bat` or `.cmd` program runs through `cmd.exe`, which parses its arguments with rules of its own. An argument for such a program that holds `%`, `!`, `"`, or a line break cannot reach it intact, and the call raises an error before it starts anything.
+On Windows the arguments are quoted for the rules that the C runtime uses to split a command line, so a program built with any common compiler receives them unchanged. A `.bat` or `.cmd` program runs through `cmd.exe`, which parses its arguments with rules of its own. An argument for such a program that holds `%`, `!`, `"`, or a line break cannot reach it intact, so the call raises an error before it starts anything.
 
 An `argv` that is empty, an empty program name, an element that is not a string or holds a zero byte, and an option of the wrong type raise a bad argument error.
 
@@ -6588,7 +6688,7 @@ print(p.stdout:read("a"))
 --> apple
 --> fig
 --> pear
-print(coroutine.resume(p:wait()))   --> true  true  exit  0
+print(coroutine.resume(p.exit))   --> true  true  exit  0
 ```
 
 Two pipes that both fill can hold a child and the program in a deadlock when one thread reads them in turn. A detached coroutine for each pipe avoids that, as the following POSIX example shows with a child that writes to both streams.
@@ -6603,10 +6703,10 @@ end))
 local output = p.stdout:read("a")
 coroutine.resume(reader)
 print(output:sub(1, -2), errors:sub(1, -2))      --> out  err
-print(select(4, coroutine.resume(p:wait())))   --> 0
+print(select(4, coroutine.resume(p.exit)))   --> 0
 ```
 
-[`os.execute`](/manual/api#os.execute) runs a command line in the system shell, and [`os.signal`](/manual/api#os.signal) handles the signals that the program itself receives.
+[`os.execute`](/manual/api#os.execute) runs a command line in the system shell. [`os.signal`](/manual/api#os.signal) handles the signals that the program itself receives.
 
 **Requires pledge:** `exec`]],
     kind = "function",
