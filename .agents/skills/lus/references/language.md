@@ -161,6 +161,28 @@ assert(loads == 1)
 
 `<lazy, close>` opens a resource on first use and closes it at the end of the block only if the program read it. A field of a local group can be lazy too, as in `median <lazy> = table.median(rows)`.
 
+## Values that follow other values
+
+An `<observe>` local whose initializer names other `<observe>` locals is _derived_ from them. Each assignment to one of those sources computes every derived local again from its initializer, once each, in declaration order. An assignment from a nested function, such as a callback, updates them too. A derived local is read-only.
+
+```lus
+local price <observe> = 12
+local quantity <observe> = 1
+local total <observe> = price * quantity
+local label <observe> = `total: $total`
+
+local function add_one()
+    quantity = quantity + 1
+end
+
+add_one()
+assert(label == "total: 24")
+price = 10
+assert(label == "total: 20")
+```
+
+Only an assignment to the variable starts an update. A write to a field of a table that a source holds, such as `cart[3] = x`, updates nothing, so assign a new table instead. Other variables an initializer reads are inputs that the update reads again, and a change to one of them updates nothing. If an initializer raises an error, the assignment raises it and the derived locals not yet updated keep their previous values. An assignment to an observed local while an update runs raises an error. Observed locals cannot be globals, group fields, or `<lazy>`, `<close>`, or `<meta>`.
+
 ## Globals and permissions
 
 A file that names its globals with a `global` declaration gets an error for every other free name, which catches typos at compile time. Write the declaration at the top of the file, then pledge.
