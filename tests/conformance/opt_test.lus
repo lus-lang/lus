@@ -2245,3 +2245,45 @@ local function ipairs_with_metatables_and_other_values_test()
     end
     assert(hot(early, { "a", "b", "stop", "c" }) == 3)
 end
+
+local function a_loop_that_calls_a_function_once_gets_optimized_code_test()
+    -- The callee has no native code when the loop calls it, so it runs
+    -- in the interpreter, and the loop must go on in native code after
+    -- it returns.
+    local function once() return 2 end
+    local function f(n)
+        local s, done = 0, false
+        for i = 1, n do
+            if not done then s = s + once() done = true end
+            s = s + 3
+        end
+        return s
+    end
+    assert(f(20000) == 60002)
+    local _, optimized = debug.jit(f)
+    if opt ~= "off" and mode ~= "off" then
+        assert(optimized, "the hot loop should have optimized code")
+    end
+end
+
+local function inlined_calls_in_a_loop_on_a_new_coroutine_stack_test()
+    -- A coroutine starts with a short stack and few frames, which the
+    -- frames of the inlined calls outgrow at the first entry.
+    local function leaf(x) return x + 1 end
+    local function mid(x) return leaf(x) * 2 end
+    local function top(x) return mid(x) - mid(0) end
+    local results = {}
+    for k = 1, 3 do
+        local co = coroutine.wrap(function(n)
+            local s = 0
+            for i = 1, n do s = s + top(i) end
+            coroutine.yield(s)
+            return s * 2
+        end)
+        local s = co(30000)
+        assert(s == 30000 * 30001, s)
+        assert(co() == s * 2)
+        results[k] = s
+    end
+    assert(results[1] == results[3])
+end

@@ -400,6 +400,8 @@ pub const Codegen = struct {
         a.jumpIfMem(.ls, sc0, .{ .base = A.thread, .disp = lay.frames_cap }, ok);
         a.bind(bail);
         a.mov(A.args[0], A.thread);
+        a.movImm(A.args[1], c.f.extent + c.f.scratch + 16);
+        a.movImm(A.args[2], c.f.depth + 1);
         a.callPair(@intFromPtr(&opt.rt.bail));
         const l_interp = a.newLabel();
         a.jumpIfImm(.eq, A.ret0, 0, l_interp);
