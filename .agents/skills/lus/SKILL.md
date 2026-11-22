@@ -11,7 +11,7 @@ Lus is a small language derived from Lua 5.5. One `lus` executable runs scripts 
 
 Work in short cycles and let the tools judge the code. Every command below is fast enough to run after each edit.
 
-1. `lus check --json FILE...` parses, lints, and compiles without running. Fix every error and every warning. Each diagnostic has a stable `code`, and `lus check --list` explains all of them.
+1. `lus check --json FILE...` parses, lints, and compiles without running. Fix every error and every warning. Each diagnostic has a stable `code`, and `lus check --list` explains all of them. A diagnostic with severity `hint` suggests a faster or shorter form of correct code and never changes the exit status.
 2. `lus fmt --write FILE...` formats in place with 4-space indentation. Run it before showing code to the user.
 3. `lus test --json` runs every `*_test.lus` file below the current directory, each in its own process and temporary directory. Write tests alongside the code they cover.
 4. `lus -P PERM FILE` runs a script with a permission granted from the command line, which is handy for a quick trial. Real programs pledge in code.
@@ -64,6 +64,12 @@ Lus ships the libraries most programs pull from a package manager. Use them befo
 - `local T <meta> = expr` computes a constant value, such as a lookup table, when the file is compiled. An `if` on `flags`, literals, and `<meta>` locals keeps only the clause that is true, so `if flags.debug then` blocks vanish from builds without `-Fdebug`.
 - `local x <lazy> = expensive()` runs the initializer on the first read of `x`, so declare costly values once at the top of the file. `<lazy, close>` opens a resource on first use.
 - Strings are text indexed by character. Raw bytes are vectors, and network and binary file reads return vectors. Decode with `vector.tostring`.
+
+## Making code faster
+
+Start with the hints of `lus check`. Each speed hint comes from a measured case and fires only where the checker proves the faster form computes the same result, so apply it. `concat-in-loop` replaces a string grown in a loop with a list joined once by `table.concat`. `insert-front-in-loop` replaces `table.insert(t, 1, v)` in a loop with appends and one reverse. `pairs-over-list` replaces `pairs` with `ipairs` on a list. The other speed hints are `closure-in-loop`, `select-in-loop`, `table-to-group`, `format-to-interpolation`, and `redundant-tostring`. The concise hints, such as `use-for-from` and `use-interpolation`, name a shorter form that costs the same. Apply them when tidying code. A program can run the same check with `debug.check(source)`, which returns each diagnostic as a table with `line`, `column`, `severity`, `code`, and `message`.
+
+Measure before and after a change that no hint suggests, with a test or a short script that times both forms through `os.clock()`.
 
 ## Testing
 

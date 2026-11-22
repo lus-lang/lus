@@ -54,6 +54,7 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 - [Testing](https://lus.dev/manual/testing.md): `lus test`, case tables, power asserts, and snapshots.
 - [Developer tools](https://lus.dev/manual/tools.md): `lus fmt`, `lus check`, `lus doc`, `lus ast`, `lus build`, and `lus compile`.
 - [Standalone binaries](https://lus.dev/manual/tools.md#standalone-executables): One executable with the script, its modules, and its permissions.
+- [Faster forms](https://lus.dev/manual/tools.md#faster-forms): The `lus check` hints that name a measured faster form of correct code, and the [diagnostic codes](https://lus.dev/manual/tools.md#diagnostic-codes) with their severities.
 - [Debugger](https://lus.dev/manual/tools.md#debugger): `lus debug` over the Debug Adapter Protocol.
 
 ## Optional
