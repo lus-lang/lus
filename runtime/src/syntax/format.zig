@@ -1357,8 +1357,8 @@ test "format keeps the escapes of interpolated strings as written" {
     try expectFormat("x = `a\\r\\n$(b)`", "x = `a\\r\\n$b`\n");
 }
 
-test "format writes control characters of interpolated strings as escapes" {
-    try expectFormat("x = `\\27[$(code)m \\u{e9}\\x07 $$`", "x = `\\x1b[$(code)m \u{e9}\\x07 $$`\n");
+test "format keeps the escapes of interpolated strings" {
+    try expectFormat("x = `\\27[$(code)m \\u{e9}\\x07 $$`", "x = `\\27[$(code)m \\u{e9}\\x07 $$`\n");
     try expectFormat("x = `a $(`b $(c)`) d`", "x = `a $(`b $c`) d`\n");
 }
 
