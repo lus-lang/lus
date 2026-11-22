@@ -415,8 +415,12 @@ const Inotify = struct {
     }
 
     fn stop(b: *Inotify, s: *Shared) void {
-        _ = s;
-        if (b.fd >= 0) _ = std.c.close(b.fd);
+        if (b.fd >= 0) {
+            // The scheduler drops its registration, since a later
+            // descriptor may get the same number.
+            sched.forget(s.g, b.fd);
+            _ = std.c.close(b.fd);
+        }
         b.fd = -1;
         var it = b.paths.valueIterator();
         while (it.next()) |p| gpa.free(p.*);
