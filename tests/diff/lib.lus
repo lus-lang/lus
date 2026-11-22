@@ -14,9 +14,10 @@ local M = {}
 -- runs its own JIT backend, and `wasm` the WebAssembly build, which runs
 -- through `wasm.mjs` in Node. The `fmt` configuration runs the program
 -- after `lus fmt`, which must keep its meaning. The `nofold` configuration
--- runs the program with every `flags.` read through the local `__F`, so
--- the compiler folds no condition on a flag, and every fold must agree
--- with evaluation at run time.
+-- runs the program with every `flags.` read through the local `__F` and
+-- every `<meta>` local made an ordinary local, so the compiler folds no
+-- condition on a flag and computes nothing at compile time. Every fold
+-- and every compile-time value must agree with evaluation at run time.
 M.CONFIGS = {
     { name = "off", env = { LUS_JIT = "off" } },
     { name = "default", env = {} },
@@ -107,7 +108,7 @@ local function command(file, config, binaries, seconds, base)
         prep = quote(binaries.lus) .. " fmt " .. quote(file) .. " > " .. quote(target) .. " 2> " .. quote(base .. ".err") .. " && "
     elseif config.nofold then
         target = base .. ".nofold.lus"
-        prep = "sed 's/flags\\./__F./g' " .. quote(file) .. " > " .. quote(target) .. " 2> " .. quote(base .. ".err") .. " && "
+        prep = "sed -e 's/flags\\./__F./g' -e 's/ <meta>//g' " .. quote(file) .. " > " .. quote(target) .. " 2> " .. quote(base .. ".err") .. " && "
     end
     local run
     if config.binary == "wasm" then

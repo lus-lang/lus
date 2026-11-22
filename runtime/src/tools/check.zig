@@ -148,7 +148,7 @@ pub fn checkSource(gpa: std.mem.Allocator, arena: std.mem.Allocator, g: *lus.vm.
     var list: std.ArrayList(lint.Diagnostic) = .empty;
     try list.appendSlice(arena, try lint.lint(arena, chunk, opts));
 
-    const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = chunkname });
+    const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = chunkname, .meta_eval = false });
     switch (r) {
         .ok => {},
         .err => |m| {

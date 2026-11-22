@@ -261,7 +261,7 @@ const Resolver = struct {
         for (names) |an| {
             const k: Kind = if (an.has(.group)) .group else kind;
             const b = try r.declare(an.name, line, k);
-            b.readonly = an.has(.@"const") or an.has(.close);
+            b.readonly = an.has(.@"const") or an.has(.close) or an.has(.meta) or an.has(.lazy);
             b.close = an.has(.close);
         }
         for (r.bindings.items[first..]) |b| try r.push(b);

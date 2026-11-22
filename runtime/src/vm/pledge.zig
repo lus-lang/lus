@@ -247,6 +247,29 @@ pub fn adopt(l: *Thread, p: *anyopaque, parent: Allocator) Allocator.Error!void 
     l.pledges = own;
 }
 
+/// Limits a fresh state to the permissions that `src` holds now, or to
+/// none: `l` starts with a copy of the set of `src`, and its scripts may
+/// pledge only what that set covers. The meta state of a compilation is
+/// limited this way (`spec/design/meta.md`). Sets are copied, since each
+/// state frees its own.
+pub fn limitTo(l: *Thread, src: ?*Thread) error{OutOfMemory}!void {
+    const gpa = l.g.gpa;
+    const r = try prepare(l.g);
+    const from: ?*Set = if (src) |s| setOf(s) else null;
+    const ceil = if (from) |f| try f.clone(gpa) else blk: {
+        const n = try gpa.create(Set);
+        n.* = .{};
+        break :blk n;
+    };
+    if (r.ceiling) |old| old.destroy(gpa);
+    r.ceiling = ceil;
+    if (from) |f| {
+        const own = try f.clone(gpa);
+        release(l);
+        l.pledges = own;
+    }
+}
+
 /// Frees a set made by `snapshot` that was never adopted.
 pub fn discard(gpa: Allocator, p: *anyopaque) void {
     const s: *Set = @ptrCast(@alignCast(p));

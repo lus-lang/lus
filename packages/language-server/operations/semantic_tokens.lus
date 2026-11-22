@@ -78,7 +78,7 @@ local function classify_name(ref)
   else
     -- local
     local mods = 0
-    if decl.node and decl.node.attr == "const" then
+    if decl.node and (decl.node.attr == "const" or decl.node.attr == "meta" or decl.node.lazy) then
       mods = MOD_READONLY
     end
     return TOKEN_VARIABLE, mods
@@ -226,7 +226,7 @@ walk_node = function(node, analysis)
         local name = name_node.value or name_node.name
         if name and name_node.line then
           local mods = MOD_DECLARATION
-          if name_node.attr == "const" then
+          if name_node.attr == "const" or name_node.attr == "meta" or name_node.lazy then
             mods = mods + MOD_READONLY
           end
           add_token(name_node.line, name_node.column, #name, TOKEN_VARIABLE, mods)

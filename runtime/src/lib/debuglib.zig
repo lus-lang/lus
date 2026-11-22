@@ -609,7 +609,7 @@ fn formatSource(l: *Thread) Error!u32 {
 /// raises while parsing (assignment to a constant, a missing label).
 fn checkChunk(ctx: *anyopaque, arena: std.mem.Allocator, chunk: @import("../syntax/ast.zig").Chunk, chunkname: []const u8) std.mem.Allocator.Error!?[]const u8 {
     const g: *state.Global = @ptrCast(@alignCast(ctx));
-    const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = chunkname });
+    const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = chunkname, .meta_eval = false });
     switch (r) {
         .ok => return null,
         .err => |m| {

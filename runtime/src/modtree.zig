@@ -302,7 +302,7 @@ pub fn build(l: *state.Thread, src: []const u8, chunkname: []const u8, opts: Opt
             const was_stopped = g.gc_stopped;
             g.gc_stopped = true;
             defer g.gc_stopped = was_stopped;
-            const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = mname, .flags = api.flagsTable(g) });
+            const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = mname, .flags = api.flagsTable(g), .meta_grants = .{ .thread = g.main_thread } });
             switch (r) {
                 .err => |m| {
                     // The compiler allocates the message with the state.

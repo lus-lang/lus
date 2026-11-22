@@ -599,6 +599,8 @@ const Formatter = struct {
                 .@"const" => "const",
                 .close => "close",
                 .group => "group",
+                .meta => "meta",
+                .lazy => "lazy",
                 .runtime => null,
             };
             if (word) |w| {

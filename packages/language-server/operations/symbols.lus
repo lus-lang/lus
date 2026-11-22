@@ -124,7 +124,7 @@ local function walk(node, result)
           name = name_node.value or name_node.name or "?"
         end
         local is_const = type(name_node) == "table"
-          and name_node.attr == "const"
+          and (name_node.attr == "const" or name_node.attr == "meta")
         local kind = is_const and SYMBOL_KIND.Constant or SYMBOL_KIND.Variable
         result[#result + 1] = make_symbol(
           name, kind, node_range(node), name_range(name_node), nil

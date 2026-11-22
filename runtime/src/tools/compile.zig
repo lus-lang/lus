@@ -6,6 +6,7 @@
 //!                          the extension .lusc)
 //!   -s, --strip            leave out debug information
 //!   -F name[=value]        define a compile-time flag (also --flag)
+//!   -P perm                grant a permission to <meta> initializers (also --pledge)
 //!
 //! The chunk is the one `string.dump` writes for the compiled script, and
 //! `lus` runs it as it runs a source file.
@@ -26,6 +27,7 @@ const usage =
     \\  -o FILE           write the chunk to FILE (default: SCRIPT.lusc)
     \\  -s, --strip       leave out debug information
     \\  -F name[=value]   define a compile-time flag (also --flag)
+    \\  -P perm           grant a permission to <meta> initializers (also --pledge)
     \\
 ;
 
@@ -34,9 +36,11 @@ const Options = struct {
     script: ?[]const u8 = null,
     strip: bool = false,
     flags: std.ArrayList([]const u8) = .empty,
+    pledges: std.ArrayList([]const u8) = .empty,
 
     fn deinit(o: *Options, gpa: Allocator) void {
         o.flags.deinit(gpa);
+        o.pledges.deinit(gpa);
     }
 };
 
@@ -46,11 +50,13 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const a = args[i];
-        const Kind = enum { output, flag };
+        const Kind = enum { output, flag, pledge };
         const kind: ?Kind = if (std.mem.eql(u8, a, "-o"))
             .output
         else if (std.mem.eql(u8, a, "-F") or std.mem.eql(u8, a, "--flag"))
             .flag
+        else if (std.mem.eql(u8, a, "-P") or std.mem.eql(u8, a, "--pledge"))
+            .pledge
         else
             null;
         if (kind) |k| {
@@ -62,6 +68,7 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
             switch (k) {
                 .output => o.output = args[i],
                 .flag => try o.flags.append(gpa, args[i]),
+                .pledge => try o.pledges.append(gpa, args[i]),
             }
         } else if (std.mem.eql(u8, a, "-s") or std.mem.eql(u8, a, "--strip")) {
             o.strip = true;
@@ -69,6 +76,10 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
             try o.flags.append(gpa, a[2..]);
         } else if (std.mem.startsWith(u8, a, "--flag=")) {
             try o.flags.append(gpa, a["--flag=".len..]);
+        } else if (std.mem.startsWith(u8, a, "-P") and a.len > 2) {
+            try o.pledges.append(gpa, a[2..]);
+        } else if (std.mem.startsWith(u8, a, "--pledge=")) {
+            try o.pledges.append(gpa, a["--pledge=".len..]);
         } else if (a.len > 1 and a[0] == '-') {
             std.debug.print("lus compile: unknown option '{s}'\n{s}", .{ a, usage });
             return null;
@@ -96,7 +107,7 @@ fn defaultOutput(gpa: Allocator, script: []const u8) ![]u8 {
 
 /// Compiles the file at `path` to a binary chunk named `chunkname`.
 /// Prints the problem and returns error.Reported on failure.
-fn compileFile(gpa: Allocator, io: std.Io, path: []const u8, chunkname: []const u8, flags: []const []const u8, strip: bool) ![]u8 {
+fn compileFile(gpa: Allocator, io: std.Io, path: []const u8, chunkname: []const u8, flags: []const []const u8, pledges: []const []const u8, strip: bool) ![]u8 {
     const src = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
         std.debug.print("lus compile: cannot open {s} ({s})\n", .{ path, @errorName(e) });
         return error.Reported;
@@ -113,7 +124,7 @@ fn compileFile(gpa: Allocator, io: std.Io, path: []const u8, chunkname: []const 
     l.g.gc_stopped = true;
     try api.setFlags(l, flags);
     const fl: ?*const std.StringHashMapUnmanaged(lus.vm.value.Value) = if (l.g.ext.get("flags.compile")) |p| @ptrCast(@alignCast(p)) else null;
-    const r = try codegen.compile(l.g, src, .{ .chunkname = chunkname, .flags = fl });
+    const r = try codegen.compile(l.g, src, .{ .chunkname = chunkname, .flags = fl, .meta_grants = .{ .specs = pledges } });
     const proto = switch (r) {
         .err => |msg| {
             defer gpa.free(msg);
@@ -139,7 +150,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     const script = opts.script.?;
     const chunkname = try std.fmt.allocPrint(gpa, "@{s}", .{script});
     defer gpa.free(chunkname);
-    const data = compileFile(gpa, io, script, chunkname, opts.flags.items, opts.strip) catch |e| {
+    const data = compileFile(gpa, io, script, chunkname, opts.flags.items, opts.pledges.items, opts.strip) catch |e| {
         if (e == error.Reported) return 1;
         return e;
     };

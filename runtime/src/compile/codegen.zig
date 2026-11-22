@@ -7,6 +7,7 @@
 const std = @import("std");
 const ast = @import("../syntax/ast.zig");
 const opc = @import("opcodes.zig");
+const meta = @import("meta.zig");
 const vm = struct {
     const value = @import("../vm/value.zig");
     const object = @import("../vm/object.zig");
@@ -95,6 +96,12 @@ const VarDesc = struct {
     /// Group field table for group variables.
     group: ?*Group = null,
     pidx: u32 = 0, // index into locvars debug info
+    /// For a `<meta>` local, its value in the meta state, which later
+    /// compile-time evaluations receive (`meta.zig`).
+    meta_value: ?Value = null,
+    /// For a `<meta>` local held in a register (a table or a vector), its
+    /// constant value, which folding reads.
+    meta_const: ?Value = null,
 };
 
 const Group = struct {
@@ -197,6 +204,14 @@ pub const Options = struct {
     /// `flags`. The modules of a remote package compile this way, so they
     /// read the flags of their package (`spec/design/modules.md`).
     fold_flag_reads: bool = false,
+    /// The permissions of compile-time evaluation (`spec/design/meta.md`).
+    meta_grants: meta.Grants = .none,
+    /// Whether compile-time evaluation runs. Tools that only check or
+    /// format a file turn it off, because opening a file must not run it.
+    meta_eval: bool = true,
+    /// Set when compiling a compile-time evaluation: the free names that
+    /// are locals without a compile-time value in the enclosing code.
+    meta_unknown: ?*const std.StringHashMapUnmanaged(void) = null,
 };
 
 pub const Compiler = struct {
@@ -204,6 +219,12 @@ pub const Compiler = struct {
     arena: Allocator,
     g: *vm.state.Global,
     opts: Options,
+    /// The meta state of the chunk, created by the first compile-time
+    /// evaluation.
+    meta: ?*meta.Meta = null,
+    /// Above zero while a discarded block or condition compiles. Such code
+    /// is checked, never evaluated at compile time.
+    discarding: u32 = 0,
     actvars: std.ArrayList(VarDesc) = .empty,
     labels: std.ArrayList(LabelDesc) = .empty,
     gotos: std.ArrayList(LabelDesc) = .empty,
@@ -1411,6 +1432,9 @@ fn singleVar(fs: *FuncState, name: []const u8, line: u32, v: *ExpDesc) Error!voi
     if (v.info != -2 and ginfo == -2 and !std.mem.eql(u8, name, "flags") and !std.mem.startsWith(u8, name, "__lus_")) {
         return fs.c.err(line, "variable '{s}' not declared", .{name});
     }
+    if (fs.c.opts.meta_unknown) |unknown| if (unknown.contains(name)) {
+        return fs.c.err(line, "'{s}' is not known at compile time", .{name});
+    };
     const readonly = if (v.info == -2) v.aux != 0 else if (ginfo >= 0) fs.c.actvars.items[@intCast(ginfo)].readonly else false;
     // _ENV.name
     var env: ExpDesc = .{};
@@ -2142,6 +2166,8 @@ fn attribKind(fs: *FuncState, an: ast.AttName, line: u32, allow_runtime: bool) E
         .@"const" => k = .const_,
         .close => k = .close,
         .group => k = .group,
+        .meta => k = .const_,
+        .lazy => {},
         .runtime => if (!allow_runtime) return fs.c.err(line, "runtime attributes not supported in this context", .{}),
     };
     return k;
@@ -2185,6 +2211,8 @@ fn explist(fs: *FuncState, exprs: []*ast.Expr, last: *ExpDesc) Error!u32 {
 }
 
 fn localStat(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
+    for (names) |an| if (an.has(.meta)) return metaLocal(fs, names, values, line);
+    for (names) |an| if (an.has(.lazy)) return fs.c.err(line, "<lazy> is not supported yet", .{});
     var toclose: ?u32 = null;
     var has_runtime = false;
     for (names, 0..) |an, i| {
@@ -2439,6 +2467,8 @@ fn globalKind(fs: *FuncState, attribs: []const ast.Attrib, line: u32) Error!bool
         .@"const" => readonly = true,
         .close => return fs.c.err(line, "global variables cannot be to-be-closed", .{}),
         .group => return fs.c.err(line, "global variables cannot be groups", .{}),
+        .meta => return fs.c.err(line, "global variables cannot be <meta>", .{}),
+        .lazy => return fs.c.err(line, "global variables cannot be <lazy>", .{}),
         .runtime => return fs.c.err(line, "runtime attributes not supported in this context", .{}),
     };
     return readonly;
@@ -2866,23 +2896,43 @@ fn flagsIsReserved(fs: *FuncState) bool {
     return true;
 }
 
-/// The truth of an `if` condition when the flags decide it at compile
-/// time, or null. A condition folds when it is a flag read, a comparison
-/// between a flag read and a literal (or another flag read), or such
-/// conditions combined with `and`, `or`, `not`, and parentheses. Folding
-/// never hides a run-time effect: a comparison that would raise stays,
-/// and `and` and `or` fold only when the left operand folds and decides
-/// the result or both operands fold.
-fn foldFlag(fs: *FuncState, cond: ast.Cond) ?bool {
-    if (fs.c.opts.flags == null) return null;
+/// The truth of an `if` condition known at compile time, or null
+/// (`spec/design/meta.md`, section 4). Literals, flag reads, comparisons
+/// and `and`, `or`, `not` fold here directly. A condition that also
+/// reads `<meta>` and `<const>` values, computes, or calls a pure library
+/// function is evaluated in the meta state. Folding never hides a run-time
+/// effect: a condition that raises stays, and `and` and `or` fold only
+/// when the left operand decides the result or both operands fold.
+fn foldCondition(fs: *FuncState, cond: ast.Cond, line: u32) Error!?bool {
     const e = switch (cond) {
         .expr => |x| x,
         else => return null,
     };
-    if (!flagsIsReserved(fs)) return null;
-    const r = foldFlagCond(fs, e) orelse return null;
-    if (!r.flag) return null;
-    return r.value;
+    return foldKnown(fs, e, line);
+}
+
+fn foldKnown(fs: *FuncState, e: *ast.Expr, line: u32) Error!?bool {
+    switch (e.kind) {
+        .paren => |inner| return foldKnown(fs, inner, line),
+        .unop => |u| if (u.op == .not) {
+            const r = try foldKnown(fs, u.operand, line) orelse return null;
+            return !r;
+        },
+        .binop => |b| if (b.op == .@"and" or b.op == .@"or") {
+            const l = try foldKnown(fs, b.lhs, line) orelse return null;
+            const decides = if (b.op == .@"and") !l else l;
+            if (decides) return l;
+            return foldKnown(fs, b.rhs, line);
+        },
+        else => {},
+    }
+    if (foldFlagCond(fs, e)) |r| return r.value;
+    if (fs.c.discarding > 0 or !fs.c.opts.meta_eval) return null;
+    if (!isKnown(fs, e)) return null;
+    return switch (try metaEval(fs, e, line)) {
+        .ok => |v| v.truthy(),
+        .err => null,
+    };
 }
 
 const FoldedCond = struct { value: bool, flag: bool };
@@ -2917,6 +2967,14 @@ fn foldFlagCond(fs: *FuncState, e: *const ast.Expr) ?FoldedCond {
         },
         .true => return .{ .value = true, .flag = false },
         .false, .nil => return .{ .value = false, .flag = false },
+        .name => {
+            const o = foldOperand(fs, e) orelse return null;
+            return .{ .value = switch (o.value) {
+                .nil => false,
+                .boolean => |b| b,
+                else => true,
+            }, .flag = false };
+        },
         else => return null,
     }
 }
@@ -2951,6 +3009,21 @@ fn foldOperand(fs: *FuncState, e: *const ast.Expr) ?FoldedOperand {
                 else => return null,
             }
         },
+        .name => |n| {
+            const vd = knownLocal(fs, n.text) orelse return null;
+            if (vd.kind != .ctc) return null;
+            const k = vd.k;
+            const lit: FoldLit = switch (k.kind) {
+                .nil => .nil,
+                .true_ => .{ .boolean = true },
+                .false_ => .{ .boolean = false },
+                .kint => .{ .int = k.ival },
+                .kflt => .{ .float = k.nval },
+                .kstr => .{ .str = k.strval },
+                else => return null,
+            };
+            return .{ .value = lit, .flag = false };
+        },
         .index => {
             const v = flagValue(fs, e) orelse return null;
             const lit: FoldLit = switch (v.tag) {
@@ -2972,6 +3045,7 @@ fn foldOperand(fs: *FuncState, e: *const ast.Expr) ?FoldedOperand {
 /// caller has checked that `flags` is the reserved name.
 fn flagValue(fs: *FuncState, e: *const ast.Expr) ?Value {
     const flags = fs.c.opts.flags orelse return null;
+    if (!flagsIsReserved(fs)) return null;
     if (e.kind != .index) return null;
     const ix = e.kind.index;
     if (ix.obj.kind != .name or !std.mem.eql(u8, ix.obj.kind.name.text, "flags")) return null;
@@ -3040,6 +3114,231 @@ fn foldNumber(x: FoldLit) Value {
     };
 }
 
+// ---------------------------------------------------------------------
+// Compile-time evaluation (`spec/design/meta.md`)
+
+/// The innermost declaration of `name` visible here, or null when the
+/// name is a global. Locals of enclosing functions count, since a nested
+/// function reaches them as upvalues.
+fn knownLocal(fs: *FuncState, name: []const u8) ?*VarDesc {
+    const vars = fs.c.actvars.items;
+    var i = vars.len;
+    while (i > 0) {
+        i -= 1;
+        const vd = &vars[i];
+        if (!std.mem.eql(u8, vd.name, name)) continue;
+        if (vd.kind == .global_named or vd.kind == .global_star) return null;
+        return vd;
+    }
+    return null;
+}
+
+fn isGlobalName(fs: *FuncState, name: []const u8) bool {
+    return knownLocal(fs, name) == null;
+}
+
+/// Functions of the standard library that compute from their arguments
+/// alone, with no side effect and no dependence on the locale. A call of
+/// one with arguments known at compile time folds.
+const pure_string = [_][]const u8{ "byte", "char", "find", "format", "gsub", "join", "len", "lower", "ltrim", "match", "rep", "reverse", "rtrim", "split", "sub", "trim", "upper" };
+const pure_math = [_][]const u8{ "abs", "acos", "asin", "atan", "ceil", "cos", "deg", "exp", "floor", "fmod", "frexp", "ldexp", "log", "max", "min", "modf", "rad", "sin", "sqrt", "tan", "tointeger", "type", "ult" };
+const pure_utf8 = [_][]const u8{ "char", "codepoint", "len", "offset" };
+const pure_base = [_][]const u8{ "tonumber", "tostring", "type" };
+/// Constant fields of the standard library.
+const known_math = [_][]const u8{ "huge", "maxinteger", "mininteger", "pi" };
+const known_utf8 = [_][]const u8{"charpattern"};
+
+fn inList(list: []const []const u8, name: []const u8) bool {
+    for (list) |x| if (std.mem.eql(u8, x, name)) return true;
+    return false;
+}
+
+/// Whether `e` names a pure library function: `string.find`,
+/// `math.floor`, `utf8.len`, or `tostring`, with the library a global.
+fn isPureFunction(fs: *FuncState, e: *const ast.Expr) bool {
+    switch (e.kind) {
+        .name => |n| return inList(&pure_base, n.text) and isGlobalName(fs, n.text),
+        .index => |ix| {
+            if (ix.obj.kind != .name or ix.key.kind != .string) return false;
+            const lib = ix.obj.kind.name.text;
+            const f = ix.key.kind.string;
+            if (!isGlobalName(fs, lib)) return false;
+            if (std.mem.eql(u8, lib, "string")) return inList(&pure_string, f);
+            if (std.mem.eql(u8, lib, "math")) return inList(&pure_math, f);
+            if (std.mem.eql(u8, lib, "utf8")) return inList(&pure_utf8, f);
+            return false;
+        },
+        else => return false,
+    }
+}
+
+/// Whether the value of `e` is known at compile time: it is built from
+/// literals, flag reads, `<meta>` locals, `<const>` compile-time
+/// constants, fields of these, operators, and calls of pure library
+/// functions with known arguments.
+fn isKnown(fs: *FuncState, e: *const ast.Expr) bool {
+    switch (e.kind) {
+        .nil, .true, .false, .integer, .float, .string, .bigint, .decimal => return true,
+        .paren => |inner| return isKnown(fs, inner),
+        .unop => |u| return isKnown(fs, u.operand),
+        .binop => |b| return isKnown(fs, b.lhs) and isKnown(fs, b.rhs),
+        .name => |n| {
+            const vd = knownLocal(fs, n.text) orelse return false;
+            return vd.kind == .ctc or vd.meta_value != null;
+        },
+        .index => |ix| {
+            if (!isKnown(fs, ix.key)) return false;
+            if (ix.obj.kind == .name) {
+                const name = ix.obj.kind.name.text;
+                if (isGlobalName(fs, name)) {
+                    if (std.mem.eql(u8, name, "flags")) return fs.c.opts.flags != null and flagsIsReserved(fs);
+                    if (ix.key.kind != .string) return false;
+                    if (std.mem.eql(u8, name, "math")) return inList(&known_math, ix.key.kind.string);
+                    if (std.mem.eql(u8, name, "utf8")) return inList(&known_utf8, ix.key.kind.string);
+                    return false;
+                }
+            }
+            return isKnown(fs, ix.obj);
+        },
+        .call => |c| {
+            if (!isPureFunction(fs, c.callee)) return false;
+            for (c.args) |a| if (!isKnown(fs, a)) return false;
+            return true;
+        },
+        .method => |m| {
+            if (!inList(&pure_string, m.name.text)) return false;
+            if (!isKnown(fs, m.obj)) return false;
+            for (m.args) |a| if (!isKnown(fs, a)) return false;
+            return true;
+        },
+        else => return false,
+    }
+}
+
+/// The meta state of the chunk, created on first use.
+fn metaState(fs: *FuncState, line: u32) Error!*meta.Meta {
+    const c = fs.c;
+    if (c.meta) |m| return m;
+    c.meta = meta.open(c.g, c.opts.flags, c.opts.meta_grants) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.MetaSetup => return c.err(line, "meta: cannot create the compile-time state", .{}),
+    };
+    return c.meta.?;
+}
+
+/// Evaluates `e` at compile time with every visible `<meta>` local and
+/// `<const>` compile-time constant bound by name.
+fn metaEval(fs: *FuncState, e: *ast.Expr, line: u32) Error!meta.EvalResult {
+    const c = fs.c;
+    const m = try metaState(fs, line);
+    var known: std.ArrayList(meta.Known) = .empty;
+    var unknown: std.StringHashMapUnmanaged(void) = .empty;
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    const vars = c.actvars.items;
+    var i = vars.len;
+    while (i > 0) {
+        i -= 1;
+        const vd = &vars[i];
+        if (vd.name.len == 0 or vd.name[0] == '(') continue;
+        if ((try seen.getOrPut(c.arena, vd.name)).found_existing) continue;
+        switch (vd.kind) {
+            .global_named, .global_star => {},
+            .ctc => try known.append(c.arena, .{ .name = vd.name, .value = vd.meta_value orelse try meta.intoMeta(m, try ctcValue(fs, vd.k)) }),
+            else => if (vd.meta_value) |mv| {
+                try known.append(c.arena, .{ .name = vd.name, .value = mv });
+            } else try unknown.put(c.arena, vd.name, {}),
+        }
+    }
+    return meta.eval(m, c.arena, c.opts.chunkname, e, known.items, &unknown);
+}
+
+/// The value of a compile-time constant descriptor, in the target state.
+fn ctcValue(fs: *FuncState, k: ExpDesc) Error!Value {
+    return switch (k.kind) {
+        .nil => .nil,
+        .true_ => .true,
+        .false_ => .false,
+        .kint => Value.int(k.ival),
+        .kflt => Value.float(k.nval),
+        .kstr => Value.obj(.string, try fs.c.newString(k.strval)),
+        else => .nil,
+    };
+}
+
+/// A compile error for an error raised at compile time. A message that
+/// starts with a position in this chunk keeps that position, which is the
+/// failing line of the initializer.
+fn metaError(c: *Compiler, line: u32, msg: []const u8) Error {
+    // A compile error of the initializer names the chunk as the compiler
+    // does, and an error raised while it runs names it as the runtime does.
+    for ([_][]const u8{ @import("../syntax/parser.zig").chunkDisplay(c.arena, c.opts.chunkname), vm.state.chunkId(c.opts.chunkname) }) |name| {
+        if (!std.mem.startsWith(u8, msg, name) or msg.len <= name.len or msg[name.len] != ':') continue;
+        const rest = msg[name.len + 1 ..];
+        if (std.mem.indexOf(u8, rest, ": ")) |colon| {
+            if (std.fmt.parseInt(u32, rest[0..colon], 10)) |at| {
+                return c.err(at, "meta: {s}", .{rest[colon + 2 ..]});
+            } else |_| {}
+        }
+    }
+    return c.err(line, "meta: {s}", .{msg});
+}
+
+/// `local name <meta> = exp`: evaluates `exp` at compile time and declares
+/// `name` with the value as a constant.
+fn metaLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
+    const c = fs.c;
+    if (names.len != 1) return c.err(line, "a <meta> declaration names one variable", .{});
+    const an = names[0];
+    if (an.has(.close)) return c.err(line, "cannot combine <meta> with <close>", .{});
+    if (an.has(.group)) return c.err(line, "cannot combine <meta> with <group>", .{});
+    if (an.has(.lazy)) return c.err(line, "cannot combine <meta> with <lazy>", .{});
+    if (hasRuntimeAttribs(an)) return c.err(line, "cannot combine <meta> with runtime attributes", .{});
+    if (values.len != 1) return c.err(line, "a <meta> variable needs one initializer", .{});
+    if (c.discarding > 0 or !c.opts.meta_eval) {
+        // Checked only: the declaration compiles as a constant local.
+        var e: ExpDesc = .{};
+        try expr(fs, values[0], &e);
+        try adjustAssign(fs, 1, 1, &e);
+        _ = try newLocalVar(fs, an.name.text, .const_);
+        try adjustLocalVars(fs, 1);
+        return;
+    }
+    const mv = switch (try metaEval(fs, values[0], line)) {
+        .ok => |v| v,
+        .err => |msg| return metaError(c, line, msg),
+    };
+    const tv = switch (try meta.intoTarget(c.meta.?, c.g, c.arena, mv)) {
+        .ok => |v| v,
+        .bad => |b| if (b.path.len == 0)
+            return c.err(line, "meta value is a {s}", .{b.type_name})
+        else
+            return c.err(line, "meta value contains a {s} at {s}", .{ b.type_name, b.path }),
+    };
+    var k: ExpDesc = switch (tv.tag) {
+        .nil => .{ .kind = .nil },
+        .true => .{ .kind = .true_ },
+        .false => .{ .kind = .false_ },
+        .integer => .{ .kind = .kint, .ival = tv.asInt() },
+        .float => .{ .kind = .kflt, .nval = tv.asFloat() },
+        .string => .{ .kind = .kstr, .strval = tv.as(vm.object.String).bytes() },
+        else => ExpDesc.init(.k, @intCast(try valueK(fs, tv))),
+    };
+    if (k.kind != .k and !c.opts.debug) {
+        const vidx = try newLocalVar(fs, an.name.text, .ctc);
+        const vd = getLocalVar(fs, vidx);
+        vd.k = k;
+        vd.meta_value = mv;
+        try adjustLocalVars(fs, 1);
+        return;
+    }
+    try exp2nextreg(fs, &k);
+    const vidx = try newLocalVar(fs, an.name.text, .const_);
+    const vd = getLocalVar(fs, vidx);
+    vd.meta_value = mv;
+    vd.meta_const = tv;
+    try adjustLocalVars(fs, 1);
+}
+
 fn ifStat(fs: *FuncState, clauses: []ast.IfClause, else_block: ?*ast.Block, line: u32) Error!void {
     // The whole statement is one scope so condition variables stay visible
     // in later clauses.
@@ -3049,7 +3348,7 @@ fn ifStat(fs: *FuncState, clauses: []ast.IfClause, else_block: ?*ast.Block, line
     var decided = false;
     for (clauses) |cl| {
         fs.line = cl.line;
-        if (foldFlag(fs, cl.cond)) |t| {
+        if (try foldCondition(fs, cl.cond, cl.line)) |t| {
             try discardCond(fs, cl.cond, cl.line);
             if (decided or !t) {
                 try discardBlock(fs, cl.body);
@@ -3081,7 +3380,9 @@ fn ifStat(fs: *FuncState, clauses: []ast.IfClause, else_block: ?*ast.Block, line
 
 /// Compiles a block for checking only and removes every trace of it.
 fn discardBlock(fs: *FuncState, b: *ast.Block) Error!void {
-    const saved = DiscardMark.take(fs);
+    const saved = try DiscardMark.take(fs);
+    fs.c.discarding += 1;
+    defer fs.c.discarding -= 1;
     try block(fs, b);
     saved.restore(fs);
 }
@@ -3089,7 +3390,9 @@ fn discardBlock(fs: *FuncState, b: *ast.Block) Error!void {
 /// Compiles a folded condition for checking only, so that the operands
 /// folding skipped still report their compile errors.
 fn discardCond(fs: *FuncState, cond: ast.Cond, line: u32) Error!void {
-    const saved = DiscardMark.take(fs);
+    const saved = try DiscardMark.take(fs);
+    fs.c.discarding += 1;
+    defer fs.c.discarding -= 1;
     _ = try condition(fs, cond, line);
     saved.restore(fs);
 }
@@ -3103,9 +3406,37 @@ const DiscardMark = struct {
     locvars: usize,
     line: u32,
     freereg: u8,
+    /// The length of the pending `continue` list of each enclosing block,
+    /// innermost first, since a discarded `continue` adds to one.
+    continues: []usize,
+    /// The exit list of each enclosing do expression, innermost first,
+    /// since a discarded `provide` adds to one.
+    exits: []i32,
 
-    fn take(fs: *FuncState) DiscardMark {
+    fn take(fs: *FuncState) Error!DiscardMark {
+        var nd: usize = 0;
+        var d = fs.do_ctx;
+        while (d) |dd| : (d = dd.parent) nd += 1;
+        const exits = try fs.c.arena.alloc(i32, nd);
+        d = fs.do_ctx;
+        var di: usize = 0;
+        while (d) |dd| : (d = dd.parent) {
+            exits[di] = dd.exits;
+            di += 1;
+        }
+        var n: usize = 0;
+        var b = fs.bl;
+        while (b) |bb| : (b = bb.parent) n += 1;
+        const lens = try fs.c.arena.alloc(usize, n);
+        b = fs.bl;
+        var i: usize = 0;
+        while (b) |bb| : (b = bb.parent) {
+            lens[i] = bb.continues.items.len;
+            i += 1;
+        }
         return .{
+            .continues = lens,
+            .exits = exits,
             .pc = fs.code.items.len,
             .protos = fs.protos.items.len,
             .gotos = fs.c.gotos.items.len,
@@ -3125,6 +3456,18 @@ const DiscardMark = struct {
         fs.locvars.items.len = m.locvars;
         fs.line = m.line;
         fs.freereg = m.freereg;
+        var b = fs.bl;
+        var i: usize = 0;
+        while (b) |bb| : (b = bb.parent) {
+            if (i < m.continues.len) bb.continues.items.len = m.continues[i];
+            i += 1;
+        }
+        var d = fs.do_ctx;
+        i = 0;
+        while (d) |dd| : (d = dd.parent) {
+            if (i < m.exits.len) dd.exits = m.exits[i];
+            i += 1;
+        }
         if (fs.last_target > pc(fs)) fs.last_target = pc(fs);
     }
 };
@@ -3411,6 +3754,7 @@ pub fn compile(g: *vm.state.Global, src: []const u8, opts: Options) Allocator.Er
     defer c.actvars.deinit(g.gpa);
     defer c.labels.deinit(g.gpa);
     defer c.gotos.deinit(g.gpa);
+    defer if (c.meta) |m| m.close(g.gpa);
     const p = compileChunk(&c, chunk) catch |e| switch (e) {
         error.OutOfMemory => {
             return error.OutOfMemory;
@@ -3432,6 +3776,7 @@ pub fn compileAst(g: *vm.state.Global, arena: Allocator, chunk: ast.Chunk, opts:
     defer c.actvars.deinit(g.gpa);
     defer c.labels.deinit(g.gpa);
     defer c.gotos.deinit(g.gpa);
+    defer if (c.meta) |m| m.close(g.gpa);
     const p = compileChunk(&c, chunk) catch |e| switch (e) {
         error.OutOfMemory => {
             return error.OutOfMemory;

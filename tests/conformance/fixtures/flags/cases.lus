@@ -204,6 +204,39 @@ case("unfoldable_comparisons_keep_run_time_behavior", function()
     assert(calls == 1)
 end)
 
+-- pure library calls with known arguments fold
+case("pure_calls_fold", function()
+    assert_folds('(flags.name or ""):upper() == "ALPHA"', "then")
+    assert_folds('string.find(flags.name, "lp", 1, true) ~= nil', "then")
+    assert_folds('(flags.name or ""):find("zz", 1, true)', "else")
+    assert_folds("math.floor(flags.version) == 1", "then")
+    assert_folds("math.max(flags.count, 10) == 10", "then")
+    assert_folds('#flags.name + flags.count == 8', "then")
+    assert_folds('flags.name .. "!" == "alpha!"', "then")
+    assert_folds('tostring(flags.count) == "3"', "then")
+    assert_folds('("a,b,c"):split(",")[2] == "b"', "then")
+end)
+
+-- calls outside the pure set do not fold
+case("impure_calls_do_not_fold", function()
+    local f = load("if math.random(1, 1) == 1 then return 'then' else return 'else' end")
+    assert(f() == "then")
+    probe = 0
+    local g = load("if string.find(flags.name, 'a') and probe == 0 then return 1 end return 2")
+    assert(g() == 1)
+end)
+
+-- meta locals read flags and feed folded conditions
+case("meta_locals_read_flags", function()
+    local f = load([[
+        local DOUBLE <meta> = flags.count * 2
+        local FEATURES <meta> = { sqlite = (flags.name or ""):find("lp") ~= nil }
+        if FEATURES.sqlite and DOUBLE == 6 then return DOUBLE end
+        return 0
+    ]])
+    assert(f() == 6)
+end)
+
 -- operands skipped by folding still report compile errors
 case("skipped_operands_are_still_checked", function()
     local f, err = load("if flags.absent and function() goto nowhere end then end")

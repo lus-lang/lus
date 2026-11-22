@@ -753,7 +753,7 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
     var tests: std.ArrayList([]const u8) = .empty;
     var cases: std.ArrayList([]const u8) = .empty;
     try transform(arena, &chunk, src, &tests, &cases);
-    const r = try lus.compile.codegen.compileAst(l.g, arena, chunk, .{ .chunkname = chunkname });
+    const r = try lus.compile.codegen.compileAst(l.g, arena, chunk, .{ .chunkname = chunkname, .meta_grants = .{ .thread = l } });
     const p = switch (r) {
         .err => |m| {
             defer gpa.free(m);

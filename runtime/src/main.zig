@@ -617,7 +617,7 @@ fn disassemble(l: *Thread, path: []const u8) !u8 {
     defer gpa.free(s);
     const chunkname = try std.fmt.allocPrint(gpa, "@{s}", .{path});
     defer gpa.free(chunkname);
-    const r = try lus.compile.codegen.compile(l.g, s, .{ .chunkname = chunkname, .flags = api.flagsTable(l.g) });
+    const r = try lus.compile.codegen.compile(l.g, s, .{ .chunkname = chunkname, .flags = api.flagsTable(l.g), .meta_grants = .{ .thread = l } });
     switch (r) {
         .err => |m| {
             std.debug.print("{s}\n", .{m});

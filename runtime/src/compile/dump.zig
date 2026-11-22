@@ -15,6 +15,7 @@ const vm = struct {
     const state = @import("../vm/state.zig");
     const gc = @import("../vm/gc.zig");
     const numeric = @import("../vm/numeric.zig");
+    const table = @import("../vm/table.zig");
 };
 const object = vm.object;
 const Value = vm.value.Value;
@@ -25,11 +26,19 @@ const Allocator = std.mem.Allocator;
 
 pub const signature = "\x1bLus";
 /// Bumped whenever the instruction set changes. Version 2 added the
-/// immediate comparisons, and version 4 renumbered the opcodes after the
-/// generic loop instructions.
-const format_version: u8 = 4;
+/// immediate comparisons, version 4 renumbered the opcodes after the
+/// generic loop instructions, and version 5 added the read-only table and
+/// vector constants of `<meta>` locals.
+const format_version: u8 = 5;
+/// The earlier version, which has no table or vector constants and loads
+/// the same way.
+const previous_version: u8 = 4;
 
-const ConstTag = enum(u8) { nil, false, true, integer, float, string, bigint, decimal, enumeration };
+/// `table` starts a graph of read-only tables: the number of tables, then
+/// each table as its entry count and its key and value pairs. Inside the
+/// graph, `tableref` names a table of the same graph by its number, which
+/// keeps sharing and cycles.
+const ConstTag = enum(u8) { nil, false, true, integer, float, string, bigint, decimal, enumeration, table, vector, tableref };
 
 pub const DumpError = Allocator.Error || error{Unsupported};
 
@@ -163,6 +172,13 @@ const Writer = struct {
                 defer w.gpa.free(s);
                 try w.text(s);
             },
+            .table => try w.tableGraph(k.as(object.Table)),
+            .vector => {
+                const v = k.as(object.Vector);
+                try w.byte(@backingInt(ConstTag.vector));
+                try w.uint(v.bytes.items.len);
+                try w.bytes(v.bytes.items);
+            },
             .enum_value => {
                 // An enum literal: its member names, loaded as a fresh enum.
                 const e = k.as(object.EnumValue);
@@ -173,6 +189,44 @@ const Writer = struct {
             },
             else => return error.Unsupported,
         }
+    }
+
+    /// Writes a read-only table constant with every table it reaches.
+    fn tableGraph(w: *Writer, root: *object.Table) DumpError!void {
+        var ids: std.AutoArrayHashMapUnmanaged(*object.Table, void) = .empty;
+        defer ids.deinit(w.gpa);
+        try ids.put(w.gpa, root, {});
+        var i: usize = 0;
+        while (i < ids.count()) : (i += 1) {
+            const t = ids.keys()[i];
+            var key: Value = .nil;
+            while (vm.table.next(t, key) catch null) |kv| {
+                key = kv.key;
+                if (kv.key.tag == .table) try ids.put(w.gpa, kv.key.as(object.Table), {});
+                if (kv.val.tag == .table) try ids.put(w.gpa, kv.val.as(object.Table), {});
+            }
+        }
+        try w.byte(@backingInt(ConstTag.table));
+        try w.uint(ids.count());
+        for (ids.keys()) |t| {
+            var n: usize = 0;
+            var key: Value = .nil;
+            while (vm.table.next(t, key) catch null) |kv| : (n += 1) key = kv.key;
+            try w.uint(n);
+            key = .nil;
+            while (vm.table.next(t, key) catch null) |kv| {
+                key = kv.key;
+                try w.graphValue(&ids, kv.key);
+                try w.graphValue(&ids, kv.val);
+            }
+        }
+    }
+
+    fn graphValue(w: *Writer, ids: *std.AutoArrayHashMapUnmanaged(*object.Table, void), v: Value) DumpError!void {
+        if (v.tag == .table) {
+            try w.byte(@backingInt(ConstTag.tableref));
+            try w.uint(ids.getIndex(v.as(object.Table)).?);
+        } else try w.constant(v);
     }
 };
 
@@ -185,7 +239,8 @@ pub fn undump(g: *Global, src: []const u8, chunkname: []const u8) UndumpError!*P
     var r: Reader = .{ .g = g, .src = src };
     if (!isBinary(src)) return error.Malformed;
     r.pos = signature.len;
-    if (try r.byte() != format_version) return error.Malformed;
+    const version = try r.byte();
+    if (version != format_version and version != previous_version) return error.Malformed;
     if (try r.byte() != @sizeOf(u32) or try r.byte() != @sizeOf(i64) or try r.byte() != @sizeOf(f64)) return error.Malformed;
     r.default_source = vm.state.newStringIn(g, chunkname) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -346,7 +401,56 @@ const Reader = struct {
                 root.values[index] = v;
                 break :blk Value.obj(.enum_value, v);
             },
+            .vector => try r.vector(),
+            .table => try r.tableGraph(),
+            .tableref => return error.Malformed,
         };
+    }
+
+    fn vector(r: *Reader) UndumpError!Value {
+        const g = r.g;
+        const data = try r.take(try r.len());
+        const v = try vm.gc.alloc(g, object.Vector, .vector, @sizeOf(object.Vector));
+        v.* = .{ .hdr = v.hdr };
+        try v.bytes.appendSlice(g.gpa, data);
+        v.hdr.spare8 = 1;
+        return Value.obj(.vector, v);
+    }
+
+    fn tableGraph(r: *Reader) UndumpError!Value {
+        const g = r.g;
+        const n = try r.len();
+        if (n == 0 or n > r.src.len - r.pos) return error.Malformed;
+        const tables = try g.gpa.alloc(*object.Table, n);
+        defer g.gpa.free(tables);
+        for (tables) |*t| t.* = try vm.state.newTableIn(g, 0, 0);
+        for (tables) |t| {
+            const count = try r.len();
+            var i: usize = 0;
+            while (i < count) : (i += 1) {
+                const k = try r.graphValue(tables);
+                const v = try r.graphValue(tables);
+                if (k.isNil() or (k.tag == .float and std.math.isNan(k.asFloat()))) return error.Malformed;
+                vm.table.set(g.gpa, t, k, v) catch |e| switch (e) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.Malformed,
+                };
+            }
+        }
+        for (tables) |t| t.setReadonly(true);
+        return Value.obj(.table, tables[0]);
+    }
+
+    fn graphValue(r: *Reader, tables: []*object.Table) UndumpError!Value {
+        if (r.pos < r.src.len and r.src[r.pos] == @backingInt(ConstTag.tableref)) {
+            r.pos += 1;
+            const id = try r.len();
+            if (id >= tables.len) return error.Malformed;
+            return Value.obj(.table, tables[id]);
+        }
+        const tag = if (r.pos < r.src.len) r.src[r.pos] else return error.Malformed;
+        if (tag == @backingInt(ConstTag.table)) return error.Malformed;
+        return r.constant();
     }
 };
 
