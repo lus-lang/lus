@@ -311,17 +311,18 @@ The server reaches storage and the edge through one driver module under `server/
 
 | Function | Local driver | Cloudflare driver |
 | --- | --- | --- |
-| `put(key, data, type)` | Writes the file under the data directory. | Writes the file and puts the same bytes in R2. |
-| `get(key)` | Reads the file. | Reads the file, or the R2 object when the file is missing. |
-| `delete(key)` | Removes the file. | Removes the file and the R2 object. |
-| `purge(paths)` | Returns at once. | Purges the URLs of the paths from the Cloudflare cache. |
-| `headers(kind)` | Returns the cache headers of the address class. | Adds the edge headers of the class. |
+| `check()` | Returns at once. | Reads the credentials and names a missing one. The server calls it at start. |
+| `put(key, data, type)` | Returns at once, because the disk holds the bundle. | Puts the bytes of a bundle in R2. |
+| `get(key)` | Returns nothing. | Reads an object from R2. The server calls it for a bundle that its disk lacks. |
+| `delete(key)` | Returns at once. | Deletes an object from R2. |
+| `purge(urls, tags)` | Returns at once. | Purges URLs or cache tags from the Cloudflare cache. |
+| `headers(class, name)` | Adds no header. | Adds `Cloudflare-CDN-Cache-Control` and `Cache-Tag`. |
 | `client(req)` | Reads `X-Forwarded-For`. | Reads `CF-Connecting-IP`. |
-| `fetches(since)` | Reads the `fetches` table. | Adds the fetches that the edge counted. |
+| `fetches(since)` | Returns no rows. | Reads the fetches that the edge counted from Analytics Engine. |
 
-The server calls `put` when the `post-receive` hook builds a bundle, `delete` when an administrator removes a release, and `purge` after each change to what an address serves. The rest of the server runs the same code under both drivers. A release document holds the same addresses under both drivers, so a change of driver never re-signs a document. The bundle address stays `https://atmosp.here/b/SHA.tar.zst` whichever host stores the bytes.
+The `post-receive` hook and the administrator's actions write the work for a driver to the `outbox` table, which the next section describes. The server sends that work from a loop. The rest of the server runs the same code under both drivers. The git hooks open the driver with an empty environment, so the Cloudflare driver reads its credentials on first use and the hooks never hold them. A release document holds the same addresses under both drivers, so a change of driver never re-signs a document. The bundle address stays `https://atmosp.here/b/SHA.tar.zst` whichever host stores the bytes.
 
-The Cloudflare driver talks to R2 through its S3 interface. `server/drivers/s3.lus` signs each request with AWS Signature Version 4, which `crypto.hmac` and `crypto.hash` compute. The same module talks to any S3 store, which the tests use. The local disk keeps every bundle, so a backup of the server stays complete and the server can serve a bundle when R2 cannot.
+The Cloudflare driver talks to R2 through its S3 interface. `server/drivers/s3.lus` signs each request with AWS Signature Version 4, which `crypto.hmac` and `crypto.hash` compute. A unit test checks the signer against the example request of the AWS documentation. The same module talks to any S3 store, which the tests use. The local disk keeps every bundle, so a backup of the server stays complete and the server can serve a bundle when R2 cannot.
 
 ### Caching and purging
 
@@ -329,17 +330,18 @@ Each address class has its own headers. `Cache-Control` governs the client and e
 
 | Addresses | `Cache-Control` | Edge lifetime | Purged when |
 | --- | --- | --- | --- |
-| `/b/SHA.tar.zst` | `public, max-age=31536000, immutable, no-transform` | One year | An administrator removes the release. |
+| `/b/SHA.tar.zst` | `public, max-age=31536000, immutable, no-transform` | One year | An administrator removes the last release that serves the bundle, which also deletes it from the disk and from R2. |
 | `/LINE/NAME@VERSION.lus` | `public, max-age=300, no-transform, stale-if-error=604800` | One year | The document is signed again, after a yank, a deprecation, or a removal. |
 | `/LINE/NAME.lus`, `/unstable/NAME.lus` | `public, max-age=60, no-transform, stale-if-error=604800` | One year | A release, a deleted tag, a deprecation, or a removal changes the newest release of the line. |
 | `/LINE/NAME`, its `.md` and `.json` twins, its `llms.txt` and `llms-full.txt` | `public, max-age=300` | One day | Any change to a release of the package on the line. |
 | `/.well-known/atmos-keys.json` | `public, max-age=3600` | One day | A signing key is added or retired. |
-| `/`, `/llms.txt`, `/api/v1/search`, `/api/v1/packages` | `public, max-age=60` | One minute | They expire. |
-| Every other `/api/v1/` route, `/device`, `/invite/`, git | `private, no-store` | Never cached | |
+| `/`, `/search`, `/llms.txt`, `/api/v1/search`, `/api/v1/packages` | `public, max-age=60` | One minute | They expire. |
+| A document or page that answers with an error | `public, max-age=60` | Never cached past a minute | They expire. |
+| Every other `/api/v1/` route, `/device`, `/invite/`, git, and every write | `private, no-store` | Never cached | |
 
-A purge follows the commit of the change in the database. The server writes the paths to purge to a `purges` table in the same transaction and sends them from a worker in batches that respect the limit of the API. A batch leaves the table when Cloudflare accepts it. A lost request is sent again on the next pass, so a document never stays stale past a failed purge. Each response also carries `Cache-Tag: atmos-NAME`. The setting `purge_by = "tag"` purges a whole package with one tag instead of its list of URLs.
+A purge follows the commit of the change in the database. The server writes each path to purge to the `outbox` table in the same transaction as the change, along with the bundles to copy to R2 or delete from it and a call of the deploy hook of the website. A loop sends the items in batches that respect the limit of the API. An item leaves the table when the provider accepts it. A failed item is sent again on the next pass, so a document never stays stale past a failed purge. A change that arrives while its item is in flight counts up the `seq` of the item, which keeps the item for the next pass. Each response of a package also carries `Cache-Tag: atmos-NAME`. The setting `purge_by = "tag"` purges a whole package with one tag instead of its list of URLs.
 
-Cloudflare keys its cache by URL. A page answers `Accept: text/markdown` and `Accept: application/json` at the address of its HTML, so the edge worker rewrites such a request to the `.md` or `.json` twin before it reaches the cache.
+Cloudflare keys its cache by URL. A page answers `Accept: text/markdown` and `Accept: application/json` at the address of its HTML with `Vary: Accept`, so the edge worker rewrites such a request to the `.md` or `.json` twin before it reaches the cache.
 
 ### Signatures from end to end
 
@@ -349,38 +351,40 @@ The `stale-if-error` directive lets the edge serve the documents it holds while 
 
 ### The edge worker
 
-One Cloudflare Worker, `atmos-edge`, serves the route `atmosp.here/*`. Its source and its `wrangler.toml` live in `edge/` of the atmosphere repository. It has the built website as static assets, a binding to the R2 bucket of bundles, and a binding to an Analytics Engine dataset. It handles each request in this order.
+One Cloudflare Worker, `atmos-edge`, serves the route `atmosp.here/*`. Its source and its `wrangler.toml` live in `edge/` of the atmosphere repository. It has the built website as static assets, a binding to the R2 bucket of bundles, and a binding to an Analytics Engine dataset. It names the kind of each path with the rules of `server/routes.lus`. `edge/routes.json` holds the cases that both must agree on. It handles each read in this order.
 
 1. `/b/SHA.tar.zst` comes from R2 with the headers of the class. A missing object falls through to the origin.
-2. A release document is fetched from the origin through the cache. The worker records one data point with the package, the line, and a hash of the client address in Analytics Engine.
+2. For a release document, the worker records one data point with the package, the line, and the client hash in Analytics Engine, then fetches the document from the origin through the cache. The client hash is the first 16 hex digits of the SHA-256 of the client address, as the server computes it, so the two counts join.
 3. A page request with an `Accept` header for Markdown or JSON is rewritten to its twin and fetched through the cache.
-4. `/api/`, `/.well-known/`, `/device`, `/invite/`, `/_git/`, the twins of pages, and every `llms.txt` go to the origin.
-5. Every other path is a file of the website.
+4. A page, `/`, `/search`, and every path of no other kind come from the files of the website. A package page without a file of its own comes from the file that the variable `PAGE_SHELL` names, when it names one. A page, `/`, or `/search` without a file goes to the origin, whose HTML pages answer it. Any other path without a file answers with the 404 page of the website.
+5. Every other read and every write go to the origin.
 
 Release documents still pass through the server on a miss, so the newest release has one source, the database of the server. The worker resolves nothing on its own.
 
 Ranking counts distinct programs. The edge answers most fetches before they reach the server. The Cloudflare driver therefore reads the Analytics Engine dataset once a day through its SQL interface and merges the counts into the `fetches` table. The local driver counts at the server, as before.
 
-`git.atmosp.here` is proxied by Cloudflare without the worker. A push fits in the 16 MiB that the server accepts, below the request limit of every Cloudflare plan. Its validation ends well within the 100 second timeout of the proxy.
+`git.atmosp.here` is proxied by Cloudflare without the worker, for the WAF and the rate limits. A push is one HTTP request that stays open through the `pre-receive` and `post-receive` hooks, so it meets two limits of the proxy. Cloudflare accepts a request body of 100 MB on its smaller plans and more on larger ones. The server accepts 16 MiB, so its own limit is the one a push meets. Git reports a larger push as HTTP 413. Git sends a pack larger than its `http.postBuffer` of 1 MiB with chunked encoding, which the server accepts. The proxy waits 100 seconds for an answer before it reports a timeout. A push of 14 MB validated and published in 2 seconds in a local test, so the 16 MiB limit keeps every push far inside that timeout. A package that outgrows 16 MiB is far larger than a Lus package is expected to be.
 
 ### The website
 
-The website of the registry is an Astro project in `site/` of the atmosphere repository. It reads the JSON interface of the server. Its build output is the set of static assets of `atmos-edge`, so the site and the API share the origin `atmosp.here` and need no CORS. A GitHub Actions workflow runs `wrangler deploy` from `edge/` after each push to `main` that changes `site/` or `edge/`. The API token of that workflow is a secret of the repository.
+The website of the registry is an Astro project in `site/` of the atmosphere repository. It reads the JSON interface of the server. Its build output is the set of static assets of `atmos-edge`, so the site and the API share the origin `atmosp.here` and need no CORS. The workflow `deploy-edge.yml` builds the site and runs `wrangler deploy` from `edge/` after each push to `main` that changes `site/` or `edge/`. It runs only when the repository variable `EDGE_DEPLOY` is `true`. The API token of that workflow is a secret of the repository.
 
-The setting `site` of the local driver names a directory of built site files. The server serves a file from it for each path that no route claims. A server without Cloudflare therefore serves the same website. A server without a built site serves its own HTML pages.
+The setting `site` names a directory of built site files. The setting `site_shell` names the file that answers a package page without a file of its own. The server answers from them exactly as the edge worker does, so a server without Cloudflare serves the same website. A server without a built site serves its own HTML pages. The setting `site_hook` names a URL that the server calls with `POST` after each change to a release, so a site that builds its pages ahead of time rebuilds them.
+
+`GET /api/v1/packages?name=NAME` reports the number of distinct programs that fetched the package in the last 90 days as `fetches`, which joins the counts of the server and the edge.
 
 ### Other Cloudflare services
 
 - **DNS and TLS.** The zone `atmosp.here` lives on Cloudflare DNS. Its universal certificate covers `atmosp.here` and `git.atmosp.here`.
 - **Tunnel.** `cloudflared` on the server machine connects out to Cloudflare and forwards requests to the port of the server. The machine opens no inbound port and needs no certificate of its own. The tunnel takes the place of the reverse proxy. The Cloudflare driver trusts `CF-Connecting-IP` because requests reach the server only through the tunnel.
-- **WAF and rate limiting.** Rate limiting rules cover `POST /api/v1/device/token`, `/device`, `/invite/`, `POST /api/v1/tokens`, and `git-receive-pack`. The server keeps its own limits per account and per address as well, so the local driver is as safe.
-- **Turnstile.** The invitation and device forms can carry a Turnstile challenge, which the setting `turnstile` enables.
+- **WAF and rate limiting.** Rate limiting rules cover `POST /api/v1/device/token`, `/device`, `/invite/`, `POST /api/v1/tokens`, and `git-receive-pack`. The server keeps its own limits per client in windows of one minute as well, so the local driver is as safe. The setting `limits` gives them as `auth` for the forms and token creation, `poll` for the polling of a device login, and `push` for git pushes. Bot Fight Mode and the Browser Integrity Check stay off for the zone, because the runtime, git, and `atmos` are programs that a browser challenge would stop.
+- **Turnstile.** A later change can add a Turnstile challenge to the invitation and device forms.
 
 Git hosting, push validation, quality checks, documentation builds, signing, accounts, search, and the database stay on the Lus server.
 
 ### Configuration of the Cloudflare driver
 
-The configuration names the Cloudflare account, zone, bucket, and dataset. Credentials come from the environment, and the configuration file names only the variables that hold them.
+The configuration names the Cloudflare account, zone, bucket, and dataset. Credentials come from the environment. The configuration file names only the variables that hold them.
 
 ```json
 {
@@ -402,7 +406,7 @@ The API token carries the permissions Zone Cache Purge and Account Analytics Rea
 
 ### Testing without an account
 
-The end-to-end test runs a second time with `driver` set to `cloudflare` against a local S3 store, MinIO, and a small Lus server that stands in for the Cloudflare API and records each call. The test checks that a published bundle reaches the store with the bytes of its hash and that an administrator's removal deletes it. It also checks the purges that a release, a deleted tag, a deprecation, a removal, and a key change produce, along with the fetches that the stand-in Analytics Engine reports. CI starts MinIO as a service container. A separate job runs `atmos-edge` under `wrangler dev` in its local mode, which needs no Cloudflare account, against the server, and checks the routing, the `Accept` rewrite, and the bundle reads from the local bucket.
+`tests/e2e-cloudflare.sh` runs the server with `driver` set to `cloudflare` against `tests/standin.lus`, a Lus server that stands in for the Cloudflare API, an S3 store, and the deploy hook. The stand-in records each call. In CI the bundles go to MinIO instead, which the variable `S3_URL` names. The test checks that a release copies its bundle to the store, purges its addresses, and calls the site hook. It checks the headers of each address class, a bundle read from the store when the disk lacks it, and a failed purge sent again. It checks the purges of a deprecation and a deleted tag. It also checks the deletion of a bundle whose last release is removed, the merge of the fetch counts of the edge, the site files, and the request limits. `edge/test/run.sh` runs `atmos-edge` under `wrangler dev` in its local mode, which needs no Cloudflare account, in front of a stand-in server, with a bundle in the local bucket. It checks the routing, the `Accept` rewrite, the bundle reads, the page shell, and the 404 page of the website.
 
 ## The `atmos` command
 
@@ -481,7 +485,6 @@ This design needs the following from the runtime and the standard library.
 1. The `@includes` annotation records where a copied dependency came from. `spec/design/modules.md` owns the header, so it needs the agreement of its owner.
 2. Deprecation is an action on the account page and through `atmos deprecate`. It needs no tag. The alternative is a signed tag such as `deprecate@2.0`, which keeps deprecation inside git at the cost of a third kind of ref.
 3. The site may render package pages at build time or in the browser from the JSON interface. A build-time page needs the server to call a deploy hook after each publish, through a setting `site_hook`. The answer comes from the website work.
-4. `git.atmosp.here` is proxied by Cloudflare for its rate limits. A DNS-only record instead sends pushes straight to the tunnel, free of the limits of the proxy.
 
 ## Decisions
 
@@ -502,3 +505,4 @@ This design needs the following from the runtime and the standard library.
 | Integrations are drivers that the configuration selects, with the local driver as the default. | The user asked for first-class support of Cloudflare that stays optional. Every feature works without a provider account. |
 | Signed documents name the same addresses under every driver. | A change of provider never signs a document again. |
 | The edge caches release documents and purges them on change. | The newest release has one source, the database of the server, and the edge still answers most reads. |
+| `git.atmosp.here` goes through the Cloudflare proxy. | The user chose it for the WAF and the rate limits. The 16 MiB limit of the server keeps pushes far inside the limits of the proxy. |
