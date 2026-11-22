@@ -10,6 +10,7 @@ const ast = @import("../syntax/ast.zig");
 const opc = @import("opcodes.zig");
 const meta = @import("meta.zig");
 const lazy = @import("../lib/lazy.zig");
+const heapcount = @import("../vm/heapcount.zig");
 const vm = struct {
     const value = @import("../vm/value.zig");
     const object = @import("../vm/object.zig");
@@ -287,7 +288,7 @@ pub fn compileChunk(c: *Compiler, chunk: ast.Chunk) Error!*Proto {
     try openFunc(c, &fs, main_fn);
     errdefer abortFunc(c, &fs);
     // The main function has a single upvalue: _ENV.
-    try fs.upvals.append(c.gpa, .{ .name = "_ENV", .in_stack = true, .index = 0, .kind = .regular, .readonly = false });
+    try push(&fs.upvals, c.gpa, .{ .name = "_ENV", .in_stack = true, .index = 0, .kind = .regular, .readonly = false });
     try codeABC(&fs, .varargprep, 0, 0, 0);
     var bl: Block = undefined;
     enterBlock(&fs, &bl, false);
@@ -356,9 +357,29 @@ fn closeFunc(c: *Compiler, fs: *FuncState) Error!*Proto {
 // ---------------------------------------------------------------------
 // Instruction emission
 
+/// Fails as an allocation would, in the builds that inject allocation
+/// failures, and does nothing in the others. A list grows only now and
+/// then, so most appends make no allocation at all. A fault point before
+/// each one takes an allocation number of its own, which lets the sweep of
+/// `sweep.zig` fail the compiler at every call site, as SQLite's fault
+/// simulation does.
+inline fn fault() Allocator.Error!void {
+    if (heapcount.inject.fail()) return error.OutOfMemory;
+}
+
+/// Appends `item` to `list` after a fault point.
+fn push(list: anytype, gpa: Allocator, item: ListItem(@TypeOf(list))) Allocator.Error!void {
+    try fault();
+    try list.append(gpa, item);
+}
+
+fn ListItem(comptime P: type) type {
+    return @typeInfo(@FieldType(@typeInfo(P).pointer.child, "items")).pointer.child;
+}
+
 fn emit(fs: *FuncState, i: u32) Error!i32 {
-    try fs.code.append(fs.c.gpa, i);
-    try fs.lines.append(fs.c.gpa, fs.line);
+    try push(&fs.code, fs.c.gpa, i);
+    try push(&fs.lines, fs.c.gpa, fs.line);
     return @intCast(fs.code.items.len - 1);
 }
 
@@ -480,6 +501,7 @@ fn checkStack(fs: *FuncState, n: u32) Error!void {
 }
 
 fn reserveRegs(fs: *FuncState, n: u32) Error!void {
+    try fault();
     try checkStack(fs, n);
     fs.freereg += @intCast(n);
 }
@@ -528,7 +550,8 @@ fn freeExps(fs: *FuncState, e1: *const ExpDesc, e2: *const ExpDesc) void {
 fn addK(fs: *FuncState, key: KKey, v: Value) Error!u32 {
     if (fs.kcache.get(key)) |idx| return idx;
     const idx: u32 = @intCast(fs.constants.items.len);
-    try fs.constants.append(fs.c.gpa, v);
+    try push(&fs.constants, fs.c.gpa, v);
+    try fault();
     try fs.kcache.put(fs.c.gpa, key, idx);
     return idx;
 }
@@ -550,7 +573,7 @@ fn floatK(fs: *FuncState, v: f64) Error!u32 {
 fn valueK(fs: *FuncState, v: Value) Error!u32 {
     // Unique heap constants (bigints, decimals, enums) are never shared.
     const idx: u32 = @intCast(fs.constants.items.len);
-    try fs.constants.append(fs.c.gpa, v);
+    try push(&fs.constants, fs.c.gpa, v);
     return idx;
 }
 
@@ -1200,7 +1223,7 @@ fn newLocalVar(fs: *FuncState, name: []const u8, kind: VarKind) Error!u32 {
     if (c.actvars.items.len + 1 - fs.first_local > max_vars) {
         return c.err(fs.line, "too many local variables (limit is {d}) in {s}", .{ max_vars, whereFunc(fs) });
     }
-    try c.actvars.append(c.gpa, .{ .name = name, .kind = kind, .readonly = kind == .const_ or kind == .ctc or kind == .close });
+    try push(&c.actvars, c.gpa, .{ .name = name, .kind = kind, .readonly = kind == .const_ or kind == .ctc or kind == .close });
     return @intCast(c.actvars.items.len - 1 - fs.first_local);
 }
 
@@ -1221,7 +1244,7 @@ fn adjustLocalVars(fs: *FuncState, n: u32) Error!void {
             v.reg = reglevel;
             reglevel += 1;
             v.pidx = @intCast(fs.locvars.items.len);
-            try fs.locvars.append(fs.c.gpa, .{ .name = try fs.c.newString(v.name), .start_pc = @intCast(pc(fs)), .end_pc = 0, .reg = v.reg });
+            try push(&fs.locvars, fs.c.gpa, .{ .name = try fs.c.newString(v.name), .start_pc = @intCast(pc(fs)), .end_pc = 0, .reg = v.reg });
         }
     }
 }
@@ -1298,7 +1321,7 @@ fn createLabel(fs: *FuncState, name: []const u8, line: u32, last: bool) Error!bo
     const c = fs.c;
     const bl = fs.bl.?;
     const l: LabelDesc = .{ .name = name, .pc = getLabel(fs), .line = line, .nactvar = if (last) bl.nactvar else fs.nactvar };
-    try c.labels.append(c.gpa, l);
+    try push(&c.labels, c.gpa, l);
     if (try solveGotos(fs, l)) {
         try codeABC(fs, .close, nvarstack(fs), 0, 0);
         return true;
@@ -1327,7 +1350,7 @@ fn solveGotos(fs: *FuncState, l: LabelDesc) Error!bool {
 }
 
 fn newGoto(fs: *FuncState, name: []const u8, line: u32, jpc: i32) Error!void {
-    try fs.c.gotos.append(fs.c.gpa, .{ .name = name, .pc = jpc, .line = line, .nactvar = fs.nactvar });
+    try push(&fs.c.gotos, fs.c.gpa, .{ .name = name, .pc = jpc, .line = line, .nactvar = fs.nactvar });
 }
 
 // --- name resolution --------------------------------------------------
@@ -1388,7 +1411,7 @@ fn newUpvalue(fs: *FuncState, name: []const u8, v: *const ExpDesc) Error!u32 {
         const u = prev.upvals.items[@intCast(v.info)];
         info = .{ .name = name, .in_stack = false, .index = @intCast(v.info), .kind = u.kind, .readonly = u.readonly };
     }
-    try fs.upvals.append(fs.c.gpa, info);
+    try push(&fs.upvals, fs.c.gpa, info);
     return @intCast(fs.upvals.items.len - 1);
 }
 
@@ -1705,7 +1728,7 @@ fn optionalExpr(fs: *FuncState, inner: *ast.Expr, v: *ExpDesc) Error!void {
 fn funcExpr(fs: *FuncState, f: *ast.Function, v: *ExpDesc) Error!void {
     const p = try compileFunction(fs.c, f);
     const idx: u32 = @intCast(fs.protos.items.len);
-    try fs.protos.append(fs.c.gpa, p);
+    try push(&fs.protos, fs.c.gpa, p);
     v.* = ExpDesc.init(.reloc, try emitABx(fs, .closure, 0, idx));
     try exp2nextreg(fs, v);
 }
@@ -1998,7 +2021,7 @@ fn genCatch(fs: *FuncState, c: ast.Catch, base: u8, nresults: i32) Error!void {
     const done = try jump(fs);
     // Error path: the unwinder stores the error in `vals`.
     const handler_pc = getLabel(fs);
-    try fs.handlers.append(fs.c.gpa, .{
+    try push(&fs.handlers, fs.c.gpa, .{
         .start_pc = @intCast(body_start),
         .end_pc = @intCast(body_end),
         .handler_pc = @intCast(handler_pc),
@@ -3661,7 +3684,7 @@ const ObserveDeps = struct {
         const vd = knownLocal(d.fs, e.kind.name.text) orelse return;
         if (vd.observe == .none) return;
         for (d.list.items) |x| if (std.mem.eql(u8, x.observers, vd.observers)) return;
-        try d.list.append(d.fs.c.arena, .{ .name = vd.name, .observers = vd.observers, .source = vd.observe == .source });
+        try push(&d.list, d.fs.c.arena, .{ .name = vd.name, .observers = vd.observers, .source = vd.observe == .source });
     }
 };
 
@@ -3930,7 +3953,7 @@ fn continueStat(fs: *FuncState, line: u32) Error!void {
     while (bl) |b| : (bl = b.parent) {
         if (b.is_loop) {
             const j = try jump(fs);
-            try b.continues.append(fs.c.arena, .{ .name = "continue", .pc = j, .line = line, .nactvar = fs.nactvar });
+            try push(&b.continues, fs.c.arena, .{ .name = "continue", .pc = j, .line = line, .nactvar = fs.nactvar });
             // Leaving blocks with captured locals needs a close at the
             // target.
             var x = fs.bl;
