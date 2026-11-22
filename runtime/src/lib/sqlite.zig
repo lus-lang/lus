@@ -37,6 +37,7 @@ const table = @import("../vm/table.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const pledge = @import("../vm/pledge.zig");
 const aux = @import("auxlib.zig");
+const faultio = @import("../vm/faultio.zig");
 const vector = @import("vector.zig");
 const base_lib = @import("base.zig");
 const Value = value.Value;
@@ -68,6 +69,7 @@ pub const c = struct {
     pub const IOERR_READ = IOERR | (1 << 8);
     pub const IOERR_WRITE = IOERR | (3 << 8);
     pub const IOERR_FSYNC = IOERR | (4 << 8);
+    pub const IOERR_DELETE = IOERR | (10 << 8);
     pub const IOERR_TRUNCATE = IOERR | (6 << 8);
     pub const IOERR_FSTAT = IOERR | (7 << 8);
     pub const IOERR_SHMOPEN = IOERR | (18 << 8);
@@ -81,6 +83,9 @@ pub const c = struct {
     pub const OPEN_URI = 0x40;
     pub const OPEN_MAIN_DB = 0x100;
     pub const OPEN_WAL = 0x80000;
+    pub const OPEN_MAIN_JOURNAL = 0x800;
+    pub const OPEN_SUPER_JOURNAL = 0x4000;
+    pub const IOCAP_POWERSAFE_OVERWRITE = 0x1000;
 
     pub const ACCESS_READWRITE = 1;
     pub const ACCESS_READ = 2;
@@ -268,6 +273,9 @@ const PFile = struct {
     /// A URI filename this wrapper created for the platform VFS, if any.
     realname: ?[*:0]const u8 = null,
     can_write: bool = false,
+    /// A journal this connection created, whose first sync also syncs its
+    /// directory, as the VFS of the platform does.
+    dirsync: bool = false,
     shm_read: bool = false,
     shm_write: bool = false,
     shm_bound: bool = false,
@@ -391,6 +399,10 @@ fn ioWrite(file: *c.File, buf: ?*const anyopaque, amount: c_int, offset: i64) ca
         f.owner.deny("fs:write", f.pathSlice());
         return c.IOERR_WRITE;
     }
+    if (faultio.enabled) {
+        if (faultio.step()) return c.IOERR_WRITE;
+        if (faultio.tracking()) faultio.crash.writingPath(f.pathSlice(), @intCast(offset), @intCast(amount));
+    }
     return realMethods(f).xWrite.?(f.real, buf, amount, offset);
 }
 
@@ -399,6 +411,10 @@ fn ioTruncate(file: *c.File, size: i64) callconv(.c) c_int {
     if (!f.can_write) {
         f.owner.deny("fs:write", f.pathSlice());
         return c.IOERR_TRUNCATE;
+    }
+    if (faultio.enabled) {
+        if (faultio.step()) return c.IOERR_TRUNCATE;
+        if (faultio.tracking()) faultio.crash.truncatingPath(f.pathSlice(), @intCast(size));
     }
     return realMethods(f).xTruncate.?(f.real, size);
 }
@@ -409,7 +425,13 @@ fn ioSync(file: *c.File, flags: c_int) callconv(.c) c_int {
         f.owner.deny("fs:write", f.pathSlice());
         return c.IOERR_FSYNC;
     }
-    return realMethods(f).xSync.?(f.real, flags);
+    if (faultio.enabled and faultio.step()) return c.IOERR_FSYNC;
+    const rc = realMethods(f).xSync.?(f.real, flags);
+    if (faultio.enabled and faultio.tracking() and rc == c.OK) {
+        faultio.crash.syncingPath(f.pathSlice(), f.dirsync);
+        f.dirsync = false;
+    }
+    return rc;
 }
 
 fn ioFileSize(file: *c.File, size: *i64) callconv(.c) c_int {
@@ -456,7 +478,10 @@ fn ioSector(file: *c.File) callconv(.c) c_int {
 
 fn ioCharacteristics(file: *c.File) callconv(.c) c_int {
     const f = pfile(file);
-    return realMethods(f).xDeviceCharacteristics.?(f.real);
+    const caps = realMethods(f).xDeviceCharacteristics.?(f.real);
+    // The power loss model without powersafe overwrite tells SQLite so.
+    if (faultio.enabled and faultio.tracking() and !faultio.crash.psow) return caps & ~@as(c_int, c.IOCAP_POWERSAFE_OVERWRITE);
+    return caps;
 }
 
 fn ioShmMap(file: *c.File, page: c_int, size: c_int, write: c_int, out: *?*anyopaque) callconv(.c) c_int {
@@ -583,6 +608,12 @@ fn vfsOpen(v: *c.Vfs, zname: ?[*:0]const u8, file: *c.File, flags: c_int, outfla
         rflags |= c.OPEN_URI;
     }
     f.can_write = rflags & c.OPEN_READWRITE != 0;
+    if (faultio.enabled) {
+        if (faultio.step()) return c.CANTOPEN;
+        const creating = rflags & c.OPEN_CREATE != 0;
+        f.dirsync = creating and flags & (c.OPEN_MAIN_JOURNAL | c.OPEN_SUPER_JOURNAL | c.OPEN_WAL) != 0;
+        if (faultio.tracking()) faultio.crash.openedPath(path, creating);
+    }
     @memset(@as([*]u8, @ptrCast(real))[0..@intCast(o.real.szOsFile)], 0);
     const rc = o.real.xOpen.?(o.real, open_name, real, rflags, outflags);
     if (rc == c.OK) {
@@ -603,7 +634,13 @@ fn vfsOpen(v: *c.Vfs, zname: ?[*:0]const u8, file: *c.File, flags: c_int, outfla
 fn vfsDelete(v: *c.Vfs, path: [*:0]const u8, syncdir: c_int) callconv(.c) c_int {
     const o = ownerOf(v);
     if (!o.allow("fs:write", std.mem.span(path))) return c.PERM;
-    return o.real.xDelete.?(o.real, path, syncdir);
+    if (faultio.enabled) {
+        if (faultio.step()) return c.IOERR_DELETE;
+        if (faultio.tracking()) faultio.crash.deleting(std.mem.span(path));
+    }
+    const rc = o.real.xDelete.?(o.real, path, syncdir);
+    if (faultio.enabled and faultio.tracking() and rc == c.OK and syncdir != 0) faultio.crash.syncingDirPath(std.mem.span(path));
+    return rc;
 }
 
 fn vfsAccess(v: *c.Vfs, path: [*:0]const u8, flags: c_int, out: *c_int) callconv(.c) c_int {

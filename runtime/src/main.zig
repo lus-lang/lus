@@ -310,11 +310,12 @@ var report_io = false;
 /// an `Io` that injects the faults it names (`vm/faultio.zig`).
 fn setupFailIo(init: *std.process.Init) void {
     const v = init.environ_map.get("LUS_FAIL_IO") orelse return;
-    report_io = lus.vm.faultio.setup(v);
+    report_io = lus.vm.faultio.setup(v, init.environ_map.get("LUS_FAIL_IO_SEED"), init.environ_map.get("LUS_FAIL_IO_PSOW"));
     init.io = lus.vm.faultio.wrap(init.io);
 }
 
 fn reportAllocs() void {
+    if (lus.vm.faultio.enabled) lus.vm.faultio.atExit();
     if (report_allocs) std.debug.print("lus: {d} allocations\n", .{lus.vm.heapcount.inject.count.load(.monotonic)});
     if (report_io) std.debug.print("lus: {d} I/O operations\n", .{lus.vm.faultio.count.load(.monotonic)});
 }

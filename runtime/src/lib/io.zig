@@ -7,6 +7,7 @@
 //! and counts bytes (spec/design/strings.md).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const value = @import("../vm/value.zig");
 const object = @import("../vm/object.zig");
 const state = @import("../vm/state.zig");
@@ -72,6 +73,7 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "seek", .func = fSeek },
         .{ .name = "setraw", .func = fSetraw },
         .{ .name = "setvbuf", .func = fSetvbuf },
+        .{ .name = "sync", .func = fSync },
         .{ .name = "write", .func = fWrite },
     });
     try aux.setField(l, mt, "__index", Value.obj(.table, methods));
@@ -577,6 +579,32 @@ fn fFlush(l: *Thread) Error!u32 {
         if (o.takeError()) |e| return ioError(l, e);
     }
     return aux.ret(l, l.arg(1));
+}
+
+/// f:sync(): writes the data and the size of a file through to its
+/// storage device, so they survive a crash of the system. A stream that is
+/// not a file has nothing to keep and is only flushed.
+fn fSync(l: *Thread) Error!u32 {
+    const h = try checkHandle(l, 1);
+    switch (h.kind) {
+        .file => {
+            syncFile(l.g.io, h.file) catch |e| return ioError(l, e);
+        },
+        .stdout => {
+            const o = out.stdout(l.g);
+            o.flush(l.g);
+            if (o.takeError()) |e| return ioError(l, e);
+        },
+        .pipe, .stdin, .stderr => {},
+    }
+    return aux.ret(l, l.arg(1));
+}
+
+/// Syncs an open file or directory. On macOS, `fsync` leaves the data in
+/// the cache of the drive, and `F_FULLFSYNC` asks the drive to write it.
+pub fn syncFile(io: std.Io, file: std.Io.File) !void {
+    try file.sync(io);
+    if (builtin.os.tag.isDarwin()) _ = std.c.fcntl(file.handle, std.c.F.FULLFSYNC);
 }
 
 /// io.flush(): flushes the default output file and returns true.

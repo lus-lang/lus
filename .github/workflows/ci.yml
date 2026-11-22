@@ -98,10 +98,10 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
-    # The step limits below add up to 255 minutes on Linux, which runs
+    # The step limits below add up to 275 minutes on Linux, which runs
     # every step. The job limit covers them and the setup steps, so a step
     # always reaches its own limit before the job is cancelled.
-    timeout-minutes: 270
+    timeout-minutes: 290
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install Zig
@@ -255,6 +255,14 @@ jobs:
         run: |
           (cd runtime && zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom)
           LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --samples 8 --jobs 4 --timeout 120
+      - name: Crash tests
+        timeout-minutes: 20
+        if: runner.os != 'Windows'
+        # Each durability sequence of the manual, crashed at every I/O
+        # operation by kills and simulated power losses.
+        run: |
+          (cd runtime && zig build -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io)
+          LUS_JIT=off runtime/zig-out-io/bin/lus tests/crash/run.lus --lus runtime/zig-out-io/bin/lus
       - name: WebAssembly host tests
         timeout-minutes: 10
         if: runner.os == 'Linux'

@@ -68,3 +68,11 @@ local function two_files_left_behind_in_one_pass_test()
     assert(report:find("left it behind", 1, true), report)
     assert(report:find("3 files, 1 passed", 1, true), report)
 end
+
+local function a_skip_reason_keeps_its_characters_test()
+    local ok, err = catch skip("réservé pour plus tard")
+    assert(not ok)
+    assert(err:len() == utf8.len(err))
+    assert(err:sub(-5) == " tard")
+    assert(err:find("réservé", 1, true))
+end

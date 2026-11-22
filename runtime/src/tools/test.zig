@@ -1275,7 +1275,8 @@ fn skipFn(l: *Thread) Error!u32 {
     defer buf.deinit(l.g.gpa);
     buf.appendSlice(l.g.gpa, skip_marker) catch return l.raiseMem();
     buf.appendSlice(l.g.gpa, reason) catch return l.raiseMem();
-    return l.raise(Value.obj(.string, lus.vm.state.newStringKnown(l.g, buf.items, false, buf.items.len) catch return l.raiseMem()));
+    // The reason may hold any text, so the string counts its characters.
+    return l.raise(try l.newStringValue(buf.items));
 }
 
 fn skipReason(l: *Thread, err: Value) ?[]const u8 {

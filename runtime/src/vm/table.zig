@@ -12,6 +12,7 @@
 //! layout and the transitions.
 
 const std = @import("std");
+const inv = @import("inv.zig");
 const numeric = @import("numeric.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
@@ -892,6 +893,31 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
 /// kind, one that receives a table takes the `table` kind, and one that
 /// receives a value no unboxed kind holds is made boxed directly.
 fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value, val: Value) Error!void {
+    try resizeParts(gpa, t, asize, hcount, key, val);
+    inv.assert(layoutOk(t));
+}
+
+/// Whether the hash part of `t` is laid out as lookups expect: a size of
+/// zero or a power of two, a count of used slots that matches, and every
+/// live key found where a lookup probes for it. A shaped table has slots
+/// instead of nodes.
+pub fn layoutOk(t: *Table) bool {
+    if (t.isShaped()) return t.hash_len == 0;
+    const n = t.hash_len;
+    if (n != 0 and !std.math.isPowerOfTwo(n)) return false;
+    var used: u32 = 0;
+    for (0..n) |h| {
+        if (t.keyTag(h) == .nil) continue;
+        used += 1;
+        if (t.valTag(h) == .nil) continue;
+        const found = get(t, t.key(h));
+        const stored = t.val(h);
+        if (found.tag != stored.tag or found.payload != stored.payload) return false;
+    }
+    return used == t.hash_used;
+}
+
+fn resizeParts(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value, val: Value) Error!void {
     // Entries that leave the array part go to a hash part.
     if (t.isShaped() and asize < t.asize) try toDictionary(gpa, t, t.asize - asize);
     if (t.isShaped()) return resizeArray(gpa, t, asize, key, val);

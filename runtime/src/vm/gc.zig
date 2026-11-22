@@ -637,7 +637,9 @@ fn finishMark(g: *Global, m: *Marker, major: bool) void {
     m.drainAll();
     m.convergeEphemerons();
     m.clearWeak();
-    if (verify) verifyHeap(g);
+    // The invariants of a checking build include the end of the mark
+    // phase: a marked object references only marked objects.
+    if (verify or @import("build_options").invariants) verifyHeap(g);
     std.debug.assert(s.gray.items.len == 0 and s.grayagain.items.len == 0);
     // The gray stack holds an entry per reference while it drains, so a
     // heap with many references grows it far past what a later cycle
@@ -1486,10 +1488,11 @@ inline fn isMarkedAtomic(h: *const Header) bool {
 }
 
 // ---------------------------------------------------------------------
-// Heap verifier, enabled with -Dgc-verify. At the end of every mark
-// phase, every marked object must be black (traced after its last store)
-// and must reference only marked objects through strong references. A
-// failure means a missing barrier or a missing root.
+// Heap verifier, enabled with -Dgc-verify and -Dinvariants. At the end of
+// every mark phase, every marked object must reference only marked objects
+// through strong references, and with -Dgc-verify it must also be black
+// (traced after its last store). A failure means a missing barrier or a
+// missing root.
 
 fn verifyHeap(g: *Global) void {
     var m = Marker.init(g);
@@ -1498,7 +1501,9 @@ fn verifyHeap(g: *Global) void {
     heap.forEachObject(g, &m, struct {
         fn f(mm: *Marker, h: *Header) void {
             if (!isMarked(h) or isLeaf(h.tag)) return;
-            if (!h.flags.barrier) {
+            // Only the verifying build tracks which objects were traced
+            // after their last store.
+            if (verify and !h.flags.barrier) {
                 std.debug.print("gc verify: marked {s} at {*} is not black\n", .{ @tagName(h.tag), h });
                 @panic("gc verify: barrier coverage violated");
             }

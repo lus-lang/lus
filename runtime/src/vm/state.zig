@@ -7,6 +7,7 @@ const object = @import("object.zig");
 const gc = @import("gc.zig");
 const table = @import("table.zig");
 const wtf8 = @import("wtf8.zig");
+const inv = @import("inv.zig");
 const Value = value.Value;
 const Tag = value.Tag;
 const String = object.String;
@@ -862,9 +863,18 @@ pub fn newLongUninit(g: *Global, len: usize) Allocator.Error!*String {
 /// Completes a string from `newLongUninit` once its bytes, valid WTF-8,
 /// are written.
 pub fn finishLong(g: *Global, s: *String, ascii: bool, chars: usize) void {
+    inv.assert(textMatches(s.bytesMut(), ascii, chars));
     s.setChars(@intCast(chars));
     s.flags().ascii = ascii;
     s.hash = object.hashBytes(g.seed, s.bytesMut());
+}
+
+/// Whether the bytes of a new string are valid WTF-8 with the flags its
+/// creator computed. Many callers count characters while they build a
+/// string, so a wrong count is a bug of the caller.
+fn textMatches(b: []const u8, ascii: bool, chars: usize) bool {
+    const a = wtf8.analyze(b);
+    return a.valid and a.ascii == ascii and a.chars == chars;
 }
 
 /// Creates a string from bytes already known to be valid WTF-8.
@@ -953,6 +963,7 @@ inline fn createStringAs(g: *Global, b: []const u8, ascii: bool, chars: usize, h
     s.flags().* = .{ .ascii = ascii, .interned = short, .crumb_slot = slot };
     s.initCrumbs();
     @memcpy(s.bytesMut(), b);
+    inv.assert(textMatches(b, ascii, chars));
     const base: [*]u8 = @ptrCast(s);
     base[@sizeOf(String) + b.len] = 0;
     if (short) try g.strings.insert(g.gpa, s);

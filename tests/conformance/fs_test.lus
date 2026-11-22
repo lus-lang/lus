@@ -1066,3 +1066,93 @@ local function final_cleanup_test()
     assert(not file_exists(SANDBOX), "Sandbox should be cleaned up")
 end
 
+
+-- ============================================================================
+-- Durable writes: fs.move with replace, fs.sync, and file:sync
+-- ============================================================================
+
+local function move_with_replace_replaces_an_existing_file_test()
+    setup_sandbox()
+    local src = sandbox_path("new.txt")
+    local dst = sandbox_path("current.txt")
+    write_file(src, "new contents")
+    write_file(dst, "old contents")
+    assert(fs.move(src, dst, { replace = true }) == nil)
+    assert(read_file(dst) == "new contents")
+    assert(not file_exists(src))
+    cleanup_sandbox()
+end
+
+local function move_with_replace_creates_a_missing_target_test()
+    setup_sandbox()
+    write_file(sandbox_path("a.txt"), "a")
+    fs.move(sandbox_path("a.txt"), sandbox_path("b.txt"), { replace = true })
+    assert(read_file(sandbox_path("b.txt")) == "a")
+    cleanup_sandbox()
+end
+
+local function move_with_replace_keeps_a_directory_target_test()
+    setup_sandbox()
+    write_file(sandbox_path("f.txt"), "f")
+    fs.createdirectory(sandbox_path("d"))
+    write_file(sandbox_path("d", "inside.txt"), "x")
+    raises(function() fs.move(sandbox_path("f.txt"), sandbox_path("d"), { replace = true }) end, "cannot move")
+    assert(read_file(sandbox_path("d", "inside.txt")) == "x")
+    assert(read_file(sandbox_path("f.txt")) == "f")
+    cleanup_sandbox()
+end
+
+local function move_with_replace_false_keeps_the_target_test()
+    setup_sandbox()
+    write_file(sandbox_path("s.txt"), "s")
+    write_file(sandbox_path("t.txt"), "t")
+    raises(function() fs.move(sandbox_path("s.txt"), sandbox_path("t.txt"), { replace = false }) end, "target already exists")
+    assert(read_file(sandbox_path("t.txt")) == "t")
+    cleanup_sandbox()
+end
+
+local function move_checks_its_options_test()
+    setup_sandbox()
+    write_file(sandbox_path("s.txt"), "s")
+    raises(function() fs.move(sandbox_path("s.txt"), sandbox_path("t.txt"), "replace") end, "bad argument #3 to 'move'")
+    cleanup_sandbox()
+end
+
+local function sync_accepts_a_directory_and_a_file_test()
+    setup_sandbox()
+    write_file(sandbox_path("f.txt"), "f")
+    assert(fs.sync(SANDBOX) == nil)
+    assert(fs.sync(sandbox_path("f.txt")) == nil)
+    raises(function() fs.sync(sandbox_path("missing")) end, "cannot sync '.*missing': path does not exist")
+    cleanup_sandbox()
+end
+
+local function file_sync_returns_the_handle_test()
+    setup_sandbox()
+    local f = assert(io.open(sandbox_path("s.txt"), "w"))
+    f:write("data")
+    assert(f:sync() == f)
+    f:close()
+    raises(function() f:sync() end, "attempt to use a closed file")
+    assert(io.stdout:sync() == io.stdout)
+    assert(io.stderr:sync() == io.stderr)
+    local r = assert(io.open(sandbox_path("s.txt"), "r"))
+    assert(r:sync() == r)
+    r:close()
+    cleanup_sandbox()
+end
+
+local function the_replace_sequence_leaves_the_new_contents_test()
+    setup_sandbox()
+    local target = sandbox_path("config.json")
+    write_file(target, "{}")
+    local tmp = target .. ".tmp"
+    local f = assert(io.open(tmp, "w"))
+    f:write('{"version": 2}')
+    f:sync()
+    f:close()
+    fs.move(tmp, target, { replace = true })
+    fs.sync(fs.path.parent(target))
+    assert(read_file(target) == '{"version": 2}')
+    cleanup_sandbox()
+end
