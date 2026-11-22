@@ -383,7 +383,7 @@ The gaps below are packages that applications commonly depend on and that nothin
 | Cloud storage | `@aws-sdk/client-s3`, `Bun.S3Client` |
 | Dates and i18n | `i18next`, `intl-messageformat`, `ms`, `pretty-bytes`, `timeago.js` |
 | Command line | `ora`, `cli-progress`, `listr2`, `cli-table3`, `string-width`, `wrap-ansi`, `strip-ansi`, `boxen` |
-| Archives | `tar`, `archiver`, `adm-zip`, `jszip`, `yauzl` |
+| Archives | `tar`, `archiver`, `adm-zip`, `jszip`, `yauzl`, which the standard library takes on |
 | Processes and files | `execa`, `cross-spawn`, `Bun.spawn`, `Bun.$`, `chokidar`, `glob`, `fast-glob`, `minimatch`, `picomatch`, `Bun.Glob` |
 
 #### Not applicable
@@ -392,7 +392,7 @@ Front-end frameworks such as `react`, `vue`, and `svelte`, and their build tools
 
 ### Proposed packages
 
-The proposal has 20 packages in four tiers. The first tier serves web applications, which are the largest group of programs in the survey. The tiers follow the order of work, and a later tier may start once the standard library additions it needs exist.
+The plan has 19 packages in four tiers. The first tier serves web applications, which are the largest group of programs in the survey. The tiers follow the order of work, and a later tier may start once the standard library additions it needs exist.
 
 | Package | Repository | Replaces | Depends on | Permissions |
 | --- | --- | --- | --- | --- |
@@ -415,23 +415,22 @@ The proposal has 20 packages in four tiers. The first tier serves web applicatio
 | `humanize` | `lus-lang/atmos-humanize` | `ms`, `pretty-bytes`, `timeago.js` | none | none |
 | `i18n` | `lus-lang/atmos-i18n` | `i18next`, `intl-messageformat` | none | `fs:read` when it loads catalogs |
 | `term` | `lus-lang/atmos-term` | `ora`, `cli-progress`, `cli-table3`, `string-width`, `wrap-ansi` | `color` | none |
-| `archive` | `lus-lang/atmos-archive` | `tar`, `archiver`, `adm-zip`, `jszip` | stdlib deflate | none |
 
 #### Tier 1: web applications
 
-**log** writes structured log records as JSON lines, with levels, child loggers that add fields, and redaction of named fields. A pretty printer formats the lines for a terminal. A `web` plugin logs one line per request with its method, path, status, and duration.
+**log** writes structured log records as JSON lines, with levels, child loggers that add fields, and redaction of named fields. A pretty printer formats the lines for a terminal. Registered on a `web` scope, it logs one line per request with its method, path, status, and duration.
 
 ```lus nocheck
 local log = require("https://atmosp.here/2.0/log.lus")
 local logger = log.new({ level = "info", redact = { "password" } })
 local db_log = logger:child({ component = "db" })
 db_log:info("connected", { host = "localhost", ms = 12 })
-app:register(log.web(logger))
+app:register(log, { logger = logger })
 ```
 
 The goal for `log` is the goal of `pino`: a disabled level costs one comparison. An enabled one costs one `tojson` call and one write.
 
-**form** decodes and encodes `application/x-www-form-urlencoded` bodies with the nested keys of `qs`, such as `user[name]=x`. It parses `multipart/form-data` bodies into fields and files, with limits on the number of parts and the size of each. It builds multipart bodies for `network.fetch`. `form.web` adds a body parser for both types to a `web` scope.
+**form** decodes and encodes `application/x-www-form-urlencoded` bodies with the nested keys of `qs`, such as `user[name]=x`. It parses `multipart/form-data` bodies into fields and files, with limits on the number of parts and the size of each. It builds multipart bodies for `network.fetch`. Registered on a `web` scope, it parses both types into `req.body` and `req.files`.
 
 ```lus nocheck
 local form = require("https://atmosp.here/2.0/form.lus")
@@ -445,7 +444,7 @@ local body, content_type = form.encode_multipart({ title = "x", upload = { filen
 
 ```lus nocheck
 local static = require("https://atmosp.here/2.0/static.lus")
-app:register(static.web({ root = "public", prefix = "/assets", max_age = 3600 }))
+app:register(static, { root = "public", prefix = "/assets", max_age = 3600 })
 network.serve("0.0.0.0", 8080, static.handler({ root = "public" }))
 ```
 
@@ -453,7 +452,7 @@ network.serve("0.0.0.0", 8080, static.handler({ root = "public" }))
 
 ```lus nocheck
 local rate_limit = require("https://atmosp.here/2.0/rate_limit.lus")
-app:register(rate_limit.web({ window = 60, max = 100, key = function(req) return req.ip end }))
+app:register(rate_limit, { window = 60, max = 100, key = function(req) return req.ip end })
 ```
 
 **http_client** wraps `network.fetch` with a base URL, query encoding, JSON bodies and replies, timeouts, retries with exponential backoff on 429 and 5xx, and hooks before a request and after a response. An error object carries the status and the decoded body.
@@ -461,7 +460,7 @@ app:register(rate_limit.web({ window = 60, max = 100, key = function(req) return
 ```lus nocheck
 local http_client = require("https://atmosp.here/2.0/http_client.lus")
 local api = http_client.new({ base = "https://api.example.com", headers = { authorization = `Bearer $(token)` }, retries = 3 })
-local user = api:get("/users/42", { query = { fields = "name" } }).json
+local user = api:get("/users/42", { query = { fields = "name" } }):json()
 local created = api:post("/users", { json = { name = "Ada" } })
 ```
 
@@ -511,15 +510,17 @@ local smtp = mail.smtp({ host = "smtp.example.com", port = 587, user = user, pas
 smtp:send({ from = "app@example.com", to = "ada@example.com", subject = "Welcome", text = "Hello", html = "<p>Hello</p>" })
 ```
 
-**cron** parses cron expressions with five or six fields, the nicknames such as `@daily`, and time zones. `cron.next(expr, after)` returns the next matching `zoned` value. `cron.schedule` runs a function on a detached coroutine at every match.
+**cron** parses cron expressions with five or six fields, the nicknames such as `@daily`, and time zones. `cron.next(expr, after)` returns the next matching `zoned` value. `cron.ticks(expr)` is an iterator that sleeps until each match, and `cron.schedule` returns a detached coroutine that runs a function at every match.
 
 ```lus nocheck
 local cron = require("https://atmosp.here/2.0/cron.lus")
 print(cron.next("0 9 * * mon-fri", time.now(), "Europe/Paris"):iso())
-cron.schedule("*/5 * * * *", function() cleanup() end)
+for at in cron.ticks("0 3 * * *", { zone = "Europe/Paris" }) do backup(at) end
+local job = cron.schedule("*/5 * * * *", function() cleanup() end)
+coroutine.close(job)
 ```
 
-**queue** runs jobs with retries, backoff, delays, priorities, and a limit on concurrency. Its default store is an SQLite table, which survives a restart of a single process. A Redis store shares jobs between processes. Workers run as detached coroutines, or as `worker` threads for jobs that compute.
+**queue** runs jobs with retries, backoff, delays, priorities, and a limit on concurrency. Its default store is an SQLite table, which survives a restart of a single process. A Redis store shares jobs between processes. `q:process` returns its workers as detached coroutines, which a caller resumes to wait for them and closes to cancel them.
 
 ```lus nocheck
 local queue = require("https://atmosp.here/2.0/queue.lus")
@@ -588,14 +589,6 @@ local bar = term.progress({ total = #files })
 for _, f in ipairs(files) do process(f) bar:tick() end
 ```
 
-**archive** reads and writes ZIP and tar archives, including gzip-compressed tar, on top of the codecs of `vector.archive`. It reads entries one at a time, so a large archive need not fit in memory. It refuses entry paths that leave the target directory.
-
-```lus nocheck
-local archive = require("https://atmosp.here/2.0/archive.lus")
-for entry in archive.zip.entries(bytes) do print(entry.name, entry.size) end
-local tgz = archive.tar.pack({ { name = "a.txt", data = "hello" } }, { gzip = true })
-```
-
 ### Standard library additions
 
 Some gaps belong in the runtime, because a package written in Lus cannot fill them or because many packages need them.
@@ -608,6 +601,7 @@ Some gaps belong in the runtime, because a package written in Lus cannot fill th
 - **File watching.** `fs.watch(path, callback)` reports changes through kqueue, inotify, or ReadDirectoryChangesW and suspends a detached coroutine between events. It covers `chokidar` and the reload loop of a development server.
 - **Signals.** `os.signal(name, callback)` runs a function on `SIGINT`, `SIGTERM`, or `SIGHUP`, so a server can stop accepting connections and finish its requests before it exits.
 - **Recursive globs.** `fs.list` accepts `**` and braces, and `fs.walk(path)` iterates over a directory tree. Together they cover `glob`, `fast-glob`, `minimatch`, and `Bun.Glob`.
+- **ZIP and tar.** Readers and writers of both containers join `vector.archive`, next to the codecs they use. They read entries one at a time and refuse entry paths that leave the target directory.
 
 ### Later packages
 
@@ -623,3 +617,36 @@ These packages have users in the survey but wait for the ones above or for a sta
 - `image`, `qrcode`, `pdf`, and `xlsx`. Decoding and resizing images at the speed of `sharp` needs native code, so `image` waits for a decision on codecs in the runtime. `qrcode`, `pdf`, and `xlsx` writers fit in Lus.
 
 Three gaps join existing packages. `web` gains a compression plugin built on `vector.archive` and a plugin for security headers in the manner of `helmet`. `schema` gains export to JSON Schema, which `ajv` users and OpenAPI generators read. `websocket` gains rooms and broadcast, which `socket.io` users expect.
+
+### Coroutines
+
+Anything that waits is a coroutine. A scheduler or a worker is a detached coroutine, which `coroutine.resume` waits for and `coroutine.close` cancels, so no package defines `wait` or `stop` methods, event callbacks, or promise objects. A stream is an iterator whose steps block, such as `ws:messages()`, `cron.ticks(expr)`, and `xml.events(reader)`, so it suspends inside a detached coroutine and waits in place in the main chunk.
+
+Some functions that the packages accept run synchronously and never wait, so they stay functions.
+
+- The hooks of `web` are steps of the request pipeline. Each runs inside the coroutine of the connection and returns a value or nothing.
+- `before_request` and `after_response` in `http_client` transform a request or a response in place.
+- The `key`, `skip`, and `cost` options of `rate_limit` compute a value from a request.
+- The `backoff` option of `queue` may be a function from the attempt to a delay.
+- The `clock` and `sleep` options of `cron` and `queue` replace the time source in tests.
+- The language hooks of `humanize`, the `missing` option of `i18n`, and the `write` option of `log` produce or consume a string.
+
+### Status
+
+The 14 packages that need no new standard library exist as prototypes in the same layout as the first 16. Each passes `lus check` and its tests under the four JIT modes. The table gives the tests of each.
+
+| Package | Tests | Package | Tests |
+| --- | --- | --- | --- |
+| `log` | 32 | `cron` | 100 |
+| `form` | 36 | `queue` | 39 |
+| `static` | 76 | `otp` | 25 |
+| `rate_limit` | 34 | `xml` | 26 |
+| `http_client` | 30 | `humanize` | 20 |
+| `html` | 56 | `i18n` | 32 |
+| `migrate` | 21 | `term` | 31 |
+
+The `html` tree builder matches parse5 on about 250,000 random inputs and 41 real pages. Its 330 inline tree cases take their expected trees from parse5. `html.sanitize` is tested against 107 XSS vectors. The `i18n` tables come from CLDR 48, and its tests replay ICU outputs for 26 locales. The `otp` tests use the vectors of RFC 4226, RFC 6238, and RFC 4648.
+
+Plugins for `web` register like `cors`: `app:register(static, options)`. Writing them fixed three faults of `web`, each with a test. A hook that answers a request keeps its body and headers. The `on_send` and `on_response` hooks also run for error responses and for unmatched requests. Percent escapes in queries and path parameters decode as UTF-8.
+
+Until the standard library gains `coroutine.sleep`, `cron` and `queue` sleep on the receive timeout of a UDP socket and declare `network:udp`. Each keeps that sleep in one internal function. `static` derives its `ETag` from the file content until `fs.stat` exists. `postgres`, `redis`, `mail`, `oauth`, and `s3` wait for TLS sockets and the new cryptography.
