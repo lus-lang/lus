@@ -10,7 +10,20 @@
 # share of swap in use says little on its own. Other systems pass at once.
 # Builds still run one at a time, with -j1 for wasm and cross builds and
 # -j2 otherwise.
+#
+# It first keeps the Zig cache under its cap with tools/prune-zig-cache.sh,
+# and refuses to start a build while the disk has less than
+# LUS_MIN_FREE_DISK_GB gigabytes free, 20 by default.
 set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+sh "$here/prune-zig-cache.sh"
+min_gb=${LUS_MIN_FREE_DISK_GB:-20}
+free_kb=$(df -k "$here" | awk 'NR == 2 { print $4 }')
+if [ -n "$free_kb" ] && [ "$free_kb" -lt $((min_gb * 1024 * 1024)) ]; then
+    echo "the disk has $((free_kb / 1024 / 1024)) GB free, under ${min_gb} GB: free space before building" >&2
+    exit 1
+fi
 
 [ "$(uname)" = Darwin ] || exit 0
 command -v memory_pressure >/dev/null 2>&1 || exit 0
