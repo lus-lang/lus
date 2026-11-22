@@ -89,6 +89,30 @@ pub fn atExit() void {
     }
 }
 
+/// `LUS_WORKER_FAIL=N` fails step N of the message handling of workers: a
+/// copy of a message into or out of a state, a push to an outbox or an
+/// inbox, and a take from one. `LUS_WORKER_FAIL=count` prints how many
+/// steps a run made. The steps of every thread share one count.
+pub var worker_target: usize = 0;
+pub var worker_count: std.atomic.Value(usize) = .init(0);
+pub var worker_report = false;
+
+/// Numbers a step of the message handling of workers, and says whether it
+/// fails.
+pub fn workerStep() ?usize {
+    const n = worker_count.fetchAdd(1, .monotonic) + 1;
+    return if (n == worker_target) n else null;
+}
+
+/// Reads `LUS_WORKER_FAIL`.
+pub fn setupWorker(spec: []const u8) void {
+    if (std.mem.eql(u8, spec, "count")) {
+        worker_report = true;
+        return;
+    }
+    worker_target = std.fmt.parseInt(usize, spec, 10) catch 0;
+}
+
 /// Numbers an operation of the SQLite VFS, and says whether it fails.
 pub fn step() bool {
     return next() == .fail;

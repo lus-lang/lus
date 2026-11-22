@@ -32,6 +32,7 @@
 //! script unwinds even when it retries in a loop.
 
 const std = @import("std");
+const faultio = @import("../vm/faultio.zig");
 const value = @import("../vm/value.zig");
 const object = @import("../vm/object.zig");
 const state = @import("../vm/state.zig");
@@ -199,7 +200,14 @@ const Encoder = struct {
 };
 
 /// Copies `v` out of the heap of `l` into a new packet.
+/// Fails a step of the message handling in the fault build
+/// (`faultio.workerStep`).
+inline fn step(l: *Thread) Error!void {
+    if (faultio.enabled) if (faultio.workerStep()) |n| return l.raiseFmt("worker step {d} failed (LUS_WORKER_FAIL)", .{n});
+}
+
 fn encode(l: *Thread, v: Value) Error!*Packet {
+    try step(l);
     const gpa = l.g.parent_gpa;
     const p = gpa.create(Packet) catch return l.raiseMem();
     p.* = .{ .arena = .init(gpa) };
@@ -231,6 +239,7 @@ fn encode(l: *Thread, v: Value) Error!*Packet {
 /// Rebuilds the value of `p` in the heap of `l`. The packet stays owned
 /// by the caller, minus any vector buffers it handed over.
 fn decode(l: *Thread, p: *Packet) Error!Value {
+    try step(l);
     const g = l.g;
     // Nothing created here is reachable until the root is returned, so
     // the collector waits until the graph is complete.
@@ -549,6 +558,7 @@ fn halt(l: *Thread, comptime what: []const u8) Error {
 // The worker thread
 
 fn threadMain(w: *Worker) void {
+    if (@import("../vm/heapcount.zig").fail_alloc) @import("../vm/heapcount.zig").inject.in_worker = true;
     var msg: ?[]u8 = null;
     var val: ?*Packet = null;
     run(w, &msg, &val);
@@ -668,6 +678,10 @@ fn setup(l: *Thread) Error!void {
 fn message(l: *Thread) Error!u32 {
     const w = selfOf(l.g) orelse return l.raiseFmt("worker.message called outside worker context", .{});
     const p = try encode(l, l.arg(1));
+    step(l) catch |e| {
+        p.destroy(l.g.parent_gpa);
+        return e;
+    };
     w.out_mutex.lockUncancelable(l.g.io);
     w.outbox.push(p);
     w.out_mutex.unlock(l.g.io);
@@ -852,6 +866,10 @@ fn status(l: *Thread) Error!u32 {
 fn send(l: *Thread) Error!u32 {
     const w = try checkWorker(l, 1);
     const p = try encode(l, l.arg(2));
+    step(l) catch |e| {
+        p.destroy(l.g.parent_gpa);
+        return e;
+    };
     w.in_mutex.lockUncancelable(l.g.io);
     w.inbox.push(p);
     w.in_cond.signal(l.g.io);

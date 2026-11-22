@@ -304,6 +304,7 @@ fn mainWithCompiler(init: std.process.Init, args: []const []const u8) !u8 {
 fn setupFailAlloc(init: std.process.Init) void {
     const inject = lus.vm.heapcount.inject;
     inject.trace = init.environ_map.get("LUS_FAIL_ALLOC_TRACE") != null;
+    if (init.environ_map.get("LUS_FAIL_ALLOC_SCOPE")) |scope| inject.workers_only = std.mem.eql(u8, scope, "worker");
     const v = init.environ_map.get("LUS_FAIL_ALLOC") orelse return;
     if (std.mem.eql(u8, v, "count")) {
         report_allocs = true;
@@ -320,6 +321,7 @@ var report_io = false;
 /// Reads `LUS_FAIL_IO` in a `-Dfail-io=true` build and gives the process
 /// an `Io` that injects the faults it names (`vm/faultio.zig`).
 fn setupFailIo(init: *std.process.Init) void {
+    if (init.environ_map.get("LUS_WORKER_FAIL")) |w| lus.vm.faultio.setupWorker(w);
     const v = init.environ_map.get("LUS_FAIL_IO") orelse return;
     report_io = lus.vm.faultio.setup(v, init.environ_map.get("LUS_FAIL_IO_SEED"), init.environ_map.get("LUS_FAIL_IO_PSOW"));
     init.io = lus.vm.faultio.wrap(init.io);
@@ -329,6 +331,7 @@ fn reportAllocs() void {
     if (lus.vm.faultio.enabled) lus.vm.faultio.atExit();
     if (report_allocs) std.debug.print("lus: {d} allocations\n", .{lus.vm.heapcount.inject.count.load(.monotonic)});
     if (report_io) std.debug.print("lus: {d} I/O operations\n", .{lus.vm.faultio.count.load(.monotonic)});
+    if (lus.vm.faultio.enabled and lus.vm.faultio.worker_report) std.debug.print("lus: {d} worker steps\n", .{lus.vm.faultio.worker_count.load(.monotonic)});
 }
 
 /// Prints the opcode sequences a run counted, in a build that counts

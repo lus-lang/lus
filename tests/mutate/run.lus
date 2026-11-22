@@ -3,14 +3,15 @@
 -- The harness copies the runtime, then for each sampled mutant changes
 -- one place of one source file in the copy (`mutate.zig`), builds the copy
 -- as releases are built, and runs the conformance files on the result,
--- cheapest first, until one fails, interpreted and then in optimized code. A mutant that a test notices is killed.
+-- cheapest first, until one fails, interpreted and then in optimized code,
+-- then N differential programs (200 by default), then the unit tests. A mutant that a test notices is killed.
 -- One that every test passes survived, which points to a check the tests
 -- lack. A mutant that does not compile, or that compiles to the same
 -- binary as the original, says nothing about the tests and is dropped.
 --
 -- Usage, from the root of the repository:
 --   lus tests/mutate/run.lus [--count N] [--seed S] [--covered KEYS] [--work DIR]
---       [--timeout SECONDS] [--minutes M] [--file PATH]...
+--       [--timeout SECONDS] [--minutes M] [--diff N] [--file PATH]...
 --
 -- KEYS is an export of the source positions that the conformance suite
 -- covers (`LUS_COVERAGE_EXPORT`, `runtime/src/coverage.zig`). With it,
@@ -24,7 +25,7 @@ global arg, assert, crypto, error, fs, io, ipairs, math, os, pairs, pledge, prin
 
 pledge("exec", "fs", "env")
 
-local opts = { count = 40, seed = 1, covered = nil, work = nil, timeout = 120, minutes = nil, files = {} }
+local opts = { count = 40, seed = 1, covered = nil, work = nil, timeout = 120, minutes = nil, diff = 200, files = {} }
 do
     local i = 1
     while i <= #arg do
@@ -35,6 +36,7 @@ do
         elseif a == "--work" then opts.work = v
         elseif a == "--timeout" then opts.timeout = tonumber(v)
         elseif a == "--minutes" then opts.minutes = tonumber(v)
+        elseif a == "--diff" then opts.diff = tonumber(v)
         elseif a == "--file" then opts.files[#opts.files + 1] = v
         else error("unknown option " .. a) end
         i = i + 2
@@ -133,10 +135,16 @@ local function orderedTests()
     return files
 end
 
--- Runs the tests on the mutant until one fails, first interpreted, then
--- in optimized code, which reaches the paths that only compiled code
--- takes. Returns the file that failed and the mode, or nil when every
--- file passed in both.
+-- The runtime that judges the differential programs, built from the
+-- unchanged sources, so a mutant never judges itself.
+local judge = fs.path.join(root, "runtime", "zig-out", "bin", "lus")
+
+-- Runs the tests on the mutant until one fails, cheapest first: the
+-- conformance files interpreted, the same files in optimized code, which
+-- reach the paths that only compiled code takes, the differential
+-- programs, which compare the configurations of the mutant, and the unit
+-- tests, which need a build of their own. Returns a name for what failed,
+-- or nil when everything passed.
 local function firstFailure(tests)
     for _, mode in ipairs({ "off", "opt-eager" }) do
         os.setenv("LUS_JIT", mode)
@@ -144,11 +152,18 @@ local function firstFailure(tests)
             local ok = sh(quote(bin) .. " test --timeout " .. opts.timeout .. " " .. quote(t.path))
             if not ok then
                 os.setenv("LUS_JIT", "off")
-                return t.path, mode
+                return fs.path.name(t.path) .. (mode == "off" and "" or ", " .. mode)
             end
         end
     end
     os.setenv("LUS_JIT", "off")
+    local diff_out = fs.path.join(opts.work, "diff-findings")
+    local ok = sh(quote(judge) .. " " .. quote(fs.path.join(root, "tests", "diff", "run.lus")) ..
+        " --count " .. opts.diff .. " --jobs 4 --timeout " .. opts.timeout .. " --lus " .. quote(bin) .. " --out " .. quote(diff_out))
+    if not ok then return string.format("the differential programs, see %s", diff_out) end
+    sh("sh " .. quote(fs.path.join(root, "tools", "wait-for-memory.sh")))
+    ok = sh("cd " .. quote(work_rt) .. " && zig build test -j2")
+    if not ok then return "the unit tests" end
     return nil
 end
 
@@ -190,6 +205,11 @@ assert(ok, "the unchanged copy does not build:\n" .. out)
 local original_digest = digest(bin)
 local tests = orderedTests()
 print(string.format("%d test files, cheapest first", #tests))
+-- The unchanged copy passes everything that kills a mutant.
+do
+    local failed = firstFailure({})
+    assert(not failed, "the unchanged copy fails " .. tostring(failed))
+end
 
 -- Every site of every target file, on covered lines when the export says.
 local covered = coveredLines()
@@ -245,9 +265,9 @@ while results.killed + results.survived < opts.count and tried < #pool do
         elseif digest(bin) == original_digest then
             verdict = "same"
         else
-            local failed, mode = firstFailure(tests)
+            local failed = firstFailure(tests)
             verdict = failed and "killed" or "survived"
-            if failed then pick.by = fs.path.name(failed) .. (mode == "off" and "" or ", " .. mode) end
+            pick.by = failed
         end
         local f = assert(io.open(src, "w"))
         f:write(saved)

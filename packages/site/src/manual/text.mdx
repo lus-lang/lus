@@ -369,6 +369,8 @@ The right format depends on the programs that read the data.
 - **brotli** is the format that browsers accept for web content. At its default level it produces small output and compresses slowly.
 - **lz4** is designed for speed and produces larger output than the other formats.
 
+Damaged data raises an error when a format can tell. gzip and lz4 store a checksum of the data, so a changed byte raises an error. The zstd frames that `compress` writes, deflate, and brotli store none, so a change that keeps the stream valid decompresses to other data. A program that stores compressed data where it can be damaged keeps a checksum of its own, such as a digest from [`crypto.hash`](/manual/api#crypto.hash), or uses gzip.
+
 Each format is a table with a `compress` and a `decompress` function. The optional second argument of `compress` sets the level, where a higher level produces smaller output and takes more time.
 
 | Format | Standard | Level | Default |
