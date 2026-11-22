@@ -26,6 +26,8 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "getlocal", .func = getlocal },
     .{ .name = "setlocal", .func = setlocal },
     .{ .name = "getupvalue", .func = getupvalue },
+    .{ .name = "getcontext", .func = @import("context.zig").getcontext },
+    .{ .name = "setcontext", .func = @import("context.zig").setcontext },
     .{ .name = "setupvalue", .func = setupvalue },
     .{ .name = "upvalueid", .func = upvalueid },
     .{ .name = "upvaluejoin", .func = upvaluejoin },

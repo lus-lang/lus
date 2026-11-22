@@ -2988,6 +2988,34 @@ An observed variable depends on the observed variables that its initializer name
 
 A variable that depends on others is read-only, so an assignment to it is a compile error. If an initializer raises an error during an update, the assignment that started the update raises it. The dependents not yet updated keep their previous values. An assignment to an observed variable while an update runs raises an error. When the block of a dependent ends, it stops depending on its inputs.
 
+### Values for each coroutine
+
+Some values describe the work in progress rather than the program, such as the identifier of the request a server is answering, which every log line should carry. A global would mix up the requests that detached coroutines serve at the same time, and passing the value to every function changes every signature. The `<context>` attribute gives a local a value for each coroutine: an assignment changes the value of the running coroutine alone, and a read returns the value of the running coroutine. The initializer is the value of every coroutine that assigned nothing.
+
+```lus
+local request_id <context> = "none"
+
+local function log(message)
+    print(`[$request_id] $message`)
+end
+
+local function handle(id)
+    request_id = id
+    coroutine.yield()
+    log("done")
+end
+
+local a = coroutine.create(handle)
+local b = coroutine.create(handle)
+coroutine.resume(a, "r1")
+coroutine.resume(b, "r2")
+coroutine.resume(a)   --> [r1] done
+coroutine.resume(b)   --> [r2] done
+log("idle")           --> [none] idle
+```
+
+A new coroutine starts with the values of the coroutine that creates it, so the connections that `network.serve` accepts start with the values of the coroutine that runs `serve`, and a task detached while answering a request keeps its request. A change after the creation stays in the coroutine that made it. A function reads the value of the coroutine that runs it, wherever the function was defined. Each run of a declaration creates a new variable, so two calls of a function that declares one have two variables. [`debug.getcontext`](/manual/api#debug.getcontext) reads the values that another coroutine sees.
+
 ## Enums
 
 Programs often need a value that is one of a few fixed choices, such as a log level, the state of a connection, or a direction. Strings and numbers can represent the choices, but both have drawbacks. A misspelled string such as `"warnning"` is still a string, so Lus reports no error. A number such as `2` has no meaning for the reader and is equal to every other `2` in the program. An _enum_ is a fixed set of named values that differ from every string, every number, and the values of every other enum.

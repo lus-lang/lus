@@ -72,6 +72,32 @@ pub fn concatShort(l: *Thread, r: [*]Value, n: usize) callconv(jit.cc) usize {
     return 1;
 }
 
+/// `getctx`: the value of the context variable whose slot object is
+/// `slotv`, as the running coroutine sees it, written to `dst`. Returns 1
+/// when it ran and 0 when the step routine must run the instruction.
+pub fn ctxGet(l: *Thread, dst: *Value, slotv: *const Value) callconv(jit.cc) usize {
+    const slot = ctxSlot(l, slotv.*) orelse return 0;
+    dst.* = @import("../vm/context.zig").get(l, slot);
+    return 1;
+}
+
+/// `setctx`: assigns `v` when the running coroutine owns an array that
+/// covers the slot. Any copy of the array is left to the step routine.
+pub fn ctxSet(l: *Thread, slotv: *const Value, v: *const Value) callconv(jit.cc) usize {
+    const slot = ctxSlot(l, slotv.*) orelse return 0;
+    const arr = l.ctx orelse return 0;
+    if (arr.refs != 1 or slot >= arr.vals.len) return 0;
+    arr.vals[slot] = v.*;
+    return 1;
+}
+
+inline fn ctxSlot(l: *Thread, v: Value) ?u32 {
+    if (v.tag != .userdata) return null;
+    const u = v.as(object.Userdata);
+    if (l.g.ctx.slot_mt == null or u.metatable != l.g.ctx.slot_mt) return null;
+    return @as(*const u32, @ptrCast(@alignCast(u.data()))).*;
+}
+
 /// A step of a generic `for` over `next` or `ipairs` (`interp.stepIterator`).
 /// Returns 1 when it ran and 0 when the step routine must make the call.
 pub fn tforStep(l: *Thread, rp: [*]Value, want: usize) callconv(jit.cc) usize {

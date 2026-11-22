@@ -50,6 +50,7 @@ pub fn newCoroutine(l: *Thread, f: Value) Error!*Thread {
     const co = state.newThread(l.g) catch return l.raiseMem();
     co.status = .suspended;
     @import("../vm/pledge.zig").inherit(co, l);
+    @import("../vm/context.zig").inherit(co, l);
     co.stack[0] = f;
     co.top = 1;
     return co;

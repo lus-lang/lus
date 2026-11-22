@@ -1585,6 +1585,7 @@ print(crypto.verifypassword("Password", stored))   --> false
       "debug.check",
       "debug.debug",
       "debug.format",
+      "debug.getcontext",
       "debug.gethook",
       "debug.getinfo",
       "debug.getlocal",
@@ -1595,6 +1596,7 @@ print(crypto.verifypassword("Password", stored))   --> false
       "debug.jit",
       "debug.parse",
       "debug.queryplan",
+      "debug.setcontext",
       "debug.sethook",
       "debug.setlocal",
       "debug.setmetatable",
@@ -1755,6 +1757,66 @@ Comments keep their text. A comment that holds bytes that are not valid WTF-8 co
     since = "0.1.0",
     source = "stdlib/debug/format.md",
     stability = "stable",
+  },
+  ["debug.getcontext"] = {
+    children = {},
+    description = [[
+Returns the name, the value, and the place of declaration of context variable number `n` as the coroutine `co` sees it, or `nil` past the last variable.
+
+- `co` is a coroutine, and the running coroutine when it is left out.
+- `n` is the number of the variable, starting at 1. The live context variables of the state are numbered in the order in which their declarations ran. A variable that nothing refers to any more leaves the numbering when the collector reclaims it, so the numbers of the variables declared after it move down by one.
+
+The value is the one that `co` assigned, or the one it inherited from the coroutine that created it, or the default of the variable. The place is a string `"SOURCE:LINE"` that names the chunk and the line of the declaration, which tells two variables of the same name apart. A context variable is a local declared with the `<context>` attribute ([Values for each coroutine](/manual/guide#values-for-each-coroutine)).
+
+The following example reads a variable as the main coroutine and as another coroutine see it.
+
+```lus
+local function find(name)
+    local n = 1
+    while true do
+        local found = debug.getcontext(n)
+        if found == nil or found == name then return n end
+        n = n + 1
+    end
+end
+
+local user <context> = "nobody"
+local co = coroutine.create(function()
+    user = "ada"
+    coroutine.yield()
+end)
+coroutine.resume(co)
+local n = find("user")
+print(select(2, debug.getcontext(n)))       --> nobody
+print(select(2, debug.getcontext(co, n)))   --> ada
+```
+
+[`debug.setcontext`](/manual/api#debug.setcontext) assigns a value for a coroutine.]],
+    kind = "function",
+    module = "debug",
+    name = "debug.getcontext",
+    origin = "lus",
+    params = {
+      {
+        name = "co",
+        optional = true,
+        type = "thread",
+      },
+      {
+        name = "n",
+        type = "integer",
+      },
+    },
+    parent = "debug",
+    returns = {
+      {
+        type = "string|nil",
+      },
+    },
+    short_name = "getcontext",
+    since = "2.0.0",
+    source = "stdlib/debug/getcontext.md",
+    stability = "unstable",
   },
   ["debug.gethook"] = {
     children = {},
@@ -2248,6 +2310,62 @@ The plan gives tests a direct observation of push-down decisions, which change h
     short_name = "queryplan",
     since = "1.7.0",
     source = "stdlib/debug/queryplan.md",
+    stability = "unstable",
+  },
+  ["debug.setcontext"] = {
+    children = {},
+    description = [[
+Assigns `value` to context variable number `n` for the coroutine `co` and returns the name of the variable, or `nil` past the last variable.
+
+`co` is a coroutine, and the running coroutine when it is left out. `n` numbers the variables as [`debug.getcontext`](/manual/api#debug.getcontext) does. The assignment changes the value that `co` sees and nothing else, exactly as an assignment inside `co` would. A coroutine that `co` creates afterwards starts with the new value. A missing `value` raises a bad argument error.
+
+The following example gives a suspended coroutine a value before it continues.
+
+```lus
+local function find(name)
+    local n = 1
+    while debug.getcontext(n) ~= name do n = n + 1 end
+    return n
+end
+
+local trace <context> = "off"
+local co = coroutine.create(function()
+    coroutine.yield()
+    return trace
+end)
+coroutine.resume(co)
+print(debug.setcontext(co, find("trace"), "on"))   --> trace
+print(select(2, coroutine.resume(co)))            --> on
+print(trace)                                      --> off
+```]],
+    kind = "function",
+    module = "debug",
+    name = "debug.setcontext",
+    origin = "lus",
+    params = {
+      {
+        name = "co",
+        optional = true,
+        type = "thread",
+      },
+      {
+        name = "n",
+        type = "integer",
+      },
+      {
+        name = "value",
+        type = "any",
+      },
+    },
+    parent = "debug",
+    returns = {
+      {
+        type = "string|nil",
+      },
+    },
+    short_name = "setcontext",
+    since = "2.0.0",
+    source = "stdlib/debug/setcontext.md",
     stability = "unstable",
   },
   ["debug.sethook"] = {

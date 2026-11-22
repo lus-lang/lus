@@ -603,6 +603,7 @@ const Formatter = struct {
                 .meta => "meta",
                 .lazy => "lazy",
                 .observe => "observe",
+                .context => "context",
                 .runtime => null,
             };
             if (word) |w| {
