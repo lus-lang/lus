@@ -340,7 +340,9 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
     defer if (!ok) freeUnit(g, unit);
     var cg = codegen.Codegen.init(arena, gpa, l, p, func, ra, unit) catch return null;
     defer cg.deinit();
+    if (cg.em.aot) |c| c.unit = unit;
     if (!cg.run()) return null;
+    cg.em.reportAot();
     const bytes = cg.em.bytes();
     unit.code = g.jit.arena.alloc(gpa, bytes.len) orelse return null;
     mem.install(unit.code, bytes);

@@ -20,6 +20,7 @@
 //! Constants build in at most five instructions, so there is no pool.
 
 const std = @import("std");
+const reloc = @import("reloc.zig");
 
 pub const Reg = enum(u5) {
     r0,
@@ -287,6 +288,15 @@ pub const Assembler = struct {
     labels: std.ArrayList(u32) = .empty,
     fixups: std.ArrayList(Fixup) = .empty,
     oom: bool = false,
+    /// Set when the assembler compiles ahead of time, which makes the
+    /// routines that write addresses record relocations.
+    aot: bool = false,
+    relocs: std.ArrayList(reloc.Entry) = .empty,
+    /// Wide immediates written ahead of time that name something the
+    /// loader cannot find. Code with any is unusable ahead of time.
+    unrelocated: u32 = 0,
+    /// Decides ahead of time what a wide immediate of `movImm` is.
+    resolver: ?reloc.Resolver = null,
     /// Set when a branch cannot reach its label.
     overflow: bool = false,
 
@@ -297,6 +307,7 @@ pub const Assembler = struct {
     }
 
     pub fn deinit(a: *Assembler) void {
+        a.relocs.deinit(a.gpa);
         a.buf.deinit(a.gpa);
         a.labels.deinit(a.gpa);
         a.fixups.deinit(a.gpa);
@@ -393,7 +404,43 @@ pub const Assembler = struct {
     }
 
     /// Loads a 64-bit constant in at most five instructions.
+    /// Loads a 64-bit constant. Ahead of time, the resolver decides
+    /// whether a wide constant is an address, which then takes the form
+    /// of `movImmReloc`.
     pub fn movImm(a: *Assembler, dst: Reg, v: u64) void {
+        if (a.aot and reloc.wide(v)) {
+            const res: reloc.Resolution = if (a.resolver) |rs| rs.resolve(rs.ctx, v) else .unknown;
+            switch (res) {
+                .address => |r| return a.movImmReloc(dst, v, r),
+                .literal => {},
+                .unknown => a.unrelocated += 1,
+            }
+        }
+        a.movImmRaw(dst, v);
+    }
+    /// Loads an address, or a value that `r` names as a literal. Ahead of
+    /// time an address takes a form whose bytes the loader patches.
+    pub fn movImmReloc(a: *Assembler, dst: Reg, v: u64, r: reloc.Reloc) void {
+        if (!a.aot or r.kind == .literal) return a.movImmRaw(dst, v);
+        a.record(a.offset(), .ppc_seq, r);
+        a.word(dform(op_addis, dst.n(), 0, @as(i16, @bitCast(@as(u16, @truncate(v >> 48))))));
+        a.word(dform(op_ori, dst.n(), dst.n(), @intCast((v >> 32) & 0xFFFF)));
+        a.sldi(dst, dst, 32);
+        a.word(dform(op_oris, dst.n(), dst.n(), @intCast((v >> 16) & 0xFFFF)));
+        a.word(dform(op_ori, dst.n(), dst.n(), @intCast(v & 0xFFFF)));
+    }
+    fn record(a: *Assembler, at: u32, form: reloc.Form, r: reloc.Reloc) void {
+        a.relocs.append(a.gpa, .{ .at = at, .form = form, .r = r }) catch {
+            a.oom = true;
+        };
+    }
+    /// Stores an address, or a value that `r` names as a literal.
+    pub fn storeImm64Reloc(a: *Assembler, m: Mem, v: u64, r: reloc.Reloc) void {
+        if (!a.aot) return a.storeImm64(m, v);
+        a.movImmReloc(s0, v, r);
+        a.store64(s0, m);
+    }
+    fn movImmRaw(a: *Assembler, dst: Reg, v: u64) void {
         const sv: i64 = @bitCast(v);
         if (sv >= std.math.minInt(i32) and sv <= std.math.maxInt(i32)) return a.mov32(dst, @truncate(v));
         // The upper word goes in first, shifted into place, and the two
@@ -836,6 +883,17 @@ pub const Assembler = struct {
     /// registers, such as `jit.Target`.
     pub fn callPair(a: *Assembler, addr: usize) void {
         a.call(addr);
+    }
+    /// Calls the routine that `r` names, at `addr` in this process.
+    pub fn callReloc(a: *Assembler, addr: usize, r: reloc.Reloc) void {
+        if (!a.aot) return a.call(addr);
+        a.movImmReloc(s0, addr, r);
+        a.word(mtctr_r12);
+        a.word(bctrl);
+    }
+    /// `callPair` for the routine that `r` names.
+    pub fn callPairReloc(a: *Assembler, addr: usize, r: reloc.Reloc) void {
+        a.callReloc(addr, r);
     }
     /// Calls a routine in the same code, which ends with `leave`.
     pub fn callLocal(a: *Assembler, l: Label) void {

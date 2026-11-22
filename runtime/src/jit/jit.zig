@@ -91,6 +91,10 @@ pub const State = if (enabled) struct {
     exits: usize = 0,
     /// Lists the intermediate representation of every compilation.
     opt_dump: bool = false,
+    /// Set by `LUS_JIT_AOT=check:PATH`: both tiers compile in the form of
+    /// code compiled ahead of time, and every address without a
+    /// relocation appends a line to the file at PATH (`aot.zig`).
+    aot_log: ?[:0]const u8 = null,
     /// Bytes of tables that optimized code did not allocate since the
     /// last collection it asked for, and the count at which it asks.
     sunk: u64 = 0,
@@ -175,6 +179,9 @@ fn setup(g: *Global) void {
         js.opt_threshold = @max(std.fmt.parseInt(u32, v, 10) catch opt.default_threshold, 1);
     };
     js.opt_dump = env.get("LUS_JIT_DUMP") != null;
+    if (env.get("LUS_JIT_AOT")) |v| {
+        if (std.mem.startsWith(u8, v, "check:")) js.aot_log = g.gpa.dupeSentinel(u8, v["check:".len..], 0) catch null;
+    }
     if (env.get("LUS_JIT_DIRECT")) |v| {
         if (std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "0")) {
             js.direct = false;
@@ -532,6 +539,7 @@ fn compileMachine(l: *Thread, p: *Proto) bool {
         gpa.free(offs);
         return false;
     }
+    e.reportAot();
     const bytes = e.bytes();
     const code = gpa.create(Code) catch {
         gpa.free(offs);
@@ -592,6 +600,7 @@ pub fn deinit(g: *Global) void {
     if (!enabled or is_wasm) return;
     g.jit.callers.deinit(g.gpa);
     g.jit.arena.deinit(g.gpa);
+    if (g.jit.aot_log) |path| g.gpa.free(path);
 }
 
 test {
@@ -601,6 +610,8 @@ test {
     _ = @import("la64.zig");
     _ = @import("ppc64.zig");
     _ = @import("s390x.zig");
+    _ = @import("reloc.zig");
+    _ = @import("aot.zig");
     if (enabled) {
         _ = mem;
         _ = emit;

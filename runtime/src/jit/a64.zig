@@ -4,6 +4,7 @@
 //! each opcode once for both architectures.
 
 const std = @import("std");
+const reloc = @import("reloc.zig");
 const builtin = @import("builtin");
 
 pub const Reg = enum(u5) {
@@ -157,6 +158,9 @@ const Fixup = struct {
     kind: enum { b26, b19, literal },
 };
 
+/// A pool word that holds an address, before `flushPool` places it.
+const PoolReloc = struct { index: u32, r: reloc.Reloc };
+
 pub const Assembler = struct {
     gpa: std.mem.Allocator,
     buf: std.ArrayList(u8) = .empty,
@@ -170,6 +174,17 @@ pub const Assembler = struct {
     /// The first fixup that the next `flushPool` looks at.
     pool_fixups: usize = 0,
     oom: bool = false,
+    /// Set when the assembler compiles ahead of time, which makes the
+    /// routines that write addresses record relocations.
+    aot: bool = false,
+    relocs: std.ArrayList(reloc.Entry) = .empty,
+    /// Wide immediates written ahead of time that name something the
+    /// loader cannot find. Code with any is unusable ahead of time.
+    unrelocated: u32 = 0,
+    /// Decides ahead of time what a wide immediate of `movImm` is.
+    resolver: ?reloc.Resolver = null,
+    /// Relocated pool words that the next `flushPool` places.
+    pool_relocs: std.ArrayList(PoolReloc) = .empty,
     /// Set when a branch cannot reach its label.
     overflow: bool = false,
 
@@ -180,6 +195,8 @@ pub const Assembler = struct {
     }
 
     pub fn deinit(a: *Assembler) void {
+        a.relocs.deinit(a.gpa);
+        a.pool_relocs.deinit(a.gpa);
         a.buf.deinit(a.gpa);
         a.labels.deinit(a.gpa);
         a.fixups.deinit(a.gpa);
@@ -242,6 +259,8 @@ pub const Assembler = struct {
             for (a.fixups.items[a.pool_fixups..]) |f| {
                 if (f.kind == .literal) a.patch(f, pool_at + f.label * 8);
             }
+            for (a.pool_relocs.items) |p| a.record(pool_at + p.index * 8, .word, p.r);
+            a.pool_relocs.clearRetainingCapacity();
             a.pool.clearRetainingCapacity();
         }
         a.pool_fixups = a.fixups.items.len;
@@ -286,7 +305,46 @@ pub const Assembler = struct {
     }
 
     /// Loads a 64-bit constant with the shortest move sequence.
+    /// Loads a 64-bit constant. Ahead of time, the resolver decides
+    /// whether a wide constant is an address, which then takes the form
+    /// of `movImmReloc`.
     pub fn movImm(a: *Assembler, dst: Reg, v: u64) void {
+        if (a.aot and reloc.wide(v)) {
+            const res: reloc.Resolution = if (a.resolver) |rs| rs.resolve(rs.ctx, v) else .unknown;
+            switch (res) {
+                .address => |r| return a.movImmReloc(dst, v, r),
+                .literal => {},
+                .unknown => a.unrelocated += 1,
+            }
+        }
+        a.movImmRaw(dst, v);
+    }
+    /// Loads an address, or a value that `r` names as a literal. Ahead of
+    /// time an address takes a form whose bytes the loader patches.
+    pub fn movImmReloc(a: *Assembler, dst: Reg, v: u64, r: reloc.Reloc) void {
+        if (!a.aot or r.kind == .literal) return a.movImmRaw(dst, v);
+        const index = a.pool.items.len;
+        a.pool.append(a.gpa, v) catch {
+            a.oom = true;
+        };
+        a.pool_relocs.append(a.gpa, .{ .index = @intCast(index), .r = r }) catch {
+            a.oom = true;
+        };
+        a.fix(@intCast(index), .literal);
+        a.word(0x58000000 | dst.n());
+    }
+    fn record(a: *Assembler, at: u32, form: reloc.Form, r: reloc.Reloc) void {
+        a.relocs.append(a.gpa, .{ .at = at, .form = form, .r = r }) catch {
+            a.oom = true;
+        };
+    }
+    /// Stores an address, or a value that `r` names as a literal.
+    pub fn storeImm64Reloc(a: *Assembler, m: Mem, v: u64, r: reloc.Reloc) void {
+        if (!a.aot) return a.storeImm64(m, v);
+        a.movImmReloc(s0, v, r);
+        a.store64(s0, m);
+    }
+    fn movImmRaw(a: *Assembler, dst: Reg, v: u64) void {
         if (v == 0) return a.word(0xD2800000 | dst.n());
         // A value with mostly set halves starts from an inverted move.
         var ones: u32 = 0;
@@ -744,6 +802,16 @@ pub const Assembler = struct {
     /// registers, such as `jit.Target`.
     pub fn callPair(a: *Assembler, addr: usize) void {
         a.call(addr);
+    }
+    /// Calls the routine that `r` names, at `addr` in this process.
+    pub fn callReloc(a: *Assembler, addr: usize, r: reloc.Reloc) void {
+        if (!a.aot) return a.call(addr);
+        a.movImmReloc(s0, addr, r);
+        a.callReg(s0);
+    }
+    /// `callPair` for the routine that `r` names.
+    pub fn callPairReloc(a: *Assembler, addr: usize, r: reloc.Reloc) void {
+        a.callReloc(addr, r);
     }
     /// Calls a routine in the same code, which ends with `leave`.
     pub fn callLocal(a: *Assembler, l: Label) void {
