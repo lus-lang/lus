@@ -1,0 +1,78 @@
+-- Measures reads of a lazy local after its first read against reads of an
+-- ordinary local, directly and through an upvalue, and the cost of
+-- executing a `<lazy>` declaration. Run directly, the program prints the
+-- time of each case (spec/design/lazy.md).
+local N = 20000000
+
+local function plain_local()
+    local k = 3
+    local s = 0
+    for i = 1, N do s = s + k end
+    return s
+end
+
+local function lazy_local()
+    local k <lazy> = 3
+    local s = 0
+    for i = 1, N do s = s + k end
+    return s
+end
+
+local function lazy_local_read_before()
+    local k <lazy> = 3
+    local s = k - 3
+    for i = 1, N do s = s + k end
+    return s
+end
+
+local up = 3
+local function plain_upvalue()
+    local s = 0
+    for i = 1, N do s = s + up end
+    return s
+end
+
+local lup <lazy> = 3
+local function lazy_upvalue()
+    local s = 0
+    for i = 1, N do s = s + lup end
+    return s
+end
+
+local function declarations()
+    local s = 0
+    for i = 1, N // 20 do
+        local k <lazy> = i
+        s = s + k
+    end
+    return s
+end
+
+local function plain_declarations()
+    local s = 0
+    for i = 1, N // 20 do
+        local k = i
+        s = s + k
+    end
+    return s
+end
+
+local function time(f)
+    local best = math.huge
+    for _ = 1, 3 do
+        local t0 = os.clock()
+        f()
+        best = math.min(best, os.clock() - t0)
+    end
+    return best
+end
+
+for _, c in ipairs({
+    { "local", plain_local, lazy_local },
+    { "local, read before the loop", plain_local, lazy_local_read_before },
+    { "upvalue", plain_upvalue, lazy_upvalue },
+    { "declaration", plain_declarations, declarations },
+}) do
+    local p, l = time(c[2]), time(c[3])
+    print(string.format("%-30s plain %.3f s  lazy %.3f s  ratio %.2f", c[1], p, l, l / p))
+end
