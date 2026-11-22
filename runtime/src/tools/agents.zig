@@ -32,7 +32,7 @@ const section =
 ++ marker ++
     \\
     \\
-    \\This project uses Lus. The skills in `.agents/skills/` explain how to write, test, and port Lus code, and they match the installed `lus`. After every change, run `lus check --json`, `lus fmt --write`, and `lus test`. `lus help NAME` prints the reference for a standard library function, and `lus help --search TEXT` finds one.
+    \\This project uses Lus. The skills in `.agents/skills/` explain how to write, test, and port Lus code, and they match the installed `lus`. After every change, run `lus check --json`, `lus fmt --write`, and `lus test`. `lus help NAME` prints the reference for a standard library function, and `lus help --search TEXT` finds one. Documentation, READMEs, doc comments, and other text for people follow the `lus-writing` skill.
     \\
 ;
 
@@ -172,8 +172,11 @@ test initProject {
     try std.testing.expectEqual(@as(u8, 0), try initProject(a, io, tmp.dir, &out.writer));
     const skill = try tmp.dir.readFileAlloc(io, ".claude/skills/lus/SKILL.md", a, .unlimited);
     try std.testing.expect(std.mem.startsWith(u8, skill, "---\nname: lus\n"));
+    const writing = try tmp.dir.readFileAlloc(io, ".agents/skills/lus-writing/SKILL.md", a, .unlimited);
+    try std.testing.expect(std.mem.startsWith(u8, writing, "---\nname: lus-writing\n"));
     const agents = try tmp.dir.readFileAlloc(io, "AGENTS.md", a, .unlimited);
     try std.testing.expect(std.mem.startsWith(u8, agents, "# Project\n\n## Lus\n" ++ marker));
+    try std.testing.expect(std.mem.indexOf(u8, agents, "`lus-writing` skill") != null);
 
     // A second run changes nothing.
     out.clearRetainingCapacity();
