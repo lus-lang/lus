@@ -14,7 +14,7 @@ Startup and peak speed on systems that have a JIT are not among the reasons. `wa
 
 ## The training run
 
-`lus build --aot` runs the program once under the normal JIT, with the arguments that `--train` names, or runs a training script that `--train-script` names. When the run ends, the builder walks every function of every bundled chunk.
+`lus build --aot` runs the program once, with the arguments that `--train` names. The training run compiles every function it reaches to baseline code on its first call, and sends functions to the optimizing tier after the usual thresholds, so its units carry the predictions of a warmed program. When the run ends, the state writes the code of every function of every bundled chunk.
 
 - A function that has optimized code contributes each of its units, as the run compiled them from its own samples and exits.
 - A function that has baseline code contributes it.
@@ -42,7 +42,9 @@ Native code embeds absolute addresses. The emitter writes them with `movImm` and
 
 Every address reaches machine code through the `movImm`, `call`, or `storeImm64` of an assembler, so the code generators name no addresses themselves. An assembler that compiles ahead of time hands each immediate wider than 32 bits to a resolver (`jit/aot.zig`), which finds what the address points to: a routine in the table that numbers them (`aot.routines`), a field of the global state or the object that a word of it holds, a field, a constant, or an inline cache entry of a function, the object that a constant holds, a unit, a native function, or an interned string, which it names by its characters. The assembler then writes the address in a form whose bytes the loader patches (`reloc.Form`) and records the relocation. An immediate in the heap or in the image of the executable that the resolver cannot name makes the unit unusable ahead of time. Any other immediate is a literal. When the assembler compiles for the JIT, none of this runs, so its code stays the same byte for byte.
 
-`LUS_JIT_AOT=check:PATH` makes both tiers compile every function in that form, with the real addresses in the patchable words, and run it. Every address that the resolver cannot name appends a line to PATH. Under it the conformance suite, the tests of the language server, and the examples of the documentation pass with an empty log. So the patchable forms run, and every address has a relocation. CI runs that check on macOS.
+`LUS_JIT_AOT=check:PATH` makes both tiers compile every function in that form, with the real addresses in the patchable words, and run it. Every address that the resolver cannot name appends a line to PATH. Under it the conformance suite, the tests of the language server, and the examples of the documentation pass with an empty log. So the patchable forms run, and every address has a relocation.
+
+`LUS_JIT_AOT=reload:PATH` checks the loader on the same code. After each function compiles, every relocated word is overwritten and written again from the address that the loader of an executable finds for its relocation. The metadata of each optimized unit, which its exits read, goes through the writer and the reader of the code section. The code then runs from what the loader produced. A relocation that the loader cannot resolve appends a line to PATH. The conformance suite and the tests of the language server pass with an empty log under the default JIT, `LUS_JIT=eager`, and `LUS_JIT=opt-eager`. CI runs it on macOS under the default JIT and `opt-eager`.
 
 Speculation on an object that the runtime cannot rebuild by name, such as a table that the program built and a guard compares by identity, makes the builder drop that unit and keep the baseline code of its function.
 
@@ -50,7 +52,9 @@ Speculation on an object that the runtime cannot rebuild by name, such as a tabl
 
 The executable is a prebuilt runtime, built with `-Dcompiler=false`, followed by the payload of `lus build` and a section of code objects with their relocations. The runtime without a compiler leaves out `src/syntax` and `src/compile` except the loader of binary chunks. `load` of source text raises "the compiler is not part of this executable". Prebuilt runtimes ship with each release for every target, as the release binaries do today.
 
-At startup the runtime loads the chunks as `lus build` does, maps the code section, applies the relocations, makes the pages executable, and points each function at its code. On a target without executable memory, the code section lives in the executable image itself, linked at build time against the prebuilt runtime as a static library, which keeps the image signed as one piece. The relocations are then resolved by the system loader.
+The code section is a module of the bundle named `.aot`. It holds the hash seed of the training run, the strings that relocations name by their characters, a record of the baseline code of each function, and a record of each optimized unit. A unit record holds its code, the offsets of its entries, the metadata of its exits, and its relocations. A word of the metadata that holds an object, such as the key of a table that an exit allocates, is a relocation as well. The training run leaves out a unit whose code or metadata names an object without a name, and its function keeps its baseline code.
+
+The runtime creates its state with the recorded seed and loads the chunks as `lus build` does. When a bundled module loads, the runtime numbers its functions, installs their baseline code, and reserves each of their units: a record and a block of executable memory. Units that call each other directly then find each other's addresses. A reserved unit is installed when every object that its relocations and its metadata name is here. It takes no direct calls before that, since a caller tests the cell of the unit before each call. A unit that names a function of a module that has not loaded yet waits for that module. On a target without executable memory, the code section lives in the executable image itself, linked at build time against the prebuilt runtime as a static library, which keeps the image signed as one piece. The relocations are then resolved by the system loader.
 
 The runtime leaves out both JIT tiers by default, so code that the training run never reached runs in the interpreter. On a target that allows executable memory, `--aot-keep-jit` keeps them, so that code compiles at run time as it does under `lus build`.
 
@@ -102,13 +106,28 @@ The table gives the best wall time of five runs of each benchmark in `tests/benc
 
 **Size (measurement 4).** In the static aarch64 Linux executable, a ReleaseSafe build with 5.66 MB of code, the parser takes 261 KB, the compiler 147 KB, the tools such as `lus test` and `lus debug` 309 KB, and the two JIT tiers 399 KB. An executable compiled ahead of time needs none of them by default, which leaves out 1.1 MB, about a fifth of the code. The sizes come from the symbol table of the executable, summed by the module that each function belongs to.
 
-**Peak speed (measurement 3)** needs relocated code and is taken in step 3.
+**Peak speed (measurement 3).** The table gives the best wall time of five runs, in seconds, from a ReleaseFast build on an Apple silicon Mac. "build" is the executable of `lus build` on `lus`, with both JIT tiers. "runtime" is the same bundle on `lus-runtime`, which interprets. "aot" is the executable of `lus build --aot`, on `lus-runtime` with the code of the training run. Every executable prints the same output.
+
+| benchmark | build | runtime | aot | aot size |
+|---|---:|---:|---:|---:|
+| arrays | 0.038 | 0.236 | 0.038 | 6.60 MB |
+| closures | 0.081 | 0.102 | 0.080 | 6.59 MB |
+| data | 0.030 | 0.039 | 0.029 | 6.60 MB |
+| fib | 0.011 | 0.050 | 0.012 | 6.59 MB |
+| loop | 0.075 | 0.249 | 0.081 | 6.58 MB |
+| methods | 0.007 | 0.272 | 0.007 | 6.61 MB |
+| patterns | 0.224 | 0.228 | 0.220 | 6.63 MB |
+| strings | 0.157 | 0.145 | 0.153 | 6.60 MB |
+| tables | 0.101 | 0.108 | 0.102 | 6.60 MB |
+| unicode | 0.009 | 0.042 | 0.009 | 6.59 MB |
+
+Code compiled ahead of time runs as fast as the JIT, as expected. The executable of `lus build` takes 8.98 MB. Without the recorded seed, `methods` and `unicode` ran at 0.202 s and 0.037 s, because the node predictions of their units failed and the units were given up.
 
 ## Order of the work
 
 1. The relocation interface in every assembler and the address sites in the code generators, with a test that compiles every conformance function for ahead of time and checks that each address it writes has a relocation.
 2. `-Dcompiler=false` and its runtime, gated by the conformance suite with the tests that call `load` on source text skipped.
-3. The training run, the code section, and the loader, gated by the conformance suite run from executables compiled ahead of time in every mode.
+3. The training run, the code section, and the loader, gated by the conformance suite under `LUS_JIT_AOT=reload` in every mode that compiles, and by an executable compiled ahead of time in `zig build test-runtime`.
 4. Library stripping.
 5. Static linking for targets without executable memory, starting with iOS.
 

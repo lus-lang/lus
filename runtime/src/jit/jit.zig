@@ -57,6 +57,7 @@ pub const is_wasm = builtin.cpu.arch == .wasm32;
 pub const has_opt = enabled and !is_wasm;
 
 const mem = @import("mem.zig");
+const aot = @import("aot.zig");
 const emit = @import("emit.zig");
 const wasm = @import("wasm.zig");
 pub const helpers = @import("helpers.zig");
@@ -91,10 +92,15 @@ pub const State = if (enabled) struct {
     exits: usize = 0,
     /// Lists the intermediate representation of every compilation.
     opt_dump: bool = false,
-    /// Set by `LUS_JIT_AOT=check:PATH`: both tiers compile in the form of
-    /// code compiled ahead of time, and every address without a
-    /// relocation appends a line to the file at PATH (`aot.zig`).
-    aot_log: ?[:0]const u8 = null,
+    /// Set by `LUS_JIT_AOT=check:PATH` and `LUS_JIT_AOT=train:PATH`: both
+    /// tiers compile in the form of code compiled ahead of time
+    /// (`aot.zig`).
+    aot: ?*aot.State = null,
+    /// The code section of an executable compiled ahead of time, which
+    /// installs functions as their modules load.
+    aot_section: ?*aot.Section = null,
+    /// The numbers of the bundled functions (`aot.idOf`).
+    aot_ids: std.AutoHashMapUnmanaged(*Proto, u32) = .empty,
     /// Bytes of tables that optimized code did not allocate since the
     /// last collection it asked for, and the count at which it asks.
     sunk: u64 = 0,
@@ -180,7 +186,23 @@ fn setup(g: *Global) void {
     };
     js.opt_dump = env.get("LUS_JIT_DUMP") != null;
     if (env.get("LUS_JIT_AOT")) |v| {
-        if (std.mem.startsWith(u8, v, "check:")) js.aot_log = g.gpa.dupeSentinel(u8, v["check:".len..], 0) catch null;
+        js.aot = aot.State.fromEnv(g.gpa, v);
+        // A training run compiles every function it reaches to baseline
+        // code, and optimizes after the usual thresholds, so its units
+        // carry the predictions of a warmed program.
+        if (js.aot) |st| if (st.mode == .train and js.setting != .off) {
+            js.setting = .eager;
+            js.threshold = 1;
+        };
+        if (js.aot) |st| if (st.mode == .reload) {
+            js.aot_section = aot.Section.empty(g.gpa);
+            // The functions of the bundled modules that loaded before the
+            // JIT started already have their numbers.
+            if (js.aot_section) |s| {
+                var it = js.aot_ids.iterator();
+                while (it.next()) |kv| s.ids.put(s.gpa, kv.value_ptr.*, kv.key_ptr.*) catch {};
+            }
+        };
     }
     if (env.get("LUS_JIT_DIRECT")) |v| {
         if (std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "0")) {
@@ -524,7 +546,13 @@ pub const Outcome = enum { done, failed, later };
 
 const compile = if (is_wasm) wasm.compile else compileNative;
 
+/// Whether this build compiles native code. The runtime of executables
+/// compiled ahead of time runs the code its executable carries and
+/// compiles none (`aot.md`).
+pub const can_compile = build_options.jit_compile;
+
 fn compileNative(l: *Thread, p: *Proto) Outcome {
+    if (comptime !can_compile) return .failed;
     return if (compileMachine(l, p)) .done else .failed;
 }
 
@@ -540,6 +568,10 @@ fn compileMachine(l: *Thread, p: *Proto) bool {
         return false;
     }
     e.reportAot();
+    if (g.jit.aot) |st| if (e.a.unrelocated == 0) {
+        st.keep(g, p, e.a.relocs.items);
+        aot.reloadBaseline(l, e.a.buf.items, e.a.relocs.items);
+    };
     const bytes = e.bytes();
     const code = gpa.create(Code) catch {
         gpa.free(offs);
@@ -575,6 +607,7 @@ fn compileMachine(l: *Thread, p: *Proto) bool {
 /// Frees the native code of a function that is being collected.
 pub fn freeProto(g: *Global, p: *Proto) void {
     if (!enabled) return;
+    if (!is_wasm) if (g.jit.aot_section) |s| s.forgetProto(g, p, aot.idOf(g, p));
     if (has_opt) opt.freeProto(g, p);
     if (is_wasm) {
         if (p.jit_code == null) return;
@@ -584,6 +617,8 @@ pub fn freeProto(g: *Global, p: *Proto) void {
         g.jit.live -= 1;
         return;
     }
+    if (g.jit.aot) |st| st.forget(p);
+    _ = g.jit.aot_ids.remove(p);
     const code: *Code = @ptrCast(@alignCast(p.jit_code orelse return));
     g.jit.arena.release(g.gpa, @as([*]u8, @ptrFromInt(code.base))[0..code.size]);
     g.gpa.free(code.offs[0..code.count]);
@@ -600,7 +635,9 @@ pub fn deinit(g: *Global) void {
     if (!enabled or is_wasm) return;
     g.jit.callers.deinit(g.gpa);
     g.jit.arena.deinit(g.gpa);
-    if (g.jit.aot_log) |path| g.gpa.free(path);
+    if (g.jit.aot) |st| st.destroy();
+    if (g.jit.aot_section) |s| s.destroy();
+    g.jit.aot_ids.deinit(g.gpa);
 }
 
 test {

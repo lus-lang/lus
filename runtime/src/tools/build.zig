@@ -48,6 +48,9 @@ const usage =
     \\  -F name[=value]         define a compile-time flag (also --flag)
     \\  --include path[:alias]  bundle a module file or directory
     \\  --runtime FILE          start the executable from FILE, such as lus-runtime
+    \\  --aot                   compile the program ahead of time from a training run
+    \\  --train ARGS            the arguments of the training run, separated by spaces
+    \\  --aot-keep-jit          keep the JIT, so code the training never reached compiles
     \\
 ;
 
@@ -57,6 +60,9 @@ const Options = struct {
     /// The executable that the bundle is appended to, in place of the
     /// running `lus`.
     runtime: ?[]const u8 = null,
+    aot: bool = false,
+    keep_jit: bool = false,
+    train: ?[]const u8 = null,
     pledges: std.ArrayList([]const u8) = .empty,
     flags: std.ArrayList([]const u8) = .empty,
     includes: std.ArrayList([]const u8) = .empty,
@@ -75,7 +81,16 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const a = args[i];
-        const Kind = enum { output, pledge, flag, include, runtime };
+        if (std.mem.eql(u8, a, "--aot")) {
+            o.aot = true;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--aot-keep-jit")) {
+            o.aot = true;
+            o.keep_jit = true;
+            continue;
+        }
+        const Kind = enum { output, pledge, flag, include, runtime, train };
         const kind: ?Kind = if (std.mem.eql(u8, a, "-o"))
             .output
         else if (std.mem.eql(u8, a, "-P") or std.mem.eql(u8, a, "--pledge"))
@@ -86,6 +101,8 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
             .include
         else if (std.mem.eql(u8, a, "--runtime"))
             .runtime
+        else if (std.mem.eql(u8, a, "--train"))
+            .train
         else
             null;
         if (kind) |k| {
@@ -101,6 +118,7 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
                 .flag => try o.flags.append(gpa, v),
                 .include => try o.includes.append(gpa, v),
                 .runtime => o.runtime = v,
+                .train => o.train = v,
             }
         } else if (std.mem.startsWith(u8, a, "-P") and a.len > 2) {
             try o.pledges.append(gpa, a[2..]);
@@ -534,35 +552,39 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     for (opts.pledges.items) |p| try preserved.appendSlice(gpa, &.{ "-P", p });
     for (opts.flags.items) |f| try preserved.appendSlice(gpa, &.{ "-F", f });
 
-    // The program part of the running executable, or of the runtime that
-    // --runtime names, without any bundle it already carries.
-    const self = if (opts.runtime) |rp| std.Io.Dir.cwd().openFile(io, rp, .{}) catch |e| {
-        std.debug.print("lus build: cannot open the runtime {s} ({s})\n", .{ rp, @errorName(e) });
-        return 1;
-    } else std.process.openExecutable(io, .{}) catch |e| {
-        std.debug.print("lus build: cannot open the running executable ({s})\n", .{@errorName(e)});
-        return 1;
-    };
-    defer self.close(io);
-    const prog_len = bundle.programLength(io, self) catch |e| {
-        std.debug.print("lus build: cannot read the running executable ({s})\n", .{@errorName(e)});
-        return 1;
-    };
-    var image: std.ArrayList(u8) = .empty;
-    defer image.deinit(gpa);
-    try image.resize(gpa, @intCast(prog_len));
-    const n = self.readPositionalAll(io, image.items, 0) catch |e| {
-        std.debug.print("lus build: cannot read the running executable ({s})\n", .{@errorName(e)});
-        return 1;
-    };
-    if (n != prog_len) {
-        std.debug.print("lus build: cannot read the running executable\n", .{});
-        return 1;
-    }
-    try bundle.write(gpa, &image, preserved.items, c.modules.items, 0);
-
     const out_path = if (opts.output) |o| try gpa.dupe(u8, o) else try defaultOutput(gpa, script);
     defer gpa.free(out_path);
+
+    var image: std.ArrayList(u8) = .empty;
+    defer image.deinit(gpa);
+    if (!opts.aot) {
+        // The program part of the running executable, or of the runtime
+        // that --runtime names, without any bundle it already carries.
+        if (!try readProgram(io, gpa, opts.runtime, &image)) return 1;
+        try bundle.write(gpa, &image, preserved.items, c.modules.items, 0);
+    } else {
+        // A bundle on the running lus runs once under the training
+        // setting and writes the code section of what it compiled
+        // (`spec/design/aot.md`).
+        const section = (try train(init, gpa, preserved.items, c.modules.items, out_path, opts.train)) orelse return 1;
+        defer gpa.free(section);
+        const base: ?[]const u8 = if (opts.keep_jit) null else opts.runtime orelse blk: {
+            const dir = std.process.executableDirPathAlloc(io, gpa) catch {
+                std.debug.print("lus build: cannot find the directory of the running executable\n", .{});
+                return 1;
+            };
+            defer gpa.free(dir);
+            break :blk try std.fs.path.join(gpa, &.{ dir, "lus-runtime" });
+        };
+        defer if (base) |b| if (opts.runtime == null) gpa.free(b);
+        if (!try readProgram(io, gpa, base, &image)) return 1;
+        var modules: std.ArrayList(bundle.Module) = .empty;
+        defer modules.deinit(gpa);
+        try modules.appendSlice(gpa, c.modules.items);
+        try modules.append(gpa, .{ .name = ".aot", .chunkname = "=aot", .data = section });
+        try bundle.write(gpa, &image, preserved.items, modules.items, 0);
+    }
+
     const cwd = std.Io.Dir.cwd();
     const file = cwd.createFile(io, out_path, .{ .permissions = .executable_file }) catch |e| {
         std.debug.print("lus build: cannot create {s} ({s})\n", .{ out_path, @errorName(e) });
@@ -577,4 +599,96 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     defer gpa.free(note);
     std.Io.File.stdout().writeStreamingAll(io, note) catch {};
     return 0;
+}
+
+/// Reads the program part of `path`, or of the running executable when
+/// `path` is null, without any bundle it carries, into `image`. Prints
+/// the reason and returns false when it cannot.
+fn readProgram(io: std.Io, gpa: Allocator, path: ?[]const u8, image: *std.ArrayList(u8)) !bool {
+    const self = if (path) |rp| std.Io.Dir.cwd().openFile(io, rp, .{}) catch |e| {
+        std.debug.print("lus build: cannot open the runtime {s} ({s})\n", .{ rp, @errorName(e) });
+        return false;
+    } else std.process.openExecutable(io, .{}) catch |e| {
+        std.debug.print("lus build: cannot open the running executable ({s})\n", .{@errorName(e)});
+        return false;
+    };
+    defer self.close(io);
+    const prog_len = bundle.programLength(io, self) catch |e| {
+        std.debug.print("lus build: cannot read the executable ({s})\n", .{@errorName(e)});
+        return false;
+    };
+    try image.resize(gpa, @intCast(prog_len));
+    const n = self.readPositionalAll(io, image.items, 0) catch |e| {
+        std.debug.print("lus build: cannot read the executable ({s})\n", .{@errorName(e)});
+        return false;
+    };
+    if (n != prog_len) {
+        std.debug.print("lus build: cannot read the executable\n", .{});
+        return false;
+    }
+    return true;
+}
+
+/// Writes a bundle on the running lus next to `out_path`, runs it with the
+/// training arguments under `LUS_JIT_AOT=train:` with the default JIT, and
+/// returns the code section that it wrote, or null after printing why.
+fn train(init: std.process.Init, gpa: Allocator, preserved: []const []const u8, modules: []const bundle.Module, out_path: []const u8, args: ?[]const u8) !?[]u8 {
+    const io = init.io;
+    var image: std.ArrayList(u8) = .empty;
+    defer image.deinit(gpa);
+    if (!try readProgram(io, gpa, null, &image)) return null;
+    try bundle.write(gpa, &image, preserved, modules, 0);
+    const exe = try std.fmt.allocPrint(gpa, "{s}.train", .{out_path});
+    defer gpa.free(exe);
+    const sec = try std.fmt.allocPrint(gpa, "{s}.aot", .{out_path});
+    defer gpa.free(sec);
+    const cwd = std.Io.Dir.cwd();
+    {
+        const file = cwd.createFile(io, exe, .{ .permissions = .executable_file }) catch |e| {
+            std.debug.print("lus build: cannot create {s} ({s})\n", .{ exe, @errorName(e) });
+            return null;
+        };
+        defer file.close(io);
+        file.writeStreamingAll(io, image.items) catch |e| {
+            std.debug.print("lus build: cannot write {s} ({s})\n", .{ exe, @errorName(e) });
+            return null;
+        };
+    }
+    defer cwd.deleteFile(io, exe) catch {};
+    defer cwd.deleteFile(io, sec) catch {};
+    var env = try init.environ_map.clone(gpa);
+    defer env.deinit();
+    const setting = try std.fmt.allocPrint(gpa, "train:{s}", .{sec});
+    defer gpa.free(setting);
+    try env.put("LUS_JIT_AOT", setting);
+    // The training run compiles as the JIT does by default.
+    _ = env.swapRemove("LUS_JIT");
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    const exe_arg = if (std.fs.path.isAbsolute(exe) or std.mem.indexOfScalar(u8, exe, '/') != null) exe else try std.fmt.allocPrint(gpa, "./{s}", .{exe});
+    defer if (exe_arg.ptr != exe.ptr) gpa.free(exe_arg);
+    try argv.append(gpa, exe_arg);
+    if (args) |a| {
+        var it = std.mem.tokenizeScalar(u8, a, ' ');
+        while (it.next()) |x| try argv.append(gpa, x);
+    }
+    var child = std.process.spawn(io, .{ .argv = argv.items, .environ_map = &env }) catch |e| {
+        std.debug.print("lus build: cannot run the training bundle ({s})\n", .{@errorName(e)});
+        return null;
+    };
+    const term = child.wait(io) catch return null;
+    switch (term) {
+        .exited => |code| if (code != 0) {
+            std.debug.print("lus build: the training run exited with status {d}\n", .{code});
+            return null;
+        },
+        else => {
+            std.debug.print("lus build: the training run did not exit normally\n", .{});
+            return null;
+        },
+    }
+    return cwd.readFileAlloc(io, sec, gpa, .unlimited) catch |e| {
+        std.debug.print("lus build: the training run wrote no code section ({s})\n", .{@errorName(e)});
+        return null;
+    };
 }

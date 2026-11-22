@@ -353,6 +353,12 @@ fn runBundle(init: std.process.Init, b: *const lus.bundle.Bundle, args: []const 
     return exitAfterWorkers(runMain(init, argv.items, 1, b.entryModule()));
 }
 
+fn aotSeed() ?u64 {
+    const b = package.bundle orelse return null;
+    const sec = b.find(".aot") orelse return null;
+    return api.aotSectionSeed(sec.data);
+}
+
 fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry: ?lus.bundle.Module) !u8 {
     const gpa = init.gpa;
     const io = init.io;
@@ -393,7 +399,9 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
     var index: ?*lus.modtree.Index = null;
     defer if (index) |x| dropIndex(gpa, x);
 
-    const l = try api.newState(gpa, io);
+    // An executable compiled ahead of time hashes with the seed of its
+    // training run, so the node predictions of its code hold.
+    const l = if (aotSeed()) |seed| try api.newStateSeeded(gpa, io, seed) else try api.newState(gpa, io);
     defer api.closeForExit(l);
     defer out.deinit(l.g);
     if (!cli.ignore_env) l.g.environ = init.environ_map;
@@ -433,7 +441,8 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
     };
 
     if (entry) |m| {
-        if (!runChunk(l, m.data, m.chunkname, args[cli.script_index + 1 ..])) return 1;
+        if (package.bundle) |b| if (b.find(".aot")) |sec| api.useAotSection(l, sec.data);
+        if (!runChunkAt(l, m.data, m.chunkname, args[cli.script_index + 1 ..], if (package.bundle) |b| b.entry else null)) return 1;
     } else if (comptime !lus.has_compiler) {
         // Without the compiler only a bundle runs, which `main` checked.
     } else if (cli.script) |path| {
@@ -587,12 +596,19 @@ fn runString(l: *Thread, src: []const u8, name: []const u8) bool {
 }
 
 fn runChunk(l: *Thread, src: []const u8, name: []const u8, script_args: []const []const u8) bool {
+    return runChunkAt(l, src, name, script_args, null);
+}
+
+/// `runChunk` for module `module` of the bundle, whose functions get
+/// their numbers for code compiled ahead of time.
+fn runChunkAt(l: *Thread, src: []const u8, name: []const u8, script_args: []const []const u8, module: ?usize) bool {
     const base = l.top;
     api.load(l, src, name) catch {
         reportError(l);
         l.top = base;
         return false;
     };
+    if (module) |i| api.bundleModuleLoaded(l, i);
     for (script_args) |a| {
         const v = l.newStringValue(a) catch return false;
         l.push(v) catch return false;

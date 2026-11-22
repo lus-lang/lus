@@ -1,0 +1,10 @@
+-- A module whose function the `lus build --aot` test calls from hot code
+-- in another module.
+
+local M = {}
+
+function M.square(x)
+    return x * x
+end
+
+return M

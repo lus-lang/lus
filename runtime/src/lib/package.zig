@@ -263,6 +263,7 @@ fn searcherBundle(l: *Thread) Error!u32 {
     api.load(l, m.data, m.chunkname) catch {
         return l.raiseFmt("error loading bundled module '{s}':\n\t{s}", .{ name, api.errorMessage(l, l.err) });
     };
+    for (b.modules, 0..) |x, i| if (std.mem.eql(u8, x.name, m.name)) api.bundleModuleLoaded(l, i);
     try l.push(try l.newStringValue(state.chunkId(m.chunkname)));
     return 2;
 }
