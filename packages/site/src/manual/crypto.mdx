@@ -3,10 +3,10 @@ order: 65
 title: Cryptography
 icon: key-round
 group: library
-shortdesc: "SHA-2 digests, streaming hashers, HMAC, Ed25519 signatures, Argon2id password hashing, secure random bytes, and UUIDs and ULIDs."
+shortdesc: "SHA-2 digests, HMAC, key derivation, AES-256-GCM, Ed25519, ECDSA, and RSA signatures, keys from PEM and JWK, Argon2id password hashing, secure random bytes, and UUIDs and ULIDs."
 ---
 
-The [`crypto`](/manual/api#crypto-library) library has the functions that programs need to check downloads, sign and verify data, store passwords, and make identifiers that no one can guess. Every function computes with values the program already holds, so the library requires no [permission](/manual/permissions).
+The [`crypto`](/manual/api#crypto-library) library has the functions that programs need to check downloads, sign and verify data, sign and check tokens, encrypt secrets, store passwords, and make identifiers that no one can guess. Every function computes with values the program already holds, so the library requires no [permission](/manual/permissions).
 
 Digests, keys, signatures, and random output are raw bytes, so the library returns them as [vectors](/manual/text#vectors). Messages, keys for HMAC, and passwords may be strings or vectors. A string contributes its UTF-8 bytes.
 
@@ -28,7 +28,7 @@ local digest = string.transcode(crypto.hash("sha256", download), "binary", "hex"
 print(digest == published)   --> true
 ```
 
-`"sha1"` gives a digest of 20 bytes. SHA-1 is broken: researchers have built two different files with the same SHA-1 digest. It exists for formats that require it, such as the object names of git, and never for new designs.
+`"sha1"` gives a digest of 20 bytes. SHA-1 is broken: researchers have built two different files with the same SHA-1 digest. It exists for formats that require it, such as the object names of git, and never for new designs. `"md5"` gives a digest of 16 bytes. MD5 is broken for every security purpose, since two inputs with the same MD5 digest take seconds to find. It exists only to speak formats that still name it, such as the `md5` password authentication of PostgreSQL.
 
 ### Large inputs
 
@@ -111,6 +111,66 @@ local restored = string.transcode(text, "hex", "binary")
 local signature = crypto.sign(secret, "hello")
 print(crypto.verify(restored, "hello", signature))      --> true
 ```
+
+### Keys from other systems
+
+Identity providers, cloud services, and certificate tools hand out RSA and ECDSA keys as PEM text or as JSON Web Keys. [`crypto.importkey`](/manual/api#crypto.importkey) reads either form and returns a key object. `crypto.sign` and `crypto.verify` take a key object and the name of a JSON Web Signature algorithm: `"RS256"` and `"PS256"` for RSA, `"ES256"` for P-256, and the variants with SHA-384 and SHA-512. An EC or Ed25519 key implies its algorithm. An RSA key signs in two ways, so it needs the name.
+
+The following program checks a token signature against a key that a provider published as a JWK, then signs a new token with a P-256 key of its own.
+
+```lus
+global crypto, print, string
+
+local published = crypto.importkey({ kty = "EC", crv = "P-256",
+    x = "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+    y = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0" })
+local input = "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ"
+local sig = string.transcode("DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q", "base64url", "binary")
+print(crypto.verify(published, input, sig, "ES256"))   --> true
+
+local mine = crypto.keypair("P-256")
+local token_sig = crypto.sign(mine, "eyJhbGciOiJFUzI1NiJ9.e30")
+print(#token_sig)                                       --> 64
+```
+
+`key:export()` writes a key back as PEM and `key:export("jwk")` as a JWK table. `key:public()` gives the half to publish. The library reads RSA keys of 2048, 3072, and 4096 bits but makes none. `openssl genpkey` makes them. A new key is better as Ed25519 or P-256 in any case.
+
+## Key derivation
+
+A program often needs several keys from one secret, such as one key to encrypt cookies and another to sign them. [`crypto.hkdf`](/manual/api#crypto.hkdf) derives as many independent keys as it is asked for from one strong secret, each bound to its purpose by a label. [`crypto.pbkdf2`](/manual/api#crypto.pbkdf2) derives a key from a password with many rounds of HMAC, which formats such as SCRAM authentication require.
+
+The following program derives an encryption key and a signing key from one master secret.
+
+```lus
+global crypto, print
+
+local master = crypto.random(32)
+local enc_key = crypto.hkdf("sha256", master, nil, "cookie encryption", 32)
+local mac_key = crypto.hkdf("sha256", master, nil, "cookie signing", 32)
+print(crypto.equal(enc_key, mac_key))   --> false
+```
+
+## Encryption
+
+[`crypto.encrypt`](/manual/api#crypto.encrypt) encrypts data with AES-256-GCM, which also protects it from changes. It takes a key of 32 bytes and a _nonce_ of 12 bytes, then returns the ciphertext and a 16-byte _tag_. [`crypto.decrypt`](/manual/api#crypto.decrypt) takes the same key and nonce with the ciphertext and the tag, then returns the plaintext, or `nil` when anything was altered.
+
+A nonce must never repeat under one key. Two messages encrypted with the same key and nonce reveal the difference of their plaintexts. An attacker can then forge messages too. A new nonce from `crypto.random(12)` for each message keeps them apart. The nonce is not secret, so a program stores it next to the ciphertext.
+
+The following program encrypts a session cookie and reads it back, then shows that a changed cookie fails.
+
+```lus
+global crypto, print, vector
+
+local key = crypto.random(32)
+local nonce = crypto.random(12)
+local ct, tag = crypto.encrypt("aes-256-gcm", key, nonce, '{"user":42}')
+print(vector.tostring(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag)))   --> {"user":42}
+
+vector.set(ct, 0, vector.get(ct, 0) ~ 1)
+print(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag))   --> nil
+```
+
+An optional last argument names data that the tag covers without encrypting it, such as the name of the cookie, so a ciphertext moved to another cookie fails too.
 
 ## Passwords
 

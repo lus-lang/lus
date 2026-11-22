@@ -1,12 +1,12 @@
 # Cryptography
 
-The `crypto` library gives Lus programs the primitives that package signing, token signing, and password storage need: the SHA-2 hash functions SHA-256, SHA-384, and SHA-512, HMAC, Ed25519 signatures, secure random bytes, constant-time comparison, and Argon2id password hashing. It also generates UUIDs and ULIDs. The runtime uses the same code to verify remote modules and Lus releases, which are signed with Ed25519 over SHA-256 digests.
+The `crypto` library gives Lus programs the primitives that package signing, token signing, OAuth, database authentication, encrypted cookies, and password storage need: the SHA-2 hash functions SHA-256, SHA-384, and SHA-512, HMAC, PBKDF2 and HKDF, AES-256-GCM, Ed25519, ECDSA, and RSA signatures with keys from PEM, DER, and JWK, secure random bytes, constant-time comparison, and Argon2id password hashing. SHA-1 and MD5 exist for formats that require them. It also generates UUIDs and ULIDs. The runtime uses the same code to verify remote modules and Lus releases, which are signed with Ed25519 over SHA-256 digests.
 
-Every primitive comes from Zig's `std.crypto`. The library adds argument checking, the conversion between Lus values and bytes, and the text formats of UUIDs and ULIDs. It contains no cryptographic code of its own.
+Every primitive comes from Zig's `std.crypto`. The library adds argument checking, the conversion between Lus values and bytes, the key formats, the RSA signature encodings that std leaves private, and the text formats of UUIDs and ULIDs. The section on RSA describes the one place where the library composes std's arithmetic itself.
 
 ## Functions
 
-The library is the global table `crypto` with twelve functions.
+The library is the global table `crypto` with seventeen functions.
 
 | Function | Result |
 |---|---|
@@ -15,15 +15,20 @@ The library is the global table `crypto` with twelve functions.
 | `crypto.hmac(algorithm, key, data)` | The HMAC of `data` under `key`. |
 | `crypto.random(n)` | A vector of `n` bytes from the operating system's secure random source. |
 | `crypto.equal(a, b)` | `true` when `a` and `b` hold the same bytes, compared in constant time. |
-| `crypto.keypair([seed])` | An Ed25519 secret key and its public key. |
-| `crypto.sign(secret, message)` | The Ed25519 signature of `message`. |
-| `crypto.verify(public, message, signature)` | `true` when `signature` is a valid signature of `message` by `public`. |
+| `crypto.pbkdf2(algorithm, password, salt, iterations, length)` | A key derived from a password with PBKDF2. |
+| `crypto.hkdf(algorithm, key, salt, info, length)` | A key derived from a key with HKDF. |
+| `crypto.encrypt(algorithm, key, nonce, plaintext [, aad])` | The AES-256-GCM ciphertext and tag. |
+| `crypto.decrypt(algorithm, key, nonce, ciphertext, tag [, aad])` | The plaintext, or `nil` when authentication fails. |
+| `crypto.importkey(data)` | A key object read from PEM, DER, or JWK. |
+| `crypto.keypair([seed or curve])` | An Ed25519 secret key and its public key, or an EC key pair. |
+| `crypto.sign(key, message [, algorithm])` | The signature of `message`. |
+| `crypto.verify(key, message, signature [, algorithm])` | `true` when `signature` is a valid signature of `message` by `key`. |
 | `crypto.hashpassword(password [, options])` | An Argon2id hash of `password` in PHC string format. |
 | `crypto.verifypassword(password, hash)` | `true` when `password` matches `hash`. |
 | `crypto.uuid([version])` | A UUID of version 4, the default, or version 7, as a string. |
 | `crypto.ulid()` | A ULID as a string. |
 
-`algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, or `"sha1"`. SHA-1 is broken for collision resistance, so it exists for interoperability with formats that require it, such as git object names. Any other name raises `bad argument #1 to 'hash' (invalid option 'md5')`.
+`algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, `"sha1"`, or `"md5"` for every function that takes a hash. SHA-1 is broken for collision resistance, so it exists for interoperability with formats that require it, such as git object names. MD5 is broken for every security purpose and exists for formats that still name it, such as the `md5` authentication of PostgreSQL. Any other name raises `bad argument #1 to 'hash' (invalid option 'sha3')`.
 
 Each operation is one function that takes the algorithm as an argument, which keeps the table small. A later algorithm, such as SHA-3 or BLAKE3, becomes a new name that `algorithm` accepts.
 
@@ -72,6 +77,40 @@ local sig = crypto.sign(secret, "release 2.0.0")
 print(crypto.verify(public, "release 2.0.0", sig))   --> true
 print(crypto.verify(public, "release 2.0.1", sig))   --> false
 ```
+
+## Keys
+
+RSA and EC keys have structure, so they are objects: userdata with the metatable `crypto.key`, made by `crypto.importkey` or `crypto.keypair`. A key object holds plain data and no heap memory, so it needs no finalizer. It reports `key.type` (`"rsa"`, `"ec"`, `"ed25519"`), `key.private`, `key.bits` for RSA, and `key.curve` for EC and Ed25519. `key:public()` returns the public half. `key:export(format)` writes PEM, DER, or a JWK table, choosing PKCS #8 for a private key and SubjectPublicKeyInfo for a public one, the layouts of `openssl pkey`. Ed25519 keys may be key objects too, so a program that reads keys from a file treats every type alike, while the vectors of `crypto.keypair()` keep working.
+
+`crypto.importkey` tells its input apart by type and first bytes: PEM text, JSON text of a JWK, a JWK table, or DER bytes in a vector. PEM blocks of EC parameters before a key are skipped. The DER layouts are PKCS #8 (versions 1 and 2), SubjectPublicKeyInfo, the RSA keys of PKCS #1, and the EC private key of SEC1. Encrypted keys raise an error that names them, since decrypting them needs password-based encryption schemes that belong with a key file tool. RSA moduli are 2048, 3072, or 4096 bits. EC keys use P-256 and P-384, the curves of ES256 and ES384. Every key is validated on import: EC points lie on their curve, Ed25519 points decode, RSA values are odd and reduce under their moduli, and a private key whose stated public part differs from the one it derives raises.
+
+std reads DER only inside its certificate parser, through a reader that trusts its lengths, so the key structures have a reader of their own that checks every bound. The corrupt harness feeds it truncated and flipped keys.
+
+The library generates RSA keys nowhere. Providers and `openssl` make them. New keys in Lus are Ed25519 or P-256, which `crypto.keypair` generates.
+
+## Signatures
+
+`crypto.sign` and `crypto.verify` take a key object and a JOSE algorithm name: `EdDSA`, `ES256`, `ES384`, `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, or `PS512`. Ed25519 and EC keys imply their algorithm, so the name is optional for them and must match when given. An RSA key requires it, since PKCS #1 v1.5 and PSS are both common. ECDSA signatures are `r || s`, the form of JWS and WebCrypto. They use the nonces of std with fresh random bytes mixed into a nonce derived from the key and the message, so a weak random source alone cannot leak the key. PSS uses MGF1 with the message hash and a salt as long as the digest, as JWS fixes it.
+
+`crypto.verify` returns `false` for every invalid signature, including one of the wrong length or under an algorithm that does not fit the key, and raises only for arguments of the wrong type.
+
+## RSA
+
+std has RSA verification for PKCS #1 v1.5 and PSS with moduli up to 4096 bits, in `std.crypto.Certificate.rsa`, and constant-time modular arithmetic in `std.crypto.ff`. It has no RSA signing. Its encoders of the padded message are private. Signing is therefore built from those parts.
+
+- The message is encoded by EMSA-PKCS1-v1_5 or EMSA-PSS of RFC 8017, written here from the RFC: a DigestInfo prefix and padding, or a salted hash masked with MGF1.
+- The encoded message is raised to the private exponent through the Chinese remainder theorem, with `powWithEncodedExponent` of `std.crypto.ff`, whose running time does not depend on the exponent.
+- Every signature is verified with std's verifier before it is returned. A fault during signing, or a key whose primes and exponents do not match its modulus, raises instead of releasing a signature that could leak a prime.
+
+Verification uses std's verifier directly, so the encoders written here are checked against an independent implementation on every signature. The conformance suite also checks the deterministic RS256 signature of RFC 7515 byte for byte and verifies signatures that OpenSSL made.
+
+## Key derivation
+
+`crypto.pbkdf2` is PBKDF2 of RFC 8018 over any HMAC, for formats that require it, such as SCRAM in PostgreSQL. `crypto.hkdf` is HKDF of RFC 5869, extract then expand, which splits one strong secret into independent keys by its `info` argument. Lengths are capped at 1024 bytes for PBKDF2 and at 255 digests for HKDF, the limit of the RFC.
+
+## Authenticated encryption
+
+`crypto.encrypt` and `crypto.decrypt` take the algorithm `"aes-256-gcm"`, a 32-byte key, and a 12-byte nonce from the caller. `encrypt` returns the ciphertext and the 16-byte tag as two vectors, which fits JWE and other formats that carry the nonce and the tag in fields of their own. `decrypt` returns `nil` when the tag does not match, parallel to `crypto.verify` returning `false`, and wipes the plaintext it computed. A nonce must never repeat under one key, which the documentation states with `crypto.random(12)` as the usual source. The algorithm argument leaves room for ChaCha20-Poly1305, which std also has.
 
 ## Passwords
 
