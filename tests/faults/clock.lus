@@ -99,7 +99,8 @@ for i = 1, 6 do
         local sock = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(0.2)
         local before = time.monotonic()
-        local ok, err = catch sock:receive(1)
+        -- A receive that times out returns nil and an error object.
+        local _, err = sock:receive(1)
         print(string.format("timeout %s %.3f", tostring(err):match("receive timeout") and "receive" or "other", (time.monotonic() - before):seconds()))
         sock:close()
         server:close()

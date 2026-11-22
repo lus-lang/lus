@@ -26,6 +26,7 @@ const table = @import("../vm/table.zig");
 const sched = @import("../vm/sched.zig");
 const aux = @import("auxlib.zig");
 const net = @import("network.zig");
+const faultio = @import("../vm/faultio.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -200,7 +201,11 @@ fn recvCb(ctx: ?*anyopaque, buf: [*]u8, len: usize) callconv(.c) c_int {
     const t: *Tls = @ptrCast(@alignCast(ctx.?));
     const n = @min(len, std.math.maxInt(i32));
     switch (net.rawRecv(t.thread, t.sock, buf[0..n])) {
-        .n => |got| return @intCast(got),
+        .n => |got| {
+            // The fault build damages one chunk of the record layer.
+            if (got > 0 and faultio.netStep(&.{.tls_receive}) != null) buf[got / 2] ^= 0x10;
+            return @intCast(got);
+        },
         .again => {
             t.want = .read;
             return want_read;
