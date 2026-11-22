@@ -121,7 +121,7 @@ fn newHandle(l: *Thread, h: Handle) Error!Value {
     return Value.obj(.userdata, u);
 }
 
-fn toHandle(l: *Thread, v: Value) ?*Handle {
+pub fn toHandle(l: *Thread, v: Value) ?*Handle {
     if (v.tag != .userdata) return null;
     const u = v.as(Userdata);
     const mt: *Table = @ptrCast(@alignCast(l.g.ext.get("io.mt").?));

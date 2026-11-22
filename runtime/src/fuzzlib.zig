@@ -218,6 +218,23 @@ const archive = target(
     \\end
 , &.{ "hello hello hello hello", "", "\x28\xb5\x2f\xfd\x00\x58\x00\x00", "\x1f\x8b\x08\x00\x00\x00\x00\x00", "\x04\x22\x4d\x18\x64\x40\xa7" });
 
+// The container readers never crash on any bytes, and packing then reading
+// gives back every entry.
+const containers = target(
+    \\for _, name in ipairs({ "zip", "tar" }) do
+    \\    local c = vector.archive[name]
+    \\    local ok, list = catch c.list(V)
+    \\    if ok then
+    \\        for _, e in ipairs(list) do catch c.read(V, e.name, 1 << 16) end
+    \\    end
+    \\    local entries = { { name = "a/" .. (#A > 0 and "x" .. #A or "f"), data = A }, { name = "b.bin", data = V, method = "store" } }
+    \\    local packed = c.pack(entries)
+    \\    local back = c.read(packed, entries[1].name)
+    \\    if vector.tostring(back) ~= A then fail(name, "round trip changed the text") end
+    \\    if not veq(c.read(packed, "b.bin"), V) then fail(name, "round trip changed the bytes") end
+    \\end
+, &.{ "", "PK\x05\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", "ustar\x00", "hello" });
+
 // Strings keep the invariants of character indexing on any text.
 const strings = target(
     \\local n = #S
@@ -262,6 +279,9 @@ test "fuzz: binary layouts never crash" {
 }
 test "fuzz: archive codecs round trip" {
     try archive.run();
+}
+test "fuzz: archive containers never crash and round trip" {
+    try containers.run();
 }
 test "fuzz: strings keep the invariants of character indexing" {
     try strings.run();
