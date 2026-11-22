@@ -28,6 +28,9 @@ Socket operations report failures as file operations do. A failed operation retu
 | `"limit"` | A received line or stream went over its limit. |
 | `"tls"` | The TLS handshake or the TLS layer failed. |
 | `"certificate"` | The certificate of the peer did not verify. |
+| `"protocol"` | An HTTP response broke the protocol, such as a malformed status line or `Content-Length`, or a body that broke its framing. |
+| `"too_large"` | An HTTP body or head went over its limit: a response body of `network.fetch` over 64 MiB, or a request body that `network.serve` refuses with 413 or 431. |
+| `"malformed"` | A request body broke its framing, which `network.serve` refuses with 400. |
 | `"io"` | Any other failure of the system. |
 
 Misuse raises rather than returns: a bad argument, a socket that the program closed before the call, and a permission that the program lacks. A coroutine of [`tcp_socket:reader`](/manual/api#tcp_socket:reader) raises its error object, so the resume returns `false` and the object, as for any coroutine.
