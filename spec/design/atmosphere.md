@@ -319,7 +319,7 @@ The server reaches storage and the edge through one driver module under `server/
 | `delete(key)` | Returns at once. | Deletes an object from R2. |
 | `purge(urls, tags)` | Returns at once. | Purges URLs or cache tags from the Cloudflare cache. |
 | `headers(class, name)` | Adds no header. | Adds `Cloudflare-CDN-Cache-Control` and `Cache-Tag`. |
-| `client(req)` | Reads `X-Forwarded-For`. | Reads `CF-Connecting-IP`. |
+| `client(req)` | Reads `X-Forwarded-For` from a proxy on the same machine, and `req.ip` otherwise. | Reads `CF-Connecting-IP`. |
 | `fetches(since)` | Returns no rows. | Reads the fetches that the edge counted from Analytics Engine. |
 
 The `post-receive` hook and the administrator's actions write the work for a driver to the `outbox` table, which the next section describes. The server sends that work from a loop. The rest of the server runs the same code under both drivers. The git hooks open the driver with an empty environment, so the Cloudflare driver reads its credentials on first use and the hooks never hold them. A release document holds the same addresses under both drivers, so a change of driver never re-signs a document. The bundle address stays `https://atmosp.here/b/SHA.tar.zst` whichever host stores the bytes.
