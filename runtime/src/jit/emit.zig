@@ -32,6 +32,7 @@ const Step = interp.Step;
 pub const A = switch (builtin.cpu.arch) {
     .aarch64 => @import("a64.zig"),
     .x86_64 => @import("x64.zig"),
+    .riscv64 => @import("rv64.zig"),
     else => @compileError("the JIT has no backend for this target"),
 };
 const Mem = A.Mem;
@@ -351,7 +352,8 @@ pub const Emitter = struct {
     /// Bytes of straight-line code between two flushes of the out-of-line
     /// code. The out-of-line code of that much straight-line code is a
     /// few times larger, and the sum stays well inside the megabyte that
-    /// a conditional branch reaches on aarch64.
+    /// a conditional branch reaches on aarch64, and that a `jal`
+    /// reaches on riscv64.
     const flush_interval = 64 * 1024;
 
     /// Emits the out-of-line code that is pending. A block may add more

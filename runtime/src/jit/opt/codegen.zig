@@ -36,26 +36,64 @@ const Loc = regalloc.Loc;
 const tl = table.layout;
 
 const is_a64 = builtin.cpu.arch == .aarch64;
+const is_x64 = builtin.cpu.arch == .x86_64;
 
 /// The registers that hold values. Every one of them belongs to the
 /// callee across a call into the runtime.
-pub const gpr_pool: []const A.Reg = if (is_a64)
-    &.{ .x0, .x1, .x2, .x3, .x4, .x5, .x6, .x7, .x8, .x9, .x10, .x11, .x12 }
-else
-    &.{ .rax, .rcx, .rdx, .rsi, .rdi, .r8, .r9 };
-pub const fpr_pool: []const A.FReg = if (is_a64)
-    &.{ .v0, .v1, .v2, .v3, .v4, .v5, .v6, .v7, .v16, .v17, .v18, .v19, .v20, .v21, .v22, .v23 }
-else
-    &.{ .xmm0, .xmm1, .xmm2, .xmm3, .xmm4, .xmm5, .xmm6, .xmm7 };
-/// Scratch registers of the code generator. On x86-64 they are the two
-/// callee-saved registers that the entry sequence saves and baseline code
-/// leaves alone.
-const sc0: A.Reg = if (is_a64) .x13 else .rbp;
-const sc1: A.Reg = if (is_a64) .x14 else .r13;
-const sc2: A.Reg = if (is_a64) .x15 else .r13;
-const fsc0: A.FReg = if (is_a64) .v30 else .xmm13;
-const fsc1: A.FReg = if (is_a64) .v29 else .xmm12;
-const fret: A.FReg = if (is_a64) .v0 else .xmm0;
+pub const gpr_pool: []const A.Reg = switch (builtin.cpu.arch) {
+    .aarch64 => &.{ .x0, .x1, .x2, .x3, .x4, .x5, .x6, .x7, .x8, .x9, .x10, .x11, .x12 },
+    .x86_64 => &.{ .rax, .rcx, .rdx, .rsi, .rdi, .r8, .r9 },
+    // a0 to a5 and t0 to t6. a6 and a7 are the scratch registers of the
+    // assembler.
+    .riscv64 => &.{ .x10, .x11, .x12, .x13, .x14, .x15, .x5, .x6, .x7, .x28, .x29, .x30, .x31 },
+    else => unreachable,
+};
+pub const fpr_pool: []const A.FReg = switch (builtin.cpu.arch) {
+    .aarch64 => &.{ .v0, .v1, .v2, .v3, .v4, .v5, .v6, .v7, .v16, .v17, .v18, .v19, .v20, .v21, .v22, .v23 },
+    .x86_64 => &.{ .xmm0, .xmm1, .xmm2, .xmm3, .xmm4, .xmm5, .xmm6, .xmm7 },
+    // fa0 to fa7 and ft0 to ft7.
+    .riscv64 => &.{ .f10, .f11, .f12, .f13, .f14, .f15, .f16, .f17, .f0, .f1, .f2, .f3, .f4, .f5, .f6, .f7 },
+    else => unreachable,
+};
+/// Scratch registers of the code generator. On x86-64 and riscv64 they
+/// are callee-saved registers that the entry sequence saves and baseline
+/// code leaves alone.
+const sc0: A.Reg = switch (builtin.cpu.arch) {
+    .aarch64 => .x13,
+    .x86_64 => .rbp,
+    .riscv64 => .x21,
+    else => unreachable,
+};
+const sc1: A.Reg = switch (builtin.cpu.arch) {
+    .aarch64 => .x14,
+    .x86_64 => .r13,
+    .riscv64 => .x22,
+    else => unreachable,
+};
+const sc2: A.Reg = switch (builtin.cpu.arch) {
+    .aarch64 => .x15,
+    .x86_64 => .r13,
+    .riscv64 => .x23,
+    else => unreachable,
+};
+const fsc0: A.FReg = switch (builtin.cpu.arch) {
+    .aarch64 => .v30,
+    .x86_64 => .xmm13,
+    .riscv64 => .f31,
+    else => unreachable,
+};
+const fsc1: A.FReg = switch (builtin.cpu.arch) {
+    .aarch64 => .v29,
+    .x86_64 => .xmm12,
+    .riscv64 => .f30,
+    else => unreachable,
+};
+const fret: A.FReg = switch (builtin.cpu.arch) {
+    .aarch64 => .v0,
+    .x86_64 => .xmm0,
+    .riscv64 => .f10,
+    else => unreachable,
+};
 
 /// The registers of a direct call. The closure travels in the first
 /// pool register and the parameters in the ones after it, each as its
@@ -989,7 +1027,7 @@ pub const Codegen = struct {
                     y = sc1;
                 } else y = c.g(i.b, sc1);
                 const d = c.dst(r);
-                if (is_a64) {
+                if (!is_x64) {
                     a.floorDiv(d, x, y, i.op == .mod or i.op == .modi, sc2, sc2);
                 } else {
                     a.floorDiv(d, x, y, i.op == .mod or i.op == .modi, sc0, sc1);

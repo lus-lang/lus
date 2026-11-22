@@ -135,6 +135,11 @@ pub fn install(block: []u8, code: []const u8) void {
         sys_icache_invalidate(block.ptr, code.len);
     } else if (builtin.cpu.arch == .aarch64) {
         syncCode(@intFromPtr(block.ptr), @intFromPtr(block.ptr) + code.len);
+    } else if (builtin.cpu.arch == .riscv64) {
+        // fence.i reaches only the hart that runs it. The system call
+        // makes every hart that runs the process fetch the new code.
+        const start = @intFromPtr(block.ptr);
+        _ = std.os.linux.syscall3(.riscv_flush_icache, start, start + code.len, 0);
     }
 }
 
@@ -196,15 +201,17 @@ test "arena reuses and merges blocks" {
 }
 
 test "installed code runs" {
-    if (!(builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .x86_64)) return error.SkipZigTest;
+    if (!(builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .riscv64)) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var a: Arena = .{};
     defer a.deinit(gpa);
     // A function that returns 42.
-    const code: []const u8 = if (builtin.cpu.arch == .aarch64)
-        &.{ 0x40, 0x05, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6 }
-    else
-        &.{ 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
+    const code: []const u8 = switch (builtin.cpu.arch) {
+        .aarch64 => &.{ 0x40, 0x05, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6 },
+        // li a0, 42; ret
+        .riscv64 => &.{ 0x13, 0x05, 0xA0, 0x02, 0x67, 0x80, 0x00, 0x00 },
+        else => &.{ 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 },
+    };
     const block = a.alloc(gpa, code.len) orelse return error.SkipZigTest;
     install(block, code);
     const f: *const fn () callconv(.c) u32 = @ptrFromInt(@intFromPtr(block.ptr));

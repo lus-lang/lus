@@ -256,7 +256,8 @@ pub fn entry(l: *Thread, p: *Proto) usize {
 /// A loop of the top frame became hot in baseline code. `pc` is the
 /// first instruction of its body, which runs next. Returns the address
 /// of optimized code that continues the frame there, or zero.
-pub fn loopEntry(l: *Thread, pc: u32) callconv(.c) usize {
+pub fn loopEntry(l: *Thread, pc_word: usize) callconv(.c) usize {
+    const pc: u32 = @truncate(pc_word);
     const fr = l.frame();
     const p = fr.closure.?.proto;
     const g = l.g;

@@ -29,6 +29,7 @@ pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
         .macos, .linux => true,
         else => false,
     },
+    .riscv64 => builtin.os.tag == .linux,
     .wasm32 => builtin.os.tag == .wasi,
     else => false,
 };
@@ -456,6 +457,15 @@ fn stackBounds() Bounds {
                 }
                 _ = std.c.pthread_attr_destroy(&attr);
             }
+            // The stack of a thread ends within the stack size limit below
+            // its top. The C library reads the bounds of the main thread
+            // from the memory map, and under an emulator that map can
+            // include memory below the stack, such as its guard page.
+            if (b.low != 0) {
+                if (std.posix.getrlimit(.STACK)) |lim| {
+                    if (lim.cur != 0 and lim.cur < b.high) b.low = @max(b.low, b.high - lim.cur);
+                } else |_| {}
+            }
         },
         else => {},
     };
@@ -548,6 +558,7 @@ pub fn deinit(g: *Global) void {
 test {
     _ = @import("a64.zig");
     _ = @import("x64.zig");
+    _ = @import("rv64.zig");
     if (enabled) {
         _ = mem;
         _ = emit;

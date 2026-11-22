@@ -2,7 +2,7 @@
 -- detached coroutine (spec/stdlib/network/serve.md). The tests talk to it
 -- over loopback sockets bound to port 0, with requests written by hand so
 -- that every byte on the wire is known.
-pledge("network")
+pledge("network", "env:read=LUS_EMULATED")
 
 local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
 local status, close = coroutine.status, coroutine.close
@@ -1018,6 +1018,12 @@ local function a_busy_connection_outlives_the_idle_timeout_test()
 end
 
 local function a_slow_reader_loses_its_connection_test()
+    -- qemu-user buffers loopback sockets beyond the bound below, so the
+    -- emulated gates (tools/test-linux.sh and the nightly qemu job) set
+    -- LUS_EMULATED.
+    if os.getenv("LUS_EMULATED") then
+        skip("socket buffers differ under emulation")
+    end
     serving(function(req)
         return 200, string.rep("x", 8 * 1024 * 1024)
     end, function(port)

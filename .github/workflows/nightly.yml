@@ -53,6 +53,56 @@ jobs:
           LUS_JIT: opt-eager
         run: zig-out/bin/lus test ../tests/conformance
 
+  emulated:
+    name: Emulated architectures (${{ matrix.arch }})
+    # Static builds for instruction sets that GitHub has no runners for,
+    # run under qemu-user (spec/design/platforms.md, "Testing each
+    # target"). LUS_EMULATED skips the test whose bound qemu-user breaks.
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [riscv64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Install qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+      - name: Build
+        working-directory: runtime
+        run: |
+          zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.arch }}-linux-musl
+          zig build -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true -Dtarget=${{ matrix.arch }}-linux-musl --prefix zig-out-stress
+      - name: Conformance tests in every JIT mode
+        timeout-minutes: 200
+        working-directory: runtime
+        env:
+          LUS_EMULATED: "1"
+        run: |
+          for mode in off on eager baseline opt-eager; do
+            echo "== LUS_JIT=$mode"
+            LUS_JIT=$mode zig-out/bin/lus test --timeout 300 ../tests/conformance ../packages/language-server/tests
+          done
+          echo "== LUS_JIT=opt-eager LUS_JIT_DIRECT=1024"
+          LUS_JIT=opt-eager LUS_JIT_DIRECT=1024 zig-out/bin/lus test --timeout 300 ../tests/conformance
+      - name: Conformance tests in a collector stress build
+        timeout-minutes: 120
+        working-directory: runtime
+        env:
+          LUS_EMULATED: "1"
+        run: |
+          for mode in eager opt-eager; do
+            echo "== LUS_JIT=$mode"
+            LUS_JIT=$mode zig-out-stress/bin/lus test --timeout 600 ../tests/conformance
+          done
+
   differential:
     name: Differential tests (${{ matrix.os }})
     strategy:
