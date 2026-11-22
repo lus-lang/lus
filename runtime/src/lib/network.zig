@@ -126,26 +126,26 @@ const Udp = struct {
 
 pub fn open(l: *Thread) Error!void {
     try makeMetatable(l, socket_name, &.{
-        .{ .name = "send", .func = socketSend },
-        .{ .name = "receive", .func = socketReceive },
+        .{ .name = "send", .func = op(socketSend) },
+        .{ .name = "receive", .func = op(socketReceive) },
         .{ .name = "close", .func = socketClose },
         .{ .name = "settimeout", .func = socketSettimeout },
         .{ .name = "getsockname", .func = socketGetsockname },
         .{ .name = "getpeername", .func = socketGetpeername },
-        .{ .name = "starttls", .func = socketStarttls },
+        .{ .name = "starttls", .func = op(socketStarttls) },
         .{ .name = "tlsinfo", .func = socketTlsinfo },
         .{ .name = "reader", .func = http.socketReader },
     }, socketGc, socketTostring);
     try makeMetatable(l, server_name, &.{
-        .{ .name = "accept", .func = serverAccept },
+        .{ .name = "accept", .func = op(serverAccept) },
         .{ .name = "close", .func = serverClose },
         .{ .name = "settimeout", .func = serverSettimeout },
         .{ .name = "getsockname", .func = serverGetsockname },
     }, serverGc, serverTostring);
     try makeMetatable(l, udp_name, &.{
-        .{ .name = "sendto", .func = udpSendto },
-        .{ .name = "receive", .func = udpReceive },
-        .{ .name = "setsockname", .func = udpSetsockname },
+        .{ .name = "sendto", .func = op(udpSendto) },
+        .{ .name = "receive", .func = op(udpReceive) },
+        .{ .name = "setsockname", .func = op(udpSetsockname) },
         .{ .name = "getsockname", .func = udpGetsockname },
         .{ .name = "close", .func = udpClose },
         .{ .name = "settimeout", .func = udpSettimeout },
@@ -161,15 +161,15 @@ pub fn open(l: *Thread) Error!void {
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
     const tcp = try aux.newLib(l, .fields, "network.tcp", &.{
-        .{ .name = "connect", .func = tcpConnect },
-        .{ .name = "bind", .func = tcpBind },
+        .{ .name = "connect", .func = op(tcpConnect) },
+        .{ .name = "bind", .func = op(tcpBind) },
     });
     try aux.setField(l, t, "tcp", Value.obj(.table, tcp));
     const tls_lib = try aux.newLib(l, .fields, "network.tls", &.{
-        .{ .name = "connect", .func = tlsConnect },
+        .{ .name = "connect", .func = op(tlsConnect) },
     });
     try aux.setField(l, t, "tls", Value.obj(.table, tls_lib));
-    const udp = try aux.newLib(l, .fields, "network.udp", &.{.{ .name = "open", .func = udpOpen }});
+    const udp = try aux.newLib(l, .fields, "network.udp", &.{.{ .name = "open", .func = op(udpOpen) }});
     try aux.setField(l, t, "udp", Value.obj(.table, udp));
     try aux.setGlobal(l, "network", Value.obj(.table, t));
 }
@@ -313,11 +313,93 @@ pub fn errText(err: anyerror) []const u8 {
     };
 }
 
-/// Returns `nil, "prefix: message"`, the result of a failed socket call.
-fn failResult(l: *Thread, prefix: []const u8, err: anyerror) Error!u32 {
-    var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "{s}: {s}", .{ prefix, errText(err) }) catch prefix;
-    return aux.retFail(l, msg);
+// ---------------------------------------------------------------------
+// Errors of operations
+
+/// The `code` of an error object for the error a socket call failed with.
+pub fn errCode(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ConnectionRefused => "refused",
+        error.ConnectionResetByPeer, error.ConnectionAborted => "reset",
+        error.BrokenPipe, error.SocketUnconnected => "closed",
+        error.NetworkUnreachable, error.HostUnreachable, error.NetworkDown => "unreachable",
+        error.Timeout, error.ConnectionTimedOut => "timeout",
+        error.UnknownHostName, error.NoAddressReturned, error.InvalidHostName, error.NameTooLong, error.NameServerFailure => "resolve",
+        error.AccessDenied, error.BlockedByFirewall => "denied",
+        error.AddressInUse, error.AddressUnavailable => "address",
+        error.TlsFailure => tls.lastCode(),
+        else => "io",
+    };
+}
+
+pub const error_name = "network.error";
+
+fn errorTostring(l: *Thread) Error!u32 {
+    if (l.arg(1).tag != .table) return aux.retStr(l, "network error");
+    return aux.ret(l, try aux.getField(l, l.arg(1).as(Table), "message"));
+}
+
+/// Raises the error object of a failed operation: a table with `code`,
+/// `message`, and `status` when `status` is not zero, whose `__tostring`
+/// gives the message. A socket method that `op` wraps returns it after
+/// `nil`, and every other caller sees it raised.
+pub fn raiseFail(l: *Thread, code: []const u8, status: u16, comptime fmt: []const u8, args: anytype) Error {
+    var buf: [400]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch &buf;
+    const g = l.g;
+    const mt: *Table = blk: {
+        if (g.ext.get(error_name)) |p| break :blk @ptrCast(@alignCast(p));
+        const t = try l.newTable(0, 2);
+        try l.push(Value.obj(.table, t));
+        defer l.top -= 1;
+        try aux.setField(l, t, "__tostring", try aux.native(l, errorTostring, "tostring"));
+        try aux.setField(l, t, "__name", try l.newStringValue(error_name));
+        try aux.setField(l, g.registry.as(Table), error_name, Value.obj(.table, t));
+        g.ext.put(g.gpa, error_name, t) catch return l.raiseMem();
+        break :blk t;
+    };
+    const e = try l.newTable(0, 3);
+    try l.push(Value.obj(.table, e));
+    defer l.top -= 1;
+    try aux.setField(l, e, "code", try l.newStringValue(code));
+    try aux.setField(l, e, "message", try l.newStringValue(msg));
+    if (status != 0) try aux.setField(l, e, "status", Value.int(status));
+    e.metatable = mt;
+    gc.barrierBack(g, &e.hdr);
+    return l.raise(Value.obj(.table, e));
+}
+
+/// Whether `v` is the error object of a failed operation.
+pub fn isFailure(l: *Thread, v: Value) bool {
+    if (v.tag != .table) return false;
+    const mt = v.as(Table).metatable orelse return false;
+    const p = l.g.ext.get(error_name) orelse return false;
+    return mt == @as(*Table, @ptrCast(@alignCast(p)));
+}
+
+/// Wraps a socket method so that a failed operation returns `nil` and its
+/// error object, as file operations return theirs. Misuse, such as a bad
+/// argument or a socket that the program closed, still raises.
+pub fn op(comptime f: state.NativeFn) state.NativeFn {
+    return struct {
+        fn call(l: *Thread) Error!u32 {
+            return f(l) catch |e| {
+                if (e == error.LusError and !l.yielding and isFailure(l, l.err)) {
+                    const err = l.err;
+                    l.err = .nil;
+                    try l.push(.nil);
+                    try l.push(err);
+                    return 2;
+                }
+                return e;
+            };
+        }
+    }.call;
+}
+
+/// Fails an operation with `prefix: message` for the error `err`.
+fn failResult(l: *Thread, prefix: []const u8, err: anyerror) Error {
+    return raiseFail(l, errCode(err), 0, "{s}: {s}", .{ prefix, errText(err) });
 }
 
 // ---------------------------------------------------------------------
@@ -349,7 +431,7 @@ pub inline fn blocksPlainly(l: *Thread, timeout_ms: i32) bool {
 /// Waits until `handle` is ready, through the scheduler. Raises
 /// "`what` timeout" when the timeout of the socket runs out first.
 pub fn awaitIo(l: *Thread, handle: net.Socket.Handle, dir: sched.Dir, timeout_ms: i32, comptime what: []const u8) Error!void {
-    if (!try sched.waitIo(l, handle, dir, timeout_ms)) return l.raiseFmt(what ++ " timeout", .{});
+    if (!try sched.waitIo(l, handle, dir, timeout_ms)) return raiseFail(l, "timeout", 0, what ++ " timeout", .{});
 }
 
 /// What a system call that never waits reports.
@@ -464,8 +546,11 @@ fn writeSome(io: Io, handle: net.Socket.Handle, data: []const u8) !usize {
 fn noSigpipe(handle: net.Socket.Handle) void {
     if (comptime is_windows) return;
     if (comptime @hasDecl(posix.SO, "NOSIGPIPE")) {
+        // The system call itself, since the standard library treats some
+        // results as impossible: macOS answers EINVAL for a socket that the
+        // peer already reset, and the option then matters no more.
         const one: c_int = 1;
-        posix.setsockopt(handle, posix.SOL.SOCKET, posix.SO.NOSIGPIPE, std.mem.asBytes(&one)) catch {};
+        _ = posix.system.setsockopt(handle, posix.SOL.SOCKET, posix.SO.NOSIGPIPE, std.mem.asBytes(&one), @sizeOf(c_int));
     }
 }
 
@@ -611,11 +696,14 @@ fn connectScheduled(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit
         const fd = c.fd;
         sched.forget(g, fd);
         c.fd = -1;
+        // The connection is the end of the operation, so the next wait of
+        // the same native starts a deadline of its own.
+        sched.opDone(l);
         setNonblocking(fd, false);
         noSigpipe(fd);
         return .{ .{ .socket = .{ .handle = fd, .address = localAddress(l.g.io, fd, a.*) } }, a.* };
     }
-    return l.raiseFmt("cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
+    return raiseFail(l, errCode(c.last), 0, "cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
 }
 
 const ListenError = error{ AccessDenied, AddressInUse, AddressUnavailable, AddressFamilyUnsupported, SystemResources, ProcessFdQuotaExceeded, SystemFdQuotaExceeded, Unexpected };
@@ -963,9 +1051,13 @@ const afd = if (is_windows) struct {
             const handle = c.handle.?;
             sched.forget(g, handle);
             c.handle = null;
+            // The connection ends the operation, whose last wait was one
+            // short tick, so the next wait of the same native starts a
+            // deadline of its own.
+            sched.opDone(l);
             return .{ .{ .socket = .{ .handle = handle, .address = afd.localAddress(io, handle) orelse c.local } }, a.* };
         }
-        return l.raiseFmt("cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
+        return raiseFail(l, errCode(c.last), 0, "cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
     }
 
     fn listen(io: Io, addr: *const net.IpAddress, backlog: u31, stage: *Stage) !net.Server {
@@ -1039,12 +1131,12 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
         out[0] = a;
         return out[0..1];
     } else |_| {}
-    const name = net.HostName.init(host) catch |e| return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(e) });
-    if (faultio.netStep(&.{.lookup}) != null) return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(error.UnknownHostName) });
+    const name = net.HostName.init(host) catch |e| return raiseFail(l, "resolve", 0, "cannot resolve '{s}': {s}", .{ host, errText(e) });
+    if (faultio.netStep(&.{.lookup}) != null) return raiseFail(l, "resolve", 0, "cannot resolve '{s}': {s}", .{ host, errText(error.UnknownHostName) });
     var results: [32]net.HostName.LookupResult = undefined;
     var queue: Io.Queue(net.HostName.LookupResult) = .init(&results);
     const io = l.g.io;
-    name.lookup(io, &queue, .{ .port = port, .family = family }) catch |e| return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(e) });
+    name.lookup(io, &queue, .{ .port = port, .family = family }) catch |e| return raiseFail(l, "resolve", 0, "cannot resolve '{s}': {s}", .{ host, errText(e) });
     var n: usize = 0;
     while (queue.getOne(io)) |r| switch (r) {
         .address => |a| if (n < out.len) {
@@ -1053,7 +1145,7 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
         },
         .canonical_name => {},
     } else |_| {}
-    if (n == 0) return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(error.NoAddressReturned) });
+    if (n == 0) return raiseFail(l, "resolve", 0, "cannot resolve '{s}': {s}", .{ host, errText(error.NoAddressReturned) });
     return out[0..n];
 }
 
@@ -1082,7 +1174,7 @@ pub const ConnectLimit = struct {
     }
 
     fn raise(c: ConnectLimit, l: *Thread, host: []const u8, port: u16) Error {
-        return l.raiseFmt("{s}timeout while connecting to {s}:{d}", .{ c.prefix, host, port });
+        return raiseFail(l, "timeout", 0, "{s}timeout while connecting to {s}:{d}", .{ c.prefix, host, port });
     }
 };
 
@@ -1117,7 +1209,7 @@ fn connectHost(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Err
         noSigpipe(stream.socket.handle);
         return .{ stream, a.* };
     }
-    return l.raiseFmt("cannot connect to {s}:{d}: {s}", .{ host, port, errText(last) });
+    return raiseFail(l, errCode(last), 0, "cannot connect to {s}:{d}: {s}", .{ host, port, errText(last) });
 }
 
 // ---------------------------------------------------------------------
@@ -1164,7 +1256,7 @@ fn handshakeOrClose(l: *Thread, s: *Socket) Error!void {
     };
     if (!done) {
         releaseSocket(l, s);
-        return l.raiseFmt("TLS handshake timeout", .{});
+        return raiseFail(l, "timeout", 0, "TLS handshake timeout", .{});
     }
 }
 
@@ -1265,8 +1357,8 @@ pub fn bindServer(l: *Thread, host: []const u8, port: u16, backlog: i64) Error!*
     var stage: Stage = .bind;
     const backlog_c: u31 = @intCast(std.math.clamp(backlog, 0, std.math.maxInt(u31)));
     const server = listenTcp(l.g.io, &list[0], backlog_c, &stage) catch |e| switch (stage) {
-        .bind => return l.raiseFmt("cannot bind to {s}:{d}: {s}", .{ host, port, errText(e) }),
-        .listen => return l.raiseFmt("cannot listen on {s}:{d}: {s}", .{ host, port, errText(e) }),
+        .bind => return raiseFail(l, errCode(e), 0, "cannot bind to {s}:{d}: {s}", .{ host, port, errText(e) }),
+        .listen => return raiseFail(l, errCode(e), 0, "cannot listen on {s}:{d}: {s}", .{ host, port, errText(e) }),
     };
     errdefer server.socket.close(l.g.io);
     return newObject(l, Server, server_name, .{ .server = server });
@@ -1329,7 +1421,7 @@ pub const Fill = union(enum) { got: usize, eof, fail: anyerror };
 /// Reads up to `max` more bytes into the socket buffer, waiting at most
 /// the socket timeout. Raises "receive timeout" when it expires.
 pub fn fill(l: *Thread, s: *Socket, max: usize) Error!Fill {
-    return (try tryFill(l, s, max)) orelse l.raiseFmt("receive timeout", .{});
+    return (try tryFill(l, s, max)) orelse raiseFail(l, "timeout", 0, "receive timeout", .{});
 }
 
 /// Reads up to `max` more bytes into the socket buffer, waiting at most
@@ -1377,7 +1469,7 @@ fn takeBuffered(l: *Thread, s: *Socket, n: usize, skip: usize) Error!u32 {
 /// graceful shutdown and does not drain input the peer controls.
 fn limitExceeded(l: *Thread, s: *Socket) Error {
     releaseSocket(l, s);
-    return l.raiseFmt("receive limit exceeded", .{});
+    return raiseFail(l, "limit", 0, "receive limit exceeded", .{});
 }
 
 fn receiveLimit(l: *Thread, i: u32, default: i64) Error!usize {
@@ -1643,8 +1735,8 @@ fn udpOpen(l: *Thread) Error!u32 {
         addr = .{ .ip4 = net.Ip4Address.parse(a, port) catch return l.raiseFmt("invalid address: {s}", .{a}) };
     }
     const sock = bindUdp(l.g.io, &addr) catch |e| {
-        if (bind) return l.raiseFmt("cannot bind UDP socket: {s}", .{errText(e)});
-        return l.raiseFmt("cannot create UDP socket: {s}", .{errText(e)});
+        if (bind) return raiseFail(l, errCode(e), 0, "cannot bind UDP socket: {s}", .{errText(e)});
+        return raiseFail(l, errCode(e), 0, "cannot create UDP socket: {s}", .{errText(e)});
     };
     errdefer sock.close(l.g.io);
     _ = try newObject(l, Udp, udp_name, .{ .socket = sock, .bound = bind });

@@ -42,8 +42,8 @@ end
 local prelude = [[
     pledge("network")
     local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
-    local bound, server = catch network.tcp.bind("127.0.0.1", 0)
-    if not bound then
+    local server = network.tcp.bind("127.0.0.1", 0)
+    if not server then
         print("unavailable")
         return
     end
@@ -53,8 +53,8 @@ local prelude = [[
     local function use_up()
         local hog = {}
         while true do
-            local ok, sock = catch network.udp.open(0)
-            if not ok then
+            local sock = network.udp.open(0)
+            if not sock then
                 return hog
             end
             hog[#hog + 1] = sock
@@ -71,10 +71,10 @@ local function waits_work_without_a_descriptor_for_the_poller_test()
         local cpu = os.clock()
         local reader = detach(create(function()
             peer:settimeout(0.2)
-            return catch peer:receive(1)
+            return peer:receive(1)
         end))
         local ok, received, err = resume(reader)
-        print("timeout:", ok, received, (string.gsub(tostring(err), "^.*: ", "")))
+        print("timeout:", ok, received, err.code, tostring(err))
         print("idle:", os.clock() - cpu < 0.1)
         local second = detach(create(function()
             peer:settimeout(10)
@@ -87,7 +87,7 @@ local function waits_work_without_a_descriptor_for_the_poller_test()
         print("byte:", resume(second))
         print("writer:", resume(writer))
     ]])
-    assert(output == "timeout:\ttrue\tfalse\treceive timeout\nidle:\ttrue\nbyte:\ttrue\tx\nwriter:\ttrue\n", output)
+    assert(output == "timeout:\ttrue\tnil\ttimeout\treceive timeout\nidle:\ttrue\nbyte:\ttrue\tx\nwriter:\ttrue\n", output)
 end
 
 -- A server that cannot accept for lack of a descriptor waits and accepts
@@ -102,8 +102,8 @@ local function serve_goes_on_after_the_descriptors_ran_out_test()
         local held = {}
         local dialer = detach(create(function()
             for i = 1, 100 do
-                local ok, sock = catch network.tcp.connect("127.0.0.1", port)
-                if not ok then
+                local sock = network.tcp.connect("127.0.0.1", port)
+                if not sock then
                     return i
                 end
                 held[i] = sock

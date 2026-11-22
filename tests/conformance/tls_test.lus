@@ -117,16 +117,18 @@ local function connect_checks_the_name_of_the_host_test()
     serving(c.server, hello, function(port)
         local sock <close> = network.tls.connect("localhost", port, { ca = c.ca })
         assert(request(sock, "/b") == "hello /b")
-        local ok, err = catch network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "nothere.test" })
-        assert(not ok and string.find(tostring(err), "certificate verification failed for nothere.test", 1, true), tostring(err))
+        local bad, err = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "nothere.test" })
+        assert(bad == nil and err.code == "certificate", tostring(err))
+        assert(string.find(tostring(err), "certificate verification failed for nothere.test", 1, true), tostring(err))
     end)
 end
 
 local function connect_refuses_an_untrusted_certificate_test()
     local c = make_certs()
     serving(c.server, hello, function(port)
-        local ok, err = catch network.tls.connect("127.0.0.1", port, { servername = "localhost" })
-        assert(not ok and string.find(tostring(err), "certificate verification failed for localhost", 1, true), tostring(err))
+        local sock, err = network.tls.connect("127.0.0.1", port, { servername = "localhost" })
+        assert(sock == nil and err.code == "certificate", tostring(err))
+        assert(string.find(err.message, "certificate verification failed for localhost", 1, true), tostring(err))
     end)
 end
 
@@ -160,9 +162,9 @@ local function connect_times_out_in_the_handshake_test()
     make_certs()
     local server = network.tcp.bind("127.0.0.1", 0)
     local _, port = server:getsockname()
-    local ok, err = catch network.tls.connect("127.0.0.1", port, { verify = false, timeout = 0.1 })
+    local sock, err = network.tls.connect("127.0.0.1", port, { verify = false, timeout = 0.1 })
     server:close()
-    assert(not ok and string.find(tostring(err), "TLS handshake timeout", 1, true), tostring(err))
+    assert(sock == nil and err.code == "timeout" and tostring(err) == "TLS handshake timeout", tostring(err))
 end
 
 local function connect_rejects_bad_options_test()
@@ -326,9 +328,9 @@ local function a_server_handshake_with_a_plain_client_fails_test()
     local c = make_certs()
     local err
     accepting(function(conn)
-        local ok, e = catch conn:starttls({ server = true, cert = c.server.cert, key = c.server.key })
+        local done, e = conn:starttls({ server = true, cert = c.server.cert, key = c.server.key })
         err = e
-        assert(not ok)
+        assert(done == nil and e.code == "tls")
     end, function(port)
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:send("GET / HTTP/1.1\r\n\r\n")
@@ -365,6 +367,30 @@ local function fetch_reaches_an_https_server_test()
         local status, body, headers = network.fetch(`https://localhost:$(port)/f`, "GET", nil, nil, { tls = { ca = c.ca } })
         assert(status == 200 and txt(body) == "hello /f" and headers["content-length"] == "8")
     end)
+end
+
+-- The timeout of the handshake starts once the connection is made. A
+-- server that starts its handshake late still answers within it, and a
+-- connection that waited in short ticks, as connections on Windows do,
+-- leaves no deadline behind for the handshake.
+local function fetch_times_the_handshake_from_the_connection_test()
+    local c = make_certs()
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local co = detach(create(function()
+        local conn <close> = server:accept()
+        -- An accept that times out waits 0.15 s before the handshake.
+        local idle <close> = network.tcp.bind("127.0.0.1", 0)
+        idle:settimeout(0.15)
+        idle:accept()
+        conn:starttls({ server = true, cert = c.server.cert, key = c.server.key, alpn = { "http/1.1" } })
+        conn:receive("*l")
+        conn:send("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nlate")
+    end))
+    local status, body = network.fetch(`https://localhost:$(port)/`, "GET", nil, nil, { timeout = 1, tls = { ca = c.ca } })
+    coroutine.close(co)
+    server:close()
+    assert(status == 200 and txt(body) == "late", tostring(body))
 end
 
 local function fetch_refuses_an_untrusted_server_test()

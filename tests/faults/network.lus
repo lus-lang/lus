@@ -58,14 +58,16 @@ local LISTED = {
 -- Shared by every scenario: a server on a free port of the loopback
 -- interface, and a report of what the client saw. `report(name, ok, v)`
 -- prints "ok NAME" or "error NAME: MESSAGE", with the position of a
--- raised error removed.
+-- raised string removed. The error objects of the network library carry
+-- no position.
 local PRELUDE = [[
 pledge("network")
 local function report(name, ok, v)
     if ok then
         print("ok " .. name)
     else
-        local msg = tostring(v):gsub("^[^:]*:%d+: ", "")
+        -- An error object carries no position. A raised string does.
+        local msg = type(v) == "table" and tostring(v) or tostring(v):gsub("^[^:]*:%d+: ", "")
         print("error " .. name .. ": " .. msg)
     end
 end
@@ -153,7 +155,9 @@ local echoing = coroutine.detach(coroutine.create(function()
     end
 end))
 local function exchange()
-    local sock <close> = network.tcp.connect("127.0.0.1", peer_port)
+    -- A failed connection returns nil and its error object.
+    local sock <close>, cerr = network.tcp.connect("127.0.0.1", peer_port)
+    if not sock then error(cerr, 0) end
     sock:settimeout(5)
     for _, word in ipairs({ "one", "two", "three" }) do
         local sent, e = sock:send(word .. "\n")

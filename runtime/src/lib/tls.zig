@@ -134,12 +134,20 @@ fn systemChain(l: *Thread) Error!*Chain {
 /// the network library reports for `error.TlsFailure`.
 threadlocal var last_buf: [320]u8 = undefined;
 threadlocal var last_len: usize = 0;
+/// The `code` of the last TLS failure: "certificate" for a certificate
+/// that did not verify, "tls" for anything else.
+threadlocal var last_cert = false;
+
+pub fn lastCode() []const u8 {
+    return if (last_cert) "certificate" else "tls";
+}
 
 pub fn lastMessage() []const u8 {
     return if (last_len == 0) "TLS failure" else last_buf[0..last_len];
 }
 
 fn setMessage(comptime fmt: []const u8, args: anytype) void {
+    last_cert = false;
     const s = std.fmt.bufPrint(&last_buf, fmt, args) catch &last_buf;
     last_len = s.len;
 }
@@ -330,6 +338,7 @@ fn handshakeFail(t: *Tls, code: c_int) net.Try {
         const why = std.mem.sliceTo(&info, 0);
         if (why.len > 0 or code == x509_verify_failed) {
             setMessage("certificate verification failed for {s}: {s}", .{ t.servername[0..t.servername_len], if (why.len > 0) why else "untrusted certificate" });
+            last_cert = true;
             return .{ .fail = error.TlsFailure };
         }
         var buf: [160]u8 = undefined;
@@ -365,8 +374,12 @@ pub fn handshake(l: *Thread, s: *net.Socket, deadline: u64) Error!bool {
             try net.stillOpen(l, s);
             continue;
         }
-        _ = handshakeFail(t, r);
-        return l.raiseFmt("{s}", .{lastMessage()});
+        switch (handshakeFail(t, r)) {
+            // A failure of the socket itself names its reason.
+            .fail => |e| if (e != error.TlsFailure) return net.raiseFail(l, net.errCode(e), 0, "TLS handshake failed: {s}", .{net.errText(e)}),
+            else => {},
+        }
+        return net.raiseFail(l, lastCode(), 0, "{s}", .{lastMessage()});
     }
 }
 
