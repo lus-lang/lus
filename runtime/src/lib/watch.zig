@@ -295,6 +295,10 @@ fn relative(s: *Shared, path: []const u8) []const u8 {
 fn wait(l: *Thread) Error!u32 {
     const w = toWatcher(l, l.arg(1)) orelse return aux.typeError(l, 1, "watcher");
     while (true) {
+        if (l.event_closed) {
+            stop(w);
+            try events.checkClosed(l);
+        }
         const s = w.shared orelse return l.raiseFmt("the watch is closed", .{});
         w.backend.poll(l, s);
         switch (s.take(monotonic())) {

@@ -47,8 +47,10 @@ pub const Sig = enum(u8) {
 
 const n_sigs = @typeInfo(Sig).@"enum".field_values.len;
 
-/// How many times each signal arrived since the process started.
-var counts: [n_sigs]std.atomic.Value(u64) = @splat(.init(0));
+/// How many times each signal arrived since the process started, modulo
+/// 2^32. A 32-bit count works on every target that has threads, and a
+/// waiter compares counts with wrapping subtraction.
+var counts: [n_sigs]std.atomic.Value(u32) = @splat(.init(0));
 /// How many open handlers each signal has. The runtime handles a signal
 /// while this is above zero.
 var handlers: [n_sigs]u32 = @splat(0);
@@ -75,7 +77,7 @@ fn unlock() void {
 }
 
 /// The number of times `s` arrived so far.
-pub fn count(s: Sig) u64 {
+pub fn count(s: Sig) u32 {
     return counts[@backingInt(s)].load(.acquire);
 }
 
