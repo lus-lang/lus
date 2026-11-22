@@ -253,10 +253,22 @@ fn consume(s: *net.Socket, n: usize) void {
     s.buf.items.len = rest;
 }
 
-/// The failure of a body as an error of Lus code.
+/// The failure of a body as an error of Lus code. A request body that the
+/// server refuses raises an error object (`raiseRefusal`).
 fn raiseBad(l: *Thread, b: *Body) Error {
-    if (b.request) return l.raiseFmt("invalid request body: {s}", .{b.bad_msg});
-    return l.raiseFmt("{s}", .{b.bad_msg});
+    if (b.request) return raiseRefusal(l, b.bad, b.bad_msg);
+    return net.raiseFail(l, "protocol", 0, "{s}", .{b.bad_msg});
+}
+
+/// Raises the error object of a request body that the server refuses
+/// with `status`, which a framework maps to its response (`net.raiseFail`).
+fn raiseRefusal(l: *Thread, status: u16, msg: []const u8) Error {
+    const code: []const u8 = switch (status) {
+        408 => "timeout",
+        413, 431 => "too_large",
+        else => "malformed",
+    };
+    return net.raiseFail(l, code, status, "{s}", .{msg});
 }
 
 /// Reads more bytes of `b` into the buffer of `s`, waiting as needed. The
@@ -273,9 +285,9 @@ fn refill(l: *Thread, s: *net.Socket, b: *Body) Error!void {
         if (b.request) {
             b.bad = 408;
             b.bad_msg = "request timeout";
+            return raiseRefusal(l, 408, "request timeout");
         }
-        if (b.request) return l.raiseFmt("receive timeout", .{});
-        return l.raiseFmt("fetch timeout while reading the body", .{});
+        return net.raiseFail(l, "timeout", 0, "fetch timeout while reading the body", .{});
     };
     switch (got) {
         .got => {},
@@ -289,8 +301,8 @@ fn refill(l: *Thread, s: *net.Socket, b: *Body) Error!void {
             return raiseBad(l, b);
         },
         .fail => |e| {
-            if (b.request) return l.raiseFmt("receive: {s}", .{net.errText(e)});
-            return l.raiseFmt("failed to read response body: {s}", .{net.errText(e)});
+            if (b.request) return net.raiseFail(l, net.errCode(e), 0, "receive: {s}", .{net.errText(e)});
+            return net.raiseFail(l, net.errCode(e), 0, "failed to read response body: {s}", .{net.errText(e)});
         },
     }
 }
@@ -479,6 +491,7 @@ fn tooLarge(l: *Thread, s: *net.Socket, comptime msg: []const u8) Error {
         if (b.request) {
             b.bad = 413;
             b.bad_msg = "request body too large";
+            return raiseRefusal(l, 413, "request body too large");
         }
     }
     return l.raiseFmt(msg, .{});
@@ -495,6 +508,55 @@ pub fn readerGc(l: *Thread) Error!u32 {
     const r = toReader(l, l.arg(1)) orelse return 0;
     closeReader(l.g, r);
     return 0;
+}
+
+// ---------------------------------------------------------------------
+// Socket readers
+
+/// sock:reader(max_bytes): a coroutine that yields what the socket
+/// received, between 1 and `max_bytes` bytes, on each resume, and ends at
+/// the end of the stream.
+pub fn socketReader(l: *Thread) Error!u32 {
+    const s = try net.checkSocket(l, 1);
+    _ = s;
+    const max = try aux.optInt(l, 2, stream_chunk);
+    if (max <= 0) return aux.argError(l, 2, "max_bytes must be positive", .{});
+    const g = l.g;
+    const n = state.newNative(g, socketNext, "reader", 2) catch return l.raiseMem();
+    n.generator = true;
+    n.upvalues()[0] = l.arg(1);
+    n.upvalues()[1] = Value.int(@min(max, 16 * 1024 * 1024));
+    gc.barrierBack(g, &n.hdr);
+    l.top = l.base() + 2;
+    try l.push(Value.obj(.native, n));
+    const co = try @import("coroutine.zig").newCoroutine(l, l.stack[l.top - 1]);
+    l.stack[l.top - 1] = Value.obj(.thread, co);
+    return 1;
+}
+
+/// The body of a socket reader (`state.Native.generator`): yields the
+/// bytes that the socket holds, waiting for some when it holds none, and
+/// returns nothing at the end of the stream.
+fn socketNext(l: *Thread) Error!u32 {
+    const up = l.frame().native.?.upvalues();
+    const s = net.toObject(l, net.Socket, net.socket_name, up[0]).?;
+    const max: usize = @intCast(up[1].asInt());
+    if (s.closed) return l.raiseFmt("attempt to use a closed socket", .{});
+    if (s.buf.items.len == 0) {
+        const got = (try net.tryFill(l, s, @min(max, 65536))) orelse return net.raiseFail(l, "timeout", 0, "receive timeout", .{});
+        switch (got) {
+            .got => {},
+            .eof => return 0,
+            .fail => |e| return net.raiseFail(l, net.errCode(e), 0, "receive: {s}", .{net.errText(e)}),
+        }
+    }
+    const n = @min(max, s.buf.items.len);
+    const v = try vector.newVector(l, s.buf.items[0..n]);
+    consume(s, n);
+    try l.push(Value.obj(.vector, v));
+    // A part that came after a wait is a value, not another wait.
+    if (sched.taskOf(l)) |t| sched.endWait(t);
+    return @import("coroutine.zig").yieldValues(l, 1);
 }
 
 // ---------------------------------------------------------------------
@@ -520,8 +582,9 @@ pub fn linesGc(l: *Thread) Error!u32 {
     return 0;
 }
 
-/// network.lines(stream, max_bytes): an iterator for a generic `for` over
-/// the lines of the parts that a coroutine yields.
+/// network.lines(stream, max_bytes): an iterator over the lines of the
+/// parts that a coroutine yields, for a generic `for` or for calls of its
+/// own.
 pub fn lines(l: *Thread) Error!u32 {
     const g = l.g;
     if (l.arg(1).tag != .thread) return aux.typeError(l, 1, "coroutine");
@@ -541,36 +604,37 @@ pub fn lines(l: *Thread) Error!u32 {
     try l.push(Value.obj(.userdata, u));
     gc.barrierBack(g, &u.hdr);
     try @import("base.zig").registerFinalizer(l, &u.hdr, mt);
-    const next = try aux.native(l, linesNext, "lines");
-    const state_v = l.stack[l.top - 1];
-    l.stack[l.top - 1] = next;
-    try l.push(state_v);
-    return 2;
+    // The iterator holds its state, so it works alone as well as in a
+    // generic `for`.
+    const next = state.newNative(g, linesNext, "lines", 1) catch return l.raiseMem();
+    next.upvalues()[0] = l.stack[l.top - 1];
+    gc.barrierBack(g, &next.hdr);
+    l.stack[l.top - 1] = Value.obj(.native, next);
+    return 1;
 }
 
 /// The step of `network.lines`: the next line without its line end, or
 /// nil at the end of the parts.
 fn linesNext(l: *Thread) Error!u32 {
-    const v = l.arg(1);
-    if (v.tag != .userdata) return aux.typeError(l, 1, "lines state");
+    const v = l.frame().native.?.upvalues()[0];
     const u = v.as(Userdata);
     const st: *Lines = @ptrCast(@alignCast(u.data()));
     const co = u.userValues()[0].as(Thread);
     const limit: usize = @intCast(u.userValues()[1].asInt());
     const gpa = l.g.gpa;
-    l.top = l.base() + 1;
+    l.top = l.base();
     while (true) {
         if (std.mem.indexOfScalar(u8, st.pending.items, '\n')) |nl| {
             var len = nl;
             if (len > 0 and st.pending.items[len - 1] == '\r') len -= 1;
-            if (len > limit) return l.raiseFmt("line too long", .{});
+            if (len > limit) return net.raiseFail(l, "limit", 0, "line too long", .{});
             const line = try vector.newVector(l, st.pending.items[0..len]);
             const rest = st.pending.items.len - nl - 1;
             std.mem.copyForwards(u8, st.pending.items[0..rest], st.pending.items[nl + 1 ..]);
             st.pending.items.len = rest;
             return aux.ret(l, Value.obj(.vector, line));
         }
-        if (st.pending.items.len > limit + 1) return l.raiseFmt("line too long", .{});
+        if (st.pending.items.len > limit + 1) return net.raiseFail(l, "limit", 0, "line too long", .{});
         if (st.done or co.status == .dead or co.status == .ok or co.status == .err) {
             st.done = true;
             if (st.pending.items.len == 0) return aux.retNil(l);
@@ -748,8 +812,11 @@ pub const Fetch = struct {
     host: [256]u8 = undefined,
     host_len: usize = 0,
 
-    fn startStep(f: *Fetch, g: *state.Global) void {
-        f.deadline = if (f.timeout_ms < 0) 0 else sched.now(g) + @as(u64, @intCast(f.timeout_ms)) * std.time.ns_per_ms;
+    /// Starts a step with its own deadline. The waits of the step that
+    /// went before leave no deadline behind (`sched.opDone`).
+    fn startStep(f: *Fetch, l: *Thread) void {
+        sched.opDone(l);
+        f.deadline = if (f.timeout_ms < 0) 0 else sched.now(l.g) + @as(u64, @intCast(f.timeout_ms)) * std.time.ns_per_ms;
     }
 
     /// The milliseconds left in the step, -1 without a limit, or null once
@@ -1008,7 +1075,7 @@ pub fn fetch(l: *Thread) Error!u32 {
     f.* = .{ .stream = o.stream, .head_method = std.ascii.eqlIgnoreCase(method, "HEAD"), .timeout_ms = o.timeout_ms };
     @memcpy(f.host[0..u.host.len], u.host);
     f.host_len = u.host.len;
-    f.startStep(l.g);
+    f.startStep(l);
     s.fetch = f;
     f.out = req;
     req = .empty;
@@ -1035,19 +1102,19 @@ fn fetchPhases(l: *Thread, s: *net.Socket) Error!u32 {
     const b = l.base();
     while (true) switch (f.phase) {
         .handshake => {
-            if (!try tls.handshake(l, s, f.deadline)) return l.raiseFmt("fetch timeout in the TLS handshake with {s}", .{f.hostName()});
+            if (!try tls.handshake(l, s, f.deadline)) return net.raiseFail(l, "timeout", 0, "fetch timeout in the TLS handshake with {s}", .{f.hostName()});
             f.phase = .send;
         },
         .send => {
             try sendOut(l, s, f);
             f.phase = if (isProducer(l.arg(4))) .generate else .head;
-            if (f.phase == .head) f.startStep(l.g);
+            if (f.phase == .head) f.startStep(l);
         },
         .generate => {
             if (f.out_off >= f.out.items.len) {
                 if (f.last) {
                     f.phase = .head;
-                    f.startStep(l.g);
+                    f.startStep(l);
                     continue;
                 }
                 try nextChunk(l, f);
@@ -1101,10 +1168,10 @@ fn sendOut(l: *Thread, s: *net.Socket, f: *Fetch) Error!void {
                 sched.opDone(l);
             },
             .again => {
-                if (!try sched.waitIo(l, s.stream.socket.handle, net.againDir(s, .write), s.timeout_ms)) return l.raiseFmt("fetch timeout while sending the request", .{});
+                if (!try sched.waitIo(l, s.stream.socket.handle, net.againDir(s, .write), s.timeout_ms)) return net.raiseFail(l, "timeout", 0, "fetch timeout while sending the request", .{});
                 try net.stillOpen(l, s);
             },
-            .fail => |e| return l.raiseFmt("failed to send request: {s}", .{net.errText(e)}),
+            .fail => |e| return net.raiseFail(l, net.errCode(e), 0, "failed to send request: {s}", .{net.errText(e)}),
         }
     }
     f.out.clearRetainingCapacity();
@@ -1185,14 +1252,14 @@ fn readHead(l: *Thread, s: *net.Socket, f: *Fetch) Error!?HeadResult {
         const buf = s.buf.items;
         const end = headEnd(buf, &f.scan);
         if (end) |e| return try parseHead(l, s, f, buf[0..e.head], e.next, b);
-        if (buf.len > max_response_head) return l.raiseFmt("response head too large", .{});
+        if (buf.len > max_response_head) return net.raiseFail(l, "protocol", 0, "response head too large", .{});
         // The status line and the headers have one deadline together.
-        s.timeout_ms = f.left(l.g) orelse return l.raiseFmt("fetch timeout while waiting for the response headers", .{});
-        const got = (try net.tryFill(l, s, 16384)) orelse return l.raiseFmt("fetch timeout while waiting for the response headers", .{});
+        s.timeout_ms = f.left(l.g) orelse return net.raiseFail(l, "timeout", 0, "fetch timeout while waiting for the response headers", .{});
+        const got = (try net.tryFill(l, s, 16384)) orelse return net.raiseFail(l, "timeout", 0, "fetch timeout while waiting for the response headers", .{});
         switch (got) {
             .got => {},
-            .eof => return l.raiseFmt("failed to read response: Connection closed by peer", .{}),
-            .fail => |e| return l.raiseFmt("failed to read response: {s}", .{net.errText(e)}),
+            .eof => return net.raiseFail(l, "closed", 0, "failed to read response: Connection closed by peer", .{}),
+            .fail => |e| return net.raiseFail(l, net.errCode(e), 0, "failed to read response: {s}", .{net.errText(e)}),
         }
     }
 }
@@ -1214,7 +1281,7 @@ fn headEnd(buf: []const u8, scan: *usize) ?struct { head: usize, next: usize } {
 fn parseHead(l: *Thread, s: *net.Socket, f: *Fetch, head: []const u8, next: usize, b: u32) Error!HeadResult {
     var rows = std.mem.splitScalar(u8, head, '\n');
     const first = std.mem.trimEnd(u8, rows.first(), "\r");
-    const status = parseStatus(first) orelse return l.raiseFmt("invalid HTTP response: {s}", .{first[0..@min(first.len, 200)]});
+    const status = parseStatus(first) orelse return net.raiseFail(l, "protocol", 0, "invalid HTTP response: {s}", .{first[0..@min(first.len, 200)]});
     const headers = try l.newTable(0, 8);
     l.top = b + headers_slot;
     try l.push(Value.obj(.table, headers));
@@ -1233,8 +1300,8 @@ fn parseHead(l: *Thread, s: *net.Socket, f: *Fetch, head: []const u8, next: usiz
         const val = std.mem.trimStart(u8, hl[colon + 1 ..], " ");
         try setHeader(l, headers, key, val);
         if (std.mem.eql(u8, key, "content-length")) {
-            const len = parseContentLength(val) orelse return l.raiseFmt("invalid Content-Length", .{});
-            if (!f.stream and len > fetch_max_body) return l.raiseFmt("invalid Content-Length", .{});
+            const len = parseContentLength(val) orelse return net.raiseFail(l, "protocol", 0, "invalid Content-Length", .{});
+            if (!f.stream and len > fetch_max_body) return net.raiseFail(l, "too_large", 0, "invalid Content-Length", .{});
             content_length = len;
         } else if (std.mem.eql(u8, key, "transfer-encoding")) {
             if (hasChunked(val)) chunked = true;
@@ -1263,10 +1330,10 @@ fn hasChunked(val: []const u8) bool {
 fn readWhole(l: *Thread, s: *net.Socket) Error!Value {
     const body = s.body.?;
     while (!body.done) {
-        if (body.pending.items.len > fetch_max_body) return l.raiseFmt("response body too large", .{});
+        if (body.pending.items.len > fetch_max_body) return net.raiseFail(l, "too_large", 0, "response body too large", .{});
         try advance(l, s, body, 1 << 20);
     }
-    if (body.pending.items.len > fetch_max_body) return l.raiseFmt("response body too large", .{});
+    if (body.pending.items.len > fetch_max_body) return net.raiseFail(l, "too_large", 0, "response body too large", .{});
     const v = try vector.newVectorFrom(l, &body.pending);
     body.pending = .empty;
     return Value.obj(.vector, v);

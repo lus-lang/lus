@@ -421,6 +421,196 @@ local function fetch_in_a_detached_coroutine_suspends_test()
     end)
 end
 
+-- A socket reader yields what has arrived on each resume and ends at the
+-- end of the stream.
+local function a_socket_reader_yields_what_arrived_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local step = 0
+    local server = coroutine.detach(coroutine.create(function()
+        local c <close> = listener:accept()
+        c:send("first")
+        while step < 1 do coroutine.yield() end
+        c:send("second part")
+    end))
+    local sock <close> = network.tcp.connect("127.0.0.1", port)
+    sock:settimeout(5)
+    local reader = sock:reader(6)
+    assert(type(reader) == "thread")
+    local ok, part = coroutine.resume(reader)
+    assert(ok and txt(part) == "first", tostring(part))
+    step = 1
+    local rest = {}
+    while true do
+        local more, piece = coroutine.resume(reader)
+        assert(more, piece)
+        if piece == nil then break end
+        assert(#piece <= 6)
+        rest[#rest + 1] = txt(piece)
+    end
+    assert(table.concat(rest) == "second part")
+    assert(coroutine.status(reader) == "dead")
+    coroutine.close(server)
+    listener:close()
+end
+
+local function network_lines_reads_a_socket_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local server = coroutine.detach(coroutine.create(function()
+        local c <close> = listener:accept()
+        c:send("one\r\ntw")
+        c:send("o\nthree")
+    end))
+    local sock <close> = network.tcp.connect("127.0.0.1", port)
+    local lines = {}
+    for line in network.lines(sock:reader()) do lines[#lines + 1] = txt(line) end
+    coroutine.close(server)
+    listener:close()
+    assert(table.concat(lines, ",") == "one,two,three")
+end
+
+-- A socket reader is a body: serve streams it out, and fetch sends it.
+local function a_socket_reader_is_a_body_test()
+    local source = tcp_bind("127.0.0.1", 0)
+    local _, sport = source:getsockname()
+    local feeder = coroutine.detach(coroutine.create(function()
+        for _ = 1, 2 do
+            local c <close> = source:accept()
+            c:send("relayed bytes")
+        end
+    end))
+    with_server(function(req)
+        if req.path == "/relay" then
+            local upstream = network.tcp.connect("127.0.0.1", sport)
+            return 200, upstream:reader()
+        end
+        return 200, `got $(txt(req.body))`
+    end, function(base)
+        local _, body = network.fetch(base .. "/relay")
+        assert(txt(body) == "relayed bytes", txt(body))
+        local up <close> = network.tcp.connect("127.0.0.1", sport)
+        local _, echoed = network.fetch(base .. "/up", "POST", nil, up:reader())
+        assert(txt(echoed) == "got relayed bytes", txt(echoed))
+    end)
+    coroutine.close(feeder)
+    source:close()
+end
+
+local function a_socket_reader_raises_on_timeout_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local sock <close> = network.tcp.connect("127.0.0.1", port, { timeout = 0.05 })
+    local ok, err = coroutine.resume(sock:reader())
+    listener:close()
+    assert(not ok and string.find(tostring(err), "receive timeout", 1, true), tostring(err))
+end
+
+-- The iterator of network.lines holds its state, so it works alone.
+local function network_lines_works_as_a_plain_function_test()
+    local co = coroutine.create(function()
+        coroutine.yield("one\ntw")
+        coroutine.yield("o\n")
+    end)
+    local nextline = network.lines(co)
+    assert(txt(nextline()) == "one" and txt(nextline()) == "two" and nextline() == nil)
+end
+
+local function settimeout_nil_clears_the_timeout_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local sock <close> = network.tcp.connect("127.0.0.1", port)
+    -- 0 polls: a receive with nothing to read fails at once.
+    sock:settimeout(0)
+    local got, err = sock:receive(1)
+    assert(got == nil and err.code == "timeout" and tostring(err) == "receive timeout", tostring(err))
+    -- nil waits without limit again.
+    sock:settimeout(nil)
+    local server = coroutine.detach(coroutine.create(function()
+        local c <close> = listener:accept()
+        c:send("z")
+    end))
+    assert(txt(sock:receive(1)) == "z")
+    coroutine.close(server)
+    listener:close()
+end
+
+local function receive_reads_more_than_a_mebibyte_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local size = 3 * 1024 * 1024 + 7
+    local server = coroutine.detach(coroutine.create(function()
+        local c <close> = listener:accept()
+        c:send(vector.create(size))
+    end))
+    local sock <close> = network.tcp.connect("127.0.0.1", port)
+    local got = sock:receive(size)
+    coroutine.close(server)
+    listener:close()
+    assert(#got == size)
+end
+
+-- send(data, i, j) sends a part: characters of a string, bytes of a
+-- vector, and returns the position of the last one.
+local function send_takes_a_range_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local sock <close> = network.tcp.connect("127.0.0.1", port)
+    local c <close> = listener:accept()
+    assert(sock:send("héllo wörld", 3, 5) == 5)
+    assert(sock:send("héllo", -2) == 5)
+    assert(sock:send(vector.fromstring("abcdef"), 2, 3) == 3)
+    assert(sock:send("xyz", 3, 2) == 0)
+    sock:close()
+    assert(txt(c:receive("*a")) == "llolobc")
+    listener:close()
+end
+
+-- A connection to a server whose queue is full waits until its timeout,
+-- which covers every address of the host and names the address.
+local function tcp_connect_times_out_test()
+    local listener = tcp_bind("127.0.0.1", 0, 1)
+    local _, port = listener:getsockname()
+    local held = {}
+    local timed_out
+    for _ = 1, 256 do
+        local sock, err = network.tcp.connect("127.0.0.1", port, { timeout = 0.05 })
+        if sock == nil then
+            timed_out = err
+            break
+        end
+        held[#held + 1] = sock
+    end
+    for _, sock in ipairs(held) do sock:close() end
+    listener:close()
+    if timed_out == nil then skip("the system accepted every connection") end
+    -- Some systems refuse a connection to a full queue at once, and others
+    -- leave it waiting, which the timeout ends.
+    if timed_out.code ~= "timeout" then skip("the system refuses connections to a full queue") end
+    assert(string.find(tostring(timed_out), `timeout while connecting to 127.0.0.1:$(port)`, 1, true), tostring(timed_out))
+end
+
+local function tcp_connect_gives_the_socket_its_timeout_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local sock <close> = network.tcp.connect("127.0.0.1", port, { timeout = 0.05 })
+    local got, err = sock:receive(1)
+    listener:close()
+    assert(got == nil and err.code == "timeout", tostring(err))
+end
+
+local function tcp_connect_rejects_bad_options_test()
+    local cases = {
+        { { bogus = 1 }, "unknown option 'bogus'" },
+        { { timeout = "soon" }, "timeout must be a number of seconds" },
+        { "fast", "table expected" },
+    }
+    for _, case in ipairs(cases) do
+        local ok, err = catch network.tcp.connect("127.0.0.1", 1, case[1])
+        assert(not ok and string.find(tostring(err), case[2], 1, true), tostring(err))
+    end
+end
+
 -- ============================================================
 -- TCP loopback data path (bind-dependent)
 -- ============================================================
@@ -517,8 +707,8 @@ local function tcp_line_receive_closes_the_socket_when_its_limit_is_exceeded_tes
     local server, client, conn = make_pair()
     client:send("abcde\n")
     client:close()
-    local ok, err = catch conn:receive("*l", 4)
-    assert(not ok)
+    local got, err = conn:receive("*l", 4)
+    assert(got == nil and err.code == "limit")
     assert(string.find(tostring(err),
         "receive limit exceeded", 1, true) ~= nil)
     assert(string.find(tostring(conn), "closed"))
@@ -539,8 +729,8 @@ local function tcp_line_receive_counts_an_unterminated_carriage_return_test()
     server, client, conn = make_pair()
     client:send("abcd\r")
     client:close()
-    local ok, err = catch conn:receive("*l", 4)
-    assert(not ok)
+    local got, err = conn:receive("*l", 4)
+    assert(got == nil)
     assert(string.find(tostring(err), "receive limit exceeded"))
     assert(string.find(tostring(conn), "closed"))
     conn:close()
@@ -559,8 +749,8 @@ local function tcp_all_data_receive_enforces_an_explicit_limit_test()
     server, client, conn = make_pair()
     client:send("abcde")
     client:close()
-    local ok, err = catch conn:receive("*a", 4)
-    assert(not ok)
+    local got, err = conn:receive("*a", 4)
+    assert(got == nil)
     assert(string.find(tostring(err),
         "receive limit exceeded", 1, true) ~= nil)
     assert(string.find(tostring(conn), "closed"))
@@ -584,9 +774,8 @@ end
 local function tcp_receive_times_out_cleanly_when_no_data_is_pending_test()
     local server, client, conn = make_pair()
     conn:settimeout(0.05)
-    raises(function()
-        conn:receive(4)
-    end, "timeout")
+    local got, err = conn:receive(4)
+    assert(got == nil and err.code == "timeout", tostring(err))
     conn:close()
     client:close()
     server:close()
@@ -596,9 +785,8 @@ end
 local function tcp_accept_times_out_cleanly_on_an_idle_server_test()
     local server = tcp_bind("127.0.0.1", 0)
     server:settimeout(0.05)
-    raises(function()
-        server:accept()
-    end, "timeout")
+    local got, err = server:accept()
+    assert(got == nil and err.code == "timeout", tostring(err))
     server:close()
 end
 
@@ -659,8 +847,8 @@ end
 local function tcp_binding_the_same_port_twice_reports_address_in_use_test()
     local server = tcp_bind("127.0.0.1", 0)
     local _, port = server:getsockname()
-    local ok, err = catch network.tcp.bind("127.0.0.1", port)
-    assert(not ok)
+    local got, err = network.tcp.bind("127.0.0.1", port)
+    assert(got == nil and err.code == "address", tostring(err))
     assert(string.find(tostring(err), "cannot bind to 127.0.0.1:" .. tostring(port)))
     server:close()
 end
@@ -690,8 +878,8 @@ end
 -- TCP connect to a closed port is refused with a clear message
 local function tcp_connect_to_a_closed_port_is_refused_with_a_clear_message_test()
     local port = closed_tcp_port()
-    local ok, err = catch network.tcp.connect("127.0.0.1", port)
-    assert(not ok)
+    local got, err = network.tcp.connect("127.0.0.1", port)
+    assert(got == nil and err.code == "refused", tostring(err))
     assert(string.find(tostring(err), "cannot connect to 127.0.0.1:" .. tostring(port)))
 end
 
@@ -980,9 +1168,9 @@ local function tcp_connection_refused_error_test()
   local server = tcp_bind("127.0.0.1", 0)
   local _, port = server:getsockname()
   server:close()
-  local ok, err = catch network.tcp.connect("127.0.0.1", port)
-  assert(not ok, "should fail to connect to closed port")
-  assert(type(err) == "string", "error should be string")
+  local sock, err = network.tcp.connect("127.0.0.1", port)
+  assert(sock == nil, "should fail to connect to closed port")
+  assert(err.code == "refused" and type(err.message) == "string", "error should carry a code and a message")
 end
 
 -- TCP server has expected methods
@@ -1097,7 +1285,7 @@ local function a_closed_local_endpoint_reports_a_fetch_error_test()
   local ok, err = catch network.fetch(
       "https://127.0.0.1:" .. tostring(port) .. "/")
   assert(not ok, "should fail for a closed local endpoint")
-  assert(type(err) == "string", "error should be string")
+  assert(err.code == "refused" and type(tostring(err)) == "string", "error should carry a code and a message")
 end
 
 -- The two default limit tests run last on purpose. In the 2.0 runtime a
@@ -1113,8 +1301,8 @@ local function tcp_line_receive_enforces_its_default_one_mib_limit_test()
     server:close()
 
     server, conn, sender = make_sender(mib + 1, "\n")
-    local ok, err = catch conn:receive("*l")
-    assert(not ok)
+    local got, err = conn:receive("*l")
+    assert(got == nil)
     assert(string.find(tostring(err), "receive limit exceeded"))
     catch worker.receive(sender)
     conn:close()
@@ -1131,8 +1319,8 @@ local function tcp_all_data_receive_enforces_its_default_64_mib_limit_test()
     server:close()
 
     server, conn, sender = make_sender(limit + 1)
-    local ok, err = catch conn:receive("*a")
-    assert(not ok)
+    local got, err = conn:receive("*a")
+    assert(got == nil)
     assert(string.find(tostring(err), "receive limit exceeded"))
     catch worker.receive(sender)
     conn:close()

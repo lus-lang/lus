@@ -59,7 +59,7 @@ end
 local rows = fromcsv(vector.tostring(body), true)
 ```
 
-`fetch` raises an error when it cannot reach the server or cannot read the response, such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"`. A connection that fails part way raises an error that names the step and the reason, such as `"failed to read response body: Connection reset by peer"`, so a response that arrives is always complete. A program that must continue after such a failure wraps the call in [`catch`](/manual/guide#errors).
+`fetch` raises an [error object](#errors-of-socket-operations) when it cannot reach the server or cannot read the response, whose message is such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"` and whose `code` says what failed. A connection that fails part way raises an error that names the step and the reason, such as `"failed to read response body: Connection reset by peer"`, so a response that arrives is always complete. A program that must continue after such a failure wraps the call in [`catch`](/manual/guide#errors).
 
 ```lus nocheck
 local ok, err = catch network.fetch("https://invalid.host.example")
@@ -126,22 +126,39 @@ local status = network.fetch("https://storage.example.com/upload", "PUT", nil, u
 
 A _TCP socket_ is a two-way connection that delivers bytes in the order they were sent. A program uses one for a protocol other than HTTP, such as the protocol of a database, a mail server, or a service of its own.
 
-[`network.tcp.connect(host, port)`](/manual/api#network.tcp.connect) opens a connection and returns a socket. `host` is a name or a numeric address. A connection that fails raises an error such as `"cannot connect to HOST:PORT: Connection refused"`.
+[`network.tcp.connect(host, port, options)`](/manual/api#network.tcp.connect) opens a connection and returns a socket. `host` is a name or a numeric address. A connection that fails returns `nil` and an [error object](#errors-of-socket-operations), such as one with the message `"cannot connect to HOST:PORT: Connection refused"`. The option `timeout` limits the connection, across every address of the host, to that many seconds, fails with the message `"timeout while connecting to HOST:PORT"` when it runs out, and becomes the timeout of the socket.
 
 A TCP socket has these methods.
 
 | Method | Effect |
 | --- | --- |
-| `send(data)` | Sends a string or a vector in full and returns the number of bytes sent. |
+| `send(data, i, j)` | Sends a string or a vector, or the part of it from position `i` to position `j`, and returns the position of the last element sent. |
 | `receive(pattern, max_bytes)` | Receives data as a vector. [Receiving from a TCP socket](#receiving-from-a-tcp-socket) describes the patterns. |
 | `settimeout(seconds)` | Limits every later wait of the socket. [Timeouts](#timeouts) describes the limit. |
 | `getsockname()` | Returns the local numeric address and port. |
 | `getpeername()` | Returns the numeric address and port of the other end. |
+| `reader(max_bytes)` | Returns a coroutine that yields what has arrived on each resume. [Receiving from a TCP socket](#receiving-from-a-tcp-socket) describes it. |
 | `close()` | Closes the connection. A second `close` does nothing. |
 
 A socket declared with the `<close>` attribute closes when its block ends, which is the usual way to release a connection. The garbage collector also closes a socket that the program no longer refers to.
 
-A method other than `close` on a closed socket raises `"attempt to use a closed socket"`. When the connection fails during `send` or `receive`, for example because the other end reset it, the method returns `nil` and a message such as `"receive: Connection reset by peer"`.
+A method other than `close` on a closed socket raises `"attempt to use a closed socket"`. When the connection fails during `send` or `receive`, for example because the other end reset it, the method returns `nil` and an error object whose message is such as `"receive: Connection reset by peer"`.
+
+### Errors of socket operations
+
+Socket operations report failures the way file operations do. A failed operation returns `nil` and an _error object_, a table with the fields `code` and `message`, whose `__tostring` gives the message. A program that prints the error or passes it to `tostring` reads the message, and a program that decides what to do next reads `code`.
+
+```lus nocheck
+local sock, err = network.tcp.connect("db.internal", 5432, { timeout = 5 })
+if not sock then
+    if err.code == "timeout" or err.code == "refused" then
+        return retry_later()
+    end
+    error(err)
+end
+```
+
+The codes are `"timeout"`, `"refused"`, `"reset"`, `"closed"`, `"unreachable"`, `"resolve"`, `"address"`, `"denied"`, `"limit"`, `"tls"`, `"certificate"`, and `"io"`, which [`network.tcp`](/manual/api#network.tcp) defines. Misuse raises instead: a bad argument, a socket that the program closed, and a missing permission. `network.fetch` raises the same error objects, since it returns a response.
 
 ## TLS sockets
 
@@ -166,9 +183,18 @@ The client checks that the certificate of the server chains to a trusted authori
 | `verify` | `false` to accept any certificate. The default is `true`. |
 | `timeout` | The timeout of the socket in seconds, which also bounds the handshake. |
 
-A certificate that does not verify raises an error such as `"certificate verification failed for example.com: The certificate is not correctly signed by the trusted CA"`, and the socket closes.
+A certificate that does not verify closes the socket, and the call returns `nil` and an error object with the code `"certificate"` and a message such as `"certificate verification failed for example.com: The certificate is not correctly signed by the trusted CA"`.
 
-Some protocols start in plain text and switch to TLS after an exchange of messages, as SMTP does with its `STARTTLS` command. [`sock:starttls(options)`](/manual/api#tcp_socket:starttls) switches a TCP socket to TLS at that point and returns the same socket. It takes the options above without `timeout`, and a socket that verifies the server must name it with `servername`. [`sock:tlsinfo()`](/manual/api#tcp_socket:tlsinfo) returns a table with the protocol `version`, the `cipher` suite, the `alpn` protocol, and the `servername` of a TLS socket, or `nil` for a plain one.
+Some protocols start in plain text and switch to TLS after an exchange of messages, as SMTP does with its `STARTTLS` command. [`sock:starttls(options)`](/manual/api#tcp_socket:starttls) switches a TCP socket to TLS at that point and returns the same socket. A client passes the options above without `timeout`, and a socket that verifies the server must name it with `servername`. A server passes `server = true` with its `cert` and `key`, or `certs`, a list of them that SNI picks from, and `alpn` for the protocols it accepts. A server of implicit TLS calls `starttls` right after `accept`.
+
+```lus nocheck
+local tls = { server = true, cert = read("cert.pem"), key = read("key.pem") }
+local conn = server:accept()
+conn:starttls(tls)              -- the handshake as the server
+conn:send("+OK ready\r\n")       -- every byte now travels over TLS
+```
+
+The server reads the certificates once for each options table, so a server keeps one table for all its connections. [`sock:tlsinfo()`](/manual/api#tcp_socket:tlsinfo) returns a table with the protocol `version`, the `cipher` suite, the `alpn` protocol, and the `servername` of a TLS socket, or `nil` for a plain one.
 
 The handshake, `send`, and `receive` of a TLS socket are suspension points, like the operations of a TCP socket.
 
@@ -179,18 +205,29 @@ A TCP connection carries a stream of bytes with no boundaries between messages, 
 | Pattern | Result | Limit |
 | --- | --- | --- |
 | `"*l"`, the default | One line, without its line feed and without a carriage return before it | 1 MiB, or `max_bytes` |
-| A positive integer `n` | Exactly `n` bytes, or the bytes that remain when the connection ends first | `n` must be at most 1 MiB |
+| A positive integer `n` | Exactly `n` bytes, or the bytes that remain when the connection ends first | `n` itself |
 | `"*a"` | Everything up to the end of the connection | 64 MiB, or `max_bytes` |
 
 Text protocols read lines with `"*l"`. Binary protocols usually send a length first, so the program then reads that many bytes with an integer pattern. `"*a"` is for a peer that sends one message and closes the connection.
 
-At the end of the connection, every pattern returns the bytes that remain. Once nothing remains, the result is an empty vector, which is how a program detects the end of the connection. An integer that is zero, negative, or larger than 1 MiB raises `"invalid receive size: N"`. Any other pattern raises `"invalid receive pattern: PATTERN"`.
+At the end of the connection, every pattern returns the bytes that remain. Once nothing remains, the result is an empty vector, which is how a program detects the end of the connection. An integer that is zero or negative raises `"invalid receive size: N"`. Any other pattern raises `"invalid receive pattern: PATTERN"`.
 
-The optional positive integer `max_bytes` sets the limit of `"*l"` and `"*a"`. A line or a stream that exceeds its limit closes the socket and raises `"receive limit exceeded"`. A server passes a small `max_bytes` so that a peer that never sends a line break cannot make the program use memory without limit. The following calls read a request line of at most 8 KiB and an upload of at most 8 MiB.
+The optional positive integer `max_bytes` sets the limit of `"*l"` and `"*a"`. A line or a stream that exceeds its limit closes the socket and returns `nil` and an error object with the code `"limit"` and the message `"receive limit exceeded"`. A server passes a small `max_bytes` so that a peer that never sends a line break cannot make the program use memory without limit. The following calls read a request line of at most 8 KiB and an upload of at most 8 MiB.
 
 ```lus nocheck
 local request_line = socket:receive("*l", 8192)
 local upload = socket:receive("*a", 8 * 1024 * 1024)
+```
+
+A program that moves bytes as they arrive, such as a relay or a parser of a stream, reads through [`socket:reader(max_bytes)`](/manual/api#tcp_socket:reader). It returns a coroutine, and each `coroutine.resume` of it returns `true` and whatever the socket received, between 1 and `max_bytes` bytes, 64 KiB by default. At the end of the connection the coroutine ends. It has the shape of the [streamed bodies](#streamed-bodies) of HTTP, so `network.lines` reads it line by line, and a `network.serve` handler may return it as the body of a response.
+
+```lus nocheck
+-- Relays an upstream connection to the client of a handler as it arrives.
+network.serve("127.0.0.1", 8080, function(req)
+    local upstream = network.tcp.connect("backend.internal", 9000, { timeout = 5 })
+    upstream:send("STREAM\r\n")
+    return 200, upstream:reader()
+end)
 ```
 
 ## TCP servers
@@ -261,19 +298,19 @@ receiver:close()
 
 ## Timeouts
 
-By default, a socket operation waits until it completes, so a peer that stops answering stops the code that waits for it. A _timeout_ limits how long one operation of a socket or server may wait. `settimeout(seconds)` sets the timeout for every later operation, where `seconds` may have a fraction. A negative value or NaN removes the timeout. With a timeout of `0`, an operation that cannot complete at once fails at once.
+By default, a socket operation waits until it completes, so a peer that stops answering stops the code that waits for it. A _timeout_ limits how long one operation of a socket or server may wait. `settimeout(seconds)` sets the timeout for every later operation, where `seconds` may have a fraction. `nil`, a negative value, or NaN removes the timeout. With a timeout of `0`, an operation that cannot complete at once fails at once.
 
-When a timeout runs out, the operation raises `"receive timeout"`, `"send timeout"`, `"accept timeout"`, or `"sendto timeout"`. The socket stays open and usable after a timeout.
+When a timeout runs out, the operation returns `nil` and an error object whose code is `"timeout"` and whose message is `"receive timeout"`, `"send timeout"`, `"accept timeout"`, or `"sendto timeout"`. The socket stays open and usable after a timeout.
 
-The following server waits 50 milliseconds for a connection that never comes, so `accept` raises an error.
+The following server waits 50 milliseconds for a connection that never comes, so `accept` returns `nil` and the error.
 
 ```lus
 pledge("network")
 
 local server = network.tcp.bind("127.0.0.1", 0)
 server:settimeout(0.05)
-local ok, err = catch server:accept()
-print(ok, err:match("accept timeout"))   --> false  accept timeout
+local sock, err = server:accept()
+print(sock, err.code, tostring(err))   --> nil  timeout  accept timeout
 server:close()
 ```
 

@@ -371,9 +371,11 @@ end
 local function network_host_port_pledges_match_the_checked_port_test()
     with_baseline(BASE_A, function()
         pledge("network:tcp=127.0.0.1:1")
-        local ok, sock_or_err = catch network.tcp.connect("127.0.0.1", 1)
-        if ok then
+        local ok, sock_or_err, failure = catch network.tcp.connect("127.0.0.1", 1)
+        if ok and sock_or_err then
             sock_or_err:close()
+        elseif ok then
+            assert(tostring(failure):find("permission") == nil)
         else
             assert(tostring(sock_or_err):find("permission") == nil)
         end

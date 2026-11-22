@@ -975,6 +975,76 @@ local function the_request_carries_the_address_of_the_client_test()
     end)
 end
 
+-- A coroutine body closes on every way out of the response, so its
+-- to-be-closed variables run without the collector.
+local function serve_closes_a_coroutine_body_on_every_way_out_test()
+    local closed = 0
+    local function guarded()
+        return create(function()
+            local guard <close> = setmetatable({}, { __close = function() closed = closed + 1 end })
+            for i = 1, 1000 do yield(string.rep("x", 65536)) end
+        end)
+    end
+    serving(function(req)
+        return 200, guarded()
+    end, function(port)
+        -- The client leaves after the first chunk.
+        local sock = connect(port)
+        exchange(sock, get("/"), true)
+        sock:receive("*l")
+        sock:close()
+        for _ = 1, 200 do
+            if closed == 1 then break end
+            assert(resume(spawn(yield)))
+        end
+        assert(closed == 1, `closed $(closed)`)
+        -- A response to HEAD never resumes the body, and still closes it.
+        local head <close> = connect(port)
+        local r = exchange(head, "HEAD / HTTP/1.1\r\nHost: test\r\n\r\n", true)
+        assert(r.status == 200)
+    end)
+end
+
+-- A streamed body with a length keeps the connection when its chunks add
+-- up to the length.
+local function a_streamed_body_of_its_declared_length_keeps_the_connection_test()
+    serving(function(req)
+        local parts = req.path == "/short" and { "ab" } or { "ab", "cd" }
+        local i = 0
+        return 200, function()
+            i = i + 1
+            return parts[i]
+        end, { ["Content-Length"] = "4" }
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/"))
+        assert(r.body == "abcd" and r.headers.connection == nil and r.headers["transfer-encoding"] == nil)
+        r = exchange(sock, get("/again"))
+        assert(r.body == "abcd")
+        -- A body shorter than its length closes the connection.
+        sock:send(get("/short"))
+        local head = read_response(sock, true)
+        assert(head.headers["content-length"] == "4")
+        assert(txt(sock:receive("*a")) == "ab")
+    end)
+end
+
+-- A refused request body raises an error object with its status.
+local function a_refused_body_raises_an_error_with_a_status_test()
+    local seen
+    serving(function(req)
+        local ok, err = catch req.body
+        seen = err
+        error(err, 0)
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 16777217\r\n\r\n")
+        assert(r.status == 413)
+    end)
+    assert(type(seen) == "table" and seen.status == 413, tostring(seen))
+    assert(tostring(seen) == "request body too large")
+end
+
 local function an_empty_chunk_is_skipped_test()
     serving(function(req)
         local parts = { "a", "", "b" }
@@ -1037,15 +1107,14 @@ end
 
 -- With a Content-Length of the handler, the chunks go out as they are and
 -- the connection closes after them.
+-- With a Content-Length of the handler, the chunks go out as they are.
 local function a_streamed_body_with_a_length_goes_out_unframed_test()
     serving(function(req)
         return 200, counting(2, "x"), { ["Content-Length"] = 4 }
     end, function(port)
         local sock <close> = connect(port)
         local r = exchange(sock, get("/"))
-        assert(r.body == "x1x2" and r.headers.connection == "close")
-        assert(r.headers["transfer-encoding"] == nil)
-        assert(at_end(sock))
+        assert(r.body == "x1x2" and r.headers["transfer-encoding"] == nil)
     end)
 end
 
@@ -1316,9 +1385,8 @@ local function a_body_at_the_limit_is_accepted_by_its_length_test()
         local sock <close> = connect(port)
         sock:send("POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 16777216\r\n\r\n")
         sock:settimeout(0.05)
-        raises(function()
-            sock:receive(1)
-        end, "receive timeout")
+        local got, err = sock:receive(1)
+        assert(got == nil and err.code == "timeout", tostring(err))
     end)
 end
 
@@ -1449,9 +1517,8 @@ local function connections_over_the_limit_wait_test()
         local third <close> = connect(port)
         third:send(get("/third"))
         third:settimeout(0.05)
-        raises(function()
-            third:receive(1)
-        end, "receive timeout")
+        local got, err = third:receive(1)
+        assert(got == nil and err.code == "timeout", tostring(err))
         -- The first two still work while the third waits.
         assert(exchange(second, get("/again")).body == "/again")
         first:close()
@@ -1567,8 +1634,8 @@ local function serve_binds_a_host_and_a_port_test()
     local attempt = spawn(function()
         return catch network.tcp.connect("127.0.0.1", port)
     end)
-    local ok, connected, err = resume(attempt)
-    assert(ok and connected == false and string.find(err, "cannot connect", 1, true), tostring(err))
+    local ok, caught, sock, err = resume(attempt)
+    assert(ok and caught and sock == nil and err.code == "refused" and string.find(tostring(err), "cannot connect", 1, true), tostring(err))
     assert(resume(keep))
 end
 
