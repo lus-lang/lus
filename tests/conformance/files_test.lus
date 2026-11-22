@@ -123,9 +123,14 @@ local function popen_lines_then_close_returns_the_status_test()
     -- cmd.exe on Windows, /bin/sh elsewhere.
     local windows = package.config:sub(1, 1) == "\\"
     local p = assert(io.popen(windows and "(echo x& echo y& exit 3)" or "printf 'x\\ny\\n'; exit 3"))
-    local k = 0
-    for _ in p:lines() do k = k + 1 end
-    assert(k == 2)
+    -- cmd.exe ends lines with a carriage return and may print a blank
+    -- line of its own, so only lines with a letter count.
+    local seen = {}
+    for line in p:lines() do
+        local word = line:match("%a+")
+        if word then seen[#seen + 1] = word end
+    end
+    assert(table.concat(seen, ",") == "x,y", table.concat(seen, ","))
     local ok, how, code = p:close()
     assert(ok == nil and how == "exit" and code == 3)
 end

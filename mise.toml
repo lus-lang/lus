@@ -9,14 +9,14 @@ ZIG_GLOBAL_CACHE_DIR = "{{config_root}}/runtime/.zig-cache/global"
 [tasks.build]
 description = "Build the Zig runtime"
 dir = "runtime"
-run = "zig build -Doptimize=ReleaseSafe"
+run = "zig build -j2 -Doptimize=ReleaseSafe"
 
 [tasks.test]
 description = "Run the runtime unit, embedding, tool, and conformance tests"
 dir = "runtime"
 run = [
-  "zig build test test-embed test-bundle test-check test-doc test-debug test-version test-remote -Doptimize=ReleaseSafe",
-  "zig build -Doptimize=ReleaseSafe",
+  "zig build -j2 test test-embed test-bundle test-check test-doc test-debug test-version test-remote -Doptimize=ReleaseSafe",
+  "zig build -j2 -Doptimize=ReleaseSafe",
   "zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
   "LUS_JIT=off zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
   "LUS_JIT=eager zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
@@ -36,7 +36,7 @@ run = "node --test packaging/install/install.test.mjs"
 [tasks.fuzz]
 description = "Fuzz the front end, the chunk loader, and the parsers and formatters of the standard library"
 dir = "runtime"
-run = "zig build test --fuzz=1M -Doptimize=ReleaseSafe"
+run = "zig build -j2 test --fuzz=1M -Doptimize=ReleaseSafe"
 
 [tasks.diff]
 description = "Run 200 generated programs under every JIT mode and compare their output"
@@ -51,22 +51,22 @@ run = "LUS_JIT=off runtime/zig-out/bin/lus tests/diff/run.lus --forever --reduce
 [tasks."build:stress"]
 description = "Build the gc-stress and gc-verify runtime into runtime/zig-out-stress"
 dir = "runtime"
-run = "zig build -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress"
+run = "zig build -j1 -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress"
 
 [tasks."build:x64"]
 description = "Build the runtime for x86-64 macOS into runtime/zig-out-x64, which runs under Rosetta"
 dir = "runtime"
-run = "zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-macos --prefix zig-out-x64"
+run = "zig build -j1 -Doptimize=ReleaseSafe -Dtarget=x86_64-macos --prefix zig-out-x64"
 
 [tasks."build:oom"]
 description = "Build the runtime with allocation failure injection into runtime/zig-out-oom"
 dir = "runtime"
-run = "zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom"
+run = "zig build -j2 -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom"
 
 [tasks."build:io"]
 description = "Build the runtime with I/O fault injection into runtime/zig-out-io"
 dir = "runtime"
-run = "zig build -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io"
+run = "zig build -j2 -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io"
 
 [tasks.io]
 description = "Fail and shorten sampled file and socket operations of every conformance test"
@@ -76,7 +76,7 @@ run = ["LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --samples 20"
 [tasks."build:coverage"]
 description = "Build the runtime with edge coverage into runtime/zig-out-cov"
 dir = "runtime"
-run = "zig build -Doptimize=ReleaseSafe -Dcoverage=true --prefix zig-out-cov"
+run = "zig build -j2 -Doptimize=ReleaseSafe -Dcoverage=true --prefix zig-out-cov"
 
 [tasks.coverage]
 description = "Measure the edge coverage of src by the conformance suite in three JIT modes and the doc tests"
@@ -94,7 +94,7 @@ run = [
 [tasks."build:sanitize"]
 description = "Build the runtime with the vendored C libraries under the undefined behavior sanitizer into runtime/zig-out-ubsan"
 dir = "runtime"
-run = "zig build -Doptimize=ReleaseSafe -Dsanitize-c=true --prefix zig-out-ubsan"
+run = "zig build -j2 -Doptimize=ReleaseSafe -Dsanitize-c=true --prefix zig-out-ubsan"
 
 [tasks.sanitize]
 description = "Run the conformance suite and the fuzz targets with the vendored C libraries under the undefined behavior sanitizer"
@@ -102,7 +102,7 @@ depends = ["build:sanitize"]
 dir = "runtime"
 run = [
   "zig-out-ubsan/bin/lus test ../tests/conformance",
-  "zig build test --fuzz=200K -Doptimize=ReleaseSafe -Dsanitize-c=true",
+  "zig build -j2 test --fuzz=200K -Doptimize=ReleaseSafe -Dsanitize-c=true",
 ]
 
 [tasks.oom]
@@ -119,7 +119,7 @@ run = ["LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --samples 400", "L
 description = "Build lus.wasm for wasm32-wasi into packages/wasm/dist"
 dir = "runtime"
 run = [
-  "zig build wasm",
+  "zig build -j1 wasm",
   "mkdir -p ../packages/wasm/dist",
   "cp zig-out/wasm/lus.wasm ../packages/wasm/dist/lus.wasm",
 ]
