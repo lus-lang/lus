@@ -2,7 +2,7 @@
 # Runs the conformance suite on Linux in a local Lima VM, natively on
 # aarch64 and, through qemu-user, on x86-64.
 #
-# Usage: tools/test-linux.sh [--quick] [--no-x64] [--riscv64] [--strict]
+# Usage: tools/test-linux.sh [--quick] [--no-x64] [--riscv64] [--loong64] [--strict]
 #
 # The script cross-builds the runtime for aarch64-linux and x86_64-linux,
 # copies each binary with the test trees into the VM, and runs `lus test`
@@ -10,10 +10,10 @@
 # default tiers, eager, and optimizing. The x86-64 binary runs under the
 # qemu-user that the VM registers with binfmt_misc, so the processes the
 # tests start run under it as well. It runs the default tiers and the
-# optimizing tier, or only the default tiers with --quick. --riscv64 also
-# cross-builds a static riscv64-linux-musl binary and runs it under the
-# qemu-user of the VM with the JIT off, with the default tiers, eager,
-# baseline, and optimizing. The VM is the one LUS_LIMA_VM names, `boring`
+# optimizing tier, or only the default tiers with --quick. --riscv64 and
+# --loong64 each also cross-build a static musl binary for that
+# architecture and run it under the qemu-user of the VM with the JIT off,
+# with the default tiers, eager, baseline, and optimizing. The VM is the one LUS_LIMA_VM names, `boring`
 # by default, and must be running.
 #
 # The aarch64 runs decide the exit status. qemu-user emulates the memory
@@ -30,13 +30,14 @@ set -eu
 vm="${LUS_LIMA_VM:-boring}"
 quick=0
 x64=1
-rv64=0
+extra=""
 strict=0
 for arg in "$@"; do
     case "$arg" in
         --quick) quick=1 ;;
         --no-x64) x64=0 ;;
-        --riscv64) rv64=1 ;;
+        --riscv64) extra="$extra riscv64" ;;
+        --loong64) extra="$extra loongarch64" ;;
         --strict) strict=1 ;;
         *) echo "unknown option $arg" >&2; exit 2 ;;
     esac
@@ -61,10 +62,10 @@ if [ "$x64" = 1 ]; then
     wait_for_memory
     zig build -j1 -Doptimize=ReleaseSafe -Dtarget=x86_64-linux --prefix zig-out-linux-x64
 fi
-if [ "$rv64" = 1 ]; then
+for arch in $extra; do
     wait_for_memory
-    zig build -j1 -Doptimize=ReleaseSafe -Dtarget=riscv64-linux-musl --prefix zig-out-linux-rv64
-fi
+    zig build -j1 -Doptimize=ReleaseSafe -Dtarget="$arch-linux-musl" --prefix "zig-out-linux-$arch"
+done
 
 # The trees the conformance suite and the language server tests read.
 stage="$(mktemp -d "${TMPDIR:-/tmp}/lus-linux.XXXXXX")"
@@ -101,7 +102,7 @@ if [ "$x64" = 1 ]; then
     if [ "$quick" = 1 ]; then run_suite x64 default; else run_suite x64 default opt-eager; fi
 fi
 
-if [ "$rv64" = 1 ]; then run_suite rv64 off default eager baseline opt-eager; fi
+for arch in $extra; do run_suite "$arch" off default eager baseline opt-eager; done
 
 if [ "$emulated_failed" = 1 ]; then
     echo "an architecture under qemu-user had failures, which the notes at the top of tools/test-linux.sh explain"

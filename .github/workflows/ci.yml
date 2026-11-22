@@ -103,7 +103,9 @@ jobs:
         # change at least compiles for them.
         if: runner.os == 'Linux'
         working-directory: runtime
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=riscv64-linux-musl --prefix zig-out-riscv64
+        run: |
+          zig build -Doptimize=ReleaseSafe -Dtarget=riscv64-linux-musl --prefix zig-out-riscv64
+          zig build -Doptimize=ReleaseSafe -Dtarget=loongarch64-linux-musl --prefix zig-out-loongarch64
       - name: Native code runs
         timeout-minutes: 5
         # Every runner of this job has the JIT. A silent fall back to the

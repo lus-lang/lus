@@ -28,6 +28,7 @@ Four facts from the table shape our order.
 | x86-64 macOS | yes | yes | yes | yes |
 | aarch64 Linux | yes | yes | yes | yes, static musl |
 | riscv64 Linux | yes | yes | yes | not yet |
+| loong64 Linux | yes | yes | yes | not yet |
 | x86-64 Linux | yes | yes | yes | yes, static musl |
 | x86-64 Windows | yes | | | yes |
 | arm64 Windows | yes | | | yes |
@@ -73,7 +74,7 @@ The pinned registers are callee-saved `s` registers. The temporaries of the base
 
 ## loong64
 
-loong64 is little-endian and 64-bit, with fixed-width instructions and compare-and-branch instructions, which is the shape of riscv64. `jit/la64.zig` follows `rv64.zig` routine by routine. The branch relaxation and the placement of pools move into one module that both assemblers instantiate with their branch ranges: 128 KB for a two-register branch, 4 MB for a branch on zero, and 128 MB for `b` and `bl`. Pool loads use `pcaddu12i` and `ld.d`. The convention reserves `r21`, which no pool uses. New code becomes visible to instruction fetch after `ibar 0`, because the hardware keeps the instruction caches of the cores coherent with stores.
+loong64 is little-endian and 64-bit, with fixed-width instructions and compare-and-branch instructions, which is the shape of riscv64. `jit/la64.zig` follows `rv64.zig` routine by routine. A branch on two registers reaches 128 KB, a branch on zero 4 MB, and `b` and `bl` 128 MB. A conditional branch to a label that is unbound or out of reach is the inverted branch over a `b`, and `b` reaches every label of a function, so loong64 needs no islands. Pool loads use `pcaddu12i` and `ld.d`. Integer and float conversions run inside the float registers, so `floatToInt` goes through `ft13`, the float scratch register of the assembler. The convention reserves `r21`, which no pool uses. The optimizing tier allocates 15 integer registers, `a0` to `a7` and `t0` to `t6`, and 16 float registers. New code becomes visible to instruction fetch after `ibar 0`, because the hardware keeps the instruction caches of the cores coherent with stores.
 
 ## ppc64le
 
@@ -174,7 +175,7 @@ iOS and the game consoles refuse executable memory to ordinary programs, so the 
 
 ## Testing each target
 
-`tools/test-linux.sh --riscv64` runs the riscv64 gate. Every Linux target is gated locally by a static musl build under qemu-user in the lima VM "boring", with the conformance suite under `LUS_JIT` set to `off`, the default, `eager`, `baseline`, and `opt-eager`, and with a `-Dgc-stress=97 -Dgc-verify=true` build under `eager` and `opt-eager`. CI cross-builds every target on every pull request. A nightly Linux job runs the same suite under `qemu-user-static` for each of them. The encodings of each assembler get byte-level unit tests against the output of a system assembler, as `a64.zig` and `x64.zig` have.
+`tools/test-linux.sh --riscv64 --loong64` runs the riscv64 and loong64 gates. Every Linux target is gated locally by a static musl build under qemu-user in the lima VM "boring", with the conformance suite under `LUS_JIT` set to `off`, the default, `eager`, `baseline`, and `opt-eager`, and with a `-Dgc-stress=97 -Dgc-verify=true` build under `eager` and `opt-eager`. CI cross-builds every target on every pull request. A nightly Linux job runs the same suite under `qemu-user-static` for each of them. The encodings of each assembler get byte-level unit tests against the output of a system assembler, as `a64.zig` and `x64.zig` have.
 
 | target | local gate | CI |
 |---|---|---|

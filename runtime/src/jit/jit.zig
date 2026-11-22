@@ -35,7 +35,7 @@ pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
         .macos, .linux, .windows => true,
         else => false,
     },
-    .riscv64 => builtin.os.tag == .linux,
+    .riscv64, .loongarch64 => builtin.os.tag == .linux,
     .wasm32 => builtin.os.tag == .wasi,
     else => false,
 };
@@ -584,6 +584,7 @@ test {
     _ = @import("a64.zig");
     _ = @import("x64.zig");
     _ = @import("rv64.zig");
+    _ = @import("la64.zig");
     if (enabled) {
         _ = mem;
         _ = emit;
