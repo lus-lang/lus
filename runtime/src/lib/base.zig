@@ -364,7 +364,13 @@ fn decimal(l: *Thread) Error!u32 {
         .string => buf.appendSlice(g.gpa, std.mem.trim(u8, v.as(String).bytes(), " \t\n\r")) catch return l.raiseMem(),
         else => return aux.typeError(l, 1, "number"),
     }
-    const d = numeric.parseDecimalLiteral(g, buf.items) catch return aux.retNil(l);
+    // Text that is not a numeral gives nil, and a numeral past the limits
+    // of a decimal raises, since it names a value the program cannot hold.
+    const d = numeric.parseDecimalLiteral(g, buf.items) catch |e| switch (e) {
+        error.OutOfRange => return numeric.raiseRange(l, numeric.rangeOfText(buf.items)),
+        error.OutOfMemory => return l.raiseMem(),
+        else => return aux.retNil(l),
+    };
     return aux.ret(l, Value.obj(.decimal, d));
 }
 

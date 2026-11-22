@@ -162,10 +162,9 @@ const numbers = target(
     \\    if b ~= 0n and (b // b ~= 1n or b % b ~= 0n) then fail("bigint division fails for", tostring(b)) end
     \\end
     \\local okd, d = catch decimal(S)
-    \\-- Exact decimal sums align exponents, which costs time quadratic in
-    \\-- an extreme exponent (tests/diff/OPEN.md), so such values skip the
-    \\-- arithmetic.
-    \\if okd and d and not S:find("[eE][+-]?0*%d%d%d%d") then
+    \\-- A numeral past the limits of a decimal raises at once, so every value
+    \\-- that parses takes part in the arithmetic.
+    \\if okd and d then
     \\    local d2 = decimal(tostring(d))
     \\    if d2 ~= d or tostring(d2) ~= tostring(d) then fail("decimal does not read back", S, tostring(d), tostring(d2)) end
     \\    if d + 0d ~= d or d * 1d ~= d or -(-d) ~= d then fail("decimal identities fail for", tostring(d)) end
@@ -173,7 +172,7 @@ const numbers = target(
     \\for base = 2, 36, 7 do catch tonumber(S, base) end
     \\catch math.tointeger(S)
     \\catch (S + 0)
-, &.{ "12345678901234567890", "-0x7fffffffffffffff", "1e308", "0x1p-1074", "1.50", "-0.000", "1e-400", "  42  ", "0x", "1_000", "9223372036854775808", "-9223372036854775809", "123456789012345678901234567890.123456789", "nan", "inf", "1e9999" });
+, &.{ "12345678901234567890", "-0x7fffffffffffffff", "1e308", "0x1p-1074", "1.50", "-0.000", "1e-400", "  42  ", "0x", "1_000", "9223372036854775808", "-9223372036854775809", "123456789012345678901234567890.123456789", "nan", "inf", "1e9999", "1e9999999", "1e-9999999", "1e16383", "1e-16384" });
 
 // Parsing times with any pattern never crashes, and a parsed time formats.
 const time = target(

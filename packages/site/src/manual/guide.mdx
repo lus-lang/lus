@@ -353,7 +353,7 @@ print(7n // 2)              --> 3
 
 #### Decimals
 
-Decimal arithmetic is in base 10. Sums, differences, and products of decimals are exact. An operation between a decimal and an integer or a bigint produces a decimal. A division of decimals keeps up to 34 significant digits and rounds the rest.
+Decimal arithmetic is in base 10. Sums, differences, and products of decimals are exact. An operation between a decimal and an integer or a bigint produces a decimal. A division of decimals keeps up to 34 significant digits and rounds the rest. A decimal holds at most 16,384 digits before the point and 16,384 after, and a result that needs more raises an error, so no operation on decimals runs for long.
 
 ```lus
 local price = 19.99d

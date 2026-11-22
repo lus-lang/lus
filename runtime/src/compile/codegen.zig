@@ -1458,7 +1458,10 @@ fn expr(fs: *FuncState, e: *ast.Expr, v: *ExpDesc) Error!void {
             v.* = ExpDesc.init(.k, @intCast(try valueK(fs, Value.obj(.bigint, b))));
         },
         .decimal => |d| {
-            const dv = vm.numeric.parseDecimalLiteral(fs.c.g, d) catch return fs.c.err(e.line, "malformed number near '{s}d'", .{d});
+            const dv = vm.numeric.parseDecimalLiteral(fs.c.g, d) catch |er| switch (er) {
+                error.OutOfRange => return fs.c.err(e.line, "decimal literal out of range near '{s}d': a decimal holds at most {d} digits before the point and {d} after", .{ d, vm.numeric.max_int_digits, vm.numeric.max_frac_digits }),
+                else => return fs.c.err(e.line, "malformed number near '{s}d'", .{d}),
+            };
             v.* = ExpDesc.init(.k, @intCast(try valueK(fs, Value.obj(.decimal, dv))));
         },
         .vararg => {
