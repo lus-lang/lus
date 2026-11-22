@@ -257,10 +257,11 @@ An unknown name raises the error `invalid source encoding` or `invalid target en
 
 ### Binary to text encodings
 
-Encoding to `"base64"`, `"base64url"`, `"url"`, or `"hex"` writes the bytes of the input as printable text, so a program can put binary data in a format that holds only text. Decoding from one of these encodings recovers the bytes, which `string.transcode` then converts to the encoding `to`.
+Encoding to `"base64"`, `"base64url"`, `"base32"`, `"url"`, or `"hex"` writes the bytes of the input as printable text, so a program can put binary data in a format that holds only text. Decoding from one of these encodings recovers the bytes, which `string.transcode` then converts to the encoding `to`.
 
 - Base64 writes every 3 bytes as 4 printable characters. Base64 input may omit its `=` padding.
 - Base64url is base64 with `-` and `_` in place of `+` and `/`, written without padding, which makes its output safe in a URL or a file name. JSON Web Tokens use it. Decoding accepts input with or without padding.
+- Base32 writes every 5 bytes as 8 characters from `A-Z` and `2-7`, padded with `=`, which survives being read aloud or typed by hand. TOTP secrets in authenticator apps use it. Decoding accepts either case, missing padding, and spaces.
 - URL encoding keeps the characters `A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, and `~` and writes every other byte as `%` followed by two hexadecimal digits. URL decoding also reads `+` as a space.
 - Hexadecimal writes every byte as two lowercase digits and accepts either case as input.
 
@@ -270,6 +271,7 @@ global print, string
 print(string.transcode("user:password", "utf-8", "base64"))  --> dXNlcjpwYXNzd29yZA==
 print(string.transcode("aGk", "base64", "utf-8"))            --> hi
 print(string.transcode("hi?", "utf-8", "base64url"))         --> aGk_
+print(string.transcode("hi?", "utf-8", "base32"))            --> NBUT6===
 print(string.transcode("São Paulo", "utf-8", "url"))         --> S%C3%A3o%20Paulo
 print(string.transcode("a%3D1+b", "url", "utf-8"))           --> a=1 b
 print(string.transcode("é", "utf-8", "hex"))                 --> c3a9
@@ -369,7 +371,7 @@ The right format depends on the programs that read the data.
 - **brotli** is the format that browsers accept for web content. At its default level it produces small output and compresses slowly.
 - **lz4** is designed for speed and produces larger output than the other formats.
 
-Damaged data raises an error when a format can tell. gzip and lz4 store a checksum of the data, so a changed byte raises an error. The zstd frames that `compress` writes, deflate, and brotli store none, so a change that keeps the stream valid decompresses to other data. A program that stores compressed data where it can be damaged keeps a checksum of its own, such as a digest from [`crypto.hash`](/manual/api#crypto.hash), or uses gzip.
+Damaged data raises an error when a format can tell. gzip, zstd, and lz4 store a checksum of the data, so a changed byte raises an error. deflate and brotli store none, so a change that keeps the stream valid decompresses to other data. A program that stores deflate or brotli data where it can be damaged keeps a checksum of its own, such as a digest from [`crypto.hash`](/manual/api#crypto.hash).
 
 Each format is a table with a `compress` and a `decompress` function. The optional second argument of `compress` sets the level, where a higher level produces smaller output and takes more time.
 
@@ -385,7 +387,7 @@ The formats differ in these details:
 
 - **gzip** adds a header and a CRC32 checksum to deflate data, which decompression checks. Level 0 stores the data without compression.
 - **deflate** writes no header and no checksum, so decompression cannot detect every corrupted input.
-- **zstd** accepts negative levels, which compress faster to a larger size. Decompression checks the header and the checksum when the data has one.
+- **zstd** accepts negative levels, which compress faster to a larger size. `compress` writes a checksum of the content into each frame. Decompression checks the header and the checksum when the data has one, which data from other programs may lack.
 - **brotli** takes a third argument, `lgwin`, from 10 to 24 with a default of 22. The compressor searches for repetitions within the last 2 to the power `lgwin` bytes, so a smaller value uses less memory and compresses less.
 - **lz4** writes the current LZ4 frame format. Decompression checks the header and the checksum when the data has one. [`vector.archive.lz4.decompress_hc`](/manual/api#vector.archive.lz4.decompress_hc) reads the older LZ4 frame format that earlier LZ4 tools produced, which starts with the number `0x184C2102`.
 
@@ -414,6 +416,31 @@ print(catch vector.archive.gzip.compress({}))                --> false  ...: bad
 print(catch vector.archive.gzip.compress("data", 15))        --> false  ...: bad argument #2 to 'compress' (compression level must be 0-9)
 print(catch vector.archive.gzip.decompress("not gzip data"))  --> false  ...: gzip decompress failed (BadZlibHeader)
 ```
+
+## Archives
+
+An _archive_ holds many named files in one sequence of bytes: a release download, a package bundle, or a folder that a user uploads. `vector.archive.zip` reads and writes ZIP archives and `vector.archive.tar` reads and writes tar archives. Each has four functions. [`list`](/manual/api#vector.archive.zip.list) returns the entries, [`read`](/manual/api#vector.archive.zip.read) returns the contents of one file, [`pack`](/manual/api#vector.archive.zip.pack) builds an archive from a table of entries, and [`unpack`](/manual/api#vector.archive.zip.unpack) writes every entry into a directory.
+
+The following program packs two files, lists them, and reads one back.
+
+```lus
+global ipairs, print, vector
+
+local zip = vector.archive.zip.pack({
+    { name = "report/summary.txt", data = "All tests pass." },
+    { name = "report/data.csv", data = "name,score\nada,9\n" },
+})
+for _, e in ipairs(vector.archive.zip.list(zip)) do
+    print(e.name, e.size)
+end
+--> report/summary.txt  15
+--> report/data.csv  18
+print(vector.tostring(vector.archive.zip.read(zip, "report/summary.txt")))  --> All tests pass.
+```
+
+An archive may be a string, a vector, or a file opened for reading. A file is read in place, so a program lists or unpacks an archive of several gigabytes without loading it. A `.tar.gz` file is a tar archive compressed with gzip, which `vector.archive.gzip.decompress` opens first.
+
+Unpacking an archive from someone else is a classic way to overwrite files: an entry named `../../.profile`, or a symbolic link to `/etc` followed by an entry that writes through it. `unpack` refuses both. It checks every name and link before it writes anything. It never writes through a symbolic link, whether the archive made the link or it was there already. It also stops when the bytes written pass a limit, 512 MiB unless the `max` option says otherwise, which defeats the small archives that expand to fill a disk. A file that exists raises an error unless the `overwrite` option is set.
 
 ## Related pages
 

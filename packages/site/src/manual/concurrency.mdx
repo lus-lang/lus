@@ -233,7 +233,7 @@ A timeout set with `settimeout` limits each wait and raises `"receive timeout"`,
 
 ### Errors that nothing collects
 
-The error of a detached coroutine goes to the code that resumes or closes it. When a detached coroutine fails and nothing collects its error, the program stops with that error and the traceback of the coroutine, so a failed task cannot go unnoticed. The program stops when `lus` has finished running the coroutines after the main chunk, or earlier, when the garbage collector finds that nothing refers to the failed coroutine any more. Results that nothing collects are dropped.
+The error of a detached coroutine goes to the code that resumes or closes it. A detached coroutine that fails closes its pending `<close>` variables at once, with its error, so a socket that it holds is released before anything collects the error. When a detached coroutine fails and nothing collects its error, the program stops with that error and the traceback of the coroutine, so a failed task cannot go unnoticed. The program stops when `lus` has finished running the coroutines after the main chunk, or earlier, when the garbage collector finds that nothing refers to the failed coroutine any more. Results that nothing collects are dropped.
 
 The following program detaches a coroutine that fails and never resumes it.
 

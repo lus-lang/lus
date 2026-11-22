@@ -1,0 +1,276 @@
+-- Network faults (`LUS_FAIL_NET`, `runtime/src/vm/faultio.zig`) for
+-- programs that talk to peers on the loopback interface.
+--
+-- Each scenario runs a server in a detached coroutine and a client in the
+-- main chunk. The scenarios cover `network.fetch` against `network.serve`,
+-- a peer that trickles its response one byte at a time and ends the body
+-- by closing, a TCP exchange of lines, and an HTTPS request to a peer that
+-- speaks plain HTTP, whose handshake fails. For every kind of fault and
+-- every step N of that kind, the checker asserts that the run ends within
+-- its time limit, so no coroutine is left waiting, that every error the
+-- client saw is one the manual lists, that a fresh request after the
+-- fault succeeds, and that no socket is open when the process exits.
+--
+-- Usage: lus network.lus [--lus BIN] [--timeout SECONDS]
+--
+-- BIN is a runtime built with `-Dfail-io=true`.
+
+global arg, assert, error, fs, io, ipairs, math, os, package, pledge, print, string, table, tonumber, tostring
+
+pledge("exec", "fs", "env")
+
+local opts = { lus = "runtime/zig-out-io/bin/lus", timeout = 40 }
+do
+    local i = 1
+    while i <= #arg do
+        local a, v = arg[i], arg[i + 1]
+        if a == "--lus" then opts.lus = v
+        elseif a == "--timeout" then opts.timeout = tonumber(v)
+        else error("unknown option " .. a) end
+        i = i + 2
+    end
+end
+
+if package.config:sub(1, 1) == "\\" then
+    print("the scenarios use perl for their time limit, so they skip Windows")
+    os.exit(0)
+end
+
+-- The messages that the manual and the reference list for a failed
+-- request or socket operation. Each is a pattern for a whole message.
+local LISTED = {
+    "^cannot resolve '[^']+': Domain name not found$",
+    "^cannot connect to [^ ]+: Connection refused$",
+    "^failed to send request: [%a ]+$",
+    "^failed to read response: [%a ]+$",
+    "^failed to read response headers: [%a ]+$",
+    "^failed to read response body: [%a ]+$",
+    "^truncated response body$",
+    "^TLS handshake failed: [^\n]+$",
+    "^failed to [%a ]+: Connection closed by peer$",
+    "^receive: Connection reset by peer$",
+    "^send: Connection reset by peer$",
+    -- The message of the tcp scenario itself for an end of the stream,
+    -- which `receive` reports with an empty vector.
+    "^the peer ended the connection$",
+}
+
+-- Shared by every scenario: a server on a free port of the loopback
+-- interface, and a report of what the client saw. `report(name, ok, v)`
+-- prints "ok NAME" or "error NAME: MESSAGE", with the position of a
+-- raised error removed.
+local PRELUDE = [[
+pledge("network")
+local function report(name, ok, v)
+    if ok then
+        print("ok " .. name)
+    else
+        local msg = tostring(v):gsub("^[^:]*:%d+: ", "")
+        print("error " .. name .. ": " .. msg)
+    end
+end
+local function hello(req)
+    return 200, "hello " .. req.path
+end
+local function serveHello()
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local serving = coroutine.detach(coroutine.create(network.serve), server, hello)
+    return server, port, serving
+end
+local function stop(server, serving)
+    coroutine.close(serving)
+    server:close()
+    print("status " .. coroutine.status(serving))
+end
+-- A request after the fault, which must succeed. The fault fires once,
+-- so when it lands on the first attempt the second one must succeed.
+local function fresh(port)
+    for attempt = 1, 2 do
+        local ok, status, body = catch network.fetch(`http://127.0.0.1:$(port)/fresh`)
+        if ok and status == 200 and vector.tostring(body) == "hello /fresh" then
+            print("fresh ok")
+            return
+        end
+        report("fresh", ok, ok and `unexpected response $(status)` or status)
+    end
+end
+]]
+
+local SCENARIOS = {
+    fetch = [[
+local server, port, serving = serveHello()
+local ok, status, body = catch network.fetch(`http://localhost:$(port)/first`)
+if ok and not (status == 200 and vector.tostring(body) == "hello /first") then
+    report("first", false, `unexpected response $(status) $(vector.tostring(body))`)
+else
+    report("first", ok, status)
+end
+fresh(port)
+stop(server, serving)
+]],
+    trickle = [[
+local server, port, serving = serveHello()
+local peer = network.tcp.bind("127.0.0.1", 0)
+local _, peer_port = peer:getsockname()
+local trickling = coroutine.detach(coroutine.create(function()
+    local sock <close> = peer:accept()
+    while true do
+        local line = sock:receive("*l")
+        if line == nil or #line == 0 then break end
+    end
+    local response = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ntrickled body"
+    for i = 1, #response do
+        if not sock:send(response:sub(i, i)) then break end
+        coroutine.yield()
+    end
+end))
+local ok, status, body = catch network.fetch(`http://127.0.0.1:$(peer_port)/slow`)
+-- The body ends where the peer closes the connection. A fault on the side
+-- of the peer makes it close early, which the client cannot tell from
+-- the end of the body, so any start of the body is a response.
+local text = ok and vector.tostring(body)
+if ok and not (status == 200 and ("trickled body"):sub(1, #text) == text) then
+    report("trickle", false, `unexpected response $(status) $(text)`)
+else
+    report("trickle", ok, status)
+end
+coroutine.close(trickling)
+peer:close()
+fresh(port)
+stop(server, serving)
+]],
+    tcp = [[
+local server, port, serving = serveHello()
+local peer = network.tcp.bind("127.0.0.1", 0)
+local _, peer_port = peer:getsockname()
+local echoing = coroutine.detach(coroutine.create(function()
+    local sock <close> = peer:accept()
+    while true do
+        local line = sock:receive("*l")
+        if line == nil or #line == 0 then break end
+        if not sock:send(vector.tostring(line):upper() .. "\n") then break end
+    end
+end))
+local function exchange()
+    local sock <close> = network.tcp.connect("127.0.0.1", peer_port)
+    sock:settimeout(5)
+    for _, word in ipairs({ "one", "two", "three" }) do
+        local sent, e = sock:send(word .. "\n")
+        if not sent then error(e, 0) end
+        local line, e2 = sock:receive("*l")
+        if line == nil then error(e2, 0) end
+        if #line == 0 then error("the peer ended the connection", 0) end
+        assert(vector.tostring(line) == word:upper())
+    end
+end
+local ok, err = catch exchange()
+report("tcp", ok, err)
+coroutine.close(echoing)
+peer:close()
+fresh(port)
+stop(server, serving)
+]],
+    tls = [[
+local server, port, serving = serveHello()
+local peer = network.tcp.bind("127.0.0.1", 0)
+local _, peer_port = peer:getsockname()
+local plain = coroutine.detach(coroutine.create(function()
+    local sock <close> = peer:accept()
+    sock:receive(1)
+    sock:send("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+end))
+local ok, err = catch network.fetch(`https://127.0.0.1:$(peer_port)/secure`)
+-- The handshake must fail, since the peer speaks plain HTTP.
+if ok then report("tls", false, "the handshake succeeded") else report("tls", false, err) end
+coroutine.close(plain)
+peer:close()
+fresh(port)
+stop(server, serving)
+]],
+}
+
+local KINDS = { "reset", "eof", "dns", "refuse", "abort" }
+local STEP_OF = { reset = "transfers", eof = "receives", dns = "lookups", refuse = "connects", abort = "accepts" }
+
+local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-network-faults")
+local _ = catch fs.remove(dir, true)
+fs.createdirectory(dir, true)
+local names = {}
+for _, name in ipairs({ "fetch", "trickle", "tcp", "tls" }) do
+    local f = assert(io.open(fs.path.join(dir, name .. ".lus"), "w"))
+    f:write(PRELUDE, SCENARIOS[name])
+    f:close()
+    names[#names + 1] = name
+end
+
+local function quote(s)
+    return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
+local function run(spec, name)
+    local cmd = string.format("cd %s && LUS_FAIL_NET=%s perl -e 'alarm %d; exec @ARGV' %s %s.lus 2>&1",
+        quote(dir), spec, opts.timeout, quote(fs.path.join(os.getenv("PWD"), opts.lus)), name)
+    local p = assert(io.popen(cmd, "r"))
+    local out = p:read("a")
+    local _, _, code = p:close()
+    return out, code
+end
+
+local function listed(msg)
+    for _, pat in ipairs(LISTED) do
+        if msg:find(pat) then return true end
+    end
+    return false
+end
+
+-- The problems of one run's output, or nil.
+local function check(out, code)
+    if code == 142 then return "the run did not end within its time limit" end
+    if code ~= 0 then return string.format("the run exited with %s: %s", tostring(code), out) end
+    for msg in out:gmatch("error [%w]+: ([^\n]+)") do
+        if not listed(msg) then return "an error the manual does not list: " .. msg end
+    end
+    if not out:find("fresh ok", 1, true) then return "the request after the fault failed: " .. out end
+    if not out:find("status dead", 1, true) then return "the server did not stop: " .. out end
+    local open = tonumber(out:match("lus: (%d+) sockets open at exit"))
+    if open ~= 0 then return string.format("%s sockets open at exit", tostring(open)) end
+end
+
+-- The steps of each kind that a scenario makes, from a run that counts
+-- them.
+local function countSteps(name)
+    local out, code = run("count", name)
+    local line = out:match("lus: network steps: ([^\n]+)")
+    assert(line, "the scenario did not run: " .. out)
+    local counts = {}
+    for n, step in line:gmatch("(%d+) (%a+)") do counts[step] = tonumber(n) end
+    return counts, out, code
+end
+
+local problems = {}
+local summary = {}
+local runs = 0
+for _, name in ipairs(names) do
+    local counts, out, code = countSteps(name)
+    local problem = check(out, code)
+    if problem then problems[#problems + 1] = string.format("%s without faults: %s", name, problem) end
+    local parts = {}
+    for _, kind in ipairs(KINDS) do
+        local step = STEP_OF[kind]
+        local steps = counts[step] or 0
+        parts[#parts + 1] = string.format("%d %s", steps, step)
+        for n = 1, steps do
+            local o, c = run(n .. ":" .. kind, name)
+            runs = runs + 1
+            local p = check(o, c)
+            if p then problems[#problems + 1] = string.format("%s, %s %d: %s", name, kind, n, p) end
+        end
+    end
+    summary[#summary + 1] = string.format("%-8s %s", name, table.concat(parts, ", "))
+end
+fs.remove(dir, true)
+for _, s in ipairs(summary) do print(s) end
+print(string.format("%d runs, %d problems", runs, #problems))
+for _, p in ipairs(problems) do print("  " .. p) end
+if #problems > 0 then os.exit(1) end

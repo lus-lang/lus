@@ -1,0 +1,8 @@
+{
+  "name": "raise",
+  "kind": "module",
+  "description": "",
+  "entries": [
+    {"name": "slurp", "module": "raise", "kind": "function", "params": [{"name": "path", "type": "string", "description": "The file to read."}], "returns": [{"type": "string", "description": "The contents."}], "raises": ["`\"cannot open PATH\"` when the file does not exist.", "`\"permission denied\"` when the program may not read the file, which the pledge of the program decides."], "line": 7, "description": "Reads a whole file."}
+  ]
+}

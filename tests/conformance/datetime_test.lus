@@ -948,6 +948,56 @@ local function gaps_move_forward_and_repeats_take_the_earlier_instant_test()
     assert(gap:with({ minute = 0 }):iso() == "2026-03-08T03:00:00-04:00")
 end
 
+-- The same rules in zones on both sides of UTC, north and south. A repeat
+-- takes the earlier instant, which carries the larger offset, and a gap
+-- moves the time forward by its length.
+local repeats_and_gaps_hold_in_every_zone_cases = {
+    { "America/New_York", 2026, 11, 1, 1, "2026-11-01T01:30:00-04:00" },
+    { "America/New_York", 2026, 3, 8, 2, "2026-03-08T03:30:00-04:00" },
+    { "America/Los_Angeles", 2026, 11, 1, 1, "2026-11-01T01:30:00-07:00" },
+    { "Europe/London", 2026, 10, 25, 1, "2026-10-25T01:30:00+01:00" },
+    { "Europe/London", 2026, 3, 29, 1, "2026-03-29T02:30:00+01:00" },
+    { "Europe/Paris", 2026, 10, 25, 2, "2026-10-25T02:30:00+02:00" },
+    { "Europe/Paris", 2026, 3, 29, 2, "2026-03-29T03:30:00+02:00" },
+    { "Europe/Berlin", 2026, 10, 25, 2, "2026-10-25T02:30:00+02:00" },
+    { "Australia/Sydney", 2026, 4, 5, 2, "2026-04-05T02:30:00+11:00" },
+    { "Australia/Sydney", 2026, 10, 4, 2, "2026-10-04T03:30:00+11:00" },
+    { "Pacific/Auckland", 2026, 4, 5, 2, "2026-04-05T02:30:00+13:00" },
+    { "Pacific/Auckland", 2026, 9, 27, 2, "2026-09-27T03:30:00+13:00" },
+    { "America/Santiago", 2026, 4, 4, 23, "2026-04-04T23:30:00-03:00" },
+}
+
+local function repeats_and_gaps_hold_in_every_zone_test(name, year, month, day, hour, expected)
+    local z = time.zoned({ year = year, month = month, day = day, hour = hour, minute = 30 }, time.zone(name))
+    assert(z:iso() == expected, `$(name): $(z:iso())`)
+    -- The instant reads back as the same wall clock time.
+    assert(z:instant():at(time.zone(name)):iso() == expected, name)
+end
+
+-- The names of months and weekdays, which format writes, parse back.
+local function a_pattern_parse_reads_month_and_weekday_names_test()
+    local i = time.parse("Sun, 22 Nov 2026 10:00:00 GMT", "%a, %d %b %Y %H:%M:%S GMT")
+    assert(i:iso() == "2026-11-22T10:00:00Z", i:iso())
+    assert(time.parse("sunday 22 NOVEMBER 2026", "%A %d %B %Y"):iso() == "2026-11-22T00:00:00Z")
+    assert(time.parse("Feb 3 2026", "%h %e %Y"):iso() == "2026-02-03T00:00:00Z")
+    -- Every date that format writes with these names parses back.
+    local start = time.instant(1767225600)
+    for day = 0, 400, 7 do
+        local t = start + time.days(day) + time.hours(day % 24)
+        local text = t:format("%a, %d %b %Y %H:%M:%S")
+        assert(time.parse(text, "%a, %d %b %Y %H:%M:%S") == t, text)
+        text = t:format("%A %B %d %Y")
+        assert(time.parse(text, "%A %B %d %Y"):epoch() == t:epoch() - t:epoch() % 86400, text)
+    end
+end
+
+local function a_weekday_that_disagrees_with_the_date_raises_test()
+    local ok, e = catch time.parse("Mon, 22 Nov 2026", "%a, %d %b %Y")
+    assert(not ok and e:find("'Mon, 22 Nov 2026' names Monday, but the date falls on a Sunday", 1, true), e)
+    ok, e = catch time.parse("22 Noe 2026", "%d %b %Y")
+    assert(not ok and e:find("does not match time format", 1, true), e)
+end
+
 -- ============================================================================
 -- a pattern parse accounts for the whole text
 -- ============================================================================

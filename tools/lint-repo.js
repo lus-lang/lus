@@ -2,7 +2,9 @@
 // Repository-wide prose and naming checks. Run: node tools/lint-repo.js
 //
 // Rules:
-// - No em dashes or en dashes anywhere in tracked text files.
+// - No em dashes or en dashes anywhere in text files that git tracks or
+//   would track: committed files and new files that no ignore rule
+//   covers, so a file is checked before its first commit.
 // - The name of one particular other Lua dialect is never mentioned. The
 //   word is assembled at runtime so this file does not contain it. The
 //   cross-language benchmark suite, which runs that dialect as one of its
@@ -32,9 +34,11 @@ const NAME_ALLOWED = [
   /^packages\/site\/src\/components\/Benchmarks\.astro$/,
 ];
 
-const files = execFileSync("git", ["ls-files", "-z"], {cwd: ROOT, encoding: "utf8"})
+const listed = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {cwd: ROOT, encoding: "utf8"})
   .split("\0")
   .filter((file) => file && !EXCLUDED.some((pattern) => pattern.test(file)));
+// A file with changes is listed once per stage, so the list is deduplicated.
+const files = [...new Set(listed)];
 
 const nameRule = new RegExp(`(?<![A-Za-z_])${FORBIDDEN_NAME}(?![A-Za-z_])`, "i");
 const failures = [];

@@ -536,7 +536,7 @@ mode = mode & ~WRITE           -- clear the WRITE bit
 print(mode)                    --> 1
 ```
 
-A float operand must be a whole number, which Lus converts to an integer. If either operand is a bigint, the result is a bigint without the 64-bit limit, so `1n << 64` is `18446744073709551616`.
+A float operand must be a whole number, which Lus converts to an integer. If either operand is a bigint, the result is a bigint without the 64-bit limit, so `1n << 64` is `18446744073709551616`. A bigint shifts left by at most 16,777,216 bits. A larger amount raises `shift amount too large`.
 
 ### Precedence
 
@@ -1279,6 +1279,16 @@ print(("hello world")[1, 5])             --> hello
 ```
 
 A slice of a list is a new list, so changing it leaves the original list unchanged.
+
+When the first position is larger than the second, the slice runs backward. It contains the items from the first position down to the second, so `s[5, 4]` holds two items, the fifth and then the fourth. A slice with equal positions holds one item.
+
+```lus
+local letters = { "a", "b", "c", "d", "e" }
+
+print(table.concat(letters[5, 4], " "))  --> e d
+print(table.concat(letters[3, 3], " "))  --> c
+print(("hello")[5, 2])                   --> olle
+```
 
 ### Copying tables
 

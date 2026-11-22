@@ -224,6 +224,8 @@ local exact_division_by_zero_cases = {
     {"decimal floor division", function() return 1d // 0d end, "attempt to divide by zero"},
     {"decimal modulo", function() return 1d % 0d end, "attempt to perform 'n%0'"},
     {"decimal division", function() return 1d / 0d end, "attempt to divide a decimal by zero"},
+    {"negative power of a zero decimal", function() return 0d ^ -1 end, "attempt to divide a decimal by zero"},
+    {"negative power of a zero decimal with digits", function() return 0.00d ^ -3 end, "attempt to divide a decimal by zero"},
     {"integer floor division", function() return 10 // 0 end, "attempt to divide by zero"},
     {"integer modulo", function() return 10 % 0 end, "attempt to perform 'n%0'"},
 }

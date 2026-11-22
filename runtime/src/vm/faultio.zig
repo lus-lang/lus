@@ -22,6 +22,25 @@
 //! how many operations a run made (`main.zig`). `tests/oom/run.lus --io`
 //! sweeps N.
 //!
+//! `LUS_FAIL_NET` injects network faults (`netStep`): `N:reset` resets
+//! the connection at socket transfer N, a send or a receive, `N:eof` ends
+//! the stream at receive N as a peer that closes does, `N:dns` fails name
+//! lookup N, `N:refuse` refuses connection attempt N, and `N:abort` aborts
+//! the connection that accept N takes, as a peer that gives up before the
+//! accept does. Each kind counts its own steps. `LUS_FAIL_NET=count`
+//! prints the count of each kind and the sockets still open at exit
+//! (`main.zig`), which a run with any `LUS_FAIL_NET` prints too.
+//! `tests/faults/network.lus` sweeps N.
+//!
+//! `LUS_CLOCK` scripts jumps of the real clock (`clockNow`). It is a list
+//! such as `1:=1772953198,4:+3600,6:-86400`, where `N:=S` sets the real
+//! clock to S seconds after the epoch at read N of it, and `N:+S` or `N:-S`
+//! moves it forward or back by S seconds from read N on. Between jumps
+//! the clock advances with the real one. Every other clock reads the real
+//! one unchanged, so a jump moves `time.now` and leaves `time.monotonic`
+//! and every timer alone. `LUS_CLOCK=count` prints how many times a run
+//! read the real clock.
+//!
 //! The wrapped `Io` keeps the userdata of the real one, so every operation
 //! it does not override reaches the real implementation unchanged.
 
@@ -59,6 +78,7 @@ pub fn wrap(io: Io) Io {
     vtable.dirRename = dirRename;
     vtable.dirRenamePreserve = dirRenamePreserve;
     vtable.dirDeleteFile = dirDeleteFile;
+    vtable.now = clockNow;
     return .{ .userdata = io.userdata, .vtable = &vtable };
 }
 
@@ -113,6 +133,151 @@ pub fn setupWorker(spec: []const u8) void {
     worker_target = std.fmt.parseInt(usize, spec, 10) catch 0;
 }
 
+/// The jumps of `LUS_CLOCK`, in the order of the reads they start at.
+const Jump = struct { at: usize, absolute: bool, seconds: i64 };
+var jumps: [16]Jump = undefined;
+var njumps: usize = 0;
+pub var clock_reads: std.atomic.Value(usize) = .init(0);
+pub var clock_report = false;
+/// The nanoseconds that the scripted real clock is ahead of the real one.
+var clock_offset: std.atomic.Value(i64) = .init(0);
+
+fn clockNow(userdata: ?*anyopaque, clock: Io.Clock) Io.Timestamp {
+    const t = inner.now(userdata, clock);
+    if (clock != .real) return t;
+    const n = clock_reads.fetchAdd(1, .monotonic) + 1;
+    for (jumps[0..njumps]) |j| {
+        if (j.at != n) continue;
+        const ns = @as(i64, j.seconds) * std.time.ns_per_s;
+        if (j.absolute) {
+            clock_offset.store(@intCast(@as(i96, ns) - t.nanoseconds), .monotonic);
+        } else {
+            _ = clock_offset.fetchAdd(ns, .monotonic);
+        }
+    }
+    return .{ .nanoseconds = t.nanoseconds + clock_offset.load(.monotonic) };
+}
+
+/// Reads `LUS_CLOCK`. Returns whether the run reads the clock through the
+/// script.
+pub fn setupClock(spec: []const u8) bool {
+    if (std.mem.eql(u8, spec, "count")) {
+        clock_report = true;
+        return true;
+    }
+    var it = std.mem.splitScalar(u8, spec, ',');
+    while (it.next()) |item| {
+        if (njumps == jumps.len) break;
+        const colon = std.mem.indexOfScalar(u8, item, ':') orelse continue;
+        const at = std.fmt.parseInt(usize, item[0..colon], 10) catch continue;
+        const rest = item[colon + 1 ..];
+        if (rest.len < 2) continue;
+        const absolute = rest[0] == '=';
+        const seconds = std.fmt.parseInt(i64, if (absolute) rest[1..] else rest, 10) catch continue;
+        jumps[njumps] = .{ .at = at, .absolute = absolute, .seconds = seconds };
+        njumps += 1;
+    }
+    return njumps > 0;
+}
+
+/// `LUS_CANCEL_AT=N` closes the detached coroutine that makes suspension
+/// N, as `coroutine.close` does, right after it suspends to wait for a
+/// socket, a timer, another coroutine, or a notification.
+/// `LUS_CANCEL_AT=count` prints how many suspensions a run made.
+pub var cancel_target: usize = 0;
+pub var cancel_count: std.atomic.Value(usize) = .init(0);
+pub var cancel_report = false;
+
+/// Numbers a suspension of a detached coroutine, and says whether the
+/// coroutine is cancelled there. The states of every thread share one
+/// count.
+pub fn cancelStep() bool {
+    if (!enabled) return false;
+    return cancel_count.fetchAdd(1, .monotonic) + 1 == cancel_target;
+}
+
+/// Reads `LUS_CANCEL_AT`.
+pub fn setupCancel(spec: []const u8) void {
+    if (std.mem.eql(u8, spec, "count")) {
+        cancel_report = true;
+        return;
+    }
+    cancel_target = std.fmt.parseInt(usize, spec, 10) catch 0;
+}
+
+/// The network faults of `LUS_FAIL_NET`, and the steps each one counts.
+pub const NetKind = enum { reset, eof, dns, refuse, abort };
+pub const NetStep = enum { transfer, receive, lookup, connect, accept };
+
+pub var net_kind: ?NetKind = null;
+pub var net_target: usize = 0;
+pub var net_report = false;
+pub var net_counts: [5]std.atomic.Value(usize) = @splat(.init(0));
+
+fn stepOf(k: NetKind) NetStep {
+    return switch (k) {
+        .reset => .transfer,
+        .eof => .receive,
+        .dns => .lookup,
+        .refuse => .connect,
+        .abort => .accept,
+    };
+}
+
+/// Numbers a network step of each kind in `steps` and returns the fault
+/// that lands on it, if any.
+pub fn netStep(steps: []const NetStep) ?NetKind {
+    if (!enabled) return null;
+    var hit: ?NetKind = null;
+    for (steps) |st| {
+        const n = net_counts[@backingInt(st)].fetchAdd(1, .monotonic) + 1;
+        const k = net_kind orelse continue;
+        if (stepOf(k) == st and n == net_target) hit = k;
+    }
+    return hit;
+}
+
+/// The steps that a receive of a stream socket counts.
+pub const receive_steps: []const NetStep = &.{ .transfer, .receive };
+/// The steps that a send of a stream socket counts.
+pub const send_steps: []const NetStep = &.{.transfer};
+
+/// Reads `LUS_FAIL_NET`: `N:KIND` or `count`.
+pub fn setupNet(spec: []const u8) void {
+    net_report = true;
+    if (std.mem.eql(u8, spec, "count")) return;
+    var it = std.mem.splitScalar(u8, spec, ':');
+    net_target = std.fmt.parseInt(usize, it.next() orelse return, 10) catch return;
+    net_kind = std.meta.stringToEnum(NetKind, it.next() orelse "reset");
+}
+
+/// The number of open TCP and UDP sockets of the process, or null where
+/// the count is not available. Local sockets that the C library keeps,
+/// such as the one of the name service on macOS, do not count.
+pub fn socketsOpen() ?usize {
+    if (@import("builtin").os.tag == .windows) return null;
+    const posix = std.posix;
+    var n: usize = 0;
+    var fd: posix.fd_t = 0;
+    while (fd < 1024) : (fd += 1) {
+        var addr: posix.sockaddr.storage = undefined;
+        var len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+        if (posix.errno(posix.system.getsockname(fd, @ptrCast(&addr), &len)) != .SUCCESS) continue;
+        if (addr.family == posix.AF.INET or addr.family == posix.AF.INET6) n += 1;
+    }
+    return n;
+}
+
+/// Prints the counts of the network steps and the sockets still open.
+pub fn reportNet() void {
+    if (!enabled or !net_report) return;
+    const c = &net_counts;
+    std.debug.print("lus: network steps: {d} transfers, {d} receives, {d} lookups, {d} connects, {d} accepts\n", .{
+        c[0].load(.monotonic), c[1].load(.monotonic), c[2].load(.monotonic), c[3].load(.monotonic), c[4].load(.monotonic),
+    });
+    if (socketsOpen()) |n| std.debug.print("lus: {d} sockets open at exit\n", .{n});
+}
+
 /// Numbers an operation of the SQLite VFS, and says whether it fails.
 pub fn step() bool {
     return next() == .fail;
@@ -158,6 +323,11 @@ fn oneWrite(header: []const u8, data: []const []const u8, store: *[1][]const u8)
 
 fn operate(userdata: ?*anyopaque, operation: Io.Operation) Io.Cancelable!Io.Operation.Result {
     if (operation == .device_io_control) return inner.operate(userdata, operation);
+    switch (operation) {
+        .net_read => if (netStep(receive_steps)) |k| return .{ .net_read = if (k == .eof) .{ .data_len = 0 } else error.ConnectionResetByPeer },
+        .net_write => if (netStep(send_steps) != null) return .{ .net_write = error.ConnectionResetByPeer },
+        else => {},
+    }
     const fault = next();
     if (tracking() and fault == .none) switch (operation) {
         .file_write_streaming => |w| crash.writing(w.file.handle, null, writeLen(w.header, w.data, w.splat)),

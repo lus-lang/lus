@@ -102,6 +102,11 @@ pub const Native = struct {
     /// The leaf computes only the first result of `func`, so it runs only
     /// for a call that wants at most one result.
     leaf_first: bool = false,
+    /// The native is the body of a coroutine that yields from inside it,
+    /// such as a stream of `network.fetch`. A resume after a yield runs it
+    /// again from its start, with the arguments it started with, rather
+    /// than returning the resume arguments from it.
+    generator: bool = false,
 
     pub inline fn upvalues(n: *Native) []Value {
         const base: [*]u8 = @ptrCast(n);

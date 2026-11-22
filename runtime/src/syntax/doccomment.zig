@@ -13,6 +13,8 @@
 //! name or after the type marks it optional. `...` documents unnamed
 //! variable arguments, and `...NAME` documents variable arguments that the
 //! declaration names, as in `local function f(...parts)`. `@return TYPE DESCRIPTION` documents one result, in order.
+//! `@raise DESCRIPTION` documents an error that the function raises, such
+//! as the message and when it occurs, one annotation per error.
 //! `@since VERSION` and `@stability LEVEL` fill the fields of the same name
 //! in the specification frontmatter. A line indented under an annotation
 //! continues its description. Every other line is free Markdown text.
@@ -109,6 +111,8 @@ pub const Doc = struct {
     text: []const u8,
     params: []Param = &.{},
     returns: []Return = &.{},
+    /// The errors that `@raise` annotations describe, in order.
+    raises: []const []const u8 = &.{},
     since: ?[]const u8 = null,
     stability: ?[]const u8 = null,
     /// The package header, when the comment holds a package annotation.
@@ -265,6 +269,7 @@ pub fn parse(arena: Allocator, lines: []const []const u8, first_line: u32, end_l
     var text: std.ArrayList(u8) = .empty;
     var params: std.ArrayList(Param) = .empty;
     var returns: std.ArrayList(Return) = .empty;
+    var raises: std.ArrayList([]const u8) = .empty;
     var flags: std.ArrayList(Flag) = .empty;
     var perms: std.ArrayList(Permission) = .empty;
     var includes: std.ArrayList(Include) = .empty;
@@ -272,7 +277,7 @@ pub fn parse(arena: Allocator, lines: []const []const u8, first_line: u32, end_l
     var has_pkg = false;
     var doc: Doc = .{ .line = first_line, .end_line = end_line, .text = "" };
     // The description a continuation line extends.
-    const Last = enum { none, param, ret };
+    const Last = enum { none, param, ret, raise };
     var last: Last = .none;
     for (lines, 0..) |line, i| {
         const lno = first_line + @as(u32, @intCast(i));
@@ -309,6 +314,13 @@ pub fn parse(arena: Allocator, lines: []const []const u8, first_line: u32, end_l
                 if (ty.word.len > 0) {
                     try returns.append(arena, .{ .type = ty.word, .description = ty.rest });
                     last = .ret;
+                    continue;
+                }
+            } else if (std.mem.eql(u8, tag.word, "@raise") or std.mem.eql(u8, tag.word, "@raises")) {
+                const desc = std.mem.trim(u8, tag.rest, " \t");
+                if (desc.len > 0) {
+                    try raises.append(arena, desc);
+                    last = .raise;
                     continue;
                 }
             } else if (std.mem.eql(u8, tag.word, "@since")) {
@@ -364,6 +376,7 @@ pub fn parse(arena: Allocator, lines: []const []const u8, first_line: u32, end_l
             const target: *[]const u8 = switch (last) {
                 .param => &params.items[params.items.len - 1].description,
                 .ret => &returns.items[returns.items.len - 1].description,
+                .raise => &raises.items[raises.items.len - 1],
                 .none => unreachable,
             };
             target.* = if (target.len == 0) trimmed else try std.fmt.allocPrint(arena, "{s} {s}", .{ target.*, trimmed });
@@ -376,6 +389,7 @@ pub fn parse(arena: Allocator, lines: []const []const u8, first_line: u32, end_l
     doc.text = std.mem.trim(u8, text.items, " \t\n");
     doc.params = params.items;
     doc.returns = returns.items;
+    doc.raises = raises.items;
     if (has_pkg) {
         pkg.flags = flags.items;
         pkg.permissions = perms.items;

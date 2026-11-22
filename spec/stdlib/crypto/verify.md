@@ -6,22 +6,28 @@ since: 2.0.0
 stability: unstable
 origin: lus
 params:
-  - name: public
-    type: vector
+  - name: key
+    type: userdata|vector
   - name: message
     type: string|vector
   - name: signature
-    type: vector
+    type: string|vector
+  - name: algorithm
+    type: string
+    optional: true
 returns: boolean
 ---
 
-Returns `true` when `signature` is a valid Ed25519 signature of `message` by the holder of `public`, and `false` otherwise.
+Returns `true` when `signature` is a valid signature of `message` by the holder of `key`, and `false` otherwise.
 
-- `public` is a public key from [`crypto.keypair`](/manual/api#crypto.keypair), a vector of 32 bytes.
+- `key` is a [`crypto.key`](/manual/api#crypto.importkey), public or private, or an Ed25519 public key from [`crypto.keypair`](/manual/api#crypto.keypair) as a vector of 32 bytes.
 - `message` is the signed message, a string or a vector.
-- `signature` is a vector of 64 bytes.
+- `signature` is the signature, a vector. A string contributes its bytes.
+- `algorithm` is a JOSE algorithm name, as for [`crypto.sign`](/manual/api#crypto.sign). An RSA key requires it.
 
-Verification is strict. It rejects a non-canonical signature, a non-canonical public key, and a public key of small order, so every strict verifier gives the same answer for the same input. Every invalid signature, including one made for another message or another key, returns `false`. The function raises only for an argument of the wrong type or size: `bad argument #1 to 'verify' (32-byte vector expected)` for the key and `bad argument #3 to 'verify' (64-byte vector expected)` for the signature.
+Ed25519 verification is strict. It rejects a non-canonical signature, a non-canonical public key, and a public key of small order, so every strict verifier gives the same answer for the same input. Every invalid signature, including one made for another message, another key, or another algorithm, and one of the wrong length, returns `false`.
+
+The function raises only for an argument of the wrong type. With a vector key, a key that is not 32 bytes raises `bad argument #1 to 'verify' (32-byte vector expected)` and a signature that is not 64 bytes raises `bad argument #3 to 'verify' (64-byte vector expected)`. Another `key` type raises `bad argument #1 to 'verify' (crypto.key or vector expected, got string)`. The algorithm errors are those of `crypto.sign`, for argument 4.
 
 The following example checks the signature of the empty message from the first test vector of RFC 8032, then the same signature over another message.
 

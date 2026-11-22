@@ -1508,6 +1508,30 @@ pub fn restartNative(l: *Thread) (Error || YieldError)!void {
     }
 }
 
+/// Runs the generator native of the top frame of `l` again, after a
+/// resume of the coroutine that it yielded from (`state.Native.generator`).
+/// The resume arguments are dropped, so the native sees the arguments it
+/// started with. The call ends the way `restartNative` ends it.
+pub fn rerunGenerator(l: *Thread, nresume: u32) (Error || YieldError)!void {
+    const fr = l.frame();
+    const nat = fr.native.?;
+    const want = fr.want;
+    l.top -= nresume;
+    l.top = @max(l.top, fr.base);
+    l.meta_finish = null;
+    const nres = nat.func(l) catch |e| {
+        if (l.status == .suspended and l.yielding) return error.Yield;
+        if (l.g.debugger) |d| d.raised(d.ctx, l);
+        if (!handleError(l, 0)) return e;
+        return;
+    };
+    try poscall(l, nres);
+    if (want >= 0 and l.frames.items.len > 0) {
+        const caller = l.frame();
+        if (caller.closure) |cl| l.top = caller.base + cl.proto.max_stack;
+    }
+}
+
 /// Pushes a frame for a call to a Lus function with fixed parameters. The
 /// callee and its `nargs` arguments are at `func`.
 pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) Error!void {
@@ -2387,11 +2411,13 @@ fn forPrep(l: *Thread, r: u32) Error!bool {
     const limit_v = try forValue(l, l.stack[r + 1], "limit");
     const step_v = try forValue(l, l.stack[r + 2], "step");
     // A float among bigints makes a float loop, as a float and a bigint
-    // add to a float. A float among decimals stays in the exact path,
-    // whose arithmetic raises the error of mixing them.
+    // add to a float. A float among decimals raises the error of mixing
+    // them, as their arithmetic does, even when the float is the limit,
+    // which the loop only compares.
     const any_float = init_v.tag == .float or limit_v.tag == .float or step_v.tag == .float;
     const any_dec = init_v.tag == .decimal or limit_v.tag == .decimal or step_v.tag == .decimal;
-    if ((isExact(init_v) or isExact(limit_v) or isExact(step_v)) and (!any_float or any_dec)) {
+    if (any_dec and any_float) return l.raiseFmt("attempt to mix decimal and float in arithmetic", .{});
+    if ((isExact(init_v) or isExact(limit_v) or isExact(step_v)) and !any_float) {
         // Bigint and decimal loops step with exact arithmetic.
         const zero = Value.int(0);
         const step_order = @import("numeric.zig").compare(l.g.gpa, step_v, zero) orelse return l.raiseFmt("'for' step is not a number", .{});

@@ -14,6 +14,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const state = @import("state.zig");
+const faultio = @import("faultio.zig");
 const value = @import("value.zig");
 const gc = @import("gc.zig");
 const Thread = state.Thread;
@@ -120,6 +121,9 @@ pub const Task = struct {
     joiners: List = .{},
     live_prev: ?*Task = null,
     live_next: ?*Task = null,
+    /// The traceback of a detached coroutine that failed, taken before
+    /// its pending to-be-closed variables closed.
+    trace: ?[]u8 = null,
 };
 
 const List = struct {
@@ -441,6 +445,18 @@ fn block(l: *Thread, t: *Task) Error!bool {
 
 /// Forgets what the thread of `t` waited for, once its native returned
 /// or its wait is abandoned.
+/// Ends the wait of `t` and keeps its `ctx`, for a generator native that
+/// yields a value after it waited (`state.Native.generator`). The thread
+/// that resumed it then takes the value in place of waiting again.
+pub fn endWait(t: *Task) void {
+    t.kind = .none;
+    t.target = null;
+    t.wake = .none;
+    t.deadline = 0;
+    t.op_deadline = 0;
+    t.progress = 0;
+}
+
 pub fn clearWait(g: *Global, t: *Task) void {
     if (t.ctx) |ctx| {
         t.ctx = null;
@@ -790,6 +806,10 @@ fn runTask(g: *Global, l: *Thread, t: *Task) Error!void {
             co.status = .suspended;
             if (t.kind != .none) {
                 register(g, t, leafOf(t));
+                if (faultio.cancelStep()) {
+                    cancel(g, t);
+                    coroutine.closeCancelled(co);
+                }
             } else {
                 // A plain yield lets the other coroutines run. Its values
                 // are dropped.
@@ -804,6 +824,7 @@ fn runTask(g: *Global, l: *Thread, t: *Task) Error!void {
         },
         .failed => {
             co.status = .err;
+            closeFailed(g, t);
             if (s.fatal or g.halting) {
                 // The error stops the program, so it leaves through the
                 // thread that runs the scheduler.
@@ -820,6 +841,35 @@ fn runTask(g: *Global, l: *Thread, t: *Task) Error!void {
             }
         },
     }
+}
+
+/// Closes the pending to-be-closed variables of the detached coroutine of
+/// `t`, which failed, with its error, so that what they hold, such as a
+/// socket, is released at once. Nothing resumes a detached coroutine
+/// again. The traceback is taken first, for the report of an error that
+/// nothing collects. An error of a closing method replaces the error of
+/// the coroutine, as `coroutine.close` does.
+fn closeFailed(g: *Global, t: *Task) void {
+    const co = t.thread;
+    if (co.tbc.items.len == 0) return;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(g.gpa);
+    @import("debug.zig").traceback(co, &buf, 0) catch {};
+    t.trace = g.gpa.dupe(u8, buf.items) catch null;
+    const interp = @import("interp.zig");
+    co.status = .running;
+    interp.closeTbc(co, 0, co.err) catch {};
+    co.status = .err;
+}
+
+/// The traceback of the detached coroutine `co`: the one taken when it
+/// failed, or its frames now.
+fn traceOf(co: *Thread, buf: *std.ArrayList(u8)) void {
+    if (co.task) |t| if (t.trace) |tr| {
+        buf.appendSlice(co.g.gpa, tr) catch {};
+        return;
+    };
+    @import("debug.zig").traceback(co, buf, 0) catch {};
 }
 
 /// Runs the coroutines that are ready, then waits for the next event
@@ -892,7 +942,7 @@ pub fn reportUncollected(l: *Thread) Error!void {
             t.collected = true;
             var buf: std.ArrayList(u8) = .empty;
             defer buf.deinit(g.gpa);
-            @import("debug.zig").traceback(co, &buf, 0) catch {};
+            traceOf(co, &buf);
             l.err_traceback = state.newStringIn(g, buf.items) catch null;
             return l.raise(co.err);
         }
@@ -911,7 +961,7 @@ pub fn raiseUncollected(l: *Thread, t: *Task) Error {
     const msg = @import("../api.zig").errorMessage(l, co.err);
     buf.appendSlice(g.gpa, msg) catch return l.raiseMem();
     buf.append(g.gpa, '\n') catch return l.raiseMem();
-    @import("debug.zig").traceback(co, &buf, 0) catch {};
+    traceOf(co, &buf);
     while (buf.items.len > 0 and buf.items[buf.items.len - 1] == '\n') buf.items.len -= 1;
     const s = state.newStringIn(g, buf.items) catch return l.raise(co.err);
     g.sched.fatal = true;
@@ -974,6 +1024,7 @@ pub fn threadFreed(g: *Global, l: *Thread) void {
     if (t.ctx) |ctx| {
         if (t.cancel) |f| f(g, ctx);
     }
+    if (t.trace) |tr| g.gpa.free(tr);
     g.gpa.destroy(t);
 }
 

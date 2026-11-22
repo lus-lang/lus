@@ -1,0 +1,89 @@
+--[[
+    Edges of the string library.
+
+    The JIT calls a string function through a fast path that handles the
+    common count and types of arguments and leaves every other call to the
+    library. The tests below call each function many times with the other
+    counts and types, so compiled code takes both paths, and then reach the
+    rarer forms of patterns, separators, and conversions.
+]]
+
+local function run_hot(f)
+    local r
+    for _ = 1, 300 do r = table.pack(catch f()) end
+    return table.unpack(r, 1, r.n)
+end
+
+local function fast_paths_hand_unusual_calls_to_the_library_test()
+    local ok, v = run_hot(function() return string.rep("ab", 3) end)
+    assert(ok and v == "ababab")
+    ok, v = run_hot(function() return string.rep("ab", 2, "-") end)
+    assert(ok and v == "ab-ab")
+    ok, v = run_hot(function() return string.rep("ab") end)
+    assert(not ok and v:find("bad argument #2 to 'rep'", 1, true), v)
+    ok, v = run_hot(function() return string.len("abc") end)
+    assert(ok and v == 3)
+    ok, v = run_hot(function() return string.len(5) end)
+    assert(ok and v == 1)
+    ok, v = run_hot(function() return string.upper("abc", 1) end)
+    assert(ok and v == "ABC")
+    ok, v = run_hot(function() return string.upper(12) end)
+    assert(ok and v == "12")
+    ok, v = run_hot(function() return string.find("a.b", ".", 1, true) end)
+    assert(ok and v == 2)
+    ok, v = run_hot(function() return string.find("a.b", "%.", 2) end)
+    assert(ok and v == 2)
+    ok, v = run_hot(function() return string.find(10, 1) end)
+    assert(ok and v == 1)
+    ok, v = run_hot(function() return string.find("abc") end)
+    assert(not ok and v:find("bad argument #2 to 'find'", 1, true), v)
+    ok, v = run_hot(function() return (string.gsub("abc", "b", "x")) end)
+    assert(ok and v == "axc")
+    ok, v = run_hot(function() return (string.gsub("abc", "b", "x", 0)) end)
+    assert(ok and v == "abc")
+    ok, v = run_hot(function() return (string.gsub(123, 2, 9)) end)
+    assert(ok and v == "193")
+    ok, v = run_hot(function() return string.format(5) end)
+    assert(ok and v == "5")
+    ok, v = run_hot(function() return string.format("%d-%s", 1, "x") end)
+    assert(ok and v == "1-x")
+end
+
+local function separators_and_classes_outside_ascii_test()
+    assert(table.concat(string.split("aéb", "é"), "|") == "a|b")
+    assert(table.concat(string.split("a,b", ","), "|") == "a|b")
+    -- The classes written with a letter hold ASCII characters only.
+    assert(string.find("é", "%a") == nil and string.find("éa", "%a") == 2)
+    assert(string.find("é1", "%d") == 2 and string.find("é", "[é]") == 1)
+    assert(string.trim("éaé", "x") == "éaé")
+    assert(string.trim("xax", "x") == "a")
+end
+
+local function brackets_and_back_references_test()
+    assert(string.find("a]b", "[^]]") == 1)
+    assert(string.find("a%b", "[%%]") == 2)
+    local ok, err = catch string.find("abc", "[%")
+    assert(not ok and err:find("malformed pattern", 1, true), err)
+    ok, err = catch string.find("abc", "[^")
+    assert(not ok and err:find("malformed pattern", 1, true), err)
+    ok, err = catch string.find("abc", "(a)%2")
+    assert(not ok and err:find("invalid capture index", 1, true), err)
+    ok, err = catch string.find("abc", "(a%1)")
+    assert(not ok and err:find("invalid capture index", 1, true), err)
+    assert(string.find("aba", "(a)b%1") == 1)
+    assert(string.find("ab", "(a)b%1") == nil)
+    assert(string.find("abc", "") == 1 and string.find("abc", "^") == 1)
+    assert(string.find("abc", "^b") == nil and string.find("abc", "^a") == 1)
+end
+
+local function rarer_conversions_of_format_test()
+    local ok, err = catch string.format("%123d", 1)
+    assert(not ok and err:find("invalid conversion", 1, true), err)
+    assert(string.format("%#o", 0) == "0" and string.format("%#o", 8) == "010")
+    assert(string.format("%+.1f", decimal("-0")) == "+0.0" or string.format("%+.1f", decimal("-0")) == "-0.0")
+    assert(string.format("%+.1f", -1.5d) == "-1.5" and string.format("%+.1f", 1.5d) == "+1.5")
+    assert(string.format("%q", "\0" .. "1") == [["\0001"]])
+    assert(string.format("%q", "\0" .. "a") == [["\0a"]])
+    assert(string.format("%x", 255n) == "ff" and string.format("%d", -10n) == "-10")
+    assert(string.format("%5d|%-5d|", -10n, -10n) == "  -10|-10  |")
+end

@@ -21,8 +21,9 @@
 //! - Binary operators get one space on each side. Parentheses from the
 //!   source are kept, and a parenthesis is added wherever precedence
 //!   requires one.
-//! - Numbers are respelled from their value and strings are requoted with
-//!   their original quote character.
+//! - Numbers are respelled from their value. Every string literal keeps
+//!   its source text, with its quotes, long brackets, and escapes exactly
+//!   as written, since the layout is all that a formatter changes.
 //!
 //! The reference formatter changes the meaning of a program in a few places.
 //! It drops global functions, `global *`, global values and attributes,
@@ -743,7 +744,9 @@ const Formatter = struct {
             },
             .string => |s| {
                 const k = f.tokAt(e.span.start);
-                if (f.toks[k].tag == .interp_simple) {
+                if (f.literalSource(k, e.span.end)) |src| {
+                    try f.put(src);
+                } else if (f.toks[k].tag == .interp_simple) {
                     try f.putc('`');
                     try f.interpText(s);
                     try f.putc('`');
@@ -751,7 +754,7 @@ const Formatter = struct {
                     try f.stringLit(s, f.quotes[k]);
                 }
             },
-            .interp => |parts| try f.interp(parts),
+            .interp => |parts| try f.interp(parts, e.span.start),
             .function => |func| {
                 try f.put("function");
                 try f.funcBody(func, f.startLine(e.span.start));
@@ -946,10 +949,69 @@ const Formatter = struct {
         }
     }
 
-    fn interp(f: *Formatter, parts: []ast.InterpPart) Error!void {
+    /// The source text of the string literal token `k`, when the literal
+    /// is that one token and ends at `end`.
+    fn literalSource(f: *Formatter, k: usize, end: u32) ?[]const u8 {
+        const t = f.toks[k];
+        if (t.tag != .string and t.tag != .interp_simple) return null;
+        if (t.span.end != end or t.span.end > f.src.len) return null;
+        return f.src[t.span.start..t.span.end];
+    }
+
+    /// The source text of the literal sections of the interpolated string
+    /// that starts at token `k`, without the backticks and the `$(` or `$`
+    /// that end a section. Sections inside a nested interpolated string
+    /// belong to that string, and empty sections are left out, as the
+    /// parser leaves out their parts.
+    fn interpSections(f: *Formatter, k: usize) Error![]const []const u8 {
+        var out: std.ArrayList([]const u8) = .empty;
+        var level: usize = 0;
+        var i = k;
+        while (i < f.toks.len) : (i += 1) {
+            const t = f.toks[i];
+            switch (t.tag) {
+                .interp_begin, .interp_mid, .interp_end => {},
+                .eof => break,
+                else => continue,
+            }
+            if (t.tag == .interp_begin) level += 1;
+            if (level == 1) {
+                var a = t.span.start;
+                var b = t.span.end;
+                if (t.tag == .interp_begin and i == k) a += 1;
+                if (t.tag == .interp_end) {
+                    b -= 1;
+                } else if (b >= 2 and f.src[b - 2] == '$' and f.src[b - 1] == '(') {
+                    b -= 2;
+                } else {
+                    b -= 1;
+                }
+                if (b > a) try out.append(f.arena, f.src[a..b]);
+            }
+            if (t.tag == .interp_end) {
+                level -= 1;
+                if (level == 0) break;
+            }
+        }
+        return out.items;
+    }
+
+    fn interp(f: *Formatter, parts: []ast.InterpPart, start: u32) Error!void {
+        const sections = try f.interpSections(f.tokAt(start));
+        var text_count: usize = 0;
+        for (parts) |p| {
+            if (p == .text) text_count += 1;
+        }
+        const raw = sections.len == text_count;
+        var next_section: usize = 0;
         try f.putc('`');
         for (parts, 0..) |p, i| switch (p) {
-            .text => |s| try f.interpText(s),
+            .text => |s| {
+                if (raw) {
+                    try f.put(sections[next_section]);
+                    next_section += 1;
+                } else try f.interpText(s);
+            },
             .expr => |e| {
                 // A bare name is written `$name`, unless the text after it
                 // would continue the name.
@@ -1019,9 +1081,13 @@ const Formatter = struct {
             const k = f.tokAt(st.e.span.start);
             if (f.toks[k].tag != .interp_simple) {
                 const s = st.e.kind.string;
-                if (isIdentifier(s)) return f.put(s);
+                const src = f.literalSource(k, st.e.span.end);
+                // A key spelled with escapes keeps them, so it stays in
+                // brackets.
+                const plain = if (src) |text| text.len == s.len + 2 else true;
+                if (isIdentifier(s) and plain) return f.put(s);
                 try f.putc('[');
-                try f.stringLit(s, f.quotes[k]);
+                if (src) |text| try f.put(text) else try f.stringLit(s, f.quotes[k]);
                 try f.putc(']');
                 return;
             }
@@ -1287,8 +1353,8 @@ test "format statements and comments" {
     try expectFormat("--[[\nlong]]\nx = {1,2,3,4}", "--[[\nlong]]\nx = {\n    1,\n    2,\n    3,\n    4,\n}\n");
 }
 
-test "format escapes a carriage return in interpolated strings" {
-    try expectFormat("x = `a\\r\\n$(b)`", "x = `a\\r\n$b`\n");
+test "format keeps the escapes of interpolated strings as written" {
+    try expectFormat("x = `a\\r\\n$(b)`", "x = `a\\r\\n$b`\n");
 }
 
 test "format writes control characters of interpolated strings as escapes" {

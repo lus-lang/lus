@@ -177,6 +177,218 @@ local function fetch_reaches_a_serve_of_the_same_state_test()
     assert(status == 200 and txt(body) == "hi /x", txt(body))
 end
 
+-- Serves `handler` in a detached coroutine and calls `body` with the URL
+-- of the server.
+local function with_server(handler, body)
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local server = coroutine.detach(coroutine.create(network.serve), listener, handler)
+    local ok, err = catch body(`http://127.0.0.1:$(port)`)
+    coroutine.close(server)
+    listener:close()
+    if not ok then error(err, 0) end
+end
+
+local function fetch_streams_a_response_body_test()
+    with_server(function(req)
+        local i = 0
+        return 200, function()
+            i = i + 1
+            if i <= 3 then return `data: $(i)\n\n` end
+        end, { ["Content-Type"] = "text/event-stream" }
+    end, function(base)
+        local status, body, headers = network.fetch(base .. "/events", "GET", nil, nil, { stream = true })
+        assert(status == 200 and headers["content-type"] == "text/event-stream")
+        assert(type(body) == "thread")
+        local lines = {}
+        for line in network.lines(body) do lines[#lines + 1] = txt(line) end
+        assert(table.concat(lines, "|") == "data: 1||data: 2||data: 3|", table.concat(lines, "|"))
+        assert(coroutine.status(body) == "dead")
+    end)
+end
+
+local function fetch_yields_a_streamed_body_in_parts_test()
+    with_server(function(req)
+        return 200, string.rep("abcdefgh", 20000)
+    end, function(base)
+        local _, body = network.fetch(base .. "/", "GET", nil, nil, { stream = true })
+        local total = 0
+        while true do
+            local ok, part = coroutine.resume(body)
+            assert(ok, part)
+            if part == nil then break end
+            assert(type(part) == "vector" and #part <= 65536)
+            total = total + #part
+        end
+        assert(total == 160000)
+    end)
+end
+
+-- Closing the coroutine of a body ends the response early and closes its
+-- connection.
+local function closing_a_body_closes_its_connection_test()
+    with_server(function(req)
+        return 200, string.rep("z", 500000)
+    end, function(base)
+        local _, body = network.fetch(base .. "/", "GET", nil, nil, { stream = true })
+        local ok, part = coroutine.resume(body)
+        assert(ok and #part > 0)
+        assert(coroutine.close(body))
+        assert(coroutine.status(body) == "dead")
+    end)
+end
+
+local function fetch_sends_a_body_from_a_function_test()
+    with_server(function(req)
+        return 200, `$(req.headers["transfer-encoding"]) $(txt(req.body))`
+    end, function(base)
+        local parts = { "ab", "", vector.fromstring("cd") }
+        local i = 0
+        local status, body = network.fetch(base .. "/up", "POST", nil, function()
+            i = i + 1
+            return parts[i]
+        end)
+        assert(status == 200 and txt(body) == "chunked abcd", txt(body))
+    end)
+end
+
+local function fetch_sends_a_body_from_a_coroutine_test()
+    with_server(function(req)
+        return 200, `$(req.headers["transfer-encoding"]) $(txt(req.body))`
+    end, function(base)
+        local status, body = network.fetch(base .. "/up", "POST", nil, coroutine.create(function()
+            coroutine.yield("ab")
+            coroutine.yield(vector.fromstring("cd"))
+            return "ef"
+        end))
+        assert(status == 200 and txt(body) == "chunked abcdef", txt(body))
+    end)
+end
+
+local function fetch_names_the_step_that_timed_out_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local server = coroutine.detach(coroutine.create(function()
+        local c = listener:accept()
+        c:receive("*l")
+        c:send("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n")
+        -- The client sends nothing more, so this waits until it gives up.
+        c:receive("*a")
+        c:close()
+    end))
+    local ok, err = catch network.fetch(`http://127.0.0.1:$(port)/`, "GET", nil, nil, { timeout = 0.1 })
+    assert(not ok and string.find(tostring(err), "fetch timeout while waiting for the response headers", 1, true), tostring(err))
+    coroutine.close(server)
+    listener:close()
+end
+
+local function fetch_sends_a_function_body_with_a_length_as_is_test()
+    with_server(function(req)
+        return 200, `$(req.headers["content-length"]) $(tostring(req.headers["transfer-encoding"])) $(txt(req.body))`
+    end, function(base)
+        local sent = false
+        local status, body = network.fetch(base .. "/up", "PUT", { ["Content-Length"] = 3 }, function()
+            if sent then return nil end
+            sent = true
+            return "xyz"
+        end)
+        assert(txt(body) == "3 nil xyz", txt(body))
+    end)
+end
+
+local function fetch_rejects_unknown_options_test()
+    local ok, err = catch network.fetch("http://127.0.0.1:1/", "GET", nil, nil, { strem = true })
+    assert(not ok and string.find(tostring(err), "unknown option 'strem'", 1, true), tostring(err))
+end
+
+local function fetch_reads_a_body_that_ends_with_the_connection_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local server = coroutine.detach(coroutine.create(function()
+        local c = listener:accept()
+        c:receive("*l")
+        c:send("HTTP/1.1 200 OK\r\n\r\nall of it")
+        c:close()
+    end))
+    local status, body = network.fetch(`http://127.0.0.1:$(port)/`)
+    coroutine.close(server)
+    listener:close()
+    assert(status == 200 and txt(body) == "all of it")
+end
+
+-- The server and the client each run in a detached coroutine of the same
+-- state. The fetch suspends its coroutine, so the server answers it at
+-- once rather than after the timeout of the fetch.
+local function fetch_and_serve_in_two_detached_coroutines_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local server = coroutine.detach(coroutine.create(network.serve), listener, function(req)
+        return 200, "served " .. req.path
+    end)
+    local result, failure
+    local client = coroutine.create(function()
+        local ok, status, body = catch network.fetch(`http://127.0.0.1:$(port)/pair`, "GET", nil, nil, { timeout = 5 })
+        if ok then result = `$(status) $(txt(body))` else failure = status end
+    end)
+    coroutine.detach(client)
+    local started = os.clock()
+    coroutine.resume(client)
+    coroutine.close(server)
+    listener:close()
+    assert(failure == nil, tostring(failure))
+    assert(result == "200 served /pair", tostring(result))
+    assert(os.clock() - started < 2)
+end
+
+-- A fetch that waits for a slow server leaves the other detached
+-- coroutines running.
+local function a_slow_fetch_leaves_other_coroutines_running_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local release = false
+    local server = coroutine.detach(coroutine.create(network.serve), listener, function(req)
+        if req.path == "/slow" then
+            while not release do coroutine.yield() end
+        end
+        return 200, req.path
+    end)
+    local slow, fast
+    local slow_co = coroutine.detach(coroutine.create(function()
+        local _, body = network.fetch(`http://127.0.0.1:$(port)/slow`)
+        slow = txt(body)
+    end))
+    local fast_co = coroutine.detach(coroutine.create(function()
+        local _, body = network.fetch(`http://127.0.0.1:$(port)/fast`)
+        fast = txt(body)
+    end))
+    -- The fast fetch ends while the slow one still waits.
+    coroutine.resume(fast_co)
+    assert(fast == "/fast" and slow == nil, tostring(slow))
+    release = true
+    coroutine.resume(slow_co)
+    assert(slow == "/slow")
+    coroutine.close(server)
+    listener:close()
+end
+
+-- Inside a detached coroutine, fetch suspends only its coroutine, so the
+-- server of the same state answers it.
+local function fetch_in_a_detached_coroutine_suspends_test()
+    with_server(function(req)
+        return 200, "from " .. req.path
+    end, function(base)
+        local result
+        local client = coroutine.detach(coroutine.create(function()
+            local _, body = network.fetch(base .. "/inner")
+            result = txt(body)
+        end))
+        while coroutine.status(client) ~= "dead" do
+            coroutine.resume(coroutine.detach(coroutine.create(coroutine.yield)))
+        end
+        assert(result == "from /inner", tostring(result))
+    end)
+end
+
 -- ============================================================
 -- TCP loopback data path (bind-dependent)
 -- ============================================================

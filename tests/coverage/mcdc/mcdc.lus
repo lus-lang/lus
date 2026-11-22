@@ -30,7 +30,7 @@ local GROUPS = {
 }
 
 local function inGroup(group, file)
-    if file == "vm/faultio.zig" then return false end
+    if file == "vm/faultio.zig" or file == "vm/faultcrash.zig" then return false end
     for _, p in ipairs(group.paths) do
         if p:sub(-1) == "/" then
             if file:sub(1, #p) == p then return true end

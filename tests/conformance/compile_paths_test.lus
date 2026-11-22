@@ -1,0 +1,152 @@
+--[[
+    Compile errors from every position.
+
+    The code generator finds some errors only when it reaches them: a goto
+    without a label when the function that holds it ends, and an
+    assignment to a constant at the assignment. Each template below puts
+    such an error in one position of an expression or a statement, so the
+    error leaves the code generator through every construct that can hold
+    it, and `load` must report it and nothing else.
+]]
+
+pledge("load")
+
+-- A function whose goto names no label. The error comes from the end of
+-- the function, in the middle of the enclosing expression.
+local bad_expr = "(function() goto nowhere end)"
+local expr_message = "no visible label 'nowhere'"
+
+-- An assignment to a constant, which fails as the statement compiles.
+local prelude = "local K <const> = 1 local t, a, b, f = {}, 1, 2, print\n"
+local bad_stat = "K = 2"
+local stat_message = "attempt to assign to const variable 'K'"
+
+-- Expressions with a hole, written @.
+local expr_templates = {
+    -- Operators on each side.
+    "return @ + 1", "return 1 + @", "return a + @", "return @ - a", "return @ * 2",
+    "return @ / a", "return @ // 2", "return @ % 2", "return @ ^ 2", "return 2 ^ @",
+    "return @ & 1", "return @ | a", "return @ ~ 1", "return @ << 1", "return 1 >> @",
+    "return @ .. 'x'", "return 'x' .. @", "return 'x' .. a .. @ .. b",
+    "return @ == 1", "return 1 == @", "return @ ~= a", "return @ < 1", "return 1 < @",
+    "return @ <= a", "return @ > 1", "return @ >= a", "return a < @",
+    "return @ and 1", "return a and @", "return @ or 1", "return a or @",
+    "return a and b or @", "return (a or @) and b", "return not @", "return -@",
+    "return ~@", "return #@", "return (@)",
+    "if a and @ then end", "if a or @ then end", "if not (a and @) then end",
+    "if a == 1 and (b or @) then end", "while a and @ do end", "repeat until a or @",
+    -- Calls and indexing.
+    "f(@)", "f(1, @)", "f(a, b, @)", "@()", "t:m(@)", "t.m(@, 1)", "t[@] = 1",
+    "t.x[@] = 1", "return t[@]", "return t[a][@]", "t[a] = @", "t.x = @",
+    "return t?.x(@)", "return (@)?.x",
+    "f{ @ }", "f'x'(@)",
+    -- Constructors.
+    "return { @ }", "return { 1, @ }", "return { x = @ }", "return { [@] = 1 }",
+    "return { [1] = @ }", "return { 1, 2, x = 3, @, [4] = 5 }",
+    "return { f(), @ }",
+    -- Interpolation.
+    "return `x$(@)y`", "return `$(a) and $(@)`",
+    -- Locals and assignments.
+    "local x = @", "local x, y = 1, @", "local x, y = @, 1", "local x <const> = @",
+    "local x <close> = @", "a = @", "a, b = @, 1", "a, b = 1, @", "t.x, t.y = @, 2",
+    "global g = @", "global g1, g2 = 1, @",
+    -- Returns.
+    "return @", "return 1, @", "return @, 1",
+    -- Control structures.
+    "if @ then end", "if a then elseif @ then end", "while @ do end", "repeat until @",
+    "for i = @, 2 do end", "for i = 1, @ do end", "for i = 1, 2, @ do end",
+    "for k in @ do end", "for k, v in pairs(@) do end",
+    "if x = @ then end", "if x = 1 then elseif y = @ then end", "while x = @ do end",
+    -- Lus expressions.
+    "local ok = catch @", "local ok, e = catch f(@)", "catch f(@)",
+    "local x = do provide @ end", "local x = do local y = @ provide y end",
+    "local x = 1 + do provide @ end",
+    "local p, q from @", "local p from { p = @ }",
+    "for p, q from @ do end",
+    "return t[@, 2]", "return t[1, @]", "return t[@,]", "return t[,@]",
+    "local g <group> = { x = @ }", "local g <group> = { x = 1, sub = { y = @ } }",
+    "local z <lazy> = @", "local z <lazy> = do provide @ end",
+    "local o <observe> = @",
+    "return enum A, B end, @",
+    -- Functions.
+    "local function h() return @ end", "local h = function(...) return ..., @ end",
+    "function t.m() return @ end", "function t:m() return self, @ end",
+    "local function h() local function i() return @ end end",
+}
+
+-- Statements with a hole, written $.
+local stat_templates = {
+    "$", "do $ end", "if a then $ end", "if a then else $ end", "if a then elseif b then $ end",
+    "if a then elseif b then else $ end", "while a do $ end", "repeat $ until a",
+    "for i = 1, 2 do $ end", "for i = 2, 1, -1 do $ end", "for k, v in pairs(t) do $ end",
+    "for p, q from {} do $ end", "if x = a then $ end", "while x = a do $ end",
+    "local function h() $ end", "local h = function() $ end", "function t.m() $ end",
+    "f(function() $ end)", "local x = do $ provide 1 end", "local ok = catch do $ end",
+    "goto l ::l:: $", "for i = 1, 2 do if i then continue end $ end",
+    "local g <group> = { x = 1 } $", "local x <close> = nil $",
+    "local function h() for i = 1, 2 do while a do repeat $ until b end end end",
+}
+
+local function expect_error(src, message)
+    local fn, err = load(src, "=paths")
+    assert(fn == nil, "compiled: " .. src)
+    assert(err:find(message, 1, true), src .. "\n" .. err)
+end
+
+local function an_error_in_each_expression_is_reported_test()
+    for _, template in ipairs(expr_templates) do
+        local src = prelude .. template:gsub("@", bad_expr)
+        expect_error(src, expr_message)
+        -- The same position with a valid expression compiles.
+        local ok_src = prelude .. template:gsub("@", "a")
+        local fn, err = load(ok_src, "=paths")
+        assert(fn, ok_src .. "\n" .. tostring(err))
+    end
+end
+
+local function an_error_in_each_statement_is_reported_test()
+    for _, template in ipairs(stat_templates) do
+        expect_error(prelude .. template:gsub("%$", bad_stat), stat_message)
+        expect_error(prelude .. template:gsub("%$", "f" .. bad_expr), expr_message)
+    end
+end
+
+-- Several functions deep, the error still names the innermost goto.
+local function an_error_deep_in_nested_functions_is_reported_test()
+    local src = bad_expr
+    for _ = 1, 20 do src = "(function() return " .. src .. " end)" end
+    expect_error("return " .. src, expr_message)
+end
+
+-- Rarer forms of statements, which compile to their own instructions.
+local function rarer_statement_forms_run_test()
+    local n = 0
+    repeat n = n + 1 if n > 2 then break end until nil
+    assert(n == 3)
+    local closed = false
+    if v <close> = setmetatable({}, { __close = function() closed = true end }) then n = n + 1 end
+    assert(closed and n == 4)
+    local function each(t)
+        local i = 0
+        return function() i = i + 1 return t[i] end
+    end
+    local sum = 0
+    for p, q from each({ { p = 1, q = 2 }, { p = 3, q = 4 } }) do
+        if p == 1 then continue end
+        sum = sum + q
+    end
+    assert(sum == 4)
+    local f = assert(load("global * gx_paths = 1 local function f() return gx_paths end return f()"))
+    assert(f() == 1)
+end
+
+-- An error raised while a <meta> initializer runs names the line of the
+-- initializer, or none when the message carries no position.
+local function meta_errors_name_their_line_test()
+    local _, e1 = load("local m <meta> = error('plain', 0)", "=meta")
+    assert(e1 == "meta:1: meta: plain", e1)
+    local _, e2 = load("\n\nlocal m <meta> = error('positioned')", "=meta")
+    assert(e2:find("^meta:3: meta: "), e2)
+    local _, e3 = load("local y = 1 local m <meta> = math.max(1, y)", "=meta")
+    assert(e3:find("'y' is not known at compile time", 1, true), e3)
+end

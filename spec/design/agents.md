@@ -31,7 +31,7 @@ Lus has an advantage most languages lack: the documentation, the checker, and th
 | `llms-full.txt` | the guide, the CLI page, the topic pages, and the API reference from `spec/stdlib` | `tools/build-llms.js` | `lus.dev/llms-full.txt` |
 | `llms-small.txt` | `.agents/skills/lus/references/language.md` and one line per stdlib function: signature, permissions, stability | `tools/build-llms.js` | `lus.dev/llms-small.txt` |
 | Markdown pages | every manual page with MDX components rendered to Markdown | `tools/build-llms.js` | `lus.dev/manual/NAME.md` |
-| Skills `lus` and `lus-rewrite` | `.agents/skills/` | copied as is | `lus.dev/agents/skills/`, the GitHub repository, and inside the `lus` binary |
+| Skills `lus`, `lus-rewrite`, and `lus-writing` | `.agents/skills/` | copied as is | `lus.dev/agents/skills/`, the GitHub repository, and inside the `lus` binary |
 | Agent entry page | `.agents/prompt.md` and a short intro | site build | `lus.dev/agents` and `lus.dev/agents.md` |
 | `context7.json` | repository root | by hand | read by Context7 |
 
@@ -43,12 +43,13 @@ The `.agents/` folder at the repository root holds everything agents consume dir
 
 #### Skills in the binary
 
-`lus agents init` writes the skills that match the installed runtime into `.agents/skills/` of the current project, links `.claude/skills` to that folder, and adds a short Lus section to `AGENTS.md`. `lus help NAME` prints the spec entry for a function, such as `lus help network.serve`, from documentation compiled into the binary. The agent then reads documentation for exactly the version it runs, offline, with nothing fetched from the network at install time. The stdlib spec and the skills add about 205 KB to a 6.8 MB executable, embedded as plain text by a module that `build.zig` generates. `lus help MODULE` lists a module, and `lus help --search TEXT` searches names and descriptions. Both commands are in place.
+`lus agents init` writes the skills that match the installed runtime into `.agents/skills/` of the current project, links `.claude/skills` to that folder, and writes a short Lus section to `AGENTS.md`. Each run rewrites the skills and the text between the markers of that section, so both follow the installed runtime, and the rest of `AGENTS.md` stays as its authors wrote it. A section from a version before the end marker is recognized by its first sentence and upgraded. Any other text after a lone start marker is left alone. `lus help NAME` prints the spec entry for a function, such as `lus help network.serve`, from documentation compiled into the binary. The agent then reads documentation for exactly the version it runs, offline, with nothing fetched from the network at install time. The stdlib spec and the skills add about 205 KB to a 6.8 MB executable, embedded as plain text by a module that `build.zig` generates. `lus help MODULE` lists a module, and `lus help --search TEXT` searches names and descriptions. Both commands are in place.
 
 #### The skills
 
 - [`.agents/skills/lus/SKILL.md`](../../.agents/skills/lus/SKILL.md) teaches the check, format, and test loop, the file header with `global` and `pledge`, the standard library map, and the idioms the checker expects. [`references/language.md`](../../.agents/skills/lus/references/language.md) lists every difference from Lua that changes generated code, with runnable examples.
 - [`.agents/skills/lus-rewrite/`](../../.agents/skills/lus-rewrite/SKILL.md) is the rewrite skill from part 2.
+- [`.agents/skills/lus-writing/`](../../.agents/skills/lus-writing/SKILL.md) carries the prose style guide of `spec/design/style.md` to other repositories. `tools/build-skills.js` generates its reference file from that note.
 - [`.agents/llms.txt`](../../.agents/llms.txt) is the index, grouped by task.
 - [`.agents/prompt.md`](../../.agents/prompt.md) holds the prompts for part 3.
 

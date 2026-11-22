@@ -179,25 +179,32 @@ fn pushZoned(l: *Thread, span: Span, offset: i64) Error!*Userdata {
 /// reads, moves forward by the length of the gap.
 fn pushZonedInZone(l: *Thread, naive: i64, frac: i32, zone: Value) Error!void {
     const z = zoneOf(zone);
+    // The offsets that can apply to the wall clock time: those in effect
+    // a day before and a day after it, around any transition, and those
+    // at the wall clock time read as UTC. A wall clock time that a zone
+    // repeats is valid with two of them, and the larger offset gives the
+    // earlier instant, the one the zone observes first.
+    const day = 86400;
+    const before = z.offsetAt(try ok(l, i64, tc.subChecked(naive, day)));
+    const after = z.offsetAt(try ok(l, i64, tc.addChecked(naive, day)));
     const a = z.offsetAt(naive);
     const b = z.offsetAt(try ok(l, i64, tc.subChecked(naive, a)));
-    const lo = @min(a, b);
-    const hi = @max(a, b);
-    const at_hi = try ok(l, i64, tc.subChecked(naive, hi));
-    const at_lo = try ok(l, i64, tc.subChecked(naive, lo));
+    var best: ?i64 = null;
+    for ([_]i64{ before, after, a, b }) |o| {
+        const at = try ok(l, i64, tc.subChecked(naive, o));
+        if (z.offsetAt(at) != o) continue;
+        if (best == null or o > best.?) best = o;
+    }
     var utc: i64 = undefined;
     var g: i64 = undefined;
-    if (z.offsetAt(at_hi) == hi) {
-        utc = at_hi;
-        g = hi;
-    } else if (z.offsetAt(at_lo) == lo) {
-        utc = at_lo;
-        g = lo;
+    if (best) |o| {
+        utc = naive - o;
+        g = o;
     } else {
         // In a gap, the offset before it applies, which lands past the
         // gap, where the offset after it holds.
-        utc = at_lo;
-        g = z.offsetAt(at_lo);
+        utc = try ok(l, i64, tc.subChecked(naive, before));
+        g = z.offsetAt(utc);
     }
     const u = try pushZoned(l, .{ .sec = utc, .nsec = frac }, g);
     u.userValues()[0] = zone;
@@ -476,6 +483,25 @@ const Cursor = struct {
         }
         return if (n == 0) null else v;
     }
+
+    /// Reads one of `names`, in full or as its first three letters,
+    /// ignoring case, and returns its index.
+    fn name(c: *Cursor, names: []const []const u8) ?usize {
+        const rest = c.s[c.i..];
+        for (names, 0..) |n, i| {
+            if (rest.len >= n.len and std.ascii.eqlIgnoreCase(rest[0..n.len], n)) {
+                c.i += n.len;
+                return i;
+            }
+        }
+        for (names, 0..) |n, i| {
+            if (rest.len >= 3 and std.ascii.eqlIgnoreCase(rest[0..3], n[0..3])) {
+                c.i += 3;
+                return i;
+            }
+        }
+        return null;
+    }
 };
 
 fn pushParsed(l: *Thread, naive: i64, frac: i32, offset: ?i32) Error!u32 {
@@ -491,9 +517,11 @@ fn mismatch(l: *Thread, s: []const u8, fmt: []const u8) Error {
 }
 
 /// Parses `s` against an explicit pattern. Supports the numeric fields
-/// %Y %y %m %d %e %H %M %S, the zone %z (Z or +/-HH[:]MM), and %% for a
-/// literal percent. A space in the pattern matches a run of whitespace,
-/// and any other character must match exactly.
+/// %Y %y %m %d %e %H %M %S, the names %a %A of weekdays and %b %h %B of
+/// months, the zone %z (Z or +/-HH[:]MM), and %% for a literal percent. A
+/// weekday must be the weekday of the date. A space in the pattern
+/// matches a run of whitespace, and any other character must match
+/// exactly.
 fn parseFormat(l: *Thread, s: []const u8, fmt: []const u8) Error!u32 {
     var y: i64 = 1970;
     var mo: i64 = 1;
@@ -502,6 +530,7 @@ fn parseFormat(l: *Thread, s: []const u8, fmt: []const u8) Error!u32 {
     var mi: i64 = 0;
     var sec: i64 = 0;
     var offset: ?i32 = null;
+    var weekday: ?usize = null;
     var c: Cursor = .{ .s = s };
     var f: usize = 0;
     while (f < fmt.len) : (f += 1) {
@@ -513,6 +542,8 @@ fn parseFormat(l: *Thread, s: []const u8, fmt: []const u8) Error!u32 {
                 'Y' => y = c.number(4) orelse return mismatch(l, s, fmt),
                 'y' => y = 2000 + (c.number(2) orelse return mismatch(l, s, fmt)),
                 'm' => mo = c.number(2) orelse return mismatch(l, s, fmt),
+                'b', 'h', 'B' => mo = @as(i64, @intCast(c.name(&tc.month_names) orelse return mismatch(l, s, fmt))) + 1,
+                'a', 'A' => weekday = c.name(&tc.day_names) orelse return mismatch(l, s, fmt),
                 'd', 'e' => {
                     while (c.peek() == ' ') c.i += 1;
                     d = c.number(2) orelse return mismatch(l, s, fmt);
@@ -552,6 +583,11 @@ fn parseFormat(l: *Thread, s: []const u8, fmt: []const u8) Error!u32 {
     if (c.i < s.len) return l.raiseFmt("trailing characters in '{s}'", .{s});
     if (mo < 1 or mo > 12 or d < 1 or d > 31) return mismatch(l, s, fmt);
     const naive = try ok(l, i64, tc.civilSeconds(y, mo, d, h, mi, sec));
+    if (weekday) |wd| {
+        // day_names starts with Sunday, and isoWeekday counts Monday as 1.
+        const actual: usize = @intCast(@mod(tc.isoWeekday(tc.daysFromCivil(y, mo, d)), 7));
+        if (wd != actual) return l.raiseFmt("'{s}' names {s}, but the date falls on a {s}", .{ s, tc.day_names[wd], tc.day_names[actual] });
+    }
     return pushParsed(l, naive, 0, offset);
 }
 
