@@ -12,6 +12,10 @@ pub const syntax = struct {
     pub const lint = @import("syntax/lint.zig");
 };
 
+/// Whether this build has the parser and the compiler. The runtime of
+/// executables compiled ahead of time has neither.
+pub const has_compiler = @import("build_options").compiler;
+
 pub const vm = struct {
     pub const value = @import("vm/value.zig");
     pub const object = @import("vm/object.zig");

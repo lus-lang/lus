@@ -389,6 +389,7 @@ fn isBuiltin(name: []const u8) bool {
 /// `g`, when the index holds that file unchanged. Returns the entry, whose
 /// `err` is the compile error to raise when it is set.
 pub fn lookup(g: *const state.Global, path: []const u8, io: std.Io) ?*const Entry {
+    if (comptime !@import("build_options").compiler) return null;
     const ix = current orelse return null;
     // The index compiled with the flags of its owner. Another state uses
     // it only when neither compiles with flags.

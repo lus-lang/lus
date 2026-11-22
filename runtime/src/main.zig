@@ -257,7 +257,14 @@ pub fn main(process_init: std.process.Init) !u8 {
         defer b.deinit(gpa);
         return runBundle(init, b, args);
     }
+    if (comptime !lus.has_compiler) {
+        std.debug.print("lus-runtime: this runtime runs the bundle that `lus build --runtime` appends to it, and it has none\n", .{});
+        return 1;
+    } else return mainWithCompiler(init, args);
+}
 
+/// The commands of a build that has the parser and the compiler.
+fn mainWithCompiler(init: std.process.Init, args: []const []const u8) !u8 {
     // `lus +REQUEST ARGS...` runs another installed version. Only the
     // first argument is read this way (`spec/tools/version.md`).
     if (args.len >= 2 and args[1].len > 1 and args[1][0] == '+') {
@@ -427,6 +434,8 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
 
     if (entry) |m| {
         if (!runChunk(l, m.data, m.chunkname, args[cli.script_index + 1 ..])) return 1;
+    } else if (comptime !lus.has_compiler) {
+        // Without the compiler only a bundle runs, which `main` checked.
     } else if (cli.script) |path| {
         if (cli.dis) return disassemble(l, path);
         // When the host limits file reads with -P, the entry script itself
@@ -455,9 +464,9 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         store.running = true;
         if (!runChunk(l, buf.items, "=stdin", args[cli.script_index + 1 ..])) return 1;
     }
-    if (cli.interactive or (cli.script == null and !cli.stdin and cli.actions.items.len == 0 and !cli.version)) {
+    if (comptime lus.has_compiler) if (cli.interactive or (cli.script == null and !cli.stdin and cli.actions.items.len == 0 and !cli.version)) {
         try repl(l, io);
-    }
+    };
     return 0;
 }
 

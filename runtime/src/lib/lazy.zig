@@ -104,6 +104,7 @@ pub fn get(g: *Global, i: u8) std.mem.Allocator.Error!Value {
 /// Compiles the update of observed variables in `g` and makes its closure,
 /// whose environment is empty because it names builtins only.
 fn runClosure(g: *Global) std.mem.Allocator.Error!*object.Closure {
+    if (comptime !@import("build_options").compiler) @panic("observed variables need the compiler, which this executable leaves out");
     const codegen = @import("../compile/codegen.zig");
     const gc = @import("../vm/gc.zig");
     const r = try codegen.compile(g, run_source, .{ .chunkname = "=observe", .meta_eval = false });

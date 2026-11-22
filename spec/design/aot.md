@@ -54,6 +54,12 @@ At startup the runtime loads the chunks as `lus build` does, maps the code secti
 
 The runtime leaves out both JIT tiers by default, so code that the training run never reached runs in the interpreter. On a target that allows executable memory, `--aot-keep-jit` keeps them, so that code compiles at run time as it does under `lus build`.
 
+### The runtime without a compiler
+
+`zig build runtime` builds `lus-runtime` with `-Dcompiler=false` and `-Djit=false`, and `lus build --runtime lus-runtime` appends a bundle to it in place of the running `lus`. A reference to the compiler sits behind a check of the build option at compile time, so the compiler, the parser, the formatter, the linter, the tools, and the JIT are never compiled into it. What remains of `src/syntax` and `src/compile` is the reader and the writer of binary chunks and the parser of numbers that `tonumber` uses. Without a bundle the runtime prints that it runs only the bundle appended to it. `load` of source text returns nil and "the compiler is not part of this executable", and `debug.parse`, `debug.format`, and `debug.check` raise that error. Observed variables compile a small chunk when a program first reaches them, so a program that uses them stops with that message on this runtime until the builder bundles the chunk compiled in advance.
+
+On an Apple silicon Mac in ReleaseFast, `lus-runtime` takes 6.37 MB against 8.70 MB for `lus`. A bundle of a benchmark from `tests/bench` takes 6.38 MB against 8.94 MB, and gives the same output. An empty bundle starts in 2.74 ms against 2.75 ms, the best of 150 alternating runs. Until code compiled ahead of time is appended, the runtime interprets, so the benchmarks that native code speeds up run as fast as under `LUS_JIT=off`. `zig build test-runtime` bundles `tests/build/app.lus` on the runtime and checks its output, and checks the message of `load`.
+
 ## Leaving out libraries
 
 A library can go only when no path of the program reaches it. The builder proves that from the bytecode, conservatively. A program qualifies when every global access names a constant, `_ENV` is never read as a value, the debug library is not reached, and every `require` names a constant module. The builder then keeps the libraries that those constants name. It leaves out the others by default. When the proof fails, the builder keeps every library and prints the first access that the proof could not name, so the result never depends on a guess.
