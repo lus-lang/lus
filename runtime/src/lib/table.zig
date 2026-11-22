@@ -769,9 +769,10 @@ fn groupby(l: *Thread) Error!u32 {
             try ops.rawSet(l, g, Value.int(1), try geti(l, t, i));
             try ops.rawSet(l, res, key, Value.obj(.table, g));
         } else {
-            try l.push(group);
-            const glen = try lenOf(l, group);
-            try seti(l, group, glen + 1, try geti(l, t, i));
+            // The groups are tables of this call, which no metamethod or
+            // other code can reach before it returns.
+            const g = group.as(Table);
+            try ops.rawSet(l, g, Value.int(table.length(g) + 1), try geti(l, t, i));
         }
         l.top = mark;
     }
