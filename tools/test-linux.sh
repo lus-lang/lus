@@ -45,16 +45,8 @@ if ! limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null | grep -q "^$vm R
 fi
 
 # A cross build takes several gigabytes, so the builds run one at a time
-# with one job each, after swap has room.
-wait_for_memory() {
-    while :; do
-        used=$(sysctl -n vm.swapusage 2>/dev/null | sed -E 's/.*used = ([0-9.]+)M.*/\1/' | cut -d. -f1)
-        total=$(sysctl -n vm.swapusage 2>/dev/null | sed -E 's/.*total = ([0-9.]+)M.*/\1/' | cut -d. -f1)
-        [ -z "$used" ] || [ -z "$total" ] || [ "$total" = 0 ] || [ $((used * 2)) -le "$total" ] && break
-        echo "waiting for swap to free up ($used of $total MB used)"
-        sleep 30
-    done
-}
+# with one job each, once the machine has memory for them.
+wait_for_memory() { sh "$root/tools/wait-for-memory.sh"; }
 echo "building for aarch64-linux and x86_64-linux"
 wait_for_memory
 zig build -j1 -Doptimize=ReleaseSafe -Dtarget=aarch64-linux --prefix zig-out-linux-arm64

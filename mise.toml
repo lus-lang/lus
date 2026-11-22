@@ -51,12 +51,12 @@ run = "LUS_JIT=off runtime/zig-out/bin/lus tests/diff/run.lus --forever --reduce
 [tasks."build:stress"]
 description = "Build the gc-stress and gc-verify runtime into runtime/zig-out-stress"
 dir = "runtime"
-run = "zig build -j1 -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress"
+run = "sh ../tools/wait-for-memory.sh && zig build -j1 -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress"
 
 [tasks."build:x64"]
 description = "Build the runtime for x86-64 macOS into runtime/zig-out-x64, which runs under Rosetta"
 dir = "runtime"
-run = "zig build -j1 -Doptimize=ReleaseSafe -Dtarget=x86_64-macos --prefix zig-out-x64"
+run = "sh ../tools/wait-for-memory.sh && zig build -j1 -Doptimize=ReleaseSafe -Dtarget=x86_64-macos --prefix zig-out-x64"
 
 [tasks."build:oom"]
 description = "Build the runtime with allocation failure injection into runtime/zig-out-oom"
@@ -119,6 +119,7 @@ run = ["LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --samples 400", "L
 description = "Build lus.wasm for wasm32-wasi into packages/wasm/dist"
 dir = "runtime"
 run = [
+  "sh ../tools/wait-for-memory.sh",
   "zig build -j1 wasm",
   "mkdir -p ../packages/wasm/dist",
   "cp zig-out/wasm/lus.wasm ../packages/wasm/dist/lus.wasm",
