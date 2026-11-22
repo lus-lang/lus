@@ -62,10 +62,10 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
-    # The step limits below add up to 255 minutes on Linux, which runs
+    # The step limits below add up to 285 minutes on Linux, which runs
     # every step. The job limit covers them and the setup steps, so a step
     # always reaches its own limit before the job is cancelled.
-    timeout-minutes: 270
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install Zig
@@ -176,6 +176,23 @@ jobs:
             LUS_JIT=$mode LUS_JIT_AOT="reload:$RUNNER_TEMP/aot.log" zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
           done
           if [ -s "$RUNNER_TEMP/aot.log" ]; then cat "$RUNNER_TEMP/aot.log"; exit 1; fi
+      - name: The linker of lus build --aot
+        timeout-minutes: 30
+        # The link objects of the runtime and of the whole lus, the whole
+        # lus linked from its link object with every builtin, and the
+        # conformance suite on it. Then an executable compiled ahead of
+        # time, linked with only the builtins it reaches, against the
+        # output of lus (spec/design/aot.md, "Leaving out code").
+        if: runner.os == 'Linux'
+        working-directory: runtime
+        run: |
+          zig build link-object -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-musl -p "$RUNNER_TEMP/lo"
+          "$RUNNER_TEMP/lo/bin/lus-link" "$RUNNER_TEMP/lo/lib/lus.lo" "$RUNNER_TEMP/lus-linked"
+          "$RUNNER_TEMP/lus-linked" test ../tests/conformance ../packages/language-server/tests
+          cd ../tests/build
+          ../../runtime/zig-out/bin/lus build --aot --link-object "$RUNNER_TEMP/lo/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/linked"
+          test "$("$RUNNER_TEMP/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+          test "$(stat -c %s "$RUNNER_TEMP/linked")" -lt 2000000
       - name: Documentation examples
         timeout-minutes: 10
         working-directory: runtime

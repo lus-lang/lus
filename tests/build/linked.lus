@@ -1,0 +1,19 @@
+-- The entry script of the test of the linker of `lus build --aot`. It
+-- reaches a few builtins by name and by method, so the executable keeps
+-- only those, and prints the same output as `lus`.
+
+local square = require("lib.square").square
+
+local function fib(n)
+    if n < 2 then
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+
+local words = {}
+for i = 1, 5 do
+    words[#words + 1] = string.format("%d:%d", i, square(i))
+end
+print(table.concat(words, " "), fib(20))
+print(("linked"):upper(), math.floor(7.5), tostring(nil))

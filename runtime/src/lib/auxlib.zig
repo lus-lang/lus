@@ -218,9 +218,10 @@ pub fn retFail(l: *Thread, msg: []const u8) Error!u32 {
 /// The entries of a `fields` registration are reached by a path, such as
 /// `table.insert`, or all at once when the program uses the table as a
 /// value. The entries of a `methods` registration are reached by the
-/// field names that the program reads. A `library` is reached both ways,
-/// as `string` is through the metatable of strings. The entries of an
-/// `always` registration, such as metamethods, are always kept.
+/// field names that the program reads, or by being metamethods, once the
+/// library before the colon of the path is reached. A `library` is
+/// reached both ways, as `string` is through the metatable of strings.
+/// The entries of an `always` registration are always kept.
 pub const Kind = enum { fields, methods, library, always };
 
 /// Creates a table that holds the builtins `funcs`, registered under
@@ -262,6 +263,25 @@ pub fn setFuncs(l: *Thread, t: *Table, comptime kind: Kind, comptime path: []con
         n.leaf_first = f.leaf_first;
         try setField(l, t, f.name, Value.obj(.native, n));
     }
+}
+
+/// The function `f`, or null when the linker of `lus build --aot` left it
+/// out because the program never reaches `path.name` (see `setFuncs`).
+/// It guards code that only a builtin leads to, such as the client of
+/// remote modules behind `require`. `tag` tells apart the guards of one
+/// path and name.
+pub fn guarded(comptime kind: Kind, comptime path: []const u8, comptime name: []const u8, comptime tag: []const u8, comptime f: anytype) ?*const @TypeOf(f) {
+    const S = struct {
+        const array = [_]Reg{.{ .name = name, .func = @ptrCast(&f) }};
+        const ref: *const anyopaque = &array;
+    };
+    if (@import("build_options").link_object) @export(&S.ref, .{ .name = guardName(kind, path, &S.array) ++ "#" ++ tag });
+    // A pointer known at compile time would let Zig fold the load, so it
+    // goes through a variable.
+    var slot: *const volatile ?state.NativeFn = &S.array[0].func;
+    _ = &slot;
+    const p = slot.* orelse return null;
+    return @ptrCast(p);
 }
 
 /// The symbol of a registration in the link object:

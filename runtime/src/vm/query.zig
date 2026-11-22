@@ -463,7 +463,9 @@ fn fetch(l: *Thread, q: *Query, qv: Value, p: *const Plan, i: u32, slot: u32, pu
             try g.add(" OFFSET ");
             try g.bind(Value.int(w.offset));
         }
-        const iter = try sqlite.openSelect(l, ref, g.out.items, g.binds.items);
+        // A table reference exists only where the program reaches SQLite.
+        const open_select = aux.guarded(.fields, "io", "sqlite", "query", sqlite.openSelect) orelse unreachable;
+        const iter = try open_select(l, ref, g.out.items, g.binds.items);
         try l.push(iter);
         const d = try drain(l, iter);
         l.stack[slot] = Value.obj(.table, d.t);
@@ -1087,7 +1089,7 @@ fn lusQueryPlan(l: *Thread) Error!u32 {
 
 /// Registers the global `query` and `debug.queryplan`.
 pub fn open(l: *Thread) Error!void {
-    try aux.setGlobal(l, "query", try aux.native(l, lusQuery, "query"));
+    try aux.setFuncs(l, l.g.globals.as(Table), .fields, "", &.{.{ .name = "query", .func = lusQuery }});
     const dbg = try aux.getField(l, l.g.globals.as(Table), "debug");
-    if (dbg.tag == .table) try aux.setField(l, dbg.as(Table), "queryplan", try aux.native(l, lusQueryPlan, "queryplan"));
+    if (dbg.tag == .table) try aux.setFuncs(l, dbg.as(Table), .fields, "debug", &.{.{ .name = "queryplan", .func = lusQueryPlan }});
 }

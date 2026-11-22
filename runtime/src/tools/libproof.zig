@@ -72,7 +72,9 @@ pub const Proof = struct {
             if (pr.reached.contains(key) or pr.wholly(path)) return true;
         }
         if (kind == .methods or kind == .library) {
-            if (!pr.dynamic and !pr.names.contains(name)) return false;
+            // Metamethods run without a field read that names them.
+            const meta = std.mem.startsWith(u8, name, "__");
+            if (!meta and !pr.dynamic and !pr.names.contains(name)) return false;
             if (kind == .library) return true;
             const colon = std.mem.indexOfScalar(u8, path, ':') orelse return true;
             return colon == 0 or pr.ownerReached(path[0..colon]);

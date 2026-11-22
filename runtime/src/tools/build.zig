@@ -35,6 +35,9 @@ const api = lus.api;
 const codegen = lus.compile.codegen;
 const dump = @import("../compile/dump.zig");
 const libproof = @import("libproof.zig");
+const lobj = @import("../link/lobj.zig");
+const linker = @import("../link/link.zig");
+const aot = @import("../jit/aot.zig");
 const package = lus.lib.package;
 const modtree = lus.modtree;
 const remote = lus.remote;
@@ -52,6 +55,9 @@ const usage =
     \\  --aot                   compile the program ahead of time from a training run
     \\  --train ARGS            the arguments of the training run, separated by spaces
     \\  --aot-keep-jit          keep the JIT, so code the training never reached compiles
+    \\  --link-object FILE      link the executable from FILE, keeping only what the program reaches
+    \\  --link-all              link every builtin of the link object
+    \\  --link-map FILE         write the size of each linked atom and what reached it
     \\
 ;
 
@@ -64,6 +70,12 @@ const Options = struct {
     aot: bool = false,
     keep_jit: bool = false,
     train: ?[]const u8 = null,
+    /// The link object to link the executable from, in place of a
+    /// prebuilt runtime (`spec/design/aot.md`, "The linker").
+    link_object: ?[]const u8 = null,
+    link_all: bool = false,
+    /// Where the linker writes the size of each kept atom and what kept it.
+    link_map: ?[]const u8 = null,
     pledges: std.ArrayList([]const u8) = .empty,
     flags: std.ArrayList([]const u8) = .empty,
     includes: std.ArrayList([]const u8) = .empty,
@@ -86,12 +98,16 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
             o.aot = true;
             continue;
         }
+        if (std.mem.eql(u8, a, "--link-all")) {
+            o.link_all = true;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--aot-keep-jit")) {
             o.aot = true;
             o.keep_jit = true;
             continue;
         }
-        const Kind = enum { output, pledge, flag, include, runtime, train };
+        const Kind = enum { output, pledge, flag, include, runtime, train, link_object, link_map };
         const kind: ?Kind = if (std.mem.eql(u8, a, "-o"))
             .output
         else if (std.mem.eql(u8, a, "-P") or std.mem.eql(u8, a, "--pledge"))
@@ -104,6 +120,10 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
             .runtime
         else if (std.mem.eql(u8, a, "--train"))
             .train
+        else if (std.mem.eql(u8, a, "--link-object"))
+            .link_object
+        else if (std.mem.eql(u8, a, "--link-map"))
+            .link_map
         else
             null;
         if (kind) |k| {
@@ -120,6 +140,8 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
                 .include => try o.includes.append(gpa, v),
                 .runtime => o.runtime = v,
                 .train => o.train = v,
+                .link_object => o.link_object = v,
+                .link_map => o.link_map = v,
             }
         } else if (std.mem.startsWith(u8, a, "-P") and a.len > 2) {
             try o.pledges.append(gpa, a[2..]);
@@ -571,7 +593,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     _ = try c.shake(io);
     // A runtime without the compiler reads the update of observed
     // variables from the bundle.
-    if (opts.aot or opts.runtime != null) try c.addObserveUpdate();
+    if (opts.aot or opts.runtime != null or opts.link_object != null) try c.addObserveUpdate();
 
     // The preserved options, applied before the program runs.
     var preserved: std.ArrayList([]const u8) = .empty;
@@ -584,10 +606,14 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
 
     var image: std.ArrayList(u8) = .empty;
     defer image.deinit(gpa);
+    var linked: ?LinkNote = null;
     if (!opts.aot) {
         // The program part of the running executable, or of the runtime
-        // that --runtime names, without any bundle it already carries.
-        if (!try readProgram(io, gpa, opts.runtime, &image)) return 1;
+        // that --runtime names, without any bundle it already carries, or
+        // an executable linked from the link object.
+        if (opts.link_object) |lo| {
+            linked = (try linkImage(io, gpa, lo, &c.proof, opts.link_all, opts.link_map, null, &image)) orelse return 1;
+        } else if (!try readProgram(io, gpa, opts.runtime, &image)) return 1;
         try bundle.write(gpa, &image, preserved.items, c.modules.items, 0);
     } else {
         // A bundle on the running lus runs once under the training
@@ -604,7 +630,13 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             break :blk try std.fs.path.join(gpa, &.{ dir, "lus-runtime" });
         };
         defer if (base) |b| if (opts.runtime == null) gpa.free(b);
-        if (!try readProgram(io, gpa, base, &image)) return 1;
+        // Releases ship the link object of the runtime next to it.
+        const default_lo = if (base) |b| try std.fmt.allocPrint(gpa, "{s}.lo", .{b}) else null;
+        defer if (default_lo) |d| gpa.free(d);
+        const lo_path = opts.link_object orelse if (default_lo) |d| (if (exists(io, d)) d else null) else null;
+        if (lo_path) |lo| {
+            linked = (try linkImage(io, gpa, lo, &c.proof, opts.link_all, opts.link_map, section, &image)) orelse return 1;
+        } else if (!try readProgram(io, gpa, base, &image)) return 1;
         var modules: std.ArrayList(bundle.Module) = .empty;
         defer modules.deinit(gpa);
         try modules.appendSlice(gpa, c.modules.items);
@@ -627,10 +659,85 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     for (c.modules.items) |m| {
         if (!std.mem.startsWith(u8, m.name, ".")) user_modules += 1;
     }
-    const note = try std.fmt.allocPrint(gpa, "wrote {s} ({d} modules)\n", .{ out_path, user_modules });
+    const note = if (linked) |ln|
+        try std.fmt.allocPrint(gpa, "wrote {s} ({d} modules, {d} KB of the {d} KB runtime linked)\n", .{ out_path, user_modules, ln.kept / 1024, ln.total / 1024 })
+    else
+        try std.fmt.allocPrint(gpa, "wrote {s} ({d} modules)\n", .{ out_path, user_modules });
     defer gpa.free(note);
     std.Io.File.stdout().writeStreamingAll(io, note) catch {};
     return 0;
+}
+
+fn exists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
+const LinkNote = struct { kept: u64, total: u64 };
+
+/// Links the executable from the link object at `path` into `image`,
+/// keeping the builtins that `proof` reaches, every builtin when `all` is
+/// set, and the builtins that the code section `section` calls. Prints
+/// the reason and returns null when it cannot.
+fn linkImage(io: std.Io, gpa: Allocator, path: []const u8, proof: *libproof.Proof, all: bool, map_path: ?[]const u8, section: ?[]const u8, image: *std.ArrayList(u8)) !?LinkNote {
+    const data = std.Io.Dir.cwd().readFileAllocOptions(io, path, gpa, .unlimited, .@"8", null) catch |e| {
+        std.debug.print("lus build: cannot read the link object {s} ({s})\n", .{ path, @errorName(e) });
+        return null;
+    };
+    defer gpa.free(data);
+    const o = lobj.read(data) catch {
+        std.debug.print("lus build: {s} is not a link object\n", .{path});
+        return null;
+    };
+    if (section) |sec| {
+        const host_arch: ?lobj.Arch = switch (builtin.cpu.arch) {
+            .x86_64 => .x86_64,
+            .aarch64 => .aarch64,
+            else => null,
+        };
+        const host_os: ?lobj.Os = switch (builtin.os.tag) {
+            .linux => .linux,
+            .macos => .macos,
+            .windows => .windows,
+            else => null,
+        };
+        if (host_arch != o.arch or host_os != o.os) {
+            std.debug.print("lus build: the link object {s} is for {s}-{s}, and code compiled ahead of time runs only where it was trained\n", .{ path, @tagName(o.arch), @tagName(o.os) });
+            return null;
+        }
+        aot.sectionStrings(sec, proof, struct {
+            fn f(pr: *libproof.Proof, str: []const u8) void {
+                pr.reach(str);
+            }
+        }.f);
+    }
+    if (!all) if (proof.failed) |f| {
+        std.debug.print("lus build: kept every builtin: {s}:{d}: {s}\n", .{ f.chunk, f.line, f.why });
+    };
+    const keep: linker.Keep = if (all) .all else .{ .ctx = proof, .keeps = struct {
+        fn f(ctx: *const anyopaque, kind: lobj.GuardKind, p: []const u8, name: []const u8) bool {
+            const pr: *const libproof.Proof = @ptrCast(@alignCast(ctx));
+            return pr.keeps(@fromBackingInt(@intCast(@backingInt(kind))), p, name);
+        }
+    }.f };
+    var map_buf: [4096]u8 = undefined;
+    var map_file: ?std.Io.File = null;
+    defer if (map_file) |f| f.close(io);
+    var map_writer: ?std.Io.File.Writer = null;
+    if (map_path) |mp| {
+        map_file = std.Io.Dir.cwd().createFile(io, mp, .{}) catch |e| {
+            std.debug.print("lus build: cannot create {s} ({s})\n", .{ mp, @errorName(e) });
+            return null;
+        };
+        map_writer = map_file.?.writer(io, &map_buf);
+    }
+    const r = linker.link(gpa, &o, keep, if (map_writer) |*mw| &mw.interface else null) catch |e| {
+        std.debug.print("lus build: cannot link {s} ({s})\n", .{ path, @errorName(e) });
+        return null;
+    };
+    defer gpa.free(r.bytes);
+    try image.appendSlice(gpa, r.bytes);
+    return .{ .kept = r.kept, .total = r.total };
 }
 
 /// Reads the program part of `path`, or of the running executable when

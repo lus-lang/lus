@@ -187,6 +187,7 @@ fn setup(g: *Global) void {
     js.opt_dump = env.get("LUS_JIT_DUMP") != null;
     if (env.get("LUS_JIT_AOT")) |v| {
         js.aot = aot.State.fromEnv(g.gpa, v);
+        if (js.aot != null) aot.noteImage();
         // A training run compiles every function it reaches to baseline
         // code, and optimizes after the usual thresholds, so its units
         // carry the predictions of a warmed program.

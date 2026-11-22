@@ -64,7 +64,7 @@ pub fn close(l: *Thread) void {
 /// function is alive.
 fn writeAotTraining(g: *Global) void {
     const jit = @import("jit/jit.zig");
-    if (comptime jit.enabled and !jit.is_wasm) @import("jit/aot.zig").writeTraining(g);
+    if (comptime jit.enabled and !jit.is_wasm and @import("build_options").jit_compile) @import("jit/aot.zig").writeTraining(g);
 }
 
 /// Numbers the functions of module `index` of the bundle, whose main

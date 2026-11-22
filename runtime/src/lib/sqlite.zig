@@ -1479,7 +1479,7 @@ fn makeMeta(l: *Thread, comptime key: []const u8, comptime methods: []const aux.
     const mt = try l.newTable(0, 8);
     try l.push(Value.obj(.table, mt));
     defer l.top -= 1;
-    try aux.setFuncs(l, mt, .always, "", meta);
+    try aux.setFuncs(l, mt, .methods, "io.sqlite:" ++ key, meta);
     if (methods.len > 0) {
         const m = try aux.newLib(l, .methods, "io.sqlite:" ++ key, methods);
         try aux.setField(l, mt, "__index", Value.obj(.table, m));
@@ -1499,7 +1499,10 @@ fn anchor(l: *Thread, comptime key: []const u8, mt: *Table) Error!void {
 /// Adds `sqlite` to the io table `io_t`. SQLite has a single entry point,
 /// so it lives in the io table beside `io.open`.
 pub fn register(l: *Thread, io_t: *Table) Error!void {
-    if (c.sqlite3_initialize() != c.OK) return l.raiseFmt("cannot initialize sqlite", .{});
+    // SQLite is linked only where the program reaches `io.sqlite`.
+    if (aux.guarded(.fields, "io", "sqlite", "init", c.sqlite3_initialize)) |init| {
+        if (init() != c.OK) return l.raiseFmt("cannot initialize sqlite", .{});
+    }
     // The database metatable indexes methods first and table references
     // after.
     const db_mt = try makeMeta(l, db_mt_key, &.{}, &.{

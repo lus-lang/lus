@@ -101,6 +101,8 @@ test {
     _ = bundle;
     _ = @import("tools/build.zig");
     _ = @import("tools/libproof.zig");
+    _ = @import("link/lobj.zig");
+    _ = @import("link/link.zig");
     _ = @import("tools/debug.zig");
     _ = @import("tools/dap.zig");
     _ = @import("tools/help.zig");

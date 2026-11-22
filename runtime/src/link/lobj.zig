@@ -1,0 +1,351 @@
+//! The link object (`spec/design/aot.md`, "The link object"): the runtime
+//! of one target as atoms with their relocations, which the linker of
+//! `lus build --aot` reads. The converter (`convert.zig`) writes it at
+//! release time from the relocatable objects that Zig and the C compiler
+//! produce.
+//!
+//! Relocation types are those of ELF for the architecture, which the
+//! converter of another object format maps its relocations onto. A
+//! relocation targets an atom, or a name that the linker defines, such as
+//! `__init_array_start`, or nothing for an undefined weak symbol.
+//!
+//! The file is little endian: the magic, the target, then the sections
+//! that `Writer.write` lists, each a count followed by fixed records, and
+//! last the string table and the bytes of the atoms.
+
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+
+pub const magic = "LUSLINK\x01";
+
+pub const Arch = enum(u8) { x86_64, aarch64 };
+pub const Os = enum(u8) { linux, macos, ios, windows };
+
+pub const Kind = enum(u8) {
+    text,
+    rodata,
+    data,
+    bss,
+    tdata,
+    tbss,
+    /// Pointers to functions that run before `main`, in order.
+    init_array,
+    /// Pointers to functions that run at exit.
+    fini_array,
+};
+
+pub const Atom = extern struct {
+    kind: Kind,
+    align_log2: u8,
+    pad: u16 = 0,
+    size: u32,
+    /// The offset of the bytes in the data of the file, unused for the
+    /// zeroed kinds.
+    data: u32,
+    first_reloc: u32,
+    relocs: u32,
+    /// The offset of the name in the string table: the symbol or the
+    /// section the atom came from.
+    name: u32,
+};
+
+/// The target of a relocation: an atom, a name the linker defines, or
+/// nothing.
+pub const Target = packed struct(u32) {
+    index: u30,
+    space: enum(u2) { atom, linker, none, _ },
+
+    pub const none_target: Target = .{ .index = 0, .space = .none };
+};
+
+/// A relocation at `offset` in its atom. The symbol it names is at
+/// `sym` bytes into the target atom, and `addend` is the addend of the
+/// relocation, kept apart for the relocations that go through the global
+/// offset table or the thread pointer.
+pub const Reloc = extern struct {
+    offset: u32,
+    type: u32,
+    target: Target,
+    sym: u32 = 0,
+    addend: i64,
+};
+
+/// How a program reaches the entries of a registration, in the order of
+/// `aux.Kind`.
+pub const GuardKind = enum(u8) { fields, methods, library, always };
+
+/// A registration of builtins (`aux.setFuncs`): the entries `names` of
+/// kind `kind` at `path`, stored as an array at `offset` in `atom`.
+pub const Guard = extern struct {
+    kind: u8,
+    pad: [3]u8 = .{ 0, 0, 0 },
+    path: u32,
+    names: u32,
+    atom: u32,
+    offset: u32,
+};
+
+/// A global symbol that the linker may name: the entry point, and the
+/// symbols that code compiled ahead of time relocates against.
+pub const Symbol = extern struct {
+    name: u32,
+    atom: u32,
+    offset: u32,
+};
+
+pub const Object = struct {
+    arch: Arch,
+    os: Os,
+    /// The size of an entry of a registration, and the offsets of its
+    /// function and its fast path.
+    reg_layout: [3]u32,
+    entry: Symbol,
+    atoms: []const Atom,
+    relocs: []const Reloc,
+    guards: []const Guard,
+    symbols: []const Symbol,
+    /// Atoms that are kept whatever the program reaches, apart from the
+    /// entry and the arrays of functions that run before `main`.
+    roots: []const u32,
+    /// The names that relocations of space `linker` index.
+    linker_names: []const u32,
+    strings: []const u8,
+    data: []const u8,
+
+    pub fn string(o: *const Object, off: u32) []const u8 {
+        const s = o.strings[off..];
+        return s[0..std.mem.indexOfScalar(u8, s, 0).?];
+    }
+
+    pub fn bytes(o: *const Object, a: Atom) []const u8 {
+        return o.data[a.data..][0..a.size];
+    }
+
+    pub fn atomRelocs(o: *const Object, a: Atom) []const Reloc {
+        return o.relocs[a.first_reloc..][0..a.relocs];
+    }
+};
+
+pub const Error = error{ BadLinkObject, OutOfMemory };
+
+/// Reads a link object. The result points into `buf`, which must stay
+/// alive and be aligned to 8 bytes.
+pub fn read(buf: []align(8) const u8) Error!Object {
+    var r: Reader = .{ .buf = buf };
+    if (!std.mem.eql(u8, try r.take(magic.len), magic)) return error.BadLinkObject;
+    const arch = std.enums.fromInt(Arch, try r.int(u8)) orelse return error.BadLinkObject;
+    const os = std.enums.fromInt(Os, try r.int(u8)) orelse return error.BadLinkObject;
+    r.pos = std.mem.alignForward(usize, r.pos, 4);
+    const layout = try r.slice(u32, 3);
+    const entry = (try r.slice(Symbol, 1))[0];
+    const atoms = try r.counted(Atom);
+    const relocs = try r.counted(Reloc);
+    const guards = try r.counted(Guard);
+    const symbols = try r.counted(Symbol);
+    const roots = try r.counted(u32);
+    const linker_names = try r.counted(u32);
+    const strings = try r.counted(u8);
+    r.pos = std.mem.alignForward(usize, r.pos, 8);
+    const data = try r.counted(u8);
+    const o: Object = .{
+        .arch = arch,
+        .os = os,
+        .reg_layout = layout[0..3].*,
+        .entry = entry,
+        .atoms = atoms,
+        .relocs = relocs,
+        .guards = guards,
+        .symbols = symbols,
+        .roots = roots,
+        .linker_names = linker_names,
+        .strings = strings,
+        .data = data,
+    };
+    // Every index the linker follows is checked once here.
+    if (strings.len == 0 or strings[strings.len - 1] != 0) return error.BadLinkObject;
+    for (atoms) |a| {
+        if (@as(u64, a.first_reloc) + a.relocs > relocs.len) return error.BadLinkObject;
+        if (a.name >= strings.len or a.align_log2 > 16) return error.BadLinkObject;
+        if (std.enums.fromInt(Kind, @backingInt(a.kind)) == null) return error.BadLinkObject;
+        if (zeroed(a.kind)) continue;
+        if (@as(u64, a.data) + a.size > data.len) return error.BadLinkObject;
+    }
+    for (relocs) |rel| switch (rel.target.space) {
+        .atom => if (rel.target.index >= atoms.len) return error.BadLinkObject,
+        .linker => if (rel.target.index >= linker_names.len) return error.BadLinkObject,
+        .none => {},
+        _ => return error.BadLinkObject,
+    };
+    for (linker_names) |n| if (n >= strings.len) return error.BadLinkObject;
+    for (roots) |a| if (a >= atoms.len) return error.BadLinkObject;
+    for (guards) |g| if (g.atom >= atoms.len or g.path >= strings.len or g.names >= strings.len or g.kind > 3) return error.BadLinkObject;
+    for (symbols) |s| if (s.atom >= atoms.len or s.name >= strings.len) return error.BadLinkObject;
+    if (entry.atom >= atoms.len) return error.BadLinkObject;
+    return o;
+}
+
+pub fn zeroed(k: Kind) bool {
+    return k == .bss or k == .tbss;
+}
+
+const Reader = struct {
+    buf: []align(8) const u8,
+    pos: usize = 0,
+
+    fn take(r: *Reader, n: usize) Error![]const u8 {
+        if (n > r.buf.len - r.pos) return error.BadLinkObject;
+        defer r.pos += n;
+        return r.buf[r.pos..][0..n];
+    }
+
+    fn int(r: *Reader, comptime T: type) Error!T {
+        return std.mem.readInt(T, (try r.take(@sizeOf(T)))[0..@sizeOf(T)], .little);
+    }
+
+    fn slice(r: *Reader, comptime T: type, n: usize) Error![]const T {
+        r.pos = std.mem.alignForward(usize, r.pos, @alignOf(T));
+        const b = try r.take(std.math.mul(usize, n, @sizeOf(T)) catch return error.BadLinkObject);
+        return @alignCast(std.mem.bytesAsSlice(T, b));
+    }
+
+    fn counted(r: *Reader, comptime T: type) Error![]const T {
+        r.pos = std.mem.alignForward(usize, r.pos, 8);
+        const n = try r.int(u64);
+        return r.slice(T, std.math.cast(usize, n) orelse return error.BadLinkObject);
+    }
+};
+
+/// Builds a link object in memory.
+pub const Writer = struct {
+    gpa: Allocator,
+    arch: Arch,
+    os: Os,
+    reg_layout: [3]u32 = .{ 0, 0, 0 },
+    entry: Symbol = .{ .name = 0, .atom = 0, .offset = 0 },
+    atoms: std.ArrayList(Atom) = .empty,
+    relocs: std.ArrayList(Reloc) = .empty,
+    guards: std.ArrayList(Guard) = .empty,
+    symbols: std.ArrayList(Symbol) = .empty,
+    roots: std.ArrayList(u32) = .empty,
+    linker_names: std.ArrayList(u32) = .empty,
+    strings: std.ArrayList(u8) = .empty,
+    data: std.ArrayList(u8) = .empty,
+    string_index: std.StringHashMapUnmanaged(u32) = .empty,
+
+    pub fn deinit(w: *Writer) void {
+        inline for (.{ "atoms", "relocs", "guards", "symbols", "roots", "linker_names", "strings", "data" }) |f| @field(w, f).deinit(w.gpa);
+        var it = w.string_index.keyIterator();
+        while (it.next()) |k| w.gpa.free(k.*);
+        w.string_index.deinit(w.gpa);
+    }
+
+    /// The offset of `s` in the string table, adding it once.
+    pub fn string(w: *Writer, s: []const u8) Allocator.Error!u32 {
+        if (w.strings.items.len == 0) try w.strings.append(w.gpa, 0);
+        if (s.len == 0) return 0;
+        if (w.string_index.get(s)) |off| return off;
+        const off: u32 = @intCast(w.strings.items.len);
+        try w.strings.appendSlice(w.gpa, s);
+        try w.strings.append(w.gpa, 0);
+        // The key is a copy, since the table of strings moves as it grows.
+        const key = try w.gpa.dupe(u8, s);
+        errdefer w.gpa.free(key);
+        try w.string_index.put(w.gpa, key, off);
+        return off;
+    }
+
+    /// The index for the linker-defined name `s`.
+    pub fn linkerName(w: *Writer, s: []const u8) Allocator.Error!Target {
+        const off = try w.string(s);
+        for (w.linker_names.items, 0..) |n, i| if (n == off) return .{ .index = @intCast(i), .space = .linker };
+        try w.linker_names.append(w.gpa, off);
+        return .{ .index = @intCast(w.linker_names.items.len - 1), .space = .linker };
+    }
+
+    /// Adds an atom with bytes `bytes`, or `size` zero bytes when `bytes`
+    /// is null. Its relocations follow with `reloc`.
+    pub fn atom(w: *Writer, kind: Kind, align_log2: u8, bytes: ?[]const u8, size: u32, name: []const u8) Allocator.Error!u32 {
+        var data: u32 = 0;
+        if (bytes) |b| {
+            while (w.data.items.len % 8 != 0) try w.data.append(w.gpa, 0);
+            data = @intCast(w.data.items.len);
+            try w.data.appendSlice(w.gpa, b);
+        }
+        try w.atoms.append(w.gpa, .{
+            .kind = kind,
+            .align_log2 = align_log2,
+            .size = size,
+            .data = data,
+            .first_reloc = @intCast(w.relocs.items.len),
+            .relocs = 0,
+            .name = try w.string(name),
+        });
+        return @intCast(w.atoms.items.len - 1);
+    }
+
+    /// Adds a relocation to the atom added last.
+    pub fn reloc(w: *Writer, rel: Reloc) Allocator.Error!void {
+        try w.relocs.append(w.gpa, rel);
+        w.atoms.items[w.atoms.items.len - 1].relocs += 1;
+    }
+
+    pub fn write(w: *Writer, out: *std.Io.Writer) !void {
+        _ = try w.string("");
+        try out.writeAll(magic);
+        try out.writeByte(@backingInt(w.arch));
+        try out.writeByte(@backingInt(w.os));
+        var pos: usize = magic.len + 2;
+        try pad(out, &pos, 4);
+        try raw(out, &pos, std.mem.sliceAsBytes(&w.reg_layout));
+        try raw(out, &pos, std.mem.asBytes(&w.entry));
+        try counted(out, &pos, Atom, w.atoms.items);
+        try counted(out, &pos, Reloc, w.relocs.items);
+        try counted(out, &pos, Guard, w.guards.items);
+        try counted(out, &pos, Symbol, w.symbols.items);
+        try counted(out, &pos, u32, w.roots.items);
+        try counted(out, &pos, u32, w.linker_names.items);
+        try counted(out, &pos, u8, w.strings.items);
+        try counted(out, &pos, u8, w.data.items);
+    }
+
+    fn pad(out: *std.Io.Writer, pos: *usize, a: usize) !void {
+        while (pos.* % a != 0) : (pos.* += 1) try out.writeByte(0);
+    }
+
+    fn raw(out: *std.Io.Writer, pos: *usize, b: []const u8) !void {
+        try out.writeAll(b);
+        pos.* += b.len;
+    }
+
+    fn counted(out: *std.Io.Writer, pos: *usize, comptime T: type, items: []const T) !void {
+        try pad(out, pos, 8);
+        var n: [8]u8 = undefined;
+        std.mem.writeInt(u64, &n, items.len, .little);
+        try raw(out, pos, &n);
+        try pad(out, pos, @alignOf(T));
+        try raw(out, pos, std.mem.sliceAsBytes(items));
+    }
+};
+
+test "a link object reads back what was written" {
+    const gpa = std.testing.allocator;
+    var w: Writer = .{ .gpa = gpa, .arch = .x86_64, .os = .linux };
+    defer w.deinit();
+    const a = try w.atom(.text, 4, "\xc3", 1, "f");
+    const b = try w.atom(.data, 3, &@as([8]u8, @splat(0)), 8, "p");
+    try w.reloc(.{ .offset = 0, .type = 1, .target = .{ .index = @intCast(a), .space = .atom }, .addend = 0 });
+    w.entry = .{ .name = try w.string("_start"), .atom = a, .offset = 0 };
+    try w.roots.append(gpa, b);
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    defer buf.deinit();
+    try w.write(&buf.writer);
+    const bytes = try gpa.alignedAlloc(u8, .@"8", buf.written().len);
+    defer gpa.free(bytes);
+    @memcpy(bytes, buf.written());
+    const o = try read(bytes);
+    try std.testing.expectEqual(@as(usize, 2), o.atoms.len);
+    try std.testing.expectEqualStrings("p", o.string(o.atoms[1].name));
+    try std.testing.expectEqual(@as(u8, 0xc3), o.bytes(o.atoms[0])[0]);
+    try std.testing.expectEqual(a, o.atomRelocs(o.atoms[1])[0].target.index);
+    try std.testing.expectEqualStrings("_start", o.string(o.entry.name));
+}

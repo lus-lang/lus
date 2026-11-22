@@ -1127,7 +1127,7 @@ fn makeMetatable(l: *Thread, comptime k: Kind, comptime methods: []const aux.Reg
     const mt = try l.newTable(0, meta.len + 4);
     try l.push(Value.obj(.table, mt));
     defer l.top -= 1;
-    try aux.setFuncs(l, mt, .always, "", meta);
+    try aux.setFuncs(l, mt, .methods, "time:" ++ @tagName(k), meta);
     const m = try aux.newLib(l, .methods, "time:" ++ @tagName(k), methods);
     try l.push(Value.obj(.table, m));
     try aux.setField(l, mt, if (k == .zoned) "__methods" else "__index", Value.obj(.table, m));

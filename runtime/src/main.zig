@@ -17,6 +17,17 @@ const Thread = lus.vm.state.Thread;
 
 pub const version = api.version;
 
+/// The runtime of executables prints the message of a panic and stops,
+/// without the stack trace, whose reader of debug information it leaves
+/// out.
+pub const panic = if (lus.has_compiler) std.debug.FullPanic(std.debug.defaultPanic) else std.debug.FullPanic(runtimePanic);
+
+fn runtimePanic(msg: []const u8, _: ?usize) noreturn {
+    @branchHint(.cold);
+    std.debug.print("panic: {s}\n", .{msg});
+    std.process.abort();
+}
+
 /// Edge coverage, in a `-Dcoverage=true` build.
 const coverage = if (lus.vm.coverage_enabled) @import("coverage.zig") else struct {};
 
