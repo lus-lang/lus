@@ -2909,6 +2909,40 @@ A group differs from a table in the following ways.
 
 A table is the right choice when the values must leave the function, when fields are added later, or when the program iterates over the fields.
 
+### Values computed on first use
+
+Some values cost time to compute but only some runs need them, such as settings that only one command of a tool reads. Computing such a value at the start slows every run. Computing it inside each function that needs it repeats the work. The `<lazy>` attribute declares the value once, at the top of the file, and computes it the first time the program reads the variable. Later reads return the same value.
+
+```lus
+local function load_settings()
+    print("reading settings")
+    return { host = "localhost", port = 8080 }
+end
+
+local settings <lazy> = load_settings()
+
+local function run(command)
+    if command == "version" then
+        return "2.0"
+    end
+    return `serving on $(settings.host):$(settings.port)`
+end
+
+print(run("version"))
+print(run("serve"))
+print(run("serve"))
+--> 2.0
+--> reading settings
+--> serving on localhost:8080
+--> serving on localhost:8080
+```
+
+A default that is expensive to find becomes cheap when another value replaces it. In `local cache_dir <lazy> = options.cache or find_cache_dir()`, the search runs only when `options.cache` is missing and the program reads `cache_dir`.
+
+A lazy variable keeps its first value, so an assignment to it is a compile error, as for `<const>`. The initializer sees the other variables as they are at the first read, as code in a function does. If the initializer raises an error, the read raises it. The next read runs the initializer again. A lazy variable that the program never reads never runs its initializer.
+
+`<lazy, close>` opens a resource on first use. At the end of the block, Lus closes the value if the program read the variable and does nothing otherwise. A field of a [local group](#local-groups) may also be lazy, as in `median <lazy> = table.median(rows)`, which computes the median only when the program reads that field.
+
 ## Enums
 
 Programs often need a value that is one of a few fixed choices, such as a log level, the state of a connection, or a direction. Strings and numbers can represent the choices, but both have drawbacks. A misspelled string such as `"warnning"` is still a string, so Lus reports no error. A number such as `2` has no meaning for the reader and is equal to every other `2` in the program. An _enum_ is a fixed set of named values that differ from every string, every number, and the values of every other enum.

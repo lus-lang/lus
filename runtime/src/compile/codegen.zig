@@ -8,6 +8,7 @@ const std = @import("std");
 const ast = @import("../syntax/ast.zig");
 const opc = @import("opcodes.zig");
 const meta = @import("meta.zig");
+const lazy = @import("../lib/lazy.zig");
 const vm = struct {
     const value = @import("../vm/value.zig");
     const object = @import("../vm/object.zig");
@@ -82,7 +83,7 @@ const ExpDesc = struct {
 // ---------------------------------------------------------------------
 // Variables, blocks, and function state
 
-const VarKind = enum { regular, const_, close, ctc, global_named, global_star, group };
+const VarKind = enum { regular, const_, close, ctc, global_named, global_star, group, lazy };
 
 const VarDesc = struct {
     name: []const u8,
@@ -102,6 +103,11 @@ const VarDesc = struct {
     /// For a `<meta>` local held in a register (a table or a vector), its
     /// constant value, which folding reads.
     meta_const: ?Value = null,
+    /// For a `<lazy>` local, which occupies no register of its own: the
+    /// names of the hidden locals that hold its value and its force
+    /// function (`lazyLocal`).
+    lazy_store: []const u8 = "",
+    lazy_force: []const u8 = "",
 };
 
 const Group = struct {
@@ -1424,9 +1430,14 @@ fn singleVarAux(fs: *FuncState, name: []const u8, v: *ExpDesc, base: bool) Error
 /// Builds the descriptor for a variable reference, including `_ENV.name`
 /// for globals.
 fn singleVar(fs: *FuncState, name: []const u8, line: u32, v: *ExpDesc) Error!void {
+    if (knownLocal(fs, name)) |vd| if (vd.kind == .lazy) return lazyRead(fs, vd, line, v);
     fs.c.ginfo = -1;
     try singleVarAux(fs, name, v, true);
     if (v.kind != .void_) return;
+    if (std.mem.startsWith(u8, name, lazy.prefix)) if (lazy.number(name[lazy.prefix.len..])) |n| {
+        v.* = ExpDesc.init(.k, @intCast(try valueK(fs, try lazy.get(fs.c.g, n))));
+        return;
+    };
     if (v.info == -3) return; // group: handled by the caller
     const ginfo = fs.c.ginfo;
     if (v.info != -2 and ginfo == -2 and !std.mem.eql(u8, name, "flags") and !std.mem.startsWith(u8, name, "__lus_")) {
@@ -1451,6 +1462,7 @@ fn singleVar(fs: *FuncState, name: []const u8, line: u32, v: *ExpDesc) Error!voi
 var readonly_marker: ast.Expr = .{ .span = .{ .start = 0, .end = 0 }, .line = 0, .kind = .nil };
 
 fn checkReadonly(fs: *FuncState, v: *const ExpDesc, name: []const u8, line: u32) Error!void {
+    if (v.node == &readonly_marker) return fs.c.err(line, "attempt to assign to const variable '{s}'", .{name});
     switch (v.kind) {
         .local => {
             const vd = getLocalVar(fs, @intCast(v.aux));
@@ -1842,6 +1854,8 @@ fn callExpr(fs: *FuncState, callee: *ast.Expr, method: ?[]const u8, args: []*ast
 /// field of a group declared in an enclosing function is reached through an
 /// upvalue, created on each function level between the two as needed.
 fn groupField(fs: *FuncState, vabs: u32, v: *ExpDesc) Error!void {
+    const fvd = &fs.c.actvars.items[vabs];
+    if (fvd.kind == .lazy) return lazyRead(fs, fvd, fs.line, v);
     if (vabs >= fs.first_local) {
         const vidx = vabs - fs.first_local;
         v.* = .{ .kind = .local, .info = getLocalVar(fs, vidx).reg, .aux = @intCast(vidx) };
@@ -2169,8 +2183,10 @@ fn attribKind(fs: *FuncState, an: ast.AttName, line: u32, allow_runtime: bool) E
         .@"const" => k = .const_,
         .close => k = .close,
         .group => k = .group,
-        .meta => k = .const_,
-        .lazy => {},
+        // A plain `local` statement and a group field handle these first,
+        // so any other declaration rejects them.
+        .meta => return fs.c.err(line, "cannot use <meta> in this declaration", .{}),
+        .lazy => return fs.c.err(line, "cannot use <lazy> in this declaration", .{}),
         .runtime => if (!allow_runtime) return fs.c.err(line, "runtime attributes not supported in this context", .{}),
     };
     return k;
@@ -2215,7 +2231,7 @@ fn explist(fs: *FuncState, exprs: []*ast.Expr, last: *ExpDesc) Error!u32 {
 
 fn localStat(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
     for (names) |an| if (an.has(.meta)) return metaLocal(fs, names, values, line);
-    for (names) |an| if (an.has(.lazy)) return fs.c.err(line, "<lazy> is not supported yet", .{});
+    for (names) |an| if (an.has(.lazy)) return lazyLocal(fs, names, values, line);
     var toclose: ?u32 = null;
     var has_runtime = false;
     for (names, 0..) |an, i| {
@@ -2410,7 +2426,7 @@ fn localGroup(fs: *FuncState, names: []ast.AttName, inits: []ast.GroupInit, line
 
 fn groupCtor(fs: *FuncState, group: *Group, fields: []ast.GroupField, handlers: []const u8, prefix_name: []const u8, line: u32) Error!void {
     for (fields) |gf| {
-        const k = try attribKind(fs, gf.name, line, false);
+        const k: VarKind = if (gf.name.has(.lazy)) .regular else try attribKind(fs, gf.name, line, false);
         switch (gf.value) {
             .group => |sub| {
                 const sg = try fs.c.arena.create(Group);
@@ -2422,6 +2438,15 @@ fn groupCtor(fs: *FuncState, group: *Group, fields: []ast.GroupField, handlers: 
                 // Field locals have hidden names so plain lookups never
                 // find them.
                 const hidden = try std.fmt.allocPrint(fs.c.arena, "({s}.{s})", .{ prefix_name, gf.name.name.text });
+                if (gf.name.has(.lazy)) {
+                    // A lazy field is a lazy local under the hidden name.
+                    if (handlers.len > 0) return fs.c.err(line, "cannot combine <lazy> fields with runtime attributes of the group", .{});
+                    var lazy_names = [_]ast.AttName{.{ .name = .{ .text = hidden, .span = gf.name.name.span }, .attribs = gf.name.attribs }};
+                    var lazy_values = [_]*ast.Expr{e};
+                    try lazyLocal(fs, &lazy_names, &lazy_values, line);
+                    try group.fields.put(fs.c.arena, gf.name.name.text, .{ .field = fs.first_local + fs.nactvar - 1 });
+                    continue;
+                }
                 var ve: ExpDesc = .{};
                 try expr(fs, e, &ve);
                 try exp2nextreg(fs, &ve);
@@ -2454,7 +2479,7 @@ fn groupCopy(fs: *FuncState, group: *Group, src: ast.Name, line: u32) Error!void
                 try groupField(fs, vabs, &fv);
                 try reserveRegs(fs, 1);
                 try exp2reg(fs, &fv, reg);
-                const vidx = try newLocalVar(fs, svd.name, svd.kind);
+                const vidx = try newLocalVar(fs, svd.name, if (svd.kind == .lazy) .const_ else svd.kind);
                 try adjustLocalVars(fs, 1);
                 try group.fields.put(fs.c.arena, entry.key_ptr.*, .{ .field = fs.first_local + vidx });
             },
@@ -3339,6 +3364,197 @@ fn metaLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u3
     const vd = getLocalVar(fs, vidx);
     vd.meta_value = mv;
     vd.meta_const = tv;
+    try adjustLocalVars(fs, 1);
+}
+
+// ---------------------------------------------------------------------
+// Lazy locals (`spec/design/lazy.md`)
+
+/// A read of the lazy local `vd`: while its force function is set, calls
+/// it, stores the value it returns, and clears it. Then reads the hidden
+/// local that holds the value. The result is read-only. The declaring
+/// function tests and writes these locals in place, and only the force
+/// function captures the state of the computation, so a hot read costs
+/// one test of a register that nothing captures.
+fn lazyRead(fs: *FuncState, vd: *VarDesc, line: u32, v: *ExpDesc) Error!void {
+    var f: ExpDesc = .{};
+    try singleVar(fs, vd.lazy_force, line, &f);
+    const base = fs.freereg;
+    var skip: i32 = undefined;
+    if (f.kind == .local) {
+        skip = try condJump(fs, .test_, @intCast(f.info), 0, 0);
+        try reserveRegs(fs, 1);
+        try codeABC(fs, .move, base, @intCast(f.info), 0);
+    } else {
+        try exp2nextreg(fs, &f);
+        skip = try condJump(fs, .test_, base, 0, 0);
+    }
+    try codeABC(fs, .call, base, 1, 2);
+    var target: ExpDesc = .{};
+    try singleVar(fs, vd.lazy_store, line, &target);
+    var result = ExpDesc.init(.nonreloc, base);
+    try storeVar(fs, &target, &result);
+    var fv: ExpDesc = .{};
+    try singleVar(fs, vd.lazy_force, line, &fv);
+    var no: ExpDesc = .{ .kind = .false_ };
+    try storeVar(fs, &fv, &no);
+    try patchToHere(fs, skip);
+    fs.freereg = base;
+    try singleVar(fs, vd.lazy_store, line, v);
+    v.node = &readonly_marker;
+}
+
+/// Builders of the syntax tree of a force function. Every node takes the
+/// line and span of the declaration.
+const Gen = struct {
+    a: Allocator,
+    line: u32,
+    span: ast.Span,
+
+    fn ex(g: Gen, kind: ast.Expr.Kind) Error!*ast.Expr {
+        const e = try g.a.create(ast.Expr);
+        e.* = .{ .span = g.span, .line = g.line, .kind = kind };
+        return e;
+    }
+    fn name(g: Gen, text: []const u8) Error!*ast.Expr {
+        return g.ex(.{ .name = .{ .text = text, .span = g.span } });
+    }
+    fn int(g: Gen, i: i64) Error!*ast.Expr {
+        return g.ex(.{ .integer = i });
+    }
+    fn str(g: Gen, text: []const u8) Error!*ast.Expr {
+        return g.ex(.{ .string = text });
+    }
+    fn bin(g: Gen, op: ast.BinOp, l: *ast.Expr, r: *ast.Expr) Error!*ast.Expr {
+        return g.ex(.{ .binop = .{ .op = op, .lhs = l, .rhs = r } });
+    }
+    fn call(g: Gen, callee: *ast.Expr, args: []const *ast.Expr) Error!*ast.Expr {
+        return g.ex(.{ .call = .{ .callee = callee, .args = try g.a.dupe(*ast.Expr, args), .args_kind = .parens } });
+    }
+    fn st(g: Gen, kind: ast.Stat.Kind) Error!*ast.Stat {
+        const s = try g.a.create(ast.Stat);
+        s.* = .{ .span = g.span, .line = g.line, .kind = kind };
+        return s;
+    }
+    fn block(g: Gen, stats: []const *ast.Stat) Error!*ast.Block {
+        const b = try g.a.create(ast.Block);
+        b.* = .{ .stats = try g.a.dupe(*ast.Stat, stats), .span = g.span, .end_line = g.line };
+        return b;
+    }
+    fn assign(g: Gen, target: []const u8, val: *ast.Expr) Error!*ast.Stat {
+        const t = try g.a.alloc(*ast.Expr, 1);
+        t[0] = try g.name(target);
+        const vs = try g.a.alloc(*ast.Expr, 1);
+        vs[0] = val;
+        return g.st(.{ .assign = .{ .targets = t, .values = vs } });
+    }
+    fn local(g: Gen, names: []const []const u8, attribs: []const ast.Attrib, val: ?*ast.Expr) Error!*ast.Stat {
+        const ns = try g.a.alloc(ast.AttName, names.len);
+        for (names, ns) |n, *d| d.* = .{ .name = .{ .text = n, .span = g.span }, .attribs = try g.a.dupe(ast.Attrib, attribs) };
+        var vs: []*ast.Expr = &.{};
+        if (val) |x| {
+            vs = try g.a.alloc(*ast.Expr, 1);
+            vs[0] = x;
+        }
+        return g.st(.{ .local = .{ .names = ns, .values = vs } });
+    }
+    fn ifThen(g: Gen, cond: *ast.Expr, then: []const *ast.Stat, else_: ?[]const *ast.Stat) Error!*ast.Stat {
+        const cl = try g.a.alloc(ast.IfClause, 1);
+        cl[0] = .{ .cond = .{ .expr = cond }, .body = try g.block(then), .line = g.line };
+        return g.st(.{ .if_ = .{ .clauses = cl, .else_ = if (else_) |e| try g.block(e) else null } });
+    }
+};
+
+/// `local name <lazy> = exp`. The compiler declares hidden locals for the
+/// value that reads see, the force function, and, captured only by the
+/// force function, the state of the computation (1 pending, 0 computed,
+/// or the thread computing it) and the computed value. `name` becomes a
+/// read-only alias whose reads call the force function while it is set
+/// (`lazyRead`).
+fn lazyLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
+    const c = fs.c;
+    if (names.len != 1) return c.err(line, "a <lazy> declaration names one variable", .{});
+    const an = names[0];
+    if (an.has(.group)) return c.err(line, "cannot combine <lazy> with <group>", .{});
+    if (values.len != 1) return c.err(line, "a <lazy> variable needs one initializer", .{});
+    const a = c.arena;
+    const x = an.name.text;
+    const g: Gen = .{ .a = a, .line = line, .span = an.name.span };
+    const store = try std.fmt.allocPrint(a, "(lazy {s})", .{x});
+    const force = try std.fmt.allocPrint(a, "(lazy force {s})", .{x});
+    const state = try std.fmt.allocPrint(a, "(lazy state {s})", .{x});
+    const cache = try std.fmt.allocPrint(a, "(lazy cache {s})", .{x});
+    const ok = "(lazy ok)";
+    const val = "(lazy value)";
+    var stats: std.ArrayList(*ast.Stat) = .empty;
+
+    // Runtime attributes are evaluated once, before the initializer, as
+    // for an ordinary local, and applied to the computed value.
+    var handlers: std.ArrayList([]const u8) = .empty;
+    for (an.attribs) |at| if (at == .runtime) {
+        const h = try std.fmt.allocPrint(a, "(lazy attr {d} {s})", .{ handlers.items.len, x });
+        try handlers.append(a, h);
+        try stats.append(a, try g.local(&.{h}, &.{}, at.runtime));
+    };
+    try stats.append(a, try g.local(&.{store}, &.{}, null));
+    try stats.append(a, try g.local(&.{state}, &.{}, try g.int(1)));
+    try stats.append(a, try g.local(&.{cache}, &.{}, null));
+
+    // The force function returns the value, computing it on its first
+    // successful call.
+    var body: std.ArrayList(*ast.Stat) = .empty;
+    const wait = try g.st(.{ .expr = try g.call(try g.name(lazy.prefix ++ "lazywait"), &.{ try g.name(state), try g.str(x) }) });
+    const rets = try a.alloc(*ast.Expr, 1);
+    rets[0] = try g.name(cache);
+    const done_return = try g.ifThen(try g.bin(.eq, try g.name(state), try g.int(0)), &.{try g.st(.{ .return_ = rets })}, null);
+    try body.append(a, try g.st(.{ .while_ = .{
+        .cond = .{ .expr = try g.bin(.ne, try g.name(state), try g.int(1)) },
+        .body = try g.block(&.{ done_return, wait }),
+    } }));
+    try body.append(a, try g.assign(state, try g.call(try g.name(lazy.prefix ++ "running"), &.{})));
+    try body.append(a, try g.local(&.{ ok, val }, &.{}, try g.ex(.{ .catch_ = .{ .handler = null, .body = values[0] } })));
+    var success: std.ArrayList(*ast.Stat) = .empty;
+    for (handlers.items) |h| {
+        const r = "(lazy result)";
+        const replaced = try g.ifThen(try g.bin(.ne, try g.name(r), try g.ex(.nil)), &.{try g.assign(val, try g.name(r))}, null);
+        const apply = try g.local(&.{r}, &.{}, try g.call(try g.name(h), &.{ try g.str(x), try g.name(val) }));
+        try success.append(a, try g.ifThen(try g.bin(.ne, try g.name(val), try g.ex(.nil)), &.{ apply, replaced }, null));
+    }
+    try success.append(a, try g.assign(cache, try g.name(val)));
+    try success.append(a, try g.assign(state, try g.int(0)));
+    const vrets = try a.alloc(*ast.Expr, 1);
+    vrets[0] = try g.name(val);
+    try success.append(a, try g.st(.{ .return_ = vrets }));
+    const failure = [_]*ast.Stat{
+        try g.assign(state, try g.int(1)),
+        try g.st(.{ .expr = try g.call(try g.name(lazy.prefix ++ "rethrow"), &.{try g.name(val)}) }),
+    };
+    try body.append(a, try g.ifThen(try g.name(ok), success.items, &failure));
+    const func = try a.create(ast.Function);
+    func.* = .{ .params = &.{}, .is_vararg = false, .body = try g.block(body.items), .line = line, .end_line = line, .span = g.span, .name = x };
+    try stats.append(a, try g.local(&.{force}, &.{}, try g.ex(.{ .function = func })));
+
+    if (an.has(.close)) {
+        // The value exists only after the first read, so a guard closes
+        // it at the end of the scope when it was computed.
+        const e = "(lazy error)";
+        const close_body = try g.ifThen(try g.bin(.eq, try g.name(state), try g.int(0)), &.{
+            try g.st(.{ .expr = try g.call(try g.name(lazy.prefix ++ "closevalue"), &.{ try g.name(cache), try g.name(e), try g.str(x) }) }),
+        }, null);
+        const params = try a.alloc(ast.Name, 1);
+        params[0] = .{ .text = e, .span = g.span };
+        const cf = try a.create(ast.Function);
+        cf.* = .{ .params = params, .is_vararg = false, .body = try g.block(&.{close_body}), .line = line, .end_line = line, .span = g.span, .name = x };
+        const guard = try std.fmt.allocPrint(a, "(lazy close {s})", .{x});
+        try stats.append(a, try g.local(&.{guard}, &.{.close}, try g.call(try g.name(lazy.prefix ++ "closer"), &.{try g.ex(.{ .function = cf })})));
+    }
+
+    for (stats.items) |s| try statement(fs, s);
+    const vidx = try newLocalVar(fs, x, .lazy);
+    const vd = getLocalVar(fs, vidx);
+    vd.readonly = true;
+    vd.lazy_store = store;
+    vd.lazy_force = force;
     try adjustLocalVars(fs, 1);
 }
 

@@ -542,7 +542,7 @@ Limits: at most 200 active locals per function (`too many local variables (limit
 - `<close>` marks the variable to be closed. At most one per declaration list (`multiple to-be-closed variables in local list`). When the variable goes out of scope, normally or through an error, its `__close` metamethod runs. A value that is neither `nil`, `false`, nor closable raises a runtime error naming the variable (`variable 'x' got a non-closable value`).
 - `<group>` declares a local group (section 5.10).
 - `<meta>` evaluates the initializer at compile time (section 5.14). It implies `<const>`.
-- `<lazy>` is reserved for lazy variables. A declaration with it raises `<lazy> is not supported yet`.
+- `<lazy>` defers the initializer to the first read (section 5.15). It implies `<const>`.
 - Combining two different attributes of `<const>`, `<close>`, and `<group>` on one name raises `conflicting attributes`. Repeating the same one inside one list (`<const, const>`) is accepted. `<meta>` and `<lazy>` combine with any of them in the parser, and the compiler rejects the combinations that section 5.14 lists.
 - Any other attribute is a runtime attribute (section 5.9).
 
@@ -1270,6 +1270,21 @@ end                                   -- odd == 25
 - `meta: MESSAGE` with the position of the failing line for an error the initializer raises.
 
 **Tested** (`meta_test.lus`): lookup tables, scalar constants, later initializers reading earlier ones, nested functions, read-only tables and vectors, one table per declaration, sharing and cycles, `string.dump`, the const rule, the rejected combinations, unknown locals, non-data values, error positions, no permissions without grants, the fresh environment, the fixed random seed, initializers in discarded branches, folded conditions with calls, and discarded `continue` and `provide`. **Tested** (`flags_test.lus`): pure calls on flags fold, other calls do not, and meta locals read flags.
+
+### 5.15 `<lazy>` locals
+
+**Source:** `compile/codegen.zig` (`lazyLocal`, `lazyRead`), `lib/lazy.zig` (the builtins), `compile/dump.zig` (builtin constants). **Design:** `spec/design/lazy.md`. **Manual:** `guide.mdx`. **Tests:** `lazy_test.lus`.
+
+`local NAME <lazy> = exp` and a group field `NAME <lazy> = exp` evaluate `exp` on the first read of `NAME` and keep the value. `exp` sees variables as a function written at the declaration sees them. The rules are in `spec/design/lazy.md`. The compile errors are:
+
+- `a <lazy> declaration names one variable` and `a <lazy> variable needs one initializer`,
+- `cannot combine <lazy> with <group>` and `cannot combine <lazy> fields with runtime attributes of the group`,
+- `cannot use <lazy> in this declaration` in `from` destructuring and assignment conditions, and `global variables cannot be <lazy>`,
+- `attempt to assign to const variable 'NAME'` for an assignment, in any function.
+
+The runtime errors are `lazy variable 'NAME' read during its own initialization` and `lazy variable 'NAME' read while another coroutine computes it`. An error that `exp` raises propagates from the read unchanged, and the next read evaluates `exp` again.
+
+**Tested** (`lazy_test.lus`): one evaluation on the first read, no evaluation without a read, values at the first read, sharing with nested functions, the const rule, retry after an error, error objects passed unchanged, recursion, `nil` and `false` values, `<close>` only after a read, runtime attributes, group fields, the rejected forms, detached coroutines that wait, plain coroutines that raise, `string.dump`, and hot loop reads.
 
 ## 6. Compile-time error catalog
 

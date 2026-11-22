@@ -23,6 +23,7 @@ const Global = vm.state.Global;
 const Proto = object.Proto;
 const String = object.String;
 const Allocator = std.mem.Allocator;
+const lazy = @import("../lib/lazy.zig");
 
 pub const signature = "\x1bLus";
 /// Bumped whenever the instruction set changes. Version 2 added the
@@ -38,7 +39,8 @@ const previous_version: u8 = 4;
 /// each table as its entry count and its key and value pairs. Inside the
 /// graph, `tableref` names a table of the same graph by its number, which
 /// keeps sharing and cycles.
-const ConstTag = enum(u8) { nil, false, true, integer, float, string, bigint, decimal, enumeration, table, vector, tableref };
+/// `builtin` names one of the natives of `lib/lazy.zig` by its number.
+const ConstTag = enum(u8) { nil, false, true, integer, float, string, bigint, decimal, enumeration, table, vector, tableref, builtin };
 
 pub const DumpError = Allocator.Error || error{Unsupported};
 
@@ -173,6 +175,11 @@ const Writer = struct {
                 try w.text(s);
             },
             .table => try w.tableGraph(k.as(object.Table)),
+            .native => {
+                const n = lazy.numberOf(k.as(vm.state.Native).func) orelse return error.Unsupported;
+                try w.byte(@backingInt(ConstTag.builtin));
+                try w.byte(n);
+            },
             .vector => {
                 const v = k.as(object.Vector);
                 try w.byte(@backingInt(ConstTag.vector));
@@ -404,6 +411,11 @@ const Reader = struct {
             .vector => try r.vector(),
             .table => try r.tableGraph(),
             .tableref => return error.Malformed,
+            .builtin => blk: {
+                const n = try r.byte();
+                if (n >= lazy.natives.len) return error.Malformed;
+                break :blk try lazy.get(g, n);
+            },
         };
     }
 
