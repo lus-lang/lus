@@ -214,7 +214,9 @@ pub fn hoist(f: *ir.Func, cfg: *Cfg, loops: []const lower.Lower.LoopInfo, marks:
                     .generic, .dcall => w.generic = true,
                     .gccheck => w.collects = true,
                     .callc => {
-                        if (!inst.flags.pure) w.collects = true;
+                        if (inst.flags.grows) {
+                            for ([_]ir.Class{ .tab_array, .elem, .gc }) |c| w.classes[@backingInt(c)] = true;
+                        } else if (!inst.flags.pure) w.collects = true;
                     },
                     else => {},
                 }

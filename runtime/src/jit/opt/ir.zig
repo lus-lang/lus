@@ -277,7 +277,10 @@ pub const Inst = struct {
         pure: bool = false,
         /// The first argument of `callc` is the thread.
         thread: bool = false,
-        _pad: u4 = 0,
+        /// The callee of `callc` writes only the array part of the
+        /// table it gets and its write barrier, and never collects.
+        grows: bool = false,
+        _pad: u3 = 0,
     };
 
     pub fn isConst(i: *const Inst) bool {
