@@ -37,13 +37,16 @@ pub const Finish = union(enum) {
     /// the next pending variable). When true, keep the stack top where the
     /// call left it, because a variable-count return reads it.
     redo: bool,
+    /// Store the result into operand `n - 1` of the calling concat
+    /// instruction, then concatenate its first `n` operands.
+    concat: u8,
 
     /// The form a frame stores, which has a fixed layout.
     pub const Packed = extern struct {
         kind: Kind = .none,
         arg: u8 = 0,
 
-        pub const Kind = enum(u8) { none, store, cond, discard, redo };
+        pub const Kind = enum(u8) { none, store, cond, discard, redo, concat };
 
         pub inline fn unpack(p: Packed) Finish {
             return switch (p.kind) {
@@ -52,6 +55,7 @@ pub const Finish = union(enum) {
                 .cond => .{ .cond = p.arg != 0 },
                 .discard => .discard,
                 .redo => .{ .redo = p.arg != 0 },
+                .concat => .{ .concat = p.arg },
             };
         }
     };
@@ -63,6 +67,7 @@ pub const Finish = union(enum) {
             .cond => |k| .{ .kind = .cond, .arg = @intFromBool(k) },
             .discard => .{ .kind = .discard },
             .redo => |keep| .{ .kind = .redo, .arg = @intFromBool(keep) },
+            .concat => |n| .{ .kind = .concat, .arg = n },
         };
     }
 };

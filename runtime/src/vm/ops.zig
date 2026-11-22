@@ -817,7 +817,13 @@ pub fn toString(l: *Thread, v: Value) Error!*String {
 
 /// Concatenates values for the `..` operator. Strings and numbers join
 /// directly. Other values use `__concat`, pairwise from the right.
+/// Inside the interpreter (when `l.meta_finish` is set) a Lus metamethod
+/// runs as a frame whose finish names the operand its result replaces.
+/// The operands before that one stay on the stack, and the interpreter
+/// concatenates them when the frame returns.
 pub fn concat(l: *Thread, first: u32, n: u32) Error!Value {
+    const framed = l.meta_finish != null;
+    l.meta_finish = null;
     // Right to left, collapsing runs of strings and numbers. The operands
     // are re-read from the stack after every metamethod call, which may
     // reallocate it.
@@ -840,7 +846,8 @@ pub fn concat(l: *Thread, first: u32, n: u32) Error!Value {
             const bad = if (isStringLike(lhs)) acc else lhs;
             return l.typeError(bad, "concatenate");
         }
-        acc = try call1(l, tm, &.{ lhs, acc });
+        if (framed) l.meta_finish = .{ .concat = @intCast(i + 1) };
+        acc = try callMeta(l, tm, &.{ lhs, acc });
     }
     return acc;
 }

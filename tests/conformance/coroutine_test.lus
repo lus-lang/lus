@@ -836,3 +836,130 @@ local function an_errored_coroutine_keeps_its_stack_for_traceback_until_clo_test
     assert(not tb2:find("boomer"), "a closed coroutine must have an empty stack")
 end
 
+
+local function tagged(name, log)
+    return setmetatable({ name = name }, {
+        __concat = function(a, b)
+            local an = type(a) == "table" and a.name or tostring(a)
+            local bn = type(b) == "table" and b.name or tostring(b)
+            local got = coroutine.yield(an .. "+" .. bn)
+            log[#log + 1] = got
+            return `($an.$bn)`
+        end,
+    })
+end
+
+local function a_concat_metamethod_can_yield_test()
+    local mt = { __concat = function() coroutine.yield("cat") return "c" end }
+    local co = coroutine.create(function(a) return a .. "x" end)
+    local ok, v = coroutine.resume(co, setmetatable({}, mt))
+    assert(ok and v == "cat")
+    ok, v = coroutine.resume(co)
+    assert(ok and v == "c")
+    assert(coroutine.status(co) == "dead")
+end
+
+local function a_chain_of_concats_resumes_with_the_operands_left_test()
+    local log = {}
+    local x, y = tagged("x", log), tagged("y", log)
+    local co = coroutine.wrap(function()
+        local pre, mid = "a", 7
+        local s = pre .. x .. mid .. "b" .. y .. "c"
+        return "done", s
+    end)
+    -- Pairs fold from the right: y with "c", then the joined "7b" with
+    -- that result after x has been folded in.
+    assert(co() == "y+c")
+    assert(co(1) == "x+7b(y.c)")
+    local tag, s = co(2)
+    assert(tag == "done")
+    assert(s == "a(x.7b(y.c))", s)
+    assert(log[1] == 1 and log[2] == 2)
+end
+
+local function every_operand_with_a_concat_metamethod_yields_in_turn_test()
+    local log = {}
+    local t = {}
+    for i = 1, 6 do t[i] = tagged(`t$i`, log) end
+    local co = coroutine.wrap(function()
+        return t[1] .. t[2] .. t[3] .. t[4] .. t[5] .. t[6]
+    end)
+    local seen = {}
+    local r = co()
+    local n = 0
+    while r:find("+", 1, true) do
+        n = n + 1
+        seen[n] = r
+        r = co(n)
+    end
+    assert(n == 5)
+    assert(seen[1] == "t5+t6")
+    assert(seen[5] == "t1+(t2.(t3.(t4.(t5.t6))))")
+    assert(r == "(t1.(t2.(t3.(t4.(t5.t6)))))", r)
+    for i = 1, 5 do assert(log[i] == i) end
+end
+
+local function a_concat_metamethod_yields_in_a_hot_loop_test()
+    local mt = {
+        __concat = function(a, b)
+            local k = coroutine.yield()
+            return (type(a) == "table" and a.v or a) .. k .. (type(b) == "table" and b.v or b)
+        end,
+    }
+    local box = setmetatable({ v = "<" }, mt)
+    local co = coroutine.wrap(function()
+        local total = 0
+        for i = 1, 300 do
+            local s = "[" .. box .. i .. "]"
+            total = total + #s
+        end
+        return total
+    end)
+    local r = co()
+    local expect = 0
+    for i = 1, 300 do
+        expect = expect + #`[<-$i]`
+        r = co("-")
+    end
+    assert(r == expect, r)
+end
+
+local function an_error_after_a_concat_yield_names_the_concatenation_test()
+    local mt = { __concat = function() coroutine.yield() return "ok" end }
+    local co = coroutine.create(function(bad)
+        return bad .. setmetatable({}, mt) .. "z"
+    end)
+    assert(coroutine.resume(co, true))
+    local ok, err = coroutine.resume(co)
+    assert(not ok)
+    assert(err:find("concatenate"), err)
+end
+
+local function a_concat_metamethod_can_yield_from_inside_another_concat_test()
+    local inner = setmetatable({}, {
+        __concat = function(_, b)
+            coroutine.yield("inner")
+            return "i" .. b
+        end,
+    })
+    local outer = setmetatable({}, {
+        __concat = function(_, b)
+            local r = inner .. b
+            coroutine.yield("outer")
+            return "o" .. r
+        end,
+    })
+    local co = coroutine.wrap(function() return "<" .. outer .. "!" end)
+    assert(co() == "inner")
+    assert(co() == "outer")
+    assert(co() == "<oi!")
+end
+
+local function native_and_main_thread_concat_metamethods_still_work_test()
+    local x = setmetatable({}, { __concat = function() return "x" end })
+    assert("a" .. x .. "b" == "ax")
+    local n = setmetatable({}, { __concat = rawequal })
+    assert(("ab" .. n) == false)
+    local co = coroutine.wrap(function() return "q" .. n end)
+    assert(co() == false)
+end
