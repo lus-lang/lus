@@ -210,9 +210,9 @@ jobs:
         run: runtime/zig-out/bin/lus tests/oom/run.lus --io --short --samples 50 --jobs 4 --timeout 120
 
   coverage:
-    name: Edge coverage
+    name: Branch coverage
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 260
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -222,25 +222,43 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - name: Build with coverage
         working-directory: runtime
-        run: zig build -Doptimize=ReleaseSafe -Dcoverage=true --prefix zig-out-cov
+        run: zig build -Doptimize=ReleaseFast -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov
       - name: Run the conformance suite and the doc tests
         timeout-minutes: 90
         working-directory: runtime
         run: |
           mkdir -p runs
           for mode in off on opt-eager; do
-            LUS_JIT=$mode LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests || true
+            LUS_JIT=$mode LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests || true
           done
-          LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents || true
-      - name: Report
+          LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents || true
+      - name: Report of the suite
         working-directory: runtime
         run: |
           LUS_COVERAGE_REPORT=$PWD/runs zig-out-cov/bin/lus | tee coverage.txt
-          { echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          LUS_JIT=off zig-out-cov/bin/lus ../tests/coverage/ratchet.lus coverage.txt ../tests/coverage/baseline.txt | tee ratchet.txt || true
+          { echo '### The suite'; echo '```'; cat coverage.txt; echo; cat ratchet.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Allocation and I/O failure sweeps
+        timeout-minutes: 120
+        working-directory: runtime
+        # The failure paths of `try`, `catch`, and `orelse` run only when an
+        # allocation or an operation fails.
+        env:
+          LUS_JIT: "off"
+        run: |
+          zig-out-cov/bin/lus ../tests/oom/run.lus --coverage $PWD/runs --lus zig-out-cov/bin/lus --samples 100 --jobs 4 --timeout 120 ../tests/conformance || true
+          zig-out-cov/bin/lus ../tests/oom/run.lus --coverage $PWD/runs --io --lus zig-out-cov/bin/lus --samples 40 --jobs 4 --timeout 120 ../tests/conformance || true
+      - name: Report with the sweeps
+        working-directory: runtime
+        run: |
+          LUS_COVERAGE_REPORT=$PWD/runs zig-out-cov/bin/lus | tee coverage-sweeps.txt
+          { echo '### The suite and the failure sweeps'; echo '```'; cat coverage-sweeps.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage
-          path: runtime/coverage.txt
+          path: |
+            runtime/coverage.txt
+            runtime/coverage-sweeps.txt
 
   sanitize:
     name: Vendored C under the undefined behavior sanitizer

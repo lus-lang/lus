@@ -483,3 +483,37 @@ local function catch_of_a_one_result_call_returns_the_result_test()
     assert(v == 7)
 end
 
+
+-- =============================================================================
+-- Diagnostics of the code generator
+-- =============================================================================
+
+-- Each case reaches a check of the code generator that the parser leaves
+-- to it, so the check runs only for a program that gets past the parser.
+local code_generator_diagnostics_cases = {
+    {"break at top level", "break", "break outside loop"},
+    {"continue at top level", "continue", "continue outside loop"},
+    {"continue in a function outside its loop", "for i = 1, 2 do local function f() continue end end", "continue outside loop"},
+    {"vararg in a fixed function", "local function f() return ... end", "cannot use '...' outside a vararg function"},
+    {"two to-be-closed in a condition", "if a <close>, b <close> = nil, nil then end", "multiple to-be-closed variables in condition"},
+    {"group and close together", "local g <group, close> = { x = 1 }", "conflicting attributes"},
+    {"meta in a group", "local m <meta, group> = {}", "cannot use <meta> in this declaration"},
+    {"meta in a group with a constructor", "local m <meta, group> = { x = 1 }", "cannot use <meta> in this declaration"},
+    {"lazy in a group", "local z <lazy, group> = { x = 1 }", "cannot use <lazy> in this declaration"},
+    {"observe in a group", "local x <group, observe> = { x = 1 }", "cannot use <observe> in this declaration"},
+    {"meta and observe", "local m <meta, observe> = {}", "cannot combine <meta> with <observe>"},
+    {"observe and a runtime attribute", "local x <observe, fmt> = 1", "cannot combine <observe> with runtime attributes"},
+    {"lazy field and a runtime attribute of the group", "local g <group, fmt> = { a <lazy> = 1 }", "cannot combine <lazy> fields with runtime attributes of the group"},
+    {"two lazy names", "local x <lazy>, y = 1, 2", "a <lazy> declaration names one variable"},
+    {"two lazy initializers", "local x <lazy> = 1, 2", "a <lazy> variable needs one initializer"},
+    {"two observed names", "local x <observe>, y = 1, 2", "an <observe> declaration names one variable"},
+    {"two observed initializers", "local x <observe> = 1, 2", "an <observe> variable needs one initializer"},
+    {"two meta names", "local m <meta>, n = 1, 2", "a <meta> declaration names one variable"},
+    {"label defined twice", "::a:: ::a::", "label 'a' already defined on line 1"},
+    {"goto without a label", "goto nowhere", "no visible label 'nowhere' for <goto>"},
+    {"undeclared name in a nested function", "global none; local function f() return y end", "variable 'y' not declared"},
+}
+
+local function code_generator_diagnostics_test(label, src, fragment)
+    checkfail(src, fragment)
+end

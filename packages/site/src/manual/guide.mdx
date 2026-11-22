@@ -718,6 +718,8 @@ end
 
 The start, the stop, and the step are evaluated once, before the first pass. If the start is already past the stop, the body does not run. The loop variable is local to the body, which cannot assign to it.
 
+The loop variable has the type that the arithmetic of the three numbers gives. A bigint or a decimal among them makes an exact loop, which counts in bigints or decimals. A float among bigints makes a float loop, as a float plus a bigint is a float, and a float among decimals raises the error of mixing them.
+
 The other form of `for` loops over the items of a table, as [Iteration](#iteration) describes.
 
 ### `break` and `continue`

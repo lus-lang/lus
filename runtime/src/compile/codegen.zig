@@ -5,6 +5,7 @@
 //! count is known when they are generated.
 
 const std = @import("std");
+const inv = @import("../vm/inv.zig");
 const ast = @import("../syntax/ast.zig");
 const opc = @import("opcodes.zig");
 const meta = @import("meta.zig");
@@ -3402,7 +3403,8 @@ fn metaLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u3
     if (names.len != 1) return c.err(line, "a <meta> declaration names one variable", .{});
     const an = names[0];
     if (an.has(.close)) return c.err(line, "cannot combine <meta> with <close>", .{});
-    if (an.has(.group)) return c.err(line, "cannot combine <meta> with <group>", .{});
+    // A group declaration rejects these attributes before it gets here.
+    if (inv.never(an.has(.group))) return c.err(line, "cannot combine <meta> with <group>", .{});
     if (an.has(.lazy)) return c.err(line, "cannot combine <meta> with <lazy>", .{});
     if (an.has(.observe)) return c.err(line, "cannot combine <meta> with <observe>", .{});
     if (hasRuntimeAttribs(an)) return c.err(line, "cannot combine <meta> with runtime attributes", .{});
@@ -3560,7 +3562,8 @@ fn lazyLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u3
     const c = fs.c;
     if (names.len != 1) return c.err(line, "a <lazy> declaration names one variable", .{});
     const an = names[0];
-    if (an.has(.group)) return c.err(line, "cannot combine <lazy> with <group>", .{});
+    // A group declaration rejects these attributes before it gets here.
+    if (inv.never(an.has(.group))) return c.err(line, "cannot combine <lazy> with <group>", .{});
     if (an.has(.observe)) return c.err(line, "cannot combine <lazy> with <observe>", .{});
     if (values.len != 1) return c.err(line, "a <lazy> variable needs one initializer", .{});
     const a = c.arena;

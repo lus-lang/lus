@@ -1738,3 +1738,71 @@ local function having_reads_a_projection_alias_through_sqlite_test()
     local rows = collect(@db.t as b select b.author, sum(b.pages) as pages group by b.author having pages > 800)
     assert(#rows == 1 and rows[1].author == "a" and rows[1].pages == 900)
 end
+
+-- ==== Expressions as group keys ====
+
+-- The rows of a query as one sorted line, so a case compares one string.
+local function canonical(rows)
+    local parts = {}
+    for _, r in ipairs(rows) do
+        local f = {}
+        for k, v in pairs(r) do f[#f + 1] = tostring(k) .. "=" .. tostring(v) end
+        table.sort(f)
+        parts[#parts + 1] = "{" .. table.concat(f, ",") .. "}"
+    end
+    table.sort(parts)
+    return table.concat(parts, " ")
+end
+
+-- A projection matches a group key by the structure of its expression,
+-- so each kind of expression can be a key and appear in the projection.
+local grouping_by_an_expression_cases = {
+    {"sum", "select r.a + r.b as k, count(*) as n group by r.a + r.b", "{k=3,n=2} {k=6,n=1}"},
+    {"concatenation", "select r.s .. '!' as k, count(*) as n group by r.s .. '!'", "{k=x!,n=2} {k=y!,n=1}"},
+    {"comparison", "select r.a > 1 as k, count(*) as n group by r.a > 1", "{k=false,n=1} {k=true,n=2}"},
+    {"disjunction", "select (r.a > 2 or r.b > 1) as k, count(*) as n group by r.a > 2 or r.b > 1", "{k=false,n=1} {k=true,n=2}"},
+    {"negation", "select not (r.a > 1) as k, count(*) as n group by not (r.a > 1)", "{k=false,n=2} {k=true,n=1}"},
+    {"minus", "select -r.a as k group by -r.a", "{k=-1} {k=-2} {k=-3}"},
+    {"literal", "select 1 as one, count(*) as n group by 1", "{n=3,one=1}"},
+    {"expression of a key", "select r.a + 1 as k group by r.a", "{k=2} {k=3} {k=4}"},
+    {"having with or", "select r.s, count(*) as n group by r.s having count(*) > 1 or sum(r.a) > 2", "{n=1,s=y} {n=2,s=x}"},
+    {"arithmetic of aggregates", "select r.s, sum(r.a) - min(r.b) as d group by r.s", "{d=0,s=y} {d=2,s=x}"},
+    {"having that compares aggregates", "select r.s, max(r.a) as m group by r.s having max(r.a) == max(r.a)", "{m=2,s=x} {m=3,s=y}"},
+    {"having with a concatenated aggregate", "select r.s, count(*) as n group by r.s having (count(*) .. '') == '2'", "{n=2,s=x}"},
+}
+
+local function grouping_by_an_expression_test(label, q, want)
+    local t = { { a = 1, b = 2, s = "x" }, { a = 2, b = 1, s = "x" }, { a = 3, b = 3, s = "y" } }
+    local f = assert(load("global t\nreturn @t as r " .. q, "=q", "t", { t = t }))
+    assert(canonical(collect(f())) == want, label)
+end
+
+-- ==== Aggregates over mixed numbers ====
+
+-- `sum` keeps integers while it can, moves to floats at the first float,
+-- and to exact arithmetic at the first bigint or decimal, and `avg`
+-- divides as `/` does.
+local aggregates_over_mixed_numbers_cases = {
+    {"integer and float", { 1, 2.5 }, "sum", "3.5"},
+    {"integer and bigint", { 1, 2n }, "sum", "3"},
+    {"float and bigint", { 1.5, 2n }, "sum", "3.5"},
+    {"bigints", { 1n, 2n, 4n }, "avg", tostring(7 / 3)},
+    {"decimals", { 1d, 2d }, "avg", "1.5"},
+}
+
+local function aggregates_over_mixed_numbers_test(label, values, func, want)
+    local t = {}
+    for i, v in ipairs(values) do t[i] = { v = v } end
+    local q = func == "sum" and @t as r select sum(r.v) as x or @t as r select avg(r.v) as x
+    assert(tostring(collect(q)[1].x) == want, label)
+end
+
+local function a_string_cannot_be_summed_test()
+    local t = { { v = 1 }, { v = "x" } }
+    raises(function() collect(@t as r select sum(r.v) as s) end, "cannot aggregate a string value")
+end
+
+local function every_source_row_must_be_a_record_test()
+    local t = { { v = 1 }, 5 }
+    raises(function() collect(@t as r select r.v) end, "query source row 2 is not a record")
+end

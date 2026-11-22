@@ -91,6 +91,7 @@ test {
     _ = @import("jit/jit.zig");
     _ = @import("vm/heapcount.zig");
     _ = @import("vm/radix.zig");
+    _ = @import("vm/inv.zig");
     _ = @import("vm/sched.zig");
     _ = @import("fuzz.zig");
     _ = @import("fuzzlib.zig");

@@ -13,7 +13,9 @@
 //! starts all count. `LUS_COVERAGE_REPORT=DIR` makes `lus` merge the files
 //! of DIR, map each edge to its source file through the debug information
 //! of the binary, and print the coverage of each directory of `src` and
-//! the files with the most uncovered edges. With `LUS_COVERAGE_FILE` set to
+//! the files with the most uncovered branches. The report counts each
+//! source position once, however many call sites an inlined function has.
+//! With `LUS_COVERAGE_FILE` set to
 //! a path below `src`, such as `vm/interp.zig`, the report lists the lines
 //! of that file that hold an uncovered edge instead. The files and the
 //! report must come from the same build.
@@ -155,28 +157,62 @@ pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, only: ?[
     // Lines of `only` with an uncovered edge, and with a covered one.
     var missed_lines: std.AutoArrayHashMapUnmanaged(u64, void) = .empty;
     var hit_lines: std.AutoArrayHashMapUnmanaged(u64, void) = .empty;
+    // An optimized build inlines a function into each of its callers, so
+    // one branch of the source becomes one edge per call site. Each edge
+    // is keyed by the source position of the block it enters, and a key
+    // counts once, covered when any of its copies ran, which is the branch
+    // coverage of the source.
+    const Key = struct { file: []const u8, line: u64, column: u64 };
+    var by_key: std.HashMapUnmanaged(Key, bool, struct {
+        pub fn hash(_: @This(), k: Key) u64 {
+            var h = std.hash.Wyhash.init(0);
+            h.update(k.file);
+            h.update(std.mem.asBytes(&k.line));
+            h.update(std.mem.asBytes(&k.column));
+            return h.final();
+        }
+        pub fn eql(_: @This(), a: Key, b: Key) bool {
+            return a.line == b.line and a.column == b.column and std.mem.eql(u8, a.file, b.file);
+        }
+    }, 80) = .empty;
+    // The names of each lookup go to a scratch arena that starts over for
+    // every edge, so the report holds only the keys it keeps.
+    var scratch_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer scratch_state.deinit();
     for (0..n) |i| {
+        _ = scratch_state.reset(.retain_capacity);
         symbols.clearRetainingCapacity();
-        si.getSymbols(io, arena, arena, table[i], false, &symbols) catch continue;
+        si.getSymbols(io, arena, scratch_state.allocator(), table[i], false, &symbols) catch continue;
         if (symbols.items.len == 0) continue;
         const loc = symbols.items[0].source_location orelse continue;
         const at = std.mem.indexOf(u8, loc.file_name, "/runtime/src/") orelse continue;
         const rel = loc.file_name[at + "/runtime/src/".len ..];
+        const gop = try by_key.getOrPut(arena, .{ .file = rel, .line = loc.line, .column = loc.column });
+        if (!gop.found_existing) {
+            gop.key_ptr.file = try arena.dupe(u8, rel);
+            gop.value_ptr.* = false;
+        }
+        if (merged[i] != 0) gop.value_ptr.* = true;
+    }
+    var keys = by_key.iterator();
+    while (keys.next()) |e| {
+        const rel = e.key_ptr.file;
+        const hit = e.value_ptr.*;
         const top = if (std.mem.indexOfScalar(u8, rel, '/')) |s| rel[0..s] else ".";
-        const hit = merged[i] != 0;
         if (only) |want| if (std.mem.eql(u8, rel, want)) {
-            try (if (hit) &hit_lines else &missed_lines).put(arena, loc.line, {});
+            try (if (hit) &hit_lines else &missed_lines).put(arena, e.key_ptr.line, {});
         };
         inline for (.{ &by_dir, &by_file }, .{ top, rel }) |map, key| {
-            const gop = try map.getOrPut(arena, try arena.dupe(u8, key));
-            if (!gop.found_existing) gop.value_ptr.* = .{};
-            gop.value_ptr.total += 1;
-            if (hit) gop.value_ptr.hit += 1;
+            const g = try map.getOrPut(arena, key);
+            if (!g.found_existing) g.value_ptr.* = .{};
+            g.value_ptr.total += 1;
+            if (hit) g.value_ptr.hit += 1;
         }
     }
 
     var buf: [4096]u8 = undefined;
-    var w = std.Io.File.stdout().writer(io, &buf);
+    // Streaming, so a report appended to a log file lands at its end.
+    var w = std.Io.File.stdout().writerStreaming(io, &buf);
     const o = &w.interface;
     if (only) |want| {
         const lines = missed_lines.keys();
@@ -186,14 +222,23 @@ pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, only: ?[
         try o.flush();
         return 0;
     }
-    try o.print("{d} coverage files, {d} edges\n\nedges covered by directory of src:\n", .{ files, n });
+    try o.print("{d} coverage files, {d} edges, {d} branches of the source\n\nbranches covered by directory of src:\n", .{ files, n, by_key.count() });
     var all: Tally = .{};
     for (by_dir.keys(), by_dir.values()) |k, v| {
         try o.print("  {s:<10} {d:>6.1}%  {d} of {d}\n", .{ k, pct(v), v.hit, v.total });
         all.hit += v.hit;
         all.total += v.total;
     }
-    try o.print("  {s:<10} {d:>6.1}%  {d} of {d}\n\nfiles with the most uncovered edges:\n", .{ "all", pct(all), all.hit, all.total });
+    try o.print("  {s:<10} {d:>6.1}%  {d} of {d}\n\ncode that every program runs:\n", .{ "all", pct(all), all.hit, all.total });
+    for (groups) |grp| {
+        var t: Tally = .{};
+        for (by_file.keys(), by_file.values()) |k, v| if (grp.has(k)) {
+            t.hit += v.hit;
+            t.total += v.total;
+        };
+        try o.print("  {s:<10} {d:>6.1}%  {d} of {d}\n", .{ grp.name, pct(t), t.hit, t.total });
+    }
+    try o.print("\nfiles with the most uncovered branches:\n", .{});
     const Entry = struct { name: []const u8, missed: usize, t: Tally };
     var list: std.ArrayList(Entry) = .empty;
     for (by_file.keys(), by_file.values()) |k, v| try list.append(arena, .{ .name = k, .missed = v.total - v.hit, .t = v });
@@ -208,6 +253,31 @@ pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, only: ?[
     try o.flush();
     return 0;
 }
+
+/// The code that every program runs, which the ratchet of CI holds.
+/// A group is a list of directories, ending in '/', and files of src.
+const Group = struct {
+    name: []const u8,
+    paths: []const []const u8,
+
+    fn has(g: Group, file: []const u8) bool {
+        // The fault layer runs only in the sweeps of parts 3 and 4.
+        if (std.mem.eql(u8, file, "vm/faultio.zig")) return false;
+        for (g.paths) |p| {
+            if (p[p.len - 1] == '/') {
+                if (std.mem.startsWith(u8, file, p)) return true;
+            } else if (std.mem.eql(u8, file, p)) return true;
+        }
+        return false;
+    }
+};
+
+pub const groups = [_]Group{
+    .{ .name = "vm", .paths = &.{"vm/"} },
+    .{ .name = "gc", .paths = &.{ "vm/gc.zig", "vm/heap.zig" } },
+    .{ .name = "compile", .paths = &.{"compile/"} },
+    .{ .name = "lib core", .paths = &.{ "lib/base.zig", "lib/string.zig", "lib/table.zig", "lib/math.zig", "lib/coroutine.zig", "lib/utf8.zig" } },
+};
 
 fn pct(t: Tally) f64 {
     if (t.total == 0) return 0;

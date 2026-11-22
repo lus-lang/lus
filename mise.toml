@@ -74,22 +74,37 @@ depends = ["build", "build:io"]
 run = ["LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --samples 20", "LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --short --samples 5"]
 
 [tasks."build:coverage"]
-description = "Build the runtime with edge coverage into runtime/zig-out-cov"
+description = "Build the runtime as releases are built, ReleaseFast, with edge coverage into runtime/zig-out-cov"
 dir = "runtime"
-run = "zig build -j2 -Doptimize=ReleaseSafe -Dcoverage=true --prefix zig-out-cov"
+run = "zig build -j2 -Doptimize=ReleaseFast -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov"
 
 [tasks.coverage]
-description = "Measure the edge coverage of src by the conformance suite in three JIT modes and the doc tests"
+description = "Measure the branch coverage of src by the conformance suite in three JIT modes and the doc tests, and compare it with the baseline"
 depends = ["build:coverage"]
 dir = "runtime"
 run = [
   "rm -rf zig-out-cov/runs && mkdir -p zig-out-cov/runs",
-  "LUS_JIT=off LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_JIT=opt-eager LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents",
-  "LUS_COVERAGE_REPORT=$PWD/zig-out-cov/runs zig-out-cov/bin/lus",
+  "LUS_JIT=off LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=opt-eager LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents",
+  "LUS_COVERAGE_REPORT=$PWD/zig-out-cov/runs zig-out-cov/bin/lus | tee zig-out-cov/report.txt",
+  "LUS_JIT=off zig-out-cov/bin/lus ../tests/coverage/ratchet.lus zig-out-cov/report.txt ../tests/coverage/baseline.txt",
 ]
+
+[tasks."coverage:sweeps"]
+description = "Add the allocation and I/O failure sweeps to the last coverage run and print the report, as the nightly job does"
+dir = "runtime"
+run = [
+  "LUS_JIT=off zig-out-cov/bin/lus ../tests/oom/run.lus --coverage $PWD/zig-out-cov/runs --lus zig-out-cov/bin/lus --samples 100 --jobs 4 --timeout 120 ../tests/conformance || true",
+  "LUS_JIT=off zig-out-cov/bin/lus ../tests/oom/run.lus --coverage $PWD/zig-out-cov/runs --io --lus zig-out-cov/bin/lus --samples 40 --jobs 4 --timeout 120 ../tests/conformance || true",
+  "LUS_COVERAGE_REPORT=$PWD/zig-out-cov/runs zig-out-cov/bin/lus | tee zig-out-cov/report-sweeps.txt",
+]
+
+[tasks."coverage:ratchet"]
+description = "Store the last coverage report as the baseline that CI holds"
+dir = "runtime"
+run = "LUS_JIT=off zig-out-cov/bin/lus ../tests/coverage/ratchet.lus zig-out-cov/report.txt ../tests/coverage/baseline.txt --write"
 
 [tasks."build:sanitize"]
 description = "Build the runtime with the vendored C libraries under the undefined behavior sanitizer into runtime/zig-out-ubsan"

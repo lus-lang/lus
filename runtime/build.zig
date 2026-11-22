@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
         .fail_io = b.option(bool, "fail-io", "Fail or shorten the file and socket operation that LUS_FAIL_IO names, to test I/O error handling (default: false)") orelse false,
         .compiler = b.option(bool, "compiler", "Include the parser and the compiler, which `load` of source text and the tools need (default: true)") orelse true,
         .jit_compile = b.option(bool, "jit-compile", "Compile native code, where the JIT is included, rather than only run the code an executable compiled ahead of time carries (default: true)") orelse true,
+        .invariants = b.option(bool, "invariants", "Check internal invariants, as Debug builds and the unit tests always do (default: false)") orelse false,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -415,6 +416,7 @@ const Features = struct {
     coverage: bool = false,
     compiler: bool = true,
     jit_compile: bool = true,
+    invariants: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -444,6 +446,7 @@ const Features = struct {
         options.addOption(bool, "coverage", f.coverage);
         options.addOption(bool, "compiler", f.compiler);
         options.addOption(bool, "jit_compile", f.jit_compile);
+        options.addOption(bool, "invariants", f.invariants);
         // The version that `lus -v` and the User-Agent of network.fetch
         // report. A release of an unstable channel sets it with `-Dversion`,
         // and every other build takes the version in build.zig.zon.

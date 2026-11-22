@@ -1,0 +1,11 @@
+# The share of branches covered in each group of the code that every
+# program runs, by the conformance suite and the doc tests in the coverage
+# build. `mise run coverage:ratchet` writes this file.
+#
+# These values are one point below a measurement on macOS, until the CI
+# job on Linux, which takes other paths in the scheduler, stores its own.
+
+vm 83.0
+gc 91.5
+compile 57.1
+lib core 78.9
