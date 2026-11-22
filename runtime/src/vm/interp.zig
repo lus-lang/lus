@@ -1741,7 +1741,12 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
         .redo => |keep_top| {
             pc.* -= 1;
             c.fr.pc = pc.*;
-            if (keep_top) l.top = dst;
+            if (keep_top) {
+                // The instruction runs again with the top it had, which a
+                // multiple-result `ret` counts its results from.
+                l.top = dst;
+                return false;
+            }
         },
         .concat => |k| {
             const a = opc.a(c.code[pc.* - 1]);

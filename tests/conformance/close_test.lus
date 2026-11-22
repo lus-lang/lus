@@ -688,3 +688,20 @@ local function a_catch_do_expression_closes_its_variables_when_an_error_unw_test
     assert(string.find(tostring(seen), "^@inblock"), tostring(seen))
 end
 
+
+local function returning_a_call_past_a_close_variable_keeps_the_result_count_test()
+    local closes = 0
+    local closer = setmetatable({}, { __close = function() closes = closes + 1 end })
+    local function id(...) return ... end
+    local function one() local guard <close> = closer; return tostring("value") end
+    local function two() local guard <close> = closer; return id("a", "b") end
+    local function none() local guard <close> = closer; return id() end
+    local function unpacked() local guard <close> = closer; return table.unpack({1, 2, 3}) end
+    assert(select("#", one()) == 1 and one() == "value")
+    assert(select("#", two()) == 2)
+    assert(select("#", none()) == 0)
+    assert(select("#", unpacked()) == 3)
+    local t = {two()}
+    assert(#t == 2 and t[1] == "a" and t[2] == "b")
+    assert(closes == 6)
+end

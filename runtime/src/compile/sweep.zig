@@ -113,8 +113,18 @@ const flags_program =
     \\    return function() if flags.level then return 1 end end
     \\end
     \\local flags2 = flags
-    \\return f(), g(), level, flags2.debug
+    \\if flags.debug == 1 or flags.name == 2 or flags.level == "3" then level = 4 end
+    \\local paren = (flags).level
+    \\return f(), g(), level, flags2.debug, paren
 ;
+
+/// The same reads under declarations of globals, where `flags` stays
+/// the reserved name.
+const flags_declared = [_][]const u8{
+    "global *\nlocal a = flags.level\nif flags.debug then a = 1 end\nreturn a",
+    "global print, level\nlocal a = flags.level\nif not flags.debug then a = 2 end\nreturn a",
+    "global none\nreturn flags.level, flags.missing",
+};
 
 /// Programs that fail to compile in the code generator, at the end of a
 /// function and in the middle of a statement.
@@ -196,6 +206,13 @@ test "the compiler survives the failure of each allocation" {
     for (corpus) |src| try sweep(Source{ .src = src, .opts = .{ .chunkname = "=sweep" } }, compileOne);
 }
 
+test "the compiler survives allocation failures for the debugger and the checker" {
+    // The debugger keeps every local visible, and `lus check` compiles
+    // without running compile-time evaluation.
+    try sweep(Source{ .src = corpus[0], .opts = .{ .chunkname = "=sweep", .debug = true } }, compileOne);
+    try sweep(Source{ .src = corpus[1], .opts = .{ .chunkname = "=sweep", .meta_eval = false } }, compileOne);
+}
+
 test "the compiler survives allocation failures while it folds flags" {
     const gpa = std.testing.allocator;
     var flags: std.StringHashMapUnmanaged(Value) = .empty;
@@ -207,6 +224,9 @@ test "the compiler survives allocation failures while it folds flags" {
     try flags.put(gpa, "name", Value.obj(.string, try l.newString("x")));
     for ([_]bool{ true, false }) |fold| {
         try sweep(Source{ .src = flags_program, .opts = .{ .chunkname = "=sweep", .flags = &flags, .fold_flag_reads = fold } }, compileOne);
+        for (flags_declared) |src| {
+            try sweep(Source{ .src = src, .opts = .{ .chunkname = "=sweep", .flags = &flags, .fold_flag_reads = fold } }, compileOne);
+        }
     }
 }
 

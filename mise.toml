@@ -4,12 +4,15 @@ node = "24.7.0"
 pnpm = "10.18.0"
 
 [env]
-ZIG_GLOBAL_CACHE_DIR = "{{config_root}}/runtime/.zig-cache/global"
+# Every checkout and worktree shares one Zig cache, which
+# tools/prune-zig-cache.sh keeps under its cap.
+ZIG_GLOBAL_CACHE_DIR = "{{env.HOME}}/.cache/lus-zig/global"
+ZIG_LOCAL_CACHE_DIR = "{{env.HOME}}/.cache/lus-zig/local"
 
 [tasks.build]
 description = "Build the Zig runtime"
 dir = "runtime"
-run = "zig build -j2 -Doptimize=ReleaseSafe"
+run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseSafe"
 
 [tasks.test]
 description = "Run the runtime unit, embedding, tool, and conformance tests"
@@ -36,7 +39,7 @@ run = "node --test packaging/install/install.test.mjs"
 [tasks.fuzz]
 description = "Fuzz the front end, the chunk loader, and the parsers and formatters of the standard library"
 dir = "runtime"
-run = "zig build -j2 test --fuzz=1M -Doptimize=ReleaseSafe"
+run = "sh ../tools/wait-for-memory.sh && zig build -j2 test --fuzz=1M -Doptimize=ReleaseSafe"
 
 [tasks.diff]
 description = "Run 200 generated programs under every JIT mode and compare their output"
@@ -61,12 +64,12 @@ run = "sh ../tools/wait-for-memory.sh && zig build -j1 -Doptimize=ReleaseSafe -D
 [tasks."build:oom"]
 description = "Build the runtime with allocation failure injection into runtime/zig-out-oom"
 dir = "runtime"
-run = "zig build -j2 -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom"
+run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom"
 
 [tasks."build:io"]
 description = "Build the runtime with I/O fault injection into runtime/zig-out-io"
 dir = "runtime"
-run = "zig build -j2 -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io"
+run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io"
 
 [tasks.io]
 description = "Fail and shorten sampled file and socket operations of every conformance test"
@@ -104,7 +107,7 @@ run = [
 [tasks."build:coverage"]
 description = "Build the runtime as releases are built, ReleaseFast, with edge coverage into runtime/zig-out-cov"
 dir = "runtime"
-run = "zig build -j2 -Doptimize=ReleaseFast -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov"
+run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseFast -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov"
 
 [tasks.coverage]
 description = "Measure the branch coverage of src by the conformance suite in three JIT modes and the doc tests, and compare it with the baseline"
@@ -178,7 +181,7 @@ run = [
 [tasks."build:sanitize"]
 description = "Build the runtime with the vendored C libraries under the undefined behavior sanitizer into runtime/zig-out-ubsan"
 dir = "runtime"
-run = "zig build -j2 -Doptimize=ReleaseSafe -Dsanitize-c=true --prefix zig-out-ubsan"
+run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseSafe -Dsanitize-c=true --prefix zig-out-ubsan"
 
 [tasks.sanitize]
 description = "Run the conformance suite and the fuzz targets with the vendored C libraries under the undefined behavior sanitizer"

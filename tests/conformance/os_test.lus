@@ -19,7 +19,7 @@ pledge("load")
 -- os.tmpname creates its file in TMPDIR, which differs between hosts, so
 -- reading it back needs fs:read wherever that is.
 pledge("fs:read", "fs:write",
-    "env=LC_*", "env=PATH", "env=LUS_TEST_*", "env=LUS_SET_*", "env:write=LUS_SET_*")
+    "env:read=LC_*", "env:read=PATH", "env:read=LUS_TEST_*", "env:read=LUS_SET_*", "env:write=LUS_SET_*")
 
 
 -- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.
@@ -50,10 +50,16 @@ end
 local function measures_cpu_time_consumed_by_a_busy_loop_test()
     local before = os.clock()
     local s = 0.0
-    for i = 1, 10000000 do
-        s = s + i * 0.5
+    -- The clock of some systems ticks every 15.6 ms, so the loop runs
+    -- until the clock moves, within a bound.
+    local after = before
+    for round = 1, 1000 do
+        for i = 1, 1000000 do
+            s = s + i * 0.5
+        end
+        after = os.clock()
+        if after > before then break end
     end
-    local after = os.clock()
     assert(after > before)
     -- Reference the accumulator so the loop cannot be optimized away.
     assert(s > 0)

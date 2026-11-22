@@ -47,9 +47,16 @@ local LISTED = {
     "^failed to read response body: [%a ]+$",
     "^truncated response body$",
     "^TLS handshake failed: [^\n]+$",
+    "^certificate verification failed for [^:]+: [^\n]+$",
+    "^receive: TLS: [^\n]+$",
+    "^send: TLS: [^\n]+$",
+    "^failed to [%a ]+: TLS: [^\n]+$",
     "^failed to [%a ]+: Connection closed by peer$",
     "^receive: Connection reset by peer$",
     "^send: Connection reset by peer$",
+    -- A send after the peer reset the connection gets the message of
+    -- EPIPE, under the code "reset" of the reference.
+    "^send: Broken pipe$",
     -- The message of the tcp scenario itself for an end of the stream,
     -- which `receive` reports with an empty vector.
     "^the peer ended the connection$",
@@ -58,14 +65,19 @@ local LISTED = {
 -- Shared by every scenario: a server on a free port of the loopback
 -- interface, and a report of what the client saw. `report(name, ok, v)`
 -- prints "ok NAME" or "error NAME: MESSAGE", with the position of a
--- raised error removed.
+-- raised string removed. The error objects of the network library carry
+-- no position.
 local PRELUDE = [[
-pledge("network")
+pledge("network", "fs:read")
 local function report(name, ok, v)
     if ok then
         print("ok " .. name)
     else
-        local msg = tostring(v):gsub("^[^:]*:%d+: ", "")
+        -- An error object carries no position. A raised string does.
+        -- Only the position of a raised error goes, a chunk name that ends
+        -- in .lus and a line number, so a message such as "cannot connect to
+        -- 127.0.0.1:N: REASON" keeps its own colons.
+        local msg = type(v) == "table" and tostring(v) or tostring(v):gsub("^[^:]*%.lus:%d+: ", "")
         print("error " .. name .. ": " .. msg)
     end
 end
@@ -153,7 +165,9 @@ local echoing = coroutine.detach(coroutine.create(function()
     end
 end))
 local function exchange()
-    local sock <close> = network.tcp.connect("127.0.0.1", peer_port)
+    -- A failed connection returns nil and its error object.
+    local sock <close>, cerr = network.tcp.connect("127.0.0.1", peer_port)
+    if not sock then error(cerr, 0) end
     sock:settimeout(5)
     for _, word in ipairs({ "one", "two", "three" }) do
         local sent, e = sock:send(word .. "\n")
@@ -188,16 +202,122 @@ peer:close()
 fresh(port)
 stop(server, serving)
 ]],
+    -- The TLS scenarios read the certificates that the harness made with
+    -- openssl from the files beside them.
+    https = [[
+local function slurp(name)
+    local f <close> = assert(io.open(name, "rb"))
+    return f:read("a")
+end
+local identity = { cert = slurp("server.pem"), key = slurp("server.key") }
+local ca = slurp("ca.pem")
+local server, port, serving = serveHello()
+local secure = network.tcp.bind("127.0.0.1", 0)
+local _, secure_port = secure:getsockname()
+local tls_serving = coroutine.detach(coroutine.create(network.serve), secure, hello, { tls = identity, idle_timeout = 5 })
+local ok, status, body = catch network.fetch(`https://127.0.0.1:$(secure_port)/secure`, "GET", nil, nil, { tls = { ca = ca }, timeout = 10 })
+if ok and not (status == 200 and vector.tostring(body) == "hello /secure") then
+    report("https", false, `unexpected response $(status)`)
+else
+    report("https", ok, status)
+end
+coroutine.close(tls_serving)
+secure:close()
+fresh(port)
+stop(server, serving)
+]],
+    tlsclient = [[
+local function slurp(name)
+    local f <close> = assert(io.open(name, "rb"))
+    return f:read("a")
+end
+local identity = { cert = slurp("server.pem"), key = slurp("server.key") }
+local ca = slurp("ca.pem")
+local server, port, serving = serveHello()
+local secure = network.tcp.bind("127.0.0.1", 0)
+local _, secure_port = secure:getsockname()
+local tls_serving = coroutine.detach(coroutine.create(network.serve), secure, hello, { tls = identity, idle_timeout = 5 })
+-- Two requests on one TLS connection, so faults land after the handshake
+-- as well as in it.
+local function exchange()
+    -- A failed connection or handshake returns nil and an error object.
+    local opened, failure = network.tls.connect("127.0.0.1", secure_port, { ca = ca, servername = "localhost", timeout = 10 })
+    if opened == nil then error(tostring(failure), 0) end
+    local sock <close> = opened
+    sock:settimeout(10)
+    for _, path in ipairs({ "/one", "/two" }) do
+        local sent, e = sock:send(`GET $(path) HTTP/1.1\r\nHost: localhost\r\n\r\n`)
+        if not sent then error(e, 0) end
+        local length
+        while true do
+            local line, e2 = sock:receive("*l")
+            if line == nil then error(e2, 0) end
+            local text = vector.tostring(line)
+            if #text == 0 then break end
+            length = length or tonumber(text:match("^[Cc]ontent%-[Ll]ength: (%d+)"))
+        end
+        if length == nil then error("the peer ended the connection", 0) end
+        local data, e3 = sock:receive(length)
+        if data == nil then error(e3, 0) end
+        if vector.tostring(data) ~= "hello " .. path then error("the peer ended the connection", 0) end
+    end
+end
+local ok, err = catch exchange()
+report("tlsclient", ok, err)
+coroutine.close(tls_serving)
+secure:close()
+fresh(port)
+stop(server, serving)
+]],
 }
 
-local KINDS = { "reset", "eof", "dns", "refuse", "abort" }
-local STEP_OF = { reset = "transfers", eof = "receives", dns = "lookups", refuse = "connects", abort = "accepts" }
+-- Makes a certificate authority and a certificate for localhost that it
+-- signs, with openssl, into `where`. Returns false without openssl.
+local function makeCerts(where)
+    local function sh(cmd)
+        local p = io.popen(cmd .. " 2>&1")
+        local out = p:read("a")
+        local ok = p:close()
+        return ok == true or ok == 0, out
+    end
+    if not sh("openssl version") then return false end
+    local function q(name) return "'" .. fs.path.join(where, name) .. "'" end
+    local f = assert(io.open(fs.path.join(where, "req.cnf"), "w"))
+    f:write("[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = test\n")
+    f:close()
+    f = assert(io.open(fs.path.join(where, "server.ext"), "w"))
+    f:write("subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n")
+    f:close()
+    for _, cmd in ipairs({
+        "openssl ecparam -name prime256v1 -genkey -noout -out " .. q("ca.key"),
+        "openssl req -x509 -new -key " .. q("ca.key") .. " -subj '/CN=Lus Fault CA' -sha256 -days 2 -config " .. q("req.cnf")
+            .. " -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' -out " .. q("ca.pem"),
+        "openssl ecparam -name prime256v1 -genkey -noout -out " .. q("server.key"),
+        "openssl req -new -key " .. q("server.key") .. " -subj '/CN=localhost' -config " .. q("req.cnf") .. " -out " .. q("server.csr"),
+        "openssl x509 -req -in " .. q("server.csr") .. " -CA " .. q("ca.pem") .. " -CAkey " .. q("ca.key")
+            .. " -CAcreateserial -sha256 -days 2 -extfile " .. q("server.ext") .. " -out " .. q("server.pem"),
+    }) do
+        local ok, out = sh(cmd)
+        assert(ok, out)
+    end
+    return true
+end
+
+local KINDS = { "reset", "eof", "dns", "refuse", "abort", "tls" }
+local STEP_OF = { reset = "transfers", eof = "receives", dns = "lookups", refuse = "connects", abort = "accepts", tls = "tlsreceives" }
 
 local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-network-faults")
 local _ = catch fs.remove(dir, true)
 fs.createdirectory(dir, true)
 local names = {}
-for _, name in ipairs({ "fetch", "trickle", "tcp", "tls" }) do
+local scenario_names = { "fetch", "trickle", "tcp", "tls" }
+if makeCerts(dir) then
+    scenario_names[#scenario_names + 1] = "https"
+    scenario_names[#scenario_names + 1] = "tlsclient"
+else
+    print("openssl is not available, so the scenarios with a TLS server are left out")
+end
+for _, name in ipairs(scenario_names) do
     local f = assert(io.open(fs.path.join(dir, name .. ".lus"), "w"))
     f:write(PRELUDE, SCENARIOS[name])
     f:close()

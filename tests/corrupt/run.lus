@@ -193,6 +193,10 @@ for _, fmt in ipairs({ "zip", "tar" }) do
                     end
                 end
             end
+        end,
+    }
+end
+
 -- ===== TLS =====
 
 -- The contents of a file: text, or a vector in binary mode.
@@ -324,6 +328,34 @@ targets[#targets + 1] = {
         if ok and not crypto.importkey(key:export("der")) then return "an imported key does not export" end
     end,
 }
+
+-- The binary to text encodings. Strict decoding must raise for data after
+-- the padding, and bytes that it decodes must encode and decode back to
+-- themselves. Lax decoding must never raise, and lax URL decoding to UTF-8
+-- returns text, with U+FFFD for each invalid sequence.
+local function hexOf(v)
+    return string.transcode(v, "binary", "hex")
+end
+
+for _, enc in ipairs({ "base64", "base64url", "base32", "hex", "url" }) do
+    targets[#targets + 1] = {
+        name = "string.transcode " .. enc,
+        text = true,
+        seeds = { string.transcode(text:sub(1, 120) .. "é日", "utf-8", enc) },
+        run = function(s)
+            local ok, v = catch string.transcode(s, enc, "binary")
+            local pad = enc ~= "url" and enc ~= "hex" and s:find("=", 1, true)
+            if ok and pad and s:find("[^=%s]", pad) then return "decoded data after the padding" end
+            if ok then
+                local again = string.transcode(string.transcode(v, "binary", enc), enc, "binary")
+                if hexOf(again) ~= hexOf(v) then return "the decoded bytes do not encode and decode back to themselves" end
+            end
+            local lax_ok, lax = catch string.transcode(s, enc, "utf-8", true)
+            if not lax_ok then return "lax decoding raised " .. tostring(lax) end
+            if type(lax) ~= "string" then return "lax decoding returned no text" end
+        end,
+    }
+end
 
 local function targetNamed(name)
     for _, t in ipairs(targets) do

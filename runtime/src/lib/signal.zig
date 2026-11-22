@@ -31,7 +31,7 @@ const Handle = struct {
     /// The signals this coroutine handles.
     mask: [n_sigs]bool = @splat(false),
     /// How many of each signal it delivered or saw before it started.
-    seen: [n_sigs]u64 = @splat(0),
+    seen: [n_sigs]u32 = @splat(0),
     open: bool = false,
 };
 
@@ -124,8 +124,9 @@ fn wait(l: *Thread) Error!u32 {
         for (h.mask, 0..) |on, i| {
             if (!on) continue;
             const sig: Sig = @fromBackingInt(@intCast(i));
-            if (sigwatch.count(sig) > h.seen[i]) {
-                h.seen[i] += 1;
+            // The counts wrap, so the difference tells how many arrived.
+            if (sigwatch.count(sig) -% h.seen[i] != 0) {
+                h.seen[i] +%= 1;
                 if (sig == .interrupt) sigwatch.handling_interrupt.store(true, .release);
                 return aux.retStr(l, sig.name());
             }
@@ -134,5 +135,10 @@ fn wait(l: *Thread) Error!u32 {
         // one again.
         if (h.mask[@backingInt(Sig.interrupt)]) sigwatch.handling_interrupt.store(false, .release);
         try sched.waitNotify(l);
+        if (l.event_closed) {
+            // Closed while it waited: the signals go back to their action.
+            _ = try closeValue(l, l.arg(1));
+            try events.checkClosed(l);
+        }
     }
 }

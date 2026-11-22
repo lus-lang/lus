@@ -121,6 +121,63 @@ local function the_program_ends_while_a_coroutine_is_parked_test()
     assert(ok == true and code == 0)
 end
 
+-- The waiter may be the main chunk or a plain coroutine, which block in
+-- the resume while the other coroutines run.
+local function closing_wakes_a_waiter_in_the_main_chunk_test()
+    local gate = coroutine.sleep(math.huge)
+    local closed_ok
+    local waker = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        closed_ok = coroutine.close(gate)
+    end))
+    local t = elapsed(function()
+        local ok, why = coroutine.resume(gate)
+        assert(ok == false and why == "closed", tostring(why))
+    end)
+    assert(closed_ok == true)
+    assert(coroutine.status(gate) == "dead")
+    assert(t < 1, t)
+    coroutine.resume(waker)
+end
+
+local function closing_wakes_a_waiter_in_a_plain_coroutine_test()
+    local gate = coroutine.sleep(30)
+    local waker = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        coroutine.close(gate)
+    end))
+    local waiter = coroutine.create(function()
+        return coroutine.resume(gate)
+    end)
+    local t = elapsed(function()
+        local _, ok, why = coroutine.resume(waiter)
+        assert(ok == false and why == "closed", tostring(why))
+    end)
+    assert(t < 1, t)
+    coroutine.resume(waker)
+end
+
+local function closing_a_signal_wait_of_the_main_chunk_test()
+    if package.config:sub(1, 1) == "\\" then skip("signals are POSIX") end
+    local sig = os.signal("hangup")
+    local waker = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        coroutine.close(sig)
+    end))
+    local ok, why = coroutine.resume(sig)
+    assert(ok == false and why == "closed", tostring(why))
+    coroutine.resume(waker)
+end
+
+local function a_parked_main_chunk_ends_with_a_deadlock_error_test()
+    local p = os.spawn({ lus_bin, "-e", [[
+        print(catch coroutine.resume(coroutine.sleep(math.huge)))
+    ]] }, { stdout = "pipe", stderr = "stdout" })
+    local text = p.stdout:read("a")
+    assert(text:find("deadlock", 1, true), text)
+    coroutine.resume(p.exit)
+end
+
 local function bad_times_raise_test()
     assert(not catch coroutine.sleep())
     assert(not catch coroutine.sleep("1"))

@@ -38,7 +38,7 @@ end
 fs.remove(path)
 ```
 
-`io.open` returns `nil` and a message when it cannot open the file, which is why the example wraps it in `assert`. `read("a")` returns the whole file. [`io.lines`](/manual/api#io.lines) reads a file line by line and closes it after the last line. Reading requires `fs:read` for the path and writing requires `fs:write`. [Files](/manual/text#files) describes reading bytes and text in other encodings.
+`io.open` returns `nil` and a message when it cannot open the file, which is why the example wraps it in `assert`. A read or a write that the operating system refuses, such as a write to a full disk, returns `nil`, the message, and the number of the error, as in Lua, so a program that must notice the failure wraps the call in `assert` too. The iterator of `io.lines` raises such an error instead, which ends its loop. `read("a")` returns the whole file. [`io.lines`](/manual/api#io.lines) reads a file line by line and closes it after the last line. Reading requires `fs:read` for the path and writing requires `fs:write`. [Files](/manual/text#files) describes reading bytes and text in other encodings.
 
 [`os.tmpname()`](/manual/api#os.tmpname) creates an empty temporary file and returns its path. A temporary file holds data that a program keeps only while it runs, so the program removes the file with `fs.remove` when it is done.
 

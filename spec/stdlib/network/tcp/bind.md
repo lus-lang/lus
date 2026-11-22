@@ -21,7 +21,7 @@ Binds a listening TCP server to `host` and `port` and returns the server.
 
 `host` is a host name or a numeric address, and the server listens on the first address it resolves to. `port` is an integer from 0 through 65535, and port `0` lets the operating system choose a free port. `backlog` is the number of connections the system queues before `accept` takes them, and defaults to 128.
 
-On success the call returns one server with the methods `accept`, `settimeout`, `getsockname`, and `close`. `accept()` waits for the next connection and returns a TCP socket. Every failure raises an error. A port out of range raises `bad argument #2 to 'bind' (port out of range)`, a name that does not resolve raises `"cannot resolve 'HOST': REASON"`, and an address that cannot be bound raises `"cannot bind to HOST:PORT: REASON"`. The call requires `network:tcp` for `host:port`.
+On success the call returns one server with the methods `accept`, `settimeout`, `getsockname`, and `close`. `accept()` waits for the next connection and returns a TCP socket, or `nil` and an error object, such as one with the code `"timeout"` and the message `"accept timeout"`. A failure returns `nil` and an error object (see [`network.tcp`](/manual/api#network.tcp)): a name that does not resolve has the code `"resolve"` and the message `"cannot resolve 'HOST': REASON"`, and an address that cannot be bound has the code `"address"` and the message `"cannot bind to HOST:PORT: REASON"`. A port out of range raises `bad argument #2 to 'bind' (port out of range)`. The call requires `network:tcp` for `host:port`.
 
 The following example binds a port that the system chooses, accepts one connection, and reads a line from it.
 

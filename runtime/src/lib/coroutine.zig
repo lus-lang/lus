@@ -448,6 +448,10 @@ pub fn resumeNative(l: *Thread) Error!u32 {
     return @"resume"(l);
 }
 
+pub fn closeNative(l: *Thread) Error!u32 {
+    return close(l);
+}
+
 pub fn statusNative(l: *Thread) Error!u32 {
     return status(l);
 }
@@ -535,6 +539,14 @@ fn close(l: *Thread) Error!u32 {
         try interp.closeTbc(co, 0, null);
         co.self_closed = true;
         return error.LusError;
+    }
+    // An event coroutine of the runtime that waits inside its native while
+    // its resumer blocks (the main chunk, or a plain coroutine) ends its
+    // wait at once, and the resume returns false and "closed".
+    if (co.event and co.status != .suspended and co.status != .dead and co.status != .err) {
+        co.event_closed = true;
+        if (sched.taskOf(co)) |t| sched.interruptWait(l.g, t);
+        return aux.retBool(l, true);
     }
     switch (co.status) {
         .suspended, .dead, .err => {},

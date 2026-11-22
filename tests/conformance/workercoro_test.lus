@@ -21,6 +21,28 @@ local function start(source, ...)
     return worker.create(path, ...)
 end
 
+-- Several tests wait for an answer that depends on another coroutine,
+-- which sends the request. An allocation that fails in that coroutine, as
+-- the allocation sweep injects, stops it before it sends, and the wait
+-- would never end. A guard sends the worker "timeout" after a few seconds
+-- unless the test closes it first, so the worker answers and the test
+-- fails on an answer it rejects. It waits for a UDP socket with a
+-- timeout, which suspends it without using the processor.
+local guard_seconds = 10
+
+local function guard(w)
+    return spawn(function()
+        local ok, sock = catch network.udp.open(0, "127.0.0.1")
+        if not ok then
+            return
+        end
+        sock:settimeout(guard_seconds)
+        local _ = catch sock:receive()
+        sock:close()
+        worker.send(w, "timeout")
+    end)
+end
+
 -- Collects the messages of a worker until it ends.
 local function drain(w)
     local messages = {}
@@ -99,6 +121,7 @@ local shout = [[
 
 local function receive_suspends_a_detached_coroutine_test()
     local w = start(shout)
+    local watchdog = guard(w)
     local turns = 0
     local receiver = spawn(function()
         return worker.receive(w)
@@ -114,6 +137,7 @@ local function receive_suspends_a_detached_coroutine_test()
         worker.send(w, "hello")
     end)
     local ok, answer = resume(receiver)
+    coroutine.close(watchdog)
     assert(ok and answer == "HELLO", tostring(answer))
     assert(turns == 5 and resume(sender))
     worker.send(w, "stop")
@@ -122,6 +146,7 @@ end
 
 local function receive_in_the_main_chunk_runs_the_coroutines_test()
     local w = start(shout)
+    local watchdog = guard(w)
     local sender = spawn(function()
         for i = 1, 5 do
             yield()
@@ -129,7 +154,9 @@ local function receive_in_the_main_chunk_runs_the_coroutines_test()
         worker.send(w, "main")
     end)
     -- The main chunk keeps its native on the stack and runs the scheduler.
-    assert(worker.receive(w) == "MAIN")
+    local answer = worker.receive(w)
+    coroutine.close(watchdog)
+    assert(answer == "MAIN", tostring(answer))
     assert(resume(sender))
     worker.send(w, "stop")
     assert(#drain(w) == 0)
@@ -163,6 +190,7 @@ local function receive_passes_a_worker_error_to_a_detached_coroutine_test()
         worker.peek()
         error("the worker failed")
     ]])
+    local watchdog = guard(w)
     local receiver = spawn(function()
         return catch worker.receive(w)
     end)
@@ -171,6 +199,7 @@ local function receive_passes_a_worker_error_to_a_detached_coroutine_test()
         worker.send(w, "go")
     end)
     local ok, good, err = resume(receiver)
+    coroutine.close(watchdog)
     assert(ok and good == false and string.find(err, "the worker failed$"), tostring(err))
     assert(resume(sender))
 end
@@ -221,7 +250,10 @@ local function peek_suspends_a_detached_coroutine_test()
         local ok, answer = resume(reader)
         worker.message(answer)
     ]])
-    assert(worker.receive(w) == "ticked")
+    local watchdog = guard(w)
+    local ticked = worker.receive(w)
+    coroutine.close(watchdog)
+    assert(ticked == "ticked", tostring(ticked))
     worker.send(w, "value")
     assert(worker.receive(w) == "value after 4 turns")
     assert(#drain(w) == 0)
@@ -237,7 +269,10 @@ local function peek_in_a_worker_body_runs_its_coroutines_test()
         end))
         worker.message(worker.peek() .. " received")
     ]])
-    assert(worker.receive(w) == "ready")
+    local watchdog = guard(w)
+    local ready = worker.receive(w)
+    coroutine.close(watchdog)
+    assert(ready == "ready", tostring(ready))
     worker.send(w, "value")
     assert(worker.receive(w) == "value received")
     assert(#drain(w) == 0)

@@ -23,7 +23,7 @@ Waits for one datagram and returns its data as a vector, together with the numer
 
 `size` is an optional integer from 1 through 1048576 (1 MiB) that defaults to 8192 (8 KiB). The call returns at most `size` bytes of the datagram and discards the rest of it. Any other size raises `"invalid receive size: N"`.
 
-On success the call returns three values: the data as a vector, the address of the sender as a string, and its port as an integer. A failure of the socket returns `nil` and a message. A timeout set with `settimeout` that runs out raises `"receive timeout"`, and a closed socket raises `"attempt to use a closed UDP socket"`. The method needs no permission.
+On success the call returns three values: the data as a vector, the address of the sender as a string, and its port as an integer. A failure of the socket returns `nil` and an error object (see [`network.tcp`](/manual/api#network.tcp)), and a timeout set with `settimeout` that runs out has the code `"timeout"` and the message `"receive timeout"`. A socket that the program closed raises `"attempt to use a closed UDP socket"`. The method needs no permission.
 
 The following example receives the first 5 bytes of a longer datagram.
 

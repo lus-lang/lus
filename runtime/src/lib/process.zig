@@ -418,7 +418,10 @@ fn tryReap(p: *Process) bool {
 fn waitExit(l: *Thread, p: *Process) Error!shell.Status {
     if (tryReap(p)) return p.status.?;
     if (sigwatch.subscribe(l.g)) {
-        while (!tryReap(p)) try sched.waitNotify(l);
+        while (!tryReap(p)) {
+            try events.checkClosed(l);
+            try sched.waitNotify(l);
+        }
         return p.status.?;
     }
     // Without a wake source the thread blocks in the system call.

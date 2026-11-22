@@ -85,6 +85,10 @@ pub const Http = struct {
     stream_raw: bool = false,
     /// The response says the connection closes after it.
     close_after: bool = false,
+    /// The length that the handler declared for a streamed body, and the
+    /// bytes of it sent so far.
+    stream_len: ?u64 = null,
+    stream_sent: u64 = 0,
     /// The address of the table of the request in progress, which tells
     /// it apart from the tables of earlier requests.
     req_id: usize = 0,
@@ -121,7 +125,7 @@ fn httpOf(l: *Thread, s: *net.Socket) Error!*Http {
 // network.serve
 
 const connection_src =
-    \\local readrequest, respond, stderr, writechunk, refusal, readbody, readerof, coresume, costatus = ...
+    \\local readrequest, respond, stderr, writechunk, refusal, readbody, readerof, coresume, costatus, coclose = ...
     \\local function report(on_error, err)
     \\    if on_error then
     \\        local ok, failure = catch on_error(err)
@@ -129,6 +133,44 @@ const connection_src =
     \\        stderr(failure)
     \\    end
     \\    stderr(err)
+    \\end
+    \\-- Sends a streamed response. Returns whether the connection stays open.
+    \\local function stream(conn, status, body, headers, keep, head, kind, on_error)
+    \\    local valid, alive, follow = catch respond(conn, status, nil, headers, keep, head, nil, true)
+    \\    if not valid then
+    \\        report(on_error, alive)
+    \\        respond(conn, 500, nil, nil, false, false)
+    \\        return false
+    \\    end
+    \\    if not alive then return false end
+    \\    if not follow then return true end
+    \\    while true do
+    \\        local produced, chunk, last
+    \\        if kind == "thread" then
+    \\            -- A coroutine yields its chunks and ends.
+    \\            produced, chunk = coresume(body)
+    \\            last = costatus(body) == "dead"
+    \\        else
+    \\            produced, chunk = catch body()
+    \\            last = chunk == nil
+    \\        end
+    \\        if not produced then
+    \\            report(on_error, chunk)
+    \\            return false
+    \\        end
+    \\        if chunk ~= nil then
+    \\            local wrote, open = catch writechunk(conn, chunk)
+    \\            if not wrote then
+    \\                report(on_error, open)
+    \\                return false
+    \\            end
+    \\            if not open then return false end
+    \\        end
+    \\        if last then
+    \\            local wrote, open = catch writechunk(conn, nil)
+    \\            return wrote and open
+    \\        end
+    \\    end
     \\end
     \\local function exchange(conn, handler, on_error)
     \\    -- The request tables of a connection make `body` and `reader` on
@@ -179,44 +221,11 @@ const connection_src =
     \\            -- A streamed response: the head goes out, then every chunk
     \\            -- that the function returns or the coroutine yields, as it
     \\            -- comes, until the function returns nil or the coroutine ends.
-    \\            local valid, alive, follow = catch respond(conn, status, nil, headers, keep, head, nil, true)
-    \\            if not valid then
-    \\                report(on_error, alive)
-    \\                respond(conn, 500, nil, nil, false, false)
-    \\                return
-    \\            end
-    \\            if not alive then return end
-    \\            if follow then
-    \\                while true do
-    \\                    local produced, chunk, last
-    \\                    if kind == "thread" then
-    \\                        -- A coroutine yields its chunks and ends.
-    \\                        produced, chunk = coresume(body)
-    \\                        last = costatus(body) == "dead"
-    \\                    else
-    \\                        produced, chunk = catch body()
-    \\                        last = chunk == nil
-    \\                    end
-    \\                    if not produced then
-    \\                        report(on_error, chunk)
-    \\                        return
-    \\                    end
-    \\                    if chunk ~= nil then
-    \\                        local wrote, open = catch writechunk(conn, chunk)
-    \\                        if not wrote then
-    \\                            report(on_error, open)
-    \\                            return
-    \\                        end
-    \\                        if not open then return end
-    \\                    end
-    \\                    if last then
-    \\                        local wrote, open = catch writechunk(conn, nil)
-    \\                        if not (wrote and open) then return end
-    \\                        break
-    \\                    end
-    \\                end
-    \\            end
-    \\            if not keep then return end
+    \\            -- A coroutine closes on every way out, so its pending
+    \\            -- to-be-closed variables run at once.
+    \\            local open = stream(conn, status, body, headers, keep, head, kind, on_error)
+    \\            if kind == "thread" then coclose(body) end
+    \\            if not (open and keep) then return end
     \\        else
     \\            local valid, alive = catch respond(conn, status, body, headers, keep, head)
     \\            if not valid then
@@ -273,7 +282,9 @@ fn connectionFn(l: *Thread) Error!Value {
     try l.push(resume_fn);
     const status_fn = try aux.native(l, coroutine.statusNative, "status");
     try l.push(status_fn);
-    const f = try ops.call1(l, chunk, &.{ read, write, report, chunk_fn, refused, body_fn, reader_fn, resume_fn, status_fn });
+    const close_fn = try aux.native(l, coroutine.closeNative, "close");
+    try l.push(close_fn);
+    const f = try ops.call1(l, chunk, &.{ read, write, report, chunk_fn, refused, body_fn, reader_fn, resume_fn, status_fn, close_fn });
     try l.push(f);
     try aux.setField(l, g.registry.as(Table), connection_key, f);
     g.ext.put(g.gpa, connection_key, f.as(object.Closure)) catch return l.raiseMem();
@@ -949,6 +960,7 @@ fn buildResponse(l: *Thread, h: *Http, keep_in: bool, head: bool, stream: bool, 
     var has_connection = false;
     var has_upgrade = false;
     var has_accept = false;
+    var declared: ?u64 = null;
     if (!l.arg(4).isNil()) {
         if (l.arg(4).tag != .table) return l.raiseFmt("handler returned invalid headers (table expected, got {s})", .{l.typeNameOf(l.arg(4))});
         const t = l.arg(4).as(Table);
@@ -958,7 +970,14 @@ fn buildResponse(l: *Thread, h: *Http, keep_in: bool, head: bool, stream: bool, 
             const name = e.key.as(object.String).bytes();
             if (name.len == 0) return l.raiseFmt("handler returned an invalid header name", .{});
             for (name) |c| if (!isToken(c)) return l.raiseFmt("handler returned an invalid header name", .{});
-            if (std.ascii.eqlIgnoreCase(name, "content-length")) has_length = true;
+            if (std.ascii.eqlIgnoreCase(name, "content-length")) {
+                has_length = true;
+                declared = switch (e.val.tag) {
+                    .integer => if (e.val.asInt() >= 0) @intCast(e.val.asInt()) else null,
+                    .string => std.fmt.parseInt(u64, e.val.as(object.String).bytes(), 10) catch null,
+                    else => null,
+                };
+            }
             if (std.ascii.eqlIgnoreCase(name, "date")) has_date = true;
             if (std.ascii.eqlIgnoreCase(name, "connection")) has_connection = true;
             if (std.ascii.eqlIgnoreCase(name, "upgrade")) has_upgrade = true;
@@ -987,11 +1006,17 @@ fn buildResponse(l: *Thread, h: *Http, keep_in: bool, head: bool, stream: bool, 
     }
     if (!has_date) out.print(gpa, "Date: {s}\r\n", .{dateText(h, l.g.io)}) catch return l.raiseMem();
     h.stream_raw = false;
+    h.stream_len = null;
+    h.stream_sent = 0;
     if (stream and !bodiless and !head) {
-        // A client of HTTP/1.0 knows no chunked coding, and a length that
-        // the handler set leaves the chunks unframed. Either way the end
-        // of the connection ends the body.
-        if (has_length or h.http10) {
+        // A length that the handler set leaves the chunks unframed, and the
+        // connection stays open when the chunks add up to it. A client of
+        // HTTP/1.0 knows no chunked coding, so the end of the connection
+        // ends its body.
+        if (has_length and declared != null and !h.http10) {
+            h.stream_raw = true;
+            h.stream_len = declared;
+        } else if (has_length or h.http10) {
             h.stream_raw = true;
             keep = false;
         } else {
@@ -1087,6 +1112,10 @@ fn writeChunk(l: *Thread) Error!u32 {
                 const data = if (v.tag == .string) v.as(object.String).bytes() else v.as(object.Vector).bytes.items;
                 // An empty chunk would end a chunked body.
                 if (data.len == 0) return aux.retBool(l, true);
+                if (h.stream_len) |n| {
+                    if (data.len > n - h.stream_sent) return l.raiseFmt("the body is longer than its Content-Length of {d}", .{n});
+                    h.stream_sent += data.len;
+                }
                 if (!h.stream_raw) h.out.print(gpa, "{x}\r\n", .{data.len}) catch return l.raiseMem();
                 h.out.appendSlice(gpa, data) catch return l.raiseMem();
                 if (!h.stream_raw) h.out.appendSlice(gpa, "\r\n") catch return l.raiseMem();
@@ -1096,7 +1125,10 @@ fn writeChunk(l: *Thread) Error!u32 {
     }
     const last = l.arg(2).isNil();
     const sent = try flushOut(l, s, h);
-    return aux.retBool(l, sent and !(last and h.close_after));
+    // A body shorter than its declared length leaves the client waiting
+    // for the rest, so the connection closes.
+    const short = last and h.stream_len != null and h.stream_sent != h.stream_len.?;
+    return aux.retBool(l, sent and !(last and h.close_after) and !short);
 }
 
 /// refusal(sock): the status that refuses the request whose body broke

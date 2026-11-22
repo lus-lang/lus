@@ -44,6 +44,9 @@ pub const Handle = struct {
     rbuf: std.ArrayList(u8) = .empty,
     rstart: usize = 0,
     eof: bool = false,
+    /// The error of the read that the system last refused, which
+    /// `file:read` returns as a result while the lines iterators raise it.
+    read_err: ?anyerror = null,
     child: ?std.process.Child = null,
     /// A pipe end of `os.spawn` in non-blocking mode, whose reads and
     /// writes wait through the scheduler.
@@ -173,7 +176,7 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
         };
         var bufs = [_][]u8{dst};
         const got = switch (h.kind) {
-            .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return ioError(l, e),
+            .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return readError(l, h, e),
             else => h.file.readStreaming(l.g.io, &bufs) catch |e| switch (e) {
                 error.EndOfStream => 0,
                 error.WouldBlock => {
@@ -182,7 +185,7 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
                     _ = try sched.waitIo(l, h.file.handle, .read, -1);
                     continue;
                 },
-                else => |x| return ioError(l, x),
+                else => |x| return readError(l, h, x),
             },
         };
         if (got == 0) h.eof = true;
@@ -198,6 +201,13 @@ fn consume(h: *Handle, n: usize) void {
 
 fn pending(h: *Handle) []const u8 {
     return h.rbuf.items[h.rstart..];
+}
+
+/// Raises the error of a read that the system refused, and records it on
+/// the handle for `doRead`.
+fn readError(l: *Thread, h: *Handle, e: anyerror) Error {
+    h.read_err = e;
+    return ioError(l, e);
 }
 
 fn ioError(l: *Thread, e: anyerror) Error {
@@ -315,7 +325,21 @@ fn readNumber(l: *Thread, h: *Handle) Error!?Value {
     return null;
 }
 
+/// Reads the formats from argument `first` on. A read that the system
+/// refuses returns `nil`, the message, and the number of the error, as in
+/// Lua, in place of every result.
 fn doRead(l: *Thread, h: *Handle, first: u32) Error!u32 {
+    h.read_err = null;
+    return readFormats(l, h, first) catch |e| {
+        if (h.read_err) |re| {
+            h.read_err = null;
+            return ioFail(l, re);
+        }
+        return e;
+    };
+}
+
+fn readFormats(l: *Thread, h: *Handle, first: u32) Error!u32 {
     if (!h.readable) return failResult(l, "file not opened for reading");
     const nargs = l.argCount();
     if (nargs < first) {
@@ -470,12 +494,18 @@ const winpipe = if (builtin.os.tag == .windows) struct {
 
     /// The bytes a write can put in the pipe without blocking. A pipe
     /// whose state cannot be read reports room for one write, which then
-    /// reports its own error.
+    /// reports its own error. The quota that Windows reports shrinks by the
+    /// size of a read pending on the other end, which `room` corrects.
     fn room(h: w.HANDLE) usize {
         var iosb: w.IO_STATUS_BLOCK = undefined;
         var info: LocalInfo = undefined;
         if (NtQueryInformationFile(h, &iosb, &info, @sizeOf(LocalInfo), 24) != .SUCCESS) return std.math.maxInt(usize);
-        return info.write_quota_available;
+        if (info.write_quota_available > 0) return info.write_quota_available;
+        // A read that waits on the other end takes its size from the quota,
+        // so an empty pipe without quota has a reader waiting in it, and a
+        // write of at most the size of the buffer goes straight to it.
+        if (info.read_available == 0) return @max(info.outbound_quota, 1);
+        return 0;
     }
 } else struct {};
 
@@ -727,7 +757,11 @@ fn fSync(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
     switch (h.kind) {
         .file => {
-            syncFile(l.g.io, h.file) catch |e| return ioFail(l, e);
+            // Windows flushes only through a handle with write access, and a
+            // handle opened for reading has written nothing to flush.
+            if (builtin.os.tag != .windows or h.writable) {
+                syncFile(l.g.io, h.file) catch |e| return ioFail(l, e);
+            }
         },
         .stdout => {
             const o = out.stdout(l.g);

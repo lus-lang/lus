@@ -337,7 +337,7 @@ vector.pack(bytes, 0, "BB", 0xFF, 0xFE)
 print(catch string.transcode(bytes, "utf-8", "utf-16le"))        --> false  ...: invalid UTF-8 sequence at position 1
 ```
 
-When `ignorebad` is true, the conversion omits invalid sequences and characters that the target cannot represent and returns the rest. A program uses `ignorebad` when a partial result is better than none, such as when it reduces text to ASCII for a file name.
+When `ignorebad` is true, the conversion replaces each invalid input sequence with U+FFFD, the replacement character, omits each character that the target cannot represent, and returns the rest. The replacement follows the URL standard, so a broken sequence of UTF-8 gives one U+FFFD for each part that could have started a valid one. A program uses `ignorebad` when a partial result is better than none, such as when it reduces text to ASCII for a file name.
 
 ```lus
 global print, string, vector
@@ -347,7 +347,7 @@ print(vector.tostring(string.transcode("€100", "utf-8", "latin1", true)))   --
 
 local bytes = vector.fromstring("valid--text")
 vector.pack(bytes, 5, "BB", 0xFF, 0xFE)
-print(string.transcode(bytes, "utf-8", "utf-8", true))                       --> validtext
+print(string.transcode(bytes, "utf-8", "utf-8", true) == "valid\u{FFFD}\u{FFFD}text")  --> true
 ```
 
 ## Compression

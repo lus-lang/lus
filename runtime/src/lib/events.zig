@@ -132,16 +132,27 @@ pub fn sleep(l: *Thread) Error!u32 {
     return 1;
 }
 
+/// Raises "closed" in an event coroutine that another coroutine closed
+/// while it waited, so the resume that waits for it returns false and
+/// "closed".
+pub fn checkClosed(l: *Thread) Error!void {
+    if (l.event_closed) return l.raise(try l.newStringValue("closed"));
+}
+
 fn sleepWait(l: *Thread) Error!u32 {
     const v = l.arg(1);
     if (v.tag != .userdata) return 0;
     const st: *Sleep = @ptrCast(@alignCast(v.as(Userdata).data()));
     const g = l.g;
     if (st.forever) {
-        while (true) try sched.waitPark(l);
+        while (true) {
+            try checkClosed(l);
+            try sched.waitPark(l);
+        }
     }
     if (st.deadline == 0) st.deadline = sched.now(g) + st.ns;
     while (true) {
+        try checkClosed(l);
         const at = sched.now(g);
         if (at >= st.deadline) return 0;
         const left = (st.deadline - at + std.time.ns_per_ms - 1) / std.time.ns_per_ms;

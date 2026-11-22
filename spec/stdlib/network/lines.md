@@ -14,9 +14,9 @@ params:
 returns: function
 ---
 
-Returns an iterator for a generic `for` over the lines of the text that a coroutine yields in parts.
+Returns an iterator over the lines of the text that a coroutine yields in parts, for a generic `for` or for calls of its own.
 
-`stream` is a coroutine that yields strings or vectors, such as the body of a response that [`network.fetch`](/manual/api#network.fetch) streams or the `reader` of a request of [`network.serve`](/manual/api#network.serve). The iterator resumes `stream` whenever it needs more text, and a line may span several parts. Each step yields one line as a vector without its line end. A line ends with LF, and a CR before the LF goes too. The last line may lack a line end. The loop ends when the coroutine ends, and a part of `nil` that a coroutine yields without ending adds nothing.
+`stream` is a coroutine that yields strings or vectors, such as the body of a response that [`network.fetch`](/manual/api#network.fetch) streams or the `reader` of a request of [`network.serve`](/manual/api#network.serve). The iterator resumes `stream` whenever it needs more text, and a line may span several parts. Each call of the iterator returns one line as a vector without its line end, and `nil` once the lines ran out. The iterator holds its state, so `local nextline = network.lines(co)` works without a loop. A line ends with LF, and a CR before the LF goes too. The last line may lack a line end. The loop ends when the coroutine ends, and a part of `nil` that a coroutine yields without ending adds nothing.
 
 `max_bytes` is a positive integer that limits a line and defaults to 1 MiB. A longer line raises `"line too long"`. An error that the coroutine raises comes out of the step that resumed it, and a part that is neither a string, a vector, nor `nil` raises an error that names its type. A `max_bytes` that is not positive raises a `bad argument` error. The function needs no permission.
 

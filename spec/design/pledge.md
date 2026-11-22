@@ -13,7 +13,7 @@ pledge("~exec")            -- reject a capability permanently
 pledge("seal")             -- forbid any further change
 ```
 
-`pledge` accepts several strings in one call and returns one boolean per string, in order, which is `true` where that grant succeeded. A coroutine starts with the permission set of its creator, and changes inside it stay local to it. On the command line, `-P` and `--pledge` grant capabilities before the script runs.
+`pledge` accepts several strings in one call and returns one boolean per string, in order, which is `true` where that grant succeeded. A grant only adds access. A check passes when any grant of the permission or of its base permission covers the request, and a grant without a value covers every value, so the order of the grants never matters. Narrowing is done with a rejection or inside a coroutine. A coroutine starts with the permission set of its creator, and changes inside it stay local to it. On the command line, `-P` and `--pledge` grant capabilities before the script runs.
 
 ## Capabilities
 

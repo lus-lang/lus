@@ -371,9 +371,11 @@ end
 local function network_host_port_pledges_match_the_checked_port_test()
     with_baseline(BASE_A, function()
         pledge("network:tcp=127.0.0.1:1")
-        local ok, sock_or_err = catch network.tcp.connect("127.0.0.1", 1)
-        if ok then
+        local ok, sock_or_err, failure = catch network.tcp.connect("127.0.0.1", 1)
+        if ok and sock_or_err then
             sock_or_err:close()
+        elseif ok then
+            assert(tostring(failure):find("permission") == nil)
         else
             assert(tostring(sock_or_err):find("permission") == nil)
         end
@@ -917,5 +919,65 @@ local function scratch_fixtures_are_removed_test()
         -- Now drop the directories themselves.
         catch fs.remove(dir_ok)
         catch fs.remove(dir_sibling)
+    end)
+end
+
+-- A grant only adds access. A grant without a value covers the grants of
+-- the same permission that have values, and a base permission granted
+-- without a value covers its parts, whichever comes first and whether the
+-- grants come in one call or in several.
+local grant_order_cases = {
+    { "env:read=OTHER_*", "env:read" },
+    { "env:read", "env:read=OTHER_*" },
+    { "env=OTHER_*", "env:read" },
+    { "env:read=OTHER_*", "env" },
+    { "env", "env:read=OTHER_*" },
+    { "env=OTHER_*", "env" },
+}
+
+local function grant_order_test(first, second)
+    for _, together in ipairs({ true, false }) do
+        isolated(function()
+            if together then
+                assert(select("#", pledge(first, second)) == 2)
+            else
+                assert(pledge(first))
+                assert(pledge(second))
+            end
+            local ok, err = catch os.getenv("LUS_PLEDGE_ORDER_X")
+            assert(ok, err)
+        end)
+    end
+end
+
+-- Values of one permission and of its base permission add up.
+local function values_add_up_across_parts_test()
+    isolated(function()
+        pledge("env=LUS_PLEDGE_BASE_*", "env:read=LUS_PLEDGE_PART_*")
+        assert(catch os.getenv("LUS_PLEDGE_BASE_X"))
+        assert(catch os.getenv("LUS_PLEDGE_PART_X"))
+        raises(function() os.getenv("LUS_PLEDGE_OTHER_X") end, 'permission "env:read" denied')
+        -- The base value also covers the other part.
+        assert(catch os.setenv("LUS_PLEDGE_BASE_X", "1"))
+        raises(function() os.setenv("LUS_PLEDGE_PART_X", "1") end, 'permission "env:write" denied')
+    end)
+end
+
+-- The report that found the old rule: a narrowed read and a bare read in
+-- one call permit reading any file.
+local function bare_read_after_narrowed_read_test()
+    isolated(function()
+        pledge("fs:read=./no-such-directory/*", "fs:read")
+        local f = assert(io.open(TEST_DIR .. "/pledge_test.lus", "r"))
+        f:close()
+    end)
+end
+
+-- A rejection still narrows whatever was granted.
+local function rejection_narrows_a_bare_grant_test()
+    isolated(function()
+        pledge("env", "env:read=OTHER_*", "~env:read")
+        raises(function() os.getenv("LUS_PLEDGE_ORDER_X") end, 'permission "env:read" denied')
+        assert(catch os.setenv("LUS_PLEDGE_ORDER_X", "1"))
     end)
 end

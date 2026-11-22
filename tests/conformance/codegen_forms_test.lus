@@ -98,3 +98,36 @@ local function a_goto_out_of_a_block_closes_its_captured_locals_test()
     ::out::
     assert(closed == 1)
 end
+
+-- A float with an integer value loads as an immediate. Others load as
+-- constants: fractions, values past the immediate range, and -0.0.
+local function float_literals_load_in_every_form_test()
+    local a, b, c, d, e = 3.0, 2.5, 1e300, -0.0, 0.0
+    assert(math.type(a) == "float" and a == 3 and b == 2.5 and c == 1e300)
+    assert(1 / d < 0 and 1 / e > 0)
+    local big = 1e10
+    assert(big == 10000000000 and math.type(big) == "float")
+end
+
+-- Folding stops where the result would differ from running the code:
+-- a bitwise operand without an integer value, and a float result that
+-- is zero or not a number.
+local function folding_leaves_what_it_cannot_reproduce_test()
+    local ok, err = catch (function() return 1 | 2.5 end)()
+    assert(not ok and err:find("number has no integer representation", 1, true), err)
+    assert((1 | 2.0) == 3)
+    local z = 0.0 * -5.0
+    assert(z == 0 and 1 / z < 0)
+    local n = 0.0 / 0.0
+    assert(n ~= n)
+end
+
+-- The first instruction of a function may load nil, with no earlier
+-- instruction to merge with.
+local function a_function_may_start_by_loading_nil_test()
+    local function f() local a, b return a, b end
+    local function g(x) local a local b return x, a, b end
+    assert(select("#", f()) == 2 and f() == nil)
+    local x, a, b = g(1)
+    assert(x == 1 and a == nil and b == nil)
+end

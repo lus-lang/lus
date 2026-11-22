@@ -295,6 +295,10 @@ fn relative(s: *Shared, path: []const u8) []const u8 {
 fn wait(l: *Thread) Error!u32 {
     const w = toWatcher(l, l.arg(1)) orelse return aux.typeError(l, 1, "watcher");
     while (true) {
+        if (l.event_closed) {
+            stop(w);
+            try events.checkClosed(l);
+        }
         const s = w.shared orelse return l.raiseFmt("the watch is closed", .{});
         w.backend.poll(l, s);
         switch (s.take(monotonic())) {
@@ -719,7 +723,10 @@ const WinWatch = struct {
                         else => null,
                     };
                     if (kind) |k| {
-                        if (std.mem.concat(gpa, u8, &.{ s.root_real, "\\", rel })) |real| {
+                        // A file is watched through its directory, so the
+                        // name is relative to that directory.
+                        const dir = if (s.is_file) std.fs.path.dirname(s.root_real) orelse s.root_real else s.root_real;
+                        if (std.mem.concat(gpa, u8, &.{ dir, "\\", rel })) |real| {
                             defer gpa.free(real);
                             const keep = if (s.is_file) std.ascii.eqlIgnoreCase(real, s.root_real) else true;
                             if (keep) {
