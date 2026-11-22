@@ -12341,7 +12341,7 @@ Copies `len` bytes of `src`, starting at the zero-based offset `srcoff`, into `d
 - `srcoff` defaults to 0.
 - `len` defaults to the rest of `src` after `srcoff`.
 
-The ranges may overlap, and the result is the same as if the bytes went through a temporary copy. The range read must lie inside `src` and the range written inside `dst`. An `srcoff` outside `src` raises `bad argument #4 to 'copy' (offset out of bounds)`, a `len` past the end of `src` raises `bad argument #5 to 'copy' (length out of bounds)`, and a range that does not fit in `dst` raises `bad argument #2 to 'copy' (offset out of bounds)`. A read-only `dst` raises `bad argument #1 to 'copy' (vector is read-only)`.
+The ranges may overlap, and the result is the same as if the bytes went through a temporary copy. The range read must lie inside `src` and the range written inside `dst`. An `srcoff` outside `src` raises `bad argument #4 to 'copy' (offset out of bounds)`. A `len` past the end of `src` raises `bad argument #5 to 'copy' (length out of bounds)`. A range that does not fit in `dst` raises `bad argument #2 to 'copy' (offset out of bounds)`. A read-only `dst` raises `bad argument #1 to 'copy' (vector is read-only)`.
 
 The following example writes a header into a buffer, then shifts its contents to drop the first two bytes.
 
@@ -12443,7 +12443,7 @@ Returns the zero-based offset of the first occurrence of the bytes of `pattern` 
 - `pattern` is the byte sequence to find, a vector or a string. A string contributes its WTF-8 bytes.
 - `init` is the zero-based offset where the search starts. It defaults to 0.
 
-The search is plain, so every byte of `pattern` matches only itself, unlike the patterns of [`string.find`](/manual/api#string.find). An empty `pattern` matches at `init`. An `init` below 0 or past the size of the vector returns `nil`. A `v` that is not a vector raises `bad argument #1 to 'find' (vector expected)`, and a `pattern` that is neither a string, a number, nor a vector raises `bad argument #2 to 'find' (string or vector expected, got table)` with its type.
+The search is plain, so every byte of `pattern` matches only itself, unlike the patterns of [`string.find`](/manual/api#string.find). An empty `pattern` matches at `init`. An `init` below 0 or past the size of the vector returns `nil`. A `v` that is not a vector raises `bad argument #1 to 'find' (vector expected)`. A `pattern` that is neither a string, a number, nor a vector raises `bad argument #2 to 'find' (string or vector expected, got table)` with its type.
 
 The following example splits a multipart body at its boundary.
 
