@@ -165,8 +165,8 @@ const Collector = struct {
     in_dir: bool = false,
     /// Resolves the remote modules that literal requires name.
     store: *remote.Store,
-    /// Which optional libraries the collected chunks can reach.
-    proof: libproof.Proof = .{},
+    /// Which builtins the collected chunks can reach.
+    proof: libproof.Proof,
 
     const Info = struct { requires: [][]u8, candidate: bool };
 
@@ -182,6 +182,7 @@ const Collector = struct {
             c.gpa.free(i.requires);
         }
         c.info.deinit(c.gpa);
+        c.proof.deinit();
     }
 
     /// Drops the candidates that no literal require reaches from the
@@ -551,7 +552,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     defer if (home_dir) |h| gpa.free(h);
     var store: remote.Store = .init(gpa, io, .{ .home = home_dir, .env = init.environ_map });
     defer store.deinit();
-    var c: Collector = .{ .gpa = gpa, .io = io, .l = l, .path_templates = path_templates, .store = &store, .pledges = opts.pledges.items };
+    var c: Collector = .{ .gpa = gpa, .io = io, .l = l, .path_templates = path_templates, .store = &store, .pledges = opts.pledges.items, .proof = .init(gpa) };
     defer c.deinit();
     // The entry module is named after the script, as a module file of
     // that name would be.

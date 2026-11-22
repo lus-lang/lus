@@ -77,11 +77,9 @@ pub const Shape = struct {
 /// each state keeps the children of the root in its own `Shapes`.
 pub var root: Shape = .{ .id = 0, .n = 0, .parent = null, .keys = undefined, .index = undefined };
 
-var registry: [max_shapes]?*Shape = blk: {
-    var r: [max_shapes]?*Shape = @splat(null);
-    r[0] = &root;
-    break :blk r;
-};
+/// Every live shape by id. The table starts zeroed, so it costs no space
+/// in the executable, and `prepare` enters the root.
+var registry: [max_shapes]?*Shape = @splat(null);
 var registry_lock: std.atomic.Mutex = .unlocked;
 /// The lowest id that was never handed out.
 var next_fresh: u32 = 1;
@@ -93,6 +91,14 @@ const no_id: u32 = 0xFFFF_FFFF;
 /// The shape with id `id`.
 pub inline fn get(id: u16) *Shape {
     return registry[id].?;
+}
+
+/// Enters the root in the registry. Every state calls it when it is
+/// created, before it makes a table.
+pub fn prepare() void {
+    lock();
+    defer registry_lock.unlock();
+    registry[0] = &root;
 }
 
 fn lock() void {

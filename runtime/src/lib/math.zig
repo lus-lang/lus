@@ -46,7 +46,7 @@ pub const funcs = [_]aux.Reg{
 };
 
 pub fn open(l: *Thread) Error!void {
-    const t = try aux.newLib(l, &funcs);
+    const t = try aux.newLib(l, .fields, "math", &funcs);
     try l.push(Value.obj(.table, t));
     try aux.setField(l, t, "pi", Value.float(std.math.pi));
     try aux.setField(l, t, "huge", Value.float(std.math.inf(f64)));

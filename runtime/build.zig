@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
         .coverage = b.option(bool, "coverage", "Instrument every edge and write the edges a run reached to LUS_COVERAGE (default: false)") orelse false,
         .fail_io = b.option(bool, "fail-io", "Fail or shorten the file and socket operation that LUS_FAIL_IO names, to test I/O error handling (default: false)") orelse false,
         .compiler = b.option(bool, "compiler", "Include the parser and the compiler, which `load` of source text and the tools need (default: true)") orelse true,
+        .link_object = b.option(bool, "link-object", "Export the registrations of builtins for the link object of `lus build --aot` (default: false)") orelse false,
         .jit_compile = b.option(bool, "jit-compile", "Compile native code, where the JIT is included, rather than only run the code an executable compiled ahead of time carries (default: true)") orelse true,
     };
     const options = requested.resolve(b, target);
@@ -93,6 +94,35 @@ pub fn build(b: *std.Build) void {
             }),
         });
         b.step("runtime", "Build lus-runtime, the base of executables compiled ahead of time").dependOn(&b.addInstallArtifact(rt_exe, .{}).step);
+
+        // The input of the link object (`../spec/design/aot.md`, "The link
+        // object"): the same runtime as one relocatable object with a
+        // section for each function and each datum, which also exports
+        // the registrations of builtins.
+        var lo = rt;
+        lo.link_object = true;
+        const lo_mod = b.createModule(.{
+            .root_source_file = b.path("src/lus.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        lo_mod.addOptions("build_options", lo.resolve(b, target));
+        lo_mod.addImport("agent_docs", agentDocsModule(b));
+        const lo_obj = b.addObject(.{
+            .name = "lus-runtime",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{.{ .name = "lus", .module = lo_mod }},
+            }),
+        });
+        lo_obj.link_function_sections = true;
+        lo_obj.link_data_sections = true;
+        lo_obj.bundle_compiler_rt = true;
+        b.step("link-object", "Build the runtime as a relocatable object for the link object").dependOn(&b.addInstallFile(lo_obj.getEmittedBin(), "lib/lus-runtime.o").step);
         break :blk rt_exe;
     };
 
@@ -197,7 +227,7 @@ pub fn build(b: *std.Build) void {
     remote_run.addFileInput(b.path("../tests/lib/release.mjs"));
     remote_step.dependOn(&remote_run.step);
 
-    const unit = b.addTest(.{ .root_module = lus_mod });
+    const unit = b.addTest(.{ .root_module = lus_mod, .filters = if (b.option([]const u8, "test-filter", "Run only the unit tests whose names contain this text")) |f| b.dupeStrings(&.{f}) else &.{} });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(unit).step);
 
@@ -415,6 +445,7 @@ const Features = struct {
     coverage: bool = false,
     compiler: bool = true,
     jit_compile: bool = true,
+    link_object: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -444,6 +475,7 @@ const Features = struct {
         options.addOption(bool, "coverage", f.coverage);
         options.addOption(bool, "compiler", f.compiler);
         options.addOption(bool, "jit_compile", f.jit_compile);
+        options.addOption(bool, "link_object", f.link_object);
         // The version that `lus -v` and the User-Agent of network.fetch
         // report. A release of an unstable channel sets it with `-Dversion`,
         // and every other build takes the version in build.zig.zon.

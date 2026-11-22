@@ -48,8 +48,10 @@ inline fn verbatimBlock(v: SV) bool {
 }
 
 pub fn open(l: *Thread) Error!void {
-    try aux.setGlobal(l, "tojson", try aux.native(l, tojson, "tojson"));
-    try aux.setGlobal(l, "fromjson", try aux.native(l, fromjson, "fromjson"));
+    try aux.setFuncs(l, l.g.globals.as(object.Table), .fields, "", &.{
+        .{ .name = "tojson", .func = tojson },
+        .{ .name = "fromjson", .func = fromjson },
+    });
 }
 
 // ---------------------------------------------------------------------

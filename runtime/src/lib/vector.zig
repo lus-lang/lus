@@ -30,7 +30,7 @@ pub const funcs = [_]aux.Reg{
 };
 
 pub fn open(l: *Thread) Error!void {
-    const t = try aux.newLib(l, &funcs);
+    const t = try aux.newLib(l, .library, "vector", &funcs);
     try aux.setGlobal(l, "vector", Value.obj(.table, t));
     // Vectors index their library, so v:size() works.
     const mt = try l.newTable(0, 2);
@@ -255,7 +255,7 @@ pub fn registerString(l: *Thread) Error!void {
         sv = Value.obj(.table, try l.newTable(0, 4));
         try aux.setGlobal(l, "string", sv);
     }
-    try aux.setFuncs(l, sv.as(object.Table), &.{
+    try aux.setFuncs(l, sv.as(object.Table), .library, "string", &.{
         .{ .name = "pack", .func = stringPack },
         .{ .name = "unpack", .func = stringUnpack },
         .{ .name = "packsize", .func = stringPacksize },

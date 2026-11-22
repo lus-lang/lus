@@ -88,7 +88,7 @@ pub fn open(l: *Thread) Error!void {
     for (list, 1..) |e, i| {
         try ops.rawSet(l, searchers, Value.int(@intCast(i)), try withPackage(l, e.f, e.name, pkg));
     }
-    try aux.setFuncs(l, pkg, &.{
+    try aux.setFuncs(l, pkg, .fields, "package", &.{
         .{ .name = "searchpath", .func = searchpath },
         .{ .name = "loadlib", .func = loadlib },
     });

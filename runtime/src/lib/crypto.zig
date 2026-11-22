@@ -56,14 +56,14 @@ pub fn open(l: *Thread) Error!void {
     const mt = try l.newTable(0, 3);
     try l.push(Value.obj(.table, mt));
     defer l.top -= 1;
-    const m = try aux.newLib(l, &hasher_methods);
+    const m = try aux.newLib(l, .methods, "crypto:hasher", &hasher_methods);
     try aux.setField(l, mt, "__index", Value.obj(.table, m));
     try aux.setField(l, mt, "__name", try l.newStringValue(hasher_key));
     // Hide the metatable from getmetatable and setmetatable.
     try aux.setField(l, mt, "__metatable", .false);
     try aux.setField(l, l.g.registry.as(Table), hasher_key, Value.obj(.table, mt));
     l.g.ext.put(l.g.gpa, hasher_key, mt) catch return l.raiseMem();
-    const t = try aux.newLib(l, &funcs);
+    const t = try aux.newLib(l, .fields, "crypto", &funcs);
     try aux.setGlobal(l, "crypto", Value.obj(.table, t));
 }
 

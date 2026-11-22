@@ -135,27 +135,27 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "settimeout", .func = udpSettimeout },
     }, udpGc, udpTostring);
 
-    const t = try aux.newLib(l, &.{
+    const t = try aux.newLib(l, .fields, "network", &.{
         .{ .name = "fetch", .func = fetch },
         .{ .name = "serve", .func = @import("serve.zig").serve },
     });
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
-    const tcp = try aux.newLib(l, &.{
+    const tcp = try aux.newLib(l, .fields, "network.tcp", &.{
         .{ .name = "connect", .func = tcpConnect },
         .{ .name = "bind", .func = tcpBind },
     });
     try aux.setField(l, t, "tcp", Value.obj(.table, tcp));
-    const udp = try aux.newLib(l, &.{.{ .name = "open", .func = udpOpen }});
+    const udp = try aux.newLib(l, .fields, "network.udp", &.{.{ .name = "open", .func = udpOpen }});
     try aux.setField(l, t, "udp", Value.obj(.table, udp));
     try aux.setGlobal(l, "network", Value.obj(.table, t));
 }
 
-fn makeMetatable(l: *Thread, comptime name: []const u8, methods: []const aux.Reg, gcf: state.NativeFn, tostr: state.NativeFn) Error!void {
+fn makeMetatable(l: *Thread, comptime name: []const u8, comptime methods: []const aux.Reg, gcf: state.NativeFn, tostr: state.NativeFn) Error!void {
     const mt = try l.newTable(0, 8);
     try l.push(Value.obj(.table, mt));
     defer l.top -= 1;
-    const m = try aux.newLib(l, methods);
+    const m = try aux.newLib(l, .methods, "network:" ++ name, methods);
     try aux.setField(l, mt, "__index", Value.obj(.table, m));
     try aux.setField(l, mt, "__name", try l.newStringValue(name));
     try aux.setField(l, mt, "__tostring", try aux.native(l, tostr, "tostring"));

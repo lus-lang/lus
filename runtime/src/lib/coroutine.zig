@@ -35,7 +35,7 @@ pub const funcs = [_]aux.Reg{
 };
 
 pub fn open(l: *Thread) Error!void {
-    const t = try aux.newLib(l, &funcs);
+    const t = try aux.newLib(l, .fields, "coroutine", &funcs);
     try aux.setGlobal(l, "coroutine", Value.obj(.table, t));
 }
 

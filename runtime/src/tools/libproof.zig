@@ -1,40 +1,26 @@
-//! The proof that decides which optional libraries a bundled program can
-//! reach (`spec/design/aot.md`, "Leaving out libraries"). It reads the
-//! bytecode of every bundled function, conservatively.
+//! The proof that decides which builtins a bundled program can reach
+//! (`spec/design/aot.md`, "Leaving out code"). It reads the bytecode of
+//! every bundled function, conservatively, and the linker keeps the
+//! builtins that `keeps` names.
 //!
 //! The program qualifies when every global access names a constant, it
 //! never reads `_ENV` as a value, it reaches neither the debug library
 //! nor the loaders of code, and every `require` names a constant module.
-//! The optional libraries are those the build can leave out: the network
-//! library (`network`), the worker library (`worker`), SQLite
-//! (`io.sqlite`), and the compression codecs (`vector.archive`). A library
-//! table that the program uses as a value, rather than to read one
-//! constant field, keeps every optional library it holds.
+//! A global read with a constant name, followed by reads of constant
+//! fields into the same register, reaches the path it spells, such as
+//! `network.tcp.connect`. The value at the end of such a chain may be
+//! used in any way, so every builtin under that path is reached as well.
+//! A field read with a constant key anywhere in the program reaches the
+//! methods of that name, and a read with any other key reaches every
+//! method.
 
 const std = @import("std");
 const object = @import("../vm/object.zig");
 const op = @import("../compile/opcodes.zig");
+const aux = @import("../lib/auxlib.zig");
 
 const Proto = object.Proto;
-
-/// The optional libraries, by the build option that includes each.
-pub const Libs = struct {
-    net: bool = false,
-    workers: bool = false,
-    sqlite: bool = false,
-    archive: bool = false,
-
-    pub fn names(l: Libs, buf: []u8) []const u8 {
-        var w: std.Io.Writer = .fixed(buf);
-        inline for (.{ .{ "net", "network" }, .{ "workers", "worker" }, .{ "sqlite", "io.sqlite" }, .{ "archive", "vector.archive" } }) |e| {
-            if (!@field(l, e[0])) {
-                if (w.end != 0) w.writeAll(", ") catch {};
-                w.writeAll(e[1]) catch {};
-            }
-        }
-        return w.buffered();
-    }
-};
+const Set = std.StringHashMapUnmanaged(void);
 
 /// Where and why the proof could not name what a function reaches.
 pub const Failure = struct {
@@ -44,14 +30,87 @@ pub const Failure = struct {
 };
 
 pub const Proof = struct {
-    reached: Libs = .{},
+    arena: std.heap.ArenaAllocator,
+    /// The globals and the paths under them that the program reads.
+    reached: Set = .empty,
+    /// The paths whose value the program uses as a whole.
+    wholes: Set = .empty,
+    /// The field names that the program reads with constant keys.
+    names: Set = .empty,
+    /// The program reads a field with a key that is not a constant.
+    dynamic: bool = false,
     failed: ?Failure = null,
+
+    pub fn init(gpa: std.mem.Allocator) Proof {
+        return .{ .arena = .init(gpa) };
+    }
+
+    pub fn deinit(pr: *Proof) void {
+        pr.arena.deinit();
+    }
 
     /// Adds the function `p` and every function it holds.
     pub fn add(pr: *Proof, p: *const Proto, chunk: []const u8) void {
         if (pr.failed != null) return;
         pr.function(p, chunk);
         for (p.protos) |q| pr.add(q, chunk);
+    }
+
+    /// Records that native code compiled ahead of time calls the builtin
+    /// at `path` directly.
+    pub fn reach(pr: *Proof, path: []const u8) void {
+        pr.put(&pr.reached, path);
+    }
+
+    /// Whether the linker keeps the entry `name` of the registration of
+    /// kind `kind` at `path` (`aux.setFuncs`).
+    pub fn keeps(pr: *const Proof, kind: aux.Kind, path: []const u8, name: []const u8) bool {
+        if (kind == .always or pr.failed != null) return true;
+        if (kind == .fields or kind == .library) {
+            var buf: [256]u8 = undefined;
+            const key = if (path.len == 0) name else std.fmt.bufPrint(&buf, "{s}.{s}", .{ path, name }) catch return true;
+            if (pr.reached.contains(key) or pr.wholly(path)) return true;
+        }
+        if (kind == .methods or kind == .library) {
+            if (!pr.dynamic and !pr.names.contains(name)) return false;
+            if (kind == .library) return true;
+            const colon = std.mem.indexOfScalar(u8, path, ':') orelse return true;
+            return colon == 0 or pr.ownerReached(path[0..colon]);
+        }
+        return false;
+    }
+
+    /// Whether `path` or a path that holds it is used as a whole.
+    fn wholly(pr: *const Proof, path: []const u8) bool {
+        if (path.len == 0) return false;
+        var i: usize = 0;
+        while (i <= path.len) : (i += 1) {
+            if (i == path.len or path[i] == '.') {
+                if (pr.wholes.contains(path[0..i])) return true;
+            }
+        }
+        return false;
+    }
+
+    /// Whether the program reaches anything under the library `lib`.
+    fn ownerReached(pr: *const Proof, lib: []const u8) bool {
+        if (pr.wholly(lib)) return true;
+        var it = pr.reached.keyIterator();
+        while (it.next()) |k| {
+            if (std.mem.startsWith(u8, k.*, lib) and (k.len == lib.len or k.*[lib.len] == '.')) return true;
+        }
+        return false;
+    }
+
+    fn put(pr: *Proof, set: *Set, key: []const u8) void {
+        if (set.contains(key)) return;
+        const a = pr.arena.allocator();
+        const k = a.dupe(u8, key) catch return pr.oom();
+        set.put(a, k, {}) catch return pr.oom();
+    }
+
+    fn oom(pr: *Proof) void {
+        if (pr.failed == null) pr.failed = .{ .chunk = "", .line = 0, .why = "the proof ran out of memory" };
     }
 
     fn fail(pr: *Proof, p: *const Proto, chunk: []const u8, pc: usize, why: []const u8) void {
@@ -63,10 +122,14 @@ pub const Proof = struct {
     fn function(pr: *Proof, p: *const Proto, chunk: []const u8) void {
         for (p.locvars) |v| if (std.mem.eql(u8, v.name.bytes(), "_ENV")) return pr.fail(p, chunk, v.start_pc, "_ENV is a local variable");
         const code = p.code;
-        for (code, 0..) |i, pc| {
+        var pc: usize = 0;
+        while (pc < code.len) : (pc += 1) {
+            const i = code[pc];
             switch (op.op(i)) {
                 .getupval, .setupval => if (isEnv(p, op.b(i))) return pr.fail(p, chunk, pc, "_ENV is read or written as a value"),
                 .globaldefr => return pr.fail(p, chunk, pc, "a global is defined in an environment held by a register"),
+                .gettable => pr.dynamic = true,
+                .getfield, .self => if (constString(p, op.c(i))) |k| pr.put(&pr.names, k),
                 .gettabup => {
                     if (!isEnv(p, op.b(i))) continue;
                     const name = constString(p, op.c(i)) orelse return pr.fail(p, chunk, pc, "a global is named by a value that is not a string");
@@ -82,23 +145,29 @@ pub const Proof = struct {
     fn global(pr: *Proof, p: *const Proto, chunk: []const u8, pc: usize, name: []const u8) void {
         const forbidden = [_][]const u8{ "_G", "debug", "load", "loadfile", "dofile", "package" };
         for (forbidden) |f| if (std.mem.eql(u8, name, f)) return pr.fail(p, chunk, pc, reasonFor(f));
+        // A metatable leads to the methods of its values by any key.
+        if (std.mem.eql(u8, name, "getmetatable")) pr.dynamic = true;
         const ra = op.a(p.code[pc]);
         if (std.mem.eql(u8, name, "require")) {
             const mod = requiredModule(p, pc, ra) orelse return pr.fail(p, chunk, pc, "require names a module that is not a constant");
-            pr.library(mod, null);
+            // A required library is a value the program holds as a whole.
+            pr.put(&pr.wholes, mod);
+            pr.put(&pr.reached, "require");
             return;
         }
-        pr.library(name, fieldRead(p, pc, ra));
-    }
-
-    /// The library `name`, as a global or a required module, of which the
-    /// program reads only the constant field `field`, or which it uses as
-    /// a value when `field` is null.
-    fn library(pr: *Proof, name: []const u8, field: ?[]const u8) void {
-        if (std.mem.eql(u8, name, "network")) pr.reached.net = true;
-        if (std.mem.eql(u8, name, "worker")) pr.reached.workers = true;
-        if (std.mem.eql(u8, name, "io") and (field == null or std.mem.eql(u8, field.?, "sqlite"))) pr.reached.sqlite = true;
-        if (std.mem.eql(u8, name, "vector") and (field == null or std.mem.eql(u8, field.?, "archive"))) pr.reached.archive = true;
+        var buf: [256]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        w.writeAll(name) catch return pr.fail(p, chunk, pc, "a global name is too long");
+        pr.put(&pr.reached, w.buffered());
+        var j = pc + 1;
+        while (j < p.code.len) : (j += 1) {
+            const n = p.code[j];
+            if (op.op(n) != .getfield or op.a(n) != ra or op.b(n) != ra) break;
+            const k = constString(p, op.c(n)) orelse break;
+            w.print(".{s}", .{k}) catch break;
+            pr.put(&pr.reached, w.buffered());
+        }
+        pr.put(&pr.wholes, w.buffered());
     }
 };
 
@@ -120,16 +189,6 @@ fn constString(p: *const Proto, k: usize) ?[]const u8 {
     const v = p.constants[k];
     if (v.tag != .string) return null;
     return v.as(object.String).bytes();
-}
-
-/// The constant field that the instruction after `pc` reads from the
-/// table in register `ra`, replacing it, or null when the table is used
-/// in any other way.
-fn fieldRead(p: *const Proto, pc: usize, ra: u8) ?[]const u8 {
-    if (pc + 1 >= p.code.len) return null;
-    const n = p.code[pc + 1];
-    if (op.op(n) != .getfield or op.b(n) != ra or op.a(n) != ra) return null;
-    return constString(p, op.c(n));
 }
 
 /// The module that `require` in register `ra` loads when the next two
@@ -156,32 +215,52 @@ fn proveSource(src: []const u8) !Proof {
             return error.TestUnexpectedResult;
         },
     };
-    var pr: Proof = .{};
+    var pr: Proof = .init(std.testing.allocator);
     pr.add(p, "=proof");
-    // The failure names a constant reason and the chunk name above, which
-    // outlive the state.
+    // The proof copies every name it keeps, and the failure names a
+    // constant reason and the chunk name above, so it outlives the state.
     return pr;
 }
 
-test "a program that reads constant globals reaches no optional library" {
-    const pr = try proveSource("local f = io.open\nprint(string.upper(\"a\"), f, math.pi)\nlocal function g() return os.time() end\nreturn g");
+test "a call of a library function keeps only that function" {
+    var pr = try proveSource("print(string.upper(\"a\"), math.pi)\nlocal t = network.tcp.connect\nreturn t");
+    defer pr.deinit();
     try std.testing.expect(pr.failed == null);
-    try std.testing.expectEqual(Libs{}, pr.reached);
+    try std.testing.expect(pr.keeps(.fields, "", "print"));
+    try std.testing.expect(!pr.keeps(.fields, "", "tojson"));
+    try std.testing.expect(pr.keeps(.library, "string", "upper"));
+    try std.testing.expect(!pr.keeps(.library, "string", "lower"));
+    try std.testing.expect(pr.keeps(.fields, "network.tcp", "connect"));
+    try std.testing.expect(!pr.keeps(.fields, "network.tcp", "listen"));
+    try std.testing.expect(!pr.keeps(.fields, "io", "open"));
+    try std.testing.expect(pr.keeps(.always, "", "__gc"));
 }
 
-test "a field of a library keeps only the optional library it names" {
-    const pr = try proveSource("local db = io.sqlite\nlocal z = vector.archive\nlocal n = require(\"network\")\nreturn db, z, n");
+test "a library used as a value keeps all of it" {
+    var pr = try proveSource("local t = io\nlocal n = require(\"network\")\nreturn t, n");
+    defer pr.deinit();
     try std.testing.expect(pr.failed == null);
-    try std.testing.expectEqual(Libs{ .sqlite = true, .archive = true, .net = true }, pr.reached);
+    try std.testing.expect(pr.keeps(.fields, "io", "open"));
+    try std.testing.expect(pr.keeps(.fields, "network.tcp", "listen"));
+    try std.testing.expect(!pr.keeps(.fields, "os", "time"));
 }
 
-test "a library used as a value keeps its optional libraries" {
-    const pr = try proveSource("local t = io\nlocal w = worker\nreturn t, w");
+test "methods follow the field names and the library that makes the values" {
+    var pr = try proveSource("local f = io.open(\"x\")\nf:close()\nlocal s = (\"a\"):rep(2)\nreturn s");
+    defer pr.deinit();
     try std.testing.expect(pr.failed == null);
-    try std.testing.expectEqual(Libs{ .sqlite = true, .workers = true }, pr.reached);
+    try std.testing.expect(pr.keeps(.methods, ":io.file", "close"));
+    try std.testing.expect(!pr.keeps(.methods, ":io.file", "seek"));
+    try std.testing.expect(pr.keeps(.library, "string", "rep"));
+    try std.testing.expect(!pr.keeps(.methods, "network:socket", "close"));
+    var dyn = try proveSource("local function get(t, k) return t[k] end\nreturn get, network.tcp");
+    defer dyn.deinit();
+    try std.testing.expect(dyn.keeps(.methods, ":io.file", "seek"));
+    try std.testing.expect(dyn.keeps(.methods, "network:socket", "close"));
+    try std.testing.expect(!dyn.keeps(.methods, "io.sqlite:db", "exec"));
 }
 
-test "the proof fails where a program can reach any library" {
+test "the proof fails where a program can reach any builtin" {
     const cases = [_][]const u8{
         "local e = _ENV\nreturn e",
         "local name = \"net\" .. \"work\"\nreturn require(name)",
@@ -192,7 +271,9 @@ test "the proof fails where a program can reach any library" {
         "return package.loaded",
     };
     for (cases) |src| {
-        const pr = try proveSource(src);
+        var pr = try proveSource(src);
+        defer pr.deinit();
         try std.testing.expect(pr.failed != null);
+        try std.testing.expect(pr.keeps(.fields, "io", "open"));
     }
 }

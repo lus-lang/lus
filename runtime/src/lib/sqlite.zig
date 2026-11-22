@@ -1475,13 +1475,13 @@ pub fn toSqlite(l: *Thread, v: Value) ?*c.sqlite3 {
 // ---------------------------------------------------------------------
 // Registration
 
-fn makeMeta(l: *Thread, comptime key: []const u8, methods: []const aux.Reg, meta: []const aux.Reg) Error!*Table {
+fn makeMeta(l: *Thread, comptime key: []const u8, comptime methods: []const aux.Reg, comptime meta: []const aux.Reg) Error!*Table {
     const mt = try l.newTable(0, 8);
     try l.push(Value.obj(.table, mt));
     defer l.top -= 1;
-    try aux.setFuncs(l, mt, meta);
+    try aux.setFuncs(l, mt, .always, "", meta);
     if (methods.len > 0) {
-        const m = try aux.newLib(l, methods);
+        const m = try aux.newLib(l, .methods, "io.sqlite:" ++ key, methods);
         try aux.setField(l, mt, "__index", Value.obj(.table, m));
     }
     try aux.setField(l, mt, "__name", try l.newStringValue(key));
@@ -1507,7 +1507,7 @@ pub fn register(l: *Thread, io_t: *Table) Error!void {
         .{ .name = "__close", .func = dbGc },
         .{ .name = "__tostring", .func = dbToString },
     });
-    const methods = try aux.newLib(l, &.{
+    const methods = try aux.newLib(l, .methods, "io.sqlite:db", &.{
         .{ .name = "exec", .func = dbExec },
         .{ .name = "run", .func = dbRun },
         .{ .name = "query", .func = dbQuery },
@@ -1536,5 +1536,5 @@ pub fn register(l: *Thread, io_t: *Table) Error!void {
     _ = try makeMeta(l, tableref_mt_key, &.{}, &.{
         .{ .name = "__tostring", .func = tableRefToString },
     });
-    try aux.setField(l, io_t, "sqlite", try aux.native(l, ioSqlite, "sqlite"));
+    try aux.setFuncs(l, io_t, .fields, "io", &.{.{ .name = "sqlite", .func = ioSqlite }});
 }
