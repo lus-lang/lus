@@ -1,6 +1,6 @@
 # Platforms
 
-Lus 2.0 compiles hot functions to machine code on aarch64 and x86-64 under macOS and Linux, and to WebAssembly modules in the WebAssembly build (`jit.md`, `opt.md`, `wasmjit.md`). Every other target runs the interpreter, which is the same code with the JIT compiled out. Windows on x86-64 and on arm64 ships in every release and runs interpreted. We add targets in this order: Windows on x86-64, Windows on arm64, riscv64 under Linux, and then 32-bit ARM as an interpreter build. Each target has a gate that runs the whole conformance suite in every JIT mode on that target, natively or under emulation, before it merges.
+Lus 2.0 compiles hot functions to machine code on aarch64 and x86-64 under macOS and Linux, and to WebAssembly modules in the WebAssembly build (`jit.md`, `opt.md`, `wasmjit.md`). Every other target runs the interpreter, which is the same code with the JIT compiled out. Windows on x86-64 and on arm64 ships in every release and runs interpreted. Lus adds both JIT tiers for every instruction set that the major JITs support: riscv64, loong64, ppc64le, 32-bit ARM, and s390x under Linux, Windows on x86-64 and arm64, and FreeBSD and Android on the instruction sets Lus already has. Each target has a gate that runs the whole conformance suite in every JIT mode on that target, natively or under emulation, before it merges.
 
 ## What other JITs support
 
@@ -42,6 +42,76 @@ The native tiers depend on the target in six places.
 - **The byte order.** `Value.make` writes the tag as the low byte of the second 64-bit word, which is the `tag` field only on a little-endian target. The word of frame flags packs its bits the same way, and a compile-time assertion in `vm/state.zig` stops a big-endian build there. Every target Lus builds today is little-endian.
 
 Native code carries no unwind information. Lus itself never unwinds through it, because errors are return values and the runtime uses no `setjmp` or `longjmp`. Debuggers, profilers, and crash reporters stop at the first frame of native code.
+
+## Order
+
+1. **riscv64, baseline tier.** A new instruction set that qemu-user runs in the lima VM, so every step has a local gate.
+2. **riscv64, optimizing tier.**
+3. **Windows on x86-64, then Windows on arm64.** Their gate is CI after the coordinator pushes, so this work runs while the next qemu target is built locally.
+4. **loong64, both tiers.** It reuses the structure of the riscv64 assembler.
+5. **ppc64le, both tiers.**
+6. **32-bit ARM, both tiers.** It first needs the collector to build for a 32-bit target with threads, and an assembler interface that names the operations on 64-bit integers.
+7. **s390x, both tiers.** The byte-order audit of the runtime comes first, gated by the interpreter under qemu. The big-endian JIT follows.
+8. **FreeBSD and Android.** The gate opens on the instruction sets that already have backends, with the stack query of each system.
+
+Every new instruction set adds an assembler behind the interface that `a64.zig` and `x64.zig` share, and nothing else in `emit.zig` or `opt/codegen.zig` beyond the register names and pools of that target. The interface already fuses comparisons with their branches (`jumpIf`, `jumpIfImm`), which matches every instruction set below that has no flags register. It already places constants in pools (`flushPool`).
+
+## riscv64
+
+riscv64 gets a third assembler, `jit/rv64.zig`. The target is RV64GC, the instruction set of every Linux distribution for riscv64. The Zba and Zbb extensions shorten address arithmetic and are used when the kernel reports them through `riscv_hwprobe`.
+
+Three properties of the instruction set need work beyond the encodings.
+
+- **Branch range.** A conditional branch reaches 4 KB in either direction, against 1 MB on aarch64. A conditional branch to a label that is not yet bound, or out of reach, is emitted as the inverted branch over a `jal`, which reaches 1 MB. A backward branch to a label in reach keeps the short form. The interval at which out-of-line code and constants are emitted shrinks to match.
+- **Constants.** A 64-bit constant takes up to eight instructions to build. Addresses of runtime routines and of objects load from the pool with `auipc` and `ld`.
+- **Instruction fetch.** `fence.i` makes new code visible to the hart that runs it alone. Installing code calls the `riscv_flush_icache` system call, which reaches every hart that runs the process.
+
+The pinned registers are callee-saved `s` registers. The temporaries of the baseline tier are `t` registers. The optimizing tier allocates from the `a` and `t` registers and the float registers that the convention lets a callee clobber, which gives it more registers than aarch64.
+
+## loong64
+
+loong64 is little-endian and 64-bit, with fixed-width instructions and compare-and-branch instructions, which is the shape of riscv64. `jit/la64.zig` follows `rv64.zig` routine by routine. The branch relaxation and the placement of pools move into one module that both assemblers instantiate with their branch ranges: 128 KB for a two-register branch, 4 MB for a branch on zero, and 128 MB for `b` and `bl`. Pool loads use `pcaddu12i` and `ld.d`. The convention reserves `r21`, which no pool uses. New code becomes visible to instruction fetch after `ibar 0`, because the hardware keeps the instruction caches of the cores coherent with stores.
+
+## ppc64le
+
+ppc64le gets `jit/ppc64.zig` for the ELFv2 convention. Three properties need work beyond the encodings.
+
+- **Calls.** A routine of the runtime expects its own address in `r12`, from which its global entry computes the table of contents in `r2`. Native code calls every routine through `mtctr r12` and `bctrl`. It never changes `r2`, which is the table of contents of the runtime itself.
+- **Branch range.** A conditional branch reaches 32 KB, so a far conditional branch is the inverted branch over `b`, which reaches 32 MB, as on riscv64.
+- **Condition registers.** A comparison writes a field of the condition register that the branch reads, so `jumpIf` emits a `cmpd` or `cmpld` into field 0 followed by `bc`.
+
+New code becomes visible to instruction fetch after `dcbst`, `sync`, `icbi`, and `isync` over its cache lines.
+
+## 32-bit ARM
+
+32-bit ARM gets both tiers for ARMv7-A with VFPv3-D16, the target of every hard-float distribution. The value layout fits as it is, with a 64-bit payload and a tag word, since the WebAssembly build already runs it on a 32-bit target. A float lives in one double register. A pointer or a tag lives in one general register. Only a 64-bit integer needs a pair of general registers. The design keeps the second code path inside the assembler.
+
+### Work before the JIT
+
+The interpreter does not build for `arm-linux-musleabihf` yet. The parallel marker of the collector updates its mark bitmap with 64-bit atomic operations (`isMarkedSmallAtomic` and `setMarkSmallAtomic` in `vm/heap.zig`), which 32-bit ARM lacks. The WebAssembly build is single-threaded and never compiles them. Mark words of the native word size fix it. The interpreter then gets its own gate under `qemu-arm` before any JIT work.
+
+### Two widths in the interface
+
+The interface gains a second register type, `Pair`, for 64-bit integers, and a family of operations on it: loads and stores of a payload, moves, integer arithmetic, shifts, bitwise operations, and compare-and-branch. On a 64-bit target `Pair` is the same type as `Reg`. Each operation on it is the operation of the same name on a register, so `a64.zig`, `x64.zig`, `rv64.zig`, and the others gain only aliases. Every operation that takes a `Reg` works on a machine word: an address, an index, a count, a tag, or a pointer payload.
+
+The templates and the code generator change in one way. A site that computes on an integer payload names a `Pair` register. Every other site keeps its `Reg`. The integer templates are a small part of `emit.zig`: arithmetic, integer comparisons, the numeric `for` loop, `mod` and `idiv`, and the bitwise operations. A site that loads a payload into a `Reg` and stores it unchanged moves a value from one slot to another, which `copy16` does on every target. Because the types differ on 32-bit ARM, the compiler rejects a 64-bit operation on a word register there. A build of that target therefore checks every site.
+
+`a32.zig` implements a `Pair` as an even register and the odd register after it, which is the pair that `ldrd` and `strd` and the convention for 64-bit arguments use. The baseline tier pins the thread, the address of register 0, the index of that register, and the stop depth in four callee-saved registers. Its temporaries `t0` to `t2` are pairs and `t3` to `t6` are words, which uses the fourteen general registers. An addition is `adds` and `adc`. A multiplication is `umull` and two `mla`. A compare-and-branch compares the high words and branches, then compares the low words unsigned. Division calls the routine of the compiler runtime, because ARMv7-A has no 64-bit divide.
+
+The optimizing tier allocates an integer value to one of four pairs. It allocates a pointer, a boolean, or a tag to a single register from the same registers. Floats use the sixteen double registers. Its passes and its representation are the same as on every target, since its values already carry their types.
+
+A routine that native code calls takes a 64-bit integer only in a position that the AAPCS assigns to an even register pair. A compile-time check over the signatures of the routines enforces it.
+
+The assembler emits the A32 encoding, whose conditional branches reach 32 MB. Addresses are 32 bits and load with `movw` and `movt`. New code becomes visible to instruction fetch through the `cacheflush` system call of ARM Linux.
+
+## s390x
+
+s390x is big-endian. The runtime assumes little-endian in two kinds of places.
+
+- **Words written whole and read by field.** `Value.make` writes the tag as the low byte of the second word. The word of frame flags packs its bits the same way. The build stops at the assertion in `vm/state.zig`. The fix declares the fields of each such word in reverse order on a big-endian target, so that the field and the low byte of the word coincide on both byte orders. Native code reads fields at offsets from `@offsetOf`, so the templates follow the new layout.
+- **Bytes that leave the process.** Binary chunks, bundles, `pack`, `vector`, hashing, and the network code read and write a fixed byte order. Each place that reads memory as a wider integer without naming its byte order is found by an audit of the casts and `readInt` calls, and is fixed to name it.
+
+The interpreter passes the conformance suite under `qemu-s390x` before the JIT starts. `jit/s390x.zig` then targets z/Architecture as of z13. Every call reserves the 160-byte register save area that the convention gives each callee, which the entry sequence allocates once. Relative branches reach 64 KB. `brcl` reaches 4 GB, so far branches use it. The instruction fetch of z/Architecture is coherent with stores, so installing code needs no cache maintenance.
 
 ## Windows on x86-64
 
@@ -93,44 +163,32 @@ The arm64 convention of Windows is the standard AAPCS64 with `x18` reserved for 
 
 CI adds a `windows-11-arm` runner to the runtime matrix with the same steps as `windows-2022`. GitHub provides that runner free of charge for public repositories. A private repository needs a paid arm64 runner. Until one exists, the target is cross-built only and its JIT stays off.
 
-## riscv64
+## FreeBSD and Android
 
-riscv64 needs a third assembler, `jit/rv64.zig`, behind the interface that `a64.zig` and `x64.zig` share. The interface fits the instruction set. Comparisons are fused with their branches (`jumpIf`, `jumpIfImm`), which is the shape of the RISC-V branch instructions. Constants already go through a pool (`flushPool`). The target is RV64GC, the instruction set of every Linux distribution for riscv64. The Zba and Zbb extensions shorten address arithmetic and are used when the kernel reports them through `riscv_hwprobe`.
+FreeBSD and Android run the instruction sets that already have backends. The gate opens for them with the stack query of each system in `stackBounds`: `pthread_attr_get_np` on FreeBSD and `pthread_getattr_np` in the C library of Android. The executable memory path of Linux works on both. FreeBSD is checked in CI by a job that runs the conformance suite in a FreeBSD virtual machine on a Linux runner. Android is cross-built in CI and checked on an emulator image when one is available to the runner.
 
-Three properties of the instruction set need work beyond the encodings.
+iOS and the game consoles refuse executable memory to ordinary programs, so the only native code they can run is code compiled ahead of time.
 
-- **Branch range.** A conditional branch reaches 4 KB in either direction, against 1 MB on aarch64. A conditional branch to a label that is not yet bound, or out of reach, is emitted as the inverted branch over a `jal`, which reaches 1 MB. Branches inside a short loop keep the short form. The interval at which out-of-line code and constants are emitted shrinks to match.
-- **Constants.** A 64-bit constant takes up to eight instructions to build. Addresses of runtime routines and of objects load from the pool with `auipc` and `ld`.
-- **Instruction fetch.** `fence.i` makes new code visible to the hart that runs it alone. Installing code calls the `riscv_flush_icache` system call, which reaches every hart that runs the process.
+## Testing each target
 
-The optimizing tier follows the baseline tier as a second step, with register pools that RV64 makes larger than those of aarch64.
+Every Linux target is gated locally by a static musl build under qemu-user in the lima VM "boring", with the conformance suite under `LUS_JIT` set to `off`, the default, `eager`, `baseline`, and `opt-eager`, and with a `-Dgc-stress=97 -Dgc-verify=true` build under `eager` and `opt-eager`. CI cross-builds every target on every pull request. A nightly Linux job runs the same suite under `qemu-user-static` for each of them. The encodings of each assembler get byte-level unit tests against the output of a system assembler, as `a64.zig` and `x64.zig` have.
 
-### Testing riscv64
+| target | local gate | CI |
+|---|---|---|
+| riscv64 | `qemu-riscv64` in the VM | nightly qemu job, cross-build on every pull request |
+| loong64 | `qemu-loongarch64` in the VM | the same |
+| ppc64le | `qemu-ppc64le` in the VM | the same |
+| 32-bit ARM | `qemu-arm` in the VM | the same |
+| s390x | `qemu-s390x` in the VM | the same |
+| Windows x86-64 | cross-build only | `windows-2022`, after a push |
+| Windows arm64 | cross-build only | `windows-11-arm`, after a push |
+| FreeBSD | cross-build only | a FreeBSD virtual machine job |
+| Android | cross-build only | cross-build, emulator when available |
 
-The interpreter already passes on riscv64 (see the next section), so a failure in the gate of the JIT points at the new tier. The local gate runs a static `riscv64-linux-musl` build under `qemu-riscv64` in the lima VM "boring", with the conformance suite in every JIT mode and in a `-Dgc-stress=97 -Dgc-verify=true` build. The known qemu-user artifacts of the x86-64 gate apply, so chains of direct calls run with `LUS_JIT_DIRECT=off` there until `stackBounds` stops trusting the stack size that qemu reports. CI adds a nightly Linux job that runs the same suite under `qemu-user-static`. Every pull request cross-builds the target. The encodings get byte-level unit tests against the output of an assembler, as `a64.zig` and `x64.zig` have. Native hardware, such as a cloud RISC-V server, confirms the result before the target is announced, because qemu does not model the memory ordering or the instruction fetch of real harts.
+qemu-user overstates the stack of the main thread, which made chains of direct calls overrun it in the x86-64 gate. `stackBounds` takes the smaller of the size that `pthread_getattr_np` reports and the `RLIMIT_STACK` limit for the main thread, which lets the qemu gates run direct calls as native systems do. Until that change lands, the qemu gates run with `LUS_JIT_DIRECT=off` as well. qemu does not model the memory ordering or the instruction fetch of real hardware, so each qemu target is confirmed on native hardware, such as a cloud server, before it is announced.
 
-## 32-bit ARM
-
-The verdict is an interpreter build with no JIT.
-
-A JIT for 32-bit ARM would hold every payload in a pair of registers. Each 64-bit load, store, add, and compare of the assembler interface becomes two or more instructions. Integer comparisons become two branches. The optimizing tier would have about six register pairs to allocate. The value layout itself fits, since the WebAssembly build runs it on a 32-bit target, but both tiers would need a second code path for every template, which is the cost JavaScriptCore pays for its 32-bit value representation. The hosts that run 32-bit ARM today are older Raspberry Pi systems, older Android devices, and embedded boards. They get the interpreter.
-
-The interpreter does not build for `arm-linux-musleabihf` yet. The parallel marker of the collector updates its mark bitmap with 64-bit atomic operations (`isMarkedSmallAtomic` and `setMarkSmallAtomic` in `vm/heap.zig`), which 32-bit ARM lacks. The WebAssembly build is single-threaded and never compiles them. Mark words of the native word size fix it. The work is that change and an `arm-linux-musleabihf` release artifact, gated by the conformance suite under `qemu-arm` in the lima VM and in the nightly qemu job.
-
-## ppc64le, s390x, and loong64
-
-None of these targets gets a JIT unless a user asks.
-
-Static interpreter builds for `riscv64-linux-musl`, `powerpc64le-linux-musl`, and `loongarch64-linux-musl` build from the same sources and pass the conformance suite under qemu-user in the lima VM, 6325 tests each. The one failure in each run is `a_slow_reader_loses_its_connection_test` in `serve_test.lus`, the known artifact of emulated socket buffers that the x86-64 gate shares.
-
-- **ppc64le** has JIT ports in V8 and HotSpot because IBM maintains them. The interpreter builds for `powerpc64le-linux-musl` unchanged, so supporting it costs a release artifact and a qemu job.
-- **s390x** is big-endian. `Value.make`, every reader of a value by its two words, and the word of frame flags assume the little-endian layout. The build stops at the assertion in `vm/state.zig`. Even the interpreter needs an audit of the byte order first, so we leave the target unsupported.
-- **loong64** is little-endian and 64-bit, with fixed-width instructions and compare-and-branch instructions like RISC-V. A loong64 backend would cost about what the riscv64 assembler costs, with longer branch ranges. The interpreter builds for `loongarch64-linux-musl` unchanged. A release artifact comes first if users appear.
-
-## Other systems
-
-FreeBSD and Android run the same instruction sets as the supported targets. They need the gate opened, the stack query of their system in `stackBounds`, and a CI runner. The executable memory path of Linux works on both. iOS and the game consoles refuse executable memory to ordinary programs, so the only native code they can run is code compiled ahead of time.
+The interpreters of riscv64, ppc64le, and loong64 build from the same sources and pass the conformance suite under qemu-user in the VM, 6325 tests each. The one failure in each run is `a_slow_reader_loses_its_connection_test` in `serve_test.lus`, the known artifact of emulated socket buffers that the x86-64 gate shares. A failure in the gate of a new JIT on those targets therefore points at the new tier.
 
 ## Ahead-of-time compilation
 
-Ahead-of-time compilation follows the platforms and has its own note, `aot.md`. Two facts from the platform work feed it. Native code embeds the absolute addresses of runtime routines, constants, and inline cache entries, so code compiled ahead of time needs relocations that the startup of the program resolves. The unwind tables of Windows and the constant pools of riscv64 make the emitter produce a code object with metadata next to its bytes. An executable compiled ahead of time stores that object together with its relocations.
+Ahead-of-time compilation follows the platforms and has its own note, `aot.md`. Two facts from the platform work feed it. Native code embeds the absolute addresses of runtime routines, constants, and inline cache entries, so code compiled ahead of time needs relocations that the startup of the program resolves. The unwind tables of Windows and the constant pools of the new assemblers make the emitter produce a code object with metadata next to its bytes. An executable compiled ahead of time stores that object together with its relocations.
