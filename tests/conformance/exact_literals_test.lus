@@ -83,9 +83,9 @@ local function decimal_literals_compare_by_value_test()
 end
 
 local function decimal_exponents_reach_the_limits_test()
-    assert(tostring(eval("1e16383d")) == "1e+16383")
-    assert(tostring(eval("1e-16384d")) == "1e-16384")
-    for _, src in ipairs({ "1e16384d", "1e-16385d", "1e2147483648d", "1e-2147483649d" }) do
+    assert(tostring(eval("1e131071d")) == "1e+131071")
+    assert(tostring(eval("1e-16383d")) == "1e-16383")
+    for _, src in ipairs({ "1e131072d", "1e-16384d", "1e2147483648d", "1e-2147483649d" }) do
         local f, err = load("return " .. src, "=lit")
         assert(f == nil, src)
         assert(string.find(err, "decimal literal out of range near '" .. src .. "'", 1, true), err)
@@ -145,49 +145,52 @@ end
 
 -- Group: the limits of decimals
 
--- A decimal holds at most 16384 digits before the point and 16384 after,
--- so no operation on decimals takes unbounded time.
+-- A decimal holds at most 131072 digits before the point and 16383 after,
+-- the limits of the numeric type of PostgreSQL, so no operation on
+-- decimals takes unbounded time.
 local function a_decimal_literal_past_the_limits_is_a_compile_error_test()
-    for _, src in ipairs({ "return 1e16384d", "return 1e-16385d", "return 1e2147483647d" }) do
+    for _, src in ipairs({ "return 1e131072d", "return 1e-16384d", "return 1e2147483647d" }) do
         local f, err = load(src)
         assert(f == nil, src)
         assert(string.find(err, "decimal literal out of range", 1, true), err)
     end
-    assert(load("return 1e16383d")() == decimal("1e16383"))
-    assert(load("return 1e-16384d")() == decimal("1e-16384"))
+    assert(load("return 1e131071d")() == decimal("1e131071"))
+    assert(load("return 1e-16383d")() == decimal("1e-16383"))
 end
 
 local function decimal_text_past_the_limits_raises_test()
-    raises(function() return decimal("1e16384") end, "more than 16384 digits before the point")
-    raises(function() return decimal(string.rep("9", 16385)) end, "more than 16384 digits before the point")
-    raises(function() return decimal("1e-16385") end, "more than 16384 digits after the point")
-    raises(function() return decimal("0." .. string.rep("0", 16384) .. "1") end, "after the point")
-    raises(function() return decimal(2n ^ 60000) end, "before the point")
+    raises(function() return decimal("1e131072") end, "more than 131072 digits before the point")
+    raises(function() return decimal(string.rep("9", 131073)) end, "more than 131072 digits before the point")
+    raises(function() return decimal("1e-16384") end, "more than 16383 digits after the point")
+    raises(function() return decimal("0." .. string.rep("0", 16383) .. "1") end, "after the point")
+    raises(function() return decimal(2n ^ 440000) end, "before the point")
     -- Text that is not a numeral still gives nil.
     assert(decimal("abc") == nil)
 end
 
 local function a_result_past_the_limits_raises_test()
-    local big = decimal(string.rep("9", 16384))
-    local tiny = decimal("1e-16384")
+    local big = decimal(string.rep("9", 131072))
+    local tiny = decimal("1e-16383")
     local cases = {
         { function() return big + 1 end, "before" },
         { function() return big * 10 end, "before" },
         { function() return tiny * tiny end, "after" },
-        { function() return 1d / tiny end, "before" },
+        { function() return big / 0.1d end, "before" },
         { function() return tiny / big end, "after" },
-        { function() return 2d ^ 54430 end, "before" },
-        { function() return 0.5d ^ 16385 end, "after" },
-        { function() return big + 2n ^ 60000 end, "before" },
+        { function() return 2d ^ 435420 end, "before" },
+        { function() return 0.5d ^ 16384 end, "after" },
+        { function() return big + 2n ^ 440000 end, "before" },
     }
     for i, case in ipairs(cases) do
         local ok, err = catch case[1]()
         assert(not ok, i)
-        assert(string.find(tostring(err), "decimal out of range: more than 16384 digits " .. case[2] .. " the point", 1, true), err)
+        local limit = case[2] == "before" and "131072" or "16383"
+        assert(string.find(tostring(err), `decimal out of range: more than $(limit) digits $(case[2]) the point`, 1, true), err)
     end
     -- Sums at the limits stay exact.
-    assert(#tostring(big + tiny) == 16384 + 1 + 16384)
-    assert(2d ^ 54420 == decimal(2n ^ 54420))
+    assert(#tostring(big + tiny) == 131072 + 1 + 16383)
+    assert(2d ^ 435400 == decimal(2n ^ 435400))
+    assert(0.5d ^ 16383 == decimal("1e-16383") * 5d ^ 16383)
 end
 
 -- The case the fuzz target for numbers found: decimal("1e9999999") + 0d
@@ -201,11 +204,11 @@ local function an_extreme_exponent_raises_at_once_test()
 end
 
 local function decimals_at_the_limits_compare_by_magnitude_test()
-    assert(not (1e16383d == 1n))
-    assert(not (1e16383d < 1))
-    assert(-1e16383d < 1)
-    assert(1e-16384d < 1e-16383d)
-    assert(1e16383d > 1e308)
+    assert(not (1e131071d == 1n))
+    assert(not (1e131071d < 1))
+    assert(-1e131071d < 1)
+    assert(1e-16383d < 1e-16382d)
+    assert(1e131071d > 1e308)
     assert(not (0d < -1e-2000d))
     assert(-2d < -1.99d)
     assert(1.5d < 1.50001d)

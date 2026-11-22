@@ -6,6 +6,7 @@
 const std = @import("std");
 const value = @import("value.zig");
 const gc = @import("gc.zig");
+pub const radix = @import("radix.zig");
 const state = @import("state.zig");
 const big = std.math.big.int;
 const Value = value.Value;
@@ -130,8 +131,8 @@ pub fn parseBigLiteral(g: *Global, digits: []const u8) !*BigInt {
 /// differences, and products stay exact, and every operation checks its
 /// result against these limits, so the work of one operation stays
 /// bounded (`spec/design/numbers.md`, "Limits of decimals").
-pub const max_int_digits = 16384;
-pub const max_frac_digits = 16384;
+pub const max_int_digits = 131072;
+pub const max_frac_digits = 16383;
 
 pub const Range = enum { ok, before, after };
 
@@ -305,16 +306,11 @@ fn mulPow10(m: *M, n: u32) !void {
 }
 
 pub fn bigToString(gpa: Allocator, b: *const BigInt) ![]u8 {
-    var m = try b.toConst().toManaged(gpa);
-    defer m.deinit();
-    return m.toString(gpa, 10, .lower);
+    return radix.toDecimal(gpa, b.toConst());
 }
 
 pub fn decimalToString(gpa: Allocator, d: *const Decimal) ![]u8 {
-    var m = try d.coef().toManaged(gpa);
-    defer m.deinit();
-    m.abs();
-    const digits = try m.toString(gpa, 10, .lower);
+    const digits = try radix.toDecimal(gpa, d.coef().abs());
     defer gpa.free(digits);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
