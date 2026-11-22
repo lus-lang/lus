@@ -874,13 +874,13 @@ x, y from { x = 1, y = 2 }
 
 #### The `for ... from` loop
 
-`for a, b, c from explist do block end` is a generic `for` whose items are destructured. The explist produces the iterator, the state, the initial control value, and the closing value, as for `in`. Before each pass the loop calls the iterator with the state and the control value and keeps its first result, the _record_. The record is the new control value. If it is `nil`, the loop ends. Otherwise each name, from left to right, receives `record.name` through a normal indexed read, so `__index` applies, a missing field yields `nil`, and a record that cannot be indexed raises the usual `attempt to index` error.
+`for a, b, c from explist do block end` is a generic `for` whose items are destructured. The explist produces the iterator, the state, the initial control value, and the closing value, as for `in`. Before each pass the loop calls the iterator with the state and the control value and keeps its first result, the _record_. The record is the new control value. If it is `nil`, the loop ends. Otherwise each name, from left to right, receives `record.name` through a normal indexed read, so `__index` applies, a missing field yields `nil`, and a record that cannot be indexed raises `'for ... from' needs an iterator that yields tables, got a number value` with the type of the record. A string record reads fields of the `string` library, as any index of a string does, so `for x from io.lines()` gives `nil` names without an error.
 
 - The names are fresh locals of each pass and may be assigned. Closures capture the variable of their own pass.
 - The record occupies a hidden read-only local. The names are fields, so the order of names is free and their number is not limited by the iterator's results.
 - The loop builds no table. Each pass costs the iterator call and one field read per name, the same as a generic `for` whose body copies the fields by hand (`tests/bench/forfrom.lus`).
 - `break`, `continue`, labels, and the closing value behave as in a generic `for`.
-- The iterator receives the record as its control value. An iterator that expects its own control value, such as the one `ipairs` returns, therefore fails on its second call, and its first result is not a record.
+- `from` is for iterators that yield records. An iterator whose first result is an index or a key, such as the one `ipairs` or `pairs` returns, raises the error above on the first pass.
 
 **Tested** (`forfrom_test.lus`): fields read by name in any order, missing fields as `nil`, `__index` on records, fresh assignable variables per pass, `break` and `continue`, nested loops, query rows, a non-indexable record, an empty iteration, the closing value, a coroutine iterator, and the syntax errors.
 

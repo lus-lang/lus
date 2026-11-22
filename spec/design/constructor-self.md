@@ -1,6 +1,6 @@
 # Nameless indexing in table constructors
 
-_Status: investigation. Nothing in this note is implemented or committed to. It ends with a verdict and choices._
+_Status: investigation closed. Lus does not adopt nameless indexing, and this note records why._
 
 _Nameless indexing_ is a proposed expression that reads a field of the table that the innermost enclosing table constructor is building, without naming the table. The proposal has three forms: `.field`, `["field"]`, and `:method(args)`.
 
@@ -84,3 +84,5 @@ The construction-time form is safe and cheap: derived fields such as `area = .wi
 - **(a) Adopt `.field` and `.[expr]` in the field values of a constructor only, outside nested functions (recommended).** A nameless index inside a function in the constructor is a compile error that suggests `self`. `:method()` is left out, because a method that the constructor itself calls during construction has no common use.
 - (b) Adopt all three forms everywhere inside the constructor, including nested functions, with the receiver pitfall documented and a `lus check` warning when such a table is cloned or used as an `__index` prototype in the same file.
 - (c) Adopt nothing. Derived fields use a local before the constructor, and functions use `self`.
+
+**Decision.** Lus adopts none of the forms. Derived fields use a local computed before the constructor, and functions that need their table use `self`.

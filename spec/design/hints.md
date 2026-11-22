@@ -1,6 +1,6 @@
 # Hints of `lus check`
 
-_Status: proposal for review. Nothing in this note is implemented yet. The open questions at the end each list choices with a recommendation._
+_Status: design accepted, implementation pending._
 
 A _hint_ is a diagnostic of `lus check` and the language server that suggests a faster or shorter form of correct code. Every hint in this note rests on a measured case in `tests/bench/hints/cases.lus`, which pairs the form a hint flags with the form it suggests. Both forms compute the same result. `lus -Pload -Pfs:read tests/bench/hints/run.lus` prints the best time of each form and their ratio.
 
@@ -54,25 +54,8 @@ The last row measures the constructor as the slower form: a table built by its c
 | `fields-one-by-one` | a table built by field stores where a constructor fits | 1.03 | 1.02 | no difference |
 | `sub-char-loop-mixed` | `s:sub(i, i)` over every character | 0.64 | 0.58 | faster than `gmatch(".")`, because strings cache the position of a character index |
 
-## 5. Open questions
+## 5. Decisions
 
-**Q1. Which hints ship?**
+All ten hints of sections 1 and 2 ship. They use a new severity, `hint`, which `lus check` prints and the language server shows as a hint. A hint never changes the exit status of `lus check`. The existing concise checks `use-from`, `use-optional-chain`, and `use-if-assign` move to the same severity.
 
-- **(a) The eight speed hints and the two concise hints of sections 1 and 2 (recommended).**
-- (b) The speed hints only.
-- (c) Only the hints whose ratio exceeds 2 under the JIT: `concat-in-loop`, `insert-front-in-loop`, `closure-in-loop`, `select-in-loop`, and `redundant-tostring`.
-
-**Q2. What happens to the three runtime findings of section 3?**
-
-- **(a) They go to the speed workstream as runtime work, and no hint covers them (recommended).**
-- (b) Hints cover them until the runtime is fixed, then the hints go.
-
-**Q3. How do hints appear?**
-
-- **(a) As a new severity, `hint`, which `lus check` prints and the language server shows as a hint, and which does not change the exit status (recommended).** Existing concise hints such as `use-from` move to this severity.
-- (b) As warnings, like `use-from` today.
-
-**Q4. Do hints that only help the interpreter ship?**
-
-- **(a) No (recommended).** The JIT runs by default, so section 4's global and field reads cost nothing in a normal run.
-- (b) Yes, behind an option for programs that run with `LUS_JIT=off` or on targets without a JIT.
+The cases of section 4 that only the interpreter pays for get no hint, because the JIT runs by default. The three slow forms of section 3 are runtime work for the speed workstream, and no hint covers them.

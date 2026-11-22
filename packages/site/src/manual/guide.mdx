@@ -1429,7 +1429,7 @@ end
 --> kettle  30
 ```
 
-A loop variable is `nil` when the item has no field with its name. Each pass creates new loop variables, which the body may assign. The item must be a table or another value with fields, so `ipairs`, whose first result is an index, does not fit a loop with `from`.
+A loop variable is `nil` when the item has no field with its name. Each pass creates new loop variables, which the body may assign. A loop with `from` needs an iterator that produces one table per pass, such as `cheapest_first` above or a [query](#running-a-query). The first result of `ipairs` and `pairs` is an index or a key, so a loop with `from` over them raises an error that says so.
 
 ## Strings and patterns
 

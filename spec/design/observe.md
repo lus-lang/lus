@@ -1,8 +1,8 @@
 # Observed variables
 
-_Status: investigation. Nothing in this note is implemented or committed to. It ends with a verdict and choices._
+_Status: design for review. Nothing in this note is implemented yet. The open questions at the end each list choices with a recommendation._
 
-An _observed variable_ is a proposed local declared with the `<observe>` attribute. An observed variable whose initializer reads other observed variables is a _derived_ variable. When a program assigns an observed variable, every derived variable that depends on it is computed again from its initializer. The motivating example follows.
+An _observed variable_ is a local declared with the `<observe>` attribute. An observed variable whose initializer reads other observed variables is a _derived_ variable, and the observed variables it reads are its _dependencies_. An observed variable with no observed dependency is a _source_. When a program assigns a source, from the declaring function or from any nested function, every derived variable that depends on it, directly or through other derived variables, is computed again from its initializer.
 
 ```lus nocheck
 local z = 10
@@ -14,18 +14,40 @@ z = 20
 assert(c == 14)
 ```
 
-## 1. What the example fixes
+## 1. Semantics
 
-`c` is 14 at the end, which is `10 + 1 + 3`. The assignment `b = 3` computes `c` again, while `z` is still 10. The assignment `z = 20` changes nothing, because `z` is not observed. Two consequences follow.
+### Recomputation at the assignment
 
-- Recomputation is eager. It happens at the assignment to the observed variable. A design that marks `c` stale and computes it at its next read would read `z` as 20 and give 24.
-- Only observed variables are dependencies. A derived variable records the observed variables its initializer reads, and every other variable it reads is an input whose value is taken at the time of recomputation.
+`c` is 14 at the end, which is `10 + 1 + 3`. The assignment `b = 3` computes `c` again while `z` is still 10. The assignment `z = 20` changes nothing, because `z` is not observed. Recomputation therefore happens at the assignment, and a non-observed variable that an initializer reads is an input whose value is taken at the time of recomputation.
 
-## 2. Dependencies and update order
+### Dependencies
 
-The dependencies of a derived variable are the observed variables that its initializer names. The compiler finds them in the syntax tree, as it finds the variables a function captures. An observed variable read through a function call, as in `local c <observe> = total()` where `total` reads `a`, is not a dependency. A design that tracks reads at run time would catch it, at the cost described in section 5.
+The dependencies of a derived variable are the observed variables that its initializer names, found in the syntax tree as the compiler finds the variables a function captures. An observed variable read through a call, as in `local c <observe> = total()` where `total` reads `a`, is not a dependency. A dependency may be a local of the same function or a captured variable of an enclosing function.
 
-A derived variable can depend only on variables declared before it, since its initializer cannot name a later local. Declaration order is therefore a topological order of the dependency graph, and the graph has no cycles. When an assignment changes a variable, the compiler recomputes its dependents in declaration order, each once. In the diamond below, `a = 5` computes `b`, then `c`, then `d` once, and `d` never sees a new `b` with an old `c`.
+A derived variable is read-only. An assignment to it raises `attempt to assign to const variable 'c'` at compile time, in the declaring function and in nested functions alike.
+
+### Writes from nested functions
+
+A nested function that assigns a source updates the dependents of that source, as an assignment in the declaring function does. This covers event handlers, callbacks passed to a library, and functions stored in tables.
+
+```lus nocheck
+local clicks <observe> = 0
+local label <observe> = `clicked $clicks times`
+
+button.on_click = function()
+    clicks = clicks + 1   -- updates label
+end
+```
+
+### Lifetime of a dependency
+
+A derived variable depends on its sources from its declaration until the end of its scope. When its block ends, by reaching `end`, by `break`, `goto`, or `return`, or by an error, the derived variable stops depending on its sources, as a `<close>` variable is closed on every exit of its block. A source that outlives the block, because a nested function captured it, then no longer computes the dead variable. A nested function that captured the derived variable keeps reading its last value.
+
+## 2. Update order
+
+When a source changes, the runtime collects every derived variable that depends on it, directly or through other derived variables, and computes each one once, in the order of its declaration. A derived variable can depend only on variables declared before it, because its initializer cannot name a later local. Declaration order is therefore a topological order of the dependencies, and the dependencies never form a cycle.
+
+The order holds across function activations, because the runtime numbers each derived variable when its declaration executes. In the diamond below, `a = 5` computes `b`, then `c`, then `d` once, and `d` never sees a new `b` with an old `c`.
 
 ```lus nocheck
 local a <observe> = 1
@@ -36,44 +58,58 @@ a = 5
 assert(d == 16)
 ```
 
-An assignment to a derived variable would replace a value that the next change of a dependency overwrites, and could hide the dependency entirely. Derived variables are therefore read-only, and an assignment to one is a compile error. Only observed variables without observed reads in their initializer, the _sources_, accept assignments. Cycles cannot form, because no assignment makes a source depend on anything.
+An initializer runs in the coroutine that made the assignment. An assignment to an observed variable while an update is running raises `cannot assign observed variable 'a' while its dependents update`, because the update would otherwise read a source that changes under it. A yield inside an initializer during an update raises `attempt to yield inside an observed update`.
 
-## 3. Captured variables
+If an initializer raises an error during an update, the error propagates from the assignment that started the update. The source keeps its new value. The derived variables computed before the error have their new values, and the failing variable and those after it keep their previous values.
 
-A function that reads an observed variable reads it as an ordinary captured variable, so it sees the value of the last recomputation.
+## 3. Representation
 
-An assignment to a source inside a nested function is the difficult case. The function may run after a derived variable that it cannot name has been declared, so the compiler of that function cannot know which dependents to recompute. Two designs work.
+The compiler resolves every name lexically, so it knows at each assignment whether the target is a source. Every decision below is made at compile time, which keeps code that never declares an observed variable exactly as it is today.
 
-- The rule of runtime attributes. An assignment in a nested function stores the value and triggers nothing, as an assignment to a variable with a runtime attribute calls no attribute there (`guide.mdx`, "Rules for runtime attributes"). This keeps the compiler static, but it makes `c` silently stale after a callback assigns `b`.
-- A compile error for an assignment to a source from a nested function. The rule is static and leaves nothing stale, but it rules out callbacks, which are the main producers of changes in event-driven code.
+**Sources.** A source has a hidden companion local, its _dependents list_, declared next to it. The list starts empty. An assignment to the source compiles to the store followed by a `notify` instruction on the companion. `notify` tests whether the list is empty and returns when it is.
 
-A design that propagates from nested functions needs each source to live in a heap cell that holds the list of its dependents, with each derived variable compiled as a hidden function. That is a library of signals with a syntax of its own (section 5).
+**Captured sources.** A nested function that assigns a source captures the companion along with the source, as one more upvalue. Its assignment compiles to the store into the upvalue followed by `notify` on the captured companion. A nested function that only reads the source captures the source alone.
+
+**Derived variables.** A derived variable compiles to a register or upvalue like any local, plus a hidden _update function_ that evaluates the initializer and stores the result in the variable. Executing the declaration evaluates the initializer, creates the update function, gives it the next number of the state's declaration counter, and adds it to the dependents list of each dependency. A derived variable that is itself a dependency has a dependents list of its own. Leaving the scope removes the update function from each list, through the same mechanism that closes `<close>` variables.
+
+**Update.** `notify` on a non-empty list collects the update functions of the list and, transitively, of the lists of the derived variables they update. It sorts the collected functions by their numbers, removes duplicates, then calls each one in that order.
 
 ## 4. Cost
 
-With the static design, a read of an observed variable is a read of a local. An assignment to a source compiles to the store followed by the initializer of each dependent, inlined at the assignment in declaration order. The cost of an assignment is the sum of the cost of those initializers, and the code of a function grows with the number of assignments times the number of dependents. Compiling each initializer once, as a hidden function that each assignment calls, bounds the code size at the cost of a call per dependent.
+| operation | cost |
+| --- | --- |
+| any code without observed variables | none, the compiler emits the same instructions as today |
+| read of an observed variable | a read of a local or an upvalue |
+| assignment to a source without dependents | the store, then one test of an empty list |
+| assignment to a source with dependents | the store, a collection and sort of the dependents, and one call of each update function |
+| assignment to a source from a nested function | the same, plus one upvalue in that function for the companion |
+| declaration of a derived variable | one evaluation of the initializer, one closure, and one list insertion per dependency |
+| end of the scope of a derived variable | one list removal per dependency |
 
-A program that declares no observed variable compiles and runs exactly as before.
+The JIT compiles `notify` as a call to a runtime routine behind the test of an empty list. Assignments to plain variables and plain upvalues compile unchanged in every tier, because `notify` exists only after assignments to sources.
 
-## 5. Locals or a library of signals
+## 5. Interaction with other features
 
-A _signal_ library keeps reactive values in objects: `signal(1)` holds a value, `computed(fn)` derives one, and `effect(fn)` runs a function when its inputs change. The library tracks dependencies at run time by recording which signals a computation reads, so dependencies through calls, across functions, and across modules all work. It can batch several changes into one recomputation, and it can dispose of a computation that is no longer needed.
+- `<const>` and `<observe>` together are a compile error on a source, which could then never change. On a derived variable `<const>` adds nothing, because a derived variable is read-only.
+- `<lazy>` and `<observe>` together are a compile error. A lazy variable computes at its first read and an observed one at each change, and the motivating example gives 14 with `<observe>` where a recomputation at read time would give 24.
+- `<close>`, `<group>`, and runtime attributes on an observed variable are compile errors. A field of a local group cannot be observed.
+- A global cannot be observed, because a global is a field of the global table and its assignments are table writes.
+- `debug.setlocal` and `debug.setupvalue` store without `notify`, as they bypass every other attribute.
+- An observed variable passed to a function passes its current value. The callee receives no link to the variable.
 
-The uses that motivate reactivity cross function boundaries: a user interface that redraws when its state changes, a cache that drops entries when its source changes, and a configuration that reloads. The changes arrive in callbacks, and the reactions are effects with side effects. Observed locals cover the part of this that fits in one function and has no callbacks, which is the part a program can already write as a sequence of assignments.
+## 6. Open questions
 
-A library costs a table and a closure per signal, and a call and a dependency check per read and per write, against nothing for the static locals. A library needs no change to the language and can ship as a package, while observed locals need a new attribute, a compile-time dependency analysis, and rules for nested functions.
+**Q1. What happens when an initializer raises an error during an update?**
 
-## 6. Relation to `<lazy>`
+- **(a) The error propagates from the assignment, and the variables after the failing one keep their previous values (recommended).** The update stops where the error happened, like any sequence of statements.
+- (b) The update computes every variable it can, skips the failing one and those that depend on it, then raises the first error.
 
-A lazy variable is computed once, at its first read, and pulls its value (`lazy.md`). An observed variable is computed again at every change of a dependency, and its sources push changes to it. The combination `<lazy, observe>` would mark a derived variable stale at a change and compute it at its next read. That reads every non-observed input at read time, so in the motivating example it gives 24 where `<observe>` gives 14. The two attributes are therefore different features and do not reduce to each other.
+**Q2. What happens when code assigns an observed variable while an update is running?**
 
-## 7. Verdict
+- **(a) It raises an error (recommended).** An update never sees a source change under it.
+- (b) The assignment is queued, and its update runs after the current one ends. A program that assigns on every update then loops forever.
 
-Observed locals are implementable at no cost for programs that leave them unused, with static dependencies, declaration order as update order, and no cycles. The uses that justify reactivity need propagation from callbacks and dependencies through calls, which static locals cannot give without becoming a signal library with special syntax.
+**Q3. May an initializer yield during an update?**
 
-**Choices**
-
-- **(a) Leave `<observe>` out of the language and publish signals as an atmosphere package, with `signal`, `computed`, and `effect` over table fields and run-time dependency tracking (recommended).**
-- (b) Adopt static observed locals with the rule of runtime attributes for nested functions, and read-only derived variables.
-- (c) Adopt static observed locals and make an assignment to a source from a nested function a compile error.
-- (d) Adopt nothing.
+- **(a) No, a yield raises an error (recommended).** An update ends before any other coroutine runs, so no coroutine sees half an update.
+- (b) Yes. Another coroutine that assigns an observed variable during the yield raises the error of Q2.

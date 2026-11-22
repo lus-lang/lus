@@ -109,7 +109,11 @@ local function non_indexable_record_raises_test()
     local ok, err = catch do
         for a from ipairs({ "x" }) do end
     end
-    assert(ok == false and tostring(err):find("attempt to index") ~= nil)
+    assert(ok == false and tostring(err):find("'for ... from' needs an iterator that yields tables, got a number value", 1, true) ~= nil)
+    ok, err = catch do
+        for a from function() return true end do end
+    end
+    assert(ok == false and tostring(err):find("got a boolean value", 1, true) ~= nil)
 end
 
 local function empty_iteration_runs_no_pass_test()

@@ -740,6 +740,10 @@ pub const Thread = struct {
 
     pub fn typeError(l: *Thread, v: Value, op: []const u8) Error {
         if (@import("debug.zig").varInfo(l, v)) |vi| {
+            // The hidden control variable of `for a, b from ...` holds the
+            // item whose fields the loop reads.
+            if (std.mem.eql(u8, vi.name, "(for record)") and std.mem.eql(u8, vi.kind, "local"))
+                return l.raiseFmt("'for ... from' needs an iterator that yields tables, got a {s} value", .{l.typeNameOf(v)});
             return l.raiseFmt("attempt to {s} a {s} value ({s} '{s}')", .{ op, l.typeNameOf(v), vi.kind, vi.name });
         }
         return l.raiseFmt("attempt to {s} a {s} value", .{ op, l.typeNameOf(v) });
