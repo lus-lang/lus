@@ -607,6 +607,118 @@ local function an_indexed_join_raises_the_errors_of_the_full_product_test()
     assert(tostring(err):find("record"), err)
 end
 
+-- Group: a small window of an ordering
+
+local function records_for_windows(n)
+    local seed = 7
+    local rows = {}
+    for i = 1, n do
+        seed = seed * 16807 % 2147483647
+        local k = seed % 50
+        rows[i] = { id = i, k = k, g = seed % 3, s = `s$(seed % 20)`, f = k == 7 and 0 / 0 or (k == 9 and nil or k / 2) }
+    end
+    return rows
+end
+
+-- The ids of the rows of `all`, a full ordering, from `offset + 1` on,
+-- `limit` of them.
+local function slice(all, offset, limit)
+    local out = {}
+    for i = offset + 1, math.min(#all, offset + limit) do out[#out + 1] = all[i].id end
+    return table.concat(out, " ")
+end
+
+local function ids(rows)
+    local out = {}
+    for i, r in ipairs(rows) do out[i] = r.id end
+    return table.concat(out, " ")
+end
+
+local function a_small_window_of_an_ordering_matches_the_full_ordering_test()
+    local t = records_for_windows(400)
+    local full = collect(@t as r select r.id order by r.k)
+    assert(ids(collect(@t as r select r.id order by r.k limit 10)) == slice(full, 0, 10))
+    assert(ids(collect(@t as r select r.id order by r.k limit 10 offset 25)) == slice(full, 25, 10))
+    local desc = collect(@t as r select r.id order by r.k desc, r.s)
+    assert(ids(collect(@t as r select r.id order by r.k desc, r.s limit 7 offset 3)) == slice(desc, 3, 7))
+    local strs = collect(@t as r select r.id order by r.s desc)
+    assert(ids(collect(@t as r select r.id order by r.s desc limit 30)) == slice(strs, 0, 30))
+    -- NaN orders as nil, first in ascending order.
+    local floats = collect(@t as r select r.id order by r.f)
+    assert(ids(collect(@t as r select r.id order by r.f limit 40)) == slice(floats, 0, 40))
+    local n, k = 5, 2
+    assert(ids(collect(@t as r select r.id order by r.k limit n offset k)) == slice(full, 2, 5))
+end
+
+local function edges_of_an_ordered_window_test()
+    local t = records_for_windows(200)
+    local full = collect(@t as r select r.id order by r.k)
+    assert(#collect(@t as r select r.id order by r.k limit 0) == 0)
+    assert(#collect(@t as r select r.id order by r.k limit 5 offset 500) == 0)
+    assert(ids(collect(@t as r select r.id order by r.k limit 199 offset 1)) == slice(full, 1, 199))
+    assert(ids(collect(@t as r select r.id order by r.k limit 1)) == slice(full, 0, 1))
+    local grouped = collect(@t as r select r.k, count(*) as n group by r.k order by n desc, r.k limit 4)
+    local all = collect(@t as r select r.k, count(*) as n group by r.k order by n desc, r.k)
+    for i = 1, 4 do assert(grouped[i].k == all[i].k and grouped[i].n == all[i].n) end
+end
+
+local function mixed_order_keys_raise_with_or_without_a_window_test()
+    local t = records_for_windows(100)
+    t[50].k = "fifty"
+    local ok1, e1 = catch collect(@t as r select r.id order by r.k)
+    local ok2, e2 = catch collect(@t as r select r.id order by r.k limit 3)
+    assert(not ok1 and not ok2)
+    assert(tostring(e1) == tostring(e2), tostring(e2))
+    t[50].k = {}
+    ok2, e2 = catch collect(@t as r select r.id order by r.k limit 3)
+    assert(not ok2 and tostring(e2):find("cannot order"), tostring(e2))
+end
+
+local function a_host_call_in_an_order_key_runs_once_per_row_test()
+    local t = records_for_windows(100)
+    local calls = 0
+    local function key(r) calls = calls + 1 return r.k end
+    local rows = collect(@t as r select r.id order by key(r) limit 2)
+    assert(#rows == 2)
+    assert(calls == 100, calls)
+end
+
+local function windows_that_read_values_or_raise_test()
+    local t = records_for_windows(300)
+    local full = collect(@t as r select r.id order by r.s)
+    local n = 4
+    assert(ids(collect(@t as r select r.id order by r.s limit n + 1)) == slice(full, 0, 5))
+    local bad = "many"
+    local ok, err = catch collect(@t as r select r.id order by r.s limit bad)
+    assert(not ok and tostring(err):find("limit must be a number"), tostring(err))
+    local neg = -1
+    ok, err = catch collect(@t as r select r.id order by r.k limit 3 offset neg)
+    assert(not ok and tostring(err):find("nonnegative"), tostring(err))
+    local text = "3"
+    assert(ids(collect(@t as r select r.id order by r.s limit text)) == slice(full, 0, 3))
+end
+
+local function one_unorderable_key_among_nils_orders_first_test()
+    local t = {}
+    for i = 1, 100 do t[i] = { id = i } end
+    t[60].k = {}
+    local rows = collect(@t as r select r.id order by r.k desc limit 2)
+    local all = collect(@t as r select r.id order by r.k desc)
+    assert(rows[1].id == all[1].id and rows[2].id == all[2].id)
+    assert(rows[1].id == 60)
+end
+
+local function string_keys_of_a_window_survive_collections_test()
+    local t = records_for_windows(3000)
+    local function key(r)
+        collectgarbage("step")
+        return `key $(r.k) $(r.id % 13)`
+    end
+    local rows = collect(@t as r select r.id order by key(r) limit 20)
+    local all = collect(@t as r select r.id order by key(r))
+    assert(ids(rows) == slice(all, 0, 20))
+end
+
 -- Group: laziness and re-execution
 
 local function a_stored_query_runs_fresh_on_every_loop_test()

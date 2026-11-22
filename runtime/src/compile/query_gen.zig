@@ -487,6 +487,16 @@ fn sqlValue(n: *const Node) bool {
     };
 }
 
+/// Whether a limit or offset node is absent, a literal, or a captured
+/// value, so that reading it raises nothing and runs nothing.
+fn plainWindow(n: ?*const Node) bool {
+    const x = n orelse return true;
+    return switch (x.kind) {
+        .lit, .param => true,
+        else => false,
+    };
+}
+
 /// Whether `n` compares a column of one source with a column of another
 /// for equality.
 fn isJoin(n: *const Node) bool {
@@ -598,6 +608,9 @@ pub const flag_distinct = 2;
 pub const flag_limit = 4;
 pub const flag_offset = 8;
 pub const flag_rec_err = 16;
+/// The limit and the offset are literals or captured values, which the
+/// runtime may read before the rows arrive.
+pub const flag_plain_window = 32;
 
 pub const agg_codes = struct {
     pub const count_star = 0;
@@ -868,6 +881,7 @@ pub fn queryExpr(fs: *FS, q: *ast.Query, v: *Exp) Error!void {
     if (limit != null) flags |= flag_limit;
     if (offset != null) flags |= flag_offset;
     if (rec_err) flags |= flag_rec_err;
+    if ((limit != null or offset != null) and plainWindow(limit) and plainWindow(offset)) flags |= flag_plain_window;
     try w.int(flags);
     try w.int(op_step);
     try w.int(op_final);

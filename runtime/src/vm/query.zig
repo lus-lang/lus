@@ -247,7 +247,7 @@ fn decodeInto(p: *Plan, s: []const u8) bool {
     const h = readHeader(&r) orelse return false;
     p.nsrc = h.nsrc;
     p.nops = h.nops;
-    p.flags = r.count(31) orelse return false;
+    p.flags = r.count(63) orelse return false;
     p.op_step = (optOp(&r, h.nops) orelse return false) orelse return false;
     p.op_final = optOp(&r, h.nops) orelse return false;
     p.op_lo = optOp(&r, h.nops) orelse return false;
@@ -621,6 +621,45 @@ const Sorter = struct {
         return 0;
     }
 
+    /// Orders by key and then by arrival.
+    fn before(s: *const Sorter, a: u32, b: u32) Error!bool {
+        const c = try s.compare(a, b);
+        return c < 0 or (c == 0 and a < b);
+    }
+
+    /// Moves the `m` ids of `ids` that come first by key and then by
+    /// arrival to its front, in no order, and returns them. A heap keeps
+    /// the `m` best so far with the last of them on top.
+    fn smallest(s: *const Sorter, ids: []u32, m: usize) Error![]u32 {
+        const h = ids[0..m];
+        var i = m / 2;
+        while (i > 0) {
+            i -= 1;
+            try s.siftDown(h, i);
+        }
+        for (ids[m..]) |id| {
+            if (try s.before(id, h[0])) {
+                h[0] = id;
+                try s.siftDown(h, 0);
+            }
+        }
+        return h;
+    }
+
+    fn siftDown(s: *const Sorter, h: []u32, start: usize) Error!void {
+        var i = start;
+        while (true) {
+            var big = i;
+            const a = 2 * i + 1;
+            const b = a + 1;
+            if (a < h.len and try s.before(h[big], h[a])) big = a;
+            if (b < h.len and try s.before(h[big], h[b])) big = b;
+            if (big == i) return;
+            std.mem.swap(u32, &h[i], &h[big]);
+            i = big;
+        }
+    }
+
     /// Stable merge sort of record ids.
     fn sort(s: *const Sorter, perm: []u32, tmp: []u32) Error!void {
         if (perm.len < 2) return;
@@ -898,6 +937,63 @@ const Sink = struct {
     limit: i64 = -1,
     /// Projection field names as strings, rooted in the names slot.
     names: []const Value = &.{},
+    /// With one order key and a window known before the rows arrive, the
+    /// records kept are the `top` best so far, by key and then by
+    /// arrival. Every key is kept, rooted in the keys table and listed in
+    /// `keys`, and `classes` and `others` track whether ordering them all
+    /// raises, which the full sort then does.
+    top: usize = 0,
+    heap: std.ArrayList(u32) = .empty,
+    keys: std.ArrayList(Value) = .empty,
+    class: ?OrderClass = null,
+    others: u32 = 0,
+    raises: bool = false,
+
+    fn deinit(s: *Sink) void {
+        s.heap.deinit(s.l.g.gpa);
+        s.keys.deinit(s.l.g.gpa);
+    }
+
+    fn sorter(s: *const Sink) Sorter {
+        return .{ .l = s.l, .desc = s.p.desc, .keys = s.keys.items };
+    }
+
+    /// Notes key `v` and whether ordering every key seen raises.
+    fn noteClass(s: *Sink, v: Value) void {
+        if (v.isNil()) return;
+        const c = orderClass(v);
+        if (c == .other) s.others += 1;
+        if (s.class) |seen| {
+            if (seen != c) s.raises = true;
+        } else s.class = c;
+        if (s.others >= 2) s.raises = true;
+    }
+
+    /// Offers the record with id `id` to the kept ones.
+    fn offer(s: *Sink, id: u32, rec: Value) Error!void {
+        const l = s.l;
+        const so = s.sorter();
+        if (s.heap.items.len < s.top) {
+            try ops.rawSet(l, s.tbl(slot_records), Value.int(@as(i64, id) + 1), rec);
+            s.heap.append(l.g.gpa, id) catch return l.raiseMem();
+            // Sift the new id up.
+            const h = s.heap.items;
+            var i = h.len - 1;
+            while (i > 0) {
+                const up = (i - 1) / 2;
+                if (!try so.before(h[up], h[i])) break;
+                std.mem.swap(u32, &h[up], &h[i]);
+                i = up;
+            }
+            return;
+        }
+        const h = s.heap.items;
+        if (!try so.before(id, h[0])) return;
+        try ops.rawSet(l, s.tbl(slot_records), Value.int(@as(i64, h[0]) + 1), .nil);
+        try ops.rawSet(l, s.tbl(slot_records), Value.int(@as(i64, id) + 1), rec);
+        h[0] = id;
+        try so.siftDown(h, 0);
+    }
 
     fn tbl(s: *Sink, slot: u32) *Table {
         return s.l.stack[s.base + slot].as(Table);
@@ -936,6 +1032,16 @@ const Sink = struct {
         }
         if (s.full()) return;
         s.nrec += 1;
+        if (s.top > 0) {
+            var kv = l.stack[res + 2];
+            if (kv.tag == .float and std.math.isNan(kv.asFloat())) kv = .nil;
+            // The keys table roots the keys that the collector could free.
+            if (kv.tag.isCollectable()) try ops.rawSet(l, s.tbl(slot_keys), Value.int(s.nrec), kv);
+            s.keys.append(l.g.gpa, kv) catch return l.raiseMem();
+            s.noteClass(kv);
+            if (!s.raises) try s.offer(@intCast(s.nrec - 1), rec);
+            return;
+        }
         try ops.rawSet(l, s.tbl(slot_records), Value.int(s.nrec), rec);
         const nk = p.desc.len;
         if (nk > 0) {
@@ -961,6 +1067,34 @@ fn evalWindow(l: *Thread, q: *Query, p: *const Plan) Error!Window {
     const limit = if (p.has(qgen.flag_limit)) try countValue(l, lv, "limit") else -1;
     const offset = if (p.has(qgen.flag_offset)) try countValue(l, ov, "offset") else 0;
     return .{ .limit = limit, .offset = offset };
+}
+
+/// The window of a plan whose limit and offset are literals or captured
+/// values, which calling the window function reads without raising or
+/// running anything. Returns null when a value is not a count, and then
+/// the window is evaluated after the rows, which raises the error.
+fn plainWindow(l: *Thread, q: *Query, p: *const Plan) Error!?Window {
+    const op = p.op_lo orelse return null;
+    const top = l.top;
+    _ = try ops.callN(l, q.operand(op), &.{}, 2);
+    const lv = l.stack[top];
+    const ov = l.stack[top + 1];
+    l.top = top;
+    const limit = if (p.has(qgen.flag_limit)) countOf(lv) orelse return null else -1;
+    const offset = if (p.has(qgen.flag_offset)) countOf(ov) orelse return null else 0;
+    return .{ .limit = limit, .offset = offset };
+}
+
+/// What `countValue` returns for `v`, or null where it raises.
+fn countOf(v: Value) ?i64 {
+    const n = switch (v.tag) {
+        .integer => v.asInt(),
+        .float => ops.floatToInt(v.asFloat()),
+        .string => if (ops.toNumberCoerce(v)) |num| ops.toIntegerStrict(num) else null,
+        else => null,
+    } orelse return null;
+    if (n < 0) return null;
+    return n;
 }
 
 /// Runs the query and returns the table of result records, which is left
@@ -1003,6 +1137,17 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     // sources are fetched, so a lone SQLite source whose whole where clause
     // pushes down can apply it in SQL too.
     var sink: Sink = .{ .l = l, .p = p, .base = base, .stream = p.desc.len == 0, .names = names };
+    defer sink.deinit();
+    // One order key and a window that reads no row: the window comes first,
+    // and the sink keeps only the records that can fall in it.
+    var early: ?Window = null;
+    if (p.desc.len == 1 and p.has(qgen.flag_plain_window)) {
+        early = try plainWindow(l, q, p);
+        if (early) |w| {
+            if (w.limit >= 0) sink.top = @intCast(@min(w.offset + w.limit, std.math.maxInt(u32)));
+            if (sink.top == 0) early = null;
+        }
+    }
     var sql_window: ?Window = null;
     if (sink.stream) {
         const w = try evalWindow(l, q, p);
@@ -1172,6 +1317,34 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     const records = l.stack[base + slot_records].as(Table);
     if (sink.stream) return finish(l, base, records);
 
+    if (sink.top > 0) {
+        if (sink.raises) {
+            // The full sort of every key raises, as it does without the
+            // window.
+            const all = gpa.alloc(u32, sink.keys.items.len * 2) catch return l.raiseMem();
+            defer gpa.free(all);
+            const nall = sink.keys.items.len;
+            for (0..nall) |i| all[i] = @intCast(i);
+            try sink.sorter().sort(all[0..nall], all[nall..]);
+            return corrupt(l);
+        }
+        const w = early.?;
+        const kept = sink.heap.items;
+        std.mem.sort(u32, kept, {}, std.sort.asc(u32));
+        const tmp = gpa.alloc(u32, kept.len) catch return l.raiseMem();
+        defer gpa.free(tmp);
+        try sink.sorter().sort(kept, tmp);
+        const out = try l.newTable(0, 0);
+        l.stack[base + slot_dmap] = Value.obj(.table, out);
+        var r: usize = @intCast(@min(w.offset, @as(i64, @intCast(kept.len))));
+        var slot: i64 = 1;
+        while (r < kept.len) : (r += 1) {
+            try ops.rawSet(l, out, Value.int(slot), table.getInt(records, @as(i64, kept[r]) + 1));
+            slot += 1;
+        }
+        return finish(l, base, out);
+    }
+
     // Order, then window.
     const n: usize = @intCast(sink.nrec);
     if (n > 1) {
@@ -1184,13 +1357,52 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
         const kt = l.stack[base + slot_keys].as(Table);
         for (keys, 0..) |*k, i| k.* = table.getInt(kt, @intCast(i + 1));
         const sorter: Sorter = .{ .l = l, .desc = p.desc, .keys = keys };
+        // When the keys of every position share one class, no comparison
+        // raises or runs a metamethod, so the window may come first, and
+        // a window much smaller than the records needs only its own rows
+        // in order: the smallest ones by key and then by arrival, which
+        // the stable sort puts first too.
+        if (oneClassPerKey(keys, nk)) {
+            const w = try evalWindow(l, q, p);
+            if (w.limit >= 0 and w.offset < n) {
+                const m: usize = @intCast(@min(@as(i64, @intCast(n)), w.offset + w.limit));
+                if (m * 4 <= n) {
+                    const out = try l.newTable(0, 0);
+                    l.stack[base + slot_dmap] = Value.obj(.table, out);
+                    if (m > 0) {
+                        const top = try sorter.smallest(perm[0..n], m);
+                        // Ascending arrival first, so the stable sort breaks
+                        // ties as the full sort does.
+                        std.mem.sort(u32, top, {}, std.sort.asc(u32));
+                        try sorter.sort(top, perm[n..][0..m]);
+                        var r: usize = @intCast(w.offset);
+                        var slot: i64 = 1;
+                        while (r < m) : (r += 1) {
+                            try ops.rawSet(l, out, Value.int(slot), table.getInt(records, @as(i64, top[r]) + 1));
+                            slot += 1;
+                        }
+                    }
+                    return finish(l, base, out);
+                }
+            }
+            try sorter.sort(perm[0..n], perm[n..]);
+            const sorted = try l.newTable(n, 0);
+            l.stack[base + slot_dmap] = Value.obj(.table, sorted);
+            for (perm[0..n], 0..) |id, i| try ops.rawSet(l, sorted, Value.int(@intCast(i + 1)), table.getInt(records, @as(i64, id) + 1));
+            l.stack[base + slot_records] = Value.obj(.table, sorted);
+            return windowed(l, base, n, w);
+        }
         try sorter.sort(perm[0..n], perm[n..]);
         const sorted = try l.newTable(n, 0);
         l.stack[base + slot_dmap] = Value.obj(.table, sorted);
         for (perm[0..n], 0..) |id, i| try ops.rawSet(l, sorted, Value.int(@intCast(i + 1)), table.getInt(records, @as(i64, id) + 1));
         l.stack[base + slot_records] = Value.obj(.table, sorted);
     }
-    const w = try evalWindow(l, q, p);
+    return windowed(l, base, n, try evalWindow(l, q, p));
+}
+
+/// Applies window `w` to the `n` ordered records and finishes.
+fn windowed(l: *Thread, base: u32, n: usize, w: Window) Error!*Table {
     if (w.limit >= 0 or w.offset > 0) {
         const all = l.stack[base + slot_records].as(Table);
         const total: i64 = @intCast(n);
@@ -1205,6 +1417,25 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
         l.stack[base + slot_records] = Value.obj(.table, out);
     }
     return finish(l, base, l.stack[base + slot_records].as(Table));
+}
+
+/// Whether the non-nil keys at each of the `nk` positions share one
+/// order class other than `.other`, so that comparing them never raises.
+fn oneClassPerKey(keys: []const Value, nk: usize) bool {
+    for (0..nk) |k| {
+        var class: ?OrderClass = null;
+        var i = k;
+        while (i < keys.len) : (i += nk) {
+            const v = keys[i];
+            if (v.isNil()) continue;
+            const c = orderClass(v);
+            if (c == .other) return false;
+            if (class) |seen| {
+                if (seen != c) return false;
+            } else class = c;
+        }
+    }
+    return true;
 }
 
 /// Moves the odometer past the sources before `from`: the last of them
