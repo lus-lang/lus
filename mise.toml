@@ -78,6 +78,14 @@ description = "Crash each durability sequence of the manual at every I/O operati
 depends = ["build:io"]
 run = "LUS_JIT=off runtime/zig-out-io/bin/lus tests/crash/run.lus --lus runtime/zig-out-io/bin/lus"
 
+[tasks.mutate]
+description = "Sample mutants of the code that every program runs, build each, and report the ones that no test kills. MUTANTS sets the count (default 40), and a coverage run limits them to covered lines"
+depends = ["build"]
+run = [
+  "if [ -d runtime/zig-out-cov/runs ]; then LUS_COVERAGE_REPORT=$PWD/runtime/zig-out-cov/runs LUS_COVERAGE_EXPORT=$PWD/runtime/zig-out-cov/covered.keys runtime/zig-out-cov/bin/lus > /dev/null; fi",
+  "LUS_JIT=off runtime/zig-out/bin/lus tests/mutate/run.lus --count ${MUTANTS:-40} $([ -f runtime/zig-out-cov/covered.keys ] && echo --covered $PWD/runtime/zig-out-cov/covered.keys)",
+]
+
 [tasks."build:coverage"]
 description = "Build the runtime as releases are built, ReleaseFast, with edge coverage into runtime/zig-out-cov"
 dir = "runtime"

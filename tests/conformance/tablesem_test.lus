@@ -841,3 +841,38 @@ local function sortby_orders_descending_and_leaves_short_tables_test()
     table.sortby(one, function(s) return s end)
     assert(one[1] == "x")
 end
+
+-- `table.insert` on a full array part, which optimized code grows in
+-- place, leaves alone an integer key that already sits in the hash part,
+-- in the range the array would take over. The hash part has room from the
+-- start, so the key goes there without a rehash.
+local inserting_keeps_a_key_just_past_the_list_cases = {
+    { 4, 6 }, { 4, 8 }, { 8, 10 }, { 8, 12 }, { 16, 20 },
+}
+
+local function insert_all(t, first, last)
+    for i = first, last do table.insert(t, i) end
+end
+
+local function inserting_keeps_a_key_just_past_the_list_test(n, far)
+    -- Plain lists warm the call site up, so optimized code takes it over
+    -- with the kind of a list of integers.
+    for _ = 1, 400 do
+        local w = table.create(2)
+        insert_all(w, 1, 9)
+    end
+    for _ = 1, 3 do
+        local t = table.create(n, 4)
+        for i = 1, n do t[i] = i end
+        t[far] = "far"
+        -- The length may be either border, so the values land after n or
+        -- after far, and the key far keeps its value either way.
+        insert_all(t, n + 1, n + 1)
+        assert(t[far] == "far")
+        insert_all(t, n + 2, far - 1)
+        assert(t[far] == "far")
+        local count = 0
+        for _ in pairs(t) do count = count + 1 end
+        assert(count == far)
+    end
+end

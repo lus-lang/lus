@@ -217,7 +217,7 @@ local scenarios = {
             "end)",
             "db:close()",
         },
-        check = function(dir, finished, out, lus)
+        check = function(dir, finished, _, lus)
             local probe = dir .. "/../probe.lus"
             writeFile(probe, table.concat({
                 'pledge("fs")',

@@ -115,6 +115,8 @@ A `-Dinvariants=true` build runs the checks of `inv.assert` in a release build. 
 
 `mise run crash` runs `tests/crash/run.lus`, which crashes each durability sequence of the manual at every I/O operation of a `-Dfail-io=true` build. `LUS_FAIL_IO=N:kill` ends the process before operation N, and `LUS_FAIL_IO=N:powerloss` also undoes, at random, what a power loss could destroy of the writes and directory changes that no sync made durable (`src/vm/faultcrash.zig`). An N of 0 crashes after the last operation. `LUS_FAIL_IO_SEED` varies the choices, and `LUS_FAIL_IO_PSOW=0` turns off powersafe overwrite. The SQLite VFS of `src/lib/sqlite.zig` reports its operations to the same model.
 
+`mise run mutate` samples mutants of the code that every program runs (`tests/mutate`), builds each, and lists the ones that no conformance test kills, interpreted or in optimized code. `MUTANTS` sets the count. A survivor either gets a test that kills it or, when it cannot change behavior, a line in `tests/mutate/equivalent.txt`.
+
 `mise run mcdc` measures modified condition and decision coverage. It copies the runtime to `zig-out-mcdc`, rewrites every decision of two or more conditions with `tests/coverage/mcdc/transform.zig` so that it records which conditions ran and the outcome, builds the copy, runs the conformance suite, and prints the share of conditions that a pair of recorded vectors shows to change the outcome on its own.
 
 ## Fuzzing
