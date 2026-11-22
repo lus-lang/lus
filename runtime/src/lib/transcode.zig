@@ -29,11 +29,12 @@ const Enc = enum {
     binary,
     base64,
     base64url,
+    base32,
     url,
     hex,
 
     fn isBinaryToText(e: Enc) bool {
-        return e == .base64 or e == .base64url or e == .url or e == .hex;
+        return e == .base64 or e == .base64url or e == .base32 or e == .url or e == .hex;
     }
 
     /// Whether values in this encoding are vectors.
@@ -69,6 +70,7 @@ const names = [_]struct { []const u8, Enc }{
     .{ "binary", .binary },
     .{ "base64", .base64 },
     .{ "base64url", .base64url },
+    .{ "base32", .base32 },
     .{ "url", .url },
     .{ "hex", .hex },
 };
@@ -114,6 +116,7 @@ fn transcode(l: *Thread) Error!u32 {
         const ok = switch (from) {
             .base64 => decodeBase64(gpa, &raw, src, std.base64.standard_no_pad.Decoder),
             .base64url => decodeBase64(gpa, &raw, src, std.base64.url_safe_no_pad.Decoder),
+            .base32 => decodeBase32(gpa, &raw, src),
             .url => decodeUrl(gpa, &raw, src),
             else => decodeHex(gpa, &raw, src),
         } catch return l.raiseMem();
@@ -133,6 +136,7 @@ fn transcode(l: *Thread) Error!u32 {
         const done = switch (to) {
             .base64 => encodeBase64(gpa, &out, data, std.base64.standard.Encoder),
             .base64url => encodeBase64(gpa, &out, data, std.base64.url_safe_no_pad.Encoder),
+            .base32 => encodeBase32(gpa, &out, data),
             .url => encodeUrl(gpa, &out, data),
             else => encodeHex(gpa, &out, data),
         };
@@ -310,6 +314,53 @@ fn encodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8, enc: s
     try out.ensureUnusedCapacity(gpa, n);
     _ = enc.encode(out.unusedCapacitySlice()[0..n], src);
     out.items.len += n;
+}
+
+const base32_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/// Encodes base32 with the alphabet of RFC 4648, padded to a multiple of
+/// eight characters.
+fn encodeBase32(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !void {
+    try out.ensureUnusedCapacity(gpa, (src.len + 4) / 5 * 8);
+    var i: usize = 0;
+    while (i < src.len) : (i += 5) {
+        const n: usize = @min(5, src.len - i);
+        var block: [5]u8 = @splat(0);
+        @memcpy(block[0..n], src[i..][0..n]);
+        const bits = std.mem.readInt(u40, &block, .big);
+        const chars = (n * 8 + 4) / 5;
+        for (0..8) |k| {
+            const c: u8 = if (k < chars) base32_alphabet[@intCast((bits >> @intCast(35 - 5 * k)) & 31)] else '=';
+            out.appendAssumeCapacity(c);
+        }
+    }
+}
+
+/// Decodes base32 in either case, skipping whitespace and stopping at the
+/// first padding character. A group of 1, 3, or 6 characters cannot hold
+/// whole bytes, so it is malformed. Returns false on malformed input.
+fn decodeBase32(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool {
+    var acc: u64 = 0;
+    var nbits: u6 = 0;
+    var count: usize = 0;
+    for (src) |c| {
+        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') continue;
+        if (c == '=') break;
+        const up = std.ascii.toUpper(c);
+        const d = std.mem.indexOfScalar(u8, base32_alphabet, up) orelse return false;
+        acc = (acc << 5) | d;
+        nbits += 5;
+        count += 1;
+        if (nbits >= 8) {
+            nbits -= 8;
+            try out.append(gpa, @truncate(acc >> nbits));
+            acc &= (@as(u64, 1) << nbits) - 1;
+        }
+    }
+    return switch (count % 8) {
+        1, 3, 6 => false,
+        else => true,
+    };
 }
 
 fn decodeUrl(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool {

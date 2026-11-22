@@ -126,6 +126,40 @@ local function errors_on_invalid_base64url_test()
   checkerror("invalid base64url", string.transcode, "a", "base64url", "binary")
 end
 
+-- Group: base32, the alphabet of RFC 4648 with padding
+
+local base32_cases = {
+  { "", "" },
+  { "f", "MY======" },
+  { "fo", "MZXQ====" },
+  { "foo", "MZXW6===" },
+  { "foob", "MZXW6YQ=" },
+  { "fooba", "MZXW6YTB" },
+  { "foobar", "MZXW6YTBOI======" },
+}
+
+local function base32_test(text, encoded)
+  assert(string.transcode(text, "utf-8", "base32") == encoded)
+  assert(string.transcode(encoded, "base32", "utf-8") == text)
+  -- Decoding ignores case and accepts input without padding.
+  assert(string.transcode(encoded:lower(), "base32", "utf-8") == text)
+  assert(string.transcode((encoded:gsub("=", "")), "base32", "utf-8") == text)
+end
+
+local function base32_totp_secret_test()
+  -- A TOTP secret as authenticator apps show it, in groups of four.
+  local key = string.transcode("JBSW Y3DP EHPK 3PXP", "base32", "binary")
+  assert(string.transcode(key, "binary", "hex") == "48656c6c6f21deadbeef")
+  assert(string.transcode(key, "binary", "base32") == "JBSWY3DPEHPK3PXP")
+end
+
+local function errors_on_invalid_base32_test()
+  checkerror("invalid base32", string.transcode, "MZ1W", "base32", "binary")
+  checkerror("invalid base32", string.transcode, "M", "base32", "binary")
+  checkerror("invalid base32", string.transcode, "MZX", "base32", "binary")
+  checkerror("invalid base32", string.transcode, "MZXW6Y", "base32", "binary")
+end
+
 -- ============================================
 -- URL encoding tests
 -- ============================================
