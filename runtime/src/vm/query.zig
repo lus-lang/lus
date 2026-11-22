@@ -103,10 +103,16 @@ const Sql = struct {
     str: []const u8 = "",
 };
 
+/// A column of a source, which a join conjunct names.
+const Column = struct { src: u32, name: []const u8 };
+
 const Conj = struct {
     mask: u32,
     opaque_: bool,
     sql: ?*Sql,
+    /// The two columns of a conjunct that compares a column of one source
+    /// with a column of another for equality.
+    join: ?[2]Column = null,
 };
 
 const AggCode = qgen.agg_codes;
@@ -241,7 +247,7 @@ fn decodeInto(p: *Plan, s: []const u8) bool {
     const h = readHeader(&r) orelse return false;
     p.nsrc = h.nsrc;
     p.nops = h.nops;
-    p.flags = r.count(31) orelse return false;
+    p.flags = r.count(63) orelse return false;
     p.op_step = (optOp(&r, h.nops) orelse return false) orelse return false;
     p.op_final = optOp(&r, h.nops) orelse return false;
     p.op_lo = optOp(&r, h.nops) orelse return false;
@@ -265,9 +271,20 @@ fn decodeInto(p: *Plan, s: []const u8) bool {
     for (p.conj) |*cj| {
         cj.mask = r.count(0xff) orelse return false;
         cj.opaque_ = (r.count(1) orelse return false) == 1;
+        cj.join = null;
         if (r.i < s.len and s[r.i] == 'X') {
             _ = r.tag() orelse return false;
             cj.sql = null;
+        } else if (r.i < s.len and s[r.i] == 'J') {
+            _ = r.tag() orelse return false;
+            cj.sql = null;
+            var cols: [2]Column = undefined;
+            for (&cols) |*col| {
+                col.src = r.count(h.nsrc - 1) orelse return false;
+                col.name = r.str() orelse return false;
+            }
+            if (cols[0].src == cols[1].src) return false;
+            cj.join = cols;
         } else {
             cj.sql = readSql(&r, a, h.nops, 0) orelse return false;
         }
@@ -604,6 +621,45 @@ const Sorter = struct {
         return 0;
     }
 
+    /// Orders by key and then by arrival.
+    fn before(s: *const Sorter, a: u32, b: u32) Error!bool {
+        const c = try s.compare(a, b);
+        return c < 0 or (c == 0 and a < b);
+    }
+
+    /// Moves the `m` ids of `ids` that come first by key and then by
+    /// arrival to its front, in no order, and returns them. A heap keeps
+    /// the `m` best so far with the last of them on top.
+    fn smallest(s: *const Sorter, ids: []u32, m: usize) Error![]u32 {
+        const h = ids[0..m];
+        var i = m / 2;
+        while (i > 0) {
+            i -= 1;
+            try s.siftDown(h, i);
+        }
+        for (ids[m..]) |id| {
+            if (try s.before(id, h[0])) {
+                h[0] = id;
+                try s.siftDown(h, 0);
+            }
+        }
+        return h;
+    }
+
+    fn siftDown(s: *const Sorter, h: []u32, start: usize) Error!void {
+        var i = start;
+        while (true) {
+            var big = i;
+            const a = 2 * i + 1;
+            const b = a + 1;
+            if (a < h.len and try s.before(h[big], h[a])) big = a;
+            if (b < h.len and try s.before(h[big], h[b])) big = b;
+            if (big == i) return;
+            std.mem.swap(u32, &h[i], &h[big]);
+            i = big;
+        }
+    }
+
     /// Stable merge sort of record ids.
     fn sort(s: *const Sorter, perm: []u32, tmp: []u32) Error!void {
         if (perm.len < 2) return;
@@ -729,6 +785,136 @@ fn aggResult(l: *Thread, code: u8, acc: *const Acc, ntuples: i64, gstate: *Table
 }
 
 // ---------------------------------------------------------------------
+// Indexed joins
+
+/// A join conjunct lets the odometer visit only the rows of its inner
+/// source whose column equals the column of the current row of the outer
+/// source, when skipping the other rows changes nothing that the step
+/// function would do. The step evaluates the conjuncts in order and stops
+/// at the first false one, so the conjunct must come after joins only,
+/// and every row that these joins read must be a table without a
+/// metatable whose columns hold nil or primitive values. Then no field
+/// read runs `__index`, no comparison runs `__eq`, and a skipped tuple is
+/// one the step would have rejected without a trace. The step still
+/// evaluates every conjunct of the tuples the index finds, and the rows
+/// come in the order of their positions, as the full product gives them.
+const Index = struct {
+    /// The outer source and the name of its column.
+    outer: u32,
+    outer_name: Value,
+    /// The normalized key of each value of the inner column to its number.
+    map: *Table,
+    /// The positions of the rows with key number `k` are
+    /// `pos[offs[k]..offs[k + 1]]`, in ascending order.
+    offs: []u32,
+    pos: []u32,
+
+    fn deinit(ix: *Index, gpa: std.mem.Allocator) void {
+        gpa.free(ix.offs);
+        gpa.free(ix.pos);
+    }
+};
+
+/// Whether `v` compares equal only to values of the same normalized key,
+/// without a metamethod.
+fn plainKey(v: Value) bool {
+    return switch (v.tag) {
+        .nil, .integer, .float, .string, .true, .false => true,
+        else => false,
+    };
+}
+
+/// Whether every row of the source table `t` is a table without a
+/// metatable whose field `name` holds nil or a plain key.
+fn plainColumn(t: *Table, n: i64, name: Value) bool {
+    var k: i64 = 1;
+    while (k <= n) : (k += 1) {
+        const row = table.getInt(t, k);
+        if (row.tag != .table) return false;
+        const rt = row.as(Table);
+        if (rt.metatable != null) return false;
+        if (!plainKey(table.get(rt, name))) return false;
+    }
+    return true;
+}
+
+/// A key that matches nothing: nil, or NaN.
+fn matchesNothing(v: Value) bool {
+    return v.isNil() or (v.tag == .float and std.math.isNan(v.asFloat()));
+}
+
+/// Indexes the rows of source table `t` by their field `name`, whose
+/// values `plainColumn` checked. `map` is a new table rooted on the stack.
+fn buildIndex(l: *Thread, t: *Table, n: i64, name: Value, map: *Table, outer: u32, outer_name: Value) Error!Index {
+    const gpa = l.g.gpa;
+    const count: usize = @intCast(n);
+    const ids = gpa.alloc(i32, count) catch return l.raiseMem();
+    defer gpa.free(ids);
+    var counts: std.ArrayList(u32) = .empty;
+    defer counts.deinit(gpa);
+    for (ids, 0..) |*id, i| {
+        const v = table.get(table.getInt(t, @intCast(i + 1)).as(Table), name);
+        if (matchesNothing(v)) {
+            id.* = -1;
+            continue;
+        }
+        const found = table.get(map, try ops.normKey(l, v));
+        if (found.tag == .integer) {
+            id.* = @intCast(found.asInt());
+        } else {
+            id.* = @intCast(counts.items.len);
+            try ops.rawSet(l, map, v, Value.int(id.*));
+            counts.append(gpa, 0) catch return l.raiseMem();
+        }
+        counts.items[@intCast(id.*)] += 1;
+    }
+    const offs = gpa.alloc(u32, counts.items.len + 1) catch return l.raiseMem();
+    errdefer gpa.free(offs);
+    var total: u32 = 0;
+    for (counts.items, 0..) |c, k| {
+        offs[k] = total;
+        total += c;
+    }
+    offs[counts.items.len] = total;
+    const pos = gpa.alloc(u32, total) catch return l.raiseMem();
+    // Fill each run in ascending order, counting the runs down again.
+    for (counts.items, 0..) |*c, k| c.* = offs[k];
+    for (ids, 0..) |id, i| {
+        if (id < 0) continue;
+        const k: usize = @intCast(id);
+        pos[counts.items[k]] = @intCast(i + 1);
+        counts.items[k] += 1;
+    }
+    return .{ .outer = outer, .outer_name = outer_name, .map = map, .offs = offs, .pos = pos };
+}
+
+/// Builds the indexes of the sources that a join lets the odometer
+/// narrow, storing each one at the index of its inner source. `slot` is
+/// the first of `nsrc` stack slots that root the names and key maps.
+fn buildIndexes(l: *Thread, p: *const Plan, src: u32, slot: u32, sizes: []const i64, out: []?Index) Error!void {
+    var nnames: i64 = 0;
+    for (p.conj) |cj| {
+        const cols = cj.join orelse break;
+        if (l.stack[slot].isNil()) l.stack[slot] = Value.obj(.table, try l.newTable(0, 0));
+        const names = l.stack[slot].as(Table);
+        var vals: [2]Value = undefined;
+        for (cols, &vals) |col, *nv| {
+            nv.* = try l.newStringValue(col.name);
+            nnames += 1;
+            try ops.rawSet(l, names, Value.int(nnames), nv.*);
+            const t = l.stack[src + col.src].as(Table);
+            if (!plainColumn(t, sizes[col.src], nv.*)) return;
+        }
+        const inner: usize = if (cols[0].src > cols[1].src) 0 else 1;
+        const s = cols[inner].src;
+        if (out[s] != null or sizes[s] < 2) continue;
+        const map = try l.newTable(0, 0);
+        l.stack[slot + 1 + s] = Value.obj(.table, map);
+        out[s] = try buildIndex(l, l.stack[src + s].as(Table), sizes[s], vals[inner], map, cols[1 - inner].src, vals[1 - inner]);
+    }
+}
+
+// ---------------------------------------------------------------------
 // Execution
 
 /// Stack slots relative to the execution base.
@@ -751,6 +937,63 @@ const Sink = struct {
     limit: i64 = -1,
     /// Projection field names as strings, rooted in the names slot.
     names: []const Value = &.{},
+    /// With one order key and a window known before the rows arrive, the
+    /// records kept are the `top` best so far, by key and then by
+    /// arrival. Every key is kept, rooted in the keys table and listed in
+    /// `keys`, and `classes` and `others` track whether ordering them all
+    /// raises, which the full sort then does.
+    top: usize = 0,
+    heap: std.ArrayList(u32) = .empty,
+    keys: std.ArrayList(Value) = .empty,
+    class: ?OrderClass = null,
+    others: u32 = 0,
+    raises: bool = false,
+
+    fn deinit(s: *Sink) void {
+        s.heap.deinit(s.l.g.gpa);
+        s.keys.deinit(s.l.g.gpa);
+    }
+
+    fn sorter(s: *const Sink) Sorter {
+        return .{ .l = s.l, .desc = s.p.desc, .keys = s.keys.items };
+    }
+
+    /// Notes key `v` and whether ordering every key seen raises.
+    fn noteClass(s: *Sink, v: Value) void {
+        if (v.isNil()) return;
+        const c = orderClass(v);
+        if (c == .other) s.others += 1;
+        if (s.class) |seen| {
+            if (seen != c) s.raises = true;
+        } else s.class = c;
+        if (s.others >= 2) s.raises = true;
+    }
+
+    /// Offers the record with id `id` to the kept ones.
+    fn offer(s: *Sink, id: u32, rec: Value) Error!void {
+        const l = s.l;
+        const so = s.sorter();
+        if (s.heap.items.len < s.top) {
+            try ops.rawSet(l, s.tbl(slot_records), Value.int(@as(i64, id) + 1), rec);
+            s.heap.append(l.g.gpa, id) catch return l.raiseMem();
+            // Sift the new id up.
+            const h = s.heap.items;
+            var i = h.len - 1;
+            while (i > 0) {
+                const up = (i - 1) / 2;
+                if (!try so.before(h[up], h[i])) break;
+                std.mem.swap(u32, &h[up], &h[i]);
+                i = up;
+            }
+            return;
+        }
+        const h = s.heap.items;
+        if (!try so.before(id, h[0])) return;
+        try ops.rawSet(l, s.tbl(slot_records), Value.int(@as(i64, h[0]) + 1), .nil);
+        try ops.rawSet(l, s.tbl(slot_records), Value.int(@as(i64, id) + 1), rec);
+        h[0] = id;
+        try so.siftDown(h, 0);
+    }
 
     fn tbl(s: *Sink, slot: u32) *Table {
         return s.l.stack[s.base + slot].as(Table);
@@ -789,6 +1032,16 @@ const Sink = struct {
         }
         if (s.full()) return;
         s.nrec += 1;
+        if (s.top > 0) {
+            var kv = l.stack[res + 2];
+            if (kv.tag == .float and std.math.isNan(kv.asFloat())) kv = .nil;
+            // The keys table roots the keys that the collector could free.
+            if (kv.tag.isCollectable()) try ops.rawSet(l, s.tbl(slot_keys), Value.int(s.nrec), kv);
+            s.keys.append(l.g.gpa, kv) catch return l.raiseMem();
+            s.noteClass(kv);
+            if (!s.raises) try s.offer(@intCast(s.nrec - 1), rec);
+            return;
+        }
         try ops.rawSet(l, s.tbl(slot_records), Value.int(s.nrec), rec);
         const nk = p.desc.len;
         if (nk > 0) {
@@ -816,6 +1069,34 @@ fn evalWindow(l: *Thread, q: *Query, p: *const Plan) Error!Window {
     return .{ .limit = limit, .offset = offset };
 }
 
+/// The window of a plan whose limit and offset are literals or captured
+/// values, which calling the window function reads without raising or
+/// running anything. Returns null when a value is not a count, and then
+/// the window is evaluated after the rows, which raises the error.
+fn plainWindow(l: *Thread, q: *Query, p: *const Plan) Error!?Window {
+    const op = p.op_lo orelse return null;
+    const top = l.top;
+    _ = try ops.callN(l, q.operand(op), &.{}, 2);
+    const lv = l.stack[top];
+    const ov = l.stack[top + 1];
+    l.top = top;
+    const limit = if (p.has(qgen.flag_limit)) countOf(lv) orelse return null else -1;
+    const offset = if (p.has(qgen.flag_offset)) countOf(ov) orelse return null else 0;
+    return .{ .limit = limit, .offset = offset };
+}
+
+/// What `countValue` returns for `v`, or null where it raises.
+fn countOf(v: Value) ?i64 {
+    const n = switch (v.tag) {
+        .integer => v.asInt(),
+        .float => ops.floatToInt(v.asFloat()),
+        .string => if (ops.toNumberCoerce(v)) |num| ops.toIntegerStrict(num) else null,
+        else => null,
+    } orelse return null;
+    if (n < 0) return null;
+    return n;
+}
+
 /// Runs the query and returns the table of result records, which is left
 /// on the stack.
 fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
@@ -824,8 +1105,11 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     const gpa = l.g.gpa;
     const nsrc = p.nsrc;
     const base = l.top;
-    try l.ensure(slot_sources + nsrc + 8);
-    for (0..slot_sources + nsrc) |_| try l.push(.nil);
+    // After the sources come the slots that root the column names and the
+    // key maps of the indexed joins.
+    const slot_index = slot_sources + nsrc;
+    try l.ensure(slot_index + 1 + nsrc + 8);
+    for (0..slot_index + 1 + nsrc) |_| try l.push(.nil);
     l.stack[base + slot_records] = Value.obj(.table, try l.newTable(0, 0));
     if (p.desc.len > 0) l.stack[base + slot_keys] = Value.obj(.table, try l.newTable(0, 0));
     const names = gpa.alloc(Value, p.sel.len) catch return l.raiseMem();
@@ -853,6 +1137,17 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     // sources are fetched, so a lone SQLite source whose whole where clause
     // pushes down can apply it in SQL too.
     var sink: Sink = .{ .l = l, .p = p, .base = base, .stream = p.desc.len == 0, .names = names };
+    defer sink.deinit();
+    // One order key and a window that reads no row: the window comes first,
+    // and the sink keeps only the records that can fall in it.
+    var early: ?Window = null;
+    if (p.desc.len == 1 and p.has(qgen.flag_plain_window)) {
+        early = try plainWindow(l, q, p);
+        if (early) |w| {
+            if (w.limit >= 0) sink.top = @intCast(@min(w.offset + w.limit, std.math.maxInt(u32)));
+            if (sink.top == 0) early = null;
+        }
+    }
     var sql_window: ?Window = null;
     if (sink.stream) {
         const w = try evalWindow(l, q, p);
@@ -883,15 +1178,56 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     var ngroups: i64 = 0;
     const naggs = p.aggs.len;
 
+    var indexes: [qgen.max_sources]?Index = @splat(null);
+    defer for (&indexes) |*ix| if (ix.*) |*x| x.deinit(gpa);
+    if (!empty and nsrc > 1) try buildIndexes(l, p, base + slot_sources, base + slot_index, sizes[0..nsrc], indexes[0..nsrc]);
+
     // The fused join loop: walk the cross product with an odometer and
-    // call the step function once per tuple.
+    // call the step function once per tuple. Each source runs through a
+    // sequence of row positions: all of them, or the rows that its index
+    // finds for the current row of the outer source.
     const step = q.operand(p.op_step);
     var args: [qgen.max_sources + 1]Value = undefined;
-    var counters: [qgen.max_sources]i64 = @splat(1);
+    var at: [qgen.max_sources]usize = @splat(0);
+    var len: [qgen.max_sources]usize = @splat(0);
+    var seq: [qgen.max_sources]?[]const u32 = @splat(null);
     var done = empty or (!grouped and sink.full());
+    // The first source whose sequence starts again.
+    var fresh: usize = 0;
     while (!done) {
+        // Start the sequences of the sources from `fresh` on. A sequence
+        // that is empty advances the source before it instead.
+        var si = fresh;
+        while (si < nsrc) {
+            at[si] = 0;
+            seq[si] = null;
+            len[si] = @intCast(sizes[si]);
+            if (indexes[si]) |*ix| {
+                const outer = args[ix.outer + 1].as(Table);
+                const v = table.get(outer, ix.outer_name);
+                len[si] = 0;
+                if (!matchesNothing(v)) {
+                    const found = table.get(ix.map, try ops.normKey(l, v));
+                    if (found.tag == .integer) {
+                        const k: usize = @intCast(found.asInt());
+                        seq[si] = ix.pos[ix.offs[k]..ix.offs[k + 1]];
+                        len[si] = seq[si].?.len;
+                    }
+                }
+            }
+            if (len[si] == 0) {
+                si = advance(&at, &len, si) orelse {
+                    done = true;
+                    break;
+                };
+                args[si] = rowAt(l, base, &seq, &at, si - 1);
+                continue;
+            }
+            args[si + 1] = rowAt(l, base, &seq, &at, si);
+            si += 1;
+        }
+        if (done) break;
         args[0] = Value.int(skip_mask);
-        for (0..nsrc) |i| args[i + 1] = table.getInt(l.stack[base + slot_sources + i].as(Table), counters[i]);
         const top = l.top;
         const nres = try ops.callN(l, step, args[0 .. nsrc + 1], -1);
         if (nres > 0 and l.stack[top].truthy()) {
@@ -943,14 +1279,8 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
         }
         l.top = top;
         // Advance the odometer.
-        var i: usize = nsrc;
-        while (i > 0) {
-            i -= 1;
-            counters[i] += 1;
-            if (counters[i] <= sizes[i]) break;
-            counters[i] = 1;
-            if (i == 0) done = true;
-        }
+        fresh = advance(&at, &len, nsrc) orelse break;
+        args[fresh] = rowAt(l, base, &seq, &at, fresh - 1);
     }
 
     if (grouped) {
@@ -987,6 +1317,34 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     const records = l.stack[base + slot_records].as(Table);
     if (sink.stream) return finish(l, base, records);
 
+    if (sink.top > 0) {
+        if (sink.raises) {
+            // The full sort of every key raises, as it does without the
+            // window.
+            const all = gpa.alloc(u32, sink.keys.items.len * 2) catch return l.raiseMem();
+            defer gpa.free(all);
+            const nall = sink.keys.items.len;
+            for (0..nall) |i| all[i] = @intCast(i);
+            try sink.sorter().sort(all[0..nall], all[nall..]);
+            return corrupt(l);
+        }
+        const w = early.?;
+        const kept = sink.heap.items;
+        std.mem.sort(u32, kept, {}, std.sort.asc(u32));
+        const tmp = gpa.alloc(u32, kept.len) catch return l.raiseMem();
+        defer gpa.free(tmp);
+        try sink.sorter().sort(kept, tmp);
+        const out = try l.newTable(0, 0);
+        l.stack[base + slot_dmap] = Value.obj(.table, out);
+        var r: usize = @intCast(@min(w.offset, @as(i64, @intCast(kept.len))));
+        var slot: i64 = 1;
+        while (r < kept.len) : (r += 1) {
+            try ops.rawSet(l, out, Value.int(slot), table.getInt(records, @as(i64, kept[r]) + 1));
+            slot += 1;
+        }
+        return finish(l, base, out);
+    }
+
     // Order, then window.
     const n: usize = @intCast(sink.nrec);
     if (n > 1) {
@@ -999,13 +1357,52 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
         const kt = l.stack[base + slot_keys].as(Table);
         for (keys, 0..) |*k, i| k.* = table.getInt(kt, @intCast(i + 1));
         const sorter: Sorter = .{ .l = l, .desc = p.desc, .keys = keys };
+        // When the keys of every position share one class, no comparison
+        // raises or runs a metamethod, so the window may come first, and
+        // a window much smaller than the records needs only its own rows
+        // in order: the smallest ones by key and then by arrival, which
+        // the stable sort puts first too.
+        if (oneClassPerKey(keys, nk)) {
+            const w = try evalWindow(l, q, p);
+            if (w.limit >= 0 and w.offset < n) {
+                const m: usize = @intCast(@min(@as(i64, @intCast(n)), w.offset + w.limit));
+                if (m * 4 <= n) {
+                    const out = try l.newTable(0, 0);
+                    l.stack[base + slot_dmap] = Value.obj(.table, out);
+                    if (m > 0) {
+                        const top = try sorter.smallest(perm[0..n], m);
+                        // Ascending arrival first, so the stable sort breaks
+                        // ties as the full sort does.
+                        std.mem.sort(u32, top, {}, std.sort.asc(u32));
+                        try sorter.sort(top, perm[n..][0..m]);
+                        var r: usize = @intCast(w.offset);
+                        var slot: i64 = 1;
+                        while (r < m) : (r += 1) {
+                            try ops.rawSet(l, out, Value.int(slot), table.getInt(records, @as(i64, top[r]) + 1));
+                            slot += 1;
+                        }
+                    }
+                    return finish(l, base, out);
+                }
+            }
+            try sorter.sort(perm[0..n], perm[n..]);
+            const sorted = try l.newTable(n, 0);
+            l.stack[base + slot_dmap] = Value.obj(.table, sorted);
+            for (perm[0..n], 0..) |id, i| try ops.rawSet(l, sorted, Value.int(@intCast(i + 1)), table.getInt(records, @as(i64, id) + 1));
+            l.stack[base + slot_records] = Value.obj(.table, sorted);
+            return windowed(l, base, n, w);
+        }
         try sorter.sort(perm[0..n], perm[n..]);
         const sorted = try l.newTable(n, 0);
         l.stack[base + slot_dmap] = Value.obj(.table, sorted);
         for (perm[0..n], 0..) |id, i| try ops.rawSet(l, sorted, Value.int(@intCast(i + 1)), table.getInt(records, @as(i64, id) + 1));
         l.stack[base + slot_records] = Value.obj(.table, sorted);
     }
-    const w = try evalWindow(l, q, p);
+    return windowed(l, base, n, try evalWindow(l, q, p));
+}
+
+/// Applies window `w` to the `n` ordered records and finishes.
+fn windowed(l: *Thread, base: u32, n: usize, w: Window) Error!*Table {
     if (w.limit >= 0 or w.offset > 0) {
         const all = l.stack[base + slot_records].as(Table);
         const total: i64 = @intCast(n);
@@ -1020,6 +1417,45 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
         l.stack[base + slot_records] = Value.obj(.table, out);
     }
     return finish(l, base, l.stack[base + slot_records].as(Table));
+}
+
+/// Whether the non-nil keys at each of the `nk` positions share one
+/// order class other than `.other`, so that comparing them never raises.
+fn oneClassPerKey(keys: []const Value, nk: usize) bool {
+    for (0..nk) |k| {
+        var class: ?OrderClass = null;
+        var i = k;
+        while (i < keys.len) : (i += nk) {
+            const v = keys[i];
+            if (v.isNil()) continue;
+            const c = orderClass(v);
+            if (c == .other) return false;
+            if (class) |seen| {
+                if (seen != c) return false;
+            } else class = c;
+        }
+    }
+    return true;
+}
+
+/// Moves the odometer past the sources before `from`: the last of them
+/// that has a next row takes it. Returns the index of the first source
+/// after it, whose sequence starts again, or null when every tuple went by.
+fn advance(at: []usize, len: []const usize, from: usize) ?usize {
+    var j = from;
+    while (j > 0) {
+        j -= 1;
+        at[j] += 1;
+        if (at[j] < len[j]) return j + 1;
+    }
+    return null;
+}
+
+/// The current row of source `i`.
+fn rowAt(l: *Thread, base: u32, seq: []const ?[]const u32, at: []const usize, i: usize) Value {
+    const t = l.stack[base + slot_sources + i].as(Table);
+    const pos: i64 = if (seq[i]) |s| s[at[i]] else @intCast(at[i] + 1);
+    return table.getInt(t, pos);
 }
 
 fn finish(l: *Thread, base: u32, records: *Table) *Table {

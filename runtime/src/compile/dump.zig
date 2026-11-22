@@ -28,12 +28,13 @@ const lazy = @import("../lib/lazy.zig");
 pub const signature = "\x1bLus";
 /// Bumped whenever the instruction set changes. Version 2 added the
 /// immediate comparisons, version 4 renumbered the opcodes after the
-/// generic loop instructions, and version 5 added the read-only table and
-/// vector constants of `<meta>` locals.
-const format_version: u8 = 5;
-/// The earlier version, which has no table or vector constants and loads
-/// the same way.
-const previous_version: u8 = 4;
+/// generic loop instructions, version 5 added the read-only table and
+/// vector constants of `<meta>` locals, and version 6 added the join shape
+/// of query conjuncts.
+const format_version: u8 = 6;
+/// The oldest version that loads. Versions 4 and 5 lack table and vector
+/// constants and join conjuncts, and otherwise load the same way.
+const oldest_version: u8 = 4;
 
 /// `table` starts a graph of read-only tables: the number of tables, then
 /// each table as its entry count and its key and value pairs. Inside the
@@ -255,7 +256,7 @@ pub fn undump(g: *Global, src: []const u8, chunkname: []const u8) UndumpError!*P
     if (!isBinary(src)) return error.Malformed;
     r.pos = signature.len;
     const version = try r.byte();
-    if (version != format_version and version != previous_version) return error.Malformed;
+    if (version < oldest_version or version > format_version) return error.Malformed;
     if (try r.byte() != @sizeOf(u32) or try r.byte() != @sizeOf(i64) or try r.byte() != @sizeOf(f64)) return error.Malformed;
     r.default_source = vm.state.newStringIn(g, chunkname) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
