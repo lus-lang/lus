@@ -625,7 +625,11 @@ fn fSync(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
     switch (h.kind) {
         .file => {
-            syncFile(l.g.io, h.file) catch |e| return ioFail(l, e);
+            // Windows flushes only through a handle with write access, and a
+            // handle opened for reading has written nothing to flush.
+            if (builtin.os.tag != .windows or h.writable) {
+                syncFile(l.g.io, h.file) catch |e| return ioFail(l, e);
+            }
         },
         .stdout => {
             const o = out.stdout(l.g);

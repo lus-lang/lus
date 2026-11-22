@@ -272,7 +272,8 @@ fn sync(l: *Thread) Error!u32 {
         };
         return 0;
     }
-    var file = cwd.openFile(io, path, .{}) catch |e| return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) });
+    // Windows flushes a file only through a handle with write access.
+    var file = cwd.openFile(io, path, .{ .mode = if (windows) .read_write else .read_only }) catch |e| return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) });
     defer file.close(io);
     @import("io.zig").syncFile(io, file) catch |e| return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) });
     return 0;
