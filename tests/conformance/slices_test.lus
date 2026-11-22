@@ -327,3 +327,17 @@ local function slice_of_an_inline_table_with_preceding_locals_test()
     assert(a == 99 and b == 88)
     assert(s[1] == 20 and s[2] == 30 and s[3] == 40 and #s == 3)
 end
+
+-- A slice whose first position is larger than the second runs backward and
+-- holds both ends, for lists, strings, and vectors alike.
+local function a_backward_slice_holds_both_ends_test()
+    local t = { 10, 20, 30, 40, 50, 60 }
+    local r = t[5, 4]
+    assert(#r == 2 and r[1] == 50 and r[2] == 40)
+    local s = "abcdef"
+    assert(s[5, 4] == "ed" and #s[5, 4] == 2)
+    local v = vector.fromstring("abcdef")
+    local w = v[5, 4]
+    assert(#w == 2 and vector.tostring(w) == "ed")
+    assert(#t[4, 4] == 1 and s[4, 4] == "d" and vector.tostring(v[4, 4]) == "d")
+end

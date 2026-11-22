@@ -114,7 +114,7 @@ fn transcode(l: *Thread) Error!u32 {
         const ok = switch (from) {
             .base64 => decodeBase64(gpa, &raw, src, std.base64.standard_no_pad.Decoder),
             .base64url => decodeBase64(gpa, &raw, src, std.base64.url_safe_no_pad.Decoder),
-            .url => decodeUrl(gpa, &raw, src),
+            .url => decodeUrl(gpa, &raw, src, ignorebad),
             else => decodeHex(gpa, &raw, src),
         } catch return l.raiseMem();
         if (!ok) {
@@ -312,16 +312,23 @@ fn encodeBase64(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8, enc: s
     out.items.len += n;
 }
 
-fn decodeUrl(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8) !bool {
+/// Decodes percent escapes and `+`. A `%` that does not start two hex
+/// digits fails the decoding, or with `lax` stays in the output as it is,
+/// as browsers read it.
+fn decodeUrl(gpa: std.mem.Allocator, out: *ArrayList, src: []const u8, lax: bool) !bool {
     var i: usize = 0;
     while (i < src.len) {
         const c = src[i];
         i += 1;
         if (c == '%') {
-            if (i + 2 > src.len) return false;
-            const h1 = std.fmt.charToDigit(src[i], 16) catch return false;
-            const h2 = std.fmt.charToDigit(src[i + 1], 16) catch return false;
-            try out.append(gpa, (h1 << 4) | h2);
+            const h1 = if (i < src.len) std.fmt.charToDigit(src[i], 16) catch null else null;
+            const h2 = if (i + 1 < src.len) std.fmt.charToDigit(src[i + 1], 16) catch null else null;
+            if (h1 == null or h2 == null) {
+                if (!lax) return false;
+                try out.append(gpa, '%');
+                continue;
+            }
+            try out.append(gpa, (h1.? << 4) | h2.?);
             i += 2;
         } else if (c == '+') {
             try out.append(gpa, ' ');
