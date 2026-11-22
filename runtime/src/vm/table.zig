@@ -402,6 +402,45 @@ fn freeArray(gpa: Allocator, t: *Table, kind: ArrayKind, ptr: [*]u64, n: usize) 
     } else gpa.free(ptr[0..n]);
 }
 
+/// Stores `v` at index `asize + 1` of a table whose array part is full,
+/// growing the array part alone the way a rehash grows a list. Returns
+/// false and leaves the table as it was when its hash part holds an
+/// integer key in the range the array part would take over.
+pub fn appendArray(gpa: Allocator, t: *Table, v: Value) Error!bool {
+    const n: usize = t.asize;
+    if (t.kind == .none) return false;
+    const m: usize = if (n >= dense_growth) n + n / 2 else @max(4, n * 2);
+    if (m > std.math.maxInt(u32)) return false;
+    if (!t.isShaped() and t.hash_used > 0) {
+        for (0..t.hash_len) |h| {
+            if (t.keyTag(h) != .integer or t.valTag(h) == .nil) continue;
+            const i = t.key(h).asInt();
+            if (i > n and i <= m) return false;
+        }
+    }
+    const kind = t.kind;
+    const old_ptr = t.array_ptr;
+    const grown = if (n > 0 and !t.ownsInline(old_ptr)) growArray(gpa, kind, old_ptr, n, m) else null;
+    if (grown) |p| {
+        t.array_ptr = p;
+    } else if (kind == .boxed) {
+        const vals = try gpa.alloc(Value, m);
+        const old: [*]Value = @ptrCast(old_ptr);
+        @memcpy(vals[0..n], old[0..n]);
+        t.array_ptr = @ptrCast(vals.ptr);
+        freeArray(gpa, t, kind, old_ptr, n);
+    } else {
+        const words = try gpa.alloc(u64, m);
+        @memcpy(words[0..n], old_ptr[0..n]);
+        t.array_ptr = words.ptr;
+        freeArray(gpa, t, kind, old_ptr, n);
+    }
+    t.asize = @intCast(m);
+    if (kind == .boxed) @memset(t.values()[n..], .nil) else @memset(t.words()[n..], hole);
+    try arrayStore(gpa, t, n, v);
+    return true;
+}
+
 /// Stores `vals` into the array slots `start + 1` through
 /// `start + vals.len`, growing the array part to hold them. Constructors
 /// and vararg tables fill their array parts this way.

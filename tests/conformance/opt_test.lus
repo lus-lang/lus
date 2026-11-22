@@ -2046,3 +2046,202 @@ local function an_inlined_callee_reads_a_captured_argument_after_its_write_test(
     assert(table.concat(out, ",") == "string 5,string 5,string 5,string 5,string 5")
     S = nil
 end
+
+-- ---------------------------------------------------------------------
+-- table.insert at the end
+
+local function insert_appends_each_kind_of_list_test()
+    local function fill(n, f)
+        local t = {}
+        for i = 1, n do table.insert(t, f(i)) end
+        return t
+    end
+    for _, n in ipairs({ 1, 3, 4, 5, 17, 1000 }) do
+        local ints = hot(fill, n, function(i) return i end)
+        local floats = hot(fill, n, function(i) return i + 0.5 end)
+        local strs = hot(fill, n, function(i) return `s$i` end)
+        local tabs = hot(fill, n, function(i) return { i } end)
+        assert(#ints == n and #floats == n and #strs == n and #tabs == n)
+        for i = 1, n do
+            assert(ints[i] == i and floats[i] == i + 0.5 and strs[i] == `s$i` and tabs[i][1] == i)
+        end
+    end
+end
+
+local function insert_into_a_list_of_mixed_values_test()
+    local function add(t, v) table.insert(t, v) end
+    local t = { "a", 1, true }
+    for i = 1, 600 do add(t, i) end
+    add(t, "z")
+    add(t, 2.5)
+    add(t, false)
+    add(t, nil)
+    assert(#t == 606 and t[3] == true and t[4] == 1 and t[604] == "z" and t[605] == 2.5 and t[606] == false)
+end
+
+local function insert_honors_metatables_and_read_only_tables_test()
+    local function add(t, v) table.insert(t, v) end
+    local plain = {}
+    for i = 1, 600 do add(plain, i) end
+    local seen = {}
+    local proxied = setmetatable({}, { __newindex = function(_, k, v) seen[#seen + 1] = k * 100 + v end })
+    add(proxied, 7)
+    add(proxied, 8)
+    assert(seen[1] == 107 and seen[2] == 108 and rawlen(proxied) == 0)
+    local counted = setmetatable({}, { __len = function() return 41 end })
+    add(counted, 5)
+    assert(rawget(counted, 42) == 5)
+    local frozen = flags
+    local before = rawlen(frozen)
+    local ok, err = catch add(frozen, 3)
+    assert(not ok and err:find("readonly", 1, true) and rawlen(frozen) == before)
+    assert(#plain == 600 and plain[600] == 600)
+end
+
+local function insert_keeps_integer_keys_of_the_hash_part_test()
+    -- The value lands after a border of the table and every other key
+    -- keeps its value, whichever border the length finds.
+    local function add(t, v)
+        local n = #t
+        table.insert(t, v)
+        assert(rawget(t, n + 1) == v)
+    end
+    local function count(t)
+        local n = 0
+        for _ in pairs(t) do n = n + 1 end
+        return n
+    end
+    local t = {}
+    for i = 1, 600 do add(t, i) end
+    local u = { 1, 2, 3, 4 }
+    u[6] = "six"
+    u[7] = "seven"
+    for i = 1, 20 do add(u, i * 10) end
+    assert(u[6] == "six" and u[7] == "seven" and count(u) == 26)
+    local holes = { 1, 2, 3, 4, nil, nil, nil, 99 }
+    add(holes, "x")
+    assert(holes[8] == 99 and count(holes) == 6)
+end
+
+local function insert_with_a_position_and_its_errors_test()
+    local function at(t, p, v) table.insert(t, p, v) end
+    local t = {}
+    for i = 1, 600 do at(t, 1, i) end
+    assert(#t == 600 and t[1] == 600 and t[600] == 1)
+    local ok, err = catch table.insert(t, 1, 2, 3)
+    assert(not ok and err:find("wrong number of arguments", 1, true))
+    local function add(x, v) table.insert(x, v) end
+    for _ = 1, 600 do add({}, 1) end
+    ok, err = catch add(42, 1)
+    assert(not ok)
+end
+
+-- ---------------------------------------------------------------------
+-- ipairs loops
+
+local function ipairs_walks_each_kind_of_list_test()
+    local function walk(t)
+        local n, keys, last = 0, 0, nil
+        for i, v in ipairs(t) do
+            n = n + 1
+            keys = keys + i
+            last = v
+        end
+        return n, keys, last
+    end
+    local lists = {
+        { 1, 2, 3, 4, 5 },
+        { 0.5, 1.5, 2.5 },
+        { "a", "b", "c", "d" },
+        { {}, {}, {} },
+        { 1, "two", 3.0, true, {} },
+    }
+    for _, t in ipairs(lists) do
+        local n, keys, last = hot(walk, t)
+        assert(n == #t and keys == #t * (#t + 1) // 2 and last == t[#t])
+    end
+    for _, t in ipairs(lists) do
+        local n = walk(t)
+        assert(n == #t)
+    end
+    assert(walk({}) == 0)
+end
+
+local function ipairs_stops_at_the_first_nil_and_reads_past_the_array_part_test()
+    local function count(t)
+        local n = 0
+        for _, v in ipairs(t) do n = n + v end
+        return n
+    end
+    local full = {}
+    for i = 1, 64 do full[i] = i end
+    assert(hot(count, full) == 64 * 65 // 2)
+    -- Keys past the array part live in the hash part.
+    local spill = { 1, 2, 3, 4 }
+    spill[5] = 5
+    spill[6] = 6
+    assert(count(spill) == 21)
+    local holes = { 1, 2, nil, 4 }
+    assert(count(holes) == 3)
+    local nothing = { nil, 2, 3 }
+    assert(count(nothing) == 0)
+end
+
+local function ipairs_sees_changes_made_by_the_body_test()
+    local function grow(t)
+        local n = 0
+        for i, v in ipairs(t) do
+            n = n + 1
+            if i < 10 and i == #t then t[i + 1] = v + 1 end
+        end
+        return n
+    end
+    assert(hot(grow, { 1 }) == 10)
+    local function cut(t)
+        local n = 0
+        for i in ipairs(t) do
+            n = n + 1
+            t[i + 2] = nil
+        end
+        return n
+    end
+    for _ = 1, 500 do cut({ 1, 2, 3, 4, 5, 6 }) end
+    assert(cut({ 1, 2, 3, 4, 5, 6 }) == 2)
+    local function retype(t)
+        local seen = {}
+        for i, v in ipairs(t) do
+            seen[#seen + 1] = tostring(v)
+            if i == 2 then t[3] = "three" end
+        end
+        return table.concat(seen, ",")
+    end
+    for _ = 1, 500 do retype({ 1, 2, 3, 4 }) end
+    assert(retype({ 1, 2, 3, 4 }) == "1,2,three,4")
+end
+
+local function ipairs_with_metatables_and_other_values_test()
+    local function sum(t)
+        local n = 0
+        for _, v in ipairs(t) do n = n + v end
+        return n
+    end
+    local plain = { 1, 2, 3 }
+    assert(hot(sum, plain) == 6)
+    local proxy = setmetatable({}, { __index = function(_, i) if i <= 4 then return i * 10 end end })
+    assert(sum(proxy) == 100)
+    local ok = catch sum(42)
+    assert(not ok)
+    local function three(t)
+        local out = {}
+        for i, v, extra in ipairs(t) do out[#out + 1] = `$i$v$(tostring(extra))` end
+        return table.concat(out, " ")
+    end
+    assert(hot(three, { "a", "b" }) == "1anil 2bnil")
+    local function early(t)
+        for i, v in ipairs(t) do
+            if v == "stop" then return i end
+        end
+        return 0
+    end
+    assert(hot(early, { "a", "b", "stop", "c" }) == 3)
+end

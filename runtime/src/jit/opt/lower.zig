@@ -401,7 +401,9 @@ pub const Lower = struct {
                         if (!i.flags.fresh) writes |= classBit(i.cls);
                     },
                     .callc => {
-                        if (!i.flags.pure) writes = all_classes;
+                        if (i.flags.grows) {
+                            writes |= classBit(.tab_array) | classBit(.elem) | classBit(.gc);
+                        } else if (!i.flags.pure) writes = all_classes;
                     },
                     else => {},
                 }
@@ -1550,6 +1552,7 @@ pub const Lower = struct {
             .forprep => return b.forPrep(ra, last),
             .forloop => return b.forLoop(ra, last),
             .call => return b.call(ra, rb, rc, last),
+            .tforcall => return b.tforCall(ra, rc, last),
             .tailcall => return b.tailCall(ra, rb, last),
             .ret0 => {
                 if (fr.parent != null) return b.inlineReturn(null);
@@ -2738,6 +2741,130 @@ pub const Lower = struct {
         return false;
     }
 
+    /// A generic loop over `ipairs` of a table without a metatable: the
+    /// call of the iterator and the loop test that follows it. A key
+    /// inside the array part reads its slot, and a nil there ends the
+    /// loop. A key past the array part ends the loop when the hash part
+    /// has no value for it either, and leaves optimized code at the
+    /// call when it has one.
+    fn tforCall(b: *Lower, ra: u32, want: u32, last: bool) Error!bool {
+        const fr = b.fr;
+        const pc = b.pc;
+        const nd = fr.cfg.nodes.items[b.node];
+        if (last or nd.end != pc + 1 or nd.nsuccs != 2 or want < 1) return b.generic(pc, last);
+        const loop_ins = fr.proto.code[pc + 1];
+        if (opc.op(loop_ins) != .tforloop or opc.a(loop_ins) != ra) return b.generic(pc, last);
+        if (b.marks() >= opt.mark_respec) return b.generic(pc, last);
+        const ipairs_fn = b.l.g.iter_ipairs orelse return b.generic(pc, last);
+        const s = fr.regs[ra].sample;
+        if (!s.exact or s.v.tag != .native or s.v.as(state.Native).func != ipairs_fn) return b.generic(pc, last);
+        const st = fr.regs[ra + 1].sample.tableOf() orelse return b.generic(pc, last);
+        if (st.metatable != null) return b.generic(pc, last);
+        if ((b.guess(ra + 2, 0) orelse return b.generic(pc, last)) != .int) return b.generic(pc, last);
+        for ([_]u32{ ra, ra + 1, ra + 2 }) |r| {
+            if (b.captured(r)) return b.generic(pc, last);
+        }
+        // The type of the values, for a boxed array part.
+        var sv: Value = .nil;
+        switch (st.kind) {
+            .int, .float, .string, .table => {},
+            .boxed => {
+                for (st.values()[0..@min(st.values().len, 16)]) |x| {
+                    if (!x.isNil()) {
+                        sv = .{ .tag = x.tag };
+                        break;
+                    }
+                }
+                if (sv.isNil() or Ty.fromTag(sv.tag) == .void) return b.generic(pc, last);
+            },
+            .none => return b.generic(pc, last),
+        }
+        try b.guardNative(ra, ipairs_fn);
+        const t = try b.typed(ra + 1, .table);
+        const m = try b.load(t, tl.metatable, .int, 8, .tab_meta, ir.none);
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = m, .imm = 0 });
+        const kind = try b.load(t, tl.kind, .int, 1, .tab_array, ir.none);
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = kind, .imm = @backingInt(st.kind) });
+        const zi = try b.typed(ra + 2, .int);
+        const key = try b.emit(.{ .op = .addi, .ty = .int, .a = zi, .imm = 1 });
+        const asize = try b.load(t, tl.asize, .int, 4, .tab_array, ir.none);
+        b.specialized += 1;
+        b.skip_next = true;
+
+        const save = b.cur;
+        const inb = try b.f.newBlock();
+        const past = try b.f.newBlock();
+        for ([_]BlockId{ inb, past }) |x| {
+            const blk = &b.f.blocks.items[x];
+            blk.node = b.root_node;
+            blk.always = false;
+            try blk.preds.append(b.arena, save);
+        }
+        _ = try b.emit(.{ .op = .br, .cond = @backingInt(ir.Cond.lo), .a = zi, .b = asize, .t = inb, .f = past });
+
+        // Past the array part: the loop ends unless the hash part holds
+        // the key.
+        b.cur = past;
+        b.cse.clearRetainingCapacity();
+        const no_value = try b.emit(.{ .op = .callc, .ty = .int, .a = t, .b = key, .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.intKeyAbsent))), .flags = .{ .pure = true } });
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = no_value, .imm = 0 });
+        const done_past = try b.edgeTo(nd.succs[0]);
+        _ = try b.emit(.{ .op = .jmp, .t = done_past });
+
+        // Inside it: the slot, and a nil there ends the loop.
+        b.cur = inb;
+        b.cse.clearRetainingCapacity();
+        const ap = try b.load(t, tl.array_ptr, .int, 8, .tab_array, ir.none);
+        var empty: Ref = undefined;
+        var word: Ref = ir.none;
+        var ea: Ref = ir.none;
+        if (st.kind == .boxed) {
+            ea = try b.emit(.{ .op = .addsh, .ty = .int, .a = ap, .b = zi, .imm = tl.value_shift });
+            empty = try b.load(ea, 8, .int, 1, .elem, ir.none);
+        } else {
+            const wty: Ty = switch (st.kind) {
+                .string => .string,
+                .table => .table,
+                else => .int,
+            };
+            word = try b.emit(.{ .op = .loadx, .ty = wty, .cls = .elem, .a = ap, .b = zi, .aux = tl.word_shift });
+            empty = word;
+        }
+        const done_in = try b.edgeTo(nd.succs[0]);
+        const again = try b.f.newBlock();
+        {
+            const blk = &b.f.blocks.items[again];
+            blk.node = b.root_node;
+            blk.always = false;
+            blk.edge_from = inb;
+            try blk.preds.append(b.arena, inb);
+        }
+        const nil_imm: i64 = if (st.kind == .boxed) @backingInt(Tag.nil) else @bitCast(tl.nil_word);
+        _ = try b.emit(.{ .op = .bri, .cond = @backingInt(ir.Cond.eq), .a = empty, .imm = nil_imm, .t = done_in, .f = again });
+
+        b.cur = again;
+        b.cse.clearRetainingCapacity();
+        // A guard on the type of the value continues at the call, before
+        // the step changed anything.
+        const v: Ref, const vs: Sample = switch (st.kind) {
+            .int => .{ word, Sample.tagged(.integer) },
+            .float => .{ try b.emit(.{ .op = .bits2f, .ty = .float, .a = word }), Sample.tagged(.float) },
+            .string => .{ word, Sample.tagged(.string) },
+            .table => .{ word, Sample.tagged(.table) },
+            .boxed => .{ try b.loadValue(ea, 0, sv, .elem, ir.none), Sample.tagged(sv.tag) },
+            .none => unreachable,
+        };
+        try b.setReg(ra + 2, key, Sample.tagged(.integer));
+        try b.setReg(ra + 4, key, Sample.tagged(.integer));
+        if (want >= 2) try b.setReg(ra + 5, v, vs);
+        var k: u32 = 2;
+        while (k < want) : (k += 1) try b.setReg(ra + 4 + k, try b.knil(), Sample.of(.nil));
+        try b.fr.incoming[nd.succs[1]].append(b.arena, try b.incomingOf(again));
+        b.cur = inb;
+        try b.finishEdges();
+        return false;
+    }
+
     fn forLoop(b: *Lower, ra: u32, last: bool) Error!bool {
         const nd = b.fr.cfg.nodes.items[b.node];
         if (!last or nd.nsuccs != 2) return b.generic(b.pc, last);
@@ -3604,7 +3731,84 @@ pub const Lower = struct {
         const sub = find(&stringlib.funcs, "sub");
         const byte = find(&stringlib.funcs, "byte");
         const setmetatable = find(&baselib.funcs, "setmetatable");
+        const tablelib = @import("../../lib/table.zig");
+        const insert = find(&tablelib.funcs, "insert");
     };
+
+    /// `table.insert(t, v)` on a table without a metatable stores `v`
+    /// after the border, as `t[#t + 1] = v` does. When the array part is
+    /// full, a helper grows it and stores the value. The helper writes
+    /// nothing but the array part, so the loads a loop repeats around the
+    /// call still move in front of the loop. A table that needs the
+    /// general path leaves optimized code at the call.
+    fn tableInsert(b: *Lower, ra: u32, want: i32) Error!?Loaded {
+        if (want != 0) return null;
+        const a1 = ra + 1;
+        const st = b.fr.regs[a1].sample.tableOf() orelse return null;
+        if (st.kind == .none or st.isReadonly()) return null;
+        const vty = b.argTy(a1 + 1) orelse return null;
+        if (!fits(st.kind, vty)) return null;
+        const tag: Tag = switch (vty) {
+            .int => .integer,
+            .float => .float,
+            .string => .string,
+            .table => .table,
+            else => return null,
+        };
+        const pc = b.pc;
+        try b.guardNative(ra, natives.insert);
+        const t = (try b.tableOf(.{ .reg = a1 }, 0)) orelse return null;
+        if (!try b.rawStore(t)) return null;
+        const v = try b.typed(a1 + 1, vty);
+        const kind = try b.load(t.ref, tl.kind, .int, 1, .tab_array, ir.none);
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = kind, .imm = @backingInt(st.kind) });
+        const bits = try b.storeBits(st.kind, v);
+        const word = if (vty == .float) try b.pure(.{ .op = .f2bits, .ty = .int, .a = v }) else v;
+        // The border is the zero-based index of the slot after it.
+        const zi = try b.emit(.{ .op = .callc, .ty = .int, .a = t.ref, .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.tableLength))), .flags = .{ .pure = true } });
+        const asize = try b.load(t.ref, tl.asize, .int, 4, .tab_array, ir.none);
+        const tag_k = try b.kint(@backingInt(tag));
+        const fast = try b.f.newBlock();
+        const slow = try b.f.newBlock();
+        for ([_]BlockId{ fast, slow }) |x| {
+            const blk = &b.f.blocks.items[x];
+            blk.node = b.root_node;
+            blk.always = false;
+            try blk.preds.append(b.arena, b.cur);
+        }
+        _ = try b.emit(.{ .op = .br, .cond = @backingInt(ir.Cond.lo), .a = zi, .b = asize, .t = fast, .f = slow });
+        const was_always = b.always;
+        const before = try b.arena.dupe(Reg, b.fr.regs);
+        const before_vobjs = try b.arena.dupe(VObj, b.vobjs.items);
+        b.cur = slow;
+        b.always = false;
+        b.clobberAll();
+        // Grow: the snapshot of the guard is the call, which nothing has
+        // changed yet when the helper declines.
+        const status = try b.emit(.{ .op = .callc, .ty = .int, .a = t.ref, .b = word, .c = tag_k, .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.tableAppend))), .flags = .{ .thread = true, .grows = true } });
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = status, .imm = 0 });
+        b.clobber(.tab_array);
+        b.clobber(.elem);
+        const slow_inc = try b.incomingOf(b.cur);
+        b.cur = fast;
+        @memcpy(b.fr.regs, before);
+        try b.setVobjs(before_vobjs);
+        b.clobberAll();
+        const ap = try b.load(t.ref, tl.array_ptr, .int, 8, .tab_array, ir.none);
+        try b.elemStore(st.kind, t.ref, ap, zi, v, bits);
+        b.clobber(.tab_array);
+        const fast_inc = try b.incomingOf(b.cur);
+        const join = try b.f.newBlock();
+        b.f.blocks.items[join].node = b.root_node;
+        b.f.blocks.items[join].always = was_always;
+        b.always = was_always;
+        var both = [_]Incoming{ fast_inc, slow_inc };
+        try b.merge(join, &both, pc + 1);
+        b.cur = join;
+        b.clobberAll();
+        b.snap_cache = ir.no_snap;
+        return .{ .ref = try b.knil(), .sample = Sample.of(.nil) };
+    }
 
     /// Guards that register `ra` holds the native function `f`.
     fn guardNative(b: *Lower, ra: u32, f: state.NativeFn) Error!void {
@@ -3623,6 +3827,7 @@ pub const Lower = struct {
         const t1: ?Ty = if (nargs >= 1) b.argTy(a1) else null;
         const t2: ?Ty = if (nargs >= 2) b.argTy(a1 + 1) else null;
         const t3: ?Ty = if (nargs >= 3) b.argTy(a1 + 2) else null;
+        if (f == natives.insert and nargs == 2 and t1 != null and t1.? == .table) return b.tableInsert(ra, want);
         if (f == natives.sqrt and nargs == 1 and t1 != null and (t1.? == .int or t1.? == .float)) {
             try b.guardNative(ra, f);
             const x = try b.toFloat(try b.typed(a1, t1.?));
