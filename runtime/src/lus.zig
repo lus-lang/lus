@@ -125,6 +125,7 @@ test {
     _ = @import("vm/sched.zig");
     _ = @import("fuzz.zig");
     _ = @import("compile/sweep.zig");
+    _ = @import("vm/sweep.zig");
     _ = @import("fuzzlib.zig");
     _ = compile.opcodes;
     _ = compile.codegen;
