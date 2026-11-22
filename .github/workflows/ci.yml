@@ -55,6 +55,42 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm test && pnpm build
 
+  coverage:
+    name: Coverage ratchet
+    runs-on: ubuntu-24.04
+    # The suite runs three times in an instrumented build, as in
+    # `mise run coverage`, so the numbers match the baseline.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build with coverage
+        timeout-minutes: 20
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseFast -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov
+      - name: Run the conformance suite and the doc tests
+        timeout-minutes: 60
+        working-directory: runtime
+        # A failing test fails the runtime job. This job judges only the
+        # branches the suite reached.
+        run: |
+          mkdir -p runs
+          for mode in off default opt-eager; do
+            if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
+            LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests > /dev/null || true
+          done
+          unset LUS_JIT
+          LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents > /dev/null || true
+      - name: Compare with the baseline
+        timeout-minutes: 10
+        working-directory: runtime
+        run: |
+          LUS_COVERAGE_REPORT=$PWD/runs zig-out-cov/bin/lus > coverage.txt
+          { echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          LUS_JIT=off zig-out-cov/bin/lus ../tests/coverage/ratchet.lus coverage.txt ../tests/coverage/baseline.txt
+
   runtime:
     name: Runtime (${{ matrix.os }})
     strategy:

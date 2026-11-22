@@ -1094,3 +1094,61 @@ local function a_loop_with_an_infinite_float_limit_is_bounded_only_by_break_test
     end
     assert(count == 3)
 end
+
+-- ==== Numeric loops at the edges ====
+
+-- The values a loop produces, as text, or the message of its error.
+local function loop_values(f)
+    local out = {}
+    local ok, err = catch f(out)
+    if not ok then return "error: " .. err:gsub("^.-:%d+: ", "") end
+    return table.concat(out, ",")
+end
+
+-- A float limit outside the integer range clips to it, a NaN limit runs
+-- nothing, and a float among bigints makes a float loop, as a float plus
+-- a bigint is a float. A float limit used to be read as a bigint there,
+-- which ended the loop after its first pass.
+local numeric_loop_edges_cases = {
+    {"NaN limit", function(o) for i = 1, 0 / 0 do o[#o + 1] = i end end, ""},
+    {"limit far below", function(o) for i = 1, -1e300 do o[#o + 1] = i end end, ""},
+    {"limit far above, counting down", function(o) for i = 1, 1e300, -1 do o[#o + 1] = i end end, ""},
+    {"limit above the integers", function(o) for i = math.maxinteger - 1, 1e300 do o[#o + 1] = i end end, "9223372036854775806,9223372036854775807"},
+    {"limit below the integers", function(o) for i = math.mininteger + 1, -1e300, -1 do o[#o + 1] = i end end, "-9223372036854775807,-9223372036854775808"},
+    {"float step of zero", function(o) for i = 1.0, 2, 0 do o[#o + 1] = i end end, "error: 'for' step is zero"},
+    {"bigint step of zero", function(o) for i = 1n, 2n, 0n do o[#o + 1] = i end end, "error: 'for' step is zero"},
+    {"decimal step of zero", function(o) for i = 1d, 2d, 0d do o[#o + 1] = i end end, "error: 'for' step is zero"},
+    {"float start, bigint limit", function(o) for i = 1.5, 3n do o[#o + 1] = i end end, "1.5,2.5"},
+    {"float start, bigint limit past a whole", function(o) for i = 0.5, 3n do o[#o + 1] = i end end, "0.5,1.5,2.5"},
+    {"integer start, bigint limit, float step", function(o) for i = 1, 3n, 0.5 do o[#o + 1] = i end end, "1.0,1.5,2.0,2.5,3.0"},
+    {"bigint start, float limit", function(o) for i = 1n, 2.5 do o[#o + 1] = i end end, "1.0,2.0"},
+    {"decimal start, float step", function(o) for i = 1d, 2d, 0.5 do o[#o + 1] = i end end, "error: attempt to mix decimal and float in arithmetic"},
+    {"bigint loop", function(o) for i = 1, 3n do o[#o + 1] = i end end, "1,2,3"},
+}
+
+local function numeric_loop_edges_test(label, f, want)
+    local got = loop_values(f)
+    assert(got == want, label .. ": " .. got)
+end
+
+-- ==== Exact operands of the math functions ====
+
+local exact_operands_of_math_functions_cases = {
+    {"abs of a negative bigint", function() return math.abs(-5n) end, "bigint", "5"},
+    {"abs of a positive bigint", function() return math.abs(5n) end, "bigint", "5"},
+    {"abs of a negative decimal", function() return math.abs(-2.5d) end, "decimal", "2.5"},
+    {"fmod of bigints", function() return math.fmod(-7n, 2n) end, "bigint", "-1"},
+    {"floor of a decimal", function() return math.floor(2.5d) end, "integer", "2"},
+    {"ceil of a negative decimal", function() return math.ceil(-2.5d) end, "integer", "-2"},
+    {"floor of a decimal with a positive exponent", function() return math.floor(1e3d) end, "integer", "1000"},
+    {"log in base 10", function() return math.log(100, 10) end, "float", "2.0"},
+}
+
+local function exact_operands_of_math_functions_test(label, f, kind, text)
+    local v = f()
+    assert(math.type(v) == kind and tostring(v) == text, label .. ": " .. tostring(v))
+end
+
+local function fmod_of_bigints_by_zero_raises_test()
+    raises(function() return math.fmod(5n, 0n) end, "to 'math.fmod' %(zero%)")
+end

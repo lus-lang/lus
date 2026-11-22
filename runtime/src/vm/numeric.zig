@@ -428,6 +428,12 @@ pub fn toFloat(gpa: Allocator, v: Value) f64 {
     };
 }
 
+/// The error of an integer division or a modulo by zero, with the
+/// messages that integers raise.
+fn zeroDivisor(l: *Thread, op: ArithOp) Error {
+    return if (op == .idiv) l.raiseFmt("attempt to divide by zero", .{}) else l.raiseFmt("attempt to perform 'n%0'", .{});
+}
+
 fn floatArith(op: ArithOp, a: f64, b: f64) f64 {
     return switch (op) {
         .add => a + b,
@@ -480,7 +486,7 @@ fn bigArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
             r.negate();
         },
         .idiv, .mod => {
-            if (mb.eqlZero()) return l.raiseFmt("attempt to perform 'n{s}0'", .{if (op == .idiv) "//" else "%%"});
+            if (mb.eqlZero()) return zeroDivisor(l, op);
             M.divFloor(&r, &rem, &ma, &mb) catch return l.raiseMem();
             if (op == .mod) r.swap(&rem);
         },
@@ -534,7 +540,7 @@ fn decArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
                 .add => r.add(&pa[0], &pb[0]) catch return l.raiseMem(),
                 .sub => r.sub(&pa[0], &pb[0]) catch return l.raiseMem(),
                 .mod, .idiv => {
-                    if (pb[0].eqlZero()) return l.raiseFmt("attempt to perform 'n{s}0'", .{if (op == .idiv) "//" else "%%"});
+                    if (pb[0].eqlZero()) return zeroDivisor(l, op);
                     var rem = M.init(gpa) catch return l.raiseMem();
                     defer rem.deinit();
                     M.divFloor(&r, &rem, &pa[0], &pb[0]) catch return l.raiseMem();

@@ -2352,7 +2352,12 @@ fn forPrep(l: *Thread, r: u32) Error!bool {
     const init_v = try forValue(l, l.stack[r], "initial");
     const limit_v = try forValue(l, l.stack[r + 1], "limit");
     const step_v = try forValue(l, l.stack[r + 2], "step");
-    if (isExact(init_v) or isExact(limit_v) or isExact(step_v)) {
+    // A float among bigints makes a float loop, as a float and a bigint
+    // add to a float. A float among decimals stays in the exact path,
+    // whose arithmetic raises the error of mixing them.
+    const any_float = init_v.tag == .float or limit_v.tag == .float or step_v.tag == .float;
+    const any_dec = init_v.tag == .decimal or limit_v.tag == .decimal or step_v.tag == .decimal;
+    if ((isExact(init_v) or isExact(limit_v) or isExact(step_v)) and (!any_float or any_dec)) {
         // Bigint and decimal loops step with exact arithmetic.
         const zero = Value.int(0);
         const step_order = @import("numeric.zig").compare(l.g.gpa, step_v, zero) orelse return l.raiseFmt("'for' step is not a number", .{});
@@ -2411,9 +2416,9 @@ fn forPrep(l: *Thread, r: u32) Error!bool {
         l.stack[r + 3] = Value.int(init);
         return false;
     }
-    const init = ops.toFloat(init_v);
-    const limit = ops.toFloat(limit_v);
-    const step = ops.toFloat(step_v);
+    const init = numeric.toFloat(l.g.gpa, init_v);
+    const limit = numeric.toFloat(l.g.gpa, limit_v);
+    const step = numeric.toFloat(l.g.gpa, step_v);
     if (step == 0) return l.raiseFmt("'for' step is zero", .{});
     if (if (step > 0) limit < init else init < limit) return true;
     l.stack[r] = Value.float(init);

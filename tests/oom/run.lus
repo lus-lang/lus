@@ -20,9 +20,11 @@
 -- which a correct program retries.
 --
 -- Usage: LUS_JIT=off lus run.lus [--lus PATH] [--samples K] [--sticky]
---            [--io] [--short] [--jobs J] [--timeout SECONDS]
+--            [--io] [--short] [--jobs J] [--timeout SECONDS] [--coverage DIR]
 --            [files or directories...]
 -- --samples 0 sweeps every N. The default samples 40 values of N per file.
+-- --coverage DIR makes the runs of a binary built with -Dcoverage=true
+-- write the branches they reach to DIR.
 
 global arg, assert, io, ipairs, math, os, pairs, pledge, print, string, table, tonumber, tostring
 
@@ -73,6 +75,9 @@ local samples = tonumber(opts.samples or "40")
 local jobs = tonumber(opts.jobs or "8")
 local seconds = tonumber(opts.timeout or "30")
 if #operands == 0 then operands[1] = root .. "/tests/conformance" end
+-- The runs of the binary under test write their coverage to this
+-- directory, and the sweep itself writes none.
+if opts.coverage then os.setenv("LUS_COVERAGE", opts.coverage) end
 
 -- The .lus files below each operand, skipping fixtures.
 local files = {}

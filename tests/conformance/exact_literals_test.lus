@@ -214,3 +214,37 @@ local function decimals_at_the_limits_compare_by_magnitude_test()
     assert(1.5d < 1.50001d)
     assert(1e10d == 10000000000)
 end
+
+-- Division by zero raises the messages of integers, whatever the type of
+-- the operands. Bigints and decimals used to name the operation in
+-- another form, `'n//0'` and `'n%%0'`.
+local exact_division_by_zero_cases = {
+    {"bigint floor division", function() return 10n // 0n end, "attempt to divide by zero"},
+    {"bigint modulo", function() return 10n % 0n end, "attempt to perform 'n%0'"},
+    {"decimal floor division", function() return 1d // 0d end, "attempt to divide by zero"},
+    {"decimal modulo", function() return 1d % 0d end, "attempt to perform 'n%0'"},
+    {"decimal division", function() return 1d / 0d end, "attempt to divide a decimal by zero"},
+    {"integer floor division", function() return 10 // 0 end, "attempt to divide by zero"},
+    {"integer modulo", function() return 10 % 0 end, "attempt to perform 'n%0'"},
+}
+
+local function exact_division_by_zero_test(label, f, want)
+    local ok, err = catch f()
+    assert(not ok, label)
+    assert(err:gsub("^.-:%d+: ", "") == want, label .. ": " .. err)
+end
+
+-- A negative bigint exponent gives a float, as for integers, and the
+-- other mixed operations keep the type their operands give.
+local mixed_exact_results_cases = {
+    {"negative bigint exponent", function() return 2n ^ -1n end, "float", "0.5"},
+    {"bigint floor division rounds down", function() return -7n // 2n end, "bigint", "-4"},
+    {"decimal modulo takes the sign of the divisor", function() return -7d % 2d end, "decimal", "1"},
+    {"float modulo by a bigint", function() return 7.5 % -2n end, "float", "-0.5"},
+    {"bigint division", function() return 1n / 4n end, "float", "0.25"},
+}
+
+local function mixed_exact_results_test(label, f, kind, text)
+    local v = f()
+    assert(math.type(v) == kind and tostring(v) == text, label .. ": " .. tostring(v))
+end

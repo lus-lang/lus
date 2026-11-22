@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
         .fail_alloc = b.option(bool, "fail-alloc", "Fail the allocation that LUS_FAIL_ALLOC names, to test out of memory handling (default: false)") orelse false,
         .coverage = b.option(bool, "coverage", "Instrument every edge and write the edges a run reached to LUS_COVERAGE (default: false)") orelse false,
         .fail_io = b.option(bool, "fail-io", "Fail or shorten the file and socket operation that LUS_FAIL_IO names, to test I/O error handling (default: false)") orelse false,
+        .invariants = b.option(bool, "invariants", "Check internal invariants, as Debug builds and the unit tests always do (default: false)") orelse false,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -334,6 +335,7 @@ const Features = struct {
     fail_alloc: bool = false,
     fail_io: bool = false,
     coverage: bool = false,
+    invariants: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -361,6 +363,7 @@ const Features = struct {
         options.addOption(bool, "fail_alloc", f.fail_alloc);
         options.addOption(bool, "fail_io", f.fail_io);
         options.addOption(bool, "coverage", f.coverage);
+        options.addOption(bool, "invariants", f.invariants);
         // The version that `lus -v` and the User-Agent of network.fetch
         // report. A release of an unstable channel sets it with `-Dversion`,
         // and every other build takes the version in build.zig.zon.
