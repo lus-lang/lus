@@ -308,6 +308,38 @@ jobs:
             LUS_JIT=$mode LUS_BIN=$PWD/zig-out-inv/bin/lus zig-out-inv/bin/lus test ../tests/conformance ../packages/language-server/tests
           done
 
+  mutate:
+    name: Mutation testing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build, and measure which lines the suite covers
+        timeout-minutes: 60
+        working-directory: runtime
+        run: |
+          zig build -Doptimize=ReleaseSafe
+          zig build -Doptimize=ReleaseFast -Dcoverage=true --prefix zig-out-cov
+          mkdir -p runs
+          LUS_JIT=off LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests || true
+          LUS_COVERAGE_REPORT=$PWD/runs LUS_COVERAGE_EXPORT=$PWD/covered.keys zig-out-cov/bin/lus > /dev/null
+      - name: Sample 40 mutants
+        timeout-minutes: 285
+        # A new seed each night samples other mutants. The harness starts no
+        # new mutant after 270 minutes, inside the limit of the step.
+        run: |
+          LUS_JIT=off runtime/zig-out/bin/lus tests/mutate/run.lus --count 40 --seed $(date +%j) --minutes 270 --covered $PWD/runtime/covered.keys | tee mutate.txt
+          { echo '### Mutation testing'; echo '```'; tail -60 mutate.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mutate
+          path: mutate.txt
+
   mcdc:
     name: MC/DC
     runs-on: ubuntu-24.04

@@ -160,3 +160,36 @@ local function bad_input_is_reported_test()
     assert(not ok and out:find("usage: lus compile", 1, true), out)
     catch fs.remove(root, true)
 end
+
+-- Found by mutation testing: a comparison with a constant takes a signed
+-- 8-bit immediate when the constant fits one, and a register otherwise.
+-- The constants on both sides of each edge of that range must compare as
+-- the same values held in a table do.
+local comparisons_with_constants_at_the_edges_of_the_immediate_cases = {
+    -1000, -200, -130, -129, -128, -127, -1, 0, 1, 126, 127, 128, 129, 200, 1000,
+}
+
+local function comparisons_with_constants_at_the_edges_of_the_immediate_test(x)
+    local k = { -200, -129, -128, 127, 128, 200 }
+    local results = {
+        x < -200, x < -129, x < -128, x < 127, x < 128, x < 200,
+        x <= -200, x <= -129, x <= -128, x <= 127, x <= 128, x <= 200,
+        x > -200, x > -129, x > -128, x > 127, x > 128, x > 200,
+        x >= -200, x >= -129, x >= -128, x >= 127, x >= 128, x >= 200,
+        x == -200, x == -129, x == -128, x == 127, x == 128, x == 200,
+    }
+    local i = 0
+    for _, op in ipairs({ "lt", "le", "gt", "ge", "eq" }) do
+        for j = 1, #k do
+            i = i + 1
+            local c = k[j]
+            local want
+            if op == "lt" then want = x < c
+            elseif op == "le" then want = x <= c
+            elseif op == "gt" then want = x > c
+            elseif op == "ge" then want = x >= c
+            else want = x == c end
+            assert(results[i] == want, string.format("%d %s %d", x, op, c))
+        end
+    end
+end

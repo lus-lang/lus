@@ -1,0 +1,290 @@
+-- Mutation testing of the runtime.
+--
+-- The harness copies the runtime, then for each sampled mutant changes
+-- one place of one source file in the copy (`mutate.zig`), builds the copy
+-- as releases are built, and runs the conformance files on the result,
+-- cheapest first, until one fails, interpreted and then in optimized code. A mutant that a test notices is killed.
+-- One that every test passes survived, which points to a check the tests
+-- lack. A mutant that does not compile, or that compiles to the same
+-- binary as the original, says nothing about the tests and is dropped.
+--
+-- Usage, from the root of the repository:
+--   lus tests/mutate/run.lus [--count N] [--seed S] [--covered KEYS] [--work DIR]
+--       [--timeout SECONDS] [--minutes M] [--file PATH]...
+--
+-- KEYS is an export of the source positions that the conformance suite
+-- covers (`LUS_COVERAGE_EXPORT`, `runtime/src/coverage.zig`). With it,
+-- the harness samples only the lines that the suite runs, since a mutant
+-- of a line no test reaches survives trivially. Each --file adds a path
+-- below runtime/src to mutate. The default is the code that every
+-- program runs, the groups of the coverage report. With --minutes, the
+-- harness starts no new mutant once that much time has passed.
+
+global arg, assert, crypto, error, fs, io, ipairs, math, os, pairs, pledge, print, string, table, tonumber, tostring
+
+pledge("exec", "fs", "env")
+
+local opts = { count = 40, seed = 1, covered = nil, work = nil, timeout = 120, minutes = nil, files = {} }
+do
+    local i = 1
+    while i <= #arg do
+        local a, v = arg[i], arg[i + 1]
+        if a == "--count" then opts.count = tonumber(v)
+        elseif a == "--seed" then opts.seed = tonumber(v)
+        elseif a == "--covered" then opts.covered = v
+        elseif a == "--work" then opts.work = v
+        elseif a == "--timeout" then opts.timeout = tonumber(v)
+        elseif a == "--minutes" then opts.minutes = tonumber(v)
+        elseif a == "--file" then opts.files[#opts.files + 1] = v
+        else error("unknown option " .. a) end
+        i = i + 2
+    end
+end
+
+-- The harness runs from the root of the repository.
+local root = assert(os.getenv("PWD"), "PWD is not set")
+assert(fs.type(fs.path.join(root, "tests", "mutate", "mutate.zig")), "run the harness from the root of the repository")
+opts.work = opts.work or fs.path.join(root, "runtime", "zig-out-mutate")
+
+local function sh(cmd)
+    local p = assert(io.popen(cmd .. " 2>&1", "r"))
+    local out = p:read("a")
+    local ok, _, code = p:close()
+    return ok == true or code == 0, out
+end
+
+local function quote(s)
+    return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
+local function readText(path)
+    local f = io.open(path, "r", { lossy = true })
+    if not f then return nil end
+    local s = f:read("a")
+    f:close()
+    return s
+end
+
+local function digest(path)
+    local f = assert(io.open(path, "rb"))
+    local v = f:read("a")
+    f:close()
+    return string.transcode(crypto.hash("sha256", v), "binary", "hex")
+end
+
+-- The code that every program runs (`coverage.zig`).
+local DEFAULT_DIRS = { "vm", "compile" }
+local DEFAULT_FILES = { "lib/base.zig", "lib/string.zig", "lib/table.zig", "lib/math.zig", "lib/coroutine.zig", "lib/utf8.zig" }
+local EXCLUDED = { ["vm/faultio.zig"] = true, ["vm/faultcrash.zig"] = true }
+
+local function targetFiles()
+    if #opts.files > 0 then return opts.files end
+    local files = {}
+    for _, d in ipairs(DEFAULT_DIRS) do
+        for _, name in ipairs(fs.list(fs.path.join(root, "runtime", "src", d), "*.zig")) do
+            local rel = d .. "/" .. name
+            if not EXCLUDED[rel] then files[#files + 1] = rel end
+        end
+    end
+    for _, f in ipairs(DEFAULT_FILES) do files[#files + 1] = f end
+    table.sort(files)
+    return files
+end
+
+-- The covered lines of each file, from an export of positions.
+local function coveredLines()
+    if not opts.covered then return nil end
+    local lines = {}
+    for entry in assert(readText(opts.covered), "cannot read " .. opts.covered):gmatch("[^\n]+") do
+        local file, line = entry:match("^(.-):(%d+):%d+$")
+        if file then
+            lines[file] = lines[file] or {}
+            lines[file][tonumber(line)] = true
+        end
+    end
+    return lines
+end
+
+local work_rt = fs.path.join(opts.work, "runtime")
+local mutate_tool = fs.path.join(root, "tests", "mutate", "mutate.zig")
+local bin = fs.path.join(work_rt, "zig-out", "bin", "lus")
+
+local function build()
+    sh("sh " .. quote(fs.path.join(root, "tools", "wait-for-memory.sh")))
+    return sh("cd " .. quote(work_rt) .. " && zig build -j2 -Doptimize=ReleaseFast")
+end
+
+-- The conformance files, cheapest first, from the times of a run of the
+-- unchanged copy.
+local function orderedTests()
+    local dirs = fs.path.join(root, "tests", "conformance") .. " " .. fs.path.join(root, "packages", "language-server", "tests")
+    os.setenv("LUS_BIN", bin)
+    os.setenv("LUS_JIT", "off")
+    local _, out = sh(quote(bin) .. " test --timeout " .. opts.timeout .. " " .. dirs)
+    local files = {}
+    for path, ms in out:gmatch("ok%s+(%S+) %([^)]-, (%d+) ms%)") do
+        files[#files + 1] = { path = path, ms = tonumber(ms) }
+    end
+    assert(#files > 0, "the unchanged copy passed no test file:\n" .. out)
+    for line in out:gmatch("[^\n]+") do
+        if line:find("^FAIL") then error("the unchanged copy fails a test: " .. line) end
+    end
+    table.sort(files, function(a, b) return a.ms < b.ms end)
+    return files
+end
+
+-- Runs the tests on the mutant until one fails, first interpreted, then
+-- in optimized code, which reaches the paths that only compiled code
+-- takes. Returns the file that failed and the mode, or nil when every
+-- file passed in both.
+local function firstFailure(tests)
+    for _, mode in ipairs({ "off", "opt-eager" }) do
+        os.setenv("LUS_JIT", mode)
+        for _, t in ipairs(tests) do
+            local ok = sh(quote(bin) .. " test --timeout " .. opts.timeout .. " " .. quote(t.path))
+            if not ok then
+                os.setenv("LUS_JIT", "off")
+                return t.path, mode
+            end
+        end
+    end
+    os.setenv("LUS_JIT", "off")
+    return nil
+end
+
+-- Mutants known to be equivalent, which the binary comparison misses, one
+-- `file:line kind what` a line. A run skips them.
+local function equivalents()
+    local set = {}
+    local text = readText(fs.path.join(root, "tests", "mutate", "equivalent.txt")) or ""
+    for line in text:gmatch("[^\n]+") do
+        if not line:find("^#") then set[line] = true end
+    end
+    return set
+end
+
+-- The share of killed mutants and its 95% Wilson score interval.
+local function score(killed, n)
+    local p = killed / n
+    local z = 1.96
+    local d = 1 + z * z / n
+    local centre = (p + z * z / (2 * n)) / d
+    local half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return p * 100, math.max(0, centre - half) * 100, math.min(1, centre + half) * 100
+end
+
+-- ===== the run =====
+
+local _ = catch fs.remove(opts.work, true)
+fs.createdirectory(opts.work, true)
+local ok, out = sh("rsync -a --exclude .zig-cache --exclude 'zig-out*' " .. quote(fs.path.join(root, "runtime") .. "/") .. " " .. quote(work_rt .. "/"))
+assert(ok, out)
+-- The build reads the specification and the skills beside the runtime.
+for _, d in ipairs({ "spec", ".agents", "tests", "packages" }) do
+    sh("ln -s " .. quote(fs.path.join(root, d)) .. " " .. quote(fs.path.join(opts.work, d)))
+end
+
+print("building the unchanged copy")
+ok, out = build()
+assert(ok, "the unchanged copy does not build:\n" .. out)
+local original_digest = digest(bin)
+local tests = orderedTests()
+print(string.format("%d test files, cheapest first", #tests))
+
+-- Every site of every target file, on covered lines when the export says.
+local covered = coveredLines()
+local pool = {}
+for _, rel in ipairs(targetFiles()) do
+    local src = fs.path.join(work_rt, "src", rel)
+    local lines_arg = ""
+    if covered then
+        local list = {}
+        for line in pairs(covered[rel] or {}) do list[#list + 1] = tostring(line) end
+        local lf = fs.path.join(opts.work, "lines.txt")
+        local f = assert(io.open(lf, "w"))
+        f:write(table.concat(list, "\n"), "\n")
+        f:close()
+        lines_arg = " " .. quote(lf)
+    end
+    local sok, sites = sh("zig run " .. quote(mutate_tool) .. " -- sites " .. quote(src) .. lines_arg)
+    assert(sok, sites)
+    for line in sites:gmatch("[^\n]+") do
+        local index, kind, ln, what = line:match("^(%d+) (%S+) (%d+) (.*)$")
+        if index then pool[#pool + 1] = { file = rel, index = tonumber(index), kind = kind, line = tonumber(ln), what = what } end
+    end
+end
+print(string.format("%d mutation sites in %d files", #pool, #targetFiles()))
+
+local skip = equivalents()
+math.randomseed(opts.seed)
+local started = os.time()
+local results = { killed = 0, survived = 0, broken = 0, same = 0 }
+local survivors = {}
+local by_dir = {}
+local tried = 0
+local seen = {}
+while results.killed + results.survived < opts.count and tried < #pool do
+    if opts.minutes and os.time() - started > opts.minutes * 60 then
+        print(string.format("stopping after %d minutes", opts.minutes))
+        break
+    end
+    local pick = pool[math.random(#pool)]
+    local key = pick.file .. "#" .. pick.index
+    if skip[string.format("%s:%d %s %s", pick.file, pick.line, pick.kind, pick.what)] then seen[key] = true end
+    if not seen[key] then
+        seen[key] = true
+        tried = tried + 1
+        local src = fs.path.join(work_rt, "src", pick.file)
+        local saved = assert(readText(src))
+        local verdict
+        local aok = sh("zig run " .. quote(mutate_tool) .. " -- apply " .. quote(src) .. " " .. pick.index)
+        if not aok then
+            verdict = "broken"
+        elseif not build() then
+            verdict = "broken"
+        elseif digest(bin) == original_digest then
+            verdict = "same"
+        else
+            local failed, mode = firstFailure(tests)
+            verdict = failed and "killed" or "survived"
+            if failed then pick.by = fs.path.name(failed) .. (mode == "off" and "" or ", " .. mode) end
+        end
+        local f = assert(io.open(src, "w"))
+        f:write(saved)
+        f:close()
+        results[verdict] = results[verdict] + 1
+        local dir = pick.file:match("^([^/]+)/") or "."
+        by_dir[dir] = by_dir[dir] or { killed = 0, n = 0 }
+        if verdict == "killed" or verdict == "survived" then
+            by_dir[dir].n = by_dir[dir].n + 1
+            if verdict == "killed" then by_dir[dir].killed = by_dir[dir].killed + 1 end
+        end
+        local label = string.format("%s:%d %s %s", pick.file, pick.line, pick.kind, pick.what)
+        if verdict == "survived" then survivors[#survivors + 1] = label end
+        print(string.format("%-9s %s%s", verdict, label, pick.by and ("  (by " .. pick.by .. ")") or ""))
+        io.stdout:flush()
+    end
+end
+
+-- Restore the copy, so a later run starts from the original sources.
+build()
+local scored = results.killed + results.survived
+print(string.format("\n%d killed, %d survived, %d did not compile, %d compiled to the same binary", results.killed, results.survived, results.broken, results.same))
+if scored > 0 then
+    local p, lo, hi = score(results.killed, scored)
+    print(string.format("mutation score %.1f%%, 95%% interval %.0f%% to %.0f%%", p, lo, hi))
+    local dirs = {}
+    for d in pairs(by_dir) do dirs[#dirs + 1] = d end
+    table.sort(dirs)
+    for _, d in ipairs(dirs) do
+        local t = by_dir[d]
+        if t.n > 0 then
+            local dp, dlo, dhi = score(t.killed, t.n)
+            print(string.format("  %-10s %5.1f%% of %d, 95%% interval %.0f%% to %.0f%%", d, dp, t.n, dlo, dhi))
+        end
+    end
+end
+if #survivors > 0 then
+    print("\nsurvivors, each a change that no test notices:")
+    for _, s in ipairs(survivors) do print("  " .. s) end
+end

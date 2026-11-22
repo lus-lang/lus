@@ -1,0 +1,10 @@
+# Mutants that change the binary but not the behavior, which mutation runs
+# skip. Each line is `file:line kind what` as `run.lus` prints it.
+#
+# The loop over the 64 buckets of integer keys stops when the buckets pass
+# the count of keys, long before the bound of 64.
+vm/table.zig:747 const 64 => 65
+#
+# A constructor with a list of one element reserves a slot of a value
+# instead of a word, which costs eight bytes and changes nothing else.
+vm/state.zig:1137 const 0 => 1
