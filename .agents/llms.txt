@@ -39,11 +39,12 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 - [Catch](https://lus.dev/manual/guide.md#catching-errors) and [catch handlers](https://lus.dev/manual/guide.md#catch-handlers): Expression-level error handling.
 - [Optional chaining](https://lus.dev/manual/guide.md#optional-chaining): The `?` suffix operator.
 - [Conditions that declare variables](https://lus.dev/manual/guide.md#conditions-that-declare-variables): `if x = f() then` and `while line = read() do`.
-- [Destructuring](https://lus.dev/manual/guide.md#destructuring-with-from): `local a, b from t`.
+- [Destructuring](https://lus.dev/manual/guide.md#destructuring-with-from) and [destructuring loops](https://lus.dev/manual/guide.md#destructuring-each-item-with-from): `local a, b from t` and `for a, b from iter do`.
 - [String interpolation](https://lus.dev/manual/guide.md#strings): Backtick strings with `$name` and `$(expr)`.
 - [Do expressions](https://lus.dev/manual/guide.md#do-expressions): Blocks that `provide` a value.
 - [Enums](https://lus.dev/manual/guide.md#enums), [slices](https://lus.dev/manual/guide.md#slices), [runtime attributes](https://lus.dev/manual/guide.md#runtime-attributes), and [local groups](https://lus.dev/manual/guide.md#local-groups).
 - [Continue](https://lus.dev/manual/guide.md#break-and-continue): Skip to the next iteration of a loop.
+- [Build flags](https://lus.dev/manual/guide.md#build-flags) and [values computed when the file is compiled](https://lus.dev/manual/guide.md#values-computed-when-the-file-is-compiled): `-F` flags, `if` branches that the compiler removes, and `<meta>` locals.
 - [Bigints and decimals](https://lus.dev/manual/guide.md#numbers): `123n` and `1.50d`.
 - [Queries](https://lus.dev/manual/guide.md#queries): First-class queries over tables and databases. Unstable.
 

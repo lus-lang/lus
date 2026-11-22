@@ -58,6 +58,20 @@ local point = { x = 1, y = 2 }
 local x, y from point
 assert(x + y == 3)
 
+-- destructuring each item of an iterator that yields tables
+local function each(list)
+    local i = 0
+    return function()
+        i = i + 1
+        return list[i]
+    end
+end
+local sum = 0
+for name, price from each({ { name = "mug", price = 8 }, { name = "pot", price = 22 } }) do
+    sum = sum + price
+end
+assert(sum == 30)
+
 -- optional chaining
 local config = { server = { port = 8080 } }
 assert(config?.server?.port == 8080)
@@ -97,6 +111,35 @@ assert(("hello")[1, 2] == "he")
 assert(2n ^ 64 == 18446744073709551616n)
 assert(0.1d + 0.2d == 0.3d)
 ```
+
+`for a, b from iter do` needs an iterator that yields one table per pass, such as a query. Over `ipairs` or `pairs` it raises an error, because their first result is an index or a key. Write `for _, item in ipairs(list) do local a, b from item` for a plain list.
+
+## Compile time
+
+A _build flag_ comes from the command line, as in `lus -Fdebug -Flevel=3 app.lus`, and the program reads it from the read-only `flags` table. A flag given without a value is `true`, and a flag that was not given is `nil`. `lus build` accepts `-F` too and stores the values in the executable.
+
+An `if` whose condition the compiler can decide compiles only the clause that is true. Such a condition reads flags, literals, and `<meta>` locals, compares them, combines them with `and`, `or`, and `not`, and may call a pure library function such as `string.find`, `string.lower`, or `math.floor` on them. Debugging code under `if flags.debug then` therefore costs nothing in a build without `-Fdebug`. A condition that reads any other value compiles as an ordinary `if`.
+
+A `<meta>` local runs its initializer when the file is compiled, so the program starts with the finished value. The initializer sees literals, flags, the standard library, constants, and earlier `<meta>` locals, and none of the program's other variables. Its value must be data: `nil`, a boolean, a number, a string, a vector, or a table of these. A table becomes read-only.
+
+```lus
+local SQUARES <meta> = do
+    local t = {}
+    for i = 1, 10 do
+        t[i] = i * i
+    end
+    provide t
+end
+assert(SQUARES[4] == 16)
+
+local MODE <meta> = (flags.mode or "release"):lower()
+if MODE == "debug" then
+    print("debug checks on")
+end
+assert(MODE == "release")
+```
+
+An initializer that reads a file pledges like any chunk, and the pledge succeeds only for permissions that the command grants with `-P`. `lus check` and `lus fmt` never run initializers.
 
 ## Globals and permissions
 

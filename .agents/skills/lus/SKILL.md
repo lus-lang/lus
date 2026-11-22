@@ -56,11 +56,12 @@ Lus ships the libraries most programs pull from a package manager. Use them befo
 ## Idioms the checker expects
 
 - `catch expr` replaces `pcall`. It returns `true` and the results, or `false` and the raw error.
-- `local a, b from t` reads fields into locals of the same name.
+- `local a, b from t` reads fields into locals of the same name, and `for a, b from iter() do` does the same for each table an iterator yields.
 - `a?.b?.c` stops at the first nil.
 - `if x = find() then ... end` and `while line = read() do ... end` scope a variable to the block.
 - Backtick strings interpolate: `` `$name is $(age + 1)` ``.
 - `continue` skips to the next iteration of a loop.
+- `local T <meta> = expr` computes a constant value, such as a lookup table, when the file is compiled. An `if` on `flags`, literals, and `<meta>` locals keeps only the clause that is true, so `if flags.debug then` blocks vanish from builds without `-Fdebug`.
 - Strings are text indexed by character. Raw bytes are vectors, and network and binary file reads return vectors. Decode with `vector.tostring`.
 
 ## Testing
