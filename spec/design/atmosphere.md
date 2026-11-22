@@ -210,7 +210,7 @@ The same checks run on every push and on the author's machine through `atmos che
 
 ### The checker
 
-`lus check` runs over every `.lus` file of the repository. It reports its errors as errors and its warnings as warnings.
+`lus check` runs over every `.lus` file of the repository. It reports its errors as errors and its warnings as warnings. Its hints appear on the package page and leave the score unchanged.
 
 ### Permissions
 
@@ -285,7 +285,7 @@ In both modes the upstream may contain anything. Atmosphere publishes only what 
 
 ## The server
 
-The server is one Lus program that answers both hosts, `atmosp.here` and `git.atmosp.here`, from one `network.serve` loop. A reverse proxy or a [Cloudflare Tunnel](#other-cloudflare-services) in front of it terminates TLS and forwards each request to the server on a local port. The server pledges `network:server` for that address, `fs` for its data directory, `exec` for the git binaries and `lus`, and `network:http` for upstreams and webhooks. It seals before it accepts the first request.
+The server is one Lus program that answers both hosts, `atmosp.here` and `git.atmosp.here`, from one `network.serve` loop. A reverse proxy or a [Cloudflare Tunnel](#other-cloudflare-services) in front of it terminates TLS and forwards each request to the server on a local port. A server without either sets `tls` in its configuration to the paths of its certificate chain and private key, and `network.serve` then serves HTTPS itself. A client of a registry whose certificate comes from a private authority sets `ATMOS_CA` to that authority, which atmos passes to `network.fetch` as its `ca`. The server pledges `network:server` for that address, `fs` for its data directory, `exec` for the git binaries and `lus`, and `network:http` for upstreams and webhooks. It seals before it accepts the first request.
 
 ### Git
 
@@ -480,7 +480,7 @@ This design needs the following from the runtime and the standard library.
 2. **A `flags` table per package**, as [Build flags of a package](#build-flags-of-a-package) describes, owned by `spec/design/modules.md`.
 3. **Cryptography.** SHA-256, Ed25519 signing and verification, Argon2id, and UUIDs come from the cryptography work. The server also needs HMAC-SHA256 for webhooks and a source of secure random bytes for tokens and invitations.
 4. **A process with two pipes**, whose reads and writes are suspension points like those of a socket. With it, git runs inside the request handler without a worker or a temporary file. The design works without it.
-5. **TLS in `network.serve`.** With it, the server terminates TLS itself and needs no proxy. The design works without it.
+5. **TLS in `network.serve`.** It ships in 2.0. The `tls` field of the configuration passes a certificate and a key to it, so a server can run without a proxy.
 
 ## Questions for review
 
