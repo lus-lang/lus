@@ -1087,6 +1087,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 if (!hooked and n <= 1 and leanReturn(l, c, stop)) {
                     c = fast.finishLean(l, c, func, n);
                     pc = c.fr.pc;
+                    try tierReturn(l, &c, pc);
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
                 if (try doReturn(l, &c, &pc, func, n, stop)) return finished(mode);
@@ -1145,12 +1146,17 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             if (!hooked and l.hook_mask == 0 and c.fr.flagsWord() == Frame.plain_flags) {
                 c = fast.finishPlain(l, c, c.bp + opc.a(ins), n);
                 pc = c.fr.pc;
+                // A caller with native code takes its frame back, so that
+                // a loop that called a function without native code goes
+                // on counting toward the optimizing tier.
+                try tierReturn(l, &c, pc);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             const first = c.fr.base + opc.a(ins);
             if (!hooked and leanReturn(l, c, stop)) {
                 c = fast.finishLean(l, c, first, n);
                 pc = c.fr.pc;
+                try tierReturn(l, &c, pc);
                 continue :sw try fetch(l, &c, &pc, &ins, hooked);
             }
             c.fr.pc = pc;

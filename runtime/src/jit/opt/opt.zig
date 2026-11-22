@@ -311,7 +311,10 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
     var tries: u32 = 0;
     while (true) : (tries += 1) {
         if (tries > 8) {
-            if (!persist.direct) return null;
+            if (!persist.direct) {
+                if (g.jit.opt_dump) std.debug.print("  give up: the build kept asking for another try\n", .{});
+                return null;
+            }
             persist = .{};
             tries = 0;
         }
@@ -324,7 +327,10 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
                 tries = 0;
                 continue;
             },
-            else => return null,
+            else => |x| {
+                if (g.jit.opt_dump) std.debug.print("  give up: {s}\n", .{@errorName(x)});
+                return null;
+            },
         };
         break;
     }
@@ -333,7 +339,10 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
     passes.hoist(func, cfg, loops, info.marks, mark_generic) catch return null;
     passes.eliminateDead(func) catch return null;
     const ra = regalloc.run(func, @intCast(codegen.gpr_pool.len), @intCast(codegen.fpr_pool.len)) catch return null;
-    if (ra.nspill > 400) return null;
+    if (ra.nspill > 400) {
+        if (g.jit.opt_dump) std.debug.print("  give up: {d} spill slots\n", .{ra.nspill});
+        return null;
+    }
     if (g.jit.opt_dump) dump(func, p, pc, ra);
 
     const unit = gpa.create(Unit) catch return null;
@@ -343,7 +352,10 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
     var cg = codegen.Codegen.init(arena, gpa, l, p, func, ra, unit) catch return null;
     defer cg.deinit();
     if (cg.em.aot) |c| c.unit = unit;
-    if (!cg.run()) return null;
+    if (!cg.run()) {
+        if (g.jit.opt_dump) std.debug.print("  give up: the code generator failed\n", .{});
+        return null;
+    }
     cg.em.reportAot();
     const bytes = cg.em.bytes();
     unit.code = g.jit.arena.alloc(gpa, bytes.len) orelse return null;
@@ -983,8 +995,14 @@ pub const rt = struct {
     }
 
     /// Optimized code found too little room for its inline frames and
-    /// gives the frame back before it ran anything.
-    pub fn bail(l: *Thread) callconv(jit.cc) jit.Target {
+    /// gives the frame back before it ran anything. Its frame needs
+    /// `slots` registers above the base and `frames` more frames, which
+    /// are made here, so that the next entry finds them. A loop enters
+    /// its code again after a few iterations of baseline code.
+    pub fn bail(l: *Thread, slots: usize, frames: usize) callconv(jit.cc) jit.Target {
+        const need = @as(usize, l.frame().base) + slots;
+        if (need > l.top and need <= Thread.max_stack) l.ensure(need - l.top) catch {};
+        l.frames.ensureTotalCapacity(l.g.gpa, l.frames.items.len + frames) catch {};
         return baseline(l);
     }
 
