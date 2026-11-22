@@ -14,7 +14,6 @@ pledge("exec", "env", "fs:write")
 
 local lus_cmd = os.getenv("LUS_EXE")
 local FIX = TEST_DIR .. "/fixtures/modtree/"
-local windows = string.sub(package.config, 1, 1) == "\\"
 
 local function quote(s)
     return '"' .. s .. '"'
@@ -26,12 +25,9 @@ local function run(cmdline, env)
     for k, v in pairs(env or {}) do
         os.setenv(k, v)
     end
-    local full = cmdline .. " 2>&1"
-    -- cmd.exe strips the outer quotes of a command that starts with one.
-    if windows then
-        full = quote(full)
-    end
-    local f = io.popen(full)
+    -- io.popen runs the line as written: sh -c on POSIX systems, and
+    -- cmd.exe /s /c "line" on Windows, which keeps the inner quotes.
+    local f = io.popen(cmdline .. " 2>&1")
     local out = f:read("a")
     local ok = f:close()
     for k in pairs(env or {}) do
