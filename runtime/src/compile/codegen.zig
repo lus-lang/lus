@@ -2117,7 +2117,7 @@ fn statement(fs: *FuncState, s: *ast.Stat) Error!void {
         .repeat_ => |r| try repeatStat(fs, r.body, r.cond, s.line),
         .if_ => |i| try ifStat(fs, i.clauses, i.else_, s.line),
         .numeric_for => |f| try numericFor(fs, f.name, f.start, f.limit, f.step, f.body, s.line),
-        .generic_for => |f| try genericFor(fs, f.names, f.exprs, f.body, s.line),
+        .generic_for => |f| if (f.from) try fromFor(fs, f.names, f.exprs, f.body, s.line) else try genericFor(fs, f.names, f.exprs, f.body, s.line),
         .return_ => |vals| try returnStat(fs, vals, s.line),
         .provide => |vals| try provideStat(fs, vals, s.line),
         .break_ => try newGoto(fs, "break", s.line, try jump(fs)),
@@ -3270,6 +3270,52 @@ fn genericFor(fs: *FuncState, names: []ast.Name, exprs: []*ast.Expr, body: *ast.
     fs.needs_close = true;
     try checkStack(fs, 3);
     try forBody(fs, base, line, @intCast(names.len), true, body, &outer);
+    try leaveBlock(fs);
+}
+
+/// `for a, b from explist do`: a generic loop whose one control
+/// variable is the iterator's first value, the record. The body block
+/// starts by reading each name as a field of the record into a fresh
+/// local, so the loop builds no table of its own.
+fn fromFor(fs: *FuncState, names: []ast.Name, exprs: []*ast.Expr, body: *ast.Block, line: u32) Error!void {
+    var outer: Block = undefined;
+    enterBlock(fs, &outer, true);
+    const base = fs.freereg;
+    var e: ExpDesc = .{};
+    const n = try explist(fs, exprs, &e);
+    try adjustAssign(fs, 4, n, &e);
+    _ = try newLocalVar(fs, "(for state)", .regular);
+    _ = try newLocalVar(fs, "(for state)", .regular);
+    _ = try newLocalVar(fs, "(for state)", .regular);
+    _ = try newLocalVar(fs, "(for state)", .regular);
+    _ = try newLocalVar(fs, "(for record)", .const_);
+    try adjustLocalVars(fs, 4);
+    outer.upval = true;
+    outer.inside_tbc = true;
+    fs.needs_close = true;
+    try checkStack(fs, 3);
+    const prep = try emitABx(fs, .tforprep, base, 0);
+    var bl: Block = undefined;
+    enterBlock(fs, &bl, false);
+    try adjustLocalVars(fs, 1);
+    try reserveRegs(fs, 1);
+    const rec = base + 4;
+    fs.line = line;
+    const first = fs.freereg;
+    try reserveRegs(fs, @intCast(names.len));
+    for (names, 0..) |nm, i| try getFieldTo(fs, first + @as(u32, @intCast(i)), rec, nm.text);
+    for (names) |nm| _ = try newLocalVar(fs, nm.text, .regular);
+    try adjustLocalVars(fs, @intCast(names.len));
+    try statList(fs, body.stats);
+    try patchContinues(fs, &outer, getLabel(fs), true);
+    try leaveBlock(fs);
+    fs.line = line;
+    const prep_target = getLabel(fs);
+    if (prep_target - prep + 1 > opc.max_arg_bx) return fs.c.err(line, "control structure too long", .{});
+    opc.setBx(&fs.code.items[@intCast(prep)], @intCast(prep_target - prep - 1));
+    try codeABC(fs, .tforcall, base, 0, 1);
+    const lp = try emitABx(fs, .tforloop, base, 0);
+    opc.setBx(&fs.code.items[@intCast(lp)], @intCast(lp - prep));
     try leaveBlock(fs);
 }
 

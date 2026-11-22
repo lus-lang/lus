@@ -1,0 +1,153 @@
+pledge("load")
+
+global print, setmetatable, assert, type, load, string, table, ipairs, tostring, query, coroutine, error, debug
+
+--[[
+    Tests for `for a, b from explist do`. The loop calls its iterator as a
+    generic for does and reads each name as a field of the iterator's first
+    value, the record. The loop ends when the record is nil.
+]]
+
+local function each(t)
+    local i = 0
+    return function()
+        i = i + 1
+        return t[i]
+    end
+end
+
+local people = {
+    { name = "Ada", age = 36 },
+    { name = "Linus", age = 21 },
+    { name = "Grace", age = 45 },
+}
+
+local function reads_fields_by_name_test()
+    local names, total = {}, 0
+    for name, age from each(people) do
+        names[#names + 1] = name
+        total = total + age
+    end
+    assert(table.concat(names, ",") == "Ada,Linus,Grace")
+    assert(total == 102)
+end
+
+local function order_of_names_is_free_test()
+    local out = {}
+    for age, name from each(people) do out[#out + 1] = name .. age end
+    assert(out[1] == "Ada36" and out[3] == "Grace45")
+end
+
+local function missing_field_is_nil_test()
+    local n = 0
+    for name, email from each(people) do
+        assert(email == nil and name ~= nil)
+        n = n + 1
+    end
+    assert(n == 3)
+end
+
+local function index_metamethod_applies_test()
+    local proxy = setmetatable({}, { __index = function(_, k) return k .. "?" end })
+    for x, y from each({ proxy }) do
+        assert(x == "x?" and y == "y?")
+    end
+end
+
+local function iterator_triple_and_state_test()
+    local function step(list, i)
+        i = i + 1
+        if list[i] then return list[i], "extra" end
+    end
+    -- the iterator's own control value is its first result, the record
+    local seen = 0
+    local ok, err = catch do
+        for name from step, people, 0 do seen = seen + 1 end
+    end
+    -- the record is passed back as the control value, so `step` receives a
+    -- table where it expects an index and fails on the second call
+    assert(ok == false and seen == 1)
+end
+
+local function names_are_assignable_and_fresh_per_pass_test()
+    local fns = {}
+    for name from each(people) do
+        name = name .. "!"
+        fns[#fns + 1] = function() return name end
+    end
+    assert(fns[1]() == "Ada!" and fns[2]() == "Linus!" and fns[3]() == "Grace!")
+end
+
+local function break_and_continue_test()
+    local out = {}
+    for name, age from each(people) do
+        if age < 30 then continue end
+        if name == "Grace" then break end
+        out[#out + 1] = name
+    end
+    assert(#out == 1 and out[1] == "Ada")
+end
+
+local function nested_loops_test()
+    local groups = { { items = { { v = 1 }, { v = 2 } } }, { items = { { v = 3 } } } }
+    local sum = 0
+    for items from each(groups) do
+        for v from each(items) do sum = sum + v end
+    end
+    assert(sum == 6)
+end
+
+local function query_rows_test()
+    local out = {}
+    for title, year from query(@people as p where p.age > 30 order by p.age desc select p.name as title, p.age as year) do
+        out[#out + 1] = title .. ":" .. year
+    end
+    assert(table.concat(out, ",") == "Grace:45,Ada:36")
+end
+
+local function non_indexable_record_raises_test()
+    local ok, err = catch do
+        for a from ipairs({ "x" }) do end
+    end
+    assert(ok == false and tostring(err):find("attempt to index") ~= nil)
+end
+
+local function empty_iteration_runs_no_pass_test()
+    local n = 0
+    for a, b from each({}) do n = n + 1 end
+    assert(n == 0)
+end
+
+local function closing_value_is_closed_test()
+    local closed = false
+    local closer = setmetatable({}, { __close = function() closed = true end })
+    for name from each(people), nil, nil, closer do
+        if name == "Linus" then break end
+    end
+    assert(closed)
+end
+
+local function coroutine_iterator_test()
+    local gen = coroutine.wrap(function()
+        for _, p in ipairs(people) do coroutine.yield(p) end
+    end)
+    local n = 0
+    for age from gen do n = n + age end
+    assert(n == 102)
+end
+
+local function syntax_test()
+    assert(load("for a from t do end") ~= nil)
+    assert(load("for a, b, c from f, s, c do end") ~= nil)
+    local f, err = load("for a from do end")
+    assert(f == nil)
+    f, err = load("for a b from t do end")
+    assert(f == nil and err:find("'=', 'in' or 'from' expected") ~= nil)
+    f, err = load("for a from t end")
+    assert(f == nil and err:find("'do' expected") ~= nil)
+end
+
+local function format_keeps_from_test()
+    local out = debug and debug.format and debug.format("for a,b from f() do end")
+    if out then assert(out:find("for a, b from f() do", 1, true) ~= nil) end
+end

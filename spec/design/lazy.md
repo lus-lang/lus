@@ -2,7 +2,7 @@
 
 _Status: proposal for review. Nothing in this note is implemented yet. The open questions at the end each list choices with a recommendation._
 
-A _lazy variable_ is a local variable declared with the `<lazy>` attribute. Its initializer runs on the first read of the variable, and the variable keeps that value afterwards. A program declares an expensive value where it belongs, at the top of a file or a function, and pays for it only on the paths that use it.
+A _lazy variable_ is a local variable declared with the `<lazy>` attribute. Its initializer runs on the first read of the variable, which stores the value for every later read. A program declares an expensive value at the top of a file or a function, then pays for it only on the paths that use it.
 
 ```lus nocheck
 local config <lazy> = fromjson(io.open("config.json"):read("a"))
@@ -29,7 +29,7 @@ A `<lazy>` declaration names one variable and has one expression. `EXP` is trunc
 
 ## 2. Assignment and `<const>`
 
-A lazy variable without `<const>` accepts assignments. An assignment before the first read stores the value and discards the pending initializer, which then never runs. This is the use for expensive defaults: the default is written once in the declaration, and a value from the command line replaces it without computing it.
+A lazy variable without `<const>` accepts assignments. An assignment before the first read stores the value and discards the pending initializer, which then never runs. This is the use for expensive defaults: the declaration holds the default, which a value from the command line replaces before it is ever computed.
 
 ```lus nocheck
 local cache_dir <lazy> = find_default_cache_dir()   -- scans the disk
@@ -44,7 +44,7 @@ end
 
 `<lazy>` comes after `<const>` and before runtime attributes, as in `local port <const, lazy, only "number"> = read_port()`. A runtime attribute runs when the initializer produces the value, as it runs for the initialization of an ordinary variable.
 
-`<lazy, close>` declares a to-be-closed variable that opens its resource on first use. At the end of the scope, the variable is closed if it was read, and nothing happens if it is still pending.
+`<lazy, close>` declares a to-be-closed variable that opens its resource on first use. At the end of the scope, the variable is closed if it was read. A variable that is still pending is not closed.
 
 ```lus nocheck
 local db <lazy, close> = sqlite.open("cache.db")
@@ -59,7 +59,7 @@ A global cannot be lazy. `global x <lazy>` is a compile error, because a global 
 
 ## 4. Errors and recursion
 
-If `EXP` raises an error, the error propagates from the read, and the variable stays pending. The next read evaluates `EXP` again. A configuration file that was missing on the first read is therefore read again once it exists.
+If `EXP` raises an error, the error propagates from the read while the variable stays pending. The next read evaluates `EXP` again. A configuration file that was missing on the first read is therefore read again once it exists.
 
 While `EXP` runs, the variable is in the _evaluating_ state. A read of the variable from the same coroutine during that time raises `lazy variable 'x' read during its own initialization`, which turns an infinite recursion into an error at the read that causes it.
 
@@ -79,7 +79,7 @@ A variable never returns to the pending state once it holds a value, since an as
 
 The baseline JIT compiles `force` as one tag comparison and a branch that is not taken after the first read. The optimizing tier compiles it as a guard on the tag. The guard is invariant in a loop that does not assign the variable, so the tier hoists it with its other loop-invariant guards. A read of a forced lazy variable in optimized code therefore costs the same as a read of an ordinary variable.
 
-Executing a `<lazy>` declaration creates the closure of `EXP`, which allocates as a function expression does. Lazy variables belong in setup code that runs once, such as the top of a file, and `lus check` warns about a `<lazy>` declaration inside a loop.
+Executing a `<lazy>` declaration creates the closure of `EXP`, which allocates as a function expression does. Lazy variables belong in setup code that runs once, such as the top of a file. `lus check` warns about a `<lazy>` declaration inside a loop.
 
 Before the implementation merges, `tests/bench/lazy.lus` measures three cases against an ordinary local: a hot loop that reads a forced lazy local, the same loop through an upvalue, and a declaration executed in a loop. The first two must be within the run-to-run variation of the ordinary local in every JIT mode.
 

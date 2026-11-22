@@ -64,7 +64,7 @@ A constant table is built once, when the chunk loads, and every evaluation of th
 
 ## 4. Permissions
 
-Comptime code runs in a _comptime state_, a fresh state with the standard library and a pledge store of its own. The comptime code calls `pledge` like any chunk. The limit is the set of grants for the compilation, and a `pledge` of anything outside it returns `false`. With no grants for the compilation, every `pledge` returns `false`, so comptime code computes from its source and its flags only.
+Comptime code runs in a _comptime state_, a fresh state with the standard library and a pledge store of its own. The comptime code calls `pledge` like any chunk. The limit is the set of grants for the compilation. A `pledge` of anything outside it returns `false`. With no grants for the compilation, every `pledge` returns `false`, so comptime code computes from its source and its flags only.
 
 The following chunk embeds a JSON schema. The comptime code pledges `fs:read` for the schema.
 
@@ -98,7 +98,7 @@ A comptime expression is a function of its source, the flags, the runtime versio
 
 `math.random` in the comptime state starts from a fixed seed, so a comptime expression that draws random numbers produces the same table on every build.
 
-Lus caches compiled chunks only within a process: the require index compiles each module once per process (`modules.md`, section 2). A script run with `lus script.lus` therefore evaluates its comptime expressions on every start, as it would evaluate the same code at run time. The input record is the key that a future on-disk cache of compiled chunks needs. Such a cache reuses a chunk when its source, flags, runtime version, and every recorded input are unchanged, and it never caches an unrepeatable result.
+Lus caches compiled chunks only within a process: the require index compiles each module once per process (`modules.md`, section 2). A script run with `lus script.lus` therefore evaluates its comptime expressions on every start, as it would evaluate the same code at run time. The input record is the key that a future on-disk cache of compiled chunks needs. Such a cache reuses a chunk when its source, flags, runtime version, and every recorded input are unchanged. It never caches an unrepeatable result.
 
 `lus build --inputs` prints the record of a build, one input per line, so a build system can rebuild an executable when an embedded file changes.
 
@@ -106,9 +106,9 @@ Lus caches compiled chunks only within a process: the require index compiles eac
 
 `lus build` and `lus compile` evaluate comptime code once, at build time. The executable or the binary chunk holds the values, so the program never runs its comptime code and never needs the permissions that the comptime code pledged.
 
-Binary chunks gain two constant kinds, the read-only table and the read-only vector. A table constant is stored as a graph of numbered nodes, which keeps sharing and cycles. `string.dump` writes the same constants, so a dumped function that reads `CRC32` loads with the table. The format version of binary chunks increases by one, and a chunk of the earlier version still loads.
+Binary chunks gain two constant kinds, the read-only table and the read-only vector. A table constant is stored as a graph of numbered nodes, which keeps sharing and cycles. `string.dump` writes the same constants, so a dumped function that reads `CRC32` loads with the table. The format version of binary chunks increases by one. A chunk of the earlier version still loads.
 
-A future `lus build --aot` compiles the program ahead of time. Comptime values are constants for that compiler, and read-only tables let it fold reads with constant keys. Comptime evaluation runs in the interpreter of the build machine before ahead-of-time compilation starts, so both compilers see the same values.
+A future `lus build --aot` compiles the program ahead of time. Comptime values are constants for that compiler. Read-only tables let it fold reads with constant keys. Comptime evaluation runs in the interpreter of the build machine before ahead-of-time compilation starts, so both compilers see the same values.
 
 ## 8. Tools and errors
 
@@ -126,7 +126,7 @@ The compiler never evaluates comptime code in a block that folding discards. It 
 
 The language server, `lus check`, `lus fmt`, `lus doc`, `lus ast`, and `debug.parse` never run comptime code, because opening or checking a file must not execute it. The language server treats the value of a comptime expression as unknown and checks the comptime code as ordinary code in the comptime environment. `lus --dis` lists comptime constants with the other constants.
 
-A comptime state starts in about 16 µs (`snapshot.md` measured 1.8 µs for a later `lus_newstate` and 14.5 µs for `lus_openlibs`), so each chunk with comptime code gets a fresh state. One chunk's comptime code therefore never sees globals that another chunk's comptime code left behind, and the order in which the require index compiles modules cannot change a result. A chunk without comptime code creates no state and compiles as fast as before.
+A comptime state starts in about 16 µs (`snapshot.md` measured 1.8 µs for a later `lus_newstate` and 14.5 µs for `lus_openlibs`), so each chunk with comptime code gets a fresh state. One chunk's comptime code therefore never sees globals that another chunk's comptime code left behind. The order in which the require index compiles modules cannot change a result either. A chunk without comptime code creates no state and compiles as fast as before.
 
 ## 9. Open questions
 

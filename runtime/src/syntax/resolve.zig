@@ -429,7 +429,7 @@ const Resolver = struct {
                 const m = r.mark();
                 for (f.names, 0..) |n, idx| {
                     const b = try r.declare(n, s.line, .loop_var);
-                    b.readonly = idx == 0;
+                    b.readonly = idx == 0 and !f.from;
                 }
                 for (r.bindings.items[r.bindings.items.len - f.names.len ..]) |b| try r.push(b);
                 try r.block(f.body);

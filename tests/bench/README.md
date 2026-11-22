@@ -17,6 +17,7 @@ Each `.lus` file in this directory is a small program that stresses one part of 
 - `startup.lus`: creates 2,000 workers with an empty body one after the other. Each worker starts a state and opens the standard library, so this measures how fast a state starts (`spec/design/snapshot.md`).
 - `fullgc.lus`: builds a graph of a million live tables and collects it in full ten times, which measures marking while the program waits. On native targets those collections mark on several threads (`spec/design/gc.md`).
 - `http_serve.lus`: an HTTP server on `network.serve` that 64 client coroutines send 100,000 requests to over loopback, all in one process. It measures the scheduler, the sockets as suspension points, and the request parser together. LuaJIT has no counterpart, so its columns show dashes.
+- `forfrom.lus`: iterates records with `for name, price, qty from` and with a generic for that reads the same fields by hand. Run directly, it prints the time and the allocated memory of each loop, which match because the `from` loop reads fields into locals and builds no table per step.
 - `gcpause.lus`: builds and drops a 50 MB object graph four times. Besides its run time, it prints the longest gap between two loop iterations, which bounds the longest collector pause. Run it directly to see that number.
 
 The runner times every benchmark under each runtime it finds and prints the best wall time of several runs. Build the runtime with ReleaseFast before measuring.

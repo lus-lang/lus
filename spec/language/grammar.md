@@ -282,6 +282,7 @@ stat = ';'
      | 'if' cond 'then' block { 'elseif' cond 'then' block } [ 'else' block ] 'end'
      | 'for' Name '=' expr ',' expr [ ',' expr ] 'do' block 'end'
      | 'for' Name { ',' Name } 'in' explist 'do' block 'end'
+     | 'for' Name { ',' Name } 'from' explist 'do' block 'end'
      | 'function' funcname funcbody
      | 'local' 'function' Name funcbody
      | 'local' localdecl
@@ -871,6 +872,18 @@ x, y from { x = 1, y = 2 }
 
 **Tested** (`from_test.lus`): the source expression runs once even when extracting several fields, the array part is ignored, and missing fields become `nil`. **Tested** (`syntax_interactions_test.lus`): `local a from nil` raises under `catch`, and `while x from t do ... end` drains a field until it becomes `nil`.
 
+#### The `for ... from` loop
+
+`for a, b, c from explist do block end` is a generic `for` whose items are destructured. The explist produces the iterator, the state, the initial control value, and the closing value, as for `in`. Before each pass the loop calls the iterator with the state and the control value and keeps its first result, the _record_. The record is the new control value. If it is `nil`, the loop ends. Otherwise each name, from left to right, receives `record.name` through a normal indexed read, so `__index` applies, a missing field yields `nil`, and a record that cannot be indexed raises the usual `attempt to index` error.
+
+- The names are fresh locals of each pass and may be assigned. Closures capture the variable of their own pass.
+- The record occupies a hidden read-only local. The names are fields, so the order of names is free and their number is not limited by the iterator's results.
+- The loop builds no table. Each pass costs the iterator call and one field read per name, the same as a generic `for` whose body copies the fields by hand (`tests/bench/forfrom.lus`).
+- `break`, `continue`, labels, and the closing value behave as in a generic `for`.
+- The iterator receives the record as its control value. An iterator that expects its own control value, such as the one `ipairs` returns, therefore fails on its second call, and its first result is not a record.
+
+**Tested** (`forfrom_test.lus`): fields read by name in any order, missing fields as `nil`, `__index` on records, fresh assignable variables per pass, `break` and `continue`, nested loops, query rows, a non-indexable record, an empty iteration, the closing value, a coroutine iterator, and the syntax errors.
+
 ### 5.7 Assignment conditions in `if`, `elseif`, and `while`
 
 **Source:** `syntax/parser.zig` (conditions), `compile/codegen.zig` (`ifStat`, `while` loops). **Manual:** `guide.mdx`. **Tests:** `ifassign_test.lus`, `whileassign_test.lus`, `syntax_interactions_test.lus`, `compile_errors_test.lus`, `attrs2_test.lus`.
@@ -1318,7 +1331,7 @@ A chunk that fails to compile produces a single string message. `load` returns `
 
 ### 6.3 Messages inherited from Lua 5.5
 
-`unexpected symbol`, `syntax error`, `'X' expected`, `'X' expected (to close 'Y' at line N)`, `<name> expected`, `<name> or '...' expected`, `<eof> expected`, `function arguments expected`, `'=' or 'in' expected`, `break outside loop`, `cannot use '...' outside a vararg function`, `attempt to assign to const variable 'X'`, `variable 'X' not declared`, `_ENV is global when accessing variable 'X'`, `global variables cannot be to-be-closed`, `multiple to-be-closed variables in local list`, `label 'X' already defined on line N`, `no visible label 'X' for <goto> at line N`, `<goto X> at line N jumps into the scope of 'Y'`, `control structure too long`, `too many constants`, and the limit messages for `local variables`, `upvalues`, and `registers`.
+`unexpected symbol`, `syntax error`, `'X' expected`, `'X' expected (to close 'Y' at line N)`, `<name> expected`, `<name> or '...' expected`, `<eof> expected`, `function arguments expected`, `'=', 'in' or 'from' expected`, `break outside loop`, `cannot use '...' outside a vararg function`, `attempt to assign to const variable 'X'`, `variable 'X' not declared`, `_ENV is global when accessing variable 'X'`, `global variables cannot be to-be-closed`, `multiple to-be-closed variables in local list`, `label 'X' already defined on line N`, `no visible label 'X' for <goto> at line N`, `<goto X> at line N jumps into the scope of 'Y'`, `control structure too long`, `too many constants`, and the limit messages for `local variables`, `upvalues`, and `registers`.
 
 ### 6.4 Runtime errors introduced by Lus syntax
 

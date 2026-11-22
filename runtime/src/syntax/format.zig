@@ -508,7 +508,7 @@ const Formatter = struct {
                     if (i > 0) try f.put(", ");
                     try f.put(nm.text);
                 }
-                try f.put(" in ");
+                try f.put(if (gf.from) " from " else " in ");
                 try f.exprList(gf.exprs);
                 try f.put(" do");
                 try f.trailingComment(line);

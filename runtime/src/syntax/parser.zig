@@ -544,16 +544,17 @@ pub const Parser = struct {
             _ = try p.expectMatch(.kw_end, .kw_for, line);
             return p.mkStat(start, line, .{ .numeric_for = .{ .name = n1, .start = s, .limit = lim, .step = step, .body = b } });
         }
-        if (p.tag() != .comma and p.tag() != .kw_in) return p.errNear("'=' or 'in' expected", .{});
+        if (p.tag() != .comma and p.tag() != .kw_in and p.tag() != .kw_from) return p.errNear("'=', 'in' or 'from' expected", .{});
         var names: std.ArrayList(ast.Name) = .empty;
         try names.append(p.arena, n1);
         while (p.accept(.comma)) try names.append(p.arena, try p.expectName());
-        _ = try p.expect(.kw_in);
+        const from = p.accept(.kw_from);
+        if (!from) _ = try p.expect(.kw_in);
         const exprs = try p.exprList();
         _ = try p.expect(.kw_do);
         const b = try p.loopBody();
         _ = try p.expectMatch(.kw_end, .kw_for, line);
-        return p.mkStat(start, line, .{ .generic_for = .{ .names = try names.toOwnedSlice(p.arena), .exprs = exprs, .body = b } });
+        return p.mkStat(start, line, .{ .generic_for = .{ .names = try names.toOwnedSlice(p.arena), .exprs = exprs, .body = b, .from = from } });
     }
 
     fn functionStat(p: *Parser) Error!*ast.Stat {
