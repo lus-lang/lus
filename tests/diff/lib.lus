@@ -2,7 +2,7 @@
 -- configurations of the runtime, running one program under several of
 -- them at once in fresh processes, and comparing the results.
 
-global assert, error, io, ipairs, math, os, pairs, string, table, tonumber, tostring
+global assert, error, fs, io, ipairs, math, os, pairs, string, table, tonumber, tostring
 
 local M = {}
 
@@ -57,10 +57,22 @@ function M.select(names, binaries)
     return out
 end
 
+M.windows = os.platform() == "windows"
+
+-- Quotes one argument for the system shell: double quotes for the
+-- `cmd.exe /s /c` of Windows, whose paths hold no quote, and single quotes
+-- for /bin/sh elsewhere.
 local function quote(s)
-    return "'" .. tostring(s):gsub("'", [['\'']]) .. "'"
+    s = tostring(s)
+    if M.windows then return '"' .. s .. '"' end
+    return "'" .. s:gsub("'", [['\'']]) .. "'"
 end
 M.quote = quote
+
+-- The directory part of a path, with either separator.
+function M.dirname(path)
+    return path:match("^(.*)[/\\][^/\\]*$") or "."
+end
 
 function M.readFile(path)
     local f = io.open(path, "r", { lossy = true })
@@ -76,75 +88,103 @@ function M.writeFile(path, text)
     f:close()
 end
 
--- A fresh temporary directory under TMPDIR.
+-- A fresh temporary directory, at a name that os.tmpname reserves.
 function M.tempDir()
-    local p = assert(io.popen([[mktemp -d "${TMPDIR:-/tmp}/lus-diff.XXXXXX"]]))
-    local dir = p:read("l")
-    p:close()
+    local name = os.tmpname()
+    fs.remove(name)
+    local dir = name .. ".d"
+    fs.createdirectory(dir)
     return dir
 end
 
 function M.removeDir(dir)
-    os.execute("rm -rf " .. quote(dir))
+    catch fs.remove(dir, true)
+end
+
+local function removeFile(path)
+    catch fs.remove(path)
 end
 
 local JIT_VARS = { "LUS_JIT", "LUS_JIT_THRESHOLD", "LUS_JIT_OPT_THRESHOLD", "LUS_JIT_DIRECT" }
+
+-- Starts `cmd` through io.popen with exactly the variables of `env` among
+-- the JIT variables, and restores those of this process afterwards, so a
+-- child sees its configuration on every system.
+function M.spawn(cmd, env)
+    local saved = {}
+    for _, v in ipairs(JIT_VARS) do
+        saved[v] = os.getenv(v)
+        os.setenv(v, env[v])
+    end
+    local p = assert(io.popen(cmd))
+    for _, v in ipairs(JIT_VARS) do os.setenv(v, saved[v]) end
+    return p
+end
 
 -- The build flags of every native run. The WebAssembly host takes no
 -- flags, and its configurations compare only with each other.
 M.FLAGS = "-Fdebug -Flevel=3 -Fratio=1.5 -Fchannel=beta"
 
--- The shell command that runs `file` under `config`, killed by SIGALRM
--- after `seconds`, with its outputs in `base`.out and `base`.err and its
--- status in `base`.code. A status of 128 plus N means signal N.
-local function command(file, config, binaries, seconds, base)
-    local env = {}
-    for _, v in ipairs(JIT_VARS) do env[#env + 1] = "-u " .. v end
-    local target = file
-    local prep = ""
+-- On POSIX systems perl stops a program at its time limit with SIGALRM.
+-- Windows gives a shell command no time limit, so there a program that
+-- never ends stops the run at the time limit of its caller, such as the
+-- CI job.
+local SIGALRM = 14
+
+-- Prepares the program that `config` runs, and returns its path, or nil
+-- when the preparation failed with its message in `base`.err.
+local function prepare(file, config, binaries, base)
     if config.fmt then
-        target = base .. ".fmt.lus"
-        prep = quote(binaries.lus) .. " fmt " .. quote(file) .. " > " .. quote(target) .. " 2> " .. quote(base .. ".err") .. " && "
+        local target = base .. ".fmt.lus"
+        os.execute(quote(binaries.lus) .. " fmt " .. quote(file) .. " > " .. quote(target) .. " 2> " .. quote(base .. ".err"))
+        return target
     elseif config.nofold then
-        target = base .. ".nofold.lus"
-        prep = "sed 's/flags\\./__F./g' " .. quote(file) .. " > " .. quote(target) .. " 2> " .. quote(base .. ".err") .. " && "
+        local target = base .. ".nofold.lus"
+        M.writeFile(target, (M.readFile(file):gsub("flags%.", "__F.")))
+        return target
     end
+    return file
+end
+
+-- The shell command that runs `target` under `config`, with its outputs
+-- in `base`.out and `base`.err.
+local function command(target, config, binaries, seconds, base)
     local run
     if config.binary == "wasm" then
         seconds = seconds * 2
         run = quote(binaries.node or "node") .. " " .. quote(binaries.wasmRunner) .. " " .. config.env.LUS_JIT .. " " .. quote(target) .. " " .. quote(binaries.wasm)
     else
         if config.binary == "stress" then seconds = seconds * 4 end
-        local sets = {}
-        for k, v in pairs(config.env) do sets[#sets + 1] = k .. "=" .. v end
-        table.sort(sets)
-        run = "env " .. table.concat(env, " ") .. " " .. table.concat(sets, " ") .. " " .. quote(binaries[config.binary or "lus"]) .. " " .. M.FLAGS .. " " .. quote(target)
+        run = quote(binaries[config.binary or "lus"]) .. " " .. M.FLAGS .. " " .. quote(target)
     end
-    return "( " .. prep .. "perl -e 'alarm shift; exec @ARGV' " .. math.floor(seconds) .. " " .. run
-        .. " > " .. quote(base .. ".out") .. " 2>> " .. quote(base .. ".err") .. "; echo $? > " .. quote(base .. ".code") .. " )"
+    if not M.windows then run = "exec perl -e 'alarm shift; exec @ARGV' " .. math.floor(seconds) .. " " .. run end
+    return run .. " > " .. quote(base .. ".out") .. " 2>> " .. quote(base .. ".err")
 end
 
 -- Runs `file` under every configuration of `configs` at once, each in a
--- process of its own, and returns one result per configuration.
+-- process of its own, and returns one result per configuration. A status
+-- of 128 plus N means signal N.
 function M.runAll(file, configs, binaries, seconds, dir)
-    local parts = {}
+    local procs = {}
     for i, c in ipairs(configs) do
         local base = dir .. "/c" .. i
-        os.execute("rm -f " .. quote(base .. ".err"))
-        parts[#parts + 1] = command(file, c, binaries, seconds, base) .. " &"
+        removeFile(base .. ".err")
+        removeFile(base .. ".out")
+        local target = prepare(file, c, binaries, base)
+        procs[i] = M.spawn(command(target, c, binaries, seconds, base), c.env)
     end
-    os.execute(table.concat(parts, "\n") .. "\nwait")
     local results = {}
     for i, c in ipairs(configs) do
         local base = dir .. "/c" .. i
-        local code = tonumber(M.readFile(base .. ".code"):match("%d+")) or -1
+        local _, how, status = procs[i]:close()
+        local code = how == "signal" and 128 + status or (status or -1)
         results[i] = {
             config = c.name,
             binary = c.binary or "lus",
             fmt = c.fmt,
             renamed = c.nofold,
             code = code,
-            timeout = code == 142,
+            timeout = code == 128 + SIGALRM,
             stdout = M.readFile(base .. ".out"),
             stderr = M.readFile(base .. ".err"),
         }
@@ -159,7 +199,7 @@ end
 function M.crashOf(res)
     if res.timeout then return "timeout" end
     if panic = res.stderr:match("panic: ([^\n]*)") then return "panic: " .. panic:gsub("0x%x+", "0x?") end
-    if res.code >= 128 then return "signal " .. (res.code - 128) end
+    if res.code >= 128 and res.code < 256 then return "signal " .. (res.code - 128) end
     if res.code ~= 0 and res.code ~= 1 then return "exit " .. res.code end
     if res.stderr:find("leaked", 1, true) then return "leak" end
     return nil

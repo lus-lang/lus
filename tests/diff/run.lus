@@ -15,11 +15,11 @@
 -- batches of N until stopped, or for M minutes with --minutes. The exit
 -- status is 1 when anything was found.
 
-global arg, assert, io, ipairs, math, os, package, pairs, pledge, print, require, string, table, tonumber, tostring
+global arg, assert, fs, io, ipairs, math, os, package, pairs, pledge, print, require, string, table, tonumber, tostring
 
 pledge("exec", "fs", "env", "load")
 
-local here = arg[0]:match("^(.*)/[^/]*$") or "."
+local here = arg[0]:match("^(.*)[/\\][^/\\]*$") or "."
 package.path = here .. "/?.lus;" .. package.path
 local gen = require("gen")
 local lib = require("lib")
@@ -43,7 +43,7 @@ end
 
 local root = here .. "/../.."
 local binaries = {
-    lus = opts.lus or (root .. "/runtime/zig-out/bin/lus"),
+    lus = opts.lus or (root .. "/runtime/zig-out/bin/lus" .. (os.platform() == "windows" and ".exe" or "")),
     stress = opts.stress,
     x64 = opts.x64,
     wasm = opts.wasm,
@@ -76,7 +76,7 @@ if jobs > 1 and not opts.shard then
             end
         end
         cmd[#cmd + 1] = "--start " .. start .. " --shard " .. j .. "/" .. jobs
-        pipes[j] = assert(io.popen("LUS_JIT=off " .. lib.quote(binaries.lus) .. " " .. lib.quote(arg[0]) .. " " .. table.concat(cmd, " ")))
+        pipes[j] = lib.spawn(lib.quote(binaries.lus) .. " " .. lib.quote(arg[0]) .. " " .. table.concat(cmd, " "), { LUS_JIT = "off" })
     end
     local ran, found, slow = 0, 0, 0
     for _, p in ipairs(pipes) do
@@ -101,7 +101,9 @@ local ran, found, slow = 0, 0, 0
 local seen = {}
 
 local function report(seed, src, results, findings)
-    os.execute("mkdir -p " .. lib.quote(outDir))
+    -- A plain call accepts a path through `..`, which a recursive one
+    -- denies.
+    if not fs.type(outDir) and not catch fs.createdirectory(outDir) then fs.createdirectory(outDir, true) end
     local base = outDir .. "/seed" .. seed
     lib.writeFile(base .. ".lus", src)
     local out = { "seed " .. seed }
