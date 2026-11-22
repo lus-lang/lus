@@ -2,7 +2,7 @@
 # Runs the conformance suite on Linux in a local Lima VM, natively on
 # aarch64 and, through qemu-user, on x86-64.
 #
-# Usage: tools/test-linux.sh [--quick] [--no-x64] [--riscv64] [--loong64] [--ppc64le] [--arm] [--strict]
+# Usage: tools/test-linux.sh [--quick] [--no-x64] [--riscv64] [--loong64] [--ppc64le] [--arm] [--s390x] [--strict]
 #
 # The script cross-builds the runtime for aarch64-linux and x86_64-linux,
 # copies each binary with the test trees into the VM, and runs `lus test`
@@ -11,7 +11,7 @@
 # qemu-user that the VM registers with binfmt_misc, so the processes the
 # tests start run under it as well. It runs the default tiers and the
 # optimizing tier, or only the default tiers with --quick. --riscv64,
-# --loong64, --ppc64le, and --arm each also cross-build a static musl
+# --loong64, --ppc64le, --arm, and --s390x each also cross-build a static musl
 # binary for that architecture and run it under the qemu-user of the VM
 # with the JIT off, with the default tiers, eager, baseline, and
 # optimizing. Fedora registers no qemu-user for 32-bit ARM on an aarch64
@@ -42,6 +42,7 @@ for arg in "$@"; do
         --loong64) extra="$extra loongarch64-linux-musl" ;;
         --ppc64le) extra="$extra powerpc64le-linux-musl" ;;
         --arm) extra="$extra arm-linux-musleabihf" ;;
+        --s390x) extra="$extra s390x-linux-musl" ;;
         --strict) strict=1 ;;
         *) echo "unknown option $arg" >&2; exit 2 ;;
     esac

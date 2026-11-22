@@ -34,6 +34,7 @@ Four facts from the table shape our order.
 | x86-64 Windows | yes | | | yes |
 | arm64 Windows | yes | | | yes |
 | 32-bit ARM Linux | yes | | | not yet |
+| s390x Linux | yes | | | not yet |
 | wasm32 WASI | yes | WebAssembly modules | | the npm package |
 
 The native tiers depend on the target in six places.
@@ -115,10 +116,10 @@ The assembler emits the A32 encoding, whose conditional branches reach 32 MB. Ad
 
 s390x is big-endian. The runtime assumes little-endian in two kinds of places.
 
-- **Words written whole and read by field.** `Value.make` writes the tag as the low byte of the second word. The word of frame flags packs its bits the same way. The build stops at the assertion in `vm/state.zig`. The fix declares the fields of each such word in reverse order on a big-endian target, so that the field and the low byte of the word coincide on both byte orders. Native code reads fields at offsets from `@offsetOf`, so the templates follow the new layout.
-- **Bytes that leave the process.** Binary chunks, bundles, `pack`, `vector`, hashing, and the network code read and write a fixed byte order. Each place that reads memory as a wider integer without naming its byte order is found by an audit of the casts and `readInt` calls, and is fixed to name it.
+- **Words written whole and read by field.** `Value.make` writes a value as two 64-bit words, and the tag is the first byte of the second word, so `Value.tagWord` puts the tag in the low byte of that word on a little-endian target and in its high byte on a big-endian one. The flags of a plain call are the last two bytes of the flags word of a frame, so `CallFlags.frameFlags` shifts them to the top of the word on a little-endian target and swaps them into its bottom on a big-endian one. `Frame.flagMask` reads its mask in the byte order of the target, because a cast of a byte array to an integer at compile time reads it little-endian.
+- **Bytes that leave the process.** Binary chunks, bundles, `pack`, `vector`, hashing, and the network code pass their conformance tests on s390x unchanged, so the byte order of what they read and write does not depend on the target.
 
-The interpreter passes the conformance suite under `qemu-s390x` before the JIT starts. `jit/s390x.zig` then targets z/Architecture as of z13. Every call reserves the 160-byte register save area that the convention gives each callee, which the entry sequence allocates once. Relative branches reach 64 KB. `brcl` reaches 4 GB, so far branches use it. The instruction fetch of z/Architecture is coherent with stores, so installing code needs no cache maintenance.
+The interpreter passes the conformance suite under `qemu-s390x` with those three changes, and `tools/test-linux.sh --s390x` runs it. `jit/s390x.zig` then targets z/Architecture as of z13. Every call reserves the 160-byte register save area that the convention gives each callee, which the entry sequence allocates once. Relative branches reach 64 KB. `brcl` reaches 4 GB, so far branches use it. The instruction fetch of z/Architecture is coherent with stores, so installing code needs no cache maintenance.
 
 ## Windows on x86-64
 
