@@ -142,10 +142,9 @@ local targets = {
 }
 
 -- The codecs. `checksum` marks those whose output carries a checksum of
--- the data, which lets them notice a flipped bit. The Zstandard frames
--- that `compress` writes carry none.
+-- the data, which lets them notice a flipped bit.
 for _, c in ipairs({
-    { "gzip", true }, { "lz4", true }, { "zstd", false }, { "deflate", false }, { "brotli", false },
+    { "gzip", true }, { "lz4", true }, { "zstd", true }, { "deflate", false }, { "brotli", false },
 }) do
     local codec = vector.archive[c[1]]
     targets[#targets + 1] = {

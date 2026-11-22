@@ -19,7 +19,7 @@ Compresses a string or a vector in the Zstandard format (RFC 8878) and returns t
 - `data` is the input, a string or a vector. A number is converted to its textual form first.
 - `level` sets the trade between speed and ratio, an integer from -131072 to 22. It defaults to 3. Negative levels compress faster with a lower ratio, and level 22 produces the smallest output.
 
-The function returns one vector. The output is one Zstandard frame. Compressing the empty string returns a short valid stream that decompresses to zero bytes. An input that is neither a string, a number, nor a vector raises `bad argument #1 to 'compress' (string or vector expected)`. A `level` outside its range raises `bad argument #2 to 'compress' (compression level out of range)`, and a float without an integer value raises `bad argument #2 to 'compress' (number has no integer representation)`.
+The function returns one vector. The output is one Zstandard frame that carries a checksum of its content, so [`vector.archive.zstd.decompress`](/manual/api#vector.archive.zstd.decompress) raises an error for damaged data. Compressing the empty string returns a short valid stream that decompresses to zero bytes. An input that is neither a string, a number, nor a vector raises `bad argument #1 to 'compress' (string or vector expected)`. A `level` outside its range raises `bad argument #2 to 'compress' (compression level out of range)`, and a float without an integer value raises `bad argument #2 to 'compress' (number has no integer representation)`.
 
 The following example compresses repeated text, decompresses it, and passes an invalid level.
 

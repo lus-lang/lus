@@ -582,6 +582,25 @@ local function gzip_crc32_rejects_a_corrupted_body_byte_test()
     end)
 end
 
+local function a_flipped_bit_in_zstd_data_raises_or_changes_nothing_test()
+    -- The frames that compress writes carry a checksum of their content, so
+    -- decompression notices a flip of any bit that matters. The format
+    -- reserves one bit of the frame header that decoders ignore, and a
+    -- flip of that bit returns the original data.
+    local comp = vector.archive.zstd.compress(sample)
+    local raised = 0
+    for i = 0, #comp * 8 - 1 do
+        local corrupt = flip_bit(comp, i // 8 + 1, i % 8)
+        local ok, out = catch vector.archive.zstd.decompress(corrupt)
+        if ok then
+            assert(vector.tostring(out) == sample, "a flipped bit decompressed to other data")
+        else
+            raised = raised + 1
+        end
+    end
+    assert(raised > 0)
+end
+
 -- ===================================================================
 -- Incompressible input
 -- ===================================================================

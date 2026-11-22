@@ -98,10 +98,10 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
-    # The step limits below add up to 330 minutes on Linux, which runs
+    # The step limits below add up to 340 minutes on Linux, which runs
     # every step. The job limit covers them and the setup steps, so a step
     # always reaches its own limit before the job is cancelled.
-    timeout-minutes: 345
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install Zig
@@ -286,14 +286,19 @@ jobs:
         run: |
           (cd runtime && zig build -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io)
           LUS_JIT=off runtime/zig-out-io/bin/lus tests/crash/run.lus --lus runtime/zig-out-io/bin/lus
-      - name: Worker faults
-        timeout-minutes: 15
+      - name: Faults
+        timeout-minutes: 25
         if: runner.os != 'Windows'
         # Each step of the message handling of a worker fails in turn, and
-        # on Linux each allocation of the worker thread too.
+        # on Linux each allocation of the worker thread too. Then each
+        # network operation fails, a detached coroutine is cancelled at
+        # each suspension, and the real clock jumps.
         run: |
           LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/workers.lus --lus runtime/zig-out-io/bin/lus
           if [ "$RUNNER_OS" = Linux ]; then LUS_JIT=off runtime/zig-out/bin/lus tests/faults/workers.lus --alloc --lus runtime/zig-out-oom/bin/lus; fi
+          LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/network.lus --lus runtime/zig-out-io/bin/lus
+          LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/cancel.lus --lus runtime/zig-out-io/bin/lus
+          LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/clock.lus --lus runtime/zig-out-io/bin/lus
       - name: WebAssembly host tests
         timeout-minutes: 10
         if: runner.os == 'Linux'

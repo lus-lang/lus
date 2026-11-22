@@ -14,6 +14,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const state = @import("state.zig");
+const faultio = @import("faultio.zig");
 const value = @import("value.zig");
 const gc = @import("gc.zig");
 const Thread = state.Thread;
@@ -790,6 +791,10 @@ fn runTask(g: *Global, l: *Thread, t: *Task) Error!void {
             co.status = .suspended;
             if (t.kind != .none) {
                 register(g, t, leafOf(t));
+                if (faultio.cancelStep()) {
+                    cancel(g, t);
+                    coroutine.closeCancelled(co);
+                }
             } else {
                 // A plain yield lets the other coroutines run. Its values
                 // are dropped.
