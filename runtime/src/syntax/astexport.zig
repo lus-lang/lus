@@ -852,6 +852,7 @@ const Exporter = struct {
             var attr: ?[]const u8 = null;
             var rt: std.ArrayList(*Node) = .empty;
             var lazy = false;
+            var observed = false;
             var is_meta = false;
             for (an.attribs) |a| switch (a) {
                 .@"const" => {
@@ -861,11 +862,13 @@ const Exporter = struct {
                 .group => attr = "group",
                 .meta => is_meta = true,
                 .lazy => lazy = true,
+                .observe => observed = true,
                 .runtime => |e| if (runtime) try rt.append(x.arena, try x.expr(e)),
             };
             if (is_meta) attr = "meta";
             if (attr) |s| try x.set(n, "attr", .{ .str = s });
             if (lazy) try x.set(n, "lazy", .{ .boolean = true });
+            if (observed) try x.set(n, "observe", .{ .boolean = true });
             try x.setList(n, "runtimeattrs", rt.items);
             try list.append(x.arena, n);
         }

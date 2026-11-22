@@ -185,6 +185,8 @@ pub const Attrib = union(enum) {
     meta,
     /// `<lazy>`: the initializer runs at the first read (`spec/design/lazy.md`).
     lazy,
+    /// `<observe>`: dependents recompute when it changes (`spec/design/observe.md`).
+    observe,
     runtime: *Expr,
 };
 

@@ -1,8 +1,11 @@
-//! The natives behind `<lazy>` locals (`spec/design/lazy.md`). The
-//! compiler turns a lazy local into hidden locals and a force function
-//! (`compile/codegen.zig`, `lazyLocal`), which calls these natives. They
-//! reach compiled code as builtin constants, which binary chunks store by
-//! number, so they never depend on the global environment.
+//! The builtins behind `<lazy>` and `<observe>` locals
+//! (`spec/design/lazy.md`, `spec/design/observe.md`). The compiler turns
+//! such locals into hidden locals and generated functions
+//! (`compile/codegen.zig`, `lazyLocal` and `observeLocal`), which call
+//! these builtins. They reach compiled code as builtin constants, which
+//! binary chunks store by number, so they never depend on the global
+//! environment. Every builtin is a native except the update of observed
+//! variables, a function written in Lus so that initializers may yield.
 
 const std = @import("std");
 const state = @import("../vm/state.zig");
@@ -17,8 +20,48 @@ const Value = value.Value;
 const Error = state.Error;
 
 /// The builtins in the order of their numbers, which binary chunks use.
-pub const natives = [_]state.NativeFn{ lazyWait, running, rethrow, closer, closeValue };
-pub const names = [_][]const u8{ "lazywait", "running", "rethrow", "closer", "closevalue" };
+pub const natives = [_]state.NativeFn{ lazyWait, running, rethrow, closer, closeValue, obsCheck, obsBegin, obsEnd, obsRegister, obsUnregister };
+pub const names = [_][]const u8{ "lazywait", "running", "rethrow", "closer", "closevalue", "obscheck", "obsbegin", "obsend", "obsregister", "obsunregister", "obsrun" };
+
+/// The name of the prototype of `obsrun`, by which binary chunks know it.
+pub const run_proto_name = "observe update";
+
+/// The update of observed variables (`spec/design/observe.md`, section 3):
+/// collects the records of the dependents of a list, transitively, sorts
+/// them by their numbers, then calls each update function once. A guard
+/// ends the update however it ends.
+const run_source =
+    \\local list = ...
+    \\local seen, recs, stack, top = {}, {}, { list }, 1
+    \\while top > 0 do
+    \\    local l = stack[top]
+    \\    stack[top] = nil
+    \\    top = top - 1
+    \\    for i = 1, #l do
+    \\        local r = l[i]
+    \\        if not seen[r] then
+    \\            seen[r] = true
+    \\            recs[#recs + 1] = r
+    \\            top = top + 1
+    \\            stack[top] = r[3]
+    \\        end
+    \\    end
+    \\end
+    \\for i = 2, #recs do
+    \\    local r = recs[i]
+    \\    local j = i - 1
+    \\    while j >= 1 and recs[j][2] > r[2] do
+    \\        recs[j + 1] = recs[j]
+    \\        j = j - 1
+    \\    end
+    \\    recs[j + 1] = r
+    \\end
+    \\__lus_builtin_obsbegin()
+    \\local guard <close> = __lus_builtin_closer(__lus_builtin_obsend)
+    \\for i = 1, #recs do
+    \\    recs[i][1]()
+    \\end
+;
 
 /// The name a compiled force function uses for builtin number `i`.
 pub const prefix = "__lus_builtin_";
@@ -38,13 +81,140 @@ pub fn numberOf(f: state.NativeFn) ?u8 {
 /// The native object of builtin number `i` in `g`, created once and kept
 /// for the life of the state.
 pub fn get(g: *Global, i: u8) std.mem.Allocator.Error!Value {
-    const keys = [_][]const u8{ "lazy.builtin.0", "lazy.builtin.1", "lazy.builtin.2", "lazy.builtin.3", "lazy.builtin.4" };
+    const keys = comptime blk: {
+        var k: [names.len][]const u8 = undefined;
+        for (&k, 0..) |*x, j| x.* = std.fmt.comptimePrint("builtin.{d}", .{j});
+        break :blk k;
+    };
     const key = keys[i];
+    if (i == natives.len) {
+        if (g.ext.get(key)) |p| return Value.obj(.closure, @as(*object.Closure, @ptrCast(@alignCast(p))));
+        const cl = try runClosure(g);
+        try g.fixed.append(g.gpa, &cl.hdr);
+        try g.ext.put(g.gpa, key, cl);
+        return Value.obj(.closure, cl);
+    }
     if (g.ext.get(key)) |p| return Value.obj(.native, @as(*state.Native, @ptrCast(@alignCast(p))));
     const n = try state.newNative(g, natives[i], names[i], 0);
     try g.fixed.append(g.gpa, &n.hdr);
     try g.ext.put(g.gpa, key, n);
     return Value.obj(.native, n);
+}
+
+/// Compiles the update of observed variables in `g` and makes its closure,
+/// whose environment is empty because it names builtins only.
+fn runClosure(g: *Global) std.mem.Allocator.Error!*object.Closure {
+    const codegen = @import("../compile/codegen.zig");
+    const gc = @import("../vm/gc.zig");
+    const r = try codegen.compile(g, run_source, .{ .chunkname = "=observe", .meta_eval = false });
+    const p = switch (r) {
+        .ok => |p| p,
+        .err => |msg| std.debug.panic("the observe update does not compile: {s}", .{msg}),
+    };
+    p.name = state.newStringIn(g, run_proto_name) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => unreachable,
+    };
+    const n = p.upvals.len;
+    const cl = try gc.alloc(g, object.Closure, .closure, object.Closure.allocSize(n));
+    cl.proto = p;
+    cl.nupvals = @intCast(n);
+    for (cl.upvals()) |*u| {
+        const up = try gc.alloc(g, object.Upvalue, .upvalue, @sizeOf(object.Upvalue));
+        up.* = .{ .hdr = up.hdr, .loc = undefined, .closed = .nil, .open = false };
+        up.loc = &up.closed;
+        u.* = up;
+    }
+    return cl;
+}
+
+/// The state of observed variables in `g`: whether an update runs, and
+/// the counter that numbers derived variables in declaration order.
+fn observeState(l: *Thread) Error!*object.Table {
+    const g = l.g;
+    if (g.ext.get("observe.state")) |p| return @ptrCast(@alignCast(p));
+    const t = try l.newTable(2, 0);
+    try l.push(Value.obj(.table, t));
+    defer l.top -= 1;
+    try ops.rawSet(l, t, Value.int(1), .false);
+    try ops.rawSet(l, t, Value.int(2), Value.int(0));
+    g.fixed.append(g.gpa, &t.hdr) catch return l.raiseMem();
+    g.ext.put(g.gpa, "observe.state", t) catch return l.raiseMem();
+    return t;
+}
+
+/// `obscheck(name)`: raises when an update of observed variables runs,
+/// before an assignment to the observed variable `name`.
+fn obsCheck(l: *Thread) Error!u32 {
+    const st = try observeState(l);
+    if (table.getInt(st, 1).truthy()) {
+        const name = if (l.arg(1).tag == .string) l.arg(1).as(object.String).bytes() else "?";
+        return l.raiseFmt("cannot assign observed variable '{s}' while its dependents update", .{name});
+    }
+    return 0;
+}
+
+fn obsBegin(l: *Thread) Error!u32 {
+    try ops.rawSet(l, try observeState(l), Value.int(1), .true);
+    return 0;
+}
+
+fn obsEnd(l: *Thread) Error!u32 {
+    try ops.rawSet(l, try observeState(l), Value.int(1), .false);
+    return 0;
+}
+
+/// `obsregister(update, own, deps...)`: the record of a derived variable,
+/// `{ update, number, own, deps }`, added to the list of each dependency.
+fn obsRegister(l: *Thread) Error!u32 {
+    const st = try observeState(l);
+    const n = table.getInt(st, 2).asInt() + 1;
+    try ops.rawSet(l, st, Value.int(2), Value.int(n));
+    const rec = try l.newTable(4, 0);
+    try l.push(Value.obj(.table, rec));
+    const deps = try l.newTable(l.argCount() -| 2, 0);
+    try ops.rawSet(l, rec, Value.int(4), Value.obj(.table, deps));
+    try ops.rawSet(l, rec, Value.int(1), l.arg(1));
+    try ops.rawSet(l, rec, Value.int(2), Value.int(n));
+    try ops.rawSet(l, rec, Value.int(3), l.arg(2));
+    var i: u32 = 3;
+    while (i <= l.argCount()) : (i += 1) {
+        const list = l.arg(i);
+        if (list.tag != .table) continue;
+        const t = list.as(object.Table);
+        try ops.rawSet(l, t, Value.int(table.length(t) + 1), Value.obj(.table, rec));
+        try ops.rawSet(l, deps, Value.int(@intCast(i - 2)), list);
+    }
+    return 1;
+}
+
+/// `obsunregister(record)`: removes a record from the lists it was added
+/// to, when the scope of its derived variable ends.
+fn obsUnregister(l: *Thread) Error!u32 {
+    const rv = l.arg(1);
+    if (rv.tag != .table) return 0;
+    const rec = rv.as(object.Table);
+    const deps = table.getInt(rec, 4);
+    if (deps.tag != .table) return 0;
+    const dl = deps.as(object.Table);
+    var k: i64 = 1;
+    while (k <= table.length(dl)) : (k += 1) {
+        const lv = table.getInt(dl, k);
+        if (lv.tag != .table) continue;
+        const t = lv.as(object.Table);
+        const n = table.length(t);
+        var i: i64 = 1;
+        while (i <= n) : (i += 1) {
+            const e = table.getInt(t, i);
+            if (e.tag == .table and e.as(object.Table) == rec) {
+                var j = i;
+                while (j < n) : (j += 1) try ops.rawSet(l, t, Value.int(j), table.getInt(t, j + 1));
+                try ops.rawSet(l, t, Value.int(n), .nil);
+                break;
+            }
+        }
+    }
+    return 0;
 }
 
 /// `lazywait(evaluator, name)`: called when a lazy variable is read while

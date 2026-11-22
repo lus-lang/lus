@@ -2943,6 +2943,31 @@ A lazy variable keeps its first value, so an assignment to it is a compile error
 
 `<lazy, close>` opens a resource on first use. At the end of the block, Lus closes the value if the program read the variable and does nothing otherwise. A field of a [local group](#local-groups) may also be lazy, as in `median <lazy> = table.median(rows)`, which computes the median only when the program reads that field.
 
+### Values that follow other values
+
+Some values are computed from others and must stay current when those others change, such as the total of a shopping cart and the label that shows it. Recomputing them by hand after every change repeats the formula in each place that changes an input. The `<observe>` attribute keeps them current: when the program assigns an observed variable, every observed variable whose initializer names it is computed again from its initializer.
+
+```lus
+local price <observe> = 12
+local quantity <observe> = 1
+local total <observe> = price * quantity
+local label <observe> = `total: $total`
+
+local function add_one()
+    quantity = quantity + 1
+end
+
+add_one()
+add_one()
+print(label)   --> total: 36
+price = 10
+print(label)   --> total: 30
+```
+
+An observed variable depends on the observed variables that its initializer names. Other variables that the initializer reads are inputs, read again at each recomputation, and a change to one of them recomputes nothing. A change updates each dependent once, in the order of the declarations, so `label` always sees the new `total`. An assignment from any function updates the dependents, as `add_one` shows.
+
+A variable that depends on others is read-only, so an assignment to it is a compile error. If an initializer raises an error during an update, the assignment that started the update raises it. The dependents not yet updated keep their previous values. An assignment to an observed variable while an update runs raises an error. When the block of a dependent ends, it stops depending on its inputs.
+
 ## Enums
 
 Programs often need a value that is one of a few fixed choices, such as a log level, the state of a connection, or a direction. Strings and numbers can represent the choices, but both have drawbacks. A misspelled string such as `"warnning"` is still a string, so Lus reports no error. A number such as `2` has no meaning for the reader and is equal to every other `2` in the program. An _enum_ is a fixed set of named values that differ from every string, every number, and the values of every other enum.

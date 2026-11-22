@@ -543,6 +543,7 @@ Limits: at most 200 active locals per function (`too many local variables (limit
 - `<group>` declares a local group (section 5.10).
 - `<meta>` evaluates the initializer at compile time (section 5.14). It implies `<const>`.
 - `<lazy>` defers the initializer to the first read (section 5.15). It implies `<const>`.
+- `<observe>` keeps dependents current (section 5.16).
 - Combining two different attributes of `<const>`, `<close>`, and `<group>` on one name raises `conflicting attributes`. Repeating the same one inside one list (`<const, const>`) is accepted. `<meta>` and `<lazy>` combine with any of them in the parser, and the compiler rejects the combinations that section 5.14 lists.
 - Any other attribute is a runtime attribute (section 5.9).
 
@@ -1285,6 +1286,22 @@ end                                   -- odd == 25
 The runtime errors are `lazy variable 'NAME' read during its own initialization` and `lazy variable 'NAME' read while another coroutine computes it`. An error that `exp` raises propagates from the read unchanged, and the next read evaluates `exp` again.
 
 **Tested** (`lazy_test.lus`): one evaluation on the first read, no evaluation without a read, values at the first read, sharing with nested functions, the const rule, retry after an error, error objects passed unchanged, recursion, `nil` and `false` values, `<close>` only after a read, runtime attributes, group fields, the rejected forms, detached coroutines that wait, plain coroutines that raise, `string.dump`, and hot loop reads.
+
+### 5.16 `<observe>` locals
+
+**Source:** `compile/codegen.zig` (`observeLocal`, `assignStat`, `observeCheck`, `observeNotify`), `lib/lazy.zig` (the builtins and the update function). **Design:** `spec/design/observe.md`. **Manual:** `guide.mdx`. **Tests:** `observe_test.lus`.
+
+`local NAME <observe> = exp` declares an observed local. If `exp` names another observed local, `NAME` is derived: an assignment to any observed local it depends on, directly or through other derived locals, evaluates `exp` again. Each dependent is computed once per assignment, in declaration order. The rules are in `spec/design/observe.md`. The compile errors are:
+
+- `an <observe> declaration names one variable` and `an <observe> variable needs one initializer`,
+- `cannot combine <observe> with <const>`, `with <close>`, `with <group>`, `with runtime attributes`, and `cannot combine <lazy> with <observe>` or `<meta> with <observe>`,
+- `cannot use <observe> in this declaration` for a group field, `from` destructuring, or an assignment condition, and `global variables cannot be <observe>`,
+- `attempt to assign to const variable 'NAME'` for an assignment to a derived local,
+- `cannot assign observed variable 'NAME' with 'from'` and `with a function statement`.
+
+The runtime error `cannot assign observed variable 'NAME' while its dependents update` comes from an assignment during an update, which includes an update paused by a yield. An error that an initializer raises during an update propagates from the assignment that started it.
+
+**Tested** (`observe_test.lus`): the motivating example, a diamond computed once in order, transitive chains, assignments from nested functions, a writer declared before its dependent, the end of a dependent's scope, multiple assignment, the const rule, the rejected forms, an error during an update, an assignment during an update, a yield during an update, closing a paused update, and `string.dump`.
 
 ## 6. Compile-time error catalog
 

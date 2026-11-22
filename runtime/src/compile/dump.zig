@@ -180,6 +180,14 @@ const Writer = struct {
                 try w.byte(@backingInt(ConstTag.builtin));
                 try w.byte(n);
             },
+            .closure => {
+                // The one closure constant is the update of observed
+                // variables, which the reader compiles again.
+                const name = k.as(object.Closure).proto.name orelse return error.Unsupported;
+                if (!std.mem.eql(u8, name.bytes(), lazy.run_proto_name)) return error.Unsupported;
+                try w.byte(@backingInt(ConstTag.builtin));
+                try w.byte(lazy.natives.len);
+            },
             .vector => {
                 const v = k.as(object.Vector);
                 try w.byte(@backingInt(ConstTag.vector));
@@ -413,7 +421,7 @@ const Reader = struct {
             .tableref => return error.Malformed,
             .builtin => blk: {
                 const n = try r.byte();
-                if (n >= lazy.natives.len) return error.Malformed;
+                if (n >= lazy.names.len) return error.Malformed;
                 break :blk try lazy.get(g, n);
             },
         };
