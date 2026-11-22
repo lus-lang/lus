@@ -95,6 +95,11 @@ const fret: A.FReg = switch (builtin.cpu.arch) {
     else => unreachable,
 };
 
+comptime {
+    // macOS and Windows reserve x18 for the system.
+    if (is_a64) for (gpr_pool ++ [_]A.Reg{ sc0, sc1, sc2 }) |r| std.debug.assert(r != .x18);
+}
+
 /// The registers of a direct call. The closure travels in the first
 /// pool register and the parameters in the ones after it, each as its
 /// payload. The callee returns the payload of its result in the first
