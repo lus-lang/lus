@@ -54,7 +54,7 @@ pub fn newCoroutine(l: *Thread, f: Value) Error!*Thread {
     return co;
 }
 
-fn create(l: *Thread) Error!u32 {
+pub fn create(l: *Thread) Error!u32 {
     const f = try aux.checkFunction(l, 1);
     const co = try newCoroutine(l, f);
     return aux.ret(l, Value.obj(.thread, co));
@@ -405,7 +405,7 @@ fn @"resume"(l: *Thread) Error!u32 {
     return n + 1;
 }
 
-fn yield(l: *Thread) Error!u32 {
+pub fn yield(l: *Thread) Error!u32 {
     if (l == l.g.main_thread or l.resumer == null) {
         return l.raiseFmt("attempt to yield from outside a coroutine", .{});
     }

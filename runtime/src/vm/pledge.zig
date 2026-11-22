@@ -10,7 +10,20 @@ const Global = state.Global;
 const Error = state.Error;
 const Allocator = std.mem.Allocator;
 
-pub const Kind = enum { none, path, host, pattern, custom };
+pub const Kind = enum { none, path, host, pattern, custom, program };
+
+/// A requested value of a `program` capability: the name of the program as
+/// the caller wrote it, empty when it holds a separator, then a zero byte,
+/// then the absolute path it resolved to. A granted value without a
+/// separator is a glob over the written name, and one with a separator is
+/// a path glob over the resolved path.
+pub fn programRequest(gpa: Allocator, written: ?[]const u8, resolved: []const u8) Allocator.Error![]u8 {
+    return std.mem.concat(gpa, u8, &.{ written orelse "", "\x00", resolved });
+}
+
+fn hasSeparator(v: []const u8) bool {
+    return std.mem.indexOfScalar(u8, v, '/') != null or (host_rules.windows and std.mem.indexOfScalar(u8, v, '\\') != null);
+}
 
 /// Decides whether a granted value covers a requested value for a
 /// `custom` capability. `ctx` is the context given at registration.
@@ -40,7 +53,7 @@ pub const RequestHook = struct {
 const builtin_caps = [_]Capability{
     .{ .name = "fs", .subs = &.{ "read", "write", "exec" }, .kind = .path },
     .{ .name = "network", .subs = &.{ "tcp", "udp", "http", "tls", "server" }, .kind = .host },
-    .{ .name = "exec", .kind = .none },
+    .{ .name = "exec", .kind = .program },
     .{ .name = "env", .subs = &.{ "read", "write" }, .kind = .pattern },
     .{ .name = "load", .kind = .none },
     .{ .name = "ffi", .kind = .none },
@@ -576,6 +589,12 @@ fn valueMatches(cap: Capability, granted: []const u8, requested: []const u8, can
         .host => hostMatch(granted, requested),
         .pattern => globMatch(granted, requested),
         .custom => if (cap.match) |m| m(cap.ctx, granted, requested) else false,
+        .program => {
+            const nul = std.mem.indexOfScalar(u8, requested, 0) orelse requested.len;
+            if (hasSeparator(granted)) return if (canon_req) |c| globMatchCase(granted, c, host_rules.windows) else false;
+            const written = requested[0..nul];
+            return written.len > 0 and globMatch(granted, written);
+        },
     };
 }
 
@@ -600,6 +619,11 @@ fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, 
     defer if (canon) |c| g.gpa.free(c);
     var canon_link: ?[]u8 = null;
     defer if (canon_link) |c| g.gpa.free(c);
+    if (cap.kind == .program) {
+        if (requested) |r| if (std.mem.indexOfScalar(u8, r, 0)) |nul| if (nul + 1 < r.len) {
+            canon = canonicalize(g, r[nul + 1 ..]);
+        };
+    }
     if (cap.kind == .path) {
         if (requested) |r| {
             // Following operations match what the path resolves to now.
@@ -618,7 +642,7 @@ fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, 
             continue;
         };
         if (cap.kind != .path) {
-            for (e.values.items) |v| if (valueMatches(cap, v, req, null)) return true;
+            for (e.values.items) |v| if (valueMatches(cap, v, req, canon)) return true;
         } else if (follow) {
             for (e.values.items) |v| if (valueMatches(cap, v, req, canon)) return true;
         } else {
@@ -626,6 +650,18 @@ fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, 
         }
         // A specific sub-permission entry decides on its own.
         if (ci == 0) return false;
+    }
+    if (s.find("all")) |e| if (e.unrestricted) return true;
+    return false;
+}
+
+/// Whether `perm` is granted without a value restriction, as running a
+/// shell command needs, since a shell runs any program.
+pub fn allowedUnrestricted(l: *Thread, perm: []const u8) bool {
+    const s = setOf(l) orelse return false;
+    if (s.find(perm)) |e| {
+        if (e.rejected) return false;
+        if (e.unrestricted) return true;
     }
     if (s.find("all")) |e| if (e.unrestricted) return true;
     return false;
@@ -694,6 +730,9 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
         if (cap.kind == .path) if (val) |v| {
             if (!isPathValue(v, host_rules)) return l.raiseFmt("filesystem permission values must be an absolute path or start with '.' (got '{s}')", .{v});
         };
+        if (cap.kind == .program) if (val) |v| {
+            if (hasSeparator(v) and !isPathValue(v, host_rules)) return l.raiseFmt("a program path in a permission value must be absolute or start with '.' (got '{s}')", .{v});
+        };
     }
     if (setOf(l)) |s| if (s.sealed) return .refused;
     if (!reject) {
@@ -743,7 +782,7 @@ fn record(l: *Thread, set: *Set, name: []const u8, val: ?[]const u8, reject: boo
     if (val == null and e.values.items.len > 0) return;
     if (val) |v| {
         const cap = findCap(g, split(name)[0]);
-        const is_path = cap != null and cap.?.kind == .path;
+        const is_path = cap != null and (cap.?.kind == .path or (cap.?.kind == .program and hasSeparator(v)));
         const stored = (if (is_path) canonicalPattern(g, v, false) else gpa.dupe(u8, v)) catch return l.raiseMem();
         const link: ?[]u8 = if (is_path) canonicalPattern(g, v, true) catch {
             gpa.free(stored);

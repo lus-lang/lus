@@ -1013,6 +1013,7 @@ pub fn release(g: *Global) void {
 /// Frees what the scheduler holds. No coroutine runs afterwards.
 pub fn deinit(g: *Global) void {
     const s = &g.sched;
+    @import("sigwatch.zig").forget(g);
     s.poller.deinit(g);
     s.timers.deinit(g.gpa);
     s.ios.deinit(g.gpa);

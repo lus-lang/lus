@@ -16,6 +16,7 @@ const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const aux = @import("auxlib.zig");
 const shell = @import("shell.zig");
+const sched = @import("../vm/sched.zig");
 const out = @import("out.zig");
 const term = @import("term.zig");
 const vector = @import("vector.zig");
@@ -44,6 +45,9 @@ pub const Handle = struct {
     rstart: usize = 0,
     eof: bool = false,
     child: ?std.process.Child = null,
+    /// A pipe end of `os.spawn` in non-blocking mode, whose reads and
+    /// writes wait through the scheduler.
+    nonblock: bool = false,
 };
 
 const handle_name = "FILE*";
@@ -156,6 +160,12 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
             .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return ioError(l, e),
             else => h.file.readStreaming(l.g.io, &bufs) catch |e| switch (e) {
                 error.EndOfStream => 0,
+                error.WouldBlock => {
+                    // The bytes read so far stay in the buffer, so the
+                    // native that runs again after the wait finds them.
+                    _ = try sched.waitIo(l, h.file.handle, .read, -1);
+                    continue;
+                },
                 else => |x| return ioError(l, x),
             },
         };
@@ -364,8 +374,49 @@ fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) Error!void {
             h.rstart = 0;
             h.eof = false;
         },
-        else => h.file.writeStreamingAll(l.g.io, bytes) catch |e| return ioError(l, e),
+        else => if (h.nonblock) try writeWaiting(l, h, bytes) else h.file.writeStreamingAll(l.g.io, bytes) catch |e| return ioError(l, e),
     }
+}
+
+/// Writes all of `bytes` to a non-blocking pipe, waiting through the
+/// scheduler while the pipe is full. The count already written survives a
+/// suspension in the scheduler record of the thread.
+fn writeWaiting(l: *Thread, h: *Handle, bytes: []const u8) Error!void {
+    var done = sched.progress(l);
+    while (done < bytes.len) {
+        const n = h.file.writeStreaming(l.g.io, &.{}, &.{bytes[done..]}, 1) catch |e| switch (e) {
+            error.WouldBlock => {
+                try sched.saveProgress(l, done);
+                _ = try sched.waitIo(l, h.file.handle, .write, -1);
+                continue;
+            },
+            else => |x| return ioError(l, x),
+        };
+        done += n;
+    }
+    if (l.task) |t| t.progress = 0;
+}
+
+/// A handle for one end of a pipe of `os.spawn`. The collector closes it.
+pub fn newPipeHandle(l: *Thread, file: std.Io.File, readable: bool, nonblock: bool) Error!Value {
+    return newHandle(l, .{ .file = file, .kind = .pipe, .readable = readable, .writable = !readable, .nonblock = nonblock });
+}
+
+/// The file of an open io handle, or null for any other value.
+pub fn fileOf(l: *Thread, v: Value) ?std.Io.File {
+    const h = toHandle(l, v) orelse return null;
+    if (h.closed) return null;
+    return h.file;
+}
+
+/// Closes an io handle of `os.spawn`, ignoring any other value.
+pub fn closePipe(l: *Thread, v: Value) void {
+    const h = toHandle(l, v) orelse return;
+    if (h.closed) return;
+    h.closed = true;
+    if (h.nonblock) sched.forget(l.g, h.file.handle);
+    h.file.close(l.g.io);
+    h.rbuf.deinit(l.g.gpa);
 }
 
 // ---------------------------------------------------------------------
@@ -466,7 +517,13 @@ fn closeHandle(l: *Thread, h: *Handle) Error!u32 {
         },
         .pipe => {
             h.closed = true;
-            if (h.child == null) h.file.close(l.g.io);
+            if (h.child == null) {
+                // A coroutine that waits on the pipe finds it closed.
+                if (h.nonblock) sched.forget(l.g, h.file.handle);
+                h.file.close(l.g.io);
+                h.rbuf.deinit(l.g.gpa);
+                return aux.retBool(l, true);
+            }
             var status: shell.Status = .{ .exited = 0 };
             if (h.child) |*c| {
                 // Both ends close before the wait, as with pclose. A child
@@ -794,7 +851,7 @@ fn popen(l: *Thread) Error!u32 {
     const reading = std.mem.eql(u8, mode, "r");
     if (!reading and !std.mem.eql(u8, mode, "w")) return aux.argError(l, 2, "invalid mode", .{});
     out.flushAll(l.g);
-    if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for popen", .{});
+    if (!@import("../vm/pledge.zig").allowedUnrestricted(l, "exec")) return l.raiseFmt("permission \"exec\" denied for popen", .{});
     const child = shell.spawn(l.g.io, l.g.gpa, cmd, if (reading) .stdout else .stdin, @import("os.zig").ownedEnviron(l.g)) catch return failResult(l, "cannot run command");
     const f = if (reading) child.stdout.? else child.stdin.?;
     const hv = try newHandle(l, .{ .file = f, .kind = .pipe, .readable = reading, .writable = !reading, .child = child });
