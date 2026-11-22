@@ -134,3 +134,37 @@ local function popen_lines_then_close_returns_the_status_test()
     local ok, how, code = p:close()
     assert(ok == nil and how == "exit" and code == 3)
 end
+
+-- Children that a signal ends. The shell sends the signal to itself, so
+-- the child that the runtime waits for is the one the signal ends.
+local a_command_that_a_signal_ends_reports_the_signal_cases = {
+    { "KILL", 9 }, { "TERM", 15 }, { "INT", 2 },
+}
+
+local function a_command_that_a_signal_ends_reports_the_signal_test(name, number)
+    if windows then skip("Windows has no signals") end
+    local ok, kind, code = os.execute("kill -" .. name .. " $$")
+    assert(ok == nil and kind == "signal" and code == number, `$(ok) $(kind) $(code)`)
+end
+
+local function closing_a_pipe_reports_a_reader_that_a_signal_ends_test()
+    if windows then skip("Windows has no signals") end
+    local f = assert(io.popen("echo before; kill -KILL $$; echo after", "r"))
+    assert(f:read("a") == "before\n")
+    local ok, kind, code = f:close()
+    assert(ok == nil and kind == "signal" and code == 9, `$(ok) $(kind) $(code)`)
+end
+
+local function writing_to_a_child_that_a_signal_ended_raises_broken_pipe_test()
+    if windows then skip("Windows has no signals") end
+    local f = assert(io.popen("kill -KILL $$", "w"))
+    -- The writes fail once the pipe has no reader, and the program goes on.
+    local ok, err
+    for _ = 1, 1000 do
+        ok, err = catch f:write(string.rep("x", 4096))
+        if not ok then break end
+    end
+    assert(not ok and string.find(tostring(err), "Broken pipe", 1, true), tostring(err))
+    local done, kind, code = f:close()
+    assert(done == nil and kind == "signal" and code == 9, `$(done) $(kind) $(code)`)
+end

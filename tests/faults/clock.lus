@@ -1,0 +1,178 @@
+-- Jumps of the real clock (`LUS_CLOCK`, `runtime/src/vm/faultio.zig`).
+--
+-- The first scenario sets the clock two seconds before New York starts
+-- daylight saving and lets it run across the change, then does the same
+-- for the end of daylight saving. The checker asserts that the readings
+-- of `time.now` advance with the elapsed time, that the zoned values and
+-- `os.date` show the offsets of the zone on each side, and that a zoned
+-- value turns back into the instant it came from.
+--
+-- The second scenario moves the clock back an hour, then forward a day,
+-- between readings. The checker asserts that `time.now` and `os.time`
+-- follow each jump, that `time.monotonic` never decreases, and that a
+-- socket timeout of 200 milliseconds after the clock moved back takes
+-- about 200 milliseconds.
+--
+-- Usage: lus clock.lus [--lus BIN] [--timeout SECONDS]
+--
+-- BIN is a runtime built with `-Dfail-io=true`.
+
+global arg, assert, error, fs, io, ipairs, math, os, package, pairs, pledge, print, string, table, tonumber, tostring
+
+pledge("exec", "fs", "env")
+
+local opts = { lus = "runtime/zig-out-io/bin/lus", timeout = 30 }
+do
+    local i = 1
+    while i <= #arg do
+        local a, v = arg[i], arg[i + 1]
+        if a == "--lus" then opts.lus = v
+        elseif a == "--timeout" then opts.timeout = tonumber(v)
+        else error("unknown option " .. a) end
+        i = i + 2
+    end
+end
+
+if package.config:sub(1, 1) == "\\" then
+    print("the scenarios use perl for their time limit, so they skip Windows")
+    os.exit(0)
+end
+
+-- 2026-03-08T06:59:58Z is 01:59:58 in New York, two seconds before the
+-- clocks there move from 02:00 to 03:00. 2026-11-01T05:59:58Z is 01:59:58
+-- daylight time, two seconds before the clocks move from 02:00 back to
+-- 01:00.
+local SPRING = 1772953198
+local AUTUMN = 1793512798
+-- An ordinary day, 2026-06-01T12:00:00Z.
+local BASE = 1780315200
+
+-- Reads the real clock once a quarter of a second until it has moved four
+-- seconds, printing each reading.
+local DST = [[
+local ny = time.zone("America/New_York")
+local first = time.now()
+local start = time.monotonic()
+while true do
+    local now = time.now()
+    local z = now:at(ny)
+    local elapsed = (time.monotonic() - start):seconds()
+    print(string.format("reading %d %.3f %s %d %s %s", now:epoch(), elapsed, z:iso(), z.offset,
+        tostring(z:instant() == now), os.date("%H:%M:%S")))
+    if (now - first):seconds() >= 4 then break end
+    local until_ = time.monotonic() + time.millis(250)
+    while time.monotonic() < until_ do end
+end
+]]
+
+-- Each loop reads the real clock twice, once with time.now and once with
+-- os.time. The checker places the jumps at the reads of loops 3 and 5.
+local JUMPS = [[
+pledge("network")
+local last = time.monotonic()
+for i = 1, 6 do
+    local now = time.now()
+    local secs = os.time()
+    local m = time.monotonic()
+    print(string.format("loop %d %d %d %s", i, now:epoch(), secs, tostring(m >= last)))
+    last = m
+    if i == 3 then
+        -- Wait for a receive that never completes, after the clock moved
+        -- back.
+        local server = network.tcp.bind("127.0.0.1", 0)
+        local _, port = server:getsockname()
+        local sock = network.tcp.connect("127.0.0.1", port)
+        sock:settimeout(0.2)
+        local before = time.monotonic()
+        local ok, err = catch sock:receive(1)
+        print(string.format("timeout %s %.3f", tostring(err):match("receive timeout") and "receive" or "other", (time.monotonic() - before):seconds()))
+        sock:close()
+        server:close()
+    end
+end
+]]
+
+local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-clock-faults")
+local _ = catch fs.remove(dir, true)
+fs.createdirectory(dir, true)
+for name, text in pairs({ ["dst.lus"] = DST, ["jumps.lus"] = JUMPS, ["empty.lus"] = "" }) do
+    local f = assert(io.open(fs.path.join(dir, name), "w"))
+    f:write(text)
+    f:close()
+end
+
+local function quote(s)
+    return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
+local function run(spec, name)
+    local cmd = string.format("cd %s && TZ=America/New_York LUS_CLOCK=%s perl -e 'alarm %d; exec @ARGV' %s %s 2>&1",
+        quote(dir), spec, opts.timeout, quote(fs.path.join(os.getenv("PWD"), opts.lus)), name)
+    local p = assert(io.popen(cmd, "r"))
+    local out = p:read("a")
+    local _, _, code = p:close()
+    if code ~= 0 then error(string.format("%s exited with %s: %s", name, tostring(code), out)) end
+    return out
+end
+
+local problems = {}
+local function problem(fmt, ...)
+    problems[#problems + 1] = string.format(fmt, ...)
+end
+
+-- The readings of a crossing of a change of daylight saving that starts
+-- at `at`. `before` and `after` are the offsets of New York in seconds,
+-- and `hour_after` the local hour right after the change.
+local function crossing(label, at, before, after, hour_after)
+    local out = run("1:=" .. at, "dst.lus")
+    local seen_before, seen_after, readings = false, false, 0
+    for epoch_text, elapsed_text, iso, offset_text, same, local_time in out:gmatch("reading (%d+) ([%d.]+) (%S+) (%-?%d+) (%a+) (%S+)") do
+        readings = readings + 1
+        local epoch, elapsed, offset = tonumber(epoch_text), tonumber(elapsed_text), tonumber(offset_text)
+        -- The scripted clock runs with the real one from its first read.
+        if math.abs(epoch - at - elapsed) > 1.5 then problem("%s: reading %d is %d seconds after the start, after %.3f seconds", label, epoch, epoch - at, elapsed) end
+        if same ~= "true" then problem("%s: %s does not turn back into its instant", label, iso) end
+        local want = epoch < at + 2 and before or after
+        if offset ~= want then problem("%s: %s has offset %d, expected %d", label, iso, offset, want) end
+        if offset == before then seen_before = true else seen_after = true end
+        local hour = tonumber(iso:sub(12, 13))
+        if offset == after and hour ~= hour_after then problem("%s: %s has hour %d after the change", label, iso, hour) end
+        if local_time:sub(1, 5) ~= iso:sub(12, 16) then problem("%s: os.date shows %s at %s", label, local_time, iso) end
+    end
+    if readings == 0 then problem("%s: no readings: %s", label, out) end
+    if not (seen_before and seen_after) then problem("%s: the readings do not cross the change", label) end
+    return readings
+end
+
+local spring = crossing("spring", SPRING, -18000, -14400, 3)
+local autumn = crossing("autumn", AUTUMN, -14400, -18000, 1)
+
+-- The jumps, placed after the reads that the runtime makes as it starts.
+local startup = tonumber(run("count", "empty.lus"):match("lus: (%d+) reads of the real clock"))
+assert(startup, "the runtime did not count its reads of the clock")
+local back = startup + 2 * 2 + 1
+local forward = startup + 2 * 4 + 1
+local out = run(string.format("1:=%d,%d:-3600,%d:+86400", BASE, back, forward), "jumps.lus")
+local loops = {}
+for i, now, secs, mono in out:gmatch("loop (%d+) (%d+) (%d+) (%a+)") do
+    loops[tonumber(i)] = { now = tonumber(now), secs = tonumber(secs), mono = mono }
+end
+local expect = { 0, 0, -3600, -3600, 82800, 82800 }
+for i = 1, 6 do
+    local l = loops[i]
+    if not l then
+        problem("jumps: loop %d did not run: %s", i, out)
+    else
+        if math.abs(l.now - BASE - expect[i]) > 2 then problem("jumps: time.now in loop %d is %d seconds from the base, expected %d", i, l.now - BASE, expect[i]) end
+        if math.abs(l.secs - l.now) > 1 then problem("jumps: os.time in loop %d is %d, time.now %d", i, l.secs, l.now) end
+        if l.mono ~= "true" then problem("jumps: time.monotonic decreased in loop %d", i) end
+    end
+end
+local what, waited = out:match("timeout (%S+) ([%d.]+)")
+waited = tonumber(waited)
+if what ~= "receive" or not waited or waited < 0.15 or waited > 2 then problem("jumps: the timeout of 0.2 seconds ended with %s after %s seconds", tostring(what), tostring(waited)) end
+
+fs.remove(dir, true)
+print(string.format("spring %d readings, autumn %d readings, 6 loops with 2 jumps, %d problems", spring, autumn, #problems))
+for _, p in ipairs(problems) do print("  " .. p) end
+if #problems > 0 then os.exit(1) end

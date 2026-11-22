@@ -201,9 +201,13 @@ fn flateDecompress(l: *Thread, input: []const u8, container: flate.Container, na
 const ZstdInBuffer = extern struct { src: ?*const anyopaque, size: usize, pos: usize };
 const ZstdOutBuffer = extern struct { dst: ?*anyopaque, size: usize, pos: usize };
 const ZstdDCtx = opaque {};
+const ZstdCCtx = opaque {};
 
 extern fn ZSTD_compressBound(src_size: usize) usize;
-extern fn ZSTD_compress(dst: ?*anyopaque, cap: usize, src: ?*const anyopaque, n: usize, level: c_int) usize;
+extern fn ZSTD_createCCtx() ?*ZstdCCtx;
+extern fn ZSTD_freeCCtx(cctx: *ZstdCCtx) usize;
+extern fn ZSTD_CCtx_setParameter(cctx: *ZstdCCtx, param: c_int, value: c_int) usize;
+extern fn ZSTD_compress2(cctx: *ZstdCCtx, dst: ?*anyopaque, cap: usize, src: ?*const anyopaque, n: usize) usize;
 extern fn ZSTD_isError(code: usize) c_uint;
 extern fn ZSTD_getErrorName(code: usize) [*:0]const u8;
 extern fn ZSTD_minCLevel() c_int;
@@ -214,6 +218,10 @@ extern fn ZSTD_createDCtx() ?*ZstdDCtx;
 extern fn ZSTD_freeDCtx(dctx: *ZstdDCtx) usize;
 extern fn ZSTD_decompressStream(dctx: *ZstdDCtx, out: *ZstdOutBuffer, in: *ZstdInBuffer) usize;
 extern fn ZSTD_DStreamOutSize() usize;
+
+// The parameters of `ZSTD_CCtx_setParameter`, from zstd.h.
+const zstd_c_compression_level: c_int = 100;
+const zstd_c_checksum_flag: c_int = 201;
 
 const zstd_content_size_unknown: c_ulonglong = std.math.maxInt(c_ulonglong);
 const zstd_content_size_error: c_ulonglong = std.math.maxInt(c_ulonglong) - 1;
@@ -228,7 +236,15 @@ fn zstdCompress(l: *Thread) Error!u32 {
     defer list.deinit(gpa);
     const bound = ZSTD_compressBound(input.len);
     list.ensureTotalCapacity(gpa, bound) catch return l.raiseMem();
-    const n = ZSTD_compress(list.items.ptr, bound, input.ptr, input.len, @intCast(level));
+    // Each frame carries a checksum of its content, so decompressing
+    // damaged data raises an error.
+    const cctx = ZSTD_createCCtx() orelse return l.raiseMem();
+    defer _ = ZSTD_freeCCtx(cctx);
+    for ([_][2]c_int{ .{ zstd_c_compression_level, @intCast(level) }, .{ zstd_c_checksum_flag, 1 } }) |p| {
+        const r = ZSTD_CCtx_setParameter(cctx, p[0], p[1]);
+        if (ZSTD_isError(r) != 0) return l.raiseFmt("zstd compress failed: {s}", .{ZSTD_getErrorName(r)});
+    }
+    const n = ZSTD_compress2(cctx, list.items.ptr, bound, input.ptr, input.len);
     if (ZSTD_isError(n) != 0) return l.raiseFmt("zstd compress failed: {s}", .{ZSTD_getErrorName(n)});
     list.items.len = n;
     return retBytes(l, &list);

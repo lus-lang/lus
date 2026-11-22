@@ -36,6 +36,7 @@ const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const pledge = @import("../vm/pledge.zig");
 const sched = @import("../vm/sched.zig");
+const faultio = @import("../vm/faultio.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
@@ -363,6 +364,7 @@ fn unblock(s: *Socket) void {
 /// Reads what the socket holds now, at most `dst.len` bytes.
 pub fn tryRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     const handle = s.stream.socket.handle;
+    if (faultio.netStep(faultio.receive_steps)) |k| return if (k == .eof) .{ .n = 0 } else .{ .fail = error.ConnectionResetByPeer };
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .read)) return .again;
         const n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
@@ -383,6 +385,7 @@ pub fn tryRecv(l: *Thread, s: *Socket, dst: []u8) Try {
 /// Writes what the socket takes now of `data`.
 pub fn trySend(l: *Thread, s: *Socket, data: []const u8) Try {
     const handle = s.stream.socket.handle;
+    if (faultio.netStep(faultio.send_steps) != null) return .{ .fail = error.ConnectionResetByPeer };
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .write)) return .again;
         return afd.sendNow(l.g.io, handle, data);
@@ -474,6 +477,7 @@ const Connecting = struct {
 /// Starts a connection to `a` on a new socket that never blocks. Returns
 /// true when the connection is already established.
 fn startConnect(a: *const net.IpAddress, out: *posix.fd_t) !bool {
+    if (faultio.netStep(&.{.connect}) != null) return error.ConnectionRefused;
     const Threaded = Io.Threaded;
     const cloexec: u32 = if (Threaded.socket_flags_unsupported) 0 else posix.SOCK.CLOEXEC;
     const rc = posix.system.socket(Threaded.posixAddressFamily(a), posix.SOCK.STREAM | cloexec, posix.IPPROTO.TCP);
@@ -987,6 +991,7 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
         return out[0..1];
     } else |_| {}
     const name = net.HostName.init(host) catch |e| return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(e) });
+    if (faultio.netStep(&.{.lookup}) != null) return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(error.UnknownHostName) });
     var results: [32]net.HostName.LookupResult = undefined;
     var queue: Io.Queue(net.HostName.LookupResult) = .init(&results);
     const io = l.g.io;
@@ -1014,6 +1019,10 @@ fn connectHost(l: *Thread, host: []const u8, port: u16) Error!struct { net.Strea
     const list = try resolve(l, host, port, null, &addrs);
     var last: anyerror = error.ConnectionRefused;
     for (list) |*a| {
+        if (faultio.netStep(&.{.connect}) != null) {
+            last = error.ConnectionRefused;
+            continue;
+        }
         var stream = a.connect(l.g.io, .{ .mode = .stream, .protocol = .tcp }) catch |e| {
             last = e;
             continue;
@@ -1327,6 +1336,7 @@ pub fn acceptOne(l: *Thread, s: *Server) !*Socket {
     }
     const stream = try s.server.accept(l.g.io);
     errdefer stream.close(l.g.io);
+    if (faultio.netStep(&.{.accept}) != null) return error.ConnectionAborted;
     noSigpipe(stream.socket.handle);
     const local = localAddress(l.g.io, stream.socket.handle, s.server.socket.address);
     return newObject(l, Socket, socket_name, .{ .stream = stream, .local = local, .peer = stream.socket.address });
@@ -1589,6 +1599,10 @@ const TimedReader = struct {
             // runs the scheduler while it waits, so a `network.serve` of
             // the same state answers.
             if (!sched.active(l.g) or sched.canSuspend(l)) break :blk waitHandle(r.stream.socket.handle, false, r.timeout_ms);
+            // The poller of the scheduler reports edges, and the edge of data
+            // that is already waiting, or of an end of stream that arrived
+            // with the last bytes, has passed.
+            if (sched.readyNow(r.stream.socket.handle, .read)) break :blk .ready;
             const ready = sched.waitIo(l, r.stream.socket.handle, .read, r.timeout_ms) catch break :blk .failed;
             break :blk if (ready) .ready else .timeout;
         } else waitHandle(r.stream.socket.handle, false, r.timeout_ms);
@@ -1650,16 +1664,28 @@ const FetchConn = struct {
     }
 };
 
+/// Raises `what` followed by the error of the socket that made the
+/// connection fail, when the socket recorded one. `error.EndOfStream`
+/// names a server that closed the connection.
+fn fetchFailed(l: *Thread, c: *FetchConn, what: []const u8) Error {
+    return fetchFailedWith(l, c, what, error.ReadFailed);
+}
+
+fn fetchFailedWith(l: *Thread, c: *FetchConn, what: []const u8, err: anyerror) Error {
+    if (err == error.EndOfStream) return l.raiseFmt("{s}: Connection closed by peer", .{what});
+    const cause: ?anyerror = c.sr.err orelse if (c.sw.err) |e| e else null;
+    if (cause) |e| return l.raiseFmt("{s}: {s}", .{ what, errText(e) });
+    return l.raiseFmt("{s}", .{what});
+}
+
 /// Reads one LF terminated line into `buf`, without the LF and an optional
 /// CR before it. A line longer than the buffer returns its first part and
-/// leaves the rest for the next read. Returns null on a read error.
-fn readHttpLine(r: *Io.Reader, buf: []u8) ?usize {
+/// leaves the rest for the next read. The end of the stream before the
+/// LF returns `error.EndOfStream`, since a response always ends its lines.
+fn readHttpLine(r: *Io.Reader, buf: []u8) error{ ReadFailed, EndOfStream }!usize {
     var pos: usize = 0;
     while (true) {
-        const b = r.takeByte() catch |e| switch (e) {
-            error.EndOfStream => return pos,
-            error.ReadFailed => return null,
-        };
+        const b = try r.takeByte();
         if (b == '\n') {
             if (pos > 0 and buf[pos - 1] == '\r') pos -= 1;
             return pos;
@@ -1882,16 +1908,16 @@ fn fetch(l: *Thread) Error!u32 {
                 error.WriteFailed => c.sw.err orelse e,
                 else => e,
             };
-            return failResult(l, "SSL handshake failed", cause);
+            return l.raiseFmt("SSL handshake failed: {s}", .{errText(cause)});
         };
         c.use_tls = true;
     }
 
-    if (!c.sendAll(req.items)) return l.raiseFmt("failed to send request", .{});
+    if (!c.sendAll(req.items)) return fetchFailed(l, c, "failed to send request");
 
     const r = c.reader();
     var line: [4096]u8 = undefined;
-    const status_len = readHttpLine(r, &line) orelse return l.raiseFmt("failed to read response", .{});
+    const status_len = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response", e);
     const status = parseStatus(line[0..status_len]) orelse return l.raiseFmt("invalid HTTP response: {s}", .{line[0..status_len]});
 
     const headers = try l.newTable(0, 8);
@@ -1900,7 +1926,7 @@ fn fetch(l: *Thread) Error!u32 {
     var content_length: ?usize = null;
     var chunked = false;
     while (true) {
-        const n = readHttpLine(r, &line) orelse return l.raiseFmt("failed to read response headers", .{});
+        const n = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response headers", e);
         if (n == 0) break;
         const hl = line[0..n];
         const colon = std.mem.indexOfScalar(u8, hl, ':') orelse continue;
@@ -1925,33 +1951,33 @@ fn fetch(l: *Thread) Error!u32 {
     const no_body = std.ascii.eqlIgnoreCase(method, "HEAD") or status == 204 or status == 304 or (status >= 100 and status < 200);
     if (no_body) {} else if (chunked) {
         while (true) {
-            const n = readHttpLine(r, &line) orelse return l.raiseFmt("truncated chunked response", .{});
+            const n = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response body", e);
             const size = parseChunkSize(line[0..n]) orelse return l.raiseFmt("invalid chunk size", .{});
             if (size > fetch_max_body - resp.items.len) return l.raiseFmt("invalid chunk size", .{});
             if (size == 0) break;
             var remaining = size;
             while (remaining > 0) {
                 const want = @min(remaining, buf.len);
-                const got = readBody(r, buf[0..want]) orelse 0;
-                if (got == 0) return l.raiseFmt("truncated chunked response", .{});
+                const got = readBody(r, buf[0..want]) orelse return fetchFailed(l, c, "failed to read response body");
+                if (got == 0) return l.raiseFmt("truncated response body", .{});
                 resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
                 remaining -= got;
             }
-            const t = readHttpLine(r, &line);
-            if (t == null or t.? != 0) return l.raiseFmt("invalid chunk terminator", .{});
+            const t = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response body", e);
+            if (t != 0) return l.raiseFmt("invalid chunk terminator", .{});
         }
     } else if (content_length) |len| {
         var remaining = len;
         while (remaining > 0) {
             const want = @min(remaining, buf.len);
-            const got = readBody(r, buf[0..want]) orelse 0;
+            const got = readBody(r, buf[0..want]) orelse return fetchFailed(l, c, "failed to read response body");
             if (got == 0) return l.raiseFmt("truncated response body", .{});
             resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
             remaining -= got;
         }
     } else {
         while (true) {
-            const got = readBody(r, &buf) orelse 0;
+            const got = readBody(r, &buf) orelse return fetchFailed(l, c, "failed to read response body");
             if (got == 0) break;
             if (got > fetch_max_body - resp.items.len) return l.raiseFmt("response body too large", .{});
             resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();

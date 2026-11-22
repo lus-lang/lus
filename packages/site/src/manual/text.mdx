@@ -369,7 +369,7 @@ The right format depends on the programs that read the data.
 - **brotli** is the format that browsers accept for web content. At its default level it produces small output and compresses slowly.
 - **lz4** is designed for speed and produces larger output than the other formats.
 
-Damaged data raises an error when a format can tell. gzip and lz4 store a checksum of the data, so a changed byte raises an error. The zstd frames that `compress` writes, deflate, and brotli store none, so a change that keeps the stream valid decompresses to other data. A program that stores compressed data where it can be damaged keeps a checksum of its own, such as a digest from [`crypto.hash`](/manual/api#crypto.hash), or uses gzip.
+Damaged data raises an error when a format can tell. gzip, zstd, and lz4 store a checksum of the data, so a changed byte raises an error. deflate and brotli store none, so a change that keeps the stream valid decompresses to other data. A program that stores deflate or brotli data where it can be damaged keeps a checksum of its own, such as a digest from [`crypto.hash`](/manual/api#crypto.hash).
 
 Each format is a table with a `compress` and a `decompress` function. The optional second argument of `compress` sets the level, where a higher level produces smaller output and takes more time.
 
@@ -385,7 +385,7 @@ The formats differ in these details:
 
 - **gzip** adds a header and a CRC32 checksum to deflate data, which decompression checks. Level 0 stores the data without compression.
 - **deflate** writes no header and no checksum, so decompression cannot detect every corrupted input.
-- **zstd** accepts negative levels, which compress faster to a larger size. Decompression checks the header and the checksum when the data has one.
+- **zstd** accepts negative levels, which compress faster to a larger size. `compress` writes a checksum of the content into each frame. Decompression checks the header and the checksum when the data has one, which data from other programs may lack.
 - **brotli** takes a third argument, `lgwin`, from 10 to 24 with a default of 22. The compressor searches for repetitions within the last 2 to the power `lgwin` bytes, so a smaller value uses less memory and compresses less.
 - **lz4** writes the current LZ4 frame format. Decompression checks the header and the checksum when the data has one. [`vector.archive.lz4.decompress_hc`](/manual/api#vector.archive.lz4.decompress_hc) reads the older LZ4 frame format that earlier LZ4 tools produced, which starts with the number `0x184C2102`.
 

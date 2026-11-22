@@ -1,0 +1,162 @@
+-- Cancels a detached coroutine at each suspension point of a program in
+-- turn (`LUS_CANCEL_AT`, `runtime/src/vm/faultio.zig`), as
+-- `coroutine.close` would, and checks what the program sees.
+--
+-- The program runs an HTTP server, a client that talks to it over TCP, a
+-- coroutine that waits for the client, and a coroutine that waits for a
+-- message from a worker. Each coroutine declares two `<close>` variables
+-- that log when they close, and catches the errors of its operations, so
+-- it ends by returning or by the cancellation. For every suspension N the checker asserts
+-- that the run ends within its time limit, so no coroutine is left
+-- waiting for one that was cancelled, that every `<close>` variable that
+-- was declared closed exactly once, in the reverse order of the
+-- declarations of its coroutine, and that no socket is open at exit.
+--
+-- Usage: lus cancel.lus [--lus BIN] [--timeout SECONDS]
+--
+-- BIN is a runtime built with `-Dfail-io=true`.
+
+global arg, assert, error, fs, io, ipairs, math, os, package, pairs, pledge, print, string, table, tonumber, tostring
+
+pledge("exec", "fs", "env")
+
+local opts = { lus = "runtime/zig-out-io/bin/lus", timeout = 30 }
+do
+    local i = 1
+    while i <= #arg do
+        local a, v = arg[i], arg[i + 1]
+        if a == "--lus" then opts.lus = v
+        elseif a == "--timeout" then opts.timeout = tonumber(v)
+        else error("unknown option " .. a) end
+        i = i + 2
+    end
+end
+
+if package.config:sub(1, 1) == "\\" then
+    print("the scenarios use perl for their time limit, so they skip Windows")
+    os.exit(0)
+end
+
+local WORKER = [[
+worker.message("from the worker")
+]]
+
+local MAIN = [[
+pledge("network", "load", "fs:read")
+local function mark(who, n)
+    print("open " .. who .. n)
+    return setmetatable({}, { __close = function() print("close " .. who .. n) end })
+end
+
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(function()
+    local a <close> = mark("server", 1)
+    local b <close> = mark("server", 2)
+    return catch network.serve(server, function(req) return 200, "hello" end, { idle_timeout = 2 })
+end))
+
+-- The client catches its own errors, so it ends by returning or by a
+-- cancellation, and every variable it declared closes either way.
+local function talk()
+    local sock <close> = network.tcp.connect("127.0.0.1", port)
+    sock:settimeout(2)
+    local b <close> = mark("client", 2)
+    for i = 1, 3 do
+        assert(sock:send("GET /" .. i .. " HTTP/1.1\r\nHost: x\r\n\r\n"))
+        while true do
+            local line = assert(sock:receive("*l"))
+            if #line == 0 then break end
+        end
+        local body = assert(sock:receive(5))
+        assert(vector.tostring(body) == "hello")
+    end
+    return "client done"
+end
+local client = coroutine.detach(coroutine.create(function()
+    local a <close> = mark("client", 1)
+    return catch talk()
+end))
+
+local joiner = coroutine.detach(coroutine.create(function()
+    local a <close> = mark("joiner", 1)
+    local b <close> = mark("joiner", 2)
+    return coroutine.resume(client)
+end))
+
+local w = worker.create("worker.lus")
+local listener = coroutine.detach(coroutine.create(function()
+    local a <close> = mark("listener", 1)
+    local b <close> = mark("listener", 2)
+    return catch worker.receive(w)
+end))
+
+print("joiner", coroutine.resume(joiner))
+print("listener", coroutine.resume(listener))
+coroutine.close(serving)
+server:close()
+print("main done")
+]]
+
+local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-cancel-faults")
+local _ = catch fs.remove(dir, true)
+fs.createdirectory(dir, true)
+for name, text in pairs({ ["worker.lus"] = WORKER, ["main.lus"] = MAIN }) do
+    local f = assert(io.open(fs.path.join(dir, name), "w"))
+    f:write(text)
+    f:close()
+end
+
+local function quote(s)
+    return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
+local function run(spec)
+    local cmd = string.format("cd %s && LUS_FAIL_NET=count LUS_CANCEL_AT=%s perl -e 'alarm %d; exec @ARGV' %s main.lus 2>&1",
+        quote(dir), spec, opts.timeout, quote(fs.path.join(os.getenv("PWD"), opts.lus)))
+    local p = assert(io.popen(cmd, "r"))
+    local out = p:read("a")
+    local _, _, code = p:close()
+    return out, code
+end
+
+-- The problems of one run's output, or nil.
+local function check(out, code)
+    if code == 142 then return "the run did not end within its time limit" end
+    if not out:find("main done", 1, true) then return "the main chunk did not finish: " .. out end
+    local stacks = {}
+    for kind, who, n in out:gmatch("(%a+) (%a+)(%d)\n") do
+        if kind == "open" or kind == "close" then
+            local s = stacks[who] or {}
+            stacks[who] = s
+            if kind == "open" then
+                s[#s + 1] = n
+            else
+                local top = s[#s]
+                if top ~= n then return string.format("%s closed variable %s while %s was the last open one", who, n, tostring(top)) end
+                s[#s] = nil
+            end
+        end
+    end
+    for who, s in pairs(stacks) do
+        if #s > 0 then return string.format("%s left %d variables open", who, #s) end
+    end
+    local open = tonumber(out:match("lus: (%d+) sockets open at exit"))
+    if open ~= 0 then return string.format("%s sockets open at exit", tostring(open)) end
+end
+
+local out, code = run("count")
+local problem = check(out, code)
+local steps = tonumber(out:match("lus: (%d+) suspensions"))
+assert(steps, "the scenario did not run: " .. out)
+local problems = {}
+if problem then problems[#problems + 1] = "without a cancellation: " .. problem end
+for n = 1, steps do
+    local o, c = run(tostring(n))
+    local p = check(o, c)
+    if p then problems[#problems + 1] = string.format("suspension %d: %s", n, p) end
+end
+fs.remove(dir, true)
+print(string.format("%d suspensions, %d problems", steps, #problems))
+for _, p in ipairs(problems) do print("  " .. p) end
+if #problems > 0 then os.exit(1) end
