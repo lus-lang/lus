@@ -76,3 +76,37 @@ local function a_skip_reason_keeps_its_characters_test()
     assert(err:sub(-5) == " tard")
     assert(err:find("réservé", 1, true))
 end
+
+-- In a test file, `assert` becomes a power assert that reports the failing
+-- expression, and it still returns every value that the standard assert
+-- returns, including the values of a call in the last position.
+local function power_assert_returns_every_value_test()
+    local function pack(...) return { n = select("#", ...), ... } end
+    local function three() return true, 2, 3 end
+    local co = coroutine.create(function() return "x", "y" end)
+    local r = pack(assert(coroutine.resume(co)))
+    local t = pack(assert(three()))
+    local a = pack(assert(1, 2, 3))
+    local l = pack(assert(true, three()))
+    local c = pack(assert(1 == 1, "message", "more"))
+    local results = {
+        { r.n, 3 }, { r[2], "x" }, { r[3], "y" },
+        { t.n, 3 }, { t[3], 3 },
+        { a.n, 3 }, { a[3], 3 },
+        { l.n, 4 }, { l[4], 3 },
+        { c.n, 3 }, { c[1], true }, { c[3], "more" },
+    }
+    for i, pair in ipairs(results) do
+        if pair[1] ~= pair[2] then error(`result $(i): $(tostring(pair[1])) where $(tostring(pair[2])) was expected`, 0) end
+    end
+    assert(select(2, assert(coroutine.resume(coroutine.create(function() return "only" end)))) == "only")
+end
+
+-- A failing call in the last position passes its message to the report.
+local function power_assert_takes_the_message_of_a_failing_call_test()
+    local function fails() return nil, "the reason" end
+    local ok, err = catch assert(fails())
+    if ok or not string.find(tostring(err), "the reason", 1, true) then error(tostring(err), 0) end
+    ok, err = catch assert(1 > 2, "bigger")
+    if ok or not string.find(tostring(err), "bigger", 1, true) then error(tostring(err), 0) end
+end
