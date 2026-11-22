@@ -242,15 +242,21 @@ fn hmac(l: *Thread) Error!u32 {
 // ---------------------------------------------------------------------
 // Random bytes and comparison
 
-const max_random = 1 << 20;
+/// The bytes one read of the random source fills. Some sources cap a
+/// single request, so a large vector fills in pieces of this size.
+const random_chunk = 1 << 20;
 
 fn random(l: *Thread) Error!u32 {
     const n = try aux.checkInt(l, 1);
-    if (n < 0 or n > max_random) return aux.argError(l, 1, "size out of range", .{});
+    if (n < 0) return aux.argError(l, 1, "size must be non-negative", .{});
+    const len = std.math.cast(usize, n) orelse return l.raiseMem();
     var list: std.ArrayList(u8) = .empty;
     defer list.deinit(l.g.gpa);
-    list.resize(l.g.gpa, @intCast(n)) catch return l.raiseMem();
-    try secureRandom(l, list.items);
+    list.resize(l.g.gpa, len) catch return l.raiseMem();
+    var i: usize = 0;
+    while (i < len) : (i += random_chunk) {
+        try secureRandom(l, list.items[i..@min(i + random_chunk, len)]);
+    }
     return aux.ret(l, Value.obj(.vector, try vector.newVectorFrom(l, &list)));
 }
 
