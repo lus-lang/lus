@@ -66,12 +66,44 @@ local function make_pair()
     return server, client, conn
 end
 
+-- The waits of these tests depend on a server in a detached coroutine or
+-- on a worker. An allocation that fails there, as the allocation sweep
+-- injects, stops that peer, so every wait carries a timeout or ends when
+-- the peer has died, and the test fails where it would otherwise hang.
+local wait_seconds = 10
+
+-- network.fetch with a timeout of `wait_seconds` unless `options` sets one.
+local function fetch(url, method, headers, body, options)
+    options = options or {}
+    if options.timeout == nil then options.timeout = wait_seconds end
+    return network.fetch(url, method or "GET", headers, body, options)
+end
+
+-- Accepts one connection on `server` while worker `w` connects. When the
+-- worker ends first, its error is raised from worker.receive.
+local function accept_from(server, w)
+    server:settimeout(0.05)
+    local started = os.time()
+    while true do
+        local ok, conn = catch server:accept()
+        if ok and conn then
+            conn:settimeout(wait_seconds)
+            return conn
+        end
+        if worker.status(w) == "dead" then
+            worker.receive(w)
+            error("the worker ended before it connected", 0)
+        end
+        if os.time() - started > wait_seconds then error("the worker did not connect", 0) end
+    end
+end
+
 local function make_sender(bytes, suffix)
     local server = tcp_bind("127.0.0.1", 0)
     local _, port = server:getsockname()
     local sender = worker.create(FIXTURES .. "/net_sender.lus")
     worker.send(sender, { port = port, bytes = bytes, suffix = suffix })
-    return server, server:accept(), sender
+    return server, accept_from(server, sender), sender
 end
 
 local function finish_sender(sender)
@@ -94,7 +126,7 @@ local function fetch_once(method, head, headers)
     local _, port = server:getsockname()
     local w = worker.create(FIXTURES .. "/net_fetch.lus")
     worker.send(w, { port = port, method = method, headers = headers })
-    local conn = server:accept()
+    local conn = accept_from(server, w)
     local request = {}
     while true do
         local line = txt(conn:receive("*l"))
@@ -171,7 +203,7 @@ local function fetch_reaches_a_serve_of_the_same_state_test()
     local server = coroutine.detach(coroutine.create(function()
         network.serve(listener, function(req) return 200, "hi " .. req.path end)
     end))
-    local status, body = network.fetch(`http://127.0.0.1:$(port)/x`)
+    local status, body = fetch(`http://127.0.0.1:$(port)/x`)
     coroutine.close(server)
     listener:close()
     assert(status == 200 and txt(body) == "hi /x", txt(body))
@@ -197,7 +229,7 @@ local function fetch_streams_a_response_body_test()
             if i <= 3 then return `data: $(i)\n\n` end
         end, { ["Content-Type"] = "text/event-stream" }
     end, function(base)
-        local status, body, headers = network.fetch(base .. "/events", "GET", nil, nil, { stream = true })
+        local status, body, headers = fetch(base .. "/events", "GET", nil, nil, { stream = true })
         assert(status == 200 and headers["content-type"] == "text/event-stream")
         assert(type(body) == "thread")
         local lines = {}
@@ -211,7 +243,7 @@ local function fetch_yields_a_streamed_body_in_parts_test()
     with_server(function(req)
         return 200, string.rep("abcdefgh", 20000)
     end, function(base)
-        local _, body = network.fetch(base .. "/", "GET", nil, nil, { stream = true })
+        local _, body = fetch(base .. "/", "GET", nil, nil, { stream = true })
         local total = 0
         while true do
             local ok, part = coroutine.resume(body)
@@ -230,7 +262,7 @@ local function closing_a_body_closes_its_connection_test()
     with_server(function(req)
         return 200, string.rep("z", 500000)
     end, function(base)
-        local _, body = network.fetch(base .. "/", "GET", nil, nil, { stream = true })
+        local _, body = fetch(base .. "/", "GET", nil, nil, { stream = true })
         local ok, part = coroutine.resume(body)
         assert(ok and #part > 0)
         assert(coroutine.close(body))
@@ -244,7 +276,7 @@ local function fetch_sends_a_body_from_a_function_test()
     end, function(base)
         local parts = { "ab", "", vector.fromstring("cd") }
         local i = 0
-        local status, body = network.fetch(base .. "/up", "POST", nil, function()
+        local status, body = fetch(base .. "/up", "POST", nil, function()
             i = i + 1
             return parts[i]
         end)
@@ -256,7 +288,7 @@ local function fetch_sends_a_body_from_a_coroutine_test()
     with_server(function(req)
         return 200, `$(req.headers["transfer-encoding"]) $(txt(req.body))`
     end, function(base)
-        local status, body = network.fetch(base .. "/up", "POST", nil, coroutine.create(function()
+        local status, body = fetch(base .. "/up", "POST", nil, coroutine.create(function()
             coroutine.yield("ab")
             coroutine.yield(vector.fromstring("cd"))
             return "ef"
@@ -287,7 +319,7 @@ local function fetch_sends_a_function_body_with_a_length_as_is_test()
         return 200, `$(req.headers["content-length"]) $(tostring(req.headers["transfer-encoding"])) $(txt(req.body))`
     end, function(base)
         local sent = false
-        local status, body = network.fetch(base .. "/up", "PUT", { ["Content-Length"] = 3 }, function()
+        local status, body = fetch(base .. "/up", "PUT", { ["Content-Length"] = 3 }, function()
             if sent then return nil end
             sent = true
             return "xyz"
@@ -310,7 +342,7 @@ local function fetch_reads_a_body_that_ends_with_the_connection_test()
         c:send("HTTP/1.1 200 OK\r\n\r\nall of it")
         c:close()
     end))
-    local status, body = network.fetch(`http://127.0.0.1:$(port)/`)
+    local status, body = fetch(`http://127.0.0.1:$(port)/`)
     coroutine.close(server)
     listener:close()
     assert(status == 200 and txt(body) == "all of it")
@@ -354,11 +386,11 @@ local function a_slow_fetch_leaves_other_coroutines_running_test()
     end)
     local slow, fast
     local slow_co = coroutine.detach(coroutine.create(function()
-        local _, body = network.fetch(`http://127.0.0.1:$(port)/slow`)
+        local _, body = fetch(`http://127.0.0.1:$(port)/slow`)
         slow = txt(body)
     end))
     local fast_co = coroutine.detach(coroutine.create(function()
-        local _, body = network.fetch(`http://127.0.0.1:$(port)/fast`)
+        local _, body = fetch(`http://127.0.0.1:$(port)/fast`)
         fast = txt(body)
     end))
     -- The fast fetch ends while the slow one still waits.
@@ -379,7 +411,7 @@ local function fetch_in_a_detached_coroutine_suspends_test()
     end, function(base)
         local result
         local client = coroutine.detach(coroutine.create(function()
-            local _, body = network.fetch(base .. "/inner")
+            local _, body = fetch(base .. "/inner")
             result = txt(body)
         end))
         while coroutine.status(client) ~= "dead" do
@@ -1014,7 +1046,7 @@ local function local_fetch(status, location, body)
   worker.send(fixture, {status = status, location = location, body = body, port = port})
   assert(worker.receive(fixture) == "ready", "local HTTP fixture should bind")
   local got_status, got_body, got_headers =
-      network.fetch("http://127.0.0.1:" .. tostring(port) .. "/fixture")
+      fetch("http://127.0.0.1:" .. tostring(port) .. "/fixture")
   assert(worker.receive(fixture) == "done", "local HTTP fixture should finish")
   return got_status, got_body, got_headers
 end

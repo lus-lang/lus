@@ -365,6 +365,9 @@ pub fn handshake(l: *Thread, s: *net.Socket, deadline: u64) Error!bool {
             try net.stillOpen(l, s);
             continue;
         }
+        // A socket error that stopped the handshake names the reason, where
+        // the message of an earlier failure would otherwise show.
+        if (t.io_err) |e| return l.raiseFmt("TLS handshake failed: {s}", .{net.errText(e)});
         _ = handshakeFail(t, r);
         return l.raiseFmt("{s}", .{lastMessage()});
     }

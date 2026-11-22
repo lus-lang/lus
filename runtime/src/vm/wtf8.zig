@@ -315,7 +315,36 @@ pub fn combineSurrogates(lead: u21, trail: u21) u21 {
     return 0x10000 + ((lead - 0xD800) << 10) + (trail - 0xDC00);
 }
 
-/// Appends `bytes` to `out`, replacing every invalid sequence with U+FFFD.
+/// The length of the maximal subpart at the start of `s`, an ill-formed
+/// UTF-8 sequence: its first byte and the continuation bytes after it
+/// that a well-formed sequence starting with that byte could hold. Each
+/// maximal subpart becomes one U+FFFD, the practice of Unicode and of the
+/// WHATWG UTF-8 decoder.
+pub fn maximalSubpart(s: []const u8) usize {
+    const b0 = s[0];
+    // The number of continuation bytes the lead takes, and the range of
+    // the first one.
+    const need: usize, const lo: u8, const hi: u8 = switch (b0) {
+        0xC2...0xDF => .{ 1, 0x80, 0xBF },
+        0xE0 => .{ 2, 0xA0, 0xBF },
+        0xE1...0xEC, 0xEE...0xEF => .{ 2, 0x80, 0xBF },
+        0xED => .{ 2, 0x80, 0x9F },
+        0xF0 => .{ 3, 0x90, 0xBF },
+        0xF1...0xF3 => .{ 3, 0x80, 0xBF },
+        0xF4 => .{ 3, 0x80, 0x8F },
+        else => return 1,
+    };
+    var n: usize = 1;
+    while (n <= need and n < s.len) : (n += 1) {
+        const c = s[n];
+        const ok = if (n == 1) c >= lo and c <= hi else c >= 0x80 and c <= 0xBF;
+        if (!ok) break;
+    }
+    return n;
+}
+
+/// Appends `bytes` to `out`, replacing each maximal subpart of an invalid
+/// sequence with U+FFFD.
 pub fn appendLossy(gpa: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) !void {
     var i: usize = 0;
     var prev_lead = false;
@@ -327,6 +356,9 @@ pub fn appendLossy(gpa: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []con
             prev_lead = false;
             continue;
         }
+        // A trail surrogate right after a lead stands for a pair that WTF-8
+        // writes as one 4-byte sequence, so it becomes one U+FFFD.
+        var skip = maximalSubpart(bytes[i..]);
         if (decodeAt(bytes, i)) |d| {
             const is_trail = d.cp >= 0xDC00 and d.cp <= 0xDFFF;
             if (!(is_trail and prev_lead)) {
@@ -335,10 +367,11 @@ pub fn appendLossy(gpa: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []con
                 i += d.len;
                 continue;
             }
+            skip = d.len;
         }
         try out.appendSlice(gpa, "\xEF\xBF\xBD");
+        i += skip;
         prev_lead = false;
-        i += 1;
     }
 }
 
