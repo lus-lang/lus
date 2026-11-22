@@ -642,3 +642,17 @@ local function format_writes_a_decimal_from_its_exact_digits_test()
     assert(string.format("%f", 1e30d) == "1000000000000000000000000000000.000000")
     assert(string.format("%.2f", 2.675) == "2.67")
 end
+
+-- A decimal zero with a positive exponent prints in exponent form, which
+-- reads back to the same stored digits. The fuzz target for numbers found
+-- that it printed one zero for each digit of the exponent.
+local function decimal_zero_with_an_exponent_reads_back_test()
+    for _, s in ipairs({ "0e9", "000E9", "0e2", "0.0e3", "0e-3", "0.00" }) do
+        local d = decimal(s)
+        local text = tostring(d)
+        assert(tostring(decimal(text)) == text, `$s printed as $text`)
+        assert(decimal(text) == d)
+    end
+    assert(tostring(decimal("0e9")) == "0e+9")
+    assert(tostring(decimal("1e9")) == "1000000000")
+end

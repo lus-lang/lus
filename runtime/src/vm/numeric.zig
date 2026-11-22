@@ -247,7 +247,10 @@ pub fn decimalToString(gpa: Allocator, d: *const Decimal) ![]u8 {
     if (!d.positive and !d.coef().eqlZero()) try out.append(gpa, '-');
     const e = d.exponent;
     if (e >= 0) {
-        if (e > 20) {
+        // A zero coefficient has no digits to pad, and zeros written out
+        // would read back as a plain 0 with another exponent, so a zero
+        // with an exponent keeps it in exponent form.
+        if (e > 20 or (e > 0 and d.coef().eqlZero())) {
             try out.print(gpa, "{s}e+{d}", .{ digits, e });
         } else {
             try out.appendSlice(gpa, digits);
