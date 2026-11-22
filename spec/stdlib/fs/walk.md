@@ -27,7 +27,7 @@ Each step gives three values: the path of the entry joined to `dir`, then `"dire
 - `links` is `"list"`, the default, or `"follow"`. With `"list"` a symbolic link is reported with the type of its target and the walk does not enter it. With `"follow"` the walk enters links to directories, except a link to a directory that the walk is already inside, which would never end.
 - `errors` is `"raise"`, the default, or `"skip"`. With `"skip"` a subdirectory that cannot be read, such as one without read permission, is left out. A `dir` that cannot be read raises in both modes.
 
-The call requires `fs:read` for `dir` and raises at once without it. The walk reports the entries of every directory it reads, and it enters a subdirectory only when `fs:read` covers it. A `dir` that does not exist raises `"cannot list directory DIR: No such file or directory"` at the first step, and a `dir` that names a file raises `"DIR is not a directory"`. An option of the wrong type or value raises a bad argument error.
+The call requires `fs:read` for `dir` and raises at once without it. The walk reports the entries of every directory it reads but enters a subdirectory only when `fs:read` covers it. A `dir` that does not exist raises `"cannot list directory DIR: No such file or directory"` at the first step, and a `dir` that names a file raises `"DIR is not a directory"`. An option of the wrong type or value raises a bad argument error.
 
 The iterator closes when the loop ends, also through `break` or an error, because the call returns a closing value as the fourth result of the generic `for`.
 

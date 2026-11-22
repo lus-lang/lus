@@ -20,13 +20,13 @@ Each argument names a signal.
 
 - `"interrupt"` is SIGINT, which Ctrl-C sends from a terminal. On Windows it is the Ctrl-C and Ctrl-Break events of the console.
 - `"terminate"` is SIGTERM, which service managers and `kill` send to stop a program. On Windows it is the close, logoff, and shutdown events of the console.
-- `"hangup"` is SIGHUP. Windows has no such signal, and the name raises an error there.
+- `"hangup"` is SIGHUP. Windows has no such signal, so the name raises an error there.
 
-While a coroutine of `os.signal` handles a signal, the signal no longer ends the program. Resuming the coroutine waits until one of its signals arrives, then returns `true` and the name of the signal. Each signal that arrives after the call is counted, so a signal that arrives while the program does other work is returned by the next resume. The system itself merges a signal into one that is still pending, so two identical signals sent at the same moment may arrive as one. Resumed from a detached coroutine, the wait suspends that coroutine, and resumed anywhere else it blocks while the detached coroutines run.
+While a coroutine of `os.signal` handles a signal, the signal no longer ends the program. Resuming the coroutine waits until one of its signals arrives, then returns `true` and the name of the signal. Each signal that arrives after the call is counted, so a signal that arrives while the program does other work is returned by the next resume. The system itself merges a signal into one that is still pending, so two identical signals sent at the same moment may arrive as one. Resumed from a detached coroutine, the wait suspends that coroutine. Resumed anywhere else, it blocks while the detached coroutines run.
 
 When an interrupt was returned and a second interrupt arrives before any coroutine waits for interrupts again, the program ends at once with exit status 130. A program whose shutdown hangs therefore still stops on the second Ctrl-C.
 
-Closing the coroutine with `coroutine.close` stops handling its signals, as does the collection of a coroutine that nothing references. A signal that no other coroutine handles then gets the action it had before the call, which for these signals ends the program. Several coroutines may handle the same signal, and every one of them receives it.
+Closing the coroutine with `coroutine.close` stops handling its signals, as does the collection of a coroutine that nothing references. A signal that no other coroutine handles then gets the action it had before the call, which for these signals ends the program. When several coroutines handle the same signal, every one of them receives it.
 
 On Windows a close, logoff, or shutdown event ends the process as soon as its handler returns, so the runtime holds the event until the process ends by itself or until the system ends it, about five seconds later.
 

@@ -37,7 +37,7 @@ Leaving the scope of a process in a `<close>` variable closes its pipes and then
 
 The call requires the `exec` permission for the program. A grant without a value covers every program. A value without a separator is a glob over the name as `argv[1]` writes it, so `pledge("exec=git")` allows `{"git", ...}`. A value with a separator is a path glob over the absolute path the name resolves to, which resolves through symbolic links like a grant of `fs:read`, so `pledge("exec=/usr/bin/*")` allows every program found there. A denied program raises `permission "exec" denied for 'NAME'`. Since a shell runs any program, `os.execute` and `io.popen` need the grant without a value.
 
-On Windows the arguments are quoted for the rules that the C runtime uses to split a command line, so a program built with any common compiler receives them unchanged. A `.bat` or `.cmd` program runs through `cmd.exe`, which parses its arguments with rules of its own. An argument for such a program that holds `%`, `!`, `"`, or a line break cannot reach it intact, and the call raises an error before it starts anything.
+On Windows the arguments are quoted for the rules that the C runtime uses to split a command line, so a program built with any common compiler receives them unchanged. A `.bat` or `.cmd` program runs through `cmd.exe`, which parses its arguments with rules of its own. An argument for such a program that holds `%`, `!`, `"`, or a line break cannot reach it intact, so the call raises an error before it starts anything.
 
 An `argv` that is empty, an empty program name, an element that is not a string or holds a zero byte, and an option of the wrong type raise a bad argument error.
 
@@ -70,4 +70,4 @@ print(output:sub(1, -2), errors:sub(1, -2))      --> out  err
 print(select(4, coroutine.resume(p:wait())))   --> 0
 ```
 
-[`os.execute`](/manual/api#os.execute) runs a command line in the system shell, and [`os.signal`](/manual/api#os.signal) handles the signals that the program itself receives.
+[`os.execute`](/manual/api#os.execute) runs a command line in the system shell. [`os.signal`](/manual/api#os.signal) handles the signals that the program itself receives.

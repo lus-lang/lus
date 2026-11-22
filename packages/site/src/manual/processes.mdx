@@ -6,13 +6,13 @@ group: library
 shortdesc: "Running other programs with os.spawn, talking to them through pipes, waiting for them, and handling the signals that stop a program."
 ---
 
-A Lus program runs another program with `os.spawn`, which starts it without a shell and connects its standard streams to pipes, files, or the streams of the program. It handles the signals that ask it to stop with `os.signal`. Both are part of the `os` library, and both wait the way the network does: inside a [detached coroutine](/manual/concurrency#detached-coroutines) a wait suspends that coroutine while the others run.
+A Lus program runs another program with `os.spawn`, which starts it without a shell and connects its standard streams to pipes, files, or the streams of the program. It handles the signals that ask it to stop with `os.signal`. Both are part of the `os` library and wait the way the network does: inside a [detached coroutine](/manual/concurrency#detached-coroutines) a wait suspends that coroutine while the others run.
 
 ## Running a program
 
-[`os.spawn(argv, options)`](/manual/api#os.spawn) starts the program that `argv[1]` names with the arguments in the rest of `argv` and returns a _process object_ that represents it. No shell reads the arguments, so a file name with a space or a quote reaches the program as written. A name without a separator is looked up in the directories of `PATH`, and a name with a separator is a path.
+[`os.spawn(argv, options)`](/manual/api#os.spawn) starts the program that `argv[1]` names with the arguments in the rest of `argv` and returns a _process object_ that represents it. No shell reads the arguments, so a file name with a space or a quote reaches the program as written. A name without a separator is looked up in the directories of `PATH`. A name with a separator is a path.
 
-The options name what each standard stream of the child is connected to. `"inherit"`, the default, shares the stream of the program. `"pipe"` connects it to a pipe whose other end is the field of the same name on the process object. `"null"` discards the stream, and an open file connects the stream to that file. `stderr = "stdout"` sends the errors of the child to the same place as its output. `env` replaces the environment of the child with a table of strings, and `cwd` sets its working directory.
+The options name what each standard stream of the child is connected to. `"inherit"`, the default, shares the stream of the program. `"pipe"` connects it to a pipe whose other end is the field of the same name on the process object. `"null"` discards the stream. An open file connects the stream to that file. `stderr = "stdout"` sends the errors of the child to the same place as its output. `env` replaces the environment of the child with a table of strings. `cwd` sets its working directory.
 
 The following program sorts a list of names with the system command `sort` and reads the result from a pipe.
 
@@ -30,7 +30,7 @@ end
 --> Linus
 ```
 
-The pipe ends are files with the methods of files from `io.open`: the program writes to `p.stdin` and closes it to signal the end of the input, and it reads `p.stdout` and `p.stderr` with `read` and `lines`. A `<close>` variable closes the pipes when its scope ends and then waits for the program to exit. When the program cannot be found or started, `os.spawn` returns `nil` and a message.
+The pipe ends are files with the methods of files from `io.open`. The program writes to `p.stdin` and closes it to mark the end of the input. It reads `p.stdout` and `p.stderr` with `read` and `lines`. A `<close>` variable closes the pipes when its scope ends and then waits for the program to exit. When the program cannot be found or started, `os.spawn` returns `nil` and a message.
 
 ## Waiting for a program
 
@@ -81,7 +81,7 @@ A child that writes much to both of its pipes can fill one while the program rea
 
 ## Signals
 
-A _signal_ is a request from the system or another program for a program to stop. [`os.signal(names...)`](/manual/api#os.signal) starts handling the named signals and returns a coroutine. Each resume waits until one of the signals arrives and returns `true` and its name. `"interrupt"` is the signal that Ctrl-C sends, `"terminate"` is the signal that service managers send to stop a program, and `"hangup"` is the signal sent when a terminal closes, which exists on POSIX systems only. While a coroutine handles a signal, the signal no longer ends the program, and closing the coroutine gives the signal its usual effect again.
+A _signal_ is a request from the system or another program for a program to stop. [`os.signal(names...)`](/manual/api#os.signal) starts handling the named signals and returns a coroutine. Each resume waits until one of the signals arrives and returns `true` and its name. `"interrupt"` is the signal that Ctrl-C sends, `"terminate"` is the signal that service managers send to stop a program, and `"hangup"` is the signal sent when a terminal closes, which exists on POSIX systems only. While a coroutine handles a signal, the signal no longer ends the program. Closing the coroutine gives the signal its usual effect again.
 
 A program that has received an interrupt and receives a second one before it waits for interrupts again ends at once with exit status 130. Ctrl-C pressed twice therefore stops a program whose shutdown hangs.
 
@@ -107,7 +107,7 @@ The `drain_timeout` option of `network.serve` limits how long the requests in pr
 
 ## Events as coroutines
 
-`p:wait()`, `os.signal`, and [`fs.watch`](/manual/filesystem#watching-for-changes) follow one rule. A function that waits for something to happen returns a coroutine, and resuming the coroutine waits for the next occurrence. A coroutine that hands over a series of events, such as signals or file changes, gives one per resume. One loop over `coroutine.resume` therefore serves for every kind of event, and a detached coroutine that resumes it waits without holding up the others.
+`p:wait()`, `os.signal`, and [`fs.watch`](/manual/filesystem#watching-for-changes) follow one rule. A function that waits for something to happen returns a coroutine whose resume waits for the next occurrence. A coroutine that hands over a series of events, such as signals or file changes, gives one per resume. One loop over `coroutine.resume` therefore serves for every kind of event, and a detached coroutine that resumes it waits without holding up the others.
 
 ## Related pages
 
