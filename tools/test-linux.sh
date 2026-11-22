@@ -86,7 +86,9 @@ run_suite() {
     arch="$1"; shift
     bin="zig-out-linux-$arch/bin/lus"
     echo "copying the $arch binary and the tests to $vm"
-    limactl shell "$vm" -- sh -c "rm -rf ~/lus-linux-$arch && mkdir -p ~/lus-linux-$arch/runtime/zig-out/bin"
+    # The temporary files of the tests live on the disk of the VM, since a
+    # /tmp that is a small tmpfs can fill up with the files of other runs.
+    limactl shell "$vm" -- sh -c "rm -rf ~/lus-linux-$arch && mkdir -p ~/lus-linux-$arch/runtime/zig-out/bin ~/lus-linux-$arch/tmp"
     limactl shell "$vm" -- sh -c "tar -xf - -C ~/lus-linux-$arch" < "$stage/trees.tar"
     limactl shell "$vm" -- sh -c "cat > ~/lus-linux-$arch/runtime/zig-out/bin/lus && chmod +x ~/lus-linux-$arch/runtime/zig-out/bin/lus" < "$bin"
     for mode in "$@"; do
@@ -96,7 +98,7 @@ run_suite() {
         [ "$arch" = arm64 ] || jit="$jit LUS_EMULATED=1"
         # The status of `lus test` decides, and the report shows every line
         # except the files that passed.
-        if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch/runtime && env $jit zig-out/bin/lus test --timeout 120 ../tests/conformance ../packages/language-server/tests > /tmp/lus-test-$arch.txt 2>&1; s=\$?; grep -a -v '^ok ' /tmp/lus-test-$arch.txt; exit \$s"; then
+        if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch/runtime && env TMPDIR=\$HOME/lus-linux-$arch/tmp $jit zig-out/bin/lus test --timeout 120 ../tests/conformance ../packages/language-server/tests > ../report.txt 2>&1; s=\$?; grep -a -v '^ok ' ../report.txt; exit \$s"; then
             if [ "$arch" = arm64 ]; then failed=1; else emulated_failed=1; fi
         fi
     done
