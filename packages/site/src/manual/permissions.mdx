@@ -157,7 +157,7 @@ print((catch os.setenv("PATH", "/tmp")))      --> false
 
 Each grant with a value adds that value to the permission. A check succeeds when any of the values matches.
 
-A permission that has a value stays limited to its values, so a later grant of the same permission without a value returns `true` and changes nothing. The limit of a part also applies when its base permission was granted without a value. For example, `pledge("fs")` followed by `pledge("fs:read=./data/*")` permits reads only inside `data` and writes everywhere.
+A grant only ever adds access. A grant without a value allows every value, so it covers the grants of the same permission that have values, whichever comes first. A base permission granted without a value covers its parts in the same way. For example, `pledge("fs:read=./data/*", "fs")` permits every read and every write, as does `pledge("fs", "fs:read=./data/*")`. A program that needs fewer permissions [rejects](#rejecting-permissions) the others or runs code in a [coroutine](#permissions-in-coroutines) that holds fewer.
 
 ## Rejecting permissions
 

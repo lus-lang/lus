@@ -1,5 +1,9 @@
 -- The crypto library (spec/design/crypto.md): published test vectors for
 -- every primitive, round trips over random inputs, and argument errors.
+-- The keys in fixtures/crypto were written by OpenSSL in each layout it
+-- supports, with signatures it made over msg.txt.
+
+pledge("fs:read")
 
 local function bytes(hexText)
     return string.transcode(hexText, "hex", "binary")
@@ -91,7 +95,7 @@ local function hasher_random_splits_test()
 end
 
 local function hasher_errors_test()
-    raises(function() crypto.hasher("md5") end, "bad argument #1 to 'hasher' %(invalid option 'md5'%)")
+    raises(function() crypto.hasher("sha3") end, "bad argument #1 to 'hasher' %(invalid option 'sha3'%)")
     local h = crypto.hasher("sha1")
     raises(function() h:update({}) end, "bad argument #1 to 'update' %(string or vector expected")
     raises(function() h.update({}, "x") end, "bad argument #1 to 'update' %(crypto.hasher expected")
@@ -115,7 +119,7 @@ local function hash_reads_wtf8_bytes_test()
 end
 
 local function hash_errors_test()
-    raises(function() crypto.hash("md5", "x") end, "bad argument #1 to 'hash' %(invalid option 'md5'%)")
+    raises(function() crypto.hash("sha3", "x") end, "bad argument #1 to 'hash' %(invalid option 'sha3'%)")
     raises(function() crypto.hash("sha256", {}) end, "bad argument #2 to 'hash' %(string or vector expected")
 end
 
@@ -142,7 +146,7 @@ local function hmac_test(alg, key, data, want)
 end
 
 local function hmac_errors_test()
-    raises(function() crypto.hmac("md5", "k", "x") end, "bad argument #1 to 'hmac'")
+    raises(function() crypto.hmac("sha3", "k", "x") end, "bad argument #1 to 'hmac'")
     raises(function() crypto.hmac("sha256", true, "x") end, "bad argument #2 to 'hmac' %(string or vector expected")
     raises(function() crypto.hmac("sha256", "k", nil) end, "bad argument #3 to 'hmac' %(string or vector expected")
 end
@@ -240,11 +244,13 @@ end
 
 local function ed25519_errors_test()
     raises(function() crypto.keypair(vector.create(31)) end, "bad argument #1 to 'keypair' %(32%-byte vector expected%)")
-    raises(function() crypto.keypair(string.rep("a", 32)) end, "32%-byte vector expected")
+    raises(function() crypto.keypair(string.rep("a", 32)) end, "bad argument #1 to 'keypair' %(invalid option")
     raises(function() crypto.sign(vector.create(64), "x") end, "bad argument #1 to 'sign' %(32%-byte vector expected%)")
     raises(function() crypto.sign(vector.create(32), {}) end, "bad argument #2 to 'sign' %(string or vector expected")
     local _, public = crypto.keypair()
-    raises(function() crypto.verify("x", "m", vector.create(64)) end, "bad argument #1 to 'verify' %(32%-byte vector expected%)")
+    raises(function() crypto.verify("x", "m", vector.create(64)) end, "bad argument #1 to 'verify' %(crypto.key or vector expected, got string%)")
+    raises(function() crypto.verify(vector.create(31), "m", vector.create(64)) end, "bad argument #1 to 'verify' %(32%-byte vector expected%)")
+    raises(function() crypto.sign(vector.create(32), "m", "RS256") end, "bad argument #3 to 'sign' %(algorithm 'RS256' does not fit an Ed25519 key%)")
     raises(function() crypto.verify(public, "m", vector.create(63)) end, "bad argument #3 to 'verify' %(64%-byte vector expected%)")
 end
 
@@ -273,8 +279,7 @@ local function random_test()
 end
 
 local function random_errors_test()
-    raises(function() crypto.random(-1) end, "bad argument #1 to 'random' %(size out of range%)")
-    raises(function() crypto.random((1 << 20) + 1) end, "size out of range")
+    raises(function() crypto.random(-1) end, "bad argument #1 to 'random' %(size must be non%-negative%)")
     raises(function() crypto.random("many") end, "bad argument #1 to 'random' %(number expected")
 end
 
@@ -407,4 +412,341 @@ local function ulid_test()
     assert(ms // 1000 >= before - 1 and ms // 1000 <= os.time() + 1)
     -- 128 bits in 26 characters leave the first one below 8.
     assert(prev:sub(1, 1) <= "7")
+end
+
+-- ============================================================
+-- MD5: RFC 1321 appendix A.5
+-- ============================================================
+
+local md5_cases = {
+    { "", "d41d8cd98f00b204e9800998ecf8427e" },
+    { "a", "0cc175b9c0f1b6a831c399e269772661" },
+    { "abc", "900150983cd24fb0d6963f7d28e17f72" },
+    { "message digest", "f96b697d7cb7938d525a2f31aaf161d0" },
+    { "abcdefghijklmnopqrstuvwxyz", "c3fcd3d76192e4007dfb496cca67e13b" },
+    { "12345678901234567890123456789012345678901234567890123456789012345678901234567890", "57edf4a22be3c955ac49da2e2107b67a" },
+}
+
+local function md5_test(input, want)
+    assert(hex(crypto.hash("md5", input)) == want)
+    hasher_test("md5", input, want)
+end
+
+local function hmac_md5_test()
+    -- RFC 2202, test cases 1 and 2.
+    assert(hex(crypto.hmac("md5", rep(0x0b, 16), "Hi There")) == "9294727a3638bb1c13f48ef8158bfc9d")
+    assert(hex(crypto.hmac("md5", "Jefe", "what do ya want for nothing?")) == "750c783e6ab0b503eaa86e310a5db738")
+end
+
+-- ============================================================
+-- PBKDF2: RFC 6070 (SHA-1) and RFC 7914 section 11 (SHA-256)
+-- ============================================================
+
+local pbkdf2_cases = {
+    { "sha1", "password", "salt", 1, 20, "0c60c80f961f0e71f3a9b524af6012062fe037a6" },
+    { "sha1", "password", "salt", 2, 20, "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957" },
+    { "sha1", "password", "salt", 4096, 20, "4b007901b765489abead49d926f721d065a429c1" },
+    { "sha1", "passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 25, "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038" },
+    { "sha1", "pass\0word", "sa\0lt", 4096, 16, "56fa6aa75548099dcc37d7f03425e0c3" },
+    { "sha256", "passwd", "salt", 1, 64, "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783" },
+}
+
+local function pbkdf2_test(alg, password, salt, iterations, length, want)
+    local v = crypto.pbkdf2(alg, password, salt, iterations, length)
+    assert(type(v) == "vector")
+    assert(hex(v) == want)
+end
+
+local function pbkdf2_errors_test()
+    raises(function() crypto.pbkdf2("sha256", "p", "s", 0, 32) end, "bad argument #4 to 'pbkdf2' %(iterations out of range%)")
+    raises(function() crypto.pbkdf2("sha256", "p", "s", 1, 0) end, "bad argument #5 to 'pbkdf2' %(length out of range%)")
+    raises(function() crypto.pbkdf2("sha256", "p", "s", 1, 1025) end, "length out of range")
+    raises(function() crypto.pbkdf2("sha3", "p", "s", 1, 32) end, "bad argument #1 to 'pbkdf2' %(invalid option 'sha3'%)")
+end
+
+-- ============================================================
+-- HKDF: RFC 5869 appendix A
+-- ============================================================
+
+local function hkdf_test()
+    -- Test case 1: SHA-256 with salt and info.
+    local okm = crypto.hkdf("sha256", rep(0x0b, 22), bytes("000102030405060708090a0b0c"), bytes("f0f1f2f3f4f5f6f7f8f9"), 42)
+    assert(hex(okm) == "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865")
+    -- Test case 3: SHA-256 with an empty salt and info.
+    assert(hex(crypto.hkdf("sha256", rep(0x0b, 22), nil, nil, 42)) == "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8")
+    assert(hex(crypto.hkdf("sha256", rep(0x0b, 22), "", "", 42)) == "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8")
+    -- Test case 4: SHA-1.
+    assert(hex(crypto.hkdf("sha1", rep(0x0b, 11), bytes("000102030405060708090a0b0c"), bytes("f0f1f2f3f4f5f6f7f8f9"), 42)) == "085a01ea1b10f36933068b56efa5ad81a4f14b822f5b091568a9cdd4f155fda2c22e422478d305f3f896")
+    -- The output is a prefix of a longer output.
+    local long = crypto.hkdf("sha512", "key", "salt", "info", 255 * 64)
+    assert(#long == 255 * 64)
+    assert(hex(crypto.hkdf("sha512", "key", "salt", "info", 10)) == hex(long):sub(1, 20))
+end
+
+local function hkdf_errors_test()
+    raises(function() crypto.hkdf("sha256", "k", nil, nil, 0) end, "bad argument #5 to 'hkdf' %(length out of range%)")
+    raises(function() crypto.hkdf("sha256", "k", nil, nil, 255 * 32 + 1) end, "length out of range")
+    raises(function() crypto.hkdf("sha256", "k", {}, nil, 32) end, "bad argument #3 to 'hkdf' %(string or vector expected")
+end
+
+-- ============================================================
+-- AES-256-GCM: the GCM specification test cases 13 to 16
+-- ============================================================
+
+local gcm_key = bytes("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308")
+local gcm_plain = bytes("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39")
+local gcm_aad = bytes("feedfacedeadbeeffeedfacedeadbeefabaddad2")
+
+local gcm_cases = {
+    { rep(0, 32), rep(0, 12), "", "", "", "530f8afbc74536b9a963b4f1c4cb738b" },
+    { rep(0, 32), rep(0, 12), rep(0, 16), "", "cea7403d4d606b6e074ec5d3baf39d18", "d0d1c8a799996bf0265b98b5d48ab919" },
+    { gcm_key, bytes("cafebabefacedbaddecaf888"), gcm_plain, gcm_aad,
+      "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662",
+      "76fc6ece0f4e1768cddf8853bb2d551b" },
+}
+
+local function gcm_test(key, nonce, plain, aad, want_ct, want_tag)
+    local ct, tag = crypto.encrypt("aes-256-gcm", key, nonce, plain, aad)
+    assert(type(ct) == "vector" and type(tag) == "vector")
+    assert(hex(ct) == want_ct)
+    assert(hex(tag) == want_tag)
+    local back = crypto.decrypt("aes-256-gcm", key, nonce, ct, tag, aad)
+    assert(hex(back) == hex(plain))
+end
+
+local function gcm_tamper_test()
+    local key, nonce = crypto.random(32), crypto.random(12)
+    local ct, tag = crypto.encrypt("aes-256-gcm", key, nonce, "attack at dawn", "header")
+    assert(vector.tostring(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag, "header")) == "attack at dawn")
+    -- A change to the ciphertext, the tag, the data, the nonce, or the key
+    -- makes decryption return nil.
+    for i = 0, #ct - 1 do
+        local bad = vector.clone(ct)
+        vector.set(bad, i, vector.get(bad, i) ~ 1)
+        assert(crypto.decrypt("aes-256-gcm", key, nonce, bad, tag, "header") == nil)
+    end
+    local bad_tag = vector.clone(tag)
+    vector.set(bad_tag, 15, vector.get(bad_tag, 15) ~ 0x80)
+    assert(crypto.decrypt("aes-256-gcm", key, nonce, ct, bad_tag, "header") == nil)
+    assert(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag, "headers") == nil)
+    assert(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag) == nil)
+    assert(crypto.decrypt("aes-256-gcm", key, crypto.random(12), ct, tag, "header") == nil)
+    assert(crypto.decrypt("aes-256-gcm", crypto.random(32), nonce, ct, tag, "header") == nil)
+end
+
+local function gcm_errors_test()
+    local k, n = crypto.random(32), crypto.random(12)
+    raises(function() crypto.encrypt("aes-128-gcm", k, n, "x") end, "bad argument #1 to 'encrypt' %(invalid option 'aes%-128%-gcm'%)")
+    raises(function() crypto.encrypt("aes-256-gcm", crypto.random(16), n, "x") end, "bad argument #2 to 'encrypt' %(32%-byte vector expected%)")
+    raises(function() crypto.encrypt("aes-256-gcm", k, crypto.random(16), "x") end, "bad argument #3 to 'encrypt' %(12%-byte vector expected%)")
+    raises(function() crypto.encrypt("aes-256-gcm", k, n, {}) end, "bad argument #4 to 'encrypt' %(string or vector expected")
+    raises(function() crypto.decrypt("aes-256-gcm", k, n, "x", crypto.random(15)) end, "bad argument #5 to 'decrypt' %(16%-byte vector expected%)")
+end
+
+-- ============================================================
+-- Keys and signatures
+-- ============================================================
+
+local function fixture(name, mode)
+    local f = assert(io.open(TEST_DIR .. "/fixtures/crypto/" .. name, mode or "r"))
+    local s = f:read("a")
+    f:close()
+    return s
+end
+
+local function b64url(text)
+    return string.transcode(text, "base64url", "binary")
+end
+
+-- RFC 7515 appendix A.2: RS256 is deterministic, so the signature of the
+-- example must match the published one byte for byte.
+local rfc7515_rsa = '{"kty":"RSA","n":"ofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd_wWJcyQoTbji9k0l8W26mPddxHmfHQp-Vaw-4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL-yRT-SFd2lZS-pCgNMsD1W_YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb_7OMg0LOL-bSf63kpaSHSXndS5z5rexMdbBYUsLA9e-KXBdQOS-UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uDZlxvb3qCo5ZwKh9kG4LT6_I5IhlJH7aGhyxXFvUK-DWNmoudF8NAco9_h9iaGNj8q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQ","e":"AQAB","d":"Eq5xpGnNCivDflJsRQBXHx1hdR1k6Ulwe2JZD50LpXyWPEAeP88vLNO97IjlA7_GQ5sLKMgvfTeXZx9SE-7YwVol2NXOoAJe46sui395IW_GO-pWJ1O0BkTGoVEn2bKVRUCgu-GjBVaYLU6f3l9kJfFNS3E0QbVdxzubSu3Mkqzjkn439X0M_V51gfpRLI9JYanrC4D4qAdGcopV_0ZHHzQlBjudU2QvXt4ehNYTCBr6XCLQUShb1juUO1ZdiYoFaFQT5Tw8bGUl_x_jTj3ccPDVZFD9pIuhLhBOneufuBiB4cS98l2SR_RQyGWSeWjnczT0QU91p1DhOVRuOopznQ","p":"4BzEEOtIpmVdVEZNCqS7baC4crd0pqnRH_5IB3jw3bcxGn6QLvnEtfdUdiYrqBdss1l58BQ3KhooKeQTa9AB0Hw_Py5PJdTJNPY8cQn7ouZ2KKDcmnPGBY5t7yLc1QlQ5xHdwW1VhvKn-nXqhJTBgIPgtldC-KDV5z-y2XDwGUc","q":"uQPEfgmVtjL0Uyyx88GZFF1fOunH3-7cepKmtH4pxhtCoHqpWmT8YAmZxaewHgHAjLYsp1ZSe7zFYHj7C6ul7TjeLQeZD_YwD66t62wDmpe_HlB-TnBA-njbglfIsRLtXlnDzQkv5dTltRJ11BKBBypeeF6689rjcJIDEz9RWdc","dp":"BwKfV3Akq5_MFZDFZCnW-wzl-CCo83WoZvnLQwCTeDv8uzluRSnm71I3QCLdhrqE2e9YkxvuxdBfpT_PI7Yz-FOKnu1R6HsJeDCjn12Sk3vmAktV2zb34MCdy7cpdTh_YVr7tss2u6vneTwrA86rZtu5Mbr1C1XsmvkxHQAdYo0","dq":"h_96-mK1R_7glhsum81dZxjTnYynPbZpHziZjeeHcXYsXaaMwkOlODsWa7I9xXDoRwbKgB719rrmI2oKr6N3Do9U0ajaHF-NKJnwgjMd2w9cjz3_-kyNlxAr2v4IKhGNpmM5iIgOS1VZnOZ68m6_pbLBSp3nssTdlqvd0tIiTHU","qi":"IYd7DHOhrWvxkwPQsRM2tOgrjbcrfvtQJipd-DlcxyVuuM9sQLdgjVk2oy26F0EmpScGLq2MowX7fhd_QJQ3ydy5cY7YIBi87w93IKLEdfnbJtoOPLUW0ITrJReOgo1cq9SbsxYawBgfp_gh6A5603k2-ZQwVK0JKSHuLFkuQ3U"}'
+local jws_payload = "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ"
+local rs256_sig = "cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw"
+
+local function rs256_jws_test()
+    local key = crypto.importkey(rfc7515_rsa)
+    assert(key.type == "rsa" and key.private and key.bits == 2048 and key.curve == nil)
+    local input = "eyJhbGciOiJSUzI1NiJ9." .. jws_payload
+    local sig = crypto.sign(key, input, "RS256")
+    assert(string.transcode(sig, "binary", "base64url") == rs256_sig)
+    assert(crypto.verify(key:public(), input, sig, "RS256"))
+    assert(crypto.verify(key, input, sig, "RS256"))
+    assert(not crypto.verify(key, input .. ".", sig, "RS256"))
+    assert(not crypto.verify(key, input, sig, "PS256"))
+    assert(not crypto.verify(key, input, sig, "RS384"))
+end
+
+-- RFC 7515 appendix A.3: ECDSA signatures are randomized, so the example
+-- signature is verified and a fresh one round-trips.
+local function es256_jws_test()
+    local key = crypto.importkey({ kty = "EC", crv = "P-256",
+        x = "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+        y = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+        d = "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI" })
+    assert(key.type == "ec" and key.curve == "P-256" and key.bits == nil)
+    local input = "eyJhbGciOiJFUzI1NiJ9." .. jws_payload
+    local sig = b64url("DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q")
+    assert(crypto.verify(key:public(), input, sig))
+    assert(crypto.verify(key, input, sig, "ES256"))
+    assert(not crypto.verify(key, input .. "x", sig))
+    local mine = crypto.sign(key, input)
+    assert(#mine == 64)
+    assert(crypto.verify(key:public(), input, mine))
+end
+
+-- RFC 8037 appendix A.4: Ed25519 keys as JWK.
+local function eddsa_jws_test()
+    local key = crypto.importkey({ kty = "OKP", crv = "Ed25519",
+        d = "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+        x = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo" })
+    assert(key.type == "ed25519" and key.curve == "Ed25519")
+    local sig = crypto.sign(key, "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc")
+    assert(hex(sig) == "860c98d2297f3060a33f42739672d61b53cf3adefed3d3c672f320dc021b411e9d59b8628dc351e248b88b29468e0e41855b0fb7d83bb15be902bfccb8cd0a02")
+    -- The same key as vectors through the Ed25519 functions of 2.0.
+    local seed = b64url("nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A")
+    assert(crypto.equal(crypto.sign(seed, "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc"), sig))
+end
+
+-- RFC 8410 sections 10.1 and 10.3: Ed25519 keys as PEM, including a
+-- version 2 PKCS#8 structure with an attribute and the public key.
+local ed_private = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\n-----END PRIVATE KEY-----\n"
+local ed_public = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PUBLIC KEY-----\n"
+local ed_private_v2 = "-----BEGIN PRIVATE KEY-----\nMHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\noB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrB\nZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PRIVATE KEY-----\n"
+
+local function ed25519_pem_test()
+    local key = crypto.importkey(ed_private)
+    assert(key:export() == ed_private)
+    assert(key:public():export() == ed_public)
+    assert(crypto.importkey(ed_public):export() == ed_public)
+    assert(crypto.importkey(ed_private_v2):export() == ed_private)
+    local sig = crypto.sign(key, "hello")
+    assert(crypto.verify(crypto.importkey(ed_public), "hello", sig))
+end
+
+-- Keys that OpenSSL wrote in each layout: PKCS#8, PKCS#1, SEC1 (after an
+-- EC PARAMETERS block), and SubjectPublicKeyInfo.
+local openssl_cases = {
+    { "rsa2048.pem", "rsa2048.pub", "rsa", 2048 },
+    { "rsa2048.pkcs1.pem", "rsa2048.pkcs1.pub", "rsa", 2048 },
+    { "rsa4096.pem", false, "rsa", 4096 },
+    { "ec256.pem", "ec256.pub", "ec", "P-256" },
+    { "ec256.sec1.pem", "ec256.pub", "ec", "P-256" },
+    { "ec384.pem", "ec384.pub", "ec", "P-384" },
+}
+
+local function openssl_test(private_name, public_name, kind, size)
+    local key = crypto.importkey(fixture(private_name))
+    assert(key.type == kind and key.private)
+    assert(key.bits == size or key.curve == size)
+    local public = public_name and crypto.importkey(fixture(public_name)) or key:public()
+    assert(not public.private)
+    -- Every export reads back to the same key.
+    for _, format in ipairs({ "pem", "der", "jwk" }) do
+        assert(crypto.importkey(key:export(format)):export() == key:export())
+        assert(crypto.importkey(public:export(format)):export() == public:export())
+    end
+    assert(crypto.importkey(tojson(key:export("jwk"))):export() == key:export())
+    assert(key:public():export() == public:export())
+    local algs = kind == "rsa" and { "RS256", "RS384", "RS512", "PS256", "PS384", "PS512" } or { nil }
+    for i = 1, math.max(#algs, 1) do
+        local alg = algs[i]
+        local sig = crypto.sign(key, "message", alg)
+        assert(crypto.verify(public, "message", sig, alg))
+        assert(not crypto.verify(public, "messagE", sig, alg))
+    end
+end
+
+local function openssl_signature_test()
+    local msg = fixture("msg.txt")
+    assert(crypto.verify(crypto.importkey(fixture("rsa2048.pub")), msg, fixture("ossl.ps256.sig", "rb"), "PS256"))
+    assert(crypto.verify(crypto.importkey(fixture("rsa3072.pub")), msg, fixture("ossl.rs384.sig", "rb"), "RS384"))
+    assert(not crypto.verify(crypto.importkey(fixture("rsa3072.pub")), msg, fixture("ossl.rs384.sig", "rb"), "PS384"))
+end
+
+-- RSA-PSS draws a fresh salt, so two signatures differ and both verify.
+local function pss_randomized_test()
+    local key = crypto.importkey(rfc7515_rsa)
+    local a, b = crypto.sign(key, "m", "PS256"), crypto.sign(key, "m", "PS256")
+    assert(not crypto.equal(a, b))
+    assert(crypto.verify(key, "m", a, "PS256") and crypto.verify(key, "m", b, "PS256"))
+end
+
+local function ec_keypair_test()
+    for _, curve in ipairs({ "P-256", "P-384" }) do
+        local secret, public = crypto.keypair(curve)
+        assert(secret.private and not public.private)
+        assert(secret.curve == curve and public.curve == curve)
+        assert(tostring(secret) == "crypto.key: " .. curve .. " private")
+        local sig = crypto.sign(secret, "data")
+        assert(#sig == (curve == "P-256" and 64 or 96))
+        assert(crypto.verify(public, "data", sig))
+        assert(crypto.verify(public, "data", sig, curve == "P-256" and "ES256" or "ES384"))
+    end
+    local a = crypto.keypair("P-256")
+    local b = crypto.keypair("P-256")
+    assert(a:export() ~= b:export())
+end
+
+-- Every corrupted signature fails, whatever the key type.
+local function signature_flip_test()
+    local keys = { crypto.importkey(rfc7515_rsa), (crypto.keypair("P-256")), crypto.importkey(ed_private) }
+    for _, key in ipairs(keys) do
+        local alg = key.type == "rsa" and "PS256" or nil
+        local sig = crypto.sign(key, "flip", alg)
+        for i = 0, #sig - 1, 7 do
+            local bad = vector.clone(sig)
+            vector.set(bad, i, vector.get(bad, i) ~ 0x10)
+            assert(not crypto.verify(key, "flip", bad, alg))
+        end
+        assert(not crypto.verify(key, "flip", vector.create(0), alg))
+        assert(not crypto.verify(key, "flip", "", alg))
+    end
+end
+
+local function key_errors_test()
+    raises(function() crypto.importkey("not a key") end, "bad argument #1 to 'importkey' %(PEM text or JWK expected%)")
+    raises(function() crypto.importkey(5) end, "bad argument #1 to 'importkey' %(string, vector, or table expected, got number%)")
+    raises(function() crypto.importkey(vector.create(10)) end, "invalid key")
+    raises(function() crypto.importkey({ kty = "oct", k = "AAAA" }) end, "unsupported key type")
+    raises(function() crypto.importkey({ kty = "EC", crv = "P-521", x = "AA", y = "AA" }) end, "unsupported key type")
+    raises(function() crypto.importkey({ kty = "RSA", n = 5 }) end, "bad argument #1 to 'importkey' %(JWK member 'n' must be a string%)")
+    raises(function() crypto.importkey("-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n") end, "encrypted keys are not supported")
+    raises(function() crypto.importkey("-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\nAAAA\n-----END RSA PRIVATE KEY-----\n") end, "encrypted keys are not supported")
+    raises(function() crypto.importkey("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n") end, "unsupported key type")
+    -- A 1024-bit RSA key.
+    raises(function() crypto.importkey({ kty = "RSA", n = string.transcode(rep(0xff, 128), "binary", "base64url"), e = "AQAB" }) end, "RSA keys must have 2048, 3072, or 4096 bits")
+    -- An EC point that is not on the curve.
+    raises(function() crypto.importkey({ kty = "EC", crv = "P-256", x = string.transcode(rep(1, 32), "binary", "base64url"), y = string.transcode(rep(2, 32), "binary", "base64url") }) end, "invalid key")
+    -- A JWK whose private and public parts disagree.
+    raises(function() crypto.importkey({ kty = "OKP", crv = "Ed25519", d = "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A", x = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }) end, "public and private parts of the key do not match")
+    local rsa = crypto.importkey(rfc7515_rsa)
+    local ec = crypto.keypair("P-256")
+    raises(function() crypto.sign(rsa, "m") end, "bad argument #3 to 'sign' %(RSA key requires an algorithm%)")
+    raises(function() crypto.sign(rsa, "m", "ES256") end, "bad argument #3 to 'sign' %(algorithm 'ES256' does not fit an RSA key%)")
+    raises(function() crypto.sign(ec, "m", "ES384") end, "algorithm 'ES384' does not fit a P%-256 key")
+    raises(function() crypto.sign(rsa:public(), "m", "RS256") end, "bad argument #1 to 'sign' %(private key expected%)")
+    raises(function() crypto.verify(rsa, "m", "sig") end, "bad argument #4 to 'verify' %(RSA key requires an algorithm%)")
+    raises(function() crypto.sign(rsa, "m", "HS256") end, "bad argument #3 to 'sign' %(invalid option 'HS256'%)")
+    raises(function() rsa:export("xml") end, "invalid option 'xml'")
+    raises(function() crypto.keypair("P-521") end, "bad argument #1 to 'keypair' %(invalid option 'P%-521'%)")
+    assert(getmetatable(rsa) == false)
+end
+
+-- A large request fills in pieces, and every piece holds fresh bytes.
+local function random_large_test()
+    local n = 8 * 1024 * 1024 + 3
+    local v = crypto.random(n)
+    assert(#v == n)
+    local mib = 1 << 20
+    local first = vector.tostring(v, 0, 64, "lossy")
+    for i = 1, 8 do
+        assert(vector.tostring(v, i * mib, i * mib + 64, "lossy") ~= first)
+    end
+    -- About 1 in 256 sampled bytes is zero, including in the last piece.
+    local zeros = 0
+    for i = 0, n - 1, 4096 do
+        if vector.get(v, i) == 0 then zeros = zeros + 1 end
+    end
+    assert(zeros < 50, "too many zero bytes for random data")
 end

@@ -199,10 +199,10 @@ fn readHeader(r: *Reader) ?Header {
     return .{ .nsrc = nsrc, .nops = nops };
 }
 
-fn readSql(r: *Reader, a: std.mem.Allocator, nops: u32, depth: u32) ?*Sql {
+fn readSql(r: *Reader, a: std.mem.Allocator, nops: u32, depth: u32) std.mem.Allocator.Error!?*Sql {
     if (depth > 200) return null;
     const t = r.tag() orelse return null;
-    const n = a.create(Sql) catch return null;
+    const n = try a.create(Sql);
     n.* = .{ .tag = t };
     switch (t) {
         'C', 'S' => n.str = r.str() orelse return null,
@@ -214,10 +214,10 @@ fn readSql(r: *Reader, a: std.mem.Allocator, nops: u32, depth: u32) ?*Sql {
         },
         'N' => {},
         'E', 'D', 'L', 'M', 'G', 'H', 'A', 'O', 'a', 's', 'm', 'c' => {
-            n.a = readSql(r, a, nops, depth + 1) orelse return null;
-            n.b = readSql(r, a, nops, depth + 1) orelse return null;
+            n.a = try readSql(r, a, nops, depth + 1) orelse return null;
+            n.b = try readSql(r, a, nops, depth + 1) orelse return null;
         },
-        'u' => n.a = readSql(r, a, nops, depth + 1) orelse return null,
+        'u' => n.a = try readSql(r, a, nops, depth + 1) orelse return null,
         else => return null,
     }
     return n;
@@ -232,16 +232,22 @@ fn optOp(r: *Reader, nops: u32) ??u32 {
 
 /// Decodes and validates a plan string. Dumped chunks are untrusted, so
 /// every count and index is checked. Returns null on a malformed plan.
-fn decode(gpa: std.mem.Allocator, s: []const u8) ?*Plan {
-    const p = gpa.create(Plan) catch return null;
+fn decode(gpa: std.mem.Allocator, s: []const u8) std.mem.Allocator.Error!?*Plan {
+    const p = try gpa.create(Plan);
     p.arena = .init(gpa);
-    if (decodeInto(p, s)) return p;
+    if (decodeInto(p, s)) |ok| {
+        if (ok) return p;
+    } else |e| {
+        p.arena.deinit();
+        gpa.destroy(p);
+        return e;
+    }
     p.arena.deinit();
     gpa.destroy(p);
     return null;
 }
 
-fn decodeInto(p: *Plan, s: []const u8) bool {
+fn decodeInto(p: *Plan, s: []const u8) std.mem.Allocator.Error!bool {
     const a = p.arena.allocator();
     var r: Reader = .{ .s = s };
     const h = readHeader(&r) orelse return false;
@@ -256,18 +262,18 @@ fn decodeInto(p: *Plan, s: []const u8) bool {
     p.err = r.str() orelse return false;
     p.nkeys = r.count(64) orelse return false;
     const naggs = r.count(255) orelse return false;
-    p.aggs = a.alloc(u8, naggs) catch return false;
+    p.aggs = try a.alloc(u8, naggs);
     for (p.aggs) |*g| g.* = @intCast(r.count(5) orelse return false);
     const norder = r.count(64) orelse return false;
-    p.desc = a.alloc(bool, norder) catch return false;
+    p.desc = try a.alloc(bool, norder);
     for (p.desc) |*d| d.* = (r.count(1) orelse return false) == 1;
     const nsel = r.count(64) orelse return false;
-    p.sel = a.alloc(?[]const u8, nsel) catch return false;
+    p.sel = try a.alloc(?[]const u8, nsel);
     for (p.sel) |*it| {
         it.* = if ((r.count(1) orelse return false) == 1) (r.str() orelse return false) else null;
     }
     const nconj = r.count(qgen.max_conjuncts) orelse return false;
-    p.conj = a.alloc(Conj, nconj) catch return false;
+    p.conj = try a.alloc(Conj, nconj);
     for (p.conj) |*cj| {
         cj.mask = r.count(0xff) orelse return false;
         cj.opaque_ = (r.count(1) orelse return false) == 1;
@@ -286,10 +292,10 @@ fn decodeInto(p: *Plan, s: []const u8) bool {
             if (cols[0].src == cols[1].src) return false;
             cj.join = cols;
         } else {
-            cj.sql = readSql(&r, a, h.nops, 0) orelse return false;
+            cj.sql = try readSql(&r, a, h.nops, 0) orelse return false;
         }
     }
-    p.aliases = a.alloc([]const u8, h.nsrc) catch return false;
+    p.aliases = try a.alloc([]const u8, h.nsrc);
     for (p.aliases) |*al| al.* = r.str() orelse return false;
     return r.i == s.len;
 }
@@ -318,7 +324,7 @@ pub fn build(l: *Thread, plan_v: Value, first: u32) Error!Value {
 
 fn planOf(l: *Thread, q: *Query) Error!*Plan {
     if (q.plan) |p| return p;
-    const p = decode(l.g.gpa, q.plan_str.as(String).bytes()) orelse return corrupt(l);
+    const p = (decode(l.g.gpa, q.plan_str.as(String).bytes()) catch return l.raiseMem()) orelse return corrupt(l);
     if (p.nsrc != q.nsrc or p.nsrc + p.nops != q.nvals) {
         p.arena.deinit();
         l.g.gpa.destroy(p);

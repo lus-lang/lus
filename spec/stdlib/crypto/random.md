@@ -13,11 +13,11 @@ returns: vector
 
 Returns a new vector of `n` bytes read from the secure random source of the operating system.
 
-- `n` is the number of bytes, from 0 to 1048576.
+- `n` is the number of bytes, 0 or more.
 
 The source is `arc4random_buf` or `getrandom` on native targets and the `random_get` call of WASI in the WebAssembly build. Every call reads the source afresh, so the bytes are suitable for keys, salts, nonces, and session tokens. [`math.random`](/manual/api#math.random) is a separate generator that `math.randomseed` makes reproducible, so it is for simulations and never for secrets.
 
-An `n` outside the range raises `bad argument #1 to 'random' (size out of range)`. If the operating system cannot supply random bytes, the call raises `secure random source unavailable`.
+Any size that fits in memory works. A negative `n` raises `bad argument #1 to 'random' (size must be non-negative)`. A size the allocator cannot satisfy raises `not enough memory`. If the operating system cannot supply random bytes, the call raises `secure random source unavailable`.
 
 The following example makes a session token of 32 random bytes and writes it as hex.
 

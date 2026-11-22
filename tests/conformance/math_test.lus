@@ -1123,6 +1123,9 @@ local numeric_loop_edges_cases = {
     {"integer start, bigint limit, float step", function(o) for i = 1, 3n, 0.5 do o[#o + 1] = i end end, "1.0,1.5,2.0,2.5,3.0"},
     {"bigint start, float limit", function(o) for i = 1n, 2.5 do o[#o + 1] = i end end, "1.0,2.0"},
     {"decimal start, float step", function(o) for i = 1d, 2d, 0.5 do o[#o + 1] = i end end, "error: attempt to mix decimal and float in arithmetic"},
+    {"decimal start, float limit", function(o) for i = 1d, 2.5 do o[#o + 1] = i end end, "error: attempt to mix decimal and float in arithmetic"},
+    {"float start, decimal limit", function(o) for i = 0.5, 2d do o[#o + 1] = i end end, "error: attempt to mix decimal and float in arithmetic"},
+    {"integer start, decimal step", function(o) for i = 1, 2, 0.5d do o[#o + 1] = i end end, "1,1.5,2.0"},
     {"bigint loop", function(o) for i = 1, 3n do o[#o + 1] = i end end, "1,2,3"},
 }
 

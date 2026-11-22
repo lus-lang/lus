@@ -124,6 +124,8 @@ test {
     _ = @import("vm/inv.zig");
     _ = @import("vm/sched.zig");
     _ = @import("fuzz.zig");
+    _ = @import("compile/sweep.zig");
+    _ = @import("vm/sweep.zig");
     _ = @import("fuzzlib.zig");
     if (@import("build_options").net) _ = @import("fuzztls.zig");
     _ = compile.opcodes;

@@ -7,9 +7,9 @@ stability: unstable
 origin: lus
 ---
 
-The `crypto` module computes SHA-256, SHA-384, SHA-512, and SHA-1 digests, in one call or streamed, and HMACs, signs and verifies with Ed25519, reads secure random bytes, compares secrets in constant time, hashes passwords with Argon2id, and generates UUIDs and ULIDs.
+The `crypto` module computes SHA-2, SHA-1, and MD5 digests, in one call or streamed. It computes HMACs, derives keys with PBKDF2 and HKDF, and encrypts with AES-256-GCM. It signs and verifies with Ed25519, ECDSA over P-256 and P-384, and RSA, with keys read from PEM, DER, or JWK. It also reads secure random bytes, compares secrets in constant time, hashes passwords with Argon2id, and generates UUIDs and ULIDs.
 
-Digests, keys, signatures, and random output are raw bytes, so the module returns them as vectors. Messages, HMAC keys, and passwords may be strings or vectors. A string contributes its WTF-8 bytes. [`string.transcode`](/manual/api#string.transcode) converts vectors to hex, base64, or base64url text and back.
+Digests, raw keys, signatures, ciphertexts, and random output are raw bytes, so the module returns them as vectors. RSA and EC keys are `crypto.key` objects from [`crypto.importkey`](/manual/api#crypto.importkey) or [`crypto.keypair`](/manual/api#crypto.keypair). Messages, HMAC keys, and passwords may be strings or vectors. A string contributes its WTF-8 bytes. [`string.transcode`](/manual/api#string.transcode) converts vectors to hex, base64, or base64url text and back.
 
 The following example prints a SHA-256 digest in hex, then signs a message and checks the signature.
 

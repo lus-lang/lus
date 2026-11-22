@@ -59,7 +59,7 @@ end
 local rows = fromcsv(vector.tostring(body), true)
 ```
 
-`fetch` raises an error when it cannot reach the server or cannot read the response, such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"`. A program that must continue after such a failure wraps the call in [`catch`](/manual/guide#errors).
+`fetch` raises an error when it cannot reach the server or cannot read the response, such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"`. A connection that fails part way raises an error that names the step and the reason, such as `"failed to read response body: Connection reset by peer"`, so a response that arrives is always complete. A program that must continue after such a failure wraps the call in [`catch`](/manual/guide#errors).
 
 ```lus nocheck
 local ok, err = catch network.fetch("https://invalid.host.example")

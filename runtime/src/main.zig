@@ -322,9 +322,13 @@ var report_io = false;
 /// an `Io` that injects the faults it names (`vm/faultio.zig`).
 fn setupFailIo(init: *std.process.Init) void {
     if (init.environ_map.get("LUS_WORKER_FAIL")) |w| lus.vm.faultio.setupWorker(w);
-    const v = init.environ_map.get("LUS_FAIL_IO") orelse return;
-    report_io = lus.vm.faultio.setup(v, init.environ_map.get("LUS_FAIL_IO_SEED"), init.environ_map.get("LUS_FAIL_IO_PSOW"));
-    init.io = lus.vm.faultio.wrap(init.io);
+    if (init.environ_map.get("LUS_CANCEL_AT")) |c| lus.vm.faultio.setupCancel(c);
+    const net = init.environ_map.get("LUS_FAIL_NET");
+    if (net) |n| lus.vm.faultio.setupNet(n);
+    const v = init.environ_map.get("LUS_FAIL_IO");
+    if (v) |spec| report_io = lus.vm.faultio.setup(spec, init.environ_map.get("LUS_FAIL_IO_SEED"), init.environ_map.get("LUS_FAIL_IO_PSOW"));
+    const clock = if (init.environ_map.get("LUS_CLOCK")) |c| lus.vm.faultio.setupClock(c) else false;
+    if (v != null or net != null or clock) init.io = lus.vm.faultio.wrap(init.io);
 }
 
 fn reportAllocs() void {
@@ -332,6 +336,9 @@ fn reportAllocs() void {
     if (report_allocs) std.debug.print("lus: {d} allocations\n", .{lus.vm.heapcount.inject.count.load(.monotonic)});
     if (report_io) std.debug.print("lus: {d} I/O operations\n", .{lus.vm.faultio.count.load(.monotonic)});
     if (lus.vm.faultio.enabled and lus.vm.faultio.worker_report) std.debug.print("lus: {d} worker steps\n", .{lus.vm.faultio.worker_count.load(.monotonic)});
+    lus.vm.faultio.reportNet();
+    if (lus.vm.faultio.enabled and lus.vm.faultio.clock_report) std.debug.print("lus: {d} reads of the real clock\n", .{lus.vm.faultio.clock_reads.load(.monotonic)});
+    if (lus.vm.faultio.enabled and lus.vm.faultio.cancel_report) std.debug.print("lus: {d} suspensions\n", .{lus.vm.faultio.cancel_count.load(.monotonic)});
 }
 
 /// Prints the opcode sequences a run counted, in a build that counts

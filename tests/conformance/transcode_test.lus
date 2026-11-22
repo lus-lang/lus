@@ -126,6 +126,40 @@ local function errors_on_invalid_base64url_test()
   checkerror("invalid base64url", string.transcode, "a", "base64url", "binary")
 end
 
+-- Group: base32, the alphabet of RFC 4648 with padding
+
+local base32_cases = {
+  { "", "" },
+  { "f", "MY======" },
+  { "fo", "MZXQ====" },
+  { "foo", "MZXW6===" },
+  { "foob", "MZXW6YQ=" },
+  { "fooba", "MZXW6YTB" },
+  { "foobar", "MZXW6YTBOI======" },
+}
+
+local function base32_test(text, encoded)
+  assert(string.transcode(text, "utf-8", "base32") == encoded)
+  assert(string.transcode(encoded, "base32", "utf-8") == text)
+  -- Decoding ignores case and accepts input without padding.
+  assert(string.transcode(encoded:lower(), "base32", "utf-8") == text)
+  assert(string.transcode((encoded:gsub("=", "")), "base32", "utf-8") == text)
+end
+
+local function base32_totp_secret_test()
+  -- A TOTP secret as authenticator apps show it, in groups of four.
+  local key = string.transcode("JBSW Y3DP EHPK 3PXP", "base32", "binary")
+  assert(string.transcode(key, "binary", "hex") == "48656c6c6f21deadbeef")
+  assert(string.transcode(key, "binary", "base32") == "JBSWY3DPEHPK3PXP")
+end
+
+local function errors_on_invalid_base32_test()
+  checkerror("invalid base32", string.transcode, "MZ1W", "base32", "binary")
+  checkerror("invalid base32", string.transcode, "M", "base32", "binary")
+  checkerror("invalid base32", string.transcode, "MZX", "base32", "binary")
+  checkerror("invalid base32", string.transcode, "MZXW6Y", "base32", "binary")
+end
+
 -- ============================================
 -- URL encoding tests
 -- ============================================
@@ -418,4 +452,22 @@ local function handles_high_iso_8859_1_characters_test()
   local utf8 = string.transcode(s, "iso-8859-1", "utf-8")
   local back = string.transcode(utf8, "utf-8", "iso-8859-1")
   assert(same_bytes(back, s))
+end
+
+-- Lax URL decoding keeps a malformed escape as it is and decodes the rest,
+-- and strict decoding raises.
+local lax_url_decoding_keeps_malformed_escapes_cases = {
+  { "%zz", "%zz" },
+  { "a%", "a%" },
+  { "%4", "%4" },
+  { "a%zz%41+b", "a%zzA b" },
+  { "100%", "100%" },
+  { "%%41", "%A" },
+  { "%4g%20", "%4g " },
+}
+
+local function lax_url_decoding_keeps_malformed_escapes_test(input, expected)
+  assert(string.transcode(input, "url", "utf-8", true) == expected, input)
+  local ok, e = catch string.transcode(input, "url", "utf-8")
+  assert(not ok and string.find(e, "invalid url input", 1, true), tostring(e))
 end

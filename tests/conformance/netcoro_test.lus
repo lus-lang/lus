@@ -818,3 +818,77 @@ local function udp_receive_timeout_in_a_detached_coroutine_test()
     assert(r.n == 3 and r[1] == true and r[2] == false and string.find(r[3], "receive timeout$"), tostring(r[3]))
     sock:close()
 end
+
+-- A peer that sends a whole response and closes before `fetch` reads it.
+-- The body runs until the end of the stream, which arrives together with
+-- the last bytes.
+local function closing_peer(server, response)
+    return spawn(function()
+        local sock <close> = server:accept()
+        while true do
+            local line = sock:receive("*l")
+            if #line == 0 then
+                break
+            end
+        end
+        sock:send(response)
+    end)
+end
+
+local function fetch_reads_a_body_that_ends_with_the_connection_while_coroutines_wait_test()
+    local server, port = listen()
+    local idle, idle_port = listen()
+    -- A coroutine that waits keeps the scheduler running during the fetch.
+    local waiting = spawn(function()
+        return catch idle:accept()
+    end)
+    local peer = closing_peer(server, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nthe whole body")
+    local status, body = network.fetch("http://127.0.0.1:" .. port .. "/")
+    assert(status == 200 and txt(body) == "the whole body", txt(body))
+    assert(resume(peer))
+    close(waiting)
+    idle:close()
+    server:close()
+end
+
+local function an_https_fetch_from_a_plain_http_peer_raises_test()
+    local server, port = listen()
+    local peer = spawn(function()
+        local sock <close> = server:accept()
+        sock:receive(1)
+        sock:send("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+    end)
+    local ok, err = catch network.fetch("https://127.0.0.1:" .. port .. "/")
+    assert(not ok and string.find(tostring(err), "TLS handshake failed: ", 1, true), tostring(err))
+    resume(peer)
+    server:close()
+end
+
+local function a_failing_detached_coroutine_closes_its_socket_at_once_test()
+    local server, port = listen()
+    local held
+    local seen
+    local co = spawn(function()
+        local sock <close> = connect(port)
+        local mark <close> = setmetatable({}, { __close = function(_, err)
+            seen = err
+        end })
+        held = sock
+        yield()
+        error("failed", 0)
+    end)
+    -- Another coroutine runs until the first one has failed.
+    local watcher = spawn(function()
+        while status(co) ~= "dead" do
+            yield()
+        end
+    end)
+    assert(resume(watcher))
+    assert(seen == "failed", tostring(seen))
+    local ok, err = catch held:send("x")
+    assert(not ok and string.find(tostring(err), "attempt to use a closed socket", 1, true), tostring(err))
+    local r = pack(resume(co))
+    assert(r[1] == false and r[2] == "failed", tostring(r[2]))
+    server:close()
+end
+

@@ -55,5 +55,7 @@ test {
     _ = @import("fs.zig");
     _ = @import("transcode.zig");
     _ = @import("crypto.zig");
+    _ = @import("cryptokey.zig");
     if (build_options.archive) _ = @import("archive.zig");
+    if (build_options.archive) _ = @import("container.zig");
 }

@@ -36,6 +36,7 @@ const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const pledge = @import("../vm/pledge.zig");
 const sched = @import("../vm/sched.zig");
+const faultio = @import("../vm/faultio.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
@@ -407,6 +408,7 @@ pub fn againDir(s: *Socket, default: sched.Dir) sched.Dir {
 /// Reads the bytes of the socket itself, without TLS.
 pub fn rawRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     const handle = s.stream.socket.handle;
+    if (faultio.netStep(faultio.receive_steps)) |k| return if (k == .eof) .{ .n = 0 } else .{ .fail = error.ConnectionResetByPeer };
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .read)) return .again;
         const n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
@@ -427,6 +429,7 @@ pub fn rawRecv(l: *Thread, s: *Socket, dst: []u8) Try {
 /// Writes bytes to the socket itself, without TLS.
 pub fn rawSend(l: *Thread, s: *Socket, data: []const u8) Try {
     const handle = s.stream.socket.handle;
+    if (faultio.netStep(faultio.send_steps) != null) return .{ .fail = error.ConnectionResetByPeer };
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .write)) return .again;
         return afd.sendNow(l.g.io, handle, data);
@@ -520,6 +523,7 @@ const Connecting = struct {
 /// Starts a connection to `a` on a new socket that never blocks. Returns
 /// true when the connection is already established.
 fn startConnect(a: *const net.IpAddress, out: *posix.fd_t) !bool {
+    if (faultio.netStep(&.{.connect}) != null) return error.ConnectionRefused;
     const Threaded = Io.Threaded;
     const cloexec: u32 = if (Threaded.socket_flags_unsupported) 0 else posix.SOCK.CLOEXEC;
     const rc = posix.system.socket(Threaded.posixAddressFamily(a), posix.SOCK.STREAM | cloexec, posix.IPPROTO.TCP);
@@ -1036,6 +1040,7 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
         return out[0..1];
     } else |_| {}
     const name = net.HostName.init(host) catch |e| return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(e) });
+    if (faultio.netStep(&.{.lookup}) != null) return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(error.UnknownHostName) });
     var results: [32]net.HostName.LookupResult = undefined;
     var queue: Io.Queue(net.HostName.LookupResult) = .init(&results);
     const io = l.g.io;
@@ -1098,6 +1103,10 @@ fn connectHost(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Err
     const list = try resolve(l, host, port, null, &addrs);
     var last: anyerror = error.ConnectionRefused;
     for (list) |*a| {
+        if (faultio.netStep(&.{.connect}) != null) {
+            last = error.ConnectionRefused;
+            continue;
+        }
         var stream = a.connect(l.g.io, .{ .mode = .stream, .protocol = .tcp }) catch |e| {
             last = e;
             continue;
@@ -1557,6 +1566,7 @@ pub fn acceptOne(l: *Thread, s: *Server) !*Socket {
     }
     const stream = try s.server.accept(l.g.io);
     errdefer stream.close(l.g.io);
+    if (faultio.netStep(&.{.accept}) != null) return error.ConnectionAborted;
     noSigpipe(stream.socket.handle);
     const local = localAddress(l.g.io, stream.socket.handle, s.server.socket.address);
     return newObject(l, Socket, socket_name, .{ .stream = stream, .local = local, .peer = stream.socket.address });

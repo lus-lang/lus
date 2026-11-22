@@ -27,9 +27,10 @@ pub const inject = struct {
     /// Set on the thread of a worker (`lib/worker.zig`).
     pub threadlocal var in_worker: bool = false;
 
-    /// Whether the allocation being made must fail.
+    /// Whether the allocation being made must fail. The unit tests inject
+    /// failures too, so a sweep can run inside one test.
     pub inline fn fail() bool {
-        if (!fail_alloc) return false;
+        if (!fail_alloc and !builtin.is_test) return false;
         if (workers_only and !in_worker) return false;
         const n = count.fetchAdd(1, .monotonic) + 1;
         if (target == 0) return false;

@@ -11,7 +11,7 @@ returns: file
 
 Writes the data and the size of a file through to its storage device and returns the file handle.
 
-A write returns once the operating system holds the bytes in its cache, and a crash of the system or a loss of power can still lose them. After `file:sync()` returns, the bytes written before the call survive both. On macOS the call also asks the drive to empty its own cache, which a plain sync leaves full. For the standard output the call flushes the buffered output, and for a pipe and the other standard streams it does nothing, since they keep nothing on a device. The method needs no permission, a closed handle raises `attempt to use a closed file`, and a failure of the device raises its error.
+A write returns once the operating system holds the bytes in its cache, and a crash of the system or a loss of power can still lose them. After `file:sync()` returns, the bytes written before the call survive both. On macOS the call also asks the drive to empty its own cache, which a plain sync leaves full. For the standard output the call flushes the buffered output, and for a pipe and the other standard streams it does nothing, since they keep nothing on a device. The method needs no permission, a closed handle raises `attempt to use a closed file`, and a failure of the device returns `nil`, the message, and the number of the error, as a refused write does.
 
 The following example writes a file and syncs it before closing.
 

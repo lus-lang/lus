@@ -27,6 +27,8 @@ With `format`, the text must match a pattern built from these specifiers:
 
 - `%Y` reads a year of one to four digits, and `%y` reads one or two digits and adds 2000, giving a year from 2000 to 2099.
 - `%m`, `%d`, `%H`, `%M`, and `%S` read one or two digits of the month, day, hour, minute, and second. `%e` is the same as `%d`, and both skip leading spaces.
+- `%b`, `%h`, and `%B` read the English name of a month, in full or as its first three letters, in any case, so each reads both `Nov` and `November`.
+- `%a` and `%A` read the English name of a weekday in the same way. The weekday must be the weekday of the date, so `time.parse("Mon, 22 Nov 2026", "%a, %d %b %Y")` raises `'Mon, 22 Nov 2026' names Monday, but the date falls on a Sunday`.
 - `%z` reads `Z`, or an offset `+HH`, `+HHMM`, or `+HH:MM` with either sign.
 - `%%` reads a literal `%`.
 
@@ -41,6 +43,8 @@ local z = time.parse("2026-07-02T09:15:00-04:00")
 print(z.offset, z:instant() == i)               --> -14400  true
 local p = time.parse("02/07/2026 09:15 -0400", "%d/%m/%Y %H:%M %z")
 print(p:iso())                                  --> 2026-07-02T09:15:00-04:00
+local h = time.parse("Sun, 22 Nov 2026 10:00:00 GMT", "%a, %d %b %Y %H:%M:%S GMT")
+print(h:iso())                                  --> 2026-11-22T10:00:00Z
 print(catch time.parse("2026-13-01"))           --> false  ...: ISO 8601 date out of range in '2026-13-01'
 ```
 

@@ -138,6 +138,39 @@ The work goes file by file, starting with the files of the most uncovered edges,
 
 Most uncovered lines of the code generator hold only the failing edge of a `try`, which the allocation sweep reaches. The transform of `tests/coverage/mcdc` finds 1,895 decisions with 4,396 conditions in `src`, and the conformance suite in three modes shows 49.3% of the conditions. The groups stand at 63.4% for `vm`, 69.0% for the collector, 52.4% for `compile`, and 68.8% for the core of `lib`. The tests found that a `__concat` metamethod cannot yield, while every other metamethod can (`tests/diff/OPEN.md`). Under the verifying build, `heapgrowth_test.lus` runs past the time limit of a file, which the nightly job tolerates. Next come tests for the rest of the reports and the conditions that MC/DC lists.
 
+The third round counted the sweeps as well. The crash model of part 10 runs only in the crash tests, so `vm` now leaves it out, as it leaves out the fault layer. Before the round, the code that every program runs stood at the following shares on macOS.
+
+| Group | The suite | With the sweeps | Every build |
+| --- | --- | --- | --- |
+| vm | 84.3% | 86.9% | 89.1% |
+| gc | 91.7% | 92.9% | 95.1% |
+| compile | 58.1% | 66.4% | 66.7% |
+| lib core | 81.3% | 82.3% | 82.9% |
+
+A sweep of whole programs fails an allocation only where one happens. A list of the code generator grows only now and then. The unit tests now sweep the compiler and the binary chunk format in `src/compile/sweep.zig`. The code generator puts a fault point before each append and each reservation of registers, which takes an allocation number of its own in the unit tests and in builds with `-Dfail-alloc=true`, as the fault simulation of SQLite does. Sweeps written in Lus make the k-th metamethod or callback call of each function of the table and string libraries raise, for every k. The error must leave the call unchanged. Other new tests load every truncation of binary chunks that hold each kind of constant. They run queries whose plan has one byte changed, place an error of the code generator in each position of an expression or a statement, and pin the argument errors of the core libraries.
+
+The tests found two bugs, both fixed. The reader of binary chunks reported a failed allocation in a bigint or decimal constant as a malformed chunk. A negative power of a zero decimal returned zero, while a division of a decimal by zero raises. Five checks of the code generator that the parser always makes first now carry `inv.never` or `inv.always`. After the round, the conformance suite covers the following shares.
+
+| Group | Before | After |
+| --- | --- | --- |
+| vm | 84.3% | 85.0% |
+| gc | 91.7% | 91.7% |
+| compile | 58.1% | 63.4% |
+| lib core | 81.3% | 87.6% |
+
+The fourth round turned to MC/DC. The measure now counts the vectors of the unit tests, as the branch report counts their positions. It leaves out the decisions inside `inv.assert`, `inv.always`, and `inv.never` and inside the functions that only invariant checks call, since an invariant has one value in every run and the shipped build has no such checks. A matrix of every operator over every kind of operand runs each operation with both operands in registers and with either one a literal, plain and under debug hooks. Other tests reach tables at the limits of their layouts, string functions called through the fast paths of the JIT with unusual arguments, weak tables with strings and exact numbers, finalizers in generational mode, and the forms of the code generator. The unit tests also sweep every allocation of running programs in `src/vm/sweep.zig`.
+
+The round found four bugs, all fixed. A left shift of a bigint clamped its amount to 2^24 bits, so `10n << math.maxinteger` returned a number of five million digits. A float limit in a numeric loop of decimals let the loop run, while the guide says it raises. A failed allocation while compiling an exact literal reported a malformed number. A failed allocation while decoding a query plan reported a corrupt plan. The code that every program runs now stands at the following shares on macOS, against the shares at the start of the third round.
+
+| Group | Branches before | Branches after | MC/DC before | MC/DC after |
+| --- | --- | --- | --- | --- |
+| vm | 84.3% | 85.2% | 63.4% | 72.5% |
+| gc | 91.7% | 91.7% | 69.0% | 69.2% |
+| compile | 58.1% | 63.5% | 52.4% | 60.2% |
+| lib core | 81.3% | 87.8% | 68.8% | 83.1% |
+
+The branch columns count the conformance suite and the doc tests. Across the whole runtime, 54.5% of the 4,624 conditions are shown to affect their decision on their own.
+
 ### 9. Mutation testing
 
 Coverage shows that a test runs a branch, and mutation testing shows that a test notices when the branch is wrong. A mutant is the runtime with one small change: a comparison flipped (`<` to `<=`, `==` to `!=`), a constant moved by one, `and` swapped with `or`, `true` swapped with `false`, the operands of a subtraction swapped, or one statement removed. A mutant is killed when some test fails on it, and the mutation score of a directory is the share of its mutants that the tests kill.
@@ -205,11 +238,15 @@ Part 10 fails a file write at every step and checks what a program can rely on a
 
 These scenarios run in the nightly job, each enumerated in full where it is small and sampled where it is not, and a short sample of each runs with every change. Every finding gets a regression test, and its scenario stays.
 
-**Progress.** Three pieces are in place. `tests/corrupt/run.lus` covers `fromjson`, `fromcsv`, `time.parse`, `decimal`, `bigint`, `tonumber`, `string.unpack`, the loader of binary chunks, and the five codecs, about 16,000 inputs in batches of 256, and runs in CI on Linux and macOS. It found no crash. Its checks of values found two things that the harness first assumed wrongly and the manual now states: the Zstandard frames that `compress` writes carry no checksum, so only gzip and lz4 notice a changed byte, and an infinity writes as `inf`, which no number parses from, as in Lua. The manual also states in the section on binary chunks that a chunk is trusted input and that `load` checks its structure but not its code.
+**Progress.** Three pieces are in place. `tests/corrupt/run.lus` covers `fromjson`, `fromcsv`, `time.parse`, `decimal`, `bigint`, `tonumber`, `string.unpack`, the loader of binary chunks, and the five codecs, about 16,000 inputs in batches of 256, and runs in CI on Linux and macOS. It found no crash. Its checks of values found two things that the harness first assumed wrongly. The Zstandard frames that `compress` wrote carried no checksum, so `compress` now writes one into every frame, and gzip, zstd, and lz4 all notice a changed byte. An infinity writes as `inf`, which no number parses from, as in Lua, and the manual states it. The manual also states in the section on binary chunks that a chunk is trusted input and that `load` checks its structure but not its code.
 
 `LUS_WORKER_FAIL=N` fails step N of the message handling of workers, and `LUS_FAIL_ALLOC_SCOPE=worker` numbers only the allocations of worker threads. `tests/faults/workers.lus` runs a worker that sends numbered messages under every step and every allocation of the worker, with a creator that receives in the main chunk and one that runs a detached coroutine meanwhile, so its wait goes through the scheduler. Every run ended within its limit, and the creator received every message sent before the failure, in order. The hang of `tests/diff/OPEN.md` did not occur, there or in 40 runs of the allocation sweep that first showed it, and stays open. Mutation runs now also kill with 200 differential programs and with the unit tests.
 
-The network faults, the cancellation of detached coroutines at their suspensions, the scripted clocks, and killed children come next.
+`LUS_FAIL_NET` gives the network five faults, each counting its own steps: `N:reset` resets the connection at transfer N, `N:eof` ends the stream at receive N, `N:dns` fails lookup N, `N:refuse` refuses connection attempt N, and `N:abort` aborts the connection of accept N. The fault build prints the count of each kind and the TCP and UDP sockets still open at exit. `tests/faults/network.lus` runs `network.fetch` against `network.serve`, against a peer that trickles its response one byte at a time and ends the body by closing, and against a peer that speaks plain HTTP to an HTTPS request, whose handshake fails for real, which replaces an injected `N:tls`. It also runs a TCP exchange of lines. The sweep found four bugs in `fetch`. A body that ends with the connection hung for 30 seconds when other coroutines kept the scheduler busy, because the reader waited for an edge that had passed. A read error in such a body ended the body early without an error. A failed TLS handshake returned `nil` and a message instead of raising. A server that closed the connection inside the status line gave `"invalid HTTP response"`. Each now has a regression test or a scenario, and the errors of `fetch` name their step and their reason. A fifth showed under load in the eager mode of the conformance suite: `fetch` closed its socket without telling the scheduler, whose kqueue poller keeps a registration until it hears of a close, so a later socket that took the same descriptor never woke. Two fetches in a row hung on every run under CPU load before the fix and on none after it.
+
+`LUS_CANCEL_AT=N` closes the detached coroutine that makes suspension N, a wait for a socket, a timer, another coroutine, or a notification. `tests/faults/cancel.lus` cancels each suspension of a program with a server, a TCP client, a coroutine that waits for the client, and one that waits for a worker, and every `<close>` variable closed once, in reverse order. The sweep showed that a detached coroutine that failed kept its pending `<close>` variables, and the sockets they held, until the collector freed it. Such a coroutine now closes them as it fails, after the runtime takes the traceback that the report of an uncollected error prints.
+
+`LUS_CLOCK` scripts the real clock. `tests/faults/clock.lus` runs the clock across both changes of daylight saving in New York and jumps it back an hour and forward a day, and `time.now`, `os.time`, `os.date`, and the zoned values followed it while `time.monotonic` and a socket timeout kept to the monotonic clock. Children that a signal ends report the signal from `os.execute` and from closing a pipe, and writing to such a child returns `nil` and `"Broken pipe"`. A write, a flush, or a sync of a file handle that the system refuses returns `nil`, the message, and the number of the error, as in Lua, while `fs` and `fetch` keep raising. The runtime installs no signal handler outside compile-time evaluation, and the standard library retries an interrupted system call itself, so an interruption never reaches Lus code and the fault build injects none.
 
 ## Gates and findings
 

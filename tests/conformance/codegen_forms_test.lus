@@ -1,0 +1,100 @@
+--[[
+    Forms of the code generator.
+
+    The code generator merges loads of nil into one instruction, joins a
+    chain of concatenations, puts small integers in the operands of an
+    instruction, moves operands of a multiple assignment out of the way of
+    the targets it assigns first, and closes captured locals when a goto
+    leaves their block. Each test runs code that takes those choices both
+    ways and checks the values that result.
+]]
+
+local function nil_loads_merge_in_any_order_test()
+    local a, b, c, d = 1, 2, 3, 4
+    c = nil
+    b = nil
+    assert(a == 1 and b == nil and c == nil and d == 4)
+    a, b, c, d = 1, 2, 3, 4
+    d = nil
+    a = nil
+    assert(a == nil and b == 2 and c == 3 and d == nil)
+    a, b, c, d = 1, 2, 3, 4
+    b = nil
+    c = nil
+    d = nil
+    assert(a == 1 and b == nil and c == nil and d == nil)
+    a, b = 1, 2
+    if a then a = 5 end
+    b = nil
+    assert(a == 5 and b == nil)
+    local e, f, g
+    local h = nil
+    assert(e == nil and f == nil and g == nil and h == nil)
+end
+
+local function multiple_assignment_evaluates_before_it_assigns_test()
+    local t, i = {}, 1
+    t[i], i = i, 2
+    assert(t[1] == 1 and i == 2)
+    local a = {}
+    local saved = a
+    a.x, a = 1, 2
+    assert(saved.x == 1 and a == 2)
+    local u = {}
+    local keep = u
+    local function f() u.y, u = 3, 4 end
+    f()
+    assert(keep.y == 3 and u == 4)
+    local k = "key"
+    local m = {}
+    m[k], k = "first", "other"
+    assert(m.key == "first" and k == "other")
+end
+
+local function concatenation_chains_join_test()
+    local a, b, c, d = "a", "b", "c", "d"
+    assert(a .. b .. c .. d == "abcd")
+    assert((a .. b) .. (c .. d) == "abcd")
+    assert(a .. (b .. c) .. d == "abcd")
+    assert(a .. 1 .. 2.5 .. d == "a12.5d")
+end
+
+local function small_integers_fit_the_immediate_operands_test()
+    local x = 5
+    assert(x + 127 == 132 and x + 128 == 133 and x - 128 == -123 and x - 129 == -124)
+    assert(x + -128 == -123 and x + -129 == -124)
+    assert(x < 127 and x < 128 and x > -128 and x > -129)
+    assert(x ~= 127 and x ~= 128 and x ~= -128 and x ~= -129)
+    local y = 127
+    assert(y == 127 and y >= 127 and y <= 127)
+    y = 128
+    assert(y == 128 and y >= 128 and y <= 128)
+    y = -129
+    assert(y == -129 and -129 >= y)
+end
+
+local function constant_keys_with_jumps_test()
+    local t = { "one", "two" }
+    local yes, no = true, false
+    assert(t[yes and 1 or 2] == "one" and t[no and 1 or 2] == "two")
+    t[no and 1 or 2] = "TWO"
+    assert(t[2] == "TWO")
+end
+
+local function a_goto_out_of_a_block_closes_its_captured_locals_test()
+    local fs = {}
+    for i = 1, 3 do
+        local v = i * 10
+        fs[i] = function() return v end
+        if i == 2 then goto done end
+    end
+    ::done::
+    assert(#fs == 2 and fs[1]() == 10 and fs[2]() == 20)
+    local closed = 0
+    do
+        local c <close> = setmetatable({}, { __close = function() closed = closed + 1 end })
+        if closed == 0 then goto out end
+    end
+    ::out::
+    assert(closed == 1)
+end
