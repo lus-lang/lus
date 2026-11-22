@@ -2,7 +2,7 @@
 # Runs the conformance suite on Linux in a local Lima VM, natively on
 # aarch64 and, through qemu-user, on x86-64.
 #
-# Usage: tools/test-linux.sh [--quick] [--no-x64] [--riscv64] [--loong64] [--strict]
+# Usage: tools/test-linux.sh [--quick] [--no-x64] [--riscv64] [--loong64] [--ppc64le] [--strict]
 #
 # The script cross-builds the runtime for aarch64-linux and x86_64-linux,
 # copies each binary with the test trees into the VM, and runs `lus test`
@@ -10,8 +10,8 @@
 # default tiers, eager, and optimizing. The x86-64 binary runs under the
 # qemu-user that the VM registers with binfmt_misc, so the processes the
 # tests start run under it as well. It runs the default tiers and the
-# optimizing tier, or only the default tiers with --quick. --riscv64 and
-# --loong64 each also cross-build a static musl binary for that
+# optimizing tier, or only the default tiers with --quick. --riscv64,
+# --loong64, and --ppc64le each also cross-build a static musl binary for that
 # architecture and run it under the qemu-user of the VM with the JIT off,
 # with the default tiers, eager, baseline, and optimizing. The VM is the one LUS_LIMA_VM names, `boring`
 # by default, and must be running.
@@ -38,6 +38,7 @@ for arg in "$@"; do
         --no-x64) x64=0 ;;
         --riscv64) extra="$extra riscv64" ;;
         --loong64) extra="$extra loongarch64" ;;
+        --ppc64le) extra="$extra powerpc64le" ;;
         --strict) strict=1 ;;
         *) echo "unknown option $arg" >&2; exit 2 ;;
     esac
