@@ -1,0 +1,12 @@
+global print, coroutine
+
+local request_id <context> = "none"
+request_id = "main"
+
+local co = coroutine.create(function()
+    request_id = "worker"
+    local seen = request_id
+    return seen
+end)
+coroutine.resume(co)
+print(request_id)

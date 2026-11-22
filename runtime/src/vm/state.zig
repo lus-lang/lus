@@ -383,6 +383,8 @@ pub const Global = struct {
     blobs: std.AutoHashMapUnmanaged(*String, *@import("blob.zig").Blob) = .empty,
     /// Hooks installed by library modules (pledge state, worker hosts...).
     ext: std.StringHashMapUnmanaged(*anyopaque) = .empty,
+    /// The slots of the context variables of this state (`context.zig`).
+    ctx: @import("context.zig").Store = .{},
     /// Program arguments and environment, provided by the host.
     args: []const []const u8 = &.{},
     environ: ?*std.process.Environ.Map = null,
@@ -595,6 +597,9 @@ pub const Thread = struct {
     /// Set when such a coroutine was closed before it ended, so resuming
     /// it reports "closed".
     event_closed: bool = false,
+    /// The values of the context variables of this coroutine
+    /// (`context.zig`), or null while it has none of its own.
+    ctx: ?*@import("context.zig").Array = null,
     /// Debug hook state (debug.sethook). The hook function itself lives in
     /// the registry. `hook_mask` combines the `hook_*` bits.
     hook_mask: u8 = 0,
@@ -644,6 +649,7 @@ pub const Thread = struct {
         m.mark(l.err);
         if (l.err_traceback) |s| m.markHeader(&s.hdr);
         if (l.resumer) |r| m.markHeader(&r.hdr);
+        @import("context.zig").traverse(l, m);
     }
 
     // -----------------------------------------------------------------
@@ -1341,6 +1347,7 @@ pub fn destroy(g: *Global) void {
     g.finobj.deinit(gpa);
     g.tobefnz.deinit(gpa);
     g.ext.deinit(gpa);
+    g.ctx.deinit(gpa);
     g.shapes.deinit(g.gpa);
     g.parent_gpa.destroy(g);
 }

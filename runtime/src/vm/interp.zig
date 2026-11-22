@@ -13,6 +13,8 @@ const inv = @import("inv.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
 const state = @import("state.zig");
+const context = @import("context.zig");
+const context_lib = @import("../lib/context.zig");
 const table = @import("table.zig");
 const shape = @import("shape.zig");
 const ops = @import("ops.zig");
@@ -1366,6 +1368,17 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             c.fr.pc = pc;
             try globalDefine(l, c.bp[opc.a(ins)], c.k(mode)[opc.b(ins)], c.bp[opc.c(ins)]);
             c.refresh(l, mode);
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .getctx => {
+            c.fr.pc = pc;
+            c.bp[opc.a(ins)] = context.get(l, try context_lib.slotOf(l, c.bp[opc.b(ins)]));
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .setctx => {
+            c.fr.pc = pc;
+            const slot = try context_lib.slotOf(l, c.bp[opc.a(ins)]);
+            context.set(l, slot, c.bp[opc.b(ins)]) catch return l.raiseMem();
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .catchcheck => {

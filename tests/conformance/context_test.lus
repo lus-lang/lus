@@ -1,0 +1,153 @@
+-- Context variables: locals declared with `<context>`, whose value belongs
+-- to the running coroutine (spec/design/context.md).
+pledge("load")
+
+local function the_initializer_is_the_default_test()
+    local id <context> = "none"
+    assert(id == "none")
+    local co = coroutine.create(function() return id end)
+    assert(select(2, coroutine.resume(co)) == "none")
+end
+
+local function a_declaration_without_initializer_defaults_to_nil_test()
+    local x <context>
+    assert(x == nil)
+    x = 1
+    assert(x == 1)
+end
+
+local function an_assignment_stays_in_the_coroutine_test()
+    local id <context> = "main"
+    local seen = {}
+    local co = coroutine.create(function()
+        id = "child"
+        coroutine.yield(id)
+        seen[#seen + 1] = id
+    end)
+    assert(select(2, coroutine.resume(co)) == "child")
+    assert(id == "main")
+    coroutine.resume(co)
+    assert(seen[1] == "child")
+end
+
+local function a_new_coroutine_inherits_the_value_at_creation_test()
+    local id <context> = "default"
+    id = "parent"
+    local co = coroutine.create(function() return id end)
+    id = "changed after"
+    assert(select(2, coroutine.resume(co)) == "parent")
+end
+
+local function detached_coroutines_inherit_too_test()
+    local id <context> = "default"
+    id = "request 7"
+    local got
+    local task = coroutine.detach(coroutine.create(function()
+        coroutine.yield()
+        got = id
+    end))
+    id = "later"
+    coroutine.resume(task)
+    assert(got == "request 7")
+end
+
+local function assigning_nil_stores_nil_test()
+    local x <context> = "default"
+    x = nil
+    assert(x == nil)
+    local co = coroutine.create(function() return x end)
+    assert(select(2, coroutine.resume(co)) == nil)
+end
+
+local function a_closure_reads_the_running_coroutine_test()
+    local id <context> = "default"
+    local function get() return id end
+    local co = coroutine.wrap(function()
+        id = "inner"
+        return get()
+    end)
+    assert(co() == "inner")
+    assert(get() == "default")
+end
+
+local function each_run_of_a_declaration_is_a_new_variable_test()
+    local getters = {}
+    for i = 1, 3 do
+        local v <context> = i
+        getters[i] = function() return v end
+    end
+    assert(getters[1]() == 1 and getters[2]() == 2 and getters[3]() == 3)
+end
+
+local function two_variables_of_one_name_are_distinct_test()
+    local function make(v)
+        local name <context> = v
+        return function() return name end
+    end
+    local a, b = make("a"), make("b")
+    assert(a() == "a" and b() == "b")
+end
+
+local function compound_values_work_in_expressions_test()
+    local n <context> = 0
+    for i = 1, 10 do n = n + i end
+    assert(n == 55)
+    local t <context> = {}
+    t.k = 1
+    assert(t.k == 1)
+end
+
+local function debug_reads_and_writes_by_number_test()
+    local function count()
+        local n = 0
+        while debug.getcontext(n + 1) do n = n + 1 end
+        return n
+    end
+    local before = count()
+    local marker <context> = "m"
+    local n = count()
+    assert(n == before + 1)
+    local name, value, where = debug.getcontext(n)
+    assert(name == "marker" and value == "m")
+    assert(where:find("context_test.lus:", 1, true))
+    local co = coroutine.create(function() return marker end)
+    assert(debug.setcontext(co, n, "set") == "marker")
+    assert(select(2, debug.getcontext(co, n)) == "set")
+    assert(select(2, coroutine.resume(co)) == "set")
+    assert(marker == "m")
+    assert(debug.getcontext(n + 1000) == nil)
+end
+
+local function unreachable_variables_are_reclaimed_test()
+    local function count()
+        local n = 0
+        while debug.getcontext(n + 1) do n = n + 1 end
+        return n
+    end
+    collectgarbage()
+    collectgarbage()
+    local before = count()
+    for i = 1, 50 do
+        local t <context> = i
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(count() == before)
+end
+
+local function invalid_declarations_are_compile_errors_test()
+    local cases = {
+        { "local x <context, const> = 1", "cannot combine <context> with <const>" },
+        { "local x <context, close> = nil", "cannot combine <context> with <close>" },
+        { "local x <context, lazy> = 1", "cannot combine <context> with <lazy>" },
+        { "local x <context, observe> = 1", "cannot combine <context> with <observe>" },
+        { "global y <context> = 1", "global variables cannot be <context>" },
+        { "local a, b <context> = 1, 2", "names one variable" },
+        { "local x <context> = 1, 2", "takes one initializer" },
+    }
+    for _, c in ipairs(cases) do
+        local f, err = load(c[1])
+        assert(f == nil, c[1])
+        assert(err:find(c[2], 1, true), err)
+    end
+end

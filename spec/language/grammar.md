@@ -541,7 +541,8 @@ Limits: at most 200 active locals per function (`too many local variables (limit
 - `<meta>` evaluates the initializer at compile time (section 5.14). It implies `<const>`.
 - `<lazy>` defers the initializer to the first read (section 5.15). It implies `<const>`.
 - `<observe>` keeps dependents current (section 5.16).
-- Combining two different attributes of `<const>`, `<close>`, and `<group>` on one name raises `conflicting attributes`. Repeating the same one inside one list (`<const, const>`) is accepted. `<meta>` and `<lazy>` combine with any of them in the parser, and the compiler rejects the combinations that section 5.14 lists.
+- `<context>` gives the variable a value for each coroutine (section 5.17).
+- Combining two different attributes of `<const>`, `<close>`, and `<group>` on one name raises `conflicting attributes`. Repeating the same one inside one list (`<const, const>`) is accepted. `<meta>`, `<lazy>`, `<observe>`, and `<context>` combine with any of them in the parser, and the compiler rejects the combinations that section 5.14 lists.
 - Any other attribute is a runtime attribute (section 5.9).
 
 The control variable of a numeric `for` and the first variable of a generic `for` are read-only (`for i = 1, 3 do i = 5 end` raises `attempt to assign to const variable 'i'`). **Tested** (`compile_errors_test.lus`).
@@ -1303,6 +1304,20 @@ The runtime errors are `lazy variable 'NAME' read during its own initialization`
 The runtime error `cannot assign observed variable 'NAME' while its dependents update` comes from an assignment during an update, which includes an update paused by a yield. An error that an initializer raises during an update propagates from the assignment that started it.
 
 **Tested** (`observe_test.lus`): the motivating example, a diamond computed once in order, transitive chains, assignments from nested functions, a writer declared before its dependent, the end of a dependent's scope, multiple assignment, the const rule, the rejected forms, an error during an update, an assignment during an update, a yield during an update, closing a paused update, and `string.dump`.
+
+### 5.17 `<context>` locals
+
+**Source:** `compile/codegen.zig` (`contextLocal`, `contextRead`, `contextStore`), `vm/context.zig` (slots and arrays), `lib/context.zig` (slot objects, the `ctxnew` builtin, `debug.getcontext` and `debug.setcontext`). **Design:** `spec/design/context.md`. **Manual:** `guide.mdx`. **Tests:** `context_test.lus`.
+
+`local NAME <context> = exp` declares a context local, whose value belongs to the running coroutine. `exp` is evaluated once, when the declaration runs, and is the default. Each run of the declaration creates a new variable. A hidden local holds the slot object of the variable, so closures capture it like any local. A read compiles to `GETCTX` and an assignment to `SETCTX`. A new coroutine starts with the values of the coroutine that creates it. The compile errors are:
+
+- `a <context> declaration names one variable` and `a <context> variable takes one initializer`,
+- `cannot combine <context> with <const>`, `with <close>`, `with <group>`, `with <meta>`, `with <lazy>`, `with <observe>`, and `with runtime attributes`,
+- `cannot use <context> in this declaration` for a group field, `from` destructuring, or an assignment condition, and `global variables cannot be <context>`.
+
+A slot object that `debug.setlocal` replaced with another value raises `the slot of a context variable was replaced` at the next read or write.
+
+**Tested** (`context_test.lus`): the default, a declaration without initializer, an assignment that stays in its coroutine, inheritance at creation by plain and detached coroutines, `nil` as a value, closures, a new variable per run, two variables of one name, `debug.getcontext` and `debug.setcontext`, reclaimed slots, and the rejected forms.
 
 ## 6. Compile-time error catalog
 

@@ -853,6 +853,7 @@ const Exporter = struct {
             var rt: std.ArrayList(*Node) = .empty;
             var lazy = false;
             var observed = false;
+            var is_context = false;
             var is_meta = false;
             for (an.attribs) |a| switch (a) {
                 .@"const" => {
@@ -863,12 +864,14 @@ const Exporter = struct {
                 .meta => is_meta = true,
                 .lazy => lazy = true,
                 .observe => observed = true,
+                .context => is_context = true,
                 .runtime => |e| if (runtime) try rt.append(x.arena, try x.expr(e)),
             };
             if (is_meta) attr = "meta";
             if (attr) |s| try x.set(n, "attr", .{ .str = s });
             if (lazy) try x.set(n, "lazy", .{ .boolean = true });
             if (observed) try x.set(n, "observe", .{ .boolean = true });
+            if (is_context) try x.set(n, "context", .{ .boolean = true });
             try x.setList(n, "runtimeattrs", rt.items);
             try list.append(x.arena, n);
         }

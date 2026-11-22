@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const lus = path.resolve(process.argv[2] ?? path.join(here, "../../runtime/zig-out/bin/lus"));
 const fixture = path.join(here, "fixture.lus");
+const contextFixture = path.join(here, "context.lus");
 const coroutineFixture = path.join(here, "coroutine.lus");
 
 class Client {
@@ -252,9 +253,39 @@ async function coroutines() {
     await exited;
 }
 
+async function context() {
+    const { c, exited } = start();
+    await c.ok("initialize", { adapterID: "lus" });
+    await c.event("initialized");
+    await c.ok("setBreakpoints", { source: { path: contextFixture }, breakpoints: [{ line: 9 }] });
+    await c.ok("launch", { program: contextFixture });
+    await c.ok("configurationDone");
+
+    // The Context scope shows the value of the coroutine that stopped,
+    // and the slot of the variable stays out of the other scopes.
+    const s = await stopped(c, "breakpoint");
+    const { scopes } = await c.ok("scopes", { frameId: s.frames[0].id });
+    const scope = scopes.find((x) => x.name === "Context");
+    assert.ok(scope, "a Context scope is listed");
+    const { variables } = await c.ok("variables", { variablesReference: scope.variablesReference });
+    const id = variables.find((v) => v.name === "request_id");
+    assert.ok(id && id.value.includes("worker"), `request_id reads ${id && id.value}`);
+    for (const x of scopes.filter((x) => x.name === "Locals" || x.name === "Upvalues")) {
+        const { variables: vs } = await c.ok("variables", { variablesReference: x.variablesReference });
+        assert.ok(!vs.some((v) => v.name.startsWith("(")), `${x.name} hides the slot`);
+    }
+
+    await c.ok("continue", { threadId: 1 });
+    await c.event("terminated");
+    assert.match(c.output.stdout, /^main\n/);
+    await c.ok("disconnect");
+    await exited;
+}
+
 async function main() {
     await basics();
     await coroutines();
+    await context();
 }
 
 const timer = setTimeout(() => {

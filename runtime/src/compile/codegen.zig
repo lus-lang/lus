@@ -85,7 +85,7 @@ const ExpDesc = struct {
 // ---------------------------------------------------------------------
 // Variables, blocks, and function state
 
-const VarKind = enum { regular, const_, close, ctc, global_named, global_star, group, lazy };
+const VarKind = enum { regular, const_, close, ctc, global_named, global_star, group, lazy, context };
 
 const VarDesc = struct {
     name: []const u8,
@@ -109,6 +109,9 @@ const VarDesc = struct {
     /// names of the hidden locals that hold its value and its force
     /// function (`lazyLocal`).
     lazy_store: []const u8 = "",
+    /// For a `<context>` local, which occupies no register of its own: the
+    /// hidden local that holds its slot object (`contextLocal`).
+    ctx_slot: []const u8 = "",
     lazy_force: []const u8 = "",
     /// For an `<observe>` local: whether it is a source or a derived
     /// variable, and the name of the hidden local that holds the list of
@@ -1465,7 +1468,11 @@ fn singleVarAux(fs: *FuncState, name: []const u8, v: *ExpDesc, base: bool) Error
 /// Builds the descriptor for a variable reference, including `_ENV.name`
 /// for globals.
 fn singleVar(fs: *FuncState, name: []const u8, line: u32, v: *ExpDesc) Error!void {
-    if (knownLocal(fs, name)) |vd| if (vd.kind == .lazy) return lazyRead(fs, vd, line, v);
+    if (knownLocal(fs, name)) |vd| switch (vd.kind) {
+        .lazy => return lazyRead(fs, vd, line, v),
+        .context => return contextRead(fs, vd, line, v),
+        else => {},
+    };
     fs.c.ginfo = -1;
     try singleVarAux(fs, name, v, true);
     if (v.kind != .void_) return;
@@ -2241,6 +2248,7 @@ fn attribKind(fs: *FuncState, an: ast.AttName, line: u32, allow_runtime: bool) E
         .meta => return fs.c.err(line, "cannot use <meta> in this declaration", .{}),
         .lazy => return fs.c.err(line, "cannot use <lazy> in this declaration", .{}),
         .observe => return fs.c.err(line, "cannot use <observe> in this declaration", .{}),
+        .context => return fs.c.err(line, "cannot use <context> in this declaration", .{}),
         .runtime => if (!allow_runtime) return fs.c.err(line, "runtime attributes not supported in this context", .{}),
     };
     return k;
@@ -2284,6 +2292,7 @@ fn explist(fs: *FuncState, exprs: []*ast.Expr, last: *ExpDesc) Error!u32 {
 }
 
 fn localStat(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
+    for (names) |an| if (an.has(.context)) return contextLocal(fs, names, values, line);
     for (names) |an| if (an.has(.meta)) return metaLocal(fs, names, values, line);
     for (names) |an| if (an.has(.lazy)) return lazyLocal(fs, names, values, line);
     for (names) |an| if (an.has(.observe)) return observeLocal(fs, names, values, line);
@@ -2554,6 +2563,7 @@ fn globalKind(fs: *FuncState, attribs: []const ast.Attrib, line: u32) Error!bool
         .meta => return fs.c.err(line, "global variables cannot be <meta>", .{}),
         .lazy => return fs.c.err(line, "global variables cannot be <lazy>", .{}),
         .observe => return fs.c.err(line, "global variables cannot be <observe>", .{}),
+        .context => return fs.c.err(line, "global variables cannot be <context>", .{}),
         .runtime => return fs.c.err(line, "runtime attributes not supported in this context", .{}),
     };
     return readonly;
@@ -2664,6 +2674,14 @@ fn assignStat(fs: *FuncState, targets: []*ast.Expr, values: []*ast.Expr, line: u
     var descs = try fs.c.arena.alloc(ExpDesc, targets.len);
     for (targets, 0..) |t, i| {
         var v: ExpDesc = .{};
+        if (contextTarget(fs, t)) |vd| {
+            // The descriptor of the hidden slot, marked so that the store
+            // assigns the variable instead of the slot.
+            try singleVar(fs, vd.ctx_slot, line, &v);
+            v.node = &context_marker;
+            descs[i] = v;
+            continue;
+        }
         try expr(fs, t, &v);
         switch (v.kind) {
             .local, .upval, .indexed, .indexup, .indexint, .indexstr, .ctc => {},
@@ -2749,6 +2767,7 @@ fn observeNotify(fs: *FuncState, o: ObservedName, line: u32) Error!void {
 }
 
 fn storeTarget(fs: *FuncState, v: *ExpDesc, ex: *ExpDesc, target: *ast.Expr) Error!void {
+    if (v.node == &context_marker) return contextStore(fs, v, ex);
     // Runtime attribute handlers on local targets.
     if (v.kind == .local) {
         const vd = getLocalVar(fs, @intCast(v.aux));
@@ -3718,7 +3737,7 @@ fn observeLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line:
         .close => return c.err(line, "cannot combine <observe> with <close>", .{}),
         .group => return c.err(line, "cannot combine <observe> with <group>", .{}),
         .runtime => return c.err(line, "cannot combine <observe> with runtime attributes", .{}),
-        .meta, .lazy => unreachable,
+        .meta, .lazy, .context => unreachable,
     };
     if (values.len != 1) return c.err(line, "an <observe> variable needs one initializer", .{});
     const a = c.arena;
@@ -4272,4 +4291,67 @@ fn getFieldTo(fs: *FuncState, dest: u32, obj: u8, name: []const u8) Error!void {
         _ = try emitABx(fs, .loadk, dest, ki);
         try codeABC(fs, .gettable, dest, obj, dest);
     }
+}
+
+// ---------------------------------------------------------------------
+// Context variables (`spec/design/context.md`)
+
+var context_marker: ast.Expr = .{ .span = .{ .start = 0, .end = 0 }, .line = 0, .kind = .nil };
+
+/// The context local that the assignment target `t` names, or null.
+fn contextTarget(fs: *FuncState, t: *const ast.Expr) ?*VarDesc {
+    if (t.kind != .name) return null;
+    const vd = knownLocal(fs, t.kind.name.text) orelse return null;
+    return if (vd.kind == .context) vd else null;
+}
+
+/// A read of the context local `vd`: `GETCTX` with its slot object.
+fn contextRead(fs: *FuncState, vd: *VarDesc, line: u32, v: *ExpDesc) Error!void {
+    var slot: ExpDesc = .{};
+    try singleVar(fs, vd.ctx_slot, line, &slot);
+    const r = try exp2anyreg(fs, &slot);
+    freeExp(fs, &slot);
+    v.* = .{ .kind = .reloc, .info = try emitABC(fs, .getctx, 0, @intCast(r), 0) };
+}
+
+/// Assigns `ex` to the context local whose slot descriptor is `v`.
+fn contextStore(fs: *FuncState, v: *ExpDesc, ex: *ExpDesc) Error!void {
+    v.node = null;
+    const val = try exp2anyreg(fs, ex);
+    const r = try exp2anyreg(fs, v);
+    try codeABC(fs, .setctx, @intCast(r), @intCast(val), 0);
+    freeExp(fs, v);
+    freeExp(fs, ex);
+}
+
+/// `local name <context> = exp`. A hidden local holds the slot object
+/// that the builtin `ctxnew` returns for the variable, with the value of
+/// the initializer as its default. The variable itself occupies no
+/// register: reads and writes go through `GETCTX` and `SETCTX`.
+fn contextLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
+    const c = fs.c;
+    if (names.len != 1) return c.err(line, "a <context> declaration names one variable", .{});
+    const an = names[0];
+    for (an.attribs) |at| switch (at) {
+        .context => {},
+        .@"const" => return c.err(line, "cannot combine <context> with <const>", .{}),
+        .close => return c.err(line, "cannot combine <context> with <close>", .{}),
+        .group => return c.err(line, "cannot combine <context> with <group>", .{}),
+        .meta => return c.err(line, "cannot combine <context> with <meta>", .{}),
+        .lazy => return c.err(line, "cannot combine <context> with <lazy>", .{}),
+        .observe => return c.err(line, "cannot combine <context> with <observe>", .{}),
+        .runtime => return c.err(line, "cannot combine <context> with runtime attributes", .{}),
+    };
+    if (values.len > 1) return c.err(line, "a <context> variable takes one initializer", .{});
+    const a = c.arena;
+    const x = an.name.text;
+    const hidden = try std.fmt.allocPrint(a, "(context {s})", .{x});
+    const g: Gen = .{ .a = a, .line = line, .span = an.name.span };
+    const init = if (values.len == 1) values[0] else try g.ex(.nil);
+    const call = try g.call(try g.name(lazy.prefix ++ "ctxnew"), &.{ init, try g.str(x), try g.str(c.opts.chunkname), try g.int(@intCast(line)) });
+    try statement(fs, try g.local(&.{hidden}, &.{}, call));
+    const vidx = try newLocalVar(fs, x, .context);
+    const vd = getLocalVar(fs, vidx);
+    vd.ctx_slot = hidden;
+    try adjustLocalVars(fs, 1);
 }
