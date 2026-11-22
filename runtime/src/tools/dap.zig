@@ -118,7 +118,8 @@ pub const Transport = struct {
     in_fd: fd_t,
     out_fd: fd_t,
     write_mutex: Io.Mutex = .init,
-    seq: std.atomic.Value(i64) = .init(1),
+    /// A word-sized counter, since 32-bit targets lack 64-bit atomics.
+    seq: std.atomic.Value(isize) = .init(1),
 
     // The inbox, filled by the reader thread.
     in_mutex: Io.Mutex = .init,
@@ -130,7 +131,7 @@ pub const Transport = struct {
     pending: std.atomic.Value(bool) = .init(false),
 
     pub fn nextSeq(t: *Transport) i64 {
-        return t.seq.fetchAdd(1, .monotonic);
+        return @intCast(t.seq.fetchAdd(1, .monotonic));
     }
 
     /// Sends one framed message.

@@ -238,7 +238,8 @@ pub inline fn setMarkSmall(h: *const Header) bool {
 pub inline fn isMarkedSmallAtomic(h: *const Header) bool {
     const p = pageOf(h);
     const gi = granuleOf(h);
-    return (@atomicLoad(u64, &p.marks[gi / 64], .monotonic) >> @intCast(gi % 64)) & 1 != 0;
+    const m = markWord(&p.marks[gi / 64], gi % 64);
+    return (@atomicLoad(MarkWord, m.word, .monotonic) >> m.shift) & 1 != 0;
 }
 
 /// `setMarkSmall` for parallel markers. Exactly one of the threads that
@@ -246,10 +247,22 @@ pub inline fn isMarkedSmallAtomic(h: *const Header) bool {
 pub inline fn setMarkSmallAtomic(h: *const Header) bool {
     const p = pageOf(h);
     const gi = granuleOf(h);
-    const bit = @as(u64, 1) << @intCast(gi % 64);
-    const w = &p.marks[gi / 64];
-    if (@atomicLoad(u64, w, .monotonic) & bit != 0) return false;
-    return @atomicRmw(u64, w, .Or, bit, .monotonic) & bit == 0;
+    const m = markWord(&p.marks[gi / 64], gi % 64);
+    const bit = @as(MarkWord, 1) << m.shift;
+    if (@atomicLoad(MarkWord, m.word, .monotonic) & bit != 0) return false;
+    return @atomicRmw(MarkWord, m.word, .Or, bit, .monotonic) & bit == 0;
+}
+
+/// The word that the parallel markers update atomically: the 64-bit word
+/// of the bitmap on a 64-bit target, and the half of it that holds the
+/// bit on a 32-bit target, which has no 64-bit atomic operations.
+const MarkWord = usize;
+const MarkBit = struct { word: *MarkWord, shift: std.math.Log2Int(MarkWord) };
+inline fn markWord(w: *u64, bit: usize) MarkBit {
+    if (@sizeOf(MarkWord) == 8) return .{ .word = @ptrCast(w), .shift = @intCast(bit) };
+    comptime std.debug.assert(@import("builtin").cpu.arch.endian() == .little);
+    const halves: *[2]MarkWord = @ptrCast(w);
+    return .{ .word = &halves[bit / 32], .shift = @intCast(bit % 32) };
 }
 
 // ---------------------------------------------------------------------

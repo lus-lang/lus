@@ -610,9 +610,14 @@ pub const Proto = struct {
 
         pub const frame_shift = 48;
 
-        /// The flags word of the frame of a plain call.
+        /// The flags word of the frame of a plain call. The two bytes of
+        /// the flags are the last two of the word, which are its high
+        /// bytes on a little-endian target and its low bytes, in the
+        /// other order, on a big-endian one.
         pub inline fn frameFlags(f: CallFlags) u64 {
-            return @as(u64, @as(u16, @bitCast(f))) << frame_shift;
+            const v: u16 = @bitCast(f);
+            if (@import("builtin").cpu.arch.endian() == .little) return @as(u64, v) << frame_shift;
+            return @byteSwap(v);
         }
     };
 

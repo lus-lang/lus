@@ -33,6 +33,9 @@ Four facts from the table shape our order.
 | x86-64 Linux | yes | yes | yes | yes, static musl |
 | x86-64 Windows | yes | | | yes |
 | arm64 Windows | yes | | | yes |
+| 32-bit ARM Linux | yes | | | not yet |
+| s390x Linux | yes | yes | yes | not yet |
+| FreeBSD (aarch64, x86-64) | yes | yes | yes | not yet |
 | wasm32 WASI | yes | WebAssembly modules | | the npm package |
 
 The native tiers depend on the target in six places.
@@ -42,7 +45,7 @@ The native tiers depend on the target in six places.
 - **The calling convention.** Native code calls about forty runtime routines, each declared `callconv(.c)`. The runtime enters native code through the entry sequence, whose type is also `callconv(.c)`. `jit/x64.zig` emits System V calls. The optimizing tier allocates `rsi`, `rdi`, `xmm6`, and `xmm7` as registers that a called routine may clobber, which holds under System V.
 - **The native stack.** `stackBounds` in `jit/jit.zig` asks the system for the stack of the thread on macOS and Linux, so that a chain of direct calls stops 128 KB above its low end (`opt.md`, "The stacks"). Elsewhere a chain gets 160 KB below its entry.
 - **The word size.** A value is 16 bytes on every target, a 64-bit payload and a tag word. The WebAssembly build already runs it on a 32-bit target. The native tiers keep a payload in one machine register. The shared assembler interface has 64-bit loads, stores, and arithmetic as its primitives.
-- **The byte order.** `Value.make` writes the tag as the low byte of the second 64-bit word, which is the `tag` field only on a little-endian target. The word of frame flags packs its bits the same way, and a compile-time assertion in `vm/state.zig` stops a big-endian build there. Every target Lus builds today is little-endian.
+- **The byte order.** `Value.make` writes the tag as the low byte of the second 64-bit word, which is the `tag` field only on a little-endian target. The word of frame flags packs its bits the same way. A compile-time assertion in `vm/state.zig` stops a big-endian build there. Every target Lus builds today is little-endian.
 
 Native code carries no unwind information. Lus itself never unwinds through it, because errors are return values and the runtime uses no `setjmp` or `longjmp`. Debuggers, profilers, and crash reporters stop at the first frame of native code.
 
@@ -53,7 +56,7 @@ Native code carries no unwind information. Lus itself never unwinds through it, 
 3. **Windows on x86-64, then Windows on arm64.** Their gate is CI after the coordinator pushes, so this work runs while the next qemu target is built locally.
 4. **loong64, both tiers.** It reuses the structure of the riscv64 assembler.
 5. **ppc64le, both tiers.**
-6. **32-bit ARM, both tiers.** It first needs the collector to build for a 32-bit target with threads, and an assembler interface that names the operations on 64-bit integers.
+6. **32-bit ARM, both tiers.** It first needs the collector to build for a 32-bit target with threads, and an assembler interface that names the loads and stores of pointer-sized words.
 7. **s390x, both tiers.** The byte-order audit of the runtime comes first, gated by the interpreter under qemu. The big-endian JIT follows.
 8. **FreeBSD and Android.** The gate opens on the instruction sets that already have backends, with the stack query of each system.
 
@@ -90,34 +93,41 @@ POWER8 has no pc-relative load, so a constant builds in place in at most five in
 
 ## 32-bit ARM
 
-32-bit ARM gets both tiers for ARMv7-A with VFPv3-D16, the target of every hard-float distribution. The value layout fits as it is, with a 64-bit payload and a tag word, since the WebAssembly build already runs it on a 32-bit target. A float lives in one double register. A pointer or a tag lives in one general register. Only a 64-bit integer needs a pair of general registers. The design keeps the second code path inside the assembler.
+32-bit ARM gets both tiers for ARMv7-A with VFPv3-D16, the target of every hard-float distribution. The value layout fits as it is, with a 64-bit payload and a tag word, since the WebAssembly build already runs it on a 32-bit target. The design keeps the second code path inside the assembler.
 
 ### Work before the JIT
 
-The interpreter does not build for `arm-linux-musleabihf` yet. The parallel marker of the collector updates its mark bitmap with 64-bit atomic operations (`isMarkedSmallAtomic` and `setMarkSmallAtomic` in `vm/heap.zig`), which 32-bit ARM lacks. The WebAssembly build is single-threaded and never compiles them. Mark words of the native word size fix it. The interpreter then gets its own gate under `qemu-arm` before any JIT work.
+The interpreter builds for `arm-linux-musleabihf` and passes the conformance suite under `qemu-arm` in the VM. Two places used 64-bit atomic operations, which 32-bit ARM lacks. The parallel marker of the collector updates its mark bitmap, whose words stay 64 bits wide for the sweep, through the 32-bit half of the word that holds the bit (`markWord` in `vm/heap.zig`). The sequence counter of the debug adapter is a word-sized atomic. `tools/test-linux.sh --arm` runs the gate.
 
-### Two widths in the interface
+### Pairs inside the assembler
 
-The interface gains a second register type, `Pair`, for 64-bit integers, and a family of operations on it: loads and stores of a payload, moves, integer arithmetic, shifts, bitwise operations, and compare-and-branch. On a 64-bit target `Pair` is the same type as `Reg`. Each operation on it is the operation of the same name on a register, so `a64.zig`, `x64.zig`, `rv64.zig`, and the others gain only aliases. Every operation that takes a `Reg` works on a machine word: an address, an index, a count, a tag, or a pointer payload.
+Every register of the interface is a pair of 32-bit registers inside `a32.zig`: a low word and a high word. Each operation of the interface keeps its 64-bit meaning, so an addition is `adds` and `adc`, a multiplication is `umull` and two `mla`, a shift spans both words, and a compare-and-branch compares the high words and then the low words unsigned. The templates and the code generator therefore keep one code path for every target.
 
-The templates and the code generator change in one way. A site that computes on an integer payload names a `Pair` register. Every other site keeps its `Reg`. The integer templates are a small part of `emit.zig`: arithmetic, integer comparisons, the numeric `for` loop, `mod` and `idiv`, and the bitwise operations. A site that loads a payload into a `Reg` and stores it unchanged moves a value from one slot to another, which `copy16` does on every target. Because the types differ on 32-bit ARM, the compiler rejects a 64-bit operation on a word register there. A build of that target therefore checks every site.
+The one distinction they gain is the width of a word in memory. A pointer, a count, or a stack index is 4 bytes on a 32-bit target, and a payload or a 64-bit counter is 8. The interface gains `loadWord` and `storeWord`, which are `load64` and `store64` on a 64-bit target. Every site that loads or stores a pointer-sized field names them. A word loaded into a pair clears its high half. A payload that holds a pointer keeps its high word zero, which is what `Value.make` writes, so a pointer read from a payload is its low word.
 
-`a32.zig` implements a `Pair` as an even register and the odd register after it, which is the pair that `ldrd` and `strd` and the convention for 64-bit arguments use. The baseline tier pins the thread, the address of register 0, the index of that register, and the stop depth in four callee-saved registers. Its temporaries `t0` to `t2` are pairs and `t3` to `t6` are words, which uses the fourteen general registers. An addition is `adds` and `adc`. A multiplication is `umull` and two `mla`. A compare-and-branch compares the high words and branches, then compares the low words unsigned. Division calls the routine of the compiler runtime, because ARMv7-A has no 64-bit divide.
+A pair costs two registers, of the fourteen that 32-bit ARM has. The pinned registers keep their single registers, because each holds a pointer or an index: the thread and the address of register 0 in two callee-saved registers, and the index of register 0 and the stop depth in slots of the native frame, which the assembler loads where an instruction names them. The temporaries `t0` to `t3` are register pairs. The temporaries `t4` to `t6`, the fifth and sixth argument, and the pool registers of the optimizing tier beyond those pairs are slots of the native frame, which the assembler moves through a scratch pair. Code that uses them runs slower than code in registers. Code that uses only the first temporaries runs at the speed of register pairs. Floats use the sixteen double registers of VFPv3-D16 directly.
 
-The optimizing tier allocates an integer value to one of four pairs. It allocates a pointer, a boolean, or a tag to a single register from the same registers. Floats use the sixteen double registers. Its passes and its representation are the same as on every target, since its values already carry their types.
-
-A routine that native code calls takes a 64-bit integer only in a position that the AAPCS assigns to an even register pair. A compile-time check over the signatures of the routines enforces it.
+A routine of the runtime takes words as arguments (see "Order"). The first four arguments of AAPCS travel in `r0` to `r3`, so the assembler passes the low word of each argument pair. Division calls the routine of the compiler runtime, because ARMv7-A has no 64-bit divide.
 
 The assembler emits the A32 encoding, whose conditional branches reach 32 MB. Addresses are 32 bits and load with `movw` and `movt`. New code becomes visible to instruction fetch through the `cacheflush` system call of ARM Linux.
+
+A frame of a 32-bit target is padded to 64 bytes, so that native code finds a frame with a shift and an add on every target.
 
 ## s390x
 
 s390x is big-endian. The runtime assumes little-endian in two kinds of places.
 
-- **Words written whole and read by field.** `Value.make` writes the tag as the low byte of the second word. The word of frame flags packs its bits the same way. The build stops at the assertion in `vm/state.zig`. The fix declares the fields of each such word in reverse order on a big-endian target, so that the field and the low byte of the word coincide on both byte orders. Native code reads fields at offsets from `@offsetOf`, so the templates follow the new layout.
-- **Bytes that leave the process.** Binary chunks, bundles, `pack`, `vector`, hashing, and the network code read and write a fixed byte order. Each place that reads memory as a wider integer without naming its byte order is found by an audit of the casts and `readInt` calls, and is fixed to name it.
+- **Words written whole and read by field.** `Value.make` writes a value as two 64-bit words, and the tag is the first byte of the second word, so `Value.tagWord` puts the tag in the low byte of that word on a little-endian target and in its high byte on a big-endian one. The flags of a plain call are the last two bytes of the flags word of a frame, so `CallFlags.frameFlags` shifts them to the top of the word on a little-endian target and swaps them into its bottom on a big-endian one. `Frame.flagMask` reads its mask in the byte order of the target, because a cast of a byte array to an integer at compile time reads it little-endian.
+- **Bytes that leave the process.** Binary chunks, bundles, `pack`, `vector`, hashing, and the network code pass their conformance tests on s390x unchanged, so the byte order of what they read and write does not depend on the target.
 
-The interpreter passes the conformance suite under `qemu-s390x` before the JIT starts. `jit/s390x.zig` then targets z/Architecture as of z13. Every call reserves the 160-byte register save area that the convention gives each callee, which the entry sequence allocates once. Relative branches reach 64 KB. `brcl` reaches 4 GB, so far branches use it. The instruction fetch of z/Architecture is coherent with stores, so installing code needs no cache maintenance.
+The interpreter passes the conformance suite under `qemu-s390x` with those three changes, and `tools/test-linux.sh --s390x` runs it. `jit/s390x.zig` targets z/Architecture and its ELF convention, with the register roles of `x64.zig`: the temporaries share the argument registers, and the optimizing tier allocates the seven temporaries in the order of the x86-64 pool, so that its registers overlap the argument registers as they do there. Four properties of the target shape it.
+
+- **The save area.** Every call gives the routine it calls a register save area of 160 bytes at the bottom of the frame of the caller. The stack pointer that native code sees sits 160 bytes above `r15`, as on ppc64le with its 32-byte header.
+- **Results of two words.** A routine that returns a structure of more than 8 bytes, such as `jit.Target`, returns it through memory whose address its caller passes in `r2`. The interface gains `callPair`, which is `call` on every other target. On s390x it moves the arguments up a register, passes 16 bytes of new frame, and loads the two words into the result registers.
+- **Register 0.** `r0` reads as zero as a base or an index, so it serves only as data. A call loads its target into `r14`, the link register, and calls through it, so the assembler needs no base register of its own. A division uses the pair `r0` and `r1`. `r1` is also the scratch register of the optimizing tier, which every target lets a call clobber.
+- **Branches.** A compare-and-branch instruction reaches 64 KB, and a comparison followed by `brcl` reaches 4 GB, which covers every function, so no branch needs an island. `jmp` is always `brcl`, which gives the jump after a call entry the fixed length that `linkPastJump` counts.
+
+The templates write a tag in three ways. On a big-endian target the tag belongs in the high byte of its word. A constant tag goes through `Value.tagWord`. A tag in a register goes through `storeTag`. A payload and a tag go through `storeValue`. Both are `store64` and `storePair64` on a little-endian target and store the tag byte at the start of its word on s390x. A tag that native code passes to the runtime is loaded as its byte. Frames need no change, because native code writes their fields one by one or as words that the runtime computes in the byte order of the target. The instruction fetch of z/Architecture follows stores, so installing code needs no cache maintenance.
 
 ## Windows on x86-64
 
@@ -171,7 +181,7 @@ CI adds a `windows-11-arm` runner to the runtime matrix with the same steps as `
 
 ## FreeBSD and Android
 
-FreeBSD and Android run the instruction sets that already have backends. The gate opens for them with the stack query of each system in `stackBounds`: `pthread_attr_get_np` on FreeBSD and `pthread_getattr_np` in the C library of Android. The executable memory path of Linux works on both. FreeBSD is checked in CI by a job that runs the conformance suite in a FreeBSD virtual machine on a Linux runner. Android is cross-built in CI and checked on an emulator image when one is available to the runner.
+FreeBSD and Android run the instruction sets that already have backends. FreeBSD maps memory writable and executable by default, so its gate opens with its stack query, `pthread_attr_get_np`, in `stackBounds`. Zig treats Android as Linux with the Android ABI, so it takes the Linux gate and the `pthread_getattr_np` of bionic as they are. The x86-64 FreeBSD build compiles. The nightly workflow cross-builds it on a Linux runner and runs the conformance suite in a FreeBSD virtual machine there, through `cross-platform-actions/action`, in the default mode, `eager`, and `opt-eager`. Android is cross-built, and checked on an emulator image when one is available to a runner.
 
 iOS and the game consoles refuse executable memory to ordinary programs, so the only native code they can run is code compiled ahead of time.
 

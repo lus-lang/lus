@@ -54,14 +54,14 @@ jobs:
         run: zig-out/bin/lus test ../tests/conformance
 
   emulated:
-    name: Emulated architectures (${{ matrix.arch }})
+    name: Emulated architectures (${{ matrix.target }})
     # Static builds for instruction sets that GitHub has no runners for,
     # run under qemu-user (spec/design/platforms.md, "Testing each
     # target"). LUS_EMULATED skips the test whose bound qemu-user breaks.
     strategy:
       fail-fast: false
       matrix:
-        arch: [riscv64, loongarch64, powerpc64le]
+        target: [riscv64-linux-musl, loongarch64-linux-musl, powerpc64le-linux-musl, arm-linux-musleabihf, s390x-linux-musl]
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     steps:
@@ -78,8 +78,8 @@ jobs:
       - name: Build
         working-directory: runtime
         run: |
-          zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.arch }}-linux-musl
-          zig build -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true -Dtarget=${{ matrix.arch }}-linux-musl --prefix zig-out-stress
+          zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+          zig build -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true -Dtarget=${{ matrix.target }} --prefix zig-out-stress
       - name: Conformance tests in every JIT mode
         timeout-minutes: 200
         working-directory: runtime
@@ -102,6 +102,37 @@ jobs:
             echo "== LUS_JIT=$mode"
             LUS_JIT=$mode zig-out-stress/bin/lus test --timeout 600 ../tests/conformance
           done
+
+  freebsd:
+    name: FreeBSD (x86-64)
+    # A FreeBSD virtual machine on a Linux runner runs a build that the
+    # runner cross-compiles (spec/design/platforms.md, "FreeBSD and
+    # Android").
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
+      - name: Conformance tests in a FreeBSD virtual machine
+        uses: cross-platform-actions/action@30cde56b87a128507bebea9531205087890ee360 # v1.8.0
+        with:
+          operating_system: freebsd
+          architecture: x86-64
+          version: "14.2"
+          run: |
+            cd runtime
+            zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
+            for mode in on eager opt-eager; do
+              echo "== LUS_JIT=$mode"
+              LUS_JIT=$mode zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+            done
 
   differential:
     name: Differential tests (${{ matrix.os }})

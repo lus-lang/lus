@@ -35,6 +35,7 @@ pub const A = switch (builtin.cpu.arch) {
     .riscv64 => @import("rv64.zig"),
     .loongarch64 => @import("la64.zig"),
     .powerpc64le => @import("ppc64.zig"),
+    .s390x => @import("s390x.zig"),
     else => @compileError("the JIT has no backend for this target"),
 };
 const Mem = A.Mem;
@@ -325,7 +326,7 @@ pub const Emitter = struct {
         a.jumpIfImm(.hi, A.ret0, @intCast(Step.dispatch), e.l_exit);
         a.bind(e.l_dispatch);
         a.mov(A.args[0], A.thread);
-        a.call(@intFromPtr(&jit.dispatch));
+        a.callPair(@intFromPtr(&jit.dispatch));
         const l_interp = a.newLabel();
         a.jumpIfImm(.eq, A.ret0, 0, l_interp);
         a.mov(A.base, A.ret1);
@@ -424,7 +425,7 @@ pub const Emitter = struct {
     }
 
     fn storeTag(e: *Emitter, r: u32, tag: u8) void {
-        e.a.storeImm64(tagOf(r), tag);
+        e.a.storeImm64(tagOf(r), Value.tagWordOf(tag));
     }
 
     /// Stores a constant value into a register.
@@ -1219,7 +1220,7 @@ pub const Emitter = struct {
         const a = &e.a;
         a.load64(tmp, .{ .base = node, .disp = tl.node_val });
         a.load8(tmp2, .{ .base = tags, .disp = tl.tag_val });
-        a.storePair64(tmp, tmp2, dst);
+        a.storeValue(tmp, tmp2, dst);
     }
 
     /// The value at `src` to the node at `node`, whose tags are at
@@ -1304,7 +1305,7 @@ pub const Emitter = struct {
         a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.slot_tag }, tag_nil, miss);
         a.load64(A.t3, .{ .base = A.t1 });
         a.load8(A.t4, .{ .base = A.t2, .disp = tl.slot_tag });
-        a.storePair64(A.t3, A.t4, slot(dst));
+        a.storeValue(A.t3, A.t4, slot(dst));
         a.jmp(done);
         a.bind(dict);
         e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, A.t3, miss, miss);
@@ -1396,7 +1397,7 @@ pub const Emitter = struct {
         a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.slot_tag }, tag_nil, miss);
         a.load64(A.t3, .{ .base = A.t1 });
         a.load8(A.t4, .{ .base = A.t2, .disp = tl.slot_tag });
-        a.storePair64(A.t3, A.t4, slot(ra));
+        a.storeValue(A.t3, A.t4, slot(ra));
         a.jmp(done);
         a.bind(dict);
         a.load32(A.t1, .{ .base = A.t0, .disp = tl.hash_used });
@@ -1428,7 +1429,7 @@ pub const Emitter = struct {
         a.movImm(A.t5, tl.nil_word);
         a.jumpIf(.eq, A.t4, A.t5, miss);
         a.store64(A.t4, slot(dst));
-        a.store64(A.t3, tagOf(dst));
+        a.storeTag(A.t3, tagOf(dst));
         a.jmp(done);
         a.bind(boxed);
         a.addScaled(A.t2, A.t2, A.t1, tl.value_shift);
@@ -1729,7 +1730,7 @@ pub const Emitter = struct {
                 a.mov(A.args[1], A.bp);
                 a.movImm(A.args[2], ins);
                 a.movImm(A.args[3], c.pc + 1);
-                a.call(@intFromPtr(&helpers.tailcall));
+                a.callPair(@intFromPtr(&helpers.tailcall));
                 const refused = a.newLabel();
                 a.jumpIfImm(.eq, A.ret0, 0, refused);
                 a.mov(A.base, A.ret1);

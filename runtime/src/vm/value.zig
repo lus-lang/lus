@@ -47,12 +47,22 @@ pub const Value = extern struct {
     pub const @"false": Value = .{ .tag = .false };
 
     /// Builds a value from its two 64-bit words, so that a store writes
-    /// the tag, the auxiliary bits, and the padding as one word.
+    /// the tag, the auxiliary bits, and the padding as one word. The tag
+    /// is the first byte of the second word, which is its low byte on a
+    /// little-endian target and its high byte on a big-endian one.
     pub inline fn make(payload: u64, tag: Tag) Value {
         var v: Value = undefined;
         const w: *[2]u64 = @ptrCast(&v);
-        w.* = .{ payload, @backingInt(tag) };
+        w.* = .{ payload, tagWord(tag) };
         return v;
+    }
+    /// The second word of a value with tag `tag` and no auxiliary bits.
+    pub inline fn tagWord(tag: Tag) u64 {
+        return tagWordOf(@backingInt(tag));
+    }
+    /// The second word of a value whose tag has the number `t`.
+    pub inline fn tagWordOf(t: u64) u64 {
+        return if (@import("builtin").cpu.arch.endian() == .little) t else t << 56;
     }
     pub inline fn int(v: i64) Value {
         return make(@bitCast(v), .integer);

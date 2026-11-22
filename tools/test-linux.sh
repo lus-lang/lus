@@ -2,7 +2,7 @@
 # Runs the conformance suite on Linux in a local Lima VM, natively on
 # aarch64 and, through qemu-user, on x86-64.
 #
-# Usage: tools/test-linux.sh [--quick] [--no-x64] [--riscv64] [--loong64] [--ppc64le] [--strict]
+# Usage: tools/test-linux.sh [--quick] [--no-x64] [--riscv64] [--loong64] [--ppc64le] [--arm] [--s390x] [--strict]
 #
 # The script cross-builds the runtime for aarch64-linux and x86_64-linux,
 # copies each binary with the test trees into the VM, and runs `lus test`
@@ -11,9 +11,11 @@
 # qemu-user that the VM registers with binfmt_misc, so the processes the
 # tests start run under it as well. It runs the default tiers and the
 # optimizing tier, or only the default tiers with --quick. --riscv64,
-# --loong64, and --ppc64le each also cross-build a static musl binary for that
-# architecture and run it under the qemu-user of the VM with the JIT off,
-# with the default tiers, eager, baseline, and optimizing. The VM is the one LUS_LIMA_VM names, `boring`
+# --loong64, --ppc64le, --arm, and --s390x each also cross-build a static musl
+# binary for that architecture and run it under the qemu-user of the VM
+# with the JIT off, with the default tiers, eager, baseline, and
+# optimizing. Fedora registers no qemu-user for 32-bit ARM on an aarch64
+# host, so --arm registers it for the running VM first. The VM is the one LUS_LIMA_VM names, `boring`
 # by default, and must be running.
 #
 # The aarch64 runs decide the exit status. qemu-user emulates the memory
@@ -36,9 +38,11 @@ for arg in "$@"; do
     case "$arg" in
         --quick) quick=1 ;;
         --no-x64) x64=0 ;;
-        --riscv64) extra="$extra riscv64" ;;
-        --loong64) extra="$extra loongarch64" ;;
-        --ppc64le) extra="$extra powerpc64le" ;;
+        --riscv64) extra="$extra riscv64-linux-musl" ;;
+        --loong64) extra="$extra loongarch64-linux-musl" ;;
+        --ppc64le) extra="$extra powerpc64le-linux-musl" ;;
+        --arm) extra="$extra arm-linux-musleabihf" ;;
+        --s390x) extra="$extra s390x-linux-musl" ;;
         --strict) strict=1 ;;
         *) echo "unknown option $arg" >&2; exit 2 ;;
     esac
@@ -63,9 +67,9 @@ if [ "$x64" = 1 ]; then
     wait_for_memory
     zig build -j1 -Doptimize=ReleaseSafe -Dtarget=x86_64-linux --prefix zig-out-linux-x64
 fi
-for arch in $extra; do
+for target in $extra; do
     wait_for_memory
-    zig build -j1 -Doptimize=ReleaseSafe -Dtarget="$arch-linux-musl" --prefix "zig-out-linux-$arch"
+    zig build -j1 -Doptimize=ReleaseSafe -Dtarget="$target" --prefix "zig-out-linux-${target%%-*}"
 done
 
 # The trees the conformance suite and the language server tests read.
@@ -103,7 +107,13 @@ if [ "$x64" = 1 ]; then
     if [ "$quick" = 1 ]; then run_suite x64 default; else run_suite x64 default opt-eager; fi
 fi
 
-for arch in $extra; do run_suite "$arch" off default eager baseline opt-eager; done
+case "$extra" in
+    *arm-linux*)
+        # The magic and mask of 32-bit little-endian ARM executables.
+        limactl shell "$vm" -- sh -c 'test -e /proc/sys/fs/binfmt_misc/qemu-arm || printf ":qemu-arm:M::\\x7fELF\\x01\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x28\\x00:\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:/usr/bin/qemu-arm-static:F\\n" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null'
+        ;;
+esac
+for target in $extra; do run_suite "${target%%-*}" off default eager baseline opt-eager; done
 
 if [ "$emulated_failed" = 1 ]; then
     echo "an architecture under qemu-user had failures, which the notes at the top of tools/test-linux.sh explain"

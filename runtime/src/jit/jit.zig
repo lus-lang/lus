@@ -28,14 +28,14 @@ pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
     // Windows on arm64 compiles with everything it needs, and its gate
     // opens once CI has a runner for it (spec/design/platforms.md).
     .aarch64 => switch (builtin.os.tag) {
-        .macos, .linux => true,
+        .macos, .linux, .freebsd => true,
         else => false,
     },
     .x86_64 => switch (builtin.os.tag) {
-        .macos, .linux, .windows => true,
+        .macos, .linux, .windows, .freebsd => true,
         else => false,
     },
-    .riscv64, .loongarch64, .powerpc64le => builtin.os.tag == .linux,
+    .riscv64, .loongarch64, .powerpc64le, .s390x => builtin.os.tag == .linux,
     .wasm32 => builtin.os.tag == .wasi,
     else => false,
 };
@@ -448,6 +448,7 @@ extern "c" fn pthread_get_stackaddr_np(thread: std.c.pthread_t) ?*anyopaque;
 extern "c" fn pthread_get_stacksize_np(thread: std.c.pthread_t) usize;
 extern "c" fn pthread_getattr_np(thread: std.c.pthread_t, attr: *std.c.pthread_attr_t) c_int;
 extern "c" fn pthread_attr_getstack(attr: *const std.c.pthread_attr_t, addr: *?*anyopaque, size: *usize) c_int;
+extern "c" fn pthread_attr_get_np(thread: std.c.pthread_t, attr: *std.c.pthread_attr_t) c_int;
 
 threadlocal var thread_bounds: ?Bounds = null;
 
@@ -490,6 +491,19 @@ fn stackBounds() Bounds {
                 if (std.posix.getrlimit(.STACK)) |lim| {
                     if (lim.cur != 0 and lim.cur < b.high) b.low = @max(b.low, b.high - lim.cur);
                 } else |_| {}
+            }
+        },
+        .freebsd => {
+            var attr: std.c.pthread_attr_t = undefined;
+            if (std.c.pthread_attr_init(&attr) == .SUCCESS) {
+                if (pthread_attr_get_np(std.c.pthread_self(), &attr) == 0) {
+                    var addr: ?*anyopaque = null;
+                    var size: usize = 0;
+                    if (pthread_attr_getstack(&attr, &addr, &size) == 0 and addr != null and size != 0) {
+                        b = .{ .low = @intFromPtr(addr), .high = @intFromPtr(addr) + size };
+                    }
+                }
+                _ = std.c.pthread_attr_destroy(&attr);
             }
         },
         else => {},
@@ -586,6 +600,7 @@ test {
     _ = @import("rv64.zig");
     _ = @import("la64.zig");
     _ = @import("ppc64.zig");
+    _ = @import("s390x.zig");
     if (enabled) {
         _ = mem;
         _ = emit;

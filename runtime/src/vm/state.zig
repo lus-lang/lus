@@ -511,7 +511,7 @@ pub const Frame = extern struct {
         var bytes: [8]u8 = @splat(0);
         const off = @offsetOf(Frame, name) - @offsetOf(Frame, "boundary");
         for (bytes[off..][0..size]) |*b| b.* = 0xFF;
-        return @bitCast(bytes);
+        return std.mem.readInt(u64, &bytes, @import("builtin").cpu.arch.endian());
     }
 
     /// Bits of the flags word that are clear in a frame that returns
