@@ -68,6 +68,34 @@ Each part below is built only when its measurement supports it, as `snapshot.md`
 
 Measurement 5 decides whether the work happens at all. The others decide which options are worth their code.
 
+### What was measured
+
+The table gives the best wall time of five runs of each benchmark in `tests/bench`, in seconds, from a ReleaseFast build on an Apple silicon Mac. "off" is the interpreter, "on" the default JIT, and "opt-eager" sends every function through both tiers on its first call, which stands in for code that is in place before the first call. Starting the executable with an empty script takes 2.7 ms.
+
+| benchmark | off | on | opt-eager | on over off | opt-eager over on |
+|---|---:|---:|---:|---:|---:|
+| arrays | 0.216 | 0.035 | 0.044 | 6.2 | 0.80 |
+| closures | 0.087 | 0.073 | 0.075 | 1.2 | 0.97 |
+| data | 0.035 | 0.029 | 0.031 | 1.2 | 0.92 |
+| fib | 0.040 | 0.010 | 0.010 | 3.8 | 1.03 |
+| forfrom | 0.181 | 0.186 | 0.177 | 0.97 | 1.05 |
+| interp | 0.505 | 0.514 | 0.503 | 0.98 | 1.02 |
+| loop | 0.228 | 0.075 | 0.067 | 3.1 | 1.12 |
+| methods | 0.241 | 0.007 | 0.006 | 33.8 | 1.10 |
+| patterns | 0.216 | 0.212 | 0.213 | 1.02 | 0.99 |
+| strings | 0.126 | 0.137 | 0.137 | 0.92 | 1.00 |
+| tables | 0.100 | 0.092 | 0.078 | 1.09 | 1.18 |
+| unicode | 0.039 | 0.008 | 0.008 | 4.7 | 1.00 |
+| messages | 0.178 | 0.183 | 0.181 | 0.97 | 1.01 |
+
+**Targets without a JIT (measurement 5).** Native code runs the benchmarks that spend their time in Lus code 3 to 34 times faster than the interpreter. It runs the benchmarks that spend their time in the library about as fast. Code compiled ahead of time is that native code, so a target that refuses executable memory gains the same factor. The work goes ahead.
+
+**Startup and steady state (measurements 1 and 2).** Code compiled before its first call moved the benchmarks by between 20 percent slower and 18 percent faster than the default JIT, with most within 5 percent. The two that gained, `loop` and `tables`, run for less than 0.1 s, where the time before the optimizing tier compiles is a visible share of the run. `arrays` lost, because a function compiled on its first call has seen fewer samples than one compiled after 120 events. On a target with a JIT, code compiled ahead of time is therefore no reason to choose `--aot`, as `warmstart.md` found for baseline code. The training run compiles after the usual thresholds, so its code has the predictions of a warmed program and does not repeat the loss of `arrays`.
+
+**Size (measurement 4).** In the static aarch64 Linux executable, a ReleaseSafe build with 5.66 MB of code, the parser takes 261 KB, the compiler 147 KB, the tools such as `lus test` and `lus debug` 309 KB, and the two JIT tiers 399 KB. An executable compiled ahead of time needs none of them by default, which leaves out 1.1 MB, about a fifth of the code. The sizes come from the symbol table of the executable, summed by the module that each function belongs to.
+
+**Peak speed (measurement 3)** needs relocated code and is taken in step 3.
+
 ## Order of the work
 
 1. The relocation interface in every assembler and the address sites in the code generators, with a test that compiles every conformance function for ahead of time and checks that each address it writes has a relocation.
