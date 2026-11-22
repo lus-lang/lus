@@ -157,7 +157,7 @@ pub fn build(b: *std.Build) void {
     _ = make_aot.captureStdOut(.{});
     const run_aot = std.Build.Step.Run.create(b, "run an executable compiled ahead of time");
     run_aot.addFileArg(app_aot);
-    run_aot.expectStdOutEqual("fib optimized true\n6765\t5341338000\t500500\n500000.5\n");
+    run_aot.expectStdOutEqual("fib optimized true\n6765\t5341338000\t500500\n500000.5\nobserved 10\n");
     runtime_step.dependOn(&run_aot.step);
 
     // `lus check` and `lus doc` on the fixtures in tests/check and

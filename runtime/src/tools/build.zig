@@ -34,6 +34,7 @@ const bundle = @import("../bundle.zig");
 const api = lus.api;
 const codegen = lus.compile.codegen;
 const dump = @import("../compile/dump.zig");
+const libproof = @import("libproof.zig");
 const package = lus.lib.package;
 const modtree = lus.modtree;
 const remote = lus.remote;
@@ -164,6 +165,8 @@ const Collector = struct {
     in_dir: bool = false,
     /// Resolves the remote modules that literal requires name.
     store: *remote.Store,
+    /// Which optional libraries the collected chunks can reach.
+    proof: libproof.Proof = .{},
 
     const Info = struct { requires: [][]u8, candidate: bool };
 
@@ -259,6 +262,7 @@ const Collector = struct {
             },
             .ok => |p| p,
         };
+        c.proof.add(proto, chunkname);
         const data = dump.dump(c.gpa, proto, false) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Unsupported => {
@@ -408,6 +412,7 @@ const Collector = struct {
             },
             .ok => |p| p,
         };
+        c.proof.add(proto, chunkname);
         const data = dump.dump(c.gpa, proto, false) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Unsupported => {
@@ -419,6 +424,24 @@ const Collector = struct {
         const owned = try c.gpa.dupe(u8, key);
         errdefer c.gpa.free(owned);
         try c.modules.append(c.gpa, .{ .name = owned, .chunkname = chunkname, .data = data });
+        try c.info.append(c.gpa, .{ .requires = &.{}, .candidate = false });
+    }
+
+    /// Bundles the update of observed variables as a binary chunk, which
+    /// a runtime without the compiler loads in place of compiling it.
+    fn addObserveUpdate(c: *Collector) !void {
+        const lazy = @import("../lib/lazy.zig");
+        const proto = try lazy.compileUpdate(c.l.g);
+        const data = dump.dump(c.gpa, proto, false) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Unsupported => unreachable,
+        };
+        errdefer c.gpa.free(data);
+        const name = try c.gpa.dupe(u8, lazy.bundle_module);
+        errdefer c.gpa.free(name);
+        const chunkname = try c.gpa.dupe(u8, "=observe");
+        errdefer c.gpa.free(chunkname);
+        try c.modules.append(c.gpa, .{ .name = name, .chunkname = chunkname, .data = data });
         try c.info.append(c.gpa, .{ .requires = &.{}, .candidate = false });
     }
 
@@ -545,6 +568,9 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         };
     }
     _ = try c.shake(io);
+    // A runtime without the compiler reads the update of observed
+    // variables from the bundle.
+    if (opts.aot or opts.runtime != null) try c.addObserveUpdate();
 
     // The preserved options, applied before the program runs.
     var preserved: std.ArrayList([]const u8) = .empty;
@@ -595,7 +621,12 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         std.debug.print("lus build: cannot write {s} ({s})\n", .{ out_path, @errorName(e) });
         return 1;
     };
-    const note = try std.fmt.allocPrint(gpa, "wrote {s} ({d} modules)\n", .{ out_path, c.modules.items.len });
+    // The modules whose names start with a dot belong to the runtime.
+    var user_modules: usize = 0;
+    for (c.modules.items) |m| {
+        if (!std.mem.startsWith(u8, m.name, ".")) user_modules += 1;
+    }
+    const note = try std.fmt.allocPrint(gpa, "wrote {s} ({d} modules)\n", .{ out_path, user_modules });
     defer gpa.free(note);
     std.Io.File.stdout().writeStreamingAll(io, note) catch {};
     return 0;
