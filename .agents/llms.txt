@@ -48,6 +48,7 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 - [Build flags](https://lus.dev/manual/guide.md#build-flags) and [values computed when the file is compiled](https://lus.dev/manual/guide.md#values-computed-when-the-file-is-compiled): `-F` flags, `if` branches that the compiler removes, and `<meta>` locals.
 - [Values computed on first use](https://lus.dev/manual/guide.md#values-computed-on-first-use): `<lazy>` locals and group fields, and `<lazy, close>`.
 - [Values that follow other values](https://lus.dev/manual/guide.md#values-that-follow-other-values): `<observe>` locals that recompute when the locals they name are assigned.
+- [Values for each coroutine](https://lus.dev/manual/guide.md#values-for-each-coroutine): `<context>` locals, which hold one value per coroutine, and `debug.getcontext`.
 - [Bigints and decimals](https://lus.dev/manual/guide.md#numbers): `123n` and `1.50d`.
 - [Queries](https://lus.dev/manual/guide.md#queries): First-class queries over tables and databases. Unstable.
 

@@ -29,7 +29,7 @@ pledge("fs:read=./data/*", "network:http")
 pledge("seal")
 ```
 
-Grant the narrowest permission that works. `fs:read=./data/*` beats `fs:read`, which beats `fs`. The permission names are `fs`, `fs:read`, `fs:write`, `fs:exec`, `network`, `network:http`, `network:tcp`, `network:udp`, `network:tls`, `network:server`, `exec`, `env`, `env:read`, `env:write`, `load`, and `worker`. Test files pledge exactly like scripts.
+Grant the narrowest permission that works. `fs:read=./data/*` beats `fs:read`, which beats `fs`. A grant without a value covers every grant of the same permission with a value, in either order, so `pledge("fs", "fs:read=./data/*")` allows every file access. The permission names are `fs`, `fs:read`, `fs:write`, `fs:exec`, `network`, `network:http`, `network:tcp`, `network:udp`, `network:tls`, `network:server`, `exec`, `env`, `env:read`, `env:write`, `load`, and `worker`. Test files pledge exactly like scripts.
 
 ## Reach for the standard library first
 
@@ -42,7 +42,9 @@ Lus ships the libraries most programs pull from a package manager. Use them befo
 | Files and paths | `fs.list`, `fs.copy`, `fs.move`, `fs.remove`, `fs.path.join` |
 | HTTP client | `network.fetch(url, method, headers, body)` returns `status, body, headers` |
 | HTTP server | `network.serve(host, port, handler)` |
-| Concurrency on one thread | `coroutine.detach(co)`. Sockets suspend the coroutine while others run. |
+| Concurrency on one thread | `coroutine.detach(co)`. Sockets and waits suspend the coroutine while others run. |
+| Sockets | `network.tcp.connect(host, port, { timeout = 5 })`, `sock:reader(max)`, `sock:starttls(options)` |
+| Timers, processes, signals, file changes | `coroutine.sleep(seconds)`, `os.spawn(argv, options)`, `os.signal(name)`, `fs.watch(path, options)` |
 | Parallelism | `worker.create(file, args)`, `worker.receive(w)` |
 | Database | `io.sqlite(path)` and queries |
 | Dates and zones | `time.now()`, `time.zone(name)` |
@@ -53,17 +55,24 @@ Lus ships the libraries most programs pull from a package manager. Use them befo
 
 `lus help NAME` prints the signature, required permissions, stability, and description of any function, such as `lus help network.serve`, from documentation built into the installed runtime. `lus help MODULE` lists a module, and `lus help --search TEXT` finds an entry. Functions marked unstable may change between releases. Mention it when you depend on one.
 
+## Failures and waits
+
+Socket operations and file reads report failures by return value, as Lua files do, and raise only on misuse such as a bad argument or a missing permission. A socket call returns `nil` and an error object with the fields `code` and `message`, such as `"timeout"` or `"refused"`, whose `tostring` is the message. A file read returns `nil`, a message, and the error number. Check the first result before using it. `network.fetch` is the exception and raises its error object.
+
+`coroutine.sleep`, `p.exit` of `os.spawn`, `os.signal`, and `fs.watch` each return a coroutine, and resuming it waits for the next event. Inside a detached coroutine the wait suspends only that coroutine. Closing a sleep wakes its waiter, whose resume returns `false` and `"closed"`, so `coroutine.sleep(math.huge)` parks a coroutine until another one closes the sleep. [references/language.md](references/language.md) shows this park and wake idiom.
+
 ## Idioms the checker expects
 
 - `catch expr` replaces `pcall`. It returns `true` and the results, or `false` and the raw error.
 - `local a, b from t` reads fields into locals of the same name, and `for a, b from iter() do` does the same for each table an iterator yields.
 - `a?.b?.c` stops at the first nil.
 - `if x = find() then ... end` and `while line = read() do ... end` scope a variable to the block.
-- Backtick strings interpolate: `` `$name is $(age + 1)` ``.
+- Backtick strings interpolate, as in `` `$name is $(age + 1)` ``, and take every escape of quoted strings plus `` \` `` and `\$`.
 - `continue` skips to the next iteration of a loop.
 - `local T <meta> = expr` computes a constant value, such as a lookup table, when the file is compiled. An `if` on `flags`, literals, and `<meta>` locals keeps only the clause that is true, so `if flags.debug then` blocks vanish from builds without `-Fdebug`.
 - `local x <lazy> = expensive()` runs the initializer on the first read of `x`, so declare costly values once at the top of the file. `<lazy, close>` opens a resource on first use.
 - `local total <observe> = price * qty`, with `price` and `qty` also `<observe>`, recomputes `total` whenever the program assigns `price` or `qty`, from any function. Only assignment updates it, so assign a new table rather than writing a field.
+- `local request_id <context> = "none"` gives each coroutine its own value. An assignment changes the value of the running coroutine only, and a new coroutine starts with the values of its creator. A worker starts from the defaults. `debug.getcontext` and `debug.setcontext` read and write the values of another coroutine.
 - Strings are text indexed by character. Raw bytes are vectors, and network and binary file reads return vectors. Decode with `vector.tostring`.
 
 ## Making code faster

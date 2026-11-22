@@ -52,6 +52,7 @@ assert(vector.tostring(bytes) == "héllo")
 local name, n = "Ada", 3
 assert(`$name has $(n + 1)` == "Ada has 4")
 assert(`costs $$5` == "costs $5")
+assert(`tab\there \$x \u{48}` == "tab\there $x H")
 
 -- destructuring
 local point = { x = 1, y = 2 }
@@ -183,6 +184,57 @@ assert(label == "total: 20")
 
 Only an assignment to the variable starts an update. A write to a field of a table that a source holds, such as `cart[3] = x`, updates nothing, so assign a new table instead. Other variables an initializer reads are inputs that the update reads again, and a change to one of them updates nothing. If an initializer raises an error, the assignment raises it and the derived locals not yet updated keep their previous values. An assignment to an observed local while an update runs raises an error. Observed locals cannot be globals, group fields, or `<lazy>`, `<close>`, or `<meta>`.
 
+## Values for each coroutine
+
+A `<context>` local holds one value for each coroutine. An assignment changes the value of the running coroutine only, and a read returns the value of the running coroutine, wherever the reading function was defined. The initializer is the value of every coroutine that assigned nothing. A new coroutine starts with the values of the coroutine that creates it, so the connections of `network.serve` see the values of the coroutine that runs `serve`. A worker starts from the defaults.
+
+```lus
+local request_id <context> = "none"
+
+local function current()
+    return request_id
+end
+
+local co = coroutine.create(function(id)
+    request_id = id
+    coroutine.yield(current())
+    return current()
+end)
+assert(select(2, coroutine.resume(co, "r1")) == "r1")
+assert(current() == "none")
+assert(select(2, coroutine.resume(co)) == "r1")
+```
+
+`<context>` combines with no other attribute, and globals and group fields cannot be context variables. `debug.getcontext(co, n)` returns the name and value of variable number `n` as coroutine `co` sees it, and `debug.setcontext(co, n, value)` assigns it.
+
+## Failures and waits
+
+A failed socket operation returns `nil` and an error object, a table with the fields `code` and `message`, and `status` for HTTP failures. Its `__tostring` gives the message. A bad argument, a closed socket, and a missing permission raise. A refused file read returns `nil`, a message, and the error number, as in Lua.
+
+```lus
+pledge("network")
+local server <close> = network.tcp.bind("127.0.0.1", 0)
+server:settimeout(0.05)
+local sock, err = server:accept()
+assert(sock == nil and err.code == "timeout")
+assert(tostring(err) == "accept timeout")
+```
+
+`network.tcp.connect` and `network.tls.connect` take `{ timeout = SECONDS }`. `sock:reader(max)` returns a coroutine that yields each received part as a vector, which `network.lines` reads line by line. `sock:starttls(options)` switches a plain connection to TLS, as the client or, with `server = true` and a certificate, as the server.
+
+Operations that wait for an event return a coroutine, and each resume waits for the next event: `coroutine.sleep(seconds)`, `p.exit` of a process from `os.spawn`, `os.signal("interrupt", "terminate")`, and `fs.watch(path)`. Inside a detached coroutine a wait suspends only that coroutine. Closing a sleep before its time ends wakes the coroutine that waits on it with `false` and `"closed"`. A sleep of `math.huge` never ends by itself, so it parks a coroutine until another one closes the sleep.
+
+```lus
+local wake = coroutine.sleep(math.huge)
+local result
+local waiter = coroutine.detach(coroutine.create(function()
+    result = table.pack(coroutine.resume(wake))
+end))
+coroutine.close(wake)
+coroutine.resume(waiter)
+assert(result[1] == false and result[2] == "closed")
+```
+
 ## Globals and permissions
 
 A file that names its globals with a `global` declaration gets an error for every other free name, which catches typos at compile time. Write the declaration at the top of the file, then pledge.
@@ -194,7 +246,7 @@ pledge("fs:read")
 pledge("seal")
 ```
 
-`pledge("seal")` freezes the permission set. `pledge("~exec")` denies a permission for good. Permission values narrow a grant: `fs:read=/var/log/*`, `network:http=api.example.com`, `network:server=127.0.0.1:8080`.
+`pledge("seal")` freezes the permission set. A grant without a value covers the grants of the same permission with values, whichever comes first. `pledge("~exec")` denies a permission for good. Permission values narrow a grant: `fs:read=/var/log/*`, `network:http=api.example.com`, `network:server=127.0.0.1:8080`.
 
 ## Modules
 
