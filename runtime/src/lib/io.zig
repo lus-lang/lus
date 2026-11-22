@@ -154,7 +154,23 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
         }
         const old = h.rbuf.items.len;
         h.rbuf.ensureUnusedCapacity(gpa, 64 * 1024) catch return l.raiseMem();
-        const dst = h.rbuf.unusedCapacitySlice();
+        var dst = h.rbuf.unusedCapacitySlice();
+        if (comptime builtin.os.tag == .windows) if (h.nonblock) {
+            // Windows pipes cannot be polled, so a pipe of `os.spawn` looks
+            // at what it holds and lets the other coroutines run while it
+            // is empty.
+            switch (winpipe.available(h.file.handle)) {
+                .bytes => |ready| dst = dst[0..@min(dst.len, ready)],
+                .ended => {
+                    h.eof = true;
+                    break;
+                },
+                .empty => {
+                    try sched.waitNotifyFor(l, winpipe.poll_ms);
+                    continue;
+                },
+            }
+        };
         var bufs = [_][]u8{dst};
         const got = switch (h.kind) {
             .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return ioError(l, e),
@@ -384,7 +400,17 @@ fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) Error!void {
 fn writeWaiting(l: *Thread, h: *Handle, bytes: []const u8) Error!void {
     var done = sched.progress(l);
     while (done < bytes.len) {
-        const n = h.file.writeStreaming(l.g.io, &.{}, &.{bytes[done..]}, 1) catch |e| switch (e) {
+        var chunk = bytes[done..];
+        if (comptime builtin.os.tag == .windows) {
+            const room = winpipe.room(h.file.handle);
+            if (room == 0) {
+                try sched.saveProgress(l, done);
+                try sched.waitNotifyFor(l, winpipe.poll_ms);
+                continue;
+            }
+            chunk = chunk[0..@min(chunk.len, room)];
+        }
+        const n = h.file.writeStreaming(l.g.io, &.{}, &.{chunk}, 1) catch |e| switch (e) {
             error.WouldBlock => {
                 try sched.saveProgress(l, done);
                 _ = try sched.waitIo(l, h.file.handle, .write, -1);
@@ -396,6 +422,43 @@ fn writeWaiting(l: *Thread, h: *Handle, bytes: []const u8) Error!void {
     }
     if (l.task) |t| t.progress = 0;
 }
+
+/// Polling the pipes of `os.spawn` on Windows, where the poller of the
+/// scheduler takes sockets only.
+const winpipe = if (builtin.os.tag == .windows) struct {
+    const w = std.os.windows;
+    const poll_ms = 5;
+    extern "kernel32" fn PeekNamedPipe(pipe: w.HANDLE, buf: ?*anyopaque, size: w.DWORD, read: ?*w.DWORD, avail: ?*w.DWORD, left: ?*w.DWORD) callconv(.winapi) w.BOOL;
+    const LocalInfo = extern struct {
+        pipe_type: u32,
+        configuration: u32,
+        max_instances: u32,
+        cur_instances: u32,
+        inbound_quota: u32,
+        read_available: u32,
+        outbound_quota: u32,
+        write_quota_available: u32,
+        state: u32,
+        end: u32,
+    };
+    extern "ntdll" fn NtQueryInformationFile(file: w.HANDLE, iosb: *w.IO_STATUS_BLOCK, info: *anyopaque, len: u32, class: u32) callconv(.winapi) w.NTSTATUS;
+
+    fn available(h: w.HANDLE) union(enum) { bytes: usize, ended, empty } {
+        var n: w.DWORD = 0;
+        if (!PeekNamedPipe(h, null, 0, null, &n, null).toBool()) return .ended;
+        return if (n > 0) .{ .bytes = n } else .empty;
+    }
+
+    /// The bytes a write can put in the pipe without blocking. A pipe
+    /// whose state cannot be read reports room for one write, which then
+    /// reports its own error.
+    fn room(h: w.HANDLE) usize {
+        var iosb: w.IO_STATUS_BLOCK = undefined;
+        var info: LocalInfo = undefined;
+        if (NtQueryInformationFile(h, &iosb, &info, @sizeOf(LocalInfo), 24) != .SUCCESS) return std.math.maxInt(usize);
+        return info.write_quota_available;
+    }
+} else struct {};
 
 /// A handle for one end of a pipe of `os.spawn`. The collector closes it.
 pub fn newPipeHandle(l: *Thread, file: std.Io.File, readable: bool, nonblock: bool) Error!Value {

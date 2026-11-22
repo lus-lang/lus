@@ -149,9 +149,11 @@ const Shared = struct {
     }
 };
 
+extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
+
 fn monotonic() u64 {
     var ts: std.c.timespec = undefined;
-    if (windows) return @intCast(std.time.nanoTimestamp());
+    if (windows) return GetTickCount64() * std.time.ns_per_ms;
     _ = std.c.clock_gettime(.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
@@ -671,7 +673,7 @@ const WinWatch = struct {
         const target = if (s.is_file) std.fs.path.dirname(s.root_real) orelse s.root_real else s.root_real;
         const name = std.unicode.wtf8ToWtf16LeAllocZ(gpa, target) catch return error.Failed;
         defer gpa.free(name);
-        const h = CreateFileW(name, FILE_LIST_DIRECTORY, w.FILE_SHARE_READ | w.FILE_SHARE_WRITE | w.FILE_SHARE_DELETE, null, w.OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
+        const h = CreateFileW(name, FILE_LIST_DIRECTORY, 0x1 | 0x2 | 0x4, null, 3, FILE_FLAG_BACKUP_SEMANTICS, null);
         if (h == w.INVALID_HANDLE_VALUE) return error.Failed;
         b.dir = h;
         b.thread = std.Thread.spawn(.{}, run, .{ h, s }) catch {
@@ -697,7 +699,7 @@ const WinWatch = struct {
                     const next = std.mem.readInt(u32, buf[off..][0..4], .little);
                     const action = std.mem.readInt(u32, buf[off + 4 ..][0..4], .little);
                     const len = std.mem.readInt(u32, buf[off + 8 ..][0..4], .little);
-                    const name16: []align(1) const u16 = @ptrCast(buf[off + 12 ..][0..len]);
+                    const name16: []const u16 = @ptrCast(@alignCast(buf[off + 12 ..][0..len]));
                     var name8: [1024]u8 = undefined;
                     var n8: usize = 0;
                     var it = std.unicode.Wtf16LeIterator.init(name16);

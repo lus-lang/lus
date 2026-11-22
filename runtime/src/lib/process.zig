@@ -372,7 +372,7 @@ fn pushProcess(l: *Thread, pid: Pid, id: i64, ends: Ends) Error!u32 {
     if (windows) win.watch(p);
     // Each end becomes an io handle before the next allocation can
     // collect, so none of them leaks.
-    const nb = !windows;
+    const nb = true;
     if (ends.stdin) |f| u.userValues()[0] = io_lib.newPipeHandle(l, f, false, nb) catch |e| {
         closeEnds(l, .{ .stdout = ends.stdout, .stderr = ends.stderr });
         return e;
@@ -614,6 +614,11 @@ const win = if (windows) struct {
     const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x20002;
     const WT_EXECUTEONLYONCE: w.ULONG = 0x8;
     const INFINITE: u32 = 0xFFFFFFFF;
+    const GENERIC_READ: w.DWORD = 0x80000000;
+    const GENERIC_WRITE: w.DWORD = 0x40000000;
+    const FILE_SHARE_READ: w.DWORD = 0x1;
+    const FILE_SHARE_WRITE: w.DWORD = 0x2;
+    const OPEN_EXISTING: w.DWORD = 3;
     const STARTUPINFOEXW = extern struct {
         info: w.STARTUPINFOW,
         attribute_list: ?*anyopaque,
@@ -687,7 +692,7 @@ const win = if (windows) struct {
                 .file => |f| child_h[i] = dup(f.handle),
                 .null => {
                     const nul = std.unicode.utf8ToUtf16LeStringLiteral("NUL");
-                    const h = CreateFileW(nul, if (i == 0) w.GENERIC_READ else w.GENERIC_WRITE, w.FILE_SHARE_READ | w.FILE_SHARE_WRITE, null, w.OPEN_EXISTING, 0, null);
+                    const h = CreateFileW(nul, if (i == 0) GENERIC_READ else GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, null, OPEN_EXISTING, 0, null);
                     if (h == w.INVALID_HANDLE_VALUE) return error.SystemResources;
                     defer w.CloseHandle(h);
                     child_h[i] = dup(h);
@@ -695,7 +700,8 @@ const win = if (windows) struct {
                 .pipe => {
                     var r: w.HANDLE = undefined;
                     var wr: w.HANDLE = undefined;
-                    if (!CreatePipe(&r, &wr, null, 0).toBool()) return error.SystemResources;
+                    // A large buffer lets most writes finish at once.
+                    if (!CreatePipe(&r, &wr, null, 1 << 16).toBool()) return error.SystemResources;
                     const mine = if (i == 0) wr else r;
                     const theirs = if (i == 0) r else wr;
                     parent[i] = mine;
