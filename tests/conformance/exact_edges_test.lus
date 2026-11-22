@@ -53,3 +53,33 @@ local function a_decimal_power_needs_an_integral_exponent_test()
     ok, err = catch (function() return 2d ^ 1.5d end)()
     assert(not ok and err:find("decimal exponent must be an integer", 1, true), err)
 end
+
+-- Equal bigints and decimals are the same key, though each is an object
+-- of its own.
+local function equal_exact_numbers_are_one_key_test()
+    local t = {}
+    t[decimal("1.5")] = "a"
+    t[10n ^ 30] = "b"
+    assert(t[decimal("1.50")] == "a" and t[1.5d] == "a")
+    assert(t[bigint("1000000000000000000000000000000")] == "b" and t[-(10n ^ 30)] == nil)
+    local k1, k2 = decimal("2.5"), decimal("2.5")
+    t[k1] = 1
+    t[k2] = 2
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    assert(n == 3 and t[2.5d] == 2)
+end
+
+-- A bigint shifts left by at most 2^24 bits. A right shift by any larger
+-- amount gives the value that every amount past the bits gives.
+local function a_bigint_shifts_left_within_its_limit_test()
+    for _, n in ipairs{ math.maxinteger, (1 << 24) + 1 } do
+        local ok, err = catch (function() return 10n << n end)()
+        assert(not ok and err:find("shift amount too large", 1, true), err)
+        ok, err = catch (function() return 10n >> -n end)()
+        assert(not ok and err:find("shift amount too large", 1, true), err)
+    end
+    assert(10n >> math.maxinteger == 0 and -10n >> math.maxinteger == -1)
+    assert(10n << -math.maxinteger == 0)
+    assert((1n << (1 << 24)) >> (1 << 24) == 1)
+end
