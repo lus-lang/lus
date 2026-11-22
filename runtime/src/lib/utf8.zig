@@ -45,7 +45,7 @@ pub const funcs = [_]aux.Reg{
 };
 
 pub fn open(l: *Thread) Error!void {
-    const t = try aux.newLib(l, &funcs);
+    const t = try aux.newLib(l, .fields, "utf8", &funcs);
     try l.push(Value.obj(.table, t));
     try aux.setField(l, t, "charpattern", try l.newStringValue("."));
     l.top -= 1;

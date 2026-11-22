@@ -106,8 +106,10 @@ pub const State = struct {
     strings: std.ArrayList([]u8) = .empty,
     string_index: std.StringHashMapUnmanaged(u32) = .empty,
     /// The path in the global tables of each native function, by the
-    /// address of its function, as an index into `strings`.
-    natives: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    /// address of its function. A path enters `strings` only when code
+    /// names its native, since the linker keeps every builtin that the
+    /// strings of the code section name.
+    natives: std.AutoHashMapUnmanaged(usize, []u8) = .empty,
     natives_built: bool = false,
     /// The relocations of the baseline code of every bundled function.
     records: std.AutoHashMapUnmanaged(*Proto, []reloc.Entry) = .empty,
@@ -133,6 +135,8 @@ pub const State = struct {
         for (s.strings.items) |x| s.gpa.free(x);
         s.strings.deinit(s.gpa);
         s.string_index.deinit(s.gpa);
+        var nit = s.natives.valueIterator();
+        while (nit.next()) |p| s.gpa.free(p.*);
         s.natives.deinit(s.gpa);
         var it = s.records.valueIterator();
         while (it.next()) |r| s.gpa.free(r.*);
@@ -177,8 +181,8 @@ pub const State = struct {
                 .native => {
                     const n = kv.val.as(state.Native);
                     if (s.natives.contains(@intFromPtr(n.func))) continue;
-                    const i = s.intern(path) orelse continue;
-                    s.natives.put(s.gpa, @intFromPtr(n.func), i) catch {};
+                    const copy = s.gpa.dupe(u8, path) catch continue;
+                    s.natives.put(s.gpa, @intFromPtr(n.func), copy) catch s.gpa.free(copy);
                 },
                 .table => if (prefix.len == 0) {
                     var pbuf: [256]u8 = undefined;
@@ -323,7 +327,7 @@ pub const Context = struct {
             if (w == v) return .{ .address = .{ .kind = .global_value, .a = @intCast(i * @sizeOf(usize)) } };
         }
         if (!c.st.natives_built) c.st.buildNatives(c.g);
-        if (c.st.natives.get(v)) |n| return .{ .address = .{ .kind = .native, .a = n } };
+        if (c.st.natives.get(v)) |path| if (c.st.intern(path)) |n| return .{ .address = .{ .kind = .native, .a = n } };
         if (inHeap(c.g, v)) {
             // Only an interned string is the same object when the loader
             // makes it again from its characters.
@@ -378,6 +382,19 @@ fn inArena(g: *Global, v: usize) bool {
 }
 
 extern "c" fn dladdr(addr: *const anyopaque, info: *DlInfo) c_int;
+
+/// Records the range of the executable image for `reloc.wide`, so that
+/// an address of a static executable loaded below 4 GB is relocated.
+pub fn noteImage() void {
+    if (comptime builtin.object_format == .elf and builtin.link_libc) {
+        reloc.image = .{ .lo = @intFromPtr(&elf_bounds.__ehdr_start), .hi = @intFromPtr(&elf_bounds._end) };
+    }
+}
+
+const elf_bounds = struct {
+    extern const __ehdr_start: u8;
+    extern const _end: u8;
+};
 /// Whether the C library can name the image and the symbol of an address.
 const has_dladdr = builtin.link_libc and builtin.os.tag != .windows;
 const DlInfo = extern struct {
@@ -392,9 +409,16 @@ const DlInfo = extern struct {
 /// nothing in other images, so an immediate that lands in one is a
 /// literal.
 fn inImage(v: usize) bool {
-    if (comptime !has_dladdr) return false;
     // Every address of a user process lies below 2^48.
     if (v < 4096 or v >> 48 != 0) return false;
+    // An ELF executable lies between the symbols that every linker
+    // defines at its first and its last byte. `dladdr` of a static
+    // executable finds nothing.
+    if (comptime builtin.object_format == .elf and builtin.link_libc) {
+        const start = @intFromPtr(&elf_bounds.__ehdr_start);
+        return v >= start and v < @intFromPtr(&elf_bounds._end);
+    }
+    if (comptime !has_dladdr) return false;
     var own: DlInfo = undefined;
     if (dladdr(routines[0], &own) == 0) return false;
     var info: DlInfo = undefined;
@@ -444,7 +468,7 @@ pub fn report(c: *Context, unresolved: u32) void {
                 var info: DlInfo = undefined;
                 if (dladdr(@ptrFromInt(v), &info) != 0 and info.sname != null) name = std.mem.span(info.sname.?);
             }
-            w.print(" image {s}", .{name}) catch return;
+            w.print(" image {s}@0x{x}", .{ name, v }) catch return;
         }
     }
     w.writeAll("\n\x00") catch return;
@@ -598,6 +622,25 @@ fn put64(list: *std.ArrayList(u8), gpa: std.mem.Allocator, v: u64) !void {
 pub fn sectionSeed(bytes: []const u8) ?u64 {
     if (bytes.len < magic.len + 8 or !std.mem.eql(u8, bytes[0..magic.len], magic)) return null;
     return std.mem.readInt(u64, bytes[magic.len..][0..8], .little);
+}
+
+/// Calls `f` with each string of the code section `bytes`: the paths of
+/// the natives that its code calls and the characters of the strings it
+/// interns. The linker keeps every builtin that such a path names.
+pub fn sectionStrings(bytes: []const u8, ctx: anytype, comptime f: fn (@TypeOf(ctx), []const u8) void) void {
+    if (sectionSeed(bytes) == null) return;
+    var pos: usize = magic.len + 8;
+    if (pos + 4 > bytes.len) return;
+    const n = std.mem.readInt(u32, bytes[pos..][0..4], .little);
+    pos += 4;
+    for (0..n) |_| {
+        if (pos + 4 > bytes.len) return;
+        const len = std.mem.readInt(u32, bytes[pos..][0..4], .little);
+        pos += 4;
+        if (len > bytes.len - pos) return;
+        f(ctx, bytes[pos..][0..len]);
+        pos += len;
+    }
 }
 
 /// Writes the code section of a training run to the path of its state:

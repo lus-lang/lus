@@ -128,12 +128,17 @@ pub fn apply(code: []u8, e: Entry, addr: u64) void {
     }
 }
 
+/// The executable image of this process, which a static executable
+/// loads below 4 GB. `aot.State.fromEnv` records it.
+pub var image: struct { lo: u64 = 0, hi: u64 = 0 } = .{};
+
 /// Whether an immediate needs a relocation or a `literal` name when the
 /// assembler compiles ahead of time: a value that does not fit 32 bits,
-/// which is where every address of a 64-bit process lies.
+/// which is where the heap and the code of a 64-bit process lie, or an
+/// address in the executable image.
 pub fn wide(v: u64) bool {
     const s: i64 = @bitCast(v);
-    return s < std.math.minInt(i32) or s > std.math.maxInt(u32);
+    return s < std.math.minInt(i32) or s > std.math.maxInt(u32) or (v >= image.lo and v < image.hi);
 }
 
 fn expectPatchable(comptime M: type, dst: M.Reg) !void {

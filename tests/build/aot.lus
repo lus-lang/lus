@@ -44,3 +44,9 @@ print(fib(20), acc, sum(t))
 -- A float where the code expects integers leaves it through an exit.
 t[500] = 0.5
 print(sum(t))
+-- Observed variables update through a chunk the runtime loads from the
+-- bundle, since it has no compiler.
+local base <observe> = 1
+local double <observe> = base * 2
+base = 5
+print(`observed $double`)

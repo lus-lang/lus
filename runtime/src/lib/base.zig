@@ -49,7 +49,7 @@ pub const funcs = [_]aux.Reg{
 pub fn open(l: *Thread) Error!void {
     const g = l.g;
     const globals = g.globals.as(Table);
-    try aux.setFuncs(l, globals, &funcs);
+    try aux.setFuncs(l, globals, .fields, "", &funcs);
     try aux.setField(l, globals, "_G", g.globals);
     try aux.setField(l, globals, "_VERSION", try l.newStringValue("Lus 2.0"));
     // The generic `for` steps these iterators itself (`interp.tforcall`).

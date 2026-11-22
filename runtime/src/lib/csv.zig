@@ -18,8 +18,10 @@ const Error = state.Error;
 const Table = object.Table;
 
 pub fn open(l: *Thread) Error!void {
-    try aux.setGlobal(l, "tocsv", try aux.native(l, tocsv, "tocsv"));
-    try aux.setGlobal(l, "fromcsv", try aux.native(l, fromcsv, "fromcsv"));
+    try aux.setFuncs(l, l.g.globals.as(object.Table), .fields, "", &.{
+        .{ .name = "tocsv", .func = tocsv },
+        .{ .name = "fromcsv", .func = fromcsv },
+    });
 }
 
 /// The optional delimiter argument `i`: exactly one character, a comma

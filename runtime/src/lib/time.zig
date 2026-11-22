@@ -1123,12 +1123,12 @@ const zone_meta = [_]aux.Reg{
 /// Creates the metatable of kind `k`, anchors it in the registry and
 /// records it for type checks. Methods go in an `__index` table, or in
 /// `__methods` when `__index` is a function.
-fn makeMetatable(l: *Thread, k: Kind, methods: []const aux.Reg, meta: []const aux.Reg) Error!void {
+fn makeMetatable(l: *Thread, comptime k: Kind, comptime methods: []const aux.Reg, comptime meta: []const aux.Reg) Error!void {
     const mt = try l.newTable(0, meta.len + 4);
     try l.push(Value.obj(.table, mt));
     defer l.top -= 1;
-    try aux.setFuncs(l, mt, meta);
-    const m = try aux.newLib(l, methods);
+    try aux.setFuncs(l, mt, .methods, "time:" ++ @tagName(k), meta);
+    const m = try aux.newLib(l, .methods, "time:" ++ @tagName(k), methods);
     try l.push(Value.obj(.table, m));
     try aux.setField(l, mt, if (k == .zoned) "__methods" else "__index", Value.obj(.table, m));
     l.top -= 1;
@@ -1167,7 +1167,7 @@ pub fn open(l: *Thread) Error!void {
     try makeMetatable(l, .duration, &duration_methods, &duration_meta);
     try makeMetatable(l, .zoned, &zoned_methods, &zoned_meta);
     try makeMetatable(l, .zone, &zone_methods, &zone_meta);
-    const lib = try aux.newLib(l, &module_funcs);
+    const lib = try aux.newLib(l, .fields, "time", &module_funcs);
     try l.push(Value.obj(.table, lib));
     defer l.top -= 1;
     // First-class weekday (ISO, Monday first) and month enums.

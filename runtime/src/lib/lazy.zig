@@ -101,12 +101,15 @@ pub fn get(g: *Global, i: u8) std.mem.Allocator.Error!Value {
     return Value.obj(.native, n);
 }
 
-/// Compiles the update of observed variables in `g` and makes its closure,
-/// whose environment is empty because it names builtins only.
-fn runClosure(g: *Global) std.mem.Allocator.Error!*object.Closure {
-    if (comptime !@import("build_options").compiler) @panic("observed variables need the compiler, which this executable leaves out");
+/// The name of the bundled module that holds the update of observed
+/// variables as a binary chunk, which `lus build` adds for a runtime
+/// without the compiler.
+pub const bundle_module = ".observe";
+
+/// Compiles the update of observed variables in `g`.
+pub fn compileUpdate(g: *Global) std.mem.Allocator.Error!*object.Proto {
+    if (comptime !@import("build_options").compiler) unreachable;
     const codegen = @import("../compile/codegen.zig");
-    const gc = @import("../vm/gc.zig");
     const r = try codegen.compile(g, run_source, .{ .chunkname = "=observe", .meta_eval = false });
     const p = switch (r) {
         .ok => |p| p,
@@ -116,6 +119,30 @@ fn runClosure(g: *Global) std.mem.Allocator.Error!*object.Closure {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidUtf8 => unreachable,
     };
+    return p;
+}
+
+/// The update of observed variables: compiled, or read from the chunk
+/// that the bundle carries in a runtime without the compiler.
+fn updateProto(g: *Global) std.mem.Allocator.Error!*object.Proto {
+    if (comptime @import("build_options").compiler) return compileUpdate(g);
+    const b = @import("package.zig").bundle orelse @panic("observed variables need the compiler, which this executable leaves out");
+    const m = b.find(bundle_module) orelse @panic("observed variables need the compiler, which this executable leaves out");
+    return @import("../compile/dump.zig").undump(g, m.data, "=observe") catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.Malformed => @panic("the bundled update of observed variables is malformed"),
+    };
+}
+
+/// Makes the closure of the update of observed variables in `g`, whose
+/// environment is empty because it names builtins only.
+fn runClosure(g: *Global) std.mem.Allocator.Error!*object.Closure {
+    const gc = @import("../vm/gc.zig");
+    // Nothing roots the function until the closure holds it.
+    const was = g.gc_stopped;
+    g.gc_stopped = true;
+    defer g.gc_stopped = was;
+    const p = try updateProto(g);
     const n = p.upvals.len;
     const cl = try gc.alloc(g, object.Closure, .closure, object.Closure.allocSize(n));
     cl.proto = p;

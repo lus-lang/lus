@@ -88,7 +88,7 @@ pub fn open(l: *Thread) Error!void {
     for (list, 1..) |e, i| {
         try ops.rawSet(l, searchers, Value.int(@intCast(i)), try withPackage(l, e.f, e.name, pkg));
     }
-    try aux.setFuncs(l, pkg, &.{
+    try aux.setFuncs(l, pkg, .fields, "package", &.{
         .{ .name = "searchpath", .func = searchpath },
         .{ .name = "loadlib", .func = loadlib },
     });
@@ -591,7 +591,11 @@ fn require(l: *Thread) Error!u32 {
     // exact name loads from there, as any other name does, so a host or a
     // test can provide a remote module without the network.
     const local = remote.isUrl(name.bytes()) and (table.getStr(loaded, name).truthy() or preloaded(l, pkg, name));
-    if (!local) if (try requireRemote(l, name.bytes(), loaded)) |n| return n;
+    // Every module of a program compiled ahead of time is bundled, so the
+    // client of remote modules is linked only when the proof fails.
+    if (!local) if (aux.guarded(.fields, "package", "remote", "require", requireRemote)) |remote_require| {
+        if (try remote_require(l, name.bytes(), loaded)) |n| return n;
+    };
     const existing = table.getStr(loaded, name);
     if (existing.truthy()) return aux.ret(l, existing);
     const searchers = try aux.getField(l, pkg, "searchers");

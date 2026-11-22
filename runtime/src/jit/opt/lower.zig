@@ -3720,7 +3720,7 @@ pub const Lower = struct {
         const aux = @import("../../lib/auxlib.zig");
         fn find(comptime funcs: []const aux.Reg, comptime name: []const u8) state.NativeFn {
             inline for (funcs) |r| {
-                if (comptime std.mem.eql(u8, r.name, name)) return r.func;
+                if (comptime std.mem.eql(u8, r.name, name)) return r.func.?;
             }
             @compileError("no such library function: " ++ name);
         }

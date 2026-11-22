@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
         .coverage = b.option(bool, "coverage", "Instrument every edge and write the edges a run reached to LUS_COVERAGE (default: false)") orelse false,
         .fail_io = b.option(bool, "fail-io", "Fail or shorten the file and socket operation that LUS_FAIL_IO names, to test I/O error handling (default: false)") orelse false,
         .compiler = b.option(bool, "compiler", "Include the parser and the compiler, which `load` of source text and the tools need (default: true)") orelse true,
+        .link_object = b.option(bool, "link-object", "Export the registrations of builtins for the link object of `lus build --aot` (default: false)") orelse false,
         .jit_compile = b.option(bool, "jit-compile", "Compile native code, where the JIT is included, rather than only run the code an executable compiled ahead of time carries (default: true)") orelse true,
         .invariants = b.option(bool, "invariants", "Check internal invariants, as Debug builds and the unit tests always do (default: false)") orelse false,
     };
@@ -59,6 +60,10 @@ pub fn build(b: *std.Build) void {
     // The test runner links its own definition, so only the executable
     // takes this one.
     if (requested.coverage) exe.root_module.addCSourceFile(.{ .file = b.path("src/coverage_tls.c") });
+    // A position-independent executable loads above 4 GB on 64-bit Linux,
+    // as every executable does on macOS, so the training run of `lus
+    // build --aot` tells its addresses apart from integers of the program.
+    if (target.result.os.tag == .linux and target.result.ptrBitWidth() == 64) exe.pie = true;
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
@@ -96,6 +101,64 @@ pub fn build(b: *std.Build) void {
             }),
         });
         b.step("runtime", "Build lus-runtime, the base of executables compiled ahead of time").dependOn(&b.addInstallArtifact(rt_exe, .{}).step);
+
+        // The input of the link object (`../spec/design/aot.md`, "The link
+        // object"): the same runtime as one relocatable object with a
+        // section for each function and each datum, which also exports
+        // the registrations of builtins. The object of the whole `lus`
+        // tests the linker on the conformance suite.
+        const lo_obj = linkObjectInput(b, rt, target, optimize, "lus-runtime");
+        const lo_full = linkObjectInput(b, requested, target, optimize, "lus");
+        const lo_step = b.step("link-object", "Build the runtime as a relocatable object and its C libraries for the link object");
+        lo_step.dependOn(&b.addInstallFile(lo_obj.getEmittedBin(), "lib/lus-runtime.o").step);
+        lo_step.dependOn(&b.addInstallFile(lo_full.getEmittedBin(), "lib/lus.o").step);
+        const lo_compress = if (features.archive) compressionLibrary(b, target) else null;
+        const lo_sqlite = if (features.sqlite) sqliteLibrary(b, target) else null;
+        if (lo_compress) |l| lo_step.dependOn(&b.addInstallArtifact(l, .{}).step);
+        if (lo_sqlite) |l| lo_step.dependOn(&b.addInstallArtifact(l, .{}).step);
+        if (target.result.os.tag == .linux) {
+            const convert = b.addExecutable(.{ .name = "lus-convert", .root_module = b.createModule(.{
+                .root_source_file = b.path("src/link/convert.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+            }) });
+            // `lus-link` links a link object with every builtin, which
+            // tests the linker on the whole `lus` and the conformance suite.
+            lo_step.dependOn(&b.addInstallArtifact(b.addExecutable(.{ .name = "lus-link", .root_module = b.createModule(.{
+                .root_source_file = b.path("src/link/main.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+            }) }), .{}).step);
+            // Zig compiles part of musl from its own sources into each
+            // executable, so the link object takes that part as an object.
+            const zigc = b.addObject(.{ .name = "zigc", .root_module = b.createModule(.{
+                .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ std.fs.path.dirname(b.graph.zig_exe) orelse ".", "lib", "c.zig" }) },
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }) });
+            zigc.link_function_sections = true;
+            zigc.link_data_sections = true;
+            // The link line of an empty program names the startup object,
+            // libc, and compiler_rt that Zig built for the target.
+            const stub = b.addWriteFiles().add("stub.zig", "pub fn main() void {}\n");
+            const line = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-lc", "--verbose-link", "-OReleaseFast", "-target", target.result.zigTriple(b.allocator) catch @panic("OOM") });
+            line.addFileArg(stub);
+            _ = line.addPrefixedOutputFileArg("-femit-bin=", "stub");
+            const link_line = line.captureStdErr(.{});
+            for ([_]struct { []const u8, *std.Build.Step.Compile }{ .{ "lus-runtime.lo", lo_obj }, .{ "lus.lo", lo_full } }) |e| {
+                const conv = b.addRunArtifact(convert);
+                conv.addArgs(&.{ "--arch", @tagName(target.result.cpu.arch), "--os", "linux", "--link-line" });
+                conv.addFileArg(link_line);
+                conv.addArg("-o");
+                const out = conv.addOutputFileArg(e[0]);
+                conv.addFileArg(e[1].getEmittedBin());
+                conv.addFileArg(zigc.getEmittedBin());
+                if (lo_compress) |l| conv.addArtifactArg(l);
+                if (lo_sqlite) |l| conv.addArtifactArg(l);
+                lo_step.dependOn(&b.addInstallFile(out, b.pathJoin(&.{ "lib", e[0] })).step);
+            }
+        }
         break :blk rt_exe;
     };
 
@@ -160,7 +223,7 @@ pub fn build(b: *std.Build) void {
     _ = make_aot.captureStdOut(.{});
     const run_aot = std.Build.Step.Run.create(b, "run an executable compiled ahead of time");
     run_aot.addFileArg(app_aot);
-    run_aot.expectStdOutEqual("fib optimized true\n6765\t5341338000\t500500\n500000.5\n");
+    run_aot.expectStdOutEqual("fib optimized true\n6765\t5341338000\t500500\n500000.5\nobserved 10\n");
     runtime_step.dependOn(&run_aot.step);
 
     // `lus check` and `lus doc` on the fixtures in tests/check and
@@ -202,6 +265,7 @@ pub fn build(b: *std.Build) void {
 
     const unit = b.addTest(.{
         .root_module = lus_mod,
+        .filters = if (b.option([]const u8, "test-filter", "Run only the unit tests whose names contain this text")) |f| b.dupeStrings(&.{f}) else &.{},
         // The runner of the Zig library runs instrumented tests only under
         // the build server (`coverage_runner.zig`).
         .test_runner = if (requested.coverage) .{ .path = b.path("src/coverage_runner.zig"), .mode = .simple } else null,
@@ -401,6 +465,35 @@ fn embedLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
 /// finds that library on its own, but a static library does not record
 /// it, so declaring it here lets every artifact that links the runtime,
 /// C hosts included, link it as well.
+/// The runtime with the features `f` as one relocatable object for the
+/// converter of the link object.
+fn linkObjectInput(b: *std.Build, f: Features, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, name: []const u8) *std.Build.Step.Compile {
+    var lo = f;
+    lo.link_object = true;
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/lus.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addOptions("build_options", lo.resolve(b, target));
+    mod.addImport("agent_docs", agentDocsModule(b));
+    const obj = b.addObject(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "lus", .module = mod }},
+        }),
+    });
+    obj.link_function_sections = true;
+    obj.link_data_sections = true;
+    obj.bundle_compiler_rt = true;
+    return obj;
+}
+
 fn linkSystemLibraries(mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     if (target.result.os.tag == .windows) mod.linkSystemLibrary("crypt32", .{});
 }
@@ -425,6 +518,7 @@ const Features = struct {
     compiler: bool = true,
     jit_compile: bool = true,
     invariants: bool = false,
+    link_object: bool = false,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -455,6 +549,7 @@ const Features = struct {
         options.addOption(bool, "compiler", f.compiler);
         options.addOption(bool, "jit_compile", f.jit_compile);
         options.addOption(bool, "invariants", f.invariants);
+        options.addOption(bool, "link_object", f.link_object);
         // The version that `lus -v` and the User-Agent of network.fetch
         // report. A release of an unstable channel sets it with `-Dversion`,
         // and every other build takes the version in build.zig.zon.
@@ -528,6 +623,10 @@ fn compressionLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Buil
         }),
     });
     addCompressionSources(b, lib.root_module);
+    // A section for each function and datum lets the linker of `lus build
+    // --aot` keep only the codecs a program reaches.
+    lib.link_function_sections = true;
+    lib.link_data_sections = true;
     return lib;
 }
 
@@ -673,7 +772,10 @@ fn sqliteLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Ste
         .pic = true,
     });
     addSqliteSource(b, mod, target);
-    return b.addLibrary(.{ .name = "sqlite3", .linkage = .static, .root_module = mod });
+    const lib = b.addLibrary(.{ .name = "sqlite3", .linkage = .static, .root_module = mod });
+    lib.link_function_sections = true;
+    lib.link_data_sections = true;
+    return lib;
 }
 
 /// Every vendored C source in one optimized module. The embedding library

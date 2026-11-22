@@ -44,10 +44,10 @@ pub const path_funcs = [_]aux.Reg{
 };
 
 pub fn open(l: *Thread) Error!void {
-    const t = try aux.newLib(l, &funcs);
+    const t = try aux.newLib(l, .fields, "fs", &funcs);
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
-    const p = try aux.newLib(l, &path_funcs);
+    const p = try aux.newLib(l, .fields, "fs.path", &path_funcs);
     try aux.setField(l, t, "path", Value.obj(.table, p));
     try aux.setField(l, p, "separator", try l.newStringValue(sep_str));
     try aux.setField(l, p, "delimiter", try l.newStringValue(delimiter));

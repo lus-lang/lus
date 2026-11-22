@@ -1280,6 +1280,7 @@ pub fn createSeeded(gpa: Allocator, io: std.Io, seed_opt: ?u64) !*Global {
     const g = try gpa.create(Global);
     var seed: u64 = 0x2545F4914F6CDD1D;
     seed ^= @intFromPtr(g);
+    @import("shape.zig").prepare();
     g.* = .{ .gpa = gpa, .io = io, .seed = seed_opt orelse seed };
     g.parent_gpa = gpa;
     g.counter = .init(gpa);

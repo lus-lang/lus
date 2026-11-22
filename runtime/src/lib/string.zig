@@ -59,7 +59,7 @@ pub fn open(l: *Thread) Error!void {
     const lib = try l.newTable(0, funcs.len);
     // Keep the table rooted while the natives are allocated.
     try l.push(Value.obj(.table, lib));
-    try aux.setFuncs(l, lib, &funcs);
+    try aux.setFuncs(l, lib, .library, "string", &funcs);
     const mt = try l.newTable(0, 1);
     try l.push(Value.obj(.table, mt));
     try aux.setField(l, mt, "__index", Value.obj(.table, lib));

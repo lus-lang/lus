@@ -658,7 +658,7 @@ fn setup(l: *Thread) Error!void {
         t_v = Value.obj(.table, try l.newTable(0, 2));
         try aux.setGlobal(l, "worker", t_v);
     }
-    try aux.setFuncs(l, t_v.as(Table), &.{
+    try aux.setFuncs(l, t_v.as(Table), .fields, "worker", &.{
         .{ .name = "message", .func = message },
         .{ .name = "peek", .func = peek },
     });
@@ -954,7 +954,7 @@ pub fn open(l: *Thread) Error!void {
     try aux.setField(l, mt, "__gc", try aux.native(l, handleGc, "gc"));
     try aux.setField(l, mt, "__tostring", try aux.native(l, handleToString, "tostring"));
     g.ext.put(g.gpa, mt_key, mt) catch return l.raiseMem();
-    const t = try aux.newLib(l, &.{
+    const t = try aux.newLib(l, .fields, "worker", &.{
         .{ .name = "create", .func = create },
         .{ .name = "status", .func = status },
         .{ .name = "receive", .func = receive },

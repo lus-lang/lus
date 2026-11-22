@@ -73,7 +73,7 @@ fn jitStatus(l: *Thread) Error!u32 {
 }
 
 pub fn open(l: *Thread) Error!void {
-    const t = try aux.newLib(l, &funcs);
+    const t = try aux.newLib(l, .fields, "debug", &funcs);
     try aux.setGlobal(l, "debug", Value.obj(.table, t));
 }
 

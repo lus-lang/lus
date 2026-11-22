@@ -51,10 +51,10 @@ pub fn open(l: *Thread) Error!void {
             .{ .name = "decompress_hc", .func = lz4DecompressLegacy },
         } },
     };
-    for (codecs) |c| {
+    inline for (codecs) |c| {
         const t = try l.newTable(0, c[1].len);
         try aux.setField(l, archive, c[0], Value.obj(.table, t));
-        try aux.setFuncs(l, t, c[1]);
+        try aux.setFuncs(l, t, .fields, "vector.archive." ++ c[0], c[1]);
     }
 }
 

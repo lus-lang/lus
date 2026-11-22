@@ -82,7 +82,7 @@ pub fn register(l: *Thread) Error!void {
     const g = l.g;
     const sv = try aux.getField(l, g.globals.as(object.Table), "string");
     if (sv.tag != .table) return;
-    try aux.setFuncs(l, sv.as(object.Table), &.{.{ .name = "transcode", .func = transcode }});
+    try aux.setFuncs(l, sv.as(object.Table), .library, "string", &.{.{ .name = "transcode", .func = transcode }});
 }
 
 /// Pushes the result in the representation `to` calls for.

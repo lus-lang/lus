@@ -17,7 +17,10 @@ const Table = object.Table;
 
 pub const Reg = struct {
     name: []const u8,
-    func: state.NativeFn,
+    /// The native. The linker of `lus build --aot` sets it to null when
+    /// the program never reaches the builtin (`spec/design/aot.md`,
+    /// "Leaving out code"), and the registration then skips it.
+    func: ?state.NativeFn,
     /// The frameless fast part of `func` (`state.LeafFn`), if any.
     leaf: ?state.LeafFn = null,
     /// The leaf computes only the first result (`state.Native.leaf_first`).
@@ -211,24 +214,91 @@ pub fn retFail(l: *Thread, msg: []const u8) Error!u32 {
 // ---------------------------------------------------------------------
 // Registration
 
-pub fn newLib(l: *Thread, funcs: []const Reg) Error!*Table {
+/// How the program reaches the entries of a registration of builtins.
+/// The entries of a `fields` registration are reached by a path, such as
+/// `table.insert`, or all at once when the program uses the table as a
+/// value. The entries of a `methods` registration are reached by the
+/// field names that the program reads, or by being metamethods, once the
+/// library before the colon of the path is reached. A `library` is
+/// reached both ways, as `string` is through the metatable of strings.
+/// The entries of an `always` registration are always kept.
+pub const Kind = enum { fields, methods, library, always };
+
+/// Creates a table that holds the builtins `funcs`, registered under
+/// `path` (see `setFuncs`).
+pub fn newLib(l: *Thread, comptime kind: Kind, comptime path: []const u8, comptime funcs: []const Reg) Error!*Table {
     // A library is a namespace that code reads by name, which a hash part
     // serves as well as a shape, without making one for each key.
     const t = state.newDictIn(l.g, funcs.len) catch return l.raiseMem();
     // Keep the table rooted while the natives are allocated.
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
-    try setFuncs(l, t, funcs);
+    try setFuncs(l, t, kind, path, funcs);
     return t;
 }
 
-pub fn setFuncs(l: *Thread, t: *Table, funcs: []const Reg) Error!void {
-    for (funcs) |f| {
-        const n = state.newNative(l.g, f.func, f.name, 0) catch return l.raiseMem();
-        n.leaf = f.leaf;
+/// Stores the builtins `funcs` in `t`. `path` names the table for the
+/// linker: the global name of a library such as `string` or
+/// `network.tcp`, the empty string for globals, and for methods the
+/// library that alone creates the values, followed by a colon and the
+/// type, such as `network:socket`. Methods of values that more than one
+/// library can create have no library before the colon, such as
+/// `:io.file`. A build for the link object (`-Dlink-object`)
+/// exports a symbol for each registration whose name lists the kind, the
+/// path, and the names of the entries, and which holds the address of
+/// the array, so that the linker finds each entry's function by its
+/// relocation.
+pub fn setFuncs(l: *Thread, t: *Table, comptime kind: Kind, comptime path: []const u8, comptime funcs: []const Reg) Error!void {
+    const S = struct {
+        const array = funcs[0..funcs.len].*;
+        const ref: *const anyopaque = &array;
+    };
+    if (@import("build_options").link_object and kind != .always) @export(&S.ref, .{ .name = guardName(kind, path, funcs) });
+    for (&S.array) |*f| {
+        // The linker writes the function after Zig compiled this load, so
+        // the load must not fold to the constant.
+        const func = @as(*const volatile ?state.NativeFn, &f.func).* orelse continue;
+        const n = state.newNative(l.g, func, f.name, 0) catch return l.raiseMem();
+        n.leaf = @as(*const volatile ?state.LeafFn, &f.leaf).*;
         n.leaf_first = f.leaf_first;
         try setField(l, t, f.name, Value.obj(.native, n));
     }
+}
+
+/// The function `f`, or null when the linker of `lus build --aot` left it
+/// out because the program never reaches `path.name` (see `setFuncs`).
+/// It guards code that only a builtin leads to, such as the client of
+/// remote modules behind `require`. `tag` tells apart the guards of one
+/// path and name.
+pub fn guarded(comptime kind: Kind, comptime path: []const u8, comptime name: []const u8, comptime tag: []const u8, comptime f: anytype) ?*const @TypeOf(f) {
+    const S = struct {
+        const array = [_]Reg{.{ .name = name, .func = @ptrCast(&f) }};
+        const ref: *const anyopaque = &array;
+    };
+    if (@import("build_options").link_object) @export(&S.ref, .{ .name = guardName(kind, path, &S.array) ++ "#" ++ tag });
+    // A pointer known at compile time would let Zig fold the load, so it
+    // goes through a variable.
+    var slot: *const volatile ?state.NativeFn = &S.array[0].func;
+    _ = &slot;
+    const p = slot.* orelse return null;
+    return @ptrCast(p);
+}
+
+/// The symbol of a registration in the link object:
+/// `lus.reg:KIND:PATH:NAME,NAME,...`.
+fn guardName(comptime kind: Kind, comptime path: []const u8, comptime funcs: []const Reg) []const u8 {
+    comptime {
+        var name: []const u8 = "lus.reg:" ++ @tagName(kind) ++ ":" ++ path ++ ":";
+        for (funcs, 0..) |f, i| name = name ++ (if (i == 0) "" else ",") ++ f.name;
+        return name;
+    }
+}
+
+/// The layout of `Reg`, which the converter of the link object reads.
+pub const reg_layout = [_]u32{ @sizeOf(Reg), @offsetOf(Reg, "func"), @offsetOf(Reg, "leaf") };
+
+comptime {
+    if (@import("build_options").link_object) @export(&reg_layout, .{ .name = "lus.reg_layout" });
 }
 
 pub fn setField(l: *Thread, t: *Table, name: []const u8, v: Value) Error!void {

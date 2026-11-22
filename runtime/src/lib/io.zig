@@ -50,7 +50,7 @@ const handle_name = "FILE*";
 
 pub fn open(l: *Thread) Error!void {
     const io_t = try l.newTable(0, 16);
-    try aux.setFuncs(l, io_t, &.{
+    try aux.setFuncs(l, io_t, .fields, "io", &.{
         .{ .name = "open", .func = ioOpen },
         .{ .name = "close", .func = ioClose },
         .{ .name = "read", .func = ioRead },
@@ -64,7 +64,7 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "tmpfile", .func = ioTmpfile },
     });
     const mt = try l.newTable(0, 8);
-    const methods = try aux.newLib(l, &.{
+    const methods = try aux.newLib(l, .methods, ":io.file", &.{
         .{ .name = "close", .func = fClose },
         .{ .name = "flush", .func = fFlush },
         .{ .name = "isatty", .func = fIsatty },
