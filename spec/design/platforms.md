@@ -33,6 +33,7 @@ Four facts from the table shape our order.
 | x86-64 Linux | yes | yes | yes | yes, static musl |
 | x86-64 Windows | yes | | | yes |
 | arm64 Windows | yes | | | yes |
+| 32-bit ARM Linux | yes | | | not yet |
 | wasm32 WASI | yes | WebAssembly modules | | the npm package |
 
 The native tiers depend on the target in six places.
@@ -94,7 +95,7 @@ POWER8 has no pc-relative load, so a constant builds in place in at most five in
 
 ### Work before the JIT
 
-The interpreter does not build for `arm-linux-musleabihf` yet. The parallel marker of the collector updates its mark bitmap with 64-bit atomic operations (`isMarkedSmallAtomic` and `setMarkSmallAtomic` in `vm/heap.zig`), which 32-bit ARM lacks. The WebAssembly build is single-threaded and never compiles them. Mark words of the native word size fix it. The interpreter then gets its own gate under `qemu-arm` before any JIT work.
+The interpreter builds for `arm-linux-musleabihf` and passes the conformance suite under `qemu-arm` in the VM. Two places used 64-bit atomic operations, which 32-bit ARM lacks. The parallel marker of the collector updates its mark bitmap, whose words stay 64 bits wide for the sweep, through the 32-bit half of the word that holds the bit (`markWord` in `vm/heap.zig`). The sequence counter of the debug adapter is a word-sized atomic. `tools/test-linux.sh --arm` runs the gate.
 
 ### Two widths in the interface
 
