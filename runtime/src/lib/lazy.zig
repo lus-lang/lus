@@ -20,8 +20,8 @@ const Value = value.Value;
 const Error = state.Error;
 
 /// The builtins in the order of their numbers, which binary chunks use.
-pub const natives = [_]state.NativeFn{ lazyWait, running, rethrow, closer, closeValue, obsCheck, obsBegin, obsEnd, obsRegister, obsUnregister };
-pub const names = [_][]const u8{ "lazywait", "running", "rethrow", "closer", "closevalue", "obscheck", "obsbegin", "obsend", "obsregister", "obsunregister", "obsrun" };
+pub const natives = [_]state.NativeFn{ lazyWait, running, rethrow, closer, closeValue, obsCheck, obsBegin, obsEnd, obsRegister, obsUnregister, @import("context.zig").ctxNew };
+pub const names = [_][]const u8{ "lazywait", "running", "rethrow", "closer", "closevalue", "obscheck", "obsbegin", "obsend", "obsregister", "obsunregister", "ctxnew", "obsrun" };
 
 /// The name of the prototype of `obsrun`, by which binary chunks know it.
 pub const run_proto_name = "observe update";

@@ -62,3 +62,20 @@ When the collector frees a slot object, the state puts the slot number on a free
 ## Numbering in the debug interface
 
 `debug.getcontext(co, n)` counts the live variables of the state in the order in which their declarations ran, starting at 1. A reclaimed variable leaves the count, so the numbers of the variables declared after it move down by one, as the numbers of `debug.getlocal` move when a block ends. A tool reads the numbers afresh each time it stops, as it does for locals.
+
+## Measurements
+
+`tests/bench/context.lus` reads and writes a variable 20 million times in a loop and compares a local, an upvalue, and a context variable. The numbers are seconds on an Apple silicon Mac, ReleaseFast, with other work running on the machine, so differences under 10 percent are noise.
+
+| Loop | JIT off | Baseline tier | Both tiers |
+| --- | ---: | ---: | ---: |
+| read a local | 0.050 | 0.028 | 0.011 |
+| read an upvalue | 0.072 | 0.035 | 0.014 |
+| read a context variable, default | 0.082 | 0.071 | 0.116 |
+| read a context variable, assigned | 0.101 | 0.083 | 0.074 |
+| write an upvalue | 0.056 | 0.023 | 0.018 |
+| write a context variable | 0.103 | 0.042 | 0.065 |
+
+A read costs about 2 ns more than a local in the interpreter and in the baseline tier, which calls a helper for `GETCTX` and `SETCTX` (`jit/helpers.zig`, `ctxGet` and `ctxSet`) and leaves a write that must copy the array to the step routine. The optimizing tier runs both instructions through their templates, so a hot loop that reads a context variable costs 3 to 5 ns per read where a local costs half a nanosecond. Lowering the two instructions in the optimizing tier, with a guard on the slot object and a load of the value through the array, is the next step for code that reads context variables in hot loops.
+
+Creating and running a coroutine (`coroutine.resume(coroutine.create(f))`, best of seven runs of a million) took 193 to 213 ns both on the commit before this work and after it, with the JIT off and on. The copy of the array pointer and its count is lost in the noise of the allocation.

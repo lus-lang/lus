@@ -12,7 +12,7 @@ ZIG_LOCAL_CACHE_DIR = "{{env.HOME}}/.cache/lus-zig/local"
 [tasks.build]
 description = "Build the Zig runtime"
 dir = "runtime"
-run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseSafe"
+run = "sh ../tools/with-build-lock.sh zig build -j2 -Doptimize=ReleaseSafe"
 
 [tasks.test]
 description = "Run the runtime unit, embedding, tool, and conformance tests"
@@ -29,7 +29,7 @@ run = [
 
 [tasks."test:linux"]
 description = "Run the conformance suite on Linux in the local Lima VM (LUS_LIMA_VM, default boring), on aarch64 and on x86-64 under qemu-user"
-run = "sh tools/test-linux.sh"
+run = "sh tools/with-build-lock.sh sh tools/test-linux.sh"
 
 [tasks."install:test"]
 description = "Run install.sh against a local release built from runtime/zig-out"
@@ -39,7 +39,7 @@ run = "node --test packaging/install/install.test.mjs"
 [tasks.fuzz]
 description = "Fuzz the front end, the chunk loader, and the parsers and formatters of the standard library"
 dir = "runtime"
-run = "sh ../tools/wait-for-memory.sh && zig build -j2 test --fuzz=1M -Doptimize=ReleaseSafe"
+run = "sh ../tools/with-build-lock.sh zig build -j2 test --fuzz=1M -Doptimize=ReleaseSafe"
 
 [tasks.diff]
 description = "Run 200 generated programs under every JIT mode and compare their output"
@@ -54,27 +54,32 @@ run = "LUS_JIT=off runtime/zig-out/bin/lus tests/diff/run.lus --forever --reduce
 [tasks."build:stress"]
 description = "Build the gc-stress and gc-verify runtime into runtime/zig-out-stress"
 dir = "runtime"
-run = "sh ../tools/wait-for-memory.sh && zig build -j1 -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress"
+run = "sh ../tools/with-build-lock.sh zig build -j1 -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress"
 
 [tasks."build:x64"]
 description = "Build the runtime for x86-64 macOS into runtime/zig-out-x64, which runs under Rosetta"
 dir = "runtime"
-run = "sh ../tools/wait-for-memory.sh && zig build -j1 -Doptimize=ReleaseSafe -Dtarget=x86_64-macos --prefix zig-out-x64"
+run = "sh ../tools/with-build-lock.sh zig build -j1 -Doptimize=ReleaseSafe -Dtarget=x86_64-macos --prefix zig-out-x64"
 
 [tasks."build:oom"]
 description = "Build the runtime with allocation failure injection into runtime/zig-out-oom"
 dir = "runtime"
-run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom"
+run = "sh ../tools/with-build-lock.sh zig build -j2 -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom"
 
 [tasks."build:io"]
 description = "Build the runtime with I/O fault injection into runtime/zig-out-io"
 dir = "runtime"
-run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io"
+run = "sh ../tools/with-build-lock.sh zig build -j2 -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io"
 
 [tasks.io]
 description = "Fail and shorten sampled file and socket operations of every conformance test"
 depends = ["build", "build:io"]
 run = ["LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --samples 20", "LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --short --samples 5"]
+
+[tasks.limits]
+description = "Find every limit of the language and the runtime, and check it in every JIT mode and one past it"
+depends = ["build"]
+run = "LUS_JIT=off runtime/zig-out/bin/lus tests/limits/run.lus"
 
 [tasks.corrupt]
 description = "Truncate and flip every bit of seed inputs to every parser and decoder of the standard library, and report crashes and values that break their contract"
@@ -107,7 +112,7 @@ run = [
 [tasks."build:coverage"]
 description = "Build the runtime as releases are built, ReleaseFast, with edge coverage into runtime/zig-out-cov"
 dir = "runtime"
-run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseFast -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov"
+run = "sh ../tools/with-build-lock.sh zig build -j2 -Doptimize=ReleaseFast -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov"
 
 [tasks.coverage]
 description = "Measure the branch coverage of src by the conformance suite in three JIT modes and the doc tests, and compare it with the baseline"
@@ -181,7 +186,7 @@ run = [
 [tasks."build:sanitize"]
 description = "Build the runtime with the vendored C libraries under the undefined behavior sanitizer into runtime/zig-out-ubsan"
 dir = "runtime"
-run = "sh ../tools/wait-for-memory.sh && zig build -j2 -Doptimize=ReleaseSafe -Dsanitize-c=true --prefix zig-out-ubsan"
+run = "sh ../tools/with-build-lock.sh zig build -j2 -Doptimize=ReleaseSafe -Dsanitize-c=true --prefix zig-out-ubsan"
 
 [tasks.sanitize]
 description = "Run the conformance suite and the fuzz targets with the vendored C libraries under the undefined behavior sanitizer"

@@ -187,6 +187,8 @@ pub const Attrib = union(enum) {
     lazy,
     /// `<observe>`: dependents recompute when it changes (`spec/design/observe.md`).
     observe,
+    /// `<context>`: a value of each coroutine (`spec/design/context.md`).
+    context,
     runtime: *Expr,
 };
 

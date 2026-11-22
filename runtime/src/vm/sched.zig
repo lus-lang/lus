@@ -632,6 +632,13 @@ fn enqueue(g: *Global, t: *Task, entry: Entry) void {
 }
 
 /// Ends the wait of `r` with `w`.
+/// Ends the wait of `t` at once, for an event coroutine that another
+/// coroutine closed while it waited inside its native. The native runs
+/// again, or returns from its blocking wait, and finds itself closed.
+pub fn interruptWait(g: *Global, t: *Task) void {
+    if (t.reg != .none or t.driver) wake(g, t, .ready);
+}
+
 fn wake(g: *Global, r: *Task, w: Wake) void {
     g.sched.wakes +%= 1;
     unregister(g, r);

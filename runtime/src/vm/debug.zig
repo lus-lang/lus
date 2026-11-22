@@ -60,7 +60,7 @@ fn findSetReg(p: *Proto, lastpc: u32, reg: u32) ?u32 {
                 const dest: i64 = @as(i64, pc) + 1 + opc.sj(i);
                 if (dest <= lastpc and dest > jmptarget) jmptarget = @intCast(dest);
             },
-            .setupval, .settabup, .settable, .setfield, .setindex, .setlist, .ret, .ret0, .ret1, .eq, .lt, .le, .eqk, .lti, .lei, .gti, .gei, .test_, .testnil, .forloop, .tforloop, .close, .tbc, .extraarg, .globaldef, .globaldefr, .catchcheck, .settop, .moverange, .varargprep => {},
+            .setupval, .settabup, .settable, .setfield, .setindex, .setlist, .ret, .ret0, .ret1, .eq, .lt, .le, .eqk, .lti, .lei, .gti, .gei, .test_, .testnil, .forloop, .tforloop, .close, .tbc, .extraarg, .globaldef, .globaldefr, .catchcheck, .settop, .moverange, .varargprep, .setctx => {},
             .self => change = reg == a or reg == a + 1,
             else => change = reg == a,
         }

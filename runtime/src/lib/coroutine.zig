@@ -50,6 +50,7 @@ pub fn newCoroutine(l: *Thread, f: Value) Error!*Thread {
     const co = state.newThread(l.g) catch return l.raiseMem();
     co.status = .suspended;
     @import("../vm/pledge.zig").inherit(co, l);
+    @import("../vm/context.zig").inherit(co, l);
     co.stack[0] = f;
     co.top = 1;
     return co;
@@ -538,6 +539,14 @@ fn close(l: *Thread) Error!u32 {
         try interp.closeTbc(co, 0, null);
         co.self_closed = true;
         return error.LusError;
+    }
+    // An event coroutine of the runtime that waits inside its native while
+    // its resumer blocks (the main chunk, or a plain coroutine) ends its
+    // wait at once, and the resume returns false and "closed".
+    if (co.event and co.status != .suspended and co.status != .dead and co.status != .err) {
+        co.event_closed = true;
+        if (sched.taskOf(co)) |t| sched.interruptWait(l.g, t);
+        return aux.retBool(l, true);
     }
     switch (co.status) {
         .suspended, .dead, .err => {},

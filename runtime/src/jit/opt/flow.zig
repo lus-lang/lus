@@ -112,6 +112,14 @@ pub fn effects(p: *const Proto, pc: u32) Effects {
             e.uses.set(b);
         },
         .eqk, .lti, .lei, .gti, .gei, .test_, .testnil, .ret1, .tbc, .catchcheck => e.uses.set(a),
+        .getctx => {
+            e.uses.set(b);
+            e.defs.set(a);
+        },
+        .setctx => {
+            e.uses.set(a);
+            e.uses.set(b);
+        },
         .testset => {
             e.uses.set(b);
             e.writes.set(a);

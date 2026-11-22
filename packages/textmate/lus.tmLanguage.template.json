@@ -172,7 +172,7 @@
       "name": "string.tag.lus"
     },
     {
-      "match": "<\\s*(const|close|group|meta|lazy|observe)\\s*>",
+      "match": "<\\s*(const|close|group|meta|lazy|observe|context)\\s*>",
       "name": "storage.type.attribute.lus"
     },
     {

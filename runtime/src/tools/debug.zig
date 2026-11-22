@@ -331,6 +331,8 @@ const FrameRef = struct {
 const Ref = union(enum) {
     locals: FrameRef,
     upvalues: FrameRef,
+    /// The context variables as the coroutine of a frame sees them.
+    context: *Thread,
     /// A value kept in the anchor table, with the expression that reads
     /// it when one exists.
     value: struct { slot: i64, eval: ?[]const u8 },
@@ -1180,6 +1182,7 @@ const Session = struct {
                 try s.writeScope(&j, "Locals", "locals", try s.newRef(.{ .locals = r }), false);
                 if (cl.nupvals > 0) try s.writeScope(&j, "Upvalues", null, try s.newRef(.{ .upvalues = r }), false);
             }
+            if (l.g.ctx.info.items.len > 0) try s.writeScope(&j, "Context", null, try s.newRef(.{ .context = r.th }), false);
             const env = frameEnv(l, r);
             try s.writeScope(&j, "Globals", null, try s.valueRef(l, env, null), true);
         }
@@ -1234,6 +1237,7 @@ const Session = struct {
         switch (ref) {
             .locals => |r| try collectLocals(a, &list, r),
             .upvalues => |r| try collectUpvalues(a, &list, r.frame().closure.?),
+            .context => |th| try collectContext(a, &list, th),
             .value => |vr| {
                 const v = table.getInt(s.anchor.?, vr.slot);
                 try collectChildren(cur, a, &list, v, vr.eval, filter, start, count);
@@ -1570,8 +1574,18 @@ fn collectUpvalues(a: Allocator, list: *std.ArrayList(Var), cl: *Closure) !void 
     for (cl.proto.upvals, 0..) |u, i| {
         if (i >= cl.nupvals) break;
         const name = if (u.name) |n| n.bytes() else "?";
-        if (std.mem.eql(u8, name, "_ENV")) continue;
+        if (std.mem.eql(u8, name, "_ENV") or isInternal(name)) continue;
         try list.append(a, .{ .name = name, .value = cl.upvals()[i].loc.*, .eval = name });
+    }
+}
+
+/// The live context variables in the order of their declarations, with
+/// the values that the coroutine `th` sees (`debug.getcontext`).
+fn collectContext(a: Allocator, list: *std.ArrayList(Var), th: *Thread) !void {
+    const context = @import("../vm/context.zig");
+    var n: i64 = 1;
+    while (context.nth(th.g, n)) |slot| : (n += 1) {
+        try list.append(a, .{ .name = th.g.ctx.info.items[slot].name, .value = context.get(th, slot) });
     }
 }
 

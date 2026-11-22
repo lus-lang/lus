@@ -494,12 +494,18 @@ const winpipe = if (builtin.os.tag == .windows) struct {
 
     /// The bytes a write can put in the pipe without blocking. A pipe
     /// whose state cannot be read reports room for one write, which then
-    /// reports its own error.
+    /// reports its own error. The quota that Windows reports shrinks by the
+    /// size of a read pending on the other end, which `room` corrects.
     fn room(h: w.HANDLE) usize {
         var iosb: w.IO_STATUS_BLOCK = undefined;
         var info: LocalInfo = undefined;
         if (NtQueryInformationFile(h, &iosb, &info, @sizeOf(LocalInfo), 24) != .SUCCESS) return std.math.maxInt(usize);
-        return info.write_quota_available;
+        if (info.write_quota_available > 0) return info.write_quota_available;
+        // A read that waits on the other end takes its size from the quota,
+        // so an empty pipe without quota has a reader waiting in it, and a
+        // write of at most the size of the buffer goes straight to it.
+        if (info.read_available == 0) return @max(info.outbound_quota, 1);
+        return 0;
     }
 } else struct {};
 
