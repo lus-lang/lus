@@ -324,8 +324,10 @@ const Group = struct {
     paths: []const []const u8,
 
     fn has(g: Group, file: []const u8) bool {
-        // The fault layer runs only in the sweeps of parts 3 and 4.
+        // The fault layer runs only in the sweeps of parts 3 and 4 and in
+        // the crash tests of part 10.
         if (std.mem.eql(u8, file, "vm/faultio.zig")) return false;
+        if (std.mem.eql(u8, file, "vm/faultcrash.zig")) return false;
         for (g.paths) |p| {
             if (p[p.len - 1] == '/') {
                 if (std.mem.startsWith(u8, file, p)) return true;

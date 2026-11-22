@@ -1,0 +1,194 @@
+--[[
+    Damaged binary chunks.
+
+    `load` reads a binary chunk from `string.dump` back into a function.
+    Every truncation of a chunk and every single bit flip of its header and
+    counts must end in a clean error, never a crash. The functions below
+    put each kind of constant into a chunk: integers, floats, strings,
+    bigints, decimals, enumerations, the read-only tables and vectors of
+    `<meta>` locals, and the natives of `<lazy>`, along with nested
+    functions, handlers, upvalues, and debug information.
+]]
+
+pledge("load")
+
+local function sample_plain(...)
+    local big = 1 << 40
+    local f = 2.5
+    local s = "text"
+    local b = 10n ^ 30
+    local d = 1.25d
+    local up = 0
+    local function inner(a, b2)
+        up = up + a
+        return up + b2 + big
+    end
+    local ok, r = catch inner(1, 2)
+    for i = 1, 3 do up = up + i end
+    return f, s, b, d, ok, r, ...
+end
+
+local function sample_enum()
+    local E = enum Red, Green, Blue end
+    return E.Green
+end
+
+local function sample_meta()
+    local G <meta> = do
+        local a = { n = 1, [2.5] = "f", [true] = 1 }
+        a.self = a
+        local keyed = {}
+        keyed[a] = "by table"
+        provide { a = a, keyed = keyed, v = vector.fromstring("xyz"), list = { 1, 2, 3 } }
+    end
+    return G
+end
+
+local function sample_lazy()
+    local c = 0
+    local x <lazy> = do c = c + 1 provide c * 5 end
+    return x + x, c
+end
+
+local samples = { sample_plain, sample_enum, sample_meta, sample_lazy }
+
+local function prefix(v, k)
+    local w = vector.clone(v)
+    vector.resize(w, k)
+    return w
+end
+
+local function binary_error(err)
+    return err == "bad binary format (truncated or corrupted chunk)"
+end
+
+local function every_sample_round_trips_test()
+    assert(load(string.dump(sample_plain))() == 2.5)
+    assert(type(load(string.dump(sample_enum))()) == type(sample_enum()))
+    local G = load(string.dump(sample_meta))()
+    assert(G.a.self == G.a and G.keyed[G.a] == "by table" and vector.size(G.v) == 3)
+    local sum, c = load(string.dump(sample_lazy))()
+    assert(sum == 10 and c == 1)
+    for _, f in ipairs(samples) do
+        assert(load(string.dump(f, true), "=stripped", "b"))
+    end
+end
+
+local function every_truncation_is_a_clean_error_test()
+    for _, f in ipairs(samples) do
+        for _, strip in ipairs{ false, true } do
+            local v = string.dump(f, strip)
+            for k = 0, #v - 1 do
+                local g, err = load(prefix(v, k), "=t", "b")
+                assert(g == nil, "a truncated chunk loaded")
+                assert(binary_error(err) or err:find("text chunk", 1, true), err)
+            end
+        end
+    end
+end
+
+local function bit_flips_never_crash_the_loader_test()
+    local rejected = 0
+    for _, f in ipairs(samples) do
+        local v = string.dump(f)
+        for i = 0, #v - 1 do
+            for _, bit in ipairs{ 1, 2, 4, 16, 128 } do
+                local w = vector.clone(v)
+                vector.set(w, i, vector.get(w, i) ~ bit)
+                local g, err = load(w, "=t", "b")
+                if g == nil then
+                    assert(binary_error(err) or err:find("text chunk", 1, true), err)
+                    rejected = rejected + 1
+                end
+            end
+        end
+    end
+    assert(rejected > 0)
+end
+
+local function an_extra_byte_after_the_chunk_is_an_error_test()
+    local v = string.dump(sample_plain)
+    local w = vector.clone(v)
+    vector.resize(w, #v + 1)
+    local g, err = load(w, "=t", "b")
+    assert(g == nil and binary_error(err), err)
+end
+
+-- A chunk starts with the four bytes of its signature, a version byte,
+-- and three bytes of sizes. The counts that follow are variable-length
+-- integers of seven bits a byte, and a count longer than 64 bits is
+-- malformed.
+local header = 8
+
+local function an_overlong_count_is_an_error_test()
+    local w = prefix(string.dump(sample_enum), header)
+    vector.resize(w, header + 12)
+    for i = header, header + 11 do vector.set(w, i, 0xff) end
+    local g, err = load(w, "=t", "b")
+    assert(g == nil and binary_error(err), err)
+end
+
+local function an_unknown_version_or_size_is_an_error_test()
+    local v = string.dump(sample_enum)
+    for _, version in ipairs{ 0, 3, 7, 255 } do
+        local w = vector.clone(v)
+        vector.set(w, 4, version)
+        local g, err = load(w, "=t", "b")
+        assert(g == nil and binary_error(err), err)
+    end
+    for i = 5, 7 do
+        local w = vector.clone(v)
+        vector.set(w, i, 3)
+        local g, err = load(w, "=t", "b")
+        assert(g == nil and binary_error(err), err)
+    end
+end
+
+-- A query keeps its plan as a string constant that starts with "Q1 ". The
+-- interpreter decodes the plan when the query runs. Changing one byte of
+-- the plan leaves the bytecode intact, so the chunk loads and runs, and
+-- the query either runs or raises an error.
+local function query_maker(t, lim)
+    local out = {}
+    for row in query(@t as p where p.a > 1 and p.b ~= "z" select p.a, p.b as name, count(*) as n
+            group by p.a, p.b order by p.a desc limit lim) do
+        out[#out + 1] = row
+    end
+    return out
+end
+
+local function plan_bounds(v)
+    for i = 0, #v - 3 do
+        if vector.get(v, i) == 81 and vector.get(v, i + 1) == 49 and vector.get(v, i + 2) == 32 then
+            -- The length before the string counts one more than its bytes.
+            local len = vector.get(v, i - 1) - 1
+            if vector.get(v, i - 2) >= 0x80 then
+                len = (vector.get(v, i - 1) << 7 | (vector.get(v, i - 2) & 0x7f)) - 1
+            end
+            return i, len
+        end
+    end
+end
+
+local function a_damaged_query_plan_raises_an_error_test()
+    local v = string.dump(query_maker)
+    local start, len = plan_bounds(v)
+    assert(start and len > 20, "found no plan")
+    local data = { { a = 2, b = "x" }, { a = 3, b = "y" }, { a = 1, b = "w" } }
+    local rows = load(v, "=q", "b")(data, 2)
+    assert(#rows == 2 and rows[1].a == 3)
+    local corrupt = 0
+    for i = start + 3, start + len - 1 do
+        for _, byte in ipairs{ 48, 57, 32, 58, 90, 120, 63 } do
+            local w = vector.clone(v)
+            vector.set(w, i, byte)
+            local f = assert(load(w, "=q", "b"))
+            local ok, err = catch f(data, 2)
+            if not ok then
+                assert(type(err) == "string", tostring(err))
+                if err:find("corrupt query plan in bytecode", 1, true) then corrupt = corrupt + 1 end
+            end
+        end
+    end
+    assert(corrupt > 0)
+end

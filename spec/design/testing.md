@@ -138,6 +138,26 @@ The work goes file by file, starting with the files of the most uncovered edges,
 
 Most uncovered lines of the code generator hold only the failing edge of a `try`, which the allocation sweep reaches. The transform of `tests/coverage/mcdc` finds 1,895 decisions with 4,396 conditions in `src`, and the conformance suite in three modes shows 49.3% of the conditions. The groups stand at 63.4% for `vm`, 69.0% for the collector, 52.4% for `compile`, and 68.8% for the core of `lib`. The tests found that a `__concat` metamethod cannot yield, while every other metamethod can (`tests/diff/OPEN.md`). Under the verifying build, `heapgrowth_test.lus` runs past the time limit of a file, which the nightly job tolerates. Next come tests for the rest of the reports and the conditions that MC/DC lists.
 
+The third round counted the sweeps as well. The crash model of part 10 runs only in the crash tests, so `vm` now leaves it out, as it leaves out the fault layer. Before the round, the code that every program runs stood at the following shares on macOS.
+
+| Group | The suite | With the sweeps | Every build |
+| --- | --- | --- | --- |
+| vm | 84.3% | 86.9% | 89.1% |
+| gc | 91.7% | 92.9% | 95.1% |
+| compile | 58.1% | 66.4% | 66.7% |
+| lib core | 81.3% | 82.3% | 82.9% |
+
+A sweep of whole programs fails an allocation only where one happens. A list of the code generator grows only now and then. The unit tests now sweep the compiler and the binary chunk format in `src/compile/sweep.zig`. The code generator puts a fault point before each append and each reservation of registers, which takes an allocation number of its own in the unit tests and in builds with `-Dfail-alloc=true`, as the fault simulation of SQLite does. Sweeps written in Lus make the k-th metamethod or callback call of each function of the table and string libraries raise, for every k. The error must leave the call unchanged. Other new tests load every truncation of binary chunks that hold each kind of constant. They run queries whose plan has one byte changed, place an error of the code generator in each position of an expression or a statement, and pin the argument errors of the core libraries.
+
+The tests found two bugs, both fixed. The reader of binary chunks reported a failed allocation in a bigint or decimal constant as a malformed chunk. A negative power of a zero decimal returned zero, while a division of a decimal by zero raises. Five checks of the code generator that the parser always makes first now carry `inv.never` or `inv.always`. After the round, the conformance suite covers the following shares.
+
+| Group | Before | After |
+| --- | --- | --- |
+| vm | 84.3% | 85.0% |
+| gc | 91.7% | 91.7% |
+| compile | 58.1% | 63.4% |
+| lib core | 81.3% | 87.6% |
+
 ### 9. Mutation testing
 
 Coverage shows that a test runs a branch, and mutation testing shows that a test notices when the branch is wrong. A mutant is the runtime with one small change: a comparison flipped (`<` to `<=`, `==` to `!=`), a constant moved by one, `and` swapped with `or`, `true` swapped with `false`, the operands of a subtraction swapped, or one statement removed. A mutant is killed when some test fails on it, and the mutation score of a directory is the share of its mutants that the tests kill.

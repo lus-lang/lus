@@ -569,6 +569,8 @@ fn decArith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
                 return l.raiseFmt("decimal exponent must be an integer", .{});
             }
             const n = pb[0].toConst().toInt(i32) catch return l.raiseFmt("exponent too large", .{});
+            // A negative power divides one by a positive power.
+            if (n < 0 and pa[0].eqlZero()) return l.raiseFmt("attempt to divide a decimal by zero", .{});
             // The power must fit before it is computed. Its digits after
             // the point are n times those of the base. A coefficient of b
             // bits is at least 2^(b-1), so log10 of the base is at least

@@ -1,0 +1,158 @@
+--[[
+    Errors inside the string library.
+
+    `gsub` calls the function or indexes the table it is given, `join`
+    reads its list through metamethods, and `format` converts values with
+    `__tostring`. Each sweep below makes those calls raise on their k-th
+    call, for every k, and the error must leave the library call unchanged.
+    The cases after them pin the errors of bad arguments and the rarer
+    forms of patterns and conversions.
+]]
+
+local fault_at, calls = 0, 0
+
+local function tick()
+    calls = calls + 1
+    if calls == fault_at then error("fault", 0) end
+end
+
+local function sweep(call)
+    local k = 1
+    while true do
+        fault_at, calls = k, 0
+        local ok, err = catch call()
+        local fired = calls >= k
+        fault_at = 0
+        if not fired then
+            assert(ok, err)
+            return k - 1
+        end
+        assert(not ok and err == "fault", "call " .. k .. ": " .. tostring(err))
+        k = k + 1
+    end
+end
+
+local function list(data)
+    return setmetatable({}, {
+        __index = function(_, k) tick() return data[k] end,
+        __len = function() tick() return #data end,
+    })
+end
+
+local shown = setmetatable({}, { __tostring = function() tick() return "shown" end })
+
+local string_sweep_cases = {
+    { "gsub with a function", function()
+        return string.gsub("a1b2c3", "%w", function(c) tick() return c:upper() end)
+    end },
+    { "gsub with captures and a function", function()
+        return string.gsub("k=v, x=y", "(%w)=(%w)", function(a, b) tick() return b .. a end)
+    end },
+    { "gsub with a table", function()
+        return string.gsub("abc", "%w", setmetatable({}, { __index = function(_, c) tick() return c .. c end }))
+    end },
+    { "gsub with a position capture and a table", function()
+        return string.gsub("abc", "()b", setmetatable({}, { __index = function(_, i) tick() return tostring(i) end }))
+    end },
+    { "join", function() return string.join(list({ "a", 1, "b", 2.5 }), ",") end },
+    { "join of values with __tostring", function() return string.join({ shown, shown }, "-") end },
+    { "format", function() return string.format("%s|%10s|%-6s|%.2s", shown, shown, shown, shown) end },
+}
+
+local function string_sweep_test(name, call)
+    assert(sweep(call) > 0, name .. " made no call")
+end
+
+-- Each case is a call and either the fragment of the error it raises or,
+-- after `ok`, the results it returns.
+local string_errors_cases = {
+    { function() return string.find(nil, "x") end, "bad argument #1 to 'find' (string expected, got nil)" },
+    { function() return string.find("x", {}) end, "bad argument #2 to 'find' (string expected, got table)" },
+    { function() return string.find("x", "x", "y") end, "bad argument #3 to 'find' (number expected, got string)" },
+    { function() return string.match(nil, "x") end, "bad argument #1 to 'match' (string expected, got nil)" },
+    { function() return string.match("x", "x", "y") end, "bad argument #3 to 'match' (number expected, got string)" },
+    { function() return string.gmatch(nil, "x") end, "bad argument #1 to 'gmatch' (string expected, got nil)" },
+    { function() return string.gmatch("x", {}) end, "bad argument #2 to 'gmatch' (string expected, got table)" },
+    { function() return string.gsub(nil, "x", "y") end, "bad argument #1 to 'gsub' (string expected, got nil)" },
+    { function() return string.gsub("x", {}, "y") end, "bad argument #2 to 'gsub' (string expected, got table)" },
+    { function() return string.gsub("x", "x", true) end, "bad argument #3 to 'gsub' (string/function/table expected, got boolean)" },
+    { function() return string.gsub("x", "x", "y", "z") end, "bad argument #4 to 'gsub' (number expected, got string)" },
+    { function() return string.gsub("abc", "(%w)", { a = {} }) end, "invalid replacement value (a table)" },
+    { function() return string.gsub("abc", "b", "%2") end, "invalid capture index %2" },
+    { function() return string.join({ 1, 2 }, {}) end, "bad argument #2 to 'string.join' (string expected, got table)" },
+    { function() return string.format("%d", "x") end, "bad argument #2 to 'format' (number expected, got string)" },
+    { function() return string.format("%q", {}) end, "bad argument #2 to 'format' (value has no literal form)" },
+    { function() return string.format("%y", 1) end, "invalid conversion '%y' to 'format'" },
+    { function() return string.format("%c", 65.5) end, "bad argument #2 to 'format' (number has no integer representation)" },
+    { function() return string.split(nil, ",") end, "bad argument #1 to 'string.split' (string expected, got nil)" },
+    { function() return string.char(0x110000) end, "bad argument #1 to 'string.char' (value out of range)" },
+    { function() return string.find("abc", "%b") end, "malformed pattern (missing arguments to '%b')" },
+    { "ok", function() return string.format("%10p", 1) end, "    (null)" },
+    { "ok", function() return string.format("%5c|%-5c|", 65, 66) end, "    A|B    |" },
+    { "ok", function() return string.format("%a %A", 1.5, 1d) end, "0x1.8p+0 0X1P+0" },
+    { "ok", function() return string.format("%.3f %e %g", 1.5d, 2.5d, 3.5d) end, "1.500 2.500000e+00 3.5" },
+    { "ok", function() return string.format("%x %X %o", 255n, 255, 8n) end, "ff FF 10" },
+    { "ok", function() return string.format("%q", math.mininteger) end, "0x8000000000000000" },
+    { "ok", function() return string.format("%#x %#o %+d % d %05d %-5d|", 255, 8, 5, 5, 5, 5) end, "0xff 010 +5  5 00005 5    |" },
+    { "ok", function() return string.format("%.0f %#.0f %#g %g", 2.5, 2.5, 1.0, 100000000000000) end, "2 2. 1.00000 1e+14" },
+    { "ok", function() return table.concat(string.split("a,,b", ","), "|") end, "a||b" },
+    { "ok", function() return table.concat(string.split("ab", ""), "|") end, "a|b" },
+    { "ok", function() return string.rep("x", -1) end, "" },
+    { "ok", function() return string.rep("x", 3, "") end, "xxx" },
+    { "ok", function() return string.trim("ééaéé", "é") end, "a" },
+    { "ok", function() return select(2, string.find("abc", "%f[%w]%w+")) end, 3 },
+    { "ok", function() return string.find("aé", "%f[é]") end, 2 },
+    { "ok", function() return string.find("(a", "%b()") end, nil },
+    { "ok", function() return string.find("a\0b", "%z") end, 2 },
+    { "ok", function() return string.find("abc", "$a") end, nil },
+    { "ok", function() return string.find("abc", "c$") end, 3 },
+    { "ok", function() return select(2, string.match("abc", "()b()")) end, 3 },
+    { "ok", function() return string.gsub("abc", "()", "%1") end, "1a2b3c4" },
+}
+
+local function string_errors_test(a, b, c)
+    if a == "ok" then
+        local ok, v = catch b()
+        assert(ok, v)
+        assert(v == c, tostring(v))
+    else
+        local ok, err = catch a()
+        assert(not ok, "no error")
+        assert(err:find(b, 1, true), err)
+    end
+end
+
+-- Every conversion with every flag, width, and precision, applied to
+-- every kind of value, either formats or raises one of the errors of
+-- `format`.
+local format_errors = {
+    "invalid conversion", "number expected", "number has no integer representation",
+    "value has no literal form", "invalid conversion specification", "no value", "value out of range", "cannot have modifiers",
+}
+
+local function every_conversion_formats_or_raises_a_known_error_test()
+    local values = { 0, 1, -1, 255, -255, 2^53, -0.0, 1.5, -1.5, 1/0, -1/0, 0/0, 10n, -10n, 10n^30,
+        1.5d, -2.25d, 1d, "s", "héllo", true, false, {}, print, math.mininteger, math.maxinteger }
+    local convs = { "d", "i", "u", "c", "x", "X", "o", "e", "E", "f", "F", "g", "G", "a", "A", "s", "q", "p" }
+    local mods = { "", "#", "0", "-", "+", " ", ".3", ".0", ".20", "5", "10", "99", "100", "5.1", "08.3", "#0-+ " }
+    local formatted = 0
+    for _, conv in ipairs(convs) do
+        for _, mod in ipairs(mods) do
+            local spec = "%" .. mod .. conv
+            for _, v in ipairs(values) do
+                local ok, err = catch string.format(spec, v)
+                if ok then
+                    formatted = formatted + 1
+                else
+                    local known = false
+                    for _, m in ipairs(format_errors) do
+                        if err:find(m, 1, true) then known = true end
+                    end
+                    assert(known, spec .. ": " .. err)
+                end
+            end
+            assert(not (catch string.format(spec)))
+        end
+    end
+    assert(formatted > 1000)
+end
