@@ -2117,7 +2117,7 @@ fn statement(fs: *FuncState, s: *ast.Stat) Error!void {
         .repeat_ => |r| try repeatStat(fs, r.body, r.cond, s.line),
         .if_ => |i| try ifStat(fs, i.clauses, i.else_, s.line),
         .numeric_for => |f| try numericFor(fs, f.name, f.start, f.limit, f.step, f.body, s.line),
-        .generic_for => |f| try genericFor(fs, f.names, f.exprs, f.body, s.line),
+        .generic_for => |f| if (f.from) try fromFor(fs, f.names, f.exprs, f.body, s.line) else try genericFor(fs, f.names, f.exprs, f.body, s.line),
         .return_ => |vals| try returnStat(fs, vals, s.line),
         .provide => |vals| try provideStat(fs, vals, s.line),
         .break_ => try newGoto(fs, "break", s.line, try jump(fs)),
@@ -2866,42 +2866,178 @@ fn flagsIsReserved(fs: *FuncState) bool {
     return true;
 }
 
+/// The truth of an `if` condition when the flags decide it at compile
+/// time, or null. A condition folds when it is a flag read, a comparison
+/// between a flag read and a literal (or another flag read), or such
+/// conditions combined with `and`, `or`, `not`, and parentheses. Folding
+/// never hides a run-time effect: a comparison that would raise stays,
+/// and `and` and `or` fold only when the left operand folds and decides
+/// the result or both operands fold.
 fn foldFlag(fs: *FuncState, cond: ast.Cond) ?bool {
-    const flags = fs.c.opts.flags orelse return null;
+    if (fs.c.opts.flags == null) return null;
     const e = switch (cond) {
         .expr => |x| x,
         else => return null,
     };
-    var negate = false;
-    var target = e;
-    if (e.kind == .unop and e.kind.unop.op == .not) {
-        negate = true;
-        target = e.kind.unop.operand;
+    if (!flagsIsReserved(fs)) return null;
+    const r = foldFlagCond(fs, e) orelse return null;
+    if (!r.flag) return null;
+    return r.value;
+}
+
+const FoldedCond = struct { value: bool, flag: bool };
+
+fn foldFlagCond(fs: *FuncState, e: *const ast.Expr) ?FoldedCond {
+    switch (e.kind) {
+        .paren => |inner| return foldFlagCond(fs, inner),
+        .unop => |u| {
+            if (u.op != .not) return null;
+            const r = foldFlagCond(fs, u.operand) orelse return null;
+            return .{ .value = !r.value, .flag = r.flag };
+        },
+        .binop => |b| switch (b.op) {
+            .@"and", .@"or" => {
+                const l = foldFlagCond(fs, b.lhs) orelse return null;
+                const decides = if (b.op == .@"and") !l.value else l.value;
+                if (decides) return l;
+                const r = foldFlagCond(fs, b.rhs) orelse return null;
+                return .{ .value = r.value, .flag = l.flag or r.flag };
+            },
+            .eq, .ne, .lt, .le, .gt, .ge => {
+                const l = foldOperand(fs, b.lhs) orelse return null;
+                const r = foldOperand(fs, b.rhs) orelse return null;
+                const v = foldCompare(b.op, l.value, r.value) orelse return null;
+                return .{ .value = v, .flag = l.flag or r.flag };
+            },
+            else => return null,
+        },
+        .index => {
+            const v = flagValue(fs, e) orelse return null;
+            return .{ .value = v.truthy(), .flag = true };
+        },
+        .true => return .{ .value = true, .flag = false },
+        .false, .nil => return .{ .value = false, .flag = false },
+        else => return null,
     }
-    if (target.kind != .index) return null;
-    const ix = target.kind.index;
+}
+
+/// A literal operand of a folded comparison: nil, a boolean, a number,
+/// or a string. String values are borrowed from the syntax tree or from
+/// the flags table, which both outlive the compilation.
+const FoldLit = union(enum) {
+    nil,
+    boolean: bool,
+    int: i64,
+    float: f64,
+    str: []const u8,
+};
+
+const FoldedOperand = struct { value: FoldLit, flag: bool };
+
+fn foldOperand(fs: *FuncState, e: *const ast.Expr) ?FoldedOperand {
+    switch (e.kind) {
+        .paren => |inner| return foldOperand(fs, inner),
+        .nil => return .{ .value = .nil, .flag = false },
+        .true => return .{ .value = .{ .boolean = true }, .flag = false },
+        .false => return .{ .value = .{ .boolean = false }, .flag = false },
+        .integer => |i| return .{ .value = .{ .int = i }, .flag = false },
+        .float => |f| return .{ .value = .{ .float = f }, .flag = false },
+        .string => |s| return .{ .value = .{ .str = s }, .flag = false },
+        .unop => |u| {
+            if (u.op != .neg) return null;
+            switch (u.operand.kind) {
+                .integer => |i| return .{ .value = .{ .int = 0 -% i }, .flag = false },
+                .float => |f| return .{ .value = .{ .float = -f }, .flag = false },
+                else => return null,
+            }
+        },
+        .index => {
+            const v = flagValue(fs, e) orelse return null;
+            const lit: FoldLit = switch (v.tag) {
+                .nil => .nil,
+                .true => .{ .boolean = true },
+                .false => .{ .boolean = false },
+                .integer => .{ .int = v.asInt() },
+                .float => .{ .float = v.asFloat() },
+                .string => .{ .str = v.as(vm.object.String).bytes() },
+                else => return null,
+            };
+            return .{ .value = lit, .flag = true };
+        },
+        else => return null,
+    }
+}
+
+/// The value of `e` when it is `flags.NAME` or `flags["NAME"]`. The
+/// caller has checked that `flags` is the reserved name.
+fn flagValue(fs: *FuncState, e: *const ast.Expr) ?Value {
+    const flags = fs.c.opts.flags orelse return null;
+    if (e.kind != .index) return null;
+    const ix = e.kind.index;
     if (ix.obj.kind != .name or !std.mem.eql(u8, ix.obj.kind.name.text, "flags")) return null;
     if (ix.key.kind != .string) return null;
-    // `flags` must be the free reserved name, not a local.
-    var gi: i32 = -1;
-    if (searchVar(fs, "flags", &gi)) |vidx| {
-        const vd = getLocalVar(fs, vidx);
-        if (vd.kind != .global_star and vd.kind != .global_named) return null;
+    return flags.get(ix.key.kind.string) orelse Value.nil;
+}
+
+/// The result of comparing two literals as the interpreter would, or
+/// null when the comparison raises an error at run time.
+fn foldCompare(op: ast.BinOp, a: FoldLit, b: FoldLit) ?bool {
+    switch (op) {
+        .eq => return foldEqual(a, b),
+        .ne => return !foldEqual(a, b),
+        .lt => return foldLess(a, b, false),
+        .le => return foldLess(a, b, true),
+        .gt => return foldLess(b, a, false),
+        .ge => return foldLess(b, a, true),
+        else => return null,
     }
-    if (fs.parent != null) {
-        // Locals in enclosing functions also shadow it.
-        var p = fs.parent;
-        while (p) |pf| : (p = pf.parent) {
-            var pp: i32 = -1;
-            if (searchVar(pf, "flags", &pp)) |vidx| {
-                const vd = getLocalVar(pf, vidx);
-                if (vd.kind != .global_star and vd.kind != .global_named) return null;
-            }
-        }
+}
+
+fn foldEqual(a: FoldLit, b: FoldLit) bool {
+    return switch (a) {
+        .nil => b == .nil,
+        .boolean => |x| b == .boolean and b.boolean == x,
+        .str => |x| b == .str and std.mem.eql(u8, x, b.str),
+        .int => |x| switch (b) {
+            .int => |y| x == y,
+            .float => |y| vm.ops.floatToInt(y) == x,
+            else => false,
+        },
+        .float => |x| switch (b) {
+            .float => |y| x == y,
+            .int => |y| vm.ops.floatToInt(x) == y,
+            else => false,
+        },
+    };
+}
+
+fn foldLess(a: FoldLit, b: FoldLit, or_equal: bool) ?bool {
+    switch (a) {
+        .str => |x| {
+            if (b != .str) return null;
+            const o = std.mem.order(u8, x, b.str);
+            return if (or_equal) o != .gt else o == .lt;
+        },
+        .int, .float => {
+            const av = foldNumber(a);
+            const bv = switch (b) {
+                .int, .float => foldNumber(b),
+                else => return null,
+            };
+            if (a == .int and b == .int) return if (or_equal) a.int <= b.int else a.int < b.int;
+            if (a == .float and b == .float) return if (or_equal) a.float <= b.float else a.float < b.float;
+            return vm.ops.intFloatLess(av, bv, or_equal);
+        },
+        else => return null,
     }
-    const val = flags.get(ix.key.kind.string) orelse Value.nil;
-    const t = val.truthy();
-    return if (negate) !t else t;
+}
+
+fn foldNumber(x: FoldLit) Value {
+    return switch (x) {
+        .int => |i| Value.int(i),
+        .float => |f| Value.float(f),
+        else => unreachable,
+    };
 }
 
 fn ifStat(fs: *FuncState, clauses: []ast.IfClause, else_block: ?*ast.Block, line: u32) Error!void {
@@ -2914,6 +3050,7 @@ fn ifStat(fs: *FuncState, clauses: []ast.IfClause, else_block: ?*ast.Block, line
     for (clauses) |cl| {
         fs.line = cl.line;
         if (foldFlag(fs, cl.cond)) |t| {
+            try discardCond(fs, cl.cond, cl.line);
             if (decided or !t) {
                 try discardBlock(fs, cl.body);
                 continue;
@@ -2944,23 +3081,53 @@ fn ifStat(fs: *FuncState, clauses: []ast.IfClause, else_block: ?*ast.Block, line
 
 /// Compiles a block for checking only and removes every trace of it.
 fn discardBlock(fs: *FuncState, b: *ast.Block) Error!void {
-    const c = fs.c;
-    const saved_pc = fs.code.items.len;
-    const saved_protos = fs.protos.items.len;
-    const saved_gotos = c.gotos.items.len;
-    const saved_handlers = fs.handlers.items.len;
-    const saved_locvars = fs.locvars.items.len;
-    const saved_line = fs.line;
+    const saved = DiscardMark.take(fs);
     try block(fs, b);
-    fs.code.items.len = saved_pc;
-    fs.lines.items.len = saved_pc;
-    fs.protos.items.len = saved_protos;
-    c.gotos.items.len = saved_gotos;
-    fs.handlers.items.len = saved_handlers;
-    fs.locvars.items.len = saved_locvars;
-    fs.line = saved_line;
-    if (fs.last_target > pc(fs)) fs.last_target = pc(fs);
+    saved.restore(fs);
 }
+
+/// Compiles a folded condition for checking only, so that the operands
+/// folding skipped still report their compile errors.
+fn discardCond(fs: *FuncState, cond: ast.Cond, line: u32) Error!void {
+    const saved = DiscardMark.take(fs);
+    _ = try condition(fs, cond, line);
+    saved.restore(fs);
+}
+
+/// The state that compiling discarded code changes.
+const DiscardMark = struct {
+    pc: usize,
+    protos: usize,
+    gotos: usize,
+    handlers: usize,
+    locvars: usize,
+    line: u32,
+    freereg: u8,
+
+    fn take(fs: *FuncState) DiscardMark {
+        return .{
+            .pc = fs.code.items.len,
+            .protos = fs.protos.items.len,
+            .gotos = fs.c.gotos.items.len,
+            .handlers = fs.handlers.items.len,
+            .locvars = fs.locvars.items.len,
+            .line = fs.line,
+            .freereg = fs.freereg,
+        };
+    }
+
+    fn restore(m: DiscardMark, fs: *FuncState) void {
+        fs.code.items.len = m.pc;
+        fs.lines.items.len = m.pc;
+        fs.protos.items.len = m.protos;
+        fs.c.gotos.items.len = m.gotos;
+        fs.handlers.items.len = m.handlers;
+        fs.locvars.items.len = m.locvars;
+        fs.line = m.line;
+        fs.freereg = m.freereg;
+        if (fs.last_target > pc(fs)) fs.last_target = pc(fs);
+    }
+};
 
 fn whileStat(fs: *FuncState, cond: ast.Cond, body: *ast.Block, line: u32) Error!void {
     // Wrap in one scope for condition variables.
@@ -3103,6 +3270,52 @@ fn genericFor(fs: *FuncState, names: []ast.Name, exprs: []*ast.Expr, body: *ast.
     fs.needs_close = true;
     try checkStack(fs, 3);
     try forBody(fs, base, line, @intCast(names.len), true, body, &outer);
+    try leaveBlock(fs);
+}
+
+/// `for a, b from explist do`: a generic loop whose one control
+/// variable is the iterator's first value, the record. The body block
+/// starts by reading each name as a field of the record into a fresh
+/// local, so the loop builds no table of its own.
+fn fromFor(fs: *FuncState, names: []ast.Name, exprs: []*ast.Expr, body: *ast.Block, line: u32) Error!void {
+    var outer: Block = undefined;
+    enterBlock(fs, &outer, true);
+    const base = fs.freereg;
+    var e: ExpDesc = .{};
+    const n = try explist(fs, exprs, &e);
+    try adjustAssign(fs, 4, n, &e);
+    _ = try newLocalVar(fs, "(for state)", .regular);
+    _ = try newLocalVar(fs, "(for state)", .regular);
+    _ = try newLocalVar(fs, "(for state)", .regular);
+    _ = try newLocalVar(fs, "(for state)", .regular);
+    _ = try newLocalVar(fs, "(for record)", .const_);
+    try adjustLocalVars(fs, 4);
+    outer.upval = true;
+    outer.inside_tbc = true;
+    fs.needs_close = true;
+    try checkStack(fs, 3);
+    const prep = try emitABx(fs, .tforprep, base, 0);
+    var bl: Block = undefined;
+    enterBlock(fs, &bl, false);
+    try adjustLocalVars(fs, 1);
+    try reserveRegs(fs, 1);
+    const rec = base + 4;
+    fs.line = line;
+    const first = fs.freereg;
+    try reserveRegs(fs, @intCast(names.len));
+    for (names, 0..) |nm, i| try getFieldTo(fs, first + @as(u32, @intCast(i)), rec, nm.text);
+    for (names) |nm| _ = try newLocalVar(fs, nm.text, .regular);
+    try adjustLocalVars(fs, @intCast(names.len));
+    try statList(fs, body.stats);
+    try patchContinues(fs, &outer, getLabel(fs), true);
+    try leaveBlock(fs);
+    fs.line = line;
+    const prep_target = getLabel(fs);
+    if (prep_target - prep + 1 > opc.max_arg_bx) return fs.c.err(line, "control structure too long", .{});
+    opc.setBx(&fs.code.items[@intCast(prep)], @intCast(prep_target - prep - 1));
+    try codeABC(fs, .tforcall, base, 0, 1);
+    const lp = try emitABx(fs, .tforloop, base, 0);
+    opc.setBx(&fs.code.items[@intCast(lp)], @intCast(lp - prep));
     try leaveBlock(fs);
 }
 

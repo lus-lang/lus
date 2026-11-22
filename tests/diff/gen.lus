@@ -147,7 +147,8 @@ local __rows = function(n, k)
     local t = {}
     for i = 1, n do t[i] = { x = (i * k) % 11, y = "r" .. i, z = i % 3 } end
     return t
-end]==]
+end
+local __F = flags]==]
 
 local function newScope(parent)
     return { parent = parent, vars = {} }
@@ -522,6 +523,34 @@ local function generate(seed, size)
         end)
     end
 
+    -- A loop that destructures the records of `__rows` by field name. The
+    -- names select fields in a random order, and a name that is not a
+    -- field reads as nil.
+    function G.forfrom(scope, ctx)
+        local fields = { { "x", "int" }, { "y", "str" }, { "z", "int" }, { "w", nil } }
+        local picked = {}
+        for _, f in ipairs(fields) do
+            if r.chance(0.6) then picked[#picked + 1] = f end
+        end
+        if #picked == 0 then picked[1] = fields[1] end
+        for i = #picked, 2, -1 do
+            local j = r.range(1, i)
+            picked[i], picked[j] = picked[j], picked[i]
+        end
+        local names = {}
+        for i, f in ipairs(picked) do names[i] = f[1] end
+        local it = fresh("it")
+        emit("local " .. it .. " = 0")
+        local rows = "__rows(" .. r.range(0, 9) .. ", " .. expr(scope, "int", 2) .. " % 13 + 1)"
+        local src = "(function(rs) return function() " .. it .. " = " .. it .. " + 1 return rs[" .. it .. "] end end)(" .. rows .. ")"
+        nested("for " .. table.concat(names, ", ") .. " from " .. src .. " do", scope, extend(ctx, { loop = true }), "end", function(s)
+            emit("P(\"ff\", " .. table.concat(names, ", ") .. ")")
+            for _, f in ipairs(picked) do
+                if f[2] then push(s, f[1], f[2]) end
+            end
+        end)
+    end
+
     function G.whiles(scope, ctx)
         local w = fresh("w")
         emit("local " .. w .. " = 0")
@@ -536,6 +565,38 @@ local function generate(seed, size)
         emit("local " .. w .. " = 0")
         nested("repeat", scope, extend(ctx, { loop = false }), "until " .. w .. " >= " .. r.range(1, 20),
             function() emit(w .. " = " .. w .. " + 1") end)
+    end
+
+    -- A condition on build flags, which the compiler folds when it
+    -- decides the condition from the flags alone. The runner passes the
+    -- same flags to every native configuration, and the `nofold`
+    -- configuration reads them through a local, so a fold that disagrees
+    -- with evaluation at run time shows as a mismatch.
+    local FLAG_NAMES = { "debug", "level", "ratio", "channel", "absent" }
+    local FLAG_LITS = { "3", "3.0", "2", "-1", "1.5", "0", '"beta"', '"alpha"', '""', "true", "false", "nil" }
+    local function flagCond(scope, d)
+        local name = "flags." .. r.pick(FLAG_NAMES)
+        if d > 2 then return name end
+        return cases({
+            { 3, function() return name end },
+            { 5, function()
+                local op = r.pick({ "==", "~=", "<", "<=", ">", ">=" })
+                if r.chance(0.25) then return r.pick(FLAG_LITS) .. " " .. op .. " " .. name end
+                return name .. " " .. op .. " " .. r.pick(FLAG_LITS)
+            end },
+            { 2, function() return "not " .. flagCond(scope, d + 1) end },
+            { 3, function() return "(" .. flagCond(scope, d + 1) .. " " .. r.pick({ "and", "or" }) .. " " .. flagCond(scope, d + 1) .. ")" end },
+            { 1, function() return "(" .. flagCond(scope, d + 1) .. " " .. r.pick({ "and", "or" }) .. " " .. expr(scope, "bool", 2) .. ")" end },
+            { 1, function() return "(" .. flagCond(scope, d + 1) .. ")" end },
+        })
+    end
+
+    function G.flagif(scope)
+        local tag = fresh("fl")
+        emit("if " .. flagCond(scope, 0) .. " then P(\"" .. tag .. "\", 1)")
+        if r.chance(0.5) then emit("elseif " .. flagCond(scope, 0) .. " then P(\"" .. tag .. "\", 2)") end
+        if r.chance(0.5) then emit("else P(\"" .. tag .. "\", 3)") end
+        emit("end")
     end
 
     function G.continues(scope) emit("if " .. expr(scope, "bool") .. " then continue end") end
@@ -1050,7 +1111,7 @@ local function generate(seed, size)
                 { 3, "kernel" }, { 2, "shape" }, { 1, "poly" }, { 1, "edgecmp" }, { 1, "edgefor" }, { 1, "coerce" },
                 { 1, "method" }, { 1, "keys" }, { 1, "deep" }, { 1, "concatn" }, { 1, "chain" }, { 1, "detach" },
                 { 2, "upvals" }, { 2, "globals" }, { 1, "tail" }, { 2, "multiret" }, { 1, "metaflip" }, { 2, "hotcall" },
-                { 2, "yieldacross" },
+                { 2, "yieldacross" }, { 1, "flagif" }, { 1, "forfrom" },
             }) do add(k[1], k[2]) end
             if ctx.coro then add(2, "yield") end
         end

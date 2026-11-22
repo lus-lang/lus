@@ -513,7 +513,7 @@ fn numLess(l: *Thread, a: Value, b: Value, or_equal: bool) bool {
     return if (or_equal) o != .gt else o == .lt;
 }
 
-fn intFloatLess(a: Value, b: Value, or_equal: bool) bool {
+pub fn intFloatLess(a: Value, b: Value, or_equal: bool) bool {
     // Exact comparison between an integer and a float.
     if (a.tag == .integer) {
         const i = a.asInt();

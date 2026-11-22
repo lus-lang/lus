@@ -1,0 +1,53 @@
+-- Iterates a list of records with `for name, price, qty from` and, for
+-- comparison, with a generic for that reads the same fields by hand.
+-- Both loops read three fields per record from the same iterator, so the
+-- two times should match. Run directly, the program prints the time of
+-- each loop and the memory each one allocated. Both allocate one iterator
+-- closure per round and no table per step.
+local N, ROUNDS = 1000, 4000
+local items = {}
+for i = 1, N do items[i] = { name = "item" .. i, price = i % 97, qty = i % 7 } end
+
+local function each(t)
+    local i = 0
+    return function()
+        i = i + 1
+        return t[i]
+    end
+end
+
+local function with_from()
+    local total = 0
+    for name, price, qty from each(items) do
+        total = total + price * qty + #name
+    end
+    return total
+end
+
+local function by_hand()
+    local total = 0
+    for item in each(items) do
+        local name, price, qty = item.name, item.price, item.qty
+        total = total + price * qty + #name
+    end
+    return total
+end
+
+local function measure(f)
+    collectgarbage("stop")
+    local before = collectgarbage("count")
+    local t0 = os.clock()
+    local sum = 0
+    for _ = 1, ROUNDS do sum = sum + f() end
+    local dt = os.clock() - t0
+    local kb = collectgarbage("count") - before
+    collectgarbage("restart")
+    collectgarbage()
+    return dt, kb, sum
+end
+
+local tf, kf, sf = measure(with_from)
+local th, kh, sh = measure(by_hand)
+assert(sf == sh)
+print(string.format("from     %.3f s  %.0f KB", tf, kf))
+print(string.format("by hand  %.3f s  %.0f KB", th, kh))

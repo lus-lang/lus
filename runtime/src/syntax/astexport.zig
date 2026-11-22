@@ -755,6 +755,7 @@ const Exporter = struct {
                 for (f.names) |nm| try names.append(x.arena, try x.nameNode(nm.text, x.pos(x.tokAt(nm.span.start))));
                 try x.setList(n, "names", names.items);
                 try x.setList(n, "explist", try x.exprList(f.exprs));
+                if (f.from) try x.set(n, "from", .{ .boolean = true });
                 for (f.names) |nm| try x.bind(nm.text, null);
                 try x.statList(n, f.body.stats);
                 break :blk n;

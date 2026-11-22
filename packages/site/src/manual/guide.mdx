@@ -1399,6 +1399,38 @@ end
 
 Several library functions return iterators. [`string.gmatch`](/manual/api#string.gmatch) returns an iterator over the [matches of a pattern](/manual/guide#every-match-with-stringgmatch) in a string. [`io.lines`](/manual/api#io.lines) returns an iterator over the lines of a file.
 
+### Destructuring each item with `from`
+
+An iterator often produces one record per pass, such as a product with a name and a price. The body of such a loop usually starts by copying fields to local variables. A `for` loop with `from` in place of `in` does this copy itself. Before each pass, the loop takes the first result of the iterator as the item and gives each loop variable the field of the item with the same name, as [`local name, price from item`](#destructuring-with-from) would. The loop ends when the iterator returns `nil`.
+
+The following iterator produces the products of a list from the cheapest to the most expensive. The loop reads two fields of each product.
+
+```lus
+local function cheapest_first(products)
+    local sorted = table.clone(products)
+    table.sort(sorted, function(a, b) return a.price < b.price end)
+    local i = 0
+    return function()
+        i = i + 1
+        return sorted[i]
+    end
+end
+
+local products = {
+    { name = "kettle", price = 30 },
+    { name = "mug", price = 8 },
+    { name = "teapot", price = 22 },
+}
+for name, price from cheapest_first(products) do
+    print(name, price)
+end
+--> mug  8
+--> teapot  22
+--> kettle  30
+```
+
+A loop variable is `nil` when the item has no field with its name. Each pass creates new loop variables, which the body may assign. The item must be a table or another value with fields, so `ipairs`, whose first result is an index, does not fit a loop with `from`.
+
 ## Strings and patterns
 
 Many programs work with text: they clean input that a person typed, extract the fields of a log line, or build a report. The functions of the [`string`](/manual/api#string-library) library measure, cut, convert, search, and replace text. The functions that search and replace take a [pattern](#patterns).
@@ -3642,6 +3674,8 @@ for row in query(novels) do
 end
 ```
 
+A loop with [`from`](#destructuring-each-item-with-from) reads the fields of each result directly, as in `for title from query(novels) do`.
+
 The clauses of a query may be written in any order, each at most once. A query always works in the same sequence, whatever the written order:
 
 1. `where` filters the rows.
@@ -3924,7 +3958,15 @@ end
 print("level", flags.level or 1)   --> level  1
 ```
 
-An `if` whose condition is a flag alone, as in `if flags.debug then` or `if not flags.debug then`, is resolved when the file is compiled, so the compiler omits the branch that the flags rule out. Debugging code in such an `if` therefore costs nothing in a run without the flag.
+The compiler resolves an `if` condition that the flags decide alone, then omits the branch that the flags rule out. Such a condition tests a flag, compares a flag with a string, number, boolean, or `nil` literal, or combines these tests with `and`, `or`, and `not`. Debugging code in such an `if` costs nothing in a run without the flag.
+
+```lus
+if flags.channel == "beta" and flags.level >= 2 then
+    print("verbose beta logging")
+end
+```
+
+Run with `-Fchannel=beta -Flevel=3`, this program compiles to the `print` alone, without a test. A condition that also reads a value of the running program, as in `flags.debug and verbose`, is resolved only when the flag part decides it. An ordering of a flag that was not given, such as `flags.level >= 2` in a run without `-Flevel`, raises an error when it runs, as `nil >= 2` does anywhere else.
 
 `lus build` accepts `-F` as well and stores the flag values in the executable, which then always runs with them. [Developer tools](/manual/tools) describes `lus build`. [CLI](/manual/cli) lists every option of the `lus` command.
 

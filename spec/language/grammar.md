@@ -282,6 +282,7 @@ stat = ';'
      | 'if' cond 'then' block { 'elseif' cond 'then' block } [ 'else' block ] 'end'
      | 'for' Name '=' expr ',' expr [ ',' expr ] 'do' block 'end'
      | 'for' Name { ',' Name } 'in' explist 'do' block 'end'
+     | 'for' Name { ',' Name } 'from' explist 'do' block 'end'
      | 'function' funcname funcbody
      | 'local' 'function' Name funcbody
      | 'local' localdecl
@@ -871,6 +872,18 @@ x, y from { x = 1, y = 2 }
 
 **Tested** (`from_test.lus`): the source expression runs once even when extracting several fields, the array part is ignored, and missing fields become `nil`. **Tested** (`syntax_interactions_test.lus`): `local a from nil` raises under `catch`, and `while x from t do ... end` drains a field until it becomes `nil`.
 
+#### The `for ... from` loop
+
+`for a, b, c from explist do block end` is a generic `for` whose items are destructured. The explist produces the iterator, the state, the initial control value, and the closing value, as for `in`. Before each pass the loop calls the iterator with the state and the control value and keeps its first result, the _record_. The record is the new control value. If it is `nil`, the loop ends. Otherwise each name, from left to right, receives `record.name` through a normal indexed read, so `__index` applies, a missing field yields `nil`, and a record that cannot be indexed raises the usual `attempt to index` error.
+
+- The names are fresh locals of each pass and may be assigned. Closures capture the variable of their own pass.
+- The record occupies a hidden read-only local. The names are fields, so the order of names is free and their number is not limited by the iterator's results.
+- The loop builds no table. Each pass costs the iterator call and one field read per name, the same as a generic `for` whose body copies the fields by hand (`tests/bench/forfrom.lus`).
+- `break`, `continue`, labels, and the closing value behave as in a generic `for`.
+- The iterator receives the record as its control value. An iterator that expects its own control value, such as the one `ipairs` returns, therefore fails on its second call, and its first result is not a record.
+
+**Tested** (`forfrom_test.lus`): fields read by name in any order, missing fields as `nil`, `__index` on records, fresh assignable variables per pass, `break` and `continue`, nested loops, query rows, a non-indexable record, an empty iteration, the closing value, a coroutine iterator, and the syntax errors.
+
 ### 5.7 Assignment conditions in `if`, `elseif`, and `while`
 
 **Source:** `syntax/parser.zig` (conditions), `compile/codegen.zig` (`ifStat`, `while` loops). **Manual:** `guide.mdx`. **Tests:** `ifassign_test.lus`, `whileassign_test.lus`, `syntax_interactions_test.lus`, `compile_errors_test.lus`, `attrs2_test.lus`.
@@ -1091,7 +1104,7 @@ local a, b from z                   -- group source
 
 ### 5.11 Flags and compile-time folding
 
-**Source:** `compile/codegen.zig` (`foldFlag`, `ifStat`, `discardBlock`), `main.zig` (option `-F`), `api.zig` (`setFlags`). **Manual:** `guide.mdx`. **Tests:** `flags_test.lus`.
+**Source:** `compile/codegen.zig` (`foldFlag`, `foldFlagCond`, `ifStat`, `discardBlock`, `discardCond`), `main.zig` (option `-F`), `api.zig` (`setFlags`). **Manual:** `guide.mdx`. **Tests:** `flags_test.lus`.
 
 #### The `flags` table
 
@@ -1112,30 +1125,42 @@ Folding applies to the condition of an `if` or `elseif` clause when all of the f
 - the condition is a plain expression (not an assignment condition),
 - no AST is being built (tools such as `debug.parse` and the language server always see the full tree),
 - the compiling state has a flags table (`lus`, `lus build`, and `lus compile` create one, and a bare embedding has none),
-- the condition is exactly `flags.NAME`, `flags["NAME"]`, `not flags.NAME`, or `not flags["NAME"]`, where `flags` is the free reserved name.
+- `flags` is the free reserved name in the condition,
+- the condition is a foldable condition that reads at least one flag.
 
-Any other shape compiles normally and reads the table at runtime, including parenthesized lookups, comparisons, and `and`/`or` chains. `while`, `repeat`, and expressions outside conditions never fold.
+A foldable condition is one of the following, where a flag read is `flags.NAME` or `flags["NAME"]` and a literal is `nil`, `true`, `false`, a string, an integer, a float, or a negated integer or float:
 
-A folded condition is true when the flag is present and truthy, negated for the `not` form. An absent flag is `nil`, so it is false.
+- a flag read, which is true when the flag is present and truthy,
+- `true`, `false`, or `nil`,
+- a comparison with `==`, `~=`, `<`, `<=`, `>`, or `>=` whose two operands are flag reads or literals,
+- `not C`, `(C)`, `C1 and C2`, or `C1 or C2` where the operands are foldable conditions.
 
+A comparison folds to the result the interpreter would compute. Equality follows raw equality, so `flags.count == 3.0` is true for the flag value `3`. Ordering folds only between two numbers or two strings, which compare by their bytes. Any other ordering, such as `flags.absent < 3`, raises an error at runtime, so it does not fold and runs normally.
+
+An `and` folds when its left operand folds false, or when both operands fold. An `or` folds when its left operand folds true, or when both operands fold. A right operand that folding skips would not run at runtime either, so folding never removes an evaluation that a run performs. A condition whose left operand folds and does not decide the result, such as `flags.debug and verbose` with the flag set, compiles normally. So does any condition that reads no flag, such as `if true then`. `while`, `repeat`, and expressions outside conditions never fold.
+
+- A folded condition is compiled for checking and then discarded, so an operand that folding skipped still reports its compile errors.
 - If a clause folds false, its block is fully parsed and checked and then its generated code is discarded. Evaluation continues with the next clause.
 - If a clause folds true, its block is compiled normally and every later `elseif` and `else` clause is fully parsed and checked and then discarded.
 - Discarded code leaves no trace: no instructions, no pending `break` or `goto` targets, no labels, no nested prototypes, no debug locals, and correct line information afterwards. Constants and upvalues created while parsing a discarded block may remain in the function (this is invisible to programs).
 - Folding decisions are made at compile time with the flags of the compiling process and are baked into dumped bytecode.
 
 ```lus nocheck
--- lus -Fdebug script.lus
+-- lus -Fdebug -Fchannel=beta -Flevel=3 script.lus
 if flags.debug then
     enableTracing()        -- compiled
 else
     quiet()                -- parsed, checked, discarded
 end
-if flags.name == "alpha" then   -- not foldable, runtime read
-    print("alpha")
+if flags.channel == "beta" and flags.level >= 2 then
+    print("beta")          -- compiled without a test
+end
+if flags.debug and verbose then   -- not foldable, runtime test of verbose
+    print("verbose")
 end
 ```
 
-**Tested** (`flags_test.lus`): dead branches are still syntax checked, line numbers stay correct after folded branches, a `break` inside a dead branch does not affect the loop, closures and `<close>` locals in dead branches do not disturb live code, a `goto` in a dead branch is dropped, nested folds work, and the folded chunk is much smaller than the unfolded control.
+**Tested** (`flags_test.lus`): dead branches are still syntax checked, line numbers stay correct after folded branches, a `break` inside a dead branch does not affect the loop, closures and `<close>` locals in dead branches do not disturb live code, a `goto` in a dead branch is dropped, nested folds work, the folded chunk is much smaller than the unfolded control, comparisons with literals fold, `and`, `or`, and `not` combine folds, a deciding left operand folds alone and skips the right one, comparisons that raise or depend on runtime values keep their runtime behavior, and operands skipped by folding are still checked. The differential tester (`tests/diff`) runs every generated program with fixed flags and again with every flag read through a local, which never folds, and the two runs must agree.
 
 ### 5.12 Queries
 
@@ -1306,7 +1331,7 @@ A chunk that fails to compile produces a single string message. `load` returns `
 
 ### 6.3 Messages inherited from Lua 5.5
 
-`unexpected symbol`, `syntax error`, `'X' expected`, `'X' expected (to close 'Y' at line N)`, `<name> expected`, `<name> or '...' expected`, `<eof> expected`, `function arguments expected`, `'=' or 'in' expected`, `break outside loop`, `cannot use '...' outside a vararg function`, `attempt to assign to const variable 'X'`, `variable 'X' not declared`, `_ENV is global when accessing variable 'X'`, `global variables cannot be to-be-closed`, `multiple to-be-closed variables in local list`, `label 'X' already defined on line N`, `no visible label 'X' for <goto> at line N`, `<goto X> at line N jumps into the scope of 'Y'`, `control structure too long`, `too many constants`, and the limit messages for `local variables`, `upvalues`, and `registers`.
+`unexpected symbol`, `syntax error`, `'X' expected`, `'X' expected (to close 'Y' at line N)`, `<name> expected`, `<name> or '...' expected`, `<eof> expected`, `function arguments expected`, `'=', 'in' or 'from' expected`, `break outside loop`, `cannot use '...' outside a vararg function`, `attempt to assign to const variable 'X'`, `variable 'X' not declared`, `_ENV is global when accessing variable 'X'`, `global variables cannot be to-be-closed`, `multiple to-be-closed variables in local list`, `label 'X' already defined on line N`, `no visible label 'X' for <goto> at line N`, `<goto X> at line N jumps into the scope of 'Y'`, `control structure too long`, `too many constants`, and the limit messages for `local variables`, `upvalues`, and `registers`.
 
 ### 6.4 Runtime errors introduced by Lus syntax
 

@@ -225,7 +225,10 @@ pub const Stat = struct {
         repeat_: struct { body: *Block, cond: *Expr },
         if_: struct { clauses: []IfClause, else_: ?*Block },
         numeric_for: struct { name: Name, start: *Expr, limit: *Expr, step: ?*Expr, body: *Block },
-        generic_for: struct { names: []Name, exprs: []*Expr, body: *Block },
+        /// `for names in exprs do` or, with `from`, `for names from exprs
+        /// do`, which reads each name as a field of the iterator's first
+        /// value.
+        generic_for: struct { names: []Name, exprs: []*Expr, body: *Block, from: bool = false },
         return_: []*Expr,
         provide: []*Expr,
         break_,
