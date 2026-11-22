@@ -156,6 +156,31 @@ print(table.concat(log, " "))   --> fast slow
 
 Closing a detached coroutine while it sleeps ends the sleep too, as [Cancelling](#cancelling) describes.
 
+### Waiting for a wake-up
+
+A coroutine that must wait until another coroutine wakes it, such as a task waiting for a free connection in a pool, resumes a sleep of `math.huge`, which never runs out. The coroutine that wakes it closes the sleep, and the resume of the waiter then returns `false` and `"closed"`. A parked coroutine uses no processor time, and the program ends after its main chunk when every detached coroutine left is parked.
+
+The following program parks a task until another task wakes it.
+
+```lus
+local wakeup = coroutine.sleep(math.huge)
+local log = {}
+
+local waiter = coroutine.detach(coroutine.create(function()
+    local ok, why = coroutine.resume(wakeup)
+    log[#log + 1] = `woken: $(tostring(ok)) $why`
+end))
+local waker = coroutine.detach(coroutine.create(function()
+    coroutine.resume(coroutine.sleep(0.05))
+    coroutine.close(wakeup)
+end))
+
+coroutine.resume(waiter)
+print(log[1])   --> woken: false closed
+```
+
+A gate that wakes many waiters gives each one a sleep of its own, or keeps a list of sleeps and closes every one of them.
+
 ### Waiting for a detached coroutine
 
 A program waits for a detached coroutine and gets its result with [`coroutine.resume(co)`](/manual/api#coroutine.resume). On a detached coroutine, `resume` waits until `co` has ended, then returns `true` and the results of the function, or `false` and the error object. Extra arguments passed to `resume` are ignored.

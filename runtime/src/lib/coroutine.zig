@@ -81,7 +81,9 @@ pub fn resumeCo(l: *Thread, co: *Thread, nargs: u32) Error!u32 {
 fn notSuspended(l: *Thread, co: *Thread, nargs: u32) Error {
     @branchHint(.cold);
     const what = switch (co.status) {
-        .dead, .err => "cannot resume dead coroutine",
+        // An event coroutine of the runtime that was closed, such as a sleep
+        // that another coroutine ended to wake its waiter.
+        .dead, .err => if (co.event_closed) "closed" else "cannot resume dead coroutine",
         else => "cannot resume non-suspended coroutine",
     };
     l.top -= nargs;
@@ -352,6 +354,7 @@ fn closeThread(co: *Thread) ?Value {
     defer if (event) |e| {
         if (e.status == .suspended) _ = closeThread(e);
     };
+    if (co.event and co.status == .suspended) co.event_closed = true;
     sched.abandonWait(co);
     // The results or the error that waiters still read. The end of a
     // detached coroutine woke them, and they run after this close.

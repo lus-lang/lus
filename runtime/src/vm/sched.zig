@@ -36,7 +36,7 @@ pub const Dir = enum(u1) { read, write };
 /// native that lets the other coroutines run and continues on its next
 /// turn. `notify` is a native that waits for a call of `notify` from
 /// another thread.
-pub const Kind = enum(u8) { none, io, join, inner, pass, notify };
+pub const Kind = enum(u8) { none, io, join, inner, pass, notify, park };
 
 /// Why a waiting native runs again.
 pub const Wake = enum(u8) { none, ready, timeout };
@@ -198,6 +198,10 @@ pub const Sched = struct {
     /// a thread.
     notify_waiters: List = .{},
     nnotify: usize = 0,
+    /// The detached coroutines parked in a sleep without end
+    /// (`waitPark`). Only closing the sleep wakes them, so the end of the
+    /// program does not wait for them.
+    nparked: usize = 0,
     /// Set by `notify` from any thread, and taken by the scheduler.
     signalled: std.atomic.Value(bool) = .init(false),
 };
@@ -385,6 +389,19 @@ pub fn waitNotifyFor(l: *Thread, timeout_ms: i32) Error!void {
     _ = try block(l, t);
 }
 
+/// Parks the thread until the wait is abandoned, which happens when the
+/// coroutine that waits is closed. A parked detached coroutine does not
+/// keep the program running after its main chunk.
+pub fn waitPark(l: *Thread) Error!void {
+    const t = try ensureTask(l);
+    t.wake = .none;
+    t.kind = .park;
+    t.target = null;
+    t.deadline = 0;
+    if (canSuspend(l)) return suspendThread(l, t);
+    _ = try block(l, t);
+}
+
 /// Runs the threads that wait in `waitNotify` again, from the thread of
 /// the state. A native calls it after it changed what one of them waits
 /// for.
@@ -557,6 +574,10 @@ fn register(g: *Global, r: *Task, leaf: *Task) void {
             s.nnotify += 1;
             r.reg = .notify;
         },
+        .park => {
+            r.reg = .park;
+            if (r.detached) s.nparked += 1;
+        },
         .none, .inner, .pass => return wakeNow(g, r),
     }
     if (leaf.deadline != 0) addTimer(g, r, leaf.deadline);
@@ -593,6 +614,9 @@ fn unregister(g: *Global, r: *Task) void {
         .notify => {
             s.notify_waiters.remove(r);
             s.nnotify -= 1;
+        },
+        .park => if (r.detached) {
+            s.nparked -= 1;
         },
     }
     r.reg = .none;
@@ -894,7 +918,7 @@ fn step(g: *Global, l: *Thread, wait: bool) Error!void {
         timeout = if (d > t) d - t else 0;
     }
     if (timeout == null and s.io_waiters == 0 and s.nnotify == 0) {
-        if (s.nlive == 0 and (l.task == null or !l.task.?.driver)) return;
+        if (s.nlive == s.nparked and (l.task == null or !l.task.?.driver)) return;
         return l.raiseFmt("deadlock: every coroutine waits for another coroutine", .{});
     }
     if (s.io_waiters > 0 or s.nnotify > 0 or (timeout orelse 1) != 0) pollWait(g, timeout);
@@ -907,7 +931,9 @@ fn step(g: *Global, l: *Thread, wait: bool) Error!void {
 /// collected it.
 pub fn drain(l: *Thread) Error!void {
     const g = l.g;
-    while (g.sched.nlive > 0) try step(g, l, true);
+    // Parked coroutines can only be woken by another coroutine, so once
+    // every coroutine left is parked the program is done.
+    while (g.sched.nlive > g.sched.nparked) try step(g, l, true);
     try reportUncollected(l);
 }
 

@@ -1,6 +1,8 @@
 -- `coroutine.sleep`: a coroutine whose resume waits for a time to pass
 -- (spec/stdlib/coroutine/sleep.md).
-pledge("fs")
+pledge("fs", "exec", "env")
+
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
 
 local function elapsed(f)
     local start = time.monotonic()
@@ -75,6 +77,48 @@ local function closing_a_sleep_ends_it_test()
     local s = coroutine.sleep(30)
     assert(coroutine.close(s))
     assert(coroutine.status(s) == "dead")
+end
+
+-- An endless sleep parks a coroutine until another one closes the sleep.
+local function closing_an_endless_sleep_wakes_its_waiter_test()
+    local gate = coroutine.sleep(math.huge)
+    local result
+    local parked = coroutine.detach(coroutine.create(function()
+        result = table.pack(coroutine.resume(gate))
+    end))
+    local waker = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        coroutine.close(gate)
+    end))
+    local t = elapsed(function()
+        coroutine.resume(parked)
+    end)
+    assert(result[1] == false and result[2] == "closed")
+    assert(t < 1, t)
+    coroutine.resume(waker)
+end
+
+local function a_timed_sleep_closed_early_reports_closed_test()
+    local s = coroutine.sleep(30)
+    local result
+    local waiter = coroutine.detach(coroutine.create(function()
+        result = table.pack(coroutine.resume(s))
+    end))
+    coroutine.resume(coroutine.sleep(0.02))
+    coroutine.close(s)
+    coroutine.resume(waiter)
+    assert(result[1] == false and result[2] == "closed")
+end
+
+local function the_program_ends_while_a_coroutine_is_parked_test()
+    local p = os.spawn({ lus_bin, "-e", [[
+        local gate = coroutine.sleep(math.huge)
+        coroutine.detach(coroutine.create(function() coroutine.resume(gate) end))
+        print("done")
+    ]] }, { stdout = "pipe" })
+    assert(p.stdout:read("l") == "done")
+    local _, ok, how, code = coroutine.resume(p.exit)
+    assert(ok == true and code == 0)
 end
 
 local function bad_times_raise_test()

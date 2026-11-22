@@ -592,6 +592,9 @@ pub const Thread = struct {
     /// (`lib/events.zig`). Closing a coroutine that waits for it closes it
     /// as well.
     event: bool = false,
+    /// Set when such a coroutine was closed before it ended, so resuming
+    /// it reports "closed".
+    event_closed: bool = false,
     /// Debug hook state (debug.sethook). The hook function itself lives in
     /// the registry. `hook_mask` combines the `hook_*` bits.
     hook_mask: u8 = 0,

@@ -104,7 +104,7 @@ const Userdata = object.Userdata;
 
 /// The state of one sleep: its length, and the time it ends once the first
 /// resume started it.
-const Sleep = struct { ns: u64, deadline: u64 = 0 };
+const Sleep = struct { ns: u64, deadline: u64 = 0, forever: bool = false };
 
 /// `coroutine.sleep(seconds)` returns a coroutine whose resume waits until
 /// `seconds` have passed and then ends it.
@@ -116,14 +116,16 @@ pub fn sleep(l: *Thread) Error!u32 {
         else => @import("time.zig").durationSeconds(l, v) orelse return aux.typeError(l, 1, "number or duration"),
     };
     if (std.math.isNan(secs) or secs < 0) return aux.argError(l, 1, "the time must not be negative", .{});
-    const ns: u64 = if (secs >= 1e10) std.math.maxInt(u64) / 2 else @intFromFloat(secs * 1e9);
+    // An infinite time parks the coroutine until something closes it.
+    const forever = std.math.isInf(secs);
+    const ns: u64 = if (forever or secs >= 1e10) std.math.maxInt(u64) / 2 else @intFromFloat(secs * 1e9);
     gc.maybeCollect(l.g);
     const u = gc.alloc(l.g, Userdata, .userdata, Userdata.allocSize(@sizeOf(Sleep), 0)) catch return l.raiseMem();
     u.size = @sizeOf(Sleep);
     u.nuser = 0;
     u.metatable = null;
     const st: *Sleep = @ptrCast(@alignCast(u.data()));
-    st.* = .{ .ns = ns };
+    st.* = .{ .ns = ns, .forever = forever };
     const uv = Value.obj(.userdata, u);
     try l.push(uv);
     _ = try once(l, sleepWait, "sleep", uv);
@@ -135,6 +137,9 @@ fn sleepWait(l: *Thread) Error!u32 {
     if (v.tag != .userdata) return 0;
     const st: *Sleep = @ptrCast(@alignCast(v.as(Userdata).data()));
     const g = l.g;
+    if (st.forever) {
+        while (true) try sched.waitPark(l);
+    }
     if (st.deadline == 0) st.deadline = sched.now(g) + st.ns;
     while (true) {
         const at = sched.now(g);

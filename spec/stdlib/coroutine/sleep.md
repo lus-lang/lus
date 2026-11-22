@@ -17,6 +17,8 @@ Returns a coroutine whose resume waits until `seconds` have passed and then ends
 
 Resumed from a detached coroutine, the wait suspends that coroutine while the other detached coroutines run. Resumed anywhere else, it blocks while the detached coroutines run. Closing the coroutine with `coroutine.close` ends the sleep. Closing a detached coroutine that waits in a resume of the sleep closes the sleep too, so a cancelled task never keeps the program waiting for its sleep.
 
+Closing the coroutine before its time has passed makes a resume that waits for it return `false` and `"closed"`, which a waiter tells apart from the `true` of a time that ran out. A time of `math.huge` never runs out, so the coroutine _parks_ its waiter until another coroutine closes it, without using the processor. A detached coroutine parked this way does not keep the program running: when every detached coroutine left is parked, the program ends after its main chunk as if they had ended.
+
 A negative or NaN time raises `bad argument #1 to 'sleep' (the time must not be negative)`, and a value that is neither a number nor a duration raises a bad argument error.
 
 The following example measures a sleep of 50 milliseconds.
