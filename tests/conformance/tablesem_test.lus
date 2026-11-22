@@ -658,3 +658,186 @@ local function table_functions_read_a_proxy_through_its_metamethods_test()
     assert(a == 10 and b == 20 and c == 30)
     assert(table.concat(setmetatable({}, getmetatable(proxy)), ",") == "10,20,30")
 end
+
+-- ============================================================
+-- The table library at its edges
+-- ============================================================
+
+-- A proxy that stores its elements in another table through __index,
+-- __newindex, and __len, so the library reaches them through metamethods.
+local function proxy(store)
+    return setmetatable({}, {
+        __index = store,
+        __newindex = function(_, k, v) store[k] = v end,
+        __len = function() return #store end,
+    })
+end
+
+local function the_library_reaches_a_proxy_through_its_metamethods_test()
+    local store = {"a", "b", "c"}
+    local p = proxy(store)
+    table.insert(p, "d")
+    table.insert(p, 1, "z")
+    assert(table.concat(store, ",") == "z,a,b,c,d")
+    assert(table.remove(p, 1) == "z")
+    assert(table.remove(p) == "d")
+    assert(table.concat(p, "-") == "a-b-c")
+    local x, y, z = table.unpack(p)
+    assert(x == "a" and y == "b" and z == "c")
+    table.move(p, 1, 3, 2)
+    assert(table.concat(store, ",") == "a,a,b,c")
+    table.sort(p)
+    assert(table.concat(store, ",") == "a,a,b,c")
+end
+
+local function a_length_metamethod_with_an_integral_float_counts_test()
+    local t = setmetatable({}, { __len = function() return 2.0 end, __index = function(_, i) return i * 10 end })
+    assert(table.concat(t, " ") == "10 20")
+end
+
+local function a_length_metamethod_with_a_fraction_raises_test()
+    local t = setmetatable({}, { __len = function() return 1.5 end })
+    raises(function() table.concat(t) end, "object length is not an integer")
+    raises(function() table.insert(t, 1) end, "object length is not an integer")
+end
+
+local function a_value_whose_metatable_lacks_the_metamethods_is_not_a_table_test()
+    local only_len = setmetatable({}, { __len = function() return 0 end })
+    local u = setmetatable({}, {})
+    raises(function() table.insert(io.stdout, 1) end, "table expected")
+    assert(table.concat(only_len) == "")
+    assert(#u == 0)
+end
+
+local table_create_out_of_range_cases = {
+    { -1, 0, "#1" },
+    { 2 ^ 31 // 1, 0, "#1" },
+    { 0, -1, "#2" },
+    { 0, 2 ^ 31 // 1, "#2" },
+}
+
+local function table_create_out_of_range_test(seq, rest, arg)
+    raises(function() table.create(seq, rest) end, "bad argument " .. arg .. " to 'create' %(out of range%)")
+end
+
+local function insert_checks_its_arguments_test()
+    raises(function() table.insert({}, 1, 2, 3) end, "wrong number of arguments to 'insert'")
+    raises(function() table.insert({1}, 3, "x") end, "position out of bounds")
+    raises(function() table.insert({1}, 0, "x") end, "position out of bounds")
+    local t = {1}
+    table.insert(t, 2, "x")
+    assert(t[2] == "x")
+end
+
+local function remove_checks_its_position_test()
+    raises(function() table.remove({1, 2}, 4) end, "position out of bounds")
+    raises(function() table.remove({1, 2}, -1) end, "position out of bounds")
+    local t = {1, 2}
+    assert(table.remove(t, 3) == nil)
+    assert(#t == 2)
+    local empty = {}
+    assert(table.remove(empty, 0) == nil)
+end
+
+local function move_copies_an_overlap_to_the_right_from_the_end_test()
+    local t = {1, 2, 3, 4, 5}
+    table.move(t, 1, 3, 2)
+    assert(table.concat(t, ",") == "1,1,2,3,5")
+    local u = {1, 2, 3, 4, 5}
+    table.move(u, 1, 3, 2, u)
+    assert(table.concat(u, ",") == "1,1,2,3,5")
+    local v = {1, 2, 3, 4, 5}
+    table.move(v, 2, 4, 1)
+    assert(table.concat(v, ",") == "2,3,4,4,5")
+end
+
+local function move_rejects_ranges_that_wrap_test()
+    raises(function() table.move({}, -1, math.maxinteger, 1) end, "too many elements to move")
+    raises(function() table.move({1, 2}, 1, 2, math.maxinteger) end, "destination wrap around")
+    local t = {1}
+    assert(table.move(t, 2, 1, 5) == t)
+end
+
+local function concat_names_the_first_value_that_is_not_a_string_test()
+    raises(function() table.concat({1, {}, 3}) end, "invalid value %(table%) at index 2 in table for 'concat'")
+    raises(function() table.concat({"a", "b"}, {}) end, "bad argument #2 to 'concat'")
+    assert(table.concat({1, 2.5, "x"}, "", 2, 3) == "2.5x")
+    assert(table.concat({"a", "b"}, ",", 3, 2) == "")
+end
+
+local function concat_of_long_strings_with_a_separator_test()
+    local part = ("é"):rep(40)
+    local s = table.concat({part, part, part}, "·")
+    assert(utf8.len(s) == 122)
+    assert(s:sub(41, 41) == "·")
+end
+
+local function unpack_limits_the_number_of_results_test()
+    raises(function() table.unpack({}, 1, 1e7) end, "too many results to unpack")
+    raises(function() table.unpack({}, math.mininteger, math.maxinteger) end, "too many results to unpack")
+    assert(select("#", table.unpack({}, 3, 2)) == 0)
+    assert(select("#", table.unpack({1, 2, 3}, 2)) == 2)
+end
+
+local function sort_detects_an_inconsistent_order_function_test()
+    local t = {}
+    for i = 1, 100 do t[i] = i % 7 end
+    raises(function() table.sort(t, function() return true end) end, "invalid order function for sorting")
+end
+
+local function deep_clone_keeps_shared_and_cyclic_structure_test()
+    local shared = {1}
+    local src = setmetatable({ a = shared, b = shared }, { tag = "m" })
+    src.self = src
+    src[shared] = "key"
+    local c = table.clone(src, true)
+    assert(c ~= src and c.a == c.b and c.a ~= shared)
+    assert(c.self == c)
+    assert(getmetatable(c).tag == "m")
+    local found = false
+    for k, v in pairs(c) do
+        if v == "key" then found = (k == c.a) end
+    end
+    assert(found)
+end
+
+local function deep_clone_limits_its_nesting_test()
+    local t = {}
+    local cur = t
+    for _ = 1, 250 do
+        cur.next = {}
+        cur = cur.next
+    end
+    raises(function() table.clone(t, true) end, "nesting too deep %(max 200%)")
+    assert(table.clone(t).next == t.next)
+end
+
+local function statistics_of_no_numbers_are_nan_test()
+    local function isnan(x) return x ~= x end
+    assert(isnan(table.mean({})))
+    assert(isnan(table.median({"a", "b"})))
+    assert(isnan(table.stdev({})))
+    assert(isnan(table.stdev({4}, true)))
+    assert(table.stdev({4}) == 0)
+    assert(table.median({4, 1, 3, 2}) == 2.5)
+    assert(table.median({3, 1, 2}) == 2)
+end
+
+local function reduce_of_an_empty_table_needs_an_initial_value_test()
+    raises(function() table.reduce({}, function(a, b) return a + b end) end, "'reduce' on empty table with no initial value")
+    assert(table.reduce({}, function(a, b) return a + b end, 7) == 7)
+end
+
+local function groupby_appends_to_an_existing_group_test()
+    local g = table.groupby({1, 2, 3, 4, 5}, function(x) return x % 2 end)
+    assert(#g[1] == 3 and #g[0] == 2 and g[1][3] == 5)
+end
+
+local function sortby_orders_descending_and_leaves_short_tables_test()
+    local t = {"bb", "a", "ccc"}
+    table.sortby(t, function(s) return #s end, false)
+    assert(table.concat(t, ",") == "ccc,bb,a")
+    local one = {"x"}
+    table.sortby(one, function(s) return s end)
+    assert(one[1] == "x")
+end

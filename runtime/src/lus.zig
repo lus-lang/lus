@@ -1,5 +1,7 @@
 //! Root of the Lus runtime library.
 
+const std = @import("std");
+
 pub const syntax = struct {
     pub const token = @import("syntax/token.zig");
     pub const lexer = @import("syntax/lexer.zig");
@@ -36,6 +38,9 @@ pub const vm = struct {
     pub const pledge = @import("vm/pledge.zig");
 };
 
+/// Edge coverage, in a `-Dcoverage=true` build.
+pub const coverage = if (vm.coverage_enabled) @import("coverage.zig") else struct {};
+
 pub const api = @import("api.zig");
 pub const bundle = @import("bundle.zig");
 pub const tools = @import("tools.zig");
@@ -62,6 +67,31 @@ pub const compile = struct {
     pub const disasm = @import("compile/disasm.zig");
     pub const dump = @import("compile/dump.zig");
 };
+
+/// The environment as `coverage.zig` reads it, for the unit tests, which
+/// have no `std.process.Init`.
+const CEnv = struct {
+    pub fn get(_: CEnv, name: []const u8) ?[]const u8 {
+        var buf: [64]u8 = undefined;
+        const z = std.fmt.bufPrintSentinel(&buf, "{s}", .{name}, 0) catch return null;
+        return std.mem.span(std.c.getenv(z) orelse return null);
+    }
+};
+
+// The first test of the unit tests. In a coverage build it writes the edges
+// of the run to `LUS_COVERAGE` when the tests end, as `lus` does. With
+// `LUS_COVERAGE_REPORT` set, the binary prints the report of those files
+// and exits, as `lus` does, so the export of the unit tests can merge with
+// the report of the shipped build.
+test "coverage of the unit tests" {
+    if (!vm.coverage_enabled) return;
+    const env: CEnv = .{};
+    if (env.get("LUS_COVERAGE_REPORT")) |dir| {
+        const status = try coverage.report(std.testing.io, std.heap.page_allocator, dir, env);
+        std.process.exit(status);
+    }
+    if (env.get("LUS_COVERAGE")) |d| coverage.setupDir(d);
+}
 
 test {
     _ = lib.serve;

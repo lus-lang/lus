@@ -37,7 +37,6 @@ pub fn build(b: *std.Build) void {
         .sanitize_c = vendorSanitizeC(),
     });
     lus_mod.addOptions("build_options", options);
-    if (requested.coverage) lus_mod.addCSourceFile(.{ .file = b.path("src/coverage_tls.c") });
     lus_mod.addImport("agent_docs", agentDocsModule(b));
     linkSystemLibraries(lus_mod, target);
     if (features.archive) lus_mod.linkLibrary(compressionLibrary(b, target));
@@ -57,6 +56,9 @@ pub fn build(b: *std.Build) void {
             .sanitize_c = vendorSanitizeC(),
         }),
     });
+    // The test runner links its own definition, so only the executable
+    // takes this one.
+    if (requested.coverage) exe.root_module.addCSourceFile(.{ .file = b.path("src/coverage_tls.c") });
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
@@ -198,7 +200,13 @@ pub fn build(b: *std.Build) void {
     remote_run.addFileInput(b.path("../tests/lib/release.mjs"));
     remote_step.dependOn(&remote_run.step);
 
-    const unit = b.addTest(.{ .root_module = lus_mod });
+    const unit = b.addTest(.{
+        .root_module = lus_mod,
+        // The runner of the Zig library runs instrumented tests only under
+        // the build server (`coverage_runner.zig`).
+        .test_runner = if (requested.coverage) .{ .path = b.path("src/coverage_runner.zig"), .mode = .simple } else null,
+    });
+    b.step("unit-binary", "Install the unit tests as bin/lus-unit, which `mise run coverage:unit` runs").dependOn(&b.addInstallArtifact(unit, .{ .dest_sub_path = "lus-unit" }).step);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(unit).step);
 

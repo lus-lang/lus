@@ -106,6 +106,45 @@ description = "Store the last coverage report as the baseline that CI holds"
 dir = "runtime"
 run = "LUS_JIT=off zig-out-cov/bin/lus ../tests/coverage/ratchet.lus zig-out-cov/report.txt ../tests/coverage/baseline.txt --write"
 
+[tasks."coverage:unit"]
+description = "Run the unit tests, built with edge coverage, and export the source positions they cover for the merged report"
+dir = "runtime"
+run = [
+  "zig build unit-binary -j2 -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov",
+  "rm -rf zig-out-cov/unit-runs && mkdir -p zig-out-cov/unit-runs",
+  "LUS_COVERAGE=$PWD/zig-out-cov/unit-runs zig-out-cov/bin/lus-unit",
+  "LUS_COVERAGE_REPORT=$PWD/zig-out-cov/unit-runs LUS_COVERAGE_EXPORT=$PWD/zig-out-cov/unit.keys zig-out-cov/bin/lus-unit > /dev/null",
+]
+
+[tasks."coverage:verify"]
+description = "Run the conformance suite on a build that collects every 97th allocation and verifies the collector, with edge coverage, and export the source positions it covers"
+dir = "runtime"
+run = [
+  "zig build -j1 -Doptimize=ReleaseFast -Dcoverage=true -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-cov-verify",
+  "rm -rf zig-out-cov-verify/runs && mkdir -p zig-out-cov-verify/runs",
+  "LUS_JIT=off LUS_BIN=$PWD/zig-out-cov-verify/bin/lus LUS_COVERAGE=$PWD/zig-out-cov-verify/runs zig-out-cov-verify/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_COVERAGE_REPORT=$PWD/zig-out-cov-verify/runs LUS_COVERAGE_EXPORT=$PWD/zig-out-cov/verify.keys zig-out-cov-verify/bin/lus > /dev/null",
+]
+
+[tasks."coverage:merged"]
+description = "Print the report of the last coverage run with the positions that the unit tests and the verifying build cover"
+dir = "runtime"
+run = "LUS_COVERAGE_REPORT=$PWD/zig-out-cov/runs LUS_COVERAGE_MERGE=$PWD/zig-out-cov/unit.keys,$PWD/zig-out-cov/verify.keys zig-out-cov/bin/lus | tee zig-out-cov/report-merged.txt"
+
+[tasks.mcdc]
+description = "Measure the MC/DC of src: transform a copy of the runtime, build it, run the conformance suite in three JIT modes, and report the share of conditions shown to affect their decision"
+dir = "runtime"
+run = [
+  "rm -rf zig-out-mcdc && mkdir -p zig-out-mcdc/runs && rsync -a --exclude .zig-cache --exclude 'zig-out*' ./ zig-out-mcdc/runtime/",
+  "for d in spec .agents tests packages; do ln -s ../../$d zig-out-mcdc/$d; done",
+  "zig run ../tests/coverage/mcdc/transform.zig -- zig-out-mcdc/runtime/src zig-out-mcdc/table.txt ../tests/coverage/mcdc/mcdc_rt.zig",
+  "cd zig-out-mcdc/runtime && zig build -j2 -Doptimize=ReleaseFast",
+  "LUS_JIT=off LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=opt-eager LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=off zig-out-mcdc/runtime/zig-out/bin/lus ../tests/coverage/mcdc/mcdc.lus zig-out-mcdc/table.txt zig-out-mcdc/runs | tee zig-out-mcdc/report.txt",
+]
+
 [tasks."build:sanitize"]
 description = "Build the runtime with the vendored C libraries under the undefined behavior sanitizer into runtime/zig-out-ubsan"
 dir = "runtime"

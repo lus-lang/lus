@@ -613,3 +613,71 @@ local function an_error_raised_inside_len_propagates_through_test()
     local t = setmetatable({}, {__len = function() error("boom-len") end})
     raises(function() return #t end, "boom%-len")
 end
+
+-- ===== metamethods that yield =====
+
+local yielding_mt = {
+    __index = function() coroutine.yield("index") return 1 end,
+    __newindex = function() coroutine.yield("newindex") end,
+    __add = function() coroutine.yield("add") return 1 end,
+    __unm = function() coroutine.yield("unm") return 1 end,
+    __len = function() coroutine.yield("len") return 1 end,
+    __eq = function() coroutine.yield("eq") return true end,
+    __lt = function() coroutine.yield("lt") return true end,
+    __le = function() coroutine.yield("le") return true end,
+    __call = function() coroutine.yield("call") return 1 end,
+    __close = function() coroutine.yield("close") end,
+    __band = function() coroutine.yield("band") return 1 end,
+    __idiv = function() coroutine.yield("idiv") return 1 end,
+}
+
+local a_metamethod_may_yield_cases = {
+    { "index", function(a) return a.k end, 1 },
+    { "newindex", function(a) a.k = 1 end, nil },
+    { "add", function(a) return a + 1 end, 1 },
+    { "unm", function(a) return -a end, 1 },
+    { "len", function(a) return #a end, 1 },
+    { "eq", function(a, b) return a == b end, true },
+    { "lt", function(a, b) return a < b end, true },
+    { "le", function(a, b) return a <= b end, true },
+    { "call", function(a) return a() end, 1 },
+    { "close", function(a) local c <close> = a end, nil },
+    { "band", function(a) return a & 1 end, 1 },
+    { "idiv", function(a) return a // 1 end, 1 },
+}
+
+local function a_metamethod_may_yield_test(name, body, result)
+    local co = coroutine.create(body)
+    local ok, v = coroutine.resume(co, setmetatable({}, yielding_mt), setmetatable({}, yielding_mt))
+    assert(ok and v == name)
+    local ok2, r = coroutine.resume(co)
+    assert(ok2 and r == result)
+    assert(coroutine.status(co) == "dead")
+end
+
+local function newindex_reaches_a_value_that_is_not_a_table_test()
+    local mt = getmetatable("")
+    local seen
+    mt.__newindex = function(s, k, v) seen = s .. k .. tostring(v) end
+    local s = "ab"
+    s.x = 1
+    mt.__newindex = nil
+    assert(seen == "abx1")
+    raises(function() local t = "q"; t.y = 2 end, "attempt to index a string value")
+end
+
+local function concatenation_of_exact_numbers_writes_their_digits_test()
+    assert("a" .. 12n .. 1.5d .. 3 == "a121.53")
+    assert(12345678901234567890123n .. "" == "12345678901234567890123")
+    assert(1.5d .. "x" == "1.5x")
+    local long = ("y"):rep(60)
+    assert(long .. 7n .. long == long .. "7" .. long)
+end
+
+local function concatenation_joins_surrogate_halves_test()
+    local lead, trail = "\u{D83D}", "\u{DE00}"
+    assert(lead .. trail == "\u{1F600}")
+    assert(("x" .. lead) .. (trail .. "y") == "x\u{1F600}y")
+    local long = ("é"):rep(40)
+    assert((long .. lead) .. trail == long .. "\u{1F600}")
+end

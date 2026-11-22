@@ -1,0 +1,162 @@
+-- Turns the vectors that a run of the transformed runtime recorded into the
+-- MC/DC report: the share of conditions shown to affect the outcome of
+-- their decision on their own, by directory of src and by group of the
+-- code that every program runs.
+--
+-- A condition counts as shown when two recorded vectors of its decision
+-- have different outcomes, the condition ran in both with different
+-- values, and every other condition either has the same value in both or
+-- did not run in one of them. That is unique-cause MC/DC for operators
+-- that stop early, which leave the later conditions of a decision unrun.
+--
+-- Usage: lus mcdc.lus TABLE DIR [FILE]
+--
+-- With FILE, a path below src, the report lists the conditions of that
+-- file that no pair of vectors shows.
+
+global arg, assert, fs, io, ipairs, math, pairs, pledge, print, string, table, tonumber
+
+pledge("fs")
+
+local tablePath, dir, only = arg[1], arg[2], arg[3]
+assert(tablePath and dir, "usage: lus mcdc.lus TABLE DIR [FILE]")
+
+-- The groups of coverage.zig.
+local GROUPS = {
+    { name = "vm", paths = { "vm/" } },
+    { name = "gc", paths = { "vm/gc.zig", "vm/heap.zig" } },
+    { name = "compile", paths = { "compile/" } },
+    { name = "lib core", paths = { "lib/base.zig", "lib/string.zig", "lib/table.zig", "lib/math.zig", "lib/coroutine.zig", "lib/utf8.zig" } },
+}
+
+local function inGroup(group, file)
+    if file == "vm/faultio.zig" then return false end
+    for _, p in ipairs(group.paths) do
+        if p:sub(-1) == "/" then
+            if file:sub(1, #p) == p then return true end
+        elseif file == p then
+            return true
+        end
+    end
+    return false
+end
+
+local function readFile(path)
+    local f = assert(io.open(path, "r"))
+    local s = f:read("a")
+    f:close()
+    return s
+end
+
+local decisions = {}
+for line in readFile(tablePath):gmatch("[^\n]+") do
+    local id, file, ln, n = line:match("^(%d+) (%S+) (%d+) (%d+)$")
+    decisions[tonumber(id)] = { file = file, line = tonumber(ln), n = tonumber(n), vectors = {}, seen = {} }
+end
+
+local files = 0
+for _, name in ipairs(fs.list(dir, "*.mcdc")) do
+    files = files + 1
+    for line in readFile(fs.path.join(dir, name)):gmatch("[^\n]+") do
+        local id, v, r = line:match("^(%d+) (%d+) (%d)$")
+        local d = decisions[tonumber(id)]
+        local key = v .. " " .. r
+        if d and not d.seen[key] then
+            d.seen[key] = true
+            d.vectors[#d.vectors + 1] = { v = tonumber(v), r = tonumber(r) }
+        end
+    end
+end
+
+-- The value of condition `i` (from 0) in vector `v`: 0 unrun, 1 false, 2 true.
+local function value(v, i)
+    return (v >> (2 * i)) & 3
+end
+
+local function shown(d, i)
+    local vs = d.vectors
+    for a = 1, #vs do
+        for b = a + 1, #vs do
+            local x, y = vs[a], vs[b]
+            local xi, yi = value(x.v, i), value(y.v, i)
+            if x.r ~= y.r and xi ~= 0 and yi ~= 0 and xi ~= yi then
+                local ok = true
+                for j = 0, d.n - 1 do
+                    if j ~= i then
+                        local xj, yj = value(x.v, j), value(y.v, j)
+                        if xj ~= yj and xj ~= 0 and yj ~= 0 then
+                            ok = false
+                            break
+                        end
+                    end
+                end
+                if ok then return true end
+            end
+        end
+    end
+    return false
+end
+
+local byDir, byFile, missed = {}, {}, {}
+local total, hit = 0, 0
+for _, d in pairs(decisions) do
+    local top = d.file:match("^([^/]+)/") or "."
+    for _, key in ipairs({ top }) do byDir[key] = byDir[key] or { total = 0, hit = 0 } end
+    byFile[d.file] = byFile[d.file] or { total = 0, hit = 0 }
+    for i = 0, d.n - 1 do
+        local s = shown(d, i)
+        for _, t in ipairs({ byDir[top], byFile[d.file] }) do
+            t.total = t.total + 1
+            if s then t.hit = t.hit + 1 end
+        end
+        total = total + 1
+        if s then hit = hit + 1 end
+        if not s and d.file == only then missed[#missed + 1] = { line = d.line, i = i, n = d.n, ran = #d.vectors > 0 } end
+    end
+end
+
+local function pct(t)
+    if t.total == 0 then return 0 end
+    return t.hit * 100 / t.total
+end
+
+if only then
+    table.sort(missed, function(a, b) return a.line < b.line or a.line == b.line and a.i < b.i end)
+    print(`conditions of {only} that no pair of vectors shows (* when the decision never ran):`)
+    for _, m in ipairs(missed) do
+        print(string.format("  %d condition %d of %d%s", m.line, m.i + 1, m.n, m.ran and "" or " *"))
+    end
+    return
+end
+
+local decisionCount = 0
+for _ in pairs(decisions) do decisionCount = decisionCount + 1 end
+print(string.format("%d vector files, %d decisions, %d conditions\n", files, decisionCount, total))
+print("conditions shown by directory of src:")
+local dirs = {}
+for k in pairs(byDir) do dirs[#dirs + 1] = k end
+table.sort(dirs)
+for _, k in ipairs(dirs) do
+    local t = byDir[k]
+    print(string.format("  %-10s %6.1f%%  %d of %d", k, pct(t), t.hit, t.total))
+end
+print(string.format("  %-10s %6.1f%%  %d of %d\n", "all", pct({ total = total, hit = hit }), hit, total))
+print("code that every program runs:")
+for _, g in ipairs(GROUPS) do
+    local t = { total = 0, hit = 0 }
+    for file, ft in pairs(byFile) do
+        if inGroup(g, file) then
+            t.total = t.total + ft.total
+            t.hit = t.hit + ft.hit
+        end
+    end
+    print(string.format("  %-10s %6.1f%%  %d of %d", g.name, pct(t), t.hit, t.total))
+end
+print("\nfiles with the most conditions not shown:")
+local list = {}
+for file, t in pairs(byFile) do list[#list + 1] = { file = file, t = t, missed = t.total - t.hit } end
+table.sort(list, function(a, b) return a.missed > b.missed or a.missed == b.missed and a.file < b.file end)
+for k = 1, math.min(25, #list) do
+    local e = list[k]
+    print(string.format("  %-34s %6.1f%%  %d not shown", e.file, pct(e.t), e.missed))
+end

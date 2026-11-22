@@ -212,7 +212,7 @@ jobs:
   coverage:
     name: Branch coverage
     runs-on: ubuntu-24.04
-    timeout-minutes: 260
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -253,12 +253,73 @@ jobs:
         run: |
           LUS_COVERAGE_REPORT=$PWD/runs zig-out-cov/bin/lus | tee coverage-sweeps.txt
           { echo '### The suite and the failure sweeps'; echo '```'; cat coverage-sweeps.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Unit tests with coverage
+        timeout-minutes: 40
+        working-directory: runtime
+        run: |
+          zig build unit-binary -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov
+          mkdir -p unit-runs
+          LUS_COVERAGE=$PWD/unit-runs zig-out-cov/bin/lus-unit || true
+          LUS_COVERAGE_REPORT=$PWD/unit-runs LUS_COVERAGE_EXPORT=$PWD/unit.keys zig-out-cov/bin/lus-unit > /dev/null
+      - name: The verifying build with coverage
+        timeout-minutes: 80
+        working-directory: runtime
+        # Collecting at every 97th allocation reaches states of the collector
+        # that the suite reaches only by chance.
+        run: |
+          zig build -Doptimize=ReleaseFast -Dcoverage=true -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-cov-verify
+          mkdir -p verify-runs
+          LUS_JIT=off LUS_BIN=$PWD/zig-out-cov-verify/bin/lus LUS_COVERAGE=$PWD/verify-runs zig-out-cov-verify/bin/lus test ../tests/conformance ../packages/language-server/tests || true
+          LUS_COVERAGE_REPORT=$PWD/verify-runs LUS_COVERAGE_EXPORT=$PWD/verify.keys zig-out-cov-verify/bin/lus > /dev/null
+      - name: Report with every build
+        working-directory: runtime
+        run: |
+          LUS_COVERAGE_REPORT=$PWD/runs LUS_COVERAGE_MERGE=$PWD/unit.keys,$PWD/verify.keys zig-out-cov/bin/lus | tee coverage-merged.txt
+          { echo '### The suite, the sweeps, the unit tests, and the verifying build'; echo '```'; cat coverage-merged.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage
           path: |
             runtime/coverage.txt
             runtime/coverage-sweeps.txt
+            runtime/coverage-merged.txt
+
+  mcdc:
+    name: MC/DC
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Transform a copy of the runtime and build it
+        working-directory: runtime
+        run: |
+          mkdir -p zig-out-mcdc/runs
+          rsync -a --exclude .zig-cache --exclude 'zig-out*' ./ zig-out-mcdc/runtime/
+          for d in spec .agents tests packages; do ln -s ../../$d zig-out-mcdc/$d; done
+          zig run ../tests/coverage/mcdc/transform.zig -- zig-out-mcdc/runtime/src zig-out-mcdc/table.txt ../tests/coverage/mcdc/mcdc_rt.zig
+          cd zig-out-mcdc/runtime && zig build -Doptimize=ReleaseFast
+      - name: Run the conformance suite
+        timeout-minutes: 90
+        working-directory: runtime
+        run: |
+          B=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus
+          for mode in off on opt-eager; do
+            LUS_JIT=$mode LUS_BIN=$B LUS_MCDC=$PWD/zig-out-mcdc/runs $B test ../tests/conformance ../packages/language-server/tests || true
+          done
+      - name: Report
+        working-directory: runtime
+        run: |
+          LUS_JIT=off zig-out-mcdc/runtime/zig-out/bin/lus ../tests/coverage/mcdc/mcdc.lus zig-out-mcdc/table.txt zig-out-mcdc/runs | tee mcdc.txt
+          { echo '### MC/DC'; echo '```'; cat mcdc.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mcdc
+          path: runtime/mcdc.txt
 
   sanitize:
     name: Vendored C under the undefined behavior sanitizer

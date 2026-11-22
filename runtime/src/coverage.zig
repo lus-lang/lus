@@ -19,11 +19,26 @@
 //! a path below `src`, such as `vm/interp.zig`, the report lists the lines
 //! of that file that hold an uncovered edge instead. The files and the
 //! report must come from the same build.
+//!
+//! Other builds reach the same source through other binaries: the unit
+//! tests, and the build that verifies the collector. `LUS_COVERAGE_EXPORT`
+//! makes the report of such a build write the source positions it covered
+//! to a file, one `file:line:column` per line, and `LUS_COVERAGE_MERGE`
+//! names such files, separated by commas, for the report of the shipped
+//! build to count as covered too. A position that only another build has
+//! stays out of the totals, so the report remains the coverage of the
+//! branches of the shipped build.
 
 const std = @import("std");
 const builtin = @import("builtin");
 
-export fn __sanitizer_cov_trace_pc_indir(callee: usize) void {
+// The test runner links the fuzzer of the Zig library, which defines this
+// hook and the stack depth variable of `coverage_tls.c` itself.
+comptime {
+    if (!builtin.is_test) @export(&traceIndirect, .{ .name = "__sanitizer_cov_trace_pc_indir" });
+}
+
+fn traceIndirect(callee: usize) callconv(.c) void {
     _ = callee;
 }
 
@@ -55,7 +70,11 @@ var dir_buf: [1024]u8 = undefined;
 /// Reads `LUS_COVERAGE` and arranges for the edges to be written when the
 /// process exits, however it exits.
 pub fn setup(environ: anytype) void {
-    const d = environ.get("LUS_COVERAGE") orelse return;
+    setupDir(environ.get("LUS_COVERAGE") orelse return);
+}
+
+/// Arranges for the edges to be written to `d` when the process exits.
+pub fn setupDir(d: []const u8) void {
     if (d.len > dir_buf.len) return;
     @memcpy(dir_buf[0..d.len], d);
     out_dir = dir_buf[0..d.len];
@@ -117,8 +136,59 @@ pub fn dump() void {
 
 const Tally = struct { total: usize = 0, hit: usize = 0 };
 
+/// A source position that an edge enters.
+const Key = struct { file: []const u8, line: u64, column: u64 };
+
+/// Each source position, and whether any of its edges ran.
+const KeyMap = std.HashMapUnmanaged(Key, bool, struct {
+    pub fn hash(_: @This(), k: Key) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(k.file);
+        h.update(std.mem.asBytes(&k.line));
+        h.update(std.mem.asBytes(&k.column));
+        return h.final();
+    }
+    pub fn eql(_: @This(), a: Key, b: Key) bool {
+        return a.line == b.line and a.column == b.column and std.mem.eql(u8, a.file, b.file);
+    }
+}, 80);
+
+/// Writes the covered positions of `keys`, one `file:line:column` a line.
+fn writeExport(io: std.Io, path: []const u8, keys: *const KeyMap) !void {
+    var file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    var buf: [4096]u8 = undefined;
+    var w = file.writerStreaming(io, &buf);
+    var it = keys.iterator();
+    while (it.next()) |e| if (e.value_ptr.*) {
+        try w.interface.print("{s}:{d}:{d}\n", .{ e.key_ptr.file, e.key_ptr.line, e.key_ptr.column });
+    };
+    try w.interface.flush();
+}
+
+/// Marks the positions that the export at `path` covered, among those of
+/// `keys`, as covered.
+fn mergeExport(io: std.Io, gpa: std.mem.Allocator, path: []const u8, keys: *KeyMap) !void {
+    const data = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
+    defer gpa.free(data);
+    var lines = std.mem.tokenizeScalar(u8, data, '\n');
+    while (lines.next()) |ln| {
+        const c2 = std.mem.lastIndexOfScalar(u8, ln, ':') orelse continue;
+        const c1 = std.mem.lastIndexOfScalar(u8, ln[0..c2], ':') orelse continue;
+        const key: Key = .{
+            .file = ln[0..c1],
+            .line = std.fmt.parseInt(u64, ln[c1 + 1 .. c2], 10) catch continue,
+            .column = std.fmt.parseInt(u64, ln[c2 + 1 ..], 10) catch continue,
+        };
+        if (keys.getPtr(key)) |hit| hit.* = true;
+    }
+}
+
 /// Merges the coverage files of `dir` and prints the report.
-pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, only: ?[]const u8) !u8 {
+/// `environ` answers `get(name)` for `LUS_COVERAGE_FILE`,
+/// `LUS_COVERAGE_EXPORT` and `LUS_COVERAGE_MERGE`.
+pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, environ: anytype) !u8 {
+    const only = environ.get("LUS_COVERAGE_FILE");
     const table = pcs();
     const n = @min(counters().len, table.len);
     const merged = try gpa.alloc(u8, n);
@@ -162,19 +232,7 @@ pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, only: ?[
     // is keyed by the source position of the block it enters, and a key
     // counts once, covered when any of its copies ran, which is the branch
     // coverage of the source.
-    const Key = struct { file: []const u8, line: u64, column: u64 };
-    var by_key: std.HashMapUnmanaged(Key, bool, struct {
-        pub fn hash(_: @This(), k: Key) u64 {
-            var h = std.hash.Wyhash.init(0);
-            h.update(k.file);
-            h.update(std.mem.asBytes(&k.line));
-            h.update(std.mem.asBytes(&k.column));
-            return h.final();
-        }
-        pub fn eql(_: @This(), a: Key, b: Key) bool {
-            return a.line == b.line and a.column == b.column and std.mem.eql(u8, a.file, b.file);
-        }
-    }, 80) = .empty;
+    var by_key: KeyMap = .empty;
     // The names of each lookup go to a scratch arena that starts over for
     // every edge, so the report holds only the keys it keeps.
     var scratch_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -194,6 +252,11 @@ pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, only: ?[
         }
         if (merged[i] != 0) gop.value_ptr.* = true;
     }
+    if (environ.get("LUS_COVERAGE_MERGE")) |list| {
+        var paths = std.mem.tokenizeScalar(u8, list, ',');
+        while (paths.next()) |path| try mergeExport(io, gpa, path, &by_key);
+    }
+    if (environ.get("LUS_COVERAGE_EXPORT")) |path| try writeExport(io, path, &by_key);
     var keys = by_key.iterator();
     while (keys.next()) |e| {
         const rel = e.key_ptr.file;

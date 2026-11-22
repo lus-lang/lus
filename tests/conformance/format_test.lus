@@ -431,3 +431,47 @@ local function nan_prints_without_a_sign_on_every_platform_test()
     end
     assert(tostring(-math.huge) == "-inf" and string.format("%f", -math.huge) == "-inf")
 end
+
+-- ===== conversions at their edges =====
+
+local conversions_at_their_edges_cases = {
+    {"[%3c][%-3c]", table.pack(66, 0xE9), "[  B][é  ]"},
+    {"[%p][%8p]", table.pack(nil, 1), "[(null)][  (null)]"},
+    {"%.1a", table.pack(1.96875), "0x2.0p+0"},
+    {"%.3A", table.pack(0.1), "0X1.99AP-4"},
+    {"%A %a %a", table.pack(0/0, -1/0, 0.0), "NAN -inf 0x0p+0"},
+    {"%#.0a", table.pack(1.0), "0x1.p+0"},
+    {"%a", table.pack(5e-324), "0x1p-1074"},
+    {"[%5.2s][%-6s][%.1s]", table.pack("héllo", "ab", "é"), "[   hé][ab    ][é]"},
+    {"[%08.3f][%+.2e]", table.pack(3.14159, 12345.678), "[0003.142][+1.23e+04]"},
+    {"[%#x][%#o][% d][%05d][%.3d]", table.pack(255, 8, 7, -42, 5), "[0xff][010][ 7][-0042][005]"},
+    {"%d|%5d", table.pack(123456789012345678901234567890n, -12n), "123456789012345678901234567890|  -12"},
+    {"%.2f|%10.3e", table.pack(1.25d, 2.5d), "1.25| 2.500e+00"},
+    {"%q|%q", table.pack(12345678901234567890123n, 1.5d), "12345678901234567890123|1.5"},
+}
+
+local function conversions_at_their_edges_test(fmt, args, want)
+    local got = string.format(fmt, table.unpack(args, 1, args.n))
+    assert(got == want, got)
+end
+
+local function conversions_in_a_hot_loop_take_the_same_path_test()
+    local out = {}
+    for i = 1, 300 do
+        out[i] = string.format("%c%3c%p%.1a%5.2s", 65 + i % 26, 66, nil, 1.5, "héllo")
+    end
+    assert(out[1] == "B  B(null)0x1.8p+0   hé")
+    assert(out[300] == string.format("%c", 65 + 300 % 26) .. "  B(null)0x1.8p+0   hé")
+end
+
+local conversion_errors_at_their_edges_cases = {
+    {"%c", -1, "value out of range"},
+    {"%c", 0x110000, "value out of range"},
+    {"%10q", "x", "specifier '%%q' cannot have modifiers"},
+    {"%", 1, "invalid conversion '%%' to 'format'"},
+    {"%0123456789012345678901d", 1, "invalid format %(too long%)"},
+}
+
+local function conversion_errors_at_their_edges_test(fmt, arg, pattern)
+    raises(function() string.format(fmt, arg) end, pattern)
+end

@@ -988,3 +988,44 @@ local function reverse_joins_a_reversed_surrogate_pair_test()
     assert(("a\u{D800}b"):reverse() == "b\u{D800}a")
     assert(("héllo"):reverse():reverse() == "héllo")
 end
+
+-- ===== library functions at their edges =====
+
+local function string_char_rejects_a_code_point_past_the_last_test()
+    raises(function() string.char(65, 0x110000) end, "bad argument #2 to 'string.char' %(value out of range%)")
+    raises(function() string.char(-1) end, "value out of range")
+    assert(string.char(0x10FFFF) == "\u{10FFFF}")
+end
+
+local function string_dump_needs_a_function_written_in_lus_test()
+    raises(function() string.dump(print) end, "unable to dump given function")
+    raises(function() string.dump(1) end, "bad argument #1 to 'dump' %(function expected")
+end
+
+local function rep_joins_a_lead_and_a_trail_surrogate_across_copies_test()
+    local lead, trail = "\u{D83D}", "\u{DE00}"
+    assert((trail .. lead):rep(2) == trail .. "\u{1F600}" .. lead)
+    assert((trail .. lead):rep(2):len() == 3)
+    assert(("x"):rep(3, trail) == "x" .. trail .. "x" .. trail .. "x")
+end
+
+local function reverse_works_by_character_test()
+    assert(("héllo"):reverse() == "olléh")
+    assert(("a\u{1F600}b"):reverse() == "b\u{1F600}a")
+    assert((""):reverse() == "")
+end
+
+local function split_with_an_empty_delimiter_gives_characters_test()
+    local t = ("hé\u{1F600}"):split("")
+    assert(#t == 3 and t[2] == "é" and t[3] == "\u{1F600}")
+    assert(#(""):split("") == 0)
+end
+
+local function join_follows_the_length_metamethod_test()
+    local t = setmetatable({}, { __len = function() return 3.0 end, __index = function(_, i) return "v" .. i end })
+    assert(string.join(t, ",") == "v1,v2,v3")
+    local bad = setmetatable({}, { __len = function() return 2.5 end })
+    raises(function() string.join(bad, ",") end, "object length is not an integer")
+    assert(string.join({"a", 2, "c"}, "-") == "a-2-c")
+    assert(string.join({"a", nil, "c"}, "-") == "a")
+end
