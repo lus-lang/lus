@@ -1664,6 +1664,11 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
     // the wanted count. __close handlers may have reallocated the frames.
     const fr = l.frames.pop().?;
     const dst = fr.ret;
+    // The results go to the slot of the function, or below it for a
+    // function with varargs, which moved up, and inside the window of the
+    // frame that called it.
+    if (inv.enabled) inv.assert(first + n <= l.stack.len and dst <= fr.func and
+        (l.frames.items.len == 0 or dst >= l.frames.items[l.frames.items.len - 1].base));
     if (fr.want < 0) {
         var i: u32 = 0;
         while (i < n) : (i += 1) l.stack[dst + i] = l.stack[first + i];

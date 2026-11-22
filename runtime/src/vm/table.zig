@@ -894,7 +894,32 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
 /// receives a value no unboxed kind holds is made boxed directly.
 fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value, val: Value) Error!void {
     try resizeParts(gpa, t, asize, hcount, key, val);
-    inv.assert(layoutOk(t));
+    inv.assert(layoutOk(t) and arrayOk(t));
+}
+
+/// Whether the array part of `t` holds what its kind says: holes alone
+/// for `none`, and for `string` and `table` words that point to objects
+/// of that type. A boxed part holds values whose objects carry their tag.
+pub fn arrayOk(t: *Table) bool {
+    for (0..t.asize) |i| {
+        if (t.kind == .boxed) {
+            const v = t.values()[i];
+            if (v.tag.isCollectable() and v.header().tag != v.tag) return false;
+            continue;
+        }
+        const w = t.array_ptr[i];
+        if (w == hole) continue;
+        switch (t.kind) {
+            .none => return false,
+            .int, .float => {},
+            .string, .table => {
+                const v = unboxWord(t.kind, w);
+                if (w == 0 or w % 8 != 0 or v.header().tag != v.tag) return false;
+            },
+            .boxed => unreachable,
+        }
+    }
+    return true;
 }
 
 /// Whether the hash part of `t` is laid out as lookups expect: a size of

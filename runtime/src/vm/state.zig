@@ -938,6 +938,7 @@ pub noinline fn intern(g: *Global, s: *String) Allocator.Error!*String {
     }
     try g.strings.insert(g.gpa, s);
     s.flags().interned = true;
+    inv.assert(internedOk(g, s));
     return s;
 }
 
@@ -967,7 +968,16 @@ inline fn createStringAs(g: *Global, b: []const u8, ascii: bool, chars: usize, h
     const base: [*]u8 = @ptrCast(s);
     base[@sizeOf(String) + b.len] = 0;
     if (short) try g.strings.insert(g.gpa, s);
+    inv.assert(internedOk(g, s));
     return s;
+}
+
+/// Whether a string is interned exactly when the string table holds it.
+/// A fresh string may have an interned twin with the same text.
+fn internedOk(g: *Global, s: *String) bool {
+    if (s.len > String.short_max) return !s.flags().interned;
+    const found = g.strings.find(s.bytes(), s.hash);
+    return s.flags().interned == (found == s);
 }
 
 pub const FirstSetCache = struct {

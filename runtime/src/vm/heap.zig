@@ -21,6 +21,7 @@ const state_mod = @import("state.zig");
 const Header = gc.Header;
 const Global = state_mod.Global;
 const Allocator = std.mem.Allocator;
+const inv = @import("inv.zig");
 
 /// A segment spends its first page on the metadata of the others, a
 /// whole 16 KB page on systems with pages of that size, so segments of
@@ -203,6 +204,9 @@ pub const Heap = struct {
     /// The sweep step position.
     sweep_seg: ?*Segment = null,
     sweep_index: u8 = 1,
+    /// Bytes of the small cells that hold objects, kept only by a checking
+    /// build, which compares the count with the pages (`bytesOk`).
+    small_bytes: usize = 0,
 };
 
 /// The page that holds a small object.
@@ -275,6 +279,7 @@ pub inline fn allocSmall(g: *Global, comptime kind: Kind, size: usize) Allocator
     const a = &g.heap.classes[@backingInt(kind)][class];
     const cell = classBytes(class);
     g.counter.bytes += cell;
+    if (inv.enabled) g.heap.small_bytes += cell;
     if (a.free) |c| {
         a.free = c.next;
         return @ptrCast(c);
@@ -286,6 +291,7 @@ pub inline fn allocSmall(g: *Global, comptime kind: Kind, size: usize) Allocator
     }
     return refill(g, kind, class) catch |e| {
         g.counter.bytes -= cell;
+        if (inv.enabled) g.heap.small_bytes -= cell;
         return e;
     };
 }
@@ -496,11 +502,61 @@ pub fn sweepPage(g: *Global, p: *Page) void {
     }
     tail.* = null;
     g.counter.bytes -|= @as(usize, freed) * p.cell;
+    if (inv.enabled) g.heap.small_bytes -= @as(usize, freed) * p.cell;
     if (live == 0) {
         releasePage(g, p);
     } else {
         p.free = head;
+        inv.assert(pageOk(p, p.free, p.top) != null);
     }
+}
+
+/// Checks a page that holds a size class: its cell size, its usable bytes
+/// and its top agree with the class, marks sit only where cells start,
+/// and the free list stays below the top, on cell boundaries, on cells
+/// flagged free that are not marked, and without a cycle. Returns the
+/// number of free cells, or null when a check fails. `free` and `top` are
+/// those of the allocation state while the page allocates.
+pub fn pageOk(p: *const Page, free: ?*FreeCell, top: usize) ?usize {
+    if (p.class >= class_count or p.cell != classBytes(p.class)) return null;
+    if (p.usable != page_size / p.cell * p.cell) return null;
+    if (top > p.usable or top % p.cell != 0) return null;
+    for (p.marks, start_masks[p.class]) |m, s| if (m & ~s != 0) return null;
+    const base = p.base();
+    const limit = top / p.cell;
+    var n: usize = 0;
+    var c = free;
+    while (c) |cell| : (c = cell.next) {
+        const at = @intFromPtr(cell);
+        if (at < base or at >= base + top or (at - base) % p.cell != 0) return null;
+        if (!cell.hdr.flags.free or isMarkedSmall(&cell.hdr)) return null;
+        n += 1;
+        if (n > limit) return null;
+    }
+    return n;
+}
+
+/// Whether the bytes of the cells that hold objects, counted page by page
+/// from the tops and the free lists, match the running count.
+pub fn bytesOk(g: *Global) bool {
+    const h = &g.heap;
+    var total: usize = 0;
+    var seg = h.segments;
+    while (seg) |s| : (seg = s.next) {
+        for (s.pages[1..]) |*p| {
+            if (!p.in_use) continue;
+            var free = p.free;
+            var top: usize = p.top;
+            if (p.current) {
+                const a = &h.classes[@backingInt(p.kind)][p.class];
+                free = a.free;
+                top = a.bump - p.base();
+            }
+            const nfree = pageOk(p, free, top) orelse return false;
+            total += (top / p.cell - nfree) * p.cell;
+        }
+    }
+    return total == h.small_bytes;
 }
 
 /// Marks pages for sweeping after a collection finished marking. A major

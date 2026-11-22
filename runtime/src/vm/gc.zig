@@ -10,6 +10,7 @@
 //! design is described in `spec/design/gc.md`.
 
 const std = @import("std");
+const inv = @import("inv.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
 const state_mod = @import("state.zig");
@@ -640,6 +641,7 @@ fn finishMark(g: *Global, m: *Marker, major: bool) void {
     // The invariants of a checking build include the end of the mark
     // phase: a marked object references only marked objects.
     if (verify or @import("build_options").invariants) verifyHeap(g);
+    inv.assert(heap.bytesOk(g));
     std.debug.assert(s.gray.items.len == 0 and s.grayagain.items.len == 0);
     // The gray stack holds an entry per reference while it drains, so a
     // heap with many references grows it far past what a later cycle
