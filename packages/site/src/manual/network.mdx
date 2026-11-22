@@ -126,7 +126,7 @@ local status = network.fetch("https://storage.example.com/upload", "PUT", nil, u
 
 A _TCP socket_ is a two-way connection that delivers bytes in the order they were sent. A program uses one for a protocol other than HTTP, such as the protocol of a database, a mail server, or a service of its own.
 
-[`network.tcp.connect(host, port)`](/manual/api#network.tcp.connect) opens a connection and returns a socket. `host` is a name or a numeric address. A connection that fails raises an error such as `"cannot connect to HOST:PORT: Connection refused"`.
+[`network.tcp.connect(host, port, options)`](/manual/api#network.tcp.connect) opens a connection and returns a socket. `host` is a name or a numeric address. A connection that fails raises an error such as `"cannot connect to HOST:PORT: Connection refused"`. The option `timeout` limits the connection, across every address of the host, to that many seconds, raises `"timeout while connecting to HOST:PORT"` when it runs out, and becomes the timeout of the socket.
 
 A TCP socket has these methods.
 
@@ -168,7 +168,16 @@ The client checks that the certificate of the server chains to a trusted authori
 
 A certificate that does not verify raises an error such as `"certificate verification failed for example.com: The certificate is not correctly signed by the trusted CA"`, and the socket closes.
 
-Some protocols start in plain text and switch to TLS after an exchange of messages, as SMTP does with its `STARTTLS` command. [`sock:starttls(options)`](/manual/api#tcp_socket:starttls) switches a TCP socket to TLS at that point and returns the same socket. It takes the options above without `timeout`, and a socket that verifies the server must name it with `servername`. [`sock:tlsinfo()`](/manual/api#tcp_socket:tlsinfo) returns a table with the protocol `version`, the `cipher` suite, the `alpn` protocol, and the `servername` of a TLS socket, or `nil` for a plain one.
+Some protocols start in plain text and switch to TLS after an exchange of messages, as SMTP does with its `STARTTLS` command. [`sock:starttls(options)`](/manual/api#tcp_socket:starttls) switches a TCP socket to TLS at that point and returns the same socket. A client passes the options above without `timeout`, and a socket that verifies the server must name it with `servername`. A server passes `server = true` with its `cert` and `key`, or `certs`, a list of them that SNI picks from, and `alpn` for the protocols it accepts. A server of implicit TLS calls `starttls` right after `accept`.
+
+```lus nocheck
+local tls = { server = true, cert = read("cert.pem"), key = read("key.pem") }
+local conn = server:accept()
+conn:starttls(tls)              -- the handshake as the server
+conn:send("+OK ready\r\n")       -- every byte now travels over TLS
+```
+
+The server reads the certificates once for each options table, so a server keeps one table for all its connections. [`sock:tlsinfo()`](/manual/api#tcp_socket:tlsinfo) returns a table with the protocol `version`, the `cipher` suite, the `alpn` protocol, and the `servername` of a TLS socket, or `nil` for a plain one.
 
 The handshake, `send`, and `receive` of a TLS socket are suspension points, like the operations of a TCP socket.
 

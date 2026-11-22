@@ -229,6 +229,120 @@ local function starttls_needs_a_server_name_to_verify_test()
     assert(not ok and string.find(tostring(err), "servername is required", 1, true), tostring(err))
 end
 
+-- ===== The server role =====
+
+-- Accepts one connection on a plain server in a detached coroutine and
+-- runs `body(conn)` on it.
+local function accepting(body, client)
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local failure
+    local co = detach(create(function()
+        local conn <close> = server:accept()
+        conn:settimeout(5)
+        local ok, err = catch body(conn)
+        if not ok then failure = err end
+    end))
+    local ok, err = catch client(port)
+    coroutine.close(co)
+    server:close()
+    if not ok then error(err, 0) end
+    if failure then error(failure, 0) end
+end
+
+local function starttls_as_a_server_after_plain_text_test()
+    local c = make_certs()
+    accepting(function(conn)
+        conn:send("220 ready\r\n")
+        assert(txt(conn:receive("*l")) == "STARTTLS")
+        conn:send("220 go ahead\r\n")
+        assert(conn:starttls({ server = true, cert = c.server.cert, key = c.server.key }) == conn)
+        local info = conn:tlsinfo()
+        local line = txt(conn:receive("*l"))
+        conn:send(`$(line) for $(info.servername)\r\n`)
+    end, function(port)
+        local sock <close> = network.tcp.connect("127.0.0.1", port)
+        sock:settimeout(5)
+        assert(txt(sock:receive("*l")) == "220 ready")
+        sock:send("STARTTLS\r\n")
+        assert(txt(sock:receive("*l")) == "220 go ahead")
+        sock:starttls({ ca = c.ca, servername = "localhost" })
+        sock:send("EHLO\r\n")
+        assert(txt(sock:receive("*l")) == "EHLO for localhost")
+    end)
+end
+
+local function implicit_tls_on_an_accepted_socket_test()
+    local c = make_certs()
+    accepting(function(conn)
+        conn:starttls({ server = true, certs = { c.server, c.other }, alpn = { "redis" } })
+        conn:send(`$(conn:tlsinfo().servername) $(conn:tlsinfo().alpn)\n`)
+    end, function(port)
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "other.test", alpn = { "redis" } })
+        assert(txt(sock:receive("*l")) == "other.test redis")
+        assert(sock:tlsinfo().alpn == "redis")
+    end)
+end
+
+-- A server reads the certificates once for each options table.
+local function a_server_reuses_its_options_test()
+    local c = make_certs()
+    local opts = { server = true, cert = c.server.cert, key = c.server.key }
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local served = 0
+    local co = detach(create(function()
+        for _ = 1, 3 do
+            local conn <close> = server:accept()
+            conn:starttls(opts)
+            conn:send("ok\n")
+            served = served + 1
+        end
+    end))
+    for _ = 1, 3 do
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost" })
+        assert(txt(sock:receive("*l")) == "ok")
+    end
+    coroutine.close(co)
+    server:close()
+    assert(served == 3)
+end
+
+local function a_server_handshake_with_a_plain_client_fails_test()
+    local c = make_certs()
+    local err
+    accepting(function(conn)
+        local ok, e = catch conn:starttls({ server = true, cert = c.server.cert, key = c.server.key })
+        err = e
+        assert(not ok)
+    end, function(port)
+        local sock <close> = network.tcp.connect("127.0.0.1", port)
+        sock:send("GET / HTTP/1.1\r\n\r\n")
+        sock:settimeout(5)
+        sock:receive("*a")
+    end)
+    assert(string.find(tostring(err), "TLS handshake failed", 1, true), tostring(err))
+end
+
+local function starttls_rejects_bad_server_options_test()
+    local c = make_certs()
+    local cases = {
+        { { server = true }, "a server needs cert and key, or certs" },
+        { { server = true, cert = "junk", key = c.server.key }, "invalid certificate" },
+        { { server = true, cert = c.server.cert }, "cert and key go together" },
+        { { server = true, certs = { "x" } }, "certs must be a list" },
+        { { server = true, cert = c.server.cert, key = c.server.key, servername = "x" }, "unknown option 'servername'" },
+    }
+    for _, case in ipairs(cases) do
+        local server = network.tcp.bind("127.0.0.1", 0)
+        local _, port = server:getsockname()
+        local sock <close> = network.tcp.connect("127.0.0.1", port)
+        local ok, err = catch sock:starttls(case[1])
+        server:close()
+        assert(not ok and string.find(tostring(err), case[2], 1, true), tostring(err))
+    end
+end
+
 -- ===== HTTPS =====
 
 local function fetch_reaches_an_https_server_test()

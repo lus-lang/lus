@@ -581,6 +581,127 @@ pub fn freeConfig(cfg: *Config) void {
     lus_tls_config_free(cfg);
 }
 
+/// Builds the configuration of a server from the options of
+/// `sock:starttls` in `t`: `cert`, `key`, and `password` for one
+/// certificate, or `certs`, a list of such tables, one for each name that
+/// SNI may ask for, and `alpn`, the protocols the server accepts.
+fn rawServerConfig(l: *Thread, i: u32, t: *Table) Error!*Config {
+    try ensureInit(l);
+    const cfg = lus_tls_config_new(1) orelse return l.raiseMem();
+    errdefer lus_tls_config_free(cfg);
+    var cert: ?[]const u8 = null;
+    var key: ?[]const u8 = null;
+    var password: ?[]const u8 = null;
+    var list: ?*Table = null;
+    var k: Value = .nil;
+    while (table.next(t, k) catch null) |e| : (k = e.key) {
+        const name = if (e.key.tag == .string) e.key.as(object.String).bytes() else "";
+        if (std.mem.eql(u8, name, "server")) {
+            continue;
+        } else if (std.mem.eql(u8, name, "cert")) {
+            cert = try fieldString(l, i, name, e.val);
+        } else if (std.mem.eql(u8, name, "key")) {
+            key = try fieldString(l, i, name, e.val);
+        } else if (std.mem.eql(u8, name, "password")) {
+            password = try fieldString(l, i, name, e.val);
+        } else if (std.mem.eql(u8, name, "certs")) {
+            if (e.val.tag != .table) return aux.argError(l, i, "certs must be a list of tables with cert and key", .{});
+            list = e.val.as(Table);
+        } else if (std.mem.eql(u8, name, "alpn")) {
+            try setAlpn(l, i, cfg, e.val);
+        } else {
+            return aux.argError(l, i, "unknown option '{s}'", .{name});
+        }
+    }
+    if ((cert == null) != (key == null)) return aux.argError(l, i, "cert and key go together", .{});
+    if (cert) |c| try addOwn(l, i, cfg, c, key.?, password);
+    if (list) |lt| {
+        const n = table.length(lt);
+        var j: i64 = 1;
+        while (j <= n) : (j += 1) {
+            const e = table.getInt(lt, j);
+            if (e.tag != .table) return aux.argError(l, i, "certs must be a list of tables with cert and key", .{});
+            try serverEntry(l, i, cfg, e.as(Table));
+        }
+    }
+    if (cert == null and list == null) return aux.argError(l, i, "a server needs cert and key, or certs", .{});
+    return cfg;
+}
+
+const config_name = "network.tlsconfig";
+const cache_key = "network.tls.servers";
+
+fn configGc(l: *Thread) Error!u32 {
+    const v = l.arg(1);
+    if (v.tag != .userdata) return 0;
+    const u = v.as(object.Userdata);
+    if (u.size != @sizeOf(?*Config)) return 0;
+    const slot: *?*Config = @ptrCast(@alignCast(u.data()));
+    if (slot.*) |cfg| lus_tls_config_free(cfg);
+    slot.* = null;
+    return 0;
+}
+
+/// The table that maps the options tables of `sock:starttls` to the server
+/// configurations built from them. Its keys are weak, so a configuration
+/// lives as long as its options table.
+fn serverCache(l: *Thread) Error!*Table {
+    const g = l.g;
+    if (g.ext.get(cache_key)) |p| return @ptrCast(@alignCast(p));
+    const cache = try l.newTable(0, 4);
+    try l.push(Value.obj(.table, cache));
+    defer l.top -= 1;
+    const mode = try l.newTable(0, 1);
+    try l.push(Value.obj(.table, mode));
+    try aux.setField(l, mode, "__mode", try l.newStringValue("k"));
+    l.top -= 1;
+    cache.metatable = mode;
+    @import("../vm/gc.zig").barrierBack(g, &cache.hdr);
+    const mt = try l.newTable(0, 2);
+    try l.push(Value.obj(.table, mt));
+    try aux.setField(l, mt, "__gc", try aux.native(l, configGc, "gc"));
+    try aux.setField(l, mt, "__name", try l.newStringValue(config_name));
+    try aux.setField(l, g.registry.as(Table), config_name, Value.obj(.table, mt));
+    g.ext.put(g.gpa, config_name, mt) catch return l.raiseMem();
+    l.top -= 1;
+    try aux.setField(l, g.registry.as(Table), cache_key, Value.obj(.table, cache));
+    g.ext.put(g.gpa, cache_key, cache) catch return l.raiseMem();
+    return cache;
+}
+
+/// The server configuration of the options table in argument `i` of
+/// `sock:starttls`. The certificates load once for each options table, so
+/// a server that passes one table to every connection parses them once,
+/// and a new table loads new certificates.
+pub fn serverConfigOf(l: *Thread, i: u32) Error!*Config {
+    const t = try aux.checkTable(l, i);
+    const cache = try serverCache(l);
+    const found = table.get(cache, Value.obj(.table, t));
+    if (found.tag == .userdata) {
+        const slot: *?*Config = @ptrCast(@alignCast(found.as(object.Userdata).data()));
+        if (slot.*) |cfg| return cfg;
+    }
+    const cfg = try rawServerConfig(l, i, t);
+    const g = l.g;
+    const mt: *Table = @ptrCast(@alignCast(g.ext.get(config_name).?));
+    const gcm = @import("../vm/gc.zig");
+    gcm.maybeCollect(g);
+    const u = gcm.alloc(g, object.Userdata, .userdata, object.Userdata.allocSize(@sizeOf(?*Config), 0)) catch {
+        lus_tls_config_free(cfg);
+        return l.raiseMem();
+    };
+    u.size = @sizeOf(?*Config);
+    u.nuser = 0;
+    u.metatable = mt;
+    const slot: *?*Config = @ptrCast(@alignCast(u.data()));
+    slot.* = cfg;
+    try l.push(Value.obj(.userdata, u));
+    defer l.top -= 1;
+    try @import("base.zig").registerFinalizer(l, &u.hdr, mt);
+    try @import("../vm/ops.zig").rawSet(l, cache, Value.obj(.table, t), Value.obj(.userdata, u));
+    return cfg;
+}
+
 // ---------------------------------------------------------------------
 // Connections in memory, for the unit tests and the fuzz targets
 

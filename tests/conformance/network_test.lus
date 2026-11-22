@@ -389,6 +389,51 @@ local function fetch_in_a_detached_coroutine_suspends_test()
     end)
 end
 
+-- A connection to a server whose queue is full waits until its timeout,
+-- which covers every address of the host and names the address.
+local function tcp_connect_times_out_test()
+    local listener = tcp_bind("127.0.0.1", 0, 1)
+    local _, port = listener:getsockname()
+    local held = {}
+    local timed_out
+    for _ = 1, 256 do
+        local ok, sock = catch network.tcp.connect("127.0.0.1", port, { timeout = 0.05 })
+        if not ok then
+            timed_out = sock
+            break
+        end
+        held[#held + 1] = sock
+    end
+    for _, sock in ipairs(held) do sock:close() end
+    listener:close()
+    if timed_out == nil then skip("the system accepted every connection") end
+    -- Some systems refuse a connection to a full queue at once, and others
+    -- leave it waiting, which the timeout ends.
+    if not string.find(tostring(timed_out), "timeout", 1, true) then skip("the system refuses connections to a full queue") end
+    assert(string.find(tostring(timed_out), `timeout while connecting to 127.0.0.1:$(port)`, 1, true), tostring(timed_out))
+end
+
+local function tcp_connect_gives_the_socket_its_timeout_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local sock <close> = network.tcp.connect("127.0.0.1", port, { timeout = 0.05 })
+    local ok, err = catch sock:receive(1)
+    listener:close()
+    assert(not ok and string.find(tostring(err), "receive timeout", 1, true), tostring(err))
+end
+
+local function tcp_connect_rejects_bad_options_test()
+    local cases = {
+        { { bogus = 1 }, "unknown option 'bogus'" },
+        { { timeout = "soon" }, "timeout must be a number of seconds" },
+        { "fast", "table expected" },
+    }
+    for _, case in ipairs(cases) do
+        local ok, err = catch network.tcp.connect("127.0.0.1", 1, case[1])
+        assert(not ok and string.find(tostring(err), case[2], 1, true), tostring(err))
+    end
+end
+
 -- ============================================================
 -- TCP loopback data path (bind-dependent)
 -- ============================================================

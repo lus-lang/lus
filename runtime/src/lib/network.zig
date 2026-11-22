@@ -36,6 +36,7 @@ const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const pledge = @import("../vm/pledge.zig");
 const sched = @import("../vm/sched.zig");
+const faultio = @import("../vm/faultio.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
@@ -401,8 +402,11 @@ pub fn againDir(s: *Socket, default: sched.Dir) sched.Dir {
     return tls.waitDir(s, default);
 }
 
-/// Reads the bytes of the socket itself, without TLS.
+/// Reads the bytes of the socket itself, without TLS. A runtime built with
+/// `-Dfail-io=true` counts the call as an operation that `LUS_FAIL_IO`
+/// may fail (`vm/faultio.zig`).
 pub fn rawRecv(l: *Thread, s: *Socket, dst: []u8) Try {
+    if (faultio.enabled and faultio.step()) return .{ .fail = error.ConnectionResetByPeer };
     const handle = s.stream.socket.handle;
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .read)) return .again;
@@ -421,8 +425,9 @@ pub fn rawRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     }
 }
 
-/// Writes bytes to the socket itself, without TLS.
+/// Writes bytes to the socket itself, without TLS, counted like `rawRecv`.
 pub fn rawSend(l: *Thread, s: *Socket, data: []const u8) Try {
+    if (faultio.enabled and faultio.step()) return .{ .fail = error.ConnectionResetByPeer };
     const handle = s.stream.socket.handle;
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .write)) return .again;
@@ -1111,14 +1116,35 @@ fn connectHost(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Err
 // ---------------------------------------------------------------------
 // TCP sockets
 
+/// network.tcp.connect(host, port, options): `options.timeout` bounds the
+/// connection to every address of the host and becomes the timeout of
+/// the socket.
 fn tcpConnect(l: *Thread) Error!u32 {
     const host = try aux.checkBytes(l, 1);
     const port = try checkPort(l, 2, false);
+    var timeout_ms: i32 = -1;
+    if (l.hasArg(3) and !l.arg(3).isNil()) {
+        const t = try aux.checkTable(l, 3);
+        var k: Value = .nil;
+        while (table.next(t, k) catch null) |e| : (k = e.key) {
+            const name = if (e.key.tag == .string) e.key.as(object.String).bytes() else "";
+            if (!std.mem.eql(u8, name, "timeout")) return aux.argError(l, 3, "unknown option '{s}'", .{name});
+            const secs: f64 = switch (e.val.tag) {
+                .integer => @floatFromInt(e.val.asInt()),
+                .float => e.val.asFloat(),
+                else => return aux.argError(l, 3, "timeout must be a number of seconds", .{}),
+            };
+            if (std.math.isNan(secs)) return aux.argError(l, 3, "timeout must be a number of seconds", .{});
+            const ms = @ceil(secs * 1000);
+            timeout_ms = if (secs < 0) -1 else if (ms >= std.math.maxInt(i32)) std.math.maxInt(i32) else @intFromFloat(ms);
+        }
+    }
     var hp: [512]u8 = undefined;
     try pledge.require(l, "network:tcp", hostPort(&hp, host, port));
-    const stream, const peer = try connectHost(l, host, port, .{});
+    const stream, const peer = try connectHost(l, host, port, .{ .timeout_ms = timeout_ms });
     errdefer stream.close(l.g.io);
-    _ = try newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer });
+    const s = try newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer });
+    s.timeout_ms = timeout_ms;
     return 1;
 }
 
@@ -1181,14 +1207,32 @@ fn socketStarttls(l: *Thread) Error!u32 {
         // Bytes that arrived before the handshake would pass for bytes of
         // the protected stream.
         if (s.buf.items.len > 0) return l.raiseFmt("starttls: the socket holds data received before TLS started", .{});
-        var o: tls.ClientOptions = .{};
-        const cfg = try tls.clientConfig(l, 2, null, false, &o);
-        defer tls.freeConfig(cfg);
-        try tls.attach(l, s, cfg, o.servername);
+        if (isServer(l, 2)) {
+            // The configuration stays in the cache of its options table.
+            try tls.attach(l, s, try tls.serverConfigOf(l, 2), null);
+        } else {
+            var o: tls.ClientOptions = .{};
+            const cfg = try tls.clientConfig(l, 2, null, false, &o);
+            defer tls.freeConfig(cfg);
+            try tls.attach(l, s, cfg, o.servername);
+        }
     }
     try handshakeOrClose(l, s);
     l.top = l.base() + 1;
     return 1;
+}
+
+/// Whether the options of `starttls` in argument `i` ask for the server
+/// role.
+fn isServer(l: *Thread, i: u32) bool {
+    const v = l.arg(i);
+    if (v.tag != .table) return false;
+    const t = v.as(object.Table);
+    var k: Value = .nil;
+    while (table.next(t, k) catch null) |e| : (k = e.key) {
+        if (e.key.tag == .string and std.mem.eql(u8, e.key.as(object.String).bytes(), "server")) return e.val.tag == .true;
+    }
+    return false;
 }
 
 fn socketTlsinfo(l: *Thread) Error!u32 {

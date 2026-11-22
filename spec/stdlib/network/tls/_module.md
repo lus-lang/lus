@@ -7,7 +7,7 @@ stability: stable
 origin: lus
 ---
 
-The `network.tls` table opens TLS connections with [`network.tls.connect`](/manual/api#network.tls.connect). A plain TCP socket starts TLS with [`tcp_socket:starttls`](/manual/api#tcp_socket:starttls), and [`network.serve`](/manual/api#network.serve) serves HTTPS with its `tls` option.
+The `network.tls` table opens TLS connections with [`network.tls.connect`](/manual/api#network.tls.connect). A plain TCP socket starts TLS with [`tcp_socket:starttls`](/manual/api#tcp_socket:starttls), as the client or as the server, and [`network.serve`](/manual/api#network.serve) serves HTTPS with its `tls` option.
 
 A _TLS socket_ is a TCP socket whose bytes travel through TLS 1.2 or TLS 1.3. It has every method of a TCP socket, and `send` and `receive` carry plain text while the bytes on the wire are encrypted. [`tcp_socket:tlsinfo`](/manual/api#tcp_socket:tlsinfo) reports the protocol version, the cipher suite, and the protocol that ALPN chose. Closing a TLS socket sends a TLS `close_notify` alert to the peer before the TCP connection closes. A peer that ends the TCP connection without that alert ends the stream like one that sends it, so `receive("*a")` returns what arrived.
 
@@ -25,7 +25,7 @@ The options of a client connection form a table with any of these fields:
 | `cert`, `key` | PEM text of a client certificate chain and of its private key, which the client presents when the server asks for one. Each needs the other. |
 | `password` | The password of an encrypted private key. |
 | `verify` | `false` to accept any certificate of the server. It defaults to `true`. |
-| `timeout` | Seconds for each wait of `network.tls.connect`, the handshake included, as `settimeout` takes them. |
+| `timeout` | Seconds for `network.tls.connect`: the connection to every address of the host must end within it, each wait of the handshake lasts at most that long, and the socket keeps it as its timeout. |
 
 PEM text is a string or a vector. A program reads a certificate file with `io.open`, which needs `fs:read` for the file. An unknown field raises `"bad argument #N to 'connect' (unknown option 'NAME')"`, and a field of the wrong type raises a `bad argument` error that names it. A `ca` that holds no certificate raises an error that says so, and a `cert` or `key` that does not parse raises `"invalid certificate"` or `"invalid private key"` with the reason.
 

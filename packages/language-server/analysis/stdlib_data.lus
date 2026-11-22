@@ -5912,9 +5912,9 @@ print(vector.tostring(conn:receive()))   --> ping
     description = [[
 Opens a TCP connection to `host` and `port` and returns the connected socket.
 
-`host` is a host name or a numeric address. `port` is an integer from 1 through 65535. The call waits until the connection is established, as described in [`network.tcp`](/manual/api#network.tcp).
+`host` is a host name or a numeric address. `port` is an integer from 1 through 65535. `options` is a table whose one field, `timeout`, is a number of seconds. The call waits until the connection is established, as described in [`network.tcp`](/manual/api#network.tcp). With `timeout`, the connection must be established within that time, which counts the attempts at every address of the host, and the socket then keeps `timeout` as the timeout of its operations, as `settimeout` sets it. A negative `timeout` waits without limit.
 
-On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, `starttls`, `tlsinfo`, and `close`. `send(data)` sends a string or a vector in full and returns the number of bytes sent. Every failure to connect raises an error, such as `"cannot connect to 127.0.0.1:1: Connection refused"` or `"cannot resolve 'HOST': Domain name not found"`. A port out of range raises a `bad argument` error. The call requires `network:tcp` for `host:port`.
+On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, `starttls`, `tlsinfo`, and `close`. `send(data)` sends a string or a vector in full and returns the number of bytes sent. Every failure to connect raises an error, such as `"cannot connect to 127.0.0.1:1: Connection refused"` or `"cannot resolve 'HOST': Domain name not found"`. A connection that runs out of time raises `"timeout while connecting to HOST:PORT"`. A port out of range, an unknown option, and a `timeout` that is not a number raise a `bad argument` error. The call requires `network:tcp` for `host:port`.
 
 The following example connects to a local server and reads the addresses of both ends.
 
@@ -5944,6 +5944,11 @@ A failure of an open connection during `send` or `receive`, such as a reset by t
         name = "port",
         type = "integer",
       },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
     },
     parent = "network.tcp",
     pledges = {
@@ -5964,7 +5969,7 @@ A failure of an open connection during `send` or `receive`, such as a reset by t
       "network.tls.connect",
     },
     description = [[
-The `network.tls` table opens TLS connections with [`network.tls.connect`](/manual/api#network.tls.connect). A plain TCP socket starts TLS with [`tcp_socket:starttls`](/manual/api#tcp_socket:starttls), and [`network.serve`](/manual/api#network.serve) serves HTTPS with its `tls` option.
+The `network.tls` table opens TLS connections with [`network.tls.connect`](/manual/api#network.tls.connect). A plain TCP socket starts TLS with [`tcp_socket:starttls`](/manual/api#tcp_socket:starttls), as the client or as the server, and [`network.serve`](/manual/api#network.serve) serves HTTPS with its `tls` option.
 
 A _TLS socket_ is a TCP socket whose bytes travel through TLS 1.2 or TLS 1.3. It has every method of a TCP socket, and `send` and `receive` carry plain text while the bytes on the wire are encrypted. [`tcp_socket:tlsinfo`](/manual/api#tcp_socket:tlsinfo) reports the protocol version, the cipher suite, and the protocol that ALPN chose. Closing a TLS socket sends a TLS `close_notify` alert to the peer before the TCP connection closes. A peer that ends the TCP connection without that alert ends the stream like one that sends it, so `receive("*a")` returns what arrived.
 
@@ -5982,7 +5987,7 @@ The options of a client connection form a table with any of these fields:
 | `cert`, `key` | PEM text of a client certificate chain and of its private key, which the client presents when the server asks for one. Each needs the other. |
 | `password` | The password of an encrypted private key. |
 | `verify` | `false` to accept any certificate of the server. It defaults to `true`. |
-| `timeout` | Seconds for each wait of `network.tls.connect`, the handshake included, as `settimeout` takes them. |
+| `timeout` | Seconds for `network.tls.connect`: the connection to every address of the host must end within it, each wait of the handshake lasts at most that long, and the socket keeps it as its timeout. |
 
 PEM text is a string or a vector. A program reads a certificate file with `io.open`, which needs `fs:read` for the file. An unknown field raises `"bad argument #N to 'connect' (unknown option 'NAME')"`, and a field of the wrong type raises a `bad argument` error that names it. A `ca` that holds no certificate raises an error that says so, and a `cert` or `key` that does not parse raises `"invalid certificate"` or `"invalid private key"` with the reason.
 
@@ -6012,7 +6017,7 @@ print(vector.tostring(sock:receive("*l")))          --> HTTP/1.1 200 OK
     description = [[
 Opens a TCP connection to `host` and `port`, runs a TLS handshake over it, and returns the TLS socket.
 
-`host` is a host name or a numeric address, and `port` is an integer from 1 through 65535. `options` is the table of client options that [`network.tls`](/manual/api#network.tls) describes. The call connects as [`network.tcp.connect`](/manual/api#network.tcp.connect) does, then runs the handshake, and returns once the handshake ends. The `timeout` option bounds every wait of the handshake and becomes the timeout of the socket.
+`host` is a host name or a numeric address, and `port` is an integer from 1 through 65535. `options` is the table of client options that [`network.tls`](/manual/api#network.tls) describes. The call connects as [`network.tcp.connect`](/manual/api#network.tcp.connect) does, then runs the handshake, and returns once the handshake ends. The `timeout` option bounds the connection as it bounds that of `network.tcp.connect`, then every wait of the handshake, and becomes the timeout of the socket. A connection that runs out of time raises `"timeout while connecting to HOST:PORT"`.
 
 On success the call returns one socket with the methods of a TCP socket and [`tlsinfo`](/manual/api#tcp_socket:tlsinfo). A failure to connect raises the errors of `network.tcp.connect`, and a failed handshake raises the errors that `network.tls` lists and closes the socket. A port out of range and an invalid option raise a `bad argument` error. The call requires `network:tcp` for `host:port`.
 
@@ -9718,11 +9723,15 @@ print(#conn:receive("*l"))                   --> 0
   ["tcp_socket:starttls"] = {
     children = {},
     description = [[
-Starts TLS over a connected TCP socket as the client, waits for the handshake to end, and returns the same socket, which is now a TLS socket.
+Starts TLS over a connected TCP socket, as the client or as the server, waits for the handshake to end, and returns the same socket, which is now a TLS socket.
 
-Protocols such as SMTP, IMAP, PostgreSQL, and Redis open a plain connection and switch to TLS after an exchange of plain text. A program runs that exchange with `send` and `receive`, then calls `starttls`. `options` is the table of client options that [`network.tls`](/manual/api#network.tls) describes, without `timeout`, since the timeout of the socket bounds the handshake. `servername` has no default here, so a socket that verifies the server must name it.
+Protocols such as SMTP, IMAP, PostgreSQL, and Redis open a plain connection and switch to TLS after an exchange of plain text. A program runs that exchange with `send` and `receive`, then calls `starttls` on both ends. The timeout of the socket bounds every wait of the handshake.
 
-On success the call returns the socket, whose `send` and `receive` then carry plain text through TLS. The socket must hold no received byte that no `receive` returned yet, since such bytes came before TLS and would read as protected data. A socket that holds one raises `"starttls: the socket holds data received before TLS started"`, and a socket that already uses TLS raises `"the socket already uses TLS"`. A missing `servername` with verification raises a `bad argument` error. A failed handshake raises the errors that `network.tls` lists and closes the socket. The method needs no permission beyond the one that opened the connection.
+For the client role, `options` is the table of client options that [`network.tls`](/manual/api#network.tls) describes, without `timeout`. `servername` has no default here, so a socket that verifies the server must name it.
+
+For the server role, `options` holds `server = true` and the certificate of the server: `cert` and `key`, PEM text of its certificate chain and of its private key, with `password` for an encrypted key, or `certs`, a list of tables with `cert`, `key`, and `password`, one for each name. The server picks the certificate whose DNS names, or whose common name when it lists none, match the name that the client sends through SNI, and the first certificate for a client that sends none or a name that none carries. `alpn` lists the protocols that the server accepts, and the server chooses the first protocol of the client that it accepts. A server that serves TLS from its first byte calls `starttls` right after `accept`. The server reads the certificates once for each options table, so a server that passes the same table to every connection parses them once, and a new table loads new certificates. [`tcp_socket:tlsinfo`](/manual/api#tcp_socket:tlsinfo) of a server socket reports the name that the client asked for.
+
+On success the call returns the socket, whose `send` and `receive` then carry plain text through TLS. The socket must hold no received byte that no `receive` returned yet, since such bytes came before TLS and would read as protected data. A socket that holds one raises `"starttls: the socket holds data received before TLS started"`, and a socket that already uses TLS raises `"the socket already uses TLS"`. A missing `servername` with verification, a server without a certificate, a certificate or a key that does not parse, and an unknown option raise a `bad argument` error. A failed handshake raises the errors that `network.tls` lists and closes the socket. The method needs no permission beyond the one that opened the connection.
 
 ```lus nocheck
 pledge("network")
@@ -9737,6 +9746,28 @@ sock:send("STARTTLS\r\n")
 sock:receive("*l")
 sock:starttls({ servername = "mail.example.com" })
 print(sock:tlsinfo().servername)   --> mail.example.com
+```
+
+The following server side of the same exchange reads its certificate once and upgrades each connection after the `STARTTLS` command.
+
+```lus nocheck
+pledge("network", "fs:read=/etc/mail/*")
+local function read(path)
+    local f <close> = io.open(path)
+    return f:read("a")
+end
+local tls = { server = true, cert = read("/etc/mail/cert.pem"), key = read("/etc/mail/key.pem") }
+local server <close> = network.tcp.bind("0.0.0.0", 587)
+while true do
+    local conn = server:accept()
+    coroutine.detach(coroutine.create(function()
+        conn:send("220 mail.example.com ESMTP\r\n")
+        -- read EHLO and STARTTLS here, then:
+        conn:send("220 2.0.0 Ready to start TLS\r\n")
+        conn:starttls(tls)
+        -- the session continues over TLS
+    end))
+end
 ```]],
     kind = "function",
     module = "network.tcp",

@@ -11,14 +11,17 @@ params:
     type: string
   - name: port
     type: integer
+  - name: options
+    type: table
+    optional: true
 returns: tcp_socket
 ---
 
 Opens a TCP connection to `host` and `port` and returns the connected socket.
 
-`host` is a host name or a numeric address. `port` is an integer from 1 through 65535. The call waits until the connection is established, as described in [`network.tcp`](/manual/api#network.tcp).
+`host` is a host name or a numeric address. `port` is an integer from 1 through 65535. `options` is a table whose one field, `timeout`, is a number of seconds. The call waits until the connection is established, as described in [`network.tcp`](/manual/api#network.tcp). With `timeout`, the connection must be established within that time, which counts the attempts at every address of the host, and the socket then keeps `timeout` as the timeout of its operations, as `settimeout` sets it. A negative `timeout` waits without limit.
 
-On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, `starttls`, `tlsinfo`, and `close`. `send(data)` sends a string or a vector in full and returns the number of bytes sent. Every failure to connect raises an error, such as `"cannot connect to 127.0.0.1:1: Connection refused"` or `"cannot resolve 'HOST': Domain name not found"`. A port out of range raises a `bad argument` error. The call requires `network:tcp` for `host:port`.
+On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, `starttls`, `tlsinfo`, and `close`. `send(data)` sends a string or a vector in full and returns the number of bytes sent. Every failure to connect raises an error, such as `"cannot connect to 127.0.0.1:1: Connection refused"` or `"cannot resolve 'HOST': Domain name not found"`. A connection that runs out of time raises `"timeout while connecting to HOST:PORT"`. A port out of range, an unknown option, and a `timeout` that is not a number raise a `bad argument` error. The call requires `network:tcp` for `host:port`.
 
 The following example connects to a local server and reads the addresses of both ends.
 
