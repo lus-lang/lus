@@ -179,14 +179,52 @@ local function a_damaged_query_plan_raises_an_error_test()
     assert(#rows == 2 and rows[1].a == 3)
     local corrupt = 0
     for i = start + 3, start + len - 1 do
-        for _, byte in ipairs{ 48, 57, 32, 58, 90, 120, 63 } do
+        for _, byte in ipairs{ 48, 49, 57, 32, 45, 58, 63, 67, 73, 74, 80, 81, 83, 88, 90, 120, 0, 255 } do
             local w = vector.clone(v)
             vector.set(w, i, byte)
-            local f = assert(load(w, "=q", "b"))
-            local ok, err = catch f(data, 2)
-            if not ok then
-                assert(type(err) == "string", tostring(err))
-                if err:find("corrupt query plan in bytecode", 1, true) then corrupt = corrupt + 1 end
+            -- A byte that leaves the plan invalid UTF-8 fails to load.
+            local f, lerr = load(w, "=q", "b")
+            if f then
+                local ok, err = catch f(data, 2)
+                if not ok then
+                    assert(type(err) == "string", tostring(err))
+                    if err:find("corrupt query plan in bytecode", 1, true) then corrupt = corrupt + 1 end
+                end
+            else
+                assert(lerr == "bad binary format (truncated or corrupted chunk)", lerr)
+            end
+        end
+    end
+    assert(corrupt > 0)
+end
+
+-- A plan one or more bytes shorter, or longer, ends early or carries
+-- bytes after its end. The length before the plan names the new size.
+local function a_shortened_or_lengthened_query_plan_raises_an_error_test()
+    local v = string.dump(query_maker)
+    local start, len = plan_bounds(v)
+    assert(len < 126, "the plan needs a one-byte length")
+    local data = { { a = 2, b = "x" } }
+    local function rebuild(newlen, fill)
+        local w = vector.create(#v - len + newlen)
+        for i = 0, start - 2 do vector.set(w, i, vector.get(v, i)) end
+        vector.set(w, start - 1, newlen + 1)
+        for i = 0, newlen - 1 do
+            vector.set(w, start + i, i < len and vector.get(v, start + i) or fill)
+        end
+        for i = start + len, #v - 1 do vector.set(w, i - len + newlen, vector.get(v, i)) end
+        return w
+    end
+    local corrupt = 0
+    for newlen = 3, len + 2 do
+        if newlen ~= len then
+            local f = load(rebuild(newlen, 32), "=q", "b")
+            if f then
+                local ok, err = catch f(data, 1)
+                if not ok then
+                    assert(type(err) == "string", tostring(err))
+                    if err:find("corrupt query plan in bytecode", 1, true) then corrupt = corrupt + 1 end
+                end
             end
         end
     end

@@ -1,0 +1,73 @@
+--[[
+    Windows, orderings, and aggregates of the query engine.
+
+    A limit and an offset cut the rows of a query in several places: after
+    an ordering, after grouping, after `distinct`, and across a join. An
+    ordering compares floats, integers, and strings, and an aggregate sums
+    integers and floats and rejects other values. Each test checks the
+    rows against the plain answer.
+]]
+
+local function collect(it)
+    local out = {}
+    for r in it do out[#out + 1] = r end
+    return out
+end
+
+local t = { { v = 1.5, k = "b" }, { v = 2, k = "a" }, { v = 0.5, k = "b" }, { v = 3, k = "c" } }
+
+local function windows_cut_rows_everywhere_test()
+    local r = collect(query(@t as p select p.v order by p.v limit 2))
+    assert(#r == 2 and r[1].v == 0.5 and r[2].v == 1.5)
+    r = collect(query(@t as p select p.v order by p.v offset 3))
+    assert(#r == 1 and r[1].v == 3)
+    r = collect(query(@t as p select p.v order by p.v desc limit 2 offset 1))
+    assert(#r == 2 and r[1].v == 2 and r[2].v == 1.5)
+    assert(#collect(query(@t as p select p.v limit 0)) == 0)
+    assert(#collect(query(@t as p select p.v offset 10)) == 0)
+    assert(#collect(query(@t as p select p.v order by p.v limit 10 offset 10)) == 0)
+    local ok, err = catch collect(query(@t as p select p.v limit -1))
+    assert(not ok and err:find("query limit must be a nonnegative number", 1, true), err)
+    assert(#collect(query(@t as p select distinct p.k limit 2)) == 2)
+    assert(#collect(query(@t as p select distinct p.k offset 1)) == 2)
+    r = collect(query(@t as p select p.k, count(*) as n group by p.k order by p.k limit 2 offset 1))
+    assert(#r == 2 and r[1].k == "b" and r[1].n == 2 and r[2].k == "c")
+    r = collect(query(@t as p select p.k, count(*) as n group by p.k limit 1))
+    assert(#r == 1)
+    r = collect(query(@t as p, t as q where p.k == q.k select p.v, q.v as w limit 3))
+    assert(#r == 3)
+    r = collect(query(@t as p, t as q where p.k == q.k select p.v, q.v as w order by p.v, w offset 4))
+    assert(#r == 2)
+end
+
+local function orderings_compare_floats_integers_and_strings_test()
+    local mixed = { { x = 2 }, { x = 1.5 }, { x = -1 }, { x = 2.0 }, { x = 0.25 } }
+    local r = collect(query(@mixed as m select m.x order by m.x))
+    assert(r[1].x == -1 and r[2].x == 0.25 and r[3].x == 1.5 and r[5].x == 2)
+    local floats = { { x = 2.5 }, { x = -0.5 }, { x = 1.25 } }
+    r = collect(query(@floats as f select f.x order by f.x desc))
+    assert(r[1].x == 2.5 and r[3].x == -0.5)
+    local strs = { { s = "b" }, { s = "a" }, { s = "c" } }
+    r = collect(query(@strs as s select s.s order by s.s desc limit 2))
+    assert(r[1].s == "c" and r[2].s == "b")
+end
+
+local function aggregates_sum_numbers_and_reject_other_values_test()
+    local nums = { { v = 1 }, { v = 2.5 }, { v = 3 } }
+    local r = collect(query(@nums as n select sum(n.v) as s, avg(n.v) as a, min(n.v) as lo, max(n.v) as hi))
+    assert(r[1].s == 6.5 and r[1].lo == 1 and r[1].hi == 3)
+    local ints = { { v = 1 }, { v = 2 } }
+    r = collect(query(@ints as n select sum(n.v) as s))
+    assert(r[1].s == 3 and math.type(r[1].s) == "integer")
+    local bad = { { v = 1.5 }, { v = "x" } }
+    local ok, err = catch collect(query(@bad as b select sum(b.v) as s))
+    assert(not ok and err:find("cannot aggregate a string value", 1, true), err)
+    bad = { { v = 1 }, { v = {} } }
+    ok, err = catch collect(query(@bad as b select sum(b.v) as s))
+    assert(not ok and err:find("cannot aggregate a table value", 1, true), err)
+end
+
+local function a_query_source_may_return_a_native_iterator_test()
+    local src = setmetatable({}, { __query = function() return string.gmatch("", "x") end })
+    assert(#collect(query(@src as s select s.v)) == 0)
+end
