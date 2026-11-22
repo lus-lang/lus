@@ -26,7 +26,10 @@
 //! The plan string describes what the runtime (`vm/query.zig`) needs: the
 //! row variable names, the operand layout, the aggregates, the projection
 //! names for `distinct`, and each where conjunct with the shape of its SQL
-//! translation when one may exist.
+//! translation when one may exist. A conjunct that compares a column of
+//! one source with a column of another for equality is a join, and the
+//! plan names both columns, so that the runtime can find the matching
+//! rows of the inner source through an index.
 
 const std = @import("std");
 const ast = @import("../syntax/ast.zig");
@@ -484,6 +487,25 @@ fn sqlValue(n: *const Node) bool {
     };
 }
 
+/// Whether `n` compares a column of one source with a column of another
+/// for equality.
+fn isJoin(n: *const Node) bool {
+    const x = switch (n.kind) {
+        .cmp => |x| x,
+        else => return false,
+    };
+    if (x.op != .eq) return false;
+    const a = switch (x.a.kind) {
+        .column => |col| col,
+        else => return false,
+    };
+    const b = switch (x.b.kind) {
+        .column => |col| col,
+        else => return false,
+    };
+    return a.src != b.src;
+}
+
 fn sqlBool(n: *const Node) bool {
     return switch (n.kind) {
         .cmp => |x| sqlValue(x.a) and sqlValue(x.b),
@@ -702,7 +724,7 @@ pub fn queryExpr(fs: *FS, q: *ast.Query, v: *Exp) Error!void {
     }
 
     // Classify the conjuncts.
-    const Conj = struct { node: *Node, mask: u32, opaque_: bool, sql: bool };
+    const Conj = struct { node: *Node, mask: u32, opaque_: bool, sql: bool, join: bool };
     const conj = try c.arena.alloc(Conj, conjuncts.items.len);
     for (conjuncts.items, conj, 0..) |n, *cj, i| {
         var mask: u32 = 0;
@@ -712,7 +734,7 @@ pub fn queryExpr(fs: *FS, q: *ast.Query, v: *Exp) Error!void {
         // The skip mask of the step function is an integer with one bit for
         // each of the first 63 conjuncts, so only those may move into SQL.
         const skippable = i < max_skip_bits;
-        cj.* = .{ .node = n, .mask = mask, .opaque_ = opq, .sql = !opq and single and skippable and sqlBool(n) };
+        cj.* = .{ .node = n, .mask = mask, .opaque_ = opq, .sql = !opq and single and skippable and sqlBool(n), .join = isJoin(n) };
     }
 
     // Synthesize the clause functions.
@@ -824,7 +846,16 @@ pub fn queryExpr(fs: *FS, q: *ast.Query, v: *Exp) Error!void {
     for (conj) |cj| {
         try conj_buf.int(cj.mask);
         try conj_buf.int(@intFromBool(cj.opaque_));
-        if (cj.sql) try writeSql(&c, &conj_buf, cj.node, &sqlops) else try conj_buf.tag('X');
+        if (cj.sql) {
+            try writeSql(&c, &conj_buf, cj.node, &sqlops);
+        } else if (cj.join) {
+            const x = cj.node.kind.cmp;
+            try conj_buf.tag('J');
+            try conj_buf.int(x.a.kind.column.src);
+            try conj_buf.str(x.a.kind.column.name);
+            try conj_buf.int(x.b.kind.column.src);
+            try conj_buf.str(x.b.kind.column.name);
+        } else try conj_buf.tag('X');
     }
     const nops = sqlops.next;
 

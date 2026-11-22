@@ -1,0 +1,87 @@
+-- Query benchmarks: joins, ordering with a limit, grouping, and a plain
+-- filter. Each case prints its best time of several runs and a checksum
+-- that stays the same across builds.
+-- Usage: lus tests/bench/queries.lus [runs] [case]
+
+local runs = tonumber(arg and arg[1]) or 5
+local only = arg and arg[2]
+
+-- The Park-Miller generator of the compare suite.
+local seed = 42
+local function rand(n)
+    seed = seed * 16807 % 2147483647
+    return seed % n
+end
+
+local function records(n, keys)
+    local list = {}
+    for i = 1, n do
+        list[i] = { id = i, key = rand(keys) + 1, score = rand(1000000), group = rand(100) + 1, name = `r$i` }
+    end
+    return list
+end
+
+local left = records(6000, 6000)
+local right = records(6000, 6000)
+local small_a = records(2000, 2000)
+local small_b = records(2000, 2000)
+local third = records(10, 2000)
+local big = records(200000, 1000)
+
+local function best(f)
+    local b, check = math.huge, nil
+    for _ = 1, runs do
+        collectgarbage()
+        local t0 = os.clock()
+        check = f()
+        local dt = os.clock() - t0
+        if dt < b then b = dt end
+    end
+    return b, check
+end
+
+local cases = {
+    { "join-2x6000", function()
+        local n = 0
+        for row in query(@left as a, right as b where a.key == b.id select a.id, b.score) do
+            n = n + row.id + row.score
+        end
+        return n
+    end },
+    { "join-3-range", function()
+        local n = 0
+        for row in query(@small_a as a, small_b as b, third as c
+            where a.key == b.id and c.score < b.score
+            select a.id, c.id as cid) do
+            n = n + row.id * 3 + row.cid
+        end
+        return n
+    end },
+    { "order-limit-10", function()
+        local n = 0
+        for row in query(@big as r order by r.score desc limit 10) do
+            n = n * 31 % 1000000007 + row.id
+        end
+        return n
+    end },
+    { "group-100", function()
+        local n = 0
+        for row in query(@big as r select r.group, count(*) as c, sum(r.score) as s group by r.group) do
+            n = (n * 31 + row.group * row.c + row.s) % 1000000007
+        end
+        return n
+    end },
+    { "filter", function()
+        local n = 0
+        for row in query(@big as r where r.score < 500000 and r.group ~= 3 select r.id) do
+            n = n + row.id
+        end
+        return n
+    end },
+}
+
+for _, c in ipairs(cases) do
+    if only and c[1] ~= only then continue end
+    local t, check = best(c[2])
+    print(string.format("%-16s %9.2f ms  checksum %d", c[1], t * 1000, check))
+end

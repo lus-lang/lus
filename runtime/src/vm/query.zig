@@ -103,10 +103,16 @@ const Sql = struct {
     str: []const u8 = "",
 };
 
+/// A column of a source, which a join conjunct names.
+const Column = struct { src: u32, name: []const u8 };
+
 const Conj = struct {
     mask: u32,
     opaque_: bool,
     sql: ?*Sql,
+    /// The two columns of a conjunct that compares a column of one source
+    /// with a column of another for equality.
+    join: ?[2]Column = null,
 };
 
 const AggCode = qgen.agg_codes;
@@ -265,9 +271,20 @@ fn decodeInto(p: *Plan, s: []const u8) bool {
     for (p.conj) |*cj| {
         cj.mask = r.count(0xff) orelse return false;
         cj.opaque_ = (r.count(1) orelse return false) == 1;
+        cj.join = null;
         if (r.i < s.len and s[r.i] == 'X') {
             _ = r.tag() orelse return false;
             cj.sql = null;
+        } else if (r.i < s.len and s[r.i] == 'J') {
+            _ = r.tag() orelse return false;
+            cj.sql = null;
+            var cols: [2]Column = undefined;
+            for (&cols) |*col| {
+                col.src = r.count(h.nsrc - 1) orelse return false;
+                col.name = r.str() orelse return false;
+            }
+            if (cols[0].src == cols[1].src) return false;
+            cj.join = cols;
         } else {
             cj.sql = readSql(&r, a, h.nops, 0) orelse return false;
         }
@@ -729,6 +746,136 @@ fn aggResult(l: *Thread, code: u8, acc: *const Acc, ntuples: i64, gstate: *Table
 }
 
 // ---------------------------------------------------------------------
+// Indexed joins
+
+/// A join conjunct lets the odometer visit only the rows of its inner
+/// source whose column equals the column of the current row of the outer
+/// source, when skipping the other rows changes nothing that the step
+/// function would do. The step evaluates the conjuncts in order and stops
+/// at the first false one, so the conjunct must come after joins only,
+/// and every row that these joins read must be a table without a
+/// metatable whose columns hold nil or primitive values. Then no field
+/// read runs `__index`, no comparison runs `__eq`, and a skipped tuple is
+/// one the step would have rejected without a trace. The step still
+/// evaluates every conjunct of the tuples the index finds, and the rows
+/// come in the order of their positions, as the full product gives them.
+const Index = struct {
+    /// The outer source and the name of its column.
+    outer: u32,
+    outer_name: Value,
+    /// The normalized key of each value of the inner column to its number.
+    map: *Table,
+    /// The positions of the rows with key number `k` are
+    /// `pos[offs[k]..offs[k + 1]]`, in ascending order.
+    offs: []u32,
+    pos: []u32,
+
+    fn deinit(ix: *Index, gpa: std.mem.Allocator) void {
+        gpa.free(ix.offs);
+        gpa.free(ix.pos);
+    }
+};
+
+/// Whether `v` compares equal only to values of the same normalized key,
+/// without a metamethod.
+fn plainKey(v: Value) bool {
+    return switch (v.tag) {
+        .nil, .integer, .float, .string, .true, .false => true,
+        else => false,
+    };
+}
+
+/// Whether every row of the source table `t` is a table without a
+/// metatable whose field `name` holds nil or a plain key.
+fn plainColumn(t: *Table, n: i64, name: Value) bool {
+    var k: i64 = 1;
+    while (k <= n) : (k += 1) {
+        const row = table.getInt(t, k);
+        if (row.tag != .table) return false;
+        const rt = row.as(Table);
+        if (rt.metatable != null) return false;
+        if (!plainKey(table.get(rt, name))) return false;
+    }
+    return true;
+}
+
+/// A key that matches nothing: nil, or NaN.
+fn matchesNothing(v: Value) bool {
+    return v.isNil() or (v.tag == .float and std.math.isNan(v.asFloat()));
+}
+
+/// Indexes the rows of source table `t` by their field `name`, whose
+/// values `plainColumn` checked. `map` is a new table rooted on the stack.
+fn buildIndex(l: *Thread, t: *Table, n: i64, name: Value, map: *Table, outer: u32, outer_name: Value) Error!Index {
+    const gpa = l.g.gpa;
+    const count: usize = @intCast(n);
+    const ids = gpa.alloc(i32, count) catch return l.raiseMem();
+    defer gpa.free(ids);
+    var counts: std.ArrayList(u32) = .empty;
+    defer counts.deinit(gpa);
+    for (ids, 0..) |*id, i| {
+        const v = table.get(table.getInt(t, @intCast(i + 1)).as(Table), name);
+        if (matchesNothing(v)) {
+            id.* = -1;
+            continue;
+        }
+        const found = table.get(map, try ops.normKey(l, v));
+        if (found.tag == .integer) {
+            id.* = @intCast(found.asInt());
+        } else {
+            id.* = @intCast(counts.items.len);
+            try ops.rawSet(l, map, v, Value.int(id.*));
+            counts.append(gpa, 0) catch return l.raiseMem();
+        }
+        counts.items[@intCast(id.*)] += 1;
+    }
+    const offs = gpa.alloc(u32, counts.items.len + 1) catch return l.raiseMem();
+    errdefer gpa.free(offs);
+    var total: u32 = 0;
+    for (counts.items, 0..) |c, k| {
+        offs[k] = total;
+        total += c;
+    }
+    offs[counts.items.len] = total;
+    const pos = gpa.alloc(u32, total) catch return l.raiseMem();
+    // Fill each run in ascending order, counting the runs down again.
+    for (counts.items, 0..) |*c, k| c.* = offs[k];
+    for (ids, 0..) |id, i| {
+        if (id < 0) continue;
+        const k: usize = @intCast(id);
+        pos[counts.items[k]] = @intCast(i + 1);
+        counts.items[k] += 1;
+    }
+    return .{ .outer = outer, .outer_name = outer_name, .map = map, .offs = offs, .pos = pos };
+}
+
+/// Builds the indexes of the sources that a join lets the odometer
+/// narrow, storing each one at the index of its inner source. `slot` is
+/// the first of `nsrc` stack slots that root the names and key maps.
+fn buildIndexes(l: *Thread, p: *const Plan, src: u32, slot: u32, sizes: []const i64, out: []?Index) Error!void {
+    var nnames: i64 = 0;
+    for (p.conj) |cj| {
+        const cols = cj.join orelse break;
+        if (l.stack[slot].isNil()) l.stack[slot] = Value.obj(.table, try l.newTable(0, 0));
+        const names = l.stack[slot].as(Table);
+        var vals: [2]Value = undefined;
+        for (cols, &vals) |col, *nv| {
+            nv.* = try l.newStringValue(col.name);
+            nnames += 1;
+            try ops.rawSet(l, names, Value.int(nnames), nv.*);
+            const t = l.stack[src + col.src].as(Table);
+            if (!plainColumn(t, sizes[col.src], nv.*)) return;
+        }
+        const inner: usize = if (cols[0].src > cols[1].src) 0 else 1;
+        const s = cols[inner].src;
+        if (out[s] != null or sizes[s] < 2) continue;
+        const map = try l.newTable(0, 0);
+        l.stack[slot + 1 + s] = Value.obj(.table, map);
+        out[s] = try buildIndex(l, l.stack[src + s].as(Table), sizes[s], vals[inner], map, cols[1 - inner].src, vals[1 - inner]);
+    }
+}
+
+// ---------------------------------------------------------------------
 // Execution
 
 /// Stack slots relative to the execution base.
@@ -824,8 +971,11 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     const gpa = l.g.gpa;
     const nsrc = p.nsrc;
     const base = l.top;
-    try l.ensure(slot_sources + nsrc + 8);
-    for (0..slot_sources + nsrc) |_| try l.push(.nil);
+    // After the sources come the slots that root the column names and the
+    // key maps of the indexed joins.
+    const slot_index = slot_sources + nsrc;
+    try l.ensure(slot_index + 1 + nsrc + 8);
+    for (0..slot_index + 1 + nsrc) |_| try l.push(.nil);
     l.stack[base + slot_records] = Value.obj(.table, try l.newTable(0, 0));
     if (p.desc.len > 0) l.stack[base + slot_keys] = Value.obj(.table, try l.newTable(0, 0));
     const names = gpa.alloc(Value, p.sel.len) catch return l.raiseMem();
@@ -883,15 +1033,56 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     var ngroups: i64 = 0;
     const naggs = p.aggs.len;
 
+    var indexes: [qgen.max_sources]?Index = @splat(null);
+    defer for (&indexes) |*ix| if (ix.*) |*x| x.deinit(gpa);
+    if (!empty and nsrc > 1) try buildIndexes(l, p, base + slot_sources, base + slot_index, sizes[0..nsrc], indexes[0..nsrc]);
+
     // The fused join loop: walk the cross product with an odometer and
-    // call the step function once per tuple.
+    // call the step function once per tuple. Each source runs through a
+    // sequence of row positions: all of them, or the rows that its index
+    // finds for the current row of the outer source.
     const step = q.operand(p.op_step);
     var args: [qgen.max_sources + 1]Value = undefined;
-    var counters: [qgen.max_sources]i64 = @splat(1);
+    var at: [qgen.max_sources]usize = @splat(0);
+    var len: [qgen.max_sources]usize = @splat(0);
+    var seq: [qgen.max_sources]?[]const u32 = @splat(null);
     var done = empty or (!grouped and sink.full());
+    // The first source whose sequence starts again.
+    var fresh: usize = 0;
     while (!done) {
+        // Start the sequences of the sources from `fresh` on. A sequence
+        // that is empty advances the source before it instead.
+        var si = fresh;
+        while (si < nsrc) {
+            at[si] = 0;
+            seq[si] = null;
+            len[si] = @intCast(sizes[si]);
+            if (indexes[si]) |*ix| {
+                const outer = args[ix.outer + 1].as(Table);
+                const v = table.get(outer, ix.outer_name);
+                len[si] = 0;
+                if (!matchesNothing(v)) {
+                    const found = table.get(ix.map, try ops.normKey(l, v));
+                    if (found.tag == .integer) {
+                        const k: usize = @intCast(found.asInt());
+                        seq[si] = ix.pos[ix.offs[k]..ix.offs[k + 1]];
+                        len[si] = seq[si].?.len;
+                    }
+                }
+            }
+            if (len[si] == 0) {
+                si = advance(&at, &len, si) orelse {
+                    done = true;
+                    break;
+                };
+                args[si] = rowAt(l, base, &seq, &at, si - 1);
+                continue;
+            }
+            args[si + 1] = rowAt(l, base, &seq, &at, si);
+            si += 1;
+        }
+        if (done) break;
         args[0] = Value.int(skip_mask);
-        for (0..nsrc) |i| args[i + 1] = table.getInt(l.stack[base + slot_sources + i].as(Table), counters[i]);
         const top = l.top;
         const nres = try ops.callN(l, step, args[0 .. nsrc + 1], -1);
         if (nres > 0 and l.stack[top].truthy()) {
@@ -943,14 +1134,8 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
         }
         l.top = top;
         // Advance the odometer.
-        var i: usize = nsrc;
-        while (i > 0) {
-            i -= 1;
-            counters[i] += 1;
-            if (counters[i] <= sizes[i]) break;
-            counters[i] = 1;
-            if (i == 0) done = true;
-        }
+        fresh = advance(&at, &len, nsrc) orelse break;
+        args[fresh] = rowAt(l, base, &seq, &at, fresh - 1);
     }
 
     if (grouped) {
@@ -1020,6 +1205,26 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
         l.stack[base + slot_records] = Value.obj(.table, out);
     }
     return finish(l, base, l.stack[base + slot_records].as(Table));
+}
+
+/// Moves the odometer past the sources before `from`: the last of them
+/// that has a next row takes it. Returns the index of the first source
+/// after it, whose sequence starts again, or null when every tuple went by.
+fn advance(at: []usize, len: []const usize, from: usize) ?usize {
+    var j = from;
+    while (j > 0) {
+        j -= 1;
+        at[j] += 1;
+        if (at[j] < len[j]) return j + 1;
+    }
+    return null;
+}
+
+/// The current row of source `i`.
+fn rowAt(l: *Thread, base: u32, seq: []const ?[]const u32, at: []const usize, i: usize) Value {
+    const t = l.stack[base + slot_sources + i].as(Table);
+    const pos: i64 = if (seq[i]) |s| s[at[i]] else @intCast(at[i] + 1);
+    return table.getInt(t, pos);
 }
 
 fn finish(l: *Thread, base: u32, records: *Table) *Table {

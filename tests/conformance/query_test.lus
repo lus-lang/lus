@@ -467,6 +467,146 @@ local function three_way_and_self_joins_test()
     assert(#pairs_ == 1)
 end
 
+-- Group: joins through an index
+
+-- The rows of `a` joined with `b` on `a.k == b.k`, as `{a.id, b.id}`
+-- pairs: through the index, and through the full product, which a host
+-- call before the join keeps.
+local function joined(a, b)
+    local function yes() return true end
+    local fast, slow = {}, {}
+    for row in query(@a as x, b as y where x.k == y.k select x.id, y.id as yid) do
+        fast[#fast + 1] = `$(row.id):$(row.yid)`
+    end
+    for row in query(@a as x, b as y where yes() and x.k == y.k select x.id, y.id as yid) do
+        slow[#slow + 1] = `$(row.id):$(row.yid)`
+    end
+    assert(#fast == #slow, `$(#fast) ~= $(#slow)`)
+    for i = 1, #fast do assert(fast[i] == slow[i], `row $i: $(fast[i]) ~= $(slow[i])`) end
+    return fast
+end
+
+local function an_indexed_join_keeps_the_order_of_the_full_product_test()
+    local a, b = {}, {}
+    for i = 1, 40 do a[i] = { id = i, k = i % 7 } end
+    for i = 1, 30 do b[i] = { id = i, k = (i * 3) % 7 } end
+    local rows = joined(a, b)
+    assert(#rows > 0)
+    -- Duplicate keys on the inner side come in ascending order.
+    assert(rows[1] == "1:5")
+end
+
+local function an_indexed_join_matches_numbers_strings_and_booleans_as_equality_does_test()
+    local a = {
+        { id = 1, k = 1 }, { id = 2, k = 1.0 }, { id = 3, k = "1" }, { id = 4, k = true },
+        { id = 5, k = 2^53 }, { id = 6, k = -0.0 }, { id = 7, k = "long key " .. string.rep("x", 60) },
+    }
+    local b = {
+        { id = 1, k = 1.0 }, { id = 2, k = "1" }, { id = 3, k = true }, { id = 4, k = 1 },
+        { id = 5, k = math.tointeger(2^53) }, { id = 6, k = 0 }, { id = 7, k = "long key " .. string.rep("x", 60) },
+        { id = 8, k = false },
+    }
+    local rows = joined(a, b)
+    assert(table.concat(rows, " ") == "1:1 1:4 2:1 2:4 3:2 4:3 5:5 6:6 7:7", table.concat(rows, " "))
+end
+
+local function nil_and_nan_keys_match_nothing_in_an_indexed_join_test()
+    local nan = 0 / 0
+    local a = { { id = 1 }, { id = 2, k = nan }, { id = 3, k = 4 } }
+    local b = { { id = 1 }, { id = 2, k = nan }, { id = 3, k = 4 }, { id = 4 } }
+    assert(table.concat(joined(a, b), " ") == "3:3")
+end
+
+local function rows_with_metatables_see_every_field_read_test()
+    local reads = 0
+    local mt = { __index = function(_, key) reads = reads + 1 return key == "k" and 1 or nil end }
+    local a = { { id = 1, k = 1 }, { id = 2, k = 2 } }
+    local b = { setmetatable({ id = 1 }, mt), { id = 2, k = 1 }, { id = 3, k = 2 } }
+    local rows = collect(@a as x, b as y where x.k == y.k select x.id, y.id as yid)
+    assert(#rows == 3)
+    assert(rows[1].id == 1 and rows[1].yid == 1)
+    -- The full product reads the field as often.
+    local fast = reads
+    reads = 0
+    local function yes() return true end
+    assert(#collect(@a as x, b as y where yes() and x.k == y.k select x.id) == 3)
+    assert(fast == reads and fast > 0, `$fast ~= $reads`)
+end
+
+local function keys_with_an_eq_metamethod_are_compared_on_every_tuple_test()
+    local calls = 0
+    local mt = { __eq = function() calls = calls + 1 return true end }
+    local a = { { id = 1, k = setmetatable({}, mt) }, { id = 2, k = 5 } }
+    local b = { { id = 1, k = setmetatable({}, mt) }, { id = 2, k = 5 }, { id = 3, k = 6 } }
+    local rows = collect(@a as x, b as y where x.k == y.k select x.id, y.id as yid)
+    assert(#rows == 2, #rows)
+    assert(calls == 1, calls)
+end
+
+local function a_join_after_another_condition_runs_on_every_tuple_test()
+    local seen = 0
+    local function tally(v) seen = seen + 1 return v end
+    local a = { { id = 1, k = 1 }, { id = 2, k = 2 } }
+    local b = { { id = 1, k = 1 }, { id = 2, k = 3 }, { id = 3, k = 1 } }
+    local rows = collect(@a as x, b as y where tally(x.id) > 0 and x.k == y.k select x.id, y.id as yid)
+    assert(#rows == 2)
+    assert(seen == 6, seen)
+    -- A condition after the join sees only the tuples that it lets through.
+    seen = 0
+    rows = collect(@a as x, b as y where x.k == y.k and tally(y.id) > 0 select x.id, y.id as yid)
+    assert(#rows == 2)
+    assert(seen == 2, seen)
+end
+
+local function chains_of_indexed_joins_and_swapped_sides_test()
+    local a, b, c = {}, {}, {}
+    for i = 1, 20 do a[i] = { id = i, k = i % 5 } end
+    for i = 1, 20 do b[i] = { id = i, k = i % 4, j = i % 3 } end
+    for i = 1, 20 do c[i] = { id = i, j = i % 6 } end
+    local function yes() return true end
+    local fast, slow = {}, {}
+    for r in query(@a as x, b as y, c as z where y.k == x.k and z.j == y.j select x.id, y.id as yid, z.id as zid) do
+        fast[#fast + 1] = `$(r.id):$(r.yid):$(r.zid)`
+    end
+    for r in query(@a as x, b as y, c as z where yes() and y.k == x.k and z.j == y.j select x.id, y.id as yid, z.id as zid) do
+        slow[#slow + 1] = `$(r.id):$(r.yid):$(r.zid)`
+    end
+    assert(#fast > 0 and #fast == #slow)
+    for i = 1, #fast do assert(fast[i] == slow[i]) end
+    -- A join of the first source with the third skips over the second.
+    local n = 0
+    for _ in query(@a as x, b as y, c as z where x.k == z.j select x.id) do n = n + 1 end
+    local m = 0
+    for _ in query(@a as x, b as y, c as z where yes() and x.k == z.j select x.id) do m = m + 1 end
+    assert(n == m and n > 0)
+end
+
+local function indexed_joins_group_order_limit_and_query_sources_test()
+    local a, b = {}, {}
+    for i = 1, 50 do a[i] = { id = i, k = i % 10 } end
+    for i = 1, 50 do b[i] = { id = i, k = i % 10, v = i } end
+    local rows = collect(@a as x, b as y where x.k == y.k
+        select x.k, count(*) as n, sum(y.v) as s group by x.k order by x.k desc)
+    assert(#rows == 10 and rows[1].k == 9 and rows[1].n == 25)
+    rows = collect(@a as x, b as y where x.k == y.k select x.id, y.id as yid order by y.id desc limit 3)
+    assert(#rows == 3 and rows[1].yid == 50 and rows[1].id == 10)
+    local src = setmetatable({}, { __query = function()
+        local i = 0
+        return function() i = i + 1 if i <= 50 then return { id = i, k = i % 10 } end end
+    end })
+    local n = 0
+    for _ in query(@a as x, src as y where x.k == y.k select x.id) do n = n + 1 end
+    assert(n == 250)
+end
+
+local function an_indexed_join_raises_the_errors_of_the_full_product_test()
+    local a = { { id = 1, k = 1 } }
+    local b = { { id = 1, k = 1 }, 5 }
+    local ok, err = catch collect(@a as x, b as y where x.k == y.k select x.id)
+    assert(not ok)
+    assert(tostring(err):find("record"), err)
+end
+
 -- Group: laziness and re-execution
 
 local function a_stored_query_runs_fresh_on_every_loop_test()
