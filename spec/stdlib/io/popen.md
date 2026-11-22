@@ -19,7 +19,7 @@ Starts the program `prog` in a separate process and returns a file handle connec
 
 `prog` is a command string. It runs in the system shell: `/bin/sh -c` on POSIX systems, and `cmd.exe /s /c` on Windows, which receives the command exactly as written. `mode` is `"r"`, the default, which reads the output of the program, or `"w"`, which writes to its input. Any other mode raises a `bad argument` error.
 
-On success the call returns one handle. A program that cannot be started returns `nil` and a message. The call requires the `exec` permission, and without it raises `permission "exec" denied`. Reading a handle opened with `"w"` returns `nil`, `"file not opened for reading"`, and `0`.
+On success the call returns one handle. A program that cannot be started returns `nil` and a message. The call requires the `exec` permission without a value, since the shell runs any program, and without it raises `permission "exec" denied for popen`. Reading a handle opened with `"w"` returns `nil`, `"file not opened for reading"`, and `0`.
 
 Closing the handle closes the pipe in both directions and waits for the program to exit. A program that still writes its output when the handle closes then stops on a broken pipe, which on POSIX systems is the signal `SIGPIPE`. Closing returns the same three results as [`os.execute`](/manual/api#os.execute).
 

@@ -110,8 +110,9 @@ local function a_detached_coroutine_waits_for_a_signal_test()
     if windows then skip("signals are POSIX") end
     local p = child([[
         local got
+        local sig = os.signal("terminate")
         local waiter = coroutine.detach(coroutine.create(function()
-            got = select(2, coroutine.resume(os.signal("terminate")))
+            got = select(2, coroutine.resume(sig))
         end))
         print("ready")
         io.stdout:flush()

@@ -184,7 +184,7 @@ The following table lists the permission that each Lua library function needs.
 | `io.open` for writing, `io.tmpfile`, `os.tmpname` | `fs:write` |
 | `require` of a module file, `dofile`, `loadfile` | `fs:read` and `load` |
 | `load` | `load` |
-| `os.execute`, `io.popen` | `exec` |
+| `os.execute`, `io.popen` | `exec` without a value |
 | `os.getenv` | `env` |
 
 A program that consists of several files needs `fs:read` and `load` for `require`, which otherwise skips the files that it may not read and reports that the module was not found. Such a program starts with the following pledge.

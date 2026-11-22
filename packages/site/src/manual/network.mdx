@@ -342,10 +342,15 @@ server:close()
 | `idle_timeout` | How many seconds a connection may spend without progress. The default is 60. A negative value removes the limit. |
 | `max_connections` | How many connections the server keeps open at once. The default is half of the file descriptors that the process may open, up to 65536. |
 | `on_error` | A function that receives the error object of a failed handler in place of the line on standard error. |
+| `drain_timeout` | How many seconds the open connections may take to finish after the server stops. The default is 10. A negative value removes the limit, and `0` closes them at once. |
 
 A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that makes no progress for `idle_timeout` seconds closes, whether it is between two requests or has stopped reading its response. A connection that stops in the middle of a request receives a 408 response before it closes. The time that the handler takes is excluded from the timeout.
 
 While `max_connections` connections are open, further clients wait in the queue of the system until a connection closes and the server accepts the next one. When the system has no file descriptor or no memory left for a new connection, the server waits until a connection closes or a short time passes, then accepts again.
+
+### Stopping the server
+
+Closing the coroutine that runs `network.serve` stops the server gracefully. `serve` accepts no new connection, and a server that `serve` bound itself closes. A connection that waits between two requests closes at once. A connection in the middle of a request finishes it, sends its response with `Connection: close`, and closes. The connections still open after `drain_timeout` seconds close without their responses. [Stopping a server gracefully](/manual/processes#stopping-a-server-gracefully) closes the coroutine when the program receives a signal.
 
 ### Limits
 

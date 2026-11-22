@@ -24,6 +24,8 @@ Serves HTTP/1.1 on `host` and `port`, calls `handler` for every request, and ret
 
 `serve` blocks its caller for as long as the server runs and returns no values. It accepts connections in a loop, and each connection runs in a coroutine of its own that the runtime resumes whenever its socket is ready (see `coroutine.detach`), so a slow client never holds up the others. Connections stay open between requests unless the client asks to close them. A server that `serve` bound itself closes when `serve` ends, and a server passed to it stays open until the program closes it. `serve` ends when the coroutine that called it is closed, or when accepting a connection fails for a reason other than a shortage of file descriptors or memory.
 
+Closing the coroutine that runs `serve` stops the server gracefully. `serve` stops accepting, and a server it bound itself closes at once. A connection that waits between two requests closes at once, and a connection in the middle of a request finishes it, with a response that carries `Connection: close`, then closes. A connection still open when `drain_timeout` has passed is closed, together with a response that was not sent yet. A handler that still runs at that point continues, and its response is dropped. The program keeps running while connections drain, because each connection runs in a detached coroutine of its own.
+
 The call requires the `network:server` permission for the address it serves, and in the first form `network:tcp` to bind it. A failure to bind raises an error such as `"cannot bind to HOST:PORT: REASON"`.
 
 The handler receives one table per request:
@@ -70,6 +72,7 @@ server:close()
 | `idle_timeout` | How many seconds a connection may spend without progress, which defaults to 60. A negative value lets a connection wait without limit. |
 | `max_connections` | How many connections the server keeps open at once. It defaults to half of the file descriptors that the process may open, and to 65536 at most. |
 | `on_error` | A function that receives the error of a handler in place of the line on standard error. |
+| `drain_timeout` | How many seconds the open connections may take to finish after the coroutine of `serve` closed, which defaults to 10. A negative value lets them take as long as they need, and `0` closes them at once. |
 
 A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that stays idle for `idle_timeout` between two requests closes. One that stops in the middle of a request is answered with 408 and closes, and one that stops reading its response closes as well. A handler may take as long as it needs.
 

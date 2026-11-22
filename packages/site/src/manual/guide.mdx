@@ -3093,7 +3093,7 @@ A permission name starts with a group, such as `fs` for the filesystem. Most nam
 | `network:tcp` | Opening TCP connections and listening for them. |
 | `network:udp` | Sending and receiving UDP datagrams. |
 | `network:server` | Serving HTTP with `network.serve`, together with `network:tcp`. |
-| `exec` | Running other programs with `os.execute` and `io.popen`. |
+| `exec` | Running other programs with `os.spawn`, `os.execute`, and `io.popen`. |
 | `env` | Reading environment variables with `os.getenv` and setting them with `os.setenv`. `env:read` and `env:write` allow one of the two. |
 | `load` | Running code that the program loads while it runs, with `load`, `require` of a file, or a worker. |
 
