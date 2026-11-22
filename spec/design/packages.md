@@ -1,8 +1,8 @@
-# First atmosphere packages
+# Atmosphere packages
 
-This note plans the first set of packages for the atmosphere registry at atmosp.here. A program loads a package by URL, as in `require("https://atmosp.here/2.0/web.lus")`. Each package lives in a public repository of the `lus-lang` organization, which the atmosphere server fetches without a token.
+This note plans the first two sets of packages for the atmosphere registry at atmosp.here. A program loads a package by URL, as in `require("https://atmosp.here/2.0/web.lus")`. Each package lives in a public repository of the `lus-lang` organization, which the atmosphere server fetches without a token.
 
-The set has four groups. The web group is a router and framework modeled on Fastify, with WebSocket and middleware for CORS, cookies, and sessions. The data group validates values against schemas and reads and writes YAML, TOML, HTML templates, and Markdown. The command line group parses arguments, colors terminal output, asks questions, and loads `.env` files. The last group holds JWT and semantic versions. UUID and ULID come from the standard library, so no package provides them.
+The first set has four groups. The web group is a router and framework modeled on Fastify, with WebSocket and middleware for CORS, cookies, and sessions. The data group validates values against schemas and reads and writes YAML, TOML, HTML templates, and Markdown. The command line group parses arguments, colors terminal output, asks questions, and loads `.env` files. The last group holds JWT and semantic versions. UUID and ULID come from the standard library, so no package provides them.
 
 The web framework is the flagship. Its goal is a request rate within 10% of a bare `network.serve` handler and a peak memory within 10% of it, measured with `tests/bench/compare` on the same machine.
 
@@ -314,3 +314,312 @@ The packages needed four additions to the runtime, which Lus 2.0 adds.
 The prototypes of `web`, `color`, and `dotenv` use these additions where the runtime provides them, so their tests pass on runtimes with and without them.
 
 The tests of `session` and `prompt` load their dependency from a sibling checkout. Each maps the atmosphere URL of the dependency to the local module through `package.preload`, which `require` consults under the exact URL before it goes to the network.
+
+## Next packages
+
+This part plans the second set of official packages. It starts from the packages that JavaScript programs depend on most, measured by weekly downloads on npm, and from the modules that Bun users reach for. The survey counts the dependencies of applications, such as database drivers, mailers, and loggers, alongside libraries and tools.
+
+### Survey
+
+Each surveyed package falls into one of four classes. The standard library covers it, one of the first 16 packages covers it, it is a gap worth an official package, or it has no use in Lus. The tables group the packages by area and name the class of each.
+
+#### Covered by the standard library
+
+| npm or Bun package | Lus |
+| --- | --- |
+| `uuid`, `nanoid`, `ulid` | `crypto.uuid`, `crypto.ulid`, and `crypto.random` |
+| `bcrypt`, `argon2`, `Bun.password` | `crypto.hashpassword` and `crypto.verifypassword` |
+| `crypto-js`, `sha.js`, `create-hmac` | `crypto.hash`, `crypto.hasher`, and `crypto.hmac` |
+| `node-fetch`, `undici`, `cross-fetch` | `network.fetch` |
+| `express`, `Bun.serve` at the transport level | `network.serve` |
+| `ws` at the socket level | the `101` upgrade of `network.serve` |
+| `better-sqlite3`, `bun:sqlite` | `io.sqlite` |
+| `csv-parse`, `papaparse`, `csv-stringify` | `fromcsv` and `tocsv` |
+| `fs-extra`, `rimraf`, `mkdirp`, `graceful-fs` | the `fs` module |
+| `pako`, `zlib`, `brotli`, `lz4`, `zstd` codecs | `vector.archive` |
+| `moment`, `dayjs`, `date-fns`, `luxon`, `date-fns-tz` | the `time` module with its IANA zones, `format`, and `parse` |
+| `lodash`, `underscore`, `ramda` | `table` functions such as `map`, `filter`, `groupby`, `sortby`, `zip`, and `clone` |
+| `bignumber.js`, `decimal.js`, `big.js` | `bigint` and `decimal` numbers |
+| `iconv-lite`, `base64-js`, `buffer` | `string.transcode` and vectors |
+| `async`, `p-map`, `p-all` | detached coroutines |
+| `jest`, `vitest`, `mocha`, `chai`, `bun:test` | `lus test` with power asserts, case tables, snapshots, and fixtures |
+| `prettier`, `eslint`, `typescript` checks | `lus fmt` and `lus check` |
+| `piscina`, `workerpool` | `worker` |
+
+#### Covered by the first 16 packages
+
+| npm or Bun package | Lus package |
+| --- | --- |
+| `express`, `fastify`, `koa`, `hono`, `elysia`, `body-parser`, `path-to-regexp` | `web` |
+| `ws`, `socket.io` at the message level | `websocket` |
+| `cors` | `cors` |
+| `cookie`, `cookie-parser`, `Bun.CookieMap` | `cookie` |
+| `express-session`, `iron-session` | `session` |
+| `zod`, `joi`, `yup`, `valibot`, `ajv`, `validator` | `schema` |
+| `js-yaml`, `yaml` | `yaml` |
+| `@iarna/toml`, `smol-toml` | `toml` |
+| `handlebars`, `mustache`, `ejs`, `nunjucks`, `pug` | `html_template` |
+| `marked`, `markdown-it`, `remark` | `markdown` |
+| `commander`, `yargs`, `minimist`, `meow`, `cac` | `cli` |
+| `chalk`, `picocolors`, `kleur`, `colorette`, `ansi-styles` | `color` |
+| `inquirer`, `@inquirer/prompts`, `prompts`, `enquirer` | `prompt` |
+| `dotenv`, `dotenv-expand` | `dotenv` |
+| `jsonwebtoken`, `jose` | `jwt`, for HMAC and Ed25519 keys |
+| `semver`, `Bun.semver` | `semver` |
+
+#### Gaps
+
+The gaps below are packages that applications commonly depend on and that nothing in Lus provides yet.
+
+| Area | npm or Bun packages |
+| --- | --- |
+| Web and HTTP | `multer`, `busboy`, `formidable`, `qs`, `form-data`, `serve-static`, `send`, `mime-types`, `express-rate-limit`, `axios`, `got`, `ky`, `helmet`, `compression`, `http-proxy` |
+| HTML and XML | `cheerio`, `htmlparser2`, `parse5`, `sanitize-html`, `entities`, `he`, `fast-xml-parser`, `xml2js`, `HTMLRewriter` |
+| Databases | `pg`, `postgres`, `Bun.sql`, `redis`, `ioredis`, `Bun.redis`, `mysql2`, `mongodb`, `knex`, `drizzle-kit` migrations |
+| Queues and jobs | `bullmq`, `bee-queue`, `p-queue`, `node-cron`, `croner`, `cron-parser` |
+| Email | `nodemailer`, `mailparser` |
+| Logging | `pino`, `winston`, `morgan`, `debug` |
+| Auth | `passport`, `openid-client`, `arctic`, `otplib`, `speakeasy` |
+| Cloud storage | `@aws-sdk/client-s3`, `Bun.S3Client` |
+| Dates and i18n | `i18next`, `intl-messageformat`, `ms`, `pretty-bytes`, `timeago.js` |
+| Command line | `ora`, `cli-progress`, `listr2`, `cli-table3`, `string-width`, `wrap-ansi`, `strip-ansi`, `boxen` |
+| Archives | `tar`, `archiver`, `adm-zip`, `jszip`, `yauzl` |
+| Processes and files | `execa`, `cross-spawn`, `Bun.spawn`, `Bun.$`, `chokidar`, `glob`, `fast-glob`, `minimatch`, `picomatch`, `Bun.Glob` |
+
+#### Not applicable
+
+Front-end frameworks such as `react`, `vue`, and `svelte`, and their build tools such as `vite`, `webpack`, `esbuild`, and `babel`, target the browser and the JavaScript toolchain. Polyfills such as `core-js`, `tslib`, and `regenerator-runtime`, and helpers for the language itself such as `eventemitter3`, `rxjs`, and `inherits`, solve problems that Lus does not have. Native addons such as `sharp`, `canvas`, and `puppeteer` wrap large C or browser engines, which a package written in Lus cannot carry. The section on later packages returns to images.
+
+### Proposed packages
+
+The proposal has 20 packages in four tiers. The first tier serves web applications, which are the largest group of programs in the survey. The tiers follow the order of work, and a later tier may start once the standard library additions it needs exist.
+
+| Package | Repository | Replaces | Depends on | Permissions |
+| --- | --- | --- | --- | --- |
+| `log` | `lus-lang/atmos-log` | `pino`, `winston`, `morgan` | none | none |
+| `form` | `lus-lang/atmos-form` | `qs`, `multer`, `busboy`, `form-data` | none | none |
+| `static` | `lus-lang/atmos-static` | `serve-static`, `send`, `mime-types` | none | `fs:read` |
+| `rate_limit` | `lus-lang/atmos-rate-limit` | `express-rate-limit` | none | none |
+| `http_client` | `lus-lang/atmos-http-client` | `axios`, `got`, `ky` | `form` | `network:http` |
+| `html` | `lus-lang/atmos-html` | `cheerio`, `htmlparser2`, `sanitize-html` | none | none |
+| `postgres` | `lus-lang/atmos-postgres` | `pg`, `postgres`, `Bun.sql` | stdlib TLS, PBKDF2 | `network:tcp` |
+| `redis` | `lus-lang/atmos-redis` | `ioredis`, `redis`, `Bun.redis` | stdlib TLS | `network:tcp` |
+| `migrate` | `lus-lang/atmos-migrate` | `knex` and `drizzle-kit` migrations | none | `fs:read` |
+| `mail` | `lus-lang/atmos-mail` | `nodemailer` | stdlib TLS | `network:tcp` |
+| `cron` | `lus-lang/atmos-cron` | `node-cron`, `croner`, `cron-parser` | stdlib `time` | none |
+| `queue` | `lus-lang/atmos-queue` | `bullmq`, `p-queue` | `redis` for its Redis store | none |
+| `oauth` | `lus-lang/atmos-oauth` | `openid-client`, `arctic`, `passport` | `jwt`, stdlib RSA and ECDSA | `network:http` |
+| `otp` | `lus-lang/atmos-otp` | `otplib`, `speakeasy` | none | none |
+| `s3` | `lus-lang/atmos-s3` | `@aws-sdk/client-s3`, `Bun.S3Client` | `xml` | `network:http` |
+| `xml` | `lus-lang/atmos-xml` | `fast-xml-parser`, `xml2js` | none | none |
+| `humanize` | `lus-lang/atmos-humanize` | `ms`, `pretty-bytes`, `timeago.js` | none | none |
+| `i18n` | `lus-lang/atmos-i18n` | `i18next`, `intl-messageformat` | none | `fs:read` when it loads catalogs |
+| `term` | `lus-lang/atmos-term` | `ora`, `cli-progress`, `cli-table3`, `string-width`, `wrap-ansi` | `color` | none |
+| `archive` | `lus-lang/atmos-archive` | `tar`, `archiver`, `adm-zip`, `jszip` | stdlib deflate | none |
+
+#### Tier 1: web applications
+
+**log** writes structured log records as JSON lines, with levels, child loggers that add fields, and redaction of named fields. A pretty printer formats the lines for a terminal. A `web` plugin logs one line per request with its method, path, status, and duration.
+
+```lus nocheck
+local log = require("https://atmosp.here/2.0/log.lus")
+local logger = log.new({ level = "info", redact = { "password" } })
+local db_log = logger:child({ component = "db" })
+db_log:info("connected", { host = "localhost", ms = 12 })
+app:register(log.web(logger))
+```
+
+The goal for `log` is the goal of `pino`: a disabled level costs one comparison. An enabled one costs one `tojson` call and one write.
+
+**form** decodes and encodes `application/x-www-form-urlencoded` bodies with the nested keys of `qs`, such as `user[name]=x`. It parses `multipart/form-data` bodies into fields and files, with limits on the number of parts and the size of each. It builds multipart bodies for `network.fetch`. `form.web` adds a body parser for both types to a `web` scope.
+
+```lus nocheck
+local form = require("https://atmosp.here/2.0/form.lus")
+local fields = form.decode("user[name]=Ada&tags[]=a&tags[]=b")
+local parts = form.multipart(req.body, req.headers["content-type"], { max_file_size = 10 * 1024 * 1024 })
+for _, file in ipairs(parts.files) do print(file.name, file.filename, #file.data) end
+local body, content_type = form.encode_multipart({ title = "x", upload = { filename = "a.png", data = bytes } })
+```
+
+**static** serves the files of a directory with a content type from its table of extensions, `ETag` and `Last-Modified` validators, `Range` requests, `Cache-Control`, and index files. It refuses paths that leave the root. It works as a `web` plugin and as a bare `network.serve` handler.
+
+```lus nocheck
+local static = require("https://atmosp.here/2.0/static.lus")
+app:register(static.web({ root = "public", prefix = "/assets", max_age = 3600 }))
+network.serve("0.0.0.0", 8080, static.handler({ root = "public" }))
+```
+
+**rate_limit** limits requests per key with a fixed window, a sliding window, or a token bucket. Its store holds counters in memory by default and accepts any table with `incr` and `expire`, which the `redis` client provides. It sets the `RateLimit` headers of the IETF draft and answers 429.
+
+```lus nocheck
+local rate_limit = require("https://atmosp.here/2.0/rate_limit.lus")
+app:register(rate_limit.web({ window = 60, max = 100, key = function(req) return req.ip end }))
+```
+
+**http_client** wraps `network.fetch` with a base URL, query encoding, JSON bodies and replies, timeouts, retries with exponential backoff on 429 and 5xx, and hooks before a request and after a response. An error object carries the status and the decoded body.
+
+```lus nocheck
+local http_client = require("https://atmosp.here/2.0/http_client.lus")
+local api = http_client.new({ base = "https://api.example.com", headers = { authorization = `Bearer $(token)` }, retries = 3 })
+local user = api:get("/users/42", { query = { fields = "name" } }).json
+local created = api:post("/users", { json = { name = "Ada" } })
+```
+
+**html** parses HTML5 into a tree, queries it with CSS selectors, edits it, and renders it back to text. `html.sanitize` keeps an allowlist of tags and attributes, which makes user input safe to embed. `html.escape` and `html.unescape` cover the named character references. The parser follows the tree construction rules of the HTML standard, so its tree matches the tree of a browser.
+
+```lus nocheck
+local html = require("https://atmosp.here/2.0/html.lus")
+local doc = html.parse(page)
+for _, a in ipairs(doc:select("a[href]")) do print(a:attr("href"), a:text()) end
+local safe = html.sanitize(comment, { tags = { "b", "i", "a", "p" }, attributes = { a = { "href" } } })
+```
+
+#### Tier 2: databases, mail, and jobs
+
+**postgres** speaks the PostgreSQL wire protocol directly. It authenticates with SCRAM-SHA-256, runs queries with the extended protocol and bound parameters, keeps a pool of connections, and exposes transactions, `LISTEN` and `NOTIFY`, and `COPY`. A query result is a source for Lus queries through `__query`, like `io.sqlite`. Each connection suspends a detached coroutine while it waits, so a `web` handler can query without blocking the server. It needs TLS client sockets and PBKDF2 from the standard library.
+
+```lus nocheck
+local postgres = require("https://atmosp.here/2.0/postgres.lus")
+local db = postgres.connect("postgres://app@localhost/app", { pool = 10 })
+for row in db:query("select id, name from users where id = $1", 42) do print(row.name) end
+db:transaction(function(tx) tx:run("update accounts set balance = balance - $1 where id = $2", 10, 1) end)
+```
+
+**redis** speaks RESP3 to Redis and Valkey with pipelining, pub/sub, scripts, and a pool. Every command is a method, as in `r:set("k", "v", { ex = 60 })`. It provides the store interface of `rate_limit`, `session`, and `queue`.
+
+```lus nocheck
+local redis = require("https://atmosp.here/2.0/redis.lus")
+local r = redis.connect("redis://localhost:6379")
+r:set("visits", 0)
+print(r:incr("visits"))                          --> 1
+local results = r:pipeline(function(p) p:get("a") p:get("b") end)
+```
+
+**migrate** applies numbered SQL files from a directory in order and records each applied file in a table of the database. It runs each file in a transaction and checks the recorded checksum of every applied file. It works with `io.sqlite` and `postgres` through a small adapter of `exec` and `query`.
+
+```lus nocheck
+local migrate = require("https://atmosp.here/2.0/migrate.lus")
+migrate.up(io.sqlite("app.db", "rw"), "migrations")
+print(migrate.status(db, "migrations")[1].name)   --> 0001_create_users.sql
+```
+
+**mail** builds MIME messages with text and HTML parts, attachments, and encoded headers, and sends them over SMTP with STARTTLS or implicit TLS, `AUTH PLAIN` or `LOGIN`, and a pool of connections. `mail.message` returns the raw message, so a program can also hand it to an HTTP mail service.
+
+```lus nocheck
+local mail = require("https://atmosp.here/2.0/mail.lus")
+local smtp = mail.smtp({ host = "smtp.example.com", port = 587, user = user, password = password })
+smtp:send({ from = "app@example.com", to = "ada@example.com", subject = "Welcome", text = "Hello", html = "<p>Hello</p>" })
+```
+
+**cron** parses cron expressions with five or six fields, the nicknames such as `@daily`, and time zones. `cron.next(expr, after)` returns the next matching `zoned` value. `cron.schedule` runs a function on a detached coroutine at every match.
+
+```lus nocheck
+local cron = require("https://atmosp.here/2.0/cron.lus")
+print(cron.next("0 9 * * mon-fri", time.now(), "Europe/Paris"):iso())
+cron.schedule("*/5 * * * *", function() cleanup() end)
+```
+
+**queue** runs jobs with retries, backoff, delays, priorities, and a limit on concurrency. Its default store is an SQLite table, which survives a restart of a single process. A Redis store shares jobs between processes. Workers run as detached coroutines, or as `worker` threads for jobs that compute.
+
+```lus nocheck
+local queue = require("https://atmosp.here/2.0/queue.lus")
+local emails = queue.new("emails", { store = queue.sqlite("jobs.db"), concurrency = 4, retries = 5 })
+emails:process(function(job) smtp:send(job.data) end)
+emails:add({ to = "ada@example.com", subject = "Hi" }, { delay = 60 })
+```
+
+#### Tier 3: auth and cloud
+
+**oauth** implements the authorization code flow of OAuth 2.0 with PKCE, token refresh, and OpenID Connect discovery. It verifies ID tokens against the keys of the provider, fetched from its JWKS URL and cached. It ships settings for common providers such as GitHub, Google, Microsoft, Apple, and GitLab. Google and Microsoft sign ID tokens with RS256, so `oauth` needs RSA verification in the standard library. `jwt` gains RS256, PS256, and ES256 at the same time.
+
+```lus nocheck
+local oauth = require("https://atmosp.here/2.0/oauth.lus")
+local github = oauth.provider("github", { client_id = id, client_secret = secret, redirect = "https://app.example/callback" })
+local url, state = github:authorize_url({ scope = { "read:user" } })
+local tokens = github:exchange(req.query_params.code, state)
+```
+
+**otp** generates and checks HOTP and TOTP codes from RFC 4226 and RFC 6238, with a window for clock drift, and builds the `otpauth://` URI that authenticator apps scan. It needs only HMAC-SHA1 from `crypto`.
+
+```lus nocheck
+local otp = require("https://atmosp.here/2.0/otp.lus")
+local secret = otp.secret()
+print(otp.uri(secret, { issuer = "App", account = "ada@example.com" }))
+print(otp.verify(secret, "492039", { window = 1 }))
+```
+
+**s3** signs requests with AWS Signature Version 4 and covers the object API of S3 and of compatible stores such as R2, MinIO, and Backblaze: get, put, delete, head, list, presigned URLs, and multipart uploads. It parses the XML replies with `xml`.
+
+```lus nocheck
+local s3 = require("https://atmosp.here/2.0/s3.lus")
+local bucket = s3.bucket({ name = "uploads", region = "auto", endpoint = endpoint, key = key, secret = secret })
+bucket:put("avatars/42.png", bytes, { content_type = "image/png" })
+print(bucket:presign("avatars/42.png", { expires = 600 }))
+```
+
+#### Tier 4: data, text, and tools
+
+**xml** parses XML into a tree or into plain tables with the conventions of `fast-xml-parser`, streams large documents through callbacks, and writes XML back. It handles namespaces, CDATA, and the predefined entities. It rejects external entities by default.
+
+```lus nocheck
+local xml = require("https://atmosp.here/2.0/xml.lus")
+local feed = xml.decode(text)
+print(feed.rss.channel.title)
+print(xml.encode({ note = { _attr = { id = 1 }, to = "Ada" } }))   --> <note id="1"><to>Ada</to></note>
+```
+
+**humanize** turns numbers and durations into short text and back: `humanize.duration("2h 5m")` gives a `time` duration, `humanize.bytes(1536)` gives `"1.5 KiB"`, and `humanize.ago(instant)` gives `"3 minutes ago"`. It covers English. `i18n` adds other languages.
+
+**i18n** loads message catalogs per locale, formats messages with the ICU MessageFormat syntax for plurals and selections, and falls back from `fr-CA` to `fr` to the default locale. It formats numbers, currencies, and dates for a bundled set of CLDR locales. The plural rules come from CLDR.
+
+```lus nocheck
+local i18n = require("https://atmosp.here/2.0/i18n.lus")
+local t = i18n.new({ default = "en", catalogs = { en = { cart = "{n, plural, one {# item} other {# items}}" } } })
+print(t:format("en", "cart", { n = 3 }))         --> 3 items
+print(t:number("fr", 1234.5))                    --> 1 234,5
+```
+
+**term** measures and lays out terminal text. It computes the display width of a string with wide and combining characters, wraps and truncates text that contains color codes, draws tables and boxes, and shows spinners and progress bars that redraw only on a terminal.
+
+```lus nocheck
+local term = require("https://atmosp.here/2.0/term.lus")
+print(term.table({ { "name", "size" }, { "lus", "2.1 MB" } }, { header = true }))
+local bar = term.progress({ total = #files })
+for _, f in ipairs(files) do process(f) bar:tick() end
+```
+
+**archive** reads and writes ZIP and tar archives, including gzip-compressed tar, on top of the codecs of `vector.archive`. It reads entries one at a time, so a large archive need not fit in memory. It refuses entry paths that leave the target directory.
+
+```lus nocheck
+local archive = require("https://atmosp.here/2.0/archive.lus")
+for entry in archive.zip.entries(bytes) do print(entry.name, entry.size) end
+local tgz = archive.tar.pack({ { name = "a.txt", data = "hello" } }, { gzip = true })
+```
+
+### Standard library additions
+
+Some gaps belong in the runtime, because a package written in Lus cannot fill them or because many packages need them.
+
+- **TLS client sockets.** `network.tls.connect(host, port, options)` returns a socket with the methods of a TCP socket, and `sock:starttls(host)` upgrades an open one. `postgres`, `redis`, and `mail` need them. The HTTP client of the runtime already holds the TLS code.
+- **Streaming bodies.** `network.fetch` returns a reader for a body that arrives over time, and a `network.serve` handler may return a function that writes the body in parts. Server-sent events, proxies, large downloads, and clients of streaming AI APIs need both.
+- **RSA and ECDSA.** Verification and signing with RS256, PS256, and ES256, and keys read from PEM and JWK. `jwt` and `oauth` need them for the ID tokens of the large identity providers.
+- **Key derivation and symmetric encryption.** PBKDF2 and HKDF, which SCRAM authentication in `postgres` needs, and AES-256-GCM, which encrypted cookies and sessions need. MD5 joins `crypto.hash` for the protocols that still require it, such as S3 checksums.
+- **Processes with arguments.** `os.spawn(argv, options)` starts a program without a shell, with pipes for its three streams, a working directory, an environment, and its exit status. It covers `execa`, `cross-spawn`, and `Bun.spawn`. It passes each argument as given, with none of the quoting that `io.popen` needs.
+- **File watching.** `fs.watch(path, callback)` reports changes through kqueue, inotify, or ReadDirectoryChangesW and suspends a detached coroutine between events. It covers `chokidar` and the reload loop of a development server.
+- **Signals.** `os.signal(name, callback)` runs a function on `SIGINT`, `SIGTERM`, or `SIGHUP`, so a server can stop accepting connections and finish its requests before it exits.
+- **Recursive globs.** `fs.list` accepts `**` and braces, and `fs.walk(path)` iterates over a directory tree. Together they cover `glob`, `fast-glob`, `minimatch`, and `Bun.Glob`.
+
+### Later packages
+
+These packages have users in the survey but wait for the ones above or for a standard library addition.
+
+- `mysql` and `mongodb` drivers, after `postgres` sets the shape of a driver.
+- `sse` for server-sent events, and an `ai` client for the streaming APIs of model providers, after streaming bodies.
+- `msgpack`, `cbor`, and `protobuf` encodings.
+- `graphql`, a parser and executor of GraphQL queries for `web`.
+- `diff`, a text diff with unified output.
+- `faker` for test data, and a property testing library for `lus test`.
+- `proxy`, an HTTP reverse proxy for `web`, after streaming bodies.
+- `image`, `qrcode`, `pdf`, and `xlsx`. Decoding and resizing images at the speed of `sharp` needs native code, so `image` waits for a decision on codecs in the runtime. `qrcode`, `pdf`, and `xlsx` writers fit in Lus.
+
+Three gaps join existing packages. `web` gains a compression plugin built on `vector.archive` and a plugin for security headers in the manner of `helmet`. `schema` gains export to JSON Schema, which `ajv` users and OpenAPI generators read. `websocket` gains rooms and broadcast, which `socket.io` users expect.
