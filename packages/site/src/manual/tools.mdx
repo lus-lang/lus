@@ -498,7 +498,7 @@ print(...)     --> foo  bar
 
 ## Binary chunks
 
-A _binary chunk_ is a compiled function stored as bytes, in the form that [`string.dump`](/manual/api#string.dump) writes. A binary chunk loads without parsing source text and can be distributed without its source. `lus compile SCRIPT` writes the compiled script as a binary chunk to `SCRIPT.lusc`, where `SCRIPT` is the script name without its extension, or to the file named by `-o`. `-s` omits debug information, which makes the chunk smaller and removes line numbers from its error messages. `-F` defines build flags as for `lus build`, with their values fixed in the chunk.
+A _binary chunk_ is a compiled function stored as bytes, in the form that [`string.dump`](/manual/api#string.dump) writes. A binary chunk loads without parsing source text and can be distributed without its source. `lus compile SCRIPT` writes the compiled script as a binary chunk to `SCRIPT.lusc`, where `SCRIPT` is the script name without its extension, or to the file named by `-o`. `-s` omits debug information, which makes the chunk smaller and removes line numbers from its error messages. `-F` defines build flags as for `lus build`, with their values fixed in the chunk. `-P` grants a permission to the initializers of [`<meta>` variables](/manual/guide#values-computed-when-the-file-is-compiled), whose values the chunk stores.
 
 ```sh
 lus compile -o report.lusc report.lus

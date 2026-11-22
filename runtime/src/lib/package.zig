@@ -531,7 +531,7 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
     }
     const code = cached orelse src.?;
     if (cached == null and pkg.kind == .atmosphere) {
-        const r = @import("../compile/codegen.zig").compile(l.g, code, .{ .chunkname = chunkname, .flags = &fmap, .fold_flag_reads = true, .debug = l.g.debugger != null }) catch return l.raiseMem();
+        const r = @import("../compile/codegen.zig").compile(l.g, code, .{ .chunkname = chunkname, .flags = &fmap, .fold_flag_reads = true, .debug = l.g.debugger != null, .meta_grants = .{ .thread = l } }) catch return l.raiseMem();
         switch (r) {
             .err => |msg| {
                 defer l.g.gpa.free(msg);

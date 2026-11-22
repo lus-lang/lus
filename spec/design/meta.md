@@ -1,6 +1,6 @@
 # Compile-time values
 
-_Status: design accepted, implementation pending._
+_Status: implemented._
 
 A _meta variable_ is a local declared with the `<meta>` attribute. The compiler evaluates its initializer while it compiles the chunk and puts the value into the compiled chunk as a constant. Compile-time evaluation moves work that depends only on the source, the build flags, and files known at build time out of every run and into the compilation. It builds lookup tables once, embeds data files in a chunk or an executable, and computes conditions that select code.
 
@@ -24,7 +24,7 @@ end
 
 A `<meta>` declaration names one variable and has one initializer. A meta variable is read-only, so `<meta>` implies `<const>`. Writing `<const, meta>` is accepted and means the same. An assignment to a meta variable raises `attempt to assign to const variable 'CRC32'` at compile time. `<meta>` cannot be combined with `<close>`, `<group>`, or a runtime attribute, because each of those acts when the program runs. Each combination is a compile error. A global cannot be `<meta>`.
 
-A meta variable whose value is `nil`, a boolean, a number, or a string is a compile-time constant in the sense of `<const>` (`grammar.md`, section 4.2), so it occupies no register. A meta variable that holds a table or a vector occupies a register loaded with the constant.
+A meta variable whose value is `nil`, a boolean, an integer, a float, or a string is a compile-time constant in the sense of `<const>` (`grammar.md`, section 4.2), so it occupies no register. A meta variable that holds a table, a vector, a bigint, or a decimal occupies a register loaded with the constant. Under the debugger every meta variable occupies a register, so the debugger can show it, as it does for `<const>`.
 
 ## 2. What the initializer can see
 
@@ -57,21 +57,29 @@ A plain `if` folds when its condition is known at compile time, which extends th
 - literals,
 - flag reads,
 - meta variables and `<const>` locals that are compile-time constants,
-- field reads with a constant key from a meta table, such as `CONFIG.mode`.
+- field reads from a meta table, a known string, or the constant fields `math.pi`, `math.huge`, `math.maxinteger`, `math.mininteger`, and `utf8.charpattern`,
+- calls of pure library functions whose arguments are all known at compile time.
 
-A folded `if` compiles the block of the clause that is true and checks the other blocks without compiling them. A condition that is not known at compile time compiles as an ordinary `if`, with no error and no warning. A call is never known at compile time, so a condition that needs one computes it in a meta variable first.
+A _pure library function_ computes its result from its arguments alone, with no side effect and no dependence on the locale. The set is fixed:
+
+- `string.byte`, `char`, `find`, `format`, `gsub`, `join`, `len`, `lower`, `ltrim`, `match`, `rep`, `reverse`, `rtrim`, `split`, `sub`, `trim`, and `upper`,
+- `math.abs`, `acos`, `asin`, `atan`, `ceil`, `cos`, `deg`, `exp`, `floor`, `fmod`, `frexp`, `ldexp`, `log`, `max`, `min`, `modf`, `rad`, `sin`, `sqrt`, `tan`, `tointeger`, `type`, and `ult`,
+- `utf8.char`, `codepoint`, `len`, and `offset`,
+- `tonumber`, `tostring`, and `type`.
+
+The library must be the global name, not a local that hides it. A method call on a known string, such as `("a,b"):split(",")`, calls the `string` function of the same name, so it is known when its arguments are. A call of any other function is never known at compile time.
 
 ```lus nocheck
-local SQLITE <meta> = (flags.features or ""):find("sqlite", 1, true) ~= nil
-
-if SQLITE then
+if (flags.features or ""):find("sqlite", 1, true) then
     store = require("store.sqlite")
 else
     store = require("store.memory")
 end
 ```
 
-Folding keeps run-time behavior. A comparison or an arithmetic operation that would raise an error at run time does not fold, so it raises when the program runs it. `and` and `or` fold when the left operand decides the result or when both operands fold.
+A folded `if` compiles the block of the clause that is true and checks the other blocks without compiling them. A condition that is not known at compile time compiles as an ordinary `if`, with no error and no warning.
+
+Folding keeps run-time behavior. A condition whose evaluation raises an error does not fold, so it raises when the program runs it. `and` and `or` fold when the left operand decides the result or when both operands fold. A condition that only literals and flags decide folds in the compiler itself. Any other known condition runs in the meta state, which evaluates it with the same operations as the running program.
 
 ## 5. Permissions
 
@@ -95,44 +103,42 @@ lus build -Pfs:read=./schema.json -o validate validate.lus
 
 `lus build` stores its `-P` grants in the executable as the limit of every run, so the executable keeps every permission that its build needed. The executable above can therefore read `schema.json` when it runs, although it carries the parsed schema and never reads the file. A program that must not keep a permission its build needed reads the file in a separate build step and embeds the result.
 
-`load` at run time evaluates the meta initializers of the chunk it compiles with the permissions of the program at the call of `load`.
+A chunk that the command compiles before the program starts takes the `-P` grants: the main chunk, the modules of the require index, and every chunk of `lus build` and `lus compile`, which accepts `-P` for this purpose. A chunk compiled while the program runs takes the permissions of the program at that moment: a chunk of `load`, `loadfile`, or `dofile`, and a module that `require` compiles outside the index.
 
 Paths in an initializer resolve against the current directory of the compiling process, as they do at run time.
 
-## 6. Reproducibility and caching
+## 6. Reproducibility
 
-A meta value is a function of its source, the flags, the runtime version, and whatever its I/O reads. The meta state records each input that comes from outside the source: every file it opens with its path, length, and SHA-256 digest, every environment variable it reads, and every network request. Reading the clock, seeding `math.random` from the clock, and a network request mark the result as unrepeatable.
+A meta value is a function of its source, the flags, the runtime version, and whatever its initializer reads. `math.random` in the meta state starts from a fixed seed, so an initializer that draws random numbers produces the same values on every build.
 
-`math.random` in the meta state starts from a fixed seed, so an initializer that draws random numbers produces the same table on every build.
+Lus caches compiled chunks only within a process: the require index compiles each module once per process (`modules.md`, section 2). A script run with `lus script.lus` therefore evaluates its meta initializers on every start, as it would evaluate the same code at run time. `lus build` and `lus compile` evaluate them once, at build time.
 
-Lus caches compiled chunks only within a process: the require index compiles each module once per process (`modules.md`, section 2). A script run with `lus script.lus` therefore evaluates its meta initializers on every start, as it would evaluate the same code at run time. The input record is the key that a future on-disk cache of compiled chunks needs. Such a cache reuses a chunk when its source, flags, runtime version, and every recorded input are unchanged. It never caches an unrepeatable result.
-
-`lus build --inputs` prints the record of a build, one input per line, so a build system can rebuild an executable when an embedded file changes.
+A later version may record each input that an initializer reads from outside the source, such as the path and digest of every file it opens, as the key of an on-disk cache of compiled chunks and as the list of files a build system watches.
 
 ## 7. Builds, binary chunks, and ahead-of-time compilation
 
 `lus build` and `lus compile` evaluate meta initializers once, at build time. The executable or the binary chunk holds the values, so the program never runs the initializers.
 
-Binary chunks gain two constant kinds, the read-only table and the read-only vector. A table constant is stored as a graph of numbered nodes, which keeps sharing and cycles. `string.dump` writes the same constants, so a dumped function that reads `CRC32` loads with the table. The format version of binary chunks increases by one, and a chunk of the earlier version still loads.
+Binary chunks have two constant kinds for meta values, the read-only table and the read-only vector, in format version 5. A table constant is stored as a graph of numbered tables, which keeps sharing and cycles between tables. A vector that a table graph holds twice loads as two vectors with the same bytes. `string.dump` writes the same constants, so a dumped function that reads `CRC32` loads with the table. A chunk of format version 4 still loads.
 
 A future `lus build --aot` compiles the program ahead of time. Meta values are constants for that compiler, and read-only tables let it fold reads with constant keys. Meta initializers run in the interpreter of the build machine before ahead-of-time compilation starts, so both compilers see the same values.
 
 ## 8. Tools and errors
 
-An error raised by an initializer is a compile error of the chunk. Its message carries the position of the failing line in the original file, the word `meta`, and the error object, followed by the traceback of the meta state.
+An error raised by an initializer is a compile error of the chunk. Its message carries the position of the failing line in the original file, the word `meta`, and the error message.
 
 ```
 config.lus:14: meta: schema.json: No such file or directory
-stack traceback:
-    config.lus:14: in meta initializer of 'SCHEMA'
 ```
 
-An initializer that never ends runs until the user interrupts the compilation. The interrupt stops the build with an error that gives the position the initializer was running, in the same form.
+A name that is not known at compile time and a value that is not a meta value are compile errors with their own messages: `meta: 'x' is not known at compile time`, `meta value is a function`, and `meta value contains a function at [3].parse`.
 
-A meta error in the main chunk stops `lus` before the program starts. A meta error in a module of the require tree is raised at the `require` of that module, as every other compile error of an indexed module is (`modules.md`, section 2). A value that is not a meta value, and a name that is not known at compile time, are compile errors with their own messages (sections 2 and 3).
+An initializer that never ends runs until the user interrupts the compilation. On POSIX systems the meta state has a count hook that checks for SIGINT every 100000 instructions, so an interrupt stops the build with `config.lus:5: meta: interrupted`, the position of the line that was running.
+
+A meta error in the main chunk stops `lus` before the program starts. A meta error in a module of the require tree is raised at the `require` of that module, as every other compile error of an indexed module is (`modules.md`, section 2).
 
 The compiler never evaluates a meta initializer in a block that folding discards. It checks such code without running it. An `if` that selects code for one platform may therefore contain meta initializers that read files present only on that platform.
 
-The language server, `lus check`, `lus fmt`, `lus doc`, `lus ast`, and `debug.parse` never run meta initializers, because opening or checking a file must not execute it. The language server treats a meta value as unknown and checks the initializer as ordinary code in the meta environment. `lus --dis` lists meta constants with the other constants.
+`lus check`, `lus fmt`, `lus ast`, `debug.parse`, `debug.format`, and the language server never run meta initializers or meta conditions, because opening or checking a file must not execute it. They check the initializer as ordinary code. `lus --dis` lists meta constants with the other constants.
 
-A meta state starts in about 16 µs (`snapshot.md` measured 1.8 µs for a later `lus_newstate` and 14.5 µs for `lus_openlibs`), so each chunk with meta variables gets a fresh state, and the initializers of one chunk share it in declaration order. One chunk's initializers therefore never see globals that another chunk's initializers left behind. The order in which the require index compiles modules cannot change a result either. A chunk without meta variables creates no state and compiles as fast as before.
+Each chunk that evaluates something at compile time gets a fresh meta state, and the evaluations of one chunk share it in source order. One chunk's initializers therefore never see globals that another chunk's initializers left behind. The order in which the require index compiles modules cannot change a result either. A load of a short chunk took 1.2 µs without compile-time evaluation and 25 µs with one meta local or one folded call, in a ReleaseFast build on an Apple silicon Mac, and the difference is the creation of the meta state. A chunk without either creates no state and compiles as fast as before.

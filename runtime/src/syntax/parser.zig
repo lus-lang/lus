@@ -646,15 +646,25 @@ pub const Parser = struct {
             } else if (p.isName("group")) {
                 _ = p.advance();
                 a = .group;
+            } else if (p.isName("meta")) {
+                _ = p.advance();
+                a = .meta;
+            } else if (p.isName("lazy")) {
+                _ = p.advance();
+                a = .lazy;
             } else {
                 a = .{ .runtime = try p.subExpr(3) };
             }
             if (a != .runtime) {
                 if (seen_runtime) return p.errSem("compile-time attribute '{s}' must come before runtime attributes", .{@tagName(a)});
-                if (kind) |k| {
-                    if (k != a) return p.errSem("conflicting attributes", .{});
+                // `<meta>` and `<lazy>` combine with the others, and the
+                // compiler reports the combinations it rejects.
+                if (a != .meta and a != .lazy) {
+                    if (kind) |k| {
+                        if (k != a) return p.errSem("conflicting attributes", .{});
+                    }
+                    kind = a;
                 }
-                kind = a;
             } else seen_runtime = true;
             try list.append(p.arena, a);
             if (!p.accept(.comma)) break;

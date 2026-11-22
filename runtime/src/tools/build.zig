@@ -126,6 +126,8 @@ const Collector = struct {
     io: std.Io,
     l: *lus.vm.state.Thread,
     path_templates: []const u8,
+    /// The `-P` grants, which also limit compile-time evaluation.
+    pledges: []const []const u8 = &.{},
     modules: std.ArrayList(bundle.Module) = .empty,
     /// For each module, in the order of `modules`: the names of its
     /// literal requires and whether it came from an `--include` of a
@@ -223,7 +225,7 @@ const Collector = struct {
         errdefer c.gpa.free(chunkname);
         const g = c.l.g;
         const flags: ?*const std.StringHashMapUnmanaged(lus.vm.value.Value) = if (g.ext.get("flags.compile")) |p| @ptrCast(@alignCast(p)) else null;
-        const r = try codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flags });
+        const r = try codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flags, .meta_grants = .{ .specs = c.pledges } });
         const proto = switch (r) {
             .err => |msg| {
                 defer c.gpa.free(msg);
@@ -372,7 +374,7 @@ const Collector = struct {
         defer c.l.top = top;
         if (pkg) |p| try package.packageFlags(c.l, c.gpa, p, sub, &fmap, &fp);
         const flags: ?*const std.StringHashMapUnmanaged(lus.vm.value.Value) = if (pkg != null) &fmap else if (g.ext.get("flags.compile")) |fl| @ptrCast(@alignCast(fl)) else null;
-        const r = try codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flags, .fold_flag_reads = pkg != null });
+        const r = try codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flags, .fold_flag_reads = pkg != null, .meta_grants = .{ .specs = c.pledges } });
         const proto = switch (r) {
             .err => |msg| {
                 defer c.gpa.free(msg);
@@ -501,7 +503,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     defer if (home_dir) |h| gpa.free(h);
     var store: remote.Store = .init(gpa, io, .{ .home = home_dir, .env = init.environ_map });
     defer store.deinit();
-    var c: Collector = .{ .gpa = gpa, .io = io, .l = l, .path_templates = path_templates, .store = &store };
+    var c: Collector = .{ .gpa = gpa, .io = io, .l = l, .path_templates = path_templates, .store = &store, .pledges = opts.pledges.items };
     defer c.deinit();
     // The entry module is named after the script, as a module file of
     // that name would be.

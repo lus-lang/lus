@@ -176,6 +176,7 @@ Compiles a script to a binary chunk, which `lus` runs as it runs a script and `l
 | `-o FILE` | Write the chunk to `FILE`. |
 | `-s`, `--strip` | Omit debug information, which makes the chunk smaller and removes line numbers from its error messages. |
 | `-F name[=value]`, `--flag name[=value]` | Define a build flag, whose value is fixed in the chunk. |
+| `-P perm`, `--pledge perm` | Grant a permission to the initializers of [`<meta>` variables](/manual/guide#values-computed-when-the-file-is-compiled), which run during the compilation. The chunk itself runs with the permissions of the command that runs it. |
 
 ## lus debug
 

@@ -211,6 +211,13 @@ fn encode(l: *Thread, v: Value) Error!*Packet {
     // Vectors move only once the whole value has been accepted.
     const vecs = p.arena.allocator().alloc(std.ArrayList(u8), e.vectors.items.len) catch return l.raiseMem();
     for (e.vectors.items, vecs) |vec, *dst| {
+        // A read-only vector is a constant of its chunk, so it stays and
+        // the worker receives a copy.
+        if (vec.isReadonly()) {
+            dst.* = .empty;
+            dst.appendSlice(gpa, vec.bytes.items) catch return l.raiseMem();
+            continue;
+        }
         dst.* = vec.bytes;
         vec.bytes = .empty;
         vec.detached = true;

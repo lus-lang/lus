@@ -761,6 +761,12 @@ pub const Vector = struct {
     bytes: std.ArrayList(u8) = .empty,
     /// Set when the payload was transferred to another worker.
     detached: bool = false,
+
+    /// A read-only vector is a constant of a `<meta>` local. The flag is
+    /// the spare byte of the header.
+    pub inline fn isReadonly(v: *const Vector) bool {
+        return v.hdr.spare8 != 0;
+    }
 };
 
 pub const EnumRoot = struct {

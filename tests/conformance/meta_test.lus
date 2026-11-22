@@ -1,0 +1,222 @@
+pledge("load")
+
+global print, assert, type, load, string, table, tostring, vector, setmetatable, pledge, math, error, select, io, coroutine, debug
+
+--[[
+    Tests for `<meta>` locals (spec/design/meta.md). The initializer runs
+    at compile time in a meta state, and the value is a constant of the
+    chunk. Conditions known at compile time fold (the flag cases live in
+    fixtures/flags/cases.lus, which runs with command line flags).
+]]
+
+local function compile_error(src)
+    local f, err = load(src)
+    assert(f == nil, "expected a compile error for: " .. src)
+    return err
+end
+
+local function lookup_table_test()
+    local SQUARES <meta> = do
+        local t = {}
+        for i = 1, 16 do t[i] = i * i end
+        provide t
+    end
+    assert(SQUARES[4] == 16 and #SQUARES == 16)
+end
+
+local function scalars_are_constants_test()
+    local N <meta> = 6 * 7
+    local NAME <meta> = string.upper("lus") .. N
+    assert(N == 42 and NAME == "LUS42")
+    assert(math.type(N) == "integer")
+    local BIG <meta> = 2n ^ 70
+    assert(BIG == 2n ^ 70)
+end
+
+local function later_meta_reads_earlier_test()
+    local N <meta> = 4
+    local LIMIT <const> = 3
+    local T <meta> = do
+        local t = {}
+        for i = 1, N + LIMIT do t[i] = i end
+        provide t
+    end
+    assert(#T == 7)
+end
+
+local function nested_functions_see_meta_test()
+    local T <meta> = { a = 1, b = { c = "x" } }
+    local function get() return T.b.c end
+    assert(get() == "x")
+    local f = function() return function() return T.a end end
+    assert(f()() == 1)
+end
+
+local function tables_are_readonly_test()
+    local T <meta> = { 1, 2, inner = { 3 } }
+    local ok, err = catch do T[1] = 5 end
+    assert(ok == false and tostring(err):find("readonly") ~= nil)
+    ok, err = catch do T.inner[1] = 5 end
+    assert(ok == false)
+    ok = catch setmetatable(T, {})
+    assert(ok == false)
+end
+
+local function same_table_on_every_evaluation_test()
+    local seen
+    for _ = 1, 3 do
+        local T <meta> = { 1 }
+        if seen then assert(seen == T) end
+        seen = T
+    end
+end
+
+local function sharing_and_cycles_kept_test()
+    local G <meta> = do
+        local a = { name = "a" }
+        local b = { name = "b", peer = a }
+        a.peer = b
+        provide { a = a, b = b, again = a }
+    end
+    assert(G.a.peer.peer == G.a and G.again == G.a)
+end
+
+local function vectors_are_readonly_test()
+    local V <meta> = vector.fromstring("ab")
+    assert(vector.size(V) == 2)
+    local ok, err = catch vector.set(V, 0, 7)
+    assert(ok == false and tostring(err):find("read-only", 1, true) ~= nil)
+    local copy = vector.clone(V)
+    vector.set(copy, 0, 7)
+    assert(vector.get(copy, 0) == 7 and vector.get(V, 0) == 97)
+end
+
+local function survives_string_dump_test()
+    local function f()
+        local G <meta> = do
+            local a = { n = 1 }
+            a.self = a
+            provide { a = a, v = vector.fromstring("xyz") }
+        end
+        return G
+    end
+    local g = load(string.dump(f))
+    local G = g()
+    assert(G.a.self == G.a and G.a.n == 1 and vector.size(G.v) == 3)
+    assert((catch do G.a.n = 2 end) == false)
+    assert((catch vector.set(G.v, 0, 1)) == false)
+end
+
+local function meta_is_const_test()
+    local err = compile_error("local M <meta> = 1 M = 2")
+    assert(err:find("attempt to assign to const variable 'M'", 1, true))
+    assert(load("local M <const, meta> = 1 return M")() == 1)
+    err = compile_error("local M <meta> = {} local function f() M = 1 end")
+    assert(err:find("const variable 'M'", 1, true))
+end
+
+local function rejected_combinations_test()
+    assert(compile_error("local a, b <meta> = 1, 2"):find("names one variable", 1, true))
+    assert(compile_error("local c <close, meta> = nil"):find("cannot combine <meta> with <close>", 1, true))
+    assert(compile_error("local g <group, meta> = { x = 1 }"))
+    assert(compile_error("local function h() end local r <meta, h> = 1"):find("runtime attributes", 1, true))
+    assert(compile_error("global G <meta> = 1"):find("cannot be <meta>", 1, true))
+    assert(compile_error("local m <meta>"):find("one initializer", 1, true))
+end
+
+local function unknown_locals_are_errors_test()
+    local err = compile_error("local x = 1 local y <meta> = x + 1")
+    assert(err:find("'x' is not known at compile time", 1, true))
+    err = compile_error("local function f() end local y <meta> = f()")
+    assert(err:find("'f' is not known at compile time", 1, true))
+end
+
+local function values_must_be_data_test()
+    assert(compile_error("local f <meta> = function() end"):find("meta value is a function", 1, true))
+    assert(compile_error("local t <meta> = { fn = print }"):find("contains a function at fn", 1, true))
+    assert(compile_error("local t <meta> = { list = { 1, print } }"):find("at list[2]", 1, true))
+    assert(compile_error("local t <meta> = setmetatable({}, {})"):find("metatable", 1, true))
+    assert(compile_error("local t <meta> = coroutine.create(print)"):find("thread", 1, true))
+end
+
+local function errors_name_the_failing_line_test()
+    local err = compile_error("local x <meta> = do\n    local t = {}\n    error('boom')\nend")
+    assert(err:find(":3: meta: boom", 1, true), err)
+end
+
+local function no_permissions_without_grants_test()
+    local f = load("local P <meta> = pledge('fs:read') return P")
+    assert(f() == false)
+    local err = compile_error("local t <meta> = io.open('x.txt')")
+    assert(err:find("meta:", 1, true))
+end
+
+local function meta_environment_is_fresh_test()
+    global SHARED
+    SHARED = 5
+    local err = compile_error("local y <meta> = SHARED + 1")
+    assert(err:find("meta:", 1, true))
+    -- globals set by one initializer are visible to later ones of the chunk
+    local f = load("local a <meta> = do global X X = 3 provide 1 end local b <meta> = X return b")
+    assert(f() == 3)
+end
+
+local function random_is_reproducible_test()
+    local f = "local R <meta> = math.random(1, 1000000) return R"
+    assert(load(f)() == load(f)())
+end
+
+local function initializer_in_dead_branch_never_runs_test()
+    local f = load("if false then local x <meta> = error('never') end return 1")
+    assert(f and f() == 1)
+end
+
+local function folded_condition_with_meta_and_calls_test()
+    local src = "local MODE <meta> = 'fast'\nif MODE:upper() == 'FAST' and #MODE == 4 then return 'yes' else "
+        .. string.rep("tostring(1) ", 200) .. " return 'no' end"
+    local f = load(src)
+    assert(f() == "yes")
+    assert(#string.dump(f, true) < 400, "the dead branch should be gone")
+end
+
+local function unknown_conditions_run_normally_test()
+    local calls = 0
+    local function bump() calls = calls + 1 return true end
+    local N <meta> = 3
+    if N > 2 and bump() then calls = calls + 10 end
+    assert(calls == 11)
+    -- a pure call that raises does not fold and raises at run time
+    local ok = catch load("if string.rep('x', -1, 5) == 1 or ('a'):rep(1, 2, 3) then end")
+    assert(ok)
+end
+
+-- a continue or provide in a branch that folding discards leaves no jump
+-- behind (found by the differential tester)
+local function discarded_continue_and_provide_test()
+    local n = 0
+    for i = 1, 3 do
+        if false then continue end
+        n = n + i
+    end
+    local function each()
+        local i = 0
+        return function()
+            i = i + 1
+            if i < 3 then return { v = i } end
+        end
+    end
+    for v from each() do
+        if false then continue end
+        n = n + v
+    end
+    local r = do
+        if false then provide 1 end
+        provide 2
+    end
+    assert(n == 9 and r == 2)
+end
+
+local function tools_never_run_meta_test()
+    local out = debug.format("local x <meta> = error('never')\n")
+    assert(out:find("<meta>", 1, true))
+end

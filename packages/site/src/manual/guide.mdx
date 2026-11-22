@@ -3968,8 +3968,77 @@ end
 
 Run with `-Fchannel=beta -Flevel=3`, this program compiles to the `print` alone, without a test. A condition that also reads a value of the running program, as in `flags.debug and verbose`, is resolved only when the flag part decides it. An ordering of a flag that was not given, such as `flags.level >= 2` in a run without `-Flevel`, raises an error when it runs, as `nil >= 2` does anywhere else.
 
+A condition may also call a function of the standard library that only computes a result, such as `string.find`, `string.upper`, or `math.floor`, when every argument is a flag or a literal. The following program colors its output only in a build whose list of features includes `color`.
+
+```lus
+if (flags.features or ""):find("color", 1, true) then
+    print("\27[32mready\27[0m")
+else
+    print("ready")
+end
+```
+
+Run with `-Ffeatures=color,json`, the compiler keeps the first `print` alone. A call of any other function, such as `os.getenv`, keeps the `if` as an ordinary test that runs with the program.
+
 `lus build` accepts `-F` as well and stores the flag values in the executable, which then always runs with them. [Developer tools](/manual/tools) describes `lus build`. [CLI](/manual/cli) lists every option of the `lus` command.
 
+
+### Values computed when the file is compiled
+
+Some tables depend only on constants, such as a table of precomputed checksums or of the squares of the first hundred numbers. A program that builds such a table repeats the same work at every start. The `<meta>` attribute moves that work into the compilation: the initializer of a `<meta>` variable runs when the file is compiled, so the program starts with the finished value.
+
+```lus
+local CRC32 <meta> = do
+    local t = {}
+    for i = 0, 255 do
+        local c = i
+        for _ = 1, 8 do
+            if c & 1 == 1 then
+                c = 0xEDB88320 ~ (c >> 1)
+            else
+                c = c >> 1
+            end
+        end
+        t[i] = c
+    end
+    provide t
+end
+
+local function crc32(text)
+    local crc = 0xFFFFFFFF
+    for i = 1, #text do
+        local byte = text:byte(i)
+        crc = CRC32[(crc ~ byte) & 0xFF] ~ (crc >> 8)
+    end
+    return crc ~ 0xFFFFFFFF
+end
+print(string.format("%08x", crc32("hello")))   --> 3610a686
+```
+
+The initializer runs before the program, so it sees none of the program's variables. It can use literals, flags, the standard library, and other `<meta>` variables or [constants](#constants) declared before it. A `<meta>` variable is constant, so an assignment to it is a compile error. Its value must be data: `nil`, a boolean, a number, a string, a vector, or a table of these. A table becomes read-only, so every part of the program sees the value the compilation produced.
+
+A `<meta>` variable that holds a string or a number can appear in a condition that the compiler resolves, as a flag can. The following program reads a mode from a flag once and compares it in two places.
+
+```lus
+local MODE <meta> = (flags.mode or "release"):lower()
+
+if MODE == "debug" then
+    print("debug checks on")
+end
+print(MODE)   --> release
+```
+
+An initializer may read a file when the command line grants the permission with `-P`. Without a grant, every `pledge` in an initializer returns `false`. The following file embeds a list of country codes. `lus build -Pfs:read=./countries.json app.lus` stores the parsed list in the executable, which then runs without the file.
+
+```lus nocheck
+local COUNTRIES <meta> = do
+    pledge("fs:read=./countries.json")
+    local file <close> = assert(io.open("countries.json"))
+    provide fromjson(file:read("a"))
+end
+```
+
+`lus build` stores its `-P` grants in the executable, so the executable keeps the permission to read `countries.json` even though it no longer reads the file.
 ## The standard library
 
 The standard library is the set of functions, compiled into the `lus` executable, that every Lus program can call without loading anything. Most of its functions are fields of global tables such as `string`, `table`, and `math`. A few functions that almost every program uses, such as `print`, `tostring`, and `fromjson`, are plain globals.

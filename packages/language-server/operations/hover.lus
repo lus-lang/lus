@@ -140,8 +140,10 @@ local function describe(decl, uri)
   else
     -- local (or global with function type)
     local attr = ""
-    if decl.node and decl.node.attr == "const" then
-      attr = " <const>"
+    if decl.node and (decl.node.attr == "const" or decl.node.attr == "meta") then
+      attr = " <" .. decl.node.attr .. ">"
+    elseif decl.node and decl.node.lazy then
+      attr = " <lazy>"
     end
     -- If the variable holds a function type, show function-style signature
     if decl.type_info and decl.type_info.tag == "function" then

@@ -181,6 +181,10 @@ pub const Attrib = union(enum) {
     @"const",
     close,
     group,
+    /// `<meta>`: the initializer runs at compile time (`spec/design/meta.md`).
+    meta,
+    /// `<lazy>`: the initializer runs at the first read (`spec/design/lazy.md`).
+    lazy,
     runtime: *Expr,
 };
 

@@ -851,13 +851,21 @@ const Exporter = struct {
             const n = try x.nameNode(an.name.text, x.pos(x.tokAt(an.name.span.start)));
             var attr: ?[]const u8 = null;
             var rt: std.ArrayList(*Node) = .empty;
+            var lazy = false;
+            var is_meta = false;
             for (an.attribs) |a| switch (a) {
-                .@"const" => attr = "const",
+                .@"const" => {
+                    if (attr == null) attr = "const";
+                },
                 .close => attr = "close",
                 .group => attr = "group",
+                .meta => is_meta = true,
+                .lazy => lazy = true,
                 .runtime => |e| if (runtime) try rt.append(x.arena, try x.expr(e)),
             };
+            if (is_meta) attr = "meta";
             if (attr) |s| try x.set(n, "attr", .{ .str = s });
+            if (lazy) try x.set(n, "lazy", .{ .boolean = true });
             try x.setList(n, "runtimeattrs", rt.items);
             try list.append(x.arena, n);
         }

@@ -591,6 +591,31 @@ local function generate(seed, size)
         })
     end
 
+    -- A `<meta>` local computed at compile time from literals and flags,
+    -- and conditions on it and on pure library calls, which fold. The
+    -- `nofold` configuration removes `<meta>`, so the same initializer
+    -- runs at run time and must give the same value.
+    function G.meta(scope)
+        local name = fresh("m")
+        local k = r.range(1, 6)
+        local init = cases({
+            { 2, function() return "do local t = {} for i = 1, " .. k .. " do t[i] = i * " .. literal("int") .. " end provide t end" end },
+            { 2, function() return "{ x = " .. literal("int") .. ", s = " .. r.pick(STR_EDGES) .. ", list = { " .. literal("int") .. ", " .. literal("float") .. " } }" end },
+            { 2, function() return "string.rep(" .. r.pick(STR_EDGES) .. ", " .. k .. ") .. tostring(" .. literal("int") .. ")" end },
+            { 1, function() return "(flags.channel or \"none\"):upper() .. #(flags.channel or \"\")" end },
+            { 1, function() return "math.max(" .. literal("int") .. ", " .. literal("int") .. ") + (flags.level or 0)" end },
+        })
+        emit("local " .. name .. " <meta> = " .. init)
+        emit("P(\"meta\", " .. name .. ")")
+        local cond = cases({
+            { 2, function() return "type(" .. name .. ") == \"table\" and #" .. name .. " > " .. r.range(0, 4) end },
+            { 2, function() return "(flags.channel or \"\"):find(" .. r.pick({ '"et"', '"b"', '"zz"' }) .. ", 1, true)" end },
+            { 1, function() return "tostring(" .. name .. "):len() > " .. r.range(0, 12) end },
+            { 1, function() return "math.floor(flags.ratio or 0) == " .. r.range(0, 2) end },
+        })
+        emit("if " .. cond .. " then P(\"mf\", 1) else P(\"mf\", 2) end")
+    end
+
     function G.flagif(scope)
         local tag = fresh("fl")
         emit("if " .. flagCond(scope, 0) .. " then P(\"" .. tag .. "\", 1)")
@@ -1111,7 +1136,7 @@ local function generate(seed, size)
                 { 3, "kernel" }, { 2, "shape" }, { 1, "poly" }, { 1, "edgecmp" }, { 1, "edgefor" }, { 1, "coerce" },
                 { 1, "method" }, { 1, "keys" }, { 1, "deep" }, { 1, "concatn" }, { 1, "chain" }, { 1, "detach" },
                 { 2, "upvals" }, { 2, "globals" }, { 1, "tail" }, { 2, "multiret" }, { 1, "metaflip" }, { 2, "hotcall" },
-                { 2, "yieldacross" }, { 1, "flagif" }, { 1, "forfrom" },
+                { 2, "yieldacross" }, { 1, "flagif" }, { 1, "forfrom" }, { 1, "meta" },
             }) do add(k[1], k[2]) end
             if ctx.coro then add(2, "yield") end
         end

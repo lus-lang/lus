@@ -124,6 +124,18 @@ local function skipped_operands_are_still_checked_test()
     check("skipped_operands_are_still_checked")
 end
 
+local function pure_calls_fold_test()
+    check("pure_calls_fold")
+end
+
+local function impure_calls_do_not_fold_test()
+    check("impure_calls_do_not_fold")
+end
+
+local function meta_locals_read_flags_test()
+    check("meta_locals_read_flags")
+end
+
 local function line_numbers_stay_correct_after_folded_branches_test()
     check("line_numbers_stay_correct_after_folded_branches")
 end

@@ -74,6 +74,14 @@ pub fn checkVector(l: *Thread, i: u32) Error!*Vector {
     return vec;
 }
 
+/// A vector argument that the caller writes. A vector that a `<meta>`
+/// local holds is read-only (`spec/design/meta.md`).
+pub fn checkVectorMut(l: *Thread, i: u32) Error!*Vector {
+    const vec = try checkVector(l, i);
+    if (vec.isReadonly()) return aux.argError(l, i, "vector is read-only", .{});
+    return vec;
+}
+
 fn create(l: *Thread) Error!u32 {
     const n = try aux.checkInt(l, 1);
     if (n < 0) return aux.argError(l, 1, "capacity must be non-negative", .{});
@@ -116,7 +124,7 @@ fn checkOffset(l: *Thread, i: u32, len: usize) Error!usize {
 }
 
 fn vpack(l: *Thread) Error!u32 {
-    const v = try checkVector(l, 1);
+    const v = try checkVectorMut(l, 1);
     const off = try checkOffset(l, 2, v.bytes.items.len);
     const fmt = try aux.checkBytes(l, 3);
     var tmp: std.ArrayList(u8) = .empty;
@@ -180,7 +188,7 @@ fn size(l: *Thread) Error!u32 {
 }
 
 fn resize(l: *Thread) Error!u32 {
-    const v = try checkVector(l, 1);
+    const v = try checkVectorMut(l, 1);
     const n = try aux.checkInt(l, 2);
     if (n < 0) return aux.argError(l, 2, "size must be non-negative", .{});
     const old = v.bytes.items.len;
@@ -200,7 +208,7 @@ fn get(l: *Thread) Error!u32 {
 
 /// vector.set(v, offset, byte): stores a byte at a zero-based offset.
 fn set(l: *Thread) Error!u32 {
-    const v = try checkVector(l, 1);
+    const v = try checkVectorMut(l, 1);
     const off = try aux.checkInt(l, 2);
     const b = try aux.checkInt(l, 3);
     if (off < 0 or off >= v.bytes.items.len) return aux.argError(l, 2, "offset out of bounds", .{});

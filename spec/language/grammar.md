@@ -541,7 +541,9 @@ Limits: at most 200 active locals per function (`too many local variables (limit
 - `<const>` makes the variable read-only. Any assignment to it, from the same function or from a closure, raises `attempt to assign to const variable 'x'` at compile time. If the const variable is the last one in its list, the number of variables equals the number of expressions, it has no runtime attributes, and its initializer is a compile-time constant (`nil`, `true`, `false`, a string literal, a numeral, constant-folded arithmetic, or another compile-time constant), the variable becomes a compile-time constant that occupies no register. A const without an initializer is still read-only (`local x <const> x = 1` is an error).
 - `<close>` marks the variable to be closed. At most one per declaration list (`multiple to-be-closed variables in local list`). When the variable goes out of scope, normally or through an error, its `__close` metamethod runs. A value that is neither `nil`, `false`, nor closable raises a runtime error naming the variable (`variable 'x' got a non-closable value`).
 - `<group>` declares a local group (section 5.10).
-- Combining two different compile-time attributes on one name raises `conflicting attributes`. Repeating the same one inside one list (`<const, const>`) is accepted.
+- `<meta>` evaluates the initializer at compile time (section 5.14). It implies `<const>`.
+- `<lazy>` is reserved for lazy variables. A declaration with it raises `<lazy> is not supported yet`.
+- Combining two different attributes of `<const>`, `<close>`, and `<group>` on one name raises `conflicting attributes`. Repeating the same one inside one list (`<const, const>`) is accepted. `<meta>` and `<lazy>` combine with any of them in the parser, and the compiler rejects the combinations that section 5.14 lists.
 - Any other attribute is a runtime attribute (section 5.9).
 
 The control variable of a numeric `for` and the first variable of a generic `for` are read-only (`for i = 1, 3 do i = 5 end` raises `attempt to assign to const variable 'i'`). **Tested** (`compile_errors_test.lus`).
@@ -1120,29 +1122,16 @@ The CLI options `-F NAME`, `-FNAME`, `-F NAME=VALUE`, and `--flag NAME[=VALUE]` 
 
 #### Folding
 
-Folding applies to the condition of an `if` or `elseif` clause when all of the following hold:
+Folding applies to the condition of an `if` or `elseif` clause when the condition is a plain expression (not an assignment condition) whose value is known at compile time, and the compiler evaluates compile-time code (`lus check`, `lus fmt`, `lus ast`, `debug.parse`, and `debug.format` do not, and fold flag conditions only). `spec/design/meta.md`, section 4, defines the conditions known at compile time: literals, flag reads, `<meta>` locals, `<const>` compile-time constants, fields of these, operators, and calls of a fixed set of pure library functions. A flag read is `flags.NAME` or `flags["NAME"]` where `flags` is the free reserved name, and it is known only when the compiling state has a flags table (`lus`, `lus build`, and `lus compile` create one, and a bare embedding has none). A flag is true when it is present and truthy.
 
-- the condition is a plain expression (not an assignment condition),
-- no AST is being built (tools such as `debug.parse` and the language server always see the full tree),
-- the compiling state has a flags table (`lus`, `lus build`, and `lus compile` create one, and a bare embedding has none),
-- `flags` is the free reserved name in the condition,
-- the condition is a foldable condition that reads at least one flag.
+A condition folds to the result the program would compute. Equality follows raw equality, so `flags.count == 3.0` is true for the flag value `3`. Ordering of two strings compares their bytes. A condition whose evaluation raises an error, such as `flags.absent < 3` or `string.rep("x", 1e10)`, does not fold and runs normally.
 
-A foldable condition is one of the following, where a flag read is `flags.NAME` or `flags["NAME"]` and a literal is `nil`, `true`, `false`, a string, an integer, a float, or a negated integer or float:
-
-- a flag read, which is true when the flag is present and truthy,
-- `true`, `false`, or `nil`,
-- a comparison with `==`, `~=`, `<`, `<=`, `>`, or `>=` whose two operands are flag reads or literals,
-- `not C`, `(C)`, `C1 and C2`, or `C1 or C2` where the operands are foldable conditions.
-
-A comparison folds to the result the interpreter would compute. Equality follows raw equality, so `flags.count == 3.0` is true for the flag value `3`. Ordering folds only between two numbers or two strings, which compare by their bytes. Any other ordering, such as `flags.absent < 3`, raises an error at runtime, so it does not fold and runs normally.
-
-An `and` folds when its left operand folds false, or when both operands fold. An `or` folds when its left operand folds true, or when both operands fold. A right operand that folding skips would not run at runtime either, so folding never removes an evaluation that a run performs. A condition whose left operand folds and does not decide the result, such as `flags.debug and verbose` with the flag set, compiles normally. So does any condition that reads no flag, such as `if true then`. `while`, `repeat`, and expressions outside conditions never fold.
+An `and` folds when its left operand folds false, or when both operands fold. An `or` folds when its left operand folds true, or when both operands fold. A right operand that folding skips would not run at runtime either, so folding never removes an evaluation that a run performs. A condition whose left operand folds and does not decide the result, such as `flags.debug and verbose` with the flag set, compiles normally. `while`, `repeat`, and expressions outside conditions never fold.
 
 - A folded condition is compiled for checking and then discarded, so an operand that folding skipped still reports its compile errors.
 - If a clause folds false, its block is fully parsed and checked and then its generated code is discarded. Evaluation continues with the next clause.
 - If a clause folds true, its block is compiled normally and every later `elseif` and `else` clause is fully parsed and checked and then discarded.
-- Discarded code leaves no trace: no instructions, no pending `break` or `goto` targets, no labels, no nested prototypes, no debug locals, and correct line information afterwards. Constants and upvalues created while parsing a discarded block may remain in the function (this is invisible to programs).
+- Discarded code leaves no trace: no instructions, no pending `break`, `continue`, `goto`, or `provide` targets, no labels, no nested prototypes, no debug locals, and correct line information afterwards. A `<meta>` initializer in discarded code is never evaluated. Constants and upvalues created while parsing a discarded block may remain in the function (this is invisible to programs).
 - Folding decisions are made at compile time with the flags of the compiling process and are baked into dumped bytecode.
 
 ```lus nocheck
@@ -1264,6 +1253,23 @@ end                                   -- odd == 25
 ```
 
 ---
+
+### 5.14 `<meta>` locals
+
+**Source:** `compile/codegen.zig` (`metaLocal`, `metaEval`, `isKnown`, `foldKnown`), `compile/meta.zig` (the meta state), `compile/dump.zig` (table and vector constants). **Design:** `spec/design/meta.md`. **Manual:** `guide.mdx`. **Tests:** `meta_test.lus`, `flags_test.lus`.
+
+`local NAME <meta> = exp` evaluates `exp` at compile time in a fresh state with the standard library and the flags of the compilation, and binds `NAME` to the value as a constant. The rules are in `spec/design/meta.md`. The compile errors are:
+
+- `a <meta> declaration names one variable` for a list of names,
+- `a <meta> variable needs one initializer` without exactly one initializer,
+- `cannot combine <meta> with <close>`, `with <group>`, `with <lazy>`, or `with runtime attributes`,
+- `global variables cannot be <meta>` in a global declaration,
+- `attempt to assign to const variable 'NAME'` for an assignment,
+- `meta: 'x' is not known at compile time` for a local of the enclosing code that has no compile-time value,
+- `meta value is a TYPE` and `meta value contains a TYPE at PATH` for a value that is not data,
+- `meta: MESSAGE` with the position of the failing line for an error the initializer raises.
+
+**Tested** (`meta_test.lus`): lookup tables, scalar constants, later initializers reading earlier ones, nested functions, read-only tables and vectors, one table per declaration, sharing and cycles, `string.dump`, the const rule, the rejected combinations, unknown locals, non-data values, error positions, no permissions without grants, the fresh environment, the fixed random seed, initializers in discarded branches, folded conditions with calls, and discarded `continue` and `provide`. **Tested** (`flags_test.lus`): pure calls on flags fold, other calls do not, and meta locals read flags.
 
 ## 6. Compile-time error catalog
 
