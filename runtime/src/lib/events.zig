@@ -21,14 +21,19 @@ const Error = state.Error;
 const Table = object.Table;
 
 const source =
-    \\local create, yield = ...
+    \\local create, yield, resume = ...
     \\local function repeating(wait, h)
-    \\    return create(function()
+    \\    local co = create(function()
     \\        local handle <close> = h
+    \\        -- The first resume stops here, so that closing the coroutine
+    \\        -- closes the handle even before the program resumed it.
+    \\        yield()
     \\        while true do
     \\            yield(wait(handle))
     \\        end
     \\    end)
+    \\    resume(co)
+    \\    return co
     \\end
     \\local function once(wait, h)
     \\    return create(function()
@@ -52,8 +57,10 @@ fn factories(l: *Thread) Error!*Table {
     try l.push(create);
     const yield = try aux.native(l, co_lib.yield, "yield");
     try l.push(yield);
+    const resume_fn = try aux.native(l, co_lib.resumeNative, "resume");
+    try l.push(resume_fn);
     const base = l.top;
-    _ = try ops.callN(l, chunk, &.{ create, yield }, 2);
+    _ = try ops.callN(l, chunk, &.{ create, yield, resume_fn }, 2);
     const t = try l.newTable(2, 0);
     try l.push(Value.obj(.table, t));
     try ops.rawSet(l, t, Value.int(1), l.stack[base]);

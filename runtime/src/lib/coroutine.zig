@@ -384,6 +384,8 @@ inline fn passes(l: *Thread) bool {
     return l.yielding or l.g.halting or l.g.sched.fatal;
 }
 
+pub const resumeNative = @"resume";
+
 fn @"resume"(l: *Thread) Error!u32 {
     const co = try checkCo(l, 1);
     const nargs = l.argCount() - 1;

@@ -1,0 +1,167 @@
+-- `fs.watch`: a coroutine that hands over changes to files
+-- (spec/stdlib/fs/watch.md). A detached coroutine changes files while the
+-- test resumes the watch. Some sandboxes refuse file notifications, and
+-- the tests skip there.
+pledge("fs", "env")
+
+local BASE = fs.path.join(os.getenv("TMPDIR") or os.getenv("TEMP") or "/tmp", "lus-watch-test-" .. os.time() .. "-" .. tostring({}):sub(-6))
+local ROOT
+local count = 0
+
+local function pause(seconds)
+    local start = time.monotonic()
+    while (time.monotonic() - start):seconds() < seconds do
+        coroutine.yield()
+    end
+end
+
+local function write(path, text)
+    local f = io.open(path, "w")
+    f:write(text)
+    f:close()
+end
+
+-- Every test watches a directory of its own, so that a late event of an
+-- earlier test never reaches it.
+local function setup()
+    count = count + 1
+    ROOT = BASE .. "-" .. count
+    fs.createdirectory(fs.path.join(ROOT, "sub"), true)
+end
+
+local function watching(options)
+    local ok, w = catch fs.watch(ROOT, options)
+    if not ok then
+        if tostring(w):find("refused", 1, true) or tostring(w):find("unavailable", 1, true) then
+            skip("file notifications unavailable")
+        end
+        error(w, 0)
+    end
+    return w
+end
+
+-- Resumes the watch `n` times and returns "kind name" for each event.
+local function collect(w, n)
+    local out = {}
+    for i = 1, n do
+        local ok, ev = coroutine.resume(w)
+        assert(ok, ev)
+        out[i] = ev.kind .. " " .. ev.path:sub(#ROOT + 2):gsub("\\", "/")
+    end
+    return table.concat(out, ", ")
+end
+
+local function in_background(f)
+    return coroutine.detach(coroutine.create(function()
+        pause(0.2)
+        f()
+    end))
+end
+
+local function reports_creation_change_and_removal_test()
+    setup()
+    local w = watching()
+    local a = fs.path.join(ROOT, "a.txt")
+    local actions = in_background(function()
+        write(a, "one")
+        pause(0.2)
+        write(a, "two")
+        pause(0.2)
+        fs.remove(a)
+    end)
+    assert(collect(w, 3) == "create a.txt, modify a.txt, remove a.txt")
+    assert(coroutine.resume(actions))
+    coroutine.close(w)
+    fs.remove(ROOT, true)
+end
+
+local function quick_changes_of_one_path_merge_test()
+    setup()
+    local w = watching()
+    local a = fs.path.join(ROOT, "a.txt")
+    local actions = in_background(function()
+        write(a, "one")
+        write(a, "two")
+        write(a, "three")
+        pause(0.3)
+        write(fs.path.join(ROOT, "marker"), "")
+    end)
+    assert(collect(w, 2) == "create a.txt, create marker")
+    coroutine.resume(actions)
+    coroutine.close(w)
+    fs.remove(ROOT, true)
+end
+
+local function recursive_watches_reach_subdirectories_test()
+    setup()
+    local w = watching({ recursive = true })
+    local actions = in_background(function()
+        write(fs.path.join(ROOT, "sub", "deep.txt"), "x")
+    end)
+    assert(collect(w, 1) == "create sub/deep.txt")
+    coroutine.resume(actions)
+    coroutine.close(w)
+    fs.remove(ROOT, true)
+end
+
+local function a_plain_watch_stays_in_its_directory_test()
+    setup()
+    local w = watching()
+    local actions = in_background(function()
+        write(fs.path.join(ROOT, "sub", "deep.txt"), "x")
+        pause(0.2)
+        write(fs.path.join(ROOT, "top.txt"), "x")
+    end)
+    assert(collect(w, 1) == "create top.txt")
+    coroutine.resume(actions)
+    coroutine.close(w)
+    fs.remove(ROOT, true)
+end
+
+local function the_glob_filters_events_test()
+    setup()
+    local w = watching({ glob = "*.lus", recursive = true })
+    local actions = in_background(function()
+        write(fs.path.join(ROOT, "skip.txt"), "x")
+        write(fs.path.join(ROOT, "sub", "keep.lus"), "x")
+    end)
+    assert(collect(w, 1) == "create sub/keep.lus")
+    coroutine.resume(actions)
+    coroutine.close(w)
+    fs.remove(ROOT, true)
+end
+
+local function a_file_can_be_watched_test()
+    setup()
+    local a = fs.path.join(ROOT, "a.txt")
+    write(a, "one")
+    local ok, w = catch fs.watch(a)
+    if not ok then skip("file notifications unavailable") end
+    local actions = in_background(function()
+        write(fs.path.join(ROOT, "other.txt"), "x")
+        pause(0.2)
+        write(a, "two")
+    end)
+    assert(collect(w, 1) == "modify a.txt")
+    coroutine.resume(actions)
+    coroutine.close(w)
+    fs.remove(ROOT, true)
+end
+
+local function a_closed_watch_cannot_be_resumed_test()
+    setup()
+    local w = watching()
+    assert(coroutine.status(w) == "suspended")
+    coroutine.close(w)
+    assert(coroutine.status(w) == "dead")
+    assert(not coroutine.resume(w))
+    fs.remove(ROOT, true)
+end
+
+local function bad_arguments_raise_test()
+    setup()
+    assert(not catch fs.watch(ROOT .. "-missing"))
+    assert(not catch fs.watch(ROOT, { recursive = "yes" }))
+    assert(not catch fs.watch(ROOT, { glob = 1 }))
+    fs.remove(ROOT, true)
+end
