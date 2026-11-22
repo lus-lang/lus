@@ -598,8 +598,8 @@ Some gaps belong in the runtime, because a package written in Lus cannot fill th
 - **RSA and ECDSA.** The standard library verifies and signs with RS256, PS256, and ES256, reading keys from PEM and JWK. `jwt` and `oauth` need them for the ID tokens of the large identity providers.
 - **Key derivation and symmetric encryption.** SCRAM authentication in `postgres` needs PBKDF2 and HKDF. Encrypted cookies and sessions need AES-256-GCM. MD5 joins `crypto.hash` for the protocols that still require it, such as S3 checksums.
 - **Processes with arguments.** `os.spawn(argv, options)` starts a program without a shell, with pipes for its three streams, a working directory, an environment, and its exit status. It covers `execa`, `cross-spawn`, and `Bun.spawn`. It passes each argument as given, with none of the quoting that `io.popen` needs.
-- **File watching.** `fs.watch(path, callback)` reports changes with kqueue, inotify, or ReadDirectoryChangesW and suspends a detached coroutine between events. It covers `chokidar` and the reload loop of a development server.
-- **Signals.** `os.signal(name, callback)` runs a function on `SIGINT`, `SIGTERM`, or `SIGHUP`, so a server can stop accepting connections and finish its requests before it exits.
+- **File watching.** `fs.watch(path)` returns a coroutine that yields one change per resume, using kqueue, inotify, or ReadDirectoryChangesW, and stays suspended until the next change arrives. It covers `chokidar` and the reload loop of a development server.
+- **Signals.** `os.signal(name)` returns a coroutine that yields once for each delivery of `SIGINT`, `SIGTERM`, or `SIGHUP`, so a server can stop accepting connections and finish its requests before it exits.
 - **Recursive globs.** `fs.list` accepts `**` and braces. `fs.walk(path)` iterates over a directory tree. Together they cover `glob`, `fast-glob`, `minimatch`, and `Bun.Glob`.
 - **ZIP and tar.** Readers and writers of both containers join `vector.archive`, next to the codecs they use. They read entries one at a time and refuse entry paths that leave the target directory.
 
@@ -616,7 +616,7 @@ These packages have users in the survey but depend on the earlier tiers or on a 
 - `proxy`, an HTTP reverse proxy for `web`, after streaming bodies.
 - `image`, `qrcode`, `pdf`, and `xlsx`. Decoding and resizing images at the speed of `sharp` needs native code, so `image` waits for a decision on codecs in the runtime. `qrcode`, `pdf`, and `xlsx` writers can be written in Lus.
 
-Other gaps join existing packages. `web` gains a compression plugin built on `vector.archive` and a plugin for security headers in the manner of `helmet`. `schema` gains export to JSON Schema, which `ajv` users and OpenAPI generators read. `websocket` gains rooms and broadcast, which `socket.io` users expect.
+Other gaps join existing packages. `web` gains a compression plugin built on `vector.archive` and a plugin for security headers in the manner of `helmet`. `websocket` gains rooms and broadcast, which `socket.io` users expect.
 
 ### Coroutines
 
