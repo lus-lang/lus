@@ -2507,7 +2507,7 @@ print()
     description = [[
 Writes the data and the size of a file through to its storage device and returns the file handle.
 
-A write returns once the operating system holds the bytes in its cache, and a crash of the system or a loss of power can still lose them. After `file:sync()` returns, the bytes written before the call survive both. On macOS the call also asks the drive to empty its own cache, which a plain sync leaves full. For the standard output the call flushes the buffered output, and for a pipe and the other standard streams it does nothing, since they keep nothing on a device. The method needs no permission, a closed handle raises `attempt to use a closed file`, and a failure of the device raises its error.
+A write returns once the operating system holds the bytes in its cache, and a crash of the system or a loss of power can still lose them. After `file:sync()` returns, the bytes written before the call survive both. On macOS the call also asks the drive to empty its own cache, which a plain sync leaves full. For the standard output the call flushes the buffered output, and for a pipe and the other standard streams it does nothing, since they keep nothing on a device. The method needs no permission, a closed handle raises `attempt to use a closed file`, and a failure of the device returns `nil`, the message, and the number of the error, as a refused write does.
 
 The following example writes a file and syncs it before closing.
 
@@ -3488,7 +3488,7 @@ fs.remove(path)
     description = [[
 Writes any buffered output of the default output file and returns `true`.
 
-The function takes no arguments and requires no permission. It flushes the current default output, which [`io.output`](/manual/api#io.output) sets and which starts as `io.stdout`.
+The function takes no arguments and requires no permission. It flushes the current default output, which [`io.output`](/manual/api#io.output) sets and which starts as `io.stdout`. A flush that the operating system refuses returns `nil`, the message, and the number of the error, as a refused write does.
 
 ```lus
 io.write("buffered\n")   --> buffered
@@ -4058,7 +4058,7 @@ Writes each argument to the default output file and returns that file handle.
 
 Each argument is a string, a number, or a vector. A number is written in the form that `tostring` gives it, and a vector is written as its raw bytes. Any other value raises a `bad argument` error naming its position, such as `bad argument #1 to 'write' (string expected, got table)`. The call adds no separators and no newline.
 
-On success the call returns the default output handle, so that calls can chain. A write that the operating system refuses raises its error, such as `"Broken pipe"` for a pipe whose reader has ended or `"No space left on device"`. `io.write` requires no permission, since the default output is already open.
+On success the call returns the default output handle, so that calls can chain. A write that the operating system refuses returns `nil`, a message such as `"Broken pipe"` for a pipe whose reader has ended or `"No space left on device"`, and the number of the error, as in Lua, so a program that must notice the failure wraps the call in `assert`. `io.write` requires no permission, since the default output is already open.
 
 ```lus
 io.write("pi is about ", 3.14, "\n")         --> pi is about 3.14

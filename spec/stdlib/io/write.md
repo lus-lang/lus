@@ -13,7 +13,7 @@ Writes each argument to the default output file and returns that file handle.
 
 Each argument is a string, a number, or a vector. A number is written in the form that `tostring` gives it, and a vector is written as its raw bytes. Any other value raises a `bad argument` error naming its position, such as `bad argument #1 to 'write' (string expected, got table)`. The call adds no separators and no newline.
 
-On success the call returns the default output handle, so that calls can chain. A write that the operating system refuses raises its error, such as `"Broken pipe"` for a pipe whose reader has ended or `"No space left on device"`. `io.write` requires no permission, since the default output is already open.
+On success the call returns the default output handle, so that calls can chain. A write that the operating system refuses returns `nil`, a message such as `"Broken pipe"` for a pipe whose reader has ended or `"No space left on device"`, and the number of the error, as in Lua, so a program that must notice the failure wraps the call in `assert`. `io.write` requires no permission, since the default output is already open.
 
 ```lus
 io.write("pi is about ", 3.14, "\n")         --> pi is about 3.14

@@ -863,3 +863,32 @@ local function an_https_fetch_from_a_plain_http_peer_raises_test()
     resume(peer)
     server:close()
 end
+
+local function a_failing_detached_coroutine_closes_its_socket_at_once_test()
+    local server, port = listen()
+    local held
+    local seen
+    local co = spawn(function()
+        local sock <close> = connect(port)
+        local mark <close> = setmetatable({}, { __close = function(_, err)
+            seen = err
+        end })
+        held = sock
+        yield()
+        error("failed", 0)
+    end)
+    -- Another coroutine runs until the first one has failed.
+    local watcher = spawn(function()
+        while status(co) ~= "dead" do
+            yield()
+        end
+    end)
+    assert(resume(watcher))
+    assert(seen == "failed", tostring(seen))
+    local ok, err = catch held:send("x")
+    assert(not ok and string.find(tostring(err), "attempt to use a closed socket", 1, true), tostring(err))
+    local r = pack(resume(co))
+    assert(r[1] == false and r[2] == "failed", tostring(r[2]))
+    server:close()
+end
+
