@@ -258,7 +258,7 @@ On every release, the server runs `lus doc --format json` over the package and s
 
 `https://atmosp.here/2.0/dates/llms.txt` lists the package's entries with one line each, in the format of the `llms.txt` that Lus builds for itself. `llms-full.txt` beside it holds the complete Markdown documentation of the package in one file. `https://atmosp.here/llms.txt` describes the registry, its addresses, and the search API, so an agent that knows only the domain finds everything else.
 
-The search API is `GET https://atmosp.here/api/v1/search?q=QUERY&lus=2.0`. It returns a JSON array with one object per package. Each object has the fields `url`, `name`, `version`, and `description`, which the language server reads through `atmos search --json`, followed by the quality score and the declared permissions. The optional parameter `permission` keeps only packages whose declared permissions are covered by the given `pledge` string, so an agent can ask for "a JSON schema validator that needs no permissions". The parameter `hidden=1` includes hidden packages. The parameter `owner` keeps the packages of one account. The parameter `sort` orders the results by `updated`, `fetches`, `score`, or `name` in place of relevance. The parameter `limit` keeps the first results, at most 100. Each object also carries `updated`, `owner`, `official`, and `deprecated`. `GET https://atmosp.here/api/v1/registry` lists the lines that have releases, the default line, and the score below which a package is hidden.
+The search API is `GET https://atmosp.here/api/v1/search?q=QUERY&lus=2.0`. It returns a JSON array with one object per package. Each object has the fields `url`, `name`, `version`, and `description`, which the language server reads through `atmos search --json`, followed by the quality score and the declared permissions. The optional parameter `permission` keeps only packages whose declared permissions are covered by the given `pledge` string, so an agent can ask for "a JSON schema validator that needs no permissions". The parameter `hidden=1` includes hidden packages. The parameter `owner` keeps the packages of one account. The parameter `official=1` keeps the official packages. The parameter `sort` orders the results by `updated`, `fetches`, `score`, or `name` in place of relevance. The parameter `limit` keeps the first results, at most 100. Each object also carries `updated`, `owner`, `official`, and `deprecated`. `GET https://atmosp.here/api/v1/registry` lists the lines that have releases, the default line, and the score below which a package is hidden.
 
 Nothing requires an account to read.
 
@@ -486,7 +486,6 @@ This design needs the following from the runtime and the standard library.
 
 1. The `@includes` annotation records where a copied dependency came from. `spec/design/modules.md` owns the header, so it needs the agreement of its owner.
 2. Deprecation is an action on the account page and through `atmos deprecate`. It needs no tag. The alternative is a signed tag such as `deprecate@2.0`, which keeps deprecation inside git at the cost of a third kind of ref.
-3. The site may render package pages at build time or in the browser from the JSON interface. A build-time page needs the server to call a deploy hook after each publish, through a setting `site_hook`. The answer comes from the website work.
 
 ## Decisions
 
@@ -508,3 +507,4 @@ This design needs the following from the runtime and the standard library.
 | Signed documents name the same addresses under every driver. | A change of provider never signs a document again. |
 | The edge caches release documents and purges them on change. | The newest release has one source, the database of the server, and the edge still answers most reads. |
 | `git.atmosp.here` goes through the Cloudflare proxy. | The user chose it for the WAF and the rate limits. The 16 MiB limit of the server keeps pushes far inside the limits of the proxy. |
+| The website renders package pages in the browser from one shell, `package/index.html`. | The website session chose it, as the user asked. Pages stay current without a rebuild, so the server calls no deploy hook on `atmosp.here`. |
