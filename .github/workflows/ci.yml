@@ -97,6 +97,13 @@ jobs:
         timeout-minutes: 15
         working-directory: runtime
         run: zig build -Doptimize=ReleaseSafe
+      - name: Cross builds for the emulated targets
+        timeout-minutes: 15
+        # The nightly workflow runs these targets under qemu-user. Every
+        # change at least compiles for them.
+        if: runner.os == 'Linux'
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=riscv64-linux-musl --prefix zig-out-riscv64
       - name: Conformance tests
         timeout-minutes: 20
         working-directory: runtime

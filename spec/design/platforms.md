@@ -27,6 +27,7 @@ Four facts from the table shape our order.
 | aarch64 macOS | yes | yes | yes | yes |
 | x86-64 macOS | yes | yes | yes | yes |
 | aarch64 Linux | yes | yes | yes | yes, static musl |
+| riscv64 Linux | yes | yes | yes | not yet |
 | x86-64 Linux | yes | yes | yes | yes, static musl |
 | x86-64 Windows | yes | | | yes |
 | arm64 Windows | yes | | | yes |
@@ -56,17 +57,19 @@ Native code carries no unwind information. Lus itself never unwinds through it, 
 
 Every new instruction set adds an assembler behind the interface that `a64.zig` and `x64.zig` share, and nothing else in `emit.zig` or `opt/codegen.zig` beyond the register names and pools of that target. The interface already fuses comparisons with their branches (`jumpIf`, `jumpIfImm`), which matches every instruction set below that has no flags register. It already places constants in pools (`flushPool`).
 
+The routines that native code calls take every integer as a full word, a pointer, or a value. The conventions of riscv64, loong64, and s390x extend a 32-bit argument to 64 bits by its sign, ppc64le by its type, and the compiled routine relies on that extension. On riscv64 a step routine compared an instruction word whose top bit was set, passed zero-extended, against a sign-extended constant, and misread it. Wide parameters keep every caller in native code free of that rule on every target.
+
 ## riscv64
 
 riscv64 gets a third assembler, `jit/rv64.zig`. The target is RV64GC, the instruction set of every Linux distribution for riscv64. The Zba and Zbb extensions shorten address arithmetic and are used when the kernel reports them through `riscv_hwprobe`.
 
 Three properties of the instruction set need work beyond the encodings.
 
-- **Branch range.** A conditional branch reaches 4 KB in either direction, against 1 MB on aarch64. A conditional branch to a label that is not yet bound, or out of reach, is emitted as the inverted branch over a `jal`, which reaches 1 MB. A backward branch to a label in reach keeps the short form. The interval at which out-of-line code and constants are emitted shrinks to match.
+- **Branch range.** A conditional branch reaches 4 KB in either direction, against 1 MB on aarch64. A conditional branch to a label that is not yet bound, or out of reach, is emitted as the inverted branch over a `jal`, which reaches 1 MB. A backward branch to a label in reach keeps the short form. A `jal` reaches 1 MB, and a function of 30 000 instructions needs more. The emitter flushes its out-of-line code and its pool every 64 KB of straight-line code, at a point execution never reaches, and each flush writes an island for every `jal` since the previous flush whose label is unbound or out of reach: an `auipc` and a `jalr` that reach 2 GB. The `jal` jumps to its island. Every jump therefore stays one instruction, which the call entry relies on when it computes the return address of its caller from the length of the jump that follows the call.
 - **Constants.** A 64-bit constant takes up to eight instructions to build. Addresses of runtime routines and of objects load from the pool with `auipc` and `ld`.
 - **Instruction fetch.** `fence.i` makes new code visible to the hart that runs it alone. Installing code calls the `riscv_flush_icache` system call, which reaches every hart that runs the process.
 
-The pinned registers are callee-saved `s` registers. The temporaries of the baseline tier are `t` registers. The optimizing tier allocates from the `a` and `t` registers and the float registers that the convention lets a callee clobber, which gives it more registers than aarch64.
+The pinned registers are callee-saved `s` registers. The temporaries of the baseline tier are `t` registers. The assembler keeps `a6` and `a7` as its own scratch registers. The optimizing tier allocates 13 integer registers, `a0` to `a5` and `t0` to `t6`, and 16 float registers, `fa0` to `fa7` and `ft0` to `ft7`, as many as on aarch64. Its scratch registers are `s5` to `s7`, which the entry sequence saves.
 
 ## loong64
 
@@ -171,7 +174,7 @@ iOS and the game consoles refuse executable memory to ordinary programs, so the 
 
 ## Testing each target
 
-Every Linux target is gated locally by a static musl build under qemu-user in the lima VM "boring", with the conformance suite under `LUS_JIT` set to `off`, the default, `eager`, `baseline`, and `opt-eager`, and with a `-Dgc-stress=97 -Dgc-verify=true` build under `eager` and `opt-eager`. CI cross-builds every target on every pull request. A nightly Linux job runs the same suite under `qemu-user-static` for each of them. The encodings of each assembler get byte-level unit tests against the output of a system assembler, as `a64.zig` and `x64.zig` have.
+`tools/test-linux.sh --riscv64` runs the riscv64 gate. Every Linux target is gated locally by a static musl build under qemu-user in the lima VM "boring", with the conformance suite under `LUS_JIT` set to `off`, the default, `eager`, `baseline`, and `opt-eager`, and with a `-Dgc-stress=97 -Dgc-verify=true` build under `eager` and `opt-eager`. CI cross-builds every target on every pull request. A nightly Linux job runs the same suite under `qemu-user-static` for each of them. The encodings of each assembler get byte-level unit tests against the output of a system assembler, as `a64.zig` and `x64.zig` have.
 
 | target | local gate | CI |
 |---|---|---|
@@ -185,9 +188,9 @@ Every Linux target is gated locally by a static musl build under qemu-user in th
 | FreeBSD | cross-build only | a FreeBSD virtual machine job |
 | Android | cross-build only | cross-build, emulator when available |
 
-qemu-user overstates the stack of the main thread, which made chains of direct calls overrun it in the x86-64 gate. `stackBounds` takes the smaller of the size that `pthread_getattr_np` reports and the `RLIMIT_STACK` limit for the main thread, which lets the qemu gates run direct calls as native systems do. Until that change lands, the qemu gates run with `LUS_JIT_DIRECT=off` as well. qemu does not model the memory ordering or the instruction fetch of real hardware, so each qemu target is confirmed on native hardware, such as a cloud server, before it is announced.
+qemu-user reports a stack for the main thread that includes memory below it, which made chains of direct calls overrun the stack in the x86-64 gate. `stackBounds` keeps its low bound within `RLIMIT_STACK` below the top of the stack, so the qemu gates run direct calls as native systems do. The emulated gates set `LUS_EMULATED`, which skips `a_slow_reader_loses_its_connection_test` in `serve_test.lus`, the one test whose bound qemu-user breaks by buffering sockets differently. qemu does not model the memory ordering or the instruction fetch of real hardware, so each qemu target is confirmed on native hardware, such as a cloud server, before it is announced.
 
-The interpreters of riscv64, ppc64le, and loong64 build from the same sources and pass the conformance suite under qemu-user in the VM, 6325 tests each. The one failure in each run is `a_slow_reader_loses_its_connection_test` in `serve_test.lus`, the known artifact of emulated socket buffers that the x86-64 gate shares. A failure in the gate of a new JIT on those targets therefore points at the new tier.
+The interpreters of riscv64, ppc64le, and loong64 build from the same sources and pass the conformance suite under qemu-user in the VM, so a failure in the gate of a new JIT on those targets points at the new tier. Both tiers on riscv64 pass the whole suite under qemu-user in every JIT mode, with `LUS_JIT_DIRECT=1024`, and in a `-Dgc-stress=97 -Dgc-verify=true` build.
 
 ## Ahead-of-time compilation
 

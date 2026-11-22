@@ -2,7 +2,7 @@
 # Runs the conformance suite on Linux in a local Lima VM, natively on
 # aarch64 and, through qemu-user, on x86-64.
 #
-# Usage: tools/test-linux.sh [--quick] [--no-x64] [--strict]
+# Usage: tools/test-linux.sh [--quick] [--no-x64] [--riscv64] [--strict]
 #
 # The script cross-builds the runtime for aarch64-linux and x86_64-linux,
 # copies each binary with the test trees into the VM, and runs `lus test`
@@ -10,26 +10,33 @@
 # default tiers, eager, and optimizing. The x86-64 binary runs under the
 # qemu-user that the VM registers with binfmt_misc, so the processes the
 # tests start run under it as well. It runs the default tiers and the
-# optimizing tier, or only the default tiers with --quick. The VM is the
-# one LUS_LIMA_VM names, `boring` by default, and must be running.
+# optimizing tier, or only the default tiers with --quick. --riscv64 also
+# cross-builds a static riscv64-linux-musl binary and runs it under the
+# qemu-user of the VM with the JIT off, with the default tiers, eager,
+# baseline, and optimizing. The VM is the one LUS_LIMA_VM names, `boring`
+# by default, and must be running.
 #
 # The aarch64 runs decide the exit status. qemu-user emulates the memory
 # map of a process, and glibc then reports native stack bounds that are
 # larger than the stack qemu gives the program, so a long chain of direct
 # calls in optimized code can overflow it (`jit_test.lus` under
 # opt-eager). Tests that measure time also run slowly under emulation.
-# The x86-64 runs therefore report their failures apart, and --strict
-# makes them count as well. Native x86-64 Linux runs in CI.
+# The emulated runs therefore report their failures apart, and --strict
+# makes them count as well. Native x86-64 Linux runs in CI. The emulated
+# runs set LUS_EMULATED, which skips the one test whose bound qemu-user
+# breaks by buffering sockets differently.
 set -eu
 
 vm="${LUS_LIMA_VM:-boring}"
 quick=0
 x64=1
+rv64=0
 strict=0
 for arg in "$@"; do
     case "$arg" in
         --quick) quick=1 ;;
         --no-x64) x64=0 ;;
+        --riscv64) rv64=1 ;;
         --strict) strict=1 ;;
         *) echo "unknown option $arg" >&2; exit 2 ;;
     esac
@@ -54,6 +61,10 @@ if [ "$x64" = 1 ]; then
     wait_for_memory
     zig build -j1 -Doptimize=ReleaseSafe -Dtarget=x86_64-linux --prefix zig-out-linux-x64
 fi
+if [ "$rv64" = 1 ]; then
+    wait_for_memory
+    zig build -j1 -Doptimize=ReleaseSafe -Dtarget=riscv64-linux-musl --prefix zig-out-linux-rv64
+fi
 
 # The trees the conformance suite and the language server tests read.
 stage="$(mktemp -d "${TMPDIR:-/tmp}/lus-linux.XXXXXX")"
@@ -76,10 +87,11 @@ run_suite() {
         echo "== $arch, LUS_JIT=$mode"
         jit="LUS_JIT=$mode"
         [ "$mode" = default ] && jit=""
+        [ "$arch" = arm64 ] || jit="$jit LUS_EMULATED=1"
         # The status of `lus test` decides, and the report shows every line
         # except the files that passed.
         if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch/runtime && env $jit zig-out/bin/lus test --timeout 120 ../tests/conformance ../packages/language-server/tests > /tmp/lus-test-$arch.txt 2>&1; s=\$?; grep -a -v '^ok ' /tmp/lus-test-$arch.txt; exit \$s"; then
-            if [ "$arch" = x64 ]; then emulated_failed=1; else failed=1; fi
+            if [ "$arch" = arm64 ]; then failed=1; else emulated_failed=1; fi
         fi
     done
 }
@@ -89,8 +101,10 @@ if [ "$x64" = 1 ]; then
     if [ "$quick" = 1 ]; then run_suite x64 default; else run_suite x64 default opt-eager; fi
 fi
 
+if [ "$rv64" = 1 ]; then run_suite rv64 off default eager baseline opt-eager; fi
+
 if [ "$emulated_failed" = 1 ]; then
-    echo "x86-64 under qemu-user had failures, which the notes at the top of tools/test-linux.sh explain"
+    echo "an architecture under qemu-user had failures, which the notes at the top of tools/test-linux.sh explain"
     [ "$strict" = 1 ] && failed=1
 fi
 exit "$failed"
