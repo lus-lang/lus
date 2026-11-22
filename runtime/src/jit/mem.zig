@@ -17,6 +17,21 @@ const toggles = darwin and builtin.cpu.arch == .aarch64;
 extern "c" fn pthread_jit_write_protect_np(enabled: c_int) void;
 extern "c" fn sys_icache_invalidate(start: *anyopaque, len: usize) void;
 
+/// Windows maps chunks writable and switches the pages of a block to
+/// executable once its code is in place. A state and its arena belong to
+/// one thread, so no other thread runs code from pages that are writable.
+const windows = builtin.os.tag == .windows;
+const mem_commit = 0x1000;
+const mem_reserve = 0x2000;
+const mem_release = 0x8000;
+const page_readwrite = 0x04;
+const page_execute_read = 0x20;
+extern "kernel32" fn VirtualAlloc(addr: ?*anyopaque, size: usize, kind: u32, protect: u32) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn VirtualFree(addr: *anyopaque, size: usize, kind: u32) callconv(.winapi) i32;
+extern "kernel32" fn VirtualProtect(addr: *anyopaque, size: usize, protect: u32, old: *u32) callconv(.winapi) i32;
+extern "kernel32" fn GetCurrentProcess() callconv(.winapi) *anyopaque;
+extern "kernel32" fn FlushInstructionCache(process: *anyopaque, addr: ?*const anyopaque, size: usize) callconv(.winapi) i32;
+
 const chunk_size = 1 << 20;
 const block_align = 16;
 
@@ -114,6 +129,17 @@ pub const Arena = struct {
 };
 
 fn map(size: usize) ?Span {
+    if (windows) {
+        const m = VirtualAlloc(null, size, mem_commit | mem_reserve, page_readwrite) orelse return null;
+        // A process with Arbitrary Code Guard cannot make pages
+        // executable, which the first install would find out too late.
+        var old: u32 = 0;
+        if (VirtualProtect(m, size, page_execute_read, &old) == 0) {
+            _ = VirtualFree(m, 0, mem_release);
+            return null;
+        }
+        return .{ .start = @intFromPtr(m), .len = size };
+    }
     const prot: posix.PROT = .{ .READ = true, .WRITE = true, .EXEC = true };
     var flags: posix.MAP = .{ .TYPE = .PRIVATE, .ANONYMOUS = true };
     if (darwin) flags.JIT = true;
@@ -122,12 +148,17 @@ fn map(size: usize) ?Span {
 }
 
 fn unmap(s: Span) void {
+    if (windows) {
+        _ = VirtualFree(@ptrFromInt(s.start), 0, mem_release);
+        return;
+    }
     const p: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(s.start);
     posix.munmap(p[0..s.len]);
 }
 
 /// Copies finished code into a block and makes it runnable.
 pub fn install(block: []u8, code: []const u8) void {
+    if (windows) return installWindows(block, code);
     if (toggles) pthread_jit_write_protect_np(0);
     @memcpy(block[0..code.len], code);
     if (toggles) pthread_jit_write_protect_np(1);
@@ -141,6 +172,22 @@ pub fn install(block: []u8, code: []const u8) void {
         const start = @intFromPtr(block.ptr);
         _ = std.os.linux.syscall3(.riscv_flush_icache, start, start + code.len, 0);
     }
+}
+
+/// Makes the pages of the block writable, copies the code, and makes them
+/// executable again. Other blocks on the same pages stay runnable for
+/// every thread except this one, which runs no native code meanwhile.
+fn installWindows(block: []u8, code: []const u8) void {
+    const page = std.heap.pageSize();
+    const start = std.mem.alignBackward(usize, @intFromPtr(block.ptr), page);
+    const end = std.mem.alignForward(usize, @intFromPtr(block.ptr) + code.len, page);
+    var old: u32 = 0;
+    // The pages were committed when the chunk was mapped, so switching
+    // their protection fails only when the system is out of resources.
+    if (VirtualProtect(@ptrFromInt(start), end - start, page_readwrite, &old) == 0) @panic("VirtualProtect failed");
+    @memcpy(block[0..code.len], code);
+    if (VirtualProtect(@ptrFromInt(start), end - start, page_execute_read, &old) == 0) @panic("VirtualProtect failed");
+    _ = FlushInstructionCache(GetCurrentProcess(), block.ptr, code.len);
 }
 
 /// Makes every core fetch the bytes just written to `start..end`, on an

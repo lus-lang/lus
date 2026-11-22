@@ -156,7 +156,7 @@ The `windows-2022` runner of `ci.yml` already runs `zig build test test-embed te
 1. A step that fails unless native code runs: `LUS_JIT=eager lus -e "local function f() end f() assert(debug.jit(f))"`. A silent fallback to the interpreter would otherwise pass every other step.
 2. The conformance suite with `LUS_JIT=baseline`, and with `LUS_JIT=opt-eager LUS_JIT_DIRECT=1024`, which ends every chain of direct calls after a few activations and so exercises the probes and the unwinding of exits.
 3. A unit test in `jit/tests.zig` that calls `RtlVirtualUnwind` from a routine that native code called, at each kind of frame, and checks that the walk reaches the caller of the entry sequence. The encoder of the unwind codes is a pure function, so byte-level tests of it run on every host.
-4. A `-Dgc-stress=97 -Dgc-verify=true` build that runs the conformance suite with `LUS_JIT=eager` and `LUS_JIT=opt-eager`, and the differential tester with its default seeds. Both join the `windows-2022` entry of the nightly matrix.
+4. A `-Dgc-stress=1 -Dgc-verify=true` build that runs the conformance suite with `LUS_JIT` set to `off`, `eager`, and `opt-eager`, in the `windows-2022` entry of the nightly stress job. The differential tester starts its programs through a POSIX shell, so it joins the Windows runs once it starts them directly.
 
 Locally, `zig build -Dtarget=x86_64-windows` and `zig build test -Dtarget=x86_64-windows` check that everything compiles. The macOS and Linux gates check that the shared code is unchanged.
 

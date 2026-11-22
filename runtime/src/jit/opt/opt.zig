@@ -256,7 +256,7 @@ pub fn entry(l: *Thread, p: *Proto) usize {
 /// A loop of the top frame became hot in baseline code. `pc` is the
 /// first instruction of its body, which runs next. Returns the address
 /// of optimized code that continues the frame there, or zero.
-pub fn loopEntry(l: *Thread, pc_word: usize) callconv(.c) usize {
+pub fn loopEntry(l: *Thread, pc_word: usize) callconv(jit.cc) usize {
     const pc: u32 = @truncate(pc_word);
     const fr = l.frame();
     const p = fr.closure.?.proto;
@@ -875,7 +875,7 @@ pub const rt = struct {
     /// frame continues in baseline code at the instruction that the
     /// guard belongs to. The exit is recorded, so that the next
     /// compilation of the function predicts better.
-    pub fn deopt(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64) callconv(.c) jit.Target {
+    pub fn deopt(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64) callconv(jit.cc) jit.Target {
         const g = l.g;
         if (g.jit.opt_dump) std.debug.print("  exit: snapshot {d} of the unit at {d}, pc {d}\n", .{ snap, u.entry_pc, u.frames[u.snaps[snap].frames + u.snaps[snap].nframes - 1].pc });
         // Read before the tables of the snapshot are allocated, which
@@ -965,7 +965,7 @@ pub const rt = struct {
     /// native frames of the callers, and then the exit proceeds as any
     /// other. The native stack pointer that the entry sequence expects
     /// is left in the state for the code that called.
-    pub fn deoptDirect(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64) callconv(.c) jit.Target {
+    pub fn deoptDirect(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64) callconv(jit.cc) jit.Target {
         const sp = @intFromPtr(regs) + @as(usize, @intCast(codegen.save_bytes));
         unwind(l, u, @intCast(snap), sp) catch return .{ .addr = failed, .base = 0 };
         return deopt(l, u, snap, regs);
@@ -973,14 +973,14 @@ pub const rt = struct {
 
     /// Optimized code found too little room for its inline frames and
     /// gives the frame back before it ran anything.
-    pub fn bail(l: *Thread) callconv(.c) jit.Target {
+    pub fn bail(l: *Thread) callconv(jit.cc) jit.Target {
         return baseline(l);
     }
 
     /// The collector check of an allocation. The live values go to
     /// their slots first, where the collector finds them, and the stack
     /// top covers `top_slots` registers of the root frame meanwhile.
-    pub fn collect(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64, top_slots: usize) callconv(.c) void {
+    pub fn collect(l: *Thread, u: *Unit, snap: usize, regs: [*]const u64, top_slots: usize) callconv(jit.cc) void {
         _ = writeBack(l, u, @intCast(snap), regs, null);
         const saved = l.top;
         const base = l.frame().base;
@@ -1005,20 +1005,20 @@ pub const rt = struct {
         l.top = saved;
     }
 
-    pub fn barrierTable(l: *Thread, tab: *Table, payload: u64, tag: u64, key: usize) callconv(.c) void {
+    pub fn barrierTable(l: *Thread, tab: *Table, payload: u64, tag: u64, key: usize) callconv(jit.cc) void {
         const v = Value.make(payload, @fromBackingInt(@as(u8, @truncate(tag))));
         const k: Value = if (key != 0) Value.make(key, .string) else .nil;
         gc.barrierTable(l.g, tab, k, v);
     }
 
-    pub fn barrierBack(l: *Thread, h: *gc.Header) callconv(.c) void {
+    pub fn barrierBack(l: *Thread, h: *gc.Header) callconv(jit.cc) void {
         gc.barrierBack(l.g, h);
     }
 
     /// A new table, as `state.newTableIn` makes it, without the
     /// collector check, which optimized code makes first. Returns null
     /// when memory ran out.
-    pub fn newTable(l: *Thread, narr: usize, nhash: usize, ic: ?*const object.IcEntry) callconv(.c) ?*Table {
+    pub fn newTable(l: *Thread, narr: usize, nhash: usize, ic: ?*const object.IcEntry) callconv(jit.cc) ?*Table {
         const g = l.g;
         // A site whose lists fit an unboxed kind keeps them in one word
         // per slot (`state.newTableAt`).
@@ -1042,7 +1042,7 @@ pub const rt = struct {
     /// A record that optimized code kept unallocated until now, with the
     /// shape `id` and `cap` empty slots in its cell, which the code then
     /// fills. Its constructor already counted the table as sunk.
-    pub fn newShapedTable(l: *Thread, cap: usize, id: usize) callconv(.c) ?*Table {
+    pub fn newShapedTable(l: *Thread, cap: usize, id: usize) callconv(jit.cc) ?*Table {
         const g = l.g;
         const units = table.inlineUnitsSlots(0, cap, @sizeOf(Value));
         g.jit.sunk -|= @sizeOf(Table) + units * Table.inline_unit;
@@ -1053,7 +1053,7 @@ pub const rt = struct {
         return t;
     }
 
-    pub fn newVirtualTable(l: *Thread, narr: usize, nhash: usize) callconv(.c) ?*Table {
+    pub fn newVirtualTable(l: *Thread, narr: usize, nhash: usize) callconv(jit.cc) ?*Table {
         const g = l.g;
         g.jit.sunk -|= @sizeOf(Table) + table.inlineUnits(narr, nhash) * Table.inline_unit;
         // Optimized code writes the fields of the record into hash nodes
@@ -1070,13 +1070,13 @@ pub const rt = struct {
         return t;
     }
 
-    pub fn tableLength(t: *Table) callconv(.c) i64 {
+    pub fn tableLength(t: *Table) callconv(jit.cc) i64 {
         return table.length(t);
     }
 
     /// The character count of `string.sub(s, i, j)` for a string of
     /// `chars` characters, with the clipping of the library function.
-    pub fn subLength(chars: i64, i: i64, j: i64) callconv(.c) i64 {
+    pub fn subLength(chars: i64, i: i64, j: i64) callconv(jit.cc) i64 {
         const start: i64 = if (i > 0) i else if (i == 0 or i < -chars) 1 else chars + i + 1;
         const end: i64 = if (j > chars) chars else if (j >= 0) j else if (j < -chars) 0 else chars + j + 1;
         return if (start > end) 0 else end - start + 1;
@@ -1084,7 +1084,7 @@ pub const rt = struct {
 
     /// The code point of character `i` of `s`, as `string.byte(s, i)`
     /// returns it, or minus one for a position outside the string.
-    pub fn stringByte(l: *Thread, s: *object.String, i: i64) callconv(.c) i64 {
+    pub fn stringByte(l: *Thread, s: *object.String, i: i64) callconv(jit.cc) i64 {
         const n: i64 = s.chars();
         const pos: i64 = if (i > 0) i else if (i == 0 or i < -n) 1 else n + i + 1;
         // The end position is the start position, clipped like the

@@ -2,6 +2,7 @@
 //! convention. It offers the same interface as `a64.zig`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Reg = enum(u4) {
     rax,
@@ -671,7 +672,16 @@ pub const Assembler = struct {
     }
     /// Moves the native stack pointer by `v` bytes.
     pub fn moveSp(a: *Assembler, v: i32) void {
+        if (v < 0) a.probe(-v);
         a.addImm(.rsp, v);
+    }
+    /// Touches each page of the `size` bytes below the stack pointer in
+    /// order, on Windows, where the system commits the stack of a thread
+    /// one guard page at a time, as the `__chkstk` of its compilers does.
+    fn probe(a: *Assembler, size: i32) void {
+        if (builtin.os.tag != .windows) return;
+        var off: i32 = 4096;
+        while (off <= size) : (off += 4096) a.load64(s0, .{ .base = .rsp, .disp = -off });
     }
 
     // -----------------------------------------------------------------
@@ -797,6 +807,7 @@ pub const Assembler = struct {
     /// Opens a native frame of `size` bytes whose top word holds the
     /// return address of the running routine, which the call pushed.
     pub fn saveLink(a: *Assembler, size: i32) void {
+        a.probe(size - 8);
         a.addImm(.rsp, -(size - 8));
     }
     /// Closes a frame that `saveLink` opened. The return address is
