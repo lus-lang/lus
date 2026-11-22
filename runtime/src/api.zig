@@ -56,7 +56,39 @@ pub fn close(l: *Thread) void {
     closeCoroutines(g);
     // Finalizers run next, while worker handles still reach their domain.
     finalizeAll(g);
+    writeAotTraining(g);
     closeRest(g);
+}
+
+/// Writes the code section of a training run (`jit/aot.zig`) while every
+/// function is alive.
+fn writeAotTraining(g: *Global) void {
+    const jit = @import("jit/jit.zig");
+    if (comptime jit.enabled and !jit.is_wasm) @import("jit/aot.zig").writeTraining(g);
+}
+
+/// Numbers the functions of module `index` of the bundle, whose main
+/// function is at the top of the stack, and installs their code when the
+/// executable carries a code section.
+pub fn bundleModuleLoaded(l: *Thread, index: usize) void {
+    const jit = @import("jit/jit.zig");
+    if (comptime !(jit.enabled and !jit.is_wasm)) return;
+    const v = l.stack[l.top - 1];
+    if (v.tag != .closure) return;
+    @import("jit/aot.zig").moduleLoaded(l, v.as(object.Closure).proto, index);
+}
+
+/// The hash seed that a code section records, or null.
+pub fn aotSectionSeed(bytes: []const u8) ?u64 {
+    return @import("jit/aot.zig").sectionSeed(bytes);
+}
+
+/// Reads the code section of an executable compiled ahead of time, which
+/// the bundle carries as the module named `.aot`.
+pub fn useAotSection(l: *Thread, bytes: []const u8) void {
+    const jit = @import("jit/jit.zig");
+    if (comptime !(jit.enabled and !jit.is_wasm)) return;
+    l.g.jit.aot_section = @import("jit/aot.zig").Section.parse(l.g.gpa, bytes);
 }
 
 /// The part of `close` after the finalizers: workers created by this
@@ -91,6 +123,7 @@ pub fn closeForExit(l: *Thread) void {
     const g = l.g;
     closeCoroutines(g);
     finalizeAll(g);
+    writeAotTraining(g);
     if (@import("build_options").workers and !@import("lib/worker.zig").stopForExit(g)) {
         workers_abandoned = true;
         @import("lib/out.zig").deinit(g);

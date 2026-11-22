@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
         .coverage = b.option(bool, "coverage", "Instrument every edge and write the edges a run reached to LUS_COVERAGE (default: false)") orelse false,
         .fail_io = b.option(bool, "fail-io", "Fail or shorten the file and socket operation that LUS_FAIL_IO names, to test I/O error handling (default: false)") orelse false,
         .compiler = b.option(bool, "compiler", "Include the parser and the compiler, which `load` of source text and the tools need (default: true)") orelse true,
+        .jit_compile = b.option(bool, "jit-compile", "Compile native code, where the JIT is included, rather than only run the code an executable compiled ahead of time carries (default: true)") orelse true,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -61,13 +62,16 @@ pub fn build(b: *std.Build) void {
     b.step("run", "Run the lus interpreter").dependOn(&run.step);
 
     // The runtime of executables compiled ahead of time
-    // (`../spec/design/aot.md`): the interpreter and the libraries without
-    // the parser, the compiler, the tools, or the JIT. It runs the bundle
+    // (`../spec/design/aot.md`): the interpreter, the libraries, and the
+    // part of the JIT that runs native code, without the parser, the
+    // compiler, the tools, or the compilers of the JIT. It runs the bundle
     // appended to it and nothing else.
     const rt_exe = blk: {
         var rt = requested;
         rt.compiler = false;
-        rt.jit = false;
+        // The JIT runs the code that the executable carries and compiles
+        // nothing (`--aot-keep-jit` bundles on `lus` itself instead).
+        rt.jit_compile = false;
         const rt_mod = b.createModule(.{
             .root_source_file = b.path("src/lus.zig"),
             .target = target,
@@ -141,6 +145,20 @@ pub fn build(b: *std.Build) void {
     run_load.addFileArg(app_load);
     run_load.expectStdOutEqual("nil\tthe compiler is not part of this executable\n");
     runtime_step.dependOn(&run_load.step);
+    // `lus build --aot` trains the program and appends its code to the
+    // runtime, so its hot function is optimized from the start.
+    const make_aot = b.addRunArtifact(exe);
+    make_aot.setCwd(b.path("../tests/build"));
+    make_aot.addArgs(&.{ "build", "--aot", "--runtime" });
+    make_aot.addArtifactArg(rt_exe);
+    make_aot.addArg("-o");
+    const app_aot = make_aot.addOutputFileArg("aot");
+    make_aot.addArg("aot.lus");
+    _ = make_aot.captureStdOut(.{});
+    const run_aot = std.Build.Step.Run.create(b, "run an executable compiled ahead of time");
+    run_aot.addFileArg(app_aot);
+    run_aot.expectStdOutEqual("fib optimized true\n6765\t5341338000\t500500\n500000.5\n");
+    runtime_step.dependOn(&run_aot.step);
 
     // `lus check` and `lus doc` on the fixtures in tests/check and
     // tests/doc. Each fixture's output must match its expected file.
@@ -396,6 +414,7 @@ const Features = struct {
     fail_io: bool = false,
     coverage: bool = false,
     compiler: bool = true,
+    jit_compile: bool = true,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -424,6 +443,7 @@ const Features = struct {
         options.addOption(bool, "fail_io", f.fail_io);
         options.addOption(bool, "coverage", f.coverage);
         options.addOption(bool, "compiler", f.compiler);
+        options.addOption(bool, "jit_compile", f.jit_compile);
         // The version that `lus -v` and the User-Agent of network.fetch
         // report. A release of an unstable channel sets it with `-Dversion`,
         // and every other build takes the version in build.zig.zon.

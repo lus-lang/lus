@@ -20,6 +20,7 @@ const interp = @import("../../vm/interp.zig");
 const opc = @import("../../compile/opcodes.zig");
 const jit = @import("../jit.zig");
 const mem = @import("../mem.zig");
+const aot = @import("../aot.zig");
 const ir = @import("ir.zig");
 const lower = @import("lower.zig");
 const passes = @import("passes.zig");
@@ -197,7 +198,7 @@ pub fn infoOf(g: *Global, p: *Proto) ?*Info {
     return info;
 }
 
-fn existing(p: *Proto) ?*Info {
+pub fn existing(p: *Proto) ?*Info {
     return if (p.opt) |x| @ptrCast(@alignCast(x)) else null;
 }
 
@@ -293,6 +294,7 @@ fn tryCompile(l: *Thread, p: *Proto, pc: u32) ?*Unit {
 }
 
 fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
+    if (comptime !jit.can_compile) return null;
     const g = l.g;
     const gpa = g.gpa;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
@@ -345,6 +347,7 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
     cg.em.reportAot();
     const bytes = cg.em.bytes();
     unit.code = g.jit.arena.alloc(gpa, bytes.len) orelse return null;
+    if (g.jit.aot != null and cg.em.a.unrelocated == 0) aot.reloadUnitCode(l, unit, cg.em.a.buf.items, cg.em.a.relocs.items);
     mem.install(unit.code, bytes);
     const base = @intFromPtr(unit.code.ptr);
     unit.entry = base + cg.entry_off;
@@ -413,6 +416,10 @@ fn compile(l: *Thread, p: *Proto, pc: u32, info: *Info) ?*Unit {
     unit.cell = 1;
     // The function now refers to the functions compiled inline.
     if (inlined.len != 0) gc.barrierBack(g, &p.hdr);
+    if (g.jit.aot) |st| if (cg.em.a.unrelocated == 0) {
+        st.keepUnit(g, unit, cg.em.a.relocs.items);
+        aot.reloadUnitMeta(l, unit);
+    };
     ok = true;
     g.jit.optimized += 1;
     return unit;
@@ -432,6 +439,8 @@ fn valOf(f: *ir.Func, ra: regalloc.Result, r: ir.Ref) Val {
 
 fn freeUnit(g: *Global, u: *Unit) void {
     const gpa = g.gpa;
+    if (g.jit.aot) |st| st.forgetUnit(u);
+    if (g.jit.aot_section) |s| s.forgetUnit(u);
     if (u.code.len != 0) g.jit.arena.release(gpa, u.code);
     gpa.free(u.snaps);
     gpa.free(u.frames);

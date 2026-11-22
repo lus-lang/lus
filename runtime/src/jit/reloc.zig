@@ -31,7 +31,8 @@ pub const Kind = enum(u8) {
     ic,
     /// A field of function `a`, at `b` bytes from its start.
     proto_field,
-    /// A field of unit `b` of function `a`, at `c` bytes from its start.
+    /// A field of the optimized unit of function `a` that starts at
+    /// instruction `b`, at `c` bytes from its start.
     unit,
     /// The native function `a` of `jit.natives`.
     native,
@@ -44,7 +45,9 @@ pub const Kind = enum(u8) {
     /// The interned string whose characters are string `a` of the string
     /// table of the code.
     interned,
-    /// The code of function `a`, at offset `b`.
+    /// The code of function `a` at offset `c`: its optimized unit that
+    /// starts at instruction `b`, or its baseline code when `b` is
+    /// `aot.baseline_pc`.
     code,
 };
 
@@ -68,6 +71,15 @@ pub const Form = enum(u8) {
     /// The two instructions of s390x that build an address 32 bits at a
     /// time: `llihf` and `iilf`.
     s390_pair,
+
+    /// The number of bytes the form covers.
+    pub fn size(f: Form) usize {
+        return switch (f) {
+            .word => 8,
+            .ppc_seq => 20,
+            .s390_pair => 12,
+        };
+    }
 };
 
 /// What a wide immediate is, as the resolver of the emitter decides.

@@ -253,11 +253,11 @@ pub const Emitter = struct {
 
     pub fn init(gpa: std.mem.Allocator, l: *Thread, p: *Proto) Emitter {
         var e: Emitter = .{ .a = A.Assembler.init(gpa), .gpa = gpa, .p = p, .g = l.g, .lay = Layout.of(l) };
-        if (l.g.jit.aot_log != null) {
+        if (l.g.jit.aot) |st| {
             // Ahead of time, every wide immediate goes through the
             // resolver (`aot.zig`).
             if (gpa.create(aot.Context)) |c| {
-                c.* = aot.Context.init(gpa, l.g, p);
+                c.* = aot.Context.init(gpa, l.g, st, p);
                 e.aot = c;
                 e.a.aot = true;
                 e.a.resolver = c.resolver();

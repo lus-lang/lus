@@ -159,19 +159,22 @@ jobs:
           LUS_JIT: opt-eager
           LUS_JIT_DIRECT: "1024"
         run: zig-out/bin/lus test ../tests/conformance
-      - name: Every address in native code has a relocation
-        timeout-minutes: 20
-        # Both tiers compile in the form of code compiled ahead of time
-        # and run it. An address that the loader of such code could not
-        # find appends a line to the log (spec/design/aot.md). The image
-        # of the executable is known to the resolver only where dladdr
-        # works, which macOS has.
+      - name: Native code runs as the loader of an executable relocates it
+        timeout-minutes: 30
+        # Both tiers compile in the form of code compiled ahead of time.
+        # Every relocated word is written again from the address that the
+        # loader finds, the metadata of every optimized unit goes through
+        # the code section, and the code runs from the result. An address
+        # without a relocation, or a relocation that the loader cannot
+        # resolve, appends a line to the log (spec/design/aot.md). The
+        # image of the executable is known to the resolver only where
+        # dladdr works, which macOS has.
         if: runner.os == 'macOS'
         working-directory: runtime
-        env:
-          LUS_JIT: opt-eager
         run: |
-          LUS_JIT_AOT="check:$RUNNER_TEMP/aot.log" zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+          for mode in opt-eager on; do
+            LUS_JIT=$mode LUS_JIT_AOT="reload:$RUNNER_TEMP/aot.log" zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+          done
           if [ -s "$RUNNER_TEMP/aot.log" ]; then cat "$RUNNER_TEMP/aot.log"; exit 1; fi
       - name: Documentation examples
         timeout-minutes: 10
