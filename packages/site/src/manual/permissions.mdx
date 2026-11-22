@@ -58,7 +58,7 @@ The standard library checks the following permissions.
 | `fs:read` | Reading files, listing directories, and inspecting paths. |
 | `fs:write` | Creating, changing, moving, and removing files, directories, and links. |
 | `load` | Running code that the program loads while it runs, from a string or from a file. |
-| `exec` | Running external commands with `os.execute` and `io.popen`. |
+| `exec` | Running other programs with `os.spawn`, and commands in the system shell with `os.execute` and `io.popen`. |
 | `env` | Reading and setting environment variables. |
 | `env:read` | Reading environment variables with `os.getenv`. |
 | `env:write` | Setting and removing environment variables with `os.setenv`. |
@@ -151,6 +151,18 @@ pledge("env:read", "env:write=APP_*")
 os.setenv("APP_MODE", "test")
 print(os.getenv("APP_MODE"))                  --> test
 print((catch os.setenv("PATH", "/tmp")))      --> false
+```
+
+### Program values
+
+An `exec` value selects the programs that [`os.spawn`](/manual/api#os.spawn) may start. A value without a separator matches the name of the program as `os.spawn` receives it, so `exec=git` allows `os.spawn({"git", ...})`. A value with a separator is a path glob, which matches the absolute path that the name resolves to, like a [filesystem value](#filesystem-values). `exec=/usr/bin/*` allows every program in `/usr/bin`, whatever name started it.
+
+`os.execute` and `io.popen` run the system shell, which can start any program, so a grant with a value never allows them. The following script may run `sort` and no shell command.
+
+```lus
+pledge("exec=sort")
+print((catch os.spawn({"sort"}, {stdin = "null"})))   --> true
+print((catch os.execute("sort")))                   --> false
 ```
 
 ### Several values

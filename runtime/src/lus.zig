@@ -144,4 +144,6 @@ test {
     _ = @import("tools/paths.zig");
     _ = @import("lib/init.zig");
     _ = @import("lib/shell.zig");
+    _ = @import("lib/glob.zig");
+    _ = @import("lib/process.zig");
 }

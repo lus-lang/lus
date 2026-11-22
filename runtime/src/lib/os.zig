@@ -36,6 +36,10 @@ pub const funcs = [_]aux.Reg{
 
 pub fn open(l: *Thread) Error!void {
     const t = try aux.newLib(l, .fields, "os", &funcs);
+    try l.push(Value.obj(.table, t));
+    defer l.top -= 1;
+    try @import("process.zig").open(l, t);
+    try @import("signal.zig").open(l, t);
     try aux.setGlobal(l, "os", Value.obj(.table, t));
 }
 
@@ -306,7 +310,7 @@ fn execute(l: *Thread) Error!u32 {
 fn spawnShell(l: *Thread) Error!u32 {
     const cmd = try aux.optString(l, 1, null);
     const c = cmd orelse return aux.retBool(l, true); // a shell is available
-    if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for os.execute", .{});
+    if (!@import("../vm/pledge.zig").allowedUnrestricted(l, "exec")) return l.raiseFmt("permission \"exec\" denied for os.execute", .{});
     const io = l.g.io;
     out.flushAll(l.g);
     const shell = @import("shell.zig");

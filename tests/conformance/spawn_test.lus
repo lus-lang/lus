@@ -1,0 +1,235 @@
+-- `os.spawn`: running a program without a shell (spec/stdlib/os/spawn.md).
+-- The child is the lus binary under test, run with `-e`, so the tests run
+-- the same on every system. It is the one in runtime/zig-out/bin, or the
+-- one named by the LUS_BIN environment variable.
+pledge("exec", "env", "fs")
+
+local windows = package.config:sub(1, 1) == "\\"
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+
+local function lus(code, options, grants)
+    local argv = { lus_bin }
+    for _, g in ipairs(grants or {}) do
+        argv[#argv + 1] = "-P" .. g
+    end
+    argv[#argv + 1] = "-e"
+    argv[#argv + 1] = code
+    return os.spawn(argv, options)
+end
+
+local function exit_of(p)
+    local ok, success, how, code = coroutine.resume(p.exit)
+    assert(ok, success)
+    return success, how, code
+end
+
+local function reads_the_output_of_a_child_test()
+    local p <close> = lus('io.write("hello")', { stdout = "pipe" })
+    assert(type(p.pid) == "number" and p.pid > 0)
+    assert(p.stdout:read("a") == "hello")
+    assert(p.stdin == nil and p.stderr == nil)
+end
+
+local function writes_the_input_of_a_child_test()
+    local p = lus('io.write(io.read("a"):upper())', { stdin = "pipe", stdout = "pipe" })
+    p.stdin:write("abc\n", "def")
+    p.stdin:close()
+    assert(p.stdout:read("a") == "ABC\nDEF")
+    assert(exit_of(p) == true)
+end
+
+local function wait_returns_the_exit_status_test()
+    local success, how, code = exit_of(lus("os.exit(3)"))
+    assert(success == nil and how == "exit" and code == 3)
+    success, how, code = exit_of(lus("os.exit(0)"))
+    assert(success == true and how == "exit" and code == 0)
+end
+
+local function the_exit_coroutine_ends_with_the_status_test()
+    local p = lus("os.exit(5)")
+    assert(coroutine.status(p.exit) == "suspended")
+    assert(p.exit == p.exit)
+    assert(select(4, coroutine.resume(p.exit)) == 5)
+    assert(coroutine.status(p.exit) == "dead")
+    local ok, err = coroutine.resume(p.exit)
+    assert(not ok and err == "cannot resume dead coroutine")
+    assert(select(3, p:poll()) == 5)
+end
+
+local function closing_a_waiter_closes_the_exit_coroutine_test()
+    local p = lus('io.read("a")', { stdin = "pipe" })
+    local waiter = coroutine.detach(coroutine.create(function()
+        coroutine.resume(p.exit)
+    end))
+    coroutine.resume(coroutine.sleep(0.05))
+    coroutine.close(waiter)
+    assert(coroutine.status(p.exit) == "dead")
+    assert(p:poll() == nil)
+    p:kill()
+end
+
+local function poll_reports_a_running_child_test()
+    local p = lus('io.read("a")', { stdin = "pipe" })
+    assert(p:poll() == nil)
+    p.stdin:close()
+    exit_of(p)
+    local success, how, code = p:poll()
+    assert(success == true and how == "exit" and code == 0)
+end
+
+local function stderr_can_join_stdout_test()
+    local p = lus('io.write("out") io.stdout:flush() io.stderr:write("err")', { stdout = "pipe", stderr = "stdout" })
+    local all = p.stdout:read("a")
+    assert(all == "outerr", all)
+    exit_of(p)
+end
+
+local function stderr_has_a_pipe_of_its_own_test()
+    local p = lus('io.stderr:write("problem")', { stderr = "pipe", stdout = "null" })
+    assert(p.stderr:read("a") == "problem")
+    exit_of(p)
+end
+
+local function a_file_can_be_a_stream_test()
+    local path = os.tmpname()
+    local f = io.open(path, "w")
+    local p = lus('io.write("to a file")', { stdout = f })
+    exit_of(p)
+    f:close()
+    local r = io.open(path, "r")
+    assert(r:read("a") == "to a file")
+    r:close()
+    fs.remove(path)
+end
+
+local function env_replaces_the_environment_test()
+    local p = lus('io.write(tostring(os.getenv("SPAWN_TEST_A")), " ", tostring(os.getenv("HOME")))', {
+        stdout = "pipe",
+        env = { SPAWN_TEST_A = "one" },
+    }, { "env" })
+    assert(p.stdout:read("a") == "one nil")
+    exit_of(p)
+end
+
+local function cwd_sets_the_working_directory_test()
+    local marker = os.tmpname()
+    local code = string.format('io.write(io.open(%q) and "found" or "missing")', fs.path.name(marker))
+    local p = os.spawn({ lus_bin, "-Pfs", "-e", code }, { stdout = "pipe", cwd = fs.path.parent(marker) })
+    assert(p.stdout:read("a") == "found")
+    assert(exit_of(p) == true)
+    fs.remove(marker)
+end
+
+local function a_missing_program_returns_nil_test()
+    local p, err = os.spawn({ "lus-spawn-test-no-such-program" })
+    assert(p == nil and err:find("program not found", 1, true))
+end
+
+local function kill_ends_a_child_test()
+    local p = lus('io.read("a")', { stdin = "pipe" })
+    assert(p:kill() == true)
+    local success, how = exit_of(p)
+    assert(success == nil)
+    if not windows then
+        assert(how == "signal")
+    end
+    assert(p:kill() == false)
+end
+
+local function closing_closes_the_pipes_and_waits_test()
+    local p
+    do
+        local child <close> = lus('io.write(#io.read("a"))', { stdin = "pipe", stdout = "null" })
+        p = child
+        child.stdin:write("12345")
+    end
+    local success, how, code = p:poll()
+    assert(success == true and code == 0)
+end
+
+local function reads_wait_inside_detached_coroutines_test()
+    local order = {}
+    local slow = coroutine.detach(coroutine.create(function()
+        local p = lus('io.read("l") io.write("slow")', { stdin = "pipe", stdout = "pipe" })
+        local fast = coroutine.detach(coroutine.create(function()
+            order[#order + 1] = "fast"
+            p.stdin:write("go\n")
+        end))
+        local got = p.stdout:read("a")
+        order[#order + 1] = got
+        coroutine.resume(fast)
+        exit_of(p)
+    end))
+    assert(coroutine.resume(slow))
+    assert(table.concat(order, " ") == "fast slow")
+end
+
+local function large_transfers_through_both_pipes_test()
+    local p = lus('io.write(io.read("a"))', { stdin = "pipe", stdout = "pipe" })
+    local data = string.rep("0123456789", 100000)
+    local writer = coroutine.detach(coroutine.create(function()
+        p.stdin:write(data)
+        p.stdin:close()
+    end))
+    assert(p.stdout:read("a") == data)
+    assert(coroutine.resume(writer))
+    exit_of(p)
+end
+
+local function arguments_reach_the_child_unchanged_test()
+    local args = { "plain", "with space", "", 'quote " inside', "back\\slash\\", "tab\there", "ünïcödé", "a\\\"b" }
+    local script = os.tmpname()
+    local f = io.open(script, "w")
+    f:write('local t = {} for i = 1, #arg do t[i] = arg[i] end io.write(table.concat(t, "\\0"))')
+    f:close()
+    local list = { lus_bin, script }
+    for _, a in ipairs(args) do
+        list[#list + 1] = a
+    end
+    local p = os.spawn(list, { stdout = "pipe" })
+    assert(p.stdout:read("a") == table.concat(args, "\0"))
+    assert(exit_of(p) == true)
+    fs.remove(script)
+end
+
+-- A child lus runs `code` with the grants `grants` and writes what it
+-- found.
+local function under(grants, code)
+    local argv = { lus_bin }
+    for _, g in ipairs(grants) do
+        argv[#argv + 1] = "-P" .. g
+    end
+    argv[#argv + 1] = "-e"
+    argv[#argv + 1] = string.format("local bin = %q ", lus_bin) .. code
+    local p = os.spawn(argv, { stdout = "pipe", stderr = "stdout" })
+    local text = p.stdout:read("a")
+    exit_of(p)
+    return text
+end
+
+local function a_path_grant_covers_programs_below_it_test()
+    local real = fs.path.parent(lus_bin)
+    local code = 'io.write(tostring((catch os.spawn({bin, "-e", ""}))), " ", tostring((catch os.spawn({"lus-spawn-test-denied"}))))'
+    assert(under({ "exec=" .. real .. "/*" }, code) == "true false")
+end
+
+local function a_name_grant_covers_the_name_as_written_test()
+    local code = 'local ok, err = catch os.spawn({"lus-spawn-test-name"}) io.write(tostring(ok), " ", tostring((catch os.spawn({bin, "-e", ""}))))'
+    -- The name is allowed, so the call returns nil for the missing program.
+    assert(under({ "exec=lus-spawn-test-*" }, code) == "true false")
+end
+
+local function a_restricted_grant_refuses_shell_commands_test()
+    local code = 'io.write(tostring((catch os.execute("true"))), " ", tostring((catch io.popen("true"))))'
+    assert(under({ "exec=lus-spawn-test-*" }, code) == "false false")
+end
+
+local function bad_arguments_raise_test()
+    assert(not catch os.spawn({}))
+    assert(not catch os.spawn({ "" }))
+    assert(not catch os.spawn({ lus_bin, 3 }))
+    assert(not catch os.spawn({ lus_bin }, { stdout = "file" }))
+    assert(not catch os.spawn({ lus_bin }, { stdin = "stdout" }))
+    assert(not catch os.spawn({ lus_bin }, { env = { 1 } }))
+    assert(not catch os.spawn({ lus_bin }, { cwd = 1 }))
+end

@@ -1,0 +1,41 @@
+-- `fs.stat` (spec/stdlib/fs/stat.md).
+pledge("fs", "env")
+
+local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-stat-test-" .. os.time() .. tostring({}):sub(-6))
+
+local function a_file_reports_its_size_and_time_test()
+    fs.createdirectory(dir, true)
+    local path = fs.path.join(dir, "a.txt")
+    local before = time.now()
+    local f = io.open(path, "w")
+    f:write("hello")
+    f:close()
+    local st = fs.stat(path)
+    assert(st.kind == "file" and st.size == 5)
+    assert(math.abs((st.modified - before):seconds()) < 5)
+    fs.remove(dir, true)
+end
+
+local function a_directory_is_a_directory_test()
+    fs.createdirectory(dir, true)
+    assert(fs.stat(dir).kind == "directory")
+    fs.remove(dir, true)
+end
+
+local function links_are_followed_unless_asked_test()
+    if fs.path.separator == "\\" then return end
+    fs.createdirectory(dir, true)
+    local target = fs.path.join(dir, "t.txt")
+    io.open(target, "w"):close()
+    local link = fs.path.join(dir, "l")
+    fs.createlink(link, "t.txt")
+    assert(fs.stat(link).kind == "file")
+    assert(fs.stat(link, { follow = false }).kind == "link")
+    fs.remove(dir, true)
+end
+
+local function a_missing_path_raises_test()
+    local ok, err = catch fs.stat(dir .. "-missing")
+    assert(not ok and err:find("does not exist", 1, true))
+    assert(not catch fs.stat(dir, { follow = "no" }))
+end

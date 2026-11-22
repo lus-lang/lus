@@ -86,6 +86,12 @@ pub const Socket = struct {
     /// coroutine of the connection keeps that server alive, and the
     /// socket leaves the count of the server when it closes.
     owner: ?*Server = null,
+    /// Set when the server closed the connection at the end of its drain
+    /// time, so the natives of the server end its exchange quietly.
+    drained: bool = false,
+    /// The other open connections of the same server.
+    conn_prev: ?*Socket = null,
+    conn_next: ?*Socket = null,
     /// The TLS connection over this socket (`tls.zig`). Every receive and
     /// send then carries plain text through it.
     tls: ?*tls.Tls = null,
@@ -110,10 +116,42 @@ pub const Server = struct {
     /// True while it waits for a connection to close before it accepts
     /// the next one.
     full: bool = false,
+    /// The open connections, linked through `conn_next`.
+    conns: ?*Socket = null,
+    /// Whether `network.serve` bound the server itself.
+    serve_owned: bool = false,
+    /// How long the connections may take to finish once the coroutine of
+    /// `serve` closed, in milliseconds, or -1 without a limit.
+    drain_ms: i32 = 10_000,
+    /// Set once the coroutine of `serve` closed. The connections finish
+    /// the request in progress and close.
+    draining: bool = false,
+    /// The time on the clock of the scheduler at which the connections
+    /// that are still open close, when `drain_ms` is not -1.
+    drain_deadline: u64 = 0,
+    /// The value of this server, which `network.serve` records so that
+    /// the coroutine that ends a drain can hold the server.
+    self_value: @import("../vm/value.zig").Value = .nil,
     /// The TLS configuration that every connection it accepts starts
     /// TLS under, for `network.serve` with the `tls` option.
     tls_config: ?*tls.Config = null,
 };
+
+/// Adds the connection `c` to the list of its server.
+pub fn linkConnection(s: *Server, c: *Socket) void {
+    c.owner = s;
+    c.conn_prev = null;
+    c.conn_next = s.conns;
+    if (s.conns) |n| n.conn_prev = c;
+    s.conns = c;
+}
+
+fn unlinkConnection(s: *Server, c: *Socket) void {
+    if (c.conn_prev) |p| p.conn_next = c.conn_next else s.conns = c.conn_next;
+    if (c.conn_next) |n| n.conn_prev = c.conn_prev;
+    c.conn_prev = null;
+    c.conn_next = null;
+}
 
 /// A UDP socket. An unbound socket holds a placeholder bound to an
 /// ephemeral port on all interfaces, which `setsockname` replaces.
@@ -1538,6 +1576,14 @@ fn socketReceive(l: *Thread) Error!u32 {
 
 /// Closes a connection gracefully: sends FIN, then discards pending input
 /// so the close does not reset the connection.
+/// Closes the socket of a connection at the end of the drain time of its
+/// server.
+pub fn drainSocket(l: *Thread, s: *Socket) void {
+    if (s.closed) return;
+    s.drained = true;
+    releaseSocket(l, s);
+}
+
 /// Closes a socket as `close` does.
 pub fn closeSocketOf(l: *Thread, s: *Socket) void {
     closeSocket(l, s);
@@ -1576,8 +1622,12 @@ pub fn releaseSocket(l: *Thread, s: *Socket) void {
     sched.forget(l.g, s.stream.socket.handle);
     s.stream.close(l.g.io);
     if (s.owner) |server| {
+        unlinkConnection(server, s);
         s.owner = null;
         server.live -= 1;
+        // The coroutine that ends a drain stops once every connection is
+        // closed.
+        if (server.draining) sched.signal(l.g);
         // A `network.serve` that waits for a free place accepts again.
         if (server.full) {
             server.full = false;

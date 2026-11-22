@@ -49,6 +49,9 @@ const default_backlog = 128;
 /// A connection that makes no progress for a minute closes, unless the
 /// options of `serve` say otherwise.
 const default_idle_ms = 60 * 1000;
+/// The connections of a server whose coroutine closed have ten seconds to
+/// finish, unless the options of `serve` say otherwise.
+const default_drain_ms = 10 * 1000;
 /// The upper end of the default for `max_connections`.
 const default_max_connections = 65536;
 /// How long `serve` waits before it accepts again after the system ran
@@ -234,7 +237,8 @@ const connection_src =
     \\        end
     \\    end
     \\end
-    \\return function(sock, handler, on_error)
+    \\return function(sock, handler, on_error, server)
+    \\    -- The server stays alive while one of its connections is open.
     \\    local conn <close> = sock
     \\    local ok, err = catch exchange(conn, handler, on_error)
     \\    if not ok then report(on_error, err) end
@@ -296,12 +300,13 @@ pub fn serve(l: *Thread) Error!u32 {
     const base = l.base();
     const s = net.toObject(l, net.Server, net.server_name, l.stack[base]).?;
     const owned = l.stack[base + 2].tag == .true;
-    if (owned) {
-        // A server that `serve` bound closes when `serve` ends, also when
-        // its coroutine is closed while it waits.
+    {
+        // Closing the coroutine of `serve` while it waits stops it
+        // accepting and lets the connections drain. A server that `serve`
+        // bound closes as well.
         const t = try sched.ensureTask(l);
         t.ctx = s;
-        t.cancel = closeOwned;
+        t.cancel = stopServing;
     }
     return acceptLoop(l, s) catch |e| {
         // A suspension keeps the server open.
@@ -316,13 +321,76 @@ pub fn serve(l: *Thread) Error!u32 {
     };
 }
 
-fn closeOwned(g: *state.Global, ctx: *anyopaque) void {
-    net.closeServerIn(g, @ptrCast(@alignCast(ctx)));
+fn stopServing(g: *state.Global, ctx: *anyopaque) void {
+    const s: *net.Server = @ptrCast(@alignCast(ctx));
+    if (s.serve_owned) net.closeServerIn(g, s);
+    // The state closes every coroutine anyway when it closes.
+    if (g.sched.closing) return;
+    s.draining = true;
+    if (s.drain_ms >= 0) s.drain_deadline = sched.now(g) + @as(u64, @intCast(s.drain_ms)) * std.time.ns_per_ms;
+    // Every connection looks at its state again: an idle one closes, and
+    // one in the middle of a request waits at most until the deadline.
+    var c = s.conns;
+    while (c) |sock| : (c = sock.conn_next) {
+        if (s.drain_ms >= 0 and (sock.timeout_ms < 0 or sock.timeout_ms > s.drain_ms)) sock.timeout_ms = @max(s.drain_ms, 1);
+        sched.forget(g, sock.stream.socket.handle);
+    }
+    if (s.drain_ms >= 0 and s.conns != null) startDrainer(g, s);
+}
+
+/// Detaches a coroutine that closes the connections still open at the
+/// deadline of the drain. It holds the server, so the server outlives its
+/// connections.
+fn startDrainer(g: *state.Global, s: *net.Server) void {
+    const was = g.gc_stopped;
+    g.gc_stopped = true;
+    defer g.gc_stopped = was;
+    const n = state.newNative(g, drainer, "drain", 0) catch return;
+    const co = state.newThread(g) catch return;
+    co.status = .suspended;
+    co.ensure(3) catch return;
+    co.stack[0] = Value.obj(.native, n);
+    co.stack[1] = s.self_value;
+    co.top = 2;
+    const t = sched.ensureTask(co) catch return;
+    sched.attach(g, t, .fresh, 1);
+}
+
+fn drainer(l: *Thread) Error!u32 {
+    const s = net.toObject(l, net.Server, net.server_name, l.arg(1)) orelse return 0;
+    while (s.conns != null) {
+        const at = sched.now(l.g);
+        if (at >= s.drain_deadline) break;
+        const left = (s.drain_deadline - at + std.time.ns_per_ms - 1) / std.time.ns_per_ms;
+        try sched.waitNotifyFor(l, @intCast(@min(left, std.math.maxInt(i32))));
+    }
+    while (s.conns) |sock| net.drainSocket(l, sock);
+    return 0;
+}
+
+/// The socket in argument 1, which may be closed only when the drain of
+/// its server closed it.
+fn drainedOr(l: *Thread) Error!*net.Socket {
+    const s = net.toObject(l, net.Socket, net.socket_name, l.arg(1)) orelse return aux.typeError(l, 1, net.socket_name);
+    if (s.closed and !s.drained) return l.raiseFmt("attempt to use a closed socket", .{});
+    return s;
+}
+
+/// Whether the connection `s` belongs to a server that drains, and how:
+/// `.close` when it should close now, `.finish` when it finishes its
+/// request and closes after it.
+fn drainState(l: *Thread, s: *net.Socket, h: *Http) enum { serve, finish, close } {
+    const server = s.owner orelse return .serve;
+    if (!server.draining) return .serve;
+    if (server.drain_ms >= 0 and sched.now(l.g) >= server.drain_deadline) return .close;
+    if (h.head_end == 0 and s.buf.items.len == 0 and h.out.items.len == 0) return .close;
+    return .finish;
 }
 
 /// What the options table of `serve` holds.
 const Options = struct {
     idle_ms: i32 = default_idle_ms,
+    drain_ms: i32 = default_drain_ms,
     max_connections: u32,
     on_error: Value = .nil,
     tls: Value = .nil,
@@ -354,6 +422,15 @@ fn readOptions(l: *Thread, i: u32) Error!Options {
             if (std.math.isNan(secs) or secs == 0) return aux.argError(l, i, "idle_timeout must be positive, or negative for no timeout", .{});
             const ms = @ceil(secs * 1000);
             o.idle_ms = if (secs < 0) -1 else if (ms >= std.math.maxInt(i32)) std.math.maxInt(i32) else @intFromFloat(ms);
+        } else if (std.mem.eql(u8, name, "drain_timeout")) {
+            const secs: f64 = switch (e.val.tag) {
+                .integer => @floatFromInt(e.val.asInt()),
+                .float => e.val.asFloat(),
+                else => return aux.argError(l, i, "drain_timeout must be a number of seconds", .{}),
+            };
+            if (std.math.isNan(secs)) return aux.argError(l, i, "drain_timeout must be a number of seconds", .{});
+            const ms = @ceil(secs * 1000);
+            o.drain_ms = if (secs < 0) -1 else if (ms >= std.math.maxInt(i32)) std.math.maxInt(i32) else @intFromFloat(ms);
         } else if (std.mem.eql(u8, name, "max_connections")) {
             if (e.val.tag != .integer or e.val.asInt() < 1) return aux.argError(l, i, "max_connections must be a positive integer", .{});
             o.max_connections = @intCast(@min(e.val.asInt(), std.math.maxInt(u32)));
@@ -410,6 +487,10 @@ fn setup(l: *Thread) Error!void {
     }
     s.idle_ms = options.idle_ms;
     s.max_live = options.max_connections;
+    s.drain_ms = options.drain_ms;
+    s.serve_owned = owned;
+    s.draining = false;
+    s.self_value = server;
     const base = l.base();
     try l.ensure(5);
     l.stack[base] = server;
@@ -444,7 +525,7 @@ fn acceptLoop(l: *Thread, s: *net.Server) Error!u32 {
             },
             else => return l.raiseFmt("accept: {s}", .{net.errText(e)}),
         };
-        sock.owner = s;
+        net.linkConnection(s, sock);
         s.live += 1;
         sock.timeout_ms = s.idle_ms;
         // The handshake runs inside the first read of the connection.
@@ -454,13 +535,14 @@ fn acceptLoop(l: *Thread, s: *net.Server) Error!u32 {
         try l.push(Value.obj(.thread, co));
         // Growing the coroutine and giving it a task raise on the
         // coroutine, so their errors move to this thread.
-        co.ensure(4) catch return l.raise(co.err);
+        co.ensure(5) catch return l.raise(co.err);
         co.stack[1] = l.stack[l.top - 2];
         co.stack[2] = l.stack[base + 1];
         co.stack[3] = l.stack[base + 3];
-        co.top = 4;
+        co.stack[4] = l.stack[base];
+        co.top = 5;
         const t = sched.ensureTask(co) catch return l.raise(co.err);
-        sched.attach(g, t, .fresh, 3);
+        sched.attach(g, t, .fresh, 4);
         l.top = base + 4;
         // The connections that are ready run before the next accept.
         try sched.pass(l);
@@ -622,8 +704,15 @@ fn consume(s: *net.Socket, n: usize) void {
 /// whether the request is a HEAD. Returns nil when the peer closed the
 /// connection, and nil with a status when the request is refused.
 fn readRequest(l: *Thread) Error!u32 {
-    const s = try net.checkSocket(l, 1);
+    const s = try drainedOr(l);
+    if (s.closed) return aux.retNil(l);
     const h = try httpOf(l, s);
+    // A connection of a server that drains closes between two requests,
+    // and in the middle of one once the deadline has passed.
+    if (drainState(l, s, h) == .close) {
+        h.nextRequest();
+        return aux.retNil(l);
+    }
     // What the handler left of the last request body goes first.
     if (h.head_end == 0 and !try http.drainRequest(l, s, max_body)) return aux.retNil(l);
     while (true) {
@@ -702,7 +791,8 @@ fn finishRequest(l: *Thread, s: *net.Socket, h: *Http) Error!u32 {
         .chunked => .chunked,
     };
     const length = h.length;
-    const keep = h.keep;
+    // The last response of a connection that drains says that it closes.
+    const keep = h.keep and drainState(l, s, h) == .serve;
     const head = h.head;
     consume(s, h.head_end);
     h.nextRequest();
@@ -947,13 +1037,16 @@ fn buildResponse(l: *Thread, h: *Http, keep_in: bool, head: bool, stream: bool, 
 /// Returns true when all of it was sent. Raises when the handler returned
 /// values that make no response, before it writes anything.
 fn respond(l: *Thread) Error!u32 {
-    const s = try net.checkSocket(l, 1);
+    const s = try drainedOr(l);
+    if (s.closed) return aux.retBool(l, false);
     const h = try httpOf(l, s);
     const stream = l.arg(8).tag == .true;
     const head = l.arg(6).tag == .true;
     // A response that waited continues after the bytes it already sent.
     if (!sched.restarted(l) or h.out.items.len == 0) {
-        try buildResponse(l, h, l.arg(5).tag == .true, head, stream, http.requestRefusal(s) != 0);
+        // A connection of a server that drains closes after this response.
+        const keep = l.arg(5).tag == .true and drainState(l, s, h) == .serve;
+        try buildResponse(l, h, keep, head, stream, http.requestRefusal(s) != 0);
     }
     const sent = try flushOut(l, s, h);
     if (!stream) return aux.retBool(l, sent and !h.close_after);
@@ -978,6 +1071,10 @@ fn flushOut(l: *Thread, s: *net.Socket, h: *Http) Error!bool {
                 sched.opDone(l);
             },
             .again => {
+                if (drainState(l, s, h) == .close) {
+                    sent = false;
+                    break;
+                }
                 // A reader that takes nothing for the idle timeout loses
                 // the connection.
                 if (!try sched.waitIo(l, handle, net.againDir(s, .write), s.timeout_ms)) {

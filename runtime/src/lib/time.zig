@@ -145,6 +145,20 @@ fn pushInstant(l: *Thread, span: Span, mono: bool) Error!u32 {
     return 1;
 }
 
+/// The length of the duration `v` in seconds, or null when `v` is not a
+/// duration. `coroutine.sleep` takes durations through it.
+pub fn durationSeconds(l: *Thread, v: Value) ?f64 {
+    const u = toUserdata(l, v, .duration) orelse return null;
+    const span = payload(Span, u).*;
+    return @as(f64, @floatFromInt(span.sec)) + @as(f64, @floatFromInt(span.nsec)) / 1e9;
+}
+
+/// Pushes the wall-clock instant `sec` seconds and `nsec` nanoseconds
+/// after the Unix epoch, for `fs.stat`.
+pub fn pushWallInstant(l: *Thread, sec: i64, nsec: i64) Error!void {
+    _ = try pushInstant(l, try normalize(l, sec, nsec), false);
+}
+
 fn pushDuration(l: *Thread, span: Span) Error!u32 {
     const u = try newUserdata(l, .duration, @sizeOf(Span), 0);
     payload(Span, u).* = span;

@@ -16,6 +16,7 @@ const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const aux = @import("auxlib.zig");
 const shell = @import("shell.zig");
+const sched = @import("../vm/sched.zig");
 const out = @import("out.zig");
 const term = @import("term.zig");
 const vector = @import("vector.zig");
@@ -47,6 +48,9 @@ pub const Handle = struct {
     /// `file:read` returns as a result while the lines iterators raise it.
     read_err: ?anyerror = null,
     child: ?std.process.Child = null,
+    /// A pipe end of `os.spawn` in non-blocking mode, whose reads and
+    /// writes wait through the scheduler.
+    nonblock: bool = false,
 };
 
 const handle_name = "FILE*";
@@ -153,12 +157,34 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
         }
         const old = h.rbuf.items.len;
         h.rbuf.ensureUnusedCapacity(gpa, 64 * 1024) catch return l.raiseMem();
-        const dst = h.rbuf.unusedCapacitySlice();
+        var dst = h.rbuf.unusedCapacitySlice();
+        if (comptime builtin.os.tag == .windows) if (h.nonblock) {
+            // Windows pipes cannot be polled, so a pipe of `os.spawn` looks
+            // at what it holds and lets the other coroutines run while it
+            // is empty.
+            switch (winpipe.available(h.file.handle)) {
+                .bytes => |ready| dst = dst[0..@min(dst.len, ready)],
+                .ended => {
+                    h.eof = true;
+                    break;
+                },
+                .empty => {
+                    try sched.waitNotifyFor(l, winpipe.poll_ms);
+                    continue;
+                },
+            }
+        };
         var bufs = [_][]u8{dst};
         const got = switch (h.kind) {
             .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return readError(l, h, e),
             else => h.file.readStreaming(l.g.io, &bufs) catch |e| switch (e) {
                 error.EndOfStream => 0,
+                error.WouldBlock => {
+                    // The bytes read so far stay in the buffer, so the
+                    // native that runs again after the wait finds them.
+                    _ = try sched.waitIo(l, h.file.handle, .read, -1);
+                    continue;
+                },
                 else => |x| return readError(l, h, x),
             },
         };
@@ -377,7 +403,9 @@ fn doWrite(l: *Thread, h: *Handle, first: u32, self: Value) Error!u32 {
             ops.numberToBuf(l.g.gpa, &buf, v) catch return l.raiseMem();
         } else return aux.typeError(l, i, "string");
     }
-    if (writeBytes(l, h, buf.items)) |e| return ioFail(l, e);
+    if (h.nonblock) {
+        if (try writeWaiting(l, h, buf.items)) |e| return ioFail(l, e);
+    } else if (writeBytes(l, h, buf.items)) |e| return ioFail(l, e);
     return aux.ret(l, self);
 }
 
@@ -403,6 +431,98 @@ fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) ?anyerror {
         else => h.file.writeStreamingAll(l.g.io, bytes) catch |e| return e,
     }
     return null;
+}
+
+/// Writes all of `bytes` to a non-blocking pipe, waiting through the
+/// scheduler while the pipe is full. The count already written survives a
+/// suspension in the scheduler record of the thread.
+fn writeWaiting(l: *Thread, h: *Handle, bytes: []const u8) Error!?anyerror {
+    var done = sched.progress(l);
+    while (done < bytes.len) {
+        var chunk = bytes[done..];
+        if (comptime builtin.os.tag == .windows) {
+            const room = winpipe.room(h.file.handle);
+            if (room == 0) {
+                try sched.saveProgress(l, done);
+                try sched.waitNotifyFor(l, winpipe.poll_ms);
+                continue;
+            }
+            chunk = chunk[0..@min(chunk.len, room)];
+        }
+        const n = h.file.writeStreaming(l.g.io, &.{}, &.{chunk}, 1) catch |e| switch (e) {
+            error.WouldBlock => {
+                try sched.saveProgress(l, done);
+                _ = try sched.waitIo(l, h.file.handle, .write, -1);
+                continue;
+            },
+            else => |x| {
+                if (l.task) |t| t.progress = 0;
+                return @as(?anyerror, x);
+            },
+        };
+        done += n;
+    }
+    if (l.task) |t| t.progress = 0;
+    return null;
+}
+
+/// Polling the pipes of `os.spawn` on Windows, where the poller of the
+/// scheduler takes sockets only.
+const winpipe = if (builtin.os.tag == .windows) struct {
+    const w = std.os.windows;
+    const poll_ms = 5;
+    extern "kernel32" fn PeekNamedPipe(pipe: w.HANDLE, buf: ?*anyopaque, size: w.DWORD, read: ?*w.DWORD, avail: ?*w.DWORD, left: ?*w.DWORD) callconv(.winapi) w.BOOL;
+    const LocalInfo = extern struct {
+        pipe_type: u32,
+        configuration: u32,
+        max_instances: u32,
+        cur_instances: u32,
+        inbound_quota: u32,
+        read_available: u32,
+        outbound_quota: u32,
+        write_quota_available: u32,
+        state: u32,
+        end: u32,
+    };
+    extern "ntdll" fn NtQueryInformationFile(file: w.HANDLE, iosb: *w.IO_STATUS_BLOCK, info: *anyopaque, len: u32, class: u32) callconv(.winapi) w.NTSTATUS;
+
+    fn available(h: w.HANDLE) union(enum) { bytes: usize, ended, empty } {
+        var n: w.DWORD = 0;
+        if (!PeekNamedPipe(h, null, 0, null, &n, null).toBool()) return .ended;
+        return if (n > 0) .{ .bytes = n } else .empty;
+    }
+
+    /// The bytes a write can put in the pipe without blocking. A pipe
+    /// whose state cannot be read reports room for one write, which then
+    /// reports its own error.
+    fn room(h: w.HANDLE) usize {
+        var iosb: w.IO_STATUS_BLOCK = undefined;
+        var info: LocalInfo = undefined;
+        if (NtQueryInformationFile(h, &iosb, &info, @sizeOf(LocalInfo), 24) != .SUCCESS) return std.math.maxInt(usize);
+        return info.write_quota_available;
+    }
+} else struct {};
+
+/// A handle for one end of a pipe of `os.spawn`. The collector closes it.
+pub fn newPipeHandle(l: *Thread, file: std.Io.File, readable: bool, nonblock: bool) Error!Value {
+    return newHandle(l, .{ .file = file, .kind = .pipe, .readable = readable, .writable = !readable, .nonblock = nonblock });
+}
+
+/// The file of an open io handle, or null for any other value.
+pub fn fileOf(l: *Thread, v: Value) ?std.Io.File {
+    const h = toHandle(l, v) orelse return null;
+    if (h.closed) return null;
+    return h.file;
+}
+
+/// Closes an io handle of `os.spawn`, ignoring any other value.
+pub fn closePipe(l: *Thread, v: Value) void {
+    const h = toHandle(l, v) orelse return;
+    if (h.closed) return;
+    h.closed = true;
+    if (h.nonblock) sched.forget(l.g, h.file.handle);
+    h.file.close(l.g.io);
+    h.rbuf.deinit(l.g.gpa);
 }
 
 // ---------------------------------------------------------------------
@@ -503,7 +623,13 @@ fn closeHandle(l: *Thread, h: *Handle) Error!u32 {
         },
         .pipe => {
             h.closed = true;
-            if (h.child == null) h.file.close(l.g.io);
+            if (h.child == null) {
+                // A coroutine that waits on the pipe finds it closed.
+                if (h.nonblock) sched.forget(l.g, h.file.handle);
+                h.file.close(l.g.io);
+                h.rbuf.deinit(l.g.gpa);
+                return aux.retBool(l, true);
+            }
             var status: shell.Status = .{ .exited = 0 };
             if (h.child) |*c| {
                 // Both ends close before the wait, as with pclose. A child
@@ -835,7 +961,7 @@ fn popen(l: *Thread) Error!u32 {
     const reading = std.mem.eql(u8, mode, "r");
     if (!reading and !std.mem.eql(u8, mode, "w")) return aux.argError(l, 2, "invalid mode", .{});
     out.flushAll(l.g);
-    if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for popen", .{});
+    if (!@import("../vm/pledge.zig").allowedUnrestricted(l, "exec")) return l.raiseFmt("permission \"exec\" denied for popen", .{});
     const child = shell.spawn(l.g.io, l.g.gpa, cmd, if (reading) .stdout else .stdin, @import("os.zig").ownedEnviron(l.g)) catch return failResult(l, "cannot run command");
     const f = if (reading) child.stdout.? else child.stdin.?;
     const hv = try newHandle(l, .{ .file = f, .kind = .pipe, .readable = reading, .writable = !reading, .child = child });

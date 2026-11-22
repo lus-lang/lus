@@ -32,6 +32,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "wrap", .func = wrap },
     .{ .name = "close", .func = close },
     .{ .name = "detach", .func = detach },
+    .{ .name = "sleep", .func = @import("events.zig").sleep },
 };
 
 pub fn open(l: *Thread) Error!void {
@@ -54,7 +55,7 @@ pub fn newCoroutine(l: *Thread, f: Value) Error!*Thread {
     return co;
 }
 
-fn create(l: *Thread) Error!u32 {
+pub fn create(l: *Thread) Error!u32 {
     const f = try aux.checkFunction(l, 1);
     const co = try newCoroutine(l, f);
     return aux.ret(l, Value.obj(.thread, co));
@@ -80,7 +81,9 @@ pub fn resumeCo(l: *Thread, co: *Thread, nargs: u32) Error!u32 {
 fn notSuspended(l: *Thread, co: *Thread, nargs: u32) Error {
     @branchHint(.cold);
     const what = switch (co.status) {
-        .dead, .err => "cannot resume dead coroutine",
+        // An event coroutine of the runtime that was closed, such as a sleep
+        // that another coroutine ended to wake its waiter.
+        .dead, .err => if (co.event_closed) "closed" else "cannot resume dead coroutine",
         else => "cannot resume non-suspended coroutine",
     };
     l.top -= nargs;
@@ -345,6 +348,13 @@ fn handleStop(co: *Thread, e: anyerror) Outcome {
 /// variables with the pending error (if any) and marks it dead. Returns
 /// the final error, or null when everything closed cleanly.
 fn closeThread(co: *Thread) ?Value {
+    // A coroutine that waits for an event coroutine of the runtime, such as
+    // a sleep or a watch, cancels that wait with it.
+    const event: ?*Thread = if (co.task) |t| (if (t.kind == .inner and t.target != null and t.target.?.event) t.target else null) else null;
+    defer if (event) |e| {
+        if (e.status == .suspended) _ = closeThread(e);
+    };
+    if (co.event and co.status == .suspended) co.event_closed = true;
     sched.abandonWait(co);
     // The results or the error that waiters still read. The end of a
     // detached coroutine woke them, and they run after this close.
@@ -445,7 +455,7 @@ pub fn statusNative(l: *Thread) Error!u32 {
     return status(l);
 }
 
-fn yield(l: *Thread) Error!u32 {
+pub fn yield(l: *Thread) Error!u32 {
     if (l == l.g.main_thread or l.resumer == null) {
         return l.raiseFmt("attempt to yield from outside a coroutine", .{});
     }
