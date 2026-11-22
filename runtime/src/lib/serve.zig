@@ -248,6 +248,7 @@ const Options = struct {
     idle_ms: i32 = default_idle_ms,
     max_connections: u32,
     on_error: Value = .nil,
+    tls: Value = .nil,
 };
 
 /// Half of the descriptors the process may open, so that a server at its
@@ -282,6 +283,8 @@ fn readOptions(l: *Thread, i: u32) Error!Options {
         } else if (std.mem.eql(u8, name, "on_error")) {
             if (e.val.tag != .closure and e.val.tag != .native) return aux.argError(l, i, "on_error must be a function", .{});
             o.on_error = e.val;
+        } else if (std.mem.eql(u8, name, "tls")) {
+            o.tls = e.val;
         } else {
             return aux.argError(l, i, "unknown option '{s}'", .{api.errorMessage(l, e.key)});
         }
@@ -295,6 +298,7 @@ fn setup(l: *Thread) Error!void {
     var server: Value = undefined;
     var owned = false;
     var options: Options = undefined;
+    var options_arg: u32 = 3;
     // The connection function compiles before anything is bound.
     _ = try connectionFn(l);
     if (net.toObject(l, net.Server, net.server_name, l.arg(1))) |_| {
@@ -310,12 +314,23 @@ fn setup(l: *Thread) Error!void {
         const port = try net.checkPort(l, 2, true);
         handler = try aux.checkFunction(l, 3);
         options = try readOptions(l, 4);
+        options_arg = 4;
         try pledge.require(l, "network:server", net.hostPort(&hp, host, port));
         _ = try net.bindServer(l, host, port, default_backlog);
         server = l.stack[l.top - 1];
         owned = true;
     }
     const s = net.toObject(l, net.Server, net.server_name, server).?;
+    if (!options.tls.isNil()) {
+        // The certificates load before the first connection, so a bad
+        // certificate fails the call.
+        const cfg = net.tls.serverConfig(l, options_arg, options.tls) catch |e| {
+            if (owned) net.closeServer(l, s);
+            return e;
+        };
+        if (s.tls_config) |old| net.tls.freeConfig(old);
+        s.tls_config = cfg;
+    }
     s.idle_ms = options.idle_ms;
     s.max_live = options.max_connections;
     const base = l.base();
@@ -355,6 +370,8 @@ fn acceptLoop(l: *Thread, s: *net.Server) Error!u32 {
         sock.owner = s;
         s.live += 1;
         sock.timeout_ms = s.idle_ms;
+        // The handshake runs inside the first read of the connection.
+        if (s.tls_config) |cfg| try net.tls.attach(l, sock, cfg, null);
         // The socket is on the stack. Its connection gets a coroutine.
         const co = try coroutine.newCoroutine(l, try connectionFn(l));
         try l.push(Value.obj(.thread, co));
@@ -927,7 +944,7 @@ fn respond(l: *Thread) Error!u32 {
             .again => {
                 // A reader that takes nothing for the idle timeout loses
                 // the connection.
-                if (!try sched.waitIo(l, handle, .write, s.timeout_ms)) {
+                if (!try sched.waitIo(l, handle, net.againDir(s, .write), s.timeout_ms)) {
                     sent = false;
                     break;
                 }

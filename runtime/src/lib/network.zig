@@ -39,6 +39,7 @@ const sched = @import("../vm/sched.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
+pub const tls = @import("tls.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -83,6 +84,9 @@ pub const Socket = struct {
     /// coroutine of the connection keeps that server alive, and the
     /// socket leaves the count of the server when it closes.
     owner: ?*Server = null,
+    /// The TLS connection over this socket (`tls.zig`). Every receive and
+    /// send then carries plain text through it.
+    tls: ?*tls.Tls = null,
 };
 
 /// A listening TCP socket.
@@ -100,6 +104,9 @@ pub const Server = struct {
     /// True while it waits for a connection to close before it accepts
     /// the next one.
     full: bool = false,
+    /// The TLS configuration that every connection it accepts starts
+    /// TLS under, for `network.serve` with the `tls` option.
+    tls_config: ?*tls.Config = null,
 };
 
 /// A UDP socket. An unbound socket holds a placeholder bound to an
@@ -119,6 +126,8 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "settimeout", .func = socketSettimeout },
         .{ .name = "getsockname", .func = socketGetsockname },
         .{ .name = "getpeername", .func = socketGetpeername },
+        .{ .name = "starttls", .func = socketStarttls },
+        .{ .name = "tlsinfo", .func = socketTlsinfo },
     }, socketGc, socketTostring);
     try makeMetatable(l, server_name, &.{
         .{ .name = "accept", .func = serverAccept },
@@ -146,6 +155,10 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "bind", .func = tcpBind },
     });
     try aux.setField(l, t, "tcp", Value.obj(.table, tcp));
+    const tls_lib = try aux.newLib(l, .fields, "network.tls", &.{
+        .{ .name = "connect", .func = tlsConnect },
+    });
+    try aux.setField(l, t, "tls", Value.obj(.table, tls_lib));
     const udp = try aux.newLib(l, .fields, "network.udp", &.{.{ .name = "open", .func = udpOpen }});
     try aux.setField(l, t, "udp", Value.obj(.table, udp));
     try aux.setGlobal(l, "network", Value.obj(.table, t));
@@ -283,6 +296,7 @@ pub fn errText(err: anyerror) []const u8 {
         error.InvalidHostName, error.NameTooLong => "Invalid host name",
         error.NameServerFailure => "Name server failure",
         error.Canceled => "Operation canceled",
+        error.TlsFailure => tls.lastMessage(),
         else => @errorName(err),
     };
 }
@@ -360,8 +374,27 @@ fn unblock(s: *Socket) void {
     s.nonblocking = true;
 }
 
-/// Reads what the socket holds now, at most `dst.len` bytes.
+/// Reads what the socket holds now, at most `dst.len` bytes. A TLS socket
+/// returns plain text.
 pub fn tryRecv(l: *Thread, s: *Socket, dst: []u8) Try {
+    if (s.tls != null) return tls.recv(l, s, dst);
+    return rawRecv(l, s, dst);
+}
+
+/// Writes what the socket takes now of `data`. A TLS socket encrypts it.
+pub fn trySend(l: *Thread, s: *Socket, data: []const u8) Try {
+    if (s.tls != null) return tls.send(l, s, data);
+    return rawSend(l, s, data);
+}
+
+/// The direction that an operation on `s` that could not finish waits
+/// for: `default`, or the direction that TLS asked for.
+pub fn againDir(s: *Socket, default: sched.Dir) sched.Dir {
+    return tls.waitDir(s, default);
+}
+
+/// Reads the bytes of the socket itself, without TLS.
+pub fn rawRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     const handle = s.stream.socket.handle;
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .read)) return .again;
@@ -380,8 +413,8 @@ pub fn tryRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     }
 }
 
-/// Writes what the socket takes now of `data`.
-pub fn trySend(l: *Thread, s: *Socket, data: []const u8) Try {
+/// Writes bytes to the socket itself, without TLS.
+pub fn rawSend(l: *Thread, s: *Socket, data: []const u8) Try {
     const handle = s.stream.socket.handle;
     if (comptime is_windows) {
         if (!sched.readyNow(handle, .write)) return .again;
@@ -1041,6 +1074,76 @@ fn tcpConnect(l: *Thread) Error!u32 {
     return 1;
 }
 
+/// Runs the handshake of a TLS socket. A failure that does not suspend
+/// closes the socket, which then can carry nothing.
+fn handshakeOrClose(l: *Thread, s: *Socket) Error!void {
+    tls.handshake(l, s) catch |e| {
+        if (!l.yielding) releaseSocket(l, s);
+        return e;
+    };
+}
+
+/// network.tls.connect(host, port, options): a TCP connection with TLS
+/// over it, once the handshake ends.
+fn tlsConnect(l: *Thread) Error!u32 {
+    const b = l.base();
+    // A connection that waited in its handshake is the fourth slot.
+    if (sched.restarted(l) and l.top == b + 4) {
+        if (toObject(l, Socket, socket_name, l.stack[b + 3])) |s| {
+            try stillOpen(l, s);
+            try handshakeOrClose(l, s);
+            return 1;
+        }
+    }
+    try l.ensure(4);
+    while (l.top < b + 3) : (l.top += 1) l.stack[l.top] = .nil;
+    l.top = b + 3;
+    const host = try aux.checkBytes(l, 1);
+    const port = try checkPort(l, 2, false);
+    var hp: [512]u8 = undefined;
+    try pledge.require(l, "network:tcp", hostPort(&hp, host, port));
+    var o: tls.ClientOptions = .{};
+    const cfg = try tls.clientConfig(l, 3, host, true, &o);
+    defer tls.freeConfig(cfg);
+    const stream, const peer = try connectHost(l, host, port);
+    const s = newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer }) catch |e| {
+        stream.close(l.g.io);
+        return e;
+    };
+    s.timeout_ms = o.timeout_ms orelse -1;
+    tls.attach(l, s, cfg, o.servername) catch |e| {
+        releaseSocket(l, s);
+        return e;
+    };
+    try handshakeOrClose(l, s);
+    return 1;
+}
+
+/// sock:starttls(options): starts TLS over a connected socket and returns
+/// the socket, once the handshake ends.
+fn socketStarttls(l: *Thread) Error!u32 {
+    const s = try checkSocket(l, 1);
+    if (s.tls) |t| {
+        if (!sched.restarted(l) or t.handshaken) return l.raiseFmt("the socket already uses TLS", .{});
+    } else {
+        // Bytes that arrived before the handshake would pass for bytes of
+        // the protected stream.
+        if (s.buf.items.len > 0) return l.raiseFmt("starttls: the socket holds data received before TLS started", .{});
+        var o: tls.ClientOptions = .{};
+        const cfg = try tls.clientConfig(l, 2, null, false, &o);
+        defer tls.freeConfig(cfg);
+        try tls.attach(l, s, cfg, o.servername);
+    }
+    try handshakeOrClose(l, s);
+    l.top = l.base() + 1;
+    return 1;
+}
+
+fn socketTlsinfo(l: *Thread) Error!u32 {
+    const s = try checkSocket(l, 1);
+    return tls.pushInfo(l, s);
+}
+
 fn tcpBind(l: *Thread) Error!u32 {
     const host = try aux.checkBytes(l, 1);
     const port = try checkPort(l, 2, true);
@@ -1075,7 +1178,7 @@ fn socketSend(l: *Thread) Error!u32 {
     var total: usize = @min(sched.progress(l), data.len);
     while (total < data.len) {
         const chunk = @min(data.len - total, std.math.maxInt(i32));
-        if (!s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
+        if (s.tls == null and !s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
             total += writeSome(io, h, data[total..][0..chunk]) catch |e| return failResult(l, "send", e);
             continue;
         }
@@ -1086,7 +1189,7 @@ fn socketSend(l: *Thread) Error!u32 {
             },
             .again => {
                 try sched.saveProgress(l, total);
-                try awaitIo(l, h, .write, s.timeout_ms, "send");
+                try awaitIo(l, h, againDir(s, .write), s.timeout_ms, "send");
                 try stillOpen(l, s);
             },
             .fail => |e| return failResult(l, "send", e),
@@ -1109,7 +1212,7 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
     s.buf.ensureUnusedCapacity(l.g.gpa, max) catch return l.raiseMem();
     const dst = s.buf.unusedCapacitySlice()[0..max];
     var n: usize = 0;
-    if (!s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
+    if (s.tls == null and !s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
         n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
     } else while (true) {
         switch (tryRecv(l, s, dst)) {
@@ -1121,7 +1224,7 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
             // The bytes already read stay in the buffer of the socket, so
             // the receive that runs again continues from them.
             .again => {
-                if (!try sched.waitIo(l, s.stream.socket.handle, .read, s.timeout_ms)) return null;
+                if (!try sched.waitIo(l, s.stream.socket.handle, againDir(s, .read), s.timeout_ms)) return null;
                 try stillOpen(l, s);
                 // The buffer may have moved while other coroutines ran.
                 return tryFill(l, s, max);
@@ -1220,6 +1323,9 @@ fn socketReceive(l: *Thread) Error!u32 {
 fn closeSocket(l: *Thread, s: *Socket) void {
     if (s.closed) return;
     const io = l.g.io;
+    // A TLS connection tells its peer that it closes, and the rest of
+    // the close works on the socket itself.
+    tls.detach(l, s);
     s.stream.shutdown(io, .send) catch {};
     if (!is_windows) {
         var tmp: [1024]u8 = undefined;
@@ -1242,7 +1348,8 @@ fn closeSocket(l: *Thread, s: *Socket) void {
 
 /// Closes the handle of a socket and frees what the socket holds.
 /// Coroutines that wait for the socket run again and find it closed.
-fn releaseSocket(l: *Thread, s: *Socket) void {
+pub fn releaseSocket(l: *Thread, s: *Socket) void {
+    tls.drop(l, s);
     sched.forget(l.g, s.stream.socket.handle);
     s.stream.close(l.g.io);
     if (s.owner) |server| {
@@ -1341,6 +1448,11 @@ pub fn closeServerIn(g: *state.Global, s: *Server) void {
     sched.forget(g, s.server.socket.handle);
     s.server.socket.close(g.io);
     s.closed = true;
+    // Connections that are still open keep the configuration alive.
+    if (s.tls_config) |cfg| {
+        tls.freeConfig(cfg);
+        s.tls_config = null;
+    }
     // A `network.serve` that waits for a free place finds the server
     // closed.
     if (s.full) {
