@@ -1922,6 +1922,9 @@ pub const Lower = struct {
             }
             if (nk.tag != .string) return false;
             if (nk.payload == @intFromPtr(key_str)) return false;
+            // The guard names the key by its address, which code compiled
+            // ahead of time can name only for an interned string.
+            if (!nk.as(String).flags().interned) return false;
             const k = try b.load(hp, off + tl.node_key, .int, 8, .node_key, g);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(nk.payload), .c = g });
             _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = tagDisp(i) + tl.tag_key, .aux = @backingInt(Tag.string), .c = g });

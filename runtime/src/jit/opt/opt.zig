@@ -1087,7 +1087,7 @@ pub const rt = struct {
 
     /// Whether a table without a metatable has no value at the integer
     /// key `k`, which lies past its array part.
-    pub fn intKeyAbsent(t: *Table, k: i64) callconv(.c) i64 {
+    pub fn intKeyAbsent(t: *Table, k: i64) callconv(jit.cc) i64 {
         return @intFromBool(table.getInt(t, k).isNil());
     }
 
@@ -1095,7 +1095,7 @@ pub const rt = struct {
     /// part is full: grows the array part and stores the value made of
     /// `payload` and `tag` after it. Returns 1 and changes nothing when the
     /// table needs the general path. The collector never runs here.
-    pub fn tableAppend(l: *Thread, t: *Table, payload: u64, tag: u64) callconv(.c) i64 {
+    pub fn tableAppend(l: *Thread, t: *Table, payload: u64, tag: u64) callconv(jit.cc) i64 {
         const v = Value.make(payload, @fromBackingInt(@as(u8, @truncate(tag))));
         const ok = table.appendArray(l.g.gpa, t, v) catch return 1;
         if (!ok) return 1;

@@ -56,6 +56,8 @@ pub const routines = [_]*const anyopaque{
     @ptrCast(&opt.rt.newShapedTable),
     @ptrCast(&opt.rt.newVirtualTable),
     @ptrCast(&opt.rt.tableLength),
+    @ptrCast(&opt.rt.intKeyAbsent),
+    @ptrCast(&opt.rt.tableAppend),
     @ptrCast(&opt.rt.subLength),
     @ptrCast(&opt.rt.stringByte),
     @ptrCast(&helpers.concatShort),
@@ -577,7 +579,7 @@ pub fn reloadUnitMeta(l: *Thread, u: *opt.Unit) void {
 // ---------------------------------------------------------------------
 // The code section
 
-const magic = "LUSAOT\x02\x00";
+const magic = "LUSAOT\x03\x00";
 
 fn put32(list: *std.ArrayList(u8), gpa: std.mem.Allocator, v: u32) !void {
     var b: [4]u8 = undefined;
@@ -1403,4 +1405,16 @@ fn number(l: *Thread, p: *Proto, module: u32, k: *u32) void {
 fn installTree(l: *Thread, s: *Section, p: *Proto) void {
     if (p.jit_code == null) s.install(l, p);
     for (p.protos) |child| installTree(l, s, child);
+}
+
+test "every routine of the optimizing tier has a number" {
+    inline for (comptime std.meta.declarations(opt.rt)) |name| {
+        const f = @field(opt.rt, name);
+        if (@typeInfo(@TypeOf(f)) == .@"fn") {
+            if (routineId(@intFromPtr(&f)) == null) {
+                std.debug.print("opt.rt.{s} is missing from aot.routines\n", .{name});
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
 }
