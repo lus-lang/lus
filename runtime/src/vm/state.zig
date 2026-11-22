@@ -317,6 +317,10 @@ pub const Global = struct {
     parent_gpa: Allocator = undefined,
     threshold: usize = 1 << 20,
     pause: usize = 175,
+    /// The longest string in bytes that the state makes. A longer result
+    /// raises the memory error. Tests lower it to reach the limit with
+    /// small strings.
+    max_string: usize = String.max_len,
     gc_depth: u32 = 0,
     gc_stopped: bool = false,
     /// Allocation points seen, for the GC stress build.
@@ -835,6 +839,7 @@ pub fn newStringIn(g: *Global, b: []const u8) (Allocator.Error || error{InvalidU
 /// is written in place this way, without a buffer to copy from.
 pub fn newLongUninit(g: *Global, len: usize) Allocator.Error!*String {
     std.debug.assert(len > String.short_max);
+    try checkStringLen(g, len);
     gc.maybeCollect(g);
     // The contents are not known yet, so the cell keeps a breadcrumb
     // slot in case they are non-ASCII.
@@ -921,11 +926,19 @@ pub noinline fn intern(g: *Global, s: *String) Allocator.Error!*String {
     return s;
 }
 
+/// Fails with the memory error when a string of `len` bytes would pass
+/// the limit of the state, which is at most what the 32-bit length of a
+/// string holds.
+pub inline fn checkStringLen(g: *const Global, len: usize) Allocator.Error!void {
+    if (len > g.max_string) return error.OutOfMemory;
+}
+
 noinline fn createString(g: *Global, b: []const u8, ascii: bool, chars: usize, h: u32) Allocator.Error!*String {
     return createStringAs(g, b, ascii, chars, h, b.len <= String.short_max);
 }
 
 inline fn createStringAs(g: *Global, b: []const u8, ascii: bool, chars: usize, h: u32, short: bool) Allocator.Error!*String {
+    try checkStringLen(g, b.len);
     gc.maybeCollect(g);
     const slot = String.needsCrumbs(ascii, chars);
     const s = try gc.allocUninit(g, String, .string, String.allocSizeWith(b.len, slot));
@@ -1021,6 +1034,7 @@ pub fn stringFromBuffer(g: *Global, sb: *StringBuffer, list: *std.ArrayList(u8),
         list.* = .empty;
     }
     const n = list.items.len;
+    try checkStringLen(g, n);
     // A string that may build breadcrumbs needs a slot after its bytes,
     // which the buffer lacks, so it is copied.
     if (String.allocSize(n) <= @import("heap.zig").max_small or String.needsCrumbs(ascii, chars)) {

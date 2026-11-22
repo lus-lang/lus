@@ -30,6 +30,8 @@ A string received from a worker message refers to a blob of bytes shared with th
 
 `string.sub` and `setmetatable` run their common calls without a frame of their own (`jit.md`). On `unicode.lus` with the JIT off, remembering where ranges end and the inline scans took the run from 0.051 to 0.044 seconds. The common call of `string.sub` takes a string and integer positions, and the result is a substring found in or added to the string table.
 
+The length field holds 32 bits, so a string holds at most 2^32 - 1 bytes, 4 GiB less one byte. Every allocation of a string checks this limit, in `state.checkStringLen`, and a longer result raises the memory error, which `catch` handles like any other error. `string.rep` computes the length of its result first and raises `resulting string too large` before it allocates anything. The limit is a field of the state, `max_string`, which the unit tests lower to 1000 bytes to reach it on every path that makes a string without allocating gigabytes.
+
 ## Substring views
 
 A substring is a string of its own: its bytes are copied, and a short one is interned. The plan for 2.0 proposed that `sub` and slices return views into the buffer of their parent, with small results copied so that they never keep a large buffer alive. The two benchmarks that take substrings take small ones, nine characters in `unicode.lus` and words such as `item 12` in `strings.lus`, and a short string is interned by contract, because equality between short strings is a pointer comparison everywhere in the runtime and in native code. A view of a short substring would therefore still be copied and interned, and the benchmarks would not change.

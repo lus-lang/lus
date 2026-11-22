@@ -401,7 +401,7 @@ fn rep(l: *Thread) Error!u32 {
     if (n <= 0 or (sb.len == 0 and sepb.len == 0)) return aux.retStr(l, "");
     // The size check runs in u64 so it holds where usize is 32 bits.
     const unit64: u64 = @as(u64, sb.len) + sepb.len;
-    const max_len: u64 = std.math.maxInt(u32);
+    const max_len: u64 = l.g.max_string;
     if (unit64 > max_len or @as(u64, @intCast(n)) > (max_len + sepb.len) / unit64)
         return l.raiseFmt("resulting string too large", .{});
     const count: usize = @intCast(n);

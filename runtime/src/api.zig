@@ -351,3 +351,51 @@ fn finalizeAll(g: *state.Global) void {
     g.gc_stopped = true;
     @import("lib/base.zig").runFinalizers(main) catch {};
 }
+
+test "a string past the length limit raises an error on every path" {
+    const jit = @import("jit/jit.zig");
+    const gpa = std.testing.allocator;
+    // Each program makes a string of more than 1000 bytes from strings of
+    // at most 600, in a state whose limit is lowered to 1000 bytes.
+    const programs = [_][]const u8{
+        "return ('x'):rep(1001)",
+        "return ('x'):rep(500, ',,')",
+        "local s = ('x'):rep(600) return s .. s",
+        "local s = ('x'):rep(600) local t = s .. 'y' return t .. s",
+        "local s = ('x'):rep(600) return `$(s)$(s)`",
+        "local s = ('x'):rep(600) return table.concat({ s, s })",
+        "local s = ('x'):rep(600) return table.concat({ s, 1, s }, ',')",
+        "local s = ('x'):rep(600) return string.format('%s%s', s, s)",
+        "local s = ('\\0'):rep(600) return string.format('%q', s)",
+        "local s = ('x'):rep(600) return (s:gsub('x', 'xx'))",
+        "local t = {} for i = 1, 1001 do t[i] = 65 end return string.char(table.unpack(t))",
+        "local t = {} for i = 1, 1001 do t[i] = 0x10000 end return utf8.char(table.unpack(t))",
+        "local t = {} for i = 1, 400 do t[i] = i end return tojson(t)",
+        "return tostring(10n ^ 1200)",
+        "return tostring(decimal(10n ^ 1200))",
+        "return vector.tostring(vector.create(1001))",
+    };
+    for ([_]jit.Setting{ .off, .eager }) |setting| {
+        const l = try newState(gpa, std.testing.io);
+        defer close(l);
+        try openLibs(l);
+        jit.configure(l.g, setting, 1);
+        l.g.max_string = 1000;
+        var failed = false;
+        for (programs) |src| {
+            const wrapped = try std.fmt.allocPrint(gpa,
+                \\local ok, err = catch (function() {s} end)()
+                \\assert(not ok, "made a string past the limit")
+                \\assert(err == "not enough memory" or err:find("too large"), err)
+            , .{src});
+            defer gpa.free(wrapped);
+            if (doString(l, wrapped, "=limit")) |msg| {
+                std.debug.print("{s}\n{s}\n", .{ src, msg });
+                failed = true;
+            }
+        }
+        if (failed) return error.TestUnexpectedResult;
+        // The state still makes strings up to the limit.
+        try std.testing.expect(doString(l, "assert(#('x'):rep(1000) == 1000)", "=limit") == null);
+    }
+}

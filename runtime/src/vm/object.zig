@@ -87,6 +87,8 @@ pub const String = struct {
     }
 
     pub const short_max = 40;
+    /// The longest string in bytes, the most that `len` holds.
+    pub const max_len: usize = std.math.maxInt(u32);
     pub const crumb_step = 64;
     /// The cell size of a shared string.
     pub const shared_size = @sizeOf(String) + @sizeOf(*Blob);
