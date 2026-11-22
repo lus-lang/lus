@@ -7,10 +7,11 @@
 //! Linux gets a static ELF executable at a fixed address, which needs no
 //! loader: the kernel maps its three segments and starts the startup code
 //! of musl, which finds the thread-local template through the program
-//! headers.
+//! headers. macOS and iOS get a Mach-O executable (`macho.zig`).
 
 const std = @import("std");
 const lobj = @import("lobj.zig");
+const macho = @import("macho.zig");
 const Allocator = std.mem.Allocator;
 const elf = std.elf;
 
@@ -57,13 +58,18 @@ pub const Error = error{ OutOfMemory, UnsupportedRelocation, RelocationOverflow,
 /// Links `o`. When `map` is given, it receives a line for each kept atom,
 /// largest first: its size, its name, and the atom that first reached it.
 pub fn link(gpa: Allocator, o: *const lobj.Object, keep: Keep, map: ?*std.Io.Writer) Error!Result {
-    if (o.os != .linux) return error.UnsupportedTarget;
     var l: Linker = .{ .gpa = gpa, .o = o };
     defer l.deinit();
     try l.drop(keep);
     try l.mark();
-    try l.layout();
-    const bytes = try l.write();
+    const bytes = switch (o.os) {
+        .linux => blk: {
+            try l.layout();
+            break :blk try l.write();
+        },
+        .macos, .ios => try macho.write(&l),
+        .windows => return error.UnsupportedTarget,
+    };
     errdefer gpa.free(bytes);
     if (map) |w| l.writeMap(w) catch {};
     var kept: u64 = 0;
@@ -75,9 +81,9 @@ pub fn link(gpa: Allocator, o: *const lobj.Object, keep: Keep, map: ?*std.Io.Wri
     return .{ .bytes = bytes, .kept = kept, .total = total };
 }
 
-const no_addr = std.math.maxInt(u64);
+pub const no_addr = std.math.maxInt(u64);
 
-const Linker = struct {
+pub const Linker = struct {
     gpa: Allocator,
     o: *const lobj.Object,
     /// The slots of registered builtins that the program never reaches,
@@ -92,6 +98,8 @@ const Linker = struct {
     /// The slots of the global offset table, by target.
     got: std.AutoArrayHashMapUnmanaged(GotKey, void) = .empty,
     linker_addr: []u64 = &.{},
+    /// The address that a branch to each import reaches: its stub.
+    import_addr: []u64 = &.{},
 
     base: u64 = 0x200000,
     page: u64 = 0x10000,
@@ -117,6 +125,7 @@ const Linker = struct {
         l.gpa.free(l.parent);
         l.gpa.free(l.addr);
         l.gpa.free(l.linker_addr);
+        l.gpa.free(l.import_addr);
     }
 
     fn drop(l: *Linker, keep: Keep) Error!void {
@@ -136,7 +145,7 @@ const Linker = struct {
         }
     }
 
-    fn isDropped(l: *const Linker, atom: usize, offset: u32) bool {
+    pub fn isDropped(l: *const Linker, atom: usize, offset: u32) bool {
         return l.dropped.contains(@as(u64, @intCast(atom)) << 32 | offset);
     }
 
@@ -179,7 +188,7 @@ const Linker = struct {
         try w.flush();
     }
 
-    fn usesGot(l: *const Linker, ty: u32) ?bool {
+    pub fn usesGot(l: *const Linker, ty: u32) ?bool {
         return switch (l.o.arch) {
             .x86_64 => switch (ty) {
                 9, 41, 42 => false, // GOTPCREL, GOTPCRELX, REX_GOTPCRELX
@@ -286,11 +295,12 @@ const Linker = struct {
 
     /// The address that the target of a relocation names, or for a
     /// thread-local atom its offset in the block.
-    fn symbol(l: *const Linker, t: lobj.Target, sym: u32) u64 {
+    pub fn symbol(l: *const Linker, t: lobj.Target, sym: u32) u64 {
         return switch (t.space) {
             .atom => l.addr[t.index] + sym,
             .linker => l.linker_addr[t.index] + sym,
-            else => sym,
+            .import => l.import_addr[t.index] + sym,
+            .none => sym,
         };
     }
 
@@ -310,7 +320,7 @@ const Linker = struct {
         };
     }
 
-    fn gotSlot(l: *const Linker, r: lobj.Reloc, tls: bool) u64 {
+    pub fn gotSlot(l: *const Linker, r: lobj.Reloc, tls: bool) u64 {
         const i = l.got.getIndex(.{ .target = r.target, .sym = r.sym, .tls = tls }).?;
         return l.got_addr + 8 * i;
     }
@@ -346,7 +356,7 @@ const Linker = struct {
         return out;
     }
 
-    fn apply(l: *const Linker, r: lobj.Reloc, loc: []u8, p: u64) Error!void {
+    pub fn apply(l: *const Linker, r: lobj.Reloc, loc: []u8, p: u64) Error!void {
         const s = l.symbol(r.target, r.sym);
         const a = r.addend;
         const sa: i64 = @as(i64, @bitCast(s)) +% a;
@@ -437,7 +447,7 @@ const Linker = struct {
 /// The index into the output of an offset in it. The output fits in
 /// memory, which `write` checks when it allocates it, so every offset in
 /// it fits a `usize` on a 32-bit host too.
-fn index(off: u64) usize {
+pub fn index(off: u64) usize {
     return @intCast(off);
 }
 

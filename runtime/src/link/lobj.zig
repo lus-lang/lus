@@ -6,8 +6,9 @@
 //!
 //! Relocation types are those of ELF for the architecture, which the
 //! converter of another object format maps its relocations onto. A
-//! relocation targets an atom, or a name that the linker defines, such as
-//! `__init_array_start`, or nothing for an undefined weak symbol.
+//! relocation targets an atom, a name that the linker defines, such as
+//! `__init_array_start`, a symbol that a shared library of the system
+//! provides at load, or nothing for an undefined weak symbol.
 //!
 //! The file is little endian: the magic, the target, then the sections
 //! that `Writer.write` lists, each a count followed by fixed records, and
@@ -16,7 +17,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const magic = "LUSLINK\x01";
+pub const magic = "LUSLINK\x02";
 
 pub const Arch = enum(u8) { x86_64, aarch64 };
 pub const Os = enum(u8) { linux, macos, ios, windows };
@@ -32,6 +33,9 @@ pub const Kind = enum(u8) {
     init_array,
     /// Pointers to functions that run at exit.
     fini_array,
+    /// The descriptors of thread-local variables on Mach-O, which `dyld`
+    /// finds by the type of their section.
+    thread_vars,
 };
 
 pub const Atom = extern struct {
@@ -49,11 +53,11 @@ pub const Atom = extern struct {
     name: u32,
 };
 
-/// The target of a relocation: an atom, a name the linker defines, or
-/// nothing.
+/// The target of a relocation: an atom, a name the linker defines, an
+/// import, or nothing.
 pub const Target = packed struct(u32) {
     index: u30,
-    space: enum(u2) { atom, linker, none, _ },
+    space: enum(u2) { atom, linker, none, import },
 
     pub const none_target: Target = .{ .index = 0, .space = .none };
 };
@@ -85,6 +89,16 @@ pub const Guard = extern struct {
     offset: u32,
 };
 
+/// A symbol that the shared library `lib` (an index into `libs`) defines,
+/// bound when the system loader maps the executable. A weak import may be
+/// missing, and its address is then zero.
+pub const Import = extern struct {
+    name: u32,
+    lib: u16,
+    weak: u8,
+    pad: u8 = 0,
+};
+
 /// A global symbol that the linker may name: the entry point, and the
 /// symbols that code compiled ahead of time relocates against.
 pub const Symbol = extern struct {
@@ -109,6 +123,12 @@ pub const Object = struct {
     roots: []const u32,
     /// The names that relocations of space `linker` index.
     linker_names: []const u32,
+    /// The symbols that relocations of space `import` index.
+    imports: []const Import,
+    /// The names of the shared libraries of the imports, in the form the
+    /// loader of the system finds them: an install name on Mach-O, a DLL
+    /// name on Windows.
+    libs: []const u32,
     strings: []const u8,
     data: []const u8,
 
@@ -144,6 +164,8 @@ pub fn read(buf: []align(8) const u8) Error!Object {
     const symbols = try r.counted(Symbol);
     const roots = try r.counted(u32);
     const linker_names = try r.counted(u32);
+    const imports = try r.counted(Import);
+    const libs = try r.counted(u32);
     const strings = try r.counted(u8);
     r.pos = std.mem.alignForward(usize, r.pos, 8);
     const data = try r.counted(u8);
@@ -158,6 +180,8 @@ pub fn read(buf: []align(8) const u8) Error!Object {
         .symbols = symbols,
         .roots = roots,
         .linker_names = linker_names,
+        .imports = imports,
+        .libs = libs,
         .strings = strings,
         .data = data,
     };
@@ -173,9 +197,11 @@ pub fn read(buf: []align(8) const u8) Error!Object {
     for (relocs) |rel| switch (rel.target.space) {
         .atom => if (rel.target.index >= atoms.len) return error.BadLinkObject,
         .linker => if (rel.target.index >= linker_names.len) return error.BadLinkObject,
+        .import => if (rel.target.index >= imports.len) return error.BadLinkObject,
         .none => {},
-        _ => return error.BadLinkObject,
     };
+    for (imports) |im| if (im.name >= strings.len or im.lib >= libs.len) return error.BadLinkObject;
+    for (libs) |n| if (n >= strings.len) return error.BadLinkObject;
     for (linker_names) |n| if (n >= strings.len) return error.BadLinkObject;
     for (roots) |a| if (a >= atoms.len) return error.BadLinkObject;
     for (guards) |g| if (g.atom >= atoms.len or g.path >= strings.len or g.names >= strings.len or g.kind > 3) return error.BadLinkObject;
@@ -228,12 +254,14 @@ pub const Writer = struct {
     symbols: std.ArrayList(Symbol) = .empty,
     roots: std.ArrayList(u32) = .empty,
     linker_names: std.ArrayList(u32) = .empty,
+    imports: std.ArrayList(Import) = .empty,
+    libs: std.ArrayList(u32) = .empty,
     strings: std.ArrayList(u8) = .empty,
     data: std.ArrayList(u8) = .empty,
     string_index: std.StringHashMapUnmanaged(u32) = .empty,
 
     pub fn deinit(w: *Writer) void {
-        inline for (.{ "atoms", "relocs", "guards", "symbols", "roots", "linker_names", "strings", "data" }) |f| @field(w, f).deinit(w.gpa);
+        inline for (.{ "atoms", "relocs", "guards", "symbols", "roots", "linker_names", "imports", "libs", "strings", "data" }) |f| @field(w, f).deinit(w.gpa);
         var it = w.string_index.keyIterator();
         while (it.next()) |k| w.gpa.free(k.*);
         w.string_index.deinit(w.gpa);
@@ -260,6 +288,24 @@ pub const Writer = struct {
         for (w.linker_names.items, 0..) |n, i| if (n == off) return .{ .index = @intCast(i), .space = .linker };
         try w.linker_names.append(w.gpa, off);
         return .{ .index = @intCast(w.linker_names.items.len - 1), .space = .linker };
+    }
+
+    /// The target for the symbol `name` of the shared library `lib`, added
+    /// once.
+    pub fn import(w: *Writer, name: []const u8, lib: []const u8, weak: bool) Allocator.Error!Target {
+        const lib_off = try w.string(lib);
+        const li = std.mem.indexOfScalar(u32, w.libs.items, lib_off) orelse blk: {
+            try w.libs.append(w.gpa, lib_off);
+            break :blk w.libs.items.len - 1;
+        };
+        const off = try w.string(name);
+        for (w.imports.items, 0..) |im, i| if (im.name == off) {
+            // A strong reference anywhere makes the import strong.
+            if (!weak) w.imports.items[i].weak = 0;
+            return .{ .index = @intCast(i), .space = .import };
+        };
+        try w.imports.append(w.gpa, .{ .name = off, .lib = @intCast(li), .weak = @intFromBool(weak) });
+        return .{ .index = @intCast(w.imports.items.len - 1), .space = .import };
     }
 
     /// Adds an atom with bytes `bytes`, or `size` zero bytes when `bytes`
@@ -304,6 +350,8 @@ pub const Writer = struct {
         try counted(out, &pos, Symbol, w.symbols.items);
         try counted(out, &pos, u32, w.roots.items);
         try counted(out, &pos, u32, w.linker_names.items);
+        try counted(out, &pos, Import, w.imports.items);
+        try counted(out, &pos, u32, w.libs.items);
         try counted(out, &pos, u8, w.strings.items);
         try counted(out, &pos, u8, w.data.items);
     }
@@ -336,6 +384,8 @@ test "a link object reads back what was written" {
     try w.reloc(.{ .offset = 0, .type = 1, .target = .{ .index = @intCast(a), .space = .atom }, .addend = 0 });
     w.entry = .{ .name = try w.string("_start"), .atom = a, .offset = 0 };
     try w.roots.append(gpa, b);
+    const im = try w.import("malloc", "/usr/lib/libSystem.B.dylib", false);
+    try w.reloc(.{ .offset = 0, .type = 1, .target = im, .addend = 0 });
     var buf: std.Io.Writer.Allocating = .init(gpa);
     defer buf.deinit();
     try w.write(&buf.writer);
@@ -348,4 +398,6 @@ test "a link object reads back what was written" {
     try std.testing.expectEqual(@as(u8, 0xc3), o.bytes(o.atoms[0])[0]);
     try std.testing.expectEqual(a, o.atomRelocs(o.atoms[1])[0].target.index);
     try std.testing.expectEqualStrings("_start", o.string(o.entry.name));
+    try std.testing.expectEqualStrings("malloc", o.string(o.imports[0].name));
+    try std.testing.expectEqualStrings("/usr/lib/libSystem.B.dylib", o.string(o.libs[o.imports[0].lib]));
 }
