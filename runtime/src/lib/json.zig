@@ -688,6 +688,46 @@ const Writer = struct {
     /// it, an array must fill at least half of its keys.
     const sparse_safe = 10;
 
+    /// Writes a table whose keys are all positive integers, too sparse for
+    /// an array, as an object with the integers as decimal string keys, in
+    /// ascending order. The keys are gathered first and each value is read
+    /// again when it is written, since a filter or `__json` function may
+    /// change the table. A missing value, or one without a JSON form, is
+    /// left out, as in any object.
+    fn sparseObject(w: *Writer, t: *Table, count: usize) Error!void {
+        const l = w.l;
+        const gpa = l.g.gpa;
+        var keys: std.ArrayList(i64) = .empty;
+        defer keys.deinit(gpa);
+        keys.ensureTotalCapacity(gpa, count) catch return l.raiseMem();
+        for (0..t.asize) |idx| {
+            if (!table.arrayIsNil(t, idx)) keys.appendAssumeCapacity(@intCast(idx + 1));
+        }
+        for (0..t.hash_len) |hi| {
+            const n = t.entry(hi);
+            if (n.key.tag != .integer or n.val.isNil()) continue;
+            keys.append(gpa, n.key.asInt()) catch return l.raiseMem();
+        }
+        std.mem.sort(i64, keys.items, {}, std.sort.asc(i64));
+        try w.write("{");
+        var first = true;
+        var digits: [24]u8 = undefined;
+        for (keys.items) |k| {
+            const raw = table.getInt(t, k);
+            if (raw.isNil()) continue;
+            const fresh = w.mayRun(raw);
+            const item = (try w.transform(Value.int(k), raw)) orelse continue;
+            if (!serializable(item)) continue;
+            if (!first) try w.write(",");
+            first = false;
+            try w.write("\"");
+            try w.write(std.fmt.bufPrint(&digits, "{d}", .{k}) catch unreachable);
+            try w.write("\":");
+            try w.item_(item, fresh);
+        }
+        try w.write("}");
+    }
+
     fn tableValue(w: *Writer, t: *Table) Error!void {
         const l = w.l;
         if (w.onPath(t)) return l.raiseFmt("circular reference detected in table", .{});
@@ -735,10 +775,10 @@ const Writer = struct {
         }
         if (!is_object) {
             // A largest key far beyond the number of elements would write
-            // mostly nulls, up to billions of them, so such a table raises
-            // an error instead.
+            // mostly nulls, up to billions of them, so such a table is an
+            // object whose keys are the decimal integers instead.
             if (max > sparse_safe and @divFloor(max, 2) > @as(i64, @intCast(count))) {
-                return l.raiseFmt("excessively sparse array (largest key {d} with {d} elements)", .{ max, count });
+                return w.sparseObject(t, count);
             }
             try w.write("[");
             var i: i64 = 1;

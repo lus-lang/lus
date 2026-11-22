@@ -999,16 +999,26 @@ local function null_elements_survive_a_round_trip_test()
     assert(tojson(fromjson("[1,null]")) == "[1]")
 end
 
--- an excessively sparse array raises instead of writing mostly nulls
-local function an_excessively_sparse_array_raises_test()
-    local ok, err = catch tojson({ [11] = true })
-    assert(not ok)
-    assert(err:find("excessively sparse array (largest key 11 with 1 elements)", 1, true))
-    raises(function() tojson({ [2 ^ 53] = 1 }) end, "excessively sparse array")
-    -- Half full is enough.
+-- a table too sparse for an array becomes an object with decimal keys
+local function a_sparse_table_becomes_an_object_test()
+    assert(tojson({ [11] = true }) == '{"11":true}')
+    assert(tojson({ [2 ^ 53] = 1 }) == '{"9007199254740992":1}')
+    assert(tojson({ [100] = "a", [3] = "b" }) == '{"3":"b","100":"a"}')
+    -- Up to key 10 any table of positive integer keys is an array.
+    assert(tojson({ [10] = 1 }) == "[null,null,null,null,null,null,null,null,null,1]")
+    -- Half full is still an array, and fewer is an object.
     local t = {}
     for i = 2, 40, 2 do t[i] = i end
     assert(tojson(t):sub(1, 9) == "[null,2,n")
+    t[40] = nil
+    t[100] = 100
+    assert(tojson(t):sub(1, 7) == '{"2":2,')
+    -- Values without a JSON form are left out, as in any object.
+    assert(tojson({ [100] = print, [50] = 1 }) == '{"50":1}')
+    -- The filter sees the integer key.
+    assert(tojson({ [1000] = 1 }, function(k, v) if k == 1000 then return "x" end return v end) == '{"1000":"x"}')
+    -- The text is stable after one round trip.
+    assert(tojson(fromjson(tojson({ [1000] = 7 }))) == '{"1000":7}')
 end
 
 local function a_table_mixing_an_array_part_and_a_string_key_keeps_only_the_string_ke_test()

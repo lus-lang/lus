@@ -1428,6 +1428,9 @@ fn udpSendto(l: *Thread) Error!u32 {
     return aux.retInt(l, @intCast(data.len));
 }
 
+/// The largest datagram UDP carries: a 16-bit length minus its header.
+const max_datagram = 65535;
+
 fn udpReceive(l: *Thread) Error!u32 {
     const s = try checkUdp(l, 1);
     const size = try aux.optInt(l, 2, default_udp_size);
@@ -1438,11 +1441,16 @@ fn udpReceive(l: *Thread) Error!u32 {
             if (s.closed) return l.raiseFmt("attempt to use a closed UDP socket", .{});
         }
     }
+    // The buffer holds any datagram, and the call keeps the first `size`
+    // bytes of it. POSIX truncates a datagram to the buffer quietly, but
+    // Windows fails the receive with a buffer that is too small and drops
+    // the datagram, so a short buffer would lose data there.
     const gpa = l.g.gpa;
-    const buf = gpa.alloc(u8, @intCast(size)) catch return l.raiseMem();
+    const want: usize = @intCast(size);
+    const buf = gpa.alloc(u8, @max(want, max_datagram)) catch return l.raiseMem();
     defer gpa.free(buf);
     const msg = s.socket.receive(l.g.io, buf) catch |e| return failResult(l, "recvfrom", e);
-    try l.push(Value.obj(.vector, try vector.newVector(l, msg.data)));
+    try l.push(Value.obj(.vector, try vector.newVector(l, msg.data[0..@min(msg.data.len, want)])));
     _ = try pushAddress(l, msg.from);
     return 3;
 }
