@@ -26,6 +26,7 @@
 //! instruction, so there is no pool.
 
 const std = @import("std");
+const reloc = @import("reloc.zig");
 
 pub const Reg = enum(u4) {
     r0,
@@ -190,6 +191,15 @@ pub const Assembler = struct {
     labels: std.ArrayList(u32) = .empty,
     fixups: std.ArrayList(Fixup) = .empty,
     oom: bool = false,
+    /// Set when the assembler compiles ahead of time, which makes the
+    /// routines that write addresses record relocations.
+    aot: bool = false,
+    relocs: std.ArrayList(reloc.Entry) = .empty,
+    /// Wide immediates written ahead of time that name something the
+    /// loader cannot find. Code with any is unusable ahead of time.
+    unrelocated: u32 = 0,
+    /// Decides ahead of time what a wide immediate of `movImm` is.
+    resolver: ?reloc.Resolver = null,
     /// Set when a branch cannot reach its label, or a displacement does
     /// not fit 20 bits.
     overflow: bool = false,
@@ -201,6 +211,7 @@ pub const Assembler = struct {
     }
 
     pub fn deinit(a: *Assembler) void {
+        a.relocs.deinit(a.gpa);
         a.buf.deinit(a.gpa);
         a.labels.deinit(a.gpa);
         a.fixups.deinit(a.gpa);
@@ -332,7 +343,40 @@ pub const Assembler = struct {
 
     /// Loads a 64-bit constant in one instruction, or two for a value
     /// that needs more than 32 bits.
+    /// Loads a 64-bit constant. Ahead of time, the resolver decides
+    /// whether a wide constant is an address, which then takes the form
+    /// of `movImmReloc`.
     pub fn movImm(a: *Assembler, dst: Reg, v: u64) void {
+        if (a.aot and reloc.wide(v)) {
+            const res: reloc.Resolution = if (a.resolver) |rs| rs.resolve(rs.ctx, v) else .unknown;
+            switch (res) {
+                .address => |r| return a.movImmReloc(dst, v, r),
+                .literal => {},
+                .unknown => a.unrelocated += 1,
+            }
+        }
+        a.movImmRaw(dst, v);
+    }
+    /// Loads an address, or a value that `r` names as a literal. Ahead of
+    /// time an address takes a form whose bytes the loader patches.
+    pub fn movImmReloc(a: *Assembler, dst: Reg, v: u64, r: reloc.Reloc) void {
+        if (!a.aot or r.kind == .literal) return a.movImmRaw(dst, v);
+        a.record(a.offset(), .s390_pair, r);
+        a.ril(0xC0, dst.n(), 0xE, @truncate(v >> 32)); // llihf
+        a.ril(0xC0, dst.n(), 0x9, @truncate(v)); // iilf
+    }
+    fn record(a: *Assembler, at: u32, form: reloc.Form, r: reloc.Reloc) void {
+        a.relocs.append(a.gpa, .{ .at = at, .form = form, .r = r }) catch {
+            a.oom = true;
+        };
+    }
+    /// Stores an address, or a value that `r` names as a literal.
+    pub fn storeImm64Reloc(a: *Assembler, m: Mem, v: u64, r: reloc.Reloc) void {
+        if (!a.aot) return a.storeImm64(m, v);
+        a.movImmReloc(s0, v, r);
+        a.store64(s0, m);
+    }
+    fn movImmRaw(a: *Assembler, dst: Reg, v: u64) void {
         const sv: i64 = @bitCast(v);
         if (fitsI16(sv)) return a.ri(0xA7, dst.n(), 0x9, @truncate(v)); // lghi
         if (sv >= std.math.minInt(i32) and sv <= std.math.maxInt(i32)) return a.ril(0xC0, dst.n(), 0x1, @truncate(v)); // lgfi
@@ -826,6 +870,26 @@ pub const Assembler = struct {
         a.moveSp(-16);
         a.leaSp(.r2, 0);
         a.call(addr);
+        a.load64(.r3, .{ .base = .r15, .disp = 8 });
+        a.load64(.r2, .{ .base = .r15 });
+        a.moveSp(16);
+    }
+    /// Calls the routine that `r` names, at `addr` in this process.
+    pub fn callReloc(a: *Assembler, addr: usize, r: reloc.Reloc) void {
+        if (!a.aot) return a.call(addr);
+        a.movImmReloc(.r14, addr, r);
+        a.h2(0x0DEE); // basr r14, r14
+    }
+    /// `callPair` for the routine that `r` names.
+    pub fn callPairReloc(a: *Assembler, addr: usize, r: reloc.Reloc) void {
+        if (!a.aot) return a.callPair(addr);
+        a.mov(.r6, .r5);
+        a.mov(.r5, .r4);
+        a.mov(.r4, .r3);
+        a.mov(.r3, .r2);
+        a.moveSp(-16);
+        a.leaSp(.r2, 0);
+        a.callReloc(addr, r);
         a.load64(.r3, .{ .base = .r15, .disp = 8 });
         a.load64(.r2, .{ .base = .r15 });
         a.moveSp(16);

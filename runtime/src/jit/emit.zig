@@ -21,6 +21,7 @@ const table = @import("../vm/table.zig");
 const opc = @import("../compile/opcodes.zig");
 const jit = @import("jit.zig");
 const helpers = @import("helpers.zig");
+const aot = @import("aot.zig");
 const Thread = state.Thread;
 const Proto = object.Proto;
 const Value = value.Value;
@@ -198,6 +199,9 @@ const Compare = struct {
 };
 
 pub const Emitter = struct {
+    /// The resolver of addresses when the state compiles in the form of
+    /// code compiled ahead of time.
+    aot: ?*aot.Context = null,
     a: A.Assembler,
     gpa: std.mem.Allocator,
     p: *Proto,
@@ -248,10 +252,31 @@ pub const Emitter = struct {
     };
 
     pub fn init(gpa: std.mem.Allocator, l: *Thread, p: *Proto) Emitter {
-        return .{ .a = A.Assembler.init(gpa), .gpa = gpa, .p = p, .g = l.g, .lay = Layout.of(l) };
+        var e: Emitter = .{ .a = A.Assembler.init(gpa), .gpa = gpa, .p = p, .g = l.g, .lay = Layout.of(l) };
+        if (l.g.jit.aot_log != null) {
+            // Ahead of time, every wide immediate goes through the
+            // resolver (`aot.zig`).
+            if (gpa.create(aot.Context)) |c| {
+                c.* = aot.Context.init(gpa, l.g, p);
+                e.aot = c;
+                e.a.aot = true;
+                e.a.resolver = c.resolver();
+            } else |_| {}
+        }
+        return e;
+    }
+
+    /// Reports the addresses that the resolver could not name, when the
+    /// state compiles in the form of code compiled ahead of time.
+    pub fn reportAot(e: *Emitter) void {
+        if (e.aot) |c| if (e.a.unrelocated > 0) aot.report(c, e.a.unrelocated);
     }
 
     pub fn deinit(e: *Emitter) void {
+        if (e.aot) |c| {
+            c.deinit();
+            e.gpa.destroy(c);
+        }
         e.a.deinit();
         e.cold.deinit(e.gpa);
     }
