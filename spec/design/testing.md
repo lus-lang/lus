@@ -158,6 +158,19 @@ The tests found two bugs, both fixed. The reader of binary chunks reported a fai
 | compile | 58.1% | 63.4% |
 | lib core | 81.3% | 87.6% |
 
+The fourth round turned to MC/DC. The measure now counts the vectors of the unit tests, as the branch report counts their positions. It leaves out the decisions inside `inv.assert`, `inv.always`, and `inv.never` and inside the functions that only invariant checks call, since an invariant has one value in every run and the shipped build has no such checks. A matrix of every operator over every kind of operand runs each operation with both operands in registers and with either one a literal, plain and under debug hooks. Other tests reach tables at the limits of their layouts, string functions called through the fast paths of the JIT with unusual arguments, weak tables with strings and exact numbers, finalizers in generational mode, and the forms of the code generator. The unit tests also sweep every allocation of running programs in `src/vm/sweep.zig`.
+
+The round found four bugs, all fixed. A left shift of a bigint clamped its amount to 2^24 bits, so `10n << math.maxinteger` returned a number of five million digits. A float limit in a numeric loop of decimals let the loop run, while the guide says it raises. A failed allocation while compiling an exact literal reported a malformed number. A failed allocation while decoding a query plan reported a corrupt plan. The code that every program runs now stands at the following shares on macOS, against the shares at the start of the third round.
+
+| Group | Branches before | Branches after | MC/DC before | MC/DC after |
+| --- | --- | --- | --- | --- |
+| vm | 84.3% | 85.2% | 63.4% | 72.5% |
+| gc | 91.7% | 91.7% | 69.0% | 69.2% |
+| compile | 58.1% | 63.5% | 52.4% | 60.2% |
+| lib core | 81.3% | 87.8% | 68.8% | 83.1% |
+
+The branch columns count the conformance suite and the doc tests. Across the whole runtime, 54.5% of the 4,624 conditions are shown to affect their decision on their own.
+
 ### 9. Mutation testing
 
 Coverage shows that a test runs a branch, and mutation testing shows that a test notices when the branch is wrong. A mutant is the runtime with one small change: a comparison flipped (`<` to `<=`, `==` to `!=`), a constant moved by one, `and` swapped with `or`, `true` swapped with `false`, the operands of a subtraction swapped, or one statement removed. A mutant is killed when some test fails on it, and the mutation score of a directory is the share of its mutants that the tests kill.
