@@ -46,7 +46,7 @@ local LISTED = {
     "^failed to read response headers: [%a ]+$",
     "^failed to read response body: [%a ]+$",
     "^truncated response body$",
-    "^SSL handshake failed: [%w ]+$",
+    "^TLS handshake failed: [^\n]+$",
     "^failed to [%a ]+: Connection closed by peer$",
     "^receive: Connection reset by peer$",
     "^send: Connection reset by peer$",

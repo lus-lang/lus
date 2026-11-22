@@ -859,7 +859,7 @@ local function an_https_fetch_from_a_plain_http_peer_raises_test()
         sock:send("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
     end)
     local ok, err = catch network.fetch("https://127.0.0.1:" .. port .. "/")
-    assert(not ok and string.find(tostring(err), "SSL handshake failed: ", 1, true), tostring(err))
+    assert(not ok and string.find(tostring(err), "TLS handshake failed: ", 1, true), tostring(err))
     resume(peer)
     server:close()
 end

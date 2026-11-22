@@ -288,7 +288,10 @@ fn refill(l: *Thread, s: *net.Socket, b: *Body) Error!void {
             b.bad_msg = if (b.request) "truncated request body" else if (b.framing == .chunked) "truncated chunked response" else "truncated response body";
             return raiseBad(l, b);
         },
-        .fail => |e| return l.raiseFmt("receive: {s}", .{net.errText(e)}),
+        .fail => |e| {
+            if (b.request) return l.raiseFmt("receive: {s}", .{net.errText(e)});
+            return l.raiseFmt("failed to read response body: {s}", .{net.errText(e)});
+        },
     }
 }
 
@@ -1188,7 +1191,7 @@ fn readHead(l: *Thread, s: *net.Socket, f: *Fetch) Error!?HeadResult {
         const got = (try net.tryFill(l, s, 16384)) orelse return l.raiseFmt("fetch timeout while waiting for the response headers", .{});
         switch (got) {
             .got => {},
-            .eof => return l.raiseFmt("failed to read response", .{}),
+            .eof => return l.raiseFmt("failed to read response: Connection closed by peer", .{}),
             .fail => |e| return l.raiseFmt("failed to read response: {s}", .{net.errText(e)}),
         }
     }

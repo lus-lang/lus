@@ -1810,6 +1810,10 @@ fn tableCtor(fs: *FuncState, fields: []ast.Field, v: *ExpDesc, line: u32) Error!
             },
             .named => |nf| {
                 nh += 1;
+                // A key past the constant operand range goes through a
+                // temporary register, released once the store is done.
+                const base = fs.freereg;
+                defer fs.freereg = base;
                 var t: ExpDesc = ExpDesc.init(.nonreloc, treg);
                 var k: ExpDesc = .{ .kind = .kstr, .strval = nf.name.text };
                 try indexed(fs, &t, &k);
@@ -1819,6 +1823,8 @@ fn tableCtor(fs: *FuncState, fields: []ast.Field, v: *ExpDesc, line: u32) Error!
             },
             .keyed => |kf| {
                 nh += 1;
+                const base = fs.freereg;
+                defer fs.freereg = base;
                 var t: ExpDesc = ExpDesc.init(.nonreloc, treg);
                 var k: ExpDesc = .{};
                 try expr(fs, kf.key, &k);
