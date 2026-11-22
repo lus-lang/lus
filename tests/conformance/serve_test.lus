@@ -1087,6 +1087,7 @@ local bad_options_cases = {
     max_zero = { { max_connections = 0 }, "max_connections must be a positive integer" },
     max_float = { { max_connections = 1.5 }, "max_connections must be a positive integer" },
     on_error_text = { { on_error = "print" }, "on_error must be a function" },
+    drain_text = { { drain_timeout = "later" }, "drain_timeout must be a number of seconds" },
 }
 
 local function bad_options_test(options, message)
@@ -1110,6 +1111,92 @@ local function options_are_optional_test()
             assert(exchange(sock, get("/")).body == "ok")
         end, options)
     end
+end
+
+-- ===== Draining =====
+
+-- Waits `seconds` through the scheduler, so the other coroutines run.
+local function pause(seconds)
+    local s = network.tcp.bind("127.0.0.1", 0)
+    s:settimeout(seconds)
+    catch s:accept()
+    s:close()
+end
+
+local function closing_serve_closes_idle_connections_test()
+    local server, port = listen()
+    local co = spawn(network.serve, server, function()
+        return 200, "ok"
+    end)
+    local sock <close> = connect(port)
+    local r = exchange(sock, get("/"))
+    assert(r.status == 200 and r.headers.connection ~= "close")
+    assert(close(co))
+    assert(at_end(sock))
+    server:close()
+end
+
+local function closing_serve_lets_an_active_request_finish_test()
+    local server, port = listen()
+    local started = false
+    local co = spawn(network.serve, server, function()
+        started = true
+        pause(0.2)
+        return 200, "late"
+    end)
+    local sock <close> = connect(port)
+    local got
+    local client = spawn(function()
+        got = exchange(sock, get("/slow"))
+    end)
+    while not started do
+        pause(0.01)
+    end
+    assert(close(co))
+    assert(resume(client))
+    assert(got.status == 200 and got.body == "late")
+    assert(got.headers.connection == "close")
+    assert(at_end(sock))
+    server:close()
+end
+
+local function the_drain_timeout_closes_the_rest_test()
+    local server, port = listen()
+    local started = false
+    local co = spawn(network.serve, server, function()
+        started = true
+        pause(0.5)
+        return 200, "too late"
+    end, { drain_timeout = 0.1 })
+    local sock <close> = connect(port)
+    assert(sock:send(get("/slow")))
+    while not started do
+        pause(0.01)
+    end
+    assert(close(co))
+    assert(at_end(sock))
+    server:close()
+end
+
+local function a_server_that_serve_bound_stops_listening_when_closed_test()
+    local port
+    local co = spawn(function()
+        local server = network.tcp.bind("127.0.0.1", 0)
+        local _, p = server:getsockname()
+        server:close()
+        port = p
+        network.serve("127.0.0.1", p, function()
+            return 200, "ok"
+        end)
+    end)
+    while not port do
+        pause(0.01)
+    end
+    local sock <close> = connect(port)
+    assert(exchange(sock, get("/")).body == "ok")
+    assert(close(co))
+    assert(at_end(sock))
+    assert(not catch network.tcp.connect("127.0.0.1", port))
 end
 
 -- ===== serve itself =====

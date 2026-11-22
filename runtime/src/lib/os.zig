@@ -39,6 +39,7 @@ pub fn open(l: *Thread) Error!void {
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
     try @import("process.zig").open(l, t);
+    try @import("signal.zig").open(l, t);
     try aux.setGlobal(l, "os", Value.obj(.table, t));
 }
 
