@@ -1,6 +1,6 @@
 # Hints of `lus check`
 
-_Status: design accepted, implementation pending._
+_Status: implemented._
 
 A _hint_ is a diagnostic of `lus check` and the language server that suggests a faster or shorter form of correct code. Every hint in this note rests on a measured case in `tests/bench/hints/cases.lus`, which pairs the form a hint flags with the form it suggests. Both forms compute the same result. `lus -Pload -Pfs:read tests/bench/hints/run.lus` prints the best time of each form and their ratio.
 
@@ -56,6 +56,6 @@ The last row measures the constructor as the slower form: a table built by its c
 
 ## 5. Decisions
 
-All ten hints of sections 1 and 2 ship. They use a new severity, `hint`, which `lus check` prints and the language server shows as a hint. A hint never changes the exit status of `lus check`. The existing concise checks `use-from`, `use-optional-chain`, and `use-if-assign` move to the same severity.
+All ten hints of sections 1 and 2 ship. They use a new severity, `hint`, which `lus check` prints and the language server shows as a hint through `debug.check`. A hint never changes the exit status of `lus check`. The existing concise checks `use-from`, `use-optional-chain`, and `use-if-assign` move to the same severity. `use-for-from` replaces the `use-from` report on the same statement. `tests/check/speed.lus` shows each hint on its flagged form and none on the suggested form.
 
 The cases of section 4 that only the interpreter pays for get no hint, because the JIT runs by default. The three slow forms of section 3 are runtime work for the speed workstream, and no hint covers them.

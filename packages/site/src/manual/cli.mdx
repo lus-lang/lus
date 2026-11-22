@@ -115,7 +115,7 @@ Gives source files one standard layout. With no option, it prints the formatted 
 lus check [--json] [--list] [path ...]
 ```
 
-Finds errors and likely mistakes without running the code. It parses, lints, and compiles each file, then prints each problem as `file:line:column: severity: message [code]`. For a directory, it checks every `.lus` file inside it. Files named `*_test.lus` are checked with the conventions of `lus test`. The exit status is 1 when anything is reported. [Checking](/manual/tools#checking) lists the diagnostics.
+Finds errors and likely mistakes without running the code. It parses, lints, and compiles each file, then prints each problem as `file:line:column: severity: message [code]`. For a directory, it checks every `.lus` file inside it. Files named `*_test.lus` are checked with the conventions of `lus test`. The exit status is 1 when an error or a warning is reported. Hints alone leave it at 0. [Checking](/manual/tools#checking) lists the diagnostics.
 
 | Option | Effect |
 | --- | --- |

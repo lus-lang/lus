@@ -15,8 +15,9 @@
 //! declares count as used.
 //!
 //! With no file, or with the file `-`, the source is read from standard
-//! input. The exit status is 0 when nothing is reported, 1 when a
-//! diagnostic is reported, and 2 for a usage or I/O problem.
+//! input. The exit status is 0 when nothing but hints is reported, 1
+//! when an error or a warning is reported, and 2 for a usage or I/O
+//! problem.
 
 const std = @import("std");
 const lus = @import("../lus.zig");
@@ -120,7 +121,11 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         }
     }
     std.Io.File.stdout().writeStreamingAll(io, out.written()) catch {};
-    if (entries.items.len > 0 and status == 0) status = 1;
+    // Hints suggest a better form of correct code, so they never change
+    // the exit status.
+    for (entries.items) |e| if (e.d.severity != .hint and status == 0) {
+        status = 1;
+    };
     return status;
 }
 

@@ -58,7 +58,7 @@ messy.lus:1:7: warning: unused local 'unused' [unused-local]
 messy.lus:5:1: warning: global 'total' is assigned without a 'global' declaration [implicit-global]
 ```
 
-An _error_ is a problem that makes the compiler reject the file, such as an assignment to a constant, a `goto` without a visible label, or a `continue` outside every loop. A _warning_ is code that runs but probably does not do what its author meant, such as an unused local, a shadowed name, or unreachable code. A variable whose name starts with an underscore is exempt from the unused checks, so use such a name for a variable that is unused on purpose. The exit status is 1 when `lus check` reports anything, including a warning.
+An _error_ is a problem that makes the compiler reject the file, such as an assignment to a constant, a `goto` without a visible label, or a `continue` outside every loop. A _warning_ is code that runs but probably does not do what its author meant, such as an unused local, a shadowed name, or unreachable code. A _hint_ suggests a faster or shorter form of correct code, such as `ipairs` for a table built as a list. A variable whose name starts with an underscore is exempt from the unused checks, so use such a name for a variable that is unused on purpose. The exit status is 1 when `lus check` reports an error or a warning. Hints alone leave it at 0, so a build that runs `lus check` never fails on a hint. The language server shows the same hints in the editor, and [`debug.check`](/manual/api#debug.check) returns every diagnostic to a program.
 
 ### Diagnostic codes
 
@@ -79,9 +79,19 @@ Every diagnostic has a code that stays the same between releases, so a tool can 
 | `self-assign` | warning | A variable or field is assigned to itself. |
 | `deprecated-pcall` | warning | `pcall` or `xpcall` is used where Lus has `catch`. |
 | `pledge-after-seal` | warning | A `pledge` follows `pledge("seal")` and has no effect. |
-| `use-from` | warning | Fields of one table are copied into same-named locals one by one. |
-| `use-optional-chain` | warning | Nested nil checks or an `and` chain do what optional chaining does. |
-| `use-if-assign` | warning | A local exists only for the truth test of the next `if`. |
+| `use-from` | hint | Fields of one table are copied into same-named locals one by one. |
+| `use-optional-chain` | hint | Nested nil checks or an `and` chain do what optional chaining does. |
+| `use-if-assign` | hint | A local exists only for the truth test of the next `if`. |
+| `use-interpolation` | hint | A chain of three or more concatenations mixes literals and values. |
+| `use-for-from` | hint | A generic `for` copies fields of its only loop variable into same-named locals. |
+| `concat-in-loop` | hint | A string grows by concatenation in a loop, which copies it on every pass. |
+| `insert-front-in-loop` | hint | `table.insert(t, 1, v)` in a loop moves the whole list on every pass. |
+| `closure-in-loop` | hint | A function created in a loop captures nothing the loop declares. |
+| `select-in-loop` | hint | `select(i, ...)` in a loop copies the arguments on every pass. |
+| `table-to-group` | hint | A table that never leaves its function holds only named fields. |
+| `pairs-over-list` | hint | `pairs` iterates a table built as a list. |
+| `format-to-interpolation` | hint | `string.format` has a format of literal text and `%s` only. |
+| `redundant-tostring` | hint | `tostring` of a number is an operand of a concatenation. |
 | `doc-unknown-param` | warning | A doc comment documents a parameter the function does not have. |
 | `package-flag` | warning | A package reads a flag that its [package header](#package-headers) does not declare. |
 | `package-pledge` | warning | A package calls `pledge` at the top level, which acts on the permissions of the program. |
@@ -105,9 +115,39 @@ pledge("seal")
 pledge("network")  -- pledge() after pledge("seal") has no effect, permissions are frozen [pledge-after-seal]
 ```
 
+### Faster forms
+
+Some hints name a form of the same code that runs faster. Each one comes from a measured case, and the checker reports it only where it can prove from the file that the faster form computes the same result. A string that grows by concatenation in a loop is copied in full on every pass, so building a long text this way takes time that grows with the square of its length.
+
+```lus
+local lines = { "a", "b", "c" }
+local text = ""
+for _, line in ipairs(lines) do
+    text = text .. line .. "\n"  -- 'text' grows by concatenation in a loop: ... [concat-in-loop]
+end
+io.write(text)
+--> a
+--> b
+--> c
+```
+
+Collecting the parts in a list and joining them once copies each part once.
+
+```lus
+local lines = { "a", "b", "c" }
+local parts = {}
+for _, line in ipairs(lines) do
+    parts[#parts + 1] = line
+end
+print(table.concat(parts, "\n"))
+--> a
+--> b
+--> c
+```
+
 ### Lua idioms with a Lus form
 
-The following warnings, which are useful when porting Lua code, report a Lua idiom that a Lus feature replaces. The message of each warning names the Lus feature.
+The following hints, which are useful when porting Lua code, report a Lua idiom that a Lus feature replaces. `deprecated-pcall` is a warning, because the Lua functions it names do not exist in Lus. The message of each diagnostic names the Lus feature.
 
 Lus catches errors with the [`catch`](/manual/guide#errors) expression, which replaces the Lua functions `pcall` and `xpcall`. `lus check` reports a reference to either function.
 

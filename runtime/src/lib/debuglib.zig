@@ -40,6 +40,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "jit", .func = jitStatus },
     .{ .name = "parse", .func = parse },
     .{ .name = "format", .func = formatSource },
+    .{ .name = "check", .func = checkSource },
 };
 
 /// debug.jit([f]): the JIT setting of the state, the setting of its
@@ -603,6 +604,44 @@ fn formatSource(l: *Thread) Error!u32 {
             return 1;
         },
     }
+}
+
+/// debug.check(code [, chunkname]): the diagnostics of `lus check` for
+/// `code`, as a list of tables with the fields `line`, `column`,
+/// `endline`, `endcolumn`, `severity` ("error", "warning", or "hint"),
+/// `code`, and `message`. Lines and columns start at 1, and columns
+/// count characters. The globals of the running state count as defined.
+/// A chunk name ending in `_test.lus` checks the code as a test file.
+fn checkSource(l: *Thread) Error!u32 {
+    const check = @import("../tools/check.zig");
+    const lint = @import("../syntax/lint.zig");
+    const code = try aux.checkBytes(l, 1);
+    const chunkname = (try aux.optString(l, 2, "=check")).?;
+    var arena_state = std.heap.ArenaAllocator.init(l.g.gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var builtins = check.globalNames(arena, l.g) catch return l.raiseMem();
+    const is_test = std.mem.endsWith(u8, chunkname, "_test.lus");
+    if (is_test) for (check.test_globals) |name| builtins.put(arena, name, {}) catch return l.raiseMem();
+    const opts: lint.Options = .{ .builtins = &builtins, .test_file = is_test };
+    const list = check.checkSource(l.g.gpa, arena, l.g, code, chunkname, opts) catch |e| switch (e) {
+        error.OutOfMemory => return l.raiseMem(),
+        else => return l.raiseFmt("cannot check the code ({s})", .{@errorName(e)}),
+    };
+    const out = try l.newTable(list.len, 0);
+    try l.push(Value.obj(.table, out));
+    for (list, 0..) |d, i| {
+        const t = try l.newTable(0, 7);
+        try ops.rawSet(l, out, Value.int(@intCast(i + 1)), Value.obj(.table, t));
+        try aux.setField(l, t, "line", Value.int(d.line));
+        try aux.setField(l, t, "column", Value.int(d.column));
+        try aux.setField(l, t, "endline", Value.int(d.end_line));
+        try aux.setField(l, t, "endcolumn", Value.int(d.end_column));
+        try aux.setField(l, t, "severity", try l.newStringValue(d.severity.label()));
+        try aux.setField(l, t, "code", try l.newStringValue(d.code));
+        try aux.setField(l, t, "message", try astString(l, d.message));
+    }
+    return 1;
 }
 
 /// Compiles the parsed chunk to report the errors the reference parser

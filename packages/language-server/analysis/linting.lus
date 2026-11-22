@@ -1,7 +1,8 @@
-global require, ipairs, string
+global require, ipairs, string, debug
 
 local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
+local document = require("lus-language.document")
 local stdlib_data = require("lus-language.analysis.stdlib_data")
 
 local linting = {}
@@ -78,6 +79,31 @@ function linting.compute(uri)
         source = "lus",
         message = "Undefined global '" .. ref.name .. "'",
       }
+    end
+  end
+
+  -- Hints of `lus check`: faster or shorter forms of correct code
+  -- (spec/design/hints.md). The other checks of `lus check` overlap the
+  -- warnings above, so only its hints are added.
+  local doc = document.get(uri)
+  if doc and debug.check then
+    local name = string.match(uri, "([^/]+)$") or uri
+    local ok, list = catch debug.check(doc.text, "@" .. name)
+    if ok then
+      for _, d in ipairs(list) do
+        if d.severity == "hint" then
+          diagnostics[#diagnostics + 1] = {
+            range = {
+              start = {line = d.line - 1, character = d.column - 1},
+              ["end"] = {line = d.endline - 1, character = d.endcolumn - 1},
+            },
+            severity = SEVERITY_HINT,
+            source = "lus",
+            code = d.code,
+            message = d.message,
+          }
+        end
+      end
     end
   end
 
