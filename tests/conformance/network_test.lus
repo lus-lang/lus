@@ -316,6 +316,61 @@ local function fetch_reads_a_body_that_ends_with_the_connection_test()
     assert(status == 200 and txt(body) == "all of it")
 end
 
+-- The server and the client each run in a detached coroutine of the same
+-- state. The fetch suspends its coroutine, so the server answers it at
+-- once rather than after the timeout of the fetch.
+local function fetch_and_serve_in_two_detached_coroutines_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local server = coroutine.detach(coroutine.create(network.serve), listener, function(req)
+        return 200, "served " .. req.path
+    end)
+    local result, failure
+    local client = coroutine.create(function()
+        local ok, status, body = catch network.fetch(`http://127.0.0.1:$(port)/pair`, "GET", nil, nil, { timeout = 5 })
+        if ok then result = `$(status) $(txt(body))` else failure = status end
+    end)
+    coroutine.detach(client)
+    local started = os.clock()
+    coroutine.resume(client)
+    coroutine.close(server)
+    listener:close()
+    assert(failure == nil, tostring(failure))
+    assert(result == "200 served /pair", tostring(result))
+    assert(os.clock() - started < 2)
+end
+
+-- A fetch that waits for a slow server leaves the other detached
+-- coroutines running.
+local function a_slow_fetch_leaves_other_coroutines_running_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local release = false
+    local server = coroutine.detach(coroutine.create(network.serve), listener, function(req)
+        if req.path == "/slow" then
+            while not release do coroutine.yield() end
+        end
+        return 200, req.path
+    end)
+    local slow, fast
+    local slow_co = coroutine.detach(coroutine.create(function()
+        local _, body = network.fetch(`http://127.0.0.1:$(port)/slow`)
+        slow = txt(body)
+    end))
+    local fast_co = coroutine.detach(coroutine.create(function()
+        local _, body = network.fetch(`http://127.0.0.1:$(port)/fast`)
+        fast = txt(body)
+    end))
+    -- The fast fetch ends while the slow one still waits.
+    coroutine.resume(fast_co)
+    assert(fast == "/fast" and slow == nil, tostring(slow))
+    release = true
+    coroutine.resume(slow_co)
+    assert(slow == "/slow")
+    coroutine.close(server)
+    listener:close()
+end
+
 -- Inside a detached coroutine, fetch suspends only its coroutine, so the
 -- server of the same state answers it.
 local function fetch_in_a_detached_coroutine_suspends_test()
