@@ -620,11 +620,27 @@ fn setNonblocking(fd: posix.fd_t, on: bool) void {
 /// A connection attempt that waits through the scheduler. It lives in the
 /// scheduler record of its thread, so it survives the runs of
 /// `network.tcp.connect` and is released when the thread is closed.
+/// How long an attempt at one address runs alone before the attempt at
+/// the next address starts beside it, as RFC 8305 suggests. A host whose
+/// first address refuses slowly, such as `::1` on Windows when the server
+/// listens on `127.0.0.1` alone, then connects without that delay.
+const attempt_delay_ns = 250 * std.time.ns_per_ms;
+/// How long one wait lasts while several attempts run, since a wait
+/// watches one socket and the others are checked between the waits.
+const attempt_tick_ms = 20;
+
+/// The attempts of one connection. The attempt at address i holds its
+/// socket in `fds[i]` until it fails or connects.
 const Connecting = struct {
     addrs: [max_addresses]net.IpAddress = undefined,
     n: usize = 0,
-    i: usize = 0,
-    fd: posix.fd_t = -1,
+    /// The addresses whose attempts started.
+    next: usize = 0,
+    fds: [max_addresses]posix.fd_t = @splat(-1),
+    /// The attempts still running.
+    running: usize = 0,
+    /// When the next attempt starts beside the running ones.
+    next_at: u64 = 0,
     last: anyerror = error.ConnectionRefused,
     /// When the attempt gives up, on the clock of `sched.now`, or zero.
     deadline: u64 = 0,
@@ -635,11 +651,17 @@ const Connecting = struct {
         g.gpa.destroy(c);
     }
 
+    /// Closes the socket of attempt `i`.
+    fn dropOne(c: *Connecting, g: *state.Global, i: usize) void {
+        if (c.fds[i] < 0) return;
+        sched.forget(g, c.fds[i]);
+        closeHandle(c.fds[i]);
+        c.fds[i] = -1;
+        c.running -= 1;
+    }
+
     fn drop(c: *Connecting, g: *state.Global) void {
-        if (c.fd < 0) return;
-        sched.forget(g, c.fd);
-        closeHandle(c.fd);
-        c.fd = -1;
+        for (0..c.next) |i| c.dropOne(g, i);
     }
 };
 
@@ -701,47 +723,81 @@ fn connectScheduled(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit
         t.ctx = c;
         t.cancel = Connecting.release;
     }
-    // Every way out other than a suspension ends the attempt.
+    // Every way out other than a suspension ends the attempts.
     defer if (!l.yielding) {
         t.ctx = null;
         t.cancel = null;
         c.drop(g);
         g.gpa.destroy(c);
     };
-    while (c.i < c.n) {
-        const a = &c.addrs[c.i];
-        var done = false;
-        if (c.fd < 0) {
-            done = startConnect(a, &c.fd) catch |e| {
+    while (true) {
+        // The next address starts when nothing runs, or beside the running
+        // attempts once they have run alone for the attempt delay.
+        if (c.next < c.n and (c.running == 0 or sched.now(g) >= c.next_at)) {
+            const i = c.next;
+            c.next += 1;
+            var fd: posix.fd_t = -1;
+            const done = startConnect(&c.addrs[i], &fd) catch |e| {
                 c.last = e;
-                c.i += 1;
                 continue;
             };
+            c.fds[i] = fd;
+            c.running += 1;
+            c.next_at = sched.now(g) + attempt_delay_ns;
+            if (done) return connected(l, c, i);
+            continue;
         }
-        if (!done) {
-            if (!sched.readyNow(c.fd, .write)) {
-                const left = limit.left(g, c.deadline) orelse return limit.raise(l, host, port);
-                _ = try sched.waitIo(l, c.fd, .write, left);
-                continue;
-            }
-            if (connectResult(c.fd)) |e| {
-                c.drop(g);
+        if (c.running == 0) break;
+        // The first attempt that connects wins. One that fails lets the
+        // next address start at once.
+        var changed = false;
+        for (0..c.next) |i| {
+            const fd = c.fds[i];
+            if (fd < 0 or !sched.readyNow(fd, .write)) continue;
+            if (connectResult(fd)) |e| {
+                c.dropOne(g, i);
                 c.last = e;
-                c.i += 1;
+                c.next_at = 0;
+                changed = true;
                 continue;
             }
+            return connected(l, c, i);
         }
-        const fd = c.fd;
-        sched.forget(g, fd);
-        c.fd = -1;
-        // The connection is the end of the operation, so the next wait of
-        // the same native starts a deadline of its own.
+        if (changed) continue;
+        var wait = limit.left(g, c.deadline) orelse return limit.raise(l, host, port);
+        if (c.next < c.n) {
+            const now = sched.now(g);
+            const until: i32 = if (c.next_at > now) @intCast(@min((c.next_at - now + std.time.ns_per_ms - 1) / std.time.ns_per_ms, std.math.maxInt(i32))) else 0;
+            wait = if (wait < 0) until else @min(wait, until);
+        }
+        if (c.running > 1) wait = if (wait < 0) attempt_tick_ms else @min(wait, attempt_tick_ms);
+        // The newest attempt is the one most likely to end next. Each wait
+        // has a deadline of its own.
+        var newest: usize = c.next;
+        while (newest > 0) : (newest -= 1) {
+            if (c.fds[newest - 1] >= 0) break;
+        }
         sched.opDone(l);
-        setNonblocking(fd, false);
-        noSigpipe(fd);
-        return .{ .{ .socket = .{ .handle = fd, .address = localAddress(l.g.io, fd, a.*) } }, a.* };
+        _ = try sched.waitIo(l, c.fds[newest - 1], .write, wait);
     }
     return raiseFail(l, errCode(c.last), 0, "cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
+}
+
+/// Ends the connection with the attempt at address `i`, which connected,
+/// and closes the others.
+fn connected(l: *Thread, c: *Connecting, i: usize) struct { net.Stream, net.IpAddress } {
+    const g = l.g;
+    const fd = c.fds[i];
+    sched.forget(g, fd);
+    c.fds[i] = -1;
+    c.running -= 1;
+    c.drop(g);
+    // The connection is the end of the operation, so the next wait of the
+    // same native starts a deadline of its own.
+    sched.opDone(l);
+    setNonblocking(fd, false);
+    noSigpipe(fd);
+    return .{ .{ .socket = .{ .handle = fd, .address = localAddress(l.g.io, fd, c.addrs[i]) } }, c.addrs[i] };
 }
 
 const ListenError = error{ AccessDenied, AddressInUse, AddressUnavailable, AddressFamilyUnsupported, SystemResources, ProcessFdQuotaExceeded, SystemFdQuotaExceeded, Unexpected };
@@ -940,13 +996,11 @@ const afd = if (is_windows) struct {
     /// request stays with the driver while the thread waits, so the
     /// record holds what the request writes to: its status block and the
     /// event that the driver sets when the request ends.
-    const Attempt = struct {
+    /// The connect request of one address, which the driver holds until
+    /// it sets the event of the request.
+    const Slot = struct {
         const Target = extern struct { reserved: [3]usize = @splat(0), address: Threaded.PosixAddress };
 
-        addrs: [max_addresses]net.IpAddress = undefined,
-        n: usize = 0,
-        i: usize = 0,
-        last: anyerror = error.ConnectionRefused,
         handle: ?w.HANDLE = null,
         event: ?w.HANDLE = null,
         /// True while the driver holds the request.
@@ -954,19 +1008,11 @@ const afd = if (is_windows) struct {
         iosb: w.IO_STATUS_BLOCK = undefined,
         target: Target = .{ .address = undefined },
         local: net.IpAddress = undefined,
-        deadline: u64 = 0,
 
-        fn release(g: *state.Global, ctx: *anyopaque) void {
-            const c: *Attempt = @ptrCast(@alignCast(ctx));
-            c.drop(g);
-            if (c.event) |e| w.CloseHandle(e);
-            g.gpa.destroy(c);
-        }
-
-        /// Ends the attempt on the current address. A request that the
-        /// driver still holds is canceled, and the driver has let go of
-        /// the status block once the event is set.
-        fn drop(c: *Attempt, g: *state.Global) void {
+        /// Ends the request. A request that the driver still holds is
+        /// canceled, and the driver has let go of the status block once
+        /// the event is set.
+        fn drop(c: *Slot, g: *state.Global) void {
             const h = c.handle orelse return;
             if (c.pending) {
                 var cancel_iosb: w.IO_STATUS_BLOCK = undefined;
@@ -981,7 +1027,7 @@ const afd = if (is_windows) struct {
 
         /// Opens an endpoint and hands the driver a connect request for
         /// `a` that it completes later.
-        fn start(c: *Attempt, io: Io, a: *const net.IpAddress) !void {
+        fn start(c: *Slot, io: Io, a: *const net.IpAddress) !void {
             if (c.event == null) c.event = CreateEventW(null, .TRUE, .FALSE, null) orelse return error.SystemResources;
             const h = try openStream(a);
             errdefer w.CloseHandle(h);
@@ -1003,7 +1049,7 @@ const afd = if (is_windows) struct {
         }
 
         /// True once the driver ended the request.
-        fn done(c: *Attempt) bool {
+        fn done(c: *Slot) bool {
             if (!c.pending) return true;
             if (WaitForSingleObject(c.event.?, 0) != 0) return false;
             c.pending = false;
@@ -1011,7 +1057,7 @@ const afd = if (is_windows) struct {
         }
 
         /// The error the request ended with, or null when it connected.
-        fn result(c: *Attempt) ?anyerror {
+        fn result(c: *Slot) ?anyerror {
             return switch (c.iosb.u.Status) {
                 .SUCCESS => null,
                 .CONNECTION_REFUSED, .PORT_CONNECTION_REFUSED => error.ConnectionRefused,
@@ -1022,6 +1068,38 @@ const afd = if (is_windows) struct {
                 .CONNECTION_RESET, .CONNECTION_ABORTED => error.ConnectionResetByPeer,
                 else => error.Unexpected,
             };
+        }
+    };
+
+    /// The attempts of one connection, one slot for each address that
+    /// started (`attempt_delay_ns`).
+    const Attempt = struct {
+        addrs: [max_addresses]net.IpAddress = undefined,
+        n: usize = 0,
+        next: usize = 0,
+        slots: [max_addresses]Slot = @splat(.{}),
+        running: usize = 0,
+        next_at: u64 = 0,
+        last: anyerror = error.ConnectionRefused,
+        deadline: u64 = 0,
+
+        fn release(g: *state.Global, ctx: *anyopaque) void {
+            const c: *Attempt = @ptrCast(@alignCast(ctx));
+            c.drop(g);
+            for (&c.slots) |*slot| {
+                if (slot.event) |e| w.CloseHandle(e);
+            }
+            g.gpa.destroy(c);
+        }
+
+        fn dropOne(c: *Attempt, g: *state.Global, i: usize) void {
+            if (c.slots[i].handle == null) return;
+            c.slots[i].drop(g);
+            c.running -= 1;
+        }
+
+        fn drop(c: *Attempt, g: *state.Global) void {
+            for (0..c.next) |i| c.dropOne(g, i);
         }
     };
 
@@ -1047,55 +1125,89 @@ const afd = if (is_windows) struct {
             t.ctx = c;
             t.cancel = Attempt.release;
         }
-        // Every way out other than a suspension ends the attempt.
+        // Every way out other than a suspension ends the attempts.
         defer if (!l.yielding) {
             t.ctx = null;
             t.cancel = null;
             Attempt.release(g, c);
         };
-        while (c.i < c.n) {
-            const a = &c.addrs[c.i];
-            var failed: ?anyerror = null;
-            if (c.handle == null) c.start(io, a) catch {
-                failed = error.Unexpected;
-            };
-            if (failed == null) {
-                if (!c.done()) {
-                    if (limit.left(g, c.deadline) == null) return limit.raise(l, host, port);
-                    // Each wait is short and has a deadline of its own.
-                    sched.opDone(l);
-                    _ = try sched.waitIo(l, c.handle.?, .write, connect_tick_ms);
-                    continue;
-                }
-                failed = c.result();
-            }
-            if (failed) |e| {
-                c.drop(g);
-                c.last = e;
-                // A request that ended in a way the driver does not
-                // explain is made again by the standard library.
-                if (e == error.Unexpected) {
-                    if (a.connect(io, .{ .mode = .stream, .protocol = .tcp })) |connected| {
-                        var stream = connected;
-                        stream.socket.address = afd.localAddress(io, stream.socket.handle) orelse stream.socket.address;
-                        return .{ stream, a.* };
-                    } else |e2| {
-                        c.last = e2;
+        while (true) {
+            // The next address starts when nothing runs, or beside the
+            // running attempts once they have run alone for the attempt
+            // delay.
+            if (c.next < c.n and (c.running == 0 or sched.now(g) >= c.next_at)) {
+                const i = c.next;
+                c.next += 1;
+                c.slots[i].start(io, &c.addrs[i]) catch {
+                    if (fallback(io, &c.addrs[i], &c.last)) |stream| {
+                        c.drop(g);
+                        sched.opDone(l);
+                        return .{ stream, c.addrs[i] };
                     }
-                }
-                c.i += 1;
+                    continue;
+                };
+                c.running += 1;
+                c.next_at = sched.now(g) + attempt_delay_ns;
                 continue;
             }
-            const handle = c.handle.?;
-            sched.forget(g, handle);
-            c.handle = null;
-            // The connection ends the operation, whose last wait was one
-            // short tick, so the next wait of the same native starts a
-            // deadline of its own.
+            if (c.running == 0) break;
+            // The first attempt that connects wins. One that fails lets the
+            // next address start at once.
+            var changed = false;
+            for (0..c.next) |i| {
+                const slot = &c.slots[i];
+                if (slot.handle == null or !slot.done()) continue;
+                if (slot.result()) |e| {
+                    c.dropOne(g, i);
+                    c.last = e;
+                    c.next_at = 0;
+                    changed = true;
+                    // A request that ended in a way the driver does not
+                    // explain is made again by the standard library.
+                    if (e == error.Unexpected) {
+                        if (fallback(io, &c.addrs[i], &c.last)) |stream| {
+                            c.drop(g);
+                            sched.opDone(l);
+                            return .{ stream, c.addrs[i] };
+                        }
+                    }
+                    continue;
+                }
+                const handle = slot.handle.?;
+                sched.forget(g, handle);
+                slot.handle = null;
+                c.running -= 1;
+                c.drop(g);
+                // The connection ends the operation, whose last wait was one
+                // short tick, so the next wait of the same native starts a
+                // deadline of its own.
+                sched.opDone(l);
+                return .{ .{ .socket = .{ .handle = handle, .address = afd.localAddress(io, handle) orelse slot.local } }, c.addrs[i] };
+            }
+            if (changed) continue;
+            if (limit.left(g, c.deadline) == null) return limit.raise(l, host, port);
+            // Each wait is short and has a deadline of its own.
+            var newest: usize = c.next;
+            while (newest > 0) : (newest -= 1) {
+                if (c.slots[newest - 1].handle != null) break;
+            }
             sched.opDone(l);
-            return .{ .{ .socket = .{ .handle = handle, .address = afd.localAddress(io, handle) orelse c.local } }, a.* };
+            _ = try sched.waitIo(l, c.slots[newest - 1].handle.?, .write, connect_tick_ms);
         }
         return raiseFail(l, errCode(c.last), 0, "cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
+    }
+
+    /// Connects to `a` through the standard library, which waits in the
+    /// call, for a request that the driver could not take or explain.
+    fn fallback(io: Io, a: *const net.IpAddress, last: *anyerror) ?net.Stream {
+        if (a.connect(io, .{ .mode = .stream, .protocol = .tcp })) |connected_stream| {
+            var stream = connected_stream;
+            stream.socket.address = afd.localAddress(io, stream.socket.handle) orelse stream.socket.address;
+            return stream;
+        } else |e| {
+            last.* = e;
+            return null;
+        }
     }
 
     fn listen(io: Io, addr: *const net.IpAddress, backlog: u31, stage: *Stage) !net.Server {

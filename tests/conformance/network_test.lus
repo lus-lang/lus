@@ -590,6 +590,20 @@ local function tcp_connect_times_out_test()
     assert(string.find(tostring(timed_out), `timeout while connecting to 127.0.0.1:$(port)`, 1, true), tostring(timed_out))
 end
 
+-- A server on 127.0.0.1 alone and a short timeout: the name localhost
+-- may resolve to ::1 first, which a system may refuse slowly, so the
+-- attempt at the next address starts beside it after a short delay.
+local function tcp_connect_reaches_the_second_address_of_a_host_in_time_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local sock, err = network.tcp.connect("localhost", port, { timeout = 1 })
+    listener:close()
+    assert(sock, tostring(err))
+    local address = sock:getpeername()
+    sock:close()
+    assert(address == "127.0.0.1", address)
+end
+
 local function tcp_connect_gives_the_socket_its_timeout_test()
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
