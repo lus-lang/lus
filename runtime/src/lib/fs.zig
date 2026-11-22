@@ -14,6 +14,7 @@ const ops = @import("../vm/ops.zig");
 const pledge = @import("../vm/pledge.zig");
 const aux = @import("auxlib.zig");
 const os = @import("os.zig");
+const walk = @import("walk.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -34,6 +35,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "follow", .func = follow },
     .{ .name = "createlink", .func = createLink },
     .{ .name = "createdirectory", .func = createDirectory },
+    .{ .name = "walk", .func = walk.walk },
 };
 
 pub const path_funcs = [_]aux.Reg{
@@ -44,6 +46,7 @@ pub const path_funcs = [_]aux.Reg{
 };
 
 pub fn open(l: *Thread) Error!void {
+    try walk.open(l);
     const t = try aux.newLib(l, .fields, "fs", &funcs);
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
@@ -140,6 +143,12 @@ fn list(l: *Thread) Error!u32 {
     const path = try aux.checkBytes(l, 1);
     const glob = try aux.optString(l, 2, null);
     try pledge.require(l, "fs:read", path);
+    var filter: ?walk.Filter = null;
+    if (glob) |g| {
+        filter = try walk.compileFilter(l, l.g.gpa, g);
+        if (filter.?.g.deep) return walk.listDeep(l, path, filter.?);
+    }
+    defer if (filter) |*f| f.g.deinit();
     const io = l.g.io;
     var dir = Dir.cwd().openDir(io, path, .{ .iterate = true }) catch |e| switch (e) {
         error.NotDir => return l.raiseFmt("{s} is not a directory", .{path}),
@@ -154,7 +163,7 @@ fn list(l: *Thread) Error!u32 {
         const entry = it.next(io) catch |e| return l.raiseFmt("cannot list directory {s}: {s}", .{ path, errMsg(e) });
         const ent = entry orelse break;
         if (std.mem.eql(u8, ent.name, ".") or std.mem.eql(u8, ent.name, "..")) continue;
-        if (glob) |g| if (!pledge.globMatch(g, ent.name)) continue;
+        if (filter) |*f| if (!f.g.match(ent.name)) continue;
         try ops.rawSet(l, t, Value.int(idx), try os.lossyString(l, ent.name));
         idx += 1;
     }
