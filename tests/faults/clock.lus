@@ -101,7 +101,10 @@ for i = 1, 6 do
         local before = time.monotonic()
         -- A receive that times out returns nil and an error object.
         local _, err = sock:receive(1)
-        print(string.format("timeout %s %.3f", tostring(err):match("receive timeout") and "receive" or "other", (time.monotonic() - before):seconds()))
+        -- The error object names a timeout by its code. Any other failure
+        -- prints its message, so a report says what happened.
+        local kind = type(err) == "table" and err.code == "timeout" and "receive" or tostring(err):gsub("%s", "_")
+        print(string.format("timeout %s %.3f", kind, (time.monotonic() - before):seconds()))
         sock:close()
         server:close()
     end
@@ -195,7 +198,11 @@ for i = 1, 6 do
 end
 local what, waited = out:match("timeout (%S+) ([%d.]+)")
 waited = tonumber(waited)
-if what ~= "receive" or not waited or waited < 0.15 or waited > 2 then problem("jumps: the timeout of 0.2 seconds ended with %s after %s seconds", tostring(what), tostring(waited)) end
+-- A timer on the monotonic clock lasts 0.2 seconds whatever the wall clock
+-- does. A timer on the wall clock would end at once after the jump
+-- forward or wait an hour after the jump back, which the bounds catch,
+-- while a loaded runner may run a little late.
+if what ~= "receive" or not waited or waited < 0.15 or waited > 5 then problem("jumps: the timeout of 0.2 seconds ended with %s after %s seconds", tostring(what), tostring(waited)) end
 
 fs.remove(dir, true)
 print(string.format("%d crossings with %d readings, 6 loops with 2 jumps, %d problems", #CROSSINGS, readings, #problems))

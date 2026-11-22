@@ -76,6 +76,11 @@ description = "Fail and shorten sampled file and socket operations of every conf
 depends = ["build", "build:io"]
 run = ["LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --samples 20", "LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --io --short --samples 5"]
 
+[tasks.limits]
+description = "Find every limit of the language and the runtime, and check it in every JIT mode and one past it"
+depends = ["build"]
+run = "LUS_JIT=off runtime/zig-out/bin/lus tests/limits/run.lus"
+
 [tasks.corrupt]
 description = "Truncate and flip every bit of seed inputs to every parser and decoder of the standard library, and report crashes and values that break their contract"
 depends = ["build"]
