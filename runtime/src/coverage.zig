@@ -187,6 +187,19 @@ fn mergeExport(io: std.Io, gpa: std.mem.Allocator, path: []const u8, keys: *KeyM
 /// Merges the coverage files of `dir` and prints the report.
 /// `environ` answers `get(name)` for `LUS_COVERAGE_FILE`,
 /// `LUS_COVERAGE_EXPORT` and `LUS_COVERAGE_MERGE`.
+/// Counts the edge at `loc` under its source position, covered when
+/// `hit` or when another copy of it ran.
+fn countEdge(arena: std.mem.Allocator, by_key: *KeyMap, loc: std.debug.SourceLocation, hit: bool) !void {
+    const at = std.mem.indexOf(u8, loc.file_name, "/runtime/src/") orelse return;
+    const rel = loc.file_name[at + "/runtime/src/".len ..];
+    const gop = try by_key.getOrPut(arena, .{ .file = rel, .line = loc.line, .column = loc.column });
+    if (!gop.found_existing) {
+        gop.key_ptr.file = try arena.dupe(u8, rel);
+        gop.value_ptr.* = false;
+    }
+    if (hit) gop.value_ptr.* = true;
+}
+
 pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, environ: anytype) !u8 {
     const only = environ.get("LUS_COVERAGE_FILE");
     const table = pcs();
@@ -237,20 +250,37 @@ pub fn report(io: std.Io, gpa: std.mem.Allocator, dir_path: []const u8, environ:
     // every edge, so the report holds only the keys it keeps.
     var scratch_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer scratch_state.deinit();
-    for (0..n) |i| {
-        _ = scratch_state.reset(.retain_capacity);
-        symbols.clearRetainingCapacity();
-        si.getSymbols(io, arena, scratch_state.allocator(), table[i], false, &symbols) catch continue;
-        if (symbols.items.len == 0) continue;
-        const loc = symbols.items[0].source_location orelse continue;
-        const at = std.mem.indexOf(u8, loc.file_name, "/runtime/src/") orelse continue;
-        const rel = loc.file_name[at + "/runtime/src/".len ..];
-        const gop = try by_key.getOrPut(arena, .{ .file = rel, .line = loc.line, .column = loc.column });
-        if (!gop.found_existing) {
-            gop.key_ptr.file = try arena.dupe(u8, rel);
-            gop.value_ptr.* = false;
+    if (builtin.object_format == .elf) {
+        // The symbol lookup of the standard library scans every function
+        // of the binary for the name of each address, which an optimized
+        // build with hundreds of thousands of edges does not finish. The
+        // report needs only the source position, which the line table of
+        // the compile unit gives.
+        const self_path = "/proc/self/exe";
+        const file = try std.Io.Dir.cwd().openFile(io, self_path, .{});
+        defer file.close(io);
+        var ef = try std.debug.ElfFile.load(gpa, io, file, null, &.native(self_path));
+        defer ef.deinit(gpa);
+        const dwarf = &(ef.dwarf orelse return error.MissingDebugInfo);
+        const endian = builtin.cpu.arch.endian();
+        try dwarf.open(gpa, endian);
+        const slide = if (n > 0) try si.getModuleSlide(io, table[0]) else 0;
+        for (0..n) |i| {
+            _ = scratch_state.reset(.retain_capacity);
+            const vaddr = table[i] - slide;
+            const cu = dwarf.findCompileUnit(endian, vaddr) catch continue;
+            const loc = dwarf.getLineNumberInfo(gpa, scratch_state.allocator(), endian, cu, vaddr) catch continue;
+            try countEdge(arena, &by_key, loc, merged[i] != 0);
         }
-        if (merged[i] != 0) gop.value_ptr.* = true;
+    } else {
+        for (0..n) |i| {
+            _ = scratch_state.reset(.retain_capacity);
+            symbols.clearRetainingCapacity();
+            si.getSymbols(io, arena, scratch_state.allocator(), table[i], false, &symbols) catch continue;
+            if (symbols.items.len == 0) continue;
+            const loc = symbols.items[0].source_location orelse continue;
+            try countEdge(arena, &by_key, loc, merged[i] != 0);
+        }
     }
     if (environ.get("LUS_COVERAGE_MERGE")) |list| {
         var paths = std.mem.tokenizeScalar(u8, list, ',');
