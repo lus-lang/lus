@@ -40,7 +40,7 @@ const block = marker ++ "\n\n" ++ body ++ "\n" ++ end_marker;
 const section = "## Lus\n\n" ++ block ++ "\n";
 
 const body =
-    \\This project uses Lus. The skills in `.agents/skills/` explain how to write, test, and port Lus code, and they match the installed `lus`. After every change, run `lus check --json`, `lus fmt --write`, and `lus test`. `lus help NAME` prints the reference for a standard library function, and `lus help --search TEXT` finds one. Documentation, READMEs, doc comments, and other text for people follow the `lus-writing` skill.
+    \\This project uses Lus. The skills in `.agents/skills/` explain how to write, test, and port Lus code, and they match the installed `lus`. After every change, run `lus check --json`, `lus fmt --write`, and `lus test`. `lus help NAME` prints the reference for a standard library function, and `lus help --search TEXT` finds one. Prose in this project follows the `lus-writing` skill in `.agents/skills/lus-writing`. That covers the README, documentation, doc comments, commit messages, and the changelog.
     \\
 ;
 
@@ -235,7 +235,7 @@ test initProject {
     try std.testing.expect(std.mem.startsWith(u8, writing, "---\nname: lus-writing\n"));
     const agents = try tmp.dir.readFileAlloc(io, "AGENTS.md", a, .unlimited);
     try std.testing.expectEqualStrings("# Project\n\n" ++ section, agents);
-    try std.testing.expect(std.mem.indexOf(u8, agents, "`lus-writing` skill") != null);
+    try std.testing.expect(std.mem.indexOf(u8, agents, "Prose in this project follows the `lus-writing` skill") != null);
 
     // A second run changes nothing.
     out.clearRetainingCapacity();
