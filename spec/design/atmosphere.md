@@ -128,7 +128,7 @@ A request for `https://atmosp.here/LINE/NAME.lus` or `https://atmosp.here/LINE/N
 | `signed` | The time of signing, in RFC 3339 form in UTC, such as `"2027-02-01T12:00:00Z"`. |
 | `signature` | The Ed25519 signature, in base64, of the canonical JSON of the document without its `signature` field. |
 
-The document for a line address may change with every release, so it is served with `Cache-Control: max-age=300`. The document for a pinned address is served with `Cache-Control: immutable` apart from its `yanked` and `deprecated` fields, which the runtime reads again when it revalidates.
+The document for a line address may change with every release, so it is served with `Cache-Control: max-age=60`. The document for a pinned address changes only in its `yanked` and `deprecated` fields, so it is served with `Cache-Control: max-age=300`, and the runtime reads those fields again when it revalidates. [Caching and purging](#caching-and-purging) lists the headers of every address.
 
 The runtime decides compatibility from the document alone. The line in the URL selects which document the server returns. The runtime never trusts it. The runtime accepts the document when its own major version equals the major version in `lus`, its own minor version is at least the minor version in `lus`, and its own version is at least `lus_min`. Otherwise `require` raises an error that names both versions. A package for `2.0` therefore runs on Lus 2.1. A package for `2.1` fails on Lus 2.0. The user chose this rule together with the patch rule, so a package never runs on a line older than the one it was published for.
 
