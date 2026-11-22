@@ -52,6 +52,7 @@ pub fn open(l: *Thread) Error!void {
     defer l.top -= 1;
     const p = try aux.newLib(l, .fields, "fs.path", &path_funcs);
     try aux.setField(l, t, "path", Value.obj(.table, p));
+    try @import("watch.zig").open(l, t);
     try aux.setField(l, p, "separator", try l.newStringValue(sep_str));
     try aux.setField(l, p, "delimiter", try l.newStringValue(delimiter));
     try aux.setGlobal(l, "fs", Value.obj(.table, t));

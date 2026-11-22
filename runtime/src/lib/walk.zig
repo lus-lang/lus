@@ -35,7 +35,7 @@ pub const Filter = struct {
     g: glob.Glob,
     by_name: bool,
 
-    fn matches(f: *const Filter, rel: []const u8, name: []const u8) bool {
+    pub fn matches(f: *const Filter, rel: []const u8, name: []const u8) bool {
         return f.g.match(if (f.by_name) name else rel);
     }
 };
