@@ -341,18 +341,27 @@ fn handshakeFail(t: *Tls, code: c_int) net.Try {
 
 /// Runs the handshake of `s` to its end, waiting through the scheduler.
 /// A native that runs again after a wait calls it again, and it continues.
-pub fn handshake(l: *Thread, s: *net.Socket) Error!void {
+/// Each wait lasts at most the timeout of the socket, or, when `deadline`
+/// is not zero, until that time on the clock of `sched.now`. Returns false
+/// when a wait runs out.
+pub fn handshake(l: *Thread, s: *net.Socket, deadline: u64) Error!bool {
     while (true) {
         const t = bind(l, s);
-        if (t.handshaken) return;
+        if (t.handshaken) return true;
         const r = lus_tls_handshake(t.conn);
         if (r == 0) {
             t.handshaken = true;
             sched.opDone(l);
-            return;
+            return true;
         }
         if (r == want_read or r == want_write) {
-            if (!try sched.waitIo(l, s.stream.socket.handle, t.want, s.timeout_ms)) return l.raiseFmt("TLS handshake timeout", .{});
+            var wait = s.timeout_ms;
+            if (deadline != 0) {
+                const now = sched.now(l.g);
+                if (now >= deadline) return false;
+                wait = @intCast(@min((deadline - now + std.time.ns_per_ms - 1) / std.time.ns_per_ms, std.math.maxInt(i32)));
+            }
+            if (!try sched.waitIo(l, s.stream.socket.handle, t.want, wait)) return false;
             try net.stillOpen(l, s);
             continue;
         }
@@ -455,6 +464,14 @@ fn timeoutMs(l: *Thread, i: u32, v: Value) Error!i32 {
 /// argument `i`, when there is one. `default_name` is the host it
 /// connects to. With `allow_timeout`, the options may also set `timeout`.
 pub fn clientConfig(l: *Thread, i: u32, default_name: ?[]const u8, allow_timeout: bool, out: *ClientOptions) Error!*Config {
+    const v: Value = if (l.hasArg(i)) l.arg(i) else .nil;
+    if (!v.isNil() and v.tag != .table) _ = try aux.checkTable(l, i);
+    return clientConfigFrom(l, i, v, default_name, allow_timeout, out);
+}
+
+/// Builds the configuration of a client from the options table `v`, nil
+/// for none, which came in argument `i`.
+pub fn clientConfigFrom(l: *Thread, i: u32, v: Value, default_name: ?[]const u8, allow_timeout: bool, out: *ClientOptions) Error!*Config {
     try ensureInit(l);
     const cfg = lus_tls_config_new(0) orelse return l.raiseMem();
     errdefer lus_tls_config_free(cfg);
@@ -464,8 +481,9 @@ pub fn clientConfig(l: *Thread, i: u32, default_name: ?[]const u8, allow_timeout
     var cert: ?[]const u8 = null;
     var key: ?[]const u8 = null;
     var password: ?[]const u8 = null;
-    if (l.hasArg(i) and !l.arg(i).isNil()) {
-        const t = try aux.checkTable(l, i);
+    if (!v.isNil()) {
+        if (v.tag != .table) return aux.argError(l, i, "tls must be a table", .{});
+        const t = v.as(Table);
         var k: Value = .nil;
         while (table.next(t, k) catch null) |e| : (k = e.key) {
             const name = if (e.key.tag == .string) e.key.as(object.String).bytes() else "";
@@ -503,14 +521,13 @@ pub fn clientConfig(l: *Thread, i: u32, default_name: ?[]const u8, allow_timeout
 }
 
 /// The configuration of an HTTPS client for `host`, as `network.fetch`
-/// uses it: the certificates of the system, and HTTP/1.1 through ALPN.
-pub fn httpsConfig(l: *Thread) Error!*Config {
-    try ensureInit(l);
-    const cfg = lus_tls_config_new(0) orelse return l.raiseMem();
+/// uses it: the `tls` option of fetch in `v`, nil for none, which came in
+/// argument `i`, and HTTP/1.1 through ALPN.
+pub fn httpsConfig(l: *Thread, i: u32, v: Value, host: []const u8, out: *ClientOptions) Error!*Config {
+    const cfg = try clientConfigFrom(l, i, v, host, false, out);
     errdefer lus_tls_config_free(cfg);
     const alpn = "http/1.1\x00";
     if (lus_tls_config_alpn(cfg, alpn.ptr, alpn.len, 1) != 0) return l.raiseMem();
-    lus_tls_config_ca(cfg, try systemChain(l), 0);
     return cfg;
 }
 
@@ -621,6 +638,51 @@ pub const MemoryEnd = struct {
         return lus_tls_write(m.conn, data.ptr, data.len);
     }
 };
+
+extern fn lus_tls_test_identity(cn: [*:0]const u8, cert: [*]u8, cert_cap: usize, key: [*]u8, key_cap: usize) c_int;
+
+/// A key and a self-signed certificate for `cn`, as PEM text, which the
+/// unit tests and the fuzz targets make when they run.
+pub const TestIdentity = struct {
+    cert: [4096]u8 = undefined,
+    key: [1024]u8 = undefined,
+
+    pub fn make(id: *TestIdentity, cn: [*:0]const u8) !void {
+        if (!initProcess()) return error.TlsUnavailable;
+        if (lus_tls_test_identity(cn, &id.cert, id.cert.len, &id.key, id.key.len) != 0) return error.TlsFailure;
+    }
+
+    pub fn certPem(id: *const TestIdentity) []const u8 {
+        return std.mem.sliceTo(&id.cert, 0);
+    }
+
+    pub fn keyPem(id: *const TestIdentity) []const u8 {
+        return std.mem.sliceTo(&id.key, 0);
+    }
+};
+
+/// Gives the server configuration `cfg` the identity `id`.
+pub fn memoryOwn(cfg: *Config, id: *const TestIdentity) !void {
+    var which: c_int = 0;
+    const c = id.certPem();
+    const k = id.keyPem();
+    if (lus_tls_config_own(cfg, c.ptr, c.len, k.ptr, k.len, null, 0, &which) != 0) return error.TlsFailure;
+}
+
+/// Parses `bytes` as PEM certificates, DER certificates, and a private
+/// key, for the fuzz targets. Each parse may fail.
+pub fn parseAll(bytes: []const u8) void {
+    if (!initProcess()) return;
+    const chain = lus_tls_chain_new() orelse return;
+    defer lus_tls_chain_free(chain);
+    _ = lus_tls_chain_add_pem(chain, bytes.ptr, bytes.len);
+    _ = lus_tls_chain_add_der(chain, bytes.ptr, bytes.len);
+    const cfg = lus_tls_config_new(1) orelse return;
+    defer lus_tls_config_free(cfg);
+    var which: c_int = 0;
+    const half = bytes.len / 2;
+    _ = lus_tls_config_own(cfg, bytes.ptr, half, bytes[half..].ptr, bytes.len - half, null, 0, &which);
+}
 
 pub fn memoryConfig(server: bool) !*Config {
     if (!initProcess()) return error.TlsUnavailable;

@@ -199,38 +199,42 @@ local function fetch_streams_a_response_body_test()
     end, function(base)
         local status, body, headers = network.fetch(base .. "/events", "GET", nil, nil, { stream = true })
         assert(status == 200 and headers["content-type"] == "text/event-stream")
-        assert(type(body) == "userdata")
+        assert(type(body) == "thread")
         local lines = {}
-        for line in body:lines() do lines[#lines + 1] = txt(line) end
+        for line in network.lines(body) do lines[#lines + 1] = txt(line) end
         assert(table.concat(lines, "|") == "data: 1||data: 2||data: 3|", table.concat(lines, "|"))
-        assert(body:read() == nil)
+        assert(coroutine.status(body) == "dead")
     end)
 end
 
-local function fetch_reads_a_streamed_body_in_pieces_test()
+local function fetch_yields_a_streamed_body_in_parts_test()
     with_server(function(req)
-        return 200, string.rep("abcdefgh", 1000)
+        return 200, string.rep("abcdefgh", 20000)
     end, function(base)
         local _, body = network.fetch(base .. "/", "GET", nil, nil, { stream = true })
         local total = 0
         while true do
-            local part = body:read(1000)
-            if not part then break end
-            assert(#part <= 1000)
+            local ok, part = coroutine.resume(body)
+            assert(ok, part)
+            if part == nil then break end
+            assert(type(part) == "vector" and #part <= 65536)
             total = total + #part
         end
-        assert(total == 8000)
+        assert(total == 160000)
     end)
 end
 
-local function a_closed_body_raises_test()
+-- Closing the coroutine of a body ends the response early and closes its
+-- connection.
+local function closing_a_body_closes_its_connection_test()
     with_server(function(req)
-        return 200, "abc"
+        return 200, string.rep("z", 500000)
     end, function(base)
         local _, body = network.fetch(base .. "/", "GET", nil, nil, { stream = true })
-        body:close()
-        local ok, err = catch body:read()
-        assert(not ok and string.find(tostring(err), "closed body", 1, true))
+        local ok, part = coroutine.resume(body)
+        assert(ok and #part > 0)
+        assert(coroutine.close(body))
+        assert(coroutine.status(body) == "dead")
     end)
 end
 
@@ -246,6 +250,36 @@ local function fetch_sends_a_body_from_a_function_test()
         end)
         assert(status == 200 and txt(body) == "chunked abcd", txt(body))
     end)
+end
+
+local function fetch_sends_a_body_from_a_coroutine_test()
+    with_server(function(req)
+        return 200, `$(req.headers["transfer-encoding"]) $(txt(req.body))`
+    end, function(base)
+        local status, body = network.fetch(base .. "/up", "POST", nil, coroutine.create(function()
+            coroutine.yield("ab")
+            coroutine.yield(vector.fromstring("cd"))
+            return "ef"
+        end))
+        assert(status == 200 and txt(body) == "chunked abcdef", txt(body))
+    end)
+end
+
+local function fetch_names_the_step_that_timed_out_test()
+    local listener = tcp_bind("127.0.0.1", 0)
+    local _, port = listener:getsockname()
+    local server = coroutine.detach(coroutine.create(function()
+        local c = listener:accept()
+        c:receive("*l")
+        c:send("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n")
+        -- The client sends nothing more, so this waits until it gives up.
+        c:receive("*a")
+        c:close()
+    end))
+    local ok, err = catch network.fetch(`http://127.0.0.1:$(port)/`, "GET", nil, nil, { timeout = 0.1 })
+    assert(not ok and string.find(tostring(err), "fetch timeout while waiting for the response headers", 1, true), tostring(err))
+    coroutine.close(server)
+    listener:close()
 end
 
 local function fetch_sends_a_function_body_with_a_length_as_is_test()

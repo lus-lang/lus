@@ -3,10 +3,12 @@
 //! A body is decoded from the buffer of the socket that carries it, by
 //! its framing: a `Content-Length`, chunked transfer coding, or the end of
 //! the stream. The state of the decoding lives in the socket (`Body`), so
-//! a native that waits and runs again continues from there. A body reader
-//! (`network.body`) is the userdata that hands a body to Lus code piece
-//! by piece. `network.fetch` returns one for a response when its options
-//! ask for a stream, and `network.serve` gives one with every request.
+//! a native that waits and runs again continues from there. A body stream
+//! is a coroutine that yields a body part by part. Its body is the
+//! generator native `streamNext`, which a resume runs again for the next
+//! part (`state.Native.generator`). `network.fetch` returns one for a
+//! response when its options ask for a stream, and `network.serve` makes
+//! one for `req.reader`.
 //!
 //! `fetch` is a native that runs through phases kept in the socket: the
 //! TLS handshake, sending the request, sending a body that a function
@@ -43,8 +45,6 @@ const max_response_head = 64 * 1024;
 /// Every wait of `fetch` lasts at most 30 seconds, unless its options say
 /// otherwise.
 const fetch_timeout_ms = 30000;
-/// What one `read` of a body reader returns at most by default.
-const default_read = 64 * 1024;
 /// A line of a body reader holds at most 1 MiB by default.
 const default_line_limit = 1024 * 1024;
 
@@ -261,8 +261,8 @@ fn raiseBad(l: *Thread, b: *Body) Error {
 
 /// Reads more bytes of `b` into the buffer of `s`, waiting as needed. The
 /// end of the stream ends a body that runs to it, and truncates any
-/// other. `timeout` is the error of a wait that runs out.
-fn refill(l: *Thread, s: *net.Socket, b: *Body, comptime timeout: []const u8) Error!void {
+/// other.
+fn refill(l: *Thread, s: *net.Socket, b: *Body) Error!void {
     if (b.expect_continue) {
         // The client waits for this line before it sends the body.
         b.expect_continue = false;
@@ -274,7 +274,8 @@ fn refill(l: *Thread, s: *net.Socket, b: *Body, comptime timeout: []const u8) Er
             b.bad = 408;
             b.bad_msg = "request timeout";
         }
-        return l.raiseFmt(timeout, .{});
+        if (b.request) return l.raiseFmt("receive timeout", .{});
+        return l.raiseFmt("fetch timeout while reading the body", .{});
     };
     switch (got) {
         .got => {},
@@ -293,12 +294,12 @@ fn refill(l: *Thread, s: *net.Socket, b: *Body, comptime timeout: []const u8) Er
 
 /// Decodes more of `b`, at most `max` bytes, and reads the socket when
 /// the buffer holds too little. Raises when the body broke its framing.
-fn advance(l: *Thread, s: *net.Socket, b: *Body, max: usize, comptime timeout: []const u8) Error!void {
+fn advance(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!void {
     if (b.bad != 0) return raiseBad(l, b);
     switch (try decode(l, s, b, max)) {
         .progress => {},
         .bad => return raiseBad(l, b),
-        .more => try refill(l, s, b, timeout),
+        .more => try refill(l, s, b),
     }
 }
 
@@ -308,7 +309,7 @@ fn pull(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!bool {
     while (true) {
         if (b.pending.items.len > 0) return true;
         if (b.done) return false;
-        try advance(l, s, b, max, "receive timeout");
+        try advance(l, s, b, max);
     }
 }
 
@@ -359,32 +360,27 @@ pub fn startBody(l: *Thread, s: *net.Socket, framing: Framing, length: u64, requ
 }
 
 // ---------------------------------------------------------------------
-// Body readers
+// Body streams
 
-/// A body reader. Its user value is the socket, which it keeps alive.
+/// The state of a body stream: a coroutine whose body is the generator
+/// native `streamNext`, which holds this userdata as its upvalue. The
+/// user value of the userdata is the socket, which it keeps alive.
 pub const Reader = struct {
     sock: *net.Socket,
     gen: u32,
-    /// A response reader closes its socket at the end of the body and in
-    /// `close`. A request reader leaves the connection to the server.
+    /// A response stream closes its socket at the end of the body, when
+    /// its coroutine is closed, and when the collector frees it. A request
+    /// stream leaves the connection to the server.
     response: bool,
-    /// Set at the end of the body, after which every read returns nil
-    /// without the socket.
+    /// Set at the end of the body, after which the coroutine is dead.
     finished: bool = false,
     closed: bool = false,
 };
 
-pub const reader_methods = [_]aux.Reg{
-    .{ .name = "read", .func = readerRead },
-    .{ .name = "readline", .func = readerReadline },
-    .{ .name = "lines", .func = readerLines },
-    .{ .name = "readall", .func = readerReadall },
-    .{ .name = "close", .func = readerClose },
-};
+/// The most bytes that one resume of a body stream yields.
+const stream_chunk = 64 * 1024;
 
-/// Pushes a new reader of the body of `s`, which is at `sock_slot` on the
-/// stack.
-pub fn pushReader(l: *Thread, s: *net.Socket, slot: u32, response: bool) Error!*Reader {
+fn newReader(l: *Thread, s: *net.Socket, slot: u32, response: bool) Error!*Reader {
     const g = l.g;
     gc.maybeCollect(g);
     const mt: *Table = @ptrCast(@alignCast(g.ext.get(reader_name).?));
@@ -397,7 +393,22 @@ pub fn pushReader(l: *Thread, s: *net.Socket, slot: u32, response: bool) Error!*
     r.* = .{ .sock = s, .gen = s.body.?.gen, .response = response };
     try l.push(Value.obj(.userdata, u));
     gc.barrierBack(g, &u.hdr);
+    try @import("base.zig").registerFinalizer(l, &u.hdr, mt);
     return r;
+}
+
+/// Pushes a coroutine that yields the body of `s`, which is at `slot` on
+/// the stack, one part at a time.
+pub fn pushStream(l: *Thread, s: *net.Socket, slot: u32, response: bool) Error!void {
+    const g = l.g;
+    _ = try newReader(l, s, slot, response);
+    const n = state.newNative(g, streamNext, "body", 1) catch return l.raiseMem();
+    n.generator = true;
+    n.upvalues()[0] = l.stack[l.top - 1];
+    gc.barrierBack(g, &n.hdr);
+    l.stack[l.top - 1] = Value.obj(.native, n);
+    const co = try @import("coroutine.zig").newCoroutine(l, l.stack[l.top - 1]);
+    l.stack[l.top - 1] = Value.obj(.thread, co);
 }
 
 fn toReader(l: *Thread, v: Value) ?*Reader {
@@ -408,12 +419,7 @@ fn toReader(l: *Thread, v: Value) ?*Reader {
     return @ptrCast(@alignCast(u.data()));
 }
 
-/// The body of a reader that may still read, or null at its end.
-fn readerBody(l: *Thread, i: u32) Error!?*Body {
-    const r = toReader(l, l.arg(i)) orelse return aux.typeError(l, i, reader_name);
-    return bodyOf(l, r);
-}
-
+/// The body of a stream that may still read, or null at its end.
 fn bodyOf(l: *Thread, r: *Reader) Error!?*Body {
     if (r.closed) return l.raiseFmt("attempt to use a closed body", .{});
     if (r.finished) return null;
@@ -425,105 +431,42 @@ fn bodyOf(l: *Thread, r: *Reader) Error!?*Body {
     return b;
 }
 
-/// Marks a reader whose body ended. A response reader closes its socket,
+/// Marks a stream whose body ended. A response stream closes its socket,
 /// since `fetch` asks the server to close the connection after the
 /// response.
-fn finish(l: *Thread, i: u32) void {
-    finishReader(l, toReader(l, l.arg(i)).?);
-}
-
 fn finishReader(l: *Thread, r: *Reader) void {
     r.finished = true;
     if (r.response) net.closeSocketOf(l, r.sock);
 }
 
-/// reader:read(n): up to `n` bytes of the body as a vector, or nil at its
-/// end.
-fn readerRead(l: *Thread) Error!u32 {
-    const max: usize = blk: {
-        if (l.arg(2).isNil()) break :blk default_read;
-        const n = try aux.checkInt(l, 2);
-        if (n <= 0) return aux.argError(l, 2, "size must be positive", .{});
-        break :blk @intCast(@min(n, std.math.maxInt(u32)));
-    };
-    const b = (try readerBody(l, 1)) orelse return aux.retNil(l);
-    const r = toReader(l, l.arg(1)).?;
-    if (!try pull(l, r.sock, b, max)) {
-        finish(l, 1);
-        return aux.retNil(l);
+fn closeReader(g: *state.Global, ctx: *anyopaque) void {
+    const r: *Reader = @ptrCast(@alignCast(ctx));
+    if (r.closed) return;
+    r.closed = true;
+    if (r.response and !r.finished and !r.sock.closed) net.closeSocketOf(g.main_thread, r.sock);
+}
+
+/// The body of a stream coroutine: yields the next part of the body as a
+/// vector, and returns nothing at its end. A resume runs it again for the
+/// next part (`state.Native.generator`).
+fn streamNext(l: *Thread) Error!u32 {
+    const rv = l.frame().native.?.upvalues()[0];
+    const r = toReader(l, rv).?;
+    const b = (try bodyOf(l, r)) orelse return 0;
+    if (!try pull(l, r.sock, b, stream_chunk)) {
+        finishReader(l, r);
+        return 0;
     }
-    try takePending(l, b, @min(max, b.pending.items.len));
-    return 1;
-}
-
-/// reader:readline(limit): the next line of the body without its line
-/// end, as a vector, or nil at its end. The last line may lack a line end.
-fn readerReadline(l: *Thread) Error!u32 {
-    const limit: usize = blk: {
-        if (l.arg(2).isNil()) break :blk default_line_limit;
-        const n = try aux.checkInt(l, 2);
-        if (n <= 0) return aux.argError(l, 2, "limit must be positive", .{});
-        break :blk @intCast(@min(n, std.math.maxInt(u32)));
-    };
-    const b = (try readerBody(l, 1)) orelse return aux.retNil(l);
-    const r = toReader(l, l.arg(1)).?;
-    var scanned: usize = 0;
-    while (true) {
-        if (std.mem.indexOfScalarPos(u8, b.pending.items, scanned, '\n')) |nl| {
-            var len = nl;
-            if (len > 0 and b.pending.items[len - 1] == '\r') len -= 1;
-            if (len > limit) return l.raiseFmt("line too long", .{});
-            try takePending(l, b, len);
-            const rest = b.pending.items.len - (nl - len + 1);
-            std.mem.copyForwards(u8, b.pending.items[0..rest], b.pending.items[nl - len + 1 ..]);
-            b.pending.items.len = rest;
-            return 1;
-        }
-        scanned = b.pending.items.len;
-        if (scanned > limit + 1) return l.raiseFmt("line too long", .{});
-        if (b.done) {
-            if (b.pending.items.len == 0) {
-                finish(l, 1);
-                return aux.retNil(l);
-            }
-            try takePending(l, b, b.pending.items.len);
-            return 1;
-        }
-        // The decoded bytes stay pending while the next part arrives.
-        try advance(l, r.sock, b, 16384, "receive timeout");
+    try takePending(l, b, @min(stream_chunk, b.pending.items.len));
+    // Closing the coroutine early closes the connection of a response.
+    const t = try sched.ensureTask(l);
+    if (t.ctx == null) {
+        t.ctx = r;
+        t.cancel = closeReader;
     }
-}
-
-/// reader:lines(): an iterator over the lines of the body, for a
-/// generic `for`.
-fn readerLines(l: *Thread) Error!u32 {
-    _ = toReader(l, l.arg(1)) orelse return aux.typeError(l, 1, reader_name);
-    l.top = l.base() + 1;
-    try l.push(try aux.native(l, linesNext, "lines"));
-    try l.push(l.stack[l.base()]);
-    return 2;
-}
-
-/// The iterator of `lines`, which leaves out the control value that the
-/// generic `for` passes.
-fn linesNext(l: *Thread) Error!u32 {
-    l.top = l.base() + 1;
-    return readerReadline(l);
-}
-
-/// Reads the rest of the body of `r` into one vector, at most `limit`
-/// bytes, and pushes it. Raises `too_large` past the limit.
-fn readRest(l: *Thread, r: *Reader, limit: usize, comptime too_large: []const u8) Error!void {
-    const b = (try bodyOf(l, r)) orelse return l.push(Value.obj(.vector, try vector.newVector(l, &.{})));
-    while (!b.done) {
-        if (b.pending.items.len > limit) return tooLarge(l, r.sock, too_large);
-        try advance(l, r.sock, b, 1 << 20, "receive timeout");
-    }
-    if (b.pending.items.len > limit) return tooLarge(l, r.sock, too_large);
-    const v = try vector.newVectorFrom(l, &b.pending);
-    b.pending = .empty;
-    try l.push(Value.obj(.vector, v));
-    finishReader(l, r);
+    // A part that came after a wait is a value, not another wait.
+    sched.endWait(t);
+    return @import("coroutine.zig").yieldValues(l, 1);
 }
 
 /// Raises `msg` for a body over its limit. A request body that goes over
@@ -538,38 +481,125 @@ fn tooLarge(l: *Thread, s: *net.Socket, comptime msg: []const u8) Error {
     return l.raiseFmt(msg, .{});
 }
 
-/// reader:readall(limit): the rest of the body as one vector.
-fn readerReadall(l: *Thread) Error!u32 {
-    const limit: usize = blk: {
-        if (l.arg(2).isNil()) break :blk fetch_max_body;
-        const n = try aux.checkInt(l, 2);
-        if (n <= 0) return aux.argError(l, 2, "limit must be positive", .{});
-        break :blk @intCast(@min(n, std.math.maxInt(u32)));
-    };
-    const r = toReader(l, l.arg(1)) orelse return aux.typeError(l, 1, reader_name);
-    try readRest(l, r, limit, "body too large");
-    return 1;
+pub fn readerTostring(l: *Thread) Error!u32 {
+    _ = toReader(l, l.arg(1)) orelse return aux.typeError(l, 1, reader_name);
+    return aux.retStr(l, "body");
 }
 
-/// reader:close(): stops reading. A response reader closes its
-/// connection. A request reader leaves the rest of the body to the server.
-fn readerClose(l: *Thread) Error!u32 {
-    const r = toReader(l, l.arg(1)) orelse return aux.typeError(l, 1, reader_name);
-    if (r.closed) return 0;
-    r.closed = true;
-    if (r.response and !r.finished) net.closeSocketOf(l, r.sock);
+/// __gc of the state of a stream: a response stream that nothing reads
+/// any more closes its connection.
+pub fn readerGc(l: *Thread) Error!u32 {
+    const r = toReader(l, l.arg(1)) orelse return 0;
+    closeReader(l.g, r);
     return 0;
 }
 
-pub fn readerTostring(l: *Thread) Error!u32 {
-    const r = toReader(l, l.arg(1)) orelse return aux.typeError(l, 1, reader_name);
-    if (r.closed) return aux.retStr(l, "body (closed)");
-    var buf: [64]u8 = undefined;
-    return aux.retStr(l, std.fmt.bufPrint(&buf, "body (0x{x})", .{l.arg(1).payload}) catch "body");
+// ---------------------------------------------------------------------
+// network.lines
+
+/// The state of `network.lines`: the text received after the last line.
+/// Its user value is the coroutine that yields the parts.
+const Lines = struct {
+    pending: std.ArrayList(u8) = .empty,
+    done: bool = false,
+};
+
+const lines_name = "network.lines";
+
+pub fn linesGc(l: *Thread) Error!u32 {
+    const v = l.arg(1);
+    if (v.tag != .userdata) return 0;
+    const u = v.as(Userdata);
+    if (u.size != @sizeOf(Lines)) return 0;
+    const st: *Lines = @ptrCast(@alignCast(u.data()));
+    st.pending.deinit(l.g.gpa);
+    st.pending = .empty;
+    return 0;
 }
 
-pub fn readerCloseMeta(l: *Thread) Error!u32 {
-    return readerClose(l);
+/// network.lines(stream, max_bytes): an iterator for a generic `for` over
+/// the lines of the parts that a coroutine yields.
+pub fn lines(l: *Thread) Error!u32 {
+    const g = l.g;
+    if (l.arg(1).tag != .thread) return aux.typeError(l, 1, "coroutine");
+    const limit = try aux.optInt(l, 2, default_line_limit);
+    if (limit <= 0) return aux.argError(l, 2, "max_bytes must be positive", .{});
+    gc.maybeCollect(g);
+    const mt: *Table = @ptrCast(@alignCast(g.ext.get(lines_name).?));
+    const u = gc.alloc(g, Userdata, .userdata, Userdata.allocSize(@sizeOf(Lines), 2)) catch return l.raiseMem();
+    u.size = @sizeOf(Lines);
+    u.nuser = 2;
+    u.metatable = mt;
+    u.userValues()[0] = l.arg(1);
+    u.userValues()[1] = Value.int(limit);
+    const st: *Lines = @ptrCast(@alignCast(u.data()));
+    st.* = .{};
+    l.top = l.base() + 2;
+    try l.push(Value.obj(.userdata, u));
+    gc.barrierBack(g, &u.hdr);
+    try @import("base.zig").registerFinalizer(l, &u.hdr, mt);
+    const next = try aux.native(l, linesNext, "lines");
+    const state_v = l.stack[l.top - 1];
+    l.stack[l.top - 1] = next;
+    try l.push(state_v);
+    return 2;
+}
+
+/// The step of `network.lines`: the next line without its line end, or
+/// nil at the end of the parts.
+fn linesNext(l: *Thread) Error!u32 {
+    const v = l.arg(1);
+    if (v.tag != .userdata) return aux.typeError(l, 1, "lines state");
+    const u = v.as(Userdata);
+    const st: *Lines = @ptrCast(@alignCast(u.data()));
+    const co = u.userValues()[0].as(Thread);
+    const limit: usize = @intCast(u.userValues()[1].asInt());
+    const gpa = l.g.gpa;
+    l.top = l.base() + 1;
+    while (true) {
+        if (std.mem.indexOfScalar(u8, st.pending.items, '\n')) |nl| {
+            var len = nl;
+            if (len > 0 and st.pending.items[len - 1] == '\r') len -= 1;
+            if (len > limit) return l.raiseFmt("line too long", .{});
+            const line = try vector.newVector(l, st.pending.items[0..len]);
+            const rest = st.pending.items.len - nl - 1;
+            std.mem.copyForwards(u8, st.pending.items[0..rest], st.pending.items[nl + 1 ..]);
+            st.pending.items.len = rest;
+            return aux.ret(l, Value.obj(.vector, line));
+        }
+        if (st.pending.items.len > limit + 1) return l.raiseFmt("line too long", .{});
+        if (st.done or co.status == .dead or co.status == .ok or co.status == .err) {
+            st.done = true;
+            if (st.pending.items.len == 0) return aux.retNil(l);
+            const line = try vector.newVector(l, st.pending.items);
+            st.pending.clearRetainingCapacity();
+            return aux.ret(l, Value.obj(.vector, line));
+        }
+        const n = try @import("coroutine.zig").resumeCo(l, co, 0);
+        if (n == 0) {
+            st.done = true;
+            continue;
+        }
+        const part = l.stack[l.top - n];
+        l.top -= n;
+        switch (part.tag) {
+            .nil => st.done = co.status != .suspended,
+            .string => st.pending.appendSlice(gpa, part.as(object.String).bytes()) catch return l.raiseMem(),
+            .vector => st.pending.appendSlice(gpa, part.as(object.Vector).bytes.items) catch return l.raiseMem(),
+            else => return l.raiseFmt("network.lines: the coroutine yielded a {s} (string or vector expected)", .{l.typeNameOf(part)}),
+        }
+    }
+}
+
+pub fn registerLines(l: *Thread) Error!void {
+    const g = l.g;
+    const mt = try l.newTable(0, 2);
+    try l.push(Value.obj(.table, mt));
+    defer l.top -= 1;
+    try aux.setField(l, mt, "__gc", try aux.native(l, linesGc, "gc"));
+    try aux.setField(l, mt, "__name", try l.newStringValue(lines_name));
+    try aux.setField(l, g.registry.as(Table), lines_name, Value.obj(.table, mt));
+    g.ext.put(g.gpa, lines_name, mt) catch return l.raiseMem();
 }
 
 // ---------------------------------------------------------------------
@@ -609,26 +639,47 @@ pub fn drainRequest(l: *Thread, s: *net.Socket, limit: usize) Error!bool {
     }
 }
 
-/// readbody(req): reads the whole body of the request table `req`, at
-/// most `limit` bytes, stores it as `req.body`, and returns it. The
-/// `__index` of request tables calls it.
-pub fn requestBody(l: *Thread, limit: usize) Error!u32 {
-    const req = try aux.checkTable(l, 1);
-    const rv = try aux.getField(l, req, "reader");
-    const r = toReader(l, rv) orelse return aux.retNil(l);
-    if (r.finished) return l.raiseFmt("the request body was already read through req.reader", .{});
-    if (r.sock.body) |b| {
-        if (b.gen == r.gen) {
-            if (b.started and !b.whole) return l.raiseFmt("the request body was already read through req.reader", .{});
-            b.whole = true;
-            b.limit = limit;
-            if (b.framing == .length and b.left > limit) return tooLarge(l, r.sock, "request body too large");
-        }
+/// The body of the request that `req_id` names on the connection `s`,
+/// or an error when that request is over.
+fn currentBody(l: *Thread, s: *net.Socket, req_id: usize, current: usize) Error!*Body {
+    const b = s.body orelse return l.raiseFmt("the body is no longer available", .{});
+    if (!b.request or req_id != current) return l.raiseFmt("the body is no longer available", .{});
+    return b;
+}
+
+/// readbody(conn, req): reads the whole body of the request table `req`
+/// on the connection `conn`, at most `limit` bytes, stores it as
+/// `req.body`, and returns it. `current` identifies the request that the
+/// connection serves now. The `__index` of request tables calls it.
+pub fn requestBody(l: *Thread, s: *net.Socket, current: usize, limit: usize) Error!u32 {
+    const req = try aux.checkTable(l, 2);
+    const b = try currentBody(l, s, @intFromPtr(req), current);
+    if (b.started and !b.whole) return l.raiseFmt("the request body was already read through req.reader", .{});
+    b.whole = true;
+    b.limit = limit;
+    if (b.framing == .length and b.left > limit) return tooLarge(l, s, "request body too large");
+    while (!b.done) {
+        if (b.pending.items.len > limit) return tooLarge(l, s, "request body too large");
+        try advance(l, s, b, 1 << 20);
     }
-    try readRest(l, r, limit, "request body too large");
-    const body = l.stack[l.top - 1];
-    try ops.rawSet(l, req, try l.newStringValue("body"), body);
-    return aux.ret(l, body);
+    if (b.pending.items.len > limit) return tooLarge(l, s, "request body too large");
+    const v = try vector.newVectorFrom(l, &b.pending);
+    b.pending = .empty;
+    try l.push(Value.obj(.vector, v));
+    try aux.setField(l, req, "body", l.stack[l.top - 1]);
+    return 1;
+}
+
+/// readerof(conn, req): the coroutine that yields the body of the request
+/// table `req` on the connection `conn`, which it stores as `req.reader`.
+pub fn requestStream(l: *Thread, s: *net.Socket, current: usize) Error!u32 {
+    const req = try aux.checkTable(l, 2);
+    const b = try currentBody(l, s, @intFromPtr(req), current);
+    if (b.whole) return l.raiseFmt("the request body was already read through req.body", .{});
+    l.top = l.base() + 2;
+    try pushStream(l, s, l.base(), false);
+    try aux.setField(l, req, "reader", l.stack[l.top - 1]);
+    return 1;
 }
 
 // ---------------------------------------------------------------------
@@ -686,6 +737,30 @@ pub const Fetch = struct {
     status: i64 = 0,
     /// Where the search for the end of the head continues.
     scan: usize = 0,
+    /// The `timeout` option, and the end of the step in progress on the
+    /// clock of `sched.now` for the steps that have one, or zero.
+    timeout_ms: i32 = fetch_timeout_ms,
+    deadline: u64 = 0,
+    /// The host, for the messages of the errors.
+    host: [256]u8 = undefined,
+    host_len: usize = 0,
+
+    fn startStep(f: *Fetch, g: *state.Global) void {
+        f.deadline = if (f.timeout_ms < 0) 0 else sched.now(g) + @as(u64, @intCast(f.timeout_ms)) * std.time.ns_per_ms;
+    }
+
+    /// The milliseconds left in the step, -1 without a limit, or null once
+    /// the step ran out of time.
+    fn left(f: *Fetch, g: *state.Global) ?i32 {
+        if (f.deadline == 0) return -1;
+        const n = sched.now(g);
+        if (n >= f.deadline) return null;
+        return @intCast(@min((f.deadline - n + std.time.ns_per_ms - 1) / std.time.ns_per_ms, std.math.maxInt(i32)));
+    }
+
+    fn hostName(f: *const Fetch) []const u8 {
+        return f.host[0..f.host_len];
+    }
 
     pub fn deinit(f: *Fetch, gpa: std.mem.Allocator) void {
         f.out.deinit(gpa);
@@ -844,6 +919,8 @@ fn setHeader(l: *Thread, t: *Table, key: []const u8, val: []const u8) Error!void
 const FetchOptions = struct {
     stream: bool = false,
     timeout_ms: i32 = fetch_timeout_ms,
+    /// The `tls` option, nil for none.
+    tls: Value = .nil,
 };
 
 fn fetchOptions(l: *Thread) Error!FetchOptions {
@@ -865,6 +942,8 @@ fn fetchOptions(l: *Thread) Error!FetchOptions {
             if (std.math.isNan(secs) or secs == 0) return aux.argError(l, 5, "timeout must be positive, or negative for no timeout", .{});
             const ms = @ceil(secs * 1000);
             o.timeout_ms = if (secs < 0) -1 else if (ms >= std.math.maxInt(i32)) std.math.maxInt(i32) else @intFromFloat(ms);
+        } else if (std.mem.eql(u8, name, "tls")) {
+            o.tls = e.val;
         } else {
             return aux.argError(l, 5, "unknown option '{s}'", .{name});
         }
@@ -890,13 +969,13 @@ pub fn fetch(l: *Thread) Error!u32 {
     const url = try aux.checkBytes(l, 1);
     const method = (try aux.optString(l, 2, "GET")).?;
     const body_arg = l.arg(4);
-    const body_fn = body_arg.tag == .closure or body_arg.tag == .native;
+    const body_fn = isProducer(body_arg);
     const body: ?[]const u8 = switch (body_arg.tag) {
         .nil => null,
         .string => body_arg.as(object.String).bytes(),
         .vector => body_arg.as(object.Vector).bytes.items,
-        .closure, .native => null,
-        else => return aux.typeError(l, 4, "string, vector, or function"),
+        .closure, .native, .thread => null,
+        else => return aux.typeError(l, 4, "string, vector, function, or coroutine"),
     };
     const o = try fetchOptions(l);
     if (std.mem.indexOfAny(u8, method, "\r\n") != null) return l.raiseFmt("invalid characters in HTTP method", .{});
@@ -909,9 +988,11 @@ pub fn fetch(l: *Thread) Error!u32 {
     defer req.deinit(gpa);
     try buildRequest(l, &req, method, u, body, body_fn);
 
-    const cfg: ?*tls.Config = if (u.https) try tls.httpsConfig(l) else null;
+    if (!u.https and !o.tls.isNil()) return aux.argError(l, 5, "the tls option needs an https URL", .{});
+    var tls_opts: tls.ClientOptions = .{};
+    const cfg: ?*tls.Config = if (u.https) try tls.httpsConfig(l, 5, o.tls, u.host, &tls_opts) else null;
     defer if (cfg) |c| tls.freeConfig(c);
-    const stream, const peer = try net.connectTo(l, u.host, u.port);
+    const stream, const peer = try net.connectTo(l, u.host, u.port, .{ .timeout_ms = o.timeout_ms, .prefix = "fetch " });
     const s = net.newObject(l, net.Socket, net.socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer }) catch |e| {
         stream.close(l.g.io);
         return e;
@@ -921,12 +1002,15 @@ pub fn fetch(l: *Thread) Error!u32 {
         net.releaseSocket(l, s);
         return l.raiseMem();
     };
-    f.* = .{ .stream = o.stream, .head_method = std.ascii.eqlIgnoreCase(method, "HEAD") };
+    f.* = .{ .stream = o.stream, .head_method = std.ascii.eqlIgnoreCase(method, "HEAD"), .timeout_ms = o.timeout_ms };
+    @memcpy(f.host[0..u.host.len], u.host);
+    f.host_len = u.host.len;
+    f.startStep(l.g);
     s.fetch = f;
     f.out = req;
     req = .empty;
     if (cfg) |c| {
-        tls.attach(l, s, c, u.host) catch |e| {
+        tls.attach(l, s, c, tls_opts.servername) catch |e| {
             net.releaseSocket(l, s);
             return e;
         };
@@ -948,17 +1032,19 @@ fn fetchPhases(l: *Thread, s: *net.Socket) Error!u32 {
     const b = l.base();
     while (true) switch (f.phase) {
         .handshake => {
-            try tls.handshake(l, s);
+            if (!try tls.handshake(l, s, f.deadline)) return l.raiseFmt("fetch timeout in the TLS handshake with {s}", .{f.hostName()});
             f.phase = .send;
         },
         .send => {
             try sendOut(l, s, f);
-            f.phase = if (l.arg(4).tag == .closure or l.arg(4).tag == .native) .generate else .head;
+            f.phase = if (isProducer(l.arg(4))) .generate else .head;
+            if (f.phase == .head) f.startStep(l.g);
         },
         .generate => {
             if (f.out_off >= f.out.items.len) {
                 if (f.last) {
                     f.phase = .head;
+                    f.startStep(l.g);
                     continue;
                 }
                 try nextChunk(l, f);
@@ -969,6 +1055,8 @@ fn fetchPhases(l: *Thread, s: *net.Socket) Error!u32 {
             if (try readHead(l, s, f)) |framing| {
                 const body_len = framing.len;
                 _ = try startBody(l, s, framing.framing, body_len, false);
+                // Each wait for the body lasts the timeout.
+                s.timeout_ms = f.timeout_ms;
                 f.phase = .body;
             }
         },
@@ -977,7 +1065,7 @@ fn fetchPhases(l: *Thread, s: *net.Socket) Error!u32 {
             if (f.stream) {
                 // The reader takes the place of the body, and the socket
                 // stays open until the body ends or the reader closes.
-                _ = try pushReader(l, s, b + sock_slot, true);
+                try pushStream(l, s, b + sock_slot, true);
                 const reader = l.stack[l.top - 1];
                 l.stack[b] = Value.int(status);
                 l.stack[b + 1] = reader;
@@ -1010,7 +1098,7 @@ fn sendOut(l: *Thread, s: *net.Socket, f: *Fetch) Error!void {
                 sched.opDone(l);
             },
             .again => {
-                if (!try sched.waitIo(l, s.stream.socket.handle, net.againDir(s, .write), s.timeout_ms)) return l.raiseFmt("fetch timeout", .{});
+                if (!try sched.waitIo(l, s.stream.socket.handle, net.againDir(s, .write), s.timeout_ms)) return l.raiseFmt("fetch timeout while sending the request", .{});
                 try net.stillOpen(l, s);
             },
             .fail => |e| return l.raiseFmt("failed to send request: {s}", .{net.errText(e)}),
@@ -1020,28 +1108,54 @@ fn sendOut(l: *Thread, s: *net.Socket, f: *Fetch) Error!void {
     f.out_off = 0;
 }
 
-/// Calls the function that produces the request body for its next chunk
-/// and frames it in `f.out`.
+/// Whether a request body is a function or a coroutine that produces it.
+fn isProducer(v: Value) bool {
+    return v.tag == .closure or v.tag == .native or v.tag == .thread;
+}
+
+/// Takes the next chunk of a request body from the function that returns
+/// it or the coroutine that yields it, and frames it in `f.out`. A
+/// function ends the body by returning nil, and a coroutine by ending,
+/// after the value it returns, if any.
 fn nextChunk(l: *Thread, f: *Fetch) Error!void {
     const gpa = l.g.gpa;
-    const v = try ops.call1(l, l.arg(4), &.{});
+    const src = l.arg(4);
+    var v: Value = .nil;
+    var last = false;
+    if (src.tag == .thread) {
+        const co = src.as(Thread);
+        if (co.status != .suspended) {
+            last = true;
+        } else {
+            const top = l.top;
+            const n = try @import("coroutine.zig").resumeCo(l, co, 0);
+            if (n > 0) v = l.stack[l.top - n];
+            l.top = top;
+            last = co.status != .suspended;
+        }
+    } else {
+        v = try ops.call1(l, src, &.{});
+        last = v.isNil();
+    }
     switch (v.tag) {
-        .nil => {
-            f.last = true;
-            if (requestIsChunked(l)) f.out.appendSlice(gpa, "0\r\n\r\n") catch return l.raiseMem();
-        },
+        .nil => {},
         .string, .vector => {
             const data = if (v.tag == .string) v.as(object.String).bytes() else v.as(object.Vector).bytes.items;
-            if (data.len == 0) return;
-            if (requestIsChunked(l)) {
-                f.out.print(gpa, "{x}\r\n", .{data.len}) catch return l.raiseMem();
-                f.out.appendSlice(gpa, data) catch return l.raiseMem();
-                f.out.appendSlice(gpa, "\r\n") catch return l.raiseMem();
-            } else {
-                f.out.appendSlice(gpa, data) catch return l.raiseMem();
+            if (data.len > 0) {
+                if (requestIsChunked(l)) {
+                    f.out.print(gpa, "{x}\r\n", .{data.len}) catch return l.raiseMem();
+                    f.out.appendSlice(gpa, data) catch return l.raiseMem();
+                    f.out.appendSlice(gpa, "\r\n") catch return l.raiseMem();
+                } else {
+                    f.out.appendSlice(gpa, data) catch return l.raiseMem();
+                }
             }
         },
-        else => return l.raiseFmt("the request body function returned a {s} (string, vector, or nil expected)", .{l.typeNameOf(v)}),
+        else => return l.raiseFmt("the request body produced a {s} (string, vector, or nil expected)", .{l.typeNameOf(v)}),
+    }
+    if (last) {
+        f.last = true;
+        if (requestIsChunked(l)) f.out.appendSlice(gpa, "0\r\n\r\n") catch return l.raiseMem();
     }
 }
 
@@ -1069,7 +1183,9 @@ fn readHead(l: *Thread, s: *net.Socket, f: *Fetch) Error!?HeadResult {
         const end = headEnd(buf, &f.scan);
         if (end) |e| return try parseHead(l, s, f, buf[0..e.head], e.next, b);
         if (buf.len > max_response_head) return l.raiseFmt("response head too large", .{});
-        const got = (try net.tryFill(l, s, 16384)) orelse return l.raiseFmt("fetch timeout", .{});
+        // The status line and the headers have one deadline together.
+        s.timeout_ms = f.left(l.g) orelse return l.raiseFmt("fetch timeout while waiting for the response headers", .{});
+        const got = (try net.tryFill(l, s, 16384)) orelse return l.raiseFmt("fetch timeout while waiting for the response headers", .{});
         switch (got) {
             .got => {},
             .eof => return l.raiseFmt("failed to read response", .{}),
@@ -1093,8 +1209,8 @@ fn headEnd(buf: []const u8, scan: *usize) ?struct { head: usize, next: usize } {
 }
 
 fn parseHead(l: *Thread, s: *net.Socket, f: *Fetch, head: []const u8, next: usize, b: u32) Error!HeadResult {
-    var lines = std.mem.splitScalar(u8, head, '\n');
-    const first = std.mem.trimEnd(u8, lines.first(), "\r");
+    var rows = std.mem.splitScalar(u8, head, '\n');
+    const first = std.mem.trimEnd(u8, rows.first(), "\r");
     const status = parseStatus(first) orelse return l.raiseFmt("invalid HTTP response: {s}", .{first[0..@min(first.len, 200)]});
     const headers = try l.newTable(0, 8);
     l.top = b + headers_slot;
@@ -1103,7 +1219,7 @@ fn parseHead(l: *Thread, s: *net.Socket, f: *Fetch, head: []const u8, next: usiz
     var chunked = false;
     var lower: std.ArrayList(u8) = .empty;
     defer lower.deinit(l.g.gpa);
-    while (lines.next()) |raw| {
+    while (rows.next()) |raw| {
         const hl = std.mem.trimEnd(u8, raw, "\r");
         if (hl.len == 0) continue;
         const colon = std.mem.indexOfScalar(u8, hl, ':') orelse continue;
@@ -1145,7 +1261,7 @@ fn readWhole(l: *Thread, s: *net.Socket) Error!Value {
     const body = s.body.?;
     while (!body.done) {
         if (body.pending.items.len > fetch_max_body) return l.raiseFmt("response body too large", .{});
-        try advance(l, s, body, 1 << 20, "fetch timeout");
+        try advance(l, s, body, 1 << 20);
     }
     if (body.pending.items.len > fetch_max_body) return l.raiseFmt("response body too large", .{});
     const v = try vector.newVectorFrom(l, &body.pending);

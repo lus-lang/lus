@@ -1,7 +1,8 @@
-//! The `network` library: TCP client and server sockets, UDP sockets,
-//! `network.fetch`, an HTTP and HTTPS client, and `network.serve`, an HTTP
-//! server (`serve.zig`). Sockets are userdata. Every operation blocks its
-//! caller, optionally bounded by a timeout set with `settimeout`.
+//! The `network` library: TCP client and server sockets, TLS over them
+//! (`tls.zig`), UDP sockets, `network.fetch`, an HTTP and HTTPS client
+//! (`http.zig`), and `network.serve`, an HTTP server (`serve.zig`).
+//! Sockets are userdata. Every operation blocks its caller, optionally
+//! bounded by a timeout set with `settimeout`.
 //!
 //! TCP connect, accept, send, and receive and UDP receive and sendto are
 //! suspension points (`spec/design/coroutines.md`). Inside a detached
@@ -16,10 +17,9 @@
 //! Data received from the network are vectors, and every send accepts a
 //! string or a vector (spec/design/strings.md).
 //!
-//! Host names resolve through `std.Io.net.HostName.lookup`. HTTPS uses
-//! `std.crypto.tls.Client` and verifies the server against the system
-//! certificate bundle. The standard library has no TLS server, so there is
-//! no server side TLS.
+//! Host names resolve through `std.Io.net.HostName.lookup`. A TLS socket
+//! is a socket whose `tls` field holds a connection of `tls.zig`, and its
+//! receives and sends carry plain text through it.
 //!
 //! On Windows an operation asks `WSAPoll` whether the socket is ready
 //! before it runs its blocking call, and it blocks in that call when the
@@ -148,11 +148,13 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "close", .func = udpClose },
         .{ .name = "settimeout", .func = udpSettimeout },
     }, udpGc, udpTostring);
-    try makeMetatable(l, http.reader_name, &http.reader_methods, http.readerCloseMeta, http.readerTostring);
+    try makeMetatable(l, http.reader_name, &.{}, http.readerGc, http.readerTostring);
+    try http.registerLines(l);
 
     const t = try aux.newLib(l, .fields, "network", &.{
         .{ .name = "fetch", .func = http.fetch },
         .{ .name = "serve", .func = @import("serve.zig").serve },
+        .{ .name = "lines", .func = http.lines },
     });
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
@@ -495,6 +497,8 @@ const Connecting = struct {
     i: usize = 0,
     fd: posix.fd_t = -1,
     last: anyerror = error.ConnectionRefused,
+    /// When the attempt gives up, on the clock of `sched.now`, or zero.
+    deadline: u64 = 0,
 
     fn release(g: *state.Global, ctx: *anyopaque) void {
         const c: *Connecting = @ptrCast(@alignCast(ctx));
@@ -553,7 +557,7 @@ fn connectResult(fd: posix.fd_t) ?anyerror {
 
 /// `connectHost` for a thread that shares the state with detached
 /// coroutines: the attempt waits through the scheduler.
-fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+fn connectScheduled(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
     const g = l.g;
     const t = try sched.ensureTask(l);
     var c: *Connecting = undefined;
@@ -561,7 +565,7 @@ fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.
         c = @ptrCast(@alignCast(t.ctx.?));
     } else {
         c = g.gpa.create(Connecting) catch return l.raiseMem();
-        c.* = .{};
+        c.* = .{ .deadline = limit.deadline(g) };
         errdefer g.gpa.destroy(c);
         c.n = (try resolve(l, host, port, null, &c.addrs)).len;
         t.ctx = c;
@@ -586,7 +590,8 @@ fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.
         }
         if (!done) {
             if (!sched.readyNow(c.fd, .write)) {
-                _ = try sched.waitIo(l, c.fd, .write, -1);
+                const left = limit.left(g, c.deadline) orelse return limit.raise(l, host, port);
+                _ = try sched.waitIo(l, c.fd, .write, left);
                 continue;
             }
             if (connectResult(c.fd)) |e| {
@@ -816,6 +821,7 @@ const afd = if (is_windows) struct {
         iosb: w.IO_STATUS_BLOCK = undefined,
         target: Target = .{ .address = undefined },
         local: net.IpAddress = undefined,
+        deadline: u64 = 0,
 
         fn release(g: *state.Global, ctx: *anyopaque) void {
             const c: *Attempt = @ptrCast(@alignCast(ctx));
@@ -893,7 +899,7 @@ const afd = if (is_windows) struct {
     /// address whose request cannot be made this way, or ends in a way
     /// the driver does not explain, connects through the standard
     /// library, which waits in the call.
-    fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+    fn connectScheduled(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
         const g = l.g;
         const io = g.io;
         const t = try sched.ensureTask(l);
@@ -902,7 +908,7 @@ const afd = if (is_windows) struct {
             c = @ptrCast(@alignCast(t.ctx.?));
         } else {
             c = g.gpa.create(Attempt) catch return l.raiseMem();
-            c.* = .{};
+            c.* = .{ .deadline = limit.deadline(g) };
             errdefer g.gpa.destroy(c);
             c.n = (try resolve(l, host, port, null, &c.addrs)).len;
             t.ctx = c;
@@ -922,6 +928,7 @@ const afd = if (is_windows) struct {
             };
             if (failed == null) {
                 if (!c.done()) {
+                    if (limit.left(g, c.deadline) == null) return limit.raise(l, host, port);
                     // Each wait is short and has a deadline of its own.
                     sched.opDone(l);
                     _ = try sched.waitIo(l, c.handle.?, .write, connect_tick_ms);
@@ -1044,15 +1051,45 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
 
 /// Connects to the first address of `host` that accepts, raising "cannot
 /// connect" when none does.
-/// Connects to `host` and `port`, waiting through the scheduler.
-pub fn connectTo(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
-    return connectHost(l, host, port);
+/// How long a connection may take: `timeout_ms` for all the addresses
+/// of the host, or no limit when it is negative. A connection that runs
+/// out of time raises "`prefix`timeout while connecting to HOST:PORT".
+pub const ConnectLimit = struct {
+    timeout_ms: i32 = -1,
+    prefix: []const u8 = "",
+
+    fn deadline(c: ConnectLimit, g: *state.Global) u64 {
+        if (c.timeout_ms < 0) return 0;
+        return sched.now(g) + @as(u64, @intCast(c.timeout_ms)) * std.time.ns_per_ms;
+    }
+
+    /// The milliseconds left before `at`, -1 without a deadline, or null
+    /// once it passed.
+    fn left(c: ConnectLimit, g: *state.Global, at: u64) ?i32 {
+        _ = c;
+        if (at == 0) return -1;
+        const n = sched.now(g);
+        if (n >= at) return null;
+        return @intCast(@min((at - n + std.time.ns_per_ms - 1) / std.time.ns_per_ms, std.math.maxInt(i32)));
+    }
+
+    fn raise(c: ConnectLimit, l: *Thread, host: []const u8, port: u16) Error {
+        return l.raiseFmt("{s}timeout while connecting to {s}:{d}", .{ c.prefix, host, port });
+    }
+};
+
+/// Connects to `host` and `port` within `limit`, waiting through the
+/// scheduler.
+pub fn connectTo(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
+    return connectHost(l, host, port, limit);
 }
 
-fn connectHost(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
-    if (sched.active(l.g) or sched.restarted(l)) {
-        if (comptime is_windows) return afd.connectScheduled(l, host, port);
-        return connectScheduled(l, host, port);
+fn connectHost(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
+    // A connection with a limit waits through the scheduler, which bounds
+    // the wait, also where no detached coroutine runs.
+    if (sched.active(l.g) or sched.restarted(l) or limit.timeout_ms >= 0) {
+        if (comptime is_windows) return afd.connectScheduled(l, host, port, limit);
+        return connectScheduled(l, host, port, limit);
     }
     var addrs: [max_addresses]net.IpAddress = undefined;
     const list = try resolve(l, host, port, null, &addrs);
@@ -1079,7 +1116,7 @@ fn tcpConnect(l: *Thread) Error!u32 {
     const port = try checkPort(l, 2, false);
     var hp: [512]u8 = undefined;
     try pledge.require(l, "network:tcp", hostPort(&hp, host, port));
-    const stream, const peer = try connectHost(l, host, port);
+    const stream, const peer = try connectHost(l, host, port, .{});
     errdefer stream.close(l.g.io);
     _ = try newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer });
     return 1;
@@ -1088,10 +1125,14 @@ fn tcpConnect(l: *Thread) Error!u32 {
 /// Runs the handshake of a TLS socket. A failure that does not suspend
 /// closes the socket, which then can carry nothing.
 fn handshakeOrClose(l: *Thread, s: *Socket) Error!void {
-    tls.handshake(l, s) catch |e| {
+    const done = tls.handshake(l, s, 0) catch |e| {
         if (!l.yielding) releaseSocket(l, s);
         return e;
     };
+    if (!done) {
+        releaseSocket(l, s);
+        return l.raiseFmt("TLS handshake timeout", .{});
+    }
 }
 
 /// network.tls.connect(host, port, options): a TCP connection with TLS
@@ -1116,7 +1157,7 @@ fn tlsConnect(l: *Thread) Error!u32 {
     var o: tls.ClientOptions = .{};
     const cfg = try tls.clientConfig(l, 3, host, true, &o);
     defer tls.freeConfig(cfg);
-    const stream, const peer = try connectHost(l, host, port);
+    const stream, const peer = try connectHost(l, host, port, .{ .timeout_ms = o.timeout_ms orelse -1 });
     const s = newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer }) catch |e| {
         stream.close(l.g.io);
         return e;

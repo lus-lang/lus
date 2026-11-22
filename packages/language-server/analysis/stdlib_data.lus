@@ -5484,8 +5484,10 @@ The `<` operator compares the same integers as signed values. [`math.maxinteger`
   ["network"] = {
     children = {
       "network.fetch",
+      "network.lines",
       "network.serve",
       "network.tcp",
+      "network.tls",
       "network.udp",
     },
     kind = "module",
@@ -5498,13 +5500,25 @@ The `<` operator compares the same integers as signed values. [`math.maxinteger`
   ["network.fetch"] = {
     children = {},
     description = [[
-Sends one HTTP or HTTPS request to `url` and returns the response status, the response body as a vector, and the response headers.
+Sends one HTTP or HTTPS request to `url` and returns the response status, the response body, and the response headers.
 
-`url` is a string that starts with `http://` or `https://`. The arguments after it are positional and optional. `method` is a string that defaults to `"GET"`. `headers` is a table from header names to values. A value is a string, a number, or a list of them, and a list sends one header line for each element in order. `body` is the request body as a string or a vector and defaults to an empty body. The request carries `Host`, `Connection: close`, and `User-Agent: Lus/VERSION`, where `VERSION` is the full version of the runtime such as `2.0.0`, except those that `headers` names in any case, then the entries of `headers`, then `Content-Length` when the body is not empty.
+`url` is a string that starts with `http://` or `https://`. The arguments after it are positional and optional. `method` is a string that defaults to `"GET"`. `headers` is a table from header names to values. A value is a string, a number, or a list of them, and a list sends one header line for each element in order. `body` is the request body and defaults to an empty body. The request carries `Host`, `Connection: close`, and `User-Agent: Lus/VERSION`, where `VERSION` is the full version of the runtime such as `2.0.0`, except those that `headers` names in any case, then the entries of `headers`, then the framing of the body.
 
-On success the call returns three values: the integer status code, the body as a vector, and a table from lowercase header names to their values. A response to `"HEAD"`, and a 1xx, 204, or 304 response, has an empty body whatever its `Content-Length` says. A response header that appears more than once holds its values joined by `", "` in the order they arrived. Every status counts as a response, so a 404 or a 500 is returned like a 200, and a redirect returns its 3xx status together with its `location` header. A program that expects text decodes the body with [`vector.tostring`](/manual/api#vector.tostring).
+A string or a vector `body` goes out whole after a `Content-Length` header. A coroutine or a function produces the request body as it goes out. `fetch` resumes a coroutine again and again, sends each chunk that it yields, and ends the body when the coroutine ends, after a chunk that the coroutine returns at its end. `fetch` calls a function again and again, sends each chunk that it returns, and ends the body when it returns `nil`. A chunk is a string or a vector, and an empty chunk or a `nil` that a coroutine yields sends nothing. Such a body goes out with `Transfer-Encoding: chunked`, unless `headers` sets `Content-Length`, in which case the chunks go out as they are and must add up to that length. Any other value raises an error, and so does an error of the coroutine or the function.
 
-Every failure raises an error. A host that cannot be reached raises an error such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"`. A URL with another scheme raises `"invalid URL: URL"`, and a URL, method, or header that contains a line break raises an error before anything is sent. A body over 64 MiB raises `"response body too large"`, and a body shorter than its `Content-Length` raises `"truncated response body"`. HTTPS verifies the certificate of the server against the certificates of the system and raises an error when the verification fails. The call requires `network:http` for `url`.
+`options` is a table with any of these fields:
+
+| Field | Value |
+| --- | --- |
+| `stream` | `true` to return the body as a coroutine that yields it, described below. It defaults to `false`. |
+| `timeout` | Seconds for each step of the request, described below, which defaults to 30. A negative value waits without limit. |
+| `tls` | A table of client TLS options for an `https` URL, as [`network.tls`](/manual/api#network.tls) describes them, such as `{ ca = pem }` for a private certificate authority. ALPN always offers `http/1.1`. |
+
+`timeout` bounds each step of the request. Connecting, the TLS handshake, and receiving the status line and the headers each must end within `timeout` seconds of their start, and connecting counts every address of the host. Sending the request and reading the body wait at most `timeout` seconds for each part, so a long upload or a stream that keeps sending stays open as long as it moves. A step that runs out of time raises an error that names it: `"fetch timeout while connecting to HOST:PORT"`, `"fetch timeout in the TLS handshake with HOST"`, `"fetch timeout while sending the request"`, `"fetch timeout while waiting for the response headers"`, or `"fetch timeout while reading the body"`.
+
+On success the call returns three values: the integer status code, the body, and a table from lowercase header names to their values. The body is a vector, or a coroutine when `options.stream` is `true`. Each resume of the coroutine returns `true` and the next part of the body as a vector, between 1 and 65536 bytes, as soon as it arrives. At the end of the body the coroutine closes the connection and ends, so its last resume returns `true` alone. A failure while it reads, such as a body that ends early or a step that runs out of time, makes the resume return `false` and the error. [`coroutine.close`](/manual/api#coroutine.close) ends the coroutine before the end of the body and closes the connection, and so does the collector for a coroutine that nothing refers to any more. [`network.lines`](/manual/api#network.lines) reads such a coroutine line by line, which suits server-sent events and other streams of text. A response to `"HEAD"`, and a 1xx, 204, or 304 response, has an empty body whatever its `Content-Length` says. A response without `Content-Length` and without chunked transfer coding ends with the connection. A response header that appears more than once holds its values joined by `", "` in the order they arrived. Every status counts as a response, so a 404 or a 500 is returned like a 200, and a redirect returns its 3xx status together with its `location` header. A program that expects text decodes the body with [`vector.tostring`](/manual/api#vector.tostring).
+
+Every failure raises an error. A host that cannot be reached raises an error such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"`. A URL with another scheme raises `"invalid URL: URL"`, and a URL, method, or header that contains a line break raises an error before anything is sent. A whole body over 64 MiB raises `"response body too large"`, and a body shorter than its `Content-Length` raises `"truncated response body"`. HTTPS verifies the certificate of the server against the certificates of the system, or against the `ca` of the `tls` option, and a certificate that does not verify raises `"certificate verification failed for HOST: REASON"`. A `tls` option with an `http` URL and an unknown option raise a `bad argument` error. The call requires `network:http` for `url`.
 
 The following example requests a JSON document from a public server, so it needs network access to run.
 
@@ -5516,7 +5530,33 @@ print(headers["content-type"])   --> application/json
 local data = fromjson(vector.tostring(body))
 ```
 
-Outside a detached coroutine, `fetch` runs the detached coroutines while it waits for the response, so the main chunk can fetch from a [`network.serve`](/manual/api#network.serve) server that runs in the same state. Inside a detached coroutine, `fetch` blocks the whole state while it waits, the other detached coroutines included.
+Every wait of `fetch` goes through the scheduler. Inside a detached coroutine it suspends the coroutine, and the other detached coroutines run in the meantime. Anywhere else it blocks its caller and runs the detached coroutines while it waits, so the main chunk can fetch from a [`network.serve`](/manual/api#network.serve) server that runs in the same state.
+
+The following example sends a request body from a coroutine and streams the response from a server of the same state.
+
+```lus
+pledge("network")
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    local got = vector.tostring(req.body)
+    local n = 0
+    return 200, function()
+        n = n + 1
+        if n <= 2 then return `line $(n) of $(got)\n` end
+    end
+end)
+local upload = coroutine.create(function()
+    coroutine.yield("up")
+    coroutine.yield("load")
+end)
+local status, body = network.fetch(`http://127.0.0.1:$(port)/`, "POST", nil, upload, { stream = true })
+for line in network.lines(body) do print(vector.tostring(line)) end
+--> line 1 of upload
+--> line 2 of upload
+coroutine.close(serving)
+server:close()
+```
 
 **Requires pledge:** `network:http`]],
     kind = "function",
@@ -5541,7 +5581,12 @@ Outside a detached coroutine, `fetch` runs the detached coroutines while it wait
       {
         name = "body",
         optional = true,
-        type = "string|vector",
+        type = "string|vector|function|thread",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
       },
     },
     parent = "network",
@@ -5555,7 +5600,7 @@ Outside a detached coroutine, `fetch` runs the detached coroutines while it wait
       },
       {
         name = "body",
-        type = "vector",
+        type = "vector|thread",
       },
       {
         name = "headers",
@@ -5565,6 +5610,62 @@ Outside a detached coroutine, `fetch` runs the detached coroutines while it wait
     short_name = "fetch",
     since = "0.1.0",
     source = "stdlib/network/fetch.md",
+    stability = "stable",
+  },
+  ["network.lines"] = {
+    children = {},
+    description = [[
+Returns an iterator for a generic `for` over the lines of the text that a coroutine yields in parts.
+
+`stream` is a coroutine that yields strings or vectors, such as the body of a response that [`network.fetch`](/manual/api#network.fetch) streams or the `reader` of a request of [`network.serve`](/manual/api#network.serve). The iterator resumes `stream` whenever it needs more text, and a line may span several parts. Each step yields one line as a vector without its line end. A line ends with LF, and a CR before the LF goes too. The last line may lack a line end. The loop ends when the coroutine ends, and a part of `nil` that a coroutine yields without ending adds nothing.
+
+`max_bytes` is a positive integer that limits a line and defaults to 1 MiB. A longer line raises `"line too long"`. An error that the coroutine raises comes out of the step that resumed it, and a part that is neither a string, a vector, nor `nil` raises an error that names its type. A `max_bytes` that is not positive raises a `bad argument` error. The function needs no permission.
+
+The following example reads the events of a stream of server-sent events, where each event is a `data:` line and an empty line.
+
+```lus
+pledge("network")
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    return 200, coroutine.create(function()
+        for n = 1, 2 do coroutine.yield(`data: tick $(n)\n\n`) end
+    end), { ["Content-Type"] = "text/event-stream" }
+end)
+local _, events = network.fetch(`http://127.0.0.1:$(port)/events`, "GET", nil, nil, { stream = true })
+for line in network.lines(events) do
+    local data = vector.tostring(line):match("^data: (.*)")
+    if data then print(data) end
+end
+--> tick 1
+--> tick 2
+coroutine.close(serving)
+server:close()
+```]],
+    kind = "function",
+    module = "network",
+    name = "network.lines",
+    origin = "lus",
+    params = {
+      {
+        name = "stream",
+        type = "thread",
+      },
+      {
+        name = "max_bytes",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "network",
+    returns = {
+      {
+        type = "function",
+      },
+    },
+    short_name = "lines",
+    since = "2.0.0",
+    source = "stdlib/network/lines.md",
     stability = "stable",
   },
   ["network.serve"] = {
@@ -5586,13 +5687,47 @@ The handler receives one table per request:
 | `path` | The request target up to the first `?`, as the client sent it. |
 | `query` | The text after the first `?`, or the empty string. |
 | `headers` | A table from lowercase header names to their values. A header that repeats joins its values with `", "`. |
-| `body` | The request body as a vector, which is empty for a request without a body. |
+| `ip` | The numeric address of the client, from the accepted connection, such as `"127.0.0.1"`. |
+| `port` | The port of the client, from the accepted connection. |
+| `body` | The whole request body as a vector, which is empty for a request without a body. The server reads it on the first use of the field. |
+| `reader` | A coroutine that yields the request body part by part, which the server makes on the first use of the field. |
 
-The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. A header value may also be a list of strings and integers, which sends one header line for each element in order, so a response can set several cookies with `{ ["Set-Cookie"] = { "a=1", "b=2" } }`. An empty list sends no line. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
+`ip` and `port` name the other end of the TCP connection. Behind a reverse proxy, a load balancer, or a service such as Cloudflare, that end is the proxy, so they hold its address. The address of the client then travels in a header that the proxy sets, such as `X-Forwarded-For` or `CF-Connecting-IP`, and the application decides which proxies it trusts to set it.
+
+The server calls the handler once the request line and the headers arrived, and the body stays in the connection. The handler reads it whole through `req.body`, which reads the rest of the body and stores the vector in the table, or part by part through `req.reader`. Each resume of `req.reader` returns `true` and the next part of the body as a vector, as soon as it arrives, and the coroutine ends at the end of the body. A failure while it reads makes the resume return `false` and the error. [`network.lines`](/manual/api#network.lines) reads it line by line. Reading `req.body` after `req.reader` yielded a part raises `"the request body was already read through req.reader"`, and using `req.reader` after `req.body` raises `"the request body was already read through req.body"`. Both work until the handler returns. Later, reading either field raises `"the body is no longer available"`, and a resume of a `req.reader` that the handler kept returns `false` and that error. When the request carries `Expect: 100-continue`, the server sends the interim response `100 Continue` on the first read of the body. Whatever the handler left of the body, the server reads and drops before the next request.
+
+The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string, a vector, a coroutine, or a function, and defaults to an empty body. `headers` is a table from header names to strings or integers. A header value may also be a list of strings and integers, which sends one header line for each element in order, so a response can set several cookies with `{ ["Set-Cookie"] = { "a=1", "b=2" } }`. An empty list sends no line. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
+
+A coroutine or a function body streams the response. The server sends the status and the headers, then resumes the coroutine again and again, or calls the function again and again. Each chunk that the coroutine yields or the function returns is a string or a vector, and the server sends it before the next resume or call, so each chunk leaves as soon as it exists. The coroutine ends the body by ending, after a chunk that it returns at its end, and the function ends it by returning `nil`. An empty chunk, and a `nil` that a coroutine yields without ending, send nothing. The coroutine of `req.reader` is such a body, so a handler that returns it sends the request body back as it arrives. The server sends the chunks with `Transfer-Encoding: chunked` and keeps the connection open for the next request. When the handler sets `Content-Length`, or the client speaks HTTP/1.0, the chunks go out as they are and the connection closes after the last one. The coroutine and the function may wait on sockets and suspend between chunks, so a handler that waits for events streams them as they come. A response to `HEAD`, and a status that carries no body, send the headers and never resume the coroutine or call the function. When the coroutine or the function raises an error or produces a value other than a string, a vector, or `nil`, the server reports the error and closes the connection after the chunks it sent, so the client sees a body that ended early.
+
+The following example streams server-sent events. Each event is a `data:` line and an empty line, and the response has the content type `text/event-stream`.
+
+```lus
+pledge("network")
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    return 200, coroutine.create(function()
+        for n = 1, 3 do
+            coroutine.yield(`data: {"count": $(n)}\n\n`)
+        end
+    end), { ["Content-Type"] = "text/event-stream", ["Cache-Control"] = "no-cache" }
+end)
+local status, events = network.fetch(`http://127.0.0.1:$(port)/events`, "GET", nil, nil, { stream = true })
+for line in network.lines(events) do
+    local data = vector.tostring(line):match("^data: (.*)$")
+    if data then print(fromjson(data).count) end
+end
+--> 1
+--> 2
+--> 3
+coroutine.close(serving)
+server:close()
+```
 
 When the handler raises an error, or returns values that make no response, such as a status that is not an integer, the server answers 500 with an empty body, reports the error, and closes that connection. The other connections continue. It writes the error to standard error, in the form `lus: network.serve: message`, or passes the error value to the `on_error` function of the options.
 
-A handler upgrades the connection to another protocol, such as a WebSocket, by returning the status 101 and a function in place of the body. The server sends the 101 response with the headers of the handler and no body, then calls the function with the TCP socket of the connection, in the coroutine of the connection. Bytes that the client sent after the request are already in the buffer of the socket, so the first `receive` returns them. The connection closes when the function returns. When the function raises an error, the server reports it like an error of a handler and closes the connection without a further response. The socket keeps the `idle_timeout` of the server until the function calls `settimeout`. A function body with any other status, and the status 101 with any other body, count as values that make no response.
+A handler upgrades the connection to another protocol, such as a WebSocket, by returning the status 101 and a function in place of the body. The server sends the 101 response with the headers of the handler and no body, then calls the function with the TCP socket of the connection, in the coroutine of the connection. Bytes that the client sent after the request are already in the buffer of the socket, so the first `receive` returns them. The connection closes when the function returns. When the function raises an error, the server reports it like an error of a handler and closes the connection without a further response. The socket keeps the `idle_timeout` of the server until the function calls `settimeout`. The status 101 with any other body counts as values that make no response.
 
 When the request carries a `Sec-WebSocket-Key` header, the server adds the headers of a WebSocket handshake that the handler does not set: `Upgrade: websocket`, `Connection: Upgrade`, and the `Sec-WebSocket-Accept` value that RFC 6455 derives from the key. The function then exchanges WebSocket frames over the socket. A handler that checks `req.headers.upgrade` before it upgrades refuses other requests with an ordinary status.
 
@@ -5622,12 +5757,15 @@ server:close()
 | `idle_timeout` | How many seconds a connection may spend without progress, which defaults to 60. A negative value lets a connection wait without limit. |
 | `max_connections` | How many connections the server keeps open at once. It defaults to half of the file descriptors that the process may open, and to 65536 at most. |
 | `on_error` | A function that receives the error of a handler in place of the line on standard error. |
+| `tls` | A table with `cert` and `key`, PEM text of the certificate chain and the private key of the server, and `password` for an encrypted key. A list of such tables serves one certificate for each name. |
 
-A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that stays idle for `idle_timeout` between two requests closes. One that stops in the middle of a request is answered with 408 and closes, and one that stops reading its response closes as well. A handler may take as long as it needs.
+A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that stays idle for `idle_timeout` between two requests closes. One that stops in the middle of the head of a request, or in the middle of a body that the handler reads, is answered with 408 and closes, and one that stops reading its response closes as well. A handler may take as long as it needs.
+
+With the `tls` option the server serves HTTPS. Every connection runs a TLS handshake inside its first read, so a client that never finishes it closes after `idle_timeout`, and a client that speaks plain HTTP gets no response. The server offers HTTP/1.1 through ALPN and chooses the certificate by the name that the client sends through SNI: the first certificate whose DNS names, or whose common name when it lists none, match the name. A client that sends no name, or a name that no certificate carries, gets the first certificate. The server reads the certificates once, when `serve` starts, and a certificate that does not parse raises a `bad argument` error before the server accepts anything. A server picks up renewed certificates when the program calls `serve` again. An upgrade with the status 101 hands the function a TLS socket, so a WebSocket over HTTPS works like one over HTTP.
 
 While `max_connections` connections are open, further clients wait in the queue of the system, and the server accepts the next one when a connection closes. When the system has no file descriptor or no memory left for a new connection, the server waits for a connection to close, or for a moment, and accepts again.
 
-The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines, and a request body to 16 MiB. A chunked body gives each chunk size as hexadecimal digits alone, and the line that starts a chunk is limited to 1 KiB. The framing of a chunked body, which is its chunk lines and its trailers, is limited to 64 KiB plus 8 bytes for every byte of the body. A request over a limit is answered with 431 or 413, and a malformed request with 400. The connection closes after each of these answers.
+The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines. A chunked body gives each chunk size as hexadecimal digits alone, and the line that starts a chunk is limited to 1 KiB. The framing of a chunked body, which is its chunk lines and its trailers, is limited to 64 KiB plus 8 bytes for every byte of the body. A head over a limit is answered with 431, and a malformed head with 400, before the handler runs. `req.body` holds at most 16 MiB, and `req.reader` yields a body of any size. A body that breaks its framing or its limit while the handler reads it raises an error in the handler. When the handler lets that error end it, the server answers 400, 413, or 431 in place of 500. Whatever the handler returns, a connection whose body broke closes after the response, and so does a connection whose unread body is over 16 MiB or waits for a `100 Continue` that the server never sent.
 
 The following example serves in a detached coroutine on a port that the system chooses, sends one request over a TCP socket, and stops the server.
 
@@ -5646,7 +5784,7 @@ coroutine.close(serving)
 server:close()
 ```
 
-The example talks to its server through a TCP socket because [`network.fetch`](/manual/api#network.fetch) blocks the whole state, the server coroutines included.
+The example talks to its server through a TCP socket so that every byte on the wire shows. [`network.fetch`](/manual/api#network.fetch) reaches a server of the same state too.
 
 **Requires pledges:** `network:server`, `network:tcp`]],
     kind = "function",
@@ -5691,7 +5829,7 @@ The example talks to its server through a TCP socket because [`network.fetch`](/
     description = [[
 The `network.tcp` table opens TCP connections with [`network.tcp.connect`](/manual/api#network.tcp.connect) and listens for them with [`network.tcp.bind`](/manual/api#network.tcp.bind).
 
-A TCP socket has the methods `send(data)`, `receive(pattern, max_bytes)`, `settimeout(seconds)`, `getsockname()`, `getpeername()`, and `close()`. A server has the methods `accept()`, `settimeout(seconds)`, `getsockname()`, and `close()`, and `accept` returns a socket. A method other than `close` on a closed socket raises `"attempt to use a closed socket"`, and on a closed server `"attempt to use a closed server"`. A second `close` does nothing. The collector closes a socket or a server that nothing refers to any more, and one declared with the `<close>` attribute closes when its variable goes out of scope.
+A TCP socket has the methods `send(data)`, `receive(pattern, max_bytes)`, `settimeout(seconds)`, `getsockname()`, `getpeername()`, `starttls(options)`, `tlsinfo()`, and `close()`. [`network.tls`](/manual/api#network.tls) describes the sockets that carry TLS. A server has the methods `accept()`, `settimeout(seconds)`, `getsockname()`, and `close()`, and `accept` returns a socket. A method other than `close` on a closed socket raises `"attempt to use a closed socket"`, and on a closed server `"attempt to use a closed server"`. A second `close` does nothing. The collector closes a socket or a server that nothing refers to any more, and one declared with the `<close>` attribute closes when its variable goes out of scope.
 
 `connect`, `accept`, `send`, and `receive` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and the other detached coroutines run in the meantime. Anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait in both cases, and an operation whose timeout runs out raises `"receive timeout"`, `"send timeout"`, or `"accept timeout"` and leaves the socket usable.
 
@@ -5776,7 +5914,7 @@ Opens a TCP connection to `host` and `port` and returns the connected socket.
 
 `host` is a host name or a numeric address. `port` is an integer from 1 through 65535. The call waits until the connection is established, as described in [`network.tcp`](/manual/api#network.tcp).
 
-On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, and `close`. `send(data)` sends a string or a vector in full and returns the number of bytes sent. Every failure to connect raises an error, such as `"cannot connect to 127.0.0.1:1: Connection refused"` or `"cannot resolve 'HOST': Domain name not found"`. A port out of range raises a `bad argument` error. The call requires `network:tcp` for `host:port`.
+On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, `starttls`, `tlsinfo`, and `close`. `send(data)` sends a string or a vector in full and returns the number of bytes sent. Every failure to connect raises an error, such as `"cannot connect to 127.0.0.1:1: Connection refused"` or `"cannot resolve 'HOST': Domain name not found"`. A port out of range raises a `bad argument` error. The call requires `network:tcp` for `host:port`.
 
 The following example connects to a local server and reads the addresses of both ends.
 
@@ -5819,6 +5957,110 @@ A failure of an open connection during `send` or `receive`, such as a reset by t
     short_name = "connect",
     since = "0.1.0",
     source = "stdlib/network/tcp/connect.md",
+    stability = "stable",
+  },
+  ["network.tls"] = {
+    children = {
+      "network.tls.connect",
+    },
+    description = [[
+The `network.tls` table opens TLS connections with [`network.tls.connect`](/manual/api#network.tls.connect). A plain TCP socket starts TLS with [`tcp_socket:starttls`](/manual/api#tcp_socket:starttls), and [`network.serve`](/manual/api#network.serve) serves HTTPS with its `tls` option.
+
+A _TLS socket_ is a TCP socket whose bytes travel through TLS 1.2 or TLS 1.3. It has every method of a TCP socket, and `send` and `receive` carry plain text while the bytes on the wire are encrypted. [`tcp_socket:tlsinfo`](/manual/api#tcp_socket:tlsinfo) reports the protocol version, the cipher suite, and the protocol that ALPN chose. Closing a TLS socket sends a TLS `close_notify` alert to the peer before the TCP connection closes. A peer that ends the TCP connection without that alert ends the stream like one that sends it, so `receive("*a")` returns what arrived.
+
+The handshake, `send`, and `receive` wait for the network as the operations of a TCP socket do. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and the other detached coroutines run in the meantime. Anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait.
+
+A client verifies the certificate of the server by default. The certificate must chain to a trusted certificate authority and must name the server: `servername` must match one of its DNS names or, when the certificate lists none, its common name. The trusted authorities are the certificates of the system, which load once per process on the first connection that needs them, or the authorities of the `ca` option.
+
+The options of a client connection form a table with any of these fields:
+
+| Field | Value |
+| --- | --- |
+| `servername` | The name that the client sends in SNI and checks the certificate against. It defaults to the host of `network.tls.connect`. |
+| `alpn` | A list of between 1 and 16 protocol names, such as `{ "h2", "http/1.1" }`, that the client offers through ALPN. |
+| `ca` | PEM text of the certificate authorities to trust in place of those of the system. |
+| `cert`, `key` | PEM text of a client certificate chain and of its private key, which the client presents when the server asks for one. Each needs the other. |
+| `password` | The password of an encrypted private key. |
+| `verify` | `false` to accept any certificate of the server. It defaults to `true`. |
+| `timeout` | Seconds for each wait of `network.tls.connect`, the handshake included, as `settimeout` takes them. |
+
+PEM text is a string or a vector. A program reads a certificate file with `io.open`, which needs `fs:read` for the file. An unknown field raises `"bad argument #N to 'connect' (unknown option 'NAME')"`, and a field of the wrong type raises a `bad argument` error that names it. A `ca` that holds no certificate raises an error that says so, and a `cert` or `key` that does not parse raises `"invalid certificate"` or `"invalid private key"` with the reason.
+
+A handshake that fails raises an error and closes the socket. A certificate that does not verify raises `"certificate verification failed for NAME: REASON"`, such as `"certificate verification failed for example.com: The certificate is not correctly signed by the trusted CA"`. Any other failure raises `"TLS handshake failed: REASON"`, and a handshake whose timeout runs out raises `"TLS handshake timeout"`. A failure of the TLS layer after the handshake makes `send` and `receive` return `nil` and a message that starts with `"TLS: "`.
+
+The WebAssembly build has no network library, so `network.tls` is absent there.
+
+```lus nocheck
+pledge("network")
+local sock <close> = network.tls.connect("example.com", 443, { alpn = { "http/1.1" } })
+sock:send("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+print(sock:tlsinfo().version)                       --> TLSv1.3
+print(vector.tostring(sock:receive("*l")))          --> HTTP/1.1 200 OK
+```]],
+    kind = "module",
+    module = "network",
+    name = "network.tls",
+    origin = "lus",
+    parent = "network",
+    short_name = "tls",
+    since = "2.0.0",
+    source = "stdlib/network/tls/_module.md",
+    stability = "stable",
+  },
+  ["network.tls.connect"] = {
+    children = {},
+    description = [[
+Opens a TCP connection to `host` and `port`, runs a TLS handshake over it, and returns the TLS socket.
+
+`host` is a host name or a numeric address, and `port` is an integer from 1 through 65535. `options` is the table of client options that [`network.tls`](/manual/api#network.tls) describes. The call connects as [`network.tcp.connect`](/manual/api#network.tcp.connect) does, then runs the handshake, and returns once the handshake ends. The `timeout` option bounds every wait of the handshake and becomes the timeout of the socket.
+
+On success the call returns one socket with the methods of a TCP socket and [`tlsinfo`](/manual/api#tcp_socket:tlsinfo). A failure to connect raises the errors of `network.tcp.connect`, and a failed handshake raises the errors that `network.tls` lists and closes the socket. A port out of range and an invalid option raise a `bad argument` error. The call requires `network:tcp` for `host:port`.
+
+The following example connects to a server with a private certificate authority and asks for HTTP/1.1 through ALPN.
+
+```lus nocheck
+pledge("network", "fs:read=/etc/myapp/*")
+local f <close> = io.open("/etc/myapp/ca.pem")
+local sock <close> = network.tls.connect("db.internal", 5433, {
+    ca = f:read("a"),
+    alpn = { "http/1.1" },
+    timeout = 5,
+})
+print(sock:tlsinfo().alpn)   --> http/1.1
+```
+
+**Requires pledge:** `network:tcp`]],
+    kind = "function",
+    module = "network.tls",
+    name = "network.tls.connect",
+    origin = "lus",
+    params = {
+      {
+        name = "host",
+        type = "string",
+      },
+      {
+        name = "port",
+        type = "integer",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "network.tls",
+    pledges = {
+      "network:tcp",
+    },
+    returns = {
+      {
+        type = "tcp_socket",
+      },
+    },
+    short_name = "connect",
+    since = "2.0.0",
+    source = "stdlib/network/tls/connect.md",
     stability = "stable",
   },
   ["network.udp"] = {
@@ -9408,6 +9650,8 @@ A connected socket has `getsockname` for its own end and `getpeername` for the o
   ["tcp_socket"] = {
     children = {
       "tcp_socket:receive",
+      "tcp_socket:starttls",
+      "tcp_socket:tlsinfo",
     },
     kind = "type",
     module = "network.tcp",
@@ -9469,6 +9713,84 @@ print(#conn:receive("*l"))                   --> 0
     short_name = "receive",
     since = "0.1.0",
     source = "stdlib/network/tcp/receive.md",
+    stability = "stable",
+  },
+  ["tcp_socket:starttls"] = {
+    children = {},
+    description = [[
+Starts TLS over a connected TCP socket as the client, waits for the handshake to end, and returns the same socket, which is now a TLS socket.
+
+Protocols such as SMTP, IMAP, PostgreSQL, and Redis open a plain connection and switch to TLS after an exchange of plain text. A program runs that exchange with `send` and `receive`, then calls `starttls`. `options` is the table of client options that [`network.tls`](/manual/api#network.tls) describes, without `timeout`, since the timeout of the socket bounds the handshake. `servername` has no default here, so a socket that verifies the server must name it.
+
+On success the call returns the socket, whose `send` and `receive` then carry plain text through TLS. The socket must hold no received byte that no `receive` returned yet, since such bytes came before TLS and would read as protected data. A socket that holds one raises `"starttls: the socket holds data received before TLS started"`, and a socket that already uses TLS raises `"the socket already uses TLS"`. A missing `servername` with verification raises a `bad argument` error. A failed handshake raises the errors that `network.tls` lists and closes the socket. The method needs no permission beyond the one that opened the connection.
+
+```lus nocheck
+pledge("network")
+local sock <close> = network.tcp.connect("mail.example.com", 587)
+sock:settimeout(10)
+sock:receive("*l")
+sock:send("EHLO client.example.com\r\n")
+repeat
+    local line = vector.tostring(sock:receive("*l"))
+until line:sub(4, 4) == " "
+sock:send("STARTTLS\r\n")
+sock:receive("*l")
+sock:starttls({ servername = "mail.example.com" })
+print(sock:tlsinfo().servername)   --> mail.example.com
+```]],
+    kind = "function",
+    module = "network.tcp",
+    name = "tcp_socket:starttls",
+    origin = "lus",
+    params = {
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "tcp_socket",
+    receiver = "tcp_socket",
+    returns = {
+      {
+        type = "tcp_socket",
+      },
+    },
+    short_name = "starttls",
+    since = "2.0.0",
+    source = "stdlib/network/tcp/starttls.md",
+    stability = "stable",
+  },
+  ["tcp_socket:tlsinfo"] = {
+    children = {},
+    description = [[
+Returns what the TLS handshake of a socket settled, or `nil` for a socket without TLS.
+
+The table has these fields. `version` is the protocol version, `"TLSv1.2"` or `"TLSv1.3"`. `cipher` is the name of the cipher suite, such as `"TLS1-3-AES-128-GCM-SHA256"`. `alpn` is the protocol that ALPN chose, or absent when the peers chose none. `servername` is the name that a client checked the certificate against, or the name that the client of a server asked for through SNI, or absent when there is none. A socket of `network.serve` before its first request has `servername` alone, since its handshake runs inside the first read. The method needs no permission.
+
+```lus nocheck
+pledge("network")
+local sock <close> = network.tls.connect("example.com", 443)
+local info = sock:tlsinfo()
+print(info.version, info.servername)   --> TLSv1.3  example.com
+local plain <close> = network.tcp.connect("example.com", 80)
+print(plain:tlsinfo())                 --> nil
+```]],
+    kind = "function",
+    module = "network.tcp",
+    name = "tcp_socket:tlsinfo",
+    origin = "lus",
+    params = {},
+    parent = "tcp_socket",
+    receiver = "tcp_socket",
+    returns = {
+      {
+        type = "table|nil",
+      },
+    },
+    short_name = "tlsinfo",
+    since = "2.0.0",
+    source = "stdlib/network/tcp/tlsinfo.md",
     stability = "stable",
   },
   ["time"] = {

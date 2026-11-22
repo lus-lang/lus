@@ -125,6 +125,7 @@ test {
     _ = @import("vm/sched.zig");
     _ = @import("fuzz.zig");
     _ = @import("fuzzlib.zig");
+    if (@import("build_options").net) _ = @import("fuzztls.zig");
     _ = compile.opcodes;
     _ = compile.codegen;
     _ = @import("tools/compile.zig");

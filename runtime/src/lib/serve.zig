@@ -82,6 +82,9 @@ pub const Http = struct {
     stream_raw: bool = false,
     /// The response says the connection closes after it.
     close_after: bool = false,
+    /// The address of the table of the request in progress, which tells
+    /// it apart from the tables of earlier requests.
+    req_id: usize = 0,
     /// The response being written and how much of it was sent.
     out: std.ArrayList(u8) = .empty,
     out_off: usize = 0,
@@ -115,13 +118,7 @@ fn httpOf(l: *Thread, s: *net.Socket) Error!*Http {
 // network.serve
 
 const connection_src =
-    \\local readrequest, respond, stderr, writechunk, refusal, readbody = ...
-    \\-- Request tables read their whole body on the first use of `body`.
-    \\local request_mt = {
-    \\    __index = function(req, key)
-    \\        if key == "body" then return readbody(req) end
-    \\    end,
-    \\}
+    \\local readrequest, respond, stderr, writechunk, refusal, readbody, readerof, coresume, costatus = ...
     \\local function report(on_error, err)
     \\    if on_error then
     \\        local ok, failure = catch on_error(err)
@@ -131,6 +128,14 @@ const connection_src =
     \\    stderr(err)
     \\end
     \\local function exchange(conn, handler, on_error)
+    \\    -- The request tables of a connection make `body` and `reader` on
+    \\    -- their first use.
+    \\    local request_mt = {
+    \\        __index = function(req, key)
+    \\            if key == "body" then return readbody(conn, req) end
+    \\            if key == "reader" then return readerof(conn, req) end
+    \\        end,
+    \\    }
     \\    while true do
     \\        local req, keep, head = readrequest(conn, request_mt)
     \\        if not req then
@@ -166,9 +171,11 @@ const connection_src =
     \\            end
     \\            return
     \\        end
-    \\        if type(body) == "function" then
+    \\        local kind = type(body)
+    \\        if kind == "function" or kind == "thread" then
     \\            -- A streamed response: the head goes out, then every chunk
-    \\            -- that the generator returns, as it returns it, until nil.
+    \\            -- that the function returns or the coroutine yields, as it
+    \\            -- comes, until the function returns nil or the coroutine ends.
     \\            local valid, alive, follow = catch respond(conn, status, nil, headers, keep, head, nil, true)
     \\            if not valid then
     \\                report(on_error, alive)
@@ -178,18 +185,32 @@ const connection_src =
     \\            if not alive then return end
     \\            if follow then
     \\                while true do
-    \\                    local produced, chunk = catch body()
+    \\                    local produced, chunk, last
+    \\                    if kind == "thread" then
+    \\                        -- A coroutine yields its chunks and ends.
+    \\                        produced, chunk = coresume(body)
+    \\                        last = costatus(body) == "dead"
+    \\                    else
+    \\                        produced, chunk = catch body()
+    \\                        last = chunk == nil
+    \\                    end
     \\                    if not produced then
     \\                        report(on_error, chunk)
     \\                        return
     \\                    end
-    \\                    local wrote, open = catch writechunk(conn, chunk)
-    \\                    if not wrote then
-    \\                        report(on_error, open)
-    \\                        return
+    \\                    if chunk ~= nil then
+    \\                        local wrote, open = catch writechunk(conn, chunk)
+    \\                        if not wrote then
+    \\                            report(on_error, open)
+    \\                            return
+    \\                        end
+    \\                        if not open then return end
     \\                    end
-    \\                    if not open then return end
-    \\                    if chunk == nil then break end
+    \\                    if last then
+    \\                        local wrote, open = catch writechunk(conn, nil)
+    \\                        if not (wrote and open) then return end
+    \\                        break
+    \\                    end
     \\                end
     \\            end
     \\            if not keep then return end
@@ -242,7 +263,13 @@ fn connectionFn(l: *Thread) Error!Value {
     try l.push(refused);
     const body_fn = try aux.native(l, readBody, "readbody");
     try l.push(body_fn);
-    const f = try ops.call1(l, chunk, &.{ read, write, report, chunk_fn, refused, body_fn });
+    const reader_fn = try aux.native(l, readerOf, "readerof");
+    try l.push(reader_fn);
+    const resume_fn = try aux.native(l, coroutine.resumeNative, "resume");
+    try l.push(resume_fn);
+    const status_fn = try aux.native(l, coroutine.statusNative, "status");
+    try l.push(status_fn);
+    const f = try ops.call1(l, chunk, &.{ read, write, report, chunk_fn, refused, body_fn, reader_fn, resume_fn, status_fn });
     try l.push(f);
     try aux.setField(l, g.registry.as(Table), connection_key, f);
     g.ext.put(g.gpa, connection_key, f.as(object.Closure)) catch return l.raiseMem();
@@ -670,9 +697,10 @@ fn finishRequest(l: *Thread, s: *net.Socket, h: *Http) Error!u32 {
     h.nextRequest();
     const body = try http.startBody(l, s, framing, length, true);
     body.expect_continue = expect and !body.done;
-    _ = try http.pushReader(l, s, l.base(), false);
-    try aux.setField(l, req, "reader", l.stack[l.top - 1]);
-    l.top -= 1;
+    h.req_id = @intFromPtr(req);
+    var ip: [64]u8 = undefined;
+    try aux.setField(l, req, "ip", try l.newStringValue(net.formatIp(&ip, s.peer)));
+    try aux.setField(l, req, "port", Value.int(s.peer.getPort()));
     if (l.arg(2).tag == .table) {
         req.metatable = l.arg(2).as(Table);
         gc.barrierBack(l.g, &req.hdr);
@@ -983,7 +1011,18 @@ fn refusal(l: *Thread) Error!u32 {
     return aux.retInt(l, status);
 }
 
-/// readbody(req): the whole body of a request, which `req.body` reads.
+/// readbody(conn, req): the whole body of a request, which `req.body`
+/// reads.
 fn readBody(l: *Thread) Error!u32 {
-    return http.requestBody(l, max_body);
+    const s = try net.checkSocket(l, 1);
+    const h = try httpOf(l, s);
+    return http.requestBody(l, s, h.req_id, max_body);
+}
+
+/// readerof(conn, req): the coroutine of a request body, which
+/// `req.reader` makes on first use.
+fn readerOf(l: *Thread) Error!u32 {
+    const s = try net.checkSocket(l, 1);
+    const h = try httpOf(l, s);
+    return http.requestStream(l, s, h.req_id);
 }

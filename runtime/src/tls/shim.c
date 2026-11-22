@@ -491,3 +491,41 @@ const char *lus_tls_servername(lus_tls *t)
 {
     return t->servername[0] ? t->servername : NULL;
 }
+
+/* ----------------------------------------------------------------------
+ * Test identities */
+
+/* Makes a P-256 key and a certificate for `cn` that the key signs, both
+ * as PEM text, for the unit tests and the fuzz targets, which make their
+ * certificates when they run. Returns 0, or an error code. */
+int lus_tls_test_identity(const char *cn, char *cert, size_t cert_cap, char *key, size_t key_cap)
+{
+    mbedtls_pk_context pk;
+    mbedtls_x509write_cert crt;
+    mbedtls_pk_init(&pk);
+    mbedtls_x509write_crt_init(&crt);
+    char name[300];
+    int r = mbedtls_pk_setup(&pk, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
+    if (r == 0) r = mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(pk), rng, NULL);
+    if (r == 0) r = mbedtls_pk_write_key_pem(&pk, (unsigned char *) key, key_cap);
+    if (r == 0) {
+        size_t n = strlen(cn);
+        if (n > 250) n = 250;
+        memcpy(name, "CN=", 3);
+        memcpy(name + 3, cn, n);
+        name[3 + n] = 0;
+        unsigned char serial[1] = { 1 };
+        mbedtls_x509write_crt_set_version(&crt, MBEDTLS_X509_CRT_VERSION_3);
+        mbedtls_x509write_crt_set_md_alg(&crt, MBEDTLS_MD_SHA256);
+        mbedtls_x509write_crt_set_subject_key(&crt, &pk);
+        mbedtls_x509write_crt_set_issuer_key(&crt, &pk);
+        r = mbedtls_x509write_crt_set_subject_name(&crt, name);
+        if (r == 0) r = mbedtls_x509write_crt_set_issuer_name(&crt, name);
+        if (r == 0) r = mbedtls_x509write_crt_set_serial_raw(&crt, serial, 1);
+        if (r == 0) r = mbedtls_x509write_crt_set_validity(&crt, "20200101000000", "20991231235959");
+        if (r == 0) r = mbedtls_x509write_crt_pem(&crt, (unsigned char *) cert, cert_cap, rng, NULL);
+    }
+    mbedtls_x509write_crt_free(&crt);
+    mbedtls_pk_free(&pk);
+    return r;
+}
