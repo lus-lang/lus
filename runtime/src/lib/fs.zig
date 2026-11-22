@@ -29,6 +29,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "copy", .func = copy },
     .{ .name = "move", .func = move },
     .{ .name = "remove", .func = remove },
+    .{ .name = "sync", .func = sync },
     .{ .name = "type", .func = fsType },
     .{ .name = "follow", .func = follow },
     .{ .name = "createlink", .func = createLink },
@@ -211,10 +212,27 @@ fn move(l: *Thread) Error!u32 {
     try pledge.require(l, "fs:read", src);
     try pledge.require(l, "fs:write", src);
     try pledge.require(l, "fs:write", dst);
+    var replace = false;
+    if (!l.arg(3).isNil()) {
+        const opts = try aux.checkTable(l, 3);
+        replace = (try aux.getField(l, opts, "replace")).truthy();
+    }
     const io = l.g.io;
     const cwd = Dir.cwd();
     if (!exists(l, src)) return l.raiseFmt("cannot move '{s}': source does not exist", .{src});
-    // The move never replaces an existing target.
+    if (replace) {
+        // One rename, which replaces the target in a single step, so a
+        // reader of `dst` sees either the old entry or the new one.
+        Dir.rename(cwd, src, cwd, dst, io) catch |e| switch (e) {
+            error.CrossDevice => return l.raiseFmt("cannot move '{s}' to '{s}': cross-device move", .{ src, dst }),
+            error.IsDir => return l.raiseFmt("cannot move '{s}' to '{s}': target is a directory", .{ src, dst }),
+            error.NotDir => return l.raiseFmt("cannot move '{s}' to '{s}': target is not a directory", .{ src, dst }),
+            error.DirNotEmpty => return l.raiseFmt("cannot move '{s}' to '{s}': target is a directory that is not empty", .{ src, dst }),
+            else => return l.raiseFmt("cannot move '{s}' to '{s}': {s}", .{ src, dst, errMsg(e) }),
+        };
+        return 0;
+    }
+    // Without `replace`, the move never replaces an existing target.
     Dir.renamePreserve(cwd, src, cwd, dst, io) catch |e| switch (e) {
         error.PathAlreadyExists => return l.raiseFmt("cannot move to '{s}': target already exists", .{dst}),
         error.CrossDevice => return l.raiseFmt("cannot move '{s}' to '{s}': cross-device move", .{ src, dst }),
@@ -227,6 +245,36 @@ fn move(l: *Thread) Error!u32 {
         },
         else => return l.raiseFmt("cannot move '{s}' to '{s}': {s}", .{ src, dst, errMsg(e) }),
     };
+    return 0;
+}
+
+/// fs.sync(path): writes the entries of a directory, or the data of a
+/// file, through to the storage device.
+fn sync(l: *Thread) Error!u32 {
+    const path = try aux.checkBytes(l, 1);
+    try pledge.require(l, "fs:read", path);
+    const io = l.g.io;
+    const cwd = Dir.cwd();
+    const st = cwd.statFile(io, path, .{}) catch |e| switch (e) {
+        error.FileNotFound => return l.raiseFmt("cannot sync '{s}': path does not exist", .{path}),
+        else => return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) }),
+    };
+    if (st.kind == .directory) {
+        // A directory opened for iteration gets a descriptor that can be
+        // synced. Linux opens one without iteration with `O_PATH`.
+        var dir = cwd.openDir(io, path, .{ .iterate = true }) catch |e| return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) });
+        defer dir.close(io);
+        @import("io.zig").syncFile(io, .{ .handle = dir.handle, .flags = .{ .nonblocking = false } }) catch |e| switch (e) {
+            // Windows opens a directory without write access, and its file
+            // systems commit the entries of a directory through their log.
+            error.AccessDenied => if (!windows) return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) }),
+            else => return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) }),
+        };
+        return 0;
+    }
+    var file = cwd.openFile(io, path, .{}) catch |e| return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) });
+    defer file.close(io);
+    @import("io.zig").syncFile(io, file) catch |e| return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) });
     return 0;
 }
 

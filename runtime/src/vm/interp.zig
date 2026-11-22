@@ -9,6 +9,7 @@
 //! handler. Entering a protected region costs nothing.
 
 const std = @import("std");
+const inv = @import("inv.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
 const state = @import("state.zig");
@@ -1396,6 +1397,10 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
 /// Appends a frame, growing the list only when it is full.
 inline fn pushFrame(l: *Thread, f: Frame) Error!void {
     if (l.frames.items.len == l.frames.capacity) try growFrames(l);
+    // A frame starts after the function it calls, inside the stack, and
+    // never below the frame that calls it.
+    if (inv.enabled) inv.assert(f.base > f.func and f.base <= l.stack.len and
+        (l.frames.items.len == 0 or f.func >= l.frames.items[l.frames.items.len - 1].func));
     l.frames.appendAssumeCapacity(f);
 }
 

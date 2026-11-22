@@ -174,6 +174,19 @@ The checks of every call and allocation are cheap. The walks of the heap and of 
 
 The guarantees go into the manual page on the filesystem in plain prose: which sequence makes an update atomic and durable, which step each guarantee needs, what a kill leaves of a file that was being written, and what `flush`, `close`, and `sync` each promise.
 
+**Progress.** The three calls, the two crash modes, the harness, and the section [Durable writes](/manual/filesystem#durable-writes) of the manual are in place. `file:sync()` also issues `F_FULLFSYNC` on macOS, where `fsync` leaves the data in the cache of the drive. The kill mode ends the process just before operation N, so a kill leaves exactly what the system received. Syncs, renames, deletions, and changes of size count as operations, and an N of 0 crashes after the last one, which is how the harness checks durability. The power loss model in `runtime/src/vm/faultcrash.zig` follows the rules above and keeps the entry changes of one file in order. The harness runs four scenarios, each crashed at every operation by a kill and by power losses under eight seeds, with powersafe overwrite on and off.
+
+| Scenario | Every step | Each step left out |
+| --- | --- | --- |
+| Replace through a temporary file | safe | caught without the file sync and without the directory sync |
+| Append with a sync per record | safe with powersafe overwrite, caught without it | caught without the sync |
+| Overwrite in place with a sync | caught, as the manual says | |
+| SQLite commit with `synchronous = FULL` | safe | caught with `synchronous = OFF` |
+
+A lost append on a disk without powersafe overwrite can damage the end of the record before it in the same sector, which the manual states. CI runs the harness on Linux and macOS.
+
+The invariant checks cover strings at each allocation, whose validity, ASCII flag, and count of characters must match their bytes, tables after each resize, whose hash part must have a size of zero or a power of two, a count of used slots that matches, and every live key where a lookup probes for it, shapes on each new shape, frames on each call, and the heap at the end of each mark phase, where every marked object must reference only marked objects. A nightly job runs the conformance suite in a `-Dinvariants=true` build, interpreted and in optimized code. The string check found that `skip` in `lus test` built its message with the flags of ASCII text and a count of bytes, so a reason with accented letters had a wrong length, which is fixed. The checks of pages, byte totals, array kinds, interning, and returns come next, then part 9.
+
 ### 11. Faults beyond files
 
 Part 10 fails a file write at every step and checks what a program can rely on afterwards. Part 11 applies the same method to the network, to coroutines and workers, and to the input a program reads. Every scenario counts its steps first, then fails each step in turn, and a checker states what must hold.

@@ -2414,6 +2414,7 @@ The `catch` expression captures the error object, as [Error handling](/manual/gu
     children = {
       "file:isatty",
       "file:setraw",
+      "file:sync",
     },
     kind = "type",
     module = "io",
@@ -2499,6 +2500,43 @@ print()
     short_name = "setraw",
     since = "2.0.0",
     source = "stdlib/io/setraw.md",
+    stability = "stable",
+  },
+  ["file:sync"] = {
+    children = {},
+    description = [[
+Writes the data and the size of a file through to its storage device and returns the file handle.
+
+A write returns once the operating system holds the bytes in its cache, and a crash of the system or a loss of power can still lose them. After `file:sync()` returns, the bytes written before the call survive both. On macOS the call also asks the drive to empty its own cache, which a plain sync leaves full. For the standard output the call flushes the buffered output, and for a pipe and the other standard streams it does nothing, since they keep nothing on a device. The method needs no permission, a closed handle raises `attempt to use a closed file`, and a failure of the device raises its error.
+
+The following example writes a file and syncs it before closing.
+
+```lus
+pledge("env", "fs")
+local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-sync-example.txt")
+local f = assert(io.open(path, "w"))
+f:write("saved\n")
+print(f:sync() == f)   --> true
+f:close()
+fs.remove(path)
+```
+
+A synced file can still disappear if its name is new: the entry of a file lives in its directory, which [`fs.sync`](/manual/api#fs.sync) syncs. [Durable writes](/manual/filesystem#durable-writes) describes the full sequence.]],
+    kind = "function",
+    module = "io",
+    name = "file:sync",
+    origin = "lus",
+    params = {},
+    parent = "file",
+    receiver = "file",
+    returns = {
+      {
+        type = "file",
+      },
+    },
+    short_name = "sync",
+    since = "2.0.0",
+    source = "stdlib/io/sync.md",
     stability = "stable",
   },
   ["flags"] = {
@@ -2632,6 +2670,7 @@ print(math.type(n), n)                                       --> decimal  19.90
       "fs.move",
       "fs.path",
       "fs.remove",
+      "fs.sync",
       "fs.type",
     },
     kind = "module",
@@ -2909,7 +2948,9 @@ Renames the file or directory at `source` to `dest` and returns no values.
 
 `source` is the string path of an existing entry, and `dest` is its new path. Renaming to a path in another directory moves the entry there, as long as both paths lie on the same filesystem. A directory moves together with everything inside it.
 
-On success the call returns nothing. Every failure raises an error. A `dest` that already exists raises `"cannot move to 'DEST': target already exists"`, so `fs.move` never replaces an entry. A missing `source` raises `"cannot move 'SOURCE': source does not exist"`. A move across two filesystems raises an error that ends in `cross-device move`. The call requires `fs:read` and `fs:write` for `source` and `fs:write` for `dest`.
+The optional `options` table takes one field. With `replace = true`, a `dest` that already exists is replaced in a single step, so a reader of `dest` finds either the old entry or the new one and never a missing or partial file. A file replaces a file, and a directory replaces an empty directory.
+
+On success the call returns nothing. Every failure raises an error. Without `replace`, a `dest` that already exists raises `"cannot move to 'DEST': target already exists"`, so the move never replaces an entry by accident. With `replace`, a file over a directory raises an error that ends in `target is a directory`, and a directory over a directory that holds entries raises one that ends in `target is a directory that is not empty`. A missing `source` raises `"cannot move 'SOURCE': source does not exist"`. A move across two filesystems raises an error that ends in `cross-device move`. The call requires `fs:read` and `fs:write` for `source` and `fs:write` for `dest`.
 
 The following example renames a file and then moves it into a subdirectory.
 
@@ -2926,7 +2967,7 @@ print(fs.type(fs.path.join(dir, "archive", "final.txt")))   --> file  false
 fs.remove(dir, true)
 ```
 
-A program that moves a file to another filesystem copies it with [`fs.copy`](/manual/api#fs.copy) and removes the original with [`fs.remove`](/manual/api#fs.remove).
+A program replaces a file safely by writing the new contents to a temporary file in the same directory, syncing it with [`file:sync`](/manual/api#file:sync), moving it over the target with `replace = true`, and syncing the directory with [`fs.sync`](/manual/api#fs.sync), as [Durable writes](/manual/filesystem#durable-writes) explains. A program that moves a file to another filesystem copies it with [`fs.copy`](/manual/api#fs.copy) and removes the original with [`fs.remove`](/manual/api#fs.remove).
 
 **Requires pledge:** `fs:write`]],
     kind = "function",
@@ -2941,6 +2982,11 @@ A program that moves a file to another filesystem copies it with [`fs.copy`](/ma
       {
         name = "dest",
         type = "string",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
       },
     },
     parent = "fs",
@@ -3221,6 +3267,53 @@ print((catch fs.type(dir)))           --> false
     short_name = "remove",
     since = "0.1.0",
     source = "stdlib/fs/remove.md",
+    stability = "stable",
+  },
+  ["fs.sync"] = {
+    children = {},
+    description = [[
+Writes the entries of the directory at `path` through to the storage device and returns no values.
+
+The name of a file is an entry of its directory, and creating, renaming, or removing a file changes that directory. Until the directory is synced, a crash of the system or a loss of power can undo the change, even when the file itself was synced with [`file:sync`](/manual/api#file:sync). After `fs.sync(dir)` returns, the changes made in `dir` before the call survive. A `path` that names a file syncs the data of that file, as `file:sync` does.
+
+On success the call returns nothing. A missing `path` raises `"cannot sync 'PATH': path does not exist"`, and a failure of the device raises an error of the form `"cannot sync 'PATH': REASON"`. On Windows, the file systems record the changes of a directory in their log, and the call succeeds when the system refuses to sync a directory directly. The call requires `fs:read` for `path`.
+
+The following example creates a file and syncs its directory, so the new name survives a crash.
+
+```lus
+pledge("env", "fs")
+local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-fs-sync-example")
+fs.createdirectory(dir, true)
+local f = assert(io.open(fs.path.join(dir, "new.txt"), "w"))
+f:write("hello\n")
+f:sync()
+f:close()
+fs.sync(dir)
+print(fs.type(fs.path.join(dir, "new.txt")))   --> file  false
+fs.remove(dir, true)
+```
+
+[Durable writes](/manual/filesystem#durable-writes) shows how a program replaces a file so that a crash leaves either the old contents or the new ones.
+
+**Requires pledge:** `fs:read`]],
+    kind = "function",
+    module = "fs",
+    name = "fs.sync",
+    origin = "lus",
+    params = {
+      {
+        name = "path",
+        type = "string",
+      },
+    },
+    parent = "fs",
+    pledges = {
+      "fs:read",
+    },
+    returns = {},
+    short_name = "sync",
+    since = "2.0.0",
+    source = "stdlib/fs/sync.md",
     stability = "stable",
   },
   ["fs.type"] = {

@@ -1,0 +1,341 @@
+-- Crash tests of the durability sequences that the manual recommends.
+--
+-- Each scenario is a writer, a program that changes some files, and a
+-- check of what a reader may find afterwards. The harness counts the I/O
+-- operations of the writer, then runs it once for every operation N with
+-- `LUS_FAIL_IO=N:powerloss`, which ends it just before operation N as a
+-- power loss would (`runtime/src/vm/faultcrash.zig`), and once with N = 0,
+-- which loses power after the writer finished. It does so for several
+-- seeds, with the powersafe overwrite property on and off, and also kills
+-- the writer at every operation. After each run it checks the files.
+--
+-- Some lines of a writer carry a tag, `-- step:NAME`. The harness also
+-- runs each scenario with each tagged step left out, and expects the check
+-- to fail at least once, which shows that the step is needed and that the
+-- model is strong enough to tell. A scenario marked unsafe is expected to
+-- fail even with every step, which documents a sequence that is not safe,
+-- and one that needs powersafe overwrite is expected to fail only without
+-- it.
+--
+-- Usage: lus run.lus [--lus BIN] [--seeds N] [--only NAME] [--work DIR]
+--
+-- BIN is a runtime built with `-Dfail-io=true`. The default is
+-- runtime/zig-out-io/bin/lus, which `mise run build:io` builds.
+
+global arg, assert, error, fs, io, ipairs, math, os, package, pairs, pledge, print, string, table, tonumber, tostring
+
+pledge("exec", "fs", "env")
+
+local opts = { lus = "runtime/zig-out-io/bin/lus", seeds = 8, work = nil, only = nil }
+do
+    local names = { ["--lus"] = "lus", ["--seeds"] = "seeds", ["--only"] = "only", ["--work"] = "work" }
+    local i = 1
+    while i <= #arg do
+        local key = names[arg[i]]
+        if not key then error("unknown option " .. arg[i]) end
+        opts[key] = key == "seeds" and tonumber(arg[i + 1]) or arg[i + 1]
+        i = i + 2
+    end
+end
+if not opts.work then
+    opts.work = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-crash")
+end
+
+if package.config:sub(1, 1) == "\\" then
+    print("the power loss model needs POSIX, so the crash tests skip Windows")
+    os.exit(0)
+end
+
+local function readFile(path)
+    local f = io.open(path, "r", { lossy = true })
+    if not f then return nil end
+    local s = f:read("a")
+    f:close()
+    return s
+end
+
+local function writeFile(path, data)
+    local f = assert(io.open(path, "w"))
+    f:write(data)
+    f:close()
+end
+
+local function quote(s)
+    return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
+local ENV = { "LUS_FAIL_IO", "LUS_FAIL_IO_SEED", "LUS_FAIL_IO_PSOW" }
+
+-- Runs `bin script args` with the variables of `env` set, and returns the
+-- output, with standard error, and the exit code.
+local function run(bin, script, args, env)
+    for _, k in ipairs(ENV) do os.setenv(k, env[k]) end
+    local cmd = quote(bin) .. " " .. quote(script)
+    for _, a in ipairs(args) do cmd = cmd .. " " .. quote(a) end
+    local p = assert(io.popen(cmd .. " 2>&1", "r"))
+    local out = p:read("a")
+    local _, _, code = p:close()
+    for _, k in ipairs(ENV) do os.setenv(k, nil) end
+    return out, code
+end
+
+local function fresh(dir)
+    local _ = catch fs.remove(dir, true)
+    fs.createdirectory(dir, true)
+end
+
+-- ===== the scenarios =====
+
+local OLD = ("old data "):rep(150)
+local NEW = ("new data "):rep(200)
+
+local function checksum(s)
+    local h = 0
+    for i = 1, #s do h = (h * 31 + s:byte(i)) % 4294967296 end
+    return h
+end
+
+local function record(i)
+    local payload = ("x"):rep(300 + i)
+    return string.format("rec %d %s %08x\n", i, payload, checksum(payload))
+end
+
+-- The number of records from the first that parse and match their
+-- checksums, and whether a valid record follows a damaged one.
+local function validRecords(log)
+    local n, damaged, after = 0, false, false
+    for line in (log or ""):gmatch("([^\n]*)\n?") do
+        local i, payload, sum = line:match("^rec (%d+) (x+) (%x+)$")
+        local ok = i and tonumber(i) == n + 1 and tonumber(sum, 16) == checksum(payload)
+        if ok and not damaged then
+            n = n + 1
+        elseif ok then
+            after = true
+        elseif line ~= "" then
+            damaged = true
+        end
+    end
+    return n, after
+end
+
+local scenarios = {
+    {
+        name = "replace",
+        about = "write a temporary file, sync it, rename it over the target, sync the directory",
+        setup = function(dir) writeFile(dir .. "/data", OLD) end,
+        writer = {
+            'pledge("fs")',
+            "local dir = arg[1]",
+            'local f = assert(io.open(dir .. "/data.tmp", "w"))',
+            "f:write(" .. string.format("%q", NEW) .. ")",
+            "f:sync() -- step:sync",
+            "f:close()",
+            'fs.move(dir .. "/data.tmp", dir .. "/data", { replace = true })',
+            "fs.sync(dir) -- step:dirsync",
+        },
+        check = function(dir, finished)
+            local s = readFile(dir .. "/data")
+            if s ~= OLD and s ~= NEW then return "the target holds neither the old nor the new contents" end
+            if finished and s ~= NEW then return "the replacement was lost after the writer finished" end
+        end,
+    },
+    {
+        name = "append",
+        about = "append a record and sync the file before acknowledging it",
+        -- A lost append may destroy the end of the record before it, in the
+        -- same sector, on a disk without powersafe overwrite.
+        needs_psow = true,
+        setup = function(dir) writeFile(dir .. "/log", record(1) .. record(2)) end,
+        writer = {
+            'pledge("fs")',
+            "local dir = arg[1]",
+            "local function checksum(s) local h = 0 for i = 1, #s do h = (h * 31 + s:byte(i)) % 4294967296 end return h end",
+            'local function record(i) local p = ("x"):rep(300 + i) return string.format("rec %d %s %08x\\n", i, p, checksum(p)) end',
+            'local f = assert(io.open(dir .. "/log", "a"))',
+            "for i = 3, 5 do",
+            "    f:write(record(i))",
+            "    f:sync() -- step:sync",
+            '    io.stdout:write("ack ", i, "\\n")',
+            "    io.stdout:flush()",
+            "end",
+            "f:close()",
+        },
+        check = function(dir, finished, out)
+            local acked = 2
+            for i in out:gmatch("ack (%d+)") do acked = math.max(acked, tonumber(i)) end
+            local n, after = validRecords(readFile(dir .. "/log"))
+            if after then return "a valid record follows a damaged one" end
+            if n < acked then return string.format("record %d was acknowledged and then lost", n + 1) end
+            if finished and n < 5 then return "a record was lost after the writer finished" end
+        end,
+    },
+    {
+        name = "overwrite",
+        about = "overwrite a record of 700 bytes in place and sync the file",
+        unsafe = true,
+        setup = function(dir) writeFile(dir .. "/table", ("A"):rep(700) .. ("B"):rep(700) .. ("C"):rep(700)) end,
+        writer = {
+            'pledge("fs")',
+            "local dir = arg[1]",
+            'local f = assert(io.open(dir .. "/table", "r+"))',
+            'f:seek("set", 700)',
+            'f:write(("Z"):rep(700))',
+            "f:sync()",
+            "f:close()",
+        },
+        check = function(dir, finished)
+            local s = readFile(dir .. "/table") or ""
+            local mid = s:sub(701, 1400)
+            if mid ~= ("B"):rep(700) and mid ~= ("Z"):rep(700) then return "the record is torn" end
+            if s:sub(1, 700) ~= ("A"):rep(700) or s:sub(1401, 2100) ~= ("C"):rep(700) then return "a neighbouring record changed" end
+        end,
+    },
+    {
+        name = "sqlite",
+        about = "commit a transaction of 20 rows with synchronous = FULL",
+        setup = function(dir, lus)
+            local setup = dir .. "/setup.lus"
+            writeFile(setup, table.concat({
+                'pledge("fs")',
+                'local db = io.sqlite(arg[1] .. "/db.sqlite")',
+                'db:exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")',
+                'for i = 1, 5 do db:run("INSERT INTO t (v) VALUES (?)", "seed" .. i) end',
+                "db:close()",
+            }, "\n"))
+            local out, code = run(lus, setup, { dir }, {})
+            assert(code == 0, out)
+            fs.remove(setup)
+        end,
+        writer = {
+            'pledge("fs")',
+            "local dir = arg[1]",
+            'local db = io.sqlite(dir .. "/db.sqlite")',
+            'db:exec("PRAGMA synchronous = OFF")',
+            'db:exec("PRAGMA synchronous = FULL") -- step:fullsync',
+            "db:transaction(function()",
+            '    for i = 1, 20 do db:run("INSERT INTO t (v) VALUES (?)", ("row"):rep(60) .. i) end',
+            "end)",
+            "db:close()",
+        },
+        check = function(dir, finished, out, lus)
+            local probe = dir .. "/../probe.lus"
+            writeFile(probe, table.concat({
+                'pledge("fs")',
+                'local db = io.sqlite(arg[1] .. "/db.sqlite")',
+                'for r in db:query("PRAGMA integrity_check") do print("integrity", r.integrity_check) end',
+                'for r in db:query("SELECT count(*) AS n FROM t") do print("rows", r.n) end',
+                "db:close()",
+            }, "\n"))
+            local o = run(lus, probe, { dir }, {})
+            local integrity = o:match("integrity%s+(%S+)")
+            local rows = tonumber(o:match("rows%s+(%d+)"))
+            if integrity ~= "ok" then return "the database is damaged: " .. (o:match("[^\n]+") or "no output") end
+            if rows ~= 5 and rows ~= 25 then return string.format("the table holds %s rows, part of a transaction", tostring(rows)) end
+            if finished and rows ~= 25 then return "the committed transaction was lost" end
+        end,
+    },
+}
+
+-- ===== the runner =====
+
+local function stepsOf(sc)
+    local steps, seen = {}, {}
+    for _, line in ipairs(sc.writer) do
+        local s = line:match("%-%- step:(%w+)")
+        if s and not seen[s] then
+            seen[s] = true
+            steps[#steps + 1] = s
+        end
+    end
+    return steps
+end
+
+local function writerWithout(sc, step)
+    local lines = {}
+    for _, line in ipairs(sc.writer) do
+        if not (step and line:find("-- step:" .. step, 1, true)) then lines[#lines + 1] = line end
+    end
+    return table.concat(lines, "\n") .. "\n"
+end
+
+-- Runs every crash of one variant. Returns the number of operations and of
+-- runs, and the first problems found with powersafe overwrite (and by the
+-- kills) and without it.
+local function crashAll(sc, script, dir)
+    fresh(dir)
+    sc.setup(dir, opts.lus)
+    local out = run(opts.lus, script, { dir }, { LUS_FAIL_IO = "count" })
+    local count = tonumber(out:match("lus: (%d+) I/O operations"))
+    assert(count, "the writer of " .. sc.name .. " failed: " .. out)
+    local runs = 0
+    local problems = { ["1"] = {}, ["0"] = {} }
+    local function try(n, mode, seed, psow)
+        fresh(dir)
+        sc.setup(dir, opts.lus)
+        local o = run(opts.lus, script, { dir }, {
+            LUS_FAIL_IO = n .. ":" .. mode,
+            LUS_FAIL_IO_SEED = tostring(seed),
+            LUS_FAIL_IO_PSOW = psow,
+        })
+        runs = runs + 1
+        local problem = sc.check(dir, n == 0, o, opts.lus)
+        local list = problems[psow]
+        if problem and #list < 3 then
+            list[#list + 1] = string.format("%s at operation %s, seed %d: %s", mode, n == 0 and "end" or tostring(n), seed, problem)
+        end
+    end
+    for n = 0, count do
+        try(n, "kill", 0, "1")
+        for seed = 1, opts.seeds do
+            try(n, "powerloss", seed, "1")
+            try(n, "powerloss", seed, "0")
+        end
+    end
+    return count, runs, problems
+end
+
+local failed = false
+
+-- Prints one verdict: `expect_safe` says whether the check must hold.
+local function verdict(label, count, runs, expect_safe, problems)
+    local ok = expect_safe == (#problems == 0)
+    local word
+    if expect_safe then word = ok and "safe" or "UNSAFE" else word = ok and "caught" or "NOT CAUGHT" end
+    print(string.format("%-44s %4d operations %6d runs  %s", label, count, runs, word))
+    if not ok then
+        failed = true
+        if expect_safe then
+            for _, p in ipairs(problems) do print("    " .. p) end
+        else
+            print("    no crash broke the check, so the model or the scenario misses this gap")
+        end
+    elseif not expect_safe then
+        print("    for example, " .. problems[1])
+    end
+end
+
+fresh(opts.work)
+for _, sc in ipairs(scenarios) do
+    if not opts.only or opts.only == sc.name then
+        local variants = { false }
+        for _, s in ipairs(stepsOf(sc)) do variants[#variants + 1] = s end
+        for _, step in ipairs(variants) do
+            local label = sc.name .. (step and (" without " .. step) or "")
+            local script = fs.path.join(opts.work, sc.name .. (step and ("-no-" .. step) or "") .. ".lus")
+            writeFile(script, writerWithout(sc, step or nil))
+            local count, runs, problems = crashAll(sc, script, fs.path.join(opts.work, "dir"))
+            local full = not step and not sc.unsafe
+            if sc.needs_psow and full then
+                verdict(label .. ", powersafe overwrite", count, runs, true, problems["1"])
+                verdict(label .. ", no powersafe overwrite", count, runs, false, problems["0"])
+            else
+                local all = {}
+                for _, p in ipairs(problems["1"]) do all[#all + 1] = p .. " (powersafe overwrite)" end
+                for _, p in ipairs(problems["0"]) do all[#all + 1] = p .. " (no powersafe overwrite)" end
+                verdict(label, count, runs, full, all)
+            end
+        end
+    end
+end
+fs.remove(opts.work, true)
+if failed then os.exit(1) end

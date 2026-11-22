@@ -284,6 +284,30 @@ jobs:
             runtime/coverage-sweeps.txt
             runtime/coverage-merged.txt
 
+  invariants:
+    name: Invariant checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build with the invariant checks
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dinvariants=true --prefix zig-out-inv
+      - name: Run the conformance suite interpreted and in optimized code
+        timeout-minutes: 90
+        working-directory: runtime
+        # The checks walk tables after each resize, the shape tree on each
+        # new shape, and the heap at the end of each mark phase.
+        run: |
+          for mode in off opt-eager; do
+            LUS_JIT=$mode LUS_BIN=$PWD/zig-out-inv/bin/lus zig-out-inv/bin/lus test ../tests/conformance ../packages/language-server/tests
+          done
+
   mcdc:
     name: MC/DC
     runs-on: ubuntu-24.04

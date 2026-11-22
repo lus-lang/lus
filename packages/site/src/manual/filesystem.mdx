@@ -181,7 +181,7 @@ fs.remove(backup)
 
 `fs.copy` requires `fs:read` for `source` and `fs:write` for `dest`.
 
-[`fs.move(source, dest)`](/manual/api#fs.move) renames a file or a directory, which moves the entry when `dest` is in another directory of the same filesystem. Like `fs.copy`, it never replaces an existing entry, so a `dest` that exists raises `"cannot move to 'DEST': target already exists"`. A missing `source` raises `"cannot move 'SOURCE': source does not exist"`. A move between two filesystems, such as two disks, raises an error that ends in `cross-device move`, so a program that needs such a move copies the file and removes the original.
+[`fs.move(source, dest)`](/manual/api#fs.move) renames a file or a directory, which moves the entry when `dest` is in another directory of the same filesystem. Like `fs.copy`, it keeps an existing entry by default, so a `dest` that exists raises `"cannot move to 'DEST': target already exists"`. With a third argument of `{ replace = true }`, the move replaces `dest` in one step, which [Durable writes](#durable-writes) builds on. A missing `source` raises `"cannot move 'SOURCE': source does not exist"`. A move between two filesystems, such as two disks, raises an error that ends in `cross-device move`, so a program that needs such a move copies the file and removes the original.
 
 The following program renames a file and then moves it into an archive directory.
 
@@ -276,6 +276,48 @@ print(fs.path.parent("report.pdf"))              --> .
 ```
 
 [`fs.path.separator`](/manual/api#fs.path.separator) is the separator of the platform, `"/"` on POSIX and `"\"` on Windows. [`fs.path.delimiter`](/manual/api#fs.path.delimiter) is the character that separates the entries of a list of paths such as the `PATH` environment variable, `":"` on POSIX and `";"` on Windows.
+
+## Durable writes
+
+A write returns when the operating system holds the new bytes in its memory. The system writes them to the disk later, in its own order. A killed process loses nothing that it wrote, because the system still holds those bytes. A crash of the system or a loss of power is different. It can lose any write that has not reached the disk, keep a later write while losing an earlier one, or keep part of a write. Two calls control when data reaches the disk.
+
+- [`file:sync()`](/manual/api#file:sync) returns once the data and the size of the file are on the disk.
+- [`fs.sync(dir)`](/manual/api#fs.sync) returns once the entries of the directory are on the disk. The name of a file is such an entry, so creating, renaming, and removing a file all change its directory.
+
+A program that replaces a file with new contents uses four steps, in this order.
+
+1. Write the new contents to a temporary file in the same directory as the target.
+2. Sync the temporary file with `file:sync()`. The new contents are then complete on the disk.
+3. Move the temporary file over the target with `fs.move(tmp, target, { replace = true })`. A reader now finds the new contents. A reader that opened the target earlier keeps the old ones.
+4. Sync the directory with `fs.sync(dir)`. The new name is then on the disk.
+
+After a crash at any point, the target holds either its complete old contents or its complete new contents. Step 2 keeps the new contents whole. Without it, the rename can reach the disk before the data, which leaves the target empty or partly written. Step 4 makes the replacement last. Without it, the target can return to its old contents after a crash, even though the program finished. The following function performs the four steps.
+
+```lus
+local function replace(path, contents)
+    local tmp = path .. ".tmp"
+    local f = assert(io.open(tmp, "w"))
+    f:write(contents)
+    f:sync()
+    f:close()
+    fs.move(tmp, path, { replace = true })
+    fs.sync(fs.path.parent(path))
+end
+
+pledge("fs")
+
+local base = os.tmpname()
+replace(base, "version 1\n")
+replace(base, "version 2\n")
+print(io.open(base):read("a"))   --> version 2
+fs.remove(base)
+```
+
+A program that appends records to a log syncs the file after each record and before it reports the record as saved. A crash then keeps every reported record. Only the last record can arrive incomplete, so each record carries a length or a checksum that lets a reader drop an incomplete one. This holds on disks with the powersafe overwrite property, which the drives of current systems have. On a disk without it, a lost append can also damage the end of the record before it, in the same sector of 512 bytes.
+
+Overwriting part of a file in place is not atomic, even with a sync. A crash can leave the region half old and half new, because a disk writes in sectors of 512 bytes and keeps any subset of the sectors of an unfinished write. A program that updates records in place keeps a journal, or stores its data in [SQLite](/manual/sqlite), which keeps one. SQLite commits a transaction atomically after any crash. It makes the commit durable when the database runs with `PRAGMA synchronous = FULL`, which syncs the log at each commit.
+
+The crash tests of the runtime check each of these sequences. They stop a program at every file operation, with a kill and with a simulated power loss that follows the rules above. Then they check that the guarantees hold and that each step is needed.
 
 ## Errors
 

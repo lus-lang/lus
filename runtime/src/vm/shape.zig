@@ -10,6 +10,7 @@
 //! finds it without its state, and a state that closes returns its ids.
 
 const std = @import("std");
+const inv = @import("inv.zig");
 const object = @import("object.zig");
 const String = object.String;
 const Allocator = std.mem.Allocator;
@@ -23,6 +24,16 @@ pub const max_children = 32;
 pub const max_shapes = 0xFFFE;
 /// Shapes of up to this many keys find a key by scanning them.
 const scan_max = 8;
+
+/// Whether a new shape extends its parent by one key, holds distinct keys,
+/// and finds each key in its own slot.
+fn wellFormed(s: *const Shape) bool {
+    const p = s.parent orelse return s.n == 0;
+    if (s.n != p.n + 1) return false;
+    for (0..p.n) |i| if (s.keys[i] != p.keys[i]) return false;
+    for (0..s.n) |i| if (s.findText(s.keys[i]) != i) return false;
+    return true;
+}
 
 pub const Shape = struct {
     id: u16,
@@ -211,6 +222,7 @@ pub const Shapes = struct {
             return null;
         };
         sh.all.appendAssumeCapacity(s);
+        inv.assert(wellFormed(s));
         return s;
     }
 
