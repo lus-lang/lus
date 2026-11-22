@@ -324,17 +324,17 @@ const Linker = struct {
         for (o.atoms, 0..) |a, i| {
             if (!l.live[i] or lobj.zeroed(a.kind)) continue;
             const at = if (a.kind == .tdata) l.tls.addr + l.addr[i] else l.addr[i];
-            @memcpy(out[at - l.base ..][0..a.size], o.bytes(a));
+            @memcpy(out[index(at - l.base)..][0..index(a.size)], o.bytes(a));
         }
         for (l.got.keys(), 0..) |k, i| {
             const v: u64 = if (k.tls) @bitCast(l.tpOffset(l.symbol(k.target, k.sym))) else l.symbol(k.target, k.sym);
-            std.mem.writeInt(u64, out[l.got_addr - l.base + 8 * i ..][0..8], v, .little);
+            std.mem.writeInt(u64, out[index(l.got_addr - l.base) + 8 * i ..][0..8], v, .little);
         }
         for (o.atoms, 0..) |a, i| {
             if (!l.live[i] or lobj.zeroed(a.kind)) continue;
             const at = if (a.kind == .tdata) l.tls.addr + l.addr[i] else l.addr[i];
             for (o.atomRelocs(a)) |r| {
-                const loc = out[at - l.base + r.offset ..];
+                const loc = out[index(at - l.base + r.offset)..];
                 if (l.isDropped(i, r.offset)) {
                     @memset(loc[0..8], 0);
                     continue;
@@ -424,7 +424,7 @@ const Linker = struct {
         eh.e_ident[elf.EI.DATA] = elf.ELFDATA2LSB;
         eh.e_ident[elf.EI.VERSION] = 1;
         @memcpy(out[0..@sizeOf(elf.Elf64_Ehdr)], std.mem.asBytes(&eh));
-        const phdr_size = @as(u64, l.phnum) * @sizeOf(Phdr);
+        const phdr_size = @as(usize, l.phnum) * @sizeOf(Phdr);
         var ph: [6]Phdr = undefined;
         ph[0] = .{ .p_type = PT_PHDR, .p_flags = elf.PF_R, .p_offset = @sizeOf(elf.Elf64_Ehdr), .p_vaddr = l.base + @sizeOf(elf.Elf64_Ehdr), .p_paddr = l.base + @sizeOf(elf.Elf64_Ehdr), .p_filesz = phdr_size, .p_memsz = phdr_size, .p_align = 8 };
         for (l.seg, 1..) |s, k| ph[k] = .{ .p_type = PT_LOAD, .p_flags = s.flags, .p_offset = s.addr - l.base, .p_vaddr = s.addr, .p_paddr = s.addr, .p_filesz = s.filesz, .p_memsz = s.memsz, .p_align = l.page };
@@ -433,6 +433,13 @@ const Linker = struct {
         @memcpy(out[@sizeOf(elf.Elf64_Ehdr)..][0..phdr_size], std.mem.sliceAsBytes(&ph));
     }
 };
+
+/// The index into the output of an offset in it. The output fits in
+/// memory, which `write` checks when it allocates it, so every offset in
+/// it fits a `usize` on a 32-bit host too.
+fn index(off: u64) usize {
+    return @intCast(off);
+}
 
 fn put(comptime T: type, loc: []u8, v: T) void {
     std.mem.writeInt(T, loc[0..@sizeOf(T)], v, .little);
@@ -516,7 +523,7 @@ test "the linker keeps what the entry reaches and clears a dropped builtin" {
     _ = gone;
     // The call reaches f, the next atom of the code, 16 bytes on.
     const eh = std.mem.bytesToValue(elf.Elf64_Ehdr, r.bytes[0..@sizeOf(elf.Elf64_Ehdr)]);
-    const text = eh.e_entry - 0x200000;
+    const text: usize = @intCast(eh.e_entry - 0x200000);
     try std.testing.expectEqual(@as(i32, 16 - 5), std.mem.readInt(i32, r.bytes[text + 1 ..][0..4], .little));
     // The registration holds the address of `kept` and null for `gone`.
     const reg_at = @sizeOf(elf.Elf64_Ehdr) + 6 * @sizeOf(Phdr);
