@@ -124,7 +124,7 @@ local function the_handler_receives_the_request_test()
         keys[#keys + 1] = k
     end
     table.sort(keys)
-    assert(table.concat(keys, " ") == "body headers method path query")
+    assert(table.concat(keys, " ") == "body headers method path query reader")
 end
 
 local function a_request_without_a_query_has_an_empty_query_test()
@@ -295,9 +295,8 @@ local function chunk_extensions_within_the_limit_are_accepted_test()
 end
 
 local function chunk_extensions_over_the_limit_are_refused_test()
-    local called = false
     serving(function(req)
-        called = true
+        return 200, req.body
     end, function(port)
         local sock <close> = connect(port)
         -- Every chunk spends 1006 bytes on one byte of the body. The line
@@ -323,7 +322,6 @@ local function chunk_extensions_over_the_limit_are_refused_test()
             .. string.rep("X-T: " .. string.rep("t", 990) .. "\r\n", 66))
         assert(r.status == 431)
     end)
-    assert(not called)
 end
 
 local function a_request_that_arrives_in_pieces_test()
@@ -667,7 +665,6 @@ local invalid_results_cases = {
     header_name_space = { function() return 200, "x", { ["bad name"] = "v" } end, "invalid header name" },
     header_value_table = { function() return 200, "x", { ["x-a"] = { {} } } end, "invalid value for the header 'x%-a'" },
     header_list_newline = { function() return 200, "x", { ["x-a"] = { "ok", "one\r\nx-b: two" } } end, "invalid header value" },
-    body_function = { function() return 200, function() end end, "invalid body" },
     upgrade_without_function = { function() return 101, "x" end, "status 101 without an upgrade function" },
     header_value_newline = { function() return 200, "x", { ["x-a"] = "one\r\nx-b: two" } end, "invalid header value" },
 }
@@ -851,6 +848,263 @@ local function many_clients_at_once_test()
     end)
 end
 
+-- ===== Streamed bodies =====
+
+-- Reads the chunks of a chunked body, each as its size line, its data,
+-- and its line end.
+local function read_chunks(sock)
+    local chunks = {}
+    while true do
+        local size = tonumber(txt(sock:receive("*l")), 16)
+        if size == 0 then
+            assert(txt(sock:receive("*l")) == "")
+            return chunks
+        end
+        chunks[#chunks + 1] = txt(sock:receive(size))
+        assert(txt(sock:receive("*l")) == "")
+    end
+end
+
+local function counting(n, prefix)
+    local i = 0
+    return function()
+        i = i + 1
+        if i <= n then return `$(prefix)$(i)` end
+    end
+end
+
+local function a_generator_streams_its_chunks_test()
+    serving(function(req)
+        return 200, counting(3, "part "), { ["Content-Type"] = "text/plain" }
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/"), true)
+        assert(r.status == 200 and r.headers["transfer-encoding"] == "chunked")
+        assert(r.headers["content-length"] == nil and r.headers.connection == nil)
+        assert(table.concat(read_chunks(sock), "|") == "part 1|part 2|part 3")
+        -- The connection carries the next request.
+        exchange(sock, get("/again"), true)
+        assert(table.concat(read_chunks(sock), "|") == "part 1|part 2|part 3")
+    end)
+end
+
+-- Each chunk goes out when the generator returns it, and the generator
+-- may suspend between chunks.
+local function each_chunk_goes_out_as_the_generator_returns_it_test()
+    local release = false
+    serving(function(req)
+        local step = 0
+        return 200, function()
+            step = step + 1
+            if step == 1 then return "first" end
+            while not release do yield() end
+            if step == 2 then return vector.fromstring("second") end
+        end
+    end, function(port)
+        local sock <close> = connect(port)
+        exchange(sock, get("/"), true)
+        assert(txt(sock:receive("*l")) == "5" and txt(sock:receive(5)) == "first")
+        assert(txt(sock:receive("*l")) == "")
+        release = true
+        local rest = read_chunks(sock)
+        assert(#rest == 1 and rest[1] == "second")
+    end)
+end
+
+local function an_empty_chunk_is_skipped_test()
+    serving(function(req)
+        local parts = { "a", "", "b" }
+        local i = 0
+        return 200, function()
+            i = i + 1
+            return parts[i]
+        end
+    end, function(port)
+        local sock <close> = connect(port)
+        exchange(sock, get("/"), true)
+        assert(table.concat(read_chunks(sock), "|") == "a|b")
+    end)
+end
+
+local function an_error_in_the_generator_closes_the_connection_test()
+    local errors = {}
+    serving(function(req)
+        local step = 0
+        return 200, function()
+            step = step + 1
+            if step == 1 then return "kept" end
+            error("the generator broke")
+        end
+    end, function(port)
+        local sock <close> = connect(port)
+        exchange(sock, get("/"), true)
+        assert(txt(sock:receive("*l")) == "4" and txt(sock:receive(4)) == "kept")
+        assert(txt(sock:receive("*l")) == "")
+        assert(at_end(sock))
+    end, { on_error = function(e) errors[#errors + 1] = e end })
+    assert(#errors == 1 and string.find(tostring(errors[1]), "the generator broke", 1, true))
+end
+
+local function an_invalid_chunk_closes_the_connection_test()
+    local errors = {}
+    serving(function(req)
+        return 200, function() return {} end
+    end, function(port)
+        local sock <close> = connect(port)
+        exchange(sock, get("/"), true)
+        assert(at_end(sock))
+    end, { on_error = function(e) errors[#errors + 1] = e end })
+    assert(#errors == 1 and string.find(tostring(errors[1]), "invalid chunk", 1, true))
+end
+
+local function a_head_request_skips_the_generator_test()
+    local called = false
+    serving(function(req)
+        return 200, function() called = true end
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "HEAD / HTTP/1.1\r\nHost: test\r\n\r\n", true)
+        assert(r.status == 200 and r.headers["transfer-encoding"] == "chunked")
+        r = exchange(sock, "HEAD / HTTP/1.1\r\nHost: test\r\n\r\n", true)
+        assert(r.status == 200)
+    end)
+    assert(not called)
+end
+
+-- With a Content-Length of the handler, the chunks go out as they are and
+-- the connection closes after them.
+local function a_streamed_body_with_a_length_goes_out_unframed_test()
+    serving(function(req)
+        return 200, counting(2, "x"), { ["Content-Length"] = 4 }
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, get("/"))
+        assert(r.body == "x1x2" and r.headers.connection == "close")
+        assert(r.headers["transfer-encoding"] == nil)
+        assert(at_end(sock))
+    end)
+end
+
+local function an_http_1_0_client_gets_an_unframed_stream_test()
+    serving(function(req)
+        return 200, counting(2, "y")
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send("GET / HTTP/1.0\r\n\r\n")
+        local all = txt(sock:receive("*a"))
+        assert(string.find(all, "Connection: close\r\n", 1, true))
+        assert(not string.find(all, "Transfer-Encoding", 1, true))
+        assert(string.match(all, "\r\n\r\n(.*)$") == "y1y2")
+    end)
+end
+
+local function the_reader_reads_the_body_in_pieces_test()
+    local pieces
+    serving(function(req)
+        pieces = {}
+        while true do
+            local part = req.reader:read(4)
+            if not part then break end
+            pieces[#pieces + 1] = txt(part)
+        end
+        return 200, "done"
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n6\r\nabcdef\r\n3\r\nghi\r\n0\r\n\r\n")
+        assert(r.body == "done")
+        r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\n\r\nhello")
+        assert(r.body == "done")
+    end)
+    assert(table.concat(pieces) == "hello")
+    for _, p in ipairs(pieces) do assert(#p <= 4) end
+end
+
+local function the_reader_reads_lines_test()
+    local lines
+    serving(function(req)
+        lines = {}
+        for line in req.reader:lines() do lines[#lines + 1] = txt(line) end
+        return 200
+    end, function(port)
+        local sock <close> = connect(port)
+        local body = "one\r\ntwo\n\nthree"
+        local r = exchange(sock, `POST / HTTP/1.1\r\nHost: test\r\nContent-Length: $(#body)\r\n\r\n` .. body)
+        assert(r.status == 200)
+    end)
+    assert(table.concat(lines, ",") == "one,two,,three")
+end
+
+local function the_reader_reads_the_rest_at_once_test()
+    local first, rest
+    serving(function(req)
+        first = txt(req.reader:read(2))
+        rest = txt(req.reader:readall())
+        return 200
+    end, function(port)
+        local sock <close> = connect(port)
+        exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 6\r\n\r\nabcdef")
+    end)
+    assert(first == "ab" and rest == "cdef")
+end
+
+local function the_body_after_the_reader_started_raises_test()
+    local err
+    serving(function(req)
+        req.reader:read(1)
+        local ok, e = catch req.body
+        err = e
+        return 200
+    end, function(port)
+        local sock <close> = connect(port)
+        exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 3\r\n\r\nabc")
+    end)
+    assert(string.find(tostring(err), "already read through req.reader", 1, true))
+end
+
+local function a_reader_of_an_earlier_request_raises_test()
+    local kept
+    serving(function(req)
+        if req.path == "/first" then
+            kept = req.reader
+            return 200, "first"
+        end
+        local ok, e = catch kept:read()
+        return 200, tostring(e)
+    end, function(port)
+        local sock <close> = connect(port)
+        assert(exchange(sock, "POST /first HTTP/1.1\r\nHost: test\r\nContent-Length: 2\r\n\r\nab").body == "first")
+        local r = exchange(sock, get("/second"))
+        assert(string.find(r.body, "no longer available", 1, true), r.body)
+    end)
+end
+
+local function expect_continue_waits_for_the_reader_test()
+    serving(function(req)
+        return 200, txt(req.reader:readall())
+    end, function(port)
+        local sock <close> = connect(port)
+        sock:send("POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n")
+        assert(txt(sock:receive("*l")) == "HTTP/1.1 100 Continue")
+        assert(txt(sock:receive("*l")) == "")
+        sock:send("body")
+        local r = read_response(sock)
+        assert(r.status == 200 and r.body == "body")
+    end)
+end
+
+-- A handler that answers without the body that the client holds back for
+-- `100 Continue` closes the connection after its response.
+local function expect_continue_without_reading_closes_the_connection_test()
+    serving(function(req)
+        return 403, "no"
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n")
+        assert(r.status == 403 and r.body == "no")
+        assert(at_end(sock))
+    end)
+end
+
 -- ===== Limits and malformed requests =====
 
 local refused_cases = {
@@ -869,18 +1123,7 @@ local refused_cases = {
     two_lengths = { "POST / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n", 400 },
     length_and_chunked = { "POST / HTTP/1.1\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n", 400 },
     unknown_encoding = { "POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n", 501 },
-    bad_chunk_size = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nxyz\r\n", 400 },
-    chunk_size_with_a_sign = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n+3\r\nabc\r\n0\r\n\r\n", 400 },
-    chunk_size_with_an_underscore = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1_0\r\n0123456789abcdef\r\n0\r\n\r\n", 400 },
-    chunk_size_with_a_prefix = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0x3\r\nabc\r\n0\r\n\r\n", 400 },
-    chunk_size_after_a_space = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n 3\r\nabc\r\n0\r\n\r\n", 400 },
-    chunk_size_too_long = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n00000000000000003\r\nabc\r\n0\r\n\r\n", 400 },
-    line_feed_in_a_chunk_extension = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3;a=\nb\r\nabc\r\n0\r\n\r\n", 400 },
-    line_feed_after_a_chunk_size = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\nabc\r\n0\r\n\r\n", 400 },
-    bad_chunk_end = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcde\r\n", 400 },
-    body_over_the_limit = { "POST / HTTP/1.1\r\nContent-Length: 16777217\r\n\r\n", 413 },
     huge_length = { "POST / HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\n", 413 },
-    chunk_over_the_limit = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1000001\r\n", 413 },
     unknown_expectation = { "POST / HTTP/1.1\r\nContent-Length: 1\r\nExpect: something\r\n\r\n", 417 },
     -- The byte 1 stands for 0xFF and the byte 2 for 0xC3, which make the
     -- text invalid UTF-8 once `refused_test` puts them in.
@@ -913,10 +1156,71 @@ local function refused_test(request, expected)
     assert(not called)
 end
 
+-- A request body that breaks its framing or its limit is refused with its
+-- status once the handler reads it through `req.body`.
+local refused_body_cases = {
+    bad_chunk_size = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nxyz\r\n", 400 },
+    chunk_size_with_a_sign = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n+3\r\nabc\r\n0\r\n\r\n", 400 },
+    chunk_size_with_an_underscore = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1_0\r\n0123456789abcdef\r\n0\r\n\r\n", 400 },
+    chunk_size_with_a_prefix = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0x3\r\nabc\r\n0\r\n\r\n", 400 },
+    chunk_size_after_a_space = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n 3\r\nabc\r\n0\r\n\r\n", 400 },
+    chunk_size_too_long = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n00000000000000003\r\nabc\r\n0\r\n\r\n", 400 },
+    line_feed_in_a_chunk_extension = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3;a=\nb\r\nabc\r\n0\r\n\r\n", 400 },
+    line_feed_after_a_chunk_size = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\nabc\r\n0\r\n\r\n", 400 },
+    bad_chunk_end = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcde\r\n", 400 },
+    body_over_the_limit = { "POST / HTTP/1.1\r\nContent-Length: 16777217\r\n\r\n", 413 },
+    chunk_over_the_limit = { "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1000001\r\n", 413 },
+}
+
+local function refused_body_test(request, expected)
+    local reached = false
+    serving(function(req)
+        reached = true
+        return 200, req.body
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, request)
+        assert(r.status == expected, `status $(r.status)`)
+        assert(r.headers.connection == "close" and r.body == "")
+        assert(at_end(sock))
+    end)
+    assert(reached)
+end
+
+-- A handler that leaves the body unread still answers. A body that broke
+-- its framing then closes the connection after the response, since the
+-- next request would start at an unknown place.
+local function a_broken_body_that_the_handler_skips_closes_the_connection_test()
+    serving(function(req)
+        return 200, "skipped"
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\nxyz\r\n")
+        assert(r.status == 200 and r.body == "skipped")
+        assert(at_end(sock))
+    end)
+end
+
+local function a_body_that_the_handler_skips_is_drained_test()
+    serving(function(req)
+        return 200, req.path
+    end, function(port)
+        local sock <close> = connect(port)
+        local r = exchange(sock, "POST /one HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\n\r\nhello")
+        assert(r.status == 200 and r.body == "/one")
+        r = exchange(sock, "POST /two HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n")
+        assert(r.status == 200 and r.body == "/two")
+        r = exchange(sock, get("/three"))
+        assert(r.body == "/three")
+    end)
+end
+
 local function a_body_at_the_limit_is_accepted_by_its_length_test()
     -- The declared length is the limit itself. The server waits for the
-    -- body instead of refusing it, so the client sees no response yet.
-    serving(function(req) end, function(port)
+    -- body that the handler reads, so the client sees no response yet.
+    serving(function(req)
+        return 200, `$(#req.body)`
+    end, function(port)
         local sock <close> = connect(port)
         sock:send("POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 16777216\r\n\r\n")
         sock:settimeout(0.05)
@@ -986,7 +1290,7 @@ end
 -- stopped inside a request is told why.
 local function an_idle_connection_closes_test()
     serving(function(req)
-        return 200, "ok"
+        return 200, req.body and "ok"
     end, function(port)
         local silent <close> = connect(port)
         local partial <close> = connect(port)

@@ -40,6 +40,7 @@ const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
 pub const tls = @import("tls.zig");
+const http = @import("http.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -87,6 +88,10 @@ pub const Socket = struct {
     /// The TLS connection over this socket (`tls.zig`). Every receive and
     /// send then carries plain text through it.
     tls: ?*tls.Tls = null,
+    /// The body that the connection carries now, and the state of a
+    /// `network.fetch` on it (`http.zig`).
+    body: ?*http.Body = null,
+    fetch: ?*http.Fetch = null,
 };
 
 /// A listening TCP socket.
@@ -143,9 +148,10 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "close", .func = udpClose },
         .{ .name = "settimeout", .func = udpSettimeout },
     }, udpGc, udpTostring);
+    try makeMetatable(l, http.reader_name, &http.reader_methods, http.readerCloseMeta, http.readerTostring);
 
     const t = try aux.newLib(l, .fields, "network", &.{
-        .{ .name = "fetch", .func = fetch },
+        .{ .name = "fetch", .func = http.fetch },
         .{ .name = "serve", .func = @import("serve.zig").serve },
     });
     try l.push(Value.obj(.table, t));
@@ -1038,6 +1044,11 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
 
 /// Connects to the first address of `host` that accepts, raising "cannot
 /// connect" when none does.
+/// Connects to `host` and `port`, waiting through the scheduler.
+pub fn connectTo(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+    return connectHost(l, host, port);
+}
+
 fn connectHost(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
     if (sched.active(l.g) or sched.restarted(l)) {
         if (comptime is_windows) return afd.connectScheduled(l, host, port);
@@ -1320,6 +1331,11 @@ fn socketReceive(l: *Thread) Error!u32 {
 
 /// Closes a connection gracefully: sends FIN, then discards pending input
 /// so the close does not reset the connection.
+/// Closes a socket as `close` does.
+pub fn closeSocketOf(l: *Thread, s: *Socket) void {
+    closeSocket(l, s);
+}
+
 fn closeSocket(l: *Thread, s: *Socket) void {
     if (s.closed) return;
     const io = l.g.io;
@@ -1363,6 +1379,7 @@ pub fn releaseSocket(l: *Thread, s: *Socket) void {
     }
     s.buf.deinit(l.g.gpa);
     s.buf = .empty;
+    http.freeState(l.g.gpa, s);
     if (s.http) |h| {
         h.deinit(l.g.gpa);
         l.g.gpa.destroy(h);
@@ -1617,469 +1634,4 @@ fn udpGc(l: *Thread) Error!u32 {
 fn udpTostring(l: *Thread) Error!u32 {
     const s = toObject(l, Udp, udp_name, l.arg(1)) orelse return aux.typeError(l, 1, udp_name);
     return objectTostring(l, "udpsocket", s.closed);
-}
-
-// ---------------------------------------------------------------------
-// network.fetch
-
-const ParsedUrl = struct {
-    https: bool,
-    host: []const u8,
-    port: u16,
-    path: []const u8,
-};
-
-fn parseUrl(url: []const u8) ?ParsedUrl {
-    const sep = std.mem.indexOf(u8, url, "://") orelse return null;
-    const scheme = url[0..sep];
-    var r: ParsedUrl = undefined;
-    if (std.mem.eql(u8, scheme, "http")) {
-        r.https = false;
-        r.port = 80;
-    } else if (std.mem.eql(u8, scheme, "https")) {
-        r.https = true;
-        r.port = 443;
-    } else return null;
-    const rest = url[sep + 3 ..];
-    const host_end = std.mem.indexOfAny(u8, rest, "/:") orelse rest.len;
-    if (host_end == 0 or host_end >= 256) return null;
-    r.host = rest[0..host_end];
-    var i = host_end;
-    if (i < rest.len and rest[i] == ':') {
-        const pstart = i + 1;
-        var j = pstart;
-        while (j < rest.len and std.ascii.isDigit(rest[j])) j += 1;
-        if (j == pstart or (j < rest.len and rest[j] != '/')) return null;
-        const port = std.fmt.parseInt(u32, rest[pstart..j], 10) catch return null;
-        if (port == 0 or port > 65535) return null;
-        r.port = @intCast(port);
-        i = j;
-    }
-    r.path = if (i < rest.len) rest[i..] else "/";
-    if (r.path.len >= 2048) return null;
-    return r;
-}
-
-/// A socket reader that waits at most `timeout_ms` for each read. A
-/// timeout or socket error is kept in `err` and reported as ReadFailed.
-const TimedReader = struct {
-    io: Io,
-    stream: net.Stream,
-    timeout_ms: i32,
-    interface: Io.Reader,
-    err: ?anyerror = null,
-    /// The thread that reads, which waits through the scheduler when it
-    /// is set.
-    thread: ?*Thread = null,
-
-    fn init(io: Io, stream: net.Stream, timeout_ms: i32, buffer: []u8) TimedReader {
-        return .{
-            .io = io,
-            .stream = stream,
-            .timeout_ms = timeout_ms,
-            .interface = .{
-                .vtable = &.{ .stream = streamImpl, .readVec = readVec },
-                .buffer = buffer,
-                .seek = 0,
-                .end = 0,
-            },
-        };
-    }
-
-    fn streamImpl(io_r: *Io.Reader, io_w: *Io.Writer, limit: Io.Limit) Io.Reader.StreamError!usize {
-        const dest = limit.slice(try io_w.writableSliceGreedy(1));
-        var data: [1][]u8 = .{dest};
-        const n = try readVec(io_r, &data);
-        io_w.advance(n);
-        return n;
-    }
-
-    fn readVec(io_r: *Io.Reader, data: [][]u8) Io.Reader.Error!usize {
-        const r: *TimedReader = @alignCast(@fieldParentPtr("interface", io_r));
-        const wait: Wait = if (r.thread) |l| blk: {
-            // With detached coroutines alive, a caller that cannot suspend
-            // runs the scheduler while it waits, so a `network.serve` of
-            // the same state answers.
-            if (!sched.active(l.g) or sched.canSuspend(l)) break :blk waitHandle(r.stream.socket.handle, false, r.timeout_ms);
-            const ready = sched.waitIo(l, r.stream.socket.handle, .read, r.timeout_ms) catch break :blk .failed;
-            break :blk if (ready) .ready else .timeout;
-        } else waitHandle(r.stream.socket.handle, false, r.timeout_ms);
-        switch (wait) {
-            .ready => {},
-            .timeout => {
-                r.err = error.Timeout;
-                return error.ReadFailed;
-            },
-            .failed => {
-                r.err = error.Unexpected;
-                return error.ReadFailed;
-            },
-        }
-        var iovecs: [8][]u8 = undefined;
-        const dest_n, const data_size = try io_r.writableVector(&iovecs, data);
-        const n = r.stream.read(r.io, iovecs[0..dest_n]) catch |e| {
-            r.err = e;
-            return error.ReadFailed;
-        };
-        if (n == 0) return error.EndOfStream;
-        if (n > data_size) {
-            io_r.end += n - data_size;
-            return data_size;
-        }
-        return n;
-    }
-};
-
-const tls_len = std.crypto.tls.Client.min_buffer_len;
-
-/// The connection of one fetch, heap allocated because the TLS client
-/// keeps pointers to the socket reader and writer.
-const FetchConn = struct {
-    stream: net.Stream,
-    sr: TimedReader,
-    sw: net.Stream.Writer,
-    tls: std.crypto.tls.Client,
-    use_tls: bool,
-    sr_buf: [tls_len]u8,
-    sw_buf: [tls_len]u8,
-    tls_read: [tls_len]u8,
-    tls_write: [tls_len]u8,
-
-    fn reader(c: *FetchConn) *Io.Reader {
-        return if (c.use_tls) &c.tls.reader else &c.sr.interface;
-    }
-
-    fn writer(c: *FetchConn) *Io.Writer {
-        return if (c.use_tls) &c.tls.writer else &c.sw.interface;
-    }
-
-    fn sendAll(c: *FetchConn, data: []const u8) bool {
-        const w = c.writer();
-        w.writeAll(data) catch return false;
-        w.flush() catch return false;
-        if (c.use_tls) c.sw.interface.flush() catch return false;
-        return true;
-    }
-};
-
-/// Reads one LF terminated line into `buf`, without the LF and an optional
-/// CR before it. A line longer than the buffer returns its first part and
-/// leaves the rest for the next read. Returns null on a read error.
-fn readHttpLine(r: *Io.Reader, buf: []u8) ?usize {
-    var pos: usize = 0;
-    while (true) {
-        const b = r.takeByte() catch |e| switch (e) {
-            error.EndOfStream => return pos,
-            error.ReadFailed => return null,
-        };
-        if (b == '\n') {
-            if (pos > 0 and buf[pos - 1] == '\r') pos -= 1;
-            return pos;
-        }
-        buf[pos] = b;
-        pos += 1;
-        if (pos >= buf.len - 1) return pos;
-    }
-}
-
-/// Reads up to `dst.len` bytes. Returns 0 at the end of the stream and
-/// null on a read error.
-fn readBody(r: *Io.Reader, dst: []u8) ?usize {
-    return r.readSliceShort(dst) catch null;
-}
-
-fn trimSpaces(s: []const u8) []const u8 {
-    return std.mem.trim(u8, s, " \t");
-}
-
-fn parseContentLength(s: []const u8) ?usize {
-    const t = trimSpaces(s);
-    if (t.len == 0) return null;
-    for (t) |c| if (!std.ascii.isDigit(c)) return null;
-    return std.fmt.parseInt(usize, t, 10) catch null;
-}
-
-fn parseChunkSize(s: []const u8) ?usize {
-    const t = std.mem.trimStart(u8, s, " \t");
-    var end: usize = 0;
-    while (end < t.len and std.ascii.isHex(t[end])) end += 1;
-    if (end == 0) return null;
-    const after = std.mem.trimStart(u8, t[end..], " \t");
-    if (after.len > 0 and after[0] != ';') return null;
-    return std.fmt.parseInt(usize, t[0..end], 16) catch null;
-}
-
-/// Parses the status code of "HTTP/<major>.<minor> <code>".
-fn parseStatus(line: []const u8) ?i64 {
-    if (!std.mem.startsWith(u8, line, "HTTP/")) return null;
-    var i: usize = 5;
-    const digits = struct {
-        fn run(s: []const u8, start: usize) usize {
-            var j = start;
-            while (j < s.len and std.ascii.isDigit(s[j])) j += 1;
-            return j;
-        }
-    }.run;
-    var j = digits(line, i);
-    if (j == i or j >= line.len or line[j] != '.') return null;
-    i = j + 1;
-    j = digits(line, i);
-    if (j == i) return null;
-    i = j;
-    while (i < line.len and std.ascii.isWhitespace(line[i])) i += 1;
-    var neg = false;
-    if (i < line.len and (line[i] == '-' or line[i] == '+')) {
-        neg = line[i] == '-';
-        i += 1;
-    }
-    j = digits(line, i);
-    if (j == i) return null;
-    const n = std.fmt.parseInt(i64, line[i..@min(j, i + 18)], 10) catch return null;
-    return if (neg) -n else n;
-}
-
-/// Stores one response header in `t`, decoding invalid UTF-8 lossily.
-/// Stores a response header in `t`. A header that repeats joins its
-/// earlier values with ", ", as HTTP allows for a field that appears more
-/// than once.
-fn setHeader(l: *Thread, t: *Table, key: []const u8, val: []const u8) Error!void {
-    const gpa = l.g.gpa;
-    var tmp: std.ArrayList(u8) = .empty;
-    defer tmp.deinit(gpa);
-    {
-        var kb: std.ArrayList(u8) = .empty;
-        defer kb.deinit(gpa);
-        wtf8.appendLossy(gpa, &kb, key) catch return l.raiseMem();
-        const prev = table.getStr(t, try l.newString(kb.items));
-        if (prev.tag == .string) {
-            tmp.appendSlice(gpa, prev.as(object.String).bytes()) catch return l.raiseMem();
-            tmp.appendSlice(gpa, ", ") catch return l.raiseMem();
-        }
-    }
-    wtf8.appendLossy(gpa, &tmp, val) catch return l.raiseMem();
-    try l.push(try l.newStringValue(tmp.items));
-    defer l.top -= 1;
-    tmp.clearRetainingCapacity();
-    wtf8.appendLossy(gpa, &tmp, key) catch return l.raiseMem();
-    const k = try l.newStringValue(tmp.items);
-    try l.push(k);
-    defer l.top -= 1;
-    try ops.rawSet(l, t, k, l.stack[l.top - 2]);
-}
-
-/// Appends the bytes of a header name or value: a string, or a number
-/// converted to a string. Returns false for any other value.
-fn headerText(l: *Thread, v: Value, buf: *std.ArrayList(u8)) Error!bool {
-    const s = switch (v.tag) {
-        .string => v.as(object.String),
-        else => if (v.isNumber()) try ops.toString(l, v) else return false,
-    };
-    buf.appendSlice(l.g.gpa, s.bytes()) catch return l.raiseMem();
-    return true;
-}
-
-/// The default User-Agent header: `Lus/` and the version of the build.
-const user_agent = "User-Agent: Lus/" ++ @import("build_options").version ++ "\r\n";
-
-fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: ParsedUrl, body: ?[]const u8) Error!void {
-    const gpa = l.g.gpa;
-    const default_port: u16 = if (u.https) 443 else 80;
-    req.print(gpa, "{s} {s} HTTP/1.1\r\n", .{ method, u.path }) catch return l.raiseMem();
-    // The headers of the caller come after the request line, and a default
-    // header that the caller also names is left out.
-    var own: std.ArrayList(u8) = .empty;
-    defer own.deinit(gpa);
-    var has_host = false;
-    var has_conn = false;
-    var has_agent = false;
-    if (l.arg(3).tag == .table) {
-        const ht = l.arg(3).as(Table);
-        var key: Value = .nil;
-        var name: std.ArrayList(u8) = .empty;
-        defer name.deinit(gpa);
-        var val: std.ArrayList(u8) = .empty;
-        defer val.deinit(gpa);
-        while (table.next(ht, key) catch null) |kv| {
-            key = kv.key;
-            name.clearRetainingCapacity();
-            val.clearRetainingCapacity();
-            if (!try headerText(l, kv.key, &name)) continue;
-            if (std.mem.indexOfAny(u8, name.items, "\r\n") != null)
-                return l.raiseFmt("invalid characters in HTTP header", .{});
-            // A list sends one header line for each of its values.
-            const list: ?*Table = if (kv.val.tag == .table) kv.val.as(Table) else null;
-            const n: i64 = if (list) |t| table.length(t) else 1;
-            var i: i64 = 1;
-            while (i <= n) : (i += 1) {
-                val.clearRetainingCapacity();
-                const v = if (list) |t| table.getInt(t, i) else kv.val;
-                if (!try headerText(l, v, &val)) continue;
-                if (std.mem.indexOfAny(u8, val.items, "\r\n") != null)
-                    return l.raiseFmt("invalid characters in HTTP header", .{});
-                if (std.ascii.eqlIgnoreCase(name.items, "host")) has_host = true;
-                if (std.ascii.eqlIgnoreCase(name.items, "connection")) has_conn = true;
-                if (std.ascii.eqlIgnoreCase(name.items, "user-agent")) has_agent = true;
-                own.print(gpa, "{s}: {s}\r\n", .{ name.items, val.items }) catch return l.raiseMem();
-            }
-        }
-    }
-    if (!has_host) {
-        if (u.port != default_port)
-            req.print(gpa, "Host: {s}:{d}\r\n", .{ u.host, u.port }) catch return l.raiseMem()
-        else
-            req.print(gpa, "Host: {s}\r\n", .{u.host}) catch return l.raiseMem();
-    }
-    if (!has_conn) req.appendSlice(gpa, "Connection: close\r\n") catch return l.raiseMem();
-    if (!has_agent) req.appendSlice(gpa, user_agent) catch return l.raiseMem();
-    req.appendSlice(gpa, own.items) catch return l.raiseMem();
-    if (body) |b| if (b.len > 0) {
-        req.print(gpa, "Content-Length: {d}\r\n", .{b.len}) catch return l.raiseMem();
-    };
-    req.appendSlice(gpa, "\r\n") catch return l.raiseMem();
-    if (body) |b| req.appendSlice(gpa, b) catch return l.raiseMem();
-}
-
-fn fetch(l: *Thread) Error!u32 {
-    const url = try aux.checkBytes(l, 1);
-    const method = (try aux.optString(l, 2, "GET")).?;
-    const body: ?[]const u8 = if (l.arg(4).isNil()) null else try checkData(l, 4);
-    if (std.mem.indexOfAny(u8, method, "\r\n") != null) return l.raiseFmt("invalid characters in HTTP method", .{});
-    if (std.mem.indexOfAny(u8, url, "\r\n") != null) return l.raiseFmt("invalid characters in URL", .{});
-    try pledge.require(l, "network:http", url);
-    const u = parseUrl(url) orelse return l.raiseFmt("invalid URL: {s}", .{url});
-
-    const g = l.g;
-    const gpa = g.gpa;
-    const io = g.io;
-
-    var req: std.ArrayList(u8) = .empty;
-    defer req.deinit(gpa);
-    try buildRequest(l, &req, method, u, body);
-
-    const stream, _ = try connectHost(l, u.host, u.port);
-    defer stream.close(io);
-
-    const c = gpa.create(FetchConn) catch return l.raiseMem();
-    defer gpa.destroy(c);
-    c.stream = stream;
-    c.use_tls = false;
-    c.sr = .init(io, stream, fetch_timeout_ms, &c.sr_buf);
-    c.sr.thread = l;
-    c.sw = stream.writer(io, &c.sw_buf);
-
-    if (u.https) {
-        var bundle: std.crypto.Certificate.Bundle = .empty;
-        defer bundle.deinit(gpa);
-        const now = Io.Clock.real.now(io);
-        bundle.rescan(gpa, io, now) catch |e| return l.raiseFmt("cannot load system certificates: {s}", .{@errorName(e)});
-        var lock: Io.RwLock = .init;
-        var entropy: [std.crypto.tls.Client.Options.entropy_len]u8 = undefined;
-        io.random(&entropy);
-        c.tls = std.crypto.tls.Client.init(&c.sr.interface, &c.sw.interface, .{
-            .host = .{ .explicit = u.host },
-            .ca = .{ .bundle = .{ .gpa = gpa, .io = io, .lock = &lock, .bundle = &bundle } },
-            .read_buffer = &c.tls_read,
-            .write_buffer = &c.tls_write,
-            .entropy = &entropy,
-            .realtime_now = now,
-            // HTTP framing detects truncated bodies through Content-Length
-            // and chunk sizes, as with the legacy runtime.
-            .allow_truncation_attacks = true,
-        }) catch |e| {
-            const name = @errorName(e);
-            if (std.mem.indexOf(u8, name, "Certificate") != null)
-                return l.raiseFmt("SSL certificate verification failed for {s}", .{u.host});
-            const cause: anyerror = switch (e) {
-                error.ReadFailed => c.sr.err orelse e,
-                error.WriteFailed => c.sw.err orelse e,
-                else => e,
-            };
-            return failResult(l, "SSL handshake failed", cause);
-        };
-        c.use_tls = true;
-    }
-
-    if (!c.sendAll(req.items)) return l.raiseFmt("failed to send request", .{});
-
-    const r = c.reader();
-    var line: [4096]u8 = undefined;
-    const status_len = readHttpLine(r, &line) orelse return l.raiseFmt("failed to read response", .{});
-    const status = parseStatus(line[0..status_len]) orelse return l.raiseFmt("invalid HTTP response: {s}", .{line[0..status_len]});
-
-    const headers = try l.newTable(0, 8);
-    try l.push(Value.obj(.table, headers));
-    const headers_idx = l.top - 1;
-    var content_length: ?usize = null;
-    var chunked = false;
-    while (true) {
-        const n = readHttpLine(r, &line) orelse return l.raiseFmt("failed to read response headers", .{});
-        if (n == 0) break;
-        const hl = line[0..n];
-        const colon = std.mem.indexOfScalar(u8, hl, ':') orelse continue;
-        const key = hl[0..colon];
-        for (key) |*ch| ch.* = std.ascii.toLower(ch.*);
-        const val = std.mem.trimStart(u8, hl[colon + 1 ..], " ");
-        try setHeader(l, headers, key, val);
-        if (std.mem.eql(u8, key, "content-length")) {
-            const len = parseContentLength(val) orelse return l.raiseFmt("invalid Content-Length", .{});
-            if (len > fetch_max_body) return l.raiseFmt("invalid Content-Length", .{});
-            content_length = len;
-        } else if (std.mem.eql(u8, key, "transfer-encoding")) {
-            if (std.mem.indexOf(u8, val, "chunked") != null) chunked = true;
-        }
-    }
-
-    var resp: std.ArrayList(u8) = .empty;
-    defer resp.deinit(gpa);
-    var buf: [4096]u8 = undefined;
-    // A response to HEAD, and a 1xx, 204 or 304 response, ends after its
-    // headers, whatever Content-Length says (RFC 9112, section 6.3).
-    const no_body = std.ascii.eqlIgnoreCase(method, "HEAD") or status == 204 or status == 304 or (status >= 100 and status < 200);
-    if (no_body) {} else if (chunked) {
-        while (true) {
-            const n = readHttpLine(r, &line) orelse return l.raiseFmt("truncated chunked response", .{});
-            const size = parseChunkSize(line[0..n]) orelse return l.raiseFmt("invalid chunk size", .{});
-            if (size > fetch_max_body - resp.items.len) return l.raiseFmt("invalid chunk size", .{});
-            if (size == 0) break;
-            var remaining = size;
-            while (remaining > 0) {
-                const want = @min(remaining, buf.len);
-                const got = readBody(r, buf[0..want]) orelse 0;
-                if (got == 0) return l.raiseFmt("truncated chunked response", .{});
-                resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
-                remaining -= got;
-            }
-            const t = readHttpLine(r, &line);
-            if (t == null or t.? != 0) return l.raiseFmt("invalid chunk terminator", .{});
-        }
-    } else if (content_length) |len| {
-        var remaining = len;
-        while (remaining > 0) {
-            const want = @min(remaining, buf.len);
-            const got = readBody(r, buf[0..want]) orelse 0;
-            if (got == 0) return l.raiseFmt("truncated response body", .{});
-            resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
-            remaining -= got;
-        }
-    } else {
-        while (true) {
-            const got = readBody(r, &buf) orelse 0;
-            if (got == 0) break;
-            if (got > fetch_max_body - resp.items.len) return l.raiseFmt("response body too large", .{});
-            resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
-            if (got < buf.len) break;
-        }
-    }
-
-    if (c.use_tls) {
-        c.tls.end() catch {};
-        c.sw.interface.flush() catch {};
-    }
-
-    const vec = try vector.newVectorFrom(l, &resp);
-    try l.push(Value.obj(.vector, vec));
-    const ht = l.stack[headers_idx];
-    l.stack[headers_idx] = Value.int(status);
-    try l.push(ht);
-    return 3;
 }

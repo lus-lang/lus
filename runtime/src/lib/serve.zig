@@ -16,6 +16,7 @@ const object = @import("../vm/object.zig");
 const state = @import("../vm/state.zig");
 const table = @import("../vm/table.zig");
 const ops = @import("../vm/ops.zig");
+const gc = @import("../vm/gc.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const pledge = @import("../vm/pledge.zig");
 const sched = @import("../vm/sched.zig");
@@ -24,6 +25,7 @@ const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const net = @import("network.zig");
 const coroutine = @import("coroutine.zig");
+const http = @import("http.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -69,22 +71,17 @@ pub const Http = struct {
     query: Span = .{},
     headers: std.ArrayList(Header) = .empty,
     framing: enum { none, length, chunked } = .none,
-    length: usize = 0,
-    /// How far the buffer of the socket is read. A chunked body leaves
-    /// the buffer as it is decoded, so the buffer holds the head and the
-    /// bytes that arrived after this point.
-    cpos: usize = 0,
-    /// The body of a chunked request, decoded so far.
-    body: std.ArrayList(u8) = .empty,
-    /// What a chunked body continues with: the line of a chunk, its data,
-    /// the line end after the data, or the trailers.
-    chunk: enum { line, data, end, trailers } = .line,
-    /// The bytes of the current chunk that have not arrived.
-    chunk_left: usize = 0,
-    /// The bytes of framing that the chunked body has spent.
-    framing_bytes: usize = 0,
+    length: u64 = 0,
     keep: bool = true,
     head: bool = false,
+    /// The request is HTTP/1.0, whose clients know no chunked responses.
+    http10: bool = false,
+    /// A response that the handler streams sends its chunks with chunked
+    /// transfer coding, or as they are when the handler set a
+    /// `Content-Length`, and then the connection closes.
+    stream_raw: bool = false,
+    /// The response says the connection closes after it.
+    close_after: bool = false,
     /// The response being written and how much of it was sent.
     out: std.ArrayList(u8) = .empty,
     out_off: usize = 0,
@@ -94,7 +91,6 @@ pub const Http = struct {
 
     pub fn deinit(h: *Http, gpa: std.mem.Allocator) void {
         h.headers.deinit(gpa);
-        h.body.deinit(gpa);
         h.out.deinit(gpa);
     }
 
@@ -104,11 +100,6 @@ pub const Http = struct {
         h.headers.clearRetainingCapacity();
         h.framing = .none;
         h.length = 0;
-        h.cpos = 0;
-        h.body.clearRetainingCapacity();
-        h.chunk = .line;
-        h.chunk_left = 0;
-        h.framing_bytes = 0;
     }
 };
 
@@ -124,7 +115,13 @@ fn httpOf(l: *Thread, s: *net.Socket) Error!*Http {
 // network.serve
 
 const connection_src =
-    \\local readrequest, respond, stderr = ...
+    \\local readrequest, respond, stderr, writechunk, refusal, readbody = ...
+    \\-- Request tables read their whole body on the first use of `body`.
+    \\local request_mt = {
+    \\    __index = function(req, key)
+    \\        if key == "body" then return readbody(req) end
+    \\    end,
+    \\}
     \\local function report(on_error, err)
     \\    if on_error then
     \\        local ok, failure = catch on_error(err)
@@ -135,13 +132,20 @@ const connection_src =
     \\end
     \\local function exchange(conn, handler, on_error)
     \\    while true do
-    \\        local req, keep, head = readrequest(conn)
+    \\        local req, keep, head = readrequest(conn, request_mt)
     \\        if not req then
     \\            if keep then respond(conn, keep, nil, nil, false, false) end
     \\            return
     \\        end
     \\        local ok, status, body, headers = catch handler(req)
     \\        if not ok then
+    \\            -- A request body that broke its framing or its limit while
+    \\            -- the handler read it is refused with its own status.
+    \\            local refused = refusal(conn)
+    \\            if refused then
+    \\                respond(conn, refused, nil, nil, false, false)
+    \\                return
+    \\            end
     \\            report(on_error, status)
     \\            respond(conn, 500, nil, nil, false, false)
     \\            return
@@ -162,13 +166,42 @@ const connection_src =
     \\            end
     \\            return
     \\        end
-    \\        local valid, alive = catch respond(conn, status, body, headers, keep, head)
-    \\        if not valid then
-    \\            report(on_error, alive)
-    \\            respond(conn, 500, nil, nil, false, false)
-    \\            return
+    \\        if type(body) == "function" then
+    \\            -- A streamed response: the head goes out, then every chunk
+    \\            -- that the generator returns, as it returns it, until nil.
+    \\            local valid, alive, follow = catch respond(conn, status, nil, headers, keep, head, nil, true)
+    \\            if not valid then
+    \\                report(on_error, alive)
+    \\                respond(conn, 500, nil, nil, false, false)
+    \\                return
+    \\            end
+    \\            if not alive then return end
+    \\            if follow then
+    \\                while true do
+    \\                    local produced, chunk = catch body()
+    \\                    if not produced then
+    \\                        report(on_error, chunk)
+    \\                        return
+    \\                    end
+    \\                    local wrote, open = catch writechunk(conn, chunk)
+    \\                    if not wrote then
+    \\                        report(on_error, open)
+    \\                        return
+    \\                    end
+    \\                    if not open then return end
+    \\                    if chunk == nil then break end
+    \\                end
+    \\            end
+    \\            if not keep then return end
+    \\        else
+    \\            local valid, alive = catch respond(conn, status, body, headers, keep, head)
+    \\            if not valid then
+    \\                report(on_error, alive)
+    \\                respond(conn, 500, nil, nil, false, false)
+    \\                return
+    \\            end
+    \\            if not (alive and keep) then return end
     \\        end
-    \\        if not (alive and keep) then return end
     \\    end
     \\end
     \\return function(sock, handler, on_error)
@@ -203,7 +236,13 @@ fn connectionFn(l: *Thread) Error!Value {
     try l.push(write);
     const report = try aux.native(l, reportError, "stderr");
     try l.push(report);
-    const f = try ops.call1(l, chunk, &.{ read, write, report });
+    const chunk_fn = try aux.native(l, writeChunk, "writechunk");
+    try l.push(chunk_fn);
+    const refused = try aux.native(l, refusal, "refusal");
+    try l.push(refused);
+    const body_fn = try aux.native(l, readBody, "readbody");
+    try l.push(body_fn);
+    const f = try ops.call1(l, chunk, &.{ read, write, report, chunk_fn, refused, body_fn });
     try l.push(f);
     try aux.setField(l, g.registry.as(Table), connection_key, f);
     g.ext.put(g.gpa, connection_key, f.as(object.Closure)) catch return l.raiseMem();
@@ -460,6 +499,7 @@ fn parseHead(l: *Thread, h: *Http, buf: []const u8, end: usize) Error!u16 {
     h.path = span(sp1 + 1, path_len);
     h.query = if (q) |i| span(sp1 + 1 + i + 1, target.len - i - 1) else .{};
     h.head = std.mem.eql(u8, method, "HEAD");
+    h.http10 = http10;
 
     var pos = line_end + 2;
     while (pos < end - 2) {
@@ -492,106 +532,14 @@ fn parseHead(l: *Thread, h: *Http, buf: []const u8, end: usize) Error!u16 {
         } else if (std.ascii.eqlIgnoreCase(name, "content-length")) {
             if (h.framing == .chunked or val.len == 0) return 400;
             for (val) |c| if (!std.ascii.isDigit(c)) return 400;
-            const n = std.fmt.parseInt(usize, val, 10) catch return 413;
+            const n = std.fmt.parseInt(u64, val, 10) catch return 413;
             if (seen_length and n != h.length) return 400;
-            if (n > max_body) return 413;
             seen_length = true;
             h.length = n;
             h.framing = .length;
         }
     }
     return 0;
-}
-
-/// The size that the line of a chunk gives, or null for a malformed
-/// line. The size is hexadecimal digits alone. Extensions follow it after
-/// a semicolon and hold no control character other than a tab, so a line
-/// feed without its carriage return is refused.
-fn chunkSize(line: []const u8) ?usize {
-    var digits = line;
-    var ext: []const u8 = "";
-    if (std.mem.indexOfScalar(u8, line, ';')) |semi| {
-        digits = line[0..semi];
-        ext = line[semi..];
-    }
-    digits = std.mem.trimEnd(u8, digits, " \t");
-    if (digits.len == 0 or digits.len > 2 * @sizeOf(usize)) return null;
-    var size: usize = 0;
-    for (digits) |c| {
-        const d = std.fmt.charToDigit(c, 16) catch return null;
-        size = size * 16 + d;
-    }
-    for (ext) |c| {
-        if ((c < ' ' and c != '\t') or c == 0x7f) return null;
-    }
-    return size;
-}
-
-/// Decodes what the buffer holds of a chunked body into `h.body`, and
-/// takes the decoded bytes out of the buffer. The buffer therefore never
-/// holds more than the head and what one read brought.
-fn parseChunks(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
-    const gpa = l.g.gpa;
-    const buf = s.buf.items;
-    const result: Parse = step: while (true) {
-        switch (h.chunk) {
-            .line => {
-                const eol = std.mem.indexOfPos(u8, buf, h.cpos, "\r\n") orelse {
-                    if (buf.len - h.cpos > max_chunk_line) break :step .{ .bad = 400 };
-                    break :step .{ .more = 4096 };
-                };
-                const line = buf[h.cpos..eol];
-                if (line.len > max_chunk_line) break :step .{ .bad = 400 };
-                const size = chunkSize(line) orelse break :step .{ .bad = 400 };
-                h.cpos = eol + 2;
-                h.framing_bytes += line.len + 2;
-                if (size == 0) {
-                    h.chunk = .trailers;
-                    continue;
-                }
-                if (size > max_body - h.body.items.len) break :step .{ .bad = 413 };
-                // The line end after the data counts with its chunk.
-                h.framing_bytes += 2;
-                if (h.framing_bytes > max_framing + framing_per_byte * (h.body.items.len + size)) break :step .{ .bad = 413 };
-                h.chunk_left = size;
-                h.chunk = .data;
-            },
-            .data => {
-                const n = @min(h.chunk_left, buf.len - h.cpos);
-                h.body.appendSlice(gpa, buf[h.cpos..][0..n]) catch return l.raiseMem();
-                h.cpos += n;
-                h.chunk_left -= n;
-                if (h.chunk_left > 0) break :step .{ .more = @min(h.chunk_left + 2, 65536) };
-                h.chunk = .end;
-            },
-            .end => {
-                if (buf.len - h.cpos < 2) break :step .{ .more = 4096 };
-                if (buf[h.cpos] != '\r' or buf[h.cpos + 1] != '\n') break :step .{ .bad = 400 };
-                h.cpos += 2;
-                h.chunk = .line;
-            },
-            // Trailer lines follow the last chunk, up to an empty line.
-            .trailers => {
-                const eol = std.mem.indexOfPos(u8, buf, h.cpos, "\r\n") orelse {
-                    if (h.framing_bytes + (buf.len - h.cpos) > max_framing + framing_per_byte * h.body.items.len) break :step .{ .bad = 431 };
-                    break :step .{ .more = 4096 };
-                };
-                const len = eol - h.cpos;
-                h.cpos = eol + 2;
-                h.framing_bytes += len + 2;
-                if (h.framing_bytes > max_framing + framing_per_byte * h.body.items.len) break :step .{ .bad = 431 };
-                if (len == 0) break :step .done;
-            },
-        }
-    };
-    if (result == .more and h.cpos > h.head_end) {
-        // The head stays, since the request table is built from it.
-        const rest = buf.len - h.cpos;
-        std.mem.copyForwards(u8, s.buf.items[h.head_end..][0..rest], buf[h.cpos..]);
-        s.buf.items.len = h.head_end + rest;
-        h.cpos = h.head_end;
-    }
-    return result;
 }
 
 fn parse(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
@@ -615,26 +563,14 @@ fn parse(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
         const status = try parseHead(l, h, buf, end);
         if (status != 0) return .{ .bad = status };
         h.head_end = end;
-        h.cpos = end;
         if (h.framing != .none) {
             if (headerValue(h, buf, "expect")) |e| {
                 if (!std.ascii.eqlIgnoreCase(e, "100-continue")) return .{ .bad = 417 };
-                // The client waits for this line before it sends the body.
-                if (buf.len == end) _ = net.trySend(l, s, "HTTP/1.1 100 Continue\r\n\r\n");
             }
         }
     }
-    const buf = s.buf.items;
-    switch (h.framing) {
-        .none => return .done,
-        .length => {
-            const need = h.head_end + h.length;
-            if (buf.len < need) return .{ .more = @min(need - buf.len, 65536) };
-            h.cpos = need;
-            return .done;
-        },
-        .chunked => return parseChunks(l, s, h),
-    }
+    // The body stays in the socket, for the handler to read.
+    return .done;
 }
 
 fn consume(s: *net.Socket, n: usize) void {
@@ -650,6 +586,8 @@ fn consume(s: *net.Socket, n: usize) void {
 fn readRequest(l: *Thread) Error!u32 {
     const s = try net.checkSocket(l, 1);
     const h = try httpOf(l, s);
+    // What the handler left of the last request body goes first.
+    if (h.head_end == 0 and !try http.drainRequest(l, s, max_body)) return aux.retNil(l);
     while (true) {
         switch (try parse(l, s, h)) {
             .more => |n| {
@@ -716,16 +654,29 @@ fn finishRequest(l: *Thread, s: *net.Socket, h: *Http) Error!u32 {
             try ops.rawSet(l, headers, Value.obj(.string, key), try l.newStringValue(val));
         }
     }
-    const body = switch (h.framing) {
-        .none => try vector.newVector(l, &.{}),
-        .length => try vector.newVector(l, buf[h.head_end..][0..h.length]),
-        .chunked => try vector.newVectorFrom(l, &h.body),
+    // The body is read when the handler reads it: through `req.reader`, or
+    // whole through `req.body`, which the metatable of the request reads
+    // on first use.
+    const expect = h.framing != .none and headerValue(h, buf, "expect") != null;
+    const framing: http.Framing = switch (h.framing) {
+        .none => .none,
+        .length => .length,
+        .chunked => .chunked,
     };
-    try aux.setField(l, req, "body", Value.obj(.vector, body));
+    const length = h.length;
     const keep = h.keep;
     const head = h.head;
-    consume(s, h.cpos);
+    consume(s, h.head_end);
     h.nextRequest();
+    const body = try http.startBody(l, s, framing, length, true);
+    body.expect_continue = expect and !body.done;
+    _ = try http.pushReader(l, s, l.base(), false);
+    try aux.setField(l, req, "reader", l.stack[l.top - 1]);
+    l.top -= 1;
+    if (l.arg(2).tag == .table) {
+        req.metatable = l.arg(2).as(Table);
+        gc.barrierBack(l.g, &req.hdr);
+    }
     l.top = slot + 1;
     try l.push(Value.boolean(keep));
     try l.push(Value.boolean(head));
@@ -845,7 +796,10 @@ fn writeHeader(l: *Thread, out: *std.ArrayList(u8), name: []const u8, v: Value) 
 
 /// Formats the response into `h.out`. The handler returned `status`,
 /// `body`, and `headers` in the arguments 2 to 4.
-fn buildResponse(l: *Thread, h: *Http, keep: bool, head: bool) Error!void {
+fn buildResponse(l: *Thread, h: *Http, keep_in: bool, head: bool, stream: bool, broken: bool) Error!void {
+    // A request body that broke its framing leaves the connection in an
+    // unknown place, so the connection closes after the response.
+    var keep = keep_in and !broken;
     const gpa = l.g.gpa;
     const out = &h.out;
     out.clearRetainingCapacity();
@@ -864,7 +818,7 @@ fn buildResponse(l: *Thread, h: *Http, keep: bool, head: bool) Error!void {
     if (upgrade and !is_fn) return l.raiseFmt("handler returned status 101 without an upgrade function (got {s})", .{l.typeNameOf(l.arg(3))});
     switch (l.arg(3).tag) {
         .nil => {},
-        .closure, .native => if (!upgrade) return l.raiseFmt("handler returned an invalid body (string or vector expected, got function)", .{}),
+        .closure, .native => if (!upgrade) return l.raiseFmt("handler returned an invalid body (string, vector, or function expected, got function)", .{}),
         .string => body = l.arg(3).as(object.String).bytes(),
         .vector => body = l.arg(3).as(object.Vector).bytes.items,
         else => return l.raiseFmt("handler returned an invalid body (string or vector expected, got {s})", .{l.typeNameOf(l.arg(3))}),
@@ -914,7 +868,21 @@ fn buildResponse(l: *Thread, h: *Http, keep: bool, head: bool) Error!void {
         }
     }
     if (!has_date) out.print(gpa, "Date: {s}\r\n", .{dateText(h, l.g.io)}) catch return l.raiseMem();
-    if (!has_length and !bodiless) out.print(gpa, "Content-Length: {d}\r\n", .{body.len}) catch return l.raiseMem();
+    h.stream_raw = false;
+    if (stream and !bodiless and !head) {
+        // A client of HTTP/1.0 knows no chunked coding, and a length that
+        // the handler set leaves the chunks unframed. Either way the end
+        // of the connection ends the body.
+        if (has_length or h.http10) {
+            h.stream_raw = true;
+            keep = false;
+        } else {
+            out.appendSlice(gpa, "Transfer-Encoding: chunked\r\n") catch return l.raiseMem();
+        }
+    } else if (stream and head and !bodiless and !has_length) {
+        out.appendSlice(gpa, "Transfer-Encoding: chunked\r\n") catch return l.raiseMem();
+    } else if (!has_length and !bodiless) out.print(gpa, "Content-Length: {d}\r\n", .{body.len}) catch return l.raiseMem();
+    h.close_after = !keep;
     if (!keep and !has_connection) out.appendSlice(gpa, "Connection: close\r\n") catch return l.raiseMem();
     out.appendSlice(gpa, "\r\n") catch return l.raiseMem();
     if (!head and !bodiless) out.appendSlice(gpa, body) catch return l.raiseMem();
@@ -928,10 +896,25 @@ fn buildResponse(l: *Thread, h: *Http, keep: bool, head: bool) Error!void {
 fn respond(l: *Thread) Error!u32 {
     const s = try net.checkSocket(l, 1);
     const h = try httpOf(l, s);
+    const stream = l.arg(8).tag == .true;
+    const head = l.arg(6).tag == .true;
     // A response that waited continues after the bytes it already sent.
     if (!sched.restarted(l) or h.out.items.len == 0) {
-        try buildResponse(l, h, l.arg(5).tag == .true, l.arg(6).tag == .true);
+        try buildResponse(l, h, l.arg(5).tag == .true, head, stream, http.requestRefusal(s) != 0);
     }
+    const sent = try flushOut(l, s, h);
+    if (!stream) return aux.retBool(l, sent and !h.close_after);
+    // A streamed response goes on with the chunks of the generator, unless
+    // the request was HEAD or the status carries no body.
+    const status: i64 = if (l.arg(2).tag == .integer) l.arg(2).asInt() else 200;
+    const bodiless = status < 200 or status == 204 or status == 304;
+    try l.push(Value.boolean(sent));
+    try l.push(Value.boolean(sent and !head and !bodiless));
+    return 2;
+}
+
+/// Sends `h.out` from `h.out_off` on. Returns whether all of it went out.
+fn flushOut(l: *Thread, s: *net.Socket, h: *Http) Error!bool {
     const handle = s.stream.socket.handle;
     var sent = true;
     while (h.out_off < h.out.items.len) {
@@ -958,5 +941,49 @@ fn respond(l: *Thread) Error!u32 {
     }
     h.out_off = 0;
     if (h.out.capacity > 256 * 1024) h.out.clearAndFree(l.g.gpa) else h.out.clearRetainingCapacity();
-    return aux.retBool(l, sent);
+    return sent;
+}
+
+/// writechunk(sock, chunk): writes one chunk of a streamed response, or
+/// its end for nil. Returns whether the connection stays open: false
+/// when the write failed, and after the end of a response that closes
+/// its connection.
+fn writeChunk(l: *Thread) Error!u32 {
+    const s = try net.checkSocket(l, 1);
+    const h = try httpOf(l, s);
+    if (!sched.restarted(l) or h.out.items.len == 0) {
+        const gpa = l.g.gpa;
+        h.out.clearRetainingCapacity();
+        h.out_off = 0;
+        const v = l.arg(2);
+        switch (v.tag) {
+            .nil => if (!h.stream_raw) h.out.appendSlice(gpa, "0\r\n\r\n") catch return l.raiseMem(),
+            .string, .vector => {
+                const data = if (v.tag == .string) v.as(object.String).bytes() else v.as(object.Vector).bytes.items;
+                // An empty chunk would end a chunked body.
+                if (data.len == 0) return aux.retBool(l, true);
+                if (!h.stream_raw) h.out.print(gpa, "{x}\r\n", .{data.len}) catch return l.raiseMem();
+                h.out.appendSlice(gpa, data) catch return l.raiseMem();
+                if (!h.stream_raw) h.out.appendSlice(gpa, "\r\n") catch return l.raiseMem();
+            },
+            else => return l.raiseFmt("the body function returned an invalid chunk (string, vector, or nil expected, got {s})", .{l.typeNameOf(v)}),
+        }
+    }
+    const last = l.arg(2).isNil();
+    const sent = try flushOut(l, s, h);
+    return aux.retBool(l, sent and !(last and h.close_after));
+}
+
+/// refusal(sock): the status that refuses the request whose body broke
+/// its framing or its limit while the handler read it, or nil.
+fn refusal(l: *Thread) Error!u32 {
+    const s = try net.checkSocket(l, 1);
+    const status = http.requestRefusal(s);
+    if (status == 0) return aux.retNil(l);
+    return aux.retInt(l, status);
+}
+
+/// readbody(req): the whole body of a request, which `req.body` reads.
+fn readBody(l: *Thread) Error!u32 {
+    return http.requestBody(l, max_body);
 }
