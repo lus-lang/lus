@@ -160,7 +160,7 @@ dir = "runtime"
 run = "LUS_COVERAGE_REPORT=$PWD/zig-out-cov/runs LUS_COVERAGE_MERGE=$PWD/zig-out-cov/unit.keys,$PWD/zig-out-cov/verify.keys zig-out-cov/bin/lus | tee zig-out-cov/report-merged.txt"
 
 [tasks.mcdc]
-description = "Measure the MC/DC of src: transform a copy of the runtime, build it, run the conformance suite in three JIT modes, and report the share of conditions shown to affect their decision"
+description = "Measure the MC/DC of src: transform a copy of the runtime, build it, run the conformance suite in three JIT modes and the unit tests, and report the share of conditions shown to affect their decision"
 dir = "runtime"
 run = [
   "rm -rf zig-out-mcdc && mkdir -p zig-out-mcdc/runs && rsync -a --exclude .zig-cache --exclude 'zig-out*' ./ zig-out-mcdc/runtime/",
@@ -170,6 +170,8 @@ run = [
   "LUS_JIT=off LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
   "LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
   "LUS_JIT=opt-eager LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "cd zig-out-mcdc/runtime && zig build unit-binary -j2",
+  "LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus-unit > /dev/null",
   "LUS_JIT=off zig-out-mcdc/runtime/zig-out/bin/lus ../tests/coverage/mcdc/mcdc.lus zig-out-mcdc/table.txt zig-out-mcdc/runs | tee zig-out-mcdc/report.txt",
 ]
 

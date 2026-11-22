@@ -528,7 +528,7 @@ mode = mode & ~WRITE           -- clear the WRITE bit
 print(mode)                    --> 1
 ```
 
-A float operand must be a whole number, which Lus converts to an integer. If either operand is a bigint, the result is a bigint without the 64-bit limit, so `1n << 64` is `18446744073709551616`.
+A float operand must be a whole number, which Lus converts to an integer. If either operand is a bigint, the result is a bigint without the 64-bit limit, so `1n << 64` is `18446744073709551616`. A bigint shifts left by at most 16,777,216 bits. A larger amount raises `shift amount too large`.
 
 ### Precedence
 

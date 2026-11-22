@@ -2411,11 +2411,13 @@ fn forPrep(l: *Thread, r: u32) Error!bool {
     const limit_v = try forValue(l, l.stack[r + 1], "limit");
     const step_v = try forValue(l, l.stack[r + 2], "step");
     // A float among bigints makes a float loop, as a float and a bigint
-    // add to a float. A float among decimals stays in the exact path,
-    // whose arithmetic raises the error of mixing them.
+    // add to a float. A float among decimals raises the error of mixing
+    // them, as their arithmetic does, even when the float is the limit,
+    // which the loop only compares.
     const any_float = init_v.tag == .float or limit_v.tag == .float or step_v.tag == .float;
     const any_dec = init_v.tag == .decimal or limit_v.tag == .decimal or step_v.tag == .decimal;
-    if ((isExact(init_v) or isExact(limit_v) or isExact(step_v)) and (!any_float or any_dec)) {
+    if (any_dec and any_float) return l.raiseFmt("attempt to mix decimal and float in arithmetic", .{});
+    if ((isExact(init_v) or isExact(limit_v) or isExact(step_v)) and !any_float) {
         // Bigint and decimal loops step with exact arithmetic.
         const zero = Value.int(0);
         const step_order = @import("numeric.zig").compare(l.g.gpa, step_v, zero) orelse return l.raiseFmt("'for' step is not a number", .{});

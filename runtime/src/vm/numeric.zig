@@ -132,6 +132,8 @@ pub fn parseBigLiteral(g: *Global, digits: []const u8) !*BigInt {
 /// result against these limits, so the work of one operation stays
 /// bounded (`spec/design/numbers.md`, "Limits of decimals").
 pub const max_int_digits = 131072;
+/// The largest amount by which a bigint shifts left, in bits.
+const max_shift = 1 << 24;
 pub const max_frac_digits = 16383;
 
 pub const Range = enum { ok, before, after };
@@ -394,7 +396,10 @@ pub fn arith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
                 .shl, .shr => blk: {
                     const n = mb.toConst().toInt(i64) catch return l.raiseFmt("shift amount too large", .{});
                     const left = (op == .shl) == (n >= 0);
-                    const amt: usize = @intCast(@min(@abs(n), 1 << 24));
+                    // A right shift past the bits of the operand gives 0 or
+                    // -1 whatever its amount. A left shift must fit.
+                    if (left and @abs(n) > max_shift) return l.raiseFmt("shift amount too large", .{});
+                    const amt: usize = @intCast(@min(@abs(n), max_shift));
                     break :blk if (left) r.shiftLeft(&ma, amt) else r.shiftRight(&ma, amt);
                 },
                 else => unreachable,
