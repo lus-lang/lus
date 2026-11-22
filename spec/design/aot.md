@@ -64,9 +64,41 @@ The runtime leaves out both JIT tiers by default, so code that the training run 
 
 On an Apple silicon Mac in ReleaseFast, `lus-runtime` takes 6.37 MB against 8.70 MB for `lus`. A bundle of a benchmark from `tests/bench` takes 6.38 MB against 8.94 MB, and gives the same output. An empty bundle starts in 2.74 ms against 2.75 ms, the best of 150 alternating runs. Until code compiled ahead of time is appended, the runtime interprets, so the benchmarks that native code speeds up run as fast as under `LUS_JIT=off`. `zig build test-runtime` bundles `tests/build/app.lus` on the runtime and checks its output, and checks the message of `load`.
 
-## Leaving out libraries
+## Leaving out code
 
-A library can go only when no path of the program reaches it. The builder proves that from the bytecode, conservatively. A program qualifies when every global access names a constant, `_ENV` is never read as a value, the debug library is not reached, and every `require` names a constant module. The builder then keeps the libraries that those constants name. It leaves out the others by default. When the proof fails, the builder keeps every library and prints the first access that the proof could not name, so the result never depends on a guess.
+An executable compiled ahead of time holds only the code that its program can reach, as a Go or Rust executable does. `lus` links the executable itself, so `lus build --aot` needs no toolchain on the machine that runs it. The input is always the runtime of the same release, which keeps the linker small: one object of known origin, a closed set of relocation kinds per architecture, and no shared libraries apart from the system interface of each platform.
+
+### What the program reaches
+
+The builder proves from the bytecode which builtins the program can reach, conservatively. A program qualifies when every global access names a constant, `_ENV` is never read as a value, the debug library is not reached, and every `require` names a constant module. A global read by a constant name reaches that builtin, such as `print`. A library read by a constant name and then indexed by a constant field reaches that one builtin, such as `string.upper`. A library used as a value in any other way reaches all of it. Methods follow the names the program uses: an entry of a method table, such as `upper` in the string methods or `close` in the methods of files, is reached when the program reads a field of that name anywhere and the library that creates the values is reached. A field read with a key that is not a constant reaches every method of the reached libraries. Builtins that the code compiled ahead of time names by path are reached too, since native code calls them directly.
+
+When the proof fails, the builder keeps every builtin and prints the first access that the proof could not name, so the result never depends on a guess. The runtime has a second kind of guarded code, features that a builtin enables, such as remote modules behind `require`. A `require` of a constant name that the bundle holds reaches only the bundled module, which leaves out the client of remote modules with its TLS, certificate, and decompression code.
+
+### The link object
+
+Each release ships, for each target, the runtime as a link object next to the prebuilt runtime. The release build compiles the runtime with `-Dcompiler=false`, one section for each function and each datum, together with libc where the target links it statically, `compiler_rt`, SQLite, and the compression codecs. A converter in `tools`, run only by the release build, reads those relocatable objects (ELF, Mach-O, or COFF) and writes the link object:
+
+- The atoms: each function or datum with its kind (code, constant data, data, zeroed data, thread data, zeroed thread data), its alignment, and its bytes.
+- The relocations of each atom: an offset, a kind from the closed set of the architecture, a target atom or import, and an addend.
+- The imports, each with the system library that provides it.
+- The roots: the entry point, initializers, the routines of `aot.routines`, and the natives by path.
+- The guarded edges: for each registration of a builtin, its path and the relocations of its function and its fast path, and for each guarded feature, its name and its relocations.
+
+The converter rejects any relocation outside the known set, so a construct the linker does not handle fails the release build, never a user's build. The registration of a builtin whose edges the linker drops holds a null function. The library skips such a registration when it builds its table.
+
+### The linker
+
+The linker marks every atom reachable from the roots, following the relocations of each marked atom and following a guarded edge only when the proof reached its path. It lays out the marked atoms by kind, applies the relocations, appends the payload and the code section, and writes the executable for the target:
+
+- **Linux** gets a static ELF executable on musl: program headers, a TLS segment, and no dynamic section.
+- **macOS and iOS** get a Mach-O executable that loads `libSystem` (and on iOS the frameworks the runtime calls), binds its imports with chained fixups, starts at `main` through `LC_MAIN`, and keeps thread data in `__thread_vars` for `dyld`. The linker signs the result ad hoc: a code directory of SHA-256 hashes of every page, as the system linker writes for an unsigned build. A developer signs it again for distribution with `codesign`.
+- **Windows** gets a PE executable with an import directory for each DLL (`kernel32`, `ntdll`, `ws2_32`, `crypt32`, and the rest), base relocations, the TLS directory, and the unwind tables of the kept functions.
+
+On a target that allows executable memory, the code compiled ahead of time stays the `.aot` module that the runtime relocates at load. On iOS it becomes atoms of the image, with relocations that name the runtime's atoms, so the system loader resolves them and the image is signed as one piece. A target that the linker does not support yet bundles on the prebuilt runtime as before.
+
+### Testing
+
+`lus build --aot --link-all` follows every guarded edge, which links the whole runtime from the link object. CI runs the conformance suite on that executable for each format, so the linked runtime behaves as the prebuilt one does. The test runtime links `tests/build/aot.lus` minimally and checks its output. A further test links, for each builtin path, a program that reaches only that builtin and calls it. Linux runs these in the virtual machine gate, macOS on the macOS runner, Windows on the Windows runner.
 
 ## Measurements before building
 
@@ -106,6 +138,8 @@ The table gives the best wall time of five runs of each benchmark in `tests/benc
 
 **Size (measurement 4).** In the static aarch64 Linux executable, a ReleaseSafe build with 5.66 MB of code, the parser takes 261 KB, the compiler 147 KB, the tools such as `lus test` and `lus debug` 309 KB, and the two JIT tiers 399 KB. An executable compiled ahead of time needs none of them by default, which leaves out 1.1 MB, about a fifth of the code. The sizes come from the symbol table of the executable, summed by the module that each function belongs to.
 
+**What linking can leave out.** A `lus-runtime` in ReleaseFast on an Apple silicon Mac takes 6.59 MB. Without the four optional libraries it takes 3.73 MB, which is what leaving out whole libraries could reach. A build whose library tables hold only `print`, which Zig reduces to the code that `print` and the runtime reach, takes 2.76 MB, the size that the linker gives a hello world. That build still holds pieces that the guarded edges and small changes remove: an initialized table of 512 KB in the data of the shape registry, the client of remote modules at about 450 KB, the text of `lus agents` at 128 KB, the printer of stack traces at about 80 KB, and the writer of the code section, which only the training run uses.
+
 **Peak speed (measurement 3).** The table gives the best wall time of five runs, in seconds, from a ReleaseFast build on an Apple silicon Mac. "build" is the executable of `lus build` on `lus`, with both JIT tiers. "runtime" is the same bundle on `lus-runtime`, which interprets. "aot" is the executable of `lus build --aot`, on `lus-runtime` with the code of the training run. Every executable prints the same output.
 
 | benchmark | build | runtime | aot | aot size |
@@ -128,8 +162,8 @@ Code compiled ahead of time runs as fast as the JIT, as expected. The executable
 1. The relocation interface in every assembler and the address sites in the code generators, with a test that compiles every conformance function for ahead of time and checks that each address it writes has a relocation.
 2. `-Dcompiler=false` and its runtime, gated by the conformance suite with the tests that call `load` on source text skipped.
 3. The training run, the code section, and the loader, gated by the conformance suite under `LUS_JIT_AOT=reload` in every mode that compiles, and by an executable compiled ahead of time in `zig build test-runtime`.
-4. Library stripping.
-5. Static linking for targets without executable memory, starting with iOS.
+4. Leaving out code, in this order: the reference graph, with registrations that skip a null function and the proof at the level of builtins. Then the converter, the link object, and the ELF linker for x86-64 and aarch64 Linux. Then Mach-O with signing, then PE. The other architectures follow with their relocation kinds.
+5. Static linking for targets without executable memory, starting with iOS, on the Mach-O linker of step 4.
 
 The equality saturation pass of the speed workstream plugs into step 3 as a pass that only the training run's compile enables.
 
@@ -137,4 +171,4 @@ The equality saturation pass of the speed workstream plugs into step 3 as a pass
 
 - The executable records a seed per build, so every node prediction holds, at the cost described in "The training run".
 - The runtime leaves out the JIT by default. `--aot-keep-jit` keeps it.
-- Library stripping is the default whenever the proof succeeds.
+- Leaving out code is the default whenever the proof succeeds. `lus` links the executable itself, with no toolchain on the machine that builds it.
