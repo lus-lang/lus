@@ -1871,7 +1871,14 @@ fn fetch(l: *Thread) Error!u32 {
     try buildRequest(l, &req, method, u, body);
 
     const stream, _ = try connectHost(l, u.host, u.port);
-    defer stream.close(io);
+    // The reader may have waited for the socket through the scheduler,
+    // whose poller keeps a registration until it hears of the close. A
+    // later socket with the same descriptor would otherwise never be
+    // armed.
+    defer {
+        sched.forget(g, stream.socket.handle);
+        stream.close(io);
+    }
 
     const c = gpa.create(FetchConn) catch return l.raiseMem();
     defer gpa.destroy(c);
