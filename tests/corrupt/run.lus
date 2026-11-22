@@ -193,6 +193,10 @@ for _, fmt in ipairs({ "zip", "tar" }) do
                     end
                 end
             end
+        end,
+    }
+end
+
 -- ===== TLS =====
 
 -- The contents of a file: text, or a vector in binary mode.
