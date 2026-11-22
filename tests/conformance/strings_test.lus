@@ -495,6 +495,22 @@ local function string_rep_overflow_raises_resulting_string_too_large_test()
     end, "resulting string too large")
 end
 
+-- A string holds at most 2^32 - 1 bytes. The check runs before any
+-- allocation, so a result one byte past the limit raises at once. The
+-- unit tests of the runtime lower the limit to reach it on every other
+-- path that makes a string.
+local function string_rep_one_byte_past_the_limit_raises_test()
+    raises(function()
+        return string.rep("x", 1 << 32)
+    end, "resulting string too large")
+    raises(function()
+        return string.rep("ab", 1 << 31)
+    end, "resulting string too large")
+    raises(function()
+        return string.rep("x", 1 << 31, "yy")
+    end, "resulting string too large")
+end
+
 -- =====================================================================
 -- string.sub full negative-index and out-of-range matrix.
 -- =====================================================================
