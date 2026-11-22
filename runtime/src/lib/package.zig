@@ -531,6 +531,7 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
     }
     const code = cached orelse src.?;
     if (cached == null and pkg.kind == .atmosphere) {
+        if (comptime !@import("build_options").compiler) return l.raiseFmt("the compiler is not part of this executable", .{});
         const r = @import("../compile/codegen.zig").compile(l.g, code, .{ .chunkname = chunkname, .flags = &fmap, .fold_flag_reads = true, .debug = l.g.debugger != null, .meta_grants = .{ .thread = l } }) catch return l.raiseMem();
         switch (r) {
             .err => |msg| {

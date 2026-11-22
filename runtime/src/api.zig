@@ -138,6 +138,11 @@ fn loadRaw(l: *Thread, src: []const u8, chunkname: []const u8) Error!void {
         try l.push(Value.obj(.closure, cl));
         return;
     }
+    if (comptime !@import("build_options").compiler) {
+        const s = try l.newString("the compiler is not part of this executable");
+        l.err = Value.obj(.string, s);
+        return error.LusError;
+    }
     const r = codegen.compile(g, src, .{ .chunkname = chunkname, .flags = flagsTable(g), .debug = g.debugger != null, .meta_grants = .{ .thread = l } }) catch return l.raiseMem();
     switch (r) {
         .err => |msg| {

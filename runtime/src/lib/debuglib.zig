@@ -542,6 +542,7 @@ fn copyPrefix(buf: *[id_size]u8, s: []const u8, max: usize) []const u8 {
 /// With `recover`, a parse that stops at an error still returns the tree
 /// read so far, with the errors listed in its `errors` array.
 fn parse(l: *Thread) Error!u32 {
+    if (comptime !@import("build_options").compiler) return l.raiseFmt("the compiler is not part of this executable", .{});
     // Source read in binary mode arrives as a vector.
     const code = if (l.arg(1).tag == .vector) (try @import("vector.zig").checkVector(l, 1)).bytes.items else try aux.checkBytes(l, 1);
     const chunkname = (try aux.optString(l, 2, "=(parse)")).?;
@@ -581,6 +582,7 @@ fn parse(l: *Thread) Error!u32 {
 /// with `indent` spaces per level (4 by default), or nil and an error
 /// message when it does not parse.
 fn formatSource(l: *Thread) Error!u32 {
+    if (comptime !@import("build_options").compiler) return l.raiseFmt("the compiler is not part of this executable", .{});
     const code = if (l.arg(1).tag == .vector) (try @import("vector.zig").checkVector(l, 1)).bytes.items else try aux.checkBytes(l, 1);
     const chunkname = (try aux.optString(l, 2, "=format")).?;
     const width = try aux.optInt(l, 3, 4);
@@ -613,6 +615,7 @@ fn formatSource(l: *Thread) Error!u32 {
 /// count characters. The globals of the running state count as defined.
 /// A chunk name ending in `_test.lus` checks the code as a test file.
 fn checkSource(l: *Thread) Error!u32 {
+    if (comptime !@import("build_options").compiler) return l.raiseFmt("the compiler is not part of this executable", .{});
     const check = @import("../tools/check.zig");
     const lint = @import("../syntax/lint.zig");
     const code = try aux.checkBytes(l, 1);
@@ -648,6 +651,7 @@ fn checkSource(l: *Thread) Error!u32 {
 /// raises while parsing (assignment to a constant, a missing label).
 fn checkChunk(ctx: *anyopaque, arena: std.mem.Allocator, chunk: @import("../syntax/ast.zig").Chunk, chunkname: []const u8) std.mem.Allocator.Error!?[]const u8 {
     const g: *state.Global = @ptrCast(@alignCast(ctx));
+    if (comptime !@import("build_options").compiler) return null;
     const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = chunkname, .meta_eval = false });
     switch (r) {
         .ok => return null,

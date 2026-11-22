@@ -47,12 +47,16 @@ const usage =
     \\  -P perm                 grant a permission at every run (also --pledge)
     \\  -F name[=value]         define a compile-time flag (also --flag)
     \\  --include path[:alias]  bundle a module file or directory
+    \\  --runtime FILE          start the executable from FILE, such as lus-runtime
     \\
 ;
 
 const Options = struct {
     output: ?[]const u8 = null,
     script: ?[]const u8 = null,
+    /// The executable that the bundle is appended to, in place of the
+    /// running `lus`.
+    runtime: ?[]const u8 = null,
     pledges: std.ArrayList([]const u8) = .empty,
     flags: std.ArrayList([]const u8) = .empty,
     includes: std.ArrayList([]const u8) = .empty,
@@ -71,7 +75,7 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const a = args[i];
-        const Kind = enum { output, pledge, flag, include };
+        const Kind = enum { output, pledge, flag, include, runtime };
         const kind: ?Kind = if (std.mem.eql(u8, a, "-o"))
             .output
         else if (std.mem.eql(u8, a, "-P") or std.mem.eql(u8, a, "--pledge"))
@@ -80,6 +84,8 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
             .flag
         else if (std.mem.eql(u8, a, "--include"))
             .include
+        else if (std.mem.eql(u8, a, "--runtime"))
+            .runtime
         else
             null;
         if (kind) |k| {
@@ -94,6 +100,7 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
                 .pledge => try o.pledges.append(gpa, v),
                 .flag => try o.flags.append(gpa, v),
                 .include => try o.includes.append(gpa, v),
+                .runtime => o.runtime = v,
             }
         } else if (std.mem.startsWith(u8, a, "-P") and a.len > 2) {
             try o.pledges.append(gpa, a[2..]);
@@ -527,9 +534,12 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     for (opts.pledges.items) |p| try preserved.appendSlice(gpa, &.{ "-P", p });
     for (opts.flags.items) |f| try preserved.appendSlice(gpa, &.{ "-F", f });
 
-    // The program part of the running executable, without any bundle it
-    // already carries.
-    const self = std.process.openExecutable(io, .{}) catch |e| {
+    // The program part of the running executable, or of the runtime that
+    // --runtime names, without any bundle it already carries.
+    const self = if (opts.runtime) |rp| std.Io.Dir.cwd().openFile(io, rp, .{}) catch |e| {
+        std.debug.print("lus build: cannot open the runtime {s} ({s})\n", .{ rp, @errorName(e) });
+        return 1;
+    } else std.process.openExecutable(io, .{}) catch |e| {
         std.debug.print("lus build: cannot open the running executable ({s})\n", .{@errorName(e)});
         return 1;
     };

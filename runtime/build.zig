@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
         .fail_alloc = b.option(bool, "fail-alloc", "Fail the allocation that LUS_FAIL_ALLOC names, to test out of memory handling (default: false)") orelse false,
         .coverage = b.option(bool, "coverage", "Instrument every edge and write the edges a run reached to LUS_COVERAGE (default: false)") orelse false,
         .fail_io = b.option(bool, "fail-io", "Fail or shorten the file and socket operation that LUS_FAIL_IO names, to test I/O error handling (default: false)") orelse false,
+        .compiler = b.option(bool, "compiler", "Include the parser and the compiler, which `load` of source text and the tools need (default: true)") orelse true,
     };
     const options = requested.resolve(b, target);
     const features = requested.forTarget(target);
@@ -59,6 +60,38 @@ pub fn build(b: *std.Build) void {
     const run = b.addRunArtifact(exe);
     b.step("run", "Run the lus interpreter").dependOn(&run.step);
 
+    // The runtime of executables compiled ahead of time
+    // (`../spec/design/aot.md`): the interpreter and the libraries without
+    // the parser, the compiler, the tools, or the JIT. It runs the bundle
+    // appended to it and nothing else.
+    const rt_exe = blk: {
+        var rt = requested;
+        rt.compiler = false;
+        rt.jit = false;
+        const rt_mod = b.createModule(.{
+            .root_source_file = b.path("src/lus.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        rt_mod.addOptions("build_options", rt.resolve(b, target));
+        rt_mod.addImport("agent_docs", agentDocsModule(b));
+        linkSystemLibraries(rt_mod, target);
+        if (features.archive) rt_mod.linkLibrary(compressionLibrary(b, target));
+        if (features.sqlite) rt_mod.linkLibrary(sqliteLibrary(b, target));
+        const rt_exe = b.addExecutable(.{
+            .name = "lus-runtime",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "lus", .module = rt_mod }},
+            }),
+        });
+        b.step("runtime", "Build lus-runtime, the base of executables compiled ahead of time").dependOn(&b.addInstallArtifact(rt_exe, .{}).step);
+        break :blk rt_exe;
+    };
+
     // `lus build` on tests/build, then the standalone program it made,
     // run from a directory without the sources.
     const bundle_step = b.step("test-bundle", "Build a standalone executable and run it");
@@ -80,6 +113,34 @@ pub fn build(b: *std.Build) void {
     run_fail.expectExitCode(1);
     run_fail.expectStdErrMatch("app.lus:22: boom from the bundle");
     bundle_step.dependOn(&run_fail.step);
+
+    // The same program on lus-runtime, which has no compiler, gives the
+    // same output, and `load` of source text reports the missing compiler.
+    const runtime_step = b.step("test-runtime", "Build a standalone executable on lus-runtime and run it");
+    const make_rt = b.addRunArtifact(exe);
+    make_rt.setCwd(b.path("../tests/build"));
+    make_rt.addArgs(&.{ "build", "-F", "mode=prod", "--include", "extra", "--runtime" });
+    make_rt.addArtifactArg(rt_exe);
+    make_rt.addArg("-o");
+    const app_rt = make_rt.addOutputFileArg("app");
+    make_rt.addArg("app.lus");
+    const run_app_rt = std.Build.Step.Run.create(b, "run bundled app on lus-runtime");
+    run_app_rt.addFileArg(app_rt);
+    run_app_rt.addArgs(&.{ "there", "-P", "all" });
+    run_app_rt.setCwd(b.path("../tests/embed"));
+    run_app_rt.expectStdOutEqual("hello there\nhello deep\nargs 3\nflag prod\nfs denied true\ndynamic 5\n");
+    runtime_step.dependOn(&run_app_rt.step);
+    const make_load = b.addRunArtifact(exe);
+    make_load.setCwd(b.path("../tests/build"));
+    make_load.addArgs(&.{ "build", "-P", "load", "--runtime" });
+    make_load.addArtifactArg(rt_exe);
+    make_load.addArg("-o");
+    const app_load = make_load.addOutputFileArg("noload");
+    make_load.addArg("noload.lus");
+    const run_load = std.Build.Step.Run.create(b, "run load on lus-runtime");
+    run_load.addFileArg(app_load);
+    run_load.expectStdOutEqual("nil\tthe compiler is not part of this executable\n");
+    runtime_step.dependOn(&run_load.step);
 
     // `lus check` and `lus doc` on the fixtures in tests/check and
     // tests/doc. Each fixture's output must match its expected file.
@@ -334,6 +395,7 @@ const Features = struct {
     fail_alloc: bool = false,
     fail_io: bool = false,
     coverage: bool = false,
+    compiler: bool = true,
 
     const Resolved = struct { net: bool, sqlite: bool, workers: bool, archive: bool };
 
@@ -361,6 +423,7 @@ const Features = struct {
         options.addOption(bool, "fail_alloc", f.fail_alloc);
         options.addOption(bool, "fail_io", f.fail_io);
         options.addOption(bool, "coverage", f.coverage);
+        options.addOption(bool, "compiler", f.compiler);
         // The version that `lus -v` and the User-Agent of network.fetch
         // report. A release of an unstable channel sets it with `-Dversion`,
         // and every other build takes the version in build.zig.zon.

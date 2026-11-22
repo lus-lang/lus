@@ -80,7 +80,7 @@ jobs:
       - name: Unit, embedding, and tool tests
         timeout-minutes: 30
         working-directory: runtime
-        run: zig build test test-embed test-bundle test-check test-doc -Doptimize=ReleaseSafe
+        run: zig build test test-embed test-bundle test-runtime test-check test-doc -Doptimize=ReleaseSafe
       - name: Debugger tests
         timeout-minutes: 15
         if: runner.os != 'Windows'

@@ -9,6 +9,8 @@ zig build test                          # unit tests
 zig build lib                           # liblus.a, the shared liblus, and lus.h
 zig build test-embed                    # the C embedding tests in ../tests/embed
 zig build test-bundle                   # `lus build` on ../tests/build
+zig build runtime                       # lus-runtime: no parser, compiler, tools, or JIT
+zig build test-runtime                  # `lus build --runtime` on ../tests/build
 zig build test-debug                    # `lus debug` driven by ../tests/debug/run.mjs (needs node)
 zig build wasm                          # lus.wasm for wasm32-wasi in zig-out/wasm
 ```
