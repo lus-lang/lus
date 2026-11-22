@@ -29,6 +29,7 @@ pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
         .macos, .linux => true,
         else => false,
     },
+    .riscv64 => builtin.os.tag == .linux,
     .wasm32 => builtin.os.tag == .wasi,
     else => false,
 };
@@ -455,6 +456,14 @@ fn stackBounds() Bounds {
                     b = .{ .low = @intFromPtr(addr), .high = @intFromPtr(addr) + size };
                 }
                 _ = std.c.pthread_attr_destroy(&attr);
+                // The stack of the main thread grows on demand up to
+                // RLIMIT_STACK. Some C libraries and emulators report the
+                // whole mapping that may hold it, which is larger.
+                if (b.high != 0 and std.os.linux.gettid() == std.os.linux.getpid()) {
+                    if (std.posix.getrlimit(.STACK)) |rl| {
+                        if (rl.cur != std.posix.RLIM.INFINITY and b.high - b.low > rl.cur) b.low = b.high - rl.cur;
+                    } else |_| {}
+                }
             }
         },
         else => {},
@@ -548,6 +557,7 @@ pub fn deinit(g: *Global) void {
 test {
     _ = @import("a64.zig");
     _ = @import("x64.zig");
+    _ = @import("rv64.zig");
     if (enabled) {
         _ = mem;
         _ = emit;

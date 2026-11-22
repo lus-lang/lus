@@ -11,15 +11,20 @@ const opc = @import("../compile/opcodes.zig");
 const Thread = state.Thread;
 const Op = opc.Op;
 
-pub const StepFn = *const fn (l: *Thread, pc: u32, stop: usize, ins: u32) callconv(.c) usize;
+/// Routines that native code calls take every integer as a full word.
+/// The conventions of riscv64, loong64, ppc64le, and s390x extend a
+/// 32-bit argument to 64 bits in a way that depends on its type, and the
+/// callee relies on it, so a 32-bit parameter would make every caller in
+/// native code extend each value the way its own target requires.
+pub const StepFn = *const fn (l: *Thread, pc: usize, stop: usize, ins: usize) callconv(.c) usize;
 
 fn StepOf(comptime o: Op) type {
     return struct {
         /// Runs the instruction `ins`, which is the one before `pc` in
         /// the top frame, and returns an `interp.Step` code.
-        fn step(l: *Thread, pc: u32, stop: usize, ins: u32) callconv(.c) usize {
-            l.frames.items[l.frames.items.len - 1].pc = pc;
-            return interp.run(l, stop, .{ .step = o }, ins) catch |e| {
+        fn step(l: *Thread, pc: usize, stop: usize, ins: usize) callconv(.c) usize {
+            l.frames.items[l.frames.items.len - 1].pc = @truncate(pc);
+            return interp.run(l, stop, .{ .step = o }, @truncate(ins)) catch |e| {
                 l.meta_finish = null;
                 return switch (e) {
                     // A metamethod frame was pushed. It runs like a call.
@@ -115,7 +120,9 @@ pub fn barrierTable(l: *Thread, tab: *object.Table, key: ?*const Value, v: *cons
 /// that could fail made before anything changes. Returns where the
 /// callee starts. A zero address means the step routine must make the
 /// call.
-pub fn tailcall(l: *Thread, bp: [*]Value, ins: u32, pc: u32) callconv(.c) jit.Target {
+pub fn tailcall(l: *Thread, bp: [*]Value, ins_word: usize, pc_word: usize) callconv(.c) jit.Target {
+    const ins: u32 = @truncate(ins_word);
+    const pc: u32 = @truncate(pc_word);
     const none: jit.Target = .{ .addr = 0, .base = 0 };
     const a = opc.a(ins);
     const callee = bp[a];
@@ -160,7 +167,9 @@ pub const retry: usize = 7;
 /// `call`. Returns `interp.Step.next` when the call completed, another
 /// `interp.Step` code when it raised, yielded, or set a hook, and `retry`
 /// when the callee is something else or finalizers are pending.
-pub fn callNative(l: *Thread, ins: u32, pc: u32) callconv(.c) usize {
+pub fn callNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(.c) usize {
+    const ins: u32 = @truncate(ins_word);
+    const pc: u32 = @truncate(pc_word);
     const fr = l.frame();
     fr.pc = pc;
     if (l.g.tobefnz.items.len > 0) return retry;
@@ -192,7 +201,9 @@ pub fn callNative(l: *Thread, ins: u32, pc: u32) callconv(.c) usize {
 /// register of the callee and run up to the stack top when this returns
 /// `interp.Step.next`. It returns `retry`, with nothing changed, when the
 /// callee is something else.
-pub fn tailNative(l: *Thread, ins: u32, pc: u32) callconv(.c) usize {
+pub fn tailNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(.c) usize {
+    const ins: u32 = @truncate(ins_word);
+    const pc: u32 = @truncate(pc_word);
     const fr = l.frame();
     const func = fr.base + opc.a(ins);
     const callee = l.stack[func];
@@ -215,7 +226,8 @@ pub fn tailNative(l: *Thread, ins: u32, pc: u32) callconv(.c) usize {
 /// Returns every value from the register of the callee of the tail call
 /// `ins` up to the stack top, as the interpreter does after a native
 /// that was called in tail position.
-pub fn returnAll(l: *Thread, stop: usize, ins: u32) callconv(.c) usize {
+pub fn returnAll(l: *Thread, stop: usize, ins_word: usize) callconv(.c) usize {
+    const ins: u32 = @truncate(ins_word);
     const func = l.frame().base + opc.a(ins);
     return interp.returnStep(l, func, l.top - func, stop) catch |e| {
         l.meta_finish = null;
