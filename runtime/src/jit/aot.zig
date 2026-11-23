@@ -1098,7 +1098,16 @@ pub const Section = struct {
     pub fn report(s: *const Section) void {
         var units: u32 = 0;
         for (s.unit_recs.items) |rec| units += @intFromBool(rec.state == .done);
-        std.debug.print("aot: {d} functions and {d} units installed, {d} placed in the executable\n", .{ s.installed, units, s.placed.count() });
+        // The units of loops that a hot loop entered. A unit at the first
+        // instruction takes its calls straight from native code.
+        var loops: u32 = 0;
+        var entered: u32 = 0;
+        var it = s.units.valueIterator();
+        while (it.next()) |u| if (u.*.entry_pc != 0 and u.*.entry != 0) {
+            loops += 1;
+            entered += @intFromBool(u.*.entered);
+        };
+        std.debug.print("aot: {d} functions and {d} units installed, {d} placed in the executable, {d} of {d} loop units entered\n", .{ s.installed, units, s.placed.count(), entered, loops });
     }
 
     /// Frees the section. The units it installed belong to their
@@ -1433,6 +1442,11 @@ pub const Section = struct {
             .call_entry_plain = call_entry_plain,
             .tail_entry = tail_entry,
         };
+        // The calls and the loops of the baseline code count down to the
+        // optimizing tier from here, as they do for code compiled at run
+        // time. A counter left at zero would wrap, and no installed unit
+        // would ever be entered.
+        p.opt_hot = g.jit.opt_threshold;
         p.jit_code = code;
         p.jit_entry = if (call_entry != 0) code.base + call_entry else 0;
         p.jit_tail = if (tail_entry != 0) code.base + tail_entry else 0;

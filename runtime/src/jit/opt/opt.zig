@@ -119,6 +119,9 @@ pub const Entry = struct {
 pub const Unit = struct {
     proto: *Proto,
     entry_pc: u32,
+    /// Set the first time a hot loop enters the unit, which
+    /// `LUS_AOT_REPORT` counts for units compiled ahead of time.
+    entered: bool = false,
     code: []u8 = &.{},
     /// Address of the body, which expects the frame in place.
     entry: usize = 0,
@@ -265,7 +268,10 @@ pub fn loopEntry(l: *Thread, pc_word: usize) callconv(jit.cc) usize {
     fr.pc = pc;
     p.opt_hot = g.jit.opt_threshold;
     if (g.jit.opt == .off or l.hook_mask != 0) return 0;
-    if (unitAt(p, pc)) |u| return u.entry;
+    if (unitAt(p, pc)) |u| {
+        u.entered = true;
+        return u.entry;
+    }
     const u = tryCompile(l, p, pc) orelse {
         p.opt_hot = g.jit.opt_threshold *| 64;
         return 0;
