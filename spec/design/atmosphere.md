@@ -128,7 +128,7 @@ A request for `https://atmosp.here/LINE/NAME.lus` or `https://atmosp.here/LINE/N
 | `signed` | The time of signing, in RFC 3339 form in UTC, such as `"2027-02-01T12:00:00Z"`. |
 | `signature` | The Ed25519 signature, in base64, of the canonical JSON of the document without its `signature` field. |
 
-The document for a line address may change with every release, so it is served with `Cache-Control: max-age=300`. The document for a pinned address is served with `Cache-Control: immutable` apart from its `yanked` and `deprecated` fields, which the runtime reads again when it revalidates.
+The document for a line address may change with every release, so it is served with `Cache-Control: max-age=60`. The document for a pinned address changes only in its `yanked` and `deprecated` fields, so it is served with `Cache-Control: max-age=300`, and the runtime reads those fields again when it revalidates. [Caching and purging](#caching-and-purging) lists the headers of every address.
 
 The line in the URL only selects which document the server returns, so the runtime decides compatibility from the document alone. It accepts the document when its own major version equals the major version in `lus`, its own minor version is at least the minor version in `lus`, and its own version is at least `lus_min`. Otherwise `require` raises an error that names both versions. A package for `2.0` therefore runs on Lus 2.1, while a package for `2.1` fails on Lus 2.0. Together with the patch rule, this rule keeps a package from running on a line older than the one it was published for.
 
@@ -210,7 +210,7 @@ The same checks run on every push and on the author's machine with `atmos check`
 
 ### The checker
 
-`lus check` runs over every `.lus` file of the repository. It reports its errors as errors and its warnings as warnings.
+`lus check` runs over every `.lus` file of the repository. It reports its errors as errors and its warnings as warnings. Its hints appear on the package page and leave the score unchanged.
 
 ### Permissions
 
@@ -294,7 +294,7 @@ In both modes the upstream may contain anything, because atmosphere publishes on
 
 ## The server
 
-The server is one Lus program that answers both hosts, `atmosp.here` and `git.atmosp.here`, from one `network.serve` loop. A reverse proxy or a [Cloudflare Tunnel](#other-cloudflare-services) in front of it terminates TLS and forwards each request to the server on a local port. The server pledges `network:server` for that address, `fs` for its data directory, `exec` for the git binaries and `lus`, and `network:http` for upstreams and webhooks, then seals before it accepts the first request.
+The server is one Lus program that answers both hosts, `atmosp.here` and `git.atmosp.here`, from one `network.serve` loop. A reverse proxy or a [Cloudflare Tunnel](#other-cloudflare-services) in front of it terminates TLS and forwards each request to the server on a local port. A server without either sets `tls` in its configuration to the paths of its certificate chain and private key, and `network.serve` then serves HTTPS itself. A client of a registry whose certificate comes from a private authority sets `ATMOS_CA` to that authority, which atmos passes to `network.fetch` as its `ca`. The server pledges `network:server` for that address, `fs` for its data directory, `exec` for the git binaries and `lus`, and `network:http` for upstreams and webhooks. It seals before it accepts the first request.
 
 ### Git
 
@@ -328,7 +328,7 @@ The server uses one driver module under `server/drivers/` for storage and the ed
 | `delete(key)` | Returns at once. | Deletes an object from R2. |
 | `purge(urls, tags)` | Returns at once. | Purges URLs or cache tags from the Cloudflare cache. |
 | `headers(class, name)` | Adds no header. | Adds `Cloudflare-CDN-Cache-Control` and `Cache-Tag`. |
-| `client(req)` | Reads `X-Forwarded-For`. | Reads `CF-Connecting-IP`. |
+| `client(req)` | Reads `X-Forwarded-For` from a proxy on the same machine, and `req.ip` otherwise. | Reads `CF-Connecting-IP`. |
 | `fetches(since)` | Returns no rows. | Reads the fetches that the edge counted from Analytics Engine. |
 
 The `post-receive` hook and the administrator's actions write the work for a driver to the `outbox` table, which a loop of the server sends, as [Caching and purging](#caching-and-purging) describes. The rest of the server runs the same code under both drivers. The git hooks open the driver with an empty environment, so the Cloudflare driver reads its credentials on first use and the hooks never hold them. A release document holds the same addresses under both drivers, so a change of driver never re-signs a document. The bundle address stays `https://atmosp.here/b/SHA.tar.zst` whichever host stores the bytes.
@@ -491,8 +491,8 @@ This design needs the following from the runtime and the standard library.
 1. **`lus doc` reads the package header** and writes it as a `package` object in its JSON output. `spec/design/modules.md` describes the object.
 2. **A `flags` table per package**, as [Build flags of a package](#build-flags-of-a-package) describes, owned by `spec/design/modules.md`.
 3. **Cryptography.** SHA-256, Ed25519 signing and verification, Argon2id, and UUIDs come from the cryptography work. The server also needs HMAC-SHA256 for webhooks and a source of secure random bytes for tokens and invitations.
-4. **A process with two pipes**, whose reads and writes are suspension points like those of a socket. It would let git run inside the request handler without a worker or a temporary file, although the design works without it.
-5. **TLS in `network.serve`.** It would let the server terminate TLS itself with no proxy, although the design works without it.
+4. **A process with two pipes**, whose reads and writes are suspension points like those of a socket. With it, git runs inside the request handler without a worker or a temporary file. The design works without it.
+5. **TLS in `network.serve`.** It ships in 2.0. The `tls` field of the configuration passes a certificate and a key to it, so a server can run without a proxy.
 
 ## Questions for review
 

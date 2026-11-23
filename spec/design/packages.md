@@ -448,7 +448,7 @@ app:register(static, { root = "public", prefix = "/assets", max_age = 3600 })
 network.serve("0.0.0.0", 8080, static.handler({ root = "public" }))
 ```
 
-**rate_limit** limits requests per key with a fixed window, a sliding window, or a token bucket. Its store holds counters in memory by default and accepts any table with `incr` and `expire`, which the `redis` client provides. It sets the `RateLimit` headers of the IETF draft and answers 429.
+**rate_limit** limits requests per key with a fixed window, a sliding window, or a token bucket. Its store holds counters in memory by default and accepts any table with `incr`, `get`, `set`, and an optional atomic `take`, which `redis.rate_limit_store` provides. It sets the `RateLimit` headers of the IETF draft and answers 429.
 
 ```lus nocheck
 local rate_limit = require("https://atmosp.here/2.0/rate_limit.lus")
