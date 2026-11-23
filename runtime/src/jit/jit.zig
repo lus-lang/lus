@@ -28,7 +28,7 @@ pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
     // Windows on arm64 compiles with everything it needs, and its gate
     // opens once CI has a runner for it (spec/design/platforms.md).
     .aarch64 => switch (builtin.os.tag) {
-        .macos, .linux, .freebsd => true,
+        .macos, .ios, .linux, .freebsd => true,
         else => false,
     },
     .x86_64 => switch (builtin.os.tag) {
@@ -510,7 +510,7 @@ fn stackBounds() Bounds {
         GetCurrentThreadStackLimits(&low, &high);
         if (high > low) b = .{ .low = low, .high = high };
     } else if (builtin.link_libc) switch (builtin.os.tag) {
-        .macos => {
+        .macos, .ios => {
             const self = std.c.pthread_self();
             const high = @intFromPtr(pthread_get_stackaddr_np(self));
             const size = pthread_get_stacksize_np(self);
