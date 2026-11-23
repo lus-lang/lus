@@ -1,0 +1,421 @@
+-- Mutated source for every tool that reads Lus source.
+--
+-- The harness splits each seed file into tokens and makes mutants of it:
+-- it cuts the file at a token or at a byte, deletes, repeats, or swaps
+-- tokens, puts a token from a pool of keywords, operators, and openers of
+-- strings and comments in place of a token or before it, and writes a byte
+-- such as a quote, a bracket, or a byte that is not UTF-8 over another.
+-- Each mutant goes through the compiler (`lus compile`), the checker
+-- (`lus check`), the syntax tree export with recovery (`lus ast`), the
+-- documentation generator (`lus doc`), and the formatter (`lus fmt`).
+--
+-- Every tool must finish with a result or an error. A crash or a run past
+-- the time limit is a finding. The formatter has a contract of its own.
+-- When it formats a mutant, formatting its output again changes nothing,
+-- and the output compiles exactly when the mutant compiles. For a mutant
+-- that compiles, the formatter must also accept it, and the syntax tree of
+-- its output must equal the syntax tree of the mutant apart from the
+-- positions, since formatting changes only the layout.
+--
+-- The seeds are the conformance files, the examples, and the language
+-- server. The mutants of a seed differ with the seed of the random
+-- generator, and each finding names the seed file, the mutation, and the
+-- path of the mutant, which the harness keeps.
+--
+-- Usage: lus run.lus [--lus BIN] [--count N] [--seed S] [--only PATTERN]
+--                    [--timeout S] [--minutes M] [--work DIR]
+--
+-- N is the number of mutants of each seed file (40 by default). PATTERN
+-- keeps the seed files whose path contains it. With --minutes, the harness
+-- starts no new batch once that much time has passed.
+
+global arg, assert, error, fromjson, fs, io, ipairs, math, os, pairs, pledge, print, string, table, tonumber, tostring, type, vector
+
+pledge("exec", "fs", "env")
+
+local opts = { lus = "runtime/zig-out/bin/lus", count = 40, seed = 1, only = nil, timeout = 20, minutes = nil, work = nil }
+do
+    local i = 1
+    while i <= #arg do
+        local a = arg[i]
+        local v = arg[i + 1]
+        if a == "--lus" then opts.lus = v
+        elseif a == "--count" then opts.count = assert(tonumber(v), "--count needs a number")
+        elseif a == "--seed" then opts.seed = assert(tonumber(v), "--seed needs a number")
+        elseif a == "--only" then opts.only = v
+        elseif a == "--timeout" then opts.timeout = assert(tonumber(v), "--timeout needs a number")
+        elseif a == "--minutes" then opts.minutes = assert(tonumber(v), "--minutes needs a number")
+        elseif a == "--work" then opts.work = v
+        else error("unknown option " .. a, 0) end
+        i = i + 2
+    end
+end
+
+local BATCH = 100
+-- A seed larger than this is cut to its first part, so that a mutant of
+-- a generated file costs no more than one of a test file.
+local LARGEST = 64 * 1024
+
+local function quote(s)
+    return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
+local function readFile(path)
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local s = f:read("a")
+    f:close()
+    return s
+end
+
+-- Writes a string, or a list of strings and vectors, which is how a
+-- mutant carries bytes that are not UTF-8.
+local function writeFile(path, s)
+    local f = assert(io.open(path, "wb"))
+    if type(s) == "table" then
+        for _, part in ipairs(s) do f:write(part) end
+    else
+        f:write(s)
+    end
+    f:close()
+end
+
+-- Bytes in a vector, with their hexadecimal spelling for the reports.
+local function raw(...)
+    local bytes = { ... }
+    local v = vector.create(#bytes)
+    local hex = {}
+    for i, b in ipairs(bytes) do
+        vector.set(v, i - 1, b)
+        hex[i] = string.format("%02x", b)
+    end
+    return { bytes = v, hex = table.concat(hex, " ") }
+end
+
+local lus = opts.lus
+if not lus:find("^/") then lus = fs.path.join(assert(os.getenv("PWD"), "PWD is not set"), lus) end
+assert(fs.type(lus) == "file", "no runtime at " .. lus .. ", run it from the root of the repository after a build")
+
+local work = opts.work or fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-syntax-" .. os.time())
+fs.createdirectory(work, true)
+
+-- ===== the tokens =====
+
+local KEYWORDS = {
+    "and", "break", "catch", "continue", "do", "else", "elseif", "end", "enum", "false", "for", "from",
+    "function", "global", "goto", "if", "in", "local", "nil", "not", "or", "provide", "repeat", "return",
+    "then", "true", "until", "while",
+}
+
+local OPERATORS = {
+    "...", "..", "::", "//", "==", "~=", "<=", ">=", "<<", ">>", "?.",
+    "+", "-", "*", "/", "%", "^", "#", "&", "~", "|", "<", ">", "=", "(", ")", "{", "}", "[", "]",
+    ";", ":", ",", ".", "?", "@",
+}
+
+-- Tokens that the pool adds besides the keywords and operators: openers
+-- and closers of strings and comments, attributes, numbers at their
+-- edges, and names that some statements treat as words.
+local EXTRA = {
+    '"', "'", "`", "[[", "]]", "[=[", "]=]", "--[[", "--", "$", "$(", "\\", "\\u{", "\\z",
+    "<const>", "<close>", "<lazy>", "<context>", "<meta>", "<observe>", "<group>", "<", ">",
+    "0x", "1e", "1e+", "0x1p", "9223372036854775808", "1n", "1.5m", "0.", "..1", "3..2",
+    "pledge", "self", "_", "x", "query", "select", "where",
+    "\n", " ", "\t", "\r",
+}
+
+local POOL = {}
+for _, list in ipairs({ KEYWORDS, OPERATORS, EXTRA }) do
+    for _, t in ipairs(list) do POOL[#POOL + 1] = t end
+end
+
+-- Characters, and as vectors bytes that no UTF-8 text holds: a byte that
+-- never starts a character and the first bytes of characters cut short.
+local BYTES = {
+    '"', "'", "`", "[", "]", "=", "\\", "$", "(", ")", "{", "}", "-", "\0", "\n", "\r", "\u{feff}", "\u{2028}",
+    raw(0xff), raw(0xc3), raw(0xe2, 0x80), raw(0xf0), raw(0xed, 0xa0, 0x80),
+}
+
+-- Splits source into the byte spans of its tokens. The scanner follows
+-- the lexer closely enough to find the boundaries that matter, and a
+-- file it misreads still gives mutants, which is all the harness needs.
+local function tokenize(src)
+    local spans = {}
+    local i, n = 1, #src
+    local function longBracket(at)
+        local eq = src:match("^%[(=*)%[", at)
+        if not eq then return nil end
+        local close = "]" .. eq .. "]"
+        local _, e = src:find(close, at + #eq + 2, true)
+        return e or n
+    end
+    while i <= n do
+        local c = src:sub(i, i)
+        if c:find("^%s") then
+            i = i + 1
+        else
+            local e
+            if src:find("^%-%-", i) then
+                e = longBracket(i + 2) or (src:find("\n", i, true) or n + 1) - 1
+            elseif c == "[" and src:find("^%[=*%[", i) then
+                e = longBracket(i)
+            elseif c == '"' or c == "'" or c == "`" then
+                local j = i + 1
+                while j <= n do
+                    local d = src:sub(j, j)
+                    if d == "\\" then j = j + 2
+                    elseif d == c or (d == "\n" and c ~= "`") then break
+                    else j = j + 1 end
+                end
+                e = math.min(j, n)
+            elseif c:find("^%d") or (c == "." and src:find("^%.%d", i)) then
+                local _, f = src:find("^[%w%.]*", i)
+                e = f
+                -- An exponent takes a sign: 1e-5 and 0x1p+4 are one token.
+                while src:sub(e, e):find("[eEpP]") and src:find("^[%+%-]%w", e + 1) do
+                    local _, g = src:find("^[%+%-][%w%.]*", e + 1)
+                    e = g
+                end
+            elseif c:find("^[%a_\u{80}-\u{10FFFF}]") then
+                local _, f = src:find("^[%w_\u{80}-\u{10FFFF}]*", i)
+                e = f
+            else
+                e = i
+                for _, op in ipairs(OPERATORS) do
+                    if src:sub(i, i + #op - 1) == op then
+                        e = i + #op - 1
+                        break
+                    end
+                end
+            end
+            spans[#spans + 1] = { i, e }
+            i = e + 1
+        end
+    end
+    return spans
+end
+
+-- ===== the mutants =====
+
+-- A generator of the 64-bit LCG of Knuth, so that a seed names the same
+-- mutants on every system.
+local function random(seed)
+    local state = seed * 6364136223846793005 + 1442695040888963407
+    return function(m)
+        state = state * 6364136223846793005 + 1442695040888963407
+        return (state >> 33) % m + 1
+    end
+end
+
+local MUTATIONS = { "cut", "cutbyte", "delete", "repeat", "swap", "replace", "insert", "byte" }
+
+-- Returns the source of one mutant of `src` and the description of the
+-- mutation.
+local function mutate(src, spans, rnd)
+    local kind = MUTATIONS[rnd(#MUTATIONS)]
+    local n = #spans
+    if n < 2 then kind = "cutbyte" end
+    local k = n > 0 and rnd(n) or 1
+    local s, e = 1, 0
+    if n > 0 then s, e = spans[k][1], spans[k][2] end
+    local tok = src:sub(s, e)
+    if kind == "cut" then
+        return src:sub(1, s - 1), string.format("cut before token %d %q", k, tok)
+    elseif kind == "cutbyte" then
+        local at = rnd(#src + 1) - 1
+        return src:sub(1, at), string.format("cut after character %d", at)
+    elseif kind == "delete" then
+        return src:sub(1, s - 1) .. src:sub(e + 1), string.format("delete token %d %q", k, tok)
+    elseif kind == "repeat" then
+        return src:sub(1, e) .. " " .. src:sub(s), string.format("repeat token %d %q", k, tok)
+    elseif kind == "swap" then
+        if k == n then k = n - 1 end
+        local a, b = spans[k], spans[k + 1]
+        local ta, tb = src:sub(a[1], a[2]), src:sub(b[1], b[2])
+        return src:sub(1, a[1] - 1) .. tb .. src:sub(a[2] + 1, b[1] - 1) .. ta .. src:sub(b[2] + 1),
+            string.format("swap tokens %d %q and %q", k, ta, tb)
+    elseif kind == "replace" then
+        local p = POOL[rnd(#POOL)]
+        return src:sub(1, s - 1) .. p .. src:sub(e + 1), string.format("replace token %d %q with %q", k, tok, p)
+    elseif kind == "insert" then
+        local p = POOL[rnd(#POOL)]
+        return src:sub(1, s - 1) .. p .. " " .. src:sub(s), string.format("insert %q before token %d %q", p, k, tok)
+    else
+        local at = rnd(#src)
+        local b = BYTES[rnd(#BYTES)]
+        if type(b) == "string" then
+            return src:sub(1, at - 1) .. b .. src:sub(at + 1), string.format("write %q at character %d", b, at)
+        end
+        return { src:sub(1, at - 1), b.bytes, src:sub(at + 1) }, string.format("write the bytes %s at character %d", b.hex, at)
+    end
+end
+
+-- ===== the tools =====
+
+-- Lines of a shell script that run the tools on mutant `m`.lus in the
+-- current directory and write their exit statuses to `m`.rc, one line of
+-- `tool status` each. Each tool runs under an alarm, so a tool that hangs
+-- ends with the status of SIGALRM.
+local function scriptFor(m)
+    local L = quote(lus)
+    local t = tostring(opts.timeout)
+    local function run(name, cmd)
+        return string.format("perl -e 'alarm shift; exec @ARGV' %s %s >/dev/null 2>>%s.err; echo \"%s $?\" >> %s.rc", t, cmd, m, name, m)
+    end
+    local function runTo(name, cmd, out)
+        return string.format("perl -e 'alarm shift; exec @ARGV' %s %s >%s 2>>%s.err; echo \"%s $?\" >> %s.rc", t, cmd, out, m, name, m)
+    end
+    return table.concat({
+        string.format(": > %s.rc; : > %s.err", m, m),
+        run("compile", string.format("%s compile -o /dev/null %s.lus", L, m)),
+        run("check", string.format("%s check %s.lus", L, m)),
+        run("ast", string.format("%s ast %s.lus", L, m)),
+        run("doc", string.format("%s doc %s.lus", L, m)),
+        runTo("fmt", string.format("%s fmt %s.lus", L, m), m .. ".f.lus"),
+        string.format("if grep -q '^fmt 0$' %s.rc; then", m),
+        "  " .. runTo("refmt", string.format("%s fmt %s.f.lus", L, m), m .. ".g.lus"),
+        string.format("  cmp -s %s.f.lus %s.g.lus; echo \"same $?\" >> %s.rc", m, m, m),
+        "  " .. run("fcompile", string.format("%s compile -o /dev/null %s.f.lus", L, m)),
+        "  " .. runTo("asta", string.format("%s ast --no-comments --no-recover %s.lus", L, m), m .. ".a.json"),
+        "  " .. runTo("astb", string.format("%s ast --no-comments --no-recover %s.f.lus", L, m), m .. ".b.json"),
+        "fi",
+    }, "\n")
+end
+
+-- The status of a tool that hung: the shell reports a process that
+-- SIGALRM ended as 128 + 14.
+local HUNG = 142
+
+local function crashed(rc)
+    return rc > 128 and rc ~= HUNG
+end
+
+-- Drops the positions from a syntax tree, so that two trees compare by
+-- their structure and values alone.
+local function strip(v)
+    if type(v) ~= "table" then return v end
+    local out = {}
+    for k, x in pairs(v) do
+        if not (type(k) == "string" and (k:find("line$") or k:find("column$"))) then out[k] = strip(x) end
+    end
+    return out
+end
+
+local function deepEqual(a, b)
+    if a == b then return true end
+    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    for k, v in pairs(a) do
+        if not deepEqual(v, b[k]) then return false end
+    end
+    for k in pairs(b) do
+        if a[k] == nil then return false end
+    end
+    return true
+end
+
+-- Returns the problems with mutant `m` from the statuses and outputs that
+-- its script left.
+local function judge(m)
+    local rc = {}
+    for line in (readFile(m .. ".rc") or ""):gmatch("[^\n]+") do
+        local tool, status = line:match("^(%S+) (%d+)$")
+        if tool then rc[tool] = tonumber(status) end
+    end
+    local problems = {}
+    local function add(s) problems[#problems + 1] = s end
+    for _, tool in ipairs({ "compile", "check", "ast", "doc", "fmt", "refmt", "fcompile", "asta", "astb" }) do
+        local s = rc[tool]
+        if s == HUNG then add(tool .. " ran past the time limit")
+        elseif s and crashed(s) then add(string.format("%s crashed with status %d", tool, s)) end
+    end
+    if rc.compile == nil or rc.fmt == nil then add("the script did not run every tool") end
+    if #problems > 0 then return problems end
+    local compiles = rc.compile == 0
+    if rc.fmt == 0 then
+        if rc.refmt ~= 0 then add("fmt rejects its own output")
+        elseif rc.same ~= 0 then add("fmt of its own output changes it") end
+        if compiles and rc.fcompile ~= 0 then add("the output of fmt does not compile, and the mutant does") end
+        if not compiles and rc.fcompile == 0 then add("the output of fmt compiles, and the mutant does not") end
+        if compiles and rc.asta == 0 and rc.astb == 0 then
+            local oka, a = catch fromjson(readFile(m .. ".a.json"))
+            local okb, b = catch fromjson(readFile(m .. ".b.json"))
+            if not (oka and okb) then
+                add("ast writes JSON that fromjson rejects: " .. tostring(oka and b or a))
+            elseif not deepEqual(strip(a), strip(b)) then
+                add("fmt changes the syntax tree")
+            end
+        end
+    elseif compiles then
+        add("fmt rejects a mutant that compiles")
+    end
+    return problems
+end
+
+-- ===== the run =====
+
+local seeds = {}
+for _, dir in ipairs({ "tests/conformance", "examples", "packages/language-server" }) do
+    for path, kind in fs.walk(dir, { glob = "*.lus", exclude = "node_modules" }) do
+        if kind == "file" and (opts.only == nil or path:find(opts.only, 1, true)) then seeds[#seeds + 1] = path end
+    end
+end
+table.sort(seeds)
+
+local findings = {}
+local started = os.time()
+local total, batches = 0, 0
+local pending = {}
+
+local function flush()
+    if #pending == 0 then return end
+    batches = batches + 1
+    local dir = fs.path.join(work, "batch" .. batches)
+    fs.createdirectory(dir, true)
+    local lines = { "cd " .. quote(dir) }
+    for i, mu in ipairs(pending) do
+        writeFile(fs.path.join(dir, "m" .. i .. ".lus"), mu.src)
+        lines[#lines + 1] = scriptFor("m" .. i)
+    end
+    local script = fs.path.join(dir, "run.sh")
+    writeFile(script, table.concat(lines, "\n") .. "\n")
+    os.execute("sh " .. quote(script))
+    local keep = false
+    for i, mu in ipairs(pending) do
+        local problems = judge(fs.path.join(dir, "m" .. i))
+        for _, p in ipairs(problems) do
+            keep = true
+            findings[#findings + 1] = string.format("%s: %s\n    mutation: %s\n    mutant: %s", mu.seed, p, mu.what, fs.path.join(dir, "m" .. i .. ".lus"))
+        end
+    end
+    if not keep then fs.remove(dir, true) end
+    total = total + #pending
+    pending = {}
+end
+
+local stopped = false
+for si, path in ipairs(seeds) do
+    if opts.minutes and os.time() - started >= opts.minutes * 60 then
+        stopped = true
+        break
+    end
+    local src = readFile(path)
+    if src and #src > 0 then
+        if #src > LARGEST then
+            local cut = src:find("\n", LARGEST, true) or LARGEST
+            src = src:sub(1, cut)
+        end
+        local spans = tokenize(src)
+        local rnd = random(opts.seed * 1000003 + si)
+        for _ = 1, opts.count do
+            local m, what = mutate(src, spans, rnd)
+            pending[#pending + 1] = { seed = path, src = m, what = what }
+            if #pending >= BATCH then flush() end
+        end
+    end
+end
+flush()
+
+for _, f in ipairs(findings) do print(f) end
+print(string.format("%d seed files, %d mutants, %d findings%s", #seeds, total, #findings, stopped and ", stopped at the time limit" or ""))
+if #findings == 0 and not opts.work then fs.remove(work, true) end
+os.exit(#findings == 0 and 0 or 1)

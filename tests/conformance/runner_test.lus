@@ -53,7 +53,10 @@ end
 local function two_files_left_behind_in_one_pass_test()
     if windows then skip("the fixture detaches a process with POSIX setsid") end
     if not os.execute("command -v perl >/dev/null 2>&1") then skip("needs perl") end
-    local report, ok = run_tests("--jobs 2 --timeout 1", "stuck.lus", "stuck2.lus", "waiting.lus")
+    -- The timeout leaves waiting.lus time to start on a loaded machine,
+    -- and the stuck files keep their pipes open past it and the grace
+    -- period of 5 s that follows.
+    local report, ok = run_tests("--jobs 2 --timeout 3", "stuck.lus", "stuck2.lus", "waiting.lus")
     assert(not ok, report)
     assert(not report:find("panic", 1, true), report)
     assert(file_line(report, "waiting.lus"):find("^ok"), report)
@@ -63,7 +66,7 @@ local function two_files_left_behind_in_one_pass_test()
         -- The time reported is the time the file ran before the runner
         -- left it behind.
         local ms = tonumber(line:match("(%d+) ms%)"))
-        assert(ms and ms >= 1000, line)
+        assert(ms and ms >= 3000, line)
     end
     assert(report:find("left it behind", 1, true), report)
     assert(report:find("3 files, 1 passed", 1, true), report)

@@ -1851,9 +1851,7 @@ fn jsonList(w: *std.Io.Writer, list: []const *Node, depth: usize) std.Io.Writer.
 fn jsonVal(w: *std.Io.Writer, v: Val, depth: usize) std.Io.Writer.Error!void {
     switch (v) {
         .int => |i| try w.print("{d}", .{i}),
-        .float => |f| {
-            if (std.math.isFinite(f)) try w.print("{d}", .{f}) else try w.writeAll("null");
-        },
+        .float => |f| try jsonFloat(w, f),
         .str => |s| try jsonString(w, s),
         .boolean => |b| try w.writeAll(if (b) "true" else "false"),
         .node => |c| try jsonNode(w, c, depth),
@@ -1861,10 +1859,43 @@ fn jsonVal(w: *std.Io.Writer, v: Val, depth: usize) std.Io.Writer.Error!void {
     }
 }
 
+/// Writes a float so that it reads back as the same float: plain decimal
+/// digits for a fraction of moderate size, and the shortest exponent form
+/// otherwise. An integral float such as `1.0` or `10e30` takes the
+/// exponent form, so it never reads back as an integer, and a large one
+/// stays short. A literal too large for a float is `null`.
+fn jsonFloat(w: *std.Io.Writer, f: f64) std.Io.Writer.Error!void {
+    if (!std.math.isFinite(f)) return w.writeAll("null");
+    const a = @abs(f);
+    if (f != @trunc(f) and a >= 1e-4 and a < 1e16) {
+        try w.print("{d}", .{f});
+    } else {
+        try w.print("{e}", .{f});
+    }
+}
+
 // ---------------------------------------------------------------------
 // Tests
 
 const testing = std.testing;
+
+test "export writes floats that read back as floats" {
+    var buf: [64]u8 = undefined;
+    const cases = [_]struct { f64, []const u8 }{
+        .{ 1.0, "1e0" },
+        .{ -0.0, "-0e0" },
+        .{ 0.1, "0.1" },
+        .{ 10e30, "1e31" },
+        .{ 1e300, "1e300" },
+        .{ 2.5e-7, "2.5e-7" },
+        .{ std.math.inf(f64), "null" },
+    };
+    for (cases) |c| {
+        var w: std.Io.Writer = .fixed(&buf);
+        try jsonFloat(&w, c[0]);
+        try testing.expectEqualStrings(c[1], w.buffered());
+    }
+}
 
 fn findField(n: *const Node, key: []const u8) ?Val {
     for (n.fields.items) |f| {

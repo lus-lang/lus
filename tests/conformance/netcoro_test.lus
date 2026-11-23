@@ -853,8 +853,12 @@ end
 
 local function an_https_fetch_from_a_plain_http_peer_raises_test()
     local server, port = listen()
+    -- Every wait of the peer has an end, so a fetch that fails before it
+    -- connects or sends fails the test instead of keeping it waiting.
+    server:settimeout(10)
     local peer = spawn(function()
-        local sock <close> = server:accept()
+        local sock <close> = assert(server:accept())
+        sock:settimeout(10)
         sock:receive(1)
         sock:send("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
     end)

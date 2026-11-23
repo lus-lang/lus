@@ -302,6 +302,13 @@ jobs:
         # Every truncation and bit flip of seed inputs to each parser and
         # decoder, one child process per batch of inputs.
         run: LUS_JIT=off runtime/zig-out/bin/lus tests/corrupt/run.lus --lus runtime/zig-out/bin/lus
+      - name: Mutated source
+        timeout-minutes: 10
+        if: runner.os != 'Windows'
+        # Mutants of every conformance file, example, and language server
+        # file through the compiler, checker, syntax tree export, doc
+        # generator, and formatter.
+        run: LUS_JIT=off runtime/zig-out/bin/lus tests/syntax/run.lus --count 8 --seed ${{ github.run_number }}
       - name: Crash tests
         timeout-minutes: 20
         if: runner.os != 'Windows'
