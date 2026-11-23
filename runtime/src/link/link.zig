@@ -55,9 +55,17 @@ pub const Result = struct {
 
 pub const Error = error{ OutOfMemory, UnsupportedRelocation, RelocationOverflow, UnsupportedTarget };
 
-/// Links `o`. When `map` is given, it receives a line for each kept atom,
-/// largest first: its size, its name, and the atom that first reached it.
-pub fn link(gpa: Allocator, o: *const lobj.Object, keep: Keep, map: ?*std.Io.Writer) Error!Result {
+pub const Options = struct {
+    /// Receives a line for each kept atom, largest first: its size, its
+    /// name, and the atom that first reached it.
+    map: ?*std.Io.Writer = null,
+    /// The bundle of `lus build`, which follows the image on Linux and
+    /// goes into a segment of the image on Mach-O (`bundle.zig`).
+    payload: []const u8 = "",
+};
+
+/// Links `o`.
+pub fn link(gpa: Allocator, o: *const lobj.Object, keep: Keep, opts: Options) Error!Result {
     var l: Linker = .{ .gpa = gpa, .o = o };
     defer l.deinit();
     try l.drop(keep);
@@ -65,13 +73,18 @@ pub fn link(gpa: Allocator, o: *const lobj.Object, keep: Keep, map: ?*std.Io.Wri
     const bytes = switch (o.os) {
         .linux => blk: {
             try l.layout();
-            break :blk try l.write();
+            const image = try l.write();
+            defer gpa.free(image);
+            const all = try gpa.alloc(u8, image.len + opts.payload.len);
+            @memcpy(all[0..image.len], image);
+            @memcpy(all[image.len..], opts.payload);
+            break :blk all;
         },
-        .macos, .ios => try macho.write(&l),
+        .macos, .ios => try macho.write(&l, opts.payload),
         .windows => return error.UnsupportedTarget,
     };
     errdefer gpa.free(bytes);
-    if (map) |w| l.writeMap(w) catch {};
+    if (opts.map) |w| l.writeMap(w) catch {};
     var kept: u64 = 0;
     var total: u64 = 0;
     for (o.atoms, l.live) |a, live| {
@@ -525,7 +538,7 @@ test "the linker keeps what the entry reaches and clears a dropped builtin" {
             return std.mem.eql(u8, name, "kept");
         }
     }.k };
-    const r = try link(gpa, &o, keep, null);
+    const r = try link(gpa, &o, keep, .{});
     defer gpa.free(r.bytes);
     // _start, f, reg, and kept: 6 + 1 + 32 + 1 bytes.
     try std.testing.expectEqual(@as(u64, 40), r.kept);

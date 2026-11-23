@@ -640,12 +640,19 @@ pub const Converter = struct {
     fn target(c: *Converter, in: *const Input, sym_index: u32, addend: i64) !Resolved {
         const s = in.syms[sym_index];
         if (s.section or s.bind == .local) return c.defined(in, s, addend);
+        // A name that the linker defines wins over a weak definition, such
+        // as the stand-in header that the standard library of Zig exports
+        // for objects.
+        const by_linker = for (linker_defined) |n| {
+            if (std.mem.eql(u8, n, s.name)) break true;
+        } else false;
         if (c.defs.get(s.name)) |d| {
             const din = &c.inputs.items[d.input];
-            return c.defined(din, din.syms[d.sym], addend);
+            const ds = din.syms[d.sym];
+            if (!(by_linker and ds.bind == .weak)) return c.defined(din, ds, addend);
         }
-        if (s.shndx != undef_sec) return c.defined(in, s, addend);
-        for (linker_defined) |n| if (std.mem.eql(u8, n, s.name)) return .{ .target = try c.w.linkerName(n), .addend = addend };
+        if (s.shndx != undef_sec and !(by_linker and s.bind == .weak)) return c.defined(in, s, addend);
+        if (by_linker) return .{ .target = try c.w.linkerName(s.name), .addend = addend };
         // On macOS and iOS, libSystem provides what the objects leave
         // undefined, which `dyld` binds at load.
         if (c.macho()) return .{ .target = try c.w.import(s.name, lib_system, s.bind == .weak), .addend = addend };
@@ -718,25 +725,25 @@ pub const Converter = struct {
             const in = &c.inputs.items[e.value_ptr.input];
             const s = in.syms[e.value_ptr.sym];
             if (std.mem.eql(u8, name, "lus.reg_layout")) {
-                const b = (in.secs[s.shndx].bytes orelse return error.BadRegistration)[s.value..][0..12];
+                const b = (in.secs[s.shndx].bytes orelse return badRegistration(name, "its layout is in a zeroed section"))[s.value..][0..12];
                 for (&c.w.reg_layout, 0..) |*f, k| f.* = std.mem.readInt(u32, b[k * 4 ..][0..4], .little);
                 continue;
             }
             if (!std.mem.startsWith(u8, name, "lus.reg:")) continue;
             const rest = name["lus.reg:".len..];
-            const k1 = std.mem.indexOfScalar(u8, rest, ':') orelse return error.BadRegistration;
+            const k1 = std.mem.indexOfScalar(u8, rest, ':') orelse return badRegistration(name, "the name has no path");
             const k2 = std.mem.lastIndexOfScalar(u8, rest, ':').?;
-            if (k2 == k1) return error.BadRegistration;
-            const kind = std.meta.stringToEnum(enum { fields, methods, library, always }, rest[0..k1]) orelse return error.BadRegistration;
+            if (k2 == k1) return badRegistration(name, "the name has no list of entries");
+            const kind = std.meta.stringToEnum(enum { fields, methods, library, always }, rest[0..k1]) orelse return badRegistration(name, "the kind is unknown");
             // A registration without entries has nothing to leave out.
             if (k2 + 1 == rest.len) continue;
-            const holder = in.atoms[s.shndx] orelse return error.BadRegistration;
+            const holder = (if (s.shndx < in.atoms.len) in.atoms[s.shndx] else null) orelse return badRegistration(name, "its pointer is in a section that is left out");
             var found: ?lobj.Reloc = null;
             for (lists[holder].items) |r| if (r.offset == s.value) {
                 found = r;
             };
-            const r = found orelse return error.BadRegistration;
-            if (r.target.space != .atom) return error.BadRegistration;
+            const r = found orelse return badRegistration(name, "no relocation holds the address of its array");
+            if (r.target.space != .atom) return badRegistration(name, "its array is not an atom");
             try c.w.guards.append(c.gpa, .{
                 .kind = @backingInt(kind),
                 .path = try c.w.string(rest[k1 + 1 .. k2]),
@@ -754,6 +761,11 @@ pub const Converter = struct {
 };
 
 const macho_magic = 0xfeedfacf;
+
+fn badRegistration(name: []const u8, why: []const u8) error{BadRegistration} {
+    std.log.err("the registration {s}: {s}", .{ name, why });
+    return error.BadRegistration;
+}
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;

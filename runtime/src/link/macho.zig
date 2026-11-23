@@ -51,8 +51,11 @@ const Fixup = struct {
 /// Where an atom goes.
 const Place = enum { text, cstring, const_reloc, init, data, thread_vars, tdata, tbss, bss };
 
-pub fn write(l: *Linker) Error![]u8 {
-    var m: MachO = .{ .l = l, .gpa = l.gpa };
+/// Writes the executable of `l`. A nonempty `payload`, the bundle of
+/// `lus build`, goes into a segment `__LUS` before `__LINKEDIT`, inside
+/// what the signature covers.
+pub fn write(l: *Linker, payload: []const u8) Error![]u8 {
+    var m: MachO = .{ .l = l, .gpa = l.gpa, .payload = payload };
     defer m.deinit();
     return m.run();
 }
@@ -74,6 +77,7 @@ const MachO = struct {
     seg_filesize: [3]u64 = .{ 0, 0, 0 },
     header_size: u64 = 0,
     has_tlv: bool = false,
+    payload: []const u8 = "",
 
     fn deinit(m: *MachO) void {
         m.gpa.free(m.place_of);
@@ -424,6 +428,7 @@ const MachO = struct {
     /// sections, then `__LINKEDIT`.
     fn segCount(m: *const MachO) usize {
         var n: usize = 3;
+        if (m.payload.len > 0) n += 1;
         if (m.segHasSects(.data_const)) n += 1;
         if (m.segHasSects(.data)) n += 1;
         return n;
@@ -480,6 +485,7 @@ const MachO = struct {
             if (seg != .text and k == 0) continue;
             n += 72 + 80 * k;
         }
+        if (m.payload.len > 0) n += 72 + 80; // __LUS
         n += 72; // __LINKEDIT
         n += 16 + 16 + 24 + 80; // chained fixups, exports trie, symtab, dysymtab
         n += 32 + 24 + 24 + 16 + 24; // dylinker, uuid, build version, source version, main
@@ -508,7 +514,8 @@ const MachO = struct {
         const str_off = le.items.len;
         try le.appendNTimes(m.gpa, 0, 8);
         while (le.items.len % 16 != 0) try le.append(m.gpa, 0);
-        const linkedit_off = segs.len;
+        const lus_size = std.mem.alignForward(u64, m.payload.len, m.page);
+        const linkedit_off = segs.len + lus_size;
         const sig_off = linkedit_off + le.items.len;
         const n_pages = std.math.divCeil(u64, sig_off, sig_page) catch unreachable;
         const sig_size = std.mem.alignForward(u64, 12 + 8 + 88 + identifier.len + 1 + 32 * n_pages, 16);
@@ -517,6 +524,7 @@ const MachO = struct {
         errdefer m.gpa.free(out);
         @memset(out, 0);
         @memcpy(out[0..segs.len], segs);
+        @memcpy(out[segs.len..][0..m.payload.len], m.payload);
         @memcpy(out[linkedit_off..][0..le.items.len], le.items);
         const linkedit_size = total - linkedit_off;
         try m.headers(out, .{
@@ -580,7 +588,16 @@ const MachO = struct {
             }
             ncmds += 1;
         }
-        w.segment("__LINKEDIT", base + m.seg_size[0] + m.seg_size[1] + m.seg_size[2], std.mem.alignForward(u64, le.linkedit_size, m.page), le.linkedit_off, le.linkedit_size, 1, 1, 0, 0);
+        // __LUS: the bundle, after the file part of __DATA.
+        const lus_addr = base + m.seg_size[0] + m.seg_size[1] + m.seg_size[2];
+        const lus_off = m.seg_addr[2] - base + m.seg_filesize[2];
+        const lus_size = std.mem.alignForward(u64, m.payload.len, m.page);
+        if (m.payload.len > 0) {
+            w.segment("__LUS", lus_addr, lus_size, lus_off, lus_size, 1, 1, 1, 0);
+            w.sect("__bundle", "__LUS", lus_addr, m.payload.len, @intCast(lus_off), 0, 0);
+            ncmds += 1;
+        }
+        w.segment("__LINKEDIT", lus_addr + lus_size, std.mem.alignForward(u64, le.linkedit_size, m.page), le.linkedit_off, le.linkedit_size, 1, 1, 0, 0);
         ncmds += 1;
         w.linkeditData(0x8000_0034, le.fixups_off, le.fixups_size); // LC_DYLD_CHAINED_FIXUPS
         w.linkeditData(0x8000_0033, le.trie_off, le.trie_size); // LC_DYLD_EXPORTS_TRIE
@@ -771,7 +788,7 @@ test "a Mach-O executable binds its imports and rebases its pointers" {
     defer gpa.free(bytes);
     @memcpy(bytes, buf.written());
     const o = try lobj.read(bytes);
-    const r = try link.link(gpa, &o, .all, null);
+    const r = try link.link(gpa, &o, .all, .{});
     defer gpa.free(r.bytes);
     const out = r.bytes;
     try std.testing.expectEqual(@as(u32, 0xfeedfacf), std.mem.readInt(u32, out[0..4], .little));
@@ -793,4 +810,127 @@ test "a Mach-O executable binds its imports and rebases its pointers" {
     // The signature hashes the file before it.
     const sig = std.mem.indexOf(u8, out, &.{ 0xfa, 0xde, 0x0c, 0xc0 }).?;
     try std.testing.expectEqual(sig, std.mem.readInt(u32, out[sig + 20 + 32 ..][0..4], .big));
+}
+
+pub const EmbedError = error{ OutOfMemory, NotMachO, Malformed, NoRoom, AlreadyBundled, UnsupportedFixups };
+
+/// Puts `payload` into a new segment `__LUS` of the executable `exe`,
+/// which the system linker wrote, and signs the result ad hoc again. The
+/// segment goes before `__LINKEDIT`, which moves up by the size of the
+/// segment along with every offset into it, so the signature covers the
+/// payload. The load commands need 168 free bytes before the first
+/// section, which the linkers of Zig and Apple leave.
+pub fn embed(gpa: std.mem.Allocator, exe: []const u8, payload: []const u8) EmbedError![]u8 {
+    if (exe.len < 32 or rd32(exe, 0) != 0xfeedfacf) return error.NotMachO;
+    const page: u64 = if (rd32(exe, 4) == 0x0100_000c) 0x4000 else 0x1000;
+    const ncmds = rd32(exe, 16);
+    const sizeofcmds = rd32(exe, 20);
+    if (32 + @as(u64, sizeofcmds) > exe.len) return error.Malformed;
+    var linkedit: ?usize = null;
+    var sig: ?usize = null;
+    var text_filesize: u64 = 0;
+    var first_data: u64 = exe.len;
+    var at: usize = 32;
+    for (0..ncmds) |_| {
+        if (at + 8 > 32 + sizeofcmds) return error.Malformed;
+        const cmd = rd32(exe, at);
+        const size = rd32(exe, at + 4);
+        if (size < 8 or at + size > 32 + sizeofcmds) return error.Malformed;
+        switch (cmd) {
+            0x19 => {
+                const name = std.mem.sliceTo(exe[at + 8 ..][0..16], 0);
+                if (std.mem.eql(u8, name, "__LINKEDIT")) linkedit = at;
+                if (std.mem.eql(u8, name, "__LUS")) return error.AlreadyBundled;
+                if (std.mem.eql(u8, name, "__TEXT")) text_filesize = rd64(exe, at + 48);
+                const nsects = rd32(exe, at + 64);
+                for (0..nsects) |k| {
+                    const sp = at + 72 + k * 80;
+                    const off = rd32(exe, sp + 48);
+                    if (off != 0 and rd64(exe, sp + 40) != 0) first_data = @min(first_data, off);
+                }
+            },
+            0x1d => sig = at,
+            0x8000_0034 => return error.UnsupportedFixups,
+            else => {},
+        }
+        at += size;
+    }
+    const le = linkedit orelse return error.Malformed;
+    const need: u64 = 72 + 80 + if (sig == null) @as(u64, 16) else 0;
+    if (first_data < 32 + sizeofcmds + need) return error.NoRoom;
+    const le_off = rd64(exe, le + 40);
+    const le_addr = rd64(exe, le + 24);
+    const le_end = if (sig) |s| rd32(exe, s + 8) else le_off + rd64(exe, le + 48);
+    if (le_off > le_end or le_end > exe.len) return error.Malformed;
+    const shift = std.mem.alignForward(u64, payload.len, page);
+    const new_le_off = le_off + shift;
+    const sig_off = std.mem.alignForward(u64, new_le_off + (le_end - le_off), 16);
+    const n_pages = std.math.divCeil(u64, sig_off, sig_page) catch unreachable;
+    const sig_size = std.mem.alignForward(u64, 12 + 8 + 88 + identifier.len + 1 + 32 * n_pages, 16);
+    const out = try gpa.alloc(u8, link.index(sig_off + sig_size));
+    errdefer gpa.free(out);
+    @memset(out, 0);
+    // The load commands, rewritten into the copy with __LUS before
+    // __LINKEDIT, then the sections up to __LINKEDIT.
+    const cmds_end = 32 + @as(usize, sizeofcmds);
+    @memcpy(out[0..32], exe[0..32]);
+    @memcpy(out[cmds_end + link.index(need) .. link.index(le_off)], exe[cmds_end + link.index(need) .. link.index(le_off)]);
+    var w: Cmds = .{ .buf = out[32 .. cmds_end + link.index(need)] };
+    at = 32;
+    for (0..ncmds) |_| {
+        const cmd = rd32(exe, at);
+        const size = rd32(exe, at + 4);
+        if (at == le) {
+            w.segment("__LUS", le_addr, shift, le_off, shift, 1, 1, 1, 0);
+            w.sect("__bundle", "__LUS", le_addr, payload.len, @intCast(le_off), 0, 0);
+        }
+        const c = w.buf[w.pos..][0..size];
+        @memcpy(c, exe[at..][0..size]);
+        w.pos += size;
+        const moved = struct {
+            fn f(b: []u8, off: usize, width: u8, from: u64, by: u64) void {
+                if (width == 8) {
+                    const v = std.mem.readInt(u64, b[off..][0..8], .little);
+                    if (v >= from) std.mem.writeInt(u64, b[off..][0..8], v + by, .little);
+                } else {
+                    const v = std.mem.readInt(u32, b[off..][0..4], .little);
+                    if (v >= from and v != 0) std.mem.writeInt(u32, b[off..][0..4], @intCast(v + by), .little);
+                }
+            }
+        }.f;
+        switch (cmd) {
+            0x19 => if (at == le) {
+                std.mem.writeInt(u64, c[24..32], le_addr + shift, .little);
+                std.mem.writeInt(u64, c[40..48], new_le_off, .little);
+                std.mem.writeInt(u64, c[48..56], sig_off + sig_size - new_le_off, .little);
+                std.mem.writeInt(u64, c[32..40], std.mem.alignForward(u64, sig_off + sig_size - new_le_off, page), .little);
+            },
+            0x2 => for ([_]usize{ 8, 16 }) |o| moved(c, o, 4, le_off, shift), // LC_SYMTAB
+            0xb => for ([_]usize{ 32, 40, 48, 56, 64, 72 }) |o| moved(c, o, 4, le_off, shift), // LC_DYSYMTAB
+            0x22, 0x8000_0022 => for ([_]usize{ 8, 16, 24, 32, 40 }) |o| moved(c, o, 4, le_off, shift), // LC_DYLD_INFO
+            0x1d => {
+                std.mem.writeInt(u32, c[8..12], @intCast(sig_off), .little);
+                std.mem.writeInt(u32, c[12..16], @intCast(sig_size), .little);
+            },
+            0x1e, 0x26, 0x29, 0x2b, 0x2e, 0x8000_0033 => moved(c, 8, 4, le_off, shift),
+            else => {},
+        }
+        at += size;
+    }
+    if (sig == null) w.linkeditData(0x1d, sig_off, sig_size);
+    const h = out[0..32];
+    std.mem.writeInt(u32, h[16..20], ncmds + 1 + @intFromBool(sig == null), .little);
+    std.mem.writeInt(u32, h[20..24], @intCast(sizeofcmds + need), .little);
+    @memcpy(out[link.index(le_off)..][0..payload.len], payload);
+    @memcpy(out[link.index(new_le_off)..][0..link.index(le_end - le_off)], exe[link.index(le_off)..link.index(le_end)]);
+    sign(out, sig_off, text_filesize);
+    return out;
+}
+
+fn rd32(b: []const u8, off: usize) u32 {
+    return std.mem.readInt(u32, b[off..][0..4], .little);
+}
+
+fn rd64(b: []const u8, off: usize) u64 {
+    return std.mem.readInt(u64, b[off..][0..8], .little);
 }

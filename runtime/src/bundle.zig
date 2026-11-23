@@ -11,10 +11,16 @@
 //! then the magic `LUSBNDL` followed by the format version byte.
 //!
 //! At startup the CLI reads its own trailer. A file without the magic is
-//! a plain interpreter.
+//! a plain interpreter. On macOS and iOS the payload with its trailer is
+//! the section `__LUS,__bundle` of the executable, inside what its code
+//! signature covers, and the CLI finds it in its own image.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+
+/// Whether the payload is a section of the executable.
+pub const in_section = builtin.os.tag.isDarwin();
 
 pub const magic = "LUSBNDL";
 pub const version: u8 = 1;
@@ -65,6 +71,12 @@ pub fn readTrailer(io: std.Io, file: std.Io.File, file_len: u64) !?Trailer {
     var t: [trailer_len]u8 = undefined;
     const n = try file.readPositionalAll(io, &t, file_len - trailer_len);
     if (n != trailer_len) return null;
+    return decodeTrailer(&t, file_len);
+}
+
+/// The trailer `t` at the end of `file_len` bytes, or null when it is not
+/// one.
+fn decodeTrailer(t: *const [trailer_len]u8, file_len: u64) !?Trailer {
     if (!std.mem.eql(u8, t[16..23], magic) or t[23] != version) return null;
     const tr: Trailer = .{
         .payload_len = std.mem.readInt(u64, t[0..8], .little),
@@ -82,9 +94,28 @@ pub fn programLength(io: std.Io, file: std.Io.File) !u64 {
     return len - trailer_len - tr.payload_len;
 }
 
-/// Loads the bundle appended to the running executable, or returns null
-/// for a plain interpreter.
+extern "c" fn getsectiondata(mhp: *const anyopaque, segname: [*:0]const u8, sectname: [*:0]const u8, size: *c_ulong) ?[*]u8;
+/// The header of image `i`, where image 0 is the main executable.
+extern "c" fn _dyld_get_image_header(i: u32) ?*const anyopaque;
+
+/// Loads the bundle that `data` holds, a payload followed by its trailer.
+pub fn fromMemory(gpa: Allocator, data: []const u8) !?Bundle {
+    if (data.len < trailer_len) return null;
+    const tr = (try decodeTrailer(data[data.len - trailer_len ..][0..trailer_len], data.len)) orelse return null;
+    const start = data.len - trailer_len - @as(usize, @intCast(tr.payload_len));
+    const bytes = try gpa.dupe(u8, data[start .. data.len - trailer_len]);
+    errdefer gpa.free(bytes);
+    return try parse(gpa, bytes, @intCast(tr.index_len));
+}
+
+/// Loads the bundle of the running executable, or returns null for a
+/// plain interpreter.
 pub fn loadSelf(io: std.Io, gpa: Allocator) !?Bundle {
+    if (comptime in_section and builtin.link_libc) {
+        var size: c_ulong = 0;
+        const header = _dyld_get_image_header(0) orelse return null;
+        if (getsectiondata(header, "__LUS", "__bundle", &size)) |p| return fromMemory(gpa, p[0..size]);
+    }
     const file = std.process.openExecutable(io, .{}) catch return null;
     defer file.close(io);
     const len = file.length(io) catch return null;

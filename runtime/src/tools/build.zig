@@ -37,6 +37,7 @@ const dump = @import("../compile/dump.zig");
 const libproof = @import("libproof.zig");
 const lobj = @import("../link/lobj.zig");
 const linker = @import("../link/link.zig");
+const macho = @import("../link/macho.zig");
 const aot = @import("../jit/aot.zig");
 const package = lus.lib.package;
 const modtree = lus.modtree;
@@ -611,10 +612,15 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         // The program part of the running executable, or of the runtime
         // that --runtime names, without any bundle it already carries, or
         // an executable linked from the link object.
+        var payload: std.ArrayList(u8) = .empty;
+        defer payload.deinit(gpa);
+        try bundle.write(gpa, &payload, preserved.items, c.modules.items, 0);
         if (opts.link_object) |lo| {
-            linked = (try linkImage(io, gpa, lo, &c.proof, opts.link_all, opts.link_map, null, &image)) orelse return 1;
-        } else if (!try readProgram(io, gpa, opts.runtime, &image)) return 1;
-        try bundle.write(gpa, &image, preserved.items, c.modules.items, 0);
+            linked = (try linkImage(io, gpa, lo, &c.proof, opts.link_all, opts.link_map, null, payload.items, &image)) orelse return 1;
+        } else {
+            if (!try readProgram(io, gpa, opts.runtime, &image)) return 1;
+            if (!try attach(gpa, &image, payload.items)) return 1;
+        }
     } else {
         // A bundle on the running lus runs once under the training
         // setting and writes the code section of what it compiled
@@ -634,14 +640,19 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         const default_lo = if (base) |b| try std.fmt.allocPrint(gpa, "{s}.lo", .{b}) else null;
         defer if (default_lo) |d| gpa.free(d);
         const lo_path = opts.link_object orelse if (default_lo) |d| (if (exists(io, d)) d else null) else null;
-        if (lo_path) |lo| {
-            linked = (try linkImage(io, gpa, lo, &c.proof, opts.link_all, opts.link_map, section, &image)) orelse return 1;
-        } else if (!try readProgram(io, gpa, base, &image)) return 1;
         var modules: std.ArrayList(bundle.Module) = .empty;
         defer modules.deinit(gpa);
         try modules.appendSlice(gpa, c.modules.items);
         try modules.append(gpa, .{ .name = ".aot", .chunkname = "=aot", .data = section });
-        try bundle.write(gpa, &image, preserved.items, modules.items, 0);
+        var payload: std.ArrayList(u8) = .empty;
+        defer payload.deinit(gpa);
+        try bundle.write(gpa, &payload, preserved.items, modules.items, 0);
+        if (lo_path) |lo| {
+            linked = (try linkImage(io, gpa, lo, &c.proof, opts.link_all, opts.link_map, section, payload.items, &image)) orelse return 1;
+        } else {
+            if (!try readProgram(io, gpa, base, &image)) return 1;
+            if (!try attach(gpa, &image, payload.items)) return 1;
+        }
     }
 
     const cwd = std.Io.Dir.cwd();
@@ -679,7 +690,7 @@ const LinkNote = struct { kept: u64, total: u64 };
 /// keeping the builtins that `proof` reaches, every builtin when `all` is
 /// set, and the builtins that the code section `section` calls. Prints
 /// the reason and returns null when it cannot.
-fn linkImage(io: std.Io, gpa: Allocator, path: []const u8, proof: *libproof.Proof, all: bool, map_path: ?[]const u8, section: ?[]const u8, image: *std.ArrayList(u8)) !?LinkNote {
+fn linkImage(io: std.Io, gpa: Allocator, path: []const u8, proof: *libproof.Proof, all: bool, map_path: ?[]const u8, section: ?[]const u8, payload: []const u8, image: *std.ArrayList(u8)) !?LinkNote {
     const data = std.Io.Dir.cwd().readFileAllocOptions(io, path, gpa, .unlimited, .@"8", null) catch |e| {
         std.debug.print("lus build: cannot read the link object {s} ({s})\n", .{ path, @errorName(e) });
         return null;
@@ -731,13 +742,31 @@ fn linkImage(io: std.Io, gpa: Allocator, path: []const u8, proof: *libproof.Proo
         };
         map_writer = map_file.?.writer(io, &map_buf);
     }
-    const r = linker.link(gpa, &o, keep, if (map_writer) |*mw| &mw.interface else null) catch |e| {
+    const r = linker.link(gpa, &o, keep, .{ .map = if (map_writer) |*mw| &mw.interface else null, .payload = payload }) catch |e| {
         std.debug.print("lus build: cannot link {s} ({s})\n", .{ path, @errorName(e) });
         return null;
     };
     defer gpa.free(r.bytes);
     try image.appendSlice(gpa, r.bytes);
     return .{ .kept = r.kept, .total = r.total };
+}
+
+/// Adds the bundle `payload` to the executable in `image`: into a segment
+/// of a Mach-O executable, which is signed again, or after any other.
+/// Prints the reason and returns false when it cannot.
+fn attach(gpa: Allocator, image: *std.ArrayList(u8), payload: []const u8) !bool {
+    if (image.items.len < 4 or std.mem.readInt(u32, image.items[0..4], .little) != 0xfeedfacf) {
+        try image.appendSlice(gpa, payload);
+        return true;
+    }
+    const out = macho.embed(gpa, image.items, payload) catch |e| {
+        std.debug.print("lus build: cannot put the bundle into the executable ({s})\n", .{@errorName(e)});
+        return false;
+    };
+    defer gpa.free(out);
+    image.clearRetainingCapacity();
+    try image.appendSlice(gpa, out);
+    return true;
 }
 
 /// Reads the program part of `path`, or of the running executable when
@@ -776,7 +805,10 @@ fn train(init: std.process.Init, gpa: Allocator, preserved: []const []const u8, 
     var image: std.ArrayList(u8) = .empty;
     defer image.deinit(gpa);
     if (!try readProgram(io, gpa, null, &image)) return null;
-    try bundle.write(gpa, &image, preserved, modules, 0);
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(gpa);
+    try bundle.write(gpa, &payload, preserved, modules, 0);
+    if (!try attach(gpa, &image, payload.items)) return null;
     const exe = try std.fmt.allocPrint(gpa, "{s}.train", .{out_path});
     defer gpa.free(exe);
     const sec = try std.fmt.allocPrint(gpa, "{s}.aot", .{out_path});

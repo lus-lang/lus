@@ -74,6 +74,8 @@ pub const routines = [_]*const anyopaque{
     @ptrCast(&helpers.callNative),
     @ptrCast(&helpers.tailNative),
     @ptrCast(&helpers.returnAll),
+    @ptrCast(&helpers.ctxGet),
+    @ptrCast(&helpers.ctxSet),
 };
 
 /// The number of the routine at `addr`, or null.
@@ -1460,4 +1462,33 @@ test "every routine of the optimizing tier has a number" {
             }
         }
     }
+}
+
+test "every helper that the emitters call by address has a number" {
+    const sources = [_][]const u8{ @embedFile("emit.zig"), @embedFile("opt/codegen.zig") };
+    inline for (comptime std.meta.declarations(helpers)) |d| {
+        const f = @field(helpers, d.name);
+        if (@typeInfo(@TypeOf(f)) == .@"fn") {
+            for (sources) |src| {
+                if (namesHelper(src, d.name) and routineId(@intFromPtr(&f)) == null) {
+                    std.debug.print("helpers.{s} is missing from aot.routines\n", .{d.name});
+                    return error.TestUnexpectedResult;
+                }
+            }
+        }
+    }
+}
+
+/// Whether `src` takes the address of `helpers.name`.
+fn namesHelper(src: []const u8, name: []const u8) bool {
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, src, pos, "&helpers.")) |i| {
+        const rest = src[i + "&helpers.".len ..];
+        pos = i + 1;
+        if (!std.mem.startsWith(u8, rest, name)) continue;
+        if (rest.len == name.len) return true;
+        const c = rest[name.len];
+        if (!std.ascii.isAlphanumeric(c) and c != '_') return true;
+    }
+    return false;
 }

@@ -245,6 +245,14 @@ jobs:
           ../../runtime/zig-out/bin/lus build --aot --link-object "$RUNNER_TEMP/lo/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/linked"
           test "$("$RUNNER_TEMP/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
           test "$(wc -c < "$RUNNER_TEMP/linked")" -lt 2000000
+          # On macOS the bundle is inside what the signature covers, for an
+          # executable linked here and for one on the prebuilt lus.
+          if [ "$RUNNER_OS" = macOS ]; then
+            codesign -v --strict "$RUNNER_TEMP/linked"
+            ../../runtime/zig-out/bin/lus build linked.lus -o "$RUNNER_TEMP/plain"
+            codesign -v --strict "$RUNNER_TEMP/plain"
+            test "$("$RUNNER_TEMP/plain")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+          fi
       - name: Documentation examples
         timeout-minutes: 10
         working-directory: runtime
