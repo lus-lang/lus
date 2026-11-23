@@ -2127,12 +2127,17 @@ fn udpTostring(l: *Thread) Error!u32 {
 const input_port = state.Port{ .step = inputStep };
 const output_port = state.Port{ .step = outputStep, .close = outputClose };
 
-/// Registers the fields `input` and `output` of sockets, which a lookup
-/// finds after the methods.
+/// Registers the fields `input` and `output` of sockets and `accepted` of
+/// servers, which a lookup finds after the methods. A program that never
+/// names one of these fields and reaches no socket leaves the getters, the
+/// ports, and the reads and writes that they make out of its executable
+/// (`aux.guarded`).
 fn portIndex(l: *Thread) Error!void {
     const g = l.g;
-    g.fields.put(g.gpa, metatableOf(l, socket_name), socketField) catch return l.raiseMem();
-    g.fields.put(g.gpa, metatableOf(l, server_name), serverField) catch return l.raiseMem();
+    const socket_input = aux.guarded(.methods, "network:" ++ socket_name, "input", "field", socketField);
+    const socket_output = aux.guarded(.methods, "network:" ++ socket_name, "output", "field", socketField);
+    if (socket_input orelse socket_output) |f| g.fields.put(g.gpa, metatableOf(l, socket_name), f) catch return l.raiseMem();
+    if (aux.guarded(.methods, "network:" ++ server_name, "accepted", "field", serverField)) |f| g.fields.put(g.gpa, metatableOf(l, server_name), f) catch return l.raiseMem();
 }
 
 /// Returns the port in user value `w` of the userdata `v`, which it
