@@ -30,7 +30,7 @@ pub fn main(init: std.process.Init) !void {
         map_file = try cwd.createFile(io, args.items[3], .{});
         map_writer = map_file.?.writer(io, &map_buf);
     }
-    const r = try link.link(gpa, &o, .all, if (map_writer) |*mw| &mw.interface else null);
+    const r = try link.link(gpa, &o, .all, .{ .map = if (map_writer) |*mw| &mw.interface else null });
     defer gpa.free(r.bytes);
     const f = try cwd.createFile(io, args.items[2], .{ .permissions = .executable_file });
     defer f.close(io);

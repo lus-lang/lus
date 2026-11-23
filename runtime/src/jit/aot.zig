@@ -605,7 +605,9 @@ pub fn reloadUnitMeta(l: *Thread, u: *opt.Unit) void {
 // ---------------------------------------------------------------------
 // The code section
 
-const magic = "LUSAOT\x03\x00";
+/// The version byte changes with the numbering of `routines`, which the
+/// step routines follow.
+const magic = "LUSAOT\x04\x00";
 
 fn put32(list: *std.ArrayList(u8), gpa: std.mem.Allocator, v: u32) !void {
     var b: [4]u8 = undefined;
@@ -1462,4 +1464,33 @@ test "every routine of the optimizing tier has a number" {
             }
         }
     }
+}
+
+test "every helper that the emitters call by address has a number" {
+    const sources = [_][]const u8{ @embedFile("emit.zig"), @embedFile("opt/codegen.zig") };
+    inline for (comptime std.meta.declarations(helpers)) |name| {
+        const f = @field(helpers, name);
+        if (@typeInfo(@TypeOf(f)) == .@"fn") {
+            for (sources) |src| {
+                if (namesHelper(src, name) and routineId(@intFromPtr(&f)) == null) {
+                    std.debug.print("helpers.{s} is missing from aot.routines\n", .{name});
+                    return error.TestUnexpectedResult;
+                }
+            }
+        }
+    }
+}
+
+/// Whether `src` takes the address of `helpers.name`.
+fn namesHelper(src: []const u8, name: []const u8) bool {
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, src, pos, "&helpers.")) |i| {
+        const rest = src[i + "&helpers.".len ..];
+        pos = i + 1;
+        if (!std.mem.startsWith(u8, rest, name)) continue;
+        if (rest.len == name.len) return true;
+        const c = rest[name.len];
+        if (!std.ascii.isAlphanumeric(c) and c != '_') return true;
+    }
+    return false;
 }
