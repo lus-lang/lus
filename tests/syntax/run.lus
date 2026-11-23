@@ -15,7 +15,8 @@
 -- and the output compiles exactly when the mutant compiles. For a mutant
 -- that compiles, the formatter must also accept it, and the syntax tree of
 -- its output must equal the syntax tree of the mutant apart from the
--- positions, since formatting changes only the layout.
+-- positions, since formatting changes only the layout. It never writes
+-- two pairs of parentheses around one expression.
 --
 -- The seeds are the conformance files, the examples, and the language
 -- server. The mutants of a seed differ with the seed of the random
@@ -315,6 +316,38 @@ end
 
 -- Returns the problems with mutant `m` from the statuses and outputs that
 -- its script left.
+local KEYWORD = {}
+for _, k in ipairs(KEYWORDS) do KEYWORD[k] = true end
+
+-- Whether formatted source puts two pairs of parentheses around one
+-- expression, as `((a + b))`. A pair that holds the arguments of a call,
+-- as in `f((a))`, follows a name, a closing bracket, or a string, and
+-- counts as no pair of its own.
+local function doubledParens(src)
+    local spans = tokenize(src)
+    local toks = {}
+    for i, sp in ipairs(spans) do toks[i] = src:sub(sp[1], sp[2]) end
+    local match, stack = {}, {}
+    for i, t in ipairs(toks) do
+        if t == "(" then
+            stack[#stack + 1] = i
+        elseif t == ")" and #stack > 0 then
+            match[stack[#stack]] = i
+            stack[#stack] = nil
+        end
+    end
+    for i = 1, #toks - 1 do
+        if toks[i] == "(" and toks[i + 1] == "(" and match[i] and match[i + 1] == match[i] - 1 then
+            local prev = toks[i - 1]
+            local call = prev ~= nil and (prev == ")" or prev == "]" or prev == "}"
+                or prev:find("^[\"'`]") ~= nil or prev:find("^%[=*%[") ~= nil
+                or (prev:find("^[%a_\u{80}-\u{10FFFF}]") ~= nil and not KEYWORD[prev]))
+            if not call then return src:sub(spans[i][1], spans[match[i]][2]) end
+        end
+    end
+    return nil
+end
+
 local function judge(m)
     local rc = {}
     for line in (readFile(m .. ".rc") or ""):gmatch("[^\n]+") do
@@ -332,6 +365,9 @@ local function judge(m)
     if #problems > 0 then return problems end
     local compiles = rc.compile == 0
     if rc.fmt == 0 then
+        local okf, formatted = catch readFile(m .. ".f.lus")
+        local doubled = okf and formatted and doubledParens(formatted)
+        if doubled then add("fmt nests parentheses around one expression: " .. doubled:sub(1, 80)) end
         if rc.refmt ~= 0 then add("fmt rejects its own output")
         elseif rc.same ~= 0 then add("fmt of its own output changes it") end
         if compiles and rc.fcompile ~= 0 then add("the output of fmt does not compile, and the mutant does") end
