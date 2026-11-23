@@ -155,7 +155,7 @@ pub const Label = u32;
 const Fixup = struct {
     at: u32,
     label: Label,
-    kind: enum { b26, b19, literal },
+    kind: enum { b26, b19, literal, adr },
 };
 
 /// A pool word that holds an address, before `flushPool` places it.
@@ -185,6 +185,11 @@ pub const Assembler = struct {
     resolver: ?reloc.Resolver = null,
     /// Relocated pool words that the next `flushPool` places.
     pool_relocs: std.ArrayList(PoolReloc) = .empty,
+    /// Set ahead of time for a target without executable memory: an
+    /// address loads through `adr` and `ldr` from its pool word, a pair
+    /// that the linker can point at a slot outside the code
+    /// (`reloc.Form.slot`).
+    static: bool = false,
     /// Set when a branch cannot reach its label.
     overflow: bool = false,
 
@@ -257,7 +262,7 @@ pub const Assembler = struct {
                 return;
             };
             for (a.fixups.items[a.pool_fixups..]) |f| {
-                if (f.kind == .literal) a.patch(f, pool_at + f.label * 8);
+                if (f.kind == .literal or f.kind == .adr) a.patch(f, pool_at + f.label * 8);
             }
             for (a.pool_relocs.items) |p| a.record(pool_at + p.index * 8, .word, p.r);
             a.pool_relocs.clearRetainingCapacity();
@@ -279,6 +284,13 @@ pub const Assembler = struct {
                 if (delta < -(1 << 18) or delta >= (1 << 18)) a.overflow = true;
                 w |= (@as(u32, @truncate(@as(u64, @bitCast(delta)))) & 0x7FFFF) << 5;
             },
+            .adr => {
+                // The offset in bytes, its low two bits apart.
+                const bytes = @as(i64, target) - @as(i64, f.at);
+                if (bytes < -(1 << 20) or bytes >= (1 << 20)) a.overflow = true;
+                const imm: u32 = @truncate(@as(u64, @bitCast(bytes)));
+                w |= (imm & 3) << 29 | ((imm >> 2) & 0x7FFFF) << 5;
+            },
         }
         p.* = std.mem.nativeToLittle(u32, w);
     }
@@ -288,7 +300,7 @@ pub const Assembler = struct {
         a.flushPool();
         if (a.oom) return false;
         for (a.fixups.items) |f| {
-            if (f.kind == .literal) continue;
+            if (f.kind == .literal or f.kind == .adr) continue;
             const target = a.labels.items[f.label];
             if (target == unbound) return false;
             a.patch(f, target);
@@ -327,6 +339,14 @@ pub const Assembler = struct {
         a.pool.append(a.gpa, v) catch {
             a.oom = true;
         };
+        if (a.static) {
+            // adr dst, word; ldr dst, [dst]
+            a.record(a.offset(), .slot, r);
+            a.fix(@intCast(index), .adr);
+            a.word(0x10000000 | dst.n());
+            a.word(0xF9400000 | dst.n() << 5 | dst.n());
+            return;
+        }
         a.pool_relocs.append(a.gpa, .{ .index = @intCast(index), .r = r }) catch {
             a.oom = true;
         };
@@ -1004,4 +1024,23 @@ test "aarch64 wide constants load from the pool" {
     try std.testing.expectEqual(@as(u32, 0x55667788), w[8]);
     try std.testing.expectEqual(@as(u32, 0x11223344), w[9]);
     try std.testing.expectEqual(@as(u32, 0x56789ABC), w[10]);
+}
+
+test "aarch64 loads an address through a slot in the static form" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.aot = true;
+    a.static = true;
+    a.movImmReloc(.x9, 0x1122334455667788, .{ .kind = .routine, .a = 3 });
+    a.trap();
+    try std.testing.expect(a.finish());
+    try std.testing.expectEqual(@as(usize, 1), a.relocs.items.len);
+    const e = a.relocs.items[0];
+    try std.testing.expectEqual(reloc.Form.slot, e.form);
+    // adr x9 points at the pool word, and ldr x9, [x9] follows.
+    const t = reloc.slotTarget(a.buf.items, e.at).?;
+    try std.testing.expectEqual(@as(u64, 0x1122334455667788), std.mem.readInt(u64, a.buf.items[t..][0..8], .little));
+    try std.testing.expectEqual(@as(u32, 0xF9400129), std.mem.readInt(u32, a.buf.items[e.at + 4 ..][0..4], .little));
+    reloc.apply(a.buf.items, e, 0xAABB);
+    try std.testing.expectEqual(@as(u64, 0xAABB), std.mem.readInt(u64, a.buf.items[t..][0..8], .little));
 }

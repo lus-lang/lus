@@ -57,6 +57,7 @@ pub fn close(l: *Thread) void {
     // Finalizers run next, while worker handles still reach their domain.
     finalizeAll(g);
     writeAotTraining(g);
+    @import("jit/jit.zig").reportAot(g);
     closeRest(g);
 }
 
@@ -124,6 +125,7 @@ pub fn closeForExit(l: *Thread) void {
     closeCoroutines(g);
     finalizeAll(g);
     writeAotTraining(g);
+    @import("jit/jit.zig").reportAot(g);
     if (@import("build_options").workers and !@import("lib/worker.zig").stopForExit(g)) {
         workers_abandoned = true;
         @import("lib/out.zig").deinit(g);

@@ -663,7 +663,7 @@ pub fn registerLines(l: *Thread) Error!void {
     const mt = try l.newTable(0, 2);
     try l.push(Value.obj(.table, mt));
     defer l.top -= 1;
-    try aux.setField(l, mt, "__gc", try aux.native(l, linesGc, "gc"));
+    if (aux.guarded(.methods, "network:" ++ lines_name, "__gc", "gc", linesGc)) |f| try aux.setField(l, mt, "__gc", try aux.native(l, f, "gc"));
     try aux.setField(l, mt, "__name", try l.newStringValue(lines_name));
     try aux.setField(l, g.registry.as(Table), lines_name, Value.obj(.table, mt));
     g.ext.put(g.gpa, lines_name, mt) catch return l.raiseMem();

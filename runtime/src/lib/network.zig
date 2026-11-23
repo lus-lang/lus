@@ -212,16 +212,21 @@ pub fn open(l: *Thread) Error!void {
     try aux.setGlobal(l, "network", Value.obj(.table, t));
 }
 
-fn makeMetatable(l: *Thread, comptime name: []const u8, comptime methods: []const aux.Reg, gcf: state.NativeFn, tostr: state.NativeFn) Error!void {
+fn makeMetatable(l: *Thread, comptime name: []const u8, comptime methods: []const aux.Reg, comptime gcf: anytype, comptime tostr: anytype) Error!void {
     const mt = try l.newTable(0, 8);
     try l.push(Value.obj(.table, mt));
     defer l.top -= 1;
     const m = try aux.newLib(l, .methods, "network:" ++ name, methods);
     try aux.setField(l, mt, "__index", Value.obj(.table, m));
     try aux.setField(l, mt, "__name", try l.newStringValue(name));
-    try aux.setField(l, mt, "__tostring", try aux.native(l, tostr, "tostring"));
-    try aux.setField(l, mt, "__gc", try aux.native(l, gcf, "gc"));
-    try aux.setField(l, mt, "__close", try aux.native(l, gcf, "close"));
+    // Only a program that reaches the network library makes these
+    // objects, so the linker of `lus build --aot` leaves the metamethods
+    // and what they call out of any other (`aux.guarded`).
+    if (aux.guarded(.methods, "network:" ++ name, "__tostring", "tostring", tostr)) |f| try aux.setField(l, mt, "__tostring", try aux.native(l, f, "tostring"));
+    if (aux.guarded(.methods, "network:" ++ name, "__gc", "gc", gcf)) |f| {
+        try aux.setField(l, mt, "__gc", try aux.native(l, f, "gc"));
+        try aux.setField(l, mt, "__close", try aux.native(l, f, "close"));
+    }
     // The registry roots the metatable, and the extension map records it
     // for fast lookup.
     const g = l.g;

@@ -85,6 +85,13 @@ pub const Arena = struct {
 
     /// Returns a block to the arena.
     pub fn release(a: *Arena, gpa: std.mem.Allocator, block: []u8) void {
+        // Code compiled ahead of time into the executable lies outside
+        // every chunk and stays where it is.
+        const start = @intFromPtr(block.ptr);
+        const owned = for (a.chunks.items) |c| {
+            if (start >= c.start and start < c.start + c.len) break true;
+        } else false;
+        if (!owned) return;
         a.used -= block.len;
         // The list has room unless growing it failed. A block that cannot
         // be recorded stays unused until the state closes.
@@ -128,7 +135,11 @@ pub const Arena = struct {
     }
 };
 
+/// Set when the process may map no executable memory (`LUS_JIT_NO_EXEC`).
+pub var refuse_exec = false;
+
 fn map(size: usize) ?Span {
+    if (refuse_exec) return null;
     if (windows) {
         const m = VirtualAlloc(null, size, mem_commit | mem_reserve, page_readwrite) orelse return null;
         // A process with Arbitrary Code Guard cannot make pages

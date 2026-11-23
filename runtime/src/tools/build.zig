@@ -38,6 +38,7 @@ const libproof = @import("libproof.zig");
 const lobj = @import("../link/lobj.zig");
 const linker = @import("../link/link.zig");
 const macho = @import("../link/macho.zig");
+const reloc = @import("../jit/reloc.zig");
 const aot = @import("../jit/aot.zig");
 const package = lus.lib.package;
 const modtree = lus.modtree;
@@ -56,6 +57,7 @@ const usage =
     \\  --aot                   compile the program ahead of time from a training run
     \\  --train ARGS            the arguments of the training run, separated by spaces
     \\  --aot-keep-jit          keep the JIT, so code the training never reached compiles
+    \\  --aot-static            compile ahead of time for a target without executable memory
     \\  --link-object FILE      link the executable from FILE, keeping only what the program reaches
     \\  --link-all              link every builtin of the link object
     \\  --link-map FILE         write the size of each linked atom and what reached it
@@ -70,6 +72,9 @@ const Options = struct {
     runtime: ?[]const u8 = null,
     aot: bool = false,
     keep_jit: bool = false,
+    /// Compiles ahead of time in the static form, for a target without
+    /// executable memory.
+    static: bool = false,
     train: ?[]const u8 = null,
     /// The link object to link the executable from, in place of a
     /// prebuilt runtime (`spec/design/aot.md`, "The linker").
@@ -101,6 +106,11 @@ fn parseOptions(gpa: Allocator, args: []const []const u8) !?Options {
         }
         if (std.mem.eql(u8, a, "--link-all")) {
             o.link_all = true;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--aot-static")) {
+            o.aot = true;
+            o.static = true;
             continue;
         }
         if (std.mem.eql(u8, a, "--aot-keep-jit")) {
@@ -625,7 +635,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         // A bundle on the running lus runs once under the training
         // setting and writes the code section of what it compiled
         // (`spec/design/aot.md`).
-        const section = (try train(init, gpa, preserved.items, c.modules.items, out_path, opts.train)) orelse return 1;
+        const section = (try train(init, gpa, preserved.items, c.modules.items, out_path, opts.train, opts.static)) orelse return 1;
         defer gpa.free(section);
         const base: ?[]const u8 = if (opts.keep_jit) null else opts.runtime orelse blk: {
             const dir = std.process.executableDirPathAlloc(io, gpa) catch {
@@ -712,7 +722,14 @@ fn linkImage(io: std.Io, gpa: Allocator, path: []const u8, proof: *libproof.Proo
             .windows => .windows,
             else => null,
         };
-        if (host_arch != o.arch or host_os != o.os) {
+        // iOS runs the code that a training run on macOS compiled in the
+        // static form, on the same architecture and calling convention.
+        const ios_ok = o.os == .ios and host_os == .macos and aot.sectionStatic(sec);
+        if (o.os == .ios and !aot.sectionStatic(sec)) {
+            std.debug.print("lus build: iOS runs only code compiled ahead of time in the static form (--aot-static)\n", .{});
+            return null;
+        }
+        if (host_arch != o.arch or (host_os != o.os and !ios_ok)) {
             std.debug.print("lus build: the link object {s} is for {s}-{s}, and code compiled ahead of time runs only where it was trained\n", .{ path, @tagName(o.arch), @tagName(o.os) });
             return null;
         }
@@ -742,13 +759,85 @@ fn linkImage(io: std.Io, gpa: Allocator, path: []const u8, proof: *libproof.Proo
         };
         map_writer = map_file.?.writer(io, &map_buf);
     }
-    const r = linker.link(gpa, &o, keep, .{ .map = if (map_writer) |*mw| &mw.interface else null, .payload = payload }) catch |e| {
+    // A static section becomes atoms of the image.
+    var merged: ?[]align(8) u8 = null;
+    defer if (merged) |m| gpa.free(m);
+    var obj = o;
+    if (section) |sec| if (aot.sectionStatic(sec)) {
+        merged = staticObject(gpa, &o, sec) catch |e| {
+            std.debug.print("lus build: cannot link the code compiled ahead of time into the executable ({s})\n", .{@errorName(e)});
+            return null;
+        };
+        obj = lobj.read(merged.?) catch {
+            std.debug.print("lus build: cannot link the code compiled ahead of time into the executable\n", .{});
+            return null;
+        };
+    };
+    const r = linker.link(gpa, &obj, keep, .{ .map = if (map_writer) |*mw| &mw.interface else null, .payload = payload }) catch |e| {
         std.debug.print("lus build: cannot link {s} ({s})\n", .{ path, @errorName(e) });
         return null;
     };
     defer gpa.free(r.bytes);
     try image.appendSlice(gpa, r.bytes);
     return .{ .kept = r.kept, .total = r.total };
+}
+
+/// The link object `o` with the code of the static section `sec` as atoms
+/// (`spec/design/aot.md`, "The linker"): one atom of code, where each pair
+/// of `adr` and `ldr` becomes `adrp` and `ldr` of a slot, the zeroed
+/// slots, and the variable `lus_aot_image` of the runtime pointing at
+/// both.
+fn staticObject(gpa: Allocator, o: *const lobj.Object, sec: []const u8) ![]align(8) u8 {
+    if (o.arch != .aarch64) return error.UnsupportedTarget;
+    var w = try lobj.Writer.fromObject(gpa, o);
+    defer w.deinit();
+    const holder = for (o.atoms, 0..) |a, i| {
+        if (std.mem.eql(u8, o.string(a.name), "lus_aot_image")) break i;
+    } else return error.NoImageVariable;
+    var code: std.ArrayList(u8) = .empty;
+    defer code.deinit(gpa);
+    var relocs: std.ArrayList(lobj.Reloc) = .empty;
+    defer relocs.deinit(gpa);
+    const slots_atom: u32 = @intCast(w.atoms.items.len + 1);
+    var it = aot.StaticIter.init(sec) orelse return error.BadSection;
+    var nslots: u32 = 0;
+    while (it.next()) |x| {
+        try code.appendNTimes(gpa, 0, @intCast(x.code_off - code.items.len));
+        try code.appendSlice(gpa, x.code);
+        const n = x.relocs.len / 20;
+        for (0..n) |k| {
+            const e = x.relocs[k * 20 ..][0..20];
+            if (e[4] != @backingInt(reloc.Form.slot)) return error.NotStatic;
+            const at: u32 = @intCast(x.code_off + std.mem.readInt(u32, e[0..4], .little));
+            // adr becomes adrp, whose immediate the linker writes.
+            const insn = std.mem.readInt(u32, code.items[at..][0..4], .little);
+            std.mem.writeInt(u32, code.items[at..][0..4], (insn & 0x1f) | 0x9000_0000, .little);
+            const slot: u32 = 8 * (x.slot_base + @as(u32, @intCast(k)));
+            const t: lobj.Target = .{ .index = @intCast(slots_atom), .space = .atom };
+            try relocs.append(gpa, .{ .offset = at, .type = 275, .target = t, .sym = slot, .addend = 0 });
+            try relocs.append(gpa, .{ .offset = at + 4, .type = 286, .target = t, .sym = slot, .addend = 0 });
+        }
+        nslots = x.slot_base + @as(u32, @intCast(n));
+    }
+    const code_atom = try w.atom(.text, 4, code.items, @intCast(code.items.len), "lus.aot.code");
+    for (relocs.items) |rl| try w.reloc(rl);
+    if (try w.atom(.bss, 3, null, @max(8, 8 * nslots), "lus.aot.slots") != slots_atom) unreachable;
+    // The variable of the runtime holds the addresses of both.
+    while (w.data.items.len % 8 != 0) try w.data.append(gpa, 0);
+    const h = &w.atoms.items[holder];
+    h.kind = .data;
+    h.data = @intCast(w.data.items.len);
+    try w.data.appendNTimes(gpa, 0, h.size);
+    h.first_reloc = @intCast(w.relocs.items.len);
+    h.relocs = 2;
+    try w.relocs.append(gpa, .{ .offset = 0, .type = 257, .target = .{ .index = @intCast(code_atom), .space = .atom }, .addend = 0 });
+    try w.relocs.append(gpa, .{ .offset = 8, .type = 257, .target = .{ .index = @intCast(slots_atom), .space = .atom }, .addend = 0 });
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try w.write(&out.writer);
+    const bytes = try gpa.alignedAlloc(u8, .@"8", out.written().len);
+    @memcpy(bytes, out.written());
+    return bytes;
 }
 
 /// Adds the bundle `payload` to the executable in `image`: into a segment
@@ -800,7 +889,7 @@ fn readProgram(io: std.Io, gpa: Allocator, path: ?[]const u8, image: *std.ArrayL
 /// Writes a bundle on the running lus next to `out_path`, runs it with the
 /// training arguments under `LUS_JIT_AOT=train:` with the default JIT, and
 /// returns the code section that it wrote, or null after printing why.
-fn train(init: std.process.Init, gpa: Allocator, preserved: []const []const u8, modules: []const bundle.Module, out_path: []const u8, args: ?[]const u8) !?[]u8 {
+fn train(init: std.process.Init, gpa: Allocator, preserved: []const []const u8, modules: []const bundle.Module, out_path: []const u8, args: ?[]const u8, static: bool) !?[]u8 {
     const io = init.io;
     var image: std.ArrayList(u8) = .empty;
     defer image.deinit(gpa);
@@ -829,7 +918,7 @@ fn train(init: std.process.Init, gpa: Allocator, preserved: []const []const u8, 
     defer cwd.deleteFile(io, sec) catch {};
     var env = try init.environ_map.clone(gpa);
     defer env.deinit();
-    const setting = try std.fmt.allocPrint(gpa, "train:{s}", .{sec});
+    const setting = try std.fmt.allocPrint(gpa, "{s}:{s}", .{ if (static) "train+static" else "train", sec });
     defer gpa.free(setting);
     try env.put("LUS_JIT_AOT", setting);
     // The training run compiles as the JIT does by default.

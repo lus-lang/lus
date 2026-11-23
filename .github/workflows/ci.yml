@@ -236,7 +236,12 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: runtime
         run: |
-          if [ "$RUNNER_OS" = Linux ]; then target=-Dtarget=x86_64-linux-musl; else target=; fi
+          # The limits sit about 5% above the measured sizes of linked.lus,
+          # 1.86 MB on x86-64 Linux and 1.41 MB on aarch64 macOS, so a
+          # change that keeps more of the runtime fails here. x86-64 code
+          # is about a sixth larger than aarch64 code for the same source
+          # (spec/design/aot.md, "Linking").
+          if [ "$RUNNER_OS" = Linux ]; then target=-Dtarget=x86_64-linux-musl; limit=1950000; else target=; limit=1480000; fi
           zig build link-object -Doptimize=ReleaseSafe $target -p "$RUNNER_TEMP/lo"
           "$RUNNER_TEMP/lo/bin/lus-link" "$RUNNER_TEMP/lo/lib/lus.lo" "$RUNNER_TEMP/lus-linked"
           if [ "$RUNNER_OS" = macOS ]; then codesign -v "$RUNNER_TEMP/lus-linked"; fi
@@ -244,7 +249,7 @@ jobs:
           cd ../tests/build
           ../../runtime/zig-out/bin/lus build --aot --link-object "$RUNNER_TEMP/lo/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/linked"
           test "$("$RUNNER_TEMP/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
-          test "$(wc -c < "$RUNNER_TEMP/linked")" -lt 2000000
+          test "$(wc -c < "$RUNNER_TEMP/linked")" -lt "$limit"
           # On macOS the bundle is inside what the signature covers, for an
           # executable linked here and for one on the prebuilt lus.
           if [ "$RUNNER_OS" = macOS ]; then
@@ -252,6 +257,15 @@ jobs:
             ../../runtime/zig-out/bin/lus build linked.lus -o "$RUNNER_TEMP/plain"
             codesign -v --strict "$RUNNER_TEMP/plain"
             test "$("$RUNNER_TEMP/plain")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+            # The static form runs from the signed image under a refusal
+            # of executable memory, which stands in for iOS, and the
+            # relocated form installs nothing under the same refusal.
+            ../../runtime/zig-out/bin/lus build --aot-static --link-object "$RUNNER_TEMP/lo/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/static"
+            codesign -v --strict "$RUNNER_TEMP/static"
+            LUS_JIT_NO_EXEC=1 LUS_AOT_REPORT=1 "$RUNNER_TEMP/static" > "$RUNNER_TEMP/static.out" 2>&1
+            head -2 "$RUNNER_TEMP/static.out" | cmp - <(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil\n')
+            grep -E "aot: [1-9][0-9]* functions .* [1-9][0-9]* placed" "$RUNNER_TEMP/static.out"
+            LUS_JIT_NO_EXEC=1 LUS_AOT_REPORT=1 "$RUNNER_TEMP/linked" 2>&1 | grep "aot: 0 functions and 0 units installed"
           fi
       - name: Documentation examples
         timeout-minutes: 10

@@ -119,17 +119,24 @@ pub const State = struct {
     unit_records: std.AutoHashMapUnmanaged(*opt.Unit, []reloc.Entry) = .empty,
     /// The last number that a reload run gave a function.
     last_id: u32 = 0,
+    /// Whether the code takes the static form, for a target without
+    /// executable memory (`reloc.Form.slot`).
+    static: bool = false,
 
-    /// Reads `LUS_JIT_AOT`, which is `check:PATH` or `train:PATH`.
+    /// Reads `LUS_JIT_AOT`, which is `check:PATH` or `train:PATH`, with
+    /// `+static` after the mode for the static form.
     pub fn fromEnv(gpa: std.mem.Allocator, v: []const u8) ?*State {
         const colon = std.mem.indexOfScalar(u8, v, ':') orelse return null;
-        const mode = std.meta.stringToEnum(Mode, v[0..colon]) orelse return null;
+        const plus = std.mem.indexOfScalar(u8, v[0..colon], '+');
+        const static = if (plus) |k| std.mem.eql(u8, v[k..colon], "+static") else false;
+        if (plus != null and !static) return null;
+        const mode = std.meta.stringToEnum(Mode, v[0 .. plus orelse colon]) orelse return null;
         const s = gpa.create(State) catch return null;
         const path = gpa.dupeSentinel(u8, v[colon + 1 ..], 0) catch {
             gpa.destroy(s);
             return null;
         };
-        s.* = .{ .gpa = gpa, .mode = mode, .path = path };
+        s.* = .{ .gpa = gpa, .mode = mode, .path = path, .static = static };
         return s;
     }
 
@@ -607,7 +614,13 @@ pub fn reloadUnitMeta(l: *Thread, u: *opt.Unit) void {
 
 /// The version byte changes with the numbering of `routines`, which the
 /// step routines follow.
-const magic = "LUSAOT\x04\x00";
+const magic = "LUSAOT\x05\x00";
+
+/// The flag of a section whose code takes the static form.
+const flag_static: u32 = 1;
+
+/// The magic, the hash seed, and the flags.
+const header_len = magic.len + 12;
 
 fn put32(list: *std.ArrayList(u8), gpa: std.mem.Allocator, v: u32) !void {
     var b: [4]u8 = undefined;
@@ -624,16 +637,118 @@ fn put64(list: *std.ArrayList(u8), gpa: std.mem.Allocator, v: u64) !void {
 /// The hash seed that a code section records, which the state of the
 /// executable takes so that the node predictions of its code hold.
 pub fn sectionSeed(bytes: []const u8) ?u64 {
-    if (bytes.len < magic.len + 8 or !std.mem.eql(u8, bytes[0..magic.len], magic)) return null;
+    if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..magic.len], magic)) return null;
     return std.mem.readInt(u64, bytes[magic.len..][0..8], .little);
 }
+
+/// Whether the code of the section `bytes` takes the static form.
+pub fn sectionStatic(bytes: []const u8) bool {
+    if (sectionSeed(bytes) == null) return false;
+    return std.mem.readInt(u32, bytes[magic.len + 8 ..][0..4], .little) & flag_static != 0;
+}
+
+/// Where the linker put the code of a static section in the executable
+/// (`spec/design/aot.md`, "The linker"). The runtime defines it zeroed,
+/// and the linker gives it the addresses of the code and of the slots
+/// when it links a static section into the image.
+pub const Image = extern struct {
+    code: usize = 0,
+    slots: usize = 0,
+};
+
+export var lus_aot_image: Image = .{};
+
+/// The image of the static section, or null when the executable holds
+/// none. The load goes through a volatile pointer, since the linker
+/// writes the variable after the compiler sees it.
+pub fn image() ?Image {
+    const img = @as(*const volatile Image, &lus_aot_image).*;
+    return if (img.code == 0) null else img;
+}
+
+/// A function or a unit of a static section, as the linker lays the code
+/// and the slots out: each code at a multiple of 16 bytes in one atom,
+/// and one slot for each relocation in the order of the section.
+pub const StaticItem = struct {
+    /// The number of the function, or of the function of the unit.
+    id: u32,
+    /// The entry instruction of a unit, or `baseline_pc` for baseline
+    /// code.
+    pc: u32,
+    code: []const u8,
+    /// The relocations, 20 bytes each.
+    relocs: []const u8,
+    code_off: u64,
+    slot_base: u32,
+};
+
+/// Walks the functions, then the units, of a static section.
+pub const StaticIter = struct {
+    r: Reader,
+    funcs: u32,
+    units: ?u32 = null,
+    code_off: u64 = 0,
+    slots: u32 = 0,
+
+    pub fn init(bytes: []const u8) ?StaticIter {
+        if (!sectionStatic(bytes)) return null;
+        var r: Reader = .{ .b = bytes, .at = header_len };
+        const nstr = r.u32_() orelse return null;
+        for (0..nstr) |_| {
+            const len = r.u32_() orelse return null;
+            _ = r.take(len) orelse return null;
+        }
+        const n = r.u32_() orelse return null;
+        return .{ .r = r, .funcs = n };
+    }
+
+    pub fn next(it: *StaticIter) ?StaticItem {
+        var r = &it.r;
+        var code: []const u8 = undefined;
+        if (it.funcs > 0) {
+            it.funcs -= 1;
+            const id = r.u32_() orelse return null;
+            const len = r.u32_() orelse return null;
+            code = r.take(len) orelse return null;
+            const count = r.u32_() orelse return null;
+            _ = r.take(count * 4 + 12) orelse return null;
+            const nrel = r.u32_() orelse return null;
+            const relocs = r.take(nrel * 20) orelse return null;
+            return it.item(id, baseline_pc, code, relocs, nrel);
+        } else {
+            if (it.units == null) it.units = r.u32_() orelse return null;
+            if (it.units.? == 0) return null;
+            it.units.? -= 1;
+            const pid = r.u32_() orelse return null;
+            const pc = r.u32_() orelse return null;
+            const body_len = r.u32_() orelse return null;
+            const end = r.at + body_len;
+            const len = r.u32_() orelse return null;
+            code = r.take(len) orelse return null;
+            _ = r.take(7 * 4) orelse return null;
+            const nrel = r.u32_() orelse return null;
+            const relocs = r.take(nrel * 20) orelse return null;
+            if (end > r.b.len) return null;
+            r.at = end;
+            return it.item(pid, pc, code, relocs, nrel);
+        }
+    }
+
+    fn item(it: *StaticIter, id: u32, pc: u32, code: []const u8, relocs: []const u8, nrel: u32) StaticItem {
+        it.code_off = std.mem.alignForward(u64, it.code_off, 16);
+        const x: StaticItem = .{ .id = id, .pc = pc, .code = code, .relocs = relocs, .code_off = it.code_off, .slot_base = it.slots };
+        it.code_off += code.len;
+        it.slots += nrel;
+        return x;
+    }
+};
 
 /// Calls `f` with each string of the code section `bytes`: the paths of
 /// the natives that its code calls and the characters of the strings it
 /// interns. The linker keeps every builtin that such a path names.
 pub fn sectionStrings(bytes: []const u8, ctx: anytype, comptime f: fn (@TypeOf(ctx), []const u8) void) void {
     if (sectionSeed(bytes) == null) return;
-    var pos: usize = magic.len + 8;
+    var pos: usize = header_len;
     if (pos + 4 > bytes.len) return;
     const n = std.mem.readInt(u32, bytes[pos..][0..4], .little);
     pos += 4;
@@ -667,6 +782,7 @@ fn writeSection(g: *Global, s: *State, out: *std.ArrayList(u8)) !void {
     const gpa = s.gpa;
     try out.appendSlice(gpa, magic);
     try put64(out, gpa, g.seed);
+    try put32(out, gpa, if (s.static) flag_static else 0);
     // The units come after the string table in the file, and add to it
     // while they are written, so they are written first.
     var units: std.ArrayList(u8) = .empty;
@@ -807,9 +923,10 @@ const UnitWriter = struct {
         try w.word(@intCast(u.code.len));
         try w.out.appendSlice(w.gpa, u.code);
         for ([_]usize{ u.entry, u.call_entry, u.tail_entry, u.direct_entry, u.root_entry, u.ret_a, u.ret_b }) |a| try w.off(base, a);
-        if (!try w.meta(u)) return false;
+        // The relocations come before the metadata, so the linker finds
+        // them without reading the metadata.
         try putRelocs(w.out, w.gpa, relocs);
-        return true;
+        return try w.meta(u);
     }
 
     /// The metadata of a unit, which its exits read.
@@ -899,6 +1016,15 @@ pub const Section = struct {
     /// instruction. A reserved unit has its record and its block of code,
     /// and takes no calls until its code is installed.
     units: std.AutoHashMapUnmanaged(UnitKey, *opt.Unit) = .empty,
+    /// For a static section that the linker put into the executable, the
+    /// address of the code and of the first slot of each function and
+    /// unit, by its function number and entry instruction. The runtime
+    /// runs that code in place and writes the slots where the relocated
+    /// form patches code.
+    placed: std.AutoHashMapUnmanaged(PlaceKey, Placed) = .empty,
+
+    const PlaceKey = struct { id: u32, pc: u32 };
+    const Placed = struct { code: usize, slots: usize };
 
     const UnitRec = struct {
         pid: u32,
@@ -927,7 +1053,11 @@ pub const Section = struct {
         if (bytes.len < magic.len or !std.mem.eql(u8, bytes[0..magic.len], magic)) return null;
         const s = gpa.create(Section) catch return null;
         s.* = .{ .gpa = gpa, .bytes = bytes };
-        var r: Reader = .{ .b = bytes, .at = magic.len + 8 };
+        if (sectionStatic(bytes)) if (image()) |img| {
+            var it = StaticIter.init(bytes) orelse return s.fail();
+            while (it.next()) |x| s.placed.put(gpa, .{ .id = x.id, .pc = x.pc }, .{ .code = img.code + @as(usize, @intCast(x.code_off)), .slots = img.slots + 8 * @as(usize, x.slot_base) }) catch return s.fail();
+        };
+        var r: Reader = .{ .b = bytes, .at = header_len };
         const nstr = r.u32_() orelse return s.fail();
         for (0..nstr) |_| {
             const len = r.u32_() orelse return s.fail();
@@ -963,6 +1093,14 @@ pub const Section = struct {
         return null;
     }
 
+    /// Prints how many functions and units the section installed, and
+    /// how many of them run in place from the executable.
+    pub fn report(s: *const Section) void {
+        var units: u32 = 0;
+        for (s.unit_recs.items) |rec| units += @intFromBool(rec.state == .done);
+        std.debug.print("aot: {d} functions and {d} units installed, {d} placed in the executable\n", .{ s.installed, units, s.placed.count() });
+    }
+
     /// Frees the section. The units it installed belong to their
     /// functions, and the executable memory to the arena, so only the
     /// records of units that never installed are freed here.
@@ -975,6 +1113,7 @@ pub const Section = struct {
         s.strings.deinit(s.gpa);
         s.records.deinit(s.gpa);
         s.ids.deinit(s.gpa);
+        s.placed.deinit(s.gpa);
         var it = s.natives.keyIterator();
         while (it.next()) |k| s.gpa.free(k.*);
         s.natives.deinit(s.gpa);
@@ -1071,16 +1210,24 @@ pub const Section = struct {
 
     const Outcome = enum { done, wait, drop };
 
-    /// Applies the relocations that `r` reads to `buf`.
-    fn applyRelocs(s: *Section, l: *Thread, r: *Reader, buf: []u8) Outcome {
+    /// Applies the relocations that `r` reads to `buf`, or for code in
+    /// place writes the slots from `slots` on.
+    fn applyRelocs(s: *Section, l: *Thread, r: *Reader, buf: []u8, slots: ?usize) Outcome {
         const nrel = r.u32_() orelse return .drop;
-        for (0..nrel) |_| {
+        for (0..nrel) |k| {
             const e_at = r.u32_() orelse return .drop;
             const head = r.take(4) orelse return .drop;
             if (head[0] >= std.enums.values(reloc.Form).len or head[1] >= std.enums.values(reloc.Kind).len) return .drop;
             const rr: reloc.Reloc = .{ .kind = @fromBackingInt(@intCast(head[1])), .a = r.u32_() orelse return .drop, .b = r.u32_() orelse return .drop, .c = r.u32_() orelse return .drop };
             const form: reloc.Form = @fromBackingInt(@intCast(head[0]));
+            if (slots) |base| {
+                if (form != .slot) return .drop;
+                const addr = s.addressOf(l, rr) orelse return .wait;
+                @as(*usize, @ptrFromInt(base + 8 * k)).* = addr;
+                continue;
+            }
             if (e_at + form.size() > buf.len) return .drop;
+            if (form == .slot and reloc.slotTarget(buf, e_at) == null) return .drop;
             const addr = s.addressOf(l, rr) orelse return .wait;
             reloc.apply(buf, .{ .at = e_at, .form = form, .r = rr }, addr);
         }
@@ -1132,7 +1279,9 @@ pub const Section = struct {
             };
             const u = s.gpa.create(opt.Unit) catch continue;
             u.* = .{ .proto = p, .entry_pc = rec.pc };
-            u.code = g.jit.arena.alloc(g.gpa, len) orelse {
+            if (s.placed.get(.{ .id = rec.pid, .pc = rec.pc })) |pl| {
+                u.code = @as([*]u8, @ptrFromInt(pl.code))[0..len];
+            } else u.code = g.jit.arena.alloc(g.gpa, len) orelse {
                 s.gpa.destroy(u);
                 continue;
             };
@@ -1168,21 +1317,36 @@ pub const Section = struct {
         var offs: [7]u32 = undefined;
         for (&offs) |*o| o.* = r.u32_() orelse return .drop;
         for (offs) |o| if (o != std.math.maxInt(u32) and o >= len) return .drop;
+        // The relocations, which the metadata follows.
+        var rr: Reader = .{ .b = s.bytes, .at = r.at };
+        const nrel = r.u32_() orelse return .drop;
+        _ = r.take(nrel * 20) orelse return .drop;
         var m: opt.Unit = .{ .proto = p, .entry_pc = rec.pc };
         rd.meta(&m) catch |e| return switch (e) {
             error.Wait => .wait,
             error.Drop => .drop,
         };
-        const buf = gpa.dupe(u8, src) catch return .wait;
-        defer gpa.free(buf);
-        switch (s.applyRelocs(l, &r, buf)) {
-            .done => {},
-            else => |o| {
-                freeMeta(gpa, &m);
-                return o;
-            },
+        if (s.placed.get(.{ .id = rec.pid, .pc = rec.pc })) |pl| {
+            var none: [0]u8 = .{};
+            switch (s.applyRelocs(l, &rr, &none, pl.slots)) {
+                .done => {},
+                else => |o| {
+                    freeMeta(gpa, &m);
+                    return o;
+                },
+            }
+        } else {
+            const buf = gpa.dupe(u8, src) catch return .wait;
+            defer gpa.free(buf);
+            switch (s.applyRelocs(l, &rr, buf, null)) {
+                .done => {},
+                else => |o| {
+                    freeMeta(gpa, &m);
+                    return o;
+                },
+            }
+            mem.install(u.code, buf);
         }
-        mem.install(u.code, buf);
         const base = @intFromPtr(u.code.ptr);
         const at = struct {
             fn f(b: usize, o: u32) usize {
@@ -1239,21 +1403,27 @@ pub const Section = struct {
         const tail_entry = r.u32_().?;
         for ([_]u32{ call_entry, call_entry_plain, tail_entry }) |o| if (o > len) return;
         for (0..count) |i| if (std.mem.readInt(u32, offs_bytes[i * 4 ..][0..4], .little) > len) return;
+        const placed = s.placed.get(.{ .id = idOf(g, p), .pc = baseline_pc });
         const buf = gpa.dupe(u8, src) catch return;
         defer gpa.free(buf);
-        if (s.applyRelocs(l, &r, buf) != .done) return;
+        if (s.applyRelocs(l, &r, buf, if (placed) |pl| pl.slots else null) != .done) return;
         const offs = gpa.alloc(u32, count) catch return;
         for (offs, 0..) |*o, i| o.* = std.mem.readInt(u32, offs_bytes[i * 4 ..][0..4], .little);
         const code = gpa.create(jit.Code) catch {
             gpa.free(offs);
             return;
         };
-        const block = g.jit.arena.alloc(gpa, buf.len) orelse {
-            gpa.destroy(code);
-            gpa.free(offs);
-            return;
+        // Code in place runs from the executable. Other code goes to the
+        // arena.
+        const block = if (placed) |pl| @as([*]u8, @ptrFromInt(pl.code))[0..buf.len] else blk: {
+            const b = g.jit.arena.alloc(gpa, buf.len) orelse {
+                gpa.destroy(code);
+                gpa.free(offs);
+                return;
+            };
+            mem.install(b, buf);
+            break :blk b;
         };
-        mem.install(block, buf);
         code.* = .{
             .base = @intFromPtr(block.ptr),
             .offs = offs.ptr,
@@ -1430,6 +1600,9 @@ pub fn moduleLoaded(l: *Thread, main: *Proto, index: usize) void {
     // Every function of the module has its number before any installs,
     // since the code of one may name another.
     if (l.g.jit.aot_section) |s| if (jit.enabled and !jit.is_wasm) {
+        // The settings of the environment, such as a refusal of
+        // executable memory, hold before any code installs.
+        jit.ensureSetup(l.g);
         installTree(l, s, main);
         if (comptime jit.has_opt) s.installUnits(l);
     };

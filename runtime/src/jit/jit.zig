@@ -101,6 +101,10 @@ pub const State = if (enabled) struct {
     aot_section: ?*aot.Section = null,
     /// The numbers of the bundled functions (`aot.idOf`).
     aot_ids: std.AutoHashMapUnmanaged(*Proto, u32) = .empty,
+    /// Set by `LUS_AOT_REPORT`: the state prints at its close how much
+    /// code compiled ahead of time it installed, and how much of it ran
+    /// in place from the executable.
+    aot_report: bool = false,
     /// Bytes of tables that optimized code did not allocate since the
     /// last collection it asked for, and the count at which it asks.
     sunk: u64 = 0,
@@ -185,6 +189,10 @@ fn setup(g: *Global) void {
         js.opt_threshold = @max(std.fmt.parseInt(u32, v, 10) catch opt.default_threshold, 1);
     };
     js.opt_dump = env.get("LUS_JIT_DUMP") != null;
+    js.aot_report = env.get("LUS_AOT_REPORT") != null;
+    // `LUS_JIT_NO_EXEC` refuses executable memory, as iOS does, so tests
+    // on macOS show that code in place needs none.
+    if (env.get("LUS_JIT_NO_EXEC") != null) mem.refuse_exec = true;
     if (env.get("LUS_JIT_AOT")) |v| {
         js.aot = aot.State.fromEnv(g.gpa, v);
         if (js.aot != null) aot.noteImage();
@@ -629,6 +637,19 @@ pub fn freeProto(g: *Global, p: *Proto) void {
     p.jit_tail = 0;
     p.call.plain = !p.is_vararg;
     g.jit.live -= 1;
+}
+
+/// Reads the settings of the state, once.
+pub fn ensureSetup(g: *Global) void {
+    if (!g.jit.ready) setup(g);
+}
+
+/// Prints what `LUS_AOT_REPORT` asks for, as the program exits.
+pub fn reportAot(g: *Global) void {
+    if (!enabled or is_wasm) return;
+    if (!g.jit.ready) setup(g);
+    if (!g.jit.aot_report) return;
+    if (g.jit.aot_section) |s| s.report();
 }
 
 /// Releases the executable memory of a state that is closing.

@@ -260,6 +260,7 @@ pub const Emitter = struct {
                 c.* = aot.Context.init(gpa, l.g, st, p);
                 e.aot = c;
                 e.a.aot = true;
+                if (@hasField(A.Assembler, "static")) e.a.static = st.static;
                 e.a.resolver = c.resolver();
             } else |_| {}
         }

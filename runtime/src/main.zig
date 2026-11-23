@@ -24,9 +24,23 @@ pub const panic = if (lus.has_compiler) std.debug.FullPanic(std.debug.defaultPan
 
 fn runtimePanic(msg: []const u8, _: ?usize) noreturn {
     @branchHint(.cold);
-    std.debug.print("panic: {s}\n", .{msg});
+    // A plain write keeps the I/O of the standard library, with its
+    // random generator, out of an executable linked from the runtime.
+    if (comptime @import("builtin").os.tag == .windows or !@import("builtin").link_libc) {
+        std.debug.print("panic: {s}\n", .{msg});
+    } else {
+        _ = std.c.write(2, "panic: ", 7);
+        _ = std.c.write(2, msg.ptr, msg.len);
+        _ = std.c.write(2, "\n", 1);
+    }
     std.process.abort();
 }
+
+/// The runtime without the compiler leaves out the handler that prints a
+/// stack trace on a segmentation fault. An executable linked from it
+/// carries no debug information to print one from, and the handler and
+/// its reader of DWARF are a tenth of a small executable.
+pub const std_options: std.Options = .{ .enable_segfault_handler = lus.has_compiler };
 
 /// Edge coverage, in a `-Dcoverage=true` build.
 const coverage = lus.coverage;

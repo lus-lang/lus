@@ -71,6 +71,12 @@ pub const Form = enum(u8) {
     /// The two instructions of s390x that build an address 32 bits at a
     /// time: `llihf` and `iilf`.
     s390_pair,
+    /// The aarch64 pair `adr` and `ldr`, which loads an address from a
+    /// pool word that `adr` points at. In an executable on a target
+    /// without executable memory, the linker points the pair at a slot of
+    /// a data atom with `adrp` and `ldr`, and the loader writes the slot
+    /// (`spec/design/aot.md`, "The linker").
+    slot,
 
     /// The number of bytes the form covers.
     pub fn size(f: Form) usize {
@@ -78,9 +84,22 @@ pub const Form = enum(u8) {
             .word => 8,
             .ppc_seq => 20,
             .s390_pair => 12,
+            .slot => 8,
         };
     }
 };
+
+/// The offset in `code` of the pool word that the `adr` at `at` points
+/// at, or null when it lies outside the code.
+pub fn slotTarget(code: []const u8, at: u32) ?usize {
+    if (at + 4 > code.len) return null;
+    const w = std.mem.readInt(u32, code[at..][0..4], .little);
+    const imm: u21 = @truncate(((w >> 5) & 0x7FFFF) << 2 | ((w >> 29) & 3));
+    const delta: i64 = @as(i21, @bitCast(imm));
+    const target = @as(i64, at) + delta;
+    if (target < 0 or target + 8 > code.len) return null;
+    return @intCast(target);
+}
 
 /// What a wide immediate is, as the resolver of the emitter decides.
 pub const Resolution = union(enum) {
@@ -125,6 +144,7 @@ pub fn apply(code: []u8, e: Entry, addr: u64) void {
             std.mem.writeInt(u32, code[e.at + 2 ..][0..4], @truncate(addr >> 32), .big);
             std.mem.writeInt(u32, code[e.at + 8 ..][0..4], @truncate(addr), .big);
         },
+        .slot => if (slotTarget(code, e.at)) |t| std.mem.writeInt(u64, code[t..][0..8], addr, .little),
     }
 }
 

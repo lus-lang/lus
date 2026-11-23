@@ -260,6 +260,24 @@ pub const Writer = struct {
     data: std.ArrayList(u8) = .empty,
     string_index: std.StringHashMapUnmanaged(u32) = .empty,
 
+    /// A writer that holds everything `o` holds, to which more atoms can
+    /// be added.
+    pub fn fromObject(gpa: Allocator, o: *const Object) Allocator.Error!Writer {
+        var w: Writer = .{ .gpa = gpa, .arch = o.arch, .os = o.os, .reg_layout = o.reg_layout, .entry = o.entry };
+        errdefer w.deinit();
+        try w.atoms.appendSlice(gpa, o.atoms);
+        try w.relocs.appendSlice(gpa, o.relocs);
+        try w.guards.appendSlice(gpa, o.guards);
+        try w.symbols.appendSlice(gpa, o.symbols);
+        try w.roots.appendSlice(gpa, o.roots);
+        try w.linker_names.appendSlice(gpa, o.linker_names);
+        try w.imports.appendSlice(gpa, o.imports);
+        try w.libs.appendSlice(gpa, o.libs);
+        try w.strings.appendSlice(gpa, o.strings);
+        try w.data.appendSlice(gpa, o.data);
+        return w;
+    }
+
     pub fn deinit(w: *Writer) void {
         inline for (.{ "atoms", "relocs", "guards", "symbols", "roots", "linker_names", "imports", "libs", "strings", "data" }) |f| @field(w, f).deinit(w.gpa);
         var it = w.string_index.keyIterator();
