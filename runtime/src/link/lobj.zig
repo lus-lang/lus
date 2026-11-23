@@ -20,6 +20,12 @@ const Allocator = std.mem.Allocator;
 pub const magic = "LUSLINK\x02";
 
 pub const Arch = enum(u8) { x86_64, aarch64 };
+
+/// The relocation types that only PE has, numbered past those of ELF: the
+/// address of a target from the start of the image, and its offset from
+/// the start of its section, which code uses for thread-local variables.
+pub const pe_addr32nb = 0x1003;
+pub const pe_secrel = 0x100b;
 pub const Os = enum(u8) {
     linux,
     macos,
@@ -52,6 +58,10 @@ pub const Kind = enum(u8) {
     /// The descriptors of thread-local variables on Mach-O, which `dyld`
     /// finds by the type of their section.
     thread_vars,
+    /// Entries of the function table of PE, 12 bytes each: the start and
+    /// the end of a function and its unwind information. The linker keeps
+    /// an entry whose function it keeps.
+    unwind,
 };
 
 pub const Atom = extern struct {

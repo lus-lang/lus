@@ -7,11 +7,13 @@
 //! Linux gets a static ELF executable at a fixed address, which needs no
 //! loader: the kernel maps its three segments and starts the startup code
 //! of musl, which finds the thread-local template through the program
-//! headers. macOS and iOS get a Mach-O executable (`macho.zig`).
+//! headers. macOS and iOS get a Mach-O executable (`macho.zig`), and
+//! Windows a PE executable (`pe.zig`).
 
 const std = @import("std");
 const lobj = @import("lobj.zig");
 const macho = @import("macho.zig");
+const pe = @import("pe.zig");
 const Allocator = std.mem.Allocator;
 const elf = std.elf;
 
@@ -81,7 +83,7 @@ pub fn link(gpa: Allocator, o: *const lobj.Object, keep: Keep, opts: Options) Er
             break :blk all;
         },
         .macos, .ios, .ios_simulator => try macho.write(&l, opts.payload),
-        .windows => return error.UnsupportedTarget,
+        .windows => try pe.write(&l, opts.payload),
     };
     errdefer gpa.free(bytes);
     if (opts.map) |w| l.writeMap(w) catch {};
@@ -172,6 +174,35 @@ pub const Linker = struct {
         try work.append(l.gpa, o.entry.atom);
         try work.appendSlice(l.gpa, o.roots);
         for (work.items) |a| l.parent[a] = a;
+        try l.drain(&work);
+        // An entry of the function table of PE whose function is kept
+        // keeps the unwind information it names, which may keep more
+        // functions, until nothing changes.
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (o.atoms, 0..) |a, i| {
+                if (a.kind != .unwind) continue;
+                const rs = o.atomRelocs(a);
+                for (rs) |r| {
+                    if (r.offset % 12 != 0 or r.target.space != .atom or !l.live[r.target.index]) continue;
+                    for (rs) |q| {
+                        if (q.offset < r.offset or q.offset >= r.offset + 12 or q.target.space != .atom or l.live[q.target.index]) continue;
+                        l.parent[q.target.index] = @intCast(i);
+                        try work.append(l.gpa, q.target.index);
+                    }
+                }
+            }
+            if (work.items.len > 0) {
+                changed = true;
+                try l.drain(&work);
+            }
+        }
+    }
+
+    /// Marks the atoms of `work` and every atom they reach.
+    fn drain(l: *Linker, work: *std.ArrayList(u32)) Error!void {
+        const o = l.o;
         while (work.pop()) |a| {
             if (l.live[a]) continue;
             l.live[a] = true;
@@ -182,6 +213,13 @@ pub const Linker = struct {
                 try work.append(l.gpa, r.target.index);
             }
         }
+    }
+
+    /// Whether the entry of a function table at `offset` of the atom `a`
+    /// names a function that is kept.
+    pub fn unwindKept(l: *const Linker, a: lobj.Atom, offset: u32) bool {
+        for (l.o.atomRelocs(a)) |r| if (r.offset == offset) return r.target.space == .atom and l.live[r.target.index];
+        return false;
     }
 
     fn writeMap(l: *const Linker, w: *std.Io.Writer) !void {
@@ -386,6 +424,8 @@ pub const Linker = struct {
                 23 => try putI32(loc, l.tpOffset(s) + a), // TPOFF32
                 25 => put(u64, loc, @bitCast(sa - @as(i64, @intCast(l.got_addr)))), // GOTOFF64
                 26 => try putI32(loc, @as(i64, @intCast(l.got_addr)) + a - pi), // GOTPC32
+                lobj.pe_addr32nb => put(u32, loc, std.math.cast(u32, sa - @as(i64, @intCast(l.base))) orelse return error.RelocationOverflow),
+                lobj.pe_secrel => try putI32(loc, sa - @as(i64, @intCast(l.tls.addr))),
                 else => return unsupported(l, r),
             },
             .aarch64 => switch (r.type) {

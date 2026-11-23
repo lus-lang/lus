@@ -282,6 +282,23 @@ jobs:
             head -2 "$RUNNER_TEMP/ios.out" | cmp - <(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil\n')
             grep -E "aot: [1-9][0-9]* functions .* [1-9][0-9]* placed" "$RUNNER_TEMP/ios.out"
           fi
+      - name: The linker of lus build --aot on Windows
+        timeout-minutes: 35
+        # The same checks as on Linux and macOS, on a PE executable that
+        # loads the C runtime of Windows and the system libraries.
+        if: runner.os == 'Windows'
+        working-directory: runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          zig build link-object -Doptimize=ReleaseSafe -p "$env:RUNNER_TEMP\lo"
+          & "$env:RUNNER_TEMP\lo\bin\lus-link.exe" "$env:RUNNER_TEMP\lo\lib\lus.lo" "$env:RUNNER_TEMP\lus-linked.exe"
+          & "$env:RUNNER_TEMP\lus-linked.exe" test ../tests/conformance ../packages/language-server/tests
+          Set-Location ../tests/build
+          & ../../runtime/zig-out/bin/lus.exe build --aot --link-object "$env:RUNNER_TEMP\lo\lib\lus-runtime.lo" linked.lus -o "$env:RUNNER_TEMP\linked.exe"
+          $out = (& "$env:RUNNER_TEMP\linked.exe") -join "`n"
+          if ($out -ne "1:1 2:4 3:9 4:16 5:25`t6765`nLINKED`t7`tnil") { Write-Error "linked.exe printed: $out" }
       - name: Documentation examples
         timeout-minutes: 10
         working-directory: runtime

@@ -121,7 +121,7 @@ pub fn build(b: *std.Build) void {
         if (lo_tls) |l| lo_step.dependOn(&b.addInstallArtifact(l, .{}).step);
         if (lo_sqlite) |l| lo_step.dependOn(&b.addInstallArtifact(l, .{}).step);
         const os_tag = target.result.os.tag;
-        if (os_tag == .linux or os_tag == .macos or os_tag == .ios) {
+        if (os_tag == .linux or os_tag == .macos or os_tag == .ios or os_tag == .windows) {
             const convert = b.addExecutable(.{ .name = "lus-convert", .root_module = b.createModule(.{
                 .root_source_file = b.path("src/link/convert.zig"),
                 .target = b.graph.host,
@@ -134,11 +134,12 @@ pub fn build(b: *std.Build) void {
                 .target = b.graph.host,
                 .optimize = .ReleaseSafe,
             }) }), .{}).step);
-            const macho = os_tag != .linux;
+            const macho = os_tag == .macos or os_tag == .ios;
             // Zig compiles part of musl from its own sources into each
             // executable, so the link object takes that part as an object.
             // On macOS and iOS the C library is libSystem, which the
-            // executable loads.
+            // executable loads. On Windows the link line names the startup
+            // object and the C library of MinGW and the import libraries.
             const zigc = b.addObject(.{ .name = "zigc", .root_module = b.createModule(.{
                 .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ std.fs.path.dirname(b.graph.zig_exe) orelse ".", "lib", "c.zig" }) },
                 .target = target,
@@ -151,6 +152,7 @@ pub fn build(b: *std.Build) void {
             // libc, and compiler_rt that Zig built for the target.
             const stub = b.addWriteFiles().add("stub.zig", "pub fn main() void {}\n");
             const line = b.addSystemCommand(&.{ b.graph.zig_exe, "build-exe", "-lc", "--verbose-link", "-OReleaseFast", "-target", target.result.zigTriple(b.allocator) catch @panic("OOM") });
+            if (os_tag == .windows) line.addArgs(&.{ "-lcrypt32", "-ladvapi32", "-lws2_32" });
             line.addFileArg(stub);
             _ = line.addPrefixedOutputFileArg("-femit-bin=", "stub");
             const link_line = line.captureStdErr(.{});
@@ -160,13 +162,14 @@ pub fn build(b: *std.Build) void {
                 if (macho) {
                     conv.addArgs(&.{ "--entry", "main" });
                 } else {
+                    if (os_tag == .windows) conv.addArgs(&.{ "--entry", "mainCRTStartup" });
                     conv.addArg("--link-line");
                     conv.addFileArg(link_line);
                 }
                 conv.addArg("-o");
                 const out = conv.addOutputFileArg(e[0]);
                 conv.addFileArg(e[1].getEmittedBin());
-                if (!macho) conv.addFileArg(zigc.getEmittedBin());
+                if (os_tag == .linux) conv.addFileArg(zigc.getEmittedBin());
                 if (lo_compress) |l| conv.addArtifactArg(l);
                 if (lo_sqlite) |l| conv.addArtifactArg(l);
                 if (lo_tls) |l| conv.addArtifactArg(l);
@@ -239,6 +242,14 @@ pub fn build(b: *std.Build) void {
     run_aot.addFileArg(app_aot);
     run_aot.expectStdOutEqual("fib optimized true\n6765\t5341338000\t500500\n500000.5\nobserved 10\n");
     runtime_step.dependOn(&run_aot.step);
+    // Its hot loops enter the units compiled for them, which only a
+    // count of the entries shows, since the results are the same either
+    // way.
+    const report_aot = std.Build.Step.Run.create(b, "loops enter units compiled ahead of time");
+    report_aot.addFileArg(app_aot);
+    report_aot.setEnvironmentVariable("LUS_AOT_REPORT", "1");
+    report_aot.addCheck(.{ .expect_stderr_match = "2 of 2 loop units entered" });
+    runtime_step.dependOn(&report_aot.step);
 
     // `lus check` and `lus doc` on the fixtures in tests/check and
     // tests/doc. Each fixture's output must match its expected file.
