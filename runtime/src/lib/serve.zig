@@ -694,9 +694,7 @@ fn parse(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
 }
 
 fn consume(s: *net.Socket, n: usize) void {
-    const rest = s.buf.items.len - n;
-    std.mem.copyForwards(u8, s.buf.items[0..rest], s.buf.items[n..]);
-    s.buf.items.len = rest;
+    s.buf.consume(n);
 }
 
 /// readrequest(sock): reads the next request of a connection. Returns the

@@ -15,7 +15,7 @@ Errors come back the way they come back from any coroutine: `resume` returns `fa
 
 **Plain coroutines.** Each direction is an ordinary coroutine whose body loops over the socket method and yields what it returns. Every read then costs a full switch: `resume` enters the interpreter on the stack of the coroutine, and the `yield` unwinds back out of it. Each coroutine also carries its own stack.
 
-**Ports.** A port is a coroutine with no stack of its own. Its thread object points at a native, and `resume` on a port calls that native on the resuming thread with the arguments of the resume in the frame (`runtime/src/lib/coroutine.zig`, `resumePort`). The native is the same code as the socket method. When data is already buffered, it returns at once, so a resume is a native call and nothing switches. When it must wait, it suspends the resuming thread exactly as the method would (`spec/design/coroutines.md`, "Natives that run again"), and the scheduler calls `resume` again, which calls the native again. A port allocates nothing per resume. A socket creates its two ports on first use and keeps them in the user values of its userdata. Every candidate the plan listed is therefore covered by the design itself: the generic resume bookkeeping is skipped, nothing allocates per call, no frame exists to save or reuse, and buffered data returns straight from the buffer.
+**Ports.** A port is a coroutine with no stack of its own. Its thread object points at a step, and `resume` on a port calls that step on the resuming thread with the port and the values of the resume (`runtime/src/lib/coroutine.zig`, `resumePort`). The step runs the same code as the socket method. When data is already buffered, it returns at once, so a resume is a native call and nothing switches. When it must wait, it suspends the resuming thread exactly as the method would (`spec/design/coroutines.md`, "Natives that run again"), and the scheduler calls `resume` again, which calls the native again. A port allocates nothing per resume. A socket creates its two ports on first use and keeps them in the user values of its userdata. Every candidate the plan listed is therefore covered by the design itself: the generic resume bookkeeping is skipped, nothing allocates per call, no frame exists to save or reuse, and buffered data returns straight from the buffer.
 
 Both JIT tiers reach `resume` as an ordinary native call, which already costs less than a method call, so no tier needed new code.
 
@@ -92,16 +92,22 @@ The source form also settles a case the method form gets wrong. At the end of a 
 
 Plain coroutines make a poor substitute for ports beyond their cost. A plain coroutine dies with its first error, so the response sink of `network.serve` built that way cannot write the 500 that replaces a failed response, and 13 tests of `serve_test.lus` fail on it.
 
-## Not measured yet
+## The shipping form
 
-- Workers. A worker as a coroutine that runs in parallel, with buffered yields, is a mailbox behind a port: its resume takes the next message from the buffer when one is there and waits through `sched.waitNotify` when none is. The port mechanism covers it, and the cost of the mailbox stays what it is today.
-- `server.accepted` as a source of connections, which is a port over `accept`.
-- `for x in co`, which loops while the coroutine has values to return.
+**Loops.** A generic `for` whose iterator is a coroutine resumes it with no values before each pass and binds the values of its `yield` to the loop variables in order. The loop ends when the coroutine returns, and the values it returns are dropped. It also ends at a `yield` whose first value is `nil`, the rule of every generic `for`, which costs nothing because the loop instructions stay as they are. `tforprep` sees the coroutine once, puts the native `coroutine.iterate` in the iterator slot and the coroutine in the state and closing slots, and the loop then runs as a loop over a native iterator in every tier. The coroutine is the closing value, so a `break`, a `return`, or an error in the body closes it. An error in the coroutine closes it and leaves the loop with that error. For the closing value to work, a coroutine is a valid value of a `<close>` variable, and it closes as `coroutine.close` closes it.
 
-## Prototype
+**The step of a port.** A port step receives the port and the values of the resume, and it reads no frame. `network.lines`, the request bodies of `network.fetch`, and the bodies that a handler of `network.serve` returns all resume streams from inside their own natives, and they drive ports the same way they drive coroutines. The step pushes its results, and `resumePort` moves them over the values of the resume, so a port consumes its arguments as any coroutine does. A step that waits runs again from its start when the native that resumed the port runs again.
+
+**One resumer at a time.** A port records the thread that resumes it while its step runs. A second thread that resumes the port while the first one waits inside it receives `false` and `"cannot resume non-suspended coroutine"`, as it would from a coroutine that runs. The port counts as busy only while that thread still waits inside it, so a thread that was cancelled or closed during its wait leaves the port free.
+
+**Ports in the library.** `conn.input`, `conn.output`, and `server.accepted` are ports, created on first use and kept in the user values of their userdata. The body streams of `network.fetch` and `req.reader`, and `sock:reader`, are ports too, with the state of the stream as their context. They replace generator natives, which ran each part through a full coroutine switch on a thread with its own stack, and the runtime has one mechanism for coroutines that it owns. `receive`, `send`, and `accept` stay. They return `nil` and an error object where the ports raise, and code that reads one message does not need a coroutine for it.
+
+**`network.serve`.** The connection code of `serve` keeps calling its natives directly. A request port and a response port measured within noise of the natives in the experiment, and they would change nothing a handler sees. The streams a handler sees, `req.reader` and the bodies it returns, are ports.
+
+## Where the code is
 
 - `state.Port`, the `port` and `port_ctx` fields of `Thread`, and `state.newPortThread`.
-- `coroutine.newPort` and `resumePort`, and `coroutine.close` on a port.
-- The input and output ports of sockets, and the field getter in `ops.index`.
-- A request port and a response port for `network.serve`, which `LUS_CIO=port` selects, and plain coroutines around the same natives, which `LUS_CIO=naive` selects. Without the variable `serve` runs the shipped connection code.
-- `tests/conformance/port_test.lus`.
+- `coroutine.newPort`, `resumePort`, `closeCo`, `forPrep`, and `iterate`, and the `tforprep` and to-be-closed paths of `vm/interp.zig`.
+- The ports of sockets and servers, and the field getter in `ops.index` (`state.Global.fields`).
+- The stream ports of `lib/http.zig`.
+- `tests/conformance/forco_test.lus` and `tests/conformance/port_test.lus`, and the programs of `tests/bench/coio/`.

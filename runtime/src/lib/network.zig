@@ -75,7 +75,7 @@ pub const Socket = struct {
     timeout_ms: i32 = -1,
     closed: bool = false,
     /// Bytes read from the socket and not yet returned.
-    buf: std.ArrayList(u8) = .empty,
+    buf: RecvBuf = .{},
     /// Set once the handle is in non-blocking mode, which happens the
     /// first time an operation on the socket must not block. From then on
     /// every operation waits through the scheduler.
@@ -102,6 +102,55 @@ pub const Socket = struct {
     /// `network.fetch` on it (`http.zig`).
     body: ?*http.Body = null,
     fetch: ?*http.Fetch = null,
+};
+
+/// The bytes a socket received and has not returned yet. `items` is the
+/// unread part, a slice of `mem`, so reading code indexes it from zero.
+/// Taking bytes from the front moves the start of `items` and copies
+/// nothing. The unread bytes move to the front of `mem` only when a read
+/// needs room after them.
+pub const RecvBuf = struct {
+    items: []u8 = &.{},
+    mem: []u8 = &.{},
+
+    fn offset(b: *const RecvBuf) usize {
+        return if (b.mem.len == 0) 0 else @intFromPtr(b.items.ptr) - @intFromPtr(b.mem.ptr);
+    }
+
+    /// Makes room for `n` more bytes after the unread ones.
+    pub fn ensureUnusedCapacity(b: *RecvBuf, gpa: std.mem.Allocator, n: usize) !void {
+        const off = b.offset();
+        const len = b.items.len;
+        if (b.mem.len - off - len >= n) return;
+        if (len + n <= b.mem.len) {
+            std.mem.copyForwards(u8, b.mem[0..len], b.items);
+            b.items = b.mem[0..len];
+            return;
+        }
+        const cap = @max(b.mem.len * 2, len + n);
+        const mem = try gpa.alloc(u8, cap);
+        @memcpy(mem[0..len], b.items);
+        if (b.mem.len > 0) gpa.free(b.mem);
+        b.mem = mem;
+        b.items = mem[0..len];
+    }
+
+    /// The free space after the unread bytes, which a read fills before
+    /// it extends `items` over what it read.
+    pub fn unusedCapacitySlice(b: *const RecvBuf) []u8 {
+        return b.mem[b.offset() + b.items.len ..];
+    }
+
+    /// Drops the first `n` unread bytes.
+    pub fn consume(b: *RecvBuf, n: usize) void {
+        b.items = b.items[n..];
+        if (b.items.len == 0 and b.mem.len > 0) b.items = b.mem[0..0];
+    }
+
+    pub fn deinit(b: *RecvBuf, gpa: std.mem.Allocator) void {
+        if (b.mem.len > 0) gpa.free(b.mem);
+        b.* = .{};
+    }
 };
 
 /// A listening TCP socket.
@@ -1631,10 +1680,7 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
 /// Pushes the first `n` buffered bytes as a vector and removes them.
 fn takeBuffered(l: *Thread, s: *Socket, n: usize, skip: usize) Error!u32 {
     const v = try vector.newVector(l, s.buf.items[0..n]);
-    const consumed = n + skip;
-    const rest = s.buf.items.len - consumed;
-    std.mem.copyForwards(u8, s.buf.items[0..rest], s.buf.items[consumed..]);
-    s.buf.items.len = rest;
+    s.buf.consume(n + skip);
     return aux.ret(l, Value.obj(.vector, v));
 }
 
@@ -1796,7 +1842,6 @@ pub fn releaseSocket(l: *Thread, s: *Socket) void {
         }
     }
     s.buf.deinit(l.g.gpa);
-    s.buf = .empty;
     http.freeState(l.g.gpa, s);
     if (s.http) |h| {
         h.deinit(l.g.gpa);

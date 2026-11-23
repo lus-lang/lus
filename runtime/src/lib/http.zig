@@ -248,9 +248,7 @@ fn decode(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!Step {
 }
 
 fn consume(s: *net.Socket, n: usize) void {
-    const rest = s.buf.items.len - n;
-    std.mem.copyForwards(u8, s.buf.items[0..rest], s.buf.items[n..]);
-    s.buf.items.len = rest;
+    s.buf.consume(n);
 }
 
 /// The failure of a body as an error of Lus code. A request body that the
