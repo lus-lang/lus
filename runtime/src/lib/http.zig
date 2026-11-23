@@ -4,11 +4,10 @@
 //! its framing: a `Content-Length`, chunked transfer coding, or the end of
 //! the stream. The state of the decoding lives in the socket (`Body`), so
 //! a native that waits and runs again continues from there. A body stream
-//! is a coroutine that yields a body part by part. Its body is the
-//! generator native `streamNext`, which a resume runs again for the next
-//! part (`state.Native.generator`). `network.fetch` returns one for a
-//! response when its options ask for a stream, and `network.serve` makes
-//! one for `req.reader`.
+//! is a port (`state.Port`): each resume runs `streamStep`, which returns
+//! the next part of the body, and the port ends with the body.
+//! `network.fetch` returns one for a response when its options ask for a
+//! stream, and `network.serve` makes one for `req.reader`.
 //!
 //! `fetch` is a native that runs through phases kept in the socket: the
 //! TLS handshake, sending the request, sending a body that a function
@@ -27,6 +26,7 @@ const wtf8 = @import("../vm/wtf8.zig");
 const pledge = @import("../vm/pledge.zig");
 const sched = @import("../vm/sched.zig");
 const aux = @import("auxlib.zig");
+const coroutine = @import("coroutine.zig");
 const vector = @import("vector.zig");
 const net = @import("network.zig");
 const tls = @import("tls.zig");
@@ -248,9 +248,7 @@ fn decode(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!Step {
 }
 
 fn consume(s: *net.Socket, n: usize) void {
-    const rest = s.buf.items.len - n;
-    std.mem.copyForwards(u8, s.buf.items[0..rest], s.buf.items[n..]);
-    s.buf.items.len = rest;
+    s.buf.consume(n);
 }
 
 /// The failure of a body as an error of Lus code. A request body that the
@@ -377,9 +375,9 @@ pub fn startBody(l: *Thread, s: *net.Socket, framing: Framing, length: u64, requ
 // ---------------------------------------------------------------------
 // Body streams
 
-/// The state of a body stream: a coroutine whose body is the generator
-/// native `streamNext`, which holds this userdata as its upvalue. The
-/// user value of the userdata is the socket, which it keeps alive.
+/// The state of a body stream or a socket reader, which its port holds as
+/// its context. The user value of the userdata is the socket, which it
+/// keeps alive.
 pub const Reader = struct {
     sock: *net.Socket,
     gen: u32,
@@ -387,9 +385,11 @@ pub const Reader = struct {
     /// its coroutine is closed, and when the collector frees it. A request
     /// stream leaves the connection to the server.
     response: bool,
-    /// Set at the end of the body, after which the coroutine is dead.
+    /// Set at the end of the body, after which the port is dead.
     finished: bool = false,
     closed: bool = false,
+    /// The most bytes that one resume returns.
+    max: u32 = stream_chunk,
 };
 
 /// The most bytes that one resume of a body stream yields.
@@ -405,25 +405,37 @@ fn newReader(l: *Thread, s: *net.Socket, slot: u32, response: bool) Error!*Reade
     u.metatable = mt;
     u.userValues()[0] = l.stack[slot];
     const r: *Reader = @ptrCast(@alignCast(u.data()));
-    r.* = .{ .sock = s, .gen = s.body.?.gen, .response = response };
+    r.* = .{ .sock = s, .gen = if (s.body) |b| b.gen else 0, .response = response };
     try l.push(Value.obj(.userdata, u));
     gc.barrierBack(g, &u.hdr);
     try @import("base.zig").registerFinalizer(l, &u.hdr, mt);
     return r;
 }
 
-/// Pushes a coroutine that yields the body of `s`, which is at `slot` on
-/// the stack, one part at a time.
+/// Pushes a port that returns the body of `s`, which is at `slot` on the
+/// stack, one part per resume.
 pub fn pushStream(l: *Thread, s: *net.Socket, slot: u32, response: bool) Error!void {
-    const g = l.g;
     _ = try newReader(l, s, slot, response);
-    const n = state.newNative(g, streamNext, "body", 1) catch return l.raiseMem();
-    n.generator = true;
-    n.upvalues()[0] = l.stack[l.top - 1];
-    gc.barrierBack(g, &n.hdr);
-    l.stack[l.top - 1] = Value.obj(.native, n);
-    const co = try @import("coroutine.zig").newCoroutine(l, l.stack[l.top - 1]);
-    l.stack[l.top - 1] = Value.obj(.thread, co);
+    try pushPort(l, &stream_port);
+}
+
+/// Replaces the reader on top of the stack with a port over it.
+fn pushPort(l: *Thread, port: *const state.Port) Error!void {
+    _ = try coroutine.newPort(l, port, l.stack[l.top - 1]);
+    l.stack[l.top - 2] = l.stack[l.top - 1];
+    l.top -= 1;
+}
+
+const stream_port = state.Port{ .step = streamStep, .close = closePort };
+const socket_port = state.Port{ .step = socketStep, .close = closePort };
+
+fn readerOfPort(l: *Thread, co: *Thread) *Reader {
+    return toReader(l, co.port_ctx).?;
+}
+
+/// Closing the port of a response stream early closes the connection.
+fn closePort(l: *Thread, co: *Thread) void {
+    if (toReader(l, co.port_ctx)) |r| closeReader(l.g, r);
 }
 
 fn toReader(l: *Thread, v: Value) ?*Reader {
@@ -461,27 +473,22 @@ fn closeReader(g: *state.Global, ctx: *anyopaque) void {
     if (r.response and !r.finished and !r.sock.closed) net.closeSocketOf(g.main_thread, r.sock);
 }
 
-/// The body of a stream coroutine: yields the next part of the body as a
-/// vector, and returns nothing at its end. A resume runs it again for the
-/// next part (`state.Native.generator`).
-fn streamNext(l: *Thread) Error!u32 {
-    const rv = l.frame().native.?.upvalues()[0];
-    const r = toReader(l, rv).?;
-    const b = (try bodyOf(l, r)) orelse return 0;
+/// resume(stream): the next part of the body as a vector. At the end of
+/// the body the port ends.
+fn streamStep(l: *Thread, co: *Thread, args: []const Value) Error!u32 {
+    _ = args;
+    const r = readerOfPort(l, co);
+    const b = (try bodyOf(l, r)) orelse {
+        co.status = .dead;
+        return 0;
+    };
     if (!try pull(l, r.sock, b, stream_chunk)) {
         finishReader(l, r);
+        co.status = .dead;
         return 0;
     }
     try takePending(l, b, @min(stream_chunk, b.pending.items.len));
-    // Closing the coroutine early closes the connection of a response.
-    const t = try sched.ensureTask(l);
-    if (t.ctx == null) {
-        t.ctx = r;
-        t.cancel = closeReader;
-    }
-    // A part that came after a wait is a value, not another wait.
-    sched.endWait(t);
-    return @import("coroutine.zig").yieldValues(l, 1);
+    return 1;
 }
 
 /// Raises `msg` for a body over its limit. A request body that goes over
@@ -513,50 +520,42 @@ pub fn readerGc(l: *Thread) Error!u32 {
 // ---------------------------------------------------------------------
 // Socket readers
 
-/// sock:reader(max_bytes): a coroutine that yields what the socket
-/// received, between 1 and `max_bytes` bytes, on each resume, and ends at
-/// the end of the stream.
+/// sock:reader(max_bytes): a port whose every resume returns what the
+/// socket received, between 1 and `max_bytes` bytes, and which ends at the
+/// end of the stream.
 pub fn socketReader(l: *Thread) Error!u32 {
     const s = try net.checkSocket(l, 1);
-    _ = s;
     const max = try aux.optInt(l, 2, stream_chunk);
     if (max <= 0) return aux.argError(l, 2, "max_bytes must be positive", .{});
-    const g = l.g;
-    const n = state.newNative(g, socketNext, "reader", 2) catch return l.raiseMem();
-    n.generator = true;
-    n.upvalues()[0] = l.arg(1);
-    n.upvalues()[1] = Value.int(@min(max, 16 * 1024 * 1024));
-    gc.barrierBack(g, &n.hdr);
-    l.top = l.base() + 2;
-    try l.push(Value.obj(.native, n));
-    const co = try @import("coroutine.zig").newCoroutine(l, l.stack[l.top - 1]);
-    l.stack[l.top - 1] = Value.obj(.thread, co);
+    const r = try newReader(l, s, l.base(), false);
+    r.max = @intCast(@min(max, 16 * 1024 * 1024));
+    try pushPort(l, &socket_port);
     return 1;
 }
 
-/// The body of a socket reader (`state.Native.generator`): yields the
-/// bytes that the socket holds, waiting for some when it holds none, and
-/// returns nothing at the end of the stream.
-fn socketNext(l: *Thread) Error!u32 {
-    const up = l.frame().native.?.upvalues();
-    const s = net.toObject(l, net.Socket, net.socket_name, up[0]).?;
-    const max: usize = @intCast(up[1].asInt());
+/// resume(reader): the bytes that the socket holds, waiting for some when
+/// it holds none. At the end of the stream the port ends.
+fn socketStep(l: *Thread, co: *Thread, args: []const Value) Error!u32 {
+    _ = args;
+    const r = readerOfPort(l, co);
+    const s = r.sock;
     if (s.closed) return l.raiseFmt("attempt to use a closed socket", .{});
     if (s.buf.items.len == 0) {
-        const got = (try net.tryFill(l, s, @min(max, 65536))) orelse return net.raiseFail(l, "timeout", 0, "receive timeout", .{});
+        const got = (try net.tryFill(l, s, @min(r.max, 65536))) orelse return net.raiseFail(l, "timeout", 0, "receive timeout", .{});
         switch (got) {
             .got => {},
-            .eof => return 0,
+            .eof => {
+                co.status = .dead;
+                return 0;
+            },
             .fail => |e| return net.raiseFail(l, net.errCode(e), 0, "receive: {s}", .{net.errText(e)}),
         }
     }
-    const n = @min(max, s.buf.items.len);
+    const n = @min(r.max, s.buf.items.len);
     const v = try vector.newVector(l, s.buf.items[0..n]);
     consume(s, n);
     try l.push(Value.obj(.vector, v));
-    // A part that came after a wait is a value, not another wait.
-    if (sched.taskOf(l)) |t| sched.endWait(t);
-    return @import("coroutine.zig").yieldValues(l, 1);
+    return 1;
 }
 
 // ---------------------------------------------------------------------
