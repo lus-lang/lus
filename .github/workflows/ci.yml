@@ -230,17 +230,21 @@ jobs:
         # lus linked from its link object with every builtin, and the
         # conformance suite on it. Then an executable compiled ahead of
         # time, linked with only the builtins it reaches, against the
-        # output of lus (spec/design/aot.md, "Leaving out code").
-        if: runner.os == 'Linux'
+        # output of lus (spec/design/aot.md, "Leaving out code"). Linux
+        # links a static ELF executable on musl, and macOS a Mach-O
+        # executable that its ad hoc signature lets run.
+        if: runner.os != 'Windows'
         working-directory: runtime
         run: |
-          zig build link-object -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-musl -p "$RUNNER_TEMP/lo"
+          if [ "$RUNNER_OS" = Linux ]; then target=-Dtarget=x86_64-linux-musl; else target=; fi
+          zig build link-object -Doptimize=ReleaseSafe $target -p "$RUNNER_TEMP/lo"
           "$RUNNER_TEMP/lo/bin/lus-link" "$RUNNER_TEMP/lo/lib/lus.lo" "$RUNNER_TEMP/lus-linked"
+          if [ "$RUNNER_OS" = macOS ]; then codesign -v "$RUNNER_TEMP/lus-linked"; fi
           "$RUNNER_TEMP/lus-linked" test ../tests/conformance ../packages/language-server/tests
           cd ../tests/build
           ../../runtime/zig-out/bin/lus build --aot --link-object "$RUNNER_TEMP/lo/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/linked"
           test "$("$RUNNER_TEMP/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
-          test "$(stat -c %s "$RUNNER_TEMP/linked")" -lt 2000000
+          test "$(wc -c < "$RUNNER_TEMP/linked")" -lt 2000000
       - name: Documentation examples
         timeout-minutes: 10
         working-directory: runtime
