@@ -1,8 +1,8 @@
 --[[
     Tables at the edges of their layouts.
 
-    A table keeps small parts in its own cell, grows a large list by half
-    of its length, moves integer keys between its hash part and its array
+    A table keeps small parts in its own cell, grows a large list by a
+    part of its length, moves integer keys between its hash part and its array
     part, and compares long string keys by content. Each test below puts a
     table at one of those edges and checks that every value stays where a
     lookup finds it.
@@ -58,6 +58,37 @@ local function large_lists_grow_by_half_with_holes_test()
     for i = 1, n, 2 do u[i] = i end
     for i = 2, n, 2 do u[i] = i end
     assert(u[n] == n and u[1] == 1)
+end
+
+-- Past a million slots a list grows by an eighth of its length, and a
+-- store just past a full list grows its array part alone. A key that
+-- already waits in the hash part a little past the list still takes the
+-- path of a rehash, and storing nil past the list adds nothing.
+local function lists_past_a_million_slots_append_test()
+    local n = (1 << 20) + 300000
+    local words = {}
+    local record = { name = "list" }
+    for i = 1, n do
+        words[i] = "w"
+        record[i] = i
+    end
+    assert(#words == n and words[n] == "w" and words[n + 1] == nil)
+    assert(#record == n and record[n] == n and record.name == "list")
+    local waiting = {}
+    for i = 1, n do waiting[i] = i end
+    local m = #waiting
+    waiting[m + 3] = "waits"
+    waiting[m + 1] = "next"
+    waiting[m + 2] = "between"
+    assert(waiting[m + 3] == "waits" and #waiting == m + 3)
+    for i = m + 4, m + 200000 do waiting[i] = i end
+    assert(#waiting == m + 200000 and waiting[m + 3] == "waits")
+    local before = #words
+    words[before + 1] = nil
+    assert(#words == before and next({}, nil) == nil)
+    local sum = 0
+    for i = 1, #record do sum = sum + record[i] end
+    assert(sum == n * (n + 1) // 2)
 end
 
 local function sizes_around_the_inline_limit_keep_their_values_test()

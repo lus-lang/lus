@@ -410,7 +410,7 @@ fn freeArray(gpa: Allocator, t: *Table, kind: ArrayKind, ptr: [*]u64, n: usize) 
 pub fn appendArray(gpa: Allocator, t: *Table, v: Value) Error!bool {
     const n: usize = t.asize;
     if (t.kind == .none) return false;
-    const m: usize = if (n >= dense_growth) n + n / 2 else @max(4, n * 2);
+    const m = listGrowth(n);
     if (m > std.math.maxInt(u32)) return false;
     if (!t.isShaped() and t.hash_used > 0) {
         for (0..t.hash_len) |h| {
@@ -617,6 +617,12 @@ pub fn set(gpa: Allocator, t: *Table, key: Value, val: Value) Error!void {
     if (k.tag == .integer) {
         const i = k.asInt();
         if (i >= 1 and i <= t.asize) return arrayStore(gpa, t, @intCast(i - 1), val);
+        // A large list that takes the key after its last slot grows its
+        // array part alone. A rehash would count every slot to reach the
+        // same size.
+        if (t.asize >= dense_growth and i == @as(i64, t.asize) + 1 and !val.isNil() and !arrayIsNil(t, t.asize - 1)) {
+            if (try appendArray(gpa, t, val)) return;
+        }
     }
     if (t.isShaped()) {
         if (shapeKey(k)) return setShaped(gpa, t, k.as(object.String), val);
@@ -671,8 +677,8 @@ fn insertNew(t: *Table, k: Value, val: Value) void {
 /// Recomputes the sizes of both parts so that the array part is the
 /// largest power of two that is more than half full, then reinserts every
 /// live entry. `extra` is the key about to be inserted. A large array
-/// part whose keys run without gaps from 1 grows by half instead
-/// (`dense_growth`).
+/// part whose keys run without gaps from 1 grows by the step of
+/// `listGrowth` instead.
 fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void {
     const p = arrayPlan(t, extra);
     const hash_count = p.total + countArray(t) - p.na;
@@ -759,11 +765,12 @@ fn arrayPlan(t: *Table, extra: Value) ArrayPlan {
     }
     // A power of two that a list of n values outgrew holds up to 2n
     // slots, and a list just past a power of two leaves half of its part
-    // empty. A large list grows by half of its length instead, which
-    // leaves at most a third empty. Every integer key then still lands in
-    // the array part.
+    // empty. A large list grows by the step of `listGrowth` instead,
+    // which leaves at most a third of it empty, and an eighth past a
+    // million slots. Every integer key then still lands in the array
+    // part.
     if (best >= dense_growth and max_int == total_int) {
-        const want = std.mem.alignForward(usize, max_int + max_int / 2, 1024);
+        const want = std.mem.alignForward(usize, listGrowth(max_int), 1024);
         if (want < best) {
             best = want;
             na = total_int;
@@ -787,6 +794,18 @@ fn growArrayShaped(gpa: Allocator, t: *Table, k: i64, val: Value) Error!bool {
 
 /// The array size from which a list grows by half instead of doubling.
 const dense_growth = 1 << 16;
+/// The array size from which a list grows by an eighth. The backing
+/// allocator extends parts this large by mapping pages, without copying
+/// them, so the smaller step costs little time and leaves less of the
+/// part empty.
+const large_growth = 1 << 20;
+
+/// The array size a full list of `n` slots grows to.
+fn listGrowth(n: usize) usize {
+    if (n < dense_growth) return @max(4, n * 2);
+    if (n < large_growth) return n + n / 2;
+    return n + n / 8;
+}
 
 fn countArray(t: *Table) u32 {
     var n: u32 = 0;
