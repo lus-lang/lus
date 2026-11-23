@@ -1,7 +1,7 @@
 // Runs Lus test files through lus.wasm, once with the JIT off and once
 // with every function compiled on its first call, and compares the two.
 //
-// Usage: node scripts/conformance.mjs [--modes off,eager] [--wasm path] [--list-failures] [files or directories...]
+// Usage: node scripts/conformance.mjs [--modes off,eager] [--wasm path] [--file-timeout seconds] [--list-failures] [files or directories...]
 //
 // The default is every file of tests/conformance and of the language
 // server tests. The directories of those files, the language server, and
@@ -15,12 +15,19 @@
 // processes, or the real file system fail under WebAssembly whatever the
 // JIT does, so the result that matters is that both modes agree and that
 // nothing crashes. The script exits with status 1 when the modes disagree
-// on any test or when a test traps or panics the runtime.
+// on any test, when a test traps or panics the runtime, or when a file
+// runs longer than the time limit of `--file-timeout` (120 seconds by
+// default). Each mode runs its files in a worker thread, and a file that
+// runs out of time ends that worker. A fresh worker goes on with the next
+// file.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadLus, readHostDirectory } from "../src/node.js";
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { Lus } from "../src/index.js";
+import { defaultWasmPath, readHostDirectory } from "../src/node.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
@@ -208,25 +215,26 @@ async function main() {
     wasmPath = args[w + 1];
     args.splice(w, 2);
   }
+  let limit = 120;
+  const t = args.indexOf("--file-timeout");
+  if (t >= 0) {
+    limit = Number(args[t + 1]);
+    args.splice(t, 2);
+  }
   const files = listFiles(args.length ? args : [path.join(root, "tests/conformance"), path.join(root, "packages/language-server/tests")]);
   const mounts = {};
   const dirs = new Set(files.map((f) => path.dirname(path.resolve(f))));
   for (const d of ["packages/language-server", "spec/stdlib"]) dirs.add(path.join(root, d));
   for (const dir of dirs) mounts[dir] = await readHostDirectory(dir, [""]);
+  const module = await WebAssembly.compile(await readFile(wasmPath ?? defaultWasmPath));
   const byMode = {};
   for (const mode of modes) {
-    const errors = [];
-    const lus = await loadLus(wasmPath, { env: { LUS_JIT: mode }, jit: { onError: (e) => errors.push(String(e)) } });
-    for (const [dir, files] of Object.entries(mounts)) lus.fs.mount(files, dir);
-    const all = {};
+    const { all, jit, errors } = await runMode({ module, mode, files, mounts, limit });
     const totals = { pass: 0, fail: 0, skip: 0 };
-    for (const file of files) {
-      const r = runFile(lus, file);
-      all[path.basename(file)] = r;
+    for (const r of Object.values(all)) {
       const c = count(r);
       for (const k of Object.keys(totals)) totals[k] += c[k] ?? 0;
     }
-    const jit = lus.jit?.runtimeStats();
     console.log(
       `${mode}: ${files.length} files, ${totals.pass} passed, ${totals.fail} failed, ${totals.skip} skipped` +
         (jit ? `, ${jit.compiled} functions compiled, ${jit.failed} declined by the host` : ""),
@@ -257,21 +265,84 @@ async function main() {
     }
   }
   console.log(differ === 0 ? "The modes agree on every test." : `${differ} tests differ between the modes.`);
-  // A trap or a runtime panic is a bug in every mode, so it fails the run
-  // even when the modes agree.
+  // A trap, a runtime panic, or a file out of time is a bug in every mode,
+  // so it fails the run even when the modes agree.
   let crashes = 0;
   for (const mode of modes) {
     for (const [file, results] of Object.entries(byMode[mode])) {
       for (const [name, r] of Object.entries(results)) {
-        if (r.status === "fail" && /^trap: |runtime crashed/.test(r.message ?? "")) {
+        if (r.status === "fail" && /^trap: |^timeout: |runtime crashed/.test(r.message ?? "")) {
           crashes++;
           console.log(`CRASH ${mode} ${file} ${name}: ${r.message}`);
         }
       }
     }
   }
-  if (crashes > 0) console.log(`${crashes} tests crashed the runtime.`);
+  if (crashes > 0) console.log(`${crashes} tests crashed the runtime or ran out of time.`);
   process.exitCode = differ === 0 && crashes === 0 ? 0 : 1;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
+/**
+ * Runs `files` in one JIT mode, in a worker thread. When a file runs
+ * longer than `limit` seconds, the worker ends, the file records a
+ * timeout, and a fresh worker goes on with the next file.
+ */
+function runMode({ module, mode, files, mounts, limit }) {
+  const all = {};
+  const errors = [];
+  const jit = { compiled: 0, failed: 0 };
+  let sawJit = false;
+  return new Promise((resolve, reject) => {
+    const spawn = (start) => {
+      const worker = new Worker(fileURLToPath(import.meta.url), { workerData: { module, mode, files, mounts, start } });
+      let current = -1;
+      let timer;
+      const arm = (i) => {
+        clearTimeout(timer);
+        current = i;
+        timer = setTimeout(() => {
+          const name = path.basename(files[i]);
+          all[name] = { ...all[name], "(file)": { status: "fail", message: `timeout: the file ran longer than ${limit} seconds` } };
+          worker.removeAllListeners();
+          worker.terminate();
+          if (i + 1 < files.length) spawn(i + 1);
+          else resolve({ all, jit: sawJit ? jit : null, errors });
+        }, limit * 1000);
+      };
+      worker.on("message", (m) => {
+        if (m.type === "start") arm(m.index);
+        else if (m.type === "done") all[path.basename(files[m.index])] = m.results;
+        else if (m.type === "end") {
+          clearTimeout(timer);
+          errors.push(...m.errors);
+          if (m.jit) {
+            sawJit = true;
+            jit.compiled += m.jit.compiled;
+            jit.failed += m.jit.failed;
+          }
+          resolve({ all, jit: sawJit ? jit : null, errors });
+        }
+      });
+      worker.on("error", (e) => {
+        clearTimeout(timer);
+        reject(new Error(`${mode}: the worker failed at ${files[current] ?? "start"}: ${e}`));
+      });
+    };
+    spawn(0);
+  });
+}
+
+/** The body of a worker of `runMode`. */
+async function runWorker({ module, mode, files, mounts, start }) {
+  const errors = [];
+  const lus = await Lus.load(module, { env: { LUS_JIT: mode }, jit: { onError: (e) => errors.push(String(e)) } });
+  for (const [dir, contents] of Object.entries(mounts)) lus.fs.mount(contents, dir);
+  for (let i = start; i < files.length; i++) {
+    parentPort.postMessage({ type: "start", index: i });
+    parentPort.postMessage({ type: "done", index: i, results: runFile(lus, files[i]) });
+  }
+  parentPort.postMessage({ type: "end", errors, jit: lus.jit?.runtimeStats() ?? null });
+}
+
+if (!isMainThread && workerData?.mounts) await runWorker(workerData);
+else if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
