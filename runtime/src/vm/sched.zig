@@ -164,7 +164,34 @@ const IoEntry = struct {
     waiters: List = .{},
     /// True while the poller of the system watches this handle.
     registered: bool = false,
+    /// Counts the events of an edge-triggered poller for the handle,
+    /// also those that found nobody waiting.
+    events: u32 = 0,
+    /// Set once such an event reported the end of the stream, which the
+    /// poller reports only once.
+    eof: bool = false,
 };
+
+/// Counts an event of an edge-triggered poller for `key`.
+fn noteEvent(g: *Global, key: usize, eof: bool) void {
+    const e = g.sched.ios.getPtr(key) orelse return;
+    e.events +%= 1;
+    if (eof) e.eof = true;
+}
+
+/// The count of events of the read side of `handle`, when an
+/// edge-triggered poller watches it and has reported no end of stream.
+/// A read that drained the handle and finds the same count later knows
+/// that no data and no end of stream arrived since: the poller reports
+/// the next of either, so a reader waits at once instead of asking the
+/// system first.
+pub fn quietCount(g: *Global, handle: Handle) ?u32 {
+    if (comptime !Poller.persistent) return null;
+    if (g.sched.loose > 0) return null;
+    const e = g.sched.ios.getPtr(ioKey(handle, .read)) orelse return null;
+    if (!e.registered or e.eof) return null;
+    return e.events;
+}
 
 pub const Sched = struct {
     queue: List = .{},
@@ -1276,6 +1303,7 @@ const Kqueue = struct {
                 // reports the error of its own operation.
                 if (g.sched.ios.getPtr(key)) |e| e.registered = false;
             }
+            noteEvent(g, key, ev.flags & c.EV.EOF != 0);
             wakeIo(g, key);
         }
     }
@@ -1398,6 +1426,7 @@ const Epoll = struct {
                 continue;
             }
             const bad = linux.EPOLL.HUP | linux.EPOLL.ERR;
+            noteEvent(g, ioKey(fd, .read), ev.events & (linux.EPOLL.RDHUP | bad) != 0);
             if (ev.events & (linux.EPOLL.IN | linux.EPOLL.RDHUP | bad) != 0) wakeIo(g, ioKey(fd, .read));
             if (ev.events & (linux.EPOLL.OUT | bad) != 0) wakeIo(g, ioKey(fd, .write));
         }

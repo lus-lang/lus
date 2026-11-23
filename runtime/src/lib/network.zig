@@ -89,6 +89,9 @@ pub const Socket = struct {
     owner: ?*Server = null,
     /// Set once a read found the end of the connection.
     eof: bool = false,
+    /// The count of poller events of the socket when a read last took
+    /// fewer bytes than it asked for (`sched.quietCount`).
+    quiet: ?u32 = null,
     /// Set when the server closed the connection at the end of its drain
     /// time, so the natives of the server end its exchange quietly.
     drained: bool = false,
@@ -1657,9 +1660,22 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
     if (s.tls == null and !s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
         n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
     } else while (true) {
+        const handle = s.stream.socket.handle;
+        // The last read drained the socket and the poller has reported
+        // nothing for it since, so a receive would only report that it
+        // blocks. The read waits at once.
+        if (s.quiet) |q| {
+            s.quiet = null;
+            if (s.tls == null and s.timeout_ms != 0 and sched.active(l.g) and sched.quietCount(l.g, handle) == q) {
+                if (!try sched.waitIo(l, handle, .read, s.timeout_ms)) return null;
+                try stillOpen(l, s);
+                return tryFill(l, s, max);
+            }
+        }
         switch (tryRecv(l, s, dst)) {
             .n => |got| {
                 n = got;
+                if (got > 0 and got < dst.len) s.quiet = sched.quietCount(l.g, handle);
                 sched.opDone(l);
                 break;
             },
