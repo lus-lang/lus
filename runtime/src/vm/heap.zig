@@ -507,7 +507,7 @@ pub fn sweepPage(g: *Global, p: *Page) void {
         releasePage(g, p);
     } else {
         p.free = head;
-        inv.assert(pageOk(p, p.free, p.top) != null);
+        if (inv.enabled) inv.assert(pageOk(p, p.free, p.top) != null);
     }
 }
 

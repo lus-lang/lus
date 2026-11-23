@@ -464,3 +464,60 @@ local function a_caret_is_literal_when_not_leading_test()
     assert(string.find("a^b", "a^b") == 1)
     assert(string.match("2^8", "%d^%d") == "2^8")
 end
+
+-- An access log line parsed with one pattern, whose captures, literal
+-- runs, and repeated classes all take part.
+local function a_log_line_parses_into_its_fields_test()
+    local line = '10.1.2.3 - - [20/Nov/2026:10:01:02 +0000] "GET /api/v1/items/7 HTTP/1.1" 200 512'
+    local pattern = '^(%S+) %- %- %[[^%]]*%] "(%u+) /(%S*) HTTP/1%.1" (%d+) (%d+)$'
+    local ip, method, path, status, bytes = line:match(pattern)
+    assert(ip == "10.1.2.3" and method == "GET" and path == "api/v1/items/7")
+    assert(status == "200" and bytes == "512")
+    assert(line:sub(1, -2):match(pattern .. "x") == nil)
+    assert((line .. " "):match(pattern) == nil)
+end
+
+-- Searches that alternate between more patterns than a program cache
+-- holds agree with searches made one pattern at a time.
+local function many_alternating_patterns_agree_test()
+    local patterns = { "(%a+)", "(%d+)", "[^,]+", "()x()", "k=(%w*)", "%s*$", "(.-)<", "<(.*)>" }
+    local subjects = { "ab12,x<y>z k=v1", "  x,,k= <<a>>", "" }
+    local expected = {}
+    for i, p in ipairs(patterns) do
+        expected[i] = {}
+        for j, s in ipairs(subjects) do expected[i][j] = table.concat({ tostring(s:find(p)), tostring(s:match(p)) }, "|") end
+    end
+    for _ = 1, 3 do
+        for j, s in ipairs(subjects) do
+            for i, p in ipairs(patterns) do
+                assert(table.concat({ tostring(s:find(p)), tostring(s:match(p)) }, "|") == expected[i][j], p)
+            end
+        end
+    end
+end
+
+-- A replacement function that runs many other searches keeps the match
+-- of the gsub that called it intact.
+local function a_gsub_function_may_search_with_other_patterns_test()
+    local out = ("a1 b22 c333"):gsub("(%a)(%d+)", function(letter, digits)
+        for _, p in ipairs({ "%d", "%a+", "[xyz]", "(%w)(%w)", "^.", "%s", "b+" }) do
+            ("filler text 42"):match(p)
+        end
+        return digits .. letter
+    end)
+    assert(out == "1a 22b 333c", out)
+end
+
+-- Plain searches find needles at every offset, including long needles
+-- in subjects full of near matches.
+local function plain_find_at_every_offset_test()
+    local hay = string.rep("ab", 40) .. "needle" .. string.rep("ab", 40)
+    assert(hay:find("needle", 1, true) == 81)
+    assert(hay:find("needle", 82, true) == nil)
+    assert(hay:find("bab", 1, true) == 2)
+    local near = string.rep("a", 300)
+    assert(near:find(string.rep("a", 30) .. "b", 1, true) == nil)
+    assert((near .. "b"):find(string.rep("a", 30) .. "b", 1, true) == 271)
+    assert(("x"):find("", 2, true) == 2)
+    assert(("x"):find("xy", 1, true) == nil)
+end
