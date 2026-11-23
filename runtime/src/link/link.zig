@@ -80,7 +80,7 @@ pub fn link(gpa: Allocator, o: *const lobj.Object, keep: Keep, opts: Options) Er
             @memcpy(all[image.len..], opts.payload);
             break :blk all;
         },
-        .macos, .ios => try macho.write(&l, opts.payload),
+        .macos, .ios, .ios_simulator => try macho.write(&l, opts.payload),
         .windows => return error.UnsupportedTarget,
     };
     errdefer gpa.free(bytes);

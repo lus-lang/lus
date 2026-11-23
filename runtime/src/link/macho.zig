@@ -618,8 +618,13 @@ const MachO = struct {
         const uuid_at = w.pos + 8;
         w.u32s(&.{ 0x1b, 24 });
         w.zeros(16);
-        // LC_BUILD_VERSION: macOS 11 or iOS 15, without tools.
-        const platform: u32, const minos: u32 = if (o.os == .ios) .{ 2, 15 << 16 } else .{ 1, 11 << 16 };
+        // LC_BUILD_VERSION: macOS 11, iOS 15, or the iOS 15 simulator,
+        // without tools.
+        const platform: u32, const minos: u32 = switch (o.os) {
+            .ios => .{ 2, 15 << 16 },
+            .ios_simulator => .{ 7, 15 << 16 },
+            else => .{ 1, 11 << 16 },
+        };
         w.u32s(&.{ 0x32, 24, platform, minos, minos, 0 });
         // LC_SOURCE_VERSION.
         w.u32s(&.{ 0x2a, 16, 0, 0 });

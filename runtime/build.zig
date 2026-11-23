@@ -156,7 +156,7 @@ pub fn build(b: *std.Build) void {
             const link_line = line.captureStdErr(.{});
             for ([_]struct { []const u8, *std.Build.Step.Compile }{ .{ "lus-runtime.lo", lo_obj }, .{ "lus.lo", lo_full } }) |e| {
                 const conv = b.addRunArtifact(convert);
-                conv.addArgs(&.{ "--arch", @tagName(target.result.cpu.arch), "--os", @tagName(os_tag) });
+                conv.addArgs(&.{ "--arch", @tagName(target.result.cpu.arch), "--os", if (os_tag == .ios and target.result.abi == .simulator) "ios_simulator" else @tagName(os_tag) });
                 if (macho) {
                     conv.addArgs(&.{ "--entry", "main" });
                 } else {
@@ -630,6 +630,17 @@ fn vendorSanitizeC() ?std.zig.SanitizeC {
     return if (vendor_sanitize) .full else null;
 }
 
+/// Gives C sources for iOS the headers of the C library that Zig carries
+/// for every Darwin system when xcrun finds no iOS SDK, which lets a host
+/// with only the command line tools build the C libraries of the link
+/// object. The C libraries use only the POSIX part of libSystem, which is
+/// the same on macOS and iOS.
+fn darwinHeaders(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    if (target.result.os.tag != .ios) return;
+    if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |_| return;
+    mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ std.fs.path.dirname(b.graph.zig_exe) orelse ".", "lib", "libc", "include", "any-darwin-any" }) });
+}
+
 fn compressionLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.Compile {
     const lib = b.addLibrary(.{
         .name = "lus_compress",
@@ -643,6 +654,7 @@ fn compressionLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Buil
         }),
     });
     addCompressionSources(b, lib.root_module);
+    darwinHeaders(b, lib.root_module, target);
     // A section for each function and datum lets the linker of `lus build
     // --aot` keep only the codecs a program reaches.
     lib.link_function_sections = true;
@@ -668,6 +680,7 @@ fn tlsLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.C
         }),
     });
     addTlsSources(b, lib.root_module);
+    darwinHeaders(b, lib.root_module, target);
     lib.link_function_sections = true;
     lib.link_data_sections = true;
     return lib;
@@ -938,6 +951,7 @@ fn sqliteLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Ste
         .pic = true,
     });
     addSqliteSource(b, mod, target);
+    darwinHeaders(b, mod, target);
     const lib = b.addLibrary(.{ .name = "sqlite3", .linkage = .static, .root_module = mod });
     lib.link_function_sections = true;
     lib.link_data_sections = true;
