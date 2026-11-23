@@ -1221,7 +1221,12 @@ pub const Section = struct {
             const rr: reloc.Reloc = .{ .kind = @fromBackingInt(@intCast(head[1])), .a = r.u32_() orelse return .drop, .b = r.u32_() orelse return .drop, .c = r.u32_() orelse return .drop };
             const form: reloc.Form = @fromBackingInt(@intCast(head[0]));
             if (slots) |base| {
-                if (form != .slot) return .drop;
+                if (form != .slot) {
+                    // The static form records only slots, so another form
+                    // means an emitter left the static path.
+                    if (l.g.jit.aot_report) std.debug.print("aot: code in place dropped for a relocation of form {s}\n", .{@tagName(form)});
+                    return .drop;
+                }
                 const addr = s.addressOf(l, rr) orelse return .wait;
                 @as(*usize, @ptrFromInt(base + 8 * k)).* = addr;
                 continue;

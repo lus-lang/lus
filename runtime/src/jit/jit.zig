@@ -74,6 +74,10 @@ pub const Setting = enum { off, on, eager };
 pub const State = if (enabled) struct {
     ready: bool = false,
     setting: Setting = .on,
+    /// Set once the process may map no executable memory. Nothing new
+    /// compiles, and code that is installed, such as code compiled ahead
+    /// of time in place, still runs through samples and calls.
+    no_compile: bool = false,
     /// Events (calls, loop iterations, returns) before a function compiles.
     threshold: u32 = default_threshold,
     /// Length of the current sampling period of the interpreter.
@@ -193,6 +197,7 @@ fn setup(g: *Global) void {
     // `LUS_JIT_NO_EXEC` refuses executable memory, as iOS does, so tests
     // on macOS show that code in place needs none.
     if (env.get("LUS_JIT_NO_EXEC") != null) mem.refuse_exec = true;
+    js.no_compile = mem.refuse_exec;
     if (env.get("LUS_JIT_AOT")) |v| {
         js.aot = aot.State.fromEnv(g.gpa, v);
         if (js.aot != null) aot.noteImage();
@@ -568,7 +573,7 @@ fn compileNative(l: *Thread, p: *Proto) Outcome {
 fn compileMachine(l: *Thread, p: *Proto) bool {
     const g = l.g;
     const gpa = g.gpa;
-    if (p.code.len > max_instructions) return false;
+    if (p.code.len > max_instructions or g.jit.no_compile) return false;
     var e = emit.Emitter.init(gpa, l, p);
     defer e.deinit();
     const offs = gpa.alloc(u32, p.code.len + 1) catch return false;
@@ -590,7 +595,7 @@ fn compileMachine(l: *Thread, p: *Proto) bool {
         gpa.free(offs);
         gpa.destroy(code);
         // Without executable memory nothing will ever compile.
-        g.jit.setting = .off;
+        g.jit.no_compile = true;
         return false;
     };
     mem.install(block, bytes);
