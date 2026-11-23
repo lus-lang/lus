@@ -1468,12 +1468,12 @@ test "every routine of the optimizing tier has a number" {
 
 test "every helper that the emitters call by address has a number" {
     const sources = [_][]const u8{ @embedFile("emit.zig"), @embedFile("opt/codegen.zig") };
-    inline for (comptime std.meta.declarations(helpers)) |d| {
-        const f = @field(helpers, d.name);
+    inline for (comptime std.meta.declarations(helpers)) |name| {
+        const f = @field(helpers, name);
         if (@typeInfo(@TypeOf(f)) == .@"fn") {
             for (sources) |src| {
-                if (namesHelper(src, d.name) and routineId(@intFromPtr(&f)) == null) {
-                    std.debug.print("helpers.{s} is missing from aot.routines\n", .{d.name});
+                if (namesHelper(src, name) and routineId(@intFromPtr(&f)) == null) {
+                    std.debug.print("helpers.{s} is missing from aot.routines\n", .{name});
                     return error.TestUnexpectedResult;
                 }
             }

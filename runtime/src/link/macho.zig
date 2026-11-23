@@ -22,6 +22,9 @@ const Sha256 = std.crypto.hash.sha2.Sha256;
 /// The address of the Mach-O header, above the 4 GB of `__PAGEZERO`.
 const base: u64 = 0x1_0000_0000;
 
+/// The free bytes after the load commands.
+const header_pad = 256;
+
 /// The size of a page that the code signature hashes.
 const sig_page = 4096;
 
@@ -173,7 +176,9 @@ const MachO = struct {
         const o = l.o;
         l.addr = try m.gpa.alloc(u64, o.atoms.len);
         @memset(l.addr, link.no_addr);
-        m.header_size = 32 + m.commandsSize();
+        // Free space after the load commands lets `embed` add a segment
+        // when this executable is the runtime of `lus build`.
+        m.header_size = 32 + m.commandsSize() + header_pad;
         // __TEXT: the header, the code, the stubs, and the constants.
         var pos = base + m.header_size;
         try m.section(.text, "__text", 0x8000_0400, &pos, .text);
@@ -569,7 +574,7 @@ const MachO = struct {
     fn headers(m: *MachO, out: []u8, le: Linkedit) Error!void {
         const l = m.l;
         const o = l.o;
-        var w: Cmds = .{ .buf = out[32..link.index(m.header_size)] };
+        var w: Cmds = .{ .buf = out[32..][0..link.index(m.commandsSize())] };
         var ncmds: u32 = 0;
         // __PAGEZERO.
         w.segment("__PAGEZERO", 0, base, 0, 0, 0, 0, 0, 0);
@@ -641,7 +646,7 @@ const MachO = struct {
         // MH_HAS_TLV_DESCRIPTORS when there are thread-local variables.
         var flags: u32 = 0x1 | 0x4 | 0x80 | 0x20_0000;
         if (m.has_tlv) flags |= 0x80_0000;
-        const h = [_]u32{ 0xfeedfacf, cpu, subtype, 2, ncmds, @intCast(m.header_size - 32), flags, 0 };
+        const h = [_]u32{ 0xfeedfacf, cpu, subtype, 2, ncmds, @intCast(m.commandsSize()), flags, 0 };
         for (h, 0..) |v, k| std.mem.writeInt(u32, out[4 * k ..][0..4], v, .little);
         var digest: [32]u8 = undefined;
         Sha256.hash(out[0..link.index(le.sig_off)], &digest, .{});
@@ -793,7 +798,7 @@ test "a Mach-O executable binds its imports and rebases its pointers" {
     const out = r.bytes;
     try std.testing.expectEqual(@as(u32, 0xfeedfacf), std.mem.readInt(u32, out[0..4], .little));
     // The call reaches the stub, which loads the slot of exit.
-    const text = 32 + std.mem.readInt(u32, out[20..24], .little);
+    const text = 32 + std.mem.readInt(u32, out[20..24], .little) + header_pad;
     const bl = std.mem.readInt(u32, out[text..][0..4], .little);
     try std.testing.expectEqual(@as(u32, 0x94), bl >> 24);
     const stub = text + 4 * (bl & 0x3ff_ffff);
@@ -812,14 +817,16 @@ test "a Mach-O executable binds its imports and rebases its pointers" {
     try std.testing.expectEqual(sig, std.mem.readInt(u32, out[sig + 20 + 32 ..][0..4], .big));
 }
 
-pub const EmbedError = error{ OutOfMemory, NotMachO, Malformed, NoRoom, AlreadyBundled, UnsupportedFixups };
+pub const EmbedError = error{ OutOfMemory, NotMachO, Malformed, NoRoom, AlreadyBundled };
 
 /// Puts `payload` into a new segment `__LUS` of the executable `exe`,
 /// which the system linker wrote, and signs the result ad hoc again. The
 /// segment goes before `__LINKEDIT`, which moves up by the size of the
 /// segment along with every offset into it, so the signature covers the
-/// payload. The load commands need 168 free bytes before the first
-/// section, which the linkers of Zig and Apple leave.
+/// payload. Chained fixups number the segments, so their table gets an
+/// entry for `__LUS` in a copy at the end of `__LINKEDIT`. The load
+/// commands need 168 free bytes before the first section, which the
+/// linkers of Zig and Apple leave, and this linker too.
 pub fn embed(gpa: std.mem.Allocator, exe: []const u8, payload: []const u8) EmbedError![]u8 {
     if (exe.len < 32 or rd32(exe, 0) != 0xfeedfacf) return error.NotMachO;
     const page: u64 = if (rd32(exe, 4) == 0x0100_000c) 0x4000 else 0x1000;
@@ -828,6 +835,10 @@ pub fn embed(gpa: std.mem.Allocator, exe: []const u8, payload: []const u8) Embed
     if (32 + @as(u64, sizeofcmds) > exe.len) return error.Malformed;
     var linkedit: ?usize = null;
     var sig: ?usize = null;
+    var fixups: ?usize = null;
+    // The number of segments before __LINKEDIT, which is the index the
+    // table of chained fixups gives __LUS.
+    var segs_before: u32 = 0;
     var text_filesize: u64 = 0;
     var first_data: u64 = exe.len;
     var at: usize = 32;
@@ -840,6 +851,7 @@ pub fn embed(gpa: std.mem.Allocator, exe: []const u8, payload: []const u8) Embed
             0x19 => {
                 const name = std.mem.sliceTo(exe[at + 8 ..][0..16], 0);
                 if (std.mem.eql(u8, name, "__LINKEDIT")) linkedit = at;
+                if (linkedit == null) segs_before += 1;
                 if (std.mem.eql(u8, name, "__LUS")) return error.AlreadyBundled;
                 if (std.mem.eql(u8, name, "__TEXT")) text_filesize = rd64(exe, at + 48);
                 const nsects = rd32(exe, at + 64);
@@ -850,7 +862,7 @@ pub fn embed(gpa: std.mem.Allocator, exe: []const u8, payload: []const u8) Embed
                 }
             },
             0x1d => sig = at,
-            0x8000_0034 => return error.UnsupportedFixups,
+            0x8000_0034 => fixups = at,
             else => {},
         }
         at += size;
@@ -864,7 +876,11 @@ pub fn embed(gpa: std.mem.Allocator, exe: []const u8, payload: []const u8) Embed
     if (le_off > le_end or le_end > exe.len) return error.Malformed;
     const shift = std.mem.alignForward(u64, payload.len, page);
     const new_le_off = le_off + shift;
-    const sig_off = std.mem.alignForward(u64, new_le_off + (le_end - le_off), 16);
+    // The copy of the table of chained fixups, 8 bytes longer.
+    var blob_off = std.mem.alignForward(u64, new_le_off + (le_end - le_off), 8);
+    var blob_len: u64 = 0;
+    if (fixups) |f| blob_len = @as(u64, rd32(exe, f + 12)) + 8 else blob_off = new_le_off + (le_end - le_off);
+    const sig_off = std.mem.alignForward(u64, blob_off + blob_len, 16);
     const n_pages = std.math.divCeil(u64, sig_off, sig_page) catch unreachable;
     const sig_size = std.mem.alignForward(u64, 12 + 8 + 88 + identifier.len + 1 + 32 * n_pages, 16);
     const out = try gpa.alloc(u8, link.index(sig_off + sig_size));
@@ -913,6 +929,10 @@ pub fn embed(gpa: std.mem.Allocator, exe: []const u8, payload: []const u8) Embed
                 std.mem.writeInt(u32, c[12..16], @intCast(sig_size), .little);
             },
             0x1e, 0x26, 0x29, 0x2b, 0x2e, 0x8000_0033 => moved(c, 8, 4, le_off, shift),
+            0x8000_0034 => {
+                std.mem.writeInt(u32, c[8..12], @intCast(blob_off), .little);
+                std.mem.writeInt(u32, c[12..16], @intCast(blob_len), .little);
+            },
             else => {},
         }
         at += size;
@@ -923,8 +943,40 @@ pub fn embed(gpa: std.mem.Allocator, exe: []const u8, payload: []const u8) Embed
     std.mem.writeInt(u32, h[20..24], @intCast(sizeofcmds + need), .little);
     @memcpy(out[link.index(le_off)..][0..payload.len], payload);
     @memcpy(out[link.index(new_le_off)..][0..link.index(le_end - le_off)], exe[link.index(le_off)..link.index(le_end)]);
+    if (fixups) |f| try insertSegment(exe[rd32(exe, f + 8)..][0..rd32(exe, f + 12)], out[link.index(blob_off)..][0..link.index(blob_len)], segs_before);
     sign(out, sig_off, text_filesize);
     return out;
+}
+
+/// Copies the table of chained fixups `old` into `new`, 8 bytes longer,
+/// with an empty entry for a segment inserted at index `at`: the entry and
+/// 4 bytes that keep what follows aligned to 8.
+fn insertSegment(old: []const u8, new: []u8, at: u32) EmbedError!void {
+    if (old.len < 28) return error.Malformed;
+    const starts = rd32(old, 4);
+    if (starts + 4 > old.len) return error.Malformed;
+    const n = rd32(old, starts);
+    if (at > n or starts + 4 + 4 * @as(u64, n) > old.len) return error.Malformed;
+    const array_end = starts + 4 + 4 * n;
+    @memcpy(new[0..starts], old[0..starts]);
+    std.mem.writeInt(u32, new[starts..][0..4], n + 1, .little);
+    var k: u32 = 0;
+    var dst: usize = starts + 4;
+    while (k <= n) : (k += 1) {
+        var v: u32 = 0;
+        if (k < at) v = rd32(old, starts + 4 + 4 * k) else if (k > at) v = rd32(old, starts + 4 + 4 * (k - 1));
+        if (v != 0) v += 8;
+        std.mem.writeInt(u32, new[dst..][0..4], v, .little);
+        dst += 4;
+    }
+    std.mem.writeInt(u32, new[dst..][0..4], 0, .little);
+    dst += 4;
+    @memcpy(new[dst..][0 .. old.len - array_end], old[array_end..]);
+    // The imports and their names follow the starts.
+    for ([_]usize{ 8, 12 }) |o| {
+        const v = rd32(old, o);
+        if (v >= array_end) std.mem.writeInt(u32, new[o..][0..4], v + 8, .little);
+    }
 }
 
 fn rd32(b: []const u8, off: usize) u32 {
@@ -933,4 +985,49 @@ fn rd32(b: []const u8, off: usize) u32 {
 
 fn rd64(b: []const u8, off: usize) u64 {
     return std.mem.readInt(u64, b[off..][0..8], .little);
+}
+
+test "embed adds a segment before __LINKEDIT and a slot to the chained fixups" {
+    const gpa = std.testing.allocator;
+    var w: lobj.Writer = .{ .gpa = gpa, .arch = .aarch64, .os = .macos };
+    defer w.deinit();
+    const main = try w.atom(.text, 2, &[_]u8{ 0xc0, 0x03, 0x5f, 0xd6 }, 4, "main");
+    const ptrs = try w.atom(.data, 3, &@as([8]u8, @splat(0)), 8, "ptrs");
+    try w.reloc(.{ .offset = 0, .type = 257, .target = .{ .index = @intCast(main), .space = .atom }, .addend = 0 });
+    try w.roots.append(gpa, ptrs);
+    w.entry = .{ .name = try w.string("main"), .atom = main, .offset = 0 };
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    defer buf.deinit();
+    try w.write(&buf.writer);
+    const bytes = try gpa.alignedAlloc(u8, .@"8", buf.written().len);
+    defer gpa.free(bytes);
+    @memcpy(bytes, buf.written());
+    const o = try lobj.read(bytes);
+    const r = try link.link(gpa, &o, .all, .{});
+    defer gpa.free(r.bytes);
+    const out = try embed(gpa, r.bytes, "PAYLOAD");
+    defer gpa.free(out);
+    // The commands now name __LUS with the payload, and the chained
+    // fixups count one more segment, which has no starts.
+    var at: usize = 32;
+    var lus_off: ?u64 = null;
+    var fixups: ?usize = null;
+    var segs: u32 = 0;
+    for (0..rd32(out, 16)) |_| {
+        const cmd = rd32(out, at);
+        if (cmd == 0x19) {
+            segs += 1;
+            if (std.mem.eql(u8, std.mem.sliceTo(out[at + 8 ..][0..16], 0), "__LUS")) lus_off = rd64(out, at + 40);
+        }
+        if (cmd == 0x8000_0034) fixups = rd32(out, at + 8);
+        at += rd32(out, at + 4);
+    }
+    try std.testing.expectEqualStrings("PAYLOAD", out[link.index(lus_off.?)..][0..7]);
+    const blob = out[fixups.?..];
+    const starts = rd32(blob, 4);
+    try std.testing.expectEqual(segs, rd32(blob, starts));
+    try std.testing.expectEqual(@as(u32, 0), rd32(blob, starts + 4 * segs));
+    // The signature covers the file before it.
+    const sig = std.mem.lastIndexOf(u8, out, &.{ 0xfa, 0xde, 0x0c, 0xc0 }).?;
+    try std.testing.expectEqual(sig, std.mem.readInt(u32, out[sig + 20 + 32 ..][0..4], .big));
 }
