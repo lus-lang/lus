@@ -129,8 +129,8 @@ const MachO = struct {
                 .tdata => .tdata,
                 .tbss => .tbss,
                 .bss => .bss,
-                .fini_array => {
-                    std.log.err("{s}: functions that run at exit are not supported on Mach-O", .{o.string(a.name)});
+                .fini_array, .unwind => {
+                    std.log.err("{s}: atoms of kind {s} are not supported on Mach-O", .{ o.string(a.name), @tagName(a.kind) });
                     return error.UnsupportedTarget;
                 },
             };

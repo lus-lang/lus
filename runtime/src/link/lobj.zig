@@ -58,6 +58,10 @@ pub const Kind = enum(u8) {
     /// The descriptors of thread-local variables on Mach-O, which `dyld`
     /// finds by the type of their section.
     thread_vars,
+    /// Entries of the function table of PE, 12 bytes each: the start and
+    /// the end of a function and its unwind information. The linker keeps
+    /// an entry whose function it keeps.
+    unwind,
 };
 
 pub const Atom = extern struct {

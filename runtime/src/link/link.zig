@@ -174,6 +174,35 @@ pub const Linker = struct {
         try work.append(l.gpa, o.entry.atom);
         try work.appendSlice(l.gpa, o.roots);
         for (work.items) |a| l.parent[a] = a;
+        try l.drain(&work);
+        // An entry of the function table of PE whose function is kept
+        // keeps the unwind information it names, which may keep more
+        // functions, until nothing changes.
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (o.atoms, 0..) |a, i| {
+                if (a.kind != .unwind) continue;
+                const rs = o.atomRelocs(a);
+                for (rs) |r| {
+                    if (r.offset % 12 != 0 or r.target.space != .atom or !l.live[r.target.index]) continue;
+                    for (rs) |q| {
+                        if (q.offset < r.offset or q.offset >= r.offset + 12 or q.target.space != .atom or l.live[q.target.index]) continue;
+                        l.parent[q.target.index] = @intCast(i);
+                        try work.append(l.gpa, q.target.index);
+                    }
+                }
+            }
+            if (work.items.len > 0) {
+                changed = true;
+                try l.drain(&work);
+            }
+        }
+    }
+
+    /// Marks the atoms of `work` and every atom they reach.
+    fn drain(l: *Linker, work: *std.ArrayList(u32)) Error!void {
+        const o = l.o;
         while (work.pop()) |a| {
             if (l.live[a]) continue;
             l.live[a] = true;
@@ -184,6 +213,13 @@ pub const Linker = struct {
                 try work.append(l.gpa, r.target.index);
             }
         }
+    }
+
+    /// Whether the entry of a function table at `offset` of the atom `a`
+    /// names a function that is kept.
+    pub fn unwindKept(l: *const Linker, a: lobj.Atom, offset: u32) bool {
+        for (l.o.atomRelocs(a)) |r| if (r.offset == offset) return r.target.space == .atom and l.live[r.target.index];
+        return false;
     }
 
     fn writeMap(l: *const Linker, w: *std.Io.Writer) !void {

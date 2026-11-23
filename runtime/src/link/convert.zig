@@ -224,7 +224,7 @@ pub const Converter = struct {
             return error.WrongArchitecture;
         }
         const shdrs = try c.arena.alloc(elf.Elf64_Shdr, eh.e_shnum);
-        for (shdrs, 0..) |*sh, k| sh.* = std.mem.bytesToValue(elf.Elf64_Shdr, data[eh.e_shoff + k * @sizeOf(elf.Elf64_Shdr) ..][0..@sizeOf(elf.Elf64_Shdr)]);
+        for (shdrs, 0..) |*sh, k| sh.* = std.mem.bytesToValue(elf.Elf64_Shdr, slice(data, eh.e_shoff + k * @sizeOf(elf.Elf64_Shdr), @sizeOf(elf.Elf64_Shdr)));
         const shstr = shdrs[eh.e_shstrndx];
         const secs = try c.arena.alloc(Sec, shdrs.len);
         var symtab: ?elf.Elf64_Shdr = null;
@@ -239,17 +239,17 @@ pub const Converter = struct {
                 .unsupported = std.mem.startsWith(u8, sname, ".ctors") or std.mem.startsWith(u8, sname, ".dtors"),
             };
             if (s.kind) |k| if (!lobj.zeroed(k)) {
-                s.bytes = data[sh.sh_offset..][0..sh.sh_size];
+                s.bytes = slice(data, sh.sh_offset, sh.sh_size);
             };
             if (sh.sh_type == elf.SHT_SYMTAB) symtab = sh;
         }
         var syms: []Sym = &.{};
         if (symtab) |st| {
             const strs = shdrs[st.sh_link];
-            const n = st.sh_size / @sizeOf(elf.Elf64_Sym);
+            const n: usize = @intCast(st.sh_size / @sizeOf(elf.Elf64_Sym));
             syms = try c.arena.alloc(Sym, n);
             for (syms, 0..) |*s, k| {
-                const es = std.mem.bytesToValue(elf.Elf64_Sym, data[st.sh_offset + k * @sizeOf(elf.Elf64_Sym) ..][0..@sizeOf(elf.Elf64_Sym)]);
+                const es = std.mem.bytesToValue(elf.Elf64_Sym, slice(data, st.sh_offset + k * @sizeOf(elf.Elf64_Sym), @sizeOf(elf.Elf64_Sym)));
                 s.* = .{
                     .name = cstr(data, strs.sh_offset + es.st_name),
                     .value = es.st_value,
@@ -274,18 +274,18 @@ pub const Converter = struct {
         var groups: std.ArrayList(Group) = .empty;
         for (shdrs) |sh| {
             if (sh.sh_type == elf.SHT_GROUP) {
-                const members = std.mem.bytesAsSlice(u32, data[sh.sh_offset..][0..sh.sh_size]);
+                const members = std.mem.bytesAsSlice(u32, slice(data, sh.sh_offset, sh.sh_size));
                 const m = try c.arena.alloc(u32, members.len - 1);
                 for (m, members[1..]) |*d, x| d.* = std.mem.littleToNative(u32, x);
                 try groups.append(c.arena, .{ .sig = syms[sh.sh_info].name, .members = m });
                 continue;
             }
             if (sh.sh_type != elf.SHT_RELA or sh.sh_info >= shdrs.len) continue;
-            const n = sh.sh_size / @sizeOf(elf.Elf64_Rela);
+            const n: usize = @intCast(sh.sh_size / @sizeOf(elf.Elf64_Rela));
             const list = try c.arena.alloc(Rel, n);
             var used: usize = 0;
             for (0..n) |k| {
-                const r = std.mem.bytesToValue(elf.Elf64_Rela, data[sh.sh_offset + k * @sizeOf(elf.Elf64_Rela) ..][0..@sizeOf(elf.Elf64_Rela)]);
+                const r = std.mem.bytesToValue(elf.Elf64_Rela, slice(data, sh.sh_offset + k * @sizeOf(elf.Elf64_Rela), @sizeOf(elf.Elf64_Rela)));
                 const ty: u32 = @truncate(r.r_info);
                 if (ty == 0) continue;
                 list[used] = .{ .offset = r.r_offset, .type = ty, .sym = @intCast(r.r_info >> 32), .addend = r.r_addend };
@@ -411,7 +411,7 @@ pub const Converter = struct {
                 try secs.append(c.arena, .{
                     .name = ms.sectname,
                     .kind = kind,
-                    .bytes = if (zero) null else data[ms.offset + off ..][0 .. end - start],
+                    .bytes = if (zero) null else data[@intCast(ms.offset + off)..][0..@intCast(end - start)],
                     .size = end - start,
                     .align_log2 = al,
                     .unsupported = ms.flags & 0xff == 0x15 or (kind == .fini_array),
@@ -802,8 +802,9 @@ pub const Converter = struct {
         if (size == 0) return null;
         // IMAGE_SCN_LNK_REMOVE and IMAGE_SCN_LNK_INFO, such as `.drectve`.
         if (flags & 0xa00 != 0) return null;
-        const left_out = [_][]const u8{ ".debug", ".pdata", ".xdata", ".llvm_addrsig", ".llvm." };
+        const left_out = [_][]const u8{ ".debug", ".llvm_addrsig", ".llvm." };
         for (left_out) |p| if (std.mem.startsWith(u8, name, p)) return null;
+        if (std.mem.startsWith(u8, name, ".pdata")) return .unwind;
         if (flags & 0x80 != 0) return .bss;
         if (flags & 0x2000_0020 != 0) return .text;
         if (flags & 0x8000_0000 != 0) return .data;
@@ -870,8 +871,14 @@ pub const Converter = struct {
         return std.mem.readInt(T, data[off..][0..@sizeOf(T)], .little);
     }
 
+    /// The `len` bytes at `off` of an input, which is in memory, so both
+    /// fit a `usize` on a 32-bit host too.
+    fn slice(data: []const u8, off: u64, len: u64) []const u8 {
+        return data[@intCast(off)..][0..@intCast(len)];
+    }
+
     fn cstr(data: []const u8, off: u64) []const u8 {
-        const s = data[off..];
+        const s = data[@intCast(off)..];
         return s[0..std.mem.indexOfScalar(u8, s, 0).?];
     }
 
@@ -1054,7 +1061,7 @@ pub const Converter = struct {
                 pos += sec.size;
                 al = @max(al, sec.align_log2);
             }
-            const bytes = try c.arena.alloc(u8, pos);
+            const bytes = try c.arena.alloc(u8, @intCast(pos));
             @memset(bytes, 0);
             for (members.items) |m| {
                 const in = &c.inputs.items[m.input];
@@ -1124,7 +1131,7 @@ pub const Converter = struct {
             const in = &c.inputs.items[e.value_ptr.input];
             const s = in.syms[e.value_ptr.sym];
             if (std.mem.eql(u8, name, "lus.reg_layout")) {
-                const b = (in.secs[s.shndx].bytes orelse return badRegistration(name, "its layout is in a zeroed section"))[s.value..][0..12];
+                const b = (in.secs[s.shndx].bytes orelse return badRegistration(name, "its layout is in a zeroed section"))[@intCast(s.value)..][0..12];
                 for (&c.w.reg_layout, 0..) |*f, k| f.* = std.mem.readInt(u32, b[k * 4 ..][0..4], .little);
                 continue;
             }

@@ -61,6 +61,9 @@ const Pe = struct {
     fixups: std.ArrayList(u64) = .empty,
     dirs: [16][2]u32 = @splat(.{ 0, 0 }),
     idata: Sect = .{ .name = ".idata", .flags = 0xc000_0040 },
+    /// The function table, in `.rdata` after the constants.
+    pdata_addr: u64 = 0,
+    pdata_count: u64 = 0,
     headers_size: u64 = 0,
 
     fn deinit(p: *Pe) void {
@@ -151,7 +154,26 @@ const Pe = struct {
         p.headers_size = std.mem.alignForward(u64, 64 + 4 + 20 + 240 + 6 * 40, file_align);
         var pos = image_base + std.mem.alignForward(u64, p.headers_size, section_align);
         try p.section(".text", 0x6000_0020, &pos, .text);
-        try p.section(".rdata", 0x4000_0040, &pos, .rdata);
+        // The constants, then the entries of the function table whose
+        // functions are kept.
+        const rdata = pos;
+        p.placeAtoms(&pos, .rdata);
+        for (o.atoms) |a| {
+            if (a.kind != .unwind) continue;
+            var off: u32 = 0;
+            while (off + 12 <= a.size) : (off += 12) {
+                if (l.unwindKept(a, off)) p.pdata_count += 1;
+            }
+        }
+        if (p.pdata_count > 0) {
+            pos = std.mem.alignForward(u64, pos, 4);
+            p.pdata_addr = pos;
+            pos += 12 * p.pdata_count;
+        }
+        if (pos > rdata) {
+            try p.sects.append(p.gpa, .{ .name = ".rdata", .addr = rdata, .size = pos - rdata, .flags = 0x4000_0040 });
+            pos = std.mem.alignForward(u64, pos, section_align);
+        }
         try p.section(".data", 0xc000_0040, &pos, .data);
         try p.section(".bss", 0xc000_0080, &pos, .bss);
         if (p.imports.count() > 0) {
@@ -243,6 +265,7 @@ const Pe = struct {
             }
         }
         if (p.imports.count() > 0) try p.importTables(out);
+        if (p.pdata_count > 0) try p.functionTable(out);
         if (relocs.items.len > 0) {
             @memcpy(out[p.fileOffset(l.end)..][0..relocs.items.len], relocs.items);
             p.dirs[@backingInt(Dir.basereloc)] = .{ try rva(l.end), @intCast(relocs.items.len) };
@@ -252,6 +275,37 @@ const Pe = struct {
         };
         try p.headers(out);
         return out;
+    }
+
+    /// The entries of the function table, relocated and sorted by the
+    /// start of their functions, as the unwinder of Windows searches it.
+    fn functionTable(p: *Pe, out: []u8) Error!void {
+        const l = p.l;
+        const o = l.o;
+        const table = out[p.fileOffset(p.pdata_addr)..][0..link.index(12 * p.pdata_count)];
+        var k: usize = 0;
+        for (o.atoms) |a| {
+            if (a.kind != .unwind) continue;
+            var off: u32 = 0;
+            while (off + 12 <= a.size) : (off += 12) {
+                if (!l.unwindKept(a, off)) continue;
+                const entry = table[12 * k ..][0..12];
+                @memcpy(entry, o.bytes(a)[off..][0..12]);
+                for (o.atomRelocs(a)) |r| {
+                    if (r.offset < off or r.offset >= off + 12) continue;
+                    try l.apply(r, entry[r.offset - off ..], p.pdata_addr + 12 * k + (r.offset - off));
+                }
+                k += 1;
+            }
+        }
+        const Entry = [3]u32;
+        const entries = std.mem.bytesAsSlice(Entry, table);
+        std.mem.sort(Entry, @alignCast(entries), {}, struct {
+            fn lt(_: void, a: Entry, b: Entry) bool {
+                return std.mem.littleToNative(u32, a[0]) < std.mem.littleToNative(u32, b[0]);
+            }
+        }.lt);
+        p.dirs[@backingInt(Dir.exception)] = .{ try rva(p.pdata_addr), @intCast(12 * p.pdata_count) };
     }
 
     /// A block of base relocations for each page of 4 KB that holds an
@@ -414,6 +468,16 @@ test "PE imports, base relocations, and the entry" {
     const ptr = try w.atom(.data, 3, &@as([8]u8, @splat(0)), 8, "ptr");
     try w.reloc(.{ .offset = 0, .type = 1, .target = .{ .index = @intCast(main), .space = .atom }, .addend = 0 });
     try w.roots.append(gpa, ptr);
+    // Entries of the function table for main and for a dead function,
+    // each naming its unwind information.
+    const dead = try w.atom(.text, 4, &[_]u8{0xc3}, 1, "dead");
+    for ([_]u32{ main, dead }) |f| {
+        const info = try w.atom(.rodata, 2, &[_]u8{ 1, 0, 0, 0 }, 4, "unwind info");
+        _ = try w.atom(.unwind, 2, &@as([12]u8, @splat(0)), 12, "function table");
+        try w.reloc(.{ .offset = 0, .type = lobj.pe_addr32nb, .target = .{ .index = @intCast(f), .space = .atom }, .addend = 0 });
+        try w.reloc(.{ .offset = 4, .type = lobj.pe_addr32nb, .target = .{ .index = @intCast(f), .space = .atom }, .addend = 1 });
+        try w.reloc(.{ .offset = 8, .type = lobj.pe_addr32nb, .target = .{ .index = @intCast(info), .space = .atom }, .addend = 0 });
+    }
     w.entry = .{ .name = try w.string("main"), .atom = main, .offset = 0 };
     var buf: std.Io.Writer.Allocating = .init(gpa);
     defer buf.deinit();
@@ -431,8 +495,8 @@ test "PE imports, base relocations, and the entry" {
     const opt = pe_at + 24;
     try std.testing.expectEqual(@as(u16, 0x20b), std.mem.readInt(u16, img[opt..][0..2], .little));
     const nsects = std.mem.readInt(u16, img[pe_at + 6 ..][0..2], .little);
-    // .text, .data, .idata, and .reloc.
-    try std.testing.expectEqual(@as(u16, 4), nsects);
+    // .text, .rdata with the function table, .data, .idata, and .reloc.
+    try std.testing.expectEqual(@as(u16, 5), nsects);
     const shdrs = opt + 240;
     const Hdr = struct { va: u32, raw: u32 };
     var by_name: std.StringHashMapUnmanaged(Hdr) = .empty;
@@ -467,4 +531,13 @@ test "PE imports, base relocations, and the entry" {
     try std.testing.expectEqual(reloc.va, rel_rva);
     try std.testing.expectEqual(data.va, std.mem.readInt(u32, img[reloc.raw..][0..4], .little));
     try std.testing.expectEqual(@as(u16, 0xa000), std.mem.readInt(u16, img[reloc.raw + 8 ..][0..2], .little));
+    // One entry in the function table, for main, which names the unwind
+    // information that main keeps.
+    const exc_rva = std.mem.readInt(u32, img[dirs + 24 ..][0..4], .little);
+    try std.testing.expectEqual(@as(u32, 12), std.mem.readInt(u32, img[dirs + 28 ..][0..4], .little));
+    const rdata = by_name.get(".rdata").?;
+    const entry_at = rdata.raw + (exc_rva - rdata.va);
+    try std.testing.expectEqual(text.va, std.mem.readInt(u32, img[entry_at..][0..4], .little));
+    try std.testing.expectEqual(text.va + 1, std.mem.readInt(u32, img[entry_at + 4 ..][0..4], .little));
+    try std.testing.expectEqual(rdata.va, std.mem.readInt(u32, img[entry_at + 8 ..][0..4], .little));
 }
