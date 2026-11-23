@@ -70,8 +70,8 @@
           "$ref": "#/$defs/nodeList"
         },
         "value": {
-          "description": "The value of a number, string, name, goto, or label. A number written with a bigint or decimal suffix carries its digits as a string and a kind.",
-          "type": ["string", "number"]
+          "description": "The value of a number, string, name, goto, or label. A float is written with a fraction or an exponent, such as 0.5 or 1e0, so it reads back as a float, and a float literal too large for a float is null. A number written with a bigint or decimal suffix carries its digits as a string and a kind.",
+          "type": ["string", "number", "null"]
         },
         "kind": {
           "description": "bigint or decimal for such a number literal. The clause keyword for a qclause.",

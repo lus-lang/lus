@@ -581,7 +581,8 @@ const Formatter = struct {
     }
 
     /// Declared names, each followed by its attributes in one `< >` list:
-    /// the compile-time attribute first, then the runtime ones.
+    /// the attributes the language names first, in source order, then the
+    /// runtime ones.
     fn attNames(f: *Formatter, names: []ast.AttName) Error!void {
         for (names, 0..) |an, i| {
             if (i > 0) try f.put(", ");
@@ -607,9 +608,9 @@ const Formatter = struct {
                 .runtime => null,
             };
             if (word) |w| {
+                if (!first) try f.put(", ");
                 try f.put(w);
                 first = false;
-                break;
             }
         }
         for (attribs) |a| switch (a) {
@@ -1387,6 +1388,12 @@ test "format keeps constructs the reference loses" {
     try expectFormat("global <const> x = 1", "global <const> x = 1\n");
     try expectFormat("repeat local z = 1 until z", "repeat\n    local z = 1\nuntil z\n");
     try expectFormat("local ok = catch[h] f()", "local ok = catch[h] f()\n");
+}
+
+test "format keeps every attribute of a name" {
+    try expectFormat("local r <lazy,close> = f()", "local r <lazy, close> = f()\n");
+    try expectFormat("local r <close, lazy> = f()", "local r <close, lazy> = f()\n");
+    try expectFormat("local v <const, check(v)> = 1", "local v <const, check(v)> = 1\n");
 }
 
 test "format rejects invalid source" {
