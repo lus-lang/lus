@@ -200,6 +200,12 @@ fn close(l: *Thread) Error!u32 {
 fn stop(w: *Watcher) void {
     const s = w.shared orelse return;
     w.backend.stop(s);
+    // The backend has stopped its thread or drained its callback queue, so
+    // no callback runs any more. Taking the lock orders the last one that
+    // ran, which released it, before the free, in a way ThreadSanitizer
+    // also sees through the callbacks of the system.
+    s.lock();
+    s.unlock();
     s.deinit();
     w.shared = null;
     if (w.filter) |*f| f.g.deinit();
@@ -607,8 +613,11 @@ const FsEvents = struct {
                 any = true;
             }
         }
-        s.unlock();
+        // The wake of the scheduler stays inside the lock, so the stop of
+        // the watch, which takes the lock after the queue drains, comes
+        // after it too.
         if (any) sched.notify(s.g);
+        s.unlock();
     }
 
     fn start(b: *FsEvents, l: *Thread, s: *Shared) StartError!void {
@@ -742,8 +751,8 @@ const WinWatch = struct {
                     off += next;
                 }
             }
-            s.unlock();
             sched.notify(s.g);
+            s.unlock();
         }
     }
 

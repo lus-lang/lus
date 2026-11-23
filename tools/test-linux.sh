@@ -7,7 +7,11 @@
 # The script cross-builds the runtime for aarch64-linux and x86_64-linux,
 # copies each binary with the test trees into the VM, and runs `lus test`
 # there. The aarch64 binary runs the suite with the JIT off, with the
-# default tiers, eager, and optimizing. The x86-64 binary runs under the
+# default tiers, eager, and optimizing. A second aarch64 binary links
+# glibc dynamically, as distributions and CI build it, where the others
+# are static musl builds, and runs natively with the default tiers and the
+# optimizing tier, so a failure that only glibc shows appears here before
+# CI. The x86-64 binary runs under the
 # qemu-user that the VM registers with binfmt_misc, so the processes the
 # tests start run under it as well. It runs the default tiers and the
 # optimizing tier, or only the default tiers with --quick. --riscv64,
@@ -64,9 +68,11 @@ fi
 # A cross build takes several gigabytes, so the builds run one at a time
 # with one job each, once the machine has memory for them.
 wait_for_memory() { sh "$root/tools/wait-for-memory.sh"; }
-echo "building for aarch64-linux and x86_64-linux"
+echo "building for aarch64-linux, aarch64-linux-gnu, and x86_64-linux"
 wait_for_memory
 zig build -j1 -Doptimize=ReleaseSafe -Dtarget=aarch64-linux --prefix zig-out-linux-arm64
+wait_for_memory
+zig build -j1 -Doptimize=ReleaseSafe -Dtarget=aarch64-linux-gnu --prefix zig-out-linux-arm64-gnu
 if [ "$x64" = 1 ]; then
     wait_for_memory
     zig build -j1 -Doptimize=ReleaseSafe -Dtarget=x86_64-linux --prefix zig-out-linux-x64
@@ -99,16 +105,17 @@ run_suite() {
         echo "== $arch, LUS_JIT=$mode"
         jit="LUS_JIT=$mode"
         [ "$mode" = default ] && jit=""
-        [ "$arch" = arm64 ] || jit="$jit LUS_EMULATED=1"
+        case "$arch" in arm64*) ;; *) jit="$jit LUS_EMULATED=1" ;; esac
         # The status of `lus test` decides, and the report shows every line
         # except the files that passed.
         if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch-$checkout/runtime && env TMPDIR=\$HOME/lus-linux-$arch-$checkout/tmp $jit zig-out/bin/lus test --timeout 120 ../tests/conformance ../packages/language-server/tests > ../report.txt 2>&1; s=\$?; grep -a -v '^ok ' ../report.txt; exit \$s"; then
-            if [ "$arch" = arm64 ]; then failed=1; else emulated_failed=1; fi
+            case "$arch" in arm64*) failed=1 ;; *) emulated_failed=1 ;; esac
         fi
     done
 }
 
 run_suite arm64 off default eager opt-eager
+run_suite arm64-gnu default opt-eager
 if [ "$x64" = 1 ]; then
     if [ "$quick" = 1 ]; then run_suite x64 default; else run_suite x64 default opt-eager; fi
 fi
