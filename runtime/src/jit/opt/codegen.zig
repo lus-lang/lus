@@ -999,6 +999,11 @@ pub const Codegen = struct {
         const i = c.f.at(r);
         switch (i.op) {
             .nop, .knil, .kbool, .kint, .kflt, .kptr, .phi, .valloc => {},
+            .thread => {
+                const d = c.dst(r);
+                a.mov(d, A.thread);
+                c.done(r, d);
+            },
 
             .sload => switch (i.ty) {
                 .float => {
