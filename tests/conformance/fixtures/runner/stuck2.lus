@@ -2,5 +2,7 @@
 -- same pass of the watchdog.
 pledge("exec")
 
-os.execute("perl -e 'use POSIX; setsid(); sleep 10' &")
+-- The perl process forks and returns only once the child has its own
+-- session, so the runner never kills the child along with the file.
+os.execute("perl -e 'use POSIX; pipe(R, W) or die; if (fork) { close W; <R>; exit } close R; setsid(); close W; sleep 30'")
 while true do end

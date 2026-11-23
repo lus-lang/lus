@@ -90,6 +90,11 @@ description = "Truncate and flip every bit of seed inputs to every parser and de
 depends = ["build"]
 run = "LUS_JIT=off runtime/zig-out/bin/lus tests/corrupt/run.lus --lus runtime/zig-out/bin/lus"
 
+[tasks.syntax]
+description = "Mutate the tokens of every conformance file, example, and language server file, and run each mutant through the compiler, checker, syntax tree export, doc generator, and formatter"
+depends = ["build"]
+run = "LUS_JIT=off sh tools/with-build-lock.sh runtime/zig-out/bin/lus tests/syntax/run.lus"
+
 [tasks.faults]
 description = "Fail each step of worker messages, each network operation, and each suspension of a detached coroutine, and script jumps of the real clock"
 depends = ["build:io"]

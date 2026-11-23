@@ -1,6 +1,6 @@
 pledge("load")
 
-global print, assert, type, load, string, table, tostring, vector, setmetatable, pledge, math, error, select, io, coroutine, debug
+global print, assert, type, load, string, table, tostring, vector, setmetatable, pledge, math, error, select, io, coroutine, debug, ipairs
 
 --[[
     Tests for `<meta>` locals (spec/design/meta.md). The initializer runs
@@ -219,4 +219,23 @@ end
 local function tools_never_run_meta_test()
     local out = debug.format("local x <meta> = error('never')\n")
     assert(out:find("<meta>", 1, true))
+end
+
+-- A free name in a meta initializer is a global of the meta environment,
+-- so the global declarations of the chunk leave it alone in every tool.
+local function meta_initializers_read_the_meta_environment_in_every_tool_test()
+    local src = "global print\nlocal PI <meta> = math.pi\nlocal T <meta> = do b = { 1 } provide b end\nprint(PI, T[1])\n"
+    local f = assert(load(src))
+    local out, err = debug.format(src)
+    assert(out, err)
+    assert(out:find("math.pi", 1, true))
+    for _, d in ipairs(debug.check(src)) do
+        assert(d.code ~= "undeclared-global", d.message)
+    end
+    local undeclared = 0
+    for _, d in ipairs(debug.check("global print\nlocal x = math.pi\n")) do
+        if d.code == "undeclared-global" then undeclared = undeclared + 1 end
+    end
+    assert(undeclared == 1)
+    assert(type(f) == "function")
 end

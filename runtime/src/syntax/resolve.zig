@@ -117,6 +117,10 @@ const Resolver = struct {
     pending: std.ArrayList(*Goto) = .empty,
     /// Index in `active_labels` where the current function starts.
     func_labels: usize = 0,
+    /// How many `<meta>` initializers enclose the expression being
+    /// resolved. A free name there is a global of the meta environment,
+    /// which the declarations of the chunk do not cover.
+    meta_depth: u32 = 0,
     scope: u32 = 0,
     scopes: u32 = 0,
 
@@ -230,7 +234,7 @@ const Resolver = struct {
             .line = line,
             .write = write,
             .binding = resolved,
-            .strict = resolved == null and strict,
+            .strict = resolved == null and strict and r.meta_depth == 0,
         });
     }
 
@@ -339,7 +343,12 @@ const Resolver = struct {
             .empty, .recovered, .break_, .continue_ => {},
             .expr => |e| try r.expr(e),
             .local => |l| {
+                const meta = for (l.names) |an| {
+                    if (an.has(.meta)) break true;
+                } else false;
+                if (meta) r.meta_depth += 1;
                 try r.exprs(l.values);
+                if (meta) r.meta_depth -= 1;
                 try r.declareNames(l.names, s.line, .local);
             },
             .local_from => |l| {
