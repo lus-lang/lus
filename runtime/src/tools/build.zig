@@ -724,8 +724,8 @@ fn linkImage(io: std.Io, gpa: Allocator, path: []const u8, proof: *libproof.Proo
         };
         // iOS runs the code that a training run on macOS compiled in the
         // static form, on the same architecture and calling convention.
-        const ios_ok = o.os == .ios and host_os == .macos and aot.sectionStatic(sec);
-        if (o.os == .ios and !aot.sectionStatic(sec)) {
+        const ios_ok = o.os.iphone() and host_os == .macos and aot.sectionStatic(sec);
+        if (o.os.iphone() and !aot.sectionStatic(sec)) {
             std.debug.print("lus build: iOS runs only code compiled ahead of time in the static form (--aot-static)\n", .{});
             return null;
         }

@@ -225,7 +225,7 @@ jobs:
           done
           if [ -s "$RUNNER_TEMP/aot.log" ]; then cat "$RUNNER_TEMP/aot.log"; exit 1; fi
       - name: The linker of lus build --aot
-        timeout-minutes: 20
+        timeout-minutes: 35
         # The link objects of the runtime and of the whole lus, the whole
         # lus linked from its link object with every builtin, and the
         # conformance suite on it. Then an executable compiled ahead of
@@ -266,6 +266,21 @@ jobs:
             head -2 "$RUNNER_TEMP/static.out" | cmp - <(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil\n')
             grep -E "aot: [1-9][0-9]* functions .* [1-9][0-9]* placed" "$RUNNER_TEMP/static.out"
             LUS_JIT_NO_EXEC=1 LUS_AOT_REPORT=1 "$RUNNER_TEMP/linked" 2>&1 | grep "aot: 0 functions and 0 units installed"
+            # The same program for iOS, trained here and linked from the
+            # link object of the simulator, runs in an iOS simulator under
+            # the refusal of executable memory that an iOS device imposes.
+            cd ../../runtime
+            zig build link-object -Doptimize=ReleaseSafe -Dtarget=aarch64-ios-simulator -p "$RUNNER_TEMP/ios"
+            cd ../tests/build
+            ../../runtime/zig-out/bin/lus build --aot-static --link-object "$RUNNER_TEMP/ios/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/ios-linked"
+            codesign -v --strict "$RUNNER_TEMP/ios-linked"
+            device=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
+            xcrun simctl boot "$device"
+            xcrun simctl bootstatus "$device"
+            SIMCTL_CHILD_LUS_JIT_NO_EXEC=1 SIMCTL_CHILD_LUS_AOT_REPORT=1 xcrun simctl spawn "$device" "$RUNNER_TEMP/ios-linked" > "$RUNNER_TEMP/ios.out" 2>&1
+            cat "$RUNNER_TEMP/ios.out"
+            head -2 "$RUNNER_TEMP/ios.out" | cmp - <(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil\n')
+            grep -E "aot: [1-9][0-9]* functions .* [1-9][0-9]* placed" "$RUNNER_TEMP/ios.out"
           fi
       - name: Documentation examples
         timeout-minutes: 10

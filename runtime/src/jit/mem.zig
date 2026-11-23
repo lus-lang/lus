@@ -135,8 +135,9 @@ pub const Arena = struct {
     }
 };
 
-/// Set when the process may map no executable memory (`LUS_JIT_NO_EXEC`).
-pub var refuse_exec = false;
+/// Set when the process may map no executable memory: on an iOS device,
+/// which grants it only to the system, and under `LUS_JIT_NO_EXEC`.
+pub var refuse_exec = builtin.os.tag == .ios and builtin.abi != .simulator;
 
 fn map(size: usize) ?Span {
     if (refuse_exec) return null;

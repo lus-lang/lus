@@ -117,7 +117,7 @@ pub const Converter = struct {
     }
 
     fn macho(c: *const Converter) bool {
-        return c.os == .macos or c.os == .ios;
+        return c.os.darwin();
     }
 
     /// Adds an object file, loaded at once, or an archive, whose members

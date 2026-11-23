@@ -20,7 +20,23 @@ const Allocator = std.mem.Allocator;
 pub const magic = "LUSLINK\x02";
 
 pub const Arch = enum(u8) { x86_64, aarch64 };
-pub const Os = enum(u8) { linux, macos, ios, windows };
+pub const Os = enum(u8) {
+    linux,
+    macos,
+    ios,
+    windows,
+    ios_simulator,
+
+    /// Whether executables for the system are Mach-O files that load libSystem.
+    pub fn darwin(os: Os) bool {
+        return os == .macos or os == .ios or os == .ios_simulator;
+    }
+
+    /// Whether the system is iOS, on a device or in the simulator.
+    pub fn iphone(os: Os) bool {
+        return os == .ios or os == .ios_simulator;
+    }
+};
 
 pub const Kind = enum(u8) {
     text,
