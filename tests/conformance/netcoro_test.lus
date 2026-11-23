@@ -33,12 +33,12 @@ local function denied(err)
 end
 
 local function listen()
-    local ok, server = catch network.tcp.bind("127.0.0.1", 0)
-    if not ok then
-        if denied(server) then
+    local server, err = network.tcp.bind("127.0.0.1", 0)
+    if not server then
+        if denied(err) then
             skip("loopback sockets unavailable")
         end
-        error(server, 0)
+        error(err, 0)
     end
     local _, port = server:getsockname()
     return server, port
@@ -357,8 +357,8 @@ local function a_coroutine_suspends_again_after_a_wait_inside_a_native_call_test
             if first then
                 first = false
                 peer:settimeout(0.02)
-                local ok, err = catch peer:receive(1)
-                assert(not ok and string.find(err, "receive timeout", 1, true))
+                local got, err = peer:receive(1)
+                assert(got == nil and err.code == "timeout")
             end
             return a < b
         end)
@@ -403,12 +403,12 @@ local function receive_timeout_in_a_detached_coroutine_test()
     local co = spawn(function()
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(0.05)
-        local ok, err = catch sock:receive(10)
-        return ok, err
+        local got, err = sock:receive(10)
+        return got, err
     end)
     local r = pack(resume(co))
-    assert(r.n == 3 and r[1] == true and r[2] == false)
-    assert(string.find(r[3], "netcoro_test.lus:%d+: receive timeout$"), r[3])
+    assert(r.n == 3 and r[1] == true and r[2] == nil)
+    assert(r[3].code == "timeout" and tostring(r[3]) == "receive timeout", tostring(r[3]))
     stop()
 end
 
@@ -422,8 +422,8 @@ local function a_coroutine_goes_on_after_a_timeout_test()
     local co = spawn(function()
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(0.03)
-        local ok, err = catch sock:receive("*l")
-        assert(not ok and string.find(err, "receive timeout", 1, true))
+        local got, err = sock:receive("*l")
+        assert(got == nil and err.code == "timeout")
         sock:settimeout(10)
         sock:send("answer\n")
         return txt(sock:receive("*l"))
@@ -438,11 +438,11 @@ local function accept_timeout_in_a_detached_coroutine_test()
     local server = listen()
     server:settimeout(0.05)
     local co = spawn(function()
-        return catch server:accept()
+        return server:accept()
     end)
     local r = pack(resume(co))
-    assert(r.n == 3 and r[1] == true and r[2] == false)
-    assert(string.find(r[3], "accept timeout$"), r[3])
+    assert(r.n == 3 and r[1] == true and r[2] == nil)
+    assert(r[3].code == "timeout" and string.find(tostring(r[3]), "accept timeout$"), tostring(r[3]))
     server:close()
 end
 
@@ -457,8 +457,8 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
     -- has it too for a while. It goes on after a timeout of its own.
     local greedy = spawn(function()
         while true do
-            local ok, sock = catch server:accept()
-            if ok then
+            local sock = server:accept()
+            if sock then
                 taken = taken + 1
                 sock:close()
             end
@@ -470,10 +470,10 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
         yield()
         server:settimeout(0.1)
         waiting = true
-        local ok, result = catch server:accept()
+        local sock, err = server:accept()
         server:settimeout(-1)
         order[#order + 1] = "patient"
-        return ok, result
+        return sock, err
     end)
     local dialer = spawn(function()
         local idle = listen()
@@ -485,7 +485,7 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
         -- A connection arrives every 20 ms for longer than the timeout.
         for i = 1, 30 do
             network.tcp.connect("127.0.0.1", port):close()
-            catch idle:accept()
+            idle:accept()
         end
         idle:close()
         order[#order + 1] = "dialer"
@@ -496,14 +496,14 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
     server:close()
     -- The acceptor with the timeout ends while connections still arrive.
     assert(dialed and table.concat(order, " ") == "patient dialer", table.concat(order, " "))
-    assert(r.n == 3 and r[1] == true)
+    assert(r[1] == true)
     if r[2] then
         -- Its deadline passed in the same moment in which a connection
         -- arrived, and a connection that is there is accepted.
-        r[3]:close()
+        r[2]:close()
         taken = taken + 1
     else
-        assert(string.find(r[3], "accept timeout$"), tostring(r[3]))
+        assert(string.find(tostring(r[3]), "accept timeout$"), tostring(r[3]))
     end
     assert(taken == 30, tostring(taken))
 end
@@ -513,10 +513,10 @@ local function a_zero_timeout_never_waits_test()
     local co = spawn(function()
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(0)
-        return catch sock:receive(1)
+        return sock:receive(1)
     end)
     local r = pack(resume(co))
-    assert(r.n == 3 and r[1] == true and r[2] == false and string.find(r[3], "receive timeout$"), tostring(r[3]))
+    assert(r.n == 3 and r[1] == true and r[2] == nil and r[3].code == "timeout", tostring(r[3]))
     stop()
 end
 
@@ -526,8 +526,8 @@ local function timeouts_fire_in_the_order_of_their_deadlines_test()
     local function waiter(name, seconds)
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(seconds)
-        local ok, err = catch sock:receive(1)
-        assert(not ok and string.find(err, "receive timeout", 1, true))
+        local got, err = sock:receive(1)
+        assert(got == nil and err.code == "timeout")
         log[#log + 1] = name
     end
     local a = spawn(waiter, "slow", 0.23)
@@ -551,9 +551,8 @@ local function receive_timeout_in_the_main_chunk_test()
     end)
     local sock <close> = network.tcp.connect("127.0.0.1", port)
     sock:settimeout(0.05)
-    local err = raises(function()
-        sock:receive(1)
-    end, "receive timeout$")
+    local got, err = sock:receive(1)
+    assert(got == nil and err.code == "timeout", tostring(err))
     -- The scheduler ran while the main chunk waited for its deadline.
     assert(ticks > 0)
     assert(close(ticker))
@@ -742,11 +741,11 @@ local function connect_reports_a_refused_connection_test()
         yield()
     end)
     local co = spawn(function()
-        return catch network.tcp.connect("127.0.0.1", port)
+        return network.tcp.connect("127.0.0.1", port)
     end)
     local r = pack(resume(co))
-    assert(r.n == 3 and r[1] == true and r[2] == false)
-    assert(string.find(r[3], "cannot connect to 127.0.0.1:" .. port, 1, true), r[3])
+    assert(r.n == 3 and r[1] == true and r[2] == nil and r[3].code == "refused")
+    assert(string.find(tostring(r[3]), "cannot connect to 127.0.0.1:" .. port, 1, true), tostring(r[3]))
     assert(resume(keep))
 end
 
@@ -773,8 +772,9 @@ end
 -- ===== UDP =====
 
 local function udp_open()
-    local ok, sock = catch network.udp.open(0, "127.0.0.1")
-    if not ok then
+    local sock, err = network.udp.open(0, "127.0.0.1")
+    if not sock then
+        sock = err
         if denied(sock) then
             skip("loopback sockets unavailable")
         end
@@ -812,10 +812,10 @@ local function udp_receive_timeout_in_a_detached_coroutine_test()
     local sock = udp_open()
     sock:settimeout(0.05)
     local co = spawn(function()
-        return catch sock:receive()
+        return sock:receive()
     end)
     local r = pack(resume(co))
-    assert(r.n == 3 and r[1] == true and r[2] == false and string.find(r[3], "receive timeout$"), tostring(r[3]))
+    assert(r[1] == true and r[2] == nil and r[3].code == "timeout", tostring(r[3]))
     sock:close()
 end
 
@@ -840,7 +840,7 @@ local function fetch_reads_a_body_that_ends_with_the_connection_while_coroutines
     local idle, idle_port = listen()
     -- A coroutine that waits keeps the scheduler running during the fetch.
     local waiting = spawn(function()
-        return catch idle:accept()
+        return idle:accept()
     end)
     local peer = closing_peer(server, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nthe whole body")
     local status, body = network.fetch("http://127.0.0.1:" .. port .. "/")
@@ -859,7 +859,36 @@ local function an_https_fetch_from_a_plain_http_peer_raises_test()
         sock:send("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
     end)
     local ok, err = catch network.fetch("https://127.0.0.1:" .. port .. "/")
-    assert(not ok and string.find(tostring(err), "SSL handshake failed: ", 1, true), tostring(err))
+    assert(not ok and string.find(tostring(err), "TLS handshake failed: ", 1, true), tostring(err))
     resume(peer)
     server:close()
 end
+
+local function a_failing_detached_coroutine_closes_its_socket_at_once_test()
+    local server, port = listen()
+    local held
+    local seen
+    local co = spawn(function()
+        local sock <close> = connect(port)
+        local mark <close> = setmetatable({}, { __close = function(_, err)
+            seen = err
+        end })
+        held = sock
+        yield()
+        error("failed", 0)
+    end)
+    -- Another coroutine runs until the first one has failed.
+    local watcher = spawn(function()
+        while status(co) ~= "dead" do
+            yield()
+        end
+    end)
+    assert(resume(watcher))
+    assert(seen == "failed", tostring(seen))
+    local ok, err = catch held:send("x")
+    assert(not ok and string.find(tostring(err), "attempt to use a closed socket", 1, true), tostring(err))
+    local r = pack(resume(co))
+    assert(r[1] == false and r[2] == "failed", tostring(r[2]))
+    server:close()
+end
+

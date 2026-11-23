@@ -23,7 +23,7 @@ Searches `s` for the first match of `pattern` and returns the character position
 
 `s` is the string to search, and `pattern` is a [pattern](/manual/guide#strings-and-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`. When `plain` is true, `pattern` is a literal substring with no special characters. `plain` defaults to false, and passing it requires an `init`, which may be `nil`.
 
-On a match, the first two results are the positions of the first and the last character of the match. The captures of the pattern follow, and a position capture `()` yields an integer. Without a match, the result is a single `nil`.
+On a match, the first two results are the positions of the first and the last character of the match. The captures of the pattern follow, and a position capture `()` yields an integer. A pattern holds at most 32 captures, and one more raises `too many captures`, in every function that takes a pattern. Without a match, the result is a single `nil`.
 
 A malformed pattern raises an error that names the problem, such as `malformed pattern (missing ']')` or `malformed pattern (ends with '%')`.
 

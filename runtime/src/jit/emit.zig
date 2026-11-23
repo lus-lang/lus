@@ -599,6 +599,24 @@ pub const Emitter = struct {
                 e.step(pc, true);
                 a.bind(done);
             },
+            .getctx, .setctx => {
+                // A read, and a write to an array the coroutine owns, run
+                // without the step routine (`spec/design/context.md`).
+                const done = a.newLabel();
+                a.mov(A.args[0], A.thread);
+                if (o == .getctx) {
+                    a.lea(A.args[1], slot(ra));
+                    a.lea(A.args[2], slot(rb));
+                    a.call(@intFromPtr(&helpers.ctxGet));
+                } else {
+                    a.lea(A.args[1], slot(ra));
+                    a.lea(A.args[2], slot(rb));
+                    a.call(@intFromPtr(&helpers.ctxSet));
+                }
+                a.jumpIfImm(.ne, A.ret0, 0, done);
+                e.step(pc, true);
+                a.bind(done);
+            },
             .tforcall => {
                 // `next` and `ipairs` over plain tables step without a
                 // native frame. Anything else takes the step routine.

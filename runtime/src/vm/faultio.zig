@@ -27,7 +27,10 @@
 //! the stream at receive N as a peer that closes does, `N:dns` fails name
 //! lookup N, `N:refuse` refuses connection attempt N, and `N:abort` aborts
 //! the connection that accept N takes, as a peer that gives up before the
-//! accept does. Each kind counts its own steps. `LUS_FAIL_NET=count`
+//! accept does. `N:tls` flips one bit in the middle of chunk N of the bytes
+//! that TLS reads from its socket, a damaged record that the TLS layer
+//! must reject, in the handshake or after it. Each kind counts its own
+//! steps. `LUS_FAIL_NET=count`
 //! prints the count of each kind and the sockets still open at exit
 //! (`main.zig`), which a run with any `LUS_FAIL_NET` prints too.
 //! `tests/faults/network.lus` sweeps N.
@@ -206,13 +209,13 @@ pub fn setupCancel(spec: []const u8) void {
 }
 
 /// The network faults of `LUS_FAIL_NET`, and the steps each one counts.
-pub const NetKind = enum { reset, eof, dns, refuse, abort };
-pub const NetStep = enum { transfer, receive, lookup, connect, accept };
+pub const NetKind = enum { reset, eof, dns, refuse, abort, tls };
+pub const NetStep = enum { transfer, receive, lookup, connect, accept, tls_receive };
 
 pub var net_kind: ?NetKind = null;
 pub var net_target: usize = 0;
 pub var net_report = false;
-pub var net_counts: [5]std.atomic.Value(usize) = @splat(.init(0));
+pub var net_counts: [6]std.atomic.Value(usize) = @splat(.init(0));
 
 fn stepOf(k: NetKind) NetStep {
     return switch (k) {
@@ -221,6 +224,7 @@ fn stepOf(k: NetKind) NetStep {
         .dns => .lookup,
         .refuse => .connect,
         .abort => .accept,
+        .tls => .tls_receive,
     };
 }
 
@@ -272,8 +276,8 @@ pub fn socketsOpen() ?usize {
 pub fn reportNet() void {
     if (!enabled or !net_report) return;
     const c = &net_counts;
-    std.debug.print("lus: network steps: {d} transfers, {d} receives, {d} lookups, {d} connects, {d} accepts\n", .{
-        c[0].load(.monotonic), c[1].load(.monotonic), c[2].load(.monotonic), c[3].load(.monotonic), c[4].load(.monotonic),
+    std.debug.print("lus: network steps: {d} transfers, {d} receives, {d} lookups, {d} connects, {d} accepts, {d} tlsreceives\n", .{
+        c[0].load(.monotonic), c[1].load(.monotonic), c[2].load(.monotonic), c[3].load(.monotonic), c[4].load(.monotonic), c[5].load(.monotonic),
     });
     if (socketsOpen()) |n| std.debug.print("lus: {d} sockets open at exit\n", .{n});
 }

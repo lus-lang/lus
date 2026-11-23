@@ -30,6 +30,16 @@ const Ast = std.zig.Ast;
 /// record coverage themselves.
 const skip = [_][]const u8{ "main.zig", "capi.zig", "wasm.zig", "coverage.zig", "mcdc_rt.zig" };
 
+/// Functions that only the invariant checks of `inv.assert` call. The
+/// shipped build leaves the checks out, so their decisions stay out of
+/// the measure, as SQLite leaves `assert` out of its own.
+const checkers = [_][]const u8{ "textMatches", "internedOk", "wellFormed", "pageOk", "layoutOk", "arrayOk", "bytesOk" };
+
+/// The calls whose argument is an invariant. An argument of `inv.assert`
+/// is always true and runs only in a checking build. An argument of
+/// `inv.always` or `inv.never` has one value in every run.
+const invariant_calls = [_][]const u8{ "inv.assert", "inv.always", "inv.never" };
+
 /// More conditions than a vector of 64 bits holds at two bits each.
 const max_conditions = 31;
 
@@ -148,6 +158,8 @@ fn transformFile(
     // blocks and expressions, where it runs while compiling.
     var bodies: std.ArrayList(Span) = .empty;
     var comptimes: std.ArrayList(Span) = .empty;
+    // Invariant checks, which the measure leaves out.
+    var invariants: std.ArrayList(Span) = .empty;
     // Nodes that are a direct operand of `and` or `or`, which belong to
     // the decision above them.
     var operand: std.AutoHashMapUnmanaged(Ast.Node.Index, void) = .empty;
@@ -156,8 +168,22 @@ fn transformFile(
         const n: Ast.Node.Index = @fromBackingInt(@intCast(i));
         switch (tree.nodeTag(n)) {
             .fn_decl => {
-                _, const body = tree.nodeData(n).node_and_node;
+                const proto, const body = tree.nodeData(n).node_and_node;
                 try bodies.append(arena, span(&tree, body));
+                var buf: [1]Ast.Node.Index = undefined;
+                if (tree.fullFnProto(&buf, proto)) |fp| if (fp.name_token) |nt| {
+                    for (checkers) |name| {
+                        if (std.mem.eql(u8, tree.tokenSlice(nt), name)) try invariants.append(arena, span(&tree, body));
+                    }
+                };
+            },
+            .call_one, .call_one_comma, .call, .call_comma => {
+                var buf: [1]Ast.Node.Index = undefined;
+                const call = tree.fullCall(&buf, n).?;
+                const callee = span(&tree, call.ast.fn_expr);
+                for (invariant_calls) |name| {
+                    if (std.mem.eql(u8, source[callee.start..callee.end], name)) try invariants.append(arena, span(&tree, n));
+                }
             },
             .@"comptime" => try comptimes.append(arena, span(&tree, n)),
             .bool_and, .bool_or => {
@@ -175,6 +201,7 @@ fn transformFile(
         const s = span(&tree, n);
         if (!inside(s, bodies.items)) continue;
         if (inside(s, comptimes.items)) continue;
+        if (inside(s, invariants.items)) continue;
         var leaves: std.ArrayList(Span) = .empty;
         try collectLeaves(&tree, arena, n, &leaves);
         if (leaves.items.len > max_conditions) continue;

@@ -1,0 +1,186 @@
+-- `coroutine.sleep`: a coroutine whose resume waits for a time to pass
+-- (spec/stdlib/coroutine/sleep.md).
+pledge("fs", "exec", "env")
+
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+
+local function elapsed(f)
+    local start = time.monotonic()
+    f()
+    return (time.monotonic() - start):seconds()
+end
+
+local function a_resume_waits_for_the_time_test()
+    local t = elapsed(function()
+        assert(coroutine.resume(coroutine.sleep(0.1)) == true)
+    end)
+    assert(t >= 0.1 and t < 2, t)
+end
+
+local function the_time_runs_from_the_first_resume_test()
+    local s = coroutine.sleep(0.1)
+    coroutine.resume(coroutine.sleep(0.15))
+    local t = elapsed(function()
+        coroutine.resume(s)
+    end)
+    assert(t >= 0.1, t)
+end
+
+local function a_duration_is_accepted_test()
+    local t = elapsed(function()
+        coroutine.resume(coroutine.sleep(time.millis(60)))
+    end)
+    assert(t >= 0.06, t)
+end
+
+local function a_finished_sleep_is_dead_test()
+    local s = coroutine.sleep(0)
+    local ok, extra = coroutine.resume(s)
+    assert(ok and extra == nil)
+    assert(coroutine.status(s) == "dead")
+    local again, err = coroutine.resume(s)
+    assert(not again and err == "cannot resume dead coroutine")
+end
+
+local function detached_sleeps_run_side_by_side_test()
+    local order = {}
+    local slow = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.15))
+        order[#order + 1] = "slow"
+    end))
+    local fast = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        order[#order + 1] = "fast"
+    end))
+    local t = elapsed(function()
+        coroutine.resume(slow)
+        coroutine.resume(fast)
+    end)
+    assert(table.concat(order, " ") == "fast slow")
+    assert(t < 0.3, t)
+end
+
+local function closing_a_waiter_ends_the_sleep_test()
+    local sleeper = coroutine.sleep(30)
+    local task = coroutine.detach(coroutine.create(function()
+        coroutine.resume(sleeper)
+    end))
+    coroutine.resume(coroutine.sleep(0.02))
+    local t = elapsed(function()
+        coroutine.close(task)
+    end)
+    assert(coroutine.status(sleeper) == "dead")
+    assert(t < 1)
+end
+
+local function closing_a_sleep_ends_it_test()
+    local s = coroutine.sleep(30)
+    assert(coroutine.close(s))
+    assert(coroutine.status(s) == "dead")
+end
+
+-- An endless sleep parks a coroutine until another one closes the sleep.
+local function closing_an_endless_sleep_wakes_its_waiter_test()
+    local gate = coroutine.sleep(math.huge)
+    local result
+    local parked = coroutine.detach(coroutine.create(function()
+        result = table.pack(coroutine.resume(gate))
+    end))
+    local waker = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        coroutine.close(gate)
+    end))
+    local t = elapsed(function()
+        coroutine.resume(parked)
+    end)
+    assert(result[1] == false and result[2] == "closed")
+    assert(t < 1, t)
+    coroutine.resume(waker)
+end
+
+local function a_timed_sleep_closed_early_reports_closed_test()
+    local s = coroutine.sleep(30)
+    local result
+    local waiter = coroutine.detach(coroutine.create(function()
+        result = table.pack(coroutine.resume(s))
+    end))
+    coroutine.resume(coroutine.sleep(0.02))
+    coroutine.close(s)
+    coroutine.resume(waiter)
+    assert(result[1] == false and result[2] == "closed")
+end
+
+local function the_program_ends_while_a_coroutine_is_parked_test()
+    local p = os.spawn({ lus_bin, "-e", [[
+        local gate = coroutine.sleep(math.huge)
+        coroutine.detach(coroutine.create(function() coroutine.resume(gate) end))
+        print("done")
+    ]] }, { stdout = "pipe" })
+    assert(p.stdout:read("l") == "done")
+    local _, ok, how, code = coroutine.resume(p.exit)
+    assert(ok == true and code == 0)
+end
+
+-- The waiter may be the main chunk or a plain coroutine, which block in
+-- the resume while the other coroutines run.
+local function closing_wakes_a_waiter_in_the_main_chunk_test()
+    local gate = coroutine.sleep(math.huge)
+    local closed_ok
+    local waker = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        closed_ok = coroutine.close(gate)
+    end))
+    local t = elapsed(function()
+        local ok, why = coroutine.resume(gate)
+        assert(ok == false and why == "closed", tostring(why))
+    end)
+    assert(closed_ok == true)
+    assert(coroutine.status(gate) == "dead")
+    assert(t < 1, t)
+    coroutine.resume(waker)
+end
+
+local function closing_wakes_a_waiter_in_a_plain_coroutine_test()
+    local gate = coroutine.sleep(30)
+    local waker = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        coroutine.close(gate)
+    end))
+    local waiter = coroutine.create(function()
+        return coroutine.resume(gate)
+    end)
+    local t = elapsed(function()
+        local _, ok, why = coroutine.resume(waiter)
+        assert(ok == false and why == "closed", tostring(why))
+    end)
+    assert(t < 1, t)
+    coroutine.resume(waker)
+end
+
+local function closing_a_signal_wait_of_the_main_chunk_test()
+    if package.config:sub(1, 1) == "\\" then skip("signals are POSIX") end
+    local sig = os.signal("hangup")
+    local waker = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(0.05))
+        coroutine.close(sig)
+    end))
+    local ok, why = coroutine.resume(sig)
+    assert(ok == false and why == "closed", tostring(why))
+    coroutine.resume(waker)
+end
+
+local function a_parked_main_chunk_ends_with_a_deadlock_error_test()
+    local p = os.spawn({ lus_bin, "-e", [[
+        print(catch coroutine.resume(coroutine.sleep(math.huge)))
+    ]] }, { stdout = "pipe", stderr = "stdout" })
+    local text = p.stdout:read("a")
+    assert(text:find("deadlock", 1, true), text)
+    coroutine.resume(p.exit)
+end
+
+local function bad_times_raise_test()
+    assert(not catch coroutine.sleep())
+    assert(not catch coroutine.sleep("1"))
+    assert(not catch coroutine.sleep(-1))
+    assert(not catch coroutine.sleep(0 / 0))
+end

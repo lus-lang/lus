@@ -647,6 +647,18 @@ local function generate(seed, size)
         end
     end
 
+    -- A `<context>` local, which later statements read and assign like
+    -- any int, and a coroutine that assigns its own value. Every
+    -- configuration must print the same values on both sides.
+    function G.context(scope)
+        local name = fresh("cx")
+        emit("local " .. name .. " <context> = " .. expr(scope, "int"))
+        local co = fresh("cxco")
+        emit("local " .. co .. " = coroutine.wrap(function() " .. name .. " = " .. name .. " + " .. literal("int") .. " coroutine.yield(" .. name .. ") return " .. name .. " end)")
+        emit("P(\"cx\", " .. co .. "(), " .. name .. ", " .. co .. "(), " .. name .. ")")
+        push(scope, name, "int")
+    end
+
     function G.flagif(scope)
         local tag = fresh("fl")
         emit("if " .. flagCond(scope, 0) .. " then P(\"" .. tag .. "\", 1)")
@@ -1167,7 +1179,7 @@ local function generate(seed, size)
                 { 3, "kernel" }, { 2, "shape" }, { 1, "poly" }, { 1, "edgecmp" }, { 1, "edgefor" }, { 1, "coerce" },
                 { 1, "method" }, { 1, "keys" }, { 1, "deep" }, { 1, "concatn" }, { 1, "chain" }, { 1, "detach" },
                 { 2, "upvals" }, { 2, "globals" }, { 1, "tail" }, { 2, "multiret" }, { 1, "metaflip" }, { 2, "hotcall" },
-                { 2, "yieldacross" }, { 1, "flagif" }, { 1, "forfrom" }, { 1, "meta" }, { 2, "lazy" }, { 2, "observe" },
+                { 2, "yieldacross" }, { 1, "flagif" }, { 1, "forfrom" }, { 1, "meta" }, { 2, "lazy" }, { 2, "observe" }, { 2, "context" },
             }) do add(k[1], k[2]) end
             if ctx.coro then add(2, "yield") end
         end

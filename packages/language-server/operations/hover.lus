@@ -144,6 +144,8 @@ local function describe(decl, uri)
       attr = " <" .. decl.node.attr .. ">"
     elseif decl.node and decl.node.lazy then
       attr = " <lazy>"
+    elseif decl.node and decl.node.context then
+      attr = " <context>"
     end
     -- If the variable holds a function type, show function-style signature
     if decl.type_info and decl.type_info.tag == "function" then

@@ -1,7 +1,8 @@
-//! The `network` library: TCP client and server sockets, UDP sockets,
-//! `network.fetch`, an HTTP and HTTPS client, and `network.serve`, an HTTP
-//! server (`serve.zig`). Sockets are userdata. Every operation blocks its
-//! caller, optionally bounded by a timeout set with `settimeout`.
+//! The `network` library: TCP client and server sockets, TLS over them
+//! (`tls.zig`), UDP sockets, `network.fetch`, an HTTP and HTTPS client
+//! (`http.zig`), and `network.serve`, an HTTP server (`serve.zig`).
+//! Sockets are userdata. Every operation blocks its caller, optionally
+//! bounded by a timeout set with `settimeout`.
 //!
 //! TCP connect, accept, send, and receive and UDP receive and sendto are
 //! suspension points (`spec/design/coroutines.md`). Inside a detached
@@ -16,10 +17,9 @@
 //! Data received from the network are vectors, and every send accepts a
 //! string or a vector (spec/design/strings.md).
 //!
-//! Host names resolve through `std.Io.net.HostName.lookup`. HTTPS uses
-//! `std.crypto.tls.Client` and verifies the server against the system
-//! certificate bundle. The standard library has no TLS server, so there is
-//! no server side TLS.
+//! Host names resolve through `std.Io.net.HostName.lookup`. A TLS socket
+//! is a socket whose `tls` field holds a connection of `tls.zig`, and its
+//! receives and sends carry plain text through it.
 //!
 //! On Windows an operation asks `WSAPoll` whether the socket is ready
 //! before it runs its blocking call, and it blocks in that call when the
@@ -41,6 +41,8 @@ const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
 const coroutine = @import("coroutine.zig");
+pub const tls = @import("tls.zig");
+const http = @import("http.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -87,6 +89,19 @@ pub const Socket = struct {
     owner: ?*Server = null,
     /// Set once a read found the end of the connection.
     eof: bool = false,
+    /// Set when the server closed the connection at the end of its drain
+    /// time, so the natives of the server end its exchange quietly.
+    drained: bool = false,
+    /// The other open connections of the same server.
+    conn_prev: ?*Socket = null,
+    conn_next: ?*Socket = null,
+    /// The TLS connection over this socket (`tls.zig`). Every receive and
+    /// send then carries plain text through it.
+    tls: ?*tls.Tls = null,
+    /// The body that the connection carries now, and the state of a
+    /// `network.fetch` on it (`http.zig`).
+    body: ?*http.Body = null,
+    fetch: ?*http.Fetch = null,
 };
 
 /// A listening TCP socket.
@@ -104,7 +119,42 @@ pub const Server = struct {
     /// True while it waits for a connection to close before it accepts
     /// the next one.
     full: bool = false,
+    /// The open connections, linked through `conn_next`.
+    conns: ?*Socket = null,
+    /// Whether `network.serve` bound the server itself.
+    serve_owned: bool = false,
+    /// How long the connections may take to finish once the coroutine of
+    /// `serve` closed, in milliseconds, or -1 without a limit.
+    drain_ms: i32 = 10_000,
+    /// Set once the coroutine of `serve` closed. The connections finish
+    /// the request in progress and close.
+    draining: bool = false,
+    /// The time on the clock of the scheduler at which the connections
+    /// that are still open close, when `drain_ms` is not -1.
+    drain_deadline: u64 = 0,
+    /// The value of this server, which `network.serve` records so that
+    /// the coroutine that ends a drain can hold the server.
+    self_value: @import("../vm/value.zig").Value = .nil,
+    /// The TLS configuration that every connection it accepts starts
+    /// TLS under, for `network.serve` with the `tls` option.
+    tls_config: ?*tls.Config = null,
 };
+
+/// Adds the connection `c` to the list of its server.
+pub fn linkConnection(s: *Server, c: *Socket) void {
+    c.owner = s;
+    c.conn_prev = null;
+    c.conn_next = s.conns;
+    if (s.conns) |n| n.conn_prev = c;
+    s.conns = c;
+}
+
+fn unlinkConnection(s: *Server, c: *Socket) void {
+    if (c.conn_prev) |p| p.conn_next = c.conn_next else s.conns = c.conn_next;
+    if (c.conn_next) |n| n.conn_prev = c.conn_prev;
+    c.conn_prev = null;
+    c.conn_next = null;
+}
 
 /// A UDP socket. An unbound socket holds a placeholder bound to an
 /// ephemeral port on all interfaces, which `setsockname` replaces.
@@ -117,41 +167,51 @@ const Udp = struct {
 
 pub fn open(l: *Thread) Error!void {
     try makeMetatable(l, socket_name, &.{
-        .{ .name = "send", .func = socketSend },
-        .{ .name = "receive", .func = socketReceive },
+        .{ .name = "send", .func = op(socketSend) },
+        .{ .name = "receive", .func = op(socketReceive) },
         .{ .name = "close", .func = socketClose },
         .{ .name = "settimeout", .func = socketSettimeout },
         .{ .name = "getsockname", .func = socketGetsockname },
         .{ .name = "getpeername", .func = socketGetpeername },
+        .{ .name = "starttls", .func = op(socketStarttls) },
+        .{ .name = "tlsinfo", .func = socketTlsinfo },
+        .{ .name = "reader", .func = http.socketReader },
     }, socketGc, socketTostring);
     try portIndex(l);
     try makeMetatable(l, server_name, &.{
-        .{ .name = "accept", .func = serverAccept },
+        .{ .name = "accept", .func = op(serverAccept) },
         .{ .name = "close", .func = serverClose },
         .{ .name = "settimeout", .func = serverSettimeout },
         .{ .name = "getsockname", .func = serverGetsockname },
     }, serverGc, serverTostring);
     try makeMetatable(l, udp_name, &.{
-        .{ .name = "sendto", .func = udpSendto },
-        .{ .name = "receive", .func = udpReceive },
-        .{ .name = "setsockname", .func = udpSetsockname },
+        .{ .name = "sendto", .func = op(udpSendto) },
+        .{ .name = "receive", .func = op(udpReceive) },
+        .{ .name = "setsockname", .func = op(udpSetsockname) },
         .{ .name = "getsockname", .func = udpGetsockname },
         .{ .name = "close", .func = udpClose },
         .{ .name = "settimeout", .func = udpSettimeout },
     }, udpGc, udpTostring);
+    try makeMetatable(l, http.reader_name, &.{}, http.readerGc, http.readerTostring);
+    try http.registerLines(l);
 
     const t = try aux.newLib(l, .fields, "network", &.{
-        .{ .name = "fetch", .func = fetch },
+        .{ .name = "fetch", .func = http.fetch },
         .{ .name = "serve", .func = @import("serve.zig").serve },
+        .{ .name = "lines", .func = http.lines },
     });
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
     const tcp = try aux.newLib(l, .fields, "network.tcp", &.{
-        .{ .name = "connect", .func = tcpConnect },
-        .{ .name = "bind", .func = tcpBind },
+        .{ .name = "connect", .func = op(tcpConnect) },
+        .{ .name = "bind", .func = op(tcpBind) },
     });
     try aux.setField(l, t, "tcp", Value.obj(.table, tcp));
-    const udp = try aux.newLib(l, .fields, "network.udp", &.{.{ .name = "open", .func = udpOpen }});
+    const tls_lib = try aux.newLib(l, .fields, "network.tls", &.{
+        .{ .name = "connect", .func = op(tlsConnect) },
+    });
+    try aux.setField(l, t, "tls", Value.obj(.table, tls_lib));
+    const udp = try aux.newLib(l, .fields, "network.udp", &.{.{ .name = "open", .func = op(udpOpen) }});
     try aux.setField(l, t, "udp", Value.obj(.table, udp));
     try aux.setGlobal(l, "network", Value.obj(.table, t));
 }
@@ -254,6 +314,8 @@ fn checkData(l: *Thread, i: u32) Error![]const u8 {
 }
 
 fn timeoutArg(l: *Thread, i: u32) Error!i32 {
+    // nil, like a negative number, waits without limit.
+    if (!l.hasArg(i) or l.arg(i).isNil()) return -1;
     const secs = try aux.checkFloat(l, i);
     if (std.math.isNan(secs) or secs < 0) return -1;
     if (secs == 0) return 0;
@@ -296,15 +358,98 @@ pub fn errText(err: anyerror) []const u8 {
         error.InvalidHostName, error.NameTooLong => "Invalid host name",
         error.NameServerFailure => "Name server failure",
         error.Canceled => "Operation canceled",
+        error.TlsFailure => tls.lastMessage(),
         else => @errorName(err),
     };
 }
 
-/// Returns `nil, "prefix: message"`, the result of a failed socket call.
-fn failResult(l: *Thread, prefix: []const u8, err: anyerror) Error!u32 {
-    var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "{s}: {s}", .{ prefix, errText(err) }) catch prefix;
-    return aux.retFail(l, msg);
+// ---------------------------------------------------------------------
+// Errors of operations
+
+/// The `code` of an error object for the error a socket call failed with.
+pub fn errCode(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ConnectionRefused => "refused",
+        error.ConnectionResetByPeer, error.ConnectionAborted => "reset",
+        error.BrokenPipe, error.SocketUnconnected => "closed",
+        error.NetworkUnreachable, error.HostUnreachable, error.NetworkDown => "unreachable",
+        error.Timeout, error.ConnectionTimedOut => "timeout",
+        error.UnknownHostName, error.NoAddressReturned, error.InvalidHostName, error.NameTooLong, error.NameServerFailure => "resolve",
+        error.AccessDenied, error.BlockedByFirewall => "denied",
+        error.AddressInUse, error.AddressUnavailable => "address",
+        error.TlsFailure => tls.lastCode(),
+        else => "io",
+    };
+}
+
+pub const error_name = "network.error";
+
+fn errorTostring(l: *Thread) Error!u32 {
+    if (l.arg(1).tag != .table) return aux.retStr(l, "network error");
+    return aux.ret(l, try aux.getField(l, l.arg(1).as(Table), "message"));
+}
+
+/// Raises the error object of a failed operation: a table with `code`,
+/// `message`, and `status` when `status` is not zero, whose `__tostring`
+/// gives the message. A socket method that `op` wraps returns it after
+/// `nil`, and every other caller sees it raised.
+pub fn raiseFail(l: *Thread, code: []const u8, status: u16, comptime fmt: []const u8, args: anytype) Error {
+    var buf: [400]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch &buf;
+    const g = l.g;
+    const mt: *Table = blk: {
+        if (g.ext.get(error_name)) |p| break :blk @ptrCast(@alignCast(p));
+        const t = try l.newTable(0, 2);
+        try l.push(Value.obj(.table, t));
+        defer l.top -= 1;
+        try aux.setField(l, t, "__tostring", try aux.native(l, errorTostring, "tostring"));
+        try aux.setField(l, t, "__name", try l.newStringValue(error_name));
+        try aux.setField(l, g.registry.as(Table), error_name, Value.obj(.table, t));
+        g.ext.put(g.gpa, error_name, t) catch return l.raiseMem();
+        break :blk t;
+    };
+    const e = try l.newTable(0, 3);
+    try l.push(Value.obj(.table, e));
+    defer l.top -= 1;
+    try aux.setField(l, e, "code", try l.newStringValue(code));
+    try aux.setField(l, e, "message", try l.newStringValue(msg));
+    if (status != 0) try aux.setField(l, e, "status", Value.int(status));
+    e.metatable = mt;
+    gc.barrierBack(g, &e.hdr);
+    return l.raise(Value.obj(.table, e));
+}
+
+/// Whether `v` is the error object of a failed operation.
+pub fn isFailure(l: *Thread, v: Value) bool {
+    if (v.tag != .table) return false;
+    const mt = v.as(Table).metatable orelse return false;
+    const p = l.g.ext.get(error_name) orelse return false;
+    return mt == @as(*Table, @ptrCast(@alignCast(p)));
+}
+
+/// Wraps a socket method so that a failed operation returns `nil` and its
+/// error object, as file operations return theirs. Misuse, such as a bad
+/// argument or a socket that the program closed, still raises.
+pub fn op(comptime f: state.NativeFn) state.NativeFn {
+    return struct {
+        fn call(l: *Thread) Error!u32 {
+            return f(l) catch |e| {
+                if (e == error.LusError and !l.yielding and isFailure(l, l.err)) {
+                    const err = l.err;
+                    l.err = .nil;
+                    try l.push(.nil);
+                    try l.push(err);
+                    return 2;
+                }
+                return e;
+            };
+        }
+    }.call;
+}
+
+/// Fails an operation with `prefix: message` for the error `err`.
+fn failResult(l: *Thread, prefix: []const u8, err: anyerror) Error {
+    return raiseFail(l, errCode(err), 0, "{s}: {s}", .{ prefix, errText(err) });
 }
 
 // ---------------------------------------------------------------------
@@ -336,7 +481,7 @@ pub inline fn blocksPlainly(l: *Thread, timeout_ms: i32) bool {
 /// Waits until `handle` is ready, through the scheduler. Raises
 /// "`what` timeout" when the timeout of the socket runs out first.
 pub fn awaitIo(l: *Thread, handle: net.Socket.Handle, dir: sched.Dir, timeout_ms: i32, comptime what: []const u8) Error!void {
-    if (!try sched.waitIo(l, handle, dir, timeout_ms)) return l.raiseFmt(what ++ " timeout", .{});
+    if (!try sched.waitIo(l, handle, dir, timeout_ms)) return raiseFail(l, "timeout", 0, what ++ " timeout", .{});
 }
 
 /// What a system call that never waits reports.
@@ -373,8 +518,27 @@ fn unblock(s: *Socket) void {
     s.nonblocking = true;
 }
 
-/// Reads what the socket holds now, at most `dst.len` bytes.
+/// Reads what the socket holds now, at most `dst.len` bytes. A TLS socket
+/// returns plain text.
 pub fn tryRecv(l: *Thread, s: *Socket, dst: []u8) Try {
+    if (s.tls != null) return tls.recv(l, s, dst);
+    return rawRecv(l, s, dst);
+}
+
+/// Writes what the socket takes now of `data`. A TLS socket encrypts it.
+pub fn trySend(l: *Thread, s: *Socket, data: []const u8) Try {
+    if (s.tls != null) return tls.send(l, s, data);
+    return rawSend(l, s, data);
+}
+
+/// The direction that an operation on `s` that could not finish waits
+/// for: `default`, or the direction that TLS asked for.
+pub fn againDir(s: *Socket, default: sched.Dir) sched.Dir {
+    return tls.waitDir(s, default);
+}
+
+/// Reads the bytes of the socket itself, without TLS.
+pub fn rawRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     const handle = s.stream.socket.handle;
     if (faultio.netStep(faultio.receive_steps)) |k| return if (k == .eof) .{ .n = 0 } else .{ .fail = error.ConnectionResetByPeer };
     if (comptime is_windows) {
@@ -394,8 +558,8 @@ pub fn tryRecv(l: *Thread, s: *Socket, dst: []u8) Try {
     }
 }
 
-/// Writes what the socket takes now of `data`.
-pub fn trySend(l: *Thread, s: *Socket, data: []const u8) Try {
+/// Writes bytes to the socket itself, without TLS.
+pub fn rawSend(l: *Thread, s: *Socket, data: []const u8) Try {
     const handle = s.stream.socket.handle;
     if (faultio.netStep(faultio.send_steps) != null) return .{ .fail = error.ConnectionResetByPeer };
     if (comptime is_windows) {
@@ -432,8 +596,11 @@ fn writeSome(io: Io, handle: net.Socket.Handle, data: []const u8) !usize {
 fn noSigpipe(handle: net.Socket.Handle) void {
     if (comptime is_windows) return;
     if (comptime @hasDecl(posix.SO, "NOSIGPIPE")) {
+        // The system call itself, since the standard library treats some
+        // results as impossible: macOS answers EINVAL for a socket that the
+        // peer already reset, and the option then matters no more.
         const one: c_int = 1;
-        posix.setsockopt(handle, posix.SOL.SOCKET, posix.SO.NOSIGPIPE, std.mem.asBytes(&one)) catch {};
+        _ = posix.system.setsockopt(handle, posix.SOL.SOCKET, posix.SO.NOSIGPIPE, std.mem.asBytes(&one), @sizeOf(c_int));
     }
 }
 
@@ -465,12 +632,30 @@ fn setNonblocking(fd: posix.fd_t, on: bool) void {
 /// A connection attempt that waits through the scheduler. It lives in the
 /// scheduler record of its thread, so it survives the runs of
 /// `network.tcp.connect` and is released when the thread is closed.
+/// How long an attempt at one address runs alone before the attempt at
+/// the next address starts beside it, as RFC 8305 suggests. A host whose
+/// first address refuses slowly, such as `::1` on Windows when the server
+/// listens on `127.0.0.1` alone, then connects without that delay.
+const attempt_delay_ns = 250 * std.time.ns_per_ms;
+/// How long one wait lasts while several attempts run, since a wait
+/// watches one socket and the others are checked between the waits.
+const attempt_tick_ms = 20;
+
+/// The attempts of one connection. The attempt at address i holds its
+/// socket in `fds[i]` until it fails or connects.
 const Connecting = struct {
     addrs: [max_addresses]net.IpAddress = undefined,
     n: usize = 0,
-    i: usize = 0,
-    fd: posix.fd_t = -1,
+    /// The addresses whose attempts started.
+    next: usize = 0,
+    fds: [max_addresses]posix.fd_t = @splat(-1),
+    /// The attempts still running.
+    running: usize = 0,
+    /// When the next attempt starts beside the running ones.
+    next_at: u64 = 0,
     last: anyerror = error.ConnectionRefused,
+    /// When the attempt gives up, on the clock of `sched.now`, or zero.
+    deadline: u64 = 0,
 
     fn release(g: *state.Global, ctx: *anyopaque) void {
         const c: *Connecting = @ptrCast(@alignCast(ctx));
@@ -478,11 +663,17 @@ const Connecting = struct {
         g.gpa.destroy(c);
     }
 
+    /// Closes the socket of attempt `i`.
+    fn dropOne(c: *Connecting, g: *state.Global, i: usize) void {
+        if (c.fds[i] < 0) return;
+        sched.forget(g, c.fds[i]);
+        closeHandle(c.fds[i]);
+        c.fds[i] = -1;
+        c.running -= 1;
+    }
+
     fn drop(c: *Connecting, g: *state.Global) void {
-        if (c.fd < 0) return;
-        sched.forget(g, c.fd);
-        closeHandle(c.fd);
-        c.fd = -1;
+        for (0..c.next) |i| c.dropOne(g, i);
     }
 };
 
@@ -530,7 +721,7 @@ fn connectResult(fd: posix.fd_t) ?anyerror {
 
 /// `connectHost` for a thread that shares the state with detached
 /// coroutines: the attempt waits through the scheduler.
-fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+fn connectScheduled(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
     const g = l.g;
     const t = try sched.ensureTask(l);
     var c: *Connecting = undefined;
@@ -538,49 +729,87 @@ fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.
         c = @ptrCast(@alignCast(t.ctx.?));
     } else {
         c = g.gpa.create(Connecting) catch return l.raiseMem();
-        c.* = .{};
+        c.* = .{ .deadline = limit.deadline(g) };
         errdefer g.gpa.destroy(c);
         c.n = (try resolve(l, host, port, null, &c.addrs)).len;
         t.ctx = c;
         t.cancel = Connecting.release;
     }
-    // Every way out other than a suspension ends the attempt.
+    // Every way out other than a suspension ends the attempts.
     defer if (!l.yielding) {
         t.ctx = null;
         t.cancel = null;
         c.drop(g);
         g.gpa.destroy(c);
     };
-    while (c.i < c.n) {
-        const a = &c.addrs[c.i];
-        var done = false;
-        if (c.fd < 0) {
-            done = startConnect(a, &c.fd) catch |e| {
+    while (true) {
+        // The next address starts when nothing runs, or beside the running
+        // attempts once they have run alone for the attempt delay.
+        if (c.next < c.n and (c.running == 0 or sched.now(g) >= c.next_at)) {
+            const i = c.next;
+            c.next += 1;
+            var fd: posix.fd_t = -1;
+            const done = startConnect(&c.addrs[i], &fd) catch |e| {
                 c.last = e;
-                c.i += 1;
                 continue;
             };
+            c.fds[i] = fd;
+            c.running += 1;
+            c.next_at = sched.now(g) + attempt_delay_ns;
+            if (done) return connected(l, c, i);
+            continue;
         }
-        if (!done) {
-            if (!sched.readyNow(c.fd, .write)) {
-                _ = try sched.waitIo(l, c.fd, .write, -1);
-                continue;
-            }
-            if (connectResult(c.fd)) |e| {
-                c.drop(g);
+        if (c.running == 0) break;
+        // The first attempt that connects wins. One that fails lets the
+        // next address start at once.
+        var changed = false;
+        for (0..c.next) |i| {
+            const fd = c.fds[i];
+            if (fd < 0 or !sched.readyNow(fd, .write)) continue;
+            if (connectResult(fd)) |e| {
+                c.dropOne(g, i);
                 c.last = e;
-                c.i += 1;
+                c.next_at = 0;
+                changed = true;
                 continue;
             }
+            return connected(l, c, i);
         }
-        const fd = c.fd;
-        sched.forget(g, fd);
-        c.fd = -1;
-        setNonblocking(fd, false);
-        noSigpipe(fd);
-        return .{ .{ .socket = .{ .handle = fd, .address = localAddress(l.g.io, fd, a.*) } }, a.* };
+        if (changed) continue;
+        var wait = limit.left(g, c.deadline) orelse return limit.raise(l, host, port);
+        if (c.next < c.n) {
+            const now = sched.now(g);
+            const until: i32 = if (c.next_at > now) @intCast(@min((c.next_at - now + std.time.ns_per_ms - 1) / std.time.ns_per_ms, std.math.maxInt(i32))) else 0;
+            wait = if (wait < 0) until else @min(wait, until);
+        }
+        if (c.running > 1) wait = if (wait < 0) attempt_tick_ms else @min(wait, attempt_tick_ms);
+        // The newest attempt is the one most likely to end next. Each wait
+        // has a deadline of its own.
+        var newest: usize = c.next;
+        while (newest > 0) : (newest -= 1) {
+            if (c.fds[newest - 1] >= 0) break;
+        }
+        sched.opDone(l);
+        _ = try sched.waitIo(l, c.fds[newest - 1], .write, wait);
     }
-    return l.raiseFmt("cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
+    return raiseFail(l, errCode(c.last), 0, "cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
+}
+
+/// Ends the connection with the attempt at address `i`, which connected,
+/// and closes the others.
+fn connected(l: *Thread, c: *Connecting, i: usize) struct { net.Stream, net.IpAddress } {
+    const g = l.g;
+    const fd = c.fds[i];
+    sched.forget(g, fd);
+    c.fds[i] = -1;
+    c.running -= 1;
+    c.drop(g);
+    // The connection is the end of the operation, so the next wait of the
+    // same native starts a deadline of its own.
+    sched.opDone(l);
+    setNonblocking(fd, false);
+    noSigpipe(fd);
+    return .{ .{ .socket = .{ .handle = fd, .address = localAddress(l.g.io, fd, c.addrs[i]) } }, c.addrs[i] };
 }
 
 const ListenError = error{ AccessDenied, AddressInUse, AddressUnavailable, AddressFamilyUnsupported, SystemResources, ProcessFdQuotaExceeded, SystemFdQuotaExceeded, Unexpected };
@@ -779,13 +1008,11 @@ const afd = if (is_windows) struct {
     /// request stays with the driver while the thread waits, so the
     /// record holds what the request writes to: its status block and the
     /// event that the driver sets when the request ends.
-    const Attempt = struct {
+    /// The connect request of one address, which the driver holds until
+    /// it sets the event of the request.
+    const Slot = struct {
         const Target = extern struct { reserved: [3]usize = @splat(0), address: Threaded.PosixAddress };
 
-        addrs: [max_addresses]net.IpAddress = undefined,
-        n: usize = 0,
-        i: usize = 0,
-        last: anyerror = error.ConnectionRefused,
         handle: ?w.HANDLE = null,
         event: ?w.HANDLE = null,
         /// True while the driver holds the request.
@@ -794,17 +1021,10 @@ const afd = if (is_windows) struct {
         target: Target = .{ .address = undefined },
         local: net.IpAddress = undefined,
 
-        fn release(g: *state.Global, ctx: *anyopaque) void {
-            const c: *Attempt = @ptrCast(@alignCast(ctx));
-            c.drop(g);
-            if (c.event) |e| w.CloseHandle(e);
-            g.gpa.destroy(c);
-        }
-
-        /// Ends the attempt on the current address. A request that the
-        /// driver still holds is canceled, and the driver has let go of
-        /// the status block once the event is set.
-        fn drop(c: *Attempt, g: *state.Global) void {
+        /// Ends the request. A request that the driver still holds is
+        /// canceled, and the driver has let go of the status block once
+        /// the event is set.
+        fn drop(c: *Slot, g: *state.Global) void {
             const h = c.handle orelse return;
             if (c.pending) {
                 var cancel_iosb: w.IO_STATUS_BLOCK = undefined;
@@ -819,7 +1039,7 @@ const afd = if (is_windows) struct {
 
         /// Opens an endpoint and hands the driver a connect request for
         /// `a` that it completes later.
-        fn start(c: *Attempt, io: Io, a: *const net.IpAddress) !void {
+        fn start(c: *Slot, io: Io, a: *const net.IpAddress) !void {
             if (c.event == null) c.event = CreateEventW(null, .TRUE, .FALSE, null) orelse return error.SystemResources;
             const h = try openStream(a);
             errdefer w.CloseHandle(h);
@@ -841,7 +1061,7 @@ const afd = if (is_windows) struct {
         }
 
         /// True once the driver ended the request.
-        fn done(c: *Attempt) bool {
+        fn done(c: *Slot) bool {
             if (!c.pending) return true;
             if (WaitForSingleObject(c.event.?, 0) != 0) return false;
             c.pending = false;
@@ -849,7 +1069,7 @@ const afd = if (is_windows) struct {
         }
 
         /// The error the request ended with, or null when it connected.
-        fn result(c: *Attempt) ?anyerror {
+        fn result(c: *Slot) ?anyerror {
             return switch (c.iosb.u.Status) {
                 .SUCCESS => null,
                 .CONNECTION_REFUSED, .PORT_CONNECTION_REFUSED => error.ConnectionRefused,
@@ -863,6 +1083,38 @@ const afd = if (is_windows) struct {
         }
     };
 
+    /// The attempts of one connection, one slot for each address that
+    /// started (`attempt_delay_ns`).
+    const Attempt = struct {
+        addrs: [max_addresses]net.IpAddress = undefined,
+        n: usize = 0,
+        next: usize = 0,
+        slots: [max_addresses]Slot = @splat(.{}),
+        running: usize = 0,
+        next_at: u64 = 0,
+        last: anyerror = error.ConnectionRefused,
+        deadline: u64 = 0,
+
+        fn release(g: *state.Global, ctx: *anyopaque) void {
+            const c: *Attempt = @ptrCast(@alignCast(ctx));
+            c.drop(g);
+            for (&c.slots) |*slot| {
+                if (slot.event) |e| w.CloseHandle(e);
+            }
+            g.gpa.destroy(c);
+        }
+
+        fn dropOne(c: *Attempt, g: *state.Global, i: usize) void {
+            if (c.slots[i].handle == null) return;
+            c.slots[i].drop(g);
+            c.running -= 1;
+        }
+
+        fn drop(c: *Attempt, g: *state.Global) void {
+            for (0..c.next) |i| c.dropOne(g, i);
+        }
+    };
+
     /// `connectHost` for a thread that shares the state with detached
     /// coroutines. The connect request of each address goes to the driver
     /// without waiting for its end, and the thread waits through the
@@ -870,7 +1122,7 @@ const afd = if (is_windows) struct {
     /// address whose request cannot be made this way, or ends in a way
     /// the driver does not explain, connects through the standard
     /// library, which waits in the call.
-    fn connectScheduled(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
+    fn connectScheduled(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
         const g = l.g;
         const io = g.io;
         const t = try sched.ensureTask(l);
@@ -879,56 +1131,95 @@ const afd = if (is_windows) struct {
             c = @ptrCast(@alignCast(t.ctx.?));
         } else {
             c = g.gpa.create(Attempt) catch return l.raiseMem();
-            c.* = .{};
+            c.* = .{ .deadline = limit.deadline(g) };
             errdefer g.gpa.destroy(c);
             c.n = (try resolve(l, host, port, null, &c.addrs)).len;
             t.ctx = c;
             t.cancel = Attempt.release;
         }
-        // Every way out other than a suspension ends the attempt.
+        // Every way out other than a suspension ends the attempts.
         defer if (!l.yielding) {
             t.ctx = null;
             t.cancel = null;
             Attempt.release(g, c);
         };
-        while (c.i < c.n) {
-            const a = &c.addrs[c.i];
-            var failed: ?anyerror = null;
-            if (c.handle == null) c.start(io, a) catch {
-                failed = error.Unexpected;
-            };
-            if (failed == null) {
-                if (!c.done()) {
-                    // Each wait is short and has a deadline of its own.
-                    sched.opDone(l);
-                    _ = try sched.waitIo(l, c.handle.?, .write, connect_tick_ms);
-                    continue;
-                }
-                failed = c.result();
-            }
-            if (failed) |e| {
-                c.drop(g);
-                c.last = e;
-                // A request that ended in a way the driver does not
-                // explain is made again by the standard library.
-                if (e == error.Unexpected) {
-                    if (a.connect(io, .{ .mode = .stream, .protocol = .tcp })) |connected| {
-                        var stream = connected;
-                        stream.socket.address = afd.localAddress(io, stream.socket.handle) orelse stream.socket.address;
-                        return .{ stream, a.* };
-                    } else |e2| {
-                        c.last = e2;
+        while (true) {
+            // The next address starts when nothing runs, or beside the
+            // running attempts once they have run alone for the attempt
+            // delay.
+            if (c.next < c.n and (c.running == 0 or sched.now(g) >= c.next_at)) {
+                const i = c.next;
+                c.next += 1;
+                c.slots[i].start(io, &c.addrs[i]) catch {
+                    if (fallback(io, &c.addrs[i], &c.last)) |stream| {
+                        c.drop(g);
+                        sched.opDone(l);
+                        return .{ stream, c.addrs[i] };
                     }
-                }
-                c.i += 1;
+                    continue;
+                };
+                c.running += 1;
+                c.next_at = sched.now(g) + attempt_delay_ns;
                 continue;
             }
-            const handle = c.handle.?;
-            sched.forget(g, handle);
-            c.handle = null;
-            return .{ .{ .socket = .{ .handle = handle, .address = afd.localAddress(io, handle) orelse c.local } }, a.* };
+            if (c.running == 0) break;
+            // The first attempt that connects wins. One that fails lets the
+            // next address start at once.
+            var changed = false;
+            for (0..c.next) |i| {
+                const slot = &c.slots[i];
+                if (slot.handle == null or !slot.done()) continue;
+                if (slot.result()) |e| {
+                    c.dropOne(g, i);
+                    c.last = e;
+                    c.next_at = 0;
+                    changed = true;
+                    // A request that ended in a way the driver does not
+                    // explain is made again by the standard library.
+                    if (e == error.Unexpected) {
+                        if (fallback(io, &c.addrs[i], &c.last)) |stream| {
+                            c.drop(g);
+                            sched.opDone(l);
+                            return .{ stream, c.addrs[i] };
+                        }
+                    }
+                    continue;
+                }
+                const handle = slot.handle.?;
+                sched.forget(g, handle);
+                slot.handle = null;
+                c.running -= 1;
+                c.drop(g);
+                // The connection ends the operation, whose last wait was one
+                // short tick, so the next wait of the same native starts a
+                // deadline of its own.
+                sched.opDone(l);
+                return .{ .{ .socket = .{ .handle = handle, .address = afd.localAddress(io, handle) orelse slot.local } }, c.addrs[i] };
+            }
+            if (changed) continue;
+            if (limit.left(g, c.deadline) == null) return limit.raise(l, host, port);
+            // Each wait is short and has a deadline of its own.
+            var newest: usize = c.next;
+            while (newest > 0) : (newest -= 1) {
+                if (c.slots[newest - 1].handle != null) break;
+            }
+            sched.opDone(l);
+            _ = try sched.waitIo(l, c.slots[newest - 1].handle.?, .write, connect_tick_ms);
         }
-        return l.raiseFmt("cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
+        return raiseFail(l, errCode(c.last), 0, "cannot connect to {s}:{d}: {s}", .{ host, port, errText(c.last) });
+    }
+
+    /// Connects to `a` through the standard library, which waits in the
+    /// call, for a request that the driver could not take or explain.
+    fn fallback(io: Io, a: *const net.IpAddress, last: *anyerror) ?net.Stream {
+        if (a.connect(io, .{ .mode = .stream, .protocol = .tcp })) |connected_stream| {
+            var stream = connected_stream;
+            stream.socket.address = afd.localAddress(io, stream.socket.handle) orelse stream.socket.address;
+            return stream;
+        } else |e| {
+            last.* = e;
+            return null;
+        }
     }
 
     fn listen(io: Io, addr: *const net.IpAddress, backlog: u31, stage: *Stage) !net.Server {
@@ -1002,12 +1293,12 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
         out[0] = a;
         return out[0..1];
     } else |_| {}
-    const name = net.HostName.init(host) catch |e| return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(e) });
-    if (faultio.netStep(&.{.lookup}) != null) return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(error.UnknownHostName) });
+    const name = net.HostName.init(host) catch |e| return raiseFail(l, "resolve", 0, "cannot resolve '{s}': {s}", .{ host, errText(e) });
+    if (faultio.netStep(&.{.lookup}) != null) return raiseFail(l, "resolve", 0, "cannot resolve '{s}': {s}", .{ host, errText(error.UnknownHostName) });
     var results: [32]net.HostName.LookupResult = undefined;
     var queue: Io.Queue(net.HostName.LookupResult) = .init(&results);
     const io = l.g.io;
-    name.lookup(io, &queue, .{ .port = port, .family = family }) catch |e| return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(e) });
+    name.lookup(io, &queue, .{ .port = port, .family = family }) catch |e| return raiseFail(l, "resolve", 0, "cannot resolve '{s}': {s}", .{ host, errText(e) });
     var n: usize = 0;
     while (queue.getOne(io)) |r| switch (r) {
         .address => |a| if (n < out.len) {
@@ -1016,16 +1307,51 @@ fn resolve(l: *Thread, host: []const u8, port: u16, family: ?net.IpAddress.Famil
         },
         .canonical_name => {},
     } else |_| {}
-    if (n == 0) return l.raiseFmt("cannot resolve '{s}': {s}", .{ host, errText(error.NoAddressReturned) });
+    if (n == 0) return raiseFail(l, "resolve", 0, "cannot resolve '{s}': {s}", .{ host, errText(error.NoAddressReturned) });
     return out[0..n];
 }
 
 /// Connects to the first address of `host` that accepts, raising "cannot
 /// connect" when none does.
-fn connectHost(l: *Thread, host: []const u8, port: u16) Error!struct { net.Stream, net.IpAddress } {
-    if (sched.active(l.g) or sched.restarted(l)) {
-        if (comptime is_windows) return afd.connectScheduled(l, host, port);
-        return connectScheduled(l, host, port);
+/// How long a connection may take: `timeout_ms` for all the addresses
+/// of the host, or no limit when it is negative. A connection that runs
+/// out of time raises "`prefix`timeout while connecting to HOST:PORT".
+pub const ConnectLimit = struct {
+    timeout_ms: i32 = -1,
+    prefix: []const u8 = "",
+
+    fn deadline(c: ConnectLimit, g: *state.Global) u64 {
+        if (c.timeout_ms < 0) return 0;
+        return sched.now(g) + @as(u64, @intCast(c.timeout_ms)) * std.time.ns_per_ms;
+    }
+
+    /// The milliseconds left before `at`, -1 without a deadline, or null
+    /// once it passed.
+    fn left(c: ConnectLimit, g: *state.Global, at: u64) ?i32 {
+        _ = c;
+        if (at == 0) return -1;
+        const n = sched.now(g);
+        if (n >= at) return null;
+        return @intCast(@min((at - n + std.time.ns_per_ms - 1) / std.time.ns_per_ms, std.math.maxInt(i32)));
+    }
+
+    fn raise(c: ConnectLimit, l: *Thread, host: []const u8, port: u16) Error {
+        return raiseFail(l, "timeout", 0, "{s}timeout while connecting to {s}:{d}", .{ c.prefix, host, port });
+    }
+};
+
+/// Connects to `host` and `port` within `limit`, waiting through the
+/// scheduler.
+pub fn connectTo(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
+    return connectHost(l, host, port, limit);
+}
+
+fn connectHost(l: *Thread, host: []const u8, port: u16, limit: ConnectLimit) Error!struct { net.Stream, net.IpAddress } {
+    // A connection with a limit waits through the scheduler, which bounds
+    // the wait, also where no detached coroutine runs.
+    if (sched.active(l.g) or sched.restarted(l) or limit.timeout_ms >= 0) {
+        if (comptime is_windows) return afd.connectScheduled(l, host, port, limit);
+        return connectScheduled(l, host, port, limit);
     }
     var addrs: [max_addresses]net.IpAddress = undefined;
     const list = try resolve(l, host, port, null, &addrs);
@@ -1045,21 +1371,134 @@ fn connectHost(l: *Thread, host: []const u8, port: u16) Error!struct { net.Strea
         noSigpipe(stream.socket.handle);
         return .{ stream, a.* };
     }
-    return l.raiseFmt("cannot connect to {s}:{d}: {s}", .{ host, port, errText(last) });
+    return raiseFail(l, errCode(last), 0, "cannot connect to {s}:{d}: {s}", .{ host, port, errText(last) });
 }
 
 // ---------------------------------------------------------------------
 // TCP sockets
 
+/// network.tcp.connect(host, port, options): `options.timeout` bounds the
+/// connection to every address of the host and becomes the timeout of
+/// the socket.
 fn tcpConnect(l: *Thread) Error!u32 {
+    const host = try aux.checkBytes(l, 1);
+    const port = try checkPort(l, 2, false);
+    var timeout_ms: i32 = -1;
+    if (l.hasArg(3) and !l.arg(3).isNil()) {
+        const t = try aux.checkTable(l, 3);
+        var k: Value = .nil;
+        while (table.next(t, k) catch null) |e| : (k = e.key) {
+            const name = if (e.key.tag == .string) e.key.as(object.String).bytes() else "";
+            if (!std.mem.eql(u8, name, "timeout")) return aux.argError(l, 3, "unknown option '{s}'", .{name});
+            const secs: f64 = switch (e.val.tag) {
+                .integer => @floatFromInt(e.val.asInt()),
+                .float => e.val.asFloat(),
+                else => return aux.argError(l, 3, "timeout must be a number of seconds", .{}),
+            };
+            if (std.math.isNan(secs)) return aux.argError(l, 3, "timeout must be a number of seconds", .{});
+            const ms = @ceil(secs * 1000);
+            timeout_ms = if (secs < 0) -1 else if (ms >= std.math.maxInt(i32)) std.math.maxInt(i32) else @intFromFloat(ms);
+        }
+    }
+    var hp: [512]u8 = undefined;
+    try pledge.require(l, "network:tcp", hostPort(&hp, host, port));
+    const stream, const peer = try connectHost(l, host, port, .{ .timeout_ms = timeout_ms });
+    errdefer stream.close(l.g.io);
+    const s = try newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer });
+    s.timeout_ms = timeout_ms;
+    return 1;
+}
+
+/// Runs the handshake of a TLS socket. A failure that does not suspend
+/// closes the socket, which then can carry nothing.
+fn handshakeOrClose(l: *Thread, s: *Socket) Error!void {
+    const done = tls.handshake(l, s, 0) catch |e| {
+        if (!l.yielding) releaseSocket(l, s);
+        return e;
+    };
+    if (!done) {
+        releaseSocket(l, s);
+        return raiseFail(l, "timeout", 0, "TLS handshake timeout", .{});
+    }
+}
+
+/// network.tls.connect(host, port, options): a TCP connection with TLS
+/// over it, once the handshake ends.
+fn tlsConnect(l: *Thread) Error!u32 {
+    const b = l.base();
+    // A connection that waited in its handshake is the fourth slot.
+    if (sched.restarted(l) and l.top == b + 4) {
+        if (toObject(l, Socket, socket_name, l.stack[b + 3])) |s| {
+            try stillOpen(l, s);
+            try handshakeOrClose(l, s);
+            return 1;
+        }
+    }
+    try l.ensure(4);
+    while (l.top < b + 3) : (l.top += 1) l.stack[l.top] = .nil;
+    l.top = b + 3;
     const host = try aux.checkBytes(l, 1);
     const port = try checkPort(l, 2, false);
     var hp: [512]u8 = undefined;
     try pledge.require(l, "network:tcp", hostPort(&hp, host, port));
-    const stream, const peer = try connectHost(l, host, port);
-    errdefer stream.close(l.g.io);
-    _ = try newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer });
+    var o: tls.ClientOptions = .{};
+    const cfg = try tls.clientConfig(l, 3, host, true, &o);
+    defer tls.freeConfig(cfg);
+    const stream, const peer = try connectHost(l, host, port, .{ .timeout_ms = o.timeout_ms orelse -1 });
+    const s = newObject(l, Socket, socket_name, .{ .stream = stream, .local = stream.socket.address, .peer = peer }) catch |e| {
+        stream.close(l.g.io);
+        return e;
+    };
+    s.timeout_ms = o.timeout_ms orelse -1;
+    tls.attach(l, s, cfg, o.servername) catch |e| {
+        releaseSocket(l, s);
+        return e;
+    };
+    try handshakeOrClose(l, s);
     return 1;
+}
+
+/// sock:starttls(options): starts TLS over a connected socket and returns
+/// the socket, once the handshake ends.
+fn socketStarttls(l: *Thread) Error!u32 {
+    const s = try checkSocket(l, 1);
+    if (s.tls) |t| {
+        if (!sched.restarted(l) or t.handshaken) return l.raiseFmt("the socket already uses TLS", .{});
+    } else {
+        // Bytes that arrived before the handshake would pass for bytes of
+        // the protected stream.
+        if (s.buf.items.len > 0) return l.raiseFmt("starttls: the socket holds data received before TLS started", .{});
+        if (isServer(l, 2)) {
+            // The configuration stays in the cache of its options table.
+            try tls.attach(l, s, try tls.serverConfigOf(l, 2), null);
+        } else {
+            var o: tls.ClientOptions = .{};
+            const cfg = try tls.clientConfig(l, 2, null, false, &o);
+            defer tls.freeConfig(cfg);
+            try tls.attach(l, s, cfg, o.servername);
+        }
+    }
+    try handshakeOrClose(l, s);
+    l.top = l.base() + 1;
+    return 1;
+}
+
+/// Whether the options of `starttls` in argument `i` ask for the server
+/// role.
+fn isServer(l: *Thread, i: u32) bool {
+    const v = l.arg(i);
+    if (v.tag != .table) return false;
+    const t = v.as(object.Table);
+    var k: Value = .nil;
+    while (table.next(t, k) catch null) |e| : (k = e.key) {
+        if (e.key.tag == .string and std.mem.eql(u8, e.key.as(object.String).bytes(), "server")) return e.val.tag == .true;
+    }
+    return false;
+}
+
+fn socketTlsinfo(l: *Thread) Error!u32 {
+    const s = try checkSocket(l, 1);
+    return tls.pushInfo(l, s);
 }
 
 fn tcpBind(l: *Thread) Error!u32 {
@@ -1080,23 +1519,46 @@ pub fn bindServer(l: *Thread, host: []const u8, port: u16, backlog: i64) Error!*
     var stage: Stage = .bind;
     const backlog_c: u31 = @intCast(std.math.clamp(backlog, 0, std.math.maxInt(u31)));
     const server = listenTcp(l.g.io, &list[0], backlog_c, &stage) catch |e| switch (stage) {
-        .bind => return l.raiseFmt("cannot bind to {s}:{d}: {s}", .{ host, port, errText(e) }),
-        .listen => return l.raiseFmt("cannot listen on {s}:{d}: {s}", .{ host, port, errText(e) }),
+        .bind => return raiseFail(l, errCode(e), 0, "cannot bind to {s}:{d}: {s}", .{ host, port, errText(e) }),
+        .listen => return raiseFail(l, errCode(e), 0, "cannot listen on {s}:{d}: {s}", .{ host, port, errText(e) }),
     };
     errdefer server.socket.close(l.g.io);
     return newObject(l, Server, server_name, .{ .server = server });
 }
 
+/// sock:send(data, i, j): sends the part of `data` from position `i` to
+/// position `j`, characters of a string or bytes of a vector, which
+/// default to the whole, and returns the position of the last one sent.
 fn socketSend(l: *Thread) Error!u32 {
     const s = try checkSocket(l, 1);
-    const data = try checkData(l, 2);
+    const whole = try checkData(l, 2);
+    const i = try aux.optInt(l, 3, 1);
+    const j = try aux.optInt(l, 4, -1);
+    var data = whole;
+    var last: usize = whole.len;
+    if (l.arg(2).tag == .string) {
+        const str_mod = @import("string.zig");
+        const part, last = str_mod.subPositions(l, l.arg(2).as(object.String), i, j) catch return l.raiseMem();
+        // The part stays on the stack while the send waits, above the
+        // four arguments.
+        try l.ensure(6);
+        const b = l.base();
+        while (l.top < b + 4) : (l.top += 1) l.stack[l.top] = .nil;
+        l.top = b + 4;
+        try l.push(part);
+        data = part.as(object.String).bytes();
+    } else {
+        const r = @import("string.zig").byteRange(i, j, whole.len);
+        data = whole[r.from..r.to];
+        last = if (r.to > r.from) r.to else 0;
+    }
     const io = l.g.io;
     const h = s.stream.socket.handle;
     // A send that waited continues after the bytes it already wrote.
     var total: usize = @min(sched.progress(l), data.len);
     while (total < data.len) {
         const chunk = @min(data.len - total, std.math.maxInt(i32));
-        if (!s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
+        if (s.tls == null and !s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
             total += writeSome(io, h, data[total..][0..chunk]) catch |e| return failResult(l, "send", e);
             continue;
         }
@@ -1107,13 +1569,13 @@ fn socketSend(l: *Thread) Error!u32 {
             },
             .again => {
                 try sched.saveProgress(l, total);
-                try awaitIo(l, h, .write, s.timeout_ms, "send");
+                try awaitIo(l, h, againDir(s, .write), s.timeout_ms, "send");
                 try stillOpen(l, s);
             },
             .fail => |e| return failResult(l, "send", e),
         }
     }
-    return aux.retInt(l, @intCast(total));
+    return aux.retInt(l, @intCast(last));
 }
 
 pub const Fill = union(enum) { got: usize, eof, fail: anyerror };
@@ -1121,7 +1583,7 @@ pub const Fill = union(enum) { got: usize, eof, fail: anyerror };
 /// Reads up to `max` more bytes into the socket buffer, waiting at most
 /// the socket timeout. Raises "receive timeout" when it expires.
 pub fn fill(l: *Thread, s: *Socket, max: usize) Error!Fill {
-    return (try tryFill(l, s, max)) orelse l.raiseFmt("receive timeout", .{});
+    return (try tryFill(l, s, max)) orelse raiseFail(l, "timeout", 0, "receive timeout", .{});
 }
 
 /// Reads up to `max` more bytes into the socket buffer, waiting at most
@@ -1130,7 +1592,7 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
     s.buf.ensureUnusedCapacity(l.g.gpa, max) catch return l.raiseMem();
     const dst = s.buf.unusedCapacitySlice()[0..max];
     var n: usize = 0;
-    if (!s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
+    if (s.tls == null and !s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
         n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
     } else while (true) {
         switch (tryRecv(l, s, dst)) {
@@ -1142,7 +1604,7 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
             // The bytes already read stay in the buffer of the socket, so
             // the receive that runs again continues from them.
             .again => {
-                if (!try sched.waitIo(l, s.stream.socket.handle, .read, s.timeout_ms)) return null;
+                if (!try sched.waitIo(l, s.stream.socket.handle, againDir(s, .read), s.timeout_ms)) return null;
                 try stillOpen(l, s);
                 // The buffer may have moved while other coroutines ran.
                 return tryFill(l, s, max);
@@ -1172,7 +1634,7 @@ fn takeBuffered(l: *Thread, s: *Socket, n: usize, skip: usize) Error!u32 {
 /// graceful shutdown and does not drain input the peer controls.
 fn limitExceeded(l: *Thread, s: *Socket) Error {
     releaseSocket(l, s);
-    return l.raiseFmt("receive limit exceeded", .{});
+    return raiseFail(l, "limit", 0, "receive limit exceeded", .{});
 }
 
 fn receiveLimit(l: *Thread, i: u32, default: i64) Error!usize {
@@ -1230,7 +1692,7 @@ fn socketReceive(l: *Thread) Error!u32 {
     const s = try checkSocket(l, 1);
     if (l.arg(2).isNumber()) {
         const n = try aux.checkInt(l, 2);
-        if (n <= 0 or n > max_recv_size) return l.raiseFmt("invalid receive size: {d}", .{n});
+        if (n <= 0) return l.raiseFmt("invalid receive size: {d}", .{n});
         return recvBytes(l, s, @intCast(n));
     }
     const pattern = (try aux.optString(l, 2, "*l")).?;
@@ -1241,9 +1703,25 @@ fn socketReceive(l: *Thread) Error!u32 {
 
 /// Closes a connection gracefully: sends FIN, then discards pending input
 /// so the close does not reset the connection.
+/// Closes the socket of a connection at the end of the drain time of its
+/// server.
+pub fn drainSocket(l: *Thread, s: *Socket) void {
+    if (s.closed) return;
+    s.drained = true;
+    releaseSocket(l, s);
+}
+
+/// Closes a socket as `close` does.
+pub fn closeSocketOf(l: *Thread, s: *Socket) void {
+    closeSocket(l, s);
+}
+
 fn closeSocket(l: *Thread, s: *Socket) void {
     if (s.closed) return;
     const io = l.g.io;
+    // A TLS connection tells its peer that it closes, and the rest of
+    // the close works on the socket itself.
+    tls.detach(l, s);
     s.stream.shutdown(io, .send) catch {};
     if (!is_windows) {
         var tmp: [1024]u8 = undefined;
@@ -1266,12 +1744,17 @@ fn closeSocket(l: *Thread, s: *Socket) void {
 
 /// Closes the handle of a socket and frees what the socket holds.
 /// Coroutines that wait for the socket run again and find it closed.
-fn releaseSocket(l: *Thread, s: *Socket) void {
+pub fn releaseSocket(l: *Thread, s: *Socket) void {
+    tls.drop(l, s);
     sched.forget(l.g, s.stream.socket.handle);
     s.stream.close(l.g.io);
     if (s.owner) |server| {
+        unlinkConnection(server, s);
         s.owner = null;
         server.live -= 1;
+        // The coroutine that ends a drain stops once every connection is
+        // closed.
+        if (server.draining) sched.signal(l.g);
         // A `network.serve` that waits for a free place accepts again.
         if (server.full) {
             server.full = false;
@@ -1280,6 +1763,7 @@ fn releaseSocket(l: *Thread, s: *Socket) void {
     }
     s.buf.deinit(l.g.gpa);
     s.buf = .empty;
+    http.freeState(l.g.gpa, s);
     if (s.http) |h| {
         h.deinit(l.g.gpa);
         l.g.gpa.destroy(h);
@@ -1366,6 +1850,11 @@ pub fn closeServerIn(g: *state.Global, s: *Server) void {
     sched.forget(g, s.server.socket.handle);
     s.server.socket.close(g.io);
     s.closed = true;
+    // Connections that are still open keep the configuration alive.
+    if (s.tls_config) |cfg| {
+        tls.freeConfig(cfg);
+        s.tls_config = null;
+    }
     // A `network.serve` that waits for a free place finds the server
     // closed.
     if (s.full) {
@@ -1423,8 +1912,8 @@ fn udpOpen(l: *Thread) Error!u32 {
         addr = .{ .ip4 = net.Ip4Address.parse(a, port) catch return l.raiseFmt("invalid address: {s}", .{a}) };
     }
     const sock = bindUdp(l.g.io, &addr) catch |e| {
-        if (bind) return l.raiseFmt("cannot bind UDP socket: {s}", .{errText(e)});
-        return l.raiseFmt("cannot create UDP socket: {s}", .{errText(e)});
+        if (bind) return raiseFail(l, errCode(e), 0, "cannot bind UDP socket: {s}", .{errText(e)});
+        return raiseFail(l, errCode(e), 0, "cannot create UDP socket: {s}", .{errText(e)});
     };
     errdefer sock.close(l.g.io);
     _ = try newObject(l, Udp, udp_name, .{ .socket = sock, .bound = bind });
@@ -1530,487 +2019,6 @@ fn udpGc(l: *Thread) Error!u32 {
 fn udpTostring(l: *Thread) Error!u32 {
     const s = toObject(l, Udp, udp_name, l.arg(1)) orelse return aux.typeError(l, 1, udp_name);
     return objectTostring(l, "udpsocket", s.closed);
-}
-
-// ---------------------------------------------------------------------
-// network.fetch
-
-const ParsedUrl = struct {
-    https: bool,
-    host: []const u8,
-    port: u16,
-    path: []const u8,
-};
-
-fn parseUrl(url: []const u8) ?ParsedUrl {
-    const sep = std.mem.indexOf(u8, url, "://") orelse return null;
-    const scheme = url[0..sep];
-    var r: ParsedUrl = undefined;
-    if (std.mem.eql(u8, scheme, "http")) {
-        r.https = false;
-        r.port = 80;
-    } else if (std.mem.eql(u8, scheme, "https")) {
-        r.https = true;
-        r.port = 443;
-    } else return null;
-    const rest = url[sep + 3 ..];
-    const host_end = std.mem.indexOfAny(u8, rest, "/:") orelse rest.len;
-    if (host_end == 0 or host_end >= 256) return null;
-    r.host = rest[0..host_end];
-    var i = host_end;
-    if (i < rest.len and rest[i] == ':') {
-        const pstart = i + 1;
-        var j = pstart;
-        while (j < rest.len and std.ascii.isDigit(rest[j])) j += 1;
-        if (j == pstart or (j < rest.len and rest[j] != '/')) return null;
-        const port = std.fmt.parseInt(u32, rest[pstart..j], 10) catch return null;
-        if (port == 0 or port > 65535) return null;
-        r.port = @intCast(port);
-        i = j;
-    }
-    r.path = if (i < rest.len) rest[i..] else "/";
-    if (r.path.len >= 2048) return null;
-    return r;
-}
-
-/// A socket reader that waits at most `timeout_ms` for each read. A
-/// timeout or socket error is kept in `err` and reported as ReadFailed.
-const TimedReader = struct {
-    io: Io,
-    stream: net.Stream,
-    timeout_ms: i32,
-    interface: Io.Reader,
-    err: ?anyerror = null,
-    /// The thread that reads, which waits through the scheduler when it
-    /// is set.
-    thread: ?*Thread = null,
-
-    fn init(io: Io, stream: net.Stream, timeout_ms: i32, buffer: []u8) TimedReader {
-        return .{
-            .io = io,
-            .stream = stream,
-            .timeout_ms = timeout_ms,
-            .interface = .{
-                .vtable = &.{ .stream = streamImpl, .readVec = readVec },
-                .buffer = buffer,
-                .seek = 0,
-                .end = 0,
-            },
-        };
-    }
-
-    fn streamImpl(io_r: *Io.Reader, io_w: *Io.Writer, limit: Io.Limit) Io.Reader.StreamError!usize {
-        const dest = limit.slice(try io_w.writableSliceGreedy(1));
-        var data: [1][]u8 = .{dest};
-        const n = try readVec(io_r, &data);
-        io_w.advance(n);
-        return n;
-    }
-
-    fn readVec(io_r: *Io.Reader, data: [][]u8) Io.Reader.Error!usize {
-        const r: *TimedReader = @alignCast(@fieldParentPtr("interface", io_r));
-        const wait: Wait = if (r.thread) |l| blk: {
-            // With detached coroutines alive, a caller that cannot suspend
-            // runs the scheduler while it waits, so a `network.serve` of
-            // the same state answers.
-            if (!sched.active(l.g) or sched.canSuspend(l)) break :blk waitHandle(r.stream.socket.handle, false, r.timeout_ms);
-            // The poller of the scheduler reports edges, and the edge of data
-            // that is already waiting, or of an end of stream that arrived
-            // with the last bytes, has passed.
-            if (sched.readyNow(r.stream.socket.handle, .read)) break :blk .ready;
-            const ready = sched.waitIo(l, r.stream.socket.handle, .read, r.timeout_ms) catch break :blk .failed;
-            break :blk if (ready) .ready else .timeout;
-        } else waitHandle(r.stream.socket.handle, false, r.timeout_ms);
-        switch (wait) {
-            .ready => {},
-            .timeout => {
-                r.err = error.Timeout;
-                return error.ReadFailed;
-            },
-            .failed => {
-                r.err = error.Unexpected;
-                return error.ReadFailed;
-            },
-        }
-        var iovecs: [8][]u8 = undefined;
-        const dest_n, const data_size = try io_r.writableVector(&iovecs, data);
-        const n = r.stream.read(r.io, iovecs[0..dest_n]) catch |e| {
-            r.err = e;
-            return error.ReadFailed;
-        };
-        if (n == 0) return error.EndOfStream;
-        if (n > data_size) {
-            io_r.end += n - data_size;
-            return data_size;
-        }
-        return n;
-    }
-};
-
-const tls_len = std.crypto.tls.Client.min_buffer_len;
-
-/// The connection of one fetch, heap allocated because the TLS client
-/// keeps pointers to the socket reader and writer.
-const FetchConn = struct {
-    stream: net.Stream,
-    sr: TimedReader,
-    sw: net.Stream.Writer,
-    tls: std.crypto.tls.Client,
-    use_tls: bool,
-    sr_buf: [tls_len]u8,
-    sw_buf: [tls_len]u8,
-    tls_read: [tls_len]u8,
-    tls_write: [tls_len]u8,
-
-    fn reader(c: *FetchConn) *Io.Reader {
-        return if (c.use_tls) &c.tls.reader else &c.sr.interface;
-    }
-
-    fn writer(c: *FetchConn) *Io.Writer {
-        return if (c.use_tls) &c.tls.writer else &c.sw.interface;
-    }
-
-    fn sendAll(c: *FetchConn, data: []const u8) bool {
-        const w = c.writer();
-        w.writeAll(data) catch return false;
-        w.flush() catch return false;
-        if (c.use_tls) c.sw.interface.flush() catch return false;
-        return true;
-    }
-};
-
-/// Raises `what` followed by the error of the socket that made the
-/// connection fail, when the socket recorded one. `error.EndOfStream`
-/// names a server that closed the connection.
-fn fetchFailed(l: *Thread, c: *FetchConn, what: []const u8) Error {
-    return fetchFailedWith(l, c, what, error.ReadFailed);
-}
-
-fn fetchFailedWith(l: *Thread, c: *FetchConn, what: []const u8, err: anyerror) Error {
-    if (err == error.EndOfStream) return l.raiseFmt("{s}: Connection closed by peer", .{what});
-    const cause: ?anyerror = c.sr.err orelse if (c.sw.err) |e| e else null;
-    if (cause) |e| return l.raiseFmt("{s}: {s}", .{ what, errText(e) });
-    return l.raiseFmt("{s}", .{what});
-}
-
-/// Reads one LF terminated line into `buf`, without the LF and an optional
-/// CR before it. A line longer than the buffer returns its first part and
-/// leaves the rest for the next read. The end of the stream before the
-/// LF returns `error.EndOfStream`, since a response always ends its lines.
-fn readHttpLine(r: *Io.Reader, buf: []u8) error{ ReadFailed, EndOfStream }!usize {
-    var pos: usize = 0;
-    while (true) {
-        const b = try r.takeByte();
-        if (b == '\n') {
-            if (pos > 0 and buf[pos - 1] == '\r') pos -= 1;
-            return pos;
-        }
-        buf[pos] = b;
-        pos += 1;
-        if (pos >= buf.len - 1) return pos;
-    }
-}
-
-/// Reads up to `dst.len` bytes. Returns 0 at the end of the stream and
-/// null on a read error.
-fn readBody(r: *Io.Reader, dst: []u8) ?usize {
-    return r.readSliceShort(dst) catch null;
-}
-
-fn trimSpaces(s: []const u8) []const u8 {
-    return std.mem.trim(u8, s, " \t");
-}
-
-fn parseContentLength(s: []const u8) ?usize {
-    const t = trimSpaces(s);
-    if (t.len == 0) return null;
-    for (t) |c| if (!std.ascii.isDigit(c)) return null;
-    return std.fmt.parseInt(usize, t, 10) catch null;
-}
-
-fn parseChunkSize(s: []const u8) ?usize {
-    const t = std.mem.trimStart(u8, s, " \t");
-    var end: usize = 0;
-    while (end < t.len and std.ascii.isHex(t[end])) end += 1;
-    if (end == 0) return null;
-    const after = std.mem.trimStart(u8, t[end..], " \t");
-    if (after.len > 0 and after[0] != ';') return null;
-    return std.fmt.parseInt(usize, t[0..end], 16) catch null;
-}
-
-/// Parses the status code of "HTTP/<major>.<minor> <code>".
-fn parseStatus(line: []const u8) ?i64 {
-    if (!std.mem.startsWith(u8, line, "HTTP/")) return null;
-    var i: usize = 5;
-    const digits = struct {
-        fn run(s: []const u8, start: usize) usize {
-            var j = start;
-            while (j < s.len and std.ascii.isDigit(s[j])) j += 1;
-            return j;
-        }
-    }.run;
-    var j = digits(line, i);
-    if (j == i or j >= line.len or line[j] != '.') return null;
-    i = j + 1;
-    j = digits(line, i);
-    if (j == i) return null;
-    i = j;
-    while (i < line.len and std.ascii.isWhitespace(line[i])) i += 1;
-    var neg = false;
-    if (i < line.len and (line[i] == '-' or line[i] == '+')) {
-        neg = line[i] == '-';
-        i += 1;
-    }
-    j = digits(line, i);
-    if (j == i) return null;
-    const n = std.fmt.parseInt(i64, line[i..@min(j, i + 18)], 10) catch return null;
-    return if (neg) -n else n;
-}
-
-/// Stores one response header in `t`, decoding invalid UTF-8 lossily.
-/// Stores a response header in `t`. A header that repeats joins its
-/// earlier values with ", ", as HTTP allows for a field that appears more
-/// than once.
-fn setHeader(l: *Thread, t: *Table, key: []const u8, val: []const u8) Error!void {
-    const gpa = l.g.gpa;
-    var tmp: std.ArrayList(u8) = .empty;
-    defer tmp.deinit(gpa);
-    {
-        var kb: std.ArrayList(u8) = .empty;
-        defer kb.deinit(gpa);
-        wtf8.appendLossy(gpa, &kb, key) catch return l.raiseMem();
-        const prev = table.getStr(t, try l.newString(kb.items));
-        if (prev.tag == .string) {
-            tmp.appendSlice(gpa, prev.as(object.String).bytes()) catch return l.raiseMem();
-            tmp.appendSlice(gpa, ", ") catch return l.raiseMem();
-        }
-    }
-    wtf8.appendLossy(gpa, &tmp, val) catch return l.raiseMem();
-    try l.push(try l.newStringValue(tmp.items));
-    defer l.top -= 1;
-    tmp.clearRetainingCapacity();
-    wtf8.appendLossy(gpa, &tmp, key) catch return l.raiseMem();
-    const k = try l.newStringValue(tmp.items);
-    try l.push(k);
-    defer l.top -= 1;
-    try ops.rawSet(l, t, k, l.stack[l.top - 2]);
-}
-
-/// Appends the bytes of a header name or value: a string, or a number
-/// converted to a string. Returns false for any other value.
-fn headerText(l: *Thread, v: Value, buf: *std.ArrayList(u8)) Error!bool {
-    const s = switch (v.tag) {
-        .string => v.as(object.String),
-        else => if (v.isNumber()) try ops.toString(l, v) else return false,
-    };
-    buf.appendSlice(l.g.gpa, s.bytes()) catch return l.raiseMem();
-    return true;
-}
-
-/// The default User-Agent header: `Lus/` and the version of the build.
-const user_agent = "User-Agent: Lus/" ++ @import("build_options").version ++ "\r\n";
-
-fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: ParsedUrl, body: ?[]const u8) Error!void {
-    const gpa = l.g.gpa;
-    const default_port: u16 = if (u.https) 443 else 80;
-    req.print(gpa, "{s} {s} HTTP/1.1\r\n", .{ method, u.path }) catch return l.raiseMem();
-    // The headers of the caller come after the request line, and a default
-    // header that the caller also names is left out.
-    var own: std.ArrayList(u8) = .empty;
-    defer own.deinit(gpa);
-    var has_host = false;
-    var has_conn = false;
-    var has_agent = false;
-    if (l.arg(3).tag == .table) {
-        const ht = l.arg(3).as(Table);
-        var key: Value = .nil;
-        var name: std.ArrayList(u8) = .empty;
-        defer name.deinit(gpa);
-        var val: std.ArrayList(u8) = .empty;
-        defer val.deinit(gpa);
-        while (table.next(ht, key) catch null) |kv| {
-            key = kv.key;
-            name.clearRetainingCapacity();
-            val.clearRetainingCapacity();
-            if (!try headerText(l, kv.key, &name)) continue;
-            if (std.mem.indexOfAny(u8, name.items, "\r\n") != null)
-                return l.raiseFmt("invalid characters in HTTP header", .{});
-            // A list sends one header line for each of its values.
-            const list: ?*Table = if (kv.val.tag == .table) kv.val.as(Table) else null;
-            const n: i64 = if (list) |t| table.length(t) else 1;
-            var i: i64 = 1;
-            while (i <= n) : (i += 1) {
-                val.clearRetainingCapacity();
-                const v = if (list) |t| table.getInt(t, i) else kv.val;
-                if (!try headerText(l, v, &val)) continue;
-                if (std.mem.indexOfAny(u8, val.items, "\r\n") != null)
-                    return l.raiseFmt("invalid characters in HTTP header", .{});
-                if (std.ascii.eqlIgnoreCase(name.items, "host")) has_host = true;
-                if (std.ascii.eqlIgnoreCase(name.items, "connection")) has_conn = true;
-                if (std.ascii.eqlIgnoreCase(name.items, "user-agent")) has_agent = true;
-                own.print(gpa, "{s}: {s}\r\n", .{ name.items, val.items }) catch return l.raiseMem();
-            }
-        }
-    }
-    if (!has_host) {
-        if (u.port != default_port)
-            req.print(gpa, "Host: {s}:{d}\r\n", .{ u.host, u.port }) catch return l.raiseMem()
-        else
-            req.print(gpa, "Host: {s}\r\n", .{u.host}) catch return l.raiseMem();
-    }
-    if (!has_conn) req.appendSlice(gpa, "Connection: close\r\n") catch return l.raiseMem();
-    if (!has_agent) req.appendSlice(gpa, user_agent) catch return l.raiseMem();
-    req.appendSlice(gpa, own.items) catch return l.raiseMem();
-    if (body) |b| if (b.len > 0) {
-        req.print(gpa, "Content-Length: {d}\r\n", .{b.len}) catch return l.raiseMem();
-    };
-    req.appendSlice(gpa, "\r\n") catch return l.raiseMem();
-    if (body) |b| req.appendSlice(gpa, b) catch return l.raiseMem();
-}
-
-fn fetch(l: *Thread) Error!u32 {
-    const url = try aux.checkBytes(l, 1);
-    const method = (try aux.optString(l, 2, "GET")).?;
-    const body: ?[]const u8 = if (l.arg(4).isNil()) null else try checkData(l, 4);
-    if (std.mem.indexOfAny(u8, method, "\r\n") != null) return l.raiseFmt("invalid characters in HTTP method", .{});
-    if (std.mem.indexOfAny(u8, url, "\r\n") != null) return l.raiseFmt("invalid characters in URL", .{});
-    try pledge.require(l, "network:http", url);
-    const u = parseUrl(url) orelse return l.raiseFmt("invalid URL: {s}", .{url});
-
-    const g = l.g;
-    const gpa = g.gpa;
-    const io = g.io;
-
-    var req: std.ArrayList(u8) = .empty;
-    defer req.deinit(gpa);
-    try buildRequest(l, &req, method, u, body);
-
-    const stream, _ = try connectHost(l, u.host, u.port);
-    defer stream.close(io);
-
-    const c = gpa.create(FetchConn) catch return l.raiseMem();
-    defer gpa.destroy(c);
-    c.stream = stream;
-    c.use_tls = false;
-    c.sr = .init(io, stream, fetch_timeout_ms, &c.sr_buf);
-    c.sr.thread = l;
-    c.sw = stream.writer(io, &c.sw_buf);
-
-    if (u.https) {
-        var bundle: std.crypto.Certificate.Bundle = .empty;
-        defer bundle.deinit(gpa);
-        const now = Io.Clock.real.now(io);
-        bundle.rescan(gpa, io, now) catch |e| return l.raiseFmt("cannot load system certificates: {s}", .{@errorName(e)});
-        var lock: Io.RwLock = .init;
-        var entropy: [std.crypto.tls.Client.Options.entropy_len]u8 = undefined;
-        io.random(&entropy);
-        c.tls = std.crypto.tls.Client.init(&c.sr.interface, &c.sw.interface, .{
-            .host = .{ .explicit = u.host },
-            .ca = .{ .bundle = .{ .gpa = gpa, .io = io, .lock = &lock, .bundle = &bundle } },
-            .read_buffer = &c.tls_read,
-            .write_buffer = &c.tls_write,
-            .entropy = &entropy,
-            .realtime_now = now,
-            // HTTP framing detects truncated bodies through Content-Length
-            // and chunk sizes, as with the legacy runtime.
-            .allow_truncation_attacks = true,
-        }) catch |e| {
-            const name = @errorName(e);
-            if (std.mem.indexOf(u8, name, "Certificate") != null)
-                return l.raiseFmt("SSL certificate verification failed for {s}", .{u.host});
-            const cause: anyerror = switch (e) {
-                error.ReadFailed => c.sr.err orelse e,
-                error.WriteFailed => c.sw.err orelse e,
-                else => e,
-            };
-            return l.raiseFmt("SSL handshake failed: {s}", .{errText(cause)});
-        };
-        c.use_tls = true;
-    }
-
-    if (!c.sendAll(req.items)) return fetchFailed(l, c, "failed to send request");
-
-    const r = c.reader();
-    var line: [4096]u8 = undefined;
-    const status_len = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response", e);
-    const status = parseStatus(line[0..status_len]) orelse return l.raiseFmt("invalid HTTP response: {s}", .{line[0..status_len]});
-
-    const headers = try l.newTable(0, 8);
-    try l.push(Value.obj(.table, headers));
-    const headers_idx = l.top - 1;
-    var content_length: ?usize = null;
-    var chunked = false;
-    while (true) {
-        const n = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response headers", e);
-        if (n == 0) break;
-        const hl = line[0..n];
-        const colon = std.mem.indexOfScalar(u8, hl, ':') orelse continue;
-        const key = hl[0..colon];
-        for (key) |*ch| ch.* = std.ascii.toLower(ch.*);
-        const val = std.mem.trimStart(u8, hl[colon + 1 ..], " ");
-        try setHeader(l, headers, key, val);
-        if (std.mem.eql(u8, key, "content-length")) {
-            const len = parseContentLength(val) orelse return l.raiseFmt("invalid Content-Length", .{});
-            if (len > fetch_max_body) return l.raiseFmt("invalid Content-Length", .{});
-            content_length = len;
-        } else if (std.mem.eql(u8, key, "transfer-encoding")) {
-            if (std.mem.indexOf(u8, val, "chunked") != null) chunked = true;
-        }
-    }
-
-    var resp: std.ArrayList(u8) = .empty;
-    defer resp.deinit(gpa);
-    var buf: [4096]u8 = undefined;
-    // A response to HEAD, and a 1xx, 204 or 304 response, ends after its
-    // headers, whatever Content-Length says (RFC 9112, section 6.3).
-    const no_body = std.ascii.eqlIgnoreCase(method, "HEAD") or status == 204 or status == 304 or (status >= 100 and status < 200);
-    if (no_body) {} else if (chunked) {
-        while (true) {
-            const n = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response body", e);
-            const size = parseChunkSize(line[0..n]) orelse return l.raiseFmt("invalid chunk size", .{});
-            if (size > fetch_max_body - resp.items.len) return l.raiseFmt("invalid chunk size", .{});
-            if (size == 0) break;
-            var remaining = size;
-            while (remaining > 0) {
-                const want = @min(remaining, buf.len);
-                const got = readBody(r, buf[0..want]) orelse return fetchFailed(l, c, "failed to read response body");
-                if (got == 0) return l.raiseFmt("truncated response body", .{});
-                resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
-                remaining -= got;
-            }
-            const t = readHttpLine(r, &line) catch |e| return fetchFailedWith(l, c, "failed to read response body", e);
-            if (t != 0) return l.raiseFmt("invalid chunk terminator", .{});
-        }
-    } else if (content_length) |len| {
-        var remaining = len;
-        while (remaining > 0) {
-            const want = @min(remaining, buf.len);
-            const got = readBody(r, buf[0..want]) orelse return fetchFailed(l, c, "failed to read response body");
-            if (got == 0) return l.raiseFmt("truncated response body", .{});
-            resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
-            remaining -= got;
-        }
-    } else {
-        while (true) {
-            const got = readBody(r, &buf) orelse return fetchFailed(l, c, "failed to read response body");
-            if (got == 0) break;
-            if (got > fetch_max_body - resp.items.len) return l.raiseFmt("response body too large", .{});
-            resp.appendSlice(gpa, buf[0..got]) catch return l.raiseMem();
-            if (got < buf.len) break;
-        }
-    }
-
-    if (c.use_tls) {
-        c.tls.end() catch {};
-        c.sw.interface.flush() catch {};
-    }
-
-    const vec = try vector.newVectorFrom(l, &resp);
-    try l.push(Value.obj(.vector, vec));
-    const ht = l.stack[headers_idx];
-    l.stack[headers_idx] = Value.int(status);
-    try l.push(ht);
-    return 3;
 }
 
 // ---------------------------------------------------------------------

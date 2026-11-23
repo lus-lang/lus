@@ -32,6 +32,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "wrap", .func = wrap },
     .{ .name = "close", .func = close },
     .{ .name = "detach", .func = detach },
+    .{ .name = "sleep", .func = @import("events.zig").sleep },
 };
 
 pub fn open(l: *Thread) Error!void {
@@ -49,12 +50,13 @@ pub fn newCoroutine(l: *Thread, f: Value) Error!*Thread {
     const co = state.newThread(l.g) catch return l.raiseMem();
     co.status = .suspended;
     @import("../vm/pledge.zig").inherit(co, l);
+    @import("../vm/context.zig").inherit(co, l);
     co.stack[0] = f;
     co.top = 1;
     return co;
 }
 
-fn create(l: *Thread) Error!u32 {
+pub fn create(l: *Thread) Error!u32 {
     const f = try aux.checkFunction(l, 1);
     const co = try newCoroutine(l, f);
     return aux.ret(l, Value.obj(.thread, co));
@@ -99,7 +101,9 @@ inline fn resumePort(l: *Thread, co: *Thread, p: *const state.Port, nargs: u32) 
 fn notSuspended(l: *Thread, co: *Thread, nargs: u32) Error {
     @branchHint(.cold);
     const what = switch (co.status) {
-        .dead, .err => "cannot resume dead coroutine",
+        // An event coroutine of the runtime that was closed, such as a sleep
+        // that another coroutine ended to wake its waiter.
+        .dead, .err => if (co.event_closed) "closed" else "cannot resume dead coroutine",
         else => "cannot resume non-suspended coroutine",
     };
     l.top -= nargs;
@@ -287,6 +291,22 @@ inline fn runCo(co: *Thread, mode: sched.Entry, nargs: u32) Outcome {
             if (co.hook_mask & Thread.hook_call != 0) interp.callHook(co, "call", null) catch |e| return handleStop(co, e);
         },
         .results => {
+            // A generator native that yielded runs again for the next
+            // value (`state.Native.generator`).
+            if (co.frame().native) |nat| {
+                if (nat.generator) {
+                    interp.rerunGenerator(co, nargs) catch |e| return handleStop(co, e);
+                    if (co.frames.items.len == 0) {
+                        co.transfer = co.top;
+                        return .returned;
+                    }
+                    if (co.frames.items.len > 0) {
+                        interp.execute(co, 0) catch |e| return handleStop(co, e);
+                    }
+                    co.transfer = co.top;
+                    return .returned;
+                }
+            }
             // Finish the pending `yield` call: its results are the resume
             // arguments now at the top of the stack.
             const fr = co.frame();
@@ -348,6 +368,13 @@ fn handleStop(co: *Thread, e: anyerror) Outcome {
 /// variables with the pending error (if any) and marks it dead. Returns
 /// the final error, or null when everything closed cleanly.
 fn closeThread(co: *Thread) ?Value {
+    // A coroutine that waits for an event coroutine of the runtime, such as
+    // a sleep or a watch, cancels that wait with it.
+    const event: ?*Thread = if (co.task) |t| (if (t.kind == .inner and t.target != null and t.target.?.event) t.target else null) else null;
+    defer if (event) |e| {
+        if (e.status == .suspended) _ = closeThread(e);
+    };
+    if (co.event and co.status == .suspended) co.event_closed = true;
     sched.abandonWait(co);
     // The results or the error that waiters still read. The end of a
     // detached coroutine woke them, and they run after this close.
@@ -424,7 +451,31 @@ fn @"resume"(l: *Thread) Error!u32 {
     return n + 1;
 }
 
-fn yield(l: *Thread) Error!u32 {
+/// Yields the top `n` values of `l` from inside a native, as
+/// `coroutine.yield` does. A generator native returns its result.
+pub fn yieldValues(l: *Thread, n: u32) Error {
+    if (l == l.g.main_thread or l.resumer == null) {
+        return l.raiseFmt("attempt to yield from outside a coroutine", .{});
+    }
+    l.transfer = n;
+    l.yielding = true;
+    l.status = .suspended;
+    return error.LusError;
+}
+
+pub fn resumeNative(l: *Thread) Error!u32 {
+    return @"resume"(l);
+}
+
+pub fn closeNative(l: *Thread) Error!u32 {
+    return close(l);
+}
+
+pub fn statusNative(l: *Thread) Error!u32 {
+    return status(l);
+}
+
+pub fn yield(l: *Thread) Error!u32 {
     if (l == l.g.main_thread or l.resumer == null) {
         return l.raiseFmt("attempt to yield from outside a coroutine", .{});
     }
@@ -514,6 +565,14 @@ fn close(l: *Thread) Error!u32 {
             if (p.close) |c| c(l, co);
         }
         return aux.ret(l, .true);
+    }
+    // An event coroutine of the runtime that waits inside its native while
+    // its resumer blocks (the main chunk, or a plain coroutine) ends its
+    // wait at once, and the resume returns false and "closed".
+    if (co.event and co.status != .suspended and co.status != .dead and co.status != .err) {
+        co.event_closed = true;
+        if (sched.taskOf(co)) |t| sched.interruptWait(l.g, t);
+        return aux.retBool(l, true);
     }
     switch (co.status) {
         .suspended, .dead, .err => {},

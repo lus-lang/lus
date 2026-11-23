@@ -16,6 +16,7 @@ const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const aux = @import("auxlib.zig");
 const shell = @import("shell.zig");
+const sched = @import("../vm/sched.zig");
 const out = @import("out.zig");
 const term = @import("term.zig");
 const vector = @import("vector.zig");
@@ -43,7 +44,13 @@ pub const Handle = struct {
     rbuf: std.ArrayList(u8) = .empty,
     rstart: usize = 0,
     eof: bool = false,
+    /// The error of the read that the system last refused, which
+    /// `file:read` returns as a result while the lines iterators raise it.
+    read_err: ?anyerror = null,
     child: ?std.process.Child = null,
+    /// A pipe end of `os.spawn` in non-blocking mode, whose reads and
+    /// writes wait through the scheduler.
+    nonblock: bool = false,
 };
 
 const handle_name = "FILE*";
@@ -121,7 +128,7 @@ fn newHandle(l: *Thread, h: Handle) Error!Value {
     return Value.obj(.userdata, u);
 }
 
-fn toHandle(l: *Thread, v: Value) ?*Handle {
+pub fn toHandle(l: *Thread, v: Value) ?*Handle {
     if (v.tag != .userdata) return null;
     const u = v.as(Userdata);
     const mt: *Table = @ptrCast(@alignCast(l.g.ext.get("io.mt").?));
@@ -150,13 +157,35 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
         }
         const old = h.rbuf.items.len;
         h.rbuf.ensureUnusedCapacity(gpa, 64 * 1024) catch return l.raiseMem();
-        const dst = h.rbuf.unusedCapacitySlice();
+        var dst = h.rbuf.unusedCapacitySlice();
+        if (comptime builtin.os.tag == .windows) if (h.nonblock) {
+            // Windows pipes cannot be polled, so a pipe of `os.spawn` looks
+            // at what it holds and lets the other coroutines run while it
+            // is empty.
+            switch (winpipe.available(h.file.handle)) {
+                .bytes => |ready| dst = dst[0..@min(dst.len, ready)],
+                .ended => {
+                    h.eof = true;
+                    break;
+                },
+                .empty => {
+                    try sched.waitNotifyFor(l, winpipe.poll_ms);
+                    continue;
+                },
+            }
+        };
         var bufs = [_][]u8{dst};
         const got = switch (h.kind) {
-            .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return ioError(l, e),
+            .file => h.file.readPositional(l.g.io, &bufs, h.pos + (old - h.rstart)) catch |e| return readError(l, h, e),
             else => h.file.readStreaming(l.g.io, &bufs) catch |e| switch (e) {
                 error.EndOfStream => 0,
-                else => |x| return ioError(l, x),
+                error.WouldBlock => {
+                    // The bytes read so far stay in the buffer, so the
+                    // native that runs again after the wait finds them.
+                    _ = try sched.waitIo(l, h.file.handle, .read, -1);
+                    continue;
+                },
+                else => |x| return readError(l, h, x),
             },
         };
         if (got == 0) h.eof = true;
@@ -174,8 +203,25 @@ fn pending(h: *Handle) []const u8 {
     return h.rbuf.items[h.rstart..];
 }
 
+/// Raises the error of a read that the system refused, and records it on
+/// the handle for `doRead`.
+fn readError(l: *Thread, h: *Handle, e: anyerror) Error {
+    h.read_err = e;
+    return ioError(l, e);
+}
+
 fn ioError(l: *Thread, e: anyerror) Error {
     return l.raiseFmt("{s}", .{@import("os.zig").errnoOf(e).msg});
+}
+
+/// Returns `nil`, the message, and the error number of a write, a flush,
+/// or a sync that the system refused, as Lua does.
+fn ioFail(l: *Thread, e: anyerror) Error!u32 {
+    const info = @import("os.zig").errnoOf(e);
+    try l.push(.nil);
+    try l.push(try l.newStringValue(info.msg));
+    try l.push(Value.int(info.errno));
+    return 3;
 }
 
 /// Wraps read bytes as a string (text mode, validated) or vector.
@@ -279,7 +325,21 @@ fn readNumber(l: *Thread, h: *Handle) Error!?Value {
     return null;
 }
 
+/// Reads the formats from argument `first` on. A read that the system
+/// refuses returns `nil`, the message, and the number of the error, as in
+/// Lua, in place of every result.
 fn doRead(l: *Thread, h: *Handle, first: u32) Error!u32 {
+    h.read_err = null;
+    return readFormats(l, h, first) catch |e| {
+        if (h.read_err) |re| {
+            h.read_err = null;
+            return ioFail(l, re);
+        }
+        return e;
+    };
+}
+
+fn readFormats(l: *Thread, h: *Handle, first: u32) Error!u32 {
     if (!h.readable) return failResult(l, "file not opened for reading");
     const nargs = l.argCount();
     if (nargs < first) {
@@ -343,29 +403,132 @@ fn doWrite(l: *Thread, h: *Handle, first: u32, self: Value) Error!u32 {
             ops.numberToBuf(l.g.gpa, &buf, v) catch return l.raiseMem();
         } else return aux.typeError(l, i, "string");
     }
-    try writeBytes(l, h, buf.items);
+    if (h.nonblock) {
+        if (try writeWaiting(l, h, buf.items)) |e| return ioFail(l, e);
+    } else if (writeBytes(l, h, buf.items)) |e| return ioFail(l, e);
     return aux.ret(l, self);
 }
 
-fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) Error!void {
+/// Writes `bytes` to the handle. Returns the error of a write that the
+/// system refused.
+fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) ?anyerror {
     switch (h.kind) {
         .stdout => {
             const o = out.stdout(l.g);
             o.write(l.g, bytes);
-            if (o.takeError()) |e| return ioError(l, e);
+            if (o.takeError()) |e| return e;
         },
         .stderr => out.stderr(l.g, bytes),
         .file => {
             if (h.append) h.pos = h.file.length(l.g.io) catch h.pos;
-            h.file.writePositionalAll(l.g.io, bytes, h.pos) catch |e| return ioError(l, e);
+            h.file.writePositionalAll(l.g.io, bytes, h.pos) catch |e| return e;
             h.pos += bytes.len;
             // Buffered read-ahead is stale after a write.
             h.rbuf.clearRetainingCapacity();
             h.rstart = 0;
             h.eof = false;
         },
-        else => h.file.writeStreamingAll(l.g.io, bytes) catch |e| return ioError(l, e),
+        else => h.file.writeStreamingAll(l.g.io, bytes) catch |e| return e,
     }
+    return null;
+}
+
+/// Writes all of `bytes` to a non-blocking pipe, waiting through the
+/// scheduler while the pipe is full. The count already written survives a
+/// suspension in the scheduler record of the thread.
+fn writeWaiting(l: *Thread, h: *Handle, bytes: []const u8) Error!?anyerror {
+    var done = sched.progress(l);
+    while (done < bytes.len) {
+        var chunk = bytes[done..];
+        if (comptime builtin.os.tag == .windows) {
+            const room = winpipe.room(h.file.handle);
+            if (room == 0) {
+                try sched.saveProgress(l, done);
+                try sched.waitNotifyFor(l, winpipe.poll_ms);
+                continue;
+            }
+            chunk = chunk[0..@min(chunk.len, room)];
+        }
+        const n = h.file.writeStreaming(l.g.io, &.{}, &.{chunk}, 1) catch |e| switch (e) {
+            error.WouldBlock => {
+                try sched.saveProgress(l, done);
+                _ = try sched.waitIo(l, h.file.handle, .write, -1);
+                continue;
+            },
+            else => |x| {
+                if (l.task) |t| t.progress = 0;
+                return @as(?anyerror, x);
+            },
+        };
+        done += n;
+    }
+    if (l.task) |t| t.progress = 0;
+    return null;
+}
+
+/// Polling the pipes of `os.spawn` on Windows, where the poller of the
+/// scheduler takes sockets only.
+const winpipe = if (builtin.os.tag == .windows) struct {
+    const w = std.os.windows;
+    const poll_ms = 5;
+    extern "kernel32" fn PeekNamedPipe(pipe: w.HANDLE, buf: ?*anyopaque, size: w.DWORD, read: ?*w.DWORD, avail: ?*w.DWORD, left: ?*w.DWORD) callconv(.winapi) w.BOOL;
+    const LocalInfo = extern struct {
+        pipe_type: u32,
+        configuration: u32,
+        max_instances: u32,
+        cur_instances: u32,
+        inbound_quota: u32,
+        read_available: u32,
+        outbound_quota: u32,
+        write_quota_available: u32,
+        state: u32,
+        end: u32,
+    };
+    extern "ntdll" fn NtQueryInformationFile(file: w.HANDLE, iosb: *w.IO_STATUS_BLOCK, info: *anyopaque, len: u32, class: u32) callconv(.winapi) w.NTSTATUS;
+
+    fn available(h: w.HANDLE) union(enum) { bytes: usize, ended, empty } {
+        var n: w.DWORD = 0;
+        if (!PeekNamedPipe(h, null, 0, null, &n, null).toBool()) return .ended;
+        return if (n > 0) .{ .bytes = n } else .empty;
+    }
+
+    /// The bytes a write can put in the pipe without blocking. A pipe
+    /// whose state cannot be read reports room for one write, which then
+    /// reports its own error. The quota that Windows reports shrinks by the
+    /// size of a read pending on the other end, which `room` corrects.
+    fn room(h: w.HANDLE) usize {
+        var iosb: w.IO_STATUS_BLOCK = undefined;
+        var info: LocalInfo = undefined;
+        if (NtQueryInformationFile(h, &iosb, &info, @sizeOf(LocalInfo), 24) != .SUCCESS) return std.math.maxInt(usize);
+        if (info.write_quota_available > 0) return info.write_quota_available;
+        // A read that waits on the other end takes its size from the quota,
+        // so an empty pipe without quota has a reader waiting in it, and a
+        // write of at most the size of the buffer goes straight to it.
+        if (info.read_available == 0) return @max(info.outbound_quota, 1);
+        return 0;
+    }
+} else struct {};
+
+/// A handle for one end of a pipe of `os.spawn`. The collector closes it.
+pub fn newPipeHandle(l: *Thread, file: std.Io.File, readable: bool, nonblock: bool) Error!Value {
+    return newHandle(l, .{ .file = file, .kind = .pipe, .readable = readable, .writable = !readable, .nonblock = nonblock });
+}
+
+/// The file of an open io handle, or null for any other value.
+pub fn fileOf(l: *Thread, v: Value) ?std.Io.File {
+    const h = toHandle(l, v) orelse return null;
+    if (h.closed) return null;
+    return h.file;
+}
+
+/// Closes an io handle of `os.spawn`, ignoring any other value.
+pub fn closePipe(l: *Thread, v: Value) void {
+    const h = toHandle(l, v) orelse return;
+    if (h.closed) return;
+    h.closed = true;
+    if (h.nonblock) sched.forget(l.g, h.file.handle);
+    h.file.close(l.g.io);
+    h.rbuf.deinit(l.g.gpa);
 }
 
 // ---------------------------------------------------------------------
@@ -466,7 +629,13 @@ fn closeHandle(l: *Thread, h: *Handle) Error!u32 {
         },
         .pipe => {
             h.closed = true;
-            if (h.child == null) h.file.close(l.g.io);
+            if (h.child == null) {
+                // A coroutine that waits on the pipe finds it closed.
+                if (h.nonblock) sched.forget(l.g, h.file.handle);
+                h.file.close(l.g.io);
+                h.rbuf.deinit(l.g.gpa);
+                return aux.retBool(l, true);
+            }
             var status: shell.Status = .{ .exited = 0 };
             if (h.child) |*c| {
                 // Both ends close before the wait, as with pclose. A child
@@ -576,7 +745,7 @@ fn fFlush(l: *Thread) Error!u32 {
     if (h.kind == .stdout) {
         const o = out.stdout(l.g);
         o.flush(l.g);
-        if (o.takeError()) |e| return ioError(l, e);
+        if (o.takeError()) |e| return ioFail(l, e);
     }
     return aux.ret(l, l.arg(1));
 }
@@ -588,12 +757,16 @@ fn fSync(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
     switch (h.kind) {
         .file => {
-            syncFile(l.g.io, h.file) catch |e| return ioError(l, e);
+            // Windows flushes only through a handle with write access, and a
+            // handle opened for reading has written nothing to flush.
+            if (builtin.os.tag != .windows or h.writable) {
+                syncFile(l.g.io, h.file) catch |e| return ioFail(l, e);
+            }
         },
         .stdout => {
             const o = out.stdout(l.g);
             o.flush(l.g);
-            if (o.takeError()) |e| return ioError(l, e);
+            if (o.takeError()) |e| return ioFail(l, e);
         },
         .pipe, .stdin, .stderr => {},
     }
@@ -615,7 +788,7 @@ fn ioFlush(l: *Thread) Error!u32 {
     if (h.kind == .stdout) {
         const o = out.stdout(l.g);
         o.flush(l.g);
-        if (o.takeError()) |e| return ioError(l, e);
+        if (o.takeError()) |e| return ioFail(l, e);
     }
     return aux.retBool(l, true);
 }
@@ -794,7 +967,7 @@ fn popen(l: *Thread) Error!u32 {
     const reading = std.mem.eql(u8, mode, "r");
     if (!reading and !std.mem.eql(u8, mode, "w")) return aux.argError(l, 2, "invalid mode", .{});
     out.flushAll(l.g);
-    if (!@import("../vm/pledge.zig").allowed(l, "exec", null)) return l.raiseFmt("permission \"exec\" denied for popen", .{});
+    if (!@import("../vm/pledge.zig").allowedUnrestricted(l, "exec")) return l.raiseFmt("permission \"exec\" denied for popen", .{});
     const child = shell.spawn(l.g.io, l.g.gpa, cmd, if (reading) .stdout else .stdin, @import("os.zig").ownedEnviron(l.g)) catch return failResult(l, "cannot run command");
     const f = if (reading) child.stdout.? else child.stdin.?;
     const hv = try newHandle(l, .{ .file = f, .kind = .pipe, .readable = reading, .writable = !reading, .child = child });

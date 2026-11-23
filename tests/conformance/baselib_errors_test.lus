@@ -1,0 +1,93 @@
+--[[
+    Errors of the base library.
+
+    Each global function of the base library checks its arguments before
+    it does anything else. The cases below call each one without the
+    arguments it needs, and then with the rarer arguments that reach the
+    other checks: a protected metatable, a `__pairs` that raises, the
+    bases of `tonumber`, the modes and readers of `load`, and the options
+    of `collectgarbage`.
+]]
+
+pledge("load")
+
+local missing_argument_cases = {
+    { "assert", "bad argument #1 to 'assert' (value expected)" },
+    { "bigint", "bad argument #1 to 'bigint' (value expected)" },
+    { "decimal", "bad argument #1 to 'decimal' (value expected)" },
+    { "dofile", "bad argument #1 to 'dofile' (string expected, got no value)" },
+    { "fromcsv", "bad argument #1 to 'fromcsv' (string expected, got no value)" },
+    { "fromjson", "bad argument #1 to 'fromjson' (string expected, got no value)" },
+    { "getmetatable", "bad argument #1 to 'getmetatable' (value expected)" },
+    { "ipairs", "bad argument #1 to 'ipairs' (value expected)" },
+    { "loadfile", "bad argument #1 to 'loadfile' (string expected, got no value)" },
+    { "next", "bad argument #1 to 'next' (table expected, got no value)" },
+    { "pairs", "bad argument #1 to 'pairs' (value expected)" },
+    { "query", "bad argument #1 to 'query' (value expected)" },
+    { "rawequal", "bad argument #1 to 'rawequal' (value expected)" },
+    { "rawget", "bad argument #1 to 'rawget' (table expected, got no value)" },
+    { "rawlen", "bad argument #1 to 'rawlen' (table or string expected, got no value)" },
+    { "rawset", "bad argument #1 to 'rawset' (table expected, got no value)" },
+    { "require", "bad argument #1 to 'require' (string expected, got no value)" },
+    { "select", "bad argument #1 to 'select' (number expected, got no value)" },
+    { "setmetatable", "bad argument #1 to 'setmetatable' (table expected, got no value)" },
+    { "tocsv", "bad argument #1 to 'tocsv' (table expected, got no value)" },
+    { "tojson", "bad argument #1 to 'tojson' (value expected)" },
+    { "tonumber", "bad argument #1 to 'tonumber' (value expected)" },
+    { "tostring", "bad argument #1 to 'tostring' (value expected)" },
+    { "type", "bad argument #1 to 'type' (value expected)" },
+    { "warn", "bad argument #1 to 'warn' (string expected, got no value)" },
+}
+
+local function missing_argument_test(name, message)
+    local ok, err = catch _G[name]()
+    assert(not ok, name .. " accepted no arguments")
+    assert(err:find(message, 1, true), err)
+end
+
+local function raises(f, message)
+    local ok, err = catch f()
+    assert(not ok, "no error")
+    assert(tostring(err):find(message, 1, true), tostring(err))
+end
+
+local function second_and_third_arguments_are_checked_test()
+    raises(function() return rawequal(1) end, "bad argument #2 to 'rawequal' (value expected)")
+    raises(function() return rawget({}) end, "bad argument #2 to 'rawget' (value expected)")
+    raises(function() return rawset({}, 1) end, "bad argument #3 to 'rawset' (value expected)")
+    raises(function() return setmetatable({}, 1) end, "bad argument #2 to 'setmetatable' (nil or table expected")
+    raises(function() return setmetatable(setmetatable({}, { __metatable = 1 }), {}) end, "cannot change a protected metatable")
+end
+
+local function a_raising_pairs_metamethod_propagates_test()
+    local t = setmetatable({}, { __pairs = function() error("from pairs", 0) end })
+    local ok, err = catch pairs(t)
+    assert(not ok and err == "from pairs")
+end
+
+local function tonumber_reads_every_base_test()
+    assert(tonumber("z", 36) == 35)
+    assert(tonumber("  ff  ", 16) == 255)
+    assert(tonumber("0x1p4") == 16.0)
+    assert(tonumber("8", 8) == nil)
+    assert(tonumber(1.5d) == 1.5 and tonumber(10n) == 10)
+    raises(function() return tonumber("1", 99) end, "bad argument #2 to 'tonumber' (base out of range)")
+    raises(function() return tonumber(1, 10) end, "bad argument #1 to 'tonumber' (string expected, got number)")
+end
+
+local function load_checks_its_mode_and_reader_test()
+    local f, err = load("x = 1", "=n", "b")
+    assert(f == nil and err:find("attempt to load a text chunk (mode is 'b')", 1, true), err)
+    local parts = { "return ", "4", "2" }
+    local i = 0
+    local g = assert(load(function() i = i + 1 return parts[i] end))
+    assert(g() == 42)
+    local h, msg = load(function() return {} end)
+    assert(h == nil and msg == "reader function must return a string", msg)
+end
+
+local function collectgarbage_checks_its_options_test()
+    raises(function() return collectgarbage("bogus") end, "bad argument #1 to 'collectgarbage' (invalid option 'bogus')")
+    raises(function() return collectgarbage("step", "x") end, "bad argument #2 to 'collectgarbage' (number expected, got string)")
+    assert(collectgarbage("step", 0) ~= nil)
+end

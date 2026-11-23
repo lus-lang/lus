@@ -127,6 +127,14 @@ print("Name:\tAda\nRole:\tEngineer")
 --> Role:  Engineer
 ```
 
+Strings in backticks take the same escape sequences, together with `` \` `` for a backtick and `\$` for a dollar sign. A string in backticks can also contain another one inside `$( )`. The following line colors a word for a terminal, where `\27` is the escape character that starts a color code.
+
+```lus
+local word = "done"
+print(`status: \27[32m$word\27[0m`)   --> status: done
+print(`$(`nested $word`) twice`)      --> nested done twice
+```
+
 A long string is written between `[[` and `]]`, can span several lines, and keeps its text exactly as written. The help text of a command line tool is a typical long string.
 
 ```lus
@@ -528,7 +536,7 @@ mode = mode & ~WRITE           -- clear the WRITE bit
 print(mode)                    --> 1
 ```
 
-A float operand must be a whole number, which Lus converts to an integer. If either operand is a bigint, the result is a bigint without the 64-bit limit, so `1n << 64` is `18446744073709551616`.
+A float operand must be a whole number, which Lus converts to an integer. If either operand is a bigint, the result is a bigint without the 64-bit limit, so `1n << 64` is `18446744073709551616`. A bigint shifts left by at most 16,777,216 bits. A larger amount raises `shift amount too large`.
 
 ### Precedence
 
@@ -1271,6 +1279,16 @@ print(("hello world")[1, 5])             --> hello
 ```
 
 A slice of a list is a new list, so changing it leaves the original list unchanged.
+
+When the first position is larger than the second, the slice runs backward. It contains the items from the first position down to the second, so `s[5, 4]` holds two items, the fifth and then the fourth. A slice with equal positions holds one item.
+
+```lus
+local letters = { "a", "b", "c", "d", "e" }
+
+print(table.concat(letters[5, 4], " "))  --> e d
+print(table.concat(letters[3, 3], " "))  --> c
+print(("hello")[5, 2])                   --> olle
+```
 
 ### Copying tables
 
@@ -2970,6 +2988,34 @@ An observed variable depends on the observed variables that its initializer name
 
 A variable that depends on others is read-only, so an assignment to it is a compile error. If an initializer raises an error during an update, the assignment that started the update raises it. The dependents not yet updated keep their previous values. An assignment to an observed variable while an update runs raises an error. When the block of a dependent ends, it stops depending on its inputs.
 
+### Values for each coroutine
+
+Some values describe the work in progress rather than the program, such as the identifier of the request a server is answering, which every log line should carry. A global would mix up the requests that detached coroutines serve at the same time, and passing the value to every function changes every signature. The `<context>` attribute gives a local a value for each coroutine: an assignment changes the value of the running coroutine alone, and a read returns the value of the running coroutine. The initializer is the value of every coroutine that assigned nothing.
+
+```lus
+local request_id <context> = "none"
+
+local function log(message)
+    print(`[$request_id] $message`)
+end
+
+local function handle(id)
+    request_id = id
+    coroutine.yield()
+    log("done")
+end
+
+local a = coroutine.create(handle)
+local b = coroutine.create(handle)
+coroutine.resume(a, "r1")
+coroutine.resume(b, "r2")
+coroutine.resume(a)   --> [r1] done
+coroutine.resume(b)   --> [r2] done
+log("idle")           --> [none] idle
+```
+
+A new coroutine starts with the values of the coroutine that creates it, so the connections that `network.serve` accepts start with the values of the coroutine that runs `serve`, and a task detached while answering a request keeps its request. A change after the creation stays in the coroutine that made it. A function reads the value of the coroutine that runs it, wherever the function was defined. Each run of a declaration creates a new variable, so two calls of a function that declares one have two variables. [`debug.getcontext`](/manual/api#debug.getcontext) reads the values that another coroutine sees.
+
 ## Enums
 
 Programs often need a value that is one of a few fixed choices, such as a log level, the state of a connection, or a direction. Strings and numbers can represent the choices, but both have drawbacks. A misspelled string such as `"warnning"` is still a string, so Lus reports no error. A number such as `2` has no meaning for the reader and is equal to every other `2` in the program. An _enum_ is a fixed set of named values that differ from every string, every number, and the values of every other enum.
@@ -3093,7 +3139,7 @@ A permission name starts with a group, such as `fs` for the filesystem. Most nam
 | `network:tcp` | Opening TCP connections and listening for them. |
 | `network:udp` | Sending and receiving UDP datagrams. |
 | `network:server` | Serving HTTP with `network.serve`, together with `network:tcp`. |
-| `exec` | Running other programs with `os.execute` and `io.popen`. |
+| `exec` | Running other programs with `os.spawn`, `os.execute`, and `io.popen`. |
 | `env` | Reading environment variables with `os.getenv` and setting them with `os.setenv`. `env:read` and `env:write` allow one of the two. |
 | `load` | Running code that the program loads while it runs, with `load`, `require` of a file, or a worker. |
 

@@ -118,6 +118,11 @@ pub const Op = enum(u8) {
     moverange, // R[A..] = R[B..top), top = base + A + count
 
     extraarg, // Ax operand for the previous instruction
+
+    // Context variables (`spec/design/context.md`). R[B] or R[A] holds the
+    // slot object of the variable.
+    getctx, // R[A] = the value of the variable R[B] in the running coroutine
+    setctx, // the value of the variable R[A] in the running coroutine = R[B]
 };
 
 /// A fused instruction: two plain instructions that the interpreter runs

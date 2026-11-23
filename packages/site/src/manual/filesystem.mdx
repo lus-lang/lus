@@ -38,7 +38,7 @@ end
 fs.remove(path)
 ```
 
-`io.open` returns `nil` and a message when it cannot open the file, which is why the example wraps it in `assert`. `read("a")` returns the whole file. [`io.lines`](/manual/api#io.lines) reads a file line by line and closes it after the last line. Reading requires `fs:read` for the path and writing requires `fs:write`. [Files](/manual/text#files) describes reading bytes and text in other encodings.
+`io.open` returns `nil` and a message when it cannot open the file, which is why the example wraps it in `assert`. A read or a write that the operating system refuses, such as a write to a full disk, returns `nil`, the message, and the number of the error, as in Lua, so a program that must notice the failure wraps the call in `assert` too. The iterator of `io.lines` raises such an error instead, which ends its loop. `read("a")` returns the whole file. [`io.lines`](/manual/api#io.lines) reads a file line by line and closes it after the last line. Reading requires `fs:read` for the path and writing requires `fs:write`. [Files](/manual/text#files) describes reading bytes and text in other encodings.
 
 [`os.tmpname()`](/manual/api#os.tmpname) creates an empty temporary file and returns its path. A temporary file holds data that a program keeps only while it runs, so the program removes the file with `fs.remove` when it is done.
 
@@ -64,7 +64,7 @@ fs.remove(dir, true)
 fs.remove(base)
 ```
 
-A _glob_ is a pattern that selects files by extension or by prefix. With a `glob`, `fs.list` returns only the names that match it. In a glob, `*` matches any sequence of characters, including the empty one, while `?` matches exactly one byte, which is one character in an ASCII name. Every other character matches itself. A name that starts with `.` matches `*` like any other name.
+A _glob_ is a pattern that selects files by extension or by prefix. With a `glob`, `fs.list` returns only the names that match it. In a glob, `*` matches any sequence of characters, including the empty one, while `?` matches exactly one character. `[abc]` matches one of the listed characters, `[a-z]` one character of the range, and `[!abc]` one character that is not listed. `{json,md}` stands for each of its comma separated alternatives in turn. Every other character matches itself. A name that starts with `.` matches `*` like any other name.
 
 The following program counts the JSON files in a directory and finds the configuration file whose number has one digit.
 
@@ -84,7 +84,84 @@ fs.remove(dir, true)
 fs.remove(base)
 ```
 
+A glob that contains `/` or a `**` segment reaches below `path`, and `fs.list` then returns paths relative to `path` with `/` between their segments. A `**` segment matches any number of directories, including none, so `**/*.lus` matches the Lus files at every depth. Symbolic links to directories are listed without being followed.
+
+The following program lists the Markdown and JSON files of a small tree.
+
+```lus
+pledge("fs")
+
+local base = os.tmpname()
+local dir = base .. ".d"
+fs.createdirectory(fs.path.join(dir, "docs", "api"), true)
+for _, name in ipairs({"README.md", "package.json", "docs/intro.md", "docs/api/fs.md", "docs/logo.png"}) do
+    io.open(fs.path.join(dir, name), "w"):close()
+end
+
+local found = fs.list(dir, "**/*.{md,json}")
+table.sort(found)
+print(table.concat(found, " "))   --> README.md docs/api/fs.md docs/intro.md package.json
+fs.remove(dir, true)
+fs.remove(base)
+```
+
 `fs.list` requires `fs:read` for `path`. It raises `"cannot list directory PATH: No such file or directory"` when the directory does not exist and `"PATH is not a directory"` when `path` names a file.
+
+## Walking a directory tree
+
+[`fs.walk(dir, options)`](/manual/api#fs.walk) returns an iterator that visits every entry below `dir` and reads each directory when it reaches it, so a loop that stops early never reads the rest of the tree. Each step gives the path of the entry joined to `dir`, then `"directory"` or `"file"`, then whether the entry is a symbolic link. The walk is depth first, sorts the names within each directory, and gives a directory before the entries inside it, so a walk of the same tree gives the same sequence on every system.
+
+The options select what the walk visits. `depth` limits how far it goes, with `1` for the entries of `dir` alone. `glob` keeps the entries that match it: a glob without `/` matches the name of an entry at any depth, and any other glob matches the path relative to `dir`. `exclude` is a glob or an array of globs whose matches are neither reported nor entered. `links = "follow"` enters symbolic links to directories, and `errors = "skip"` leaves out a subdirectory that cannot be read where the walk would otherwise raise an error.
+
+The following program adds up the sizes of the Lus files in a project and leaves out a directory of dependencies.
+
+```lus
+pledge("fs")
+
+local base = os.tmpname()
+local dir = base .. ".d"
+fs.createdirectory(fs.path.join(dir, "src"), true)
+fs.createdirectory(fs.path.join(dir, "deps"), true)
+local files = {["main.lus"] = "print(1)\n", ["src/util.lus"] = "return {}\n", ["deps/big.lus"] = string.rep("x", 1000)}
+for name, text in pairs(files) do
+    local f = io.open(fs.path.join(dir, name), "w")
+    f:write(text)
+    f:close()
+end
+
+local total = 0
+for path in fs.walk(dir, {glob = "*.lus", exclude = "deps"}) do
+    local f = io.open(path, "r")
+    total = total + #f:read("a")
+    f:close()
+end
+print(total)   --> 19
+fs.remove(dir, true)
+fs.remove(base)
+```
+
+`fs.walk` requires `fs:read` for `dir`, and it enters a subdirectory only when `fs:read` covers it.
+
+## Watching for changes
+
+[`fs.watch(path, options)`](/manual/api#fs.watch) returns a coroutine that hands over the changes to the files under `path`. Each resume waits for the next change, then returns `true` and an event whose `kind` is `"create"`, `"modify"`, `"remove"`, or `"rescan"`, and whose `path` is the path that changed. A `"rescan"` event means that the system dropped events, so the program should look at the tree again. Events of one path that follow each other within 50 milliseconds merge into one, so an editor that saves a file in several steps produces one event.
+
+The watch covers the entries of `path`, and with `recursive = true` every directory below it. `glob` keeps the events whose path matches it. Closing the coroutine stops the watch. Resumed inside a detached coroutine, the wait suspends that coroutine as a [suspension point](/manual/concurrency#suspension-points) does.
+
+The following program rebuilds a site whenever one of its pages changes.
+
+```lus nocheck
+pledge("fs")
+
+local changes = fs.watch("pages", {recursive = true, glob = "*.md"})
+while true do
+    local _, event = coroutine.resume(changes)
+    print(event.kind, event.path)
+    rebuild()
+end
+```
+
+`fs.watch` requires `fs:read` for `path` and never delivers an event of a path that `fs:read` does not cover.
 
 ## Inspecting a path
 
@@ -297,8 +374,8 @@ After a crash at any point, the target holds either its complete old contents or
 local function replace(path, contents)
     local tmp = path .. ".tmp"
     local f = assert(io.open(tmp, "w"))
-    f:write(contents)
-    f:sync()
+    assert(f:write(contents))
+    assert(f:sync())
     f:close()
     fs.move(tmp, path, { replace = true })
     fs.sync(fs.path.parent(path))

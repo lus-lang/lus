@@ -1,0 +1,136 @@
+-- `os.signal`: handling signals through a coroutine
+-- (spec/stdlib/os/signal.md). Each test runs a child lus that handles a
+-- signal and sends it the signal with `p:kill`, so the signals never reach
+-- the test runner. Windows delivers console events only to a console, so
+-- the tests run on POSIX systems.
+pledge("exec", "env")
+
+local windows = package.config:sub(1, 1) == "\\"
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+
+local function child(code)
+    return os.spawn({ lus_bin, "-e", code }, { stdin = "pipe", stdout = "pipe" })
+end
+
+local function exit_of(p)
+    local _, success, how, code = coroutine.resume(p.exit)
+    return success, how, code
+end
+
+local function a_handled_signal_is_delivered_test()
+    if windows then skip("signals are POSIX") end
+    local p = child([[
+        local sig = os.signal("interrupt", "terminate")
+        print(coroutine.status(sig))
+        io.stdout:flush()
+        local ok, name = coroutine.resume(sig)
+        print(ok, name)
+    ]])
+    assert(p.stdout:read("l") == "suspended")
+    p:kill("terminate")
+    assert(p.stdout:read("l") == "true\tterminate")
+    assert(exit_of(p) == true)
+end
+
+local function signals_between_resumes_are_counted_test()
+    if windows then skip("signals are POSIX") end
+    local p = child([[
+        local sig = os.signal("hangup")
+        print("ready")
+        io.stdout:flush()
+        io.read("l")
+        print(select(2, coroutine.resume(sig)), select(2, coroutine.resume(sig)))
+    ]])
+    assert(p.stdout:read("l") == "ready")
+    -- The system merges a signal that arrives while the same one is still
+    -- pending, so the second follows after a moment.
+    p:kill("hangup")
+    coroutine.resume(coroutine.sleep(0.2))
+    p:kill("hangup")
+    p.stdin:write("go\n")
+    assert(p.stdout:read("l") == "hangup\thangup")
+    assert(exit_of(p) == true)
+end
+
+local function closing_restores_the_default_action_test()
+    if windows then skip("signals are POSIX") end
+    local p = child([[
+        local sig = os.signal("terminate")
+        coroutine.close(sig)
+        print("closed")
+        io.stdout:flush()
+        io.read("a")
+    ]])
+    assert(p.stdout:read("l") == "closed")
+    p:kill("terminate")
+    local success, how, code = exit_of(p)
+    assert(success == nil and how == "signal" and code == 15)
+end
+
+local function a_second_interrupt_during_handling_exits_test()
+    if windows then skip("signals are POSIX") end
+    local p = child([[
+        local sig = os.signal("interrupt")
+        print("ready")
+        io.stdout:flush()
+        coroutine.resume(sig)
+        print("handling")
+        io.stdout:flush()
+        io.read("a")
+    ]])
+    assert(p.stdout:read("l") == "ready")
+    p:kill("interrupt")
+    assert(p.stdout:read("l") == "handling")
+    p:kill("interrupt")
+    local success, how, code = exit_of(p)
+    assert(success == nil and how == "exit" and code == 130)
+end
+
+local function an_interrupt_while_waiting_again_is_handled_test()
+    if windows then skip("signals are POSIX") end
+    local p = child([[
+        local sig = os.signal("interrupt")
+        print("ready")
+        io.stdout:flush()
+        coroutine.resume(sig)
+        -- The announcement runs once the main chunk waits again, so the
+        -- second interrupt arrives during that wait.
+        coroutine.detach(coroutine.create(function()
+            print("again")
+            io.stdout:flush()
+        end))
+        coroutine.resume(sig)
+        print("twice")
+    ]])
+    assert(p.stdout:read("l") == "ready")
+    p:kill("interrupt")
+    assert(p.stdout:read("l") == "again")
+    p:kill("interrupt")
+    assert(p.stdout:read("l") == "twice")
+    assert(exit_of(p) == true)
+end
+
+local function a_detached_coroutine_waits_for_a_signal_test()
+    if windows then skip("signals are POSIX") end
+    local p = child([[
+        local got
+        local sig = os.signal("terminate")
+        local waiter = coroutine.detach(coroutine.create(function()
+            got = select(2, coroutine.resume(sig))
+        end))
+        print("ready")
+        io.stdout:flush()
+        coroutine.resume(waiter)
+        print(got)
+    ]])
+    assert(p.stdout:read("l") == "ready")
+    p:kill("terminate")
+    assert(p.stdout:read("l") == "terminate")
+    assert(exit_of(p) == true)
+end
+
+local function unknown_names_raise_test()
+    assert(not catch os.signal())
+    assert(not catch os.signal("stop"))
+    assert(not catch os.signal("interrupt", 3))
+end

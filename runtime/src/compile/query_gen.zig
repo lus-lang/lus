@@ -84,6 +84,9 @@ const Ctx = struct {
     aliases: [][]const u8,
     /// Scope-name chains captured at build time, in order of appearance.
     params: std.ArrayList(*ast.Expr) = .empty,
+    /// The name chain of each parameter, so that a chain that appears
+    /// twice in a query is one parameter and its two uses are equal.
+    param_chains: std.ArrayList([]const ast.Name) = .empty,
     aggs: std.ArrayList(Agg) = .empty,
     clause: Clause = .where,
     in_agg: bool = false,
@@ -217,8 +220,12 @@ const Ctx = struct {
                         if (it.name) |n| if (std.mem.eql(u8, n, head)) return it.node;
                     }
                 }
+                for (c.param_chains.items, 0..) |pc, i| {
+                    if (sameChain(pc, chain)) return c.newNode(line, .{ .param = @intCast(i) });
+                }
                 const idx: u32 = @intCast(c.params.items.len);
                 try c.params.append(c.arena, try c.chainExpr(line, chain));
+                try c.param_chains.append(c.arena, chain);
                 return c.newNode(line, .{ .param = idx });
             },
             .unop => |u| {
@@ -326,6 +333,26 @@ fn litEqual(a: *const ast.Expr, b: *const ast.Expr) bool {
     };
 }
 
+/// Whether two host expressions read the same value: names, field paths,
+/// and literals, which read the same value wherever they appear in one
+/// query. Any other expression equals only itself.
+fn hostEqual(a: *const ast.Expr, b: *const ast.Expr) bool {
+    if (a == b) return true;
+    if (std.meta.activeTag(a.kind) != std.meta.activeTag(b.kind)) return false;
+    return switch (a.kind) {
+        .name => |n| std.mem.eql(u8, n.text, b.kind.name.text),
+        .paren => |e| hostEqual(e, b.kind.paren),
+        .index => |ix| hostEqual(ix.obj, b.kind.index.obj) and hostEqual(ix.key, b.kind.index.key),
+        else => litEqual(a, b),
+    };
+}
+
+fn sameChain(a: []const ast.Name, b: []const ast.Name) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (!std.mem.eql(u8, x.text, y.text)) return false;
+    return true;
+}
+
 /// Structural equality, used to match projections against group keys.
 fn nodeEqual(a: *const Node, b: *const Node) bool {
     if (a == b) return true;
@@ -335,7 +362,7 @@ fn nodeEqual(a: *const Node, b: *const Node) bool {
         .column => |x| x.src == b.kind.column.src and std.mem.eql(u8, x.name, b.kind.column.name),
         .rowvar => |x| x == b.kind.rowvar,
         .param => |x| x == b.kind.param,
-        .host => |x| x == b.kind.host,
+        .host => |x| hostEqual(x, b.kind.host),
         .nameref => |x| std.mem.eql(u8, x, b.kind.nameref),
         .and_ => |x| nodeEqual(x[0], b.kind.and_[0]) and nodeEqual(x[1], b.kind.and_[1]),
         .or_ => |x| nodeEqual(x[0], b.kind.or_[0]) and nodeEqual(x[1], b.kind.or_[1]),

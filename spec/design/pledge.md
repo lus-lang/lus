@@ -13,7 +13,7 @@ pledge("~exec")            -- reject a capability permanently
 pledge("seal")             -- forbid any further change
 ```
 
-`pledge` accepts several strings in one call and returns one boolean per string, in order, which is `true` where that grant succeeded. A coroutine starts with the permission set of its creator, and changes inside it stay local to it. On the command line, `-P` and `--pledge` grant capabilities before the script runs.
+`pledge` accepts several strings in one call and returns one boolean per string, in order, which is `true` where that grant succeeded. A grant only adds access. A check passes when any grant of the permission or of its base permission covers the request, and a grant without a value covers every value, so the order of the grants never matters. Narrowing is done with a rejection or inside a coroutine. A coroutine starts with the permission set of its creator, and changes inside it stay local to it. On the command line, `-P` and `--pledge` grant capabilities before the script runs.
 
 ## Capabilities
 
@@ -26,8 +26,11 @@ A capability has a name, a list of subcapabilities, and a value kind. The value 
 | `host` | `host[:port][/path-glob]`, with `*` allowed in the host | host labels, port, and path are matched separately |
 | `pattern` | a glob over an opaque string | the linear time glob matcher |
 | `custom` | any string | a matcher function supplied at registration |
+| `program` | a program name glob, or a path glob | a value without a separator matches the name of the program as written, and one with a separator matches the absolute path the name resolves to, canonical as for `path` |
 
 The runtime registers its own capabilities through the same registry that extensions use: `fs` (with `read`, `write`, `exec`), `network` (with `tcp`, `udp`, `http`, `tls`), `exec`, `env`, `load`, `ffi`, `worker`, and `seal`.
+
+`exec` has the `program` kind. `os.spawn` asks for the program it runs, so `pledge("exec=git")` lets a script run `git` and nothing else. `os.execute` and `io.popen` run a shell, which runs any program, so they need `exec` without a value. The kind is not part of the C interface, which registers the other kinds.
 
 ## Path values
 

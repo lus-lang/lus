@@ -13,6 +13,8 @@ const inv = @import("inv.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
 const state = @import("state.zig");
+const context = @import("context.zig");
+const context_lib = @import("../lib/context.zig");
 const table = @import("table.zig");
 const shape = @import("shape.zig");
 const ops = @import("ops.zig");
@@ -1368,6 +1370,17 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             c.refresh(l, mode);
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
+        .getctx => {
+            c.fr.pc = pc;
+            c.bp[opc.a(ins)] = context.get(l, try context_lib.slotOf(l, c.bp[opc.b(ins)]));
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
+        .setctx => {
+            c.fr.pc = pc;
+            const slot = try context_lib.slotOf(l, c.bp[opc.a(ins)]);
+            context.set(l, slot, c.bp[opc.b(ins)]) catch return l.raiseMem();
+            continue :sw try fetch(l, &c, &pc, &ins, hooked);
+        },
         .catchcheck => {
             const h = c.bp[opc.a(ins)];
             if (h.tag != .closure and h.tag != .native) {
@@ -1501,6 +1514,30 @@ pub fn restartNative(l: *Thread) (Error || YieldError)!void {
         return;
     };
     sched.clearWait(l.g, t);
+    try poscall(l, nres);
+    if (want >= 0 and l.frames.items.len > 0) {
+        const caller = l.frame();
+        if (caller.closure) |cl| l.top = caller.base + cl.proto.max_stack;
+    }
+}
+
+/// Runs the generator native of the top frame of `l` again, after a
+/// resume of the coroutine that it yielded from (`state.Native.generator`).
+/// The resume arguments are dropped, so the native sees the arguments it
+/// started with. The call ends the way `restartNative` ends it.
+pub fn rerunGenerator(l: *Thread, nresume: u32) (Error || YieldError)!void {
+    const fr = l.frame();
+    const nat = fr.native.?;
+    const want = fr.want;
+    l.top -= nresume;
+    l.top = @max(l.top, fr.base);
+    l.meta_finish = null;
+    const nres = nat.func(l) catch |e| {
+        if (l.status == .suspended and l.yielding) return error.Yield;
+        if (l.g.debugger) |d| d.raised(d.ctx, l);
+        if (!handleError(l, 0)) return e;
+        return;
+    };
     try poscall(l, nres);
     if (want >= 0 and l.frames.items.len > 0) {
         const caller = l.frame();
@@ -1704,7 +1741,12 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
         .redo => |keep_top| {
             pc.* -= 1;
             c.fr.pc = pc.*;
-            if (keep_top) l.top = dst;
+            if (keep_top) {
+                // The instruction runs again with the top it had, which a
+                // multiple-result `ret` counts its results from.
+                l.top = dst;
+                return false;
+            }
         },
         .concat => |k| {
             const a = opc.a(c.code[pc.* - 1]);
@@ -2387,11 +2429,13 @@ fn forPrep(l: *Thread, r: u32) Error!bool {
     const limit_v = try forValue(l, l.stack[r + 1], "limit");
     const step_v = try forValue(l, l.stack[r + 2], "step");
     // A float among bigints makes a float loop, as a float and a bigint
-    // add to a float. A float among decimals stays in the exact path,
-    // whose arithmetic raises the error of mixing them.
+    // add to a float. A float among decimals raises the error of mixing
+    // them, as their arithmetic does, even when the float is the limit,
+    // which the loop only compares.
     const any_float = init_v.tag == .float or limit_v.tag == .float or step_v.tag == .float;
     const any_dec = init_v.tag == .decimal or limit_v.tag == .decimal or step_v.tag == .decimal;
-    if ((isExact(init_v) or isExact(limit_v) or isExact(step_v)) and (!any_float or any_dec)) {
+    if (any_dec and any_float) return l.raiseFmt("attempt to mix decimal and float in arithmetic", .{});
+    if ((isExact(init_v) or isExact(limit_v) or isExact(step_v)) and !any_float) {
         // Bigint and decimal loops step with exact arithmetic.
         const zero = Value.int(0);
         const step_order = @import("numeric.zig").compare(l.g.gpa, step_v, zero) orelse return l.raiseFmt("'for' step is not a number", .{});

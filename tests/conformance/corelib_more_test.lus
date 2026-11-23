@@ -1,0 +1,60 @@
+--[[
+    More edges of the core libraries.
+
+    `table.move` copies forward or backward depending on how its ranges
+    overlap and refuses ranges that would wrap. `table.concat` joins a
+    lone high surrogate and a lone low surrogate into one character.
+    `table.sort` picks random pivots in long ranges. `math.fmod` of exact
+    numbers keeps the sign of the dividend, and `load` reads a chunk from
+    any function, a native one included.
+]]
+
+pledge("load")
+
+local function move_copies_in_the_direction_its_ranges_need_test()
+    local a = { 1, 2, 3, 4, 5 }
+    table.move(a, 1, 3, 3)
+    assert(table.concat(a, ",") == "1,2,1,2,3")
+    a = { 1, 2, 3, 4, 5 }
+    table.move(a, 2, 4, 1)
+    assert(table.concat(a, ",") == "2,3,4,4,5")
+    a = { 1, 2, 3 }
+    table.move(a, 1, 3, 10)
+    assert(a[10] == 1 and a[12] == 3)
+    local b = {}
+    table.move(a, 1, 3, 1, b)
+    assert(table.concat(b, ",") == "1,2,3")
+    local ok, err = catch table.move({}, -1, math.maxinteger, 1)
+    assert(not ok and err:find("too many elements to move", 1, true), err)
+    ok, err = catch table.move({}, 1, math.maxinteger, 2)
+    assert(not ok and err:find("destination wrap around", 1, true), err)
+end
+
+local function concat_joins_surrogate_halves_test()
+    local s = table.concat({ "\u{D800}", "\u{DC00}" })
+    assert(s == "\u{10000}" and utf8.len(s) == 1)
+    s = table.concat({ "a\u{D83D}", "\u{DE00}b" }, "")
+    assert(s == "a\u{1F600}b")
+    assert(table.concat({ "x", "y" }, "\u{D800}") ~= "")
+end
+
+local function sort_handles_long_ordered_ranges_test()
+    for _, n in ipairs{ 1000, 3000 } do
+        local desc, asc = {}, {}
+        for i = 1, n do desc[i] = n + 1 - i; asc[i] = i end
+        table.sort(desc)
+        table.sort(asc, function(x, y) return x > y end)
+        assert(desc[1] == 1 and desc[n] == n and asc[1] == n and asc[n] == 1)
+    end
+end
+
+local function fmod_of_exact_numbers_keeps_the_sign_of_the_dividend_test()
+    assert(math.fmod(7n, 2) == 1 and math.fmod(-7n, 2n) == -1 and math.fmod(7n, -2n) == 1)
+    assert(math.fmod(7, 2n) == 1 and math.fmod(-7, 2n) == -1)
+    assert(tostring(math.fmod(-7.5d, 2)) == "-1.5")
+end
+
+local function load_reads_from_a_native_function_test()
+    local f = assert(load(string.gmatch("return 41 + 1", ".+")))
+    assert(f() == 42)
+end

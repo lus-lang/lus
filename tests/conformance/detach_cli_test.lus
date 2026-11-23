@@ -149,3 +149,44 @@ local function a_circle_of_waiters_ends_lus_with_a_deadlock_test()
     assert(not ok, output)
     assert(string.find(output, "deadlock", 1, true), output)
 end
+
+-- A detached coroutine that fails closes its pending `<close>` variables at
+-- once, and the report of its error keeps the traceback it had when it
+-- failed. The two scripts differ only in the attribute, on the same
+-- lines, so their reports match.
+local function a_failure_closes_pending_variables_and_keeps_the_traceback_test()
+    local function script(attribute)
+        return `
+            local function inner()
+                error("lost in inner")
+            end
+            local function middle()
+                local mark $(attribute) = setmetatable({}, { __close = function(_, err)
+                    print("closed with " .. tostring(err):match("lost in inner"))
+                end })
+                coroutine.yield()
+                inner()
+            end
+            coroutine.detach(coroutine.create(middle))
+            coroutine.detach(coroutine.create(function()
+                for i = 1, 3 do coroutine.yield() end
+                print("the others finish")
+            end))
+        `
+    end
+    local ok, closing = run_script(script("<close>"))
+    assert(not ok, closing)
+    local plain_ok, plain = run_script(script(""))
+    assert(not plain_ok, plain)
+    -- The variable closed with the error as soon as the coroutine failed,
+    -- before the other coroutine finished.
+    local closed_at = string.find(closing, "closed with lost in inner", 1, true)
+    local others_at = string.find(closing, "the others finish", 1, true)
+    assert(closed_at and others_at and closed_at < others_at, closing)
+    -- The scripts have numbered names, which the report shows.
+    local function report(output)
+        return (output:sub(output:find("lus: ", 1, true) or 1):gsub("detach_cli_%d+", "script"))
+    end
+    assert(string.find(report(closing), "'inner'", 1, true), closing)
+    assert(report(closing) == report(plain), report(closing) .. "\n---\n" .. report(plain))
+end

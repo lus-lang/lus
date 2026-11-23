@@ -172,7 +172,7 @@
       "name": "string.tag.lus"
     },
     {
-      "match": "<\\s*(const|close|group|meta|lazy|observe)\\s*>",
+      "match": "<\\s*(const|close|group|meta|lazy|observe|context)\\s*>",
       "name": "storage.type.attribute.lus"
     },
     {
@@ -381,6 +381,13 @@
           },
           "name": "string.quoted.template.lus",
           "patterns": [
+            {
+              "match": "\\\\[`$]",
+              "name": "constant.character.escape.lus"
+            },
+            {
+              "include": "#escaped_char"
+            },
             {
               "match": "\\$\\$",
               "name": "constant.character.escape.lus"

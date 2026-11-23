@@ -36,7 +36,7 @@ pub const Dir = enum(u1) { read, write };
 /// native that lets the other coroutines run and continues on its next
 /// turn. `notify` is a native that waits for a call of `notify` from
 /// another thread.
-pub const Kind = enum(u8) { none, io, join, inner, pass, notify };
+pub const Kind = enum(u8) { none, io, join, inner, pass, notify, park };
 
 /// Why a waiting native runs again.
 pub const Wake = enum(u8) { none, ready, timeout };
@@ -121,6 +121,9 @@ pub const Task = struct {
     joiners: List = .{},
     live_prev: ?*Task = null,
     live_next: ?*Task = null,
+    /// The traceback of a detached coroutine that failed, taken before
+    /// its pending to-be-closed variables closed.
+    trace: ?[]u8 = null,
 };
 
 const List = struct {
@@ -195,6 +198,10 @@ pub const Sched = struct {
     /// a thread.
     notify_waiters: List = .{},
     nnotify: usize = 0,
+    /// The detached coroutines parked in a sleep without end
+    /// (`waitPark`). Only closing the sleep wakes them, so the end of the
+    /// program does not wait for them.
+    nparked: usize = 0,
     /// Set by `notify` from any thread, and taken by the scheduler.
     signalled: std.atomic.Value(bool) = .init(false),
 };
@@ -382,6 +389,19 @@ pub fn waitNotifyFor(l: *Thread, timeout_ms: i32) Error!void {
     _ = try block(l, t);
 }
 
+/// Parks the thread until the wait is abandoned, which happens when the
+/// coroutine that waits is closed. A parked detached coroutine does not
+/// keep the program running after its main chunk.
+pub fn waitPark(l: *Thread) Error!void {
+    const t = try ensureTask(l);
+    t.wake = .none;
+    t.kind = .park;
+    t.target = null;
+    t.deadline = 0;
+    if (canSuspend(l)) return suspendThread(l, t);
+    _ = try block(l, t);
+}
+
 /// Runs the threads that wait in `waitNotify` again, from the thread of
 /// the state. A native calls it after it changed what one of them waits
 /// for.
@@ -442,6 +462,18 @@ fn block(l: *Thread, t: *Task) Error!bool {
 
 /// Forgets what the thread of `t` waited for, once its native returned
 /// or its wait is abandoned.
+/// Ends the wait of `t` and keeps its `ctx`, for a generator native that
+/// yields a value after it waited (`state.Native.generator`). The thread
+/// that resumed it then takes the value in place of waiting again.
+pub fn endWait(t: *Task) void {
+    t.kind = .none;
+    t.target = null;
+    t.wake = .none;
+    t.deadline = 0;
+    t.op_deadline = 0;
+    t.progress = 0;
+}
+
 pub fn clearWait(g: *Global, t: *Task) void {
     if (t.ctx) |ctx| {
         t.ctx = null;
@@ -542,6 +574,10 @@ fn register(g: *Global, r: *Task, leaf: *Task) void {
             s.nnotify += 1;
             r.reg = .notify;
         },
+        .park => {
+            r.reg = .park;
+            if (r.detached) s.nparked += 1;
+        },
         .none, .inner, .pass => return wakeNow(g, r),
     }
     if (leaf.deadline != 0) addTimer(g, r, leaf.deadline);
@@ -579,6 +615,9 @@ fn unregister(g: *Global, r: *Task) void {
             s.notify_waiters.remove(r);
             s.nnotify -= 1;
         },
+        .park => if (r.detached) {
+            s.nparked -= 1;
+        },
     }
     r.reg = .none;
     r.reg_target = null;
@@ -593,6 +632,13 @@ fn enqueue(g: *Global, t: *Task, entry: Entry) void {
 }
 
 /// Ends the wait of `r` with `w`.
+/// Ends the wait of `t` at once, for an event coroutine that another
+/// coroutine closed while it waited inside its native. The native runs
+/// again, or returns from its blocking wait, and finds itself closed.
+pub fn interruptWait(g: *Global, t: *Task) void {
+    if (t.reg != .none or t.driver) wake(g, t, .ready);
+}
+
 fn wake(g: *Global, r: *Task, w: Wake) void {
     g.sched.wakes +%= 1;
     unregister(g, r);
@@ -809,6 +855,7 @@ fn runTask(g: *Global, l: *Thread, t: *Task) Error!void {
         },
         .failed => {
             co.status = .err;
+            closeFailed(g, t);
             if (s.fatal or g.halting) {
                 // The error stops the program, so it leaves through the
                 // thread that runs the scheduler.
@@ -825,6 +872,35 @@ fn runTask(g: *Global, l: *Thread, t: *Task) Error!void {
             }
         },
     }
+}
+
+/// Closes the pending to-be-closed variables of the detached coroutine of
+/// `t`, which failed, with its error, so that what they hold, such as a
+/// socket, is released at once. Nothing resumes a detached coroutine
+/// again. The traceback is taken first, for the report of an error that
+/// nothing collects. An error of a closing method replaces the error of
+/// the coroutine, as `coroutine.close` does.
+fn closeFailed(g: *Global, t: *Task) void {
+    const co = t.thread;
+    if (co.tbc.items.len == 0) return;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(g.gpa);
+    @import("debug.zig").traceback(co, &buf, 0) catch {};
+    t.trace = g.gpa.dupe(u8, buf.items) catch null;
+    const interp = @import("interp.zig");
+    co.status = .running;
+    interp.closeTbc(co, 0, co.err) catch {};
+    co.status = .err;
+}
+
+/// The traceback of the detached coroutine `co`: the one taken when it
+/// failed, or its frames now.
+fn traceOf(co: *Thread, buf: *std.ArrayList(u8)) void {
+    if (co.task) |t| if (t.trace) |tr| {
+        buf.appendSlice(co.g.gpa, tr) catch {};
+        return;
+    };
+    @import("debug.zig").traceback(co, buf, 0) catch {};
 }
 
 /// Runs the coroutines that are ready, then waits for the next event
@@ -849,7 +925,7 @@ fn step(g: *Global, l: *Thread, wait: bool) Error!void {
         timeout = if (d > t) d - t else 0;
     }
     if (timeout == null and s.io_waiters == 0 and s.nnotify == 0) {
-        if (s.nlive == 0 and (l.task == null or !l.task.?.driver)) return;
+        if (s.nlive == s.nparked and (l.task == null or !l.task.?.driver)) return;
         return l.raiseFmt("deadlock: every coroutine waits for another coroutine", .{});
     }
     if (s.io_waiters > 0 or s.nnotify > 0 or (timeout orelse 1) != 0) pollWait(g, timeout);
@@ -862,7 +938,9 @@ fn step(g: *Global, l: *Thread, wait: bool) Error!void {
 /// collected it.
 pub fn drain(l: *Thread) Error!void {
     const g = l.g;
-    while (g.sched.nlive > 0) try step(g, l, true);
+    // Parked coroutines can only be woken by another coroutine, so once
+    // every coroutine left is parked the program is done.
+    while (g.sched.nlive > g.sched.nparked) try step(g, l, true);
     try reportUncollected(l);
 }
 
@@ -897,7 +975,7 @@ pub fn reportUncollected(l: *Thread) Error!void {
             t.collected = true;
             var buf: std.ArrayList(u8) = .empty;
             defer buf.deinit(g.gpa);
-            @import("debug.zig").traceback(co, &buf, 0) catch {};
+            traceOf(co, &buf);
             l.err_traceback = state.newStringIn(g, buf.items) catch null;
             return l.raise(co.err);
         }
@@ -916,7 +994,7 @@ pub fn raiseUncollected(l: *Thread, t: *Task) Error {
     const msg = @import("../api.zig").errorMessage(l, co.err);
     buf.appendSlice(g.gpa, msg) catch return l.raiseMem();
     buf.append(g.gpa, '\n') catch return l.raiseMem();
-    @import("debug.zig").traceback(co, &buf, 0) catch {};
+    traceOf(co, &buf);
     while (buf.items.len > 0 and buf.items[buf.items.len - 1] == '\n') buf.items.len -= 1;
     const s = state.newStringIn(g, buf.items) catch return l.raise(co.err);
     g.sched.fatal = true;
@@ -979,6 +1057,7 @@ pub fn threadFreed(g: *Global, l: *Thread) void {
     if (t.ctx) |ctx| {
         if (t.cancel) |f| f(g, ctx);
     }
+    if (t.trace) |tr| g.gpa.free(tr);
     g.gpa.destroy(t);
 }
 
@@ -1018,6 +1097,7 @@ pub fn release(g: *Global) void {
 /// Frees what the scheduler holds. No coroutine runs afterwards.
 pub fn deinit(g: *Global) void {
     const s = &g.sched;
+    @import("sigwatch.zig").forget(g);
     s.poller.deinit(g);
     s.timers.deinit(g.gpa);
     s.ios.deinit(g.gpa);

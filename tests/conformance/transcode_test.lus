@@ -126,6 +126,40 @@ local function errors_on_invalid_base64url_test()
   checkerror("invalid base64url", string.transcode, "a", "base64url", "binary")
 end
 
+-- Group: base32, the alphabet of RFC 4648 with padding
+
+local base32_cases = {
+  { "", "" },
+  { "f", "MY======" },
+  { "fo", "MZXQ====" },
+  { "foo", "MZXW6===" },
+  { "foob", "MZXW6YQ=" },
+  { "fooba", "MZXW6YTB" },
+  { "foobar", "MZXW6YTBOI======" },
+}
+
+local function base32_test(text, encoded)
+  assert(string.transcode(text, "utf-8", "base32") == encoded)
+  assert(string.transcode(encoded, "base32", "utf-8") == text)
+  -- Decoding ignores case and accepts input without padding.
+  assert(string.transcode(encoded:lower(), "base32", "utf-8") == text)
+  assert(string.transcode((encoded:gsub("=", "")), "base32", "utf-8") == text)
+end
+
+local function base32_totp_secret_test()
+  -- A TOTP secret as authenticator apps show it, in groups of four.
+  local key = string.transcode("JBSW Y3DP EHPK 3PXP", "base32", "binary")
+  assert(string.transcode(key, "binary", "hex") == "48656c6c6f21deadbeef")
+  assert(string.transcode(key, "binary", "base32") == "JBSWY3DPEHPK3PXP")
+end
+
+local function errors_on_invalid_base32_test()
+  checkerror("invalid base32", string.transcode, "MZ1W", "base32", "binary")
+  checkerror("invalid base32", string.transcode, "M", "base32", "binary")
+  checkerror("invalid base32", string.transcode, "MZX", "base32", "binary")
+  checkerror("invalid base32", string.transcode, "MZXW6Y", "base32", "binary")
+end
+
 -- ============================================
 -- URL encoding tests
 -- ============================================
@@ -320,12 +354,14 @@ local function errors_on_codepoints_127_when_encoding_to_ascii_test()
   checkerror("cannot be encoded as ASCII", string.transcode, "日本", "utf-8", "ascii")
 end
 
+-- A character that ASCII cannot hold is skipped, and an invalid byte of
+-- ASCII input becomes U+FFFD.
 local function ignorebad_skips_non_ascii_characters_test()
   local result = string.transcode("hello日world", "utf-8", "ascii", true)
   assert(result == "helloworld")
-  
+
   local result2 = string.transcode(bytes(0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x80, 0x77, 0x6F, 0x72, 0x6C, 0x64), "ascii", "utf-8", true)
-  assert(result2 == "helloworld")
+  assert(result2 == "hello\u{FFFD}world")
 end
 
 -- ============================================
@@ -418,4 +454,133 @@ local function handles_high_iso_8859_1_characters_test()
   local utf8 = string.transcode(s, "iso-8859-1", "utf-8")
   local back = string.transcode(utf8, "utf-8", "iso-8859-1")
   assert(same_bytes(back, s))
+end
+
+-- Lax URL decoding keeps a malformed escape as it is and decodes the rest,
+-- and strict decoding raises.
+local lax_url_decoding_keeps_malformed_escapes_cases = {
+  { "%zz", "%zz" },
+  { "a%", "a%" },
+  { "%4", "%4" },
+  { "a%zz%41+b", "a%zzA b" },
+  { "100%", "100%" },
+  { "%%41", "%A" },
+  { "%4g%20", "%4g " },
+}
+
+local function lax_url_decoding_keeps_malformed_escapes_test(input, expected)
+  assert(string.transcode(input, "url", "utf-8", true) == expected, input)
+  local ok, e = catch string.transcode(input, "url", "utf-8")
+  assert(not ok and string.find(e, "invalid url input", 1, true), tostring(e))
+end
+
+-- Lax base64, base32, and hex decoding skip what is invalid and decode
+-- the rest. Strict decoding raises.
+local lax_decoding_skips_invalid_sequences_cases = {
+  { "base64", "aGV*sbG8=", "hello" },
+  { "base64", "aGVs!bG8", "hello" },
+  { "base64", "a!GVsbG8=", "hello" },
+  { "base64url", "aGk_*", "hi?" },
+  { "base32", "NBSWY3DP!", "hello" },
+  { "base32", "NB?SWY3DP", "hello" },
+  { "hex", "4g41", "A" },
+  { "hex", "414", "A" },
+  { "hex", "zz4142", "AB" },
+}
+
+local function lax_decoding_skips_invalid_sequences_test(encoding, input, expected)
+  local got = string.transcode(input, encoding, "utf-8", true)
+  assert(got == expected, `$(encoding) $(input): $(got)`)
+  local ok = catch string.transcode(input, encoding, "utf-8")
+  assert(not ok, `$(encoding) $(input) decoded strictly`)
+end
+
+-- Valid input decodes the same with and without ignorebad.
+local function lax_decoding_keeps_valid_input_test()
+  for _, c in ipairs({ { "base64", "aGVsbG8=" }, { "base32", "NBSWY3DP" }, { "hex", "68656c6c6f" } }) do
+    assert(string.transcode(c[2], c[1], "utf-8", true) == "hello", c[1])
+    assert(string.transcode(c[2], c[1], "utf-8") == "hello", c[1])
+  end
+end
+
+-- Padding ends the data, so a "=" with more data after it raises, while
+-- padding and whitespace at the end decode. Lax decoding skips the "=".
+local padding_only_ends_the_data_cases = {
+  { "base32", "MZ=XQ", "fo" },
+  { "base32", "MZXQ====\n=", nil },
+  { "base64", "aGVsbG8=x", nil },
+  { "base64", "aGk=aGk=", nil },
+  { "base64url", "aGk=_", nil },
+}
+
+local function padding_only_ends_the_data_test(encoding, input, lax_result)
+  local ok = catch string.transcode(input, encoding, "utf-8")
+  local trailing = input:match("=+[%s=]*$") == input:sub(input:find("=") or #input + 1)
+  if trailing then
+    assert(ok, `$(encoding) $(input) should decode`)
+  else
+    assert(not ok, `$(encoding) $(input) decoded with data after the padding`)
+  end
+  if lax_result then
+    assert(string.transcode(input, encoding, "utf-8", true) == lax_result, input)
+  end
+end
+
+-- Whitespace anywhere in base64 and base32 input is skipped.
+local function base_encodings_skip_whitespace_test()
+  assert(string.transcode("aGVs\nbG8=\r\n", "base64", "utf-8") == "hello")
+  assert(string.transcode("NBSW Y3DP\t", "base32", "utf-8") == "hello")
+  assert(string.transcode("nbswy3dp", "base32", "utf-8") == "hello")
+  for _, n in ipairs({ 1, 3, 6 }) do
+    local ok = catch string.transcode(("A"):rep(8 + n), "base32", "utf-8")
+    assert(not ok, `a base32 text of 8 + $(n) characters decoded`)
+  end
+end
+
+-- With ignorebad, each invalid sequence becomes U+FFFD. In UTF-8 input one
+-- U+FFFD stands for each maximal subpart, as the URL standard decodes.
+local invalid_input_becomes_the_replacement_character_cases = {
+  { "%C3%A9%FF", "url", "\u{E9}\u{FFFD}" },
+  { "%E2%82%41", "url", "\u{FFFD}A" },
+  { "%F0%9F%98", "url", "\u{FFFD}" },
+  { "%C0%AF", "url", "\u{FFFD}\u{FFFD}" },
+  { "%ED%A0%80", "url", "\u{FFFD}\u{FFFD}\u{FFFD}" },
+  { "%F4%90%80%80", "url", "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}" },
+  { "%80%E1%80", "url", "\u{FFFD}\u{FFFD}" },
+  { "%61%F1%80%80%62", "url", "a\u{FFFD}b" },
+  { "c3a9ff", "hex", "\u{E9}\u{FFFD}" },
+}
+
+local function invalid_input_becomes_the_replacement_character_test(input, source, expected)
+  local got = string.transcode(input, source, "utf-8", true)
+  assert(got == expected, `$(input): $(#got) bytes`)
+end
+
+-- A vector of the given bytes.
+local function raw(...)
+  local list = { ... }
+  local v = vector.create(#list)
+  for i, b in ipairs(list) do vector.set(v, i - 1, b) end
+  return v
+end
+
+local function other_decoders_substitute_the_replacement_character_test()
+  -- An unpaired surrogate and an odd last byte of UTF-16.
+  local lone = raw(0x00, 0xD8, 0x41, 0x00, 0x42)
+  assert(string.transcode(lone, "utf-16le", "utf-8", true) == "\u{FFFD}A\u{FFFD}")
+  -- A code point past U+10FFFF in UTF-32.
+  local big = raw(0x00, 0x00, 0x11, 0x00, 0x41, 0x00, 0x00, 0x00)
+  assert(string.transcode(big, "utf-32le", "utf-8", true) == "\u{FFFD}A")
+  -- A byte above 127 in ASCII, then a target that cannot hold U+FFFD.
+  assert(string.transcode(raw(0x61, 0xE9, 0x62), "ascii", "utf-8", true) == "a\u{FFFD}b")
+  assert(string.transcode(raw(0x61, 0xE9, 0x62), "ascii", "ascii", true) == "ab")
+  -- UTF-8 input as raw bytes, one U+FFFD per maximal subpart.
+  assert(string.transcode(raw(0xE2, 0x82, 0x41), "binary", "utf-8", true) == "\u{FFFD}A")
+end
+
+-- Lossy decoding of a vector follows the same rule.
+local function lossy_decoding_replaces_each_maximal_subpart_test()
+  local v = raw(0xE2, 0x82, 0x41, 0xF0, 0x9F, 0x98, 0x42, 0xC0, 0xAF)
+  local text = vector.tostring(v, 0, #v, "lossy")
+  assert(text == "\u{FFFD}A\u{FFFD}B\u{FFFD}\u{FFFD}", text)
 end

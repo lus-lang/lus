@@ -108,7 +108,7 @@ The runner reports the two failures as follows.
          value: false
 ```
 
-Only the `assert` calls written in the test file report this way, while modules that the test file requires keep the standard `assert`.
+A power assert that passes returns what the standard `assert` returns, all of its arguments, so `select(2, assert(coroutine.resume(co)))` reads the first result of the coroutine in a test file as it does anywhere else. Only the `assert` calls written in the test file report this way, while modules that the test file requires keep the standard `assert`.
 
 ## Case tables
 

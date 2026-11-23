@@ -266,6 +266,7 @@ The annotations are the following.
 
 - `@param NAME TYPE DESCRIPTION` documents a parameter. A `?` after the name or after the type makes the parameter optional. `...` documents unnamed variable arguments, while named variable arguments such as `...parts` are documented under their name without the dots.
 - `@return TYPE DESCRIPTION` documents one result, in order. `@returns` is the same annotation.
+- `@raise DESCRIPTION` documents an error that the function raises, such as its message and when it occurs. Each error takes an annotation of its own, and `@raises` is the same annotation. The output lists them under **Raises** and in the `raises` field of the JSON.
 - `@since VERSION` records the release in which the entry appeared.
 - `@stability LEVEL` records how settled the entry is.
 
@@ -639,7 +640,7 @@ Serves HTTP/1.1 on `host` and `port`, calls `handler` for every request, and ret
 
 ## Agent setup
 
-A coding agent writes better Lus when the project contains instructions for the language and its tools. `lus agents init [DIR]` writes the agent skills of the running version into `DIR/.agents/skills`, the folder that coding agents of several vendors read, where `DIR` defaults to the current directory. The command then links `.claude/skills` to that folder, or links each skill into it when `.claude/skills` is already a directory. On a system that refuses symbolic links, it copies the skills. Last, it adds a short Lus section to `AGENTS.md`, creating the file if needed. Running the command again updates the skills and changes nothing else. [The agents page](/agents) lists the skills and the prompts to start from.
+A coding agent writes better Lus when the project contains instructions for the language and its tools. `lus agents init [DIR]` writes the agent skills of the running version into `DIR/.agents/skills`, the folder that coding agents of several vendors read, where `DIR` defaults to the current directory. The command then links `.claude/skills` to that folder, or links each skill into it when `.claude/skills` is already a directory. On a system that refuses symbolic links, it copies the skills. Last, it writes a short Lus section to `AGENTS.md`, creating the file if needed. The section sits between the lines `<!-- lus agents init -->` and `<!-- /lus agents init -->`. Running the command again updates the skills and the text between those lines, and leaves the rest of `AGENTS.md` as it is. [The agents page](/agents) lists the skills and the prompts to start from.
 
 ## Related pages
 

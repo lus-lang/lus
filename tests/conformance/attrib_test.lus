@@ -180,6 +180,18 @@ local function table_indexing_with_various_types_test()
     assert(a[nil] == nil)
 end
 
+local function constructors_with_thousands_of_constant_keys_test()
+    local named, keyed = {}, {}
+    for i = 1, 2000 do
+        named[#named + 1] = `k$i = $i`
+        keyed[#keyed + 1] = `["s$i"] = $i, [$(i + 0.5)] = $i`
+    end
+    local t = load("return { " .. table.concat(named, ", ") .. " }")()
+    assert(t.k1 == 1 and t.k2000 == 2000)
+    local u = load("return { 1, " .. table.concat(keyed, ", ") .. ", 2 }")()
+    assert(u.s1999 == 1999 and u[1999.5] == 1999 and u[1] == 1 and u[2] == 2)
+end
+
 local function complex_table_constructor_test()
     local function f(a) return a end
     local a, b, c

@@ -14,6 +14,7 @@ const ops = @import("../vm/ops.zig");
 const pledge = @import("../vm/pledge.zig");
 const aux = @import("auxlib.zig");
 const os = @import("os.zig");
+const walk = @import("walk.zig");
 const Value = value.Value;
 const Thread = state.Thread;
 const Error = state.Error;
@@ -34,6 +35,8 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "follow", .func = follow },
     .{ .name = "createlink", .func = createLink },
     .{ .name = "createdirectory", .func = createDirectory },
+    .{ .name = "walk", .func = walk.walk },
+    .{ .name = "stat", .func = stat },
 };
 
 pub const path_funcs = [_]aux.Reg{
@@ -44,11 +47,13 @@ pub const path_funcs = [_]aux.Reg{
 };
 
 pub fn open(l: *Thread) Error!void {
+    try walk.open(l);
     const t = try aux.newLib(l, .fields, "fs", &funcs);
     try l.push(Value.obj(.table, t));
     defer l.top -= 1;
     const p = try aux.newLib(l, .fields, "fs.path", &path_funcs);
     try aux.setField(l, t, "path", Value.obj(.table, p));
+    try @import("watch.zig").open(l, t);
     try aux.setField(l, p, "separator", try l.newStringValue(sep_str));
     try aux.setField(l, p, "delimiter", try l.newStringValue(delimiter));
     try aux.setGlobal(l, "fs", Value.obj(.table, t));
@@ -140,6 +145,12 @@ fn list(l: *Thread) Error!u32 {
     const path = try aux.checkBytes(l, 1);
     const glob = try aux.optString(l, 2, null);
     try pledge.require(l, "fs:read", path);
+    var filter: ?walk.Filter = null;
+    if (glob) |g| {
+        filter = try walk.compileFilter(l, l.g.gpa, g);
+        if (filter.?.g.deep) return walk.listDeep(l, path, filter.?);
+    }
+    defer if (filter) |*f| f.g.deinit();
     const io = l.g.io;
     var dir = Dir.cwd().openDir(io, path, .{ .iterate = true }) catch |e| switch (e) {
         error.NotDir => return l.raiseFmt("{s} is not a directory", .{path}),
@@ -154,7 +165,7 @@ fn list(l: *Thread) Error!u32 {
         const entry = it.next(io) catch |e| return l.raiseFmt("cannot list directory {s}: {s}", .{ path, errMsg(e) });
         const ent = entry orelse break;
         if (std.mem.eql(u8, ent.name, ".") or std.mem.eql(u8, ent.name, "..")) continue;
-        if (glob) |g| if (!pledge.globMatch(g, ent.name)) continue;
+        if (filter) |*f| if (!f.g.match(ent.name)) continue;
         try ops.rawSet(l, t, Value.int(idx), try os.lossyString(l, ent.name));
         idx += 1;
     }
@@ -272,7 +283,8 @@ fn sync(l: *Thread) Error!u32 {
         };
         return 0;
     }
-    var file = cwd.openFile(io, path, .{}) catch |e| return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) });
+    // Windows flushes a file only through a handle with write access.
+    var file = cwd.openFile(io, path, .{ .mode = if (windows) .read_write else .read_only }) catch |e| return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) });
     defer file.close(io);
     @import("io.zig").syncFile(io, file) catch |e| return l.raiseFmt("cannot sync '{s}': {s}", .{ path, errMsg(e) });
     return 0;
@@ -322,6 +334,40 @@ fn fsType(l: *Thread) Error!u32 {
     try l.push(try l.newStringValue(if (kind == .directory) "directory" else "file"));
     try l.push(Value.boolean(is_link));
     return 2;
+}
+
+/// `fs.stat(path [, options])` returns `{size, modified, kind}`.
+fn stat(l: *Thread) Error!u32 {
+    const path = try aux.checkBytes(l, 1);
+    var follow_links = true;
+    if (!l.arg(2).isNil()) {
+        const t = try aux.checkTable(l, 2);
+        const f = try aux.getField(l, t, "follow");
+        if (!f.isNil()) {
+            if (f.tag != .true and f.tag != .false) return aux.argError(l, 2, "option 'follow' must be a boolean", .{});
+            follow_links = f.tag == .true;
+        }
+    }
+    try pledge.require(l, "fs:read", path);
+    const st = Dir.cwd().statFile(l.g.io, path, .{ .follow_symlinks = follow_links }) catch |e| switch (e) {
+        error.FileNotFound => return l.raiseFmt("path '{s}' does not exist", .{path}),
+        else => return l.raiseFmt("cannot stat '{s}': {s}", .{ path, errMsg(e) }),
+    };
+    const t = try l.newTable(0, 3);
+    try l.push(Value.obj(.table, t));
+    try aux.setField(l, t, "size", Value.int(@intCast(@min(st.size, std.math.maxInt(i64)))));
+    const kind: []const u8 = switch (st.kind) {
+        .directory => "directory",
+        .file => "file",
+        .sym_link => "link",
+        else => "other",
+    };
+    try aux.setField(l, t, "kind", try l.newStringValue(kind));
+    const ns: i128 = st.mtime.nanoseconds;
+    try @import("time.zig").pushWallInstant(l, @intCast(@divFloor(ns, std.time.ns_per_s)), @intCast(@mod(ns, std.time.ns_per_s)));
+    try aux.setField(l, t, "modified", l.stack[l.top - 1]);
+    l.top -= 1;
+    return 1;
 }
 
 fn follow(l: *Thread) Error!u32 {

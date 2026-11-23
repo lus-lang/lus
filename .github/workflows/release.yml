@@ -87,7 +87,7 @@ jobs:
             cp ../LICENSE.md "$prefix/LICENSE.md"
             cp ../packaging/notices/THIRD_PARTY_NOTICES.NATIVE.md "$prefix/THIRD_PARTY_NOTICES.md"
             mkdir -p "$prefix/licenses"
-            for license in BROTLI LUA SQLITE TZDATA UNICODE ZIG ZSTD; do
+            for license in BROTLI LUA MBEDTLS SQLITE TZDATA UNICODE ZIG ZSTD; do
               cp "../packaging/licenses/LICENSE.$license.txt" "$prefix/licenses/"
             done
             case "$target" in

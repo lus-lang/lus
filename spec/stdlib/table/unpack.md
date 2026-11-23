@@ -23,7 +23,7 @@ Returns the elements `list[i]` through `list[j]` as separate values.
 
 The results are `j - i + 1` values in order, with `nil` for each missing element in the range. When `i` is greater than `j`, there are no results.
 
-A range of more values than the stack can hold raises `too many results to unpack`. A `list` that is not a table raises a type error.
+A range of more values than the stack can hold raises `too many results to unpack`. The stack of a thread holds 1,000,000 slots, so a call from a fresh state unpacks at most about 999,990 values. A `list` that is not a table raises a type error.
 
 ```lus
 print(table.unpack({1, 2, 3}))         --> 1  2  3

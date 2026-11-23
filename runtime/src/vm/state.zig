@@ -115,6 +115,11 @@ pub const Native = struct {
     /// The leaf computes only the first result of `func`, so it runs only
     /// for a call that wants at most one result.
     leaf_first: bool = false,
+    /// The native is the body of a coroutine that yields from inside it,
+    /// such as a stream of `network.fetch`. A resume after a yield runs it
+    /// again from its start, with the arguments it started with, rather
+    /// than returning the resume arguments from it.
+    generator: bool = false,
 
     pub inline fn upvalues(n: *Native) []Value {
         const base: [*]u8 = @ptrCast(n);
@@ -395,6 +400,8 @@ pub const Global = struct {
     /// lookup consults the getter of the metatable after its `__index`
     /// table missed, so method lookups never reach it (`ops.index`).
     fields: std.AutoHashMapUnmanaged(*Table, FieldGetter) = .empty,
+    /// The slots of the context variables of this state (`context.zig`).
+    ctx: @import("context.zig").Store = .{},
     /// Program arguments and environment, provided by the host.
     args: []const []const u8 = &.{},
     environ: ?*std.process.Environ.Map = null,
@@ -606,6 +613,16 @@ pub const Thread = struct {
     /// Set on a coroutine whose resumer passes a wait on to its own
     /// resumer (`sched.canSuspend`).
     resumer_passes: bool = false,
+    /// Set on a coroutine that the runtime made to hand over events
+    /// (`lib/events.zig`). Closing a coroutine that waits for it closes it
+    /// as well.
+    event: bool = false,
+    /// Set when such a coroutine was closed before it ended, so resuming
+    /// it reports "closed".
+    event_closed: bool = false,
+    /// The values of the context variables of this coroutine
+    /// (`context.zig`), or null while it has none of its own.
+    ctx: ?*@import("context.zig").Array = null,
     /// Debug hook state (debug.sethook). The hook function itself lives in
     /// the registry. `hook_mask` combines the `hook_*` bits.
     hook_mask: u8 = 0,
@@ -656,6 +673,7 @@ pub const Thread = struct {
         if (l.err_traceback) |s| m.markHeader(&s.hdr);
         if (l.resumer) |r| m.markHeader(&r.hdr);
         m.mark(l.port_ctx);
+        @import("context.zig").traverse(l, m);
     }
 
     // -----------------------------------------------------------------
@@ -1363,6 +1381,7 @@ pub fn destroy(g: *Global) void {
     g.tobefnz.deinit(gpa);
     g.ext.deinit(gpa);
     g.fields.deinit(gpa);
+    g.ctx.deinit(gpa);
     g.shapes.deinit(g.gpa);
     g.parent_gpa.destroy(g);
 }

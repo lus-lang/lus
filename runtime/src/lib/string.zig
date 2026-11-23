@@ -258,6 +258,24 @@ fn sub(l: *Thread) Error!u32 {
     return aux.ret(l, subRange(l, s, start, end) catch return l.raiseMem());
 }
 
+/// The characters `i` through `j` of `s`, as `string.sub` takes them, and
+/// the position of the last of them, which is zero for an empty range.
+pub fn subPositions(l: *Thread, s: *String, i: i64, j: i64) Allocator.Error!struct { Value, usize } {
+    const n: usize = s.chars();
+    const start = posRelat(i, n);
+    const end = clipEnd(j, n);
+    return .{ try subRange(l, s, start, end), if (start <= end) end else 0 };
+}
+
+/// The bytes `i` through `j` of a sequence of `n` bytes, as `string.sub`
+/// takes positions, as a 0-based range.
+pub fn byteRange(i: i64, j: i64, n: usize) struct { from: usize, to: usize } {
+    const start = posRelat(i, n);
+    const end = clipEnd(j, n);
+    if (start > end) return .{ .from = 0, .to = 0 };
+    return .{ .from = start - 1, .to = end };
+}
+
 /// `string.sub` with integer positions (`state.LeafFn`), the common call.
 fn subLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
     if (nargs < 2 or nargs > 3) return state.leaf_miss;

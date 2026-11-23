@@ -207,6 +207,7 @@ print(collectgarbage())                     --> 0
       "coroutine.isyieldable",
       "coroutine.resume",
       "coroutine.running",
+      "coroutine.sleep",
       "coroutine.status",
       "coroutine.wrap",
       "coroutine.yield",
@@ -480,6 +481,49 @@ print(coroutine.resume(co))               --> true  running  false
     source = "stdlib/coroutine/running.md",
     stability = "stable",
   },
+  ["coroutine.sleep"] = {
+    children = {},
+    description = [[
+Returns a coroutine whose resume waits until `seconds` have passed and then ends it.
+
+`seconds` is a number of seconds, which may have a fraction, or a `duration` from the `time` library. The time runs from the first resume, not from the call, so a coroutine made early waits its whole time when the program resumes it. Resuming it returns `true` once the time has passed, with no other values. The coroutine is then dead, so a second resume returns `false` and `"cannot resume dead coroutine"`. A time of zero returns at the first resume.
+
+Resumed from a detached coroutine, the wait suspends that coroutine while the other detached coroutines run. Resumed anywhere else, it blocks while the detached coroutines run. Closing the coroutine with `coroutine.close` ends the sleep. Closing a detached coroutine that waits in a resume of the sleep closes the sleep too, so a cancelled task never keeps the program waiting for its sleep.
+
+Closing the coroutine before its time has passed makes a resume that waits for it return `false` and `"closed"`, which a waiter tells apart from the `true` of a time that ran out. A time of `math.huge` never runs out, so the coroutine _parks_ its waiter until another coroutine closes it, without using the processor. A detached coroutine parked this way does not keep the program running: when every detached coroutine left is parked, the program ends after its main chunk as if they had ended.
+
+A negative or NaN time raises `bad argument #1 to 'sleep' (the time must not be negative)`, and a value that is neither a number nor a duration raises a bad argument error.
+
+The following example measures a sleep of 50 milliseconds.
+
+```lus
+local start = time.monotonic()
+print(coroutine.resume(coroutine.sleep(0.05)))            --> true
+print((time.monotonic() - start):seconds() >= 0.05)       --> true
+```
+
+[`coroutine.detach`](/manual/api#coroutine.detach) runs tasks that sleep side by side.]],
+    kind = "function",
+    module = "coroutine",
+    name = "coroutine.sleep",
+    origin = "lus",
+    params = {
+      {
+        name = "seconds",
+        type = "number|duration",
+      },
+    },
+    parent = "coroutine",
+    returns = {
+      {
+        type = "thread",
+      },
+    },
+    short_name = "sleep",
+    since = "2.0.0",
+    source = "stdlib/coroutine/sleep.md",
+    stability = "unstable",
+  },
   ["coroutine.status"] = {
     children = {},
     description = [[
@@ -607,12 +651,17 @@ In a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach), `yie
   },
   ["crypto"] = {
     children = {
+      "crypto.decrypt",
+      "crypto.encrypt",
       "crypto.equal",
       "crypto.hash",
       "crypto.hasher",
       "crypto.hashpassword",
+      "crypto.hkdf",
       "crypto.hmac",
+      "crypto.importkey",
       "crypto.keypair",
+      "crypto.pbkdf2",
       "crypto.random",
       "crypto.sign",
       "crypto.ulid",
@@ -621,9 +670,9 @@ In a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach), `yie
       "crypto.verifypassword",
     },
     description = [[
-The `crypto` module computes SHA-256, SHA-384, SHA-512, and SHA-1 digests, in one call or streamed, and HMACs, signs and verifies with Ed25519, reads secure random bytes, compares secrets in constant time, hashes passwords with Argon2id, and generates UUIDs and ULIDs.
+The `crypto` module computes SHA-2, SHA-1, and MD5 digests, in one call or streamed. It computes HMACs, derives keys with PBKDF2 and HKDF, and encrypts with AES-256-GCM. It signs and verifies with Ed25519, ECDSA over P-256 and P-384, and RSA, with keys read from PEM, DER, or JWK. It also reads secure random bytes, compares secrets in constant time, hashes passwords with Argon2id, and generates UUIDs and ULIDs.
 
-Digests, keys, signatures, and random output are raw bytes, so the module returns them as vectors. Messages, HMAC keys, and passwords may be strings or vectors. A string contributes its WTF-8 bytes. [`string.transcode`](/manual/api#string.transcode) converts vectors to hex, base64, or base64url text and back.
+Digests, raw keys, signatures, ciphertexts, and random output are raw bytes, so the module returns them as vectors. RSA and EC keys are `crypto.key` objects from [`crypto.importkey`](/manual/api#crypto.importkey) or [`crypto.keypair`](/manual/api#crypto.keypair). Messages, HMAC keys, and passwords may be strings or vectors. A string contributes its WTF-8 bytes. [`string.transcode`](/manual/api#string.transcode) converts vectors to hex, base64, or base64url text and back.
 
 The following example prints a SHA-256 digest in hex, then signs a message and checks the signature.
 
@@ -645,6 +694,141 @@ The module requires no permission, so a chunk that renounced every permission wi
     short_name = "crypto",
     since = "2.0.0",
     source = "stdlib/crypto/_module.md",
+    stability = "unstable",
+  },
+  ["crypto.decrypt"] = {
+    children = {},
+    description = [[
+Checks and decrypts a ciphertext from [`crypto.encrypt`](/manual/api#crypto.encrypt) and returns the plaintext as a vector, or `nil` when the check fails.
+
+- `algorithm` is `"aes-256-gcm"`.
+- `key` is the vector of 32 bytes that encrypted the data.
+- `nonce` is the vector of 12 bytes it was encrypted with.
+- `ciphertext` is a string or a vector.
+- `tag` is the vector of 16 bytes that `crypto.encrypt` returned.
+- `aad` is the additional data given to `crypto.encrypt`, if any.
+
+The function returns `nil` when the ciphertext, the tag, the nonce, the key, or the additional data differs from what was encrypted, so a tampered message never yields a plaintext. It raises only for an argument of the wrong type or size, with the errors of `crypto.encrypt` and `bad argument #5 to 'decrypt' (16-byte vector expected)` for the tag.
+
+The following example decrypts a message, then the same message with one bit of the ciphertext flipped.
+
+```lus
+local key, nonce = crypto.random(32), crypto.random(12)
+local ct, tag = crypto.encrypt("aes-256-gcm", key, nonce, "attack at dawn")
+print(vector.tostring(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag)))   --> attack at dawn
+vector.set(ct, 0, vector.get(ct, 0) ~ 1)
+print(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag))   --> nil
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.decrypt",
+    origin = "lus",
+    params = {
+      {
+        name = "algorithm",
+        type = "string",
+      },
+      {
+        name = "key",
+        type = "vector",
+      },
+      {
+        name = "nonce",
+        type = "vector",
+      },
+      {
+        name = "ciphertext",
+        type = "string|vector",
+      },
+      {
+        name = "tag",
+        type = "vector",
+      },
+      {
+        name = "aad",
+        optional = true,
+        type = "string|vector",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "vector|nil",
+      },
+    },
+    short_name = "decrypt",
+    since = "2.0.0",
+    source = "stdlib/crypto/decrypt.md",
+    stability = "unstable",
+  },
+  ["crypto.encrypt"] = {
+    children = {},
+    description = [[
+Encrypts and authenticates `plaintext` and returns the ciphertext and the authentication tag as two vectors.
+
+- `algorithm` is `"aes-256-gcm"`.
+- `key` is a vector of 32 bytes.
+- `nonce` is a vector of 12 bytes.
+- `plaintext` is a string or a vector.
+- `aad` is optional additional data, such as a header or a record ID, which the tag covers without encrypting it.
+
+The ciphertext is as long as the plaintext. The tag is 16 bytes. [`crypto.decrypt`](/manual/api#crypto.decrypt) needs the key, the nonce, the ciphertext, the tag, and the same `aad`, so a program stores or sends the nonce and the tag with the ciphertext.
+
+A nonce must never repeat under one key. Two messages encrypted with the same key and nonce reveal the difference of their plaintexts and let an attacker forge tags. [`crypto.random(12)`](/manual/api#crypto.random) is the usual source of a nonce, which is safe for up to about four billion messages per key.
+
+A `key` or `nonce` of the wrong size raises `bad argument #2 to 'encrypt' (32-byte vector expected)` or `bad argument #3 to 'encrypt' (12-byte vector expected)`. Another algorithm raises `bad argument #1 to 'encrypt' (invalid option 'aes-128-gcm')`.
+
+The following example encrypts a session cookie with a fresh nonce and decrypts it.
+
+```lus
+local key = crypto.random(32)
+local nonce = crypto.random(12)
+local ct, tag = crypto.encrypt("aes-256-gcm", key, nonce, '{"user":42}', "session")
+print(#ct, #tag)   --> 11  16
+local plain = crypto.decrypt("aes-256-gcm", key, nonce, ct, tag, "session")
+print(vector.tostring(plain))   --> {"user":42}
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.encrypt",
+    origin = "lus",
+    params = {
+      {
+        name = "algorithm",
+        type = "string",
+      },
+      {
+        name = "key",
+        type = "vector",
+      },
+      {
+        name = "nonce",
+        type = "vector",
+      },
+      {
+        name = "plaintext",
+        type = "string|vector",
+      },
+      {
+        name = "aad",
+        optional = true,
+        type = "string|vector",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        name = "ciphertext",
+        type = "vector",
+      },
+      {
+        name = "tag",
+        type = "vector",
+      },
+    },
+    short_name = "encrypt",
+    since = "2.0.0",
+    source = "stdlib/crypto/encrypt.md",
     stability = "unstable",
   },
   ["crypto.equal"] = {
@@ -693,12 +877,12 @@ print(crypto.equal("token", "tok"))                        --> false
     description = [[
 Returns the digest of `data` under a hash function, as a vector.
 
-- `algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, or `"sha1"`.
+- `algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, `"sha1"`, or `"md5"`.
 - `data` is the input. A string contributes its WTF-8 bytes. A number is converted to its textual form first.
 
-The result is a vector of 32 bytes for SHA-256, 48 bytes for SHA-384, 64 bytes for SHA-512, and 20 bytes for SHA-1. [`string.transcode`](/manual/api#string.transcode) writes it as hex or base64 text. SHA-1 is broken for collision resistance, so it is for formats that require it, such as git object names, and never for new signatures.
+The result is a vector of 32 bytes for SHA-256, 48 bytes for SHA-384, 64 bytes for SHA-512, 20 bytes for SHA-1, and 16 bytes for MD5. [`string.transcode`](/manual/api#string.transcode) writes it as hex or base64 text. SHA-1 is broken for collision resistance, so it is for formats that require it, such as git object names, and never for new signatures. MD5 is broken for every security purpose. It exists for formats that still name it, such as the `md5` password authentication of PostgreSQL and old checksum files.
 
-An unknown algorithm raises `bad argument #1 to 'hash' (invalid option 'md5')`. A `data` that is neither a string, a number, nor a vector raises `bad argument #2 to 'hash' (string or vector expected, got table)` with its type.
+An unknown algorithm raises `bad argument #1 to 'hash' (invalid option 'sha3')`. A `data` that is neither a string, a number, nor a vector raises `bad argument #2 to 'hash' (string or vector expected, got table)` with its type.
 
 The following example hashes the test message of FIPS 180 with each algorithm and writes the digests as text.
 
@@ -745,14 +929,14 @@ print(string.transcode(crypto.hash("sha256", ""), "binary", "base64"))
     description = [[
 Returns a new hasher, a userdata that computes a digest over data added in pieces.
 
-- `algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, or `"sha1"`, as for [`crypto.hash`](/manual/api#crypto.hash).
+- `algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, `"sha1"`, or `"md5"`, as for [`crypto.hash`](/manual/api#crypto.hash).
 
 A hasher has two methods.
 
 - `hasher:update(data)` adds the bytes of `data`, a string or a vector, and returns the hasher, so calls chain. A string contributes its WTF-8 bytes. A `data` that is neither a string, a number, nor a vector raises `bad argument #1 to 'update' (string or vector expected, got table)` with its type.
 - `hasher:digest()` returns the digest of every byte added so far, as a vector. It leaves the hasher unchanged, so more data may follow and a later `digest` covers all of it.
 
-The digest of data added in any number of pieces equals the digest that `crypto.hash` returns for the same bytes in one string or vector. A program reads a large file in blocks and feeds each block to a hasher, so it never holds the whole file in memory. Calling a method on a value that is not a hasher raises `bad argument #1 to 'update' (crypto.hasher expected, got number)` with its type, or the same error for `digest`. An unknown algorithm raises `bad argument #1 to 'hasher' (invalid option 'md5')`. A hasher is userdata, so a worker message cannot carry it.
+The digest of data added in any number of pieces equals the digest that `crypto.hash` returns for the same bytes in one string or vector. A program reads a large file in blocks and feeds each block to a hasher, so it never holds the whole file in memory. Calling a method on a value that is not a hasher raises `bad argument #1 to 'update' (crypto.hasher expected, got number)` with its type, or the same error for `digest`. An unknown algorithm raises `bad argument #1 to 'hasher' (invalid option 'sha3')`. A hasher is userdata, so a worker message cannot carry it.
 
 The following example hashes a message in two pieces, then adds a third piece and hashes again.
 
@@ -835,16 +1019,78 @@ print(crypto.verifypassword("Tr0ub4dor&3", stored))                    --> false
     source = "stdlib/crypto/hashpassword.md",
     stability = "unstable",
   },
+  ["crypto.hkdf"] = {
+    children = {},
+    description = [[
+Derives `length` bytes from a key with HKDF (RFC 5869) and returns them as a vector.
+
+- `algorithm` names the HMAC, as for [`crypto.hmac`](/manual/api#crypto.hmac).
+- `key` is the input keying material, such as a shared secret or a master key.
+- `salt` is an optional non-secret random value. `nil` is the empty salt.
+- `info` is optional context that binds the result to one use, such as `"cookie encryption"`. `nil` is empty.
+- `length` is the size of the result, from 1 to 255 times the digest size of `algorithm`.
+
+HKDF turns one strong secret into several independent keys, one per `info`. It adds no cost to guessing, so the input must already be a strong secret. A password goes through [`crypto.hashpassword`](/manual/api#crypto.hashpassword) or [`crypto.pbkdf2`](/manual/api#crypto.pbkdf2) instead.
+
+A `length` out of range raises `bad argument #5 to 'hkdf' (length out of range)`. The other errors are those of `crypto.hmac`.
+
+The following example derives two keys for different purposes from one master key.
+
+```lus
+local master = crypto.random(32)
+local enc = crypto.hkdf("sha256", master, nil, "cookie encryption", 32)
+local mac = crypto.hkdf("sha256", master, nil, "cookie signing", 32)
+print(#enc, #mac, crypto.equal(enc, mac))   --> 32  32  false
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.hkdf",
+    origin = "lus",
+    params = {
+      {
+        name = "algorithm",
+        type = "string",
+      },
+      {
+        name = "key",
+        type = "string|vector",
+      },
+      {
+        name = "salt",
+        optional = true,
+        type = "string|vector",
+      },
+      {
+        name = "info",
+        optional = true,
+        type = "string|vector",
+      },
+      {
+        name = "length",
+        type = "integer",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "vector",
+      },
+    },
+    short_name = "hkdf",
+    since = "2.0.0",
+    source = "stdlib/crypto/hkdf.md",
+    stability = "unstable",
+  },
   ["crypto.hmac"] = {
     children = {},
     description = [[
 Returns the HMAC of `data` under `key`, as defined by RFC 2104, as a vector.
 
-- `algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, or `"sha1"`.
+- `algorithm` is `"sha256"`, `"sha384"`, `"sha512"`, `"sha1"`, or `"md5"`.
 - `key` is the secret key, a string or a vector of any length.
 - `data` is the message, a string or a vector.
 
-The result has the size of a digest of `algorithm`: 32 bytes for SHA-256, 48 bytes for SHA-384, 64 bytes for SHA-512, and 20 bytes for SHA-1. A string `key` or `data` contributes its WTF-8 bytes. A number is converted to its textual form first. The errors are those of [`crypto.hash`](/manual/api#crypto.hash), with `key` as argument 2 and `data` as argument 3.
+The result has the size of a digest of `algorithm`: 32 bytes for SHA-256, 48 bytes for SHA-384, 64 bytes for SHA-512, 20 bytes for SHA-1, and 16 bytes for MD5. A string `key` or `data` contributes its WTF-8 bytes. A number is converted to its textual form first. The errors are those of [`crypto.hash`](/manual/api#crypto.hash), with `key` as argument 2 and `data` as argument 3.
 
 An HMAC proves that a message comes from a holder of the key, such as the signature of a webhook or of a JSON Web Token. Compare a received HMAC with the expected one through [`crypto.equal`](/manual/api#crypto.equal), whose running time reveals nothing about where they differ.
 
@@ -886,24 +1132,93 @@ print(crypto.equal(mac, string.transcode(received, "hex", "binary")))   --> true
     source = "stdlib/crypto/hmac.md",
     stability = "unstable",
   },
+  ["crypto.importkey"] = {
+    children = {},
+    description = [=[
+Reads an RSA, EC, or Ed25519 key and returns it as a `crypto.key` object.
+
+- A string that starts with `-----BEGIN` is PEM text. The labels `PRIVATE KEY` (PKCS #8), `PUBLIC KEY` (SubjectPublicKeyInfo), `RSA PRIVATE KEY` and `RSA PUBLIC KEY` (PKCS #1), and `EC PRIVATE KEY` (SEC1) are read. A block of EC parameters before the key, which `openssl ecparam -genkey` writes, is skipped.
+- A string that starts with `{` is a JSON Web Key as JSON text.
+- A table is a JSON Web Key with its members as fields.
+- A vector holds the DER bytes of any of the PEM layouts.
+
+RSA keys have a modulus of 2048, 3072, or 4096 bits. EC keys use the curves P-256 and P-384. A JWK has `kty` `"RSA"`, `"EC"`, or `"OKP"` with the curve `"Ed25519"`. A private RSA key carries its primes and CRT values, as every PKCS #1 and PKCS #8 key does. Members of a JWK that hold no key material, such as `alg` and `kid`, are ignored.
+
+A key object has four fields.
+
+- `key.type` is `"rsa"`, `"ec"`, or `"ed25519"`.
+- `key.private` is `true` for a private key.
+- `key.bits` is the size of an RSA modulus, and `nil` for other keys.
+- `key.curve` is `"P-256"`, `"P-384"`, or `"Ed25519"`, and `nil` for RSA.
+
+It has two methods.
+
+- `key:public()` returns the public half of the key as a new key object.
+- `key:export([format])` writes the key. `"pem"`, the default, returns PEM text in PKCS #8 for a private key and in SubjectPublicKeyInfo for a public key, the layouts of `openssl pkey`. `"der"` returns the same structure as a vector. `"jwk"` returns a table of JWK members.
+
+Data that is not a key raises `invalid key`. An encrypted PEM key raises `encrypted keys are not supported`. Another algorithm, curve, or PEM label raises `unsupported key type`. An RSA modulus of another size raises `RSA keys must have 2048, 3072, or 4096 bits`. A JWK whose public part does not match its private part raises `public and private parts of the key do not match`. A string that is neither PEM nor JSON raises `bad argument #1 to 'importkey' (PEM text or JWK expected)`. A JWK member that is not a string raises `bad argument #1 to 'importkey' (JWK member 'n' must be a string)`.
+
+The following example reads an Ed25519 key from RFC 8410 and writes its public half as PEM and as a JWK.
+
+```lus
+local key = crypto.importkey([[
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC
+-----END PRIVATE KEY-----
+]])
+print(key.type, key.private)    --> ed25519  true
+io.write(key:public():export())
+--> -----BEGIN PUBLIC KEY-----
+--> MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
+--> -----END PUBLIC KEY-----
+print(key:public():export("jwk").x)   --> Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE
+```
+
+[`crypto.sign`](/manual/api#crypto.sign) and [`crypto.verify`](/manual/api#crypto.verify) take key objects.]=],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.importkey",
+    origin = "lus",
+    params = {
+      {
+        name = "data",
+        type = "string|vector|table",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "userdata",
+      },
+    },
+    short_name = "importkey",
+    since = "2.0.0",
+    source = "stdlib/crypto/importkey.md",
+    stability = "unstable",
+  },
   ["crypto.keypair"] = {
     children = {},
     description = [[
-Returns an Ed25519 secret key and its public key, as two vectors of 32 bytes.
+Returns a new secret key and its public key.
 
-- `seed` is a vector of 32 bytes. When it is absent, the seed comes from the secure random source.
+- With no argument, the function returns an Ed25519 key pair as two vectors of 32 bytes, drawn from the secure random source.
+- With a `seed` vector of 32 bytes, it returns the Ed25519 key pair of that seed.
+- With the curve name `"P-256"` or `"P-384"`, it returns a new ECDSA key pair as two [`crypto.key`](/manual/api#crypto.importkey) objects.
 
-The secret key is the seed itself, which is the private key of RFC 8032. `crypto.keypair(secret)` therefore returns the same secret key with its public key, which is how a program recovers the public key of a stored secret key. Keep the secret key private. The public key may be published.
+The Ed25519 secret key is the seed itself, which is the private key of RFC 8032. `crypto.keypair(secret)` therefore returns the same secret key with its public key, which is how a program recovers the public key of a stored secret key. An EC secret key gives its public key through `key:public()`. Keep the secret key private. The public key may be published.
 
-A `seed` that is not a vector of 32 bytes raises `bad argument #1 to 'keypair' (32-byte vector expected)`.
+A `seed` vector of another size raises `bad argument #1 to 'keypair' (32-byte vector expected)`. Another curve name raises `bad argument #1 to 'keypair' (invalid option 'P-521')`. The library generates no RSA keys. A program imports them with [`crypto.importkey`](/manual/api#crypto.importkey).
 
-The following example derives the public key of the first test vector of RFC 8032.
+The following example derives the public key of the first test vector of RFC 8032, then makes a P-256 key pair.
 
 ```lus
 local seed = string.transcode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", "hex", "binary")
 local secret, public = crypto.keypair(seed)
 print(string.transcode(public, "binary", "hex"))
 --> d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+
+local ec_secret, ec_public = crypto.keypair("P-256")
+print(ec_secret.curve, ec_secret.private, ec_public.private)   --> P-256  true  false
 ```
 
 [`crypto.sign`](/manual/api#crypto.sign) signs with the secret key and [`crypto.verify`](/manual/api#crypto.verify) checks a signature with the public key.]],
@@ -915,18 +1230,18 @@ print(string.transcode(public, "binary", "hex"))
       {
         name = "seed",
         optional = true,
-        type = "vector",
+        type = "vector|string",
       },
     },
     parent = "crypto",
     returns = {
       {
         name = "secret",
-        type = "vector",
+        type = "vector|userdata",
       },
       {
         name = "public",
-        type = "vector",
+        type = "vector|userdata",
       },
     },
     short_name = "keypair",
@@ -934,16 +1249,73 @@ print(string.transcode(public, "binary", "hex"))
     source = "stdlib/crypto/keypair.md",
     stability = "unstable",
   },
+  ["crypto.pbkdf2"] = {
+    children = {},
+    description = [[
+Derives a key from a password with PBKDF2 (RFC 8018) and returns `length` bytes as a vector.
+
+- `algorithm` names the HMAC, as for [`crypto.hmac`](/manual/api#crypto.hmac).
+- `password` and `salt` are strings or vectors.
+- `iterations` is the iteration count, from 1 to 4,294,967,295.
+- `length` is the size of the result, from 1 to 1024 bytes.
+
+PBKDF2 is the key derivation of formats that require it, such as SCRAM authentication in PostgreSQL and password-based encryption of old key files. To store passwords, [`crypto.hashpassword`](/manual/api#crypto.hashpassword) is stronger, since Argon2id also costs memory.
+
+An `iterations` or `length` out of range raises `bad argument #4 to 'pbkdf2' (iterations out of range)` or `bad argument #5 to 'pbkdf2' (length out of range)`. The other errors are those of `crypto.hmac`.
+
+The following example derives the first key of RFC 6070.
+
+```lus
+local key = crypto.pbkdf2("sha1", "password", "salt", 1, 20)
+print(string.transcode(key, "binary", "hex"))   --> 0c60c80f961f0e71f3a9b524af6012062fe037a6
+```]],
+    kind = "function",
+    module = "crypto",
+    name = "crypto.pbkdf2",
+    origin = "lus",
+    params = {
+      {
+        name = "algorithm",
+        type = "string",
+      },
+      {
+        name = "password",
+        type = "string|vector",
+      },
+      {
+        name = "salt",
+        type = "string|vector",
+      },
+      {
+        name = "iterations",
+        type = "integer",
+      },
+      {
+        name = "length",
+        type = "integer",
+      },
+    },
+    parent = "crypto",
+    returns = {
+      {
+        type = "vector",
+      },
+    },
+    short_name = "pbkdf2",
+    since = "2.0.0",
+    source = "stdlib/crypto/pbkdf2.md",
+    stability = "unstable",
+  },
   ["crypto.random"] = {
     children = {},
     description = [[
 Returns a new vector of `n` bytes read from the secure random source of the operating system.
 
-- `n` is the number of bytes, from 0 to 1048576.
+- `n` is the number of bytes, 0 or more.
 
 The source is `arc4random_buf` or `getrandom` on native targets and the `random_get` call of WASI in the WebAssembly build. Every call reads the source afresh, so the bytes are suitable for keys, salts, nonces, and session tokens. [`math.random`](/manual/api#math.random) is a separate generator that `math.randomseed` makes reproducible, so it is for simulations and never for secrets.
 
-An `n` outside the range raises `bad argument #1 to 'random' (size out of range)`. If the operating system cannot supply random bytes, the call raises `secure random source unavailable`.
+Any size that fits in memory works. A negative `n` raises `bad argument #1 to 'random' (size must be non-negative)`. A size the allocator cannot satisfy raises `not enough memory`. If the operating system cannot supply random bytes, the call raises `secure random source unavailable`.
 
 The following example makes a session token of 32 random bytes and writes it as hex.
 
@@ -976,22 +1348,29 @@ print(#crypto.random(0))   --> 0
   ["crypto.sign"] = {
     children = {},
     description = [[
-Returns the Ed25519 signature of `message`, a vector of 64 bytes.
+Returns the signature of `message` under a secret key, as a vector.
 
-- `secret` is a secret key from [`crypto.keypair`](/manual/api#crypto.keypair), a vector of 32 bytes.
+- `key` is a private [`crypto.key`](/manual/api#crypto.importkey), or an Ed25519 secret key from [`crypto.keypair`](/manual/api#crypto.keypair) as a vector of 32 bytes.
 - `message` is a string or a vector of any length. A string contributes its WTF-8 bytes.
+- `algorithm` is a JOSE algorithm name: `"EdDSA"`, `"ES256"`, `"ES384"`, `"RS256"`, `"RS384"`, `"RS512"`, `"PS256"`, `"PS384"`, or `"PS512"`.
 
-Signing is deterministic, as RFC 8032 defines it, so the same key and message always give the same signature. A `secret` that is not a vector of 32 bytes raises `bad argument #1 to 'sign' (32-byte vector expected)`. A `message` that is neither a string, a number, nor a vector raises `bad argument #2 to 'sign' (string or vector expected, got table)` with its type.
+An Ed25519 or EC key implies its algorithm, so `algorithm` may be left out. An RSA key signs with PKCS #1 v1.5 (`RS`) or PSS (`PS`), so it requires the algorithm. PSS uses MGF1 with the same hash and a salt as long as the digest, as JSON Web Signatures fix it.
 
-The following example signs a release manifest and writes the signature as base64.
+The result is 64 bytes for Ed25519 and ES256, 96 bytes for ES384, and as long as the modulus for RSA. ECDSA signatures are the two numbers `r` and `s` side by side, the form of JSON Web Signatures and WebCrypto. Ed25519 and RS signatures are deterministic. ECDSA and PS signatures mix in fresh random bytes, so two signatures of one message differ and both verify. Every RSA signature is checked against the public key before it is returned, so a fault or a key with mismatched parts raises `RSA signature failed its verification check` and never releases a signature.
+
+A `key` of the wrong type raises `bad argument #1 to 'sign' (crypto.key or vector expected, got string)` with its type. A public key raises `bad argument #1 to 'sign' (private key expected)`. An RSA key without an algorithm raises `bad argument #3 to 'sign' (RSA key requires an algorithm)`. An algorithm of another key type raises `bad argument #3 to 'sign' (algorithm 'ES256' does not fit an RSA key)`. A `message` that is neither a string, a number, nor a vector raises `bad argument #2 to 'sign' (string or vector expected, got table)` with its type.
+
+The following example signs a release manifest with Ed25519, then signs a token header with a P-256 key.
 
 ```lus
 local secret, public = crypto.keypair()
 local manifest = tojson({ name = "app", version = "1.4.0" })
 local sig = crypto.sign(secret, manifest)
-print(#sig)                                       --> 64
-print(#string.transcode(sig, "binary", "base64"))  --> 88
-print(crypto.verify(public, manifest, sig))       --> true
+print(#sig, crypto.verify(public, manifest, sig))   --> 64  true
+
+local ec = crypto.keypair("P-256")
+local es = crypto.sign(ec, "eyJhbGciOiJFUzI1NiJ9.e30")
+print(#es, crypto.verify(ec:public(), "eyJhbGciOiJFUzI1NiJ9.e30", es))   --> 64  true
 ```]],
     kind = "function",
     module = "crypto",
@@ -999,12 +1378,17 @@ print(crypto.verify(public, manifest, sig))       --> true
     origin = "lus",
     params = {
       {
-        name = "secret",
-        type = "vector",
+        name = "key",
+        type = "userdata|vector",
       },
       {
         name = "message",
         type = "string|vector",
+      },
+      {
+        name = "algorithm",
+        optional = true,
+        type = "string",
       },
     },
     parent = "crypto",
@@ -1096,13 +1480,16 @@ print(a:sub(15, 15), a < b)        --> 7  true
   ["crypto.verify"] = {
     children = {},
     description = [[
-Returns `true` when `signature` is a valid Ed25519 signature of `message` by the holder of `public`, and `false` otherwise.
+Returns `true` when `signature` is a valid signature of `message` by the holder of `key`, and `false` otherwise.
 
-- `public` is a public key from [`crypto.keypair`](/manual/api#crypto.keypair), a vector of 32 bytes.
+- `key` is a [`crypto.key`](/manual/api#crypto.importkey), public or private, or an Ed25519 public key from [`crypto.keypair`](/manual/api#crypto.keypair) as a vector of 32 bytes.
 - `message` is the signed message, a string or a vector.
-- `signature` is a vector of 64 bytes.
+- `signature` is the signature, a vector. A string contributes its bytes.
+- `algorithm` is a JOSE algorithm name, as for [`crypto.sign`](/manual/api#crypto.sign). An RSA key requires it.
 
-Verification is strict. It rejects a non-canonical signature, a non-canonical public key, and a public key of small order, so every strict verifier gives the same answer for the same input. Every invalid signature, including one made for another message or another key, returns `false`. The function raises only for an argument of the wrong type or size: `bad argument #1 to 'verify' (32-byte vector expected)` for the key and `bad argument #3 to 'verify' (64-byte vector expected)` for the signature.
+Ed25519 verification is strict. It rejects a non-canonical signature, a non-canonical public key, and a public key of small order, so every strict verifier gives the same answer for the same input. Every invalid signature, including one made for another message, another key, or another algorithm, and one of the wrong length, returns `false`.
+
+The function raises only for an argument of the wrong type. With a vector key, a key that is not 32 bytes raises `bad argument #1 to 'verify' (32-byte vector expected)` and a signature that is not 64 bytes raises `bad argument #3 to 'verify' (64-byte vector expected)`. Another `key` type raises `bad argument #1 to 'verify' (crypto.key or vector expected, got string)`. The algorithm errors are those of `crypto.sign`, for argument 4.
 
 The following example checks the signature of the empty message from the first test vector of RFC 8032, then the same signature over another message.
 
@@ -1121,8 +1508,8 @@ print(crypto.verify(public, "x", sig))   --> false
     origin = "lus",
     params = {
       {
-        name = "public",
-        type = "vector",
+        name = "key",
+        type = "userdata|vector",
       },
       {
         name = "message",
@@ -1130,7 +1517,12 @@ print(crypto.verify(public, "x", sig))   --> false
       },
       {
         name = "signature",
-        type = "vector",
+        type = "string|vector",
+      },
+      {
+        name = "algorithm",
+        optional = true,
+        type = "string",
       },
     },
     parent = "crypto",
@@ -1193,6 +1585,7 @@ print(crypto.verifypassword("Password", stored))   --> false
       "debug.check",
       "debug.debug",
       "debug.format",
+      "debug.getcontext",
       "debug.gethook",
       "debug.getinfo",
       "debug.getlocal",
@@ -1203,6 +1596,7 @@ print(crypto.verifypassword("Password", stored))   --> false
       "debug.jit",
       "debug.parse",
       "debug.queryplan",
+      "debug.setcontext",
       "debug.sethook",
       "debug.setlocal",
       "debug.setmetatable",
@@ -1363,6 +1757,66 @@ Comments keep their text. A comment that holds bytes that are not valid WTF-8 co
     since = "0.1.0",
     source = "stdlib/debug/format.md",
     stability = "stable",
+  },
+  ["debug.getcontext"] = {
+    children = {},
+    description = [[
+Returns the name, the value, and the place of declaration of context variable number `n` as the coroutine `co` sees it, or `nil` past the last variable.
+
+- `co` is a coroutine, and the running coroutine when it is left out.
+- `n` is the number of the variable, starting at 1. The live context variables of the state are numbered in the order in which their declarations ran. A variable that nothing refers to any more leaves the numbering when the collector reclaims it, so the numbers of the variables declared after it move down by one.
+
+The value is the one that `co` assigned, or the one it inherited from the coroutine that created it, or the default of the variable. The place is a string `"SOURCE:LINE"` that names the chunk and the line of the declaration, which tells two variables of the same name apart. A context variable is a local declared with the `<context>` attribute ([Values for each coroutine](/manual/guide#values-for-each-coroutine)).
+
+The following example reads a variable as the main coroutine and as another coroutine see it.
+
+```lus
+local function find(name)
+    local n = 1
+    while true do
+        local found = debug.getcontext(n)
+        if found == nil or found == name then return n end
+        n = n + 1
+    end
+end
+
+local user <context> = "nobody"
+local co = coroutine.create(function()
+    user = "ada"
+    coroutine.yield()
+end)
+coroutine.resume(co)
+local n = find("user")
+print(select(2, debug.getcontext(n)))       --> nobody
+print(select(2, debug.getcontext(co, n)))   --> ada
+```
+
+[`debug.setcontext`](/manual/api#debug.setcontext) assigns a value for a coroutine.]],
+    kind = "function",
+    module = "debug",
+    name = "debug.getcontext",
+    origin = "lus",
+    params = {
+      {
+        name = "co",
+        optional = true,
+        type = "thread",
+      },
+      {
+        name = "n",
+        type = "integer",
+      },
+    },
+    parent = "debug",
+    returns = {
+      {
+        type = "string|nil",
+      },
+    },
+    short_name = "getcontext",
+    since = "2.0.0",
+    source = "stdlib/debug/getcontext.md",
+    stability = "unstable",
   },
   ["debug.gethook"] = {
     children = {},
@@ -1856,6 +2310,62 @@ The plan gives tests a direct observation of push-down decisions, which change h
     short_name = "queryplan",
     since = "1.7.0",
     source = "stdlib/debug/queryplan.md",
+    stability = "unstable",
+  },
+  ["debug.setcontext"] = {
+    children = {},
+    description = [[
+Assigns `value` to context variable number `n` for the coroutine `co` and returns the name of the variable, or `nil` past the last variable.
+
+`co` is a coroutine, and the running coroutine when it is left out. `n` numbers the variables as [`debug.getcontext`](/manual/api#debug.getcontext) does. The assignment changes the value that `co` sees and nothing else, exactly as an assignment inside `co` would. A coroutine that `co` creates afterwards starts with the new value. A missing `value` raises a bad argument error.
+
+The following example gives a suspended coroutine a value before it continues.
+
+```lus
+local function find(name)
+    local n = 1
+    while debug.getcontext(n) ~= name do n = n + 1 end
+    return n
+end
+
+local trace <context> = "off"
+local co = coroutine.create(function()
+    coroutine.yield()
+    return trace
+end)
+coroutine.resume(co)
+print(debug.setcontext(co, find("trace"), "on"))   --> trace
+print(select(2, coroutine.resume(co)))            --> on
+print(trace)                                      --> off
+```]],
+    kind = "function",
+    module = "debug",
+    name = "debug.setcontext",
+    origin = "lus",
+    params = {
+      {
+        name = "co",
+        optional = true,
+        type = "thread",
+      },
+      {
+        name = "n",
+        type = "integer",
+      },
+      {
+        name = "value",
+        type = "any",
+      },
+    },
+    parent = "debug",
+    returns = {
+      {
+        type = "string|nil",
+      },
+    },
+    short_name = "setcontext",
+    since = "2.0.0",
+    source = "stdlib/debug/setcontext.md",
     stability = "unstable",
   },
   ["debug.sethook"] = {
@@ -2507,7 +3017,7 @@ print()
     description = [[
 Writes the data and the size of a file through to its storage device and returns the file handle.
 
-A write returns once the operating system holds the bytes in its cache, and a crash of the system or a loss of power can still lose them. After `file:sync()` returns, the bytes written before the call survive both. On macOS the call also asks the drive to empty its own cache, which a plain sync leaves full. For the standard output the call flushes the buffered output, and for a pipe and the other standard streams it does nothing, since they keep nothing on a device. The method needs no permission, a closed handle raises `attempt to use a closed file`, and a failure of the device raises its error.
+A write returns once the operating system holds the bytes in its cache, and a crash of the system or a loss of power can still lose them. After `file:sync()` returns, the bytes written before the call survive both. On macOS the call also asks the drive to empty its own cache, which a plain sync leaves full. For the standard output the call flushes the buffered output, and for a pipe and the other standard streams it does nothing, since they keep nothing on a device. On Windows, where the system flushes a file only through a handle with write access, the call on a file opened only for reading does nothing, since nothing was written through it. The method needs no permission, a closed handle raises `attempt to use a closed file`, and a failure of the device returns `nil`, the message, and the number of the error, as a refused write does.
 
 The following example writes a file and syncs it before closing.
 
@@ -2670,8 +3180,11 @@ print(math.type(n), n)                                       --> decimal  19.90
       "fs.move",
       "fs.path",
       "fs.remove",
+      "fs.stat",
       "fs.sync",
       "fs.type",
+      "fs.walk",
+      "fs.watch",
     },
     kind = "module",
     module = "fs",
@@ -2886,12 +3399,16 @@ The second result of [`fs.type`](/manual/api#fs.type) tells whether a path is a 
   },
   ["fs.list"] = {
     children = {},
-    description = [[
+    description = [=[
 Returns an array with the name of every entry in the directory at `path`.
 
-`path` is the string path of a directory. The optional `glob` is a string that keeps only the names that match it. In a glob, `*` matches any sequence of characters, including the empty one, and `?` matches exactly one byte, which is one character in an ASCII name. A name that starts with `.` matches `*` like any other name. Without `glob`, every entry is listed.
+`path` is the string path of a directory. The optional `glob` is a string that keeps only the entries that match it. Without `glob`, every entry is listed.
 
-On success the call returns one table. The names carry no directory prefix, the array leaves out `.` and `..`, and the order of the names is unspecified. An empty directory gives an empty table. Every failure raises an error. A missing directory raises `"cannot list directory PATH: No such file or directory"`, and a `path` that names a file raises `"PATH is not a directory"`. The call requires `fs:read` for `path`.
+In a glob, `*` matches any sequence of characters, including the empty one, and `?` matches exactly one character. `[abc]` matches one of the characters between the brackets, `[a-z]` one character of the range, and `[!abc]` one character that is not listed. A `]` right after the opening bracket is a member of the class, so `[]]` matches `]`, and `[*]` matches a literal `*`. `{a,b}` stands for each of its comma separated alternatives in turn, and braces nest. A name that starts with `.` matches `*` like any other name. A `[` without its `]` and a `{` without its `}` match themselves.
+
+A glob that contains `/` or a `**` segment reaches below `path`. The glob is then matched against the path of each entry relative to `path`, with `/` between its segments, and the array holds those relative paths. A `**` segment matches any number of directories, including none, so `**/*.lus` matches `main.lus` and `lib/util.lus`. Directories that no match can lie under are not read, and symbolic links to directories are listed without being followed. A glob that expands to more than 256 patterns raises an error.
+
+On success the call returns one table. The names of a glob that stays in `path` carry no directory prefix, the array leaves out `.` and `..`, and the order of the names is unspecified. An empty directory gives an empty table. Every failure raises an error. A missing directory raises `"cannot list directory PATH: No such file or directory"`, and a `path` that names a file raises `"PATH is not a directory"`. The call requires `fs:read` for `path`.
 
 The following example lists a directory with and without a glob, sorting the names because their order is unspecified.
 
@@ -2902,16 +3419,21 @@ fs.createdirectory(dir, true)
 for _, name in ipairs({"b.json", "a.json", "notes.md"}) do
     io.open(fs.path.join(dir, name), "w"):close()
 end
+fs.createdirectory(fs.path.join(dir, "old"))
+io.open(fs.path.join(dir, "old", "c.json"), "w"):close()
 local names = fs.list(dir, "*.json")
 table.sort(names)
 print(table.concat(names, " "))   --> a.json b.json
-print(#fs.list(dir))              --> 3
+local all = fs.list(dir, "**/*.{json,md}")
+table.sort(all)
+print(table.concat(all, " "))     --> a.json b.json notes.md old/c.json
+print(#fs.list(dir))              --> 4
 fs.remove(dir, true)
 ```
 
-A symbolic link appears in the list under its own name. [`fs.type`](/manual/api#fs.type) tells files and directories apart, and [`fs.path.join`](/manual/api#fs.path.join) builds the full path of an entry.
+A symbolic link appears in the list under its own name. [`fs.walk`](/manual/api#fs.walk) visits a whole tree one entry at a time, and [`fs.type`](/manual/api#fs.type) tells files and directories apart, and [`fs.path.join`](/manual/api#fs.path.join) builds the full path of an entry.
 
-**Requires pledge:** `fs:read`]],
+**Requires pledge:** `fs:read`]=],
     kind = "function",
     module = "fs",
     name = "fs.list",
@@ -3269,6 +3791,63 @@ print((catch fs.type(dir)))           --> false
     source = "stdlib/fs/remove.md",
     stability = "stable",
   },
+  ["fs.stat"] = {
+    children = {},
+    description = [[
+Returns a table that describes the file, directory, or link at `path`.
+
+The table has three fields. `size` is the size in bytes as an integer. `modified` is the time of the last change to the contents, as a wall-clock `instant` of the `time` library. `kind` is `"file"`, `"directory"`, `"link"`, or `"other"` for a device, a socket, or a named pipe.
+
+`options` is a table with one optional field, `follow`. With `follow` true, the default, a symbolic link is followed and the table describes its target, as the first result of [`fs.type`](/manual/api#fs.type) does, so `kind` is never `"link"`. With `follow` false the table describes the link itself, and `kind` is `"link"`.
+
+Every failure raises an error. A `path` that does not exist, or a link whose target does not exist when `follow` is true, raises `"path 'PATH' does not exist"`, and any other failure raises `"cannot stat 'PATH': REASON"`. A `follow` that is not a boolean raises a bad argument error. The call requires `fs:read` for `path`.
+
+The following example writes a file and reads its size and the age of its contents.
+
+```lus
+pledge("env", "fs")
+local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-stat-example.txt")
+local f = io.open(path, "w")
+f:write("hello")
+f:close()
+local info = fs.stat(path)
+print(info.kind, info.size)                        --> file  5
+print((time.now() - info.modified):seconds() < 60)   --> true
+fs.remove(path)
+```
+
+[`fs.type`](/manual/api#fs.type) tells files and directories apart without the other fields.
+
+**Requires pledge:** `fs:read`]],
+    kind = "function",
+    module = "fs",
+    name = "fs.stat",
+    origin = "lus",
+    params = {
+      {
+        name = "path",
+        type = "string",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "fs",
+    pledges = {
+      "fs:read",
+    },
+    returns = {
+      {
+        type = "table",
+      },
+    },
+    short_name = "stat",
+    since = "2.0.0",
+    source = "stdlib/fs/stat.md",
+    stability = "unstable",
+  },
   ["fs.sync"] = {
     children = {},
     description = [[
@@ -3276,7 +3855,7 @@ Writes the entries of the directory at `path` through to the storage device and 
 
 The name of a file is an entry of its directory, and creating, renaming, or removing a file changes that directory. Until the directory is synced, a crash of the system or a loss of power can undo the change, even when the file itself was synced with [`file:sync`](/manual/api#file:sync). After `fs.sync(dir)` returns, the changes made in `dir` before the call survive. A `path` that names a file syncs the data of that file, as `file:sync` does.
 
-On success the call returns nothing. A missing `path` raises `"cannot sync 'PATH': path does not exist"`, and a failure of the device raises an error of the form `"cannot sync 'PATH': REASON"`. On Windows, the file systems record the changes of a directory in their log, and the call succeeds when the system refuses to sync a directory directly. The call requires `fs:read` for `path`.
+On success the call returns nothing. A missing `path` raises `"cannot sync 'PATH': path does not exist"`, and a failure of the device raises an error of the form `"cannot sync 'PATH': REASON"`. On Windows, the file systems record the changes of a directory in their log, and the call succeeds when the system refuses to sync a directory directly. Windows flushes a file only through a handle with write access, so there the call opens a file for writing, and a file that the program may not write raises `"cannot sync 'PATH': Permission denied"`. The call requires `fs:read` for `path`.
 
 The following example creates a file and syncs its directory, so the new name survives a crash.
 
@@ -3371,6 +3950,149 @@ A link to a directory reports `"directory"` and `true`. [`fs.follow`](/manual/ap
     since = "0.1.0",
     source = "stdlib/fs/type.md",
     stability = "stable",
+  },
+  ["fs.walk"] = {
+    children = {},
+    description = [[
+Returns an iterator that visits every entry below the directory `dir`, for use in a generic `for`.
+
+Each step gives three values: the path of the entry joined to `dir`, then `"directory"` or `"file"`, then whether the entry is a symbolic link. These are the path that `fs.path.join` would build and the two results of `fs.type`, so the path opens directly. The walk is depth first. Within each directory the names are sorted by their bytes, and a directory comes before the entries inside it, so a walk of the same tree gives the same sequence on every system. A directory is read when the walk reaches it.
+
+`options` is a table with these optional fields.
+
+- `depth` limits how far the walk goes. `1` visits the entries of `dir` only, `2` adds the entries of its subdirectories, and so on. Without it the walk has no limit.
+- `glob` keeps only the entries that match it, in the glob syntax of [`fs.list`](/manual/api#fs.list). A glob without `/` and `**` matches the name of each entry at any depth, so `"*.lus"` keeps every Lus file. Any other glob matches the path relative to `dir`, with `/` between its segments, and the walk skips directories that no match can lie under.
+- `exclude` is a glob or an array of globs, matched the same way. An entry that matches is neither reported nor entered, so `exclude = "node_modules"` leaves out every directory of that name with all it holds.
+- `links` is `"list"`, the default, or `"follow"`. With `"list"` a symbolic link is reported with the type of its target and the walk does not enter it. With `"follow"` the walk enters links to directories, except a link to a directory that the walk is already inside, which would never end.
+- `errors` is `"raise"`, the default, or `"skip"`. With `"skip"` a subdirectory that cannot be read, such as one without read permission, is left out. A `dir` that cannot be read raises in both modes.
+
+The call requires `fs:read` for `dir` and raises at once without it. The walk reports the entries of every directory it reads but enters a subdirectory only when `fs:read` covers it. A `dir` that does not exist raises `"cannot list directory DIR: No such file or directory"` at the first step, and a `dir` that names a file raises `"DIR is not a directory"`. An option of the wrong type or value raises a bad argument error.
+
+The iterator closes when the loop ends, also through `break` or an error, because the call returns a closing value as the fourth result of the generic `for`.
+
+The following example builds a small tree and prints the Lus files in it, leaving out a directory of dependencies.
+
+```lus
+pledge("env", "fs")
+local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-walk-example")
+fs.createdirectory(fs.path.join(dir, "lib"), true)
+fs.createdirectory(fs.path.join(dir, "deps", "json"), true)
+for _, name in ipairs({"main.lus", "notes.md", "lib/util.lus", "deps/json/json.lus"}) do
+    io.open(fs.path.join(dir, name), "w"):close()
+end
+for path, kind in fs.walk(dir, {glob = "*.lus", exclude = "deps"}) do
+    print(fs.path.name(path), kind)
+end
+--> util.lus  file
+--> main.lus  file
+fs.remove(dir, true)
+```
+
+[`fs.list`](/manual/api#fs.list) returns the matching paths of a tree as one array.
+
+**Requires pledge:** `fs:read`]],
+    kind = "function",
+    module = "fs",
+    name = "fs.walk",
+    origin = "lus",
+    params = {
+      {
+        name = "dir",
+        type = "string",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "fs",
+    pledges = {
+      "fs:read",
+    },
+    returns = {
+      {
+        type = "function",
+      },
+    },
+    short_name = "walk",
+    since = "2.0.0",
+    source = "stdlib/fs/walk.md",
+    stability = "unstable",
+  },
+  ["fs.watch"] = {
+    children = {},
+    description = [[
+Starts watching the file or directory at `path` and returns a coroutine that hands over each change, one per resume.
+
+Resuming the coroutine waits for the next change, then returns `true` and an event, which is a table with two fields. `kind` is one of these strings.
+
+- `"create"`: a file or directory appeared, by creation or by a rename into place.
+- `"modify"`: the contents or the attributes of a file changed.
+- `"remove"`: a file or directory disappeared, by removal or by a rename away.
+- `"rescan"`: the system dropped events, for example because they arrived faster than the program took them, so the program should look at the tree again.
+
+`path` is the path of the file or directory that changed, which starts with `path` as the call wrote it. A `"rescan"` event carries `path` itself. A rename is reported as a removal of the old name and a creation of the new one.
+
+Events of one path that follow each other within 50 milliseconds merge into one, so an editor that saves a file in several steps produces one `"modify"`. A creation followed by changes stays a `"create"`, a creation followed by a removal produces nothing, and a removal followed by a creation becomes a `"modify"`. An event is therefore delivered at least 50 milliseconds after it happened. Changes that happen while the program does other work wait in a queue for the next resume.
+
+Resumed from a detached coroutine, the wait suspends that coroutine. Resumed anywhere else, it blocks while the detached coroutines run. Closing the coroutine with `coroutine.close` stops the watch, as does the collection of a coroutine that nothing references.
+
+`options` is a table with these optional fields.
+
+- `recursive` is a boolean. With `true` the watch covers every directory below `path`, including directories created during the watch. Without it a directory watch covers the entries of `path` itself.
+- `glob` keeps only the events whose path matches it, in the glob syntax of [`fs.list`](/manual/api#fs.list). A glob without `/` and `**` matches the name of the file. Any other glob matches the path relative to `path`, with `/` between its segments.
+
+A watch of a file reports the changes of that file only.
+
+The call requires `fs:read` for `path`. An event of a path that `fs:read` does not cover is never delivered. A `path` that does not exist raises `"cannot watch 'PATH': No such file or directory"`. A system that refuses the watch, such as a sandbox without access to the notification service, raises an error that starts with `"cannot watch 'PATH'"`. An option of the wrong type raises a bad argument error.
+
+The notifications come from inotify on Linux, FSEvents on macOS, and `ReadDirectoryChangesW` on Windows. inotify keeps one watch for each directory of a recursive watch, which counts against the number of watches that the system allows each user (`/proc/sys/fs/inotify/max_user_watches`).
+
+The following example reloads a configuration file whenever it changes.
+
+```lus nocheck
+pledge("fs:read=./config")
+local changes = fs.watch("config", {glob = "*.json"})
+while true do
+    local _, event = coroutine.resume(changes)
+    if event.kind ~= "remove" then
+        print("reloading " .. event.path)
+    end
+end
+```
+
+[`fs.walk`](/manual/api#fs.walk) visits the tree again after a `"rescan"` event.
+
+**Requires pledge:** `fs:read`]],
+    kind = "function",
+    module = "fs",
+    name = "fs.watch",
+    origin = "lus",
+    params = {
+      {
+        name = "path",
+        type = "string",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "fs",
+    pledges = {
+      "fs:read",
+    },
+    returns = {
+      {
+        type = "thread",
+      },
+    },
+    short_name = "watch",
+    since = "2.0.0",
+    source = "stdlib/fs/watch.md",
+    stability = "unstable",
   },
   ["getmetatable"] = {
     children = {},
@@ -3488,7 +4210,7 @@ fs.remove(path)
     description = [[
 Writes any buffered output of the default output file and returns `true`.
 
-The function takes no arguments and requires no permission. It flushes the current default output, which [`io.output`](/manual/api#io.output) sets and which starts as `io.stdout`.
+The function takes no arguments and requires no permission. It flushes the current default output, which [`io.output`](/manual/api#io.output) sets and which starts as `io.stdout`. A flush that the operating system refuses returns `nil`, the message, and the number of the error, as a refused write does.
 
 ```lus
 io.write("buffered\n")   --> buffered
@@ -3565,7 +4287,7 @@ Returns an iterator that reads the file `filename`, or the default input, with t
 
 `filename` is optional. With it, the file is opened in text read mode, and the call requires `fs:read` for it. Without it, the iterator reads the default input that [`io.input`](/manual/api#io.input) sets. The formats after `filename` are those of [`io.read`](/manual/api#io.read) and default to `"l"`, which reads one line without its newline. Each call of the iterator returns one value per format.
 
-The call returns four values for a generic `for`: the iterator, two `nil` values, and the file handle as the closing value, so a loop that ends early, or that raises an error, still closes the file. The iterator returns `nil` at the end of the file and closes the file then, including the default input. Calling the iterator again after that raises `"file is already closed"`. A file that cannot be opened raises an error such as `"PATH: No such file or directory"`. An invalid format raises a `bad argument` error at the first call of the iterator.
+The call returns four values for a generic `for`: the iterator, two `nil` values, and the file handle as the closing value, so a loop that ends early, or that raises an error, still closes the file. The iterator returns `nil` at the end of the file and closes the file then, including the default input. Calling the iterator again after that raises `"file is already closed"`. A file that cannot be opened raises an error such as `"PATH: No such file or directory"`. An invalid format raises a `bad argument` error at the first call of the iterator. A read that the operating system refuses raises its message from the iterator, as Lua's `io.lines` does, so a `for` loop stops with that error and closes the file through its closing value. `file:lines` raises in the same way. A program that must continue after such a failure reads with `file:read`, which returns the error as [`io.read`](/manual/api#io.read) describes.
 
 The following example reads a temporary file line by line, then reads it with two formats per step.
 
@@ -3726,7 +4448,7 @@ Starts the program `prog` in a separate process and returns a file handle connec
 
 `prog` is a command string. It runs in the system shell: `/bin/sh -c` on POSIX systems, and `cmd.exe /s /c` on Windows, which receives the command exactly as written. `mode` is `"r"`, the default, which reads the output of the program, or `"w"`, which writes to its input. Any other mode raises a `bad argument` error.
 
-On success the call returns one handle. A program that cannot be started returns `nil` and a message. The call requires the `exec` permission, and without it raises `permission "exec" denied`. Reading a handle opened with `"w"` returns `nil`, `"file not opened for reading"`, and `0`.
+On success the call returns one handle. A program that cannot be started returns `nil` and a message. The call requires the `exec` permission without a value, since the shell runs any program, and without it raises `permission "exec" denied for popen`. Reading a handle opened with `"w"` returns `nil`, `"file not opened for reading"`, and `0`.
 
 Closing the handle closes the pipe in both directions and waits for the program to exit. A program that still writes its output when the handle closes then stops on a broken pipe, which on POSIX systems is the signal `SIGPIPE`. Closing returns the same three results as [`os.execute`](/manual/api#os.execute).
 
@@ -3780,7 +4502,7 @@ Reads from the default input file according to the given formats and returns one
 
 Each argument is a format. `"l"`, the default, reads one line and drops its newline. `"L"` reads one line and keeps its newline. `"a"` reads the rest of the file. `"n"` reads a number, written in decimal or hexadecimal. An integer `n` reads up to `n` characters, and `0` reads nothing and tests for the end of the file. Any other format raises a `bad argument` error.
 
-The call returns one value per format. A format that finds nothing returns `nil` at the end of the file, and reading stops at the first format that fails, so the later formats return nothing. `"a"` returns the empty string at the end of the file, and `0` returns the empty string before it. The default input starts as `io.stdin` in text mode, so the results are strings. `io.read` requires no permission, since the default input is already open.
+The call returns one value per format. A format that finds nothing returns `nil` at the end of the file, and reading stops at the first format that fails, so the later formats return nothing. `"a"` returns the empty string at the end of the file, and `0` returns the empty string before it. A read that the operating system refuses, such as a read of a directory, returns `nil`, the message, and the number of the error, as in Lua, in place of the results, so `f:read("a")` on a directory returns `nil`, `"Is a directory"`, and `21`. Text that is not valid UTF-8 in text mode raises an error, since the file read fine. The default input starts as `io.stdin` in text mode, so the results are strings. `io.read` requires no permission, since the default input is already open.
 
 The following example points the default input at a temporary file and reads it with several formats.
 
@@ -4058,7 +4780,7 @@ Writes each argument to the default output file and returns that file handle.
 
 Each argument is a string, a number, or a vector. A number is written in the form that `tostring` gives it, and a vector is written as its raw bytes. Any other value raises a `bad argument` error naming its position, such as `bad argument #1 to 'write' (string expected, got table)`. The call adds no separators and no newline.
 
-On success the call returns the default output handle, so that calls can chain. A write that the operating system refuses raises its error, such as `"Broken pipe"` for a pipe whose reader has ended or `"No space left on device"`. `io.write` requires no permission, since the default output is already open.
+On success the call returns the default output handle, so that calls can chain. A write that the operating system refuses returns `nil`, a message such as `"Broken pipe"` for a pipe whose reader has ended or `"No space left on device"`, and the number of the error, as in Lua, so a program that must notice the failure wraps the call in `assert`. `io.write` requires no permission, since the default output is already open.
 
 ```lus
 io.write("pi is about ", 3.14, "\n")         --> pi is about 3.14
@@ -5484,8 +6206,10 @@ The `<` operator compares the same integers as signed values. [`math.maxinteger`
   ["network"] = {
     children = {
       "network.fetch",
+      "network.lines",
       "network.serve",
       "network.tcp",
+      "network.tls",
       "network.udp",
     },
     kind = "module",
@@ -5498,13 +6222,25 @@ The `<` operator compares the same integers as signed values. [`math.maxinteger`
   ["network.fetch"] = {
     children = {},
     description = [[
-Sends one HTTP or HTTPS request to `url` and returns the response status, the response body as a vector, and the response headers.
+Sends one HTTP or HTTPS request to `url` and returns the response status, the response body, and the response headers.
 
-`url` is a string that starts with `http://` or `https://`. The arguments after it are positional and optional. `method` is a string that defaults to `"GET"`. `headers` is a table from header names to values. A value is a string, a number, or a list of them, and a list sends one header line for each element in order. `body` is the request body as a string or a vector and defaults to an empty body. The request carries `Host`, `Connection: close`, and `User-Agent: Lus/VERSION`, where `VERSION` is the full version of the runtime such as `2.0.0`, except those that `headers` names in any case, then the entries of `headers`, then `Content-Length` when the body is not empty.
+`url` is a string that starts with `http://` or `https://`. The arguments after it are positional and optional. `method` is a string that defaults to `"GET"`. `headers` is a table from header names to values. A value is a string, a number, or a list of them, and a list sends one header line for each element in order. `body` is the request body and defaults to an empty body. The request carries `Host`, `Connection: close`, and `User-Agent: Lus/VERSION`, where `VERSION` is the full version of the runtime such as `2.0.0`, except those that `headers` names in any case, then the entries of `headers`, then the framing of the body.
 
-On success the call returns three values: the integer status code, the body as a vector, and a table from lowercase header names to their values. A response to `"HEAD"`, and a 1xx, 204, or 304 response, has an empty body whatever its `Content-Length` says. A response header that appears more than once holds its values joined by `", "` in the order they arrived. Every status counts as a response, so a 404 or a 500 is returned like a 200, and a redirect returns its 3xx status together with its `location` header. A program that expects text decodes the body with [`vector.tostring`](/manual/api#vector.tostring).
+A string or a vector `body` goes out whole after a `Content-Length` header. A coroutine or a function produces the request body as it goes out. `fetch` resumes a coroutine again and again, sends each chunk that it yields, and ends the body when the coroutine ends, after a chunk that the coroutine returns at its end. `fetch` calls a function again and again, sends each chunk that it returns, and ends the body when it returns `nil`. A chunk is a string or a vector, and an empty chunk or a `nil` that a coroutine yields sends nothing. Such a body goes out with `Transfer-Encoding: chunked`, unless `headers` sets `Content-Length`, in which case the chunks go out as they are and must add up to that length. Any other value raises an error, and so does an error of the coroutine or the function.
 
-Every failure raises an error. A host that cannot be reached raises an error such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"`. A connection that fails once it is open raises `"failed to send request: REASON"`, `"failed to read response: REASON"`, `"failed to read response headers: REASON"`, or `"failed to read response body: REASON"`, where `REASON` is the error of the system, such as `Connection reset by peer`. A server that sends nothing for 30 seconds gives the reason `Operation timed out`. A server that closes the connection in the middle of a line gives the reason `Connection closed by peer`. A URL with another scheme raises `"invalid URL: URL"`, and a URL, method, or header that contains a line break raises an error before anything is sent. A body over 64 MiB raises `"response body too large"`, and a body shorter than its `Content-Length` or its chunk sizes raises `"truncated response body"`. A body without either ends where the server closes the connection. HTTPS verifies the certificate of the server against the certificates of the system and raises `"SSL certificate verification failed for HOST"` when the verification fails. A handshake that fails for another reason, such as a server that does not speak TLS, raises `"SSL handshake failed: REASON"`. The call requires `network:http` for `url`.
+`options` is a table with any of these fields:
+
+| Field | Value |
+| --- | --- |
+| `stream` | `true` to return the body as a coroutine that yields it, described below. It defaults to `false`. |
+| `timeout` | Seconds for each step of the request, described below, which defaults to 30. A negative value waits without limit. |
+| `tls` | A table of client TLS options for an `https` URL, as [`network.tls`](/manual/api#network.tls) describes them, such as `{ ca = pem }` for a private certificate authority. ALPN always offers `http/1.1`. |
+
+`timeout` bounds each step of the request. Connecting, the TLS handshake, and receiving the status line and the headers each must end within `timeout` seconds of their start, and connecting counts every address of the host. Sending the request and reading the body wait at most `timeout` seconds for each part, so a long upload or a stream that keeps sending stays open as long as it moves. A step that runs out of time raises an error that names it: `"fetch timeout while connecting to HOST:PORT"`, `"fetch timeout in the TLS handshake with HOST"`, `"fetch timeout while sending the request"`, `"fetch timeout while waiting for the response headers"`, or `"fetch timeout while reading the body"`.
+
+On success the call returns three values: the integer status code, the body, and a table from lowercase header names to their values. The body is a vector, or a coroutine when `options.stream` is `true`. Each resume of the coroutine returns `true` and the next part of the body as a vector, between 1 and 65536 bytes, as soon as it arrives. At the end of the body the coroutine closes the connection and ends, so its last resume returns `true` alone. A failure while it reads, such as a body that ends early or a step that runs out of time, makes the resume return `false` and the error. [`coroutine.close`](/manual/api#coroutine.close) ends the coroutine before the end of the body and closes the connection, and so does the collector for a coroutine that nothing refers to any more. [`network.lines`](/manual/api#network.lines) reads such a coroutine line by line, which suits server-sent events and other streams of text. A response to `"HEAD"`, and a 1xx, 204, or 304 response, has an empty body whatever its `Content-Length` says. A response without `Content-Length` and without chunked transfer coding ends with the connection. A response header that appears more than once holds its values joined by `", "` in the order they arrived. Every status counts as a response, so a 404 or a 500 is returned like a 200, and a redirect returns its 3xx status together with its `location` header. A program that expects text decodes the body with [`vector.tostring`](/manual/api#vector.tostring).
+
+Every failure raises an error. A failure of the network or of the response raises an error object with the fields `code` and `message`, as socket operations return them (see [`network.tcp`](/manual/api#network.tcp)), whose `__tostring` gives the message. A host that cannot be reached raises an error such as `"cannot resolve 'invalid.host.example': Domain name not found"` or `"cannot connect to 127.0.0.1:1: Connection refused"`. A connection that fails once it is open raises `"failed to send request: REASON"`, `"failed to read response: REASON"`, or `"failed to read response body: REASON"`, where `REASON` is the error of the system, such as `Connection reset by peer`. A server that closes the connection before the end of the headers gives the reason `Connection closed by peer`. A URL with another scheme raises `"invalid URL: URL"`, and a URL, method, or header that contains a line break raises an error before anything is sent. A whole body over 64 MiB raises `"response body too large"`, and a body shorter than its `Content-Length` raises `"truncated response body"`. HTTPS verifies the certificate of the server against the certificates of the system, or against the `ca` of the `tls` option, and a certificate that does not verify raises `"certificate verification failed for HOST: REASON"`. A handshake that fails for another reason, such as a server that does not speak TLS, raises `"TLS handshake failed: REASON"`. A `tls` option with an `http` URL and an unknown option raise a `bad argument` error. The call requires `network:http` for `url`.
 
 The following example requests a JSON document from a public server, so it needs network access to run.
 
@@ -5516,7 +6252,33 @@ print(headers["content-type"])   --> application/json
 local data = fromjson(vector.tostring(body))
 ```
 
-Outside a detached coroutine, `fetch` runs the detached coroutines while it waits for the response, so the main chunk can fetch from a [`network.serve`](/manual/api#network.serve) server that runs in the same state. Inside a detached coroutine, `fetch` blocks the whole state while it waits, the other detached coroutines included.
+Every wait of `fetch` goes through the scheduler. Inside a detached coroutine it suspends the coroutine, and the other detached coroutines run in the meantime. Anywhere else it blocks its caller and runs the detached coroutines while it waits, so the main chunk can fetch from a [`network.serve`](/manual/api#network.serve) server that runs in the same state.
+
+The following example sends a request body from a coroutine and streams the response from a server of the same state.
+
+```lus
+pledge("network")
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    local got = vector.tostring(req.body)
+    local n = 0
+    return 200, function()
+        n = n + 1
+        if n <= 2 then return `line $(n) of $(got)\n` end
+    end
+end)
+local upload = coroutine.create(function()
+    coroutine.yield("up")
+    coroutine.yield("load")
+end)
+local status, body = network.fetch(`http://127.0.0.1:$(port)/`, "POST", nil, upload, { stream = true })
+for line in network.lines(body) do print(vector.tostring(line)) end
+--> line 1 of upload
+--> line 2 of upload
+coroutine.close(serving)
+server:close()
+```
 
 **Requires pledge:** `network:http`]],
     kind = "function",
@@ -5541,7 +6303,12 @@ Outside a detached coroutine, `fetch` runs the detached coroutines while it wait
       {
         name = "body",
         optional = true,
-        type = "string|vector",
+        type = "string|vector|function|thread",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
       },
     },
     parent = "network",
@@ -5555,7 +6322,7 @@ Outside a detached coroutine, `fetch` runs the detached coroutines while it wait
       },
       {
         name = "body",
-        type = "vector",
+        type = "vector|thread",
       },
       {
         name = "headers",
@@ -5567,6 +6334,62 @@ Outside a detached coroutine, `fetch` runs the detached coroutines while it wait
     source = "stdlib/network/fetch.md",
     stability = "stable",
   },
+  ["network.lines"] = {
+    children = {},
+    description = [[
+Returns an iterator over the lines of the text that a coroutine yields in parts, for a generic `for` or for calls of its own.
+
+`stream` is a coroutine that yields strings or vectors, such as the body of a response that [`network.fetch`](/manual/api#network.fetch) streams or the `reader` of a request of [`network.serve`](/manual/api#network.serve). The iterator resumes `stream` whenever it needs more text, and a line may span several parts. Each call of the iterator returns one line as a vector without its line end, and `nil` once the lines ran out. The iterator holds its state, so `local nextline = network.lines(co)` works without a loop. A line ends with LF, and a CR before the LF goes too. The last line may lack a line end. The loop ends when the coroutine ends, and a part of `nil` that a coroutine yields without ending adds nothing.
+
+`max_bytes` is a positive integer that limits a line and defaults to 1 MiB. A longer line raises `"line too long"`. An error that the coroutine raises comes out of the step that resumed it, and a part that is neither a string, a vector, nor `nil` raises an error that names its type. A `max_bytes` that is not positive raises a `bad argument` error. The function needs no permission.
+
+The following example reads the events of a stream of server-sent events, where each event is a `data:` line and an empty line.
+
+```lus
+pledge("network")
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    return 200, coroutine.create(function()
+        for n = 1, 2 do coroutine.yield(`data: tick $(n)\n\n`) end
+    end), { ["Content-Type"] = "text/event-stream" }
+end)
+local _, events = network.fetch(`http://127.0.0.1:$(port)/events`, "GET", nil, nil, { stream = true })
+for line in network.lines(events) do
+    local data = vector.tostring(line):match("^data: (.*)")
+    if data then print(data) end
+end
+--> tick 1
+--> tick 2
+coroutine.close(serving)
+server:close()
+```]],
+    kind = "function",
+    module = "network",
+    name = "network.lines",
+    origin = "lus",
+    params = {
+      {
+        name = "stream",
+        type = "thread",
+      },
+      {
+        name = "max_bytes",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "network",
+    returns = {
+      {
+        type = "function",
+      },
+    },
+    short_name = "lines",
+    since = "2.0.0",
+    source = "stdlib/network/lines.md",
+    stability = "stable",
+  },
   ["network.serve"] = {
     children = {},
     description = [[
@@ -5575,6 +6398,8 @@ Serves HTTP/1.1 on `host` and `port`, calls `handler` for every request, and ret
 `host` is a string and `port` an integer that name the address to listen on. `handler` is a function that receives one table per request and returns the response. `options` is an optional table described below. The second form, `network.serve(server, handler, options)`, serves on a server that [`network.tcp.bind`](/manual/api#network.tcp.bind) returned, which lets a program bind port `0` and read the chosen port with `getsockname` before it serves.
 
 `serve` blocks its caller for as long as the server runs and returns no values. It accepts connections in a loop, and each connection runs in a coroutine of its own that the runtime resumes whenever its socket is ready (see `coroutine.detach`), so a slow client never holds up the others. Connections stay open between requests unless the client asks to close them. A server that `serve` bound itself closes when `serve` ends, and a server passed to it stays open until the program closes it. `serve` ends when the coroutine that called it is closed, or when accepting a connection fails for a reason other than a shortage of file descriptors or memory.
+
+Closing the coroutine that runs `serve` stops the server gracefully. `serve` stops accepting, and a server it bound itself closes at once. A connection that waits between two requests closes at once, and a connection in the middle of a request finishes it, with a response that carries `Connection: close`, then closes. A connection still open when `drain_timeout` has passed is closed, together with a response that was not sent yet. A handler that still runs at that point continues, and its response is dropped. The program keeps running while connections drain, because each connection runs in a detached coroutine of its own.
 
 The call requires the `network:server` permission for the address it serves, and in the first form `network:tcp` to bind it. A failure to bind raises an error such as `"cannot bind to HOST:PORT: REASON"`.
 
@@ -5586,13 +6411,47 @@ The handler receives one table per request:
 | `path` | The request target up to the first `?`, as the client sent it. |
 | `query` | The text after the first `?`, or the empty string. |
 | `headers` | A table from lowercase header names to their values. A header that repeats joins its values with `", "`. |
-| `body` | The request body as a vector, which is empty for a request without a body. |
+| `ip` | The numeric address of the client, from the accepted connection, such as `"127.0.0.1"`. |
+| `port` | The port of the client, from the accepted connection. |
+| `body` | The whole request body as a vector, which is empty for a request without a body. The server reads it on the first use of the field. |
+| `reader` | A coroutine that yields the request body part by part, which the server makes on the first use of the field. |
 
-The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string or a vector and defaults to an empty body. `headers` is a table from header names to strings or integers. A header value may also be a list of strings and integers, which sends one header line for each element in order, so a response can set several cookies with `{ ["Set-Cookie"] = { "a=1", "b=2" } }`. An empty list sends no line. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
+`ip` and `port` name the other end of the TCP connection. Behind a reverse proxy, a load balancer, or a service such as Cloudflare, that end is the proxy, so they hold its address. The address of the client then travels in a header that the proxy sets, such as `X-Forwarded-For` or `CF-Connecting-IP`, and the application decides which proxies it trusts to set it.
+
+The server calls the handler once the request line and the headers arrived, and the body stays in the connection. The handler reads it whole through `req.body`, which reads the rest of the body and stores the vector in the table, or part by part through `req.reader`. Each resume of `req.reader` returns `true` and the next part of the body as a vector, as soon as it arrives, and the coroutine ends at the end of the body. A failure while it reads makes the resume return `false` and the error. [`network.lines`](/manual/api#network.lines) reads it line by line. Reading `req.body` after `req.reader` yielded a part raises `"the request body was already read through req.reader"`, and using `req.reader` after `req.body` raises `"the request body was already read through req.body"`. Both work until the handler returns. Later, reading either field raises `"the body is no longer available"`, and a resume of a `req.reader` that the handler kept returns `false` and that error. When the request carries `Expect: 100-continue`, the server sends the interim response `100 Continue` on the first read of the body. Whatever the handler left of the body, the server reads and drops before the next request.
+
+The handler returns `status, body, headers`, in the order in which `network.fetch` returns them. `status` is an integer and defaults to 200. `body` is a string, a vector, a coroutine, or a function, and defaults to an empty body. `headers` is a table from header names to strings or integers. A header value may also be a list of strings and integers, which sends one header line for each element in order, so a response can set several cookies with `{ ["Set-Cookie"] = { "a=1", "b=2" } }`. An empty list sends no line. The server adds `Date`, `Content-Length`, and `Connection` when the handler does not set them. A handler may suspend: socket operations and `coroutine.yield` inside it let the other connections run.
+
+A coroutine or a function body streams the response. The server sends the status and the headers, then resumes the coroutine again and again, or calls the function again and again. Each chunk that the coroutine yields or the function returns is a string or a vector, and the server sends it before the next resume or call, so each chunk leaves as soon as it exists. The coroutine ends the body by ending, after a chunk that it returns at its end, and the function ends it by returning `nil`. An empty chunk, and a `nil` that a coroutine yields without ending, send nothing. The server closes a coroutine body with `coroutine.close` when the response ends, however it ends, so the to-be-closed variables of the coroutine run at once: after the last chunk, when the client leaves, after an error, and for a response that never resumes it. The coroutine of `req.reader` is such a body, so a handler that returns it sends the request body back as it arrives. The server sends the chunks with `Transfer-Encoding: chunked` and keeps the connection open for the next request. When the handler sets `Content-Length`, the chunks go out as they are, and the connection stays open when they add up to that length and closes when they fall short. A chunk past the length raises an error. A client of HTTP/1.0 gets the chunks as they are, and the connection closes after the last one. The coroutine and the function may wait on sockets and suspend between chunks, so a handler that waits for events streams them as they come. A response to `HEAD`, and a status that carries no body, send the headers and never resume the coroutine or call the function. When the coroutine or the function raises an error or produces a value other than a string, a vector, or `nil`, the server reports the error and closes the connection after the chunks it sent, so the client sees a body that ended early.
+
+The following example streams server-sent events. Each event is a `data:` line and an empty line, and the response has the content type `text/event-stream`.
+
+```lus
+pledge("network")
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    return 200, coroutine.create(function()
+        for n = 1, 3 do
+            coroutine.yield(`data: {"count": $(n)}\n\n`)
+        end
+    end), { ["Content-Type"] = "text/event-stream", ["Cache-Control"] = "no-cache" }
+end)
+local status, events = network.fetch(`http://127.0.0.1:$(port)/events`, "GET", nil, nil, { stream = true })
+for line in network.lines(events) do
+    local data = vector.tostring(line):match("^data: (.*)$")
+    if data then print(fromjson(data).count) end
+end
+--> 1
+--> 2
+--> 3
+coroutine.close(serving)
+server:close()
+```
 
 When the handler raises an error, or returns values that make no response, such as a status that is not an integer, the server answers 500 with an empty body, reports the error, and closes that connection. The other connections continue. It writes the error to standard error, in the form `lus: network.serve: message`, or passes the error value to the `on_error` function of the options.
 
-A handler upgrades the connection to another protocol, such as a WebSocket, by returning the status 101 and a function in place of the body. The server sends the 101 response with the headers of the handler and no body, then calls the function with the TCP socket of the connection, in the coroutine of the connection. Bytes that the client sent after the request are already in the buffer of the socket, so the first `receive` returns them. The connection closes when the function returns. When the function raises an error, the server reports it like an error of a handler and closes the connection without a further response. The socket keeps the `idle_timeout` of the server until the function calls `settimeout`. A function body with any other status, and the status 101 with any other body, count as values that make no response.
+A handler upgrades the connection to another protocol, such as a WebSocket, by returning the status 101 and a function in place of the body. The server sends the 101 response with the headers of the handler and no body, then calls the function with the TCP socket of the connection, in the coroutine of the connection. Bytes that the client sent after the request are already in the buffer of the socket, so the first `receive` returns them. The connection closes when the function returns. When the function raises an error, the server reports it like an error of a handler and closes the connection without a further response. The socket keeps the `idle_timeout` of the server until the function calls `settimeout`. The status 101 with any other body counts as values that make no response.
 
 When the request carries a `Sec-WebSocket-Key` header, the server adds the headers of a WebSocket handshake that the handler does not set: `Upgrade: websocket`, `Connection: Upgrade`, and the `Sec-WebSocket-Accept` value that RFC 6455 derives from the key. The function then exchanges WebSocket frames over the socket. A handler that checks `req.headers.upgrade` before it upgrades refuses other requests with an ordinary status.
 
@@ -5622,12 +6481,23 @@ server:close()
 | `idle_timeout` | How many seconds a connection may spend without progress, which defaults to 60. A negative value lets a connection wait without limit. |
 | `max_connections` | How many connections the server keeps open at once. It defaults to half of the file descriptors that the process may open, and to 65536 at most. |
 | `on_error` | A function that receives the error of a handler in place of the line on standard error. |
+| `drain_timeout` | How many seconds the open connections may take to finish after the coroutine of `serve` closed, which defaults to 10. A negative value lets them take as long as they need, and `0` closes them at once. |
+| `tls` | A table with `cert` and `key`, PEM text of the certificate chain and the private key of the server, and `password` for an encrypted key. A list of such tables serves one certificate for each name. |
 
-A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that stays idle for `idle_timeout` between two requests closes. One that stops in the middle of a request is answered with 408 and closes, and one that stops reading its response closes as well. A handler may take as long as it needs.
+A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that stays idle for `idle_timeout` between two requests closes. One that stops in the middle of the head of a request, or in the middle of a body that the handler reads, is answered with 408 and closes, and one that stops reading its response closes as well. A handler may take as long as it needs.
+
+With the `tls` option the server serves HTTPS. Every connection runs a TLS handshake inside its first read, so a client that never finishes it closes after `idle_timeout`, and a client that speaks plain HTTP gets no response. The server offers HTTP/1.1 through ALPN and chooses the certificate by the name that the client sends through SNI: the first certificate whose DNS names, or whose common name when it lists none, match the name. A client that sends no name, or a name that no certificate carries, gets the first certificate. The server reads the certificates once, when `serve` starts, and a certificate that does not parse raises a `bad argument` error before the server accepts anything. A server picks up renewed certificates when the program calls `serve` again. An upgrade with the status 101 hands the function a TLS socket, so a WebSocket over HTTPS works like one over HTTP.
 
 While `max_connections` connections are open, further clients wait in the queue of the system, and the server accepts the next one when a connection closes. When the system has no file descriptor or no memory left for a new connection, the server waits for a connection to close, or for a moment, and accepts again.
 
-The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines, and a request body to 16 MiB. A chunked body gives each chunk size as hexadecimal digits alone, and the line that starts a chunk is limited to 1 KiB. The framing of a chunked body, which is its chunk lines and its trailers, is limited to 64 KiB plus 8 bytes for every byte of the body. A request over a limit is answered with 431 or 413, and a malformed request with 400. The connection closes after each of these answers.
+The server reads request bodies with a `Content-Length` and bodies with `Transfer-Encoding: chunked`, answers `Expect: 100-continue`, and leaves the body out of the response to a `HEAD` request. The request line and the headers of a request are limited to 64 KiB and 128 header lines. A chunked body gives each chunk size as hexadecimal digits alone, and the line that starts a chunk is limited to 1 KiB. The framing of a chunked body, which is its chunk lines and its trailers, is limited to 64 KiB plus 8 bytes for every byte of the body. A head over a limit is answered with 431, and a malformed head with 400, before the handler runs. `req.body` holds at most 16 MiB, and `req.reader` yields a body of any size. A body that breaks its framing or its limit while the handler reads it raises an error in the handler. The error is an error object as socket operations return them (see [`network.tcp`](/manual/api#network.tcp)): a table with the fields `code`, `status`, the status of the refusal, and `message`, whose `__tostring` gives the message, so a framework that catches it answers with that status. The code follows the status:
+
+| Code | Status | Refusal |
+| --- | --- | --- |
+| `"malformed"` | 400 | The body broke its framing, such as a bad chunk size or a body that ended early. |
+| `"timeout"` | 408 | The body stalled for `idle_timeout`. |
+| `"too_large"` | 413 | The body went over the 16 MiB of `req.body`, or its chunk framing went over its limit. |
+| `"too_large"` | 431 | The trailers of a chunked body went over their limit. | Reading `req.body` raises it, since a field read returns no second value, and a resume of `req.reader` returns `false` and the object. When the handler lets that error end it, the server answers 400, 408, 413, or 431 in place of 500. Whatever the handler returns, a connection whose body broke closes after the response, and so does a connection whose unread body is over 16 MiB or waits for a `100 Continue` that the server never sent.
 
 The following example serves in a detached coroutine on a port that the system chooses, sends one request over a TCP socket, and stops the server.
 
@@ -5646,7 +6516,7 @@ coroutine.close(serving)
 server:close()
 ```
 
-The example talks to its server through a TCP socket because [`network.fetch`](/manual/api#network.fetch) blocks the whole state, the server coroutines included.
+The example talks to its server through a TCP socket so that every byte on the wire shows. [`network.fetch`](/manual/api#network.fetch) reaches a server of the same state too.
 
 **Requires pledges:** `network:server`, `network:tcp`]],
     kind = "function",
@@ -5691,16 +6561,38 @@ The example talks to its server through a TCP socket because [`network.fetch`](/
     description = [[
 The `network.tcp` table opens TCP connections with [`network.tcp.connect`](/manual/api#network.tcp.connect) and listens for them with [`network.tcp.bind`](/manual/api#network.tcp.bind).
 
-A TCP socket has the methods `send(data)`, `receive(pattern, max_bytes)`, `settimeout(seconds)`, `getsockname()`, `getpeername()`, and `close()`. A server has the methods `accept()`, `settimeout(seconds)`, `getsockname()`, and `close()`, and `accept` returns a socket. A method other than `close` on a closed socket raises `"attempt to use a closed socket"`, and on a closed server `"attempt to use a closed server"`. A second `close` does nothing. The collector closes a socket or a server that nothing refers to any more, and one declared with the `<close>` attribute closes when its variable goes out of scope.
+A TCP socket has the methods `send(data, i, j)`, `receive(pattern, max_bytes)`, `settimeout(seconds)`, `getsockname()`, `getpeername()`, `starttls(options)`, `tlsinfo()`, `reader(max_bytes)`, and `close()`. [`network.tls`](/manual/api#network.tls) describes the sockets that carry TLS. A server has the methods `accept()`, `settimeout(seconds)`, `getsockname()`, and `close()`, and `accept` returns a socket. A method other than `close` on a closed socket raises `"attempt to use a closed socket"`, and on a closed server `"attempt to use a closed server"`. A second `close` does nothing. The collector closes a socket or a server that nothing refers to any more, and one declared with the `<close>` attribute closes when its variable goes out of scope.
 
-`connect`, `accept`, `send`, and `receive` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and the other detached coroutines run in the meantime. Anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait in both cases, and an operation whose timeout runs out raises `"receive timeout"`, `"send timeout"`, or `"accept timeout"` and leaves the socket usable.
+`connect`, `accept`, `send`, and `receive` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and the other detached coroutines run in the meantime. Anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait in both cases. `settimeout(nil)` and a negative value remove the timeout, and `settimeout(0)` makes an operation that cannot finish at once fail at once. An operation whose timeout runs out fails with the code `"timeout"` and the message `"receive timeout"`, `"send timeout"`, or `"accept timeout"`, and leaves the socket usable.
+
+Socket operations report failures as file operations do. A failed operation returns `nil` and an _error object_, a table with the fields `code` and `message`, and `status` where an HTTP status applies. Its `__tostring` gives the message, so printing it or concatenating it with `tostring` reads like the message of a file operation. The code says what failed:
+
+| Code | Failure |
+| --- | --- |
+| `"timeout"` | A timeout ran out. |
+| `"refused"` | The peer refused the connection. |
+| `"reset"` | The peer reset or aborted the connection. |
+| `"closed"` | The connection ended while the operation needed it. |
+| `"unreachable"` | No route leads to the host. |
+| `"resolve"` | The name of the host does not resolve. |
+| `"address"` | The address is in use or cannot be assigned. |
+| `"denied"` | The system denied the operation. |
+| `"limit"` | A received line or stream went over its limit. |
+| `"tls"` | The TLS handshake or the TLS layer failed. |
+| `"certificate"` | The certificate of the peer did not verify. |
+| `"protocol"` | An HTTP response broke the protocol, such as a malformed status line or `Content-Length`, or a body that broke its framing. |
+| `"too_large"` | An HTTP body or head went over its limit: a response body of `network.fetch` over 64 MiB, or a request body that `network.serve` refuses with 413 or 431. |
+| `"malformed"` | A request body broke its framing, which `network.serve` refuses with 400. |
+| `"io"` | Any other failure of the system. |
+
+Misuse raises rather than returns: a bad argument, a socket that the program closed before the call, and a permission that the program lacks. A coroutine of [`tcp_socket:reader`](/manual/api#tcp_socket:reader) raises its error object, so the resume returns `false` and the object, as for any coroutine.
 
 ```lus
 pledge("network")
 local server <close> = network.tcp.bind("127.0.0.1", 0)
 server:settimeout(0.05)
-local ok, err = catch server:accept()
-print(ok, err:match("accept timeout"))   --> false  accept timeout
+local sock, err = server:accept()
+print(sock, err.code, tostring(err))   --> nil  timeout  accept timeout
 ```]],
     kind = "module",
     module = "network",
@@ -5719,7 +6611,7 @@ Binds a listening TCP server to `host` and `port` and returns the server.
 
 `host` is a host name or a numeric address, and the server listens on the first address it resolves to. `port` is an integer from 0 through 65535, and port `0` lets the operating system choose a free port. `backlog` is the number of connections the system queues before `accept` takes them, and defaults to 128.
 
-On success the call returns one server with the methods `accept`, `settimeout`, `getsockname`, and `close`. `accept()` waits for the next connection and returns a TCP socket. Every failure raises an error. A port out of range raises `bad argument #2 to 'bind' (port out of range)`, a name that does not resolve raises `"cannot resolve 'HOST': REASON"`, and an address that cannot be bound raises `"cannot bind to HOST:PORT: REASON"`. The call requires `network:tcp` for `host:port`.
+On success the call returns one server with the methods `accept`, `settimeout`, `getsockname`, and `close`. `accept()` waits for the next connection and returns a TCP socket, or `nil` and an error object, such as one with the code `"timeout"` and the message `"accept timeout"`. A failure returns `nil` and an error object (see [`network.tcp`](/manual/api#network.tcp)): a name that does not resolve has the code `"resolve"` and the message `"cannot resolve 'HOST': REASON"`, and an address that cannot be bound has the code `"address"` and the message `"cannot bind to HOST:PORT: REASON"`. A port out of range raises `bad argument #2 to 'bind' (port out of range)`. The call requires `network:tcp` for `host:port`.
 
 The following example binds a port that the system chooses, accepts one connection, and reads a line from it.
 
@@ -5774,9 +6666,9 @@ print(vector.tostring(conn:receive()))   --> ping
     description = [[
 Opens a TCP connection to `host` and `port` and returns the connected socket.
 
-`host` is a host name or a numeric address. `port` is an integer from 1 through 65535. The call waits until the connection is established, as described in [`network.tcp`](/manual/api#network.tcp).
+`host` is a host name or a numeric address. `port` is an integer from 1 through 65535. `options` is a table whose one field, `timeout`, is a number of seconds. The call waits until the connection is established, as described in [`network.tcp`](/manual/api#network.tcp). With `timeout`, the connection must be established within that time, which counts the attempts at every address of the host, and the socket then keeps `timeout` as the timeout of its operations, as `settimeout` sets it. A negative `timeout` waits without limit.
 
-On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, and `close`. `send(data)` sends a string or a vector in full and returns the number of bytes sent. Every failure to connect raises an error, such as `"cannot connect to 127.0.0.1:1: Connection refused"` or `"cannot resolve 'HOST': Domain name not found"`. A port out of range raises a `bad argument` error. The call requires `network:tcp` for `host:port`.
+On success the call returns one socket with the methods `send`, `receive`, `settimeout`, `getsockname`, `getpeername`, `starttls`, `tlsinfo`, `reader`, and `close`. `send(data, i, j)` sends a string or a vector in full and returns the position of its last element, which for a string is its number of characters and for a vector its number of bytes. With `i` and `j` it sends the part from position `i` to position `j`, which count characters of a string and bytes of a vector as `string.sub` counts them, and returns `j` as `string.sub` clips it, or 0 for an empty part. A failure to connect returns `nil` and an error object (see [`network.tcp`](/manual/api#network.tcp)), such as one with the code `"refused"` and the message `"cannot connect to 127.0.0.1:1: Connection refused"`, or the code `"resolve"` and the message `"cannot resolve 'HOST': Domain name not found"`. A connection that runs out of time has the code `"timeout"` and the message `"timeout while connecting to HOST:PORT"`. A port out of range, an unknown option, and a `timeout` that is not a number raise a `bad argument` error. The call requires `network:tcp` for `host:port`.
 
 The following example connects to a local server and reads the addresses of both ends.
 
@@ -5790,7 +6682,7 @@ print(peer_address, peer_port == port)   --> 127.0.0.1  true
 print(sock:send("hello"))                --> 5
 ```
 
-A failure of an open connection during `send` or `receive`, such as a reset by the other end, returns `nil` and a message such as `"receive: Connection reset by peer"`. [`tcp_socket:receive`](/manual/api#tcp_socket:receive) reads from the socket.
+A failure of an open connection during `send` or `receive`, such as a reset by the other end, returns `nil` and an error object with the code `"reset"` and a message such as `"receive: Connection reset by peer"`. [`tcp_socket:receive`](/manual/api#tcp_socket:receive) reads from the socket.
 
 **Requires pledge:** `network:tcp`]],
     kind = "function",
@@ -5805,6 +6697,11 @@ A failure of an open connection during `send` or `receive`, such as a reset by t
       {
         name = "port",
         type = "integer",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
       },
     },
     parent = "network.tcp",
@@ -5821,6 +6718,110 @@ A failure of an open connection during `send` or `receive`, such as a reset by t
     source = "stdlib/network/tcp/connect.md",
     stability = "stable",
   },
+  ["network.tls"] = {
+    children = {
+      "network.tls.connect",
+    },
+    description = [[
+The `network.tls` table opens TLS connections with [`network.tls.connect`](/manual/api#network.tls.connect). A plain TCP socket starts TLS with [`tcp_socket:starttls`](/manual/api#tcp_socket:starttls), as the client or as the server, and [`network.serve`](/manual/api#network.serve) serves HTTPS with its `tls` option.
+
+A _TLS socket_ is a TCP socket whose bytes travel through TLS 1.2 or TLS 1.3. It has every method of a TCP socket, and `send` and `receive` carry plain text while the bytes on the wire are encrypted. [`tcp_socket:tlsinfo`](/manual/api#tcp_socket:tlsinfo) reports the protocol version, the cipher suite, and the protocol that ALPN chose. Closing a TLS socket sends a TLS `close_notify` alert to the peer before the TCP connection closes. A peer that ends the TCP connection without that alert ends the stream like one that sends it, so `receive("*a")` returns what arrived.
+
+The handshake, `send`, and `receive` wait for the network as the operations of a TCP socket do. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and the other detached coroutines run in the meantime. Anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait.
+
+A client verifies the certificate of the server by default. The certificate must chain to a trusted certificate authority and must name the server: `servername` must match one of its DNS names or, when the certificate lists none, its common name. The trusted authorities are the certificates of the system, which load once per process on the first connection that needs them, or the authorities of the `ca` option.
+
+The options of a client connection form a table with any of these fields:
+
+| Field | Value |
+| --- | --- |
+| `servername` | The name that the client sends in SNI and checks the certificate against. It defaults to the host of `network.tls.connect`. |
+| `alpn` | A list of between 1 and 16 protocol names, such as `{ "h2", "http/1.1" }`, that the client offers through ALPN. |
+| `ca` | PEM text of the certificate authorities to trust in place of those of the system. |
+| `cert`, `key` | PEM text of a client certificate chain and of its private key, which the client presents when the server asks for one. Each needs the other. |
+| `password` | The password of an encrypted private key. |
+| `verify` | `false` to accept any certificate of the server. It defaults to `true`. |
+| `timeout` | Seconds for `network.tls.connect`: the connection to every address of the host must end within it, each wait of the handshake lasts at most that long, and the socket keeps it as its timeout. |
+
+PEM text is a string or a vector. A program reads a certificate file with `io.open`, which needs `fs:read` for the file. An unknown field raises `"bad argument #N to 'connect' (unknown option 'NAME')"`, and a field of the wrong type raises a `bad argument` error that names it. A `ca` that holds no certificate raises an error that says so, and a `cert` or `key` that does not parse raises `"invalid certificate"` or `"invalid private key"` with the reason.
+
+A handshake that fails closes the socket, and the call returns `nil` and an error object (see [`network.tcp`](/manual/api#network.tcp)). A certificate that does not verify has the code `"certificate"` and the message `"certificate verification failed for NAME: REASON"`, such as `"certificate verification failed for example.com: The certificate is not correctly signed by the trusted CA"`. Any other failure has the code `"tls"` and the message `"TLS handshake failed: REASON"`, and a handshake whose timeout runs out has the code `"timeout"` and the message `"TLS handshake timeout"`. A failure of the TLS layer after the handshake makes `send` and `receive` return `nil` and an error object with the code `"tls"` and a message that starts with `"TLS: "`.
+
+The WebAssembly build has no network library, so `network.tls` is absent there.
+
+```lus nocheck
+pledge("network")
+local sock <close> = network.tls.connect("example.com", 443, { alpn = { "http/1.1" } })
+sock:send("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+print(sock:tlsinfo().version)                       --> TLSv1.3
+print(vector.tostring(sock:receive("*l")))          --> HTTP/1.1 200 OK
+```]],
+    kind = "module",
+    module = "network",
+    name = "network.tls",
+    origin = "lus",
+    parent = "network",
+    short_name = "tls",
+    since = "2.0.0",
+    source = "stdlib/network/tls/_module.md",
+    stability = "stable",
+  },
+  ["network.tls.connect"] = {
+    children = {},
+    description = [[
+Opens a TCP connection to `host` and `port`, runs a TLS handshake over it, and returns the TLS socket.
+
+`host` is a host name or a numeric address, and `port` is an integer from 1 through 65535. `options` is the table of client options that [`network.tls`](/manual/api#network.tls) describes. The call connects as [`network.tcp.connect`](/manual/api#network.tcp.connect) does, then runs the handshake, and returns once the handshake ends. The `timeout` option bounds the connection as it bounds that of `network.tcp.connect`, then every wait of the handshake, and becomes the timeout of the socket. A connection that runs out of time fails with the code `"timeout"` and the message `"timeout while connecting to HOST:PORT"`.
+
+On success the call returns one socket with the methods of a TCP socket and [`tlsinfo`](/manual/api#tcp_socket:tlsinfo). A failure to connect returns `nil` and the error object that `network.tcp.connect` returns, and a failed handshake closes the socket and returns `nil` and an error object that `network.tls` describes. A port out of range and an invalid option raise a `bad argument` error. The call requires `network:tcp` for `host:port`.
+
+The following example connects to a server with a private certificate authority and asks for HTTP/1.1 through ALPN.
+
+```lus nocheck
+pledge("network", "fs:read=/etc/myapp/*")
+local f <close> = io.open("/etc/myapp/ca.pem")
+local sock <close> = network.tls.connect("db.internal", 5433, {
+    ca = f:read("a"),
+    alpn = { "http/1.1" },
+    timeout = 5,
+})
+print(sock:tlsinfo().alpn)   --> http/1.1
+```
+
+**Requires pledge:** `network:tcp`]],
+    kind = "function",
+    module = "network.tls",
+    name = "network.tls.connect",
+    origin = "lus",
+    params = {
+      {
+        name = "host",
+        type = "string",
+      },
+      {
+        name = "port",
+        type = "integer",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "network.tls",
+    pledges = {
+      "network:tcp",
+    },
+    returns = {
+      {
+        type = "tcp_socket",
+      },
+    },
+    short_name = "connect",
+    since = "2.0.0",
+    source = "stdlib/network/tls/connect.md",
+    stability = "stable",
+  },
   ["network.udp"] = {
     children = {
       "network.udp.open",
@@ -5830,14 +6831,14 @@ The `network.udp` table opens UDP sockets with [`network.udp.open`](/manual/api#
 
 A UDP socket has the methods `sendto(data, address, port)`, `receive(size)`, `setsockname(address, port)`, `getsockname()`, `settimeout(seconds)`, and `close()`. `sendto` sends one datagram of a string or a vector and returns the number of bytes sent, and it checks `network:udp` for every destination. `setsockname` binds a socket that is not bound yet and returns nothing, and on a bound socket it returns `nil` and an error message. A method other than `close` on a closed socket raises `"attempt to use a closed UDP socket"`.
 
-`receive` and `sendto` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait, and an operation whose timeout runs out raises `"receive timeout"` or `"sendto timeout"` and leaves the socket usable.
+`receive` and `sendto` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait, and an operation whose timeout runs out returns `nil` and an error object with the code `"timeout"` and the message `"receive timeout"` or `"sendto timeout"`, and leaves the socket usable. Failures return error objects as those of TCP sockets do (see [`network.tcp`](/manual/api#network.tcp)).
 
 ```lus
 pledge("network")
 local sock <close> = network.udp.open(0, "127.0.0.1")
 sock:settimeout(0.05)
-local ok, err = catch sock:receive()
-print(ok, err:match("receive timeout"))   --> false  receive timeout
+local data, err = sock:receive()
+print(data, err.code, tostring(err))   --> nil  timeout  receive timeout
 ```]],
     kind = "module",
     module = "network",
@@ -5856,7 +6857,7 @@ Creates a UDP socket, bound to a local address and port when they are given, and
 
 `port` is an optional integer from 0 through 65535 that defaults to `0`. `address` is an optional numeric IPv4 address that defaults to `"0.0.0.0"`, and a host name raises `"invalid address: NAME"`. With an `address`, or with a `port` other than `0`, the socket is bound to that address and port at once, and port `0` then lets the operating system choose a free port. Without either, the socket sends from a port that the system chooses, and `setsockname` may bind it once later.
 
-On success the call returns one socket. A failure raises an error such as `"cannot bind UDP socket: REASON"`. A bound socket requires `network:udp` for `address:port`, and an unbound socket requires any grant of `network:udp`, including one limited to other hosts.
+On success the call returns one socket. A failure returns `nil` and an error object (see [`network.tcp`](/manual/api#network.tcp)) with a message such as `"cannot bind UDP socket: REASON"`. A bound socket requires `network:udp` for `address:port`, and an unbound socket requires any grant of `network:udp`, including one limited to other hosts.
 
 The following example opens a receiving socket on a chosen port and a sending socket without a binding, and passes one datagram between them.
 
@@ -5956,6 +6957,8 @@ The order of traversal is unspecified, even for integer keys. During a traversal
       "os.platform",
       "os.setenv",
       "os.setlocale",
+      "os.signal",
+      "os.spawn",
       "os.time",
       "os.tmpname",
     },
@@ -6089,7 +7092,7 @@ Runs `command` in the system shell, waits for it to finish, and returns whether 
 
 `command` is a command string. It runs under `/bin/sh -c` on POSIX systems, and under `cmd.exe /s /c` on Windows, which receives the command exactly as written. The runtime flushes its standard output before the command starts, so earlier output appears first.
 
-With a command, the call returns three values: `true` when the command exited with status 0 and `nil` otherwise, then `"exit"` when the command exited or `"signal"` when a signal ended it, then the exit status or the signal number. On Windows the exit number is the full 32-bit exit code of the process, so a crash code such as `3221225477` reads as a failure. A command that cannot be started returns `nil` and a message. Running a command requires the `exec` permission, and without it the call raises `permission "exec" denied for os.execute`.
+With a command, the call returns three values: `true` when the command exited with status 0 and `nil` otherwise, then `"exit"` when the command exited or `"signal"` when a signal ended it, then the exit status or the signal number. On Windows the exit number is the full 32-bit exit code of the process, so a crash code such as `3221225477` reads as a failure. A command that cannot be started returns `nil` and a message. Running a command requires the `exec` permission without a value, since the shell runs any program, and without it the call raises `permission "exec" denied for os.execute`. A grant limited to some programs, such as `exec=git`, covers [`os.spawn`](/manual/api#os.spawn) only.
 
 Without `command`, the call returns `true` to report that a shell is available, and it needs no permission. A build without process support returns `false` instead.
 
@@ -6100,7 +7103,7 @@ print(os.execute("exit 3"))   --> nil  exit  3
 print(os.execute())           --> true
 ```
 
-[`io.popen`](/manual/api#io.popen) runs a command and connects a pipe to its output or input.
+[`io.popen`](/manual/api#io.popen) runs a command and connects a pipe to its output or input, and [`os.spawn`](/manual/api#os.spawn) runs a program without a shell.
 
 **Requires pledge:** `exec`]],
     kind = "function",
@@ -6327,6 +7330,157 @@ print(os.setlocale("fr_FR.UTF-8"))    --> nil
     since = "0.1.0",
     source = "stdlib/os/setlocale.md",
     stability = "stable",
+  },
+  ["os.signal"] = {
+    children = {},
+    description = [[
+Starts handling the named signals and returns a coroutine that hands them over, one per resume.
+
+Each argument names a signal.
+
+- `"interrupt"` is SIGINT, which Ctrl-C sends from a terminal. On Windows it is the Ctrl-C and Ctrl-Break events of the console.
+- `"terminate"` is SIGTERM, which service managers and `kill` send to stop a program. On Windows it is the close, logoff, and shutdown events of the console.
+- `"hangup"` is SIGHUP. Windows has no such signal, so the name raises an error there.
+
+While a coroutine of `os.signal` handles a signal, the signal no longer ends the program. Resuming the coroutine waits until one of its signals arrives, then returns `true` and the name of the signal. Each signal that arrives after the call is counted, so a signal that arrives while the program does other work is returned by the next resume. The system itself merges a signal into one that is still pending, so two identical signals sent at the same moment may arrive as one. Resumed from a detached coroutine, the wait suspends that coroutine. Resumed anywhere else, it blocks while the detached coroutines run.
+
+When an interrupt was returned and a second interrupt arrives before any coroutine waits for interrupts again, the program ends at once with exit status 130. A program whose shutdown hangs therefore still stops on the second Ctrl-C.
+
+Closing the coroutine with `coroutine.close` stops handling its signals, as does the collection of a coroutine that nothing references. A signal that no other coroutine handles then gets the action it had before the call, which for these signals ends the program. When several coroutines handle the same signal, every one of them receives it.
+
+On Windows a close, logoff, or shutdown event ends the process as soon as its handler returns, so the runtime holds the event until the process ends by itself or until the system ends it, about five seconds later.
+
+A call without arguments, or with a name that is not one of the three, raises a bad argument error. The call needs no permission, because handling a signal changes only how the program itself ends.
+
+The following program serves HTTP until it receives SIGTERM or Ctrl-C. Closing the coroutine that runs `network.serve` lets the requests in progress finish before the program ends.
+
+```lus nocheck
+pledge("network:server=127.0.0.1:8080")
+local serving = coroutine.detach(coroutine.create(network.serve), "127.0.0.1", 8080, function(req)
+    return 200, "hello"
+end)
+local stop = os.signal("interrupt", "terminate")
+local _, name = coroutine.resume(stop)
+print("stopping on " .. name)
+coroutine.close(serving)
+```
+
+[`os.spawn`](/manual/api#os.spawn) sends signals to other processes with `p:kill`.]],
+    kind = "function",
+    module = "os",
+    name = "os.signal",
+    origin = "lus",
+    params = {
+      {
+        name = "name",
+        type = "string",
+      },
+      {
+        name = "...",
+        optional = true,
+        type = "string",
+      },
+    },
+    parent = "os",
+    returns = {
+      {
+        type = "thread",
+      },
+    },
+    short_name = "signal",
+    since = "2.0.0",
+    source = "stdlib/os/signal.md",
+    stability = "unstable",
+  },
+  ["os.spawn"] = {
+    children = {},
+    description = [[
+Starts a program without a shell and returns a process object, or `nil` and a message when the program cannot be found or started.
+
+`argv` is an array of strings. `argv[1]` names the program and the other elements are its arguments, which reach the program exactly as written because no shell interprets them. A name without a separator is looked up in the directories of `PATH`, together with the extensions of `PATHEXT` on Windows. A name with a separator is a path, relative to `cwd` when that option is given. `PATH` comes from the environment that the child receives.
+
+`options` is a table with these optional fields.
+
+- `stdin`, `stdout`, and `stderr` each name what the stream of the child is connected to. `"inherit"`, the default, gives the child the stream of the program. `"pipe"` connects the stream to a pipe whose other end is a field of the process object. `"null"` connects it to the null device. An open file from `io.open` connects it to that file. `stderr` also accepts `"stdout"`, which sends the errors of the child wherever its output goes, into the same pipe when `stdout` is `"pipe"`.
+- `env` is a table of strings that replaces the environment of the child. Without it the child receives the environment of the program, including the changes that `os.setenv` made.
+- `cwd` is the working directory of the child.
+
+The process object has these fields and methods.
+
+- `p.pid` is the integer that the system gives the process.
+- `p.stdin`, `p.stdout`, and `p.stderr` are the pipe ends of the streams opened with `"pipe"`, and `nil` for the others. They are files with the methods of `io.open` files: `p.stdin` is written with `write` and closed with `close`, and `p.stdout` and `p.stderr` are read with `read` and `lines`. A read or a write that cannot proceed waits, which suspends a detached coroutine and lets the other detached coroutines run while any other thread waits.
+- `p.exit` is a coroutine that waits for the process to end, made together with the process. Resuming it returns `true` followed by the three values of `os.execute`: `true` or `nil`, then `"exit"` or `"signal"`, then the exit status or the signal number. The coroutine is then dead, so a second resume returns `false` and `"cannot resume dead coroutine"`. Closing a detached coroutine that waits in a resume of `p.exit` closes `p.exit` as well, which ends the wait.
+- `p:poll()` returns the same three values when the process has ended, and nothing while it runs. It never waits, and it reads the status also after `p.exit` returned it.
+- `p:kill(signal)` sends a signal to the process and returns `true`, or returns `false` when the process has already ended. `signal` is `"terminate"`, the default, `"kill"`, `"interrupt"`, `"hangup"`, or a signal number. On Windows every signal ends the process with exit code 1.
+
+Leaving the scope of a process in a `<close>` variable closes its pipes and then waits for it to end, so a child that reads its input to the end sees the end and exits. A process object that the collector reclaims while the process runs leaves it running, and the runtime collects its exit status so that it never remains a zombie. A child keeps running after the program ends.
+
+The call requires the `exec` permission for the program. A grant without a value covers every program. A value without a separator is a glob over the name as `argv[1]` writes it, so `pledge("exec=git")` allows `{"git", ...}`. A value with a separator is a path glob over the absolute path the name resolves to, which resolves through symbolic links like a grant of `fs:read`, so `pledge("exec=/usr/bin/*")` allows every program found there. A denied program raises `permission "exec" denied for 'NAME'`. Since a shell runs any program, `os.execute` and `io.popen` need the grant without a value.
+
+On Windows the arguments are quoted for the rules that the C runtime uses to split a command line, so a program built with any common compiler receives them unchanged. A `.bat` or `.cmd` program runs through `cmd.exe`, which parses its arguments with rules of its own. An argument for such a program that holds `%`, `!`, `"`, or a line break cannot reach it intact, so the call raises an error before it starts anything.
+
+An `argv` that is empty, an empty program name, an element that is not a string or holds a zero byte, and an option of the wrong type raise a bad argument error.
+
+The following example sends text through `sort` and reads the result.
+
+```lus
+pledge("exec=sort")
+local p <close> = os.spawn({"sort"}, {stdin = "pipe", stdout = "pipe"})
+p.stdin:write("pear\napple\nfig\n")
+p.stdin:close()
+print(p.stdout:read("a"))
+--> apple
+--> fig
+--> pear
+print(coroutine.resume(p.exit))   --> true  true  exit  0
+```
+
+Two pipes that both fill can hold a child and the program in a deadlock when one thread reads them in turn. A detached coroutine for each pipe avoids that, as the following POSIX example shows with a child that writes to both streams.
+
+```lus nocheck
+pledge("exec=sh")
+local p = os.spawn({"sh", "-c", "echo out; echo err >&2"}, {stdout = "pipe", stderr = "pipe"})
+local errors
+local reader = coroutine.detach(coroutine.create(function()
+    errors = p.stderr:read("a")
+end))
+local output = p.stdout:read("a")
+coroutine.resume(reader)
+print(output:sub(1, -2), errors:sub(1, -2))      --> out  err
+print(select(4, coroutine.resume(p.exit)))   --> 0
+```
+
+[`os.execute`](/manual/api#os.execute) runs a command line in the system shell. [`os.signal`](/manual/api#os.signal) handles the signals that the program itself receives.
+
+**Requires pledge:** `exec`]],
+    kind = "function",
+    module = "os",
+    name = "os.spawn",
+    origin = "lus",
+    params = {
+      {
+        name = "argv",
+        type = "table",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "os",
+    pledges = {
+      "exec",
+    },
+    returns = {
+      {
+        type = "userdata|nil",
+      },
+    },
+    short_name = "spawn",
+    since = "2.0.0",
+    source = "stdlib/os/spawn.md",
+    stability = "unstable",
   },
   ["os.time"] = {
     children = {},
@@ -7126,7 +8280,7 @@ print(select("#", "a", nil, nil))   --> 3
 
 The parameter `t` must be a table, and any other value raises `bad argument #1 to 'setmetatable' (table expected, got TYPE)`. The parameter `metatable` is a table, or `nil` to remove the metatable. A missing `metatable` counts as `nil`, and any other value raises `bad argument #2 to 'setmetatable' (nil or table expected, got TYPE)`.
 
-If the current metatable of `t` has a `__metatable` field, the metatable is protected, and `setmetatable` raises `cannot change a protected metatable`. A read-only table, such as `flags` or a table that `--readonly-env` froze, keeps its metatable, and `setmetatable` on it raises `attempt to modify a readonly table`. A metatable with a `__gc` field marks `t` for finalization when it is set.
+A lookup follows a chain of `__index` tables, or of `__newindex` tables for an assignment, through at most 2,000 tables, and a longer chain raises `'__index' chain too long, possible loop` or `'__newindex' chain too long, possible loop`, which also catches a chain that leads back to itself. A call follows a chain of `__call` tables through at most 15 tables, and a longer chain raises `'__call' chain too long`. If the current metatable of `t` has a `__metatable` field, the metatable is protected, and `setmetatable` raises `cannot change a protected metatable`. A read-only table, such as `flags` or a table that `--readonly-env` froze, keeps its metatable, and `setmetatable` on it raises `attempt to modify a readonly table`. A metatable with a `__gc` field marks `t` for finalization when it is set.
 
 ```lus
 local Point = {}
@@ -7340,7 +8494,7 @@ Searches `s` for the first match of `pattern` and returns the character position
 
 `s` is the string to search, and `pattern` is a [pattern](/manual/guide#strings-and-patterns). A number in either place is converted to its textual form. `init` is the character position where the search starts. It defaults to 1, and a negative value counts back from the end of `s`. When `plain` is true, `pattern` is a literal substring with no special characters. `plain` defaults to false, and passing it requires an `init`, which may be `nil`.
 
-On a match, the first two results are the positions of the first and the last character of the match. The captures of the pattern follow, and a position capture `()` yields an integer. Without a match, the result is a single `nil`.
+On a match, the first two results are the positions of the first and the last character of the match. The captures of the pattern follow, and a position capture `()` yields an integer. A pattern holds at most 32 captures, and one more raises `too many captures`, in every function that takes a pattern. Without a match, the result is a single `nil`.
 
 A malformed pattern raises an error that names the problem, such as `malformed pattern (missing ']')` or `malformed pattern (ends with '%')`.
 
@@ -8103,9 +9257,9 @@ The slice `s[i, j]` takes the same range as `s:sub(i, j)` when both positions li
     description = [[
 Converts `input` from the encoding `from` to the encoding `to` and returns the result, a vector for a byte encoding and a string for a text encoding.
 
-`input` is a string or a vector. A number is converted to its textual form first. `from` and `to` name encodings, and the names are case sensitive. `ignorebad` defaults to false. When it is true, invalid input sequences and characters that `to` cannot represent are skipped.
+`input` is a string or a vector. A number is converted to its textual form first. `from` and `to` name encodings, and the names are case sensitive. `ignorebad` defaults to false. When it is true, each invalid input sequence becomes U+FFFD, and a character that `to` cannot represent is skipped. In UTF-8 input each maximal subpart of an invalid sequence becomes one U+FFFD, the practice of Unicode and of the URL standard, so `"\xE2\x82A"` gives U+FFFD followed by `A`. In UTF-16 input each unpaired surrogate and an odd last byte become one U+FFFD, and in UTF-32 and ASCII input each invalid unit does.
 
-The byte encodings are `"utf-16le"`, `"utf-16be"`, `"utf-32le"`, `"utf-32be"`, `"iso-8859-1"` (also `"latin1"` and `"latin-1"`), and `"binary"`, which stands for the raw bytes. The text encodings are `"utf-8"`, `"utf-8bom"`, `"ascii"`, and the binary to text encodings `"base64"`, `"base64url"`, `"url"`, and `"hex"`. Decoding `"base64"`, `"base64url"`, `"url"`, or `"hex"` input yields its raw bytes, which are then converted to `to`.
+The byte encodings are `"utf-16le"`, `"utf-16be"`, `"utf-32le"`, `"utf-32be"`, `"iso-8859-1"` (also `"latin1"` and `"latin-1"`), and `"binary"`, which stands for the raw bytes. The text encodings are `"utf-8"`, `"utf-8bom"`, `"ascii"`, and the binary to text encodings `"base64"`, `"base64url"`, `"base32"`, `"url"`, and `"hex"`. Decoding `"base64"`, `"base64url"`, `"base32"`, `"url"`, or `"hex"` input yields its raw bytes, which are then converted to `to`.
 
 The result is a new vector when `to` is a byte encoding and a string when `to` is a text encoding.
 
@@ -8120,7 +9274,7 @@ print(string.transcode("hi?", "utf-8", "base64url"))  --> aGk_
 print(string.transcode("Hello 日本", "utf-8", "ascii", true))  --> Hello
 ```
 
-`"utf-8bom"` adds the byte order mark U+FEFF as a target and removes a leading one as a source. Base64 input may omit its padding. `"base64url"` is the URL-safe alphabet of RFC 4648, with `-` and `_` in place of `+` and `/`, and it writes no padding. Its input may carry padding. URL decoding reads `+` as a space. [Text and bytes](/manual/text#transcoding) describes every encoding with examples. [`vector.fromstring`](/manual/api#vector.fromstring) and [`vector.tostring`](/manual/api#vector.tostring) convert between a string and its WTF-8 bytes.]],
+`"utf-8bom"` adds the byte order mark U+FEFF as a target and removes a leading one as a source. Base64 input may omit its padding. `"base64url"` is the URL-safe alphabet of RFC 4648, with `-` and `_` in place of `+` and `/`, and it writes no padding. Its input may carry padding. `"base32"` is the alphabet of RFC 4648, written in uppercase with padding, as TOTP secrets use it. Its input may be in either case and may omit padding. A base32 text without padding has a length of 0, 2, 4, 5, or 7 characters after its last full group of 8, since a group of 1, 3, or 6 characters encodes no whole byte, and any other length raises an error. Base64, base64url, and base32 decoding skip spaces, tabs, carriage returns, and line feeds anywhere in the input, so text wrapped across lines decodes. Padding `=` may appear only at the end, after the data, and a `=` followed by more data raises an error, so `string.transcode("MZ=XQ", "base32", "utf-8")` raises. URL decoding reads `+` as a space. With `ignorebad`, URL decoding keeps a `%` that does not start two hexadecimal digits as it is and decodes the rest, so `string.transcode("a%zz%41", "url", "utf-8", true)` returns `a%zzA`. The decoded bytes are then UTF-8, so an escape that decodes to an invalid byte becomes U+FFFD, and `string.transcode("%C3%A9%FF", "url", "utf-8", true)` returns `é` followed by U+FFFD, as the URL standard decodes it. Base64, base64url, and base32 decoding with `ignorebad` skip every character outside their alphabet and an incomplete last group, and hex decoding skips each pair that holds a character other than a hexadecimal digit and a lone last digit, so `string.transcode("4g41", "hex", "utf-8", true)` returns `A`. [Text and bytes](/manual/text#transcoding) describes every encoding with examples. [`vector.fromstring`](/manual/api#vector.fromstring) and [`vector.tostring`](/manual/api#vector.tostring) convert between a string and its WTF-8 bytes.]],
     kind = "function",
     module = "string",
     name = "string.transcode",
@@ -9240,7 +10394,7 @@ Returns the elements `list[i]` through `list[j]` as separate values.
 
 The results are `j - i + 1` values in order, with `nil` for each missing element in the range. When `i` is greater than `j`, there are no results.
 
-A range of more values than the stack can hold raises `too many results to unpack`. A `list` that is not a table raises a type error.
+A range of more values than the stack can hold raises `too many results to unpack`. The stack of a thread holds 1,000,000 slots, so a call from a fresh state unpacks at most about 999,990 values. A `list` that is not a table raises a type error.
 
 ```lus
 print(table.unpack({1, 2, 3}))         --> 1  2  3
@@ -9407,7 +10561,10 @@ A connected socket has `getsockname` for its own end and `getpeername` for the o
   },
   ["tcp_socket"] = {
     children = {
+      "tcp_socket:reader",
       "tcp_socket:receive",
+      "tcp_socket:starttls",
+      "tcp_socket:tlsinfo",
     },
     kind = "type",
     module = "network.tcp",
@@ -9417,14 +10574,61 @@ A connected socket has `getsockname` for its own end and `getpeername` for the o
     short_name = "tcp_socket",
     synthetic = true,
   },
+  ["tcp_socket:reader"] = {
+    children = {},
+    description = [[
+Returns a coroutine that reads the socket: each resume yields what has arrived, and the coroutine ends at the end of the stream.
+
+`max_bytes` is a positive integer that limits each part and defaults to 65536. Each resume returns `true` and a vector of between 1 and `max_bytes` bytes as soon as the socket holds any, so a relay moves bytes as they come rather than one at a time. When the peer ends the stream, the resume returns `true` alone and the coroutine is dead. A TLS socket yields plain text. The coroutine waits as `receive` does: inside a detached coroutine the wait suspends, anywhere else it runs the detached coroutines, and the timeout of the socket bounds it. A failure makes the resume return `false` and the error object of the failure (see [`network.tcp`](/manual/api#network.tcp)): a wait that runs out has the code `"timeout"` and the message `"receive timeout"`, and a failure of the connection has a code such as `"reset"` and a message such as `"receive: Connection reset by peer"`. A socket that the program closed makes the resume return `false` and `"attempt to use a closed socket"`. Closing the coroutine leaves the socket open. A `max_bytes` that is not positive raises a `bad argument` error. The method needs no permission.
+
+The coroutine has the shape of the streamed bodies of the network library, so [`network.lines`](/manual/api#network.lines) reads it line by line, a handler of [`network.serve`](/manual/api#network.serve) may return it as a body, and [`network.fetch`](/manual/api#network.fetch) sends it as a request body.
+
+```lus
+pledge("network")
+local server <close> = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local writer = coroutine.detach(coroutine.create(function()
+    local conn <close> = server:accept()
+    conn:send("+OK one\r\n+OK two\r\n")
+end))
+local sock <close> = network.tcp.connect("127.0.0.1", port)
+for line in network.lines(sock:reader()) do
+    print(vector.tostring(line))
+end
+--> +OK one
+--> +OK two
+```]],
+    kind = "function",
+    module = "network.tcp",
+    name = "tcp_socket:reader",
+    origin = "lus",
+    params = {
+      {
+        name = "max_bytes",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "tcp_socket",
+    receiver = "tcp_socket",
+    returns = {
+      {
+        type = "thread",
+      },
+    },
+    short_name = "reader",
+    since = "2.0.0",
+    source = "stdlib/network/tcp/reader.md",
+    stability = "stable",
+  },
   ["tcp_socket:receive"] = {
     children = {},
     description = [[
 Receives data from a TCP socket according to `pattern` and returns it as a vector.
 
-`pattern` defaults to `"*l"`, which reads one line and removes its trailing LF and an optional CR before it. `"*a"` reads everything up to the end of the connection. A positive integer reads exactly that many bytes, or the bytes that remain when the connection ends first, and it may be at most 1 MiB. `max_bytes` is an optional positive integer that sets the limit of `"*l"` and `"*a"`, which defaults to 1 MiB for a line and 64 MiB for `"*a"`.
+`pattern` defaults to `"*l"`, which reads one line and removes its trailing LF and an optional CR before it. `"*a"` reads everything up to the end of the connection. A positive integer reads exactly that many bytes, or the bytes that remain when the connection ends first. `max_bytes` is an optional positive integer that sets the limit of `"*l"` and `"*a"`, which defaults to 1 MiB for a line and 64 MiB for `"*a"`.
 
-On success the call returns one vector. At the end of the connection every pattern returns the bytes that remain, which is an empty vector once nothing remains. A failure of the connection itself, such as a reset by the other end, returns `nil` and a message such as `"receive: Connection reset by peer"`. An integer that is zero, negative, or over 1 MiB raises `"invalid receive size: N"`, and any other pattern raises `"invalid receive pattern: PATTERN"`. A `max_bytes` that is not positive raises a `bad argument` error. A line or a stream that exceeds its limit closes the socket and raises `"receive limit exceeded"`. A closed socket raises `"attempt to use a closed socket"`, and a timeout set with `settimeout` that runs out raises `"receive timeout"`. The method needs no permission.
+On success the call returns one vector. At the end of the connection every pattern returns the bytes that remain, which is an empty vector once nothing remains. A failure returns `nil` and an error object (see [`network.tcp`](/manual/api#network.tcp)): a reset by the other end has the code `"reset"` and the message `"receive: Connection reset by peer"`, a timeout set with `settimeout` that runs out has the code `"timeout"` and the message `"receive timeout"`, and a line or a stream that exceeds its limit closes the socket and has the code `"limit"` and the message `"receive limit exceeded"`. An integer that is zero or negative raises `"invalid receive size: N"`, and any other pattern raises `"invalid receive pattern: PATTERN"`. A `max_bytes` that is not positive raises a `bad argument` error. A socket that the program closed raises `"attempt to use a closed socket"`. The method needs no permission.
 
 The following example reads one message with each pattern after the sender has closed its end.
 
@@ -9469,6 +10673,110 @@ print(#conn:receive("*l"))                   --> 0
     short_name = "receive",
     since = "0.1.0",
     source = "stdlib/network/tcp/receive.md",
+    stability = "stable",
+  },
+  ["tcp_socket:starttls"] = {
+    children = {},
+    description = [[
+Starts TLS over a connected TCP socket, as the client or as the server, waits for the handshake to end, and returns the same socket, which is now a TLS socket.
+
+Protocols such as SMTP, IMAP, PostgreSQL, and Redis open a plain connection and switch to TLS after an exchange of plain text. A program runs that exchange with `send` and `receive`, then calls `starttls` on both ends. The timeout of the socket bounds every wait of the handshake.
+
+For the client role, `options` is the table of client options that [`network.tls`](/manual/api#network.tls) describes, without `timeout`. `servername` has no default here, so a socket that verifies the server must name it.
+
+For the server role, `options` holds `server = true` and the certificate of the server: `cert` and `key`, PEM text of its certificate chain and of its private key, with `password` for an encrypted key, or `certs`, a list of tables with `cert`, `key`, and `password`, one for each name. The server picks the certificate whose DNS names, or whose common name when it lists none, match the name that the client sends through SNI, and the first certificate for a client that sends none or a name that none carries. `alpn` lists the protocols that the server accepts, in its order of preference, and the server chooses the first of them that the client offers. A server that serves TLS from its first byte calls `starttls` right after `accept`. The server reads the certificates once for each options table, so a server that passes the same table to every connection parses them once, and a new table loads new certificates. [`tcp_socket:tlsinfo`](/manual/api#tcp_socket:tlsinfo) of a server socket reports the name that the client asked for.
+
+On success the call returns the socket, whose `send` and `receive` then carry plain text through TLS. The socket must hold no received byte that no `receive` returned yet, since such bytes came before TLS and would read as protected data. A socket that holds one raises `"starttls: the socket holds data received before TLS started"`, and a socket that already uses TLS raises `"the socket already uses TLS"`. A missing `servername` with verification, a server without a certificate, a certificate or a key that does not parse, and an unknown option raise a `bad argument` error. A failed handshake closes the socket and returns `nil` and an error object that `network.tls` describes. The method needs no permission beyond the one that opened the connection.
+
+```lus nocheck
+pledge("network")
+local sock <close> = network.tcp.connect("mail.example.com", 587)
+sock:settimeout(10)
+sock:receive("*l")
+sock:send("EHLO client.example.com\r\n")
+repeat
+    local line = vector.tostring(sock:receive("*l"))
+until line:sub(4, 4) == " "
+sock:send("STARTTLS\r\n")
+sock:receive("*l")
+sock:starttls({ servername = "mail.example.com" })
+print(sock:tlsinfo().servername)   --> mail.example.com
+```
+
+The following server side of the same exchange reads its certificate once and upgrades each connection after the `STARTTLS` command.
+
+```lus nocheck
+pledge("network", "fs:read=/etc/mail/*")
+local function read(path)
+    local f <close> = io.open(path)
+    return f:read("a")
+end
+local tls = { server = true, cert = read("/etc/mail/cert.pem"), key = read("/etc/mail/key.pem") }
+local server <close> = network.tcp.bind("0.0.0.0", 587)
+while true do
+    local conn = server:accept()
+    coroutine.detach(coroutine.create(function()
+        conn:send("220 mail.example.com ESMTP\r\n")
+        -- read EHLO and STARTTLS here, then:
+        conn:send("220 2.0.0 Ready to start TLS\r\n")
+        conn:starttls(tls)
+        -- the session continues over TLS
+    end))
+end
+```]],
+    kind = "function",
+    module = "network.tcp",
+    name = "tcp_socket:starttls",
+    origin = "lus",
+    params = {
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "tcp_socket",
+    receiver = "tcp_socket",
+    returns = {
+      {
+        type = "tcp_socket",
+      },
+    },
+    short_name = "starttls",
+    since = "2.0.0",
+    source = "stdlib/network/tcp/starttls.md",
+    stability = "stable",
+  },
+  ["tcp_socket:tlsinfo"] = {
+    children = {},
+    description = [[
+Returns what the TLS handshake of a socket settled, or `nil` for a socket without TLS.
+
+The table has these fields. `version` is the protocol version, `"TLSv1.2"` or `"TLSv1.3"`. `cipher` is the name of the cipher suite, such as `"TLS1-3-AES-128-GCM-SHA256"`. `alpn` is the protocol that ALPN chose, or absent when the peers chose none. `servername` is the name that a client checked the certificate against, or the name that the client of a server asked for through SNI, or absent when there is none. A socket of `network.serve` before its first request has `servername` alone, since its handshake runs inside the first read. The method needs no permission.
+
+```lus nocheck
+pledge("network")
+local sock <close> = network.tls.connect("example.com", 443)
+local info = sock:tlsinfo()
+print(info.version, info.servername)   --> TLSv1.3  example.com
+local plain <close> = network.tcp.connect("example.com", 80)
+print(plain:tlsinfo())                 --> nil
+```]],
+    kind = "function",
+    module = "network.tcp",
+    name = "tcp_socket:tlsinfo",
+    origin = "lus",
+    params = {},
+    parent = "tcp_socket",
+    receiver = "tcp_socket",
+    returns = {
+      {
+        type = "table|nil",
+      },
+    },
+    short_name = "tlsinfo",
+    since = "2.0.0",
+    source = "stdlib/network/tcp/tlsinfo.md",
     stability = "stable",
   },
   ["time"] = {
@@ -9974,6 +11282,8 @@ With `format`, the text must match a pattern built from these specifiers:
 
 - `%Y` reads a year of one to four digits, and `%y` reads one or two digits and adds 2000, giving a year from 2000 to 2099.
 - `%m`, `%d`, `%H`, `%M`, and `%S` read one or two digits of the month, day, hour, minute, and second. `%e` is the same as `%d`, and both skip leading spaces.
+- `%b`, `%h`, and `%B` read the English name of a month, in full or as its first three letters, in any case, so each reads both `Nov` and `November`.
+- `%a` and `%A` read the English name of a weekday in the same way. The weekday must be the weekday of the date, so `time.parse("Mon, 22 Nov 2026", "%a, %d %b %Y")` raises `'Mon, 22 Nov 2026' names Monday, but the date falls on a Sunday`.
 - `%z` reads `Z`, or an offset `+HH`, `+HHMM`, or `+HH:MM` with either sign.
 - `%%` reads a literal `%`.
 
@@ -9988,6 +11298,8 @@ local z = time.parse("2026-07-02T09:15:00-04:00")
 print(z.offset, z:instant() == i)               --> -14400  true
 local p = time.parse("02/07/2026 09:15 -0400", "%d/%m/%Y %H:%M %z")
 print(p:iso())                                  --> 2026-07-02T09:15:00-04:00
+local h = time.parse("Sun, 22 Nov 2026 10:00:00 GMT", "%a, %d %b %Y %H:%M:%S GMT")
+print(h:iso())                                  --> 2026-11-22T10:00:00Z
 print(catch time.parse("2026-13-01"))           --> false  ...: ISO 8601 date out of range in '2026-13-01'
 ```
 
@@ -10517,7 +11829,7 @@ Waits for one datagram and returns its data as a vector, together with the numer
 
 `size` is an optional integer from 1 through 1048576 (1 MiB) that defaults to 8192 (8 KiB). The call returns at most `size` bytes of the datagram and discards the rest of it. Any other size raises `"invalid receive size: N"`.
 
-On success the call returns three values: the data as a vector, the address of the sender as a string, and its port as an integer. A failure of the socket returns `nil` and a message. A timeout set with `settimeout` that runs out raises `"receive timeout"`, and a closed socket raises `"attempt to use a closed UDP socket"`. The method needs no permission.
+On success the call returns three values: the data as a vector, the address of the sender as a string, and its port as an integer. A failure of the socket returns `nil` and an error object (see [`network.tcp`](/manual/api#network.tcp)), and a timeout set with `settimeout` that runs out has the code `"timeout"` and the message `"receive timeout"`. A socket that the program closed raises `"attempt to use a closed UDP socket"`. The method needs no permission.
 
 The following example receives the first 5 bytes of a longer datagram.
 
@@ -10855,7 +12167,9 @@ Character positions are plain integers in Lus, so [`string.sub`](/manual/api#str
     children = {
       "vector.archive",
       "vector.clone",
+      "vector.copy",
       "vector.create",
+      "vector.find",
       "vector.fromstring",
       "vector.get",
       "vector.pack",
@@ -10879,6 +12193,8 @@ Character positions are plain integers in Lus, so [`string.sub`](/manual/api#str
       "vector.archive.deflate",
       "vector.archive.gzip",
       "vector.archive.lz4",
+      "vector.archive.tar",
+      "vector.archive.zip",
       "vector.archive.zstd",
     },
     kind = "module",
@@ -11377,6 +12693,457 @@ The library writes only the current frame format, so new data goes through [`vec
     source = "stdlib/vector.archive.lz4/decompress_hc.md",
     stability = "stable",
   },
+  ["vector.archive.tar"] = {
+    children = {
+      "vector.archive.tar.list",
+      "vector.archive.tar.pack",
+      "vector.archive.tar.read",
+      "vector.archive.tar.unpack",
+    },
+    kind = "module",
+    module = "vector",
+    name = "vector.archive.tar",
+    parent = "vector.archive",
+    short_name = "tar",
+    synthetic = true,
+  },
+  ["vector.archive.tar.list"] = {
+    children = {},
+    description = [[
+Returns the entries of a tar archive as an array of tables, in archive order.
+
+- `archive` is the archive as a vector or a string, or an open file. A file is read from its start with positional reads, which leave its position unchanged, so a large archive is never loaded whole.
+
+The reader takes ustar, pax, and GNU archives. Pax records set the name, the link target, the size, and the time. GNU long-name records set the name and the link target. Each entry is a table with these fields.
+
+- `name` is the full name, joined from the prefix and name fields of a ustar header or taken from a pax or GNU record. Bytes that are not UTF-8 read as U+FFFD.
+- `kind` is `"file"`, `"directory"`, `"symlink"`, `"link"` for a hard link, or `"special"` for a device, a FIFO, or another type.
+- `size` is the size of the contents in bytes.
+- `mode` is the permission bits.
+- `mtime` is the modification time in seconds since the Unix epoch.
+- `target` is the target of a symlink or a hard link.
+
+The archive ends at a block of zeros. A header with a wrong checksum raises `invalid tar archive (bad header checksum)`. An archive that ends before its zero block raises `truncated archive`. A gzip-compressed tar file goes through [`vector.archive.gzip.decompress`](/manual/api#vector.archive.gzip.decompress) first.
+
+The following example lists a compressed tar archive.
+
+```lus
+local tgz = vector.archive.gzip.compress(vector.archive.tar.pack({
+    { name = "pkg/init.lus", data = "return {}" },
+    { name = "pkg/latest", kind = "symlink", target = "init.lus" },
+}))
+for _, e in ipairs(vector.archive.tar.list(vector.archive.gzip.decompress(tgz))) do
+    print(e.name, e.kind, e.target)
+end
+--> pkg/init.lus  file  nil
+--> pkg/latest  symlink  init.lus
+```]],
+    kind = "function",
+    module = "vector.archive.tar",
+    name = "vector.archive.tar.list",
+    origin = "lus",
+    params = {
+      {
+        name = "archive",
+        type = "string|vector|userdata",
+      },
+    },
+    parent = "vector.archive.tar",
+    returns = {
+      {
+        type = "table",
+      },
+    },
+    short_name = "list",
+    since = "2.0.0",
+    source = "stdlib/vector.archive.tar/list.md",
+    stability = "unstable",
+  },
+  ["vector.archive.tar.pack"] = {
+    children = {},
+    description = [[
+Writes a tar archive and returns it as a vector.
+
+- `entries` is an array of entry tables, written in order, with the fields of [`vector.archive.zip.pack`](/manual/api#vector.archive.zip.pack) except `method`.
+
+Each entry gets a ustar header. A name longer than the ustar fields hold, a link target longer than 100 bytes, a size of 8 GiB or more, or a time before 1970 or after 2242 adds a pax record that carries the exact value. Owners are written as 0 with empty names. The archive ends with two blocks of zeros. The errors are those of `vector.archive.zip.pack`.
+
+The following example writes a gzip-compressed tar file of two entries.
+
+```lus
+local tar = vector.archive.tar.pack({
+    { name = "release/README", data = "Read me first.\n", mtime = 1700000000 },
+    { name = "release/bin/tool", data = "#!/bin/sh\n", mode = 493 },
+})
+print(#tar % 512)                                                       --> 0
+local tgz = vector.archive.gzip.compress(tar)
+print(vector.archive.tar.list(vector.archive.gzip.decompress(tgz))[1].mtime)   --> 1700000000
+```]],
+    kind = "function",
+    module = "vector.archive.tar",
+    name = "vector.archive.tar.pack",
+    origin = "lus",
+    params = {
+      {
+        name = "entries",
+        type = "table",
+      },
+    },
+    parent = "vector.archive.tar",
+    returns = {
+      {
+        type = "vector",
+      },
+    },
+    short_name = "pack",
+    since = "2.0.0",
+    source = "stdlib/vector.archive.tar/pack.md",
+    stability = "unstable",
+  },
+  ["vector.archive.tar.read"] = {
+    children = {},
+    description = [[
+Returns the contents of one file in a tar archive as a vector, or `nil` when the archive holds no entry by that name.
+
+- `archive` is a vector, a string, or an open file, as for [`vector.archive.tar.list`](/manual/api#vector.archive.tar.list).
+- `name` is the entry name. Names compare after dropping empty and `.` components, so `"./a//b"` finds `a/b`.
+- `max` is the largest size in bytes to read. It defaults to 536,870,912 (512 MiB), and a value of 0 or less also selects the default.
+
+The function reads the first entry with the name. Tar carries no checksum of the contents, so only the headers are checked. An entry larger than `max` raises `archive exceeds size limit (N bytes)`. An entry that is not a file raises `'NAME' is not a file`. A name with a `..` component or an absolute path raises `unsafe entry name 'NAME'`.
+
+The following example reads a file from an archive.
+
+```lus
+local tar = vector.archive.tar.pack({ { name = "VERSION", data = "2.0.0\n" } })
+io.write(vector.tostring(vector.archive.tar.read(tar, "VERSION")))   --> 2.0.0
+```]],
+    kind = "function",
+    module = "vector.archive.tar",
+    name = "vector.archive.tar.read",
+    origin = "lus",
+    params = {
+      {
+        name = "archive",
+        type = "string|vector|userdata",
+      },
+      {
+        name = "name",
+        type = "string",
+      },
+      {
+        name = "max",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "vector.archive.tar",
+    returns = {
+      {
+        type = "vector|nil",
+      },
+    },
+    short_name = "read",
+    since = "2.0.0",
+    source = "stdlib/vector.archive.tar/read.md",
+    stability = "unstable",
+  },
+  ["vector.archive.tar.unpack"] = {
+    children = {},
+    description = [[
+Writes every entry of a tar archive under `directory` and returns the number of entries written.
+
+- `archive` is a vector, a string, or an open file, as for [`vector.archive.tar.list`](/manual/api#vector.archive.tar.list).
+- `directory` is the target directory, created when it does not exist.
+- `options` may set `max`, `entries`, and `overwrite`, as for [`vector.archive.zip.unpack`](/manual/api#vector.archive.zip.unpack).
+
+The function keeps every write inside `directory` by the rules of `vector.archive.zip.unpack`, and checks every entry before it writes anything. Hard links and special files raise `unsupported entry type 'link' for 'NAME'` or the same error with `'special'`. The function requires `fs:write` for `directory` and for every path it writes.
+
+The following example unpacks a compressed tar file into a new directory.
+
+```lus
+local tgz = vector.archive.gzip.compress(vector.archive.tar.pack({
+    { name = "data/a.csv", data = "x,y\n1,2\n" },
+}))
+local dir = "tar-example-" .. os.time()
+print(vector.archive.tar.unpack(vector.archive.gzip.decompress(tgz), dir))   --> 1
+print(fs.type(dir .. "/data/a.csv"))                                         --> file
+fs.remove(dir, true)
+```
+
+**Requires pledge:** `fs:write`]],
+    kind = "function",
+    module = "vector.archive.tar",
+    name = "vector.archive.tar.unpack",
+    origin = "lus",
+    params = {
+      {
+        name = "archive",
+        type = "string|vector|userdata",
+      },
+      {
+        name = "directory",
+        type = "string",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "vector.archive.tar",
+    pledges = {
+      "fs:write",
+    },
+    returns = {
+      {
+        type = "integer",
+      },
+    },
+    short_name = "unpack",
+    since = "2.0.0",
+    source = "stdlib/vector.archive.tar/unpack.md",
+    stability = "unstable",
+  },
+  ["vector.archive.zip"] = {
+    children = {
+      "vector.archive.zip.list",
+      "vector.archive.zip.pack",
+      "vector.archive.zip.read",
+      "vector.archive.zip.unpack",
+    },
+    kind = "module",
+    module = "vector",
+    name = "vector.archive.zip",
+    parent = "vector.archive",
+    short_name = "zip",
+    synthetic = true,
+  },
+  ["vector.archive.zip.list"] = {
+    children = {},
+    description = [[
+Returns the entries of a ZIP archive as an array of tables, in the order of its central directory.
+
+- `archive` is the archive as a vector or a string, or an open file. A file is read from its start with positional reads, which leave its position unchanged, so a large archive is never loaded whole.
+
+Each entry is a table with these fields.
+
+- `name` is the name as stored. Bytes that are not UTF-8 read as U+FFFD.
+- `kind` is `"file"`, `"directory"`, or `"symlink"`.
+- `size` is the size of the contents in bytes, and 0 for a directory or a symlink.
+- `mode` is the permission bits, such as `420` (`0644`).
+- `mtime` is the modification time in seconds since the Unix epoch. The Unix timestamp field is read when present. Otherwise the DOS date and time are read, taken as UTC.
+- `target` is the target of a symlink.
+- `method` is `"store"` or `"deflate"`.
+- `compressed` is the size of the stored data in bytes.
+
+ZIP64 archives are read. Data that is not a ZIP archive raises `invalid ZIP archive` with the reason in parentheses, such as `(no end of central directory)`. An archive that ends early raises `truncated archive`. An argument that is not a string, a vector, or a file raises `bad argument #1 to 'list' (string, vector, or file expected, got boolean)` with its type.
+
+The following example packs two files and lists them.
+
+```lus
+local zip = vector.archive.zip.pack({
+    { name = "notes/todo.txt", data = "buy milk" },
+    { name = "notes/done.txt", data = "", method = "store" },
+})
+for _, e in ipairs(vector.archive.zip.list(zip)) do
+    print(e.name, e.kind, e.size, e.method)
+end
+--> notes/todo.txt  file  8  deflate
+--> notes/done.txt  file  0  store
+```]],
+    kind = "function",
+    module = "vector.archive.zip",
+    name = "vector.archive.zip.list",
+    origin = "lus",
+    params = {
+      {
+        name = "archive",
+        type = "string|vector|userdata",
+      },
+    },
+    parent = "vector.archive.zip",
+    returns = {
+      {
+        type = "table",
+      },
+    },
+    short_name = "list",
+    since = "2.0.0",
+    source = "stdlib/vector.archive.zip/list.md",
+    stability = "unstable",
+  },
+  ["vector.archive.zip.pack"] = {
+    children = {},
+    description = [[
+Writes a ZIP archive and returns it as a vector.
+
+- `entries` is an array of entry tables, written in order.
+- `options` may set `method`, the default method of every entry, and `level`, the deflate level from 0 to 9, which defaults to 6.
+
+Each entry table has these fields.
+
+- `name` is the entry name, which is required. `kind` is `"file"`, the default, `"directory"`, or `"symlink"`. A name that ends in `/` defaults to a directory.
+- `data` is the contents of a file, a string or a vector. It defaults to empty.
+- `target` is the target of a symlink, which is required for one.
+- `mode` is the permission bits. It defaults to `0644` for a file, `0755` for a directory, and `0777` for a symlink.
+- `mtime` is the modification time in seconds since the Unix epoch. It defaults to 0. ZIP dates start in 1980, so an earlier time is written as 1 January 1980 in the DOS field. The exact time goes in the Unix timestamp field.
+- `method` is `"deflate"`, the default, or `"store"`.
+
+Names are stored normalized and in UTF-8, with a `/` after a directory. The writer adds ZIP64 records when a size, an offset, or the entry count needs them. A name that is empty, absolute, or holds a `..` component raises `unsafe entry name 'NAME'`. A missing name raises `bad entry #1 to 'pack' (field 'name' missing)`. A field of the wrong type raises the same error with the field named.
+
+The following example packs a small project and checks that a file reads back.
+
+```lus
+local zip = vector.archive.zip.pack({
+    { name = "app", kind = "directory" },
+    { name = "app/main.lus", data = 'print("hi")' },
+    { name = "app/run.sh", data = "#!/bin/sh\nlus main.lus\n", mode = 493 },
+}, { level = 9 })
+print(#vector.archive.zip.list(zip))                                  --> 3
+print(vector.tostring(vector.archive.zip.read(zip, "app/main.lus")))  --> print("hi")
+```]],
+    kind = "function",
+    module = "vector.archive.zip",
+    name = "vector.archive.zip.pack",
+    origin = "lus",
+    params = {
+      {
+        name = "entries",
+        type = "table",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "vector.archive.zip",
+    returns = {
+      {
+        type = "vector",
+      },
+    },
+    short_name = "pack",
+    since = "2.0.0",
+    source = "stdlib/vector.archive.zip/pack.md",
+    stability = "unstable",
+  },
+  ["vector.archive.zip.read"] = {
+    children = {},
+    description = [[
+Returns the contents of one file in a ZIP archive as a vector, or `nil` when the archive holds no entry by that name.
+
+- `archive` is a vector, a string, or an open file, as for [`vector.archive.zip.list`](/manual/api#vector.archive.zip.list).
+- `name` is the entry name. Names compare after dropping empty and `.` components, so `"./a//b"` finds `a/b`.
+- `max` is the largest size in bytes to read. It defaults to 536,870,912 (512 MiB), and a value of 0 or less also selects the default.
+
+The function reads the first entry with the name. It checks the local header against the central directory, counts the bytes actually decompressed against both `max` and the size the header declares, and checks the CRC-32. An entry that grows past `max` raises `archive exceeds size limit (N bytes)`. A size that differs from the header raises `size of 'NAME' does not match its header`. A wrong checksum raises `checksum mismatch in 'NAME'`. An entry that is a directory or a symlink raises `'NAME' is not a file`. A name with a `..` component or an absolute path raises `unsafe entry name 'NAME'`. Encrypted entries raise `encrypted entry 'NAME' is not supported`. Compression methods other than store and deflate raise `unsupported compression method N in 'NAME'`.
+
+The following example reads one file of an archive and looks for a missing one.
+
+```lus
+local zip = vector.archive.zip.pack({ { name = "config.json", data = '{"debug":true}' } })
+print(vector.tostring(vector.archive.zip.read(zip, "config.json")))   --> {"debug":true}
+print(vector.archive.zip.read(zip, "missing.json"))                   --> nil
+```]],
+    kind = "function",
+    module = "vector.archive.zip",
+    name = "vector.archive.zip.read",
+    origin = "lus",
+    params = {
+      {
+        name = "archive",
+        type = "string|vector|userdata",
+      },
+      {
+        name = "name",
+        type = "string",
+      },
+      {
+        name = "max",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "vector.archive.zip",
+    returns = {
+      {
+        type = "vector|nil",
+      },
+    },
+    short_name = "read",
+    since = "2.0.0",
+    source = "stdlib/vector.archive.zip/read.md",
+    stability = "unstable",
+  },
+  ["vector.archive.zip.unpack"] = {
+    children = {},
+    description = [[
+Writes every entry of a ZIP archive under `directory` and returns the number of entries written.
+
+- `archive` is a vector, a string, or an open file, as for [`vector.archive.zip.list`](/manual/api#vector.archive.zip.list).
+- `directory` is the target directory, created when it does not exist.
+- `options` may set `max`, the largest total size in bytes to write, 536,870,912 by default, `entries`, the largest number of entries, 10,000 by default, and `overwrite`.
+
+Every write stays inside `directory`. Before anything is written, the function checks every entry. An archive that fails a check leaves the file system untouched.
+
+- An entry name that is absolute, starts with a drive letter, or holds a backslash, a NUL byte, or a `..` component raises `unsafe entry name 'NAME'`.
+- A symlink is created only when its target is relative, all of its `..` components come first, and they climb no higher than the directory that holds the link. Any other target raises `symlink 'NAME' points outside the target directory`.
+- The local header of every entry must match the central directory. No two entries may share bytes. Overlapping entries raise `invalid ZIP archive (overlapping entries)`, which stops an archive from reaching a high ratio by pointing many entries at the same data.
+- More entries than `entries` raise `archive exceeds entry limit (N entries)`.
+
+While writing, every directory on the way to an entry is opened without following a symbolic link, so no entry is written through a link, whether the archive made it or it was already on disk. Such a path raises `cannot write 'PATH' (a parent is a symlink or a file)`. Sizes are counted from the bytes actually decompressed, so a total past `max` raises `archive exceeds size limit (N bytes)` whatever the headers declare. Files get the permission bits `0644`, or `0755` when the entry is executable. Directories get `0755`.
+
+A file that already exists raises `file exists: PATH`. Directories that exist are merged. With `overwrite = true`, an existing file or symlink is removed and the entry written in its place, never through it. The function requires `fs:write` for `directory` and for every path it writes. The other errors are those of [`vector.archive.zip.read`](/manual/api#vector.archive.zip.read).
+
+The following example unpacks an archive, then unpacks it again over the same files.
+
+```lus
+local zip = vector.archive.zip.pack({
+    { name = "site/index.html", data = "<h1>hi</h1>" },
+    { name = "site/css/main.css", data = "h1 { color: red }" },
+})
+local dir = "unpack-example-" .. os.time()
+print(vector.archive.zip.unpack(zip, dir))                         --> 2
+print(catch vector.archive.zip.unpack(zip, dir))                   --> false  ...: file exists: ...
+print(vector.archive.zip.unpack(zip, dir, { overwrite = true }))   --> 2
+fs.remove(dir, true)
+```
+
+**Requires pledge:** `fs:write`]],
+    kind = "function",
+    module = "vector.archive.zip",
+    name = "vector.archive.zip.unpack",
+    origin = "lus",
+    params = {
+      {
+        name = "archive",
+        type = "string|vector|userdata",
+      },
+      {
+        name = "directory",
+        type = "string",
+      },
+      {
+        name = "options",
+        optional = true,
+        type = "table",
+      },
+    },
+    parent = "vector.archive.zip",
+    pledges = {
+      "fs:write",
+    },
+    returns = {
+      {
+        type = "integer",
+      },
+    },
+    short_name = "unpack",
+    since = "2.0.0",
+    source = "stdlib/vector.archive.zip/unpack.md",
+    stability = "unstable",
+  },
   ["vector.archive.zstd"] = {
     children = {
       "vector.archive.zstd.compress",
@@ -11527,6 +13294,64 @@ Two vectors are equal only when they are the same object, so a clone never compa
     source = "stdlib/vector/clone.md",
     stability = "stable",
   },
+  ["vector.copy"] = {
+    children = {},
+    description = [[
+Copies `len` bytes of `src`, starting at the zero-based offset `srcoff`, into `dst` at the zero-based offset `dstoff`, and returns no values.
+
+- `dst` is the vector written. It keeps its size.
+- `dstoff` is the offset in `dst` where the copy goes.
+- `src` is the vector read. It may be `dst` itself.
+- `srcoff` defaults to 0.
+- `len` defaults to the rest of `src` after `srcoff`.
+
+The ranges may overlap, and the result is the same as if the bytes went through a temporary copy. The range read must lie inside `src` and the range written inside `dst`. An `srcoff` outside `src` raises `bad argument #4 to 'copy' (offset out of bounds)`. A `len` past the end of `src` raises `bad argument #5 to 'copy' (length out of bounds)`. A range that does not fit in `dst` raises `bad argument #2 to 'copy' (offset out of bounds)`. A read-only `dst` raises `bad argument #1 to 'copy' (vector is read-only)`.
+
+The following example writes a header into a buffer, then shifts its contents to drop the first two bytes.
+
+```lus
+local buf = vector.create(8)
+vector.copy(buf, 0, vector.fromstring("LUS2"))
+vector.copy(buf, 4, buf, 0, 4)
+print(vector.tostring(buf))   --> LUS2LUS2
+vector.copy(buf, 0, buf, 2)
+print(vector.tostring(buf, 0, 6))   --> S2LUS2
+```]],
+    kind = "function",
+    module = "vector",
+    name = "vector.copy",
+    origin = "lus",
+    params = {
+      {
+        name = "dst",
+        type = "vector",
+      },
+      {
+        name = "dstoff",
+        type = "integer",
+      },
+      {
+        name = "src",
+        type = "vector",
+      },
+      {
+        name = "srcoff",
+        optional = true,
+        type = "integer",
+      },
+      {
+        name = "len",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "vector",
+    returns = {},
+    short_name = "copy",
+    since = "2.0.0",
+    source = "stdlib/vector/copy.md",
+    stability = "unstable",
+  },
   ["vector.create"] = {
     children = {},
     description = [[
@@ -11572,6 +13397,62 @@ A vector created with size 0 is valid, and [`vector.resize`](/manual/api#vector.
     since = "0.1.0",
     source = "stdlib/vector/create.md",
     stability = "stable",
+  },
+  ["vector.find"] = {
+    children = {},
+    description = [[
+Returns the zero-based offset of the first occurrence of the bytes of `pattern` in a vector at or after `init`, or `nil` when there is none.
+
+- `v` is the vector to search.
+- `pattern` is the byte sequence to find, a vector or a string. A string contributes its WTF-8 bytes.
+- `init` is the zero-based offset where the search starts. It defaults to 0.
+
+The search is plain, so every byte of `pattern` matches only itself, unlike the patterns of [`string.find`](/manual/api#string.find). An empty `pattern` matches at `init`. An `init` below 0 or past the size of the vector returns `nil`. A `v` that is not a vector raises `bad argument #1 to 'find' (vector expected)`. A `pattern` that is neither a string, a number, nor a vector raises `bad argument #2 to 'find' (string or vector expected, got table)` with its type.
+
+The following example splits a multipart body at its boundary.
+
+```lus
+local body = vector.fromstring("--x\r\nfirst\r\n--x\r\nsecond\r\n--x--")
+local parts = {}
+local at = vector.find(body, "--x")
+while true do
+    local start = at + 5
+    local next_at = vector.find(body, "\r\n--x", start)
+    if not next_at then break end
+    parts[#parts + 1] = vector.tostring(body, start, next_at)
+    at = next_at + 2
+end
+print(parts[1], parts[2])   --> first  second
+```]],
+    kind = "function",
+    module = "vector",
+    name = "vector.find",
+    origin = "lus",
+    params = {
+      {
+        name = "v",
+        type = "vector",
+      },
+      {
+        name = "pattern",
+        type = "string|vector",
+      },
+      {
+        name = "init",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "vector",
+    returns = {
+      {
+        type = "integer|nil",
+      },
+    },
+    short_name = "find",
+    since = "2.0.0",
+    source = "stdlib/vector/find.md",
+    stability = "unstable",
   },
   ["vector.fromstring"] = {
     children = {},

@@ -5,7 +5,7 @@
 # These values are one point below a measurement on macOS, until the CI
 # job on Linux, which takes other paths in the scheduler, stores its own.
 
-vm 83.0
+vm 84.3
 gc 91.5
-compile 57.1
-lib core 78.9
+compile 62.8
+lib core 86.8

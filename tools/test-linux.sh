@@ -49,6 +49,10 @@ for arg in "$@"; do
 done
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
+# Each checkout gets directories of its own in the VM, named after a
+# checksum of its path, so runs from several worktrees at once never
+# replace each other's binary or tests.
+checkout="$(printf '%s' "$root" | cksum | cut -d' ' -f1)"
 cd "$root/runtime"
 export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$PWD/.zig-cache/global}"
 
@@ -88,9 +92,9 @@ run_suite() {
     echo "copying the $arch binary and the tests to $vm"
     # The temporary files of the tests live on the disk of the VM, since a
     # /tmp that is a small tmpfs can fill up with the files of other runs.
-    limactl shell "$vm" -- sh -c "rm -rf ~/lus-linux-$arch && mkdir -p ~/lus-linux-$arch/runtime/zig-out/bin ~/lus-linux-$arch/tmp"
-    limactl shell "$vm" -- sh -c "tar -xf - -C ~/lus-linux-$arch" < "$stage/trees.tar"
-    limactl shell "$vm" -- sh -c "cat > ~/lus-linux-$arch/runtime/zig-out/bin/lus && chmod +x ~/lus-linux-$arch/runtime/zig-out/bin/lus" < "$bin"
+    limactl shell "$vm" -- sh -c "rm -rf ~/lus-linux-$arch-$checkout && mkdir -p ~/lus-linux-$arch-$checkout/runtime/zig-out/bin ~/lus-linux-$arch-$checkout/tmp"
+    limactl shell "$vm" -- sh -c "tar -xf - -C ~/lus-linux-$arch-$checkout" < "$stage/trees.tar"
+    limactl shell "$vm" -- sh -c "cat > ~/lus-linux-$arch-$checkout/runtime/zig-out/bin/lus && chmod +x ~/lus-linux-$arch-$checkout/runtime/zig-out/bin/lus" < "$bin"
     for mode in "$@"; do
         echo "== $arch, LUS_JIT=$mode"
         jit="LUS_JIT=$mode"
@@ -98,7 +102,7 @@ run_suite() {
         [ "$arch" = arm64 ] || jit="$jit LUS_EMULATED=1"
         # The status of `lus test` decides, and the report shows every line
         # except the files that passed.
-        if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch/runtime && env TMPDIR=\$HOME/lus-linux-$arch/tmp $jit zig-out/bin/lus test --timeout 120 ../tests/conformance ../packages/language-server/tests > ../report.txt 2>&1; s=\$?; grep -a -v '^ok ' ../report.txt; exit \$s"; then
+        if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch-$checkout/runtime && env TMPDIR=\$HOME/lus-linux-$arch-$checkout/tmp $jit zig-out/bin/lus test --timeout 120 ../tests/conformance ../packages/language-server/tests > ../report.txt 2>&1; s=\$?; grep -a -v '^ok ' ../report.txt; exit \$s"; then
             if [ "$arch" = arm64 ]; then failed=1; else emulated_failed=1; fi
         fi
     done

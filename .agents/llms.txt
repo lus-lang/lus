@@ -15,6 +15,7 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 
 - [lus](https://lus.dev/agents/skills/lus/SKILL.md): Write, check, format, and test Lus code.
 - [lus-rewrite](https://lus.dev/agents/skills/lus-rewrite/SKILL.md): Assess a project for Lus, preview it, and port it behind a parity harness.
+- [lus-writing](https://lus.dev/agents/skills/lus-writing/SKILL.md): Write documentation, READMEs, and doc comments in the Lus prose style.
 - [Install the skills](https://lus.dev/agents.md): `claude plugin install lus --marketplace lus-lang/lus` in Claude Code, `lus agents init` in any other agent.
 
 ## Standard library
@@ -47,6 +48,7 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 - [Build flags](https://lus.dev/manual/guide.md#build-flags) and [values computed when the file is compiled](https://lus.dev/manual/guide.md#values-computed-when-the-file-is-compiled): `-F` flags, `if` branches that the compiler removes, and `<meta>` locals.
 - [Values computed on first use](https://lus.dev/manual/guide.md#values-computed-on-first-use): `<lazy>` locals and group fields, and `<lazy, close>`.
 - [Values that follow other values](https://lus.dev/manual/guide.md#values-that-follow-other-values): `<observe>` locals that recompute when the locals they name are assigned.
+- [Values for each coroutine](https://lus.dev/manual/guide.md#values-for-each-coroutine): `<context>` locals, which hold one value per coroutine, and `debug.getcontext`.
 - [Bigints and decimals](https://lus.dev/manual/guide.md#numbers): `123n` and `1.50d`.
 - [Queries](https://lus.dev/manual/guide.md#queries): First-class queries over tables and databases. Unstable.
 

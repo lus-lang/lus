@@ -548,26 +548,13 @@ pub const Lexer = struct {
                     }
                 },
                 '\\' => {
-                    lx.pos += 1;
-                    const e = lx.cur();
-                    const out: ?u8 = switch (e) {
-                        '`' => '`',
-                        '$' => '$',
-                        'n' => '\n',
-                        't' => '\t',
-                        'r' => '\r',
-                        '\\' => '\\',
-                        else => null,
-                    };
-                    if (out) |o| {
-                        try lx.buf.append(lx.gpa, o);
-                        lx.pos += 1;
-                    } else if (e == '\n' or e == '\r') {
-                        try lx.buf.append(lx.gpa, '\n');
-                        lx.newline();
-                    } else {
-                        return lx.fail(start, "invalid escape sequence in interpolated string", .{});
-                    }
+                    // A backtick string takes every escape of a quoted string,
+                    // and `\`` and `\$` besides.
+                    const e = lx.peekAt(1);
+                    if (e == '`' or e == '$') {
+                        try lx.buf.append(lx.gpa, e);
+                        lx.pos += 2;
+                    } else try lx.escape(start);
                 },
                 '\n', '\r' => {
                     try lx.buf.append(lx.gpa, '\n');
@@ -834,6 +821,13 @@ test "interpolation with names and expressions" {
     defer testing.allocator.free(tags);
     const want = [_]Tag{ .interp_begin, .name, .interp_mid, .name, .lparen, .integer, .rparen, .interp_end, .eof };
     try testing.expectEqualSlices(Tag, &want, tags);
+}
+
+test "interpolated strings take the escapes of quoted strings" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const r = try lex(testing.allocator, arena.allocator(), "`\\27[\\x41\\u{e9}\\0\\z   b\\`\\$`");
+    try testing.expectEqualStrings("\x1b[A\u{e9}\x00b`$", r.payloads[r.tokens[0].payload].text);
 }
 
 test "nested interpolation" {

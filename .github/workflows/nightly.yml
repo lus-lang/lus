@@ -209,6 +209,35 @@ jobs:
           LUS_JIT: "off"
         run: runtime/zig-out/bin/lus tests/oom/run.lus --io --short --samples 50 --jobs 4 --timeout 120
 
+  limits:
+    name: Every limit at the limit and one past it
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build
+        working-directory: runtime
+        run: |
+          zig build -Doptimize=ReleaseSafe
+          zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom
+      - name: Find each limit in every JIT mode
+        timeout-minutes: 120
+        env:
+          LUS_JIT: "off"
+        run: |
+          mkdir -p edge
+          runtime/zig-out/bin/lus tests/limits/run.lus --emit edge
+      - name: Fail allocations in the programs at their limits
+        timeout-minutes: 60
+        env:
+          LUS_JIT: "off"
+        run: runtime/zig-out/bin/lus tests/oom/run.lus --lus runtime/zig-out-oom/bin/lus --samples 30 --jobs 4 --timeout 120 edge
+
   coverage:
     name: Branch coverage
     runs-on: ubuntu-24.04

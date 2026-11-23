@@ -1,0 +1,504 @@
+--[[
+    Test suite for TLS: `network.tls.connect`, `sock:starttls`, HTTPS in
+    `network.fetch`, and `network.serve` with the `tls` option. Every test
+    talks to a server of the same state over loopback. The certificates
+    come from the openssl command when the suite first needs them, and the
+    suite skips without it.
+]]
+
+pledge("exec", "fs:read", "fs:write", "env:read", "network")
+
+local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
+
+local function txt(v)
+    if type(v) == "vector" then return vector.tostring(v) end
+    return v
+end
+
+-- Runs a command line and returns whether it succeeded.
+local function run(cmdline)
+    local f = io.popen(cmdline .. " 2>&1")
+    local out = f:read("a")
+    local ok = f:close()
+    return ok == true or ok == 0, out
+end
+
+local function readfile(path)
+    local f <close> = assert(io.open(path, "rb"))
+    return f:read("a")
+end
+
+local function writefile(path, text)
+    local f <close> = assert(io.open(path, "wb"))
+    f:write(text)
+end
+
+-- A certificate authority, two server certificates that it signs, one for
+-- localhost and 127.0.0.1 and one for other.test, and a client
+-- certificate. Each holds `cert` and `key` as PEM text.
+local certs
+
+local function make_certs()
+    if certs == false then skip("openssl is not available") end
+    if certs then return certs end
+    if not run("openssl version") then
+        certs = false
+        skip("openssl is not available")
+    end
+    local dir = os.tmpname()
+    fs.remove(dir)
+    fs.createdirectory(dir)
+    local function p(name) return '"' .. dir .. "/" .. name .. '"' end
+    writefile(dir .. "/req.cnf", "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = test\n")
+    local function key(name)
+        assert(run(`openssl ecparam -name prime256v1 -genkey -noout -out $(p(name .. ".key"))`))
+    end
+    local function issue(name, cn, ext)
+        key(name)
+        writefile(dir .. "/" .. name .. ".ext", ext)
+        assert(run(`openssl req -new -key $(p(name .. ".key")) -subj "/CN=$(cn)" -config $(p("req.cnf")) -out $(p(name .. ".csr"))`))
+        local ok, out = run(`openssl x509 -req -in $(p(name .. ".csr")) -CA $(p("ca.pem")) -CAkey $(p("ca.key")) -CAcreateserial -sha256 -days 2 -extfile $(p(name .. ".ext")) -out $(p(name .. ".pem"))`)
+        assert(ok, out)
+    end
+    key("ca")
+    local ok, out = run(`openssl req -x509 -new -key $(p("ca.key")) -subj "/CN=Lus Test CA" -sha256 -days 2 -config $(p("req.cnf")) `
+        .. `-addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -out $(p("ca.pem"))`)
+    assert(ok, out)
+    issue("server", "localhost", "subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n")
+    issue("other", "other.test", "subjectAltName=DNS:other.test\nextendedKeyUsage=serverAuth\n")
+    issue("client", "client", "extendedKeyUsage=clientAuth\n")
+    certs = { ca = readfile(dir .. "/ca.pem") }
+    for _, name in ipairs({ "server", "other", "client" }) do
+        certs[name] = { cert = readfile(dir .. "/" .. name .. ".pem"), key = readfile(dir .. "/" .. name .. ".key") }
+    end
+    for _, entry in ipairs(fs.list(dir)) do fs.remove(dir .. "/" .. entry) end
+    fs.remove(dir)
+    return certs
+end
+
+-- Serves `handler` with TLS on a free port while `body(port)` runs.
+local function serving(tls, handler, body)
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local co = detach(create(network.serve), server, handler, { tls = tls })
+    local ok, err = catch body(port)
+    coroutine.close(co)
+    server:close()
+    if not ok then error(err, 0) end
+end
+
+local function hello(req)
+    return 200, "hello " .. req.path
+end
+
+-- Sends one request over `sock` and returns the body of the response.
+local function request(sock, path)
+    sock:send(`GET $(path) HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`)
+    local all = txt(sock:receive("*a"))
+    return string.match(all, "\r\n\r\n(.*)$"), string.match(all, "^HTTP/1%.1 (%d+)")
+end
+
+-- ===== network.tls.connect =====
+
+local function connect_verifies_the_server_against_a_given_authority_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost", alpn = { "http/1.1" } })
+        local info = sock:tlsinfo()
+        assert(info.version == "TLSv1.3" or info.version == "TLSv1.2", tostring(info.version))
+        assert(info.alpn == "http/1.1" and info.servername == "localhost")
+        assert(type(info.cipher) == "string")
+        assert(request(sock, "/a") == "hello /a")
+    end)
+end
+
+local function connect_checks_the_name_of_the_host_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local sock <close> = network.tls.connect("localhost", port, { ca = c.ca })
+        assert(request(sock, "/b") == "hello /b")
+        local bad, err = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "nothere.test" })
+        assert(bad == nil and err.code == "certificate", tostring(err))
+        assert(string.find(tostring(err), "certificate verification failed for nothere.test", 1, true), tostring(err))
+    end)
+end
+
+local function connect_refuses_an_untrusted_certificate_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local sock, err = network.tls.connect("127.0.0.1", port, { servername = "localhost" })
+        assert(sock == nil and err.code == "certificate", tostring(err))
+        assert(string.find(err.message, "certificate verification failed for localhost", 1, true), tostring(err))
+    end)
+end
+
+local function connect_without_verification_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local sock <close> = network.tls.connect("127.0.0.1", port, { verify = false })
+        assert(request(sock, "/c") == "hello /c")
+    end)
+end
+
+local function connect_with_a_client_certificate_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost", cert = c.client.cert, key = c.client.key })
+        assert(request(sock, "/d") == "hello /d")
+    end)
+end
+
+local function serve_picks_a_certificate_by_server_name_test()
+    local c = make_certs()
+    serving({ c.server, c.other }, hello, function(port)
+        local a <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "other.test" })
+        assert(request(a, "/other") == "hello /other")
+        local b <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost" })
+        assert(request(b, "/local") == "hello /local")
+    end)
+end
+
+local function connect_times_out_in_the_handshake_test()
+    make_certs()
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local sock, err = network.tls.connect("127.0.0.1", port, { verify = false, timeout = 0.1 })
+    server:close()
+    assert(sock == nil and err.code == "timeout" and tostring(err) == "TLS handshake timeout", tostring(err))
+end
+
+local function connect_rejects_bad_options_test()
+    make_certs()
+    local cases = {
+        { { verify = false, bogus = 1 }, "unknown option 'bogus'" },
+        { { ca = "not a certificate", servername = "x" }, "ca holds no certificate" },
+        { { alpn = {}, verify = false }, "alpn must list" },
+        { { alpn = { "" }, verify = false }, "invalid ALPN protocol name" },
+        { { cert = certs.client.cert, verify = false }, "cert and key go together" },
+        { { cert = "junk", key = certs.client.key, verify = false }, "invalid certificate" },
+        { { cert = certs.client.cert, key = "junk", verify = false }, "invalid private key" },
+        { { verify = "yes" }, "verify must be a boolean" },
+    }
+    for _, case in ipairs(cases) do
+        local ok, err = catch network.tls.connect("127.0.0.1", 1, case[1])
+        assert(not ok and string.find(tostring(err), case[2], 1, true), tostring(err))
+    end
+end
+
+-- ===== sock:starttls =====
+
+local function starttls_upgrades_a_plain_socket_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local sock <close> = network.tcp.connect("127.0.0.1", port)
+        assert(sock:tlsinfo() == nil)
+        assert(sock:starttls({ ca = c.ca, servername = "localhost" }) == sock)
+        assert(sock:tlsinfo().servername == "localhost")
+        assert(request(sock, "/up") == "hello /up")
+        local ok, err = catch sock:starttls({ verify = false })
+        assert(not ok and string.find(tostring(err), "already uses TLS", 1, true))
+    end)
+end
+
+-- Bytes that arrived before the upgrade could have come from anyone on
+-- the path, so they refuse it.
+local function starttls_refuses_data_received_before_test()
+    make_certs()
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local co = detach(create(function()
+        local conn <close> = server:accept()
+        conn:send("ready\nextra")
+        conn:receive("*a")
+    end))
+    local sock <close> = network.tcp.connect("127.0.0.1", port)
+    -- One read takes the line and the bytes after it, which stay in the
+    -- buffer of the socket.
+    assert(txt(sock:receive("*l")) == "ready")
+    local ok, err = catch sock:starttls({ verify = false })
+    assert(not ok and string.find(tostring(err), "data received before TLS", 1, true), tostring(err))
+    coroutine.close(co)
+    server:close()
+end
+
+local function starttls_needs_a_server_name_to_verify_test()
+    make_certs()
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local sock <close> = network.tcp.connect("127.0.0.1", port)
+    local ok, err = catch sock:starttls({ ca = certs.ca })
+    server:close()
+    assert(not ok and string.find(tostring(err), "servername is required", 1, true), tostring(err))
+end
+
+-- ===== The server role =====
+
+-- Accepts one connection on a plain server in a detached coroutine and
+-- runs `body(conn)` on it.
+local function accepting(body, client)
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local failure
+    local co = detach(create(function()
+        local conn <close> = server:accept()
+        conn:settimeout(5)
+        local ok, err = catch body(conn)
+        if not ok then failure = err end
+    end))
+    local ok, err = catch client(port)
+    coroutine.close(co)
+    server:close()
+    if not ok then error(err, 0) end
+    if failure then error(failure, 0) end
+end
+
+local function starttls_as_a_server_after_plain_text_test()
+    local c = make_certs()
+    accepting(function(conn)
+        conn:send("220 ready\r\n")
+        assert(txt(conn:receive("*l")) == "STARTTLS")
+        conn:send("220 go ahead\r\n")
+        assert(conn:starttls({ server = true, cert = c.server.cert, key = c.server.key }) == conn)
+        local info = conn:tlsinfo()
+        local line = txt(conn:receive("*l"))
+        conn:send(`$(line) for $(info.servername)\r\n`)
+    end, function(port)
+        local sock <close> = network.tcp.connect("127.0.0.1", port)
+        sock:settimeout(5)
+        assert(txt(sock:receive("*l")) == "220 ready")
+        sock:send("STARTTLS\r\n")
+        assert(txt(sock:receive("*l")) == "220 go ahead")
+        sock:starttls({ ca = c.ca, servername = "localhost" })
+        sock:send("EHLO\r\n")
+        assert(txt(sock:receive("*l")) == "EHLO for localhost")
+    end)
+end
+
+local function implicit_tls_on_an_accepted_socket_test()
+    local c = make_certs()
+    accepting(function(conn)
+        conn:starttls({ server = true, certs = { c.server, c.other }, alpn = { "postgresql", "redis" } })
+        conn:send(`$(conn:tlsinfo().servername) $(conn:tlsinfo().alpn)\n`)
+    end, function(port)
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "other.test", alpn = { "redis" } })
+        assert(txt(sock:receive("*l")) == "other.test redis")
+        assert(sock:tlsinfo().alpn == "redis")
+    end)
+end
+
+-- A server reads the certificates once for each options table.
+local function a_socket_reader_reads_over_tls_test()
+    local c = make_certs()
+    accepting(function(conn)
+        conn:starttls({ server = true, cert = c.server.cert, key = c.server.key })
+        conn:send("over\n")
+        conn:send("tls\n")
+    end, function(port)
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost" })
+        local lines = {}
+        for line in network.lines(sock:reader()) do lines[#lines + 1] = txt(line) end
+        assert(table.concat(lines, " ") == "over tls", table.concat(lines, " "))
+    end)
+end
+
+local function a_server_reuses_its_options_test()
+    local c = make_certs()
+    local opts = { server = true, cert = c.server.cert, key = c.server.key }
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local served = 0
+    local co = detach(create(function()
+        for _ = 1, 3 do
+            local conn <close> = server:accept()
+            conn:starttls(opts)
+            conn:send("ok\n")
+            served = served + 1
+        end
+    end))
+    for _ = 1, 3 do
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost" })
+        assert(txt(sock:receive("*l")) == "ok")
+    end
+    coroutine.close(co)
+    server:close()
+    assert(served == 3)
+end
+
+local function a_server_handshake_with_a_plain_client_fails_test()
+    local c = make_certs()
+    local err
+    accepting(function(conn)
+        local done, e = conn:starttls({ server = true, cert = c.server.cert, key = c.server.key })
+        err = e
+        assert(done == nil and e.code == "tls")
+    end, function(port)
+        local sock <close> = network.tcp.connect("127.0.0.1", port)
+        sock:send("GET / HTTP/1.1\r\n\r\n")
+        sock:settimeout(5)
+        sock:receive("*a")
+    end)
+    assert(string.find(tostring(err), "TLS handshake failed", 1, true), tostring(err))
+end
+
+local function starttls_rejects_bad_server_options_test()
+    local c = make_certs()
+    local cases = {
+        { { server = true }, "a server needs cert and key, or certs" },
+        { { server = true, cert = "junk", key = c.server.key }, "invalid certificate" },
+        { { server = true, cert = c.server.cert }, "cert and key go together" },
+        { { server = true, certs = { "x" } }, "certs must be a list" },
+        { { server = true, cert = c.server.cert, key = c.server.key, servername = "x" }, "unknown option 'servername'" },
+    }
+    for _, case in ipairs(cases) do
+        local server = network.tcp.bind("127.0.0.1", 0)
+        local _, port = server:getsockname()
+        local sock <close> = network.tcp.connect("127.0.0.1", port)
+        local ok, err = catch sock:starttls(case[1])
+        server:close()
+        assert(not ok and string.find(tostring(err), case[2], 1, true), tostring(err))
+    end
+end
+
+-- ===== HTTPS =====
+
+local function fetch_reaches_an_https_server_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local status, body, headers = network.fetch(`https://localhost:$(port)/f`, "GET", nil, nil, { tls = { ca = c.ca } })
+        assert(status == 200 and txt(body) == "hello /f" and headers["content-length"] == "8")
+    end)
+end
+
+-- The timeout of the handshake starts once the connection is made. A
+-- server that starts its handshake late still answers within it, and a
+-- connection that waited in short ticks, as connections on Windows do,
+-- leaves no deadline behind for the handshake.
+local function fetch_times_the_handshake_from_the_connection_test()
+    local c = make_certs()
+    local server = network.tcp.bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    local co = detach(create(function()
+        local conn <close> = server:accept()
+        -- An accept that times out waits 0.15 s before the handshake.
+        local idle <close> = network.tcp.bind("127.0.0.1", 0)
+        idle:settimeout(0.15)
+        idle:accept()
+        conn:starttls({ server = true, cert = c.server.cert, key = c.server.key, alpn = { "http/1.1" } })
+        conn:receive("*l")
+        conn:send("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nlate")
+    end))
+    local status, body = network.fetch(`https://localhost:$(port)/`, "GET", nil, nil, { timeout = 1, tls = { ca = c.ca } })
+    coroutine.close(co)
+    server:close()
+    assert(status == 200 and txt(body) == "late", tostring(body))
+end
+
+local function fetch_refuses_an_untrusted_server_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local ok, err = catch network.fetch(`https://localhost:$(port)/f`)
+        assert(not ok and string.find(tostring(err), "certificate verification failed for localhost", 1, true), tostring(err))
+    end)
+end
+
+local function fetch_streams_over_https_test()
+    local c = make_certs()
+    serving(c.server, function(req)
+        local got = txt(req.body)
+        local i = 0
+        return 200, function()
+            i = i + 1
+            if i <= 2 then return `event $(i) after $(got)\n` end
+        end
+    end, function(port)
+        local parts = { "up", "load" }
+        local n = 0
+        local status, body = network.fetch(`https://localhost:$(port)/s`, "POST", nil, function()
+            n = n + 1
+            return parts[n]
+        end, { stream = true, tls = { ca = c.ca } })
+        local lines = {}
+        for line in network.lines(body) do lines[#lines + 1] = txt(line) end
+        assert(status == 200 and table.concat(lines, "|") == "event 1 after upload|event 2 after upload", table.concat(lines, "|"))
+    end)
+end
+
+local function fetch_rejects_tls_options_for_plain_http_test()
+    local ok, err = catch network.fetch("http://127.0.0.1:1/", "GET", nil, nil, { tls = { verify = false } })
+    assert(not ok and string.find(tostring(err), "needs an https URL", 1, true), tostring(err))
+end
+
+-- ===== network.serve with TLS =====
+
+local function a_websocket_upgrade_works_over_tls_test()
+    local c = make_certs()
+    serving(c.server, function(req)
+        return 101, function(sock)
+            sock:send("upgraded")
+        end
+    end, function(port)
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost" })
+        sock:send("GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            .. "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+        local all = txt(sock:receive("*a"))
+        assert(string.match(all, "^HTTP/1%.1 101 "))
+        assert(string.match(all, "Sec%-WebSocket%-Accept: ([^\r]+)") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+        assert(string.match(all, "\r\n\r\n(.*)$") == "upgraded")
+    end)
+end
+
+-- A client that speaks plain HTTP to a TLS server gets no response, and
+-- the server goes on.
+local function a_plain_client_of_a_tls_server_gets_no_response_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local plain <close> = network.tcp.connect("127.0.0.1", port)
+        plain:settimeout(5)
+        plain:send("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        local got = txt(plain:receive("*a"))
+        assert(not string.find(got, "HTTP/1.1", 1, true))
+        local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost" })
+        assert(request(sock, "/after") == "hello /after")
+    end)
+end
+
+local function serve_rejects_a_bad_certificate_test()
+    local c = make_certs()
+    local cases = {
+        { { cert = "junk", key = c.server.key }, "invalid certificate" },
+        { { cert = c.server.cert, key = "junk" }, "invalid private key" },
+        { { cert = c.server.cert }, "tls needs cert and key" },
+        { "text", "tls must be a table" },
+    }
+    for _, case in ipairs(cases) do
+        local ok, err = catch network.serve("127.0.0.1", 0, hello, { tls = case[1] })
+        assert(not ok and string.find(tostring(err), case[2], 1, true), tostring(err))
+    end
+end
+
+-- Every TLS connection waits through the scheduler, so many clients in
+-- detached coroutines share one server.
+local function many_tls_clients_run_at_once_test()
+    local c = make_certs()
+    serving(c.server, hello, function(port)
+        local done = 0
+        local clients = {}
+        for i = 1, 8 do
+            clients[i] = detach(create(function()
+                local sock <close> = network.tls.connect("127.0.0.1", port, { ca = c.ca, servername = "localhost" })
+                assert(request(sock, `/$(i)`) == `hello /$(i)`)
+                done = done + 1
+            end))
+        end
+        while done < 8 do resume(detach(create(yield))) end
+    end)
+end
+
+-- ===== Permissions =====
+
+-- This test drops a permission, so it runs last.
+local function tls_connect_needs_the_tcp_permission_test()
+    pledge("~network:tcp")
+    local ok, err = catch network.tls.connect("127.0.0.1", 443, { verify = false })
+    assert(not ok and string.find(tostring(err), "network:tcp", 1, true), tostring(err))
+end

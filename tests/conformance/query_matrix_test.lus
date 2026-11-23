@@ -1,0 +1,190 @@
+--[[
+    Generated queries against plain loops.
+
+    The query compiler checks the shape of every expression: whether it
+    reads the row, whether it holds an aggregate, whether a projection
+    equals a group key, and whether a comparison has a nil operand. The
+    tests below generate expressions from a small grammar, put each one in
+    a clause, and compare the rows of the query with the rows a loop
+    computes under the rules of queries, where a comparison with a nil
+    operand is false.
+]]
+
+pledge("load")
+
+local rows = {
+    { id = 1, a = 3, b = "x", c = 2.5 },
+    { id = 2, a = 1, b = "y", c = 0.5 },
+    { id = 3, a = 3, b = "x", c = -1.0 },
+    { id = 4, a = 2, b = "zz", c = 4.0 },
+}
+local lim = 2
+
+-- Each atom is the text of the expression and a function of the row.
+local num_atoms = {
+    { "p.a", function(p) return p.a end },
+    { "p.c", function(p) return p.c end },
+    { "2", function() return 2 end },
+    { "lim", function() return lim end },
+}
+local str_atoms = {
+    { "p.b", function(p) return p.b end },
+    { '"x"', function() return "x" end },
+}
+local missing = { "p.z", function(p) return p.z end }
+
+local function cmp(op, x, y)
+    if x == nil or y == nil then return false end
+    if op == "==" then return x == y elseif op == "~=" then return x ~= y
+    elseif op == "<" then return x < y elseif op == "<=" then return x <= y
+    elseif op == ">" then return x > y else return x >= y end
+end
+
+local function arith(op, x, y)
+    if op == "+" then return x + y elseif op == "-" then return x - y else return x * y end
+end
+
+-- Predicates: comparisons of numbers and of strings, with the missing
+-- field on either side, and their conjunctions and disjunctions.
+local predicates = {}
+local function addPred(text, f) predicates[#predicates + 1] = { text, f } end
+for _, op in ipairs{ "==", "~=", "<", "<=", ">", ">=" } do
+    for _, x in ipairs(num_atoms) do
+        for _, y in ipairs(num_atoms) do
+            addPred(x[1] .. " " .. op .. " " .. y[1], function(p) return cmp(op, x[2](p), y[2](p)) end)
+        end
+        addPred(x[1] .. " " .. op .. " " .. missing[1], function(p) return cmp(op, x[2](p), nil) end)
+        addPred(missing[1] .. " " .. op .. " " .. x[1], function(p) return cmp(op, nil, x[2](p)) end)
+    end
+    for _, x in ipairs(str_atoms) do
+        for _, y in ipairs(str_atoms) do
+            addPred(x[1] .. " " .. op .. " " .. y[1], function(p) return cmp(op, x[2](p), y[2](p)) end)
+        end
+    end
+    addPred("p.a " .. op .. " nil", function() return false end)
+end
+local base_count = #predicates
+for i = 1, base_count, 7 do
+    for j = 1, base_count, 11 do
+        local l, r = predicates[i], predicates[j]
+        addPred("(" .. l[1] .. ") and (" .. r[1] .. ")", function(p) return l[2](p) and r[2](p) end)
+        addPred("(" .. l[1] .. ") or (" .. r[1] .. ")", function(p) return l[2](p) or r[2](p) end)
+    end
+end
+
+-- Values: atoms, arithmetic of numbers, and concatenations.
+local values = {}
+for _, x in ipairs(num_atoms) do values[#values + 1] = x end
+for _, x in ipairs(str_atoms) do values[#values + 1] = x end
+for _, op in ipairs{ "+", "-", "*" } do
+    for _, x in ipairs(num_atoms) do
+        for _, y in ipairs(num_atoms) do
+            values[#values + 1] = { "(" .. x[1] .. " " .. op .. " " .. y[1] .. ")", function(p) return arith(op, x[2](p), y[2](p)) end }
+        end
+    end
+end
+for _, x in ipairs(str_atoms) do
+    for _, y in ipairs(num_atoms) do
+        values[#values + 1] = { "(" .. x[1] .. " .. " .. y[1] .. ")", function(p) return x[2](p) .. y[2](p) end }
+        values[#values + 1] = { "(" .. y[1] .. " .. " .. x[1] .. ")", function(p) return y[2](p) .. x[2](p) end }
+    end
+end
+
+local function run(src)
+    local f = assert(load("local t, lim = ... local out = {} for row in query(" .. src .. ") do out[#out + 1] = row end return out", "=q"))
+    return f(rows, lim)
+end
+
+local function every_predicate_selects_the_rows_a_loop_selects_test()
+    for _, pred in ipairs(predicates) do
+        local got = run("@t as p where " .. pred[1] .. " select p.id")
+        local want = {}
+        for _, p in ipairs(rows) do
+            if pred[2](p) then want[#want + 1] = p.id end
+        end
+        assert(#got == #want, pred[1] .. ": " .. #got .. " rows against " .. #want)
+        for i = 1, #want do assert(got[i].id == want[i], pred[1]) end
+    end
+end
+
+local function every_value_projects_as_a_loop_computes_test()
+    for _, v in ipairs(values) do
+        local got = run("@t as p select " .. v[1] .. " as v")
+        for i, p in ipairs(rows) do
+            assert(got[i].v == v[2](p), v[1] .. " at row " .. i)
+        end
+    end
+end
+
+local function every_value_groups_as_a_loop_groups_test()
+    for _, v in ipairs(values) do
+        local got = run("@t as p select " .. v[1] .. " as k, count(*) as n, sum(p.a) as s group by " .. v[1])
+        local counts, sums, keys = {}, {}, 0
+        for _, p in ipairs(rows) do
+            local k = v[2](p)
+            if not counts[k] then keys = keys + 1 end
+            counts[k] = (counts[k] or 0) + 1
+            sums[k] = (sums[k] or 0) + p.a
+        end
+        assert(#got == keys, v[1])
+        for _, r in ipairs(got) do
+            assert(counts[r.k] == r.n and sums[r.k] == r.s, v[1])
+        end
+    end
+end
+
+-- An expression built from the group keys is a valid projection. One that
+-- reads another column is an error.
+local function projections_must_follow_the_group_keys_test()
+    local ok_cases = { "p.a + 1", "p.a * p.a", "p.a .. \"!\"", "p.a > 1", "p.a == 2 or p.a == 3" }
+    for _, e in ipairs(ok_cases) do
+        local got = run("@t as p select " .. e .. " as k, count(*) as n group by p.a")
+        assert(#got == 3, e)
+    end
+    for _, e in ipairs{ "p.c", "p.a + p.c", "p.b .. p.a", "p.c > 1", "p.a == 2 and p.c > 0" } do
+        local ok, err = catch run("@t as p select " .. e .. " as k, count(*) as n group by p.a")
+        assert(not ok and err:find("a grouped projection must be an aggregate or a group key", 1, true), e .. ": " .. tostring(err))
+    end
+end
+
+-- Aggregates may sit inside comparisons, arithmetic, concatenation, and
+-- logical operators, in a projection or in a having clause.
+local function aggregates_nest_inside_other_expressions_test()
+    local one = run("@t as p select sum(p.a) + count(*) as s, count(*) > 3 as big, \"n\" .. count(*) as label, "
+        .. "max(p.a) == 3 and min(p.a) == 1 as range, sum(p.c) * 2 as twice")
+    assert(#one == 1)
+    local r = one[1]
+    assert(r.s == 13 and r.big == true and r.label == "n4" and r.range == true and r.twice == 12.0)
+    local having = run("@t as p select p.b as b, count(*) as n group by p.b having count(*) > 1 or sum(p.a) > 2")
+    assert(#having == 1 and having[1].b == "x" and having[1].n == 2)
+    having = run("@t as p select p.b as b, count(*) as n group by p.b having count(*) >= 1 and max(p.c) < 3")
+    assert(#having == 2)
+    having = run("@t as p select p.b as b group by p.b having \"k\" .. count(*) == \"k2\"")
+    assert(#having == 1 and having[1].b == "x")
+    having = run("@t as p select count(*) as n having count(*) > 2")
+    assert(#having == 1 and having[1].n == 4)
+    local ok, err = catch run("@t as p select p.b as b, count(*) as n group by p.b having p.c > 1")
+    assert(not ok and err:find("'having' must use aggregates", 1, true), tostring(err))
+end
+
+-- A predicate that reads no row decides for every row at once.
+local function constant_predicates_decide_for_every_row_test()
+    assert(#run("@t as p where lim > 1 select p.id") == 4)
+    assert(#run("@t as p where lim > 5 select p.id") == 0)
+    assert(#run("@t as p where lim > 1 and p.a == 3 select p.id") == 2)
+    assert(#run("@t as p where 1 + lim == 3 or p.a == 0 select p.id") == 4)
+    assert(#run("@t as p where \"a\" .. lim == \"a2\" select p.id") == 4)
+end
+
+-- A projection equals a group key that reads a host variable or a field
+-- below the row, when the two are written the same way.
+local function group_keys_may_read_hosts_and_deep_fields_test()
+    local deep = { { x = { y = 1 } }, { x = { y = 1 } }, { x = { y = 2 } } }
+    for _, e in ipairs{ "p.x.y", "p.x.y + 1", "cfg.n * p.x.y", "lim * p.x.y" } do
+        local f = assert(load("local t, cfg, lim = ... local n = 0 for r in query(@t as p select " .. e
+            .. " as k, count(*) as n group by " .. e .. ") do n = n + 1 end return n", "=q"))
+        assert(f(deep, { n = 2 }, 3) == 2, e)
+    end
+    local got = run("@t as p select lim * p.a as k, count(*) as n group by lim * p.a")
+    assert(#got == 3)
+end

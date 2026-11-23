@@ -1,0 +1,168 @@
+global print, assert, table, fs, os, io, string, pledge, ipairs, tostring
+
+pledge("fs", "env")
+
+--[[
+    Tests for the file globs of `fs.list` and for `fs.walk`. A glob with `**`
+    or `/` reaches below the listed directory and gives relative paths. The
+    walk is depth first, sorts the names of each directory, and reports a
+    directory before its entries.
+]]
+
+local SEP = fs.path.separator
+local ROOT = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-walk-test-" .. os.time() .. "-" .. tostring({}):sub(-6))
+
+local function touch(...)
+    io.open(fs.path.join(ROOT, ...), "w"):close()
+end
+
+local function build()
+    catch fs.remove(ROOT, true)
+    fs.createdirectory(fs.path.join(ROOT, "src", "lib", "deep"), true)
+    fs.createdirectory(fs.path.join(ROOT, "test"), true)
+    fs.createdirectory(fs.path.join(ROOT, "node_modules", "pkg"), true)
+    touch("src", "a.lus")
+    touch("src", "readme.md")
+    touch("src", "lib", "b.lus")
+    touch("src", "lib", "deep", "c.lus")
+    touch("test", "t.lus")
+    touch("test", "[x].txt")
+    touch("node_modules", "pkg", "p.lus")
+end
+
+local function sorted(t)
+    table.sort(t)
+    return table.concat(t, " ")
+end
+
+-- The part of each walked path below ROOT, with `/` between segments.
+local function walked(opts, dir)
+    local out = {}
+    for path, kind, link in fs.walk(dir or ROOT, opts) do
+        out[#out + 1] = path:sub(#ROOT + 2):gsub("\\", "/") .. (kind == "directory" and "/" or "") .. (link and "@" or "")
+    end
+    return table.concat(out, " ")
+end
+
+local function double_star_reaches_every_depth_test()
+    build()
+    assert(sorted(fs.list(ROOT, "**/*.lus")) == "node_modules/pkg/p.lus src/a.lus src/lib/b.lus src/lib/deep/c.lus test/t.lus")
+    assert(sorted(fs.list(ROOT, "src/**/*.lus")) == "src/a.lus src/lib/b.lus src/lib/deep/c.lus")
+    fs.remove(ROOT, true)
+end
+
+local function a_slash_without_double_star_lists_one_level_test()
+    build()
+    assert(sorted(fs.list(ROOT, "src/*")) == "src/a.lus src/lib src/readme.md")
+    fs.remove(ROOT, true)
+end
+
+local function braces_expand_to_alternatives_test()
+    build()
+    assert(sorted(fs.list(ROOT, "src/*.{lus,md}")) == "src/a.lus src/readme.md")
+    assert(sorted(fs.list(ROOT, "{src,test}/*.lus")) == "src/a.lus test/t.lus")
+    fs.remove(ROOT, true)
+end
+
+local function classes_match_one_character_test()
+    build()
+    assert(sorted(fs.list(ROOT, "[st]*")) == "src test")
+    assert(sorted(fs.list(ROOT, "[!st]*")) == "node_modules")
+    assert(sorted(fs.list(fs.path.join(ROOT, "test"), "[[]x].txt")) == "[x].txt")
+    fs.remove(ROOT, true)
+end
+
+local function a_glob_without_slash_keeps_names_test()
+    build()
+    assert(sorted(fs.list(fs.path.join(ROOT, "src"), "*.lus")) == "a.lus")
+    fs.remove(ROOT, true)
+end
+
+local function too_many_alternatives_raise_test()
+    build()
+    local ok, err = catch fs.list(ROOT, "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}")
+    assert(not ok and err:find("expands to more than 256 patterns", 1, true))
+    fs.remove(ROOT, true)
+end
+
+local function walk_is_depth_first_and_sorted_test()
+    build()
+    assert(walked({ exclude = "node_modules" }) ==
+        "src/ src/a.lus src/lib/ src/lib/b.lus src/lib/deep/ src/lib/deep/c.lus src/readme.md test/ test/[x].txt test/t.lus")
+    fs.remove(ROOT, true)
+end
+
+local function walk_paths_are_joined_to_the_directory_test()
+    build()
+    for path in fs.walk(fs.path.join(ROOT, "test")) do
+        assert(path:sub(1, #ROOT) == ROOT)
+        assert(fs.type(path))
+    end
+    fs.remove(ROOT, true)
+end
+
+local function depth_limits_the_walk_test()
+    build()
+    assert(walked({ depth = 1 }, fs.path.join(ROOT, "src")) == "src/a.lus src/lib/ src/readme.md")
+    assert(walked({ depth = 2, glob = "*.lus" }, fs.path.join(ROOT, "src")) == "src/a.lus src/lib/b.lus")
+    fs.remove(ROOT, true)
+end
+
+local function glob_with_slash_matches_relative_paths_test()
+    build()
+    assert(walked({ glob = "src/**/*.lus" }) == "src/a.lus src/lib/b.lus src/lib/deep/c.lus")
+    fs.remove(ROOT, true)
+end
+
+local function exclude_takes_a_list_test()
+    build()
+    assert(walked({ exclude = { "node_modules", "lib", "*.md" } }) == "src/ src/a.lus test/ test/[x].txt test/t.lus")
+    fs.remove(ROOT, true)
+end
+
+local function links_are_listed_or_followed_test()
+    if SEP == "\\" then return end
+    build()
+    fs.createlink(fs.path.join(ROOT, "test", "src"), "../src")
+    -- A link back to an ancestor ends the descent there. `**` matches no
+    -- directory too, so `test/**` also matches `test` itself.
+    fs.createlink(fs.path.join(ROOT, "src", "lib", "up"), "..")
+    assert(walked({ glob = "test/**" }) == "test/ test/[x].txt test/src/@ test/t.lus")
+    assert(walked({ glob = "test/**/*.lus", links = "follow" }) ==
+        "test/src/a.lus test/src/lib/b.lus test/src/lib/deep/c.lus test/t.lus")
+    assert(walked({ glob = "src/**", links = "follow" }) ==
+        "src/ src/a.lus src/lib/ src/lib/b.lus src/lib/deep/ src/lib/deep/c.lus src/lib/up/@ src/readme.md")
+    fs.remove(ROOT, true)
+end
+
+local function a_missing_directory_raises_test()
+    local ok, err = catch fs.walk(ROOT .. "-missing")()
+    assert(not ok and err:find("cannot list directory", 1, true))
+end
+
+local function a_file_raises_test()
+    build()
+    local ok, err = catch fs.walk(fs.path.join(ROOT, "src", "a.lus"))()
+    assert(not ok and err:find("is not a directory", 1, true))
+    fs.remove(ROOT, true)
+end
+
+local function bad_options_raise_test()
+    build()
+    assert(not catch fs.walk(ROOT, { depth = 0 }))
+    assert(not catch fs.walk(ROOT, { links = "maybe" }))
+    assert(not catch fs.walk(ROOT, { errors = "ignore" }))
+    assert(not catch fs.walk(ROOT, { exclude = 3 }))
+    fs.remove(ROOT, true)
+end
+
+local function breaking_out_closes_the_walk_test()
+    build()
+    local n = 0
+    for _ in fs.walk(ROOT) do
+        n = n + 1
+        if n == 2 then break end
+    end
+    assert(n == 2)
+    fs.remove(ROOT, true)
+end

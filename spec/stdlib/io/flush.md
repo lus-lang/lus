@@ -10,7 +10,7 @@ returns: boolean|nil
 
 Writes any buffered output of the default output file and returns `true`.
 
-The function takes no arguments and requires no permission. It flushes the current default output, which [`io.output`](/manual/api#io.output) sets and which starts as `io.stdout`.
+The function takes no arguments and requires no permission. It flushes the current default output, which [`io.output`](/manual/api#io.output) sets and which starts as `io.stdout`. A flush that the operating system refuses returns `nil`, the message, and the number of the error, as a refused write does.
 
 ```lus
 io.write("buffered\n")   --> buffered

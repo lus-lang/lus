@@ -209,17 +209,14 @@ The lexer keeps a stack of modes. The bottom mode is ordinary code. Each `$(` pu
    - End of input raises `unfinished interpolated string near <eof>`.
 4. In a pushed code mode, the lexer produces ordinary tokens. Each `(` increments the depth of that mode and each `)` decrements it. A `)` at depth 0 closes the interpolation. The lexer consumes it, pops the mode, reads the next section (step 2), and returns that section's `interp_mid` or `interp_end` token in the position of the `)`. Parentheses inside string literals and comments within the expression are part of those tokens and do not affect the depth. A backtick inside the expression opens a nested interpolated string.
 
-The escapes inside interpolated sections are a separate, smaller set:
+An interpolated section takes every escape of a quoted string (section 1.6), with the same meaning and the same errors, so `` `\27[1m` ``, `` `\x41` ``, `` `\u{e9}` ``, and `` `\z` `` followed by spaces mean what they mean between quotes. Two escapes belong to interpolated strings alone:
 
 | Escape | Meaning |
 | --- | --- |
 | `` \` `` | literal backtick |
 | `\$` | literal `$` |
-| `\n` `\t` `\r` | newline, tab, carriage return |
-| `\\` | literal backslash |
-| `\` followed by a line break | a single `\n` |
 
-Any other escape raises `invalid escape sequence in interpolated string`. Quotes need no escaping inside backticks (`` `a'b"c` `` is `a'b"c`). The escapes `\x`, `\u`, `\z`, `\ddd`, `\a`, `\b`, `\f`, `\v`, `\"`, and `\'` are all errors inside backticks.
+Quotes need no escaping inside backticks (`` `a'b"c` `` is `a'b"c`), and `\"` and `\'` still mean a quote. An escape that a quoted string rejects, such as `\q`, raises `invalid escape sequence near ...`.
 
 #### 1.8.2 Parsing
 
@@ -532,7 +529,7 @@ Lus is lexically scoped. A local declared by `local` enters scope at the stateme
 
 A name resolves by scanning active declarations of the current function from innermost to outermost, then the enclosing functions (creating upvalues), and finally as a global. Global declarations participate in the same scan (section 4.3).
 
-Limits: at most 200 active locals per function (`too many local variables (limit is 200) in main function` or `... in function at line N`), at most 255 upvalues per function (`too many upvalues (limit is 255) in ...`), and at most 255 registers (`too many registers (limit is 255) in ...`). A loop instruction stores the length of its loop in 16 bits, so a `for` loop whose body compiles to more than about 65535 instructions raises `control structure too long`. Hidden internal variables such as the generic-for state slots and runtime attribute slots count toward the local limit.
+Limits: at most 200 active locals per function (`too many local variables (limit is 200) in main function` or `... in function at line N`), at most 255 upvalues per function (`too many upvalues (limit is 255) in ...`), and at most 255 registers (`too many registers (limit is 255) in ...`). A loop instruction stores the length of its loop in 16 bits, so a `for` loop whose body compiles to more than about 65535 instructions raises `control structure too long`. Hidden internal variables such as the generic-for state slots and runtime attribute slots count toward the local limit. Each name of a `global` statement also takes one of the 200 slots for the rest of its block, so a main chunk that declares ten globals holds at most 190 locals. A function holds at most 65,535 constants and nested functions together, where each distinct string, number, and key of a table constructor counts once, and one more raises `too many constants or functions`. Each argument of a call, value of a `return`, target of a multiple assignment, and segment of an interpolated string occupies a register while the statement runs, so a call in the main chunk passes at most 252 arguments, and a `return`, a multiple assignment, or an interpolated string holds at most 254 values, targets, or segments. A chain of `..` holds at most 199 operands, since each operator nests one syntax level.
 
 ### 4.2 Local attributes
 
@@ -544,7 +541,8 @@ Limits: at most 200 active locals per function (`too many local variables (limit
 - `<meta>` evaluates the initializer at compile time (section 5.14). It implies `<const>`.
 - `<lazy>` defers the initializer to the first read (section 5.15). It implies `<const>`.
 - `<observe>` keeps dependents current (section 5.16).
-- Combining two different attributes of `<const>`, `<close>`, and `<group>` on one name raises `conflicting attributes`. Repeating the same one inside one list (`<const, const>`) is accepted. `<meta>` and `<lazy>` combine with any of them in the parser, and the compiler rejects the combinations that section 5.14 lists.
+- `<context>` gives the variable a value for each coroutine (section 5.17).
+- Combining two different attributes of `<const>`, `<close>`, and `<group>` on one name raises `conflicting attributes`. Repeating the same one inside one list (`<const, const>`) is accepted. `<meta>`, `<lazy>`, `<observe>`, and `<context>` combine with any of them in the parser, and the compiler rejects the combinations that section 5.14 lists.
 - Any other attribute is a runtime attribute (section 5.9).
 
 The control variable of a numeric `for` and the first variable of a generic `for` are read-only (`for i = 1, 3 do i = 5 end` raises `attempt to assign to const variable 'i'`). **Tested** (`compile_errors_test.lus`).
@@ -581,6 +579,8 @@ Dynamic semantics of initialization:
 A parameter list is a list of names optionally ending in `...`. The `...` may be followed by a name (`function f(a, ...t)`), which declares `t` as the vararg table parameter (Lua 5.5). Using `...` in a function that is not vararg raises `cannot use '...' outside a vararg function`. The main chunk is always vararg. A malformed parameter raises `<name> or '...' expected`.
 
 `function a.b:c()` adds an implicit first parameter `self`. Assigning a function to a read-only name (`function flags() end`) raises the const error.
+
+Calls are bounded at run time. The stack of a thread holds at most 1,000,000 slots, so a plain recursive function reaches about 500,000 calls, and one more call raises `stack overflow`. A call that passes through a function written in Zig, such as a callback of `string.gsub` or `table.sort` or a metamethod, nests at most 200 deep, and one more raises `stack overflow (too many nested native calls)`. A coroutine resumed inside a coroutine nests at most 200 deep, and one more raises `C stack overflow`.
 
 ### 4.5 Control flow
 
@@ -1105,6 +1105,8 @@ local a, b from z                   -- group source
 - An overwrite evaluates each listed value in source order and stores it into the existing field. Unlisted fields keep their values.
 - With runtime attributes on the group (`local g <group, h> = {...}`), handlers run for each direct field as described in section 5.9.
 
+A group takes one slot of the local limit besides one slot for each field, so a function with no other locals holds a group of at most 199 fields.
+
 ### 5.11 Flags and compile-time folding
 
 **Source:** `compile/codegen.zig` (`foldFlag`, `foldFlagCond`, `ifStat`, `discardBlock`, `discardCond`), `main.zig` (option `-F`), `api.zig` (`setFlags`). **Manual:** `guide.mdx`. **Tests:** `flags_test.lus`.
@@ -1303,6 +1305,20 @@ The runtime error `cannot assign observed variable 'NAME' while its dependents u
 
 **Tested** (`observe_test.lus`): the motivating example, a diamond computed once in order, transitive chains, assignments from nested functions, a writer declared before its dependent, the end of a dependent's scope, multiple assignment, the const rule, the rejected forms, an error during an update, an assignment during an update, a yield during an update, closing a paused update, and `string.dump`.
 
+### 5.17 `<context>` locals
+
+**Source:** `compile/codegen.zig` (`contextLocal`, `contextRead`, `contextStore`), `vm/context.zig` (slots and arrays), `lib/context.zig` (slot objects, the `ctxnew` builtin, `debug.getcontext` and `debug.setcontext`). **Design:** `spec/design/context.md`. **Manual:** `guide.mdx`. **Tests:** `context_test.lus`.
+
+`local NAME <context> = exp` declares a context local, whose value belongs to the running coroutine. `exp` is evaluated once, when the declaration runs, and is the default. Each run of the declaration creates a new variable. A hidden local holds the slot object of the variable, so closures capture it like any local. A read compiles to `GETCTX` and an assignment to `SETCTX`. A new coroutine starts with the values of the coroutine that creates it. The compile errors are:
+
+- `a <context> declaration names one variable` and `a <context> variable takes one initializer`,
+- `cannot combine <context> with <const>`, `with <close>`, `with <group>`, `with <meta>`, `with <lazy>`, `with <observe>`, and `with runtime attributes`,
+- `cannot use <context> in this declaration` for a group field, `from` destructuring, or an assignment condition, and `global variables cannot be <context>`.
+
+A slot object that `debug.setlocal` replaced with another value raises `the slot of a context variable was replaced` at the next read or write.
+
+**Tested** (`context_test.lus`): the default, a declaration without initializer, an assignment that stays in its coroutine, inheritance at creation by plain and detached coroutines, `nil` as a value, closures, a new variable per run, two variables of one name, `debug.getcontext` and `debug.setcontext`, reclaimed slots, and the rejected forms.
+
 ## 6. Compile-time error catalog
 
 ### 6.1 Message format
@@ -1314,7 +1330,7 @@ A chunk that fails to compile produces a single string message. `load` returns `
 - **Unclosed blocks** produce `'X' expected near TOKEN` when the opener is on the current line and `'X' expected (to close 'Y' at line N) near TOKEN` otherwise.
 - **Limits** produce `too many WHAT (limit is N) in main function` or `... in function at line N`.
 - **Chunk names**: a name beginning with `=` or `@` is shown without that prefix. Any other name is shown as `[string "..."]`, cut at the first line break or after 45 bytes and then followed by `...`.
-- Recursion in the parser is bounded at 200 nested levels of statements and expressions. Exceeding it raises `chunk has too many syntax levels (stack overflow)`.
+- Recursion in the parser is bounded at 200 nested levels of statements and expressions. Exceeding it raises `chunk has too many syntax levels (stack overflow)`. Blocks nest 200 deep, table constructors 199, and parentheses 198. A function literal takes two levels, so functions nest at most 99 deep.
 
 ### 6.2 Messages specific to Lus
 

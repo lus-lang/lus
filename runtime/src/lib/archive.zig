@@ -56,6 +56,7 @@ pub fn open(l: *Thread) Error!void {
         try aux.setField(l, archive, c[0], Value.obj(.table, t));
         try aux.setFuncs(l, t, .fields, "vector.archive." ++ c[0], c[1]);
     }
+    try @import("container.zig").register(l, archive);
 }
 
 // ---------------------------------------------------------------------
@@ -141,7 +142,7 @@ fn flateCompress(l: *Thread, container: flate.Container) Error!u32 {
 }
 
 /// Writes `input` as one complete stream. Level 0 emits stored blocks.
-fn flateWrite(out: *std.Io.Writer, window: []u8, container: flate.Container, level: u4, input: []const u8) std.Io.Writer.Error!void {
+pub fn flateWrite(out: *std.Io.Writer, window: []u8, container: flate.Container, level: u4, input: []const u8) std.Io.Writer.Error!void {
     if (level == 0) {
         var raw = try flate.Compress.Raw.init(out, window, container);
         try raw.writer.writeAll(input);

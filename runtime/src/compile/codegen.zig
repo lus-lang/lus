@@ -10,6 +10,7 @@ const ast = @import("../syntax/ast.zig");
 const opc = @import("opcodes.zig");
 const meta = @import("meta.zig");
 const lazy = @import("../lib/lazy.zig");
+const heapcount = @import("../vm/heapcount.zig");
 const vm = struct {
     const value = @import("../vm/value.zig");
     const object = @import("../vm/object.zig");
@@ -84,7 +85,7 @@ const ExpDesc = struct {
 // ---------------------------------------------------------------------
 // Variables, blocks, and function state
 
-const VarKind = enum { regular, const_, close, ctc, global_named, global_star, group, lazy };
+const VarKind = enum { regular, const_, close, ctc, global_named, global_star, group, lazy, context };
 
 const VarDesc = struct {
     name: []const u8,
@@ -108,6 +109,9 @@ const VarDesc = struct {
     /// names of the hidden locals that hold its value and its force
     /// function (`lazyLocal`).
     lazy_store: []const u8 = "",
+    /// For a `<context>` local, which occupies no register of its own: the
+    /// hidden local that holds its slot object (`contextLocal`).
+    ctx_slot: []const u8 = "",
     lazy_force: []const u8 = "",
     /// For an `<observe>` local: whether it is a source or a derived
     /// variable, and the name of the hidden local that holds the list of
@@ -287,7 +291,7 @@ pub fn compileChunk(c: *Compiler, chunk: ast.Chunk) Error!*Proto {
     try openFunc(c, &fs, main_fn);
     errdefer abortFunc(c, &fs);
     // The main function has a single upvalue: _ENV.
-    try fs.upvals.append(c.gpa, .{ .name = "_ENV", .in_stack = true, .index = 0, .kind = .regular, .readonly = false });
+    try push(&fs.upvals, c.gpa, .{ .name = "_ENV", .in_stack = true, .index = 0, .kind = .regular, .readonly = false });
     try codeABC(&fs, .varargprep, 0, 0, 0);
     var bl: Block = undefined;
     enterBlock(&fs, &bl, false);
@@ -356,9 +360,29 @@ fn closeFunc(c: *Compiler, fs: *FuncState) Error!*Proto {
 // ---------------------------------------------------------------------
 // Instruction emission
 
+/// Fails as an allocation would, in the builds that inject allocation
+/// failures, and does nothing in the others. A list grows only now and
+/// then, so most appends make no allocation at all. A fault point before
+/// each one takes an allocation number of its own, which lets the sweep of
+/// `sweep.zig` fail the compiler at every call site, as SQLite's fault
+/// simulation does.
+inline fn fault() Allocator.Error!void {
+    if (heapcount.inject.fail()) return error.OutOfMemory;
+}
+
+/// Appends `item` to `list` after a fault point.
+fn push(list: anytype, gpa: Allocator, item: ListItem(@TypeOf(list))) Allocator.Error!void {
+    try fault();
+    try list.append(gpa, item);
+}
+
+fn ListItem(comptime P: type) type {
+    return @typeInfo(@FieldType(@typeInfo(P).pointer.child, "items")).pointer.child;
+}
+
 fn emit(fs: *FuncState, i: u32) Error!i32 {
-    try fs.code.append(fs.c.gpa, i);
-    try fs.lines.append(fs.c.gpa, fs.line);
+    try push(&fs.code, fs.c.gpa, i);
+    try push(&fs.lines, fs.c.gpa, fs.line);
     return @intCast(fs.code.items.len - 1);
 }
 
@@ -480,6 +504,7 @@ fn checkStack(fs: *FuncState, n: u32) Error!void {
 }
 
 fn reserveRegs(fs: *FuncState, n: u32) Error!void {
+    try fault();
     try checkStack(fs, n);
     fs.freereg += @intCast(n);
 }
@@ -516,10 +541,11 @@ fn freeExp(fs: *FuncState, e: *const ExpDesc) void {
     if (e.kind == .nonreloc) freeReg(fs, e.info);
 }
 
+/// Frees the registers of two operands, which every caller has put in
+/// registers with `exp2anyreg`.
 fn freeExps(fs: *FuncState, e1: *const ExpDesc, e2: *const ExpDesc) void {
-    const r1: i32 = if (e1.kind == .nonreloc) e1.info else -1;
-    const r2: i32 = if (e2.kind == .nonreloc) e2.info else -1;
-    if (r1 >= 0 and r2 >= 0) freeRegs(fs, r1, r2) else if (r1 >= 0) freeReg(fs, r1) else if (r2 >= 0) freeReg(fs, r2);
+    inv.assert(e1.kind == .nonreloc and e2.kind == .nonreloc);
+    freeRegs(fs, e1.info, e2.info);
 }
 
 // ---------------------------------------------------------------------
@@ -528,7 +554,8 @@ fn freeExps(fs: *FuncState, e1: *const ExpDesc, e2: *const ExpDesc) void {
 fn addK(fs: *FuncState, key: KKey, v: Value) Error!u32 {
     if (fs.kcache.get(key)) |idx| return idx;
     const idx: u32 = @intCast(fs.constants.items.len);
-    try fs.constants.append(fs.c.gpa, v);
+    try push(&fs.constants, fs.c.gpa, v);
+    try fault();
     try fs.kcache.put(fs.c.gpa, key, idx);
     return idx;
 }
@@ -550,7 +577,7 @@ fn floatK(fs: *FuncState, v: f64) Error!u32 {
 fn valueK(fs: *FuncState, v: Value) Error!u32 {
     // Unique heap constants (bigints, decimals, enums) are never shared.
     const idx: u32 = @intCast(fs.constants.items.len);
-    try fs.constants.append(fs.c.gpa, v);
+    try push(&fs.constants, fs.c.gpa, v);
     return idx;
 }
 
@@ -1200,7 +1227,7 @@ fn newLocalVar(fs: *FuncState, name: []const u8, kind: VarKind) Error!u32 {
     if (c.actvars.items.len + 1 - fs.first_local > max_vars) {
         return c.err(fs.line, "too many local variables (limit is {d}) in {s}", .{ max_vars, whereFunc(fs) });
     }
-    try c.actvars.append(c.gpa, .{ .name = name, .kind = kind, .readonly = kind == .const_ or kind == .ctc or kind == .close });
+    try push(&c.actvars, c.gpa, .{ .name = name, .kind = kind, .readonly = kind == .const_ or kind == .ctc or kind == .close });
     return @intCast(c.actvars.items.len - 1 - fs.first_local);
 }
 
@@ -1221,7 +1248,7 @@ fn adjustLocalVars(fs: *FuncState, n: u32) Error!void {
             v.reg = reglevel;
             reglevel += 1;
             v.pidx = @intCast(fs.locvars.items.len);
-            try fs.locvars.append(fs.c.gpa, .{ .name = try fs.c.newString(v.name), .start_pc = @intCast(pc(fs)), .end_pc = 0, .reg = v.reg });
+            try push(&fs.locvars, fs.c.gpa, .{ .name = try fs.c.newString(v.name), .start_pc = @intCast(pc(fs)), .end_pc = 0, .reg = v.reg });
         }
     }
 }
@@ -1266,7 +1293,8 @@ fn leaveBlock(fs: *FuncState) Error!void {
         try moveGotosOut(fs, bl, p);
     } else if (bl.first_goto < c.gotos.items.len) {
         const g = c.gotos.items[bl.first_goto];
-        if (std.mem.eql(u8, g.name, "break")) return c.err(g.line, "break outside loop", .{});
+        // The parser rejects a break outside a loop.
+        if (inv.never(std.mem.eql(u8, g.name, "break"))) return c.err(g.line, "break outside loop", .{});
         if (std.mem.eql(u8, g.name, "continue")) return c.err(g.line, "continue outside loop", .{});
         return c.err(g.line, "no visible label '{s}' for <goto> at line {d}", .{ g.name, g.line });
     }
@@ -1298,7 +1326,7 @@ fn createLabel(fs: *FuncState, name: []const u8, line: u32, last: bool) Error!bo
     const c = fs.c;
     const bl = fs.bl.?;
     const l: LabelDesc = .{ .name = name, .pc = getLabel(fs), .line = line, .nactvar = if (last) bl.nactvar else fs.nactvar };
-    try c.labels.append(c.gpa, l);
+    try push(&c.labels, c.gpa, l);
     if (try solveGotos(fs, l)) {
         try codeABC(fs, .close, nvarstack(fs), 0, 0);
         return true;
@@ -1327,7 +1355,7 @@ fn solveGotos(fs: *FuncState, l: LabelDesc) Error!bool {
 }
 
 fn newGoto(fs: *FuncState, name: []const u8, line: u32, jpc: i32) Error!void {
-    try fs.c.gotos.append(fs.c.gpa, .{ .name = name, .pc = jpc, .line = line, .nactvar = fs.nactvar });
+    try push(&fs.c.gotos, fs.c.gpa, .{ .name = name, .pc = jpc, .line = line, .nactvar = fs.nactvar });
 }
 
 // --- name resolution --------------------------------------------------
@@ -1388,7 +1416,7 @@ fn newUpvalue(fs: *FuncState, name: []const u8, v: *const ExpDesc) Error!u32 {
         const u = prev.upvals.items[@intCast(v.info)];
         info = .{ .name = name, .in_stack = false, .index = @intCast(v.info), .kind = u.kind, .readonly = u.readonly };
     }
-    try fs.upvals.append(fs.c.gpa, info);
+    try push(&fs.upvals, fs.c.gpa, info);
     return @intCast(fs.upvals.items.len - 1);
 }
 
@@ -1440,7 +1468,11 @@ fn singleVarAux(fs: *FuncState, name: []const u8, v: *ExpDesc, base: bool) Error
 /// Builds the descriptor for a variable reference, including `_ENV.name`
 /// for globals.
 fn singleVar(fs: *FuncState, name: []const u8, line: u32, v: *ExpDesc) Error!void {
-    if (knownLocal(fs, name)) |vd| if (vd.kind == .lazy) return lazyRead(fs, vd, line, v);
+    if (knownLocal(fs, name)) |vd| switch (vd.kind) {
+        .lazy => return lazyRead(fs, vd, line, v),
+        .context => return contextRead(fs, vd, line, v),
+        else => {},
+    };
     fs.c.ginfo = -1;
     try singleVarAux(fs, name, v, true);
     if (v.kind != .void_) return;
@@ -1500,12 +1532,16 @@ fn expr(fs: *FuncState, e: *ast.Expr, v: *ExpDesc) Error!void {
         .float => |f| v.* = .{ .kind = .kflt, .nval = f },
         .string => |s| v.* = .{ .kind = .kstr, .strval = s },
         .bigint => |d| {
-            const b = vm.numeric.parseBigLiteral(fs.c.g, d) catch return fs.c.err(e.line, "malformed number near '{s}n'", .{d});
+            const b = vm.numeric.parseBigLiteral(fs.c.g, d) catch |er| switch (er) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return fs.c.err(e.line, "malformed number near '{s}n'", .{d}),
+            };
             v.* = ExpDesc.init(.k, @intCast(try valueK(fs, Value.obj(.bigint, b))));
         },
         .decimal => |d| {
             const dv = vm.numeric.parseDecimalLiteral(fs.c.g, d) catch |er| switch (er) {
                 error.OutOfRange => return fs.c.err(e.line, "decimal literal out of range near '{s}d': a decimal holds at most {d} digits before the point and {d} after", .{ d, vm.numeric.max_int_digits, vm.numeric.max_frac_digits }),
+                error.OutOfMemory => return error.OutOfMemory,
                 else => return fs.c.err(e.line, "malformed number near '{s}d'", .{d}),
             };
             v.* = ExpDesc.init(.k, @intCast(try valueK(fs, Value.obj(.decimal, dv))));
@@ -1705,7 +1741,7 @@ fn optionalExpr(fs: *FuncState, inner: *ast.Expr, v: *ExpDesc) Error!void {
 fn funcExpr(fs: *FuncState, f: *ast.Function, v: *ExpDesc) Error!void {
     const p = try compileFunction(fs.c, f);
     const idx: u32 = @intCast(fs.protos.items.len);
-    try fs.protos.append(fs.c.gpa, p);
+    try push(&fs.protos, fs.c.gpa, p);
     v.* = ExpDesc.init(.reloc, try emitABx(fs, .closure, 0, idx));
     try exp2nextreg(fs, v);
 }
@@ -1785,6 +1821,10 @@ fn tableCtor(fs: *FuncState, fields: []ast.Field, v: *ExpDesc, line: u32) Error!
             },
             .named => |nf| {
                 nh += 1;
+                // A key past the constant operand range goes through a
+                // temporary register, released once the store is done.
+                const base = fs.freereg;
+                defer fs.freereg = base;
                 var t: ExpDesc = ExpDesc.init(.nonreloc, treg);
                 var k: ExpDesc = .{ .kind = .kstr, .strval = nf.name.text };
                 try indexed(fs, &t, &k);
@@ -1794,6 +1834,8 @@ fn tableCtor(fs: *FuncState, fields: []ast.Field, v: *ExpDesc, line: u32) Error!
             },
             .keyed => |kf| {
                 nh += 1;
+                const base = fs.freereg;
+                defer fs.freereg = base;
                 var t: ExpDesc = ExpDesc.init(.nonreloc, treg);
                 var k: ExpDesc = .{};
                 try expr(fs, kf.key, &k);
@@ -1998,7 +2040,7 @@ fn genCatch(fs: *FuncState, c: ast.Catch, base: u8, nresults: i32) Error!void {
     const done = try jump(fs);
     // Error path: the unwinder stores the error in `vals`.
     const handler_pc = getLabel(fs);
-    try fs.handlers.append(fs.c.gpa, .{
+    try push(&fs.handlers, fs.c.gpa, .{
         .start_pc = @intCast(body_start),
         .end_pc = @intCast(body_end),
         .handler_pc = @intCast(handler_pc),
@@ -2206,6 +2248,7 @@ fn attribKind(fs: *FuncState, an: ast.AttName, line: u32, allow_runtime: bool) E
         .meta => return fs.c.err(line, "cannot use <meta> in this declaration", .{}),
         .lazy => return fs.c.err(line, "cannot use <lazy> in this declaration", .{}),
         .observe => return fs.c.err(line, "cannot use <observe> in this declaration", .{}),
+        .context => return fs.c.err(line, "cannot use <context> in this declaration", .{}),
         .runtime => if (!allow_runtime) return fs.c.err(line, "runtime attributes not supported in this context", .{}),
     };
     return k;
@@ -2249,6 +2292,7 @@ fn explist(fs: *FuncState, exprs: []*ast.Expr, last: *ExpDesc) Error!u32 {
 }
 
 fn localStat(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
+    for (names) |an| if (an.has(.context)) return contextLocal(fs, names, values, line);
     for (names) |an| if (an.has(.meta)) return metaLocal(fs, names, values, line);
     for (names) |an| if (an.has(.lazy)) return lazyLocal(fs, names, values, line);
     for (names) |an| if (an.has(.observe)) return observeLocal(fs, names, values, line);
@@ -2426,7 +2470,8 @@ fn localGroup(fs: *FuncState, names: []ast.AttName, inits: []ast.GroupInit, line
     for (names) |an| {
         const k = try attribKind(fs, an, line, true);
         if (k != .group) return fs.c.err(line, "cannot mix <group> with non-group variables", .{});
-        if (an.has(.close)) return fs.c.err(line, "cannot use <close> with <group> variables", .{});
+        // The parser rejects <close> beside <group> as conflicting.
+        if (inv.never(an.has(.close))) return fs.c.err(line, "cannot use <close> with <group> variables", .{});
     }
     if (inits.len != names.len) return fs.c.err(line, "'=' expected", .{});
     for (names, inits) |an, init| {
@@ -2518,6 +2563,7 @@ fn globalKind(fs: *FuncState, attribs: []const ast.Attrib, line: u32) Error!bool
         .meta => return fs.c.err(line, "global variables cannot be <meta>", .{}),
         .lazy => return fs.c.err(line, "global variables cannot be <lazy>", .{}),
         .observe => return fs.c.err(line, "global variables cannot be <observe>", .{}),
+        .context => return fs.c.err(line, "global variables cannot be <context>", .{}),
         .runtime => return fs.c.err(line, "runtime attributes not supported in this context", .{}),
     };
     return readonly;
@@ -2628,6 +2674,14 @@ fn assignStat(fs: *FuncState, targets: []*ast.Expr, values: []*ast.Expr, line: u
     var descs = try fs.c.arena.alloc(ExpDesc, targets.len);
     for (targets, 0..) |t, i| {
         var v: ExpDesc = .{};
+        if (contextTarget(fs, t)) |vd| {
+            // The descriptor of the hidden slot, marked so that the store
+            // assigns the variable instead of the slot.
+            try singleVar(fs, vd.ctx_slot, line, &v);
+            v.node = &context_marker;
+            descs[i] = v;
+            continue;
+        }
         try expr(fs, t, &v);
         switch (v.kind) {
             .local, .upval, .indexed, .indexup, .indexint, .indexstr, .ctc => {},
@@ -2713,6 +2767,7 @@ fn observeNotify(fs: *FuncState, o: ObservedName, line: u32) Error!void {
 }
 
 fn storeTarget(fs: *FuncState, v: *ExpDesc, ex: *ExpDesc, target: *ast.Expr) Error!void {
+    if (v.node == &context_marker) return contextStore(fs, v, ex);
     // Runtime attribute handlers on local targets.
     if (v.kind == .local) {
         const vd = getLocalVar(fs, @intCast(v.aux));
@@ -2935,7 +2990,8 @@ fn condition(fs: *FuncState, cond: ast.Cond, line: u32) Error!i32 {
                     if (toclose != null) return fs.c.err(line, "multiple to-be-closed variables in condition", .{});
                     toclose = @intCast(i);
                 }
-                if (k == .group) return fs.c.err(line, "cannot mix <group> with non-group variables in condition", .{});
+                // The parser makes a condition that names a group a group condition.
+                if (inv.never(k == .group)) return fs.c.err(line, "cannot mix <group> with non-group variables in condition", .{});
             }
             const first = fs.nactvar;
             const base = fs.freereg;
@@ -3661,7 +3717,7 @@ const ObserveDeps = struct {
         const vd = knownLocal(d.fs, e.kind.name.text) orelse return;
         if (vd.observe == .none) return;
         for (d.list.items) |x| if (std.mem.eql(u8, x.observers, vd.observers)) return;
-        try d.list.append(d.fs.c.arena, .{ .name = vd.name, .observers = vd.observers, .source = vd.observe == .source });
+        try push(&d.list, d.fs.c.arena, .{ .name = vd.name, .observers = vd.observers, .source = vd.observe == .source });
     }
 };
 
@@ -3681,7 +3737,7 @@ fn observeLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line:
         .close => return c.err(line, "cannot combine <observe> with <close>", .{}),
         .group => return c.err(line, "cannot combine <observe> with <group>", .{}),
         .runtime => return c.err(line, "cannot combine <observe> with runtime attributes", .{}),
-        .meta, .lazy => unreachable,
+        .meta, .lazy, .context => unreachable,
     };
     if (values.len != 1) return c.err(line, "an <observe> variable needs one initializer", .{});
     const a = c.arena;
@@ -3860,13 +3916,14 @@ const DiscardMark = struct {
         var b = fs.bl;
         var i: usize = 0;
         while (b) |bb| : (b = bb.parent) {
-            if (i < m.continues.len) bb.continues.items.len = m.continues[i];
+            // The mark was taken in the same block, so the chains match.
+            if (inv.always(i < m.continues.len)) bb.continues.items.len = m.continues[i];
             i += 1;
         }
         var d = fs.do_ctx;
         i = 0;
         while (d) |dd| : (d = dd.parent) {
-            if (i < m.exits.len) dd.exits = m.exits[i];
+            if (inv.always(i < m.exits.len)) dd.exits = m.exits[i];
             i += 1;
         }
         if (fs.last_target > pc(fs)) fs.last_target = pc(fs);
@@ -3930,7 +3987,7 @@ fn continueStat(fs: *FuncState, line: u32) Error!void {
     while (bl) |b| : (bl = b.parent) {
         if (b.is_loop) {
             const j = try jump(fs);
-            try b.continues.append(fs.c.arena, .{ .name = "continue", .pc = j, .line = line, .nactvar = fs.nactvar });
+            try push(&b.continues, fs.c.arena, .{ .name = "continue", .pc = j, .line = line, .nactvar = fs.nactvar });
             // Leaving blocks with captured locals needs a close at the
             // target.
             var x = fs.bl;
@@ -4234,4 +4291,67 @@ fn getFieldTo(fs: *FuncState, dest: u32, obj: u8, name: []const u8) Error!void {
         _ = try emitABx(fs, .loadk, dest, ki);
         try codeABC(fs, .gettable, dest, obj, dest);
     }
+}
+
+// ---------------------------------------------------------------------
+// Context variables (`spec/design/context.md`)
+
+var context_marker: ast.Expr = .{ .span = .{ .start = 0, .end = 0 }, .line = 0, .kind = .nil };
+
+/// The context local that the assignment target `t` names, or null.
+fn contextTarget(fs: *FuncState, t: *const ast.Expr) ?*VarDesc {
+    if (t.kind != .name) return null;
+    const vd = knownLocal(fs, t.kind.name.text) orelse return null;
+    return if (vd.kind == .context) vd else null;
+}
+
+/// A read of the context local `vd`: `GETCTX` with its slot object.
+fn contextRead(fs: *FuncState, vd: *VarDesc, line: u32, v: *ExpDesc) Error!void {
+    var slot: ExpDesc = .{};
+    try singleVar(fs, vd.ctx_slot, line, &slot);
+    const r = try exp2anyreg(fs, &slot);
+    freeExp(fs, &slot);
+    v.* = .{ .kind = .reloc, .info = try emitABC(fs, .getctx, 0, @intCast(r), 0) };
+}
+
+/// Assigns `ex` to the context local whose slot descriptor is `v`.
+fn contextStore(fs: *FuncState, v: *ExpDesc, ex: *ExpDesc) Error!void {
+    v.node = null;
+    const val = try exp2anyreg(fs, ex);
+    const r = try exp2anyreg(fs, v);
+    try codeABC(fs, .setctx, @intCast(r), @intCast(val), 0);
+    freeExp(fs, v);
+    freeExp(fs, ex);
+}
+
+/// `local name <context> = exp`. A hidden local holds the slot object
+/// that the builtin `ctxnew` returns for the variable, with the value of
+/// the initializer as its default. The variable itself occupies no
+/// register: reads and writes go through `GETCTX` and `SETCTX`.
+fn contextLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u32) Error!void {
+    const c = fs.c;
+    if (names.len != 1) return c.err(line, "a <context> declaration names one variable", .{});
+    const an = names[0];
+    for (an.attribs) |at| switch (at) {
+        .context => {},
+        .@"const" => return c.err(line, "cannot combine <context> with <const>", .{}),
+        .close => return c.err(line, "cannot combine <context> with <close>", .{}),
+        .group => return c.err(line, "cannot combine <context> with <group>", .{}),
+        .meta => return c.err(line, "cannot combine <context> with <meta>", .{}),
+        .lazy => return c.err(line, "cannot combine <context> with <lazy>", .{}),
+        .observe => return c.err(line, "cannot combine <context> with <observe>", .{}),
+        .runtime => return c.err(line, "cannot combine <context> with runtime attributes", .{}),
+    };
+    if (values.len > 1) return c.err(line, "a <context> variable takes one initializer", .{});
+    const a = c.arena;
+    const x = an.name.text;
+    const hidden = try std.fmt.allocPrint(a, "(context {s})", .{x});
+    const g: Gen = .{ .a = a, .line = line, .span = an.name.span };
+    const init = if (values.len == 1) values[0] else try g.ex(.nil);
+    const call = try g.call(try g.name(lazy.prefix ++ "ctxnew"), &.{ init, try g.str(x), try g.str(c.opts.chunkname), try g.int(@intCast(line)) });
+    try statement(fs, try g.local(&.{hidden}, &.{}, call));
+    const vidx = try newLocalVar(fs, x, .context);
+    const vd = getLocalVar(fs, vidx);
+    vd.ctx_slot = hidden;
+    try adjustLocalVars(fs, 1);
 }
