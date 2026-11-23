@@ -66,6 +66,7 @@ var subscribers: std.ArrayList(*Global) = .empty;
 var orphans: std.ArrayList(i32) = .empty;
 var started = false;
 var pipe_fds: [2]i32 = .{ -1, -1 };
+var watcher_thread: ?std.Thread = null;
 var saved: [n_sigs]if (posix) std.posix.Sigaction else void = undefined;
 
 fn lock() void {
@@ -180,13 +181,18 @@ fn start() bool {
     const fl = std.c.fcntl(fds[1], std.c.F.GETFL, @as(c_int, 0));
     _ = std.c.fcntl(fds[1], std.c.F.SETFL, fl | @as(c_int, @bitCast(std.c.O{ .NONBLOCK = true })));
     pipe_fds = fds;
-    const t = std.Thread.spawn(.{ .stack_size = 64 * 1024 }, watcher, .{}) catch {
+    // The thread keeps the default stack: glibc places the static
+    // thread-local storage of every thread on its stack, and that storage
+    // holds the alternate signal stack of the standard library
+    // (`std.options.signal_stack_size`, 256 KiB by default), which a small
+    // stack does not hold (`gcpar.zig`, `helper_stack_size`). It runs for the life of the process, so its handle
+    // stays in `watcher_thread` and is never joined or detached.
+    watcher_thread = std.Thread.spawn(.{}, watcher, .{}) catch {
         _ = std.c.close(fds[0]);
         _ = std.c.close(fds[1]);
         pipe_fds = .{ -1, -1 };
         return false;
     };
-    t.detach();
     install(.child);
     started = true;
     return true;
