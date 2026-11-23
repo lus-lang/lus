@@ -243,7 +243,7 @@
       "name": "keyword.control.lus"
     },
     {
-      "match": "(?<![^.]\\.|:)\\b(?:fs\\.path\\.delimiter|fs\\.path\\.separator|package\\.searchers|utf8\\.charpattern|math\\.maxinteger|math\\.mininteger|package\\.preload|package\\.config|package\\.loaded|package\\.cpath|package\\.path|time\\.weekday|time\\.month|io\\.stderr|io\\.stdout|math\\.huge|_VERSION|io\\.stdin|math\\.pi|false|flags|_ENV|true|_G|nil(?!:))\\b|(?<![.])\\.{3}(?!\\.)",
+      "match": "(?<![^.]\\.|:)\\b(?:tcp_server\\.accepted|fs\\.path\\.delimiter|fs\\.path\\.separator|package\\.searchers|tcp_socket\\.output|tcp_socket\\.input|utf8\\.charpattern|math\\.maxinteger|math\\.mininteger|package\\.preload|package\\.config|package\\.loaded|package\\.cpath|package\\.path|time\\.weekday|time\\.month|io\\.stderr|io\\.stdout|math\\.huge|_VERSION|io\\.stdin|math\\.pi|false|flags|_ENV|true|_G|nil(?!:))\\b|(?<![.])\\.{3}(?!\\.)",
       "name": "constant.language.lus"
     },
     {

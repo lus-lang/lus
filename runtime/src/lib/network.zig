@@ -40,6 +40,7 @@ const faultio = @import("../vm/faultio.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const base = @import("base.zig");
+const coroutine = @import("coroutine.zig");
 pub const tls = @import("tls.zig");
 const http = @import("http.zig");
 const Value = value.Value;
@@ -74,7 +75,7 @@ pub const Socket = struct {
     timeout_ms: i32 = -1,
     closed: bool = false,
     /// Bytes read from the socket and not yet returned.
-    buf: std.ArrayList(u8) = .empty,
+    buf: RecvBuf = .{},
     /// Set once the handle is in non-blocking mode, which happens the
     /// first time an operation on the socket must not block. From then on
     /// every operation waits through the scheduler.
@@ -86,6 +87,8 @@ pub const Socket = struct {
     /// coroutine of the connection keeps that server alive, and the
     /// socket leaves the count of the server when it closes.
     owner: ?*Server = null,
+    /// Set once a read found the end of the connection.
+    eof: bool = false,
     /// Set when the server closed the connection at the end of its drain
     /// time, so the natives of the server end its exchange quietly.
     drained: bool = false,
@@ -99,6 +102,55 @@ pub const Socket = struct {
     /// `network.fetch` on it (`http.zig`).
     body: ?*http.Body = null,
     fetch: ?*http.Fetch = null,
+};
+
+/// The bytes a socket received and has not returned yet. `items` is the
+/// unread part, a slice of `mem`, so reading code indexes it from zero.
+/// Taking bytes from the front moves the start of `items` and copies
+/// nothing. The unread bytes move to the front of `mem` only when a read
+/// needs room after them.
+pub const RecvBuf = struct {
+    items: []u8 = &.{},
+    mem: []u8 = &.{},
+
+    fn offset(b: *const RecvBuf) usize {
+        return if (b.mem.len == 0) 0 else @intFromPtr(b.items.ptr) - @intFromPtr(b.mem.ptr);
+    }
+
+    /// Makes room for `n` more bytes after the unread ones.
+    pub fn ensureUnusedCapacity(b: *RecvBuf, gpa: std.mem.Allocator, n: usize) !void {
+        const off = b.offset();
+        const len = b.items.len;
+        if (b.mem.len - off - len >= n) return;
+        if (len + n <= b.mem.len) {
+            std.mem.copyForwards(u8, b.mem[0..len], b.items);
+            b.items = b.mem[0..len];
+            return;
+        }
+        const cap = @max(b.mem.len * 2, len + n);
+        const mem = try gpa.alloc(u8, cap);
+        @memcpy(mem[0..len], b.items);
+        if (b.mem.len > 0) gpa.free(b.mem);
+        b.mem = mem;
+        b.items = mem[0..len];
+    }
+
+    /// The free space after the unread bytes, which a read fills before
+    /// it extends `items` over what it read.
+    pub fn unusedCapacitySlice(b: *const RecvBuf) []u8 {
+        return b.mem[b.offset() + b.items.len ..];
+    }
+
+    /// Drops the first `n` unread bytes.
+    pub fn consume(b: *RecvBuf, n: usize) void {
+        b.items = b.items[n..];
+        if (b.items.len == 0 and b.mem.len > 0) b.items = b.mem[0..0];
+    }
+
+    pub fn deinit(b: *RecvBuf, gpa: std.mem.Allocator) void {
+        if (b.mem.len > 0) gpa.free(b.mem);
+        b.* = .{};
+    }
 };
 
 /// A listening TCP socket.
@@ -180,6 +232,7 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "settimeout", .func = serverSettimeout },
         .{ .name = "getsockname", .func = serverGetsockname },
     }, serverGc, serverTostring);
+    try portIndex(l);
     try makeMetatable(l, udp_name, &.{
         .{ .name = "sendto", .func = op(udpSendto) },
         .{ .name = "receive", .func = op(udpReceive) },
@@ -240,12 +293,17 @@ fn metatableOf(l: *Thread, comptime name: []const u8) *Table {
 
 /// Creates a userdata holding `init` and pushes it.
 pub fn newObject(l: *Thread, comptime T: type, comptime name: []const u8, init: T) Error!*T {
+    return newObjectUser(l, T, name, init, if (T == Socket) 2 else if (T == Server) 1 else 0);
+}
+
+fn newObjectUser(l: *Thread, comptime T: type, comptime name: []const u8, init: T, nuser: u16) Error!*T {
     const g = l.g;
     gc.maybeCollect(g);
     const mt = metatableOf(l, name);
-    const u = gc.alloc(g, Userdata, .userdata, Userdata.allocSize(@sizeOf(T), 0)) catch return l.raiseMem();
+    const u = gc.alloc(g, Userdata, .userdata, Userdata.allocSize(@sizeOf(T), nuser)) catch return l.raiseMem();
     u.size = @sizeOf(T);
-    u.nuser = 0;
+    u.nuser = nuser;
+    for (u.userValues()) |*v| v.* = .nil;
     u.metatable = mt;
     const p: *T = @ptrCast(@alignCast(u.data()));
     p.* = init;
@@ -262,7 +320,10 @@ pub fn toObject(l: *Thread, comptime T: type, comptime name: []const u8, v: Valu
 }
 
 pub fn checkSocket(l: *Thread, i: u32) Error!*Socket {
-    const s = toObject(l, Socket, socket_name, l.arg(i)) orelse return aux.typeError(l, i, socket_name);
+    var v = l.arg(i);
+    // A port of a socket stands for the socket.
+    if (v.tag == .thread and v.as(Thread).port != null) v = v.as(Thread).port_ctx;
+    const s = toObject(l, Socket, socket_name, v) orelse return aux.typeError(l, i, socket_name);
     if (s.closed) return l.raiseFmt("attempt to use a closed socket", .{});
     return s;
 }
@@ -274,7 +335,10 @@ pub fn stillOpen(l: *Thread, s: *Socket) Error!void {
 }
 
 pub fn checkServer(l: *Thread, i: u32) Error!*Server {
-    const s = toObject(l, Server, server_name, l.arg(i)) orelse return aux.typeError(l, i, server_name);
+    var v = l.arg(i);
+    // The port of a server stands for the server.
+    if (v.tag == .thread and v.as(Thread).port != null) v = v.as(Thread).port_ctx;
+    const s = toObject(l, Server, server_name, v) orelse return aux.typeError(l, i, server_name);
     if (s.closed) return l.raiseFmt("attempt to use a closed server", .{});
     return s;
 }
@@ -1545,6 +1609,12 @@ fn socketSend(l: *Thread) Error!u32 {
         data = whole[r.from..r.to];
         last = if (r.to > r.from) r.to else 0;
     }
+    try sendAll(l, s, data);
+    return aux.retInt(l, @intCast(last));
+}
+
+/// Sends all of `data`, which stays where it is while the send waits.
+fn sendAll(l: *Thread, s: *Socket, data: []const u8) Error!void {
     const io = l.g.io;
     const h = s.stream.socket.handle;
     // A send that waited continues after the bytes it already wrote.
@@ -1568,7 +1638,6 @@ fn socketSend(l: *Thread) Error!u32 {
             .fail => |e| return failResult(l, "send", e),
         }
     }
-    return aux.retInt(l, @intCast(last));
 }
 
 pub const Fill = union(enum) { got: usize, eof, fail: anyerror };
@@ -1605,7 +1674,10 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
             .fail => |e| return .{ .fail = e },
         }
     }
-    if (n == 0) return .eof;
+    if (n == 0) {
+        s.eof = true;
+        return .eof;
+    }
     s.buf.items.len += n;
     return .{ .got = n };
 }
@@ -1613,10 +1685,7 @@ pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
 /// Pushes the first `n` buffered bytes as a vector and removes them.
 fn takeBuffered(l: *Thread, s: *Socket, n: usize, skip: usize) Error!u32 {
     const v = try vector.newVector(l, s.buf.items[0..n]);
-    const consumed = n + skip;
-    const rest = s.buf.items.len - consumed;
-    std.mem.copyForwards(u8, s.buf.items[0..rest], s.buf.items[consumed..]);
-    s.buf.items.len = rest;
+    s.buf.consume(n + skip);
     return aux.ret(l, Value.obj(.vector, v));
 }
 
@@ -1691,6 +1760,32 @@ fn socketReceive(l: *Thread) Error!u32 {
     return l.raiseFmt("invalid receive pattern: {s}", .{pattern});
 }
 
+/// `receive` with its pattern and its limit given as values, for the
+/// input port of a socket.
+fn receiveValues(l: *Thread, s: *Socket, pattern: Value, limit: Value) Error!u32 {
+    const max: ?i64 = switch (limit.tag) {
+        .nil => null,
+        .integer => limit.asInt(),
+        .float => if (@floor(limit.asFloat()) == limit.asFloat()) @as(i64, @intFromFloat(limit.asFloat())) else return l.raiseFmt("max_bytes must be an integer", .{}),
+        else => return l.raiseFmt("max_bytes must be an integer", .{}),
+    };
+    if (max) |m| if (m <= 0) return l.raiseFmt("max_bytes must be positive", .{});
+    switch (pattern.tag) {
+        .integer => {
+            const n = pattern.asInt();
+            if (n <= 0) return l.raiseFmt("invalid receive size: {d}", .{n});
+            return recvBytes(l, s, @intCast(n));
+        },
+        .nil, .string => {
+            const name = if (pattern.tag == .nil) "*l" else pattern.as(object.String).bytes();
+            if (std.mem.eql(u8, name, "*l")) return recvLine(l, s, @intCast(max orelse default_line_limit));
+            if (std.mem.eql(u8, name, "*a")) return recvAll(l, s, @intCast(max orelse default_all_limit));
+            return l.raiseFmt("invalid receive pattern: {s}", .{name});
+        },
+        else => return l.raiseFmt("invalid receive pattern: {s}", .{l.typeNameOf(pattern)}),
+    }
+}
+
 /// Closes a connection gracefully: sends FIN, then discards pending input
 /// so the close does not reset the connection.
 /// Closes the socket of a connection at the end of the drain time of its
@@ -1752,7 +1847,6 @@ pub fn releaseSocket(l: *Thread, s: *Socket) void {
         }
     }
     s.buf.deinit(l.g.gpa);
-    s.buf = .empty;
     http.freeState(l.g.gpa, s);
     if (s.http) |h| {
         h.deinit(l.g.gpa);
@@ -2009,4 +2103,114 @@ fn udpGc(l: *Thread) Error!u32 {
 fn udpTostring(l: *Thread) Error!u32 {
     const s = toObject(l, Udp, udp_name, l.arg(1)) orelse return aux.typeError(l, 1, udp_name);
     return objectTostring(l, "udpsocket", s.closed);
+}
+
+// ---------------------------------------------------------------------
+// Ports: `conn.input` and `conn.output`
+
+const input_port = state.Port{ .step = inputStep };
+const output_port = state.Port{ .step = outputStep, .close = outputClose };
+
+/// Registers the fields `input` and `output` of sockets, which a lookup
+/// finds after the methods.
+fn portIndex(l: *Thread) Error!void {
+    const g = l.g;
+    g.fields.put(g.gpa, metatableOf(l, socket_name), socketField) catch return l.raiseMem();
+    g.fields.put(g.gpa, metatableOf(l, server_name), serverField) catch return l.raiseMem();
+}
+
+/// Returns the port in user value `w` of the userdata `v`, which it
+/// creates on first use.
+fn portOf(l: *Thread, v: Value, w: usize, port: *const state.Port) Error!Value {
+    const u = v.as(Userdata);
+    const slot = &u.userValues()[w];
+    if (slot.isNil()) {
+        const co = try coroutine.newPort(l, port, v);
+        l.top -= 1;
+        slot.* = Value.obj(.thread, co);
+        gc.barrierBack(l.g, &u.hdr);
+    }
+    return slot.*;
+}
+
+const accepted_port = state.Port{ .step = acceptedStep };
+
+fn serverField(l: *Thread, v: Value, key: Value) Error!?Value {
+    if (key.tag != .string or !std.mem.eql(u8, key.as(object.String).bytes(), "accepted")) return null;
+    if (toObject(l, Server, server_name, v) == null) return null;
+    return try portOf(l, v, 0, &accepted_port);
+}
+
+/// resume(server.accepted): the next connection, as `accept` returns it.
+/// The port ends when the server closes.
+fn acceptedStep(l: *Thread, co: *Thread, args: []const Value) Error!u32 {
+    _ = args;
+    const s = toObject(l, Server, server_name, co.port_ctx).?;
+    if (s.closed) {
+        co.status = .dead;
+        return 0;
+    }
+    _ = acceptOne(l, s) catch |e| switch (e) {
+        error.LusError, error.MetaCall => |x| {
+            // A server that closes while the port waits ends the port.
+            if (x == error.LusError and !l.yielding and s.closed) {
+                co.status = .dead;
+                return 0;
+            }
+            return x;
+        },
+        else => return failResult(l, "accept", e),
+    };
+    return 1;
+}
+
+fn socketField(l: *Thread, v: Value, key: Value) Error!?Value {
+    if (key.tag != .string) return null;
+    const name = key.as(object.String).bytes();
+    const w: usize = if (std.mem.eql(u8, name, "input")) 0 else if (std.mem.eql(u8, name, "output")) 1 else return null;
+    if (toObject(l, Socket, socket_name, v) == null) return null;
+    return try portOf(l, v, w, if (w == 0) &input_port else &output_port);
+}
+
+/// The open socket of the port `co`.
+fn portSocket(l: *Thread, co: *Thread) Error!*Socket {
+    const s = toObject(l, Socket, socket_name, co.port_ctx).?;
+    if (s.closed) return l.raiseFmt("attempt to use a closed socket", .{});
+    return s;
+}
+
+/// resume(conn.input, pattern, max_bytes): the next piece of input, read
+/// as `receive` reads it. At the end of the connection the port ends.
+fn inputStep(l: *Thread, co: *Thread, args: []const Value) Error!u32 {
+    const pattern: Value = if (args.len > 0) args[0] else .nil;
+    const limit: Value = if (args.len > 1) args[1] else .nil;
+    const s = try portSocket(l, co);
+    const n = try receiveValues(l, s, pattern, limit);
+    if (n == 1 and s.eof and s.buf.items.len == 0) {
+        const r = l.stack[l.top - 1];
+        if (r.tag == .vector and r.as(object.Vector).bytes.items.len == 0) {
+            co.status = .dead;
+            l.top -= 1;
+            return 0;
+        }
+    }
+    return n;
+}
+
+/// resume(conn.output, data): sends all of `data`, a string or a vector.
+fn outputStep(l: *Thread, co: *Thread, args: []const Value) Error!u32 {
+    const v: Value = if (args.len > 0) args[0] else .nil;
+    const data = switch (v.tag) {
+        .string => v.as(object.String).bytes(),
+        .vector => v.as(object.Vector).bytes.items,
+        else => return l.raiseFmt("bad argument #1 to 'output' (string or vector expected, got {s})", .{l.typeNameOf(v)}),
+    };
+    const s = try portSocket(l, co);
+    try sendAll(l, s, data);
+    return 0;
+}
+
+fn outputClose(l: *Thread, co: *Thread) void {
+    const s = toObject(l, Socket, socket_name, co.port_ctx) orelse return;
+    if (!s.closed) s.stream.shutdown(l.g.io, .send) catch {};
 }

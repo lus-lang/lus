@@ -1315,7 +1315,7 @@ print(shallow.tags[1], deep.tags[1])  --> final  draft
 
 ## Iteration
 
-To _iterate_ is to process the items of a collection one after another. The [numeric `for`](/manual/guide#numeric-for-loops) loop iterates over numbers. The _generic `for`_ loop iterates over the items of a list, the keys of a dictionary, the matches in a string, or the lines of a file. It gets the items from an _iterator_, which is a function that returns the next item each time it is called.
+To _iterate_ is to process the items of a collection one after another. The [numeric `for`](/manual/guide#numeric-for-loops) loop iterates over numbers. The _generic `for`_ loop iterates over the items of a list, the keys of a dictionary, the matches in a string, or the lines of a file. It gets the items from an _iterator_, which is a function that returns the next item each time it is called, or from a [coroutine](#looping-over-a-coroutine), which yields the next item each time it is resumed.
 
 ### The generic for
 
@@ -2610,7 +2610,7 @@ end
 print(table.concat(log, ", "))   --> begin, insert row, commit, begin, rollback
 ```
 
-A `<close>` variable is also constant. When one block declares several `<close>` variables, Lus closes them in reverse order of declaration, so a resource is released before the resources that it depends on. The value of a `<close>` variable must have a `__close` metamethod or be `nil` or `false`. Lus skips a `nil` or `false` value, so a function that returns `nil` on failure can initialize a `<close>` variable directly.
+A `<close>` variable is also constant. When one block declares several `<close>` variables, Lus closes them in reverse order of declaration, so a resource is released before the resources that it depends on. The value of a `<close>` variable must have a `__close` metamethod, be a coroutine, or be `nil` or `false`. A coroutine closes as [`coroutine.close`](/manual/api#coroutine.close) closes it, which releases what its own `<close>` variables hold. Lus skips a `nil` or `false` value, so a function that returns `nil` on failure can initialize a `<close>` variable directly.
 
 ### Classes
 
@@ -3295,6 +3295,58 @@ end
 --> project/src/main.lus
 --> project/src/util.lus
 ```
+
+### Looping over a coroutine
+
+A generic `for` loop also takes a coroutine where it takes an iterator. Before each pass, the loop resumes the coroutine with no values and gives the values of its `yield` to the loop variables, the first value to the first variable and so on. A variable without a value is `nil`, and extra values are dropped. The loop ends when the coroutine returns, and the values it returns are dropped. Like every generic `for`, the loop also ends at a `yield` whose first value is `nil`.
+
+The following loop goes over the files of the tree from [Generators](#generators) with a coroutine in place of the wrapped function.
+
+```lus
+local tree = {
+    name = "project",
+    children = {
+        { name = "README.md" },
+        { name = "src", children = { { name = "main.lus" } } },
+    },
+}
+
+local function walk(node, prefix)
+    local path = prefix .. node.name
+    if node.children then
+        for _, child in ipairs(node.children) do
+            walk(child, path .. "/")
+        end
+    else
+        coroutine.yield(path, #node.name)
+    end
+end
+
+for path, length in coroutine.create(function() walk(tree, "") end) do
+    print(path, length)
+end
+--> project/README.md  9
+--> project/src/main.lus  8
+```
+
+The coroutine is the closing value of the loop. When the loop ends before the coroutine does, at a `break`, a `return`, an error in the body, or a `nil` value, the loop closes the coroutine as [`coroutine.close`](/manual/api#coroutine.close) does, so the `<close>` variables of the coroutine release what they hold. An error in the coroutine ends the loop with that error. A loop over a coroutine that has already ended raises `cannot resume dead coroutine`.
+
+```lus
+local released = false
+local numbers = coroutine.create(function()
+    local guard <close> = setmetatable({}, { __close = function() released = true end })
+    for i = 1, 1000 do coroutine.yield(i) end
+end)
+
+local sum = 0
+for i in numbers do
+    if i > 3 then break end
+    sum = sum + i
+end
+print(sum, released, coroutine.status(numbers))   --> 6  true  dead
+```
+
+The reads of a network connection work the same way. [`conn.input`](/manual/api#network.tcp) is a coroutine whose every resume returns the next line, so `for line in conn.input do` handles each line of a connection until the other end closes it.
 
 ### Status and closing
 

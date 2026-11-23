@@ -75,6 +75,21 @@ pub const Finish = union(enum) {
 
 pub const NativeFn = *const fn (l: *Thread) Error!u32;
 
+/// Returns the field `key` of the userdata `obj`, or null when it has
+/// none. It must not call Lus code.
+pub const FieldGetter = *const fn (l: *Thread, obj: Value, key: Value) Error!?Value;
+
+/// The behavior of a port. `step` runs on the resuming thread with the
+/// port and the values of the resume, which live on the stack and must be
+/// read before the step pushes anything. It pushes its results and
+/// returns their count, as a native does, and ends the port by setting
+/// the status of the port to dead. A step that waits runs again from its
+/// start, as a native does. `close` runs when the port is closed.
+pub const Port = struct {
+    step: *const fn (l: *Thread, co: *Thread, args: []const Value) Error!u32,
+    close: ?*const fn (l: *Thread, co: *Thread) void = null,
+};
+
 /// The common case of a native, run without a frame of its own. It reads
 /// its `nargs` arguments at `args` before it allocates anything, and it
 /// returns the single result, or `leaf_miss` when the call needs the full
@@ -102,11 +117,6 @@ pub const Native = struct {
     /// The leaf computes only the first result of `func`, so it runs only
     /// for a call that wants at most one result.
     leaf_first: bool = false,
-    /// The native is the body of a coroutine that yields from inside it,
-    /// such as a stream of `network.fetch`. A resume after a yield runs it
-    /// again from its start, with the arguments it started with, rather
-    /// than returning the resume arguments from it.
-    generator: bool = false,
 
     pub inline fn upvalues(n: *Native) []Value {
         const base: [*]u8 = @ptrCast(n);
@@ -383,6 +393,10 @@ pub const Global = struct {
     blobs: std.AutoHashMapUnmanaged(*String, *@import("blob.zig").Blob) = .empty,
     /// Hooks installed by library modules (pledge state, worker hosts...).
     ext: std.StringHashMapUnmanaged(*anyopaque) = .empty,
+    /// Fields of userdata that no `__index` table holds, by metatable. A
+    /// lookup consults the getter of the metatable after its `__index`
+    /// table missed, so method lookups never reach it (`ops.index`).
+    fields: std.AutoHashMapUnmanaged(*Table, FieldGetter) = .empty,
     /// The slots of the context variables of this state (`context.zig`).
     ctx: @import("context.zig").Store = .{},
     /// Program arguments and environment, provided by the host.
@@ -577,6 +591,12 @@ pub const Thread = struct {
     resumer: ?*Thread = null,
     /// The scheduler record of a thread that waited or was detached.
     task: ?*@import("sched.zig").Task = null,
+    /// What a port runs when it is resumed. A port is a coroutine with no
+    /// stack of its own: `resume` calls its native on the resuming thread
+    /// (`lib/coroutine.zig`).
+    port: ?*const Port = null,
+    /// The object a port reads from or writes to.
+    port_ctx: Value = .nil,
     /// Values passed across resume and yield.
     transfer: u32 = 0,
     /// Set by `coroutine.yield` so the call machinery unwinds to `resume`.
@@ -649,6 +669,7 @@ pub const Thread = struct {
         m.mark(l.err);
         if (l.err_traceback) |s| m.markHeader(&s.hdr);
         if (l.resumer) |r| m.markHeader(&r.hdr);
+        m.mark(l.port_ctx);
         @import("context.zig").traverse(l, m);
     }
 
@@ -1207,6 +1228,15 @@ pub fn newThread(g: *Global) Allocator.Error!*Thread {
     return l;
 }
 
+/// A thread with no stack, for a port, which never runs code of its own.
+pub fn newPortThread(g: *Global, port: *const Port, ctx: Value) Allocator.Error!*Thread {
+    try g.gcs.threads.ensureUnusedCapacity(g.gpa, 1);
+    const l = try gc.allocUninit(g, Thread, .thread, @sizeOf(Thread));
+    l.* = .{ .hdr = l.hdr, .g = g, .status = .suspended, .port = port, .port_ctx = ctx };
+    gc.addThread(g, l);
+    return l;
+}
+
 // ---------------------------------------------------------------------
 // Hooks for object kinds defined outside this file (protos, upvalues,
 // bigints, decimals, queries). They are routed here so gc.zig stays
@@ -1347,6 +1377,7 @@ pub fn destroy(g: *Global) void {
     g.finobj.deinit(gpa);
     g.tobefnz.deinit(gpa);
     g.ext.deinit(gpa);
+    g.fields.deinit(gpa);
     g.ctx.deinit(gpa);
     g.shapes.deinit(g.gpa);
     g.parent_gpa.destroy(g);

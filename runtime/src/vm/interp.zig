@@ -125,6 +125,13 @@ pub fn closeTbc(l: *Thread, level: u32, err: ?Value) Error!void {
         _ = l.tbc.pop();
         const obj = l.stack[lv];
         if (obj.isNil() or obj.tag == .false) continue;
+        if (obj.tag == .thread) {
+            if (@import("../lib/coroutine.zig").closeCo(l, obj.as(Thread))) |e| {
+                cur_err = e;
+                failed = true;
+            }
+            continue;
+        }
         const tm = l.metamethod(obj, .close);
         const saved_top = l.top;
         if (l.top < lv + 1) l.top = lv + 1;
@@ -1205,6 +1212,11 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         },
         .tforprep => {
             const r = c.fr.base + opc.a(ins);
+            if (l.stack[r].tag == .thread) {
+                c.fr.pc = pc;
+                try @import("../lib/coroutine.zig").forPrep(l, r);
+                c.refresh(l, mode);
+            }
             if (!l.stack[r + 3].isNil()) {
                 c.fr.pc = pc;
                 try markTbc(l, r + 3);
@@ -1521,30 +1533,6 @@ pub fn restartNative(l: *Thread) (Error || YieldError)!void {
     }
 }
 
-/// Runs the generator native of the top frame of `l` again, after a
-/// resume of the coroutine that it yielded from (`state.Native.generator`).
-/// The resume arguments are dropped, so the native sees the arguments it
-/// started with. The call ends the way `restartNative` ends it.
-pub fn rerunGenerator(l: *Thread, nresume: u32) (Error || YieldError)!void {
-    const fr = l.frame();
-    const nat = fr.native.?;
-    const want = fr.want;
-    l.top -= nresume;
-    l.top = @max(l.top, fr.base);
-    l.meta_finish = null;
-    const nres = nat.func(l) catch |e| {
-        if (l.status == .suspended and l.yielding) return error.Yield;
-        if (l.g.debugger) |d| d.raised(d.ctx, l);
-        if (!handleError(l, 0)) return e;
-        return;
-    };
-    try poscall(l, nres);
-    if (want >= 0 and l.frames.items.len > 0) {
-        const caller = l.frame();
-        if (caller.closure) |cl| l.top = caller.base + cl.proto.max_stack;
-    }
-}
-
 /// Pushes a frame for a call to a Lus function with fixed parameters. The
 /// callee and its `nargs` arguments are at `func`.
 pub inline fn enterLus(l: *Thread, cl: *Closure, func: u32, nargs: u32, want: i32) Error!void {
@@ -1778,7 +1766,8 @@ pub fn returnStep(l: *Thread, first: u32, n: u32, stop: usize) Error!u32 {
 fn markTbc(l: *Thread, level: u32) Error!void {
     const v = l.stack[level];
     if (v.isNil() or v.tag == .false) return;
-    if (l.metamethod(v, .close).isNil()) {
+    // A coroutine closes as `coroutine.close` closes it.
+    if (v.tag != .thread and l.metamethod(v, .close).isNil()) {
         if (l.frames.items.len > 0) if (l.frame().closure) |cl| {
             const pc = if (l.frame().pc == 0) 0 else l.frame().pc - 1;
             if (@import("debug.zig").localName(cl.proto, level - l.frame().base, pc + 1)) |name| {

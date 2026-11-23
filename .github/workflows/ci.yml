@@ -304,7 +304,7 @@ jobs:
         working-directory: runtime
         run: zig-out/bin/lus test --doc ../packages/site/src/manual ../spec
       - name: WebAssembly build
-        timeout-minutes: 15
+        timeout-minutes: 30
         if: runner.os == 'Linux'
         working-directory: runtime
         run: |

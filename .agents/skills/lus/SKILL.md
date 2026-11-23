@@ -69,6 +69,7 @@ Socket operations and file reads report failures by return value, as Lua files d
 - `if x = find() then ... end` and `while line = read() do ... end` scope a variable to the block.
 - Backtick strings interpolate, as in `` `$name is $(age + 1)` ``, and take every escape of quoted strings plus `` \` `` and `\$`.
 - `continue` skips to the next iteration of a loop.
+- `for x in co do` loops over a coroutine: each pass resumes it and binds what it yields, and the loop closes it on `break` or error. `for line in conn.input do` reads a TCP connection line by line, and `for conn in server.accepted do` serves connections.
 - `local T <meta> = expr` computes a constant value, such as a lookup table, when the file is compiled. An `if` on `flags`, literals, and `<meta>` locals keeps only the clause that is true, so `if flags.debug then` blocks vanish from builds without `-Fdebug`.
 - `local x <lazy> = expensive()` runs the initializer on the first read of `x`, so declare costly values once at the top of the file. `<lazy, close>` opens a resource on first use.
 - `local total <observe> = price * qty`, with `price` and `qty` also `<observe>`, recomputes `total` whenever the program assigns `price` or `qty`, from any function. Only assignment updates it, so assign a new table rather than writing a field.

@@ -242,6 +242,14 @@ pub fn build(b: *std.Build) void {
     run_aot.addFileArg(app_aot);
     run_aot.expectStdOutEqual("fib optimized true\n6765\t5341338000\t500500\n500000.5\nobserved 10\n");
     runtime_step.dependOn(&run_aot.step);
+    // Its hot loops enter the units compiled for them, which only a
+    // count of the entries shows, since the results are the same either
+    // way.
+    const report_aot = std.Build.Step.Run.create(b, "loops enter units compiled ahead of time");
+    report_aot.addFileArg(app_aot);
+    report_aot.setEnvironmentVariable("LUS_AOT_REPORT", "1");
+    report_aot.addCheck(.{ .expect_stderr_match = "2 of 2 loop units entered" });
+    runtime_step.dependOn(&report_aot.step);
 
     // `lus check` and `lus doc` on the fixtures in tests/check and
     // tests/doc. Each fixture's output must match its expected file.

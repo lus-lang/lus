@@ -10,7 +10,7 @@ local SPEC = TEST_DIR .. "/../../spec/stdlib"
 -- Names that exist only inside a worker's own state.
 local worker_only = { ["worker.message"] = true, ["worker.peek"] = true }
 
-local live, removed = {}, {}
+local live, removed, on_objects = {}, {}, {}
 
 local function scan(dir)
     for _, entry in ipairs(fs.list(dir)) do
@@ -24,6 +24,7 @@ local function scan(dir)
             f:close()
             local name = text:match("\nname: ([^\n]+)")
             if name then
+                if text:match("\nreceiver: ") then on_objects[name] = true end
                 if text:match("\nstability: removed") then
                     removed[name] = true
                 else
@@ -54,8 +55,9 @@ end
 local function every_spec_entry_exists_at_run_time_test()
     local missing = {}
     for _, name in ipairs(sorted(live)) do
-        -- Methods (a:b) are documented on their objects, not as globals.
-        if not name:find(":") and not worker_only[name] and resolve(name) == nil then
+        -- Methods (a:b) and the fields of objects are documented on their
+        -- objects, not as globals.
+        if not name:find(":") and not on_objects[name] and not worker_only[name] and resolve(name) == nil then
             missing[#missing + 1] = name
         end
     end

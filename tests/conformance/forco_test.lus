@@ -1,0 +1,162 @@
+-- Loops over coroutines. `for x in co` resumes `co` with no values once
+-- per iteration and binds the yielded values to the loop variables. The
+-- loop ends when the coroutine ends, or at a yield whose first value is
+-- nil, as every generic for ends at a nil. The loop closes the coroutine
+-- when it leaves early, and an error in the coroutine leaves the loop.
+
+local create, yield, status = coroutine.create, coroutine.yield, coroutine.status
+
+local function counter(n)
+    return create(function()
+        for i = 1, n do yield(i) end
+    end)
+end
+
+local function each_yield_runs_the_body_once_test()
+    local got = {}
+    for i in counter(5) do got[#got + 1] = i end
+    assert(table.concat(got, ",") == "1,2,3,4,5")
+end
+
+local function yielded_values_bind_in_order_test()
+    local co = create(function()
+        yield(1, "a", true)
+        yield(2, "b")
+        yield(3)
+    end)
+    local rows = {}
+    for n, s, b in co do rows[#rows + 1] = `$n $(tostring(s)) $(tostring(b))` end
+    assert(table.concat(rows, "|") == "1 a true|2 b nil|3 nil nil", table.concat(rows, "|"))
+end
+
+local function the_values_a_coroutine_returns_end_the_loop_test()
+    local co = create(function()
+        yield("first")
+        return "returned"
+    end)
+    local got = {}
+    for v in co do got[#got + 1] = v end
+    assert(#got == 1 and got[1] == "first")
+    assert(status(co) == "dead")
+end
+
+local function a_nil_yield_ends_the_loop_and_closes_the_coroutine_test()
+    local closed = false
+    local co = create(function()
+        local guard <close> = setmetatable({}, { __close = function() closed = true end })
+        yield(1)
+        yield(nil, "ignored")
+        yield(3)
+    end)
+    local got = {}
+    for v in co do got[#got + 1] = v end
+    assert(#got == 1 and got[1] == 1)
+    assert(closed and status(co) == "dead")
+end
+
+local function break_closes_the_coroutine_test()
+    local closed = false
+    local co = create(function()
+        local guard <close> = setmetatable({}, { __close = function() closed = true end })
+        for i = 1, 100 do yield(i) end
+    end)
+    local sum = 0
+    for i in co do
+        if i > 3 then break end
+        sum = sum + i
+    end
+    assert(sum == 6 and closed and status(co) == "dead")
+end
+
+local function an_error_in_the_body_closes_the_coroutine_test()
+    local closed = false
+    local co = create(function()
+        local guard <close> = setmetatable({}, { __close = function() closed = true end })
+        while true do yield(1) end
+    end)
+    local ok, err = catch (function()
+        for _ in co do error("body failed", 0) end
+    end)()
+    assert(not ok and err == "body failed")
+    assert(closed and status(co) == "dead")
+end
+
+local function an_error_in_the_coroutine_leaves_the_loop_test()
+    local closed = false
+    local co = create(function()
+        local guard <close> = setmetatable({}, { __close = function() closed = true end })
+        yield(1)
+        error("coroutine failed", 0)
+    end)
+    local got = {}
+    local ok, err = catch (function()
+        for v in co do got[#got + 1] = v end
+    end)()
+    assert(not ok and err == "coroutine failed", tostring(err))
+    assert(#got == 1 and closed and status(co) == "dead")
+end
+
+local function a_dead_coroutine_raises_test()
+    local co = counter(1)
+    for _ in co do end
+    local ok, err = catch (function()
+        for _ in co do end
+    end)()
+    assert(not ok and string.find(err, "cannot resume dead coroutine", 1, true), tostring(err))
+end
+
+local function loops_nest_and_share_nothing_test()
+    local pairs_seen = {}
+    for a in counter(3) do
+        for b in counter(2) do pairs_seen[#pairs_seen + 1] = a * 10 + b end
+    end
+    assert(table.concat(pairs_seen, ",") == "11,12,21,22,31,32")
+end
+
+local function a_hot_loop_over_a_coroutine_test()
+    local sum = 0
+    for i in counter(20000) do sum = sum + i end
+    assert(sum == 20000 * 20001 // 2)
+end
+
+local function from_destructures_each_yielded_table_test()
+    local co = create(function()
+        yield({ name = "a", qty = 2 })
+        yield({ name = "b", qty = 3 })
+    end)
+    local total, names = 0, ""
+    for name, qty from co do
+        total = total + qty
+        names = names .. name
+    end
+    assert(total == 5 and names == "ab")
+end
+
+local function a_to_be_closed_coroutine_closes_at_the_end_of_its_scope_test()
+    local closed = false
+    local co = create(function()
+        local guard <close> = setmetatable({}, { __close = function() closed = true end })
+        yield()
+    end)
+    coroutine.resume(co)
+    do
+        local c <close> = co
+    end
+    assert(closed and status(co) == "dead")
+end
+
+local function an_explicit_closing_value_is_kept_test()
+    local mine = false
+    local closer = setmetatable({}, { __close = function() mine = true end })
+    local co = counter(10)
+    for i in co, nil, nil, closer do
+        if i == 2 then break end
+    end
+    assert(mine and status(co) == "suspended")
+end
+
+local function wrapped_coroutines_still_iterate_as_functions_test()
+    local got = {}
+    for v in coroutine.wrap(function() yield(1) yield(2) end) do got[#got + 1] = v end
+    assert(table.concat(got, ",") == "1,2")
+end

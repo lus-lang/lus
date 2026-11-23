@@ -245,7 +245,21 @@ print(coroutine.close(co))    --> released
 print(coroutine.status(co))   --> dead
 ```
 
-Closing a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach) cancels it. The runtime stops resuming it, its pending to-be-closed variables are closed, and callers that wait for it in `resume` receive `false` and `"cannot resume dead coroutine"`. Closing a detached coroutine that failed returns `false` and its error object, which counts as collecting that error. [Cancelling](/manual/concurrency#cancelling) describes detached coroutines in full.]],
+Closing a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach) cancels it. The runtime stops resuming it, its pending to-be-closed variables are closed, and callers that wait for it in `resume` receive `false` and `"cannot resume dead coroutine"`. Closing a detached coroutine that failed returns `false` and its error object, which counts as collecting that error. [Cancelling](/manual/concurrency#cancelling) describes detached coroutines in full.
+
+A coroutine closes the same way at the end of the scope of a `<close>` variable that holds it, and when a [loop over the coroutine](/manual/guide#looping-over-a-coroutine) ends before the coroutine does. There, an error object of the close is raised, and a coroutine that is running or normal is left as it is.
+
+```lus
+local co = coroutine.create(function()
+    local res <close> = setmetatable({}, { __close = function() print("released") end })
+    coroutine.yield()
+end)
+coroutine.resume(co)
+do
+    local c <close> = co
+end                           --> released
+print(coroutine.status(co))   --> dead
+```]],
     kind = "function",
     module = "coroutine",
     name = "coroutine.close",
@@ -6561,7 +6575,7 @@ The example talks to its server through a TCP socket so that every byte on the w
     description = [[
 The `network.tcp` table opens TCP connections with [`network.tcp.connect`](/manual/api#network.tcp.connect) and listens for them with [`network.tcp.bind`](/manual/api#network.tcp.bind).
 
-A TCP socket has the methods `send(data, i, j)`, `receive(pattern, max_bytes)`, `settimeout(seconds)`, `getsockname()`, `getpeername()`, `starttls(options)`, `tlsinfo()`, `reader(max_bytes)`, and `close()`. [`network.tls`](/manual/api#network.tls) describes the sockets that carry TLS. A server has the methods `accept()`, `settimeout(seconds)`, `getsockname()`, and `close()`, and `accept` returns a socket. A method other than `close` on a closed socket raises `"attempt to use a closed socket"`, and on a closed server `"attempt to use a closed server"`. A second `close` does nothing. The collector closes a socket or a server that nothing refers to any more, and one declared with the `<close>` attribute closes when its variable goes out of scope.
+A TCP socket has the methods `send(data, i, j)`, `receive(pattern, max_bytes)`, `settimeout(seconds)`, `getsockname()`, `getpeername()`, `starttls(options)`, `tlsinfo()`, `reader(max_bytes)`, and `close()`. [`network.tls`](/manual/api#network.tls) describes the sockets that carry TLS. A server has the methods `accept()`, `settimeout(seconds)`, `getsockname()`, and `close()`, and `accept` returns a socket. A socket also has two coroutines, [`input`](/manual/api#tcp_socket.input), whose resumes read, and [`output`](/manual/api#tcp_socket.output), whose resumes send, and a server has [`accepted`](/manual/api#tcp_server.accepted), whose resumes accept. A method other than `close` on a closed socket raises `"attempt to use a closed socket"`, and on a closed server `"attempt to use a closed server"`. A second `close` does nothing. The collector closes a socket or a server that nothing refers to any more, and one declared with the `<close>` attribute closes when its variable goes out of scope.
 
 `connect`, `accept`, `send`, and `receive` wait for the network. Inside a coroutine given to `coroutine.detach` each of them suspends the coroutine until its socket is ready, and the other detached coroutines run in the meantime. Anywhere else they block their caller and run the detached coroutines while they wait. A timeout set with `settimeout` bounds each wait in both cases. `settimeout(nil)` and a negative value remove the timeout, and `settimeout(0)` makes an operation that cannot finish at once fail at once. An operation whose timeout runs out fails with the code `"timeout"` and the message `"receive timeout"`, `"send timeout"`, or `"accept timeout"`, and leaves the socket usable.
 
@@ -6585,7 +6599,7 @@ Socket operations report failures as file operations do. A failed operation retu
 | `"malformed"` | A request body broke its framing, which `network.serve` refuses with 400. |
 | `"io"` | Any other failure of the system. |
 
-Misuse raises rather than returns: a bad argument, a socket that the program closed before the call, and a permission that the program lacks. A coroutine of [`tcp_socket:reader`](/manual/api#tcp_socket:reader) raises its error object, so the resume returns `false` and the object, as for any coroutine.
+Misuse raises rather than returns: a bad argument, a socket that the program closed before the call, and a permission that the program lacks. The coroutines `input`, `output`, and `accepted`, and a coroutine of [`tcp_socket:reader`](/manual/api#tcp_socket:reader), raise their error object, so the resume returns `false` and the object, as for any coroutine.
 
 ```lus
 pledge("network")
@@ -10512,6 +10526,7 @@ print(#table.zip())                                        --> 0
   },
   ["tcp_server"] = {
     children = {
+      "tcp_server.accepted",
       "tcp_server:getsockname",
     },
     kind = "type",
@@ -10521,6 +10536,44 @@ print(#table.zip())                                        --> 0
     receiver_type = true,
     short_name = "tcp_server",
     synthetic = true,
+  },
+  ["tcp_server.accepted"] = {
+    children = {},
+    description = [[
+The connections of a TCP server as a coroutine: each resume returns `true` and the next accepted connection, and the coroutine ends when the server closes.
+
+A resume waits for a connection as [`accept`](/manual/api#tcp_server:accept) does, and returns its socket. When the server is closed, also while a resume waits, the resume returns `true` alone and the coroutine is dead, so a [loop over the coroutine](/manual/guide#looping-over-a-coroutine) serves connections until the program closes the server. A failure of the system call makes the resume return `false` and the error that `accept` raises. One coroutine accepts through `server.accepted` at a time. Every access returns the same coroutine. The field needs no permission beyond the `network:server` permission that binding the server took.
+
+```lus
+pledge("network")
+local server = network.tcp.bind("127.0.0.1", 0)
+local host, port = server:getsockname()
+coroutine.detach(coroutine.create(function()
+    for conn in server.accepted do
+        coroutine.resume(conn.output, "welcome\n")
+        conn:close()
+    end
+end))
+for _ = 1, 2 do
+    local sock <close> = network.tcp.connect(host, port)
+    local _, line = coroutine.resume(sock.input)
+    print(vector.tostring(line))
+end
+server:close()
+--> welcome
+--> welcome
+```]],
+    kind = "variable",
+    module = "network.tcp",
+    name = "tcp_server.accepted",
+    origin = "lus",
+    parent = "tcp_server",
+    receiver = "tcp_server",
+    short_name = "accepted",
+    since = "2.0.0",
+    source = "stdlib/network/tcp/accepted.md",
+    stability = "stable",
+    type = "thread",
   },
   ["tcp_server:getsockname"] = {
     children = {},
@@ -10561,6 +10614,8 @@ A connected socket has `getsockname` for its own end and `getpeername` for the o
   },
   ["tcp_socket"] = {
     children = {
+      "tcp_socket.input",
+      "tcp_socket.output",
       "tcp_socket:reader",
       "tcp_socket:receive",
       "tcp_socket:starttls",
@@ -10573,6 +10628,73 @@ A connected socket has `getsockname` for its own end and `getpeername` for the o
     receiver_type = true,
     short_name = "tcp_socket",
     synthetic = true,
+  },
+  ["tcp_socket.input"] = {
+    children = {},
+    description = [[
+The input of a TCP socket as a coroutine: each resume returns `true` and the next piece of input, and the coroutine ends at the end of the connection.
+
+The arguments of a resume are the read request, with the patterns of [`receive`](/manual/api#tcp_socket:receive): `coroutine.resume(conn.input)` reads a line, `coroutine.resume(conn.input, "*l", 1024)` reads a line of at most 1024 bytes, `coroutine.resume(conn.input, 512)` reads 512 bytes, and `coroutine.resume(conn.input, "*a")` reads everything up to the end of the connection. Each piece is a vector. An empty line is an empty vector. When the connection ends with nothing left to read, the resume returns `true` alone and the coroutine is dead, so a [loop over the coroutine](/manual/guide#looping-over-a-coroutine) reads every line until the peer closes its end.
+
+A failure makes the resume return `false` and the error that `receive` raises, and the coroutine stays usable. One coroutine reads through `conn.input` at a time: a resume while another coroutine waits inside it returns `false` and `"cannot resume non-suspended coroutine"`. The coroutine waits as `receive` does, and the timeout of the socket bounds each read. A resume reads the data that has already arrived without a switch to another coroutine. Every access returns the same coroutine. Closing it stops the reads and leaves the socket open. The field needs no permission.
+
+```lus
+pledge("network")
+local server <close> = network.tcp.bind("127.0.0.1", 0)
+local client = network.tcp.connect(server:getsockname())
+local conn <close> = server:accept()
+client:send("first\n\nthird\n")
+client:close()
+for line in conn.input do
+    print(#line, vector.tostring(line))
+end
+--> 5  first
+--> 0
+--> 5  third
+print(coroutine.status(conn.input))   --> dead
+```]],
+    kind = "variable",
+    module = "network.tcp",
+    name = "tcp_socket.input",
+    origin = "lus",
+    parent = "tcp_socket",
+    receiver = "tcp_socket",
+    short_name = "input",
+    since = "2.0.0",
+    source = "stdlib/network/tcp/input.md",
+    stability = "stable",
+    type = "thread",
+  },
+  ["tcp_socket.output"] = {
+    children = {},
+    description = [[
+The output of a TCP socket as a coroutine: `coroutine.resume(conn.output, data)` sends all of `data`, a string or a vector, and returns `true`.
+
+A failure makes the resume return `false` and the error that [`send`](/manual/api#tcp_socket:send) raises, and the coroutine stays usable. `data` of another type makes the resume return `false` and a `bad argument` message. One coroutine writes through `conn.output` at a time, as with [`conn.input`](/manual/api#tcp_socket.input). The coroutine waits as `send` does, and the timeout of the socket bounds the send. Closing the coroutine with [`coroutine.close`](/manual/api#coroutine.close) ends the sending side of the connection, so the peer reads the end of its input, while this side can still read. Every access returns the same coroutine. The field needs no permission.
+
+```lus
+pledge("network")
+local server <close> = network.tcp.bind("127.0.0.1", 0)
+local client <close> = network.tcp.connect(server:getsockname())
+local conn <close> = server:accept()
+coroutine.resume(conn.output, "hello\n")
+coroutine.close(conn.output)
+for line in client.input do
+    print(vector.tostring(line))
+end
+--> hello
+```]],
+    kind = "variable",
+    module = "network.tcp",
+    name = "tcp_socket.output",
+    origin = "lus",
+    parent = "tcp_socket",
+    receiver = "tcp_socket",
+    short_name = "output",
+    since = "2.0.0",
+    source = "stdlib/network/tcp/output.md",
+    stability = "stable",
+    type = "thread",
   },
   ["tcp_socket:reader"] = {
     children = {},

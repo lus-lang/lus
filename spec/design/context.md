@@ -76,6 +76,17 @@ When the collector frees a slot object, the state puts the slot number on a free
 | write an upvalue | 0.056 | 0.023 | 0.018 |
 | write a context variable | 0.103 | 0.042 | 0.065 |
 
-A read costs about 2 ns more than a local in the interpreter and in the baseline tier, which calls a helper for `GETCTX` and `SETCTX` (`jit/helpers.zig`, `ctxGet` and `ctxSet`) and leaves a write that must copy the array to the step routine. The optimizing tier runs both instructions through their templates, so a hot loop that reads a context variable costs 3 to 5 ns per read where a local costs half a nanosecond. Lowering the two instructions in the optimizing tier, with a guard on the slot object and a load of the value through the array, is the next step for code that reads context variables in hot loops.
+The optimizing tier lowers both instructions inline (`jit/opt/lower.zig`, `getCtx` and `setCtx`). A read guards that the register holds a userdata whose metatable is the metatable of slot objects, which the code loads through the thread and the state, so it embeds no address. It then loads the slot number and the array of the running coroutine, and takes whichever case held when the code was built: the array covers the slot and the read loads the value through it, or the coroutine has no array and the read loads the default of the slot. A guard leaves optimized code when the other case comes up. A write takes the store in place when the coroutine owns its array alone and the array covers the slot, with guards on both, and runs the template in every other case. The loads belong to an alias class of their own, so a loop that assigns no context variable and calls nothing loads the array once, before the loop.
 
-Creating and running a coroutine (`coroutine.resume(coroutine.create(f))`, best of seven runs of a million) took 193 to 213 ns both on the commit before this work and after it, with the JIT off and on. The copy of the array pointer and its count is lost in the noise of the allocation.
+The same benchmark with the lowering, in seconds for 20 million iterations, with ReleaseFast builds on the same machine while it was quiet:
+
+| Loop | JIT off | Default tiers, before | Default tiers, after | Optimizing tier, before | Optimizing tier, after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| read a local | 0.037 | 0.010 | 0.010 | 0.009 | 0.009 |
+| read an upvalue | 0.040 | 0.010 | 0.010 | 0.009 | 0.010 |
+| read a context variable, default | 0.055 | 0.054 | 0.009 | 0.055 | 0.005 |
+| read a context variable, assigned | 0.057 | 0.052 | 0.009 | 0.059 | 0.009 |
+| write an upvalue | 0.037 | 0.019 | 0.014 | 0.014 | 0.010 |
+| write a context variable | 0.059 | 0.045 | 0.010 | 0.045 | 0.010 |
+
+A read of a context variable in a hot loop now costs what a read of a local costs. Creating and running a coroutine takes 0.136 to 0.140 seconds for a million of them before and after.
