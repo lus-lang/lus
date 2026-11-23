@@ -19,8 +19,8 @@
 //! - Tables with more than three fields go one field per line with a
 //!   trailing comma. Smaller tables stay on one line.
 //! - Binary operators get one space on each side. Parentheses from the
-//!   source are kept, and a parenthesis is added wherever precedence
-//!   requires one.
+//!   source are kept, one pair for any number of nested pairs, and a pair
+//!   is added only where precedence requires one and the source has none.
 //! - Numbers are respelled from their value. Every string literal keeps
 //!   its source text, with its quotes, long brackets, and escapes exactly
 //!   as written, since the layout is all that a formatter changes.
@@ -1127,8 +1127,12 @@ const Formatter = struct {
         return cp == parent and on_right and !rightAssoc(op);
     }
 
+    /// The operator of an operand that needs parentheses the source does
+    /// not already give it. An operand in parentheses keeps the ones its
+    /// author wrote, and the formatter adds none around them.
     fn binopOf(e: *ast.Expr) ?ast.BinOp {
         const st = strip(e);
+        if (st.paren) return null;
         return if (st.e.kind == .binop) st.e.kind.binop.op else null;
     }
 
@@ -1272,6 +1276,7 @@ const Formatter = struct {
 
     fn qbinopOf(e: *ast.QExpr) ?ast.BinOp {
         const st = qstrip(e);
+        if (st.paren) return null;
         return switch (st.e.kind) {
             .binop => |b| b.op,
             .host, .literal => |h| binopOf(h),
@@ -1373,8 +1378,12 @@ test "format keeps comment markers and long comments as written" {
 }
 
 test "format expressions" {
-    try expectFormat("x = (1+2)*3", "x = ((1 + 2)) * 3\n");
-    try expectFormat("x = a - (b - c)", "x = a - ((b - c))\n");
+    try expectFormat("x = (1+2)*3", "x = (1 + 2) * 3\n");
+    try expectFormat("x = a - (b - c)", "x = a - (b - c)\n");
+    try expectFormat("x = ((a + b)) * c", "x = (a + b) * c\n");
+    try expectFormat("x = (a * b) + c", "x = (a * b) + c\n");
+    try expectFormat("x = (a or b) and c", "x = (a or b) and c\n");
+    try expectFormat("x = 2 ^ (3 ^ 2) .. (s .. t)", "x = 2 ^ (3 ^ 2) .. (s .. t)\n");
     try expectFormat("x = -(-1)", "x = - (-1)\n");
     try expectFormat("x = 0x10 + 1.5e300", "x = 16 + 1.5e+300\n");
     try expectFormat("x = f 'a' .. g {1}", "x = f 'a' .. g{ 1 }\n");
