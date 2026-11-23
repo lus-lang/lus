@@ -241,6 +241,10 @@ pub const Compiler = struct {
     /// Above zero while a discarded block or condition compiles. Such code
     /// is checked, never evaluated at compile time.
     discarding: u32 = 0,
+    /// Above zero while the initializer of a `<meta>` local compiles as a
+    /// check, without evaluation. Its free names are globals of the meta
+    /// environment, which the declarations of the chunk do not cover.
+    meta_body: u32 = 0,
     /// The assignment targets of the update functions of derived
     /// observed variables, which write those variables without the checks
     /// of a user assignment.
@@ -1482,7 +1486,7 @@ fn singleVar(fs: *FuncState, name: []const u8, line: u32, v: *ExpDesc) Error!voi
     };
     if (v.info == -3) return; // group: handled by the caller
     const ginfo = fs.c.ginfo;
-    if (v.info != -2 and ginfo == -2 and !std.mem.eql(u8, name, "flags") and !std.mem.startsWith(u8, name, "__lus_")) {
+    if (v.info != -2 and ginfo == -2 and fs.c.meta_body == 0 and !std.mem.eql(u8, name, "flags") and !std.mem.startsWith(u8, name, "__lus_")) {
         return fs.c.err(line, "variable '{s}' not declared", .{name});
     }
     if (fs.c.opts.meta_unknown) |unknown| if (unknown.contains(name)) {
@@ -3468,6 +3472,8 @@ fn metaLocal(fs: *FuncState, names: []ast.AttName, values: []*ast.Expr, line: u3
     if (c.discarding > 0 or !c.opts.meta_eval) {
         // Checked only: the declaration compiles as a constant local.
         var e: ExpDesc = .{};
+        c.meta_body += 1;
+        defer c.meta_body -= 1;
         try expr(fs, values[0], &e);
         try adjustAssign(fs, 1, 1, &e);
         _ = try newLocalVar(fs, an.name.text, .const_);
