@@ -383,14 +383,14 @@ const MachO = struct {
             try appendU32(gpa, blob, 0);
             try appendU16(gpa, blob, @intCast(pages));
             const page_starts = blob.items.len;
-            try blob.appendNTimes(gpa, 0xff, 2 * pages);
+            try blob.appendNTimes(gpa, 0xff, link.index(2 * pages));
             var last_page: ?u64 = null;
             for (m.fixups.items) |f| {
                 if (m.segOf(f.addr).? != seg) continue;
                 const pg = (f.addr - m.seg_addr[k]) / m.page;
                 if (last_page == pg) continue;
                 last_page = pg;
-                std.mem.writeInt(u16, blob.items[page_starts + 2 * pg ..][0..2], @intCast((f.addr - m.seg_addr[k]) % m.page), .little);
+                std.mem.writeInt(u16, blob.items[page_starts + link.index(2 * pg) ..][0..2], @intCast((f.addr - m.seg_addr[k]) % m.page), .little);
             }
         }
         while (blob.items.len % 4 != 0) try blob.append(gpa, 0);
@@ -722,8 +722,8 @@ fn sign(out: []u8, sig_off: u64, text_size: u64) void {
     std.mem.writeInt(u64, cd[80..88], 1, be); // CS_EXECSEG_MAIN_BINARY
     @memcpy(cd[88..][0..identifier.len], identifier);
     cd[88 + identifier.len] = 0;
-    for (0..n_pages) |k| {
-        const start = k * sig_page;
+    for (0..link.index(n_pages)) |k| {
+        const start = @as(u64, k) * sig_page;
         const end = @min(start + sig_page, sig_off);
         Sha256.hash(out[link.index(start)..link.index(end)], cd[hash_off + 32 * k ..][0..32], .{});
     }
