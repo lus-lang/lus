@@ -7,11 +7,13 @@
 //! Linux gets a static ELF executable at a fixed address, which needs no
 //! loader: the kernel maps its three segments and starts the startup code
 //! of musl, which finds the thread-local template through the program
-//! headers. macOS and iOS get a Mach-O executable (`macho.zig`).
+//! headers. macOS and iOS get a Mach-O executable (`macho.zig`), and
+//! Windows a PE executable (`pe.zig`).
 
 const std = @import("std");
 const lobj = @import("lobj.zig");
 const macho = @import("macho.zig");
+const pe = @import("pe.zig");
 const Allocator = std.mem.Allocator;
 const elf = std.elf;
 
@@ -81,7 +83,7 @@ pub fn link(gpa: Allocator, o: *const lobj.Object, keep: Keep, opts: Options) Er
             break :blk all;
         },
         .macos, .ios, .ios_simulator => try macho.write(&l, opts.payload),
-        .windows => return error.UnsupportedTarget,
+        .windows => try pe.write(&l, opts.payload),
     };
     errdefer gpa.free(bytes);
     if (opts.map) |w| l.writeMap(w) catch {};
@@ -386,6 +388,8 @@ pub const Linker = struct {
                 23 => try putI32(loc, l.tpOffset(s) + a), // TPOFF32
                 25 => put(u64, loc, @bitCast(sa - @as(i64, @intCast(l.got_addr)))), // GOTOFF64
                 26 => try putI32(loc, @as(i64, @intCast(l.got_addr)) + a - pi), // GOTPC32
+                lobj.pe_addr32nb => put(u32, loc, std.math.cast(u32, sa - @as(i64, @intCast(l.base))) orelse return error.RelocationOverflow),
+                lobj.pe_secrel => try putI32(loc, sa - @as(i64, @intCast(l.tls.addr))),
                 else => return unsupported(l, r),
             },
             .aarch64 => switch (r.type) {

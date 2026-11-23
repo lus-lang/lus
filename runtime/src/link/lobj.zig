@@ -20,6 +20,12 @@ const Allocator = std.mem.Allocator;
 pub const magic = "LUSLINK\x02";
 
 pub const Arch = enum(u8) { x86_64, aarch64 };
+
+/// The relocation types that only PE has, numbered past those of ELF: the
+/// address of a target from the start of the image, and its offset from
+/// the start of its section, which code uses for thread-local variables.
+pub const pe_addr32nb = 0x1003;
+pub const pe_secrel = 0x100b;
 pub const Os = enum(u8) {
     linux,
     macos,

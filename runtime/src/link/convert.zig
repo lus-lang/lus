@@ -1,5 +1,5 @@
 //! The converter that writes the link object (`lobj.zig`) of a target
-//! from relocatable ELF and Mach-O objects and archives. Only the release
+//! from relocatable ELF, Mach-O, and COFF objects and archives. Only the release
 //! build runs it, so a construct that the linker does not handle fails
 //! there:
 //!
@@ -12,7 +12,8 @@
 //! section of a loaded object becomes an atom, apart from the unwind
 //! tables, the debug information, and the notes, which executables
 //! compiled ahead of time leave out. On macOS and iOS, the symbols that
-//! no input defines become imports of libSystem.
+//! no input defines become imports of libSystem. On Windows, the import
+//! libraries name the library of each import.
 
 const std = @import("std");
 const lobj = @import("lobj.zig");
@@ -25,7 +26,7 @@ pub const linker_defined = [_][]const u8{
     "__preinit_array_start", "__preinit_array_end", "_DYNAMIC",           "_GLOBAL_OFFSET_TABLE_",
     "__ehdr_start",          "__dso_handle",        "_end",               "__bss_start",
     "_etext",                "_edata",              "end",                "etext",
-    "edata",                 "_mh_execute_header",
+    "edata",                 "_mh_execute_header",  "__ImageBase",        "__image_base__",
 };
 
 const Sec = struct {
@@ -40,12 +41,18 @@ const Sec = struct {
     /// A section that the linker does not handle, which is an error only
     /// when its object loads.
     unsupported: bool = false,
+    /// The group of COFF sections it merges into, such as `.CRT`.
+    group: ?[]const u8 = null,
 };
 
 /// The section index of an undefined, an absolute, and a common symbol.
 const undef_sec = std.math.maxInt(u32);
 const abs_sec = undef_sec - 1;
 const common_sec = undef_sec - 2;
+/// The section index of the slot of an import and of the jump to it,
+/// which a member of an import library defines.
+const import_sec = undef_sec - 3;
+const thunk_sec = undef_sec - 4;
 
 const Bind = enum { local, global, weak };
 
@@ -58,6 +65,16 @@ const Sym = struct {
     bind: Bind,
     /// A symbol that names its section, which the relocations of ELF use.
     section: bool = false,
+    /// For a weak external of COFF, the symbol it stands for when nothing
+    /// defines its name.
+    alias: ?u32 = null,
+
+    /// Whether the symbol defines its name for other inputs. A weak
+    /// external of COFF defines it as its alias, as an import library
+    /// does for another name of an import.
+    fn defines(s: Sym) bool {
+        return s.bind != .local and (s.shndx != undef_sec or s.alias != null);
+    }
 };
 
 /// A relocation of a section, its type mapped onto the numbering of ELF.
@@ -82,8 +99,23 @@ const Input = struct {
     groups: []const Group = &.{},
     /// The atom of each section, once the object is loaded.
     atoms: []?u32 = &.{},
+    /// The offset of each section in its atom, nonzero in a merged group.
+    base: []u32 = &.{},
     loaded: bool = false,
+    /// The import that a member of an import library defines.
+    imp: ?Import = null,
 };
+
+const Import = struct {
+    name: []const u8,
+    dll: []const u8,
+    code: bool,
+    target: lobj.Target = .none_target,
+    thunk: ?u32 = null,
+};
+
+/// A section of a loaded input that merges into a group.
+const Pending = struct { input: u32, sec: u32 };
 
 /// The library that provides every symbol the objects leave undefined on
 /// macOS and iOS.
@@ -100,6 +132,9 @@ pub const Converter = struct {
     offers: std.StringHashMapUnmanaged(u32) = .empty,
     groups: std.StringHashMapUnmanaged(void) = .empty,
     commons: std.StringHashMapUnmanaged(u32) = .empty,
+    /// The data that the linker of the C library of Windows provides.
+    synthetic: std.StringHashMapUnmanaged(u32) = .empty,
+    pending: std.ArrayList(Pending) = .empty,
     arch: lobj.Arch,
     os: lobj.Os,
 
@@ -114,6 +149,8 @@ pub const Converter = struct {
         c.offers.deinit(c.gpa);
         c.groups.deinit(c.gpa);
         c.commons.deinit(c.gpa);
+        c.synthetic.deinit(c.gpa);
+        c.pending.deinit(c.gpa);
     }
 
     fn macho(c: *const Converter) bool {
@@ -155,12 +192,13 @@ pub const Converter = struct {
             } else if (raw.len > 1 and raw[0] == '/') {
                 const off = std.fmt.parseInt(usize, raw[1..], 10) catch return error.BadArchive;
                 const rest = long_names[off..];
-                mname = rest[0 .. std.mem.indexOfAny(u8, rest, "/\n") orelse rest.len];
+                mname = rest[0 .. std.mem.indexOfAny(u8, rest, "/\n\x00") orelse rest.len];
             } else if (std.mem.endsWith(u8, raw, "/")) mname = raw[0 .. raw.len - 1];
-            if (!std.mem.startsWith(u8, body, elf.MAGIC) and !isMachO(body)) continue;
+            const known = if (c.os == .windows) c.isCoff(body) else std.mem.startsWith(u8, body, elf.MAGIC) or isMachO(body);
+            if (!known) continue;
             const i = try c.parse(try std.fmt.allocPrint(c.arena, "{s}({s})", .{ name, mname }), body);
             for (c.inputs.items[i].syms) |s| {
-                if (s.shndx == undef_sec or s.bind == .local) continue;
+                if (!s.defines()) continue;
                 const gop = try c.offers.getOrPut(c.gpa, s.name);
                 if (!gop.found_existing) gop.value_ptr.* = i;
             }
@@ -168,7 +206,7 @@ pub const Converter = struct {
     }
 
     fn parse(c: *Converter, name: []const u8, data: []const u8) !u32 {
-        const in = if (c.macho()) try c.parseMachO(name, data) else try c.parseElf(name, data);
+        const in = if (c.macho()) try c.parseMachO(name, data) else if (c.os == .windows) try c.parseCoff(name, data) else try c.parseElf(name, data);
         try c.inputs.append(c.gpa, in);
         return @intCast(c.inputs.items.len - 1);
     }
@@ -556,6 +594,278 @@ pub const Converter = struct {
         };
     }
 
+    /// The class identifier of the large form of COFF objects, which
+    /// numbers sections with 32 bits.
+    const bigobj_class = [16]u8{ 0xc7, 0xa1, 0xba, 0xd1, 0xee, 0xba, 0xa9, 0x4b, 0xaf, 0x20, 0xfa, 0xf6, 0x6a, 0xa4, 0xdc, 0xb8 };
+
+    fn coffMachine(arch: lobj.Arch) u16 {
+        return switch (arch) {
+            .x86_64 => 0x8664,
+            .aarch64 => 0xaa64,
+        };
+    }
+
+    fn isCoff(c: *const Converter, data: []const u8) bool {
+        if (data.len < 20) return false;
+        if (rd(u16, data, 0) == 0 and rd(u16, data, 2) == 0xffff) return true;
+        return rd(u16, data, 0) == coffMachine(c.arch);
+    }
+
+    /// Reads a COFF object in the ordinary or the large form, or a short
+    /// member of an import library. Sections keep the numbers of COFF,
+    /// which start at 1. The sections of the startup code of the C
+    /// library whose names share a prefix before `$` are merged in the
+    /// order of their names once every input is loaded (`mergeGroups`).
+    fn parseCoff(c: *Converter, name: []const u8, data: []const u8) !Input {
+        if (data.len < 20) return error.NotCoff;
+        const machine = coffMachine(c.arch);
+        var nsecs: u32 = 0;
+        var symoff: usize = 0;
+        var nsyms: usize = 0;
+        var sec_at: usize = 0;
+        var big = false;
+        if (rd(u16, data, 0) == 0 and rd(u16, data, 2) == 0xffff) {
+            if (rd(u16, data, 6) != machine) return wrongArchitecture(name);
+            const version = rd(u16, data, 4);
+            if (version == 0) return c.parseImport(name, data);
+            if (version != 2 or data.len < 56 or !std.mem.eql(u8, data[12..28], &bigobj_class)) return error.NotCoff;
+            nsecs = rd(u32, data, 44);
+            symoff = rd(u32, data, 48);
+            nsyms = rd(u32, data, 52);
+            sec_at = 56;
+            big = true;
+        } else {
+            if (rd(u16, data, 0) != machine) return wrongArchitecture(name);
+            nsecs = rd(u16, data, 2);
+            symoff = rd(u32, data, 8);
+            nsyms = rd(u32, data, 12);
+            sec_at = 20 + @as(usize, rd(u16, data, 16));
+        }
+        const sym_size: usize = if (big) 20 else 18;
+        const strtab = data[symoff + nsyms * sym_size ..];
+        const secs = try c.arena.alloc(Sec, nsecs + 1);
+        secs[0] = .{ .name = "", .kind = null, .bytes = null, .size = 0, .align_log2 = 0 };
+        const flags = try c.arena.alloc(u32, nsecs + 1);
+        flags[0] = 0;
+        for (1..nsecs + 1) |k| {
+            const sh = sec_at + (k - 1) * 40;
+            const sname = try coffName(data[sh..][0..8], strtab);
+            const f = rd(u32, data, sh + 36);
+            const size = rd(u32, data, sh + 16);
+            const ptr = rd(u32, data, sh + 20);
+            const a = (f >> 20) & 0xf;
+            const kind = coffKind(sname, f, size);
+            flags[k] = f;
+            secs[k] = .{
+                .name = sname,
+                .kind = kind,
+                .bytes = if (kind != null and !lobj.zeroed(kind.?) and ptr != 0) data[ptr..][0..size] else null,
+                .size = size,
+                // An object that leaves the alignment out gets 16 bytes.
+                .align_log2 = if (a == 0) 4 else @intCast(a - 1),
+                .group = if (std.mem.startsWith(u8, sname, ".CRT$")) ".CRT" else if (std.mem.eql(u8, sname, ".tls") or std.mem.startsWith(u8, sname, ".tls$")) ".tls" else null,
+            };
+        }
+        // Symbols, with the slots of auxiliary records kept so that the
+        // indices of relocations stay valid.
+        const syms = try c.arena.alloc(Sym, nsyms);
+        const comdat_sym = try c.arena.alloc(?u32, nsecs + 1);
+        @memset(comdat_sym, null);
+        const comdat_sel = try c.arena.alloc(u8, nsecs + 1);
+        @memset(comdat_sel, 0);
+        const assoc = try c.arena.alloc(u32, nsecs + 1);
+        @memset(assoc, 0);
+        var k: usize = 0;
+        while (k < nsyms) {
+            const p = symoff + k * sym_size;
+            const nm = try coffName(data[p..][0..8], strtab);
+            const value = rd(u32, data, p + 8);
+            const secnum: i32 = if (big) rd(i32, data, p + 12) else rd(i16, data, p + 12);
+            const tail = p + if (big) @as(usize, 16) else 14;
+            const typ = rd(u16, data, tail);
+            const class = data[tail + 2];
+            const naux = data[tail + 3];
+            var s: Sym = .{ .name = nm, .value = value, .size = 0, .shndx = undef_sec, .bind = .local };
+            const in_sec = secnum > 0 and secnum <= nsecs;
+            if (in_sec) {
+                s.shndx = @intCast(secnum);
+            } else if (secnum != 0) {
+                s.shndx = abs_sec;
+            }
+            switch (class) {
+                2 => {
+                    s.bind = .global;
+                    // An external symbol without a section but with a
+                    // value is common, and its value is its size.
+                    if (secnum == 0 and value > 0) {
+                        s.shndx = common_sec;
+                        s.size = value;
+                        s.value = @min(16, std.math.ceilPowerOfTwoAssert(u64, value));
+                    }
+                },
+                105 => {
+                    // A weak external takes the symbol of its auxiliary
+                    // record when nothing defines its name.
+                    s.bind = .weak;
+                    s.shndx = undef_sec;
+                    if (naux > 0) s.alias = rd(u32, data, p + sym_size);
+                },
+                else => {},
+            }
+            if (class == 3 and naux > 0 and in_sec and value == 0 and typ == 0 and std.mem.eql(u8, nm, secs[s.shndx].name)) {
+                // The definition of a section, with its COMDAT selection.
+                s.section = true;
+                const ax = p + sym_size;
+                if (flags[s.shndx] & 0x1000 != 0) {
+                    comdat_sel[s.shndx] = data[ax + 14];
+                    var number: u32 = rd(u16, data, ax + 12);
+                    if (big) number |= @as(u32, rd(u16, data, ax + 16)) << 16;
+                    if (comdat_sel[s.shndx] == 5) assoc[s.shndx] = number;
+                }
+            } else if (in_sec and flags[s.shndx] & 0x1000 != 0 and comdat_sym[s.shndx] == null and (class == 2 or class == 3)) {
+                comdat_sym[s.shndx] = @intCast(k);
+            }
+            syms[k] = s;
+            for (syms[k + 1 ..][0..naux]) |*x| x.* = .{ .name = "", .value = 0, .size = 0, .shndx = abs_sec, .bind = .local };
+            k += 1 + @as(usize, naux);
+        }
+        // Each COMDAT section that is not associative leads a group with
+        // the sections associated with it. A group whose symbol is static
+        // belongs to its object alone, as the strings of C do.
+        var groups: std.ArrayList(Group) = .empty;
+        for (1..nsecs + 1) |s| {
+            if (flags[s] & 0x1000 == 0 or comdat_sel[s] == 5) continue;
+            if (comdat_sym[s]) |cs| if (syms[cs].bind == .local) continue;
+            var members: std.ArrayList(u32) = .empty;
+            try members.append(c.arena, @intCast(s));
+            for (assoc, 0..) |x, j| if (x == s) try members.append(c.arena, @intCast(j));
+            const sig = if (comdat_sym[s]) |cs| syms[cs].name else secs[s].name;
+            try groups.append(c.arena, .{ .sig = sig, .members = members.items });
+        }
+        // Relocations, with the addend that COFF keeps in the bytes.
+        const rels = try c.arena.alloc([]const Rel, nsecs + 1);
+        @memset(rels, &.{});
+        for (1..nsecs + 1) |s| {
+            const sec = secs[s];
+            if (sec.kind == null) continue;
+            const sh = sec_at + (s - 1) * 40;
+            var relptr: usize = rd(u32, data, sh + 24);
+            var nrel: usize = rd(u16, data, sh + 32);
+            if (flags[s] & 0x0100_0000 != 0 and nrel == 0xffff) {
+                // The first relocation holds the count, itself included.
+                nrel = rd(u32, data, relptr) - 1;
+                relptr += 10;
+            }
+            const list = try c.arena.alloc(Rel, nrel);
+            var used: usize = 0;
+            for (0..nrel) |j| {
+                const rp = relptr + j * 10;
+                const off = rd(u32, data, rp);
+                const ty = rd(u16, data, rp + 8);
+                const m = try coffRel(c.arch, ty, sec.bytes, off) orelse continue;
+                list[used] = .{ .offset = off, .type = m.type, .sym = rd(u32, data, rp + 4), .addend = m.addend };
+                used += 1;
+            }
+            rels[s] = list[0..used];
+        }
+        return .{ .name = name, .data = data, .secs = secs, .syms = syms, .rels = rels, .groups = groups.items };
+    }
+
+    /// A name of a section or a symbol: eight bytes, or an offset in the
+    /// string table after `/` in decimal or after `//` in base 64.
+    fn coffName(raw: *const [8]u8, strtab: []const u8) ![]const u8 {
+        if (raw[0] == '/' and raw[1] == '/') {
+            var off: usize = 0;
+            for (raw[2..]) |ch| {
+                const d: usize = switch (ch) {
+                    'A'...'Z' => ch - 'A',
+                    'a'...'z' => ch - 'a' + 26,
+                    '0'...'9' => ch - '0' + 52,
+                    '+' => 62,
+                    '/' => 63,
+                    else => return error.BadName,
+                };
+                off = off * 64 + d;
+            }
+            return cstr(strtab, off);
+        }
+        if (raw[0] == '/') {
+            const off = std.fmt.parseInt(usize, std.mem.sliceTo(raw[1..], 0), 10) catch return error.BadName;
+            return cstr(strtab, off);
+        }
+        // A symbol whose first four bytes are zero names an offset.
+        if (std.mem.readInt(u32, raw[0..4], .little) == 0) return cstr(strtab, std.mem.readInt(u32, raw[4..8], .little));
+        return std.mem.sliceTo(raw, 0);
+    }
+
+    fn coffKind(name: []const u8, flags: u32, size: u32) ?lobj.Kind {
+        if (size == 0) return null;
+        // IMAGE_SCN_LNK_REMOVE and IMAGE_SCN_LNK_INFO, such as `.drectve`.
+        if (flags & 0xa00 != 0) return null;
+        const left_out = [_][]const u8{ ".debug", ".pdata", ".xdata", ".llvm_addrsig", ".llvm." };
+        for (left_out) |p| if (std.mem.startsWith(u8, name, p)) return null;
+        if (flags & 0x80 != 0) return .bss;
+        if (flags & 0x2000_0020 != 0) return .text;
+        if (flags & 0x8000_0000 != 0) return .data;
+        return .rodata;
+    }
+
+    /// Maps a relocation of COFF onto the numbering of ELF, or onto the
+    /// numbers of `link.zig` for those that only PE has, and reads its
+    /// addend from the bytes. Returns null for one that does nothing.
+    fn coffRel(arch: lobj.Arch, ty: u16, bytes: ?[]const u8, off: u32) !?struct { type: u32, addend: i64 } {
+        if (arch != .x86_64) {
+            std.log.err("COFF objects of {s} are not supported", .{@tagName(arch)});
+            return error.Unsupported;
+        }
+        if (ty == 0) return null;
+        const b = bytes orelse return error.Unsupported;
+        const i32_at: i64 = std.mem.readInt(i32, b[off..][0..4], .little);
+        return switch (ty) {
+            1 => .{ .type = 1, .addend = std.mem.readInt(i64, b[off..][0..8], .little) }, // ADDR64
+            2 => .{ .type = 10, .addend = i32_at }, // ADDR32
+            3 => .{ .type = lobj.pe_addr32nb, .addend = i32_at }, // ADDR32NB
+            // REL32 and REL32_1 to REL32_5, relative to the end of the
+            // field and 0 to 5 more bytes.
+            4...9 => .{ .type = 2, .addend = i32_at - 4 - (ty - 4) },
+            0xb => .{ .type = lobj.pe_secrel, .addend = i32_at }, // SECREL
+            else => {
+                std.log.err("COFF relocation type {d} is not supported", .{ty});
+                return error.Unsupported;
+            },
+        };
+    }
+
+    /// Reads a short member of an import library, which defines the slot
+    /// `__imp_NAME` of the import table and, for a function, `NAME` as a
+    /// jump through that slot.
+    fn parseImport(c: *Converter, name: []const u8, data: []const u8) !Input {
+        const size = rd(u32, data, 12);
+        const info = rd(u16, data, 18);
+        const strs = data[20..][0..size];
+        const sym = std.mem.sliceTo(strs, 0);
+        const rest = strs[sym.len + 1 ..];
+        const dll = std.mem.sliceTo(rest, 0);
+        const name_type = (info >> 2) & 7;
+        var export_name: []const u8 = sym;
+        switch (name_type) {
+            1 => {},
+            // NAME_NOPREFIX and NAME_UNDECORATE drop a leading `?`, `@`,
+            // or `_`, and the second also what follows a later `@`.
+            2, 3 => {
+                if (export_name.len > 0 and std.mem.indexOfScalar(u8, "?@_", export_name[0]) != null) export_name = export_name[1..];
+                if (name_type == 3) export_name = export_name[0 .. std.mem.indexOfScalar(u8, export_name, '@') orelse export_name.len];
+            },
+            4 => export_name = std.mem.sliceTo(rest[dll.len + 1 ..], 0),
+            else => export_name = "",
+        }
+        const code = info & 3 == 0;
+        const syms = try c.arena.alloc(Sym, if (code) 2 else 1);
+        syms[0] = .{ .name = try std.fmt.allocPrint(c.arena, "__imp_{s}", .{sym}), .value = 0, .size = 8, .shndx = import_sec, .bind = .global };
+        if (code) syms[1] = .{ .name = sym, .value = 0, .size = 6, .shndx = thunk_sec, .bind = .global };
+        return .{ .name = name, .data = data, .secs = &.{}, .syms = syms, .rels = &.{}, .imp = .{ .name = export_name, .dll = dll, .code = code } };
+    }
+
     fn rd(comptime T: type, data: []const u8, off: usize) T {
         return std.mem.readInt(T, data[off..][0..@sizeOf(T)], .little);
     }
@@ -573,6 +883,17 @@ pub const Converter = struct {
         in.loaded = true;
         in.atoms = try c.arena.alloc(?u32, in.secs.len);
         @memset(in.atoms, null);
+        in.base = try c.arena.alloc(u32, in.secs.len);
+        @memset(in.base, 0);
+        if (in.imp) |*imp| {
+            if (imp.name.len == 0) {
+                std.log.err("{s}: imports by ordinal are not supported", .{in.name});
+                return error.Unsupported;
+            }
+            imp.target = try c.w.import(imp.name, imp.dll, false);
+            // jmp qword ptr [rip + slot]
+            if (imp.code) imp.thunk = try c.w.atom(.text, 1, &.{ 0xff, 0x25, 0, 0, 0, 0 }, 6, in.syms[1].name);
+        }
         // Members of a group seen before stay out.
         var skip = try c.arena.alloc(bool, in.secs.len);
         @memset(skip, false);
@@ -589,12 +910,16 @@ pub const Converter = struct {
                 std.log.err("{s}: {s} is not supported", .{ in.name, s.name });
                 return error.Unsupported;
             }
+            if (s.group != null) {
+                try c.pending.append(c.gpa, .{ .input = i, .sec = @intCast(k) });
+                continue;
+            }
             const a = try c.w.atom(kind, s.align_log2, s.bytes, @intCast(s.size), atomName(in, @intCast(k)));
             in.atoms[k] = a;
             if (kind == .init_array or kind == .fini_array) try c.w.roots.append(c.gpa, a);
         }
         for (in.syms, 0..) |s, k| {
-            if (s.bind == .local or s.shndx == undef_sec) continue;
+            if (!s.defines()) continue;
             if (s.shndx < in.secs.len and skip[s.shndx]) continue;
             const gop = try c.defs.getOrPut(c.gpa, s.name);
             if (gop.found_existing) {
@@ -649,10 +974,13 @@ pub const Converter = struct {
         if (c.defs.get(s.name)) |d| {
             const din = &c.inputs.items[d.input];
             const ds = din.syms[d.sym];
+            if (ds.shndx == undef_sec) return c.target(din, ds.alias.?, addend);
             if (!(by_linker and ds.bind == .weak)) return c.defined(din, ds, addend);
         }
         if (s.shndx != undef_sec and !(by_linker and s.bind == .weak)) return c.defined(in, s, addend);
         if (by_linker) return .{ .target = try c.w.linkerName(s.name), .addend = addend };
+        if (s.alias) |al| return c.target(in, al, addend);
+        if (c.os == .windows) if (try c.windowsData(s.name)) |a| return .{ .target = .{ .index = @intCast(a), .space = .atom }, .addend = addend };
         // On macOS and iOS, libSystem provides what the objects leave
         // undefined, which `dyld` binds at load.
         if (c.macho()) return .{ .target = try c.w.import(s.name, lib_system, s.bind == .weak), .addend = addend };
@@ -662,6 +990,8 @@ pub const Converter = struct {
     }
 
     fn defined(c: *Converter, in: *const Input, s: Sym, addend: i64) !Resolved {
+        if (s.shndx == import_sec) return .{ .target = in.imp.?.target, .addend = addend };
+        if (s.shndx == thunk_sec) return .{ .target = .{ .index = @intCast(in.imp.?.thunk.?), .space = .atom }, .addend = addend };
         if (s.shndx == abs_sec) return .{ .target = .none_target, .sym = std.math.cast(u32, s.value) orelse return error.Unsupported, .addend = addend };
         if (s.shndx == common_sec) {
             const gop = try c.commons.getOrPut(c.gpa, s.name);
@@ -673,15 +1003,73 @@ pub const Converter = struct {
             return .{ .target = .{ .index = @intCast(gop.value_ptr.*), .space = .atom }, .addend = addend };
         }
         const a = (if (s.shndx < in.atoms.len) in.atoms[s.shndx] else null) orelse {
-            std.log.err("{s}: a relocation names {s} in a section that is left out", .{ in.name, s.name });
+            std.log.err("{s}: a relocation names {s} in the section {s}, which is left out", .{ in.name, s.name, if (s.shndx < in.secs.len) in.secs[s.shndx].name else "?" });
             return error.Unsupported;
         };
-        return .{ .target = .{ .index = @intCast(a), .space = .atom }, .sym = @intCast(s.value), .addend = addend };
+        return .{ .target = .{ .index = @intCast(a), .space = .atom }, .sym = @intCast(s.value + in.base[s.shndx]), .addend = addend };
+    }
+
+    /// The data that the linker of the C library of Windows defines: the
+    /// lists of constructors and destructors in the form of GCC, each a
+    /// marker of -1 and a null end with nothing between, and the empty
+    /// list of pseudo relocations, whose start and end are one address.
+    fn windowsData(c: *Converter, name: []const u8) !?u32 {
+        const table = [_]struct { []const u8, []const u8, []const u8 }{
+            .{ "__CTOR_LIST__", "__CTOR_LIST__", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00" },
+            .{ "__DTOR_LIST__", "__DTOR_LIST__", "\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00" },
+            .{ "__RUNTIME_PSEUDO_RELOC_LIST__", "pseudo relocations", "\x00\x00\x00\x00\x00\x00\x00\x00" },
+            .{ "__RUNTIME_PSEUDO_RELOC_LIST_END__", "pseudo relocations", "\x00\x00\x00\x00\x00\x00\x00\x00" },
+        };
+        for (table) |e| {
+            if (!std.mem.eql(u8, name, e[0])) continue;
+            const gop = try c.synthetic.getOrPut(c.gpa, e[1]);
+            if (!gop.found_existing) gop.value_ptr.* = try c.w.atom(.rodata, 3, e[2], @intCast(e[2].len), e[1]);
+            return gop.value_ptr.*;
+        }
+        return null;
+    }
+
+    /// Merges the pending sections of each group into one atom, in the
+    /// order of their names, as the linker of Windows does for the
+    /// sections whose names share the part before `$`. The tables of
+    /// initializers of the C library run from a marker in `.CRT$XCA` to
+    /// one in `.CRT$XCZ`, and the template of thread-local data from
+    /// `.tls` to `.tls$ZZZ`.
+    fn mergeGroups(c: *Converter) !void {
+        for ([_][]const u8{ ".CRT", ".tls" }) |g| {
+            var members: std.ArrayList(Pending) = .empty;
+            for (c.pending.items) |p| if (std.mem.eql(u8, c.inputs.items[p.input].secs[p.sec].group.?, g)) try members.append(c.arena, p);
+            if (members.items.len == 0) continue;
+            std.mem.sort(Pending, members.items, c, struct {
+                fn lt(cv: *Converter, a: Pending, b: Pending) bool {
+                    return std.mem.lessThan(u8, cv.inputs.items[a.input].secs[a.sec].name, cv.inputs.items[b.input].secs[b.sec].name);
+                }
+            }.lt);
+            var pos: u64 = 0;
+            var al: u8 = 0;
+            for (members.items) |m| {
+                const sec = c.inputs.items[m.input].secs[m.sec];
+                pos = std.mem.alignForward(u64, pos, @as(u64, 1) << @intCast(sec.align_log2));
+                c.inputs.items[m.input].base[m.sec] = @intCast(pos);
+                pos += sec.size;
+                al = @max(al, sec.align_log2);
+            }
+            const bytes = try c.arena.alloc(u8, pos);
+            @memset(bytes, 0);
+            for (members.items) |m| {
+                const in = &c.inputs.items[m.input];
+                if (in.secs[m.sec].bytes) |b| @memcpy(bytes[in.base[m.sec]..][0..b.len], b);
+            }
+            const a = try c.w.atom(if (std.mem.eql(u8, g, ".tls")) .data else .rodata, al, bytes, @intCast(pos), g);
+            for (members.items) |m| c.inputs.items[m.input].atoms[m.sec] = a;
+            try c.w.roots.append(c.gpa, a);
+        }
     }
 
     /// Adds the relocations of every loaded section, the registrations,
     /// and the entry.
     pub fn finish(c: *Converter, entry: []const u8) !void {
+        if (c.os == .windows) try c.mergeGroups();
         // Relocations go with their atoms, which are contiguous in the
         // writer only if added in atom order, so they are collected first.
         const n_atoms = c.w.atoms.items.len;
@@ -693,10 +1081,21 @@ pub const Converter = struct {
                 const a = in.atoms[k] orelse continue;
                 for (rels) |r| {
                     const res = try c.target(in, r.sym, r.addend);
-                    try lists[a].append(c.arena, .{ .offset = @intCast(r.offset), .type = r.type, .target = res.target, .sym = res.sym, .addend = res.addend });
+                    try lists[a].append(c.arena, .{ .offset = @intCast(r.offset + in.base[k]), .type = r.type, .target = res.target, .sym = res.sym, .addend = res.addend });
                 }
             }
+            // The jump of an import reads its slot.
+            if (in.imp) |imp| if (imp.thunk) |t| {
+                try lists[t].append(c.arena, .{ .offset = 2, .type = 2, .target = imp.target, .addend = -4 });
+            };
         }
+        // The loader of Windows finds the directory of thread-local data
+        // that the C library defines, which nothing else reaches.
+        if (c.os == .windows) if (c.defs.get("_tls_used")) |d| {
+            const din = &c.inputs.items[d.input];
+            const res = try c.defined(din, din.syms[d.sym], 0);
+            try c.w.roots.append(c.gpa, res.target.index);
+        };
         // Common symbols may have added atoms after the lists were made.
         c.w.relocs.clearRetainingCapacity();
         for (c.w.atoms.items, 0..) |*a, k| {
@@ -762,6 +1161,11 @@ pub const Converter = struct {
 
 const macho_magic = 0xfeedfacf;
 
+fn wrongArchitecture(name: []const u8) error{WrongArchitecture} {
+    std.log.err("{s}: built for another architecture", .{name});
+    return error.WrongArchitecture;
+}
+
 fn badRegistration(name: []const u8, why: []const u8) error{BadRegistration} {
     std.log.err("the registration {s}: {s}", .{ name, why });
     return error.BadRegistration;
@@ -803,8 +1207,10 @@ pub fn main(init: std.process.Init) !void {
             var tok = std.mem.tokenizeAny(u8, line, " \n\t");
             while (tok.next()) |t| {
                 const base = std.fs.path.basename(t);
-                const wanted = [_][]const u8{ "crt1.o", "rcrt1.o", "libc.a", "libcompiler_rt.a" };
+                const wanted = [_][]const u8{ "crt1.o", "rcrt1.o", "libc.a", "libcompiler_rt.a", "crt2.obj" };
                 for (wanted) |w| if (std.mem.eql(u8, base, w)) try files.append(arena, t);
+                // On Windows, the C library and the import libraries.
+                if (os != null and os.? == .windows and std.mem.endsWith(u8, base, ".lib") and !std.mem.startsWith(u8, t, "-")) try files.append(arena, t);
             }
         } else if (std.mem.eql(u8, a, "-o")) {
             k += 1;
