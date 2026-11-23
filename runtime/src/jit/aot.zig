@@ -605,7 +605,9 @@ pub fn reloadUnitMeta(l: *Thread, u: *opt.Unit) void {
 // ---------------------------------------------------------------------
 // The code section
 
-const magic = "LUSAOT\x03\x00";
+/// The version byte changes with the numbering of `routines`, which the
+/// step routines follow.
+const magic = "LUSAOT\x04\x00";
 
 fn put32(list: *std.ArrayList(u8), gpa: std.mem.Allocator, v: u32) !void {
     var b: [4]u8 = undefined;
