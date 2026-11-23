@@ -525,7 +525,7 @@ const MachO = struct {
         @memset(out, 0);
         @memcpy(out[0..segs.len], segs);
         @memcpy(out[segs.len..][0..m.payload.len], m.payload);
-        @memcpy(out[linkedit_off..][0..le.items.len], le.items);
+        @memcpy(out[link.index(linkedit_off)..][0..le.items.len], le.items);
         const linkedit_size = total - linkedit_off;
         try m.headers(out, .{
             .linkedit_off = linkedit_off,
