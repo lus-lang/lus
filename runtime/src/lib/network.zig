@@ -177,13 +177,13 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "tlsinfo", .func = socketTlsinfo },
         .{ .name = "reader", .func = http.socketReader },
     }, socketGc, socketTostring);
-    try portIndex(l);
     try makeMetatable(l, server_name, &.{
         .{ .name = "accept", .func = op(serverAccept) },
         .{ .name = "close", .func = serverClose },
         .{ .name = "settimeout", .func = serverSettimeout },
         .{ .name = "getsockname", .func = serverGetsockname },
     }, serverGc, serverTostring);
+    try portIndex(l);
     try makeMetatable(l, udp_name, &.{
         .{ .name = "sendto", .func = op(udpSendto) },
         .{ .name = "receive", .func = op(udpReceive) },
@@ -239,7 +239,7 @@ fn metatableOf(l: *Thread, comptime name: []const u8) *Table {
 
 /// Creates a userdata holding `init` and pushes it.
 pub fn newObject(l: *Thread, comptime T: type, comptime name: []const u8, init: T) Error!*T {
-    return newObjectUser(l, T, name, init, if (T == Socket) 2 else 0);
+    return newObjectUser(l, T, name, init, if (T == Socket) 2 else if (T == Server) 1 else 0);
 }
 
 fn newObjectUser(l: *Thread, comptime T: type, comptime name: []const u8, init: T, nuser: u16) Error!*T {
@@ -281,7 +281,10 @@ pub fn stillOpen(l: *Thread, s: *Socket) Error!void {
 }
 
 pub fn checkServer(l: *Thread, i: u32) Error!*Server {
-    const s = toObject(l, Server, server_name, l.arg(i)) orelse return aux.typeError(l, i, server_name);
+    var v = l.arg(i);
+    // The port of a server stands for the server.
+    if (v.tag == .thread and v.as(Thread).port != null) v = v.as(Thread).port_ctx;
+    const s = toObject(l, Server, server_name, v) orelse return aux.typeError(l, i, server_name);
     if (s.closed) return l.raiseFmt("attempt to use a closed server", .{});
     return s;
 }
@@ -1552,6 +1555,12 @@ fn socketSend(l: *Thread) Error!u32 {
         data = whole[r.from..r.to];
         last = if (r.to > r.from) r.to else 0;
     }
+    try sendAll(l, s, data);
+    return aux.retInt(l, @intCast(last));
+}
+
+/// Sends all of `data`, which stays where it is while the send waits.
+fn sendAll(l: *Thread, s: *Socket, data: []const u8) Error!void {
     const io = l.g.io;
     const h = s.stream.socket.handle;
     // A send that waited continues after the bytes it already wrote.
@@ -1575,7 +1584,6 @@ fn socketSend(l: *Thread) Error!u32 {
             .fail => |e| return failResult(l, "send", e),
         }
     }
-    return aux.retInt(l, @intCast(last));
 }
 
 pub const Fill = union(enum) { got: usize, eof, fail: anyerror };
@@ -1699,6 +1707,32 @@ fn socketReceive(l: *Thread) Error!u32 {
     if (std.mem.eql(u8, pattern, "*l")) return recvLine(l, s, try receiveLimit(l, 3, default_line_limit));
     if (std.mem.eql(u8, pattern, "*a")) return recvAll(l, s, try receiveLimit(l, 3, default_all_limit));
     return l.raiseFmt("invalid receive pattern: {s}", .{pattern});
+}
+
+/// `receive` with its pattern and its limit given as values, for the
+/// input port of a socket.
+fn receiveValues(l: *Thread, s: *Socket, pattern: Value, limit: Value) Error!u32 {
+    const max: ?i64 = switch (limit.tag) {
+        .nil => null,
+        .integer => limit.asInt(),
+        .float => if (@floor(limit.asFloat()) == limit.asFloat()) @as(i64, @intFromFloat(limit.asFloat())) else return l.raiseFmt("max_bytes must be an integer", .{}),
+        else => return l.raiseFmt("max_bytes must be an integer", .{}),
+    };
+    if (max) |m| if (m <= 0) return l.raiseFmt("max_bytes must be positive", .{});
+    switch (pattern.tag) {
+        .integer => {
+            const n = pattern.asInt();
+            if (n <= 0) return l.raiseFmt("invalid receive size: {d}", .{n});
+            return recvBytes(l, s, @intCast(n));
+        },
+        .nil, .string => {
+            const name = if (pattern.tag == .nil) "*l" else pattern.as(object.String).bytes();
+            if (std.mem.eql(u8, name, "*l")) return recvLine(l, s, @intCast(max orelse default_line_limit));
+            if (std.mem.eql(u8, name, "*a")) return recvAll(l, s, @intCast(max orelse default_all_limit));
+            return l.raiseFmt("invalid receive pattern: {s}", .{name});
+        },
+        else => return l.raiseFmt("invalid receive pattern: {s}", .{l.typeNameOf(pattern)}),
+    }
 }
 
 /// Closes a connection gracefully: sends FIN, then discards pending input
@@ -2032,17 +2066,16 @@ const output_port = state.Port{ .step = outputStep, .close = outputClose };
 fn portIndex(l: *Thread) Error!void {
     const g = l.g;
     g.fields.put(g.gpa, metatableOf(l, socket_name), socketField) catch return l.raiseMem();
+    g.fields.put(g.gpa, metatableOf(l, server_name), serverField) catch return l.raiseMem();
 }
 
-fn socketField(l: *Thread, v: Value, key: Value) Error!?Value {
-    if (key.tag != .string) return null;
-    const name = key.as(object.String).bytes();
-    const w: usize = if (std.mem.eql(u8, name, "input")) 0 else if (std.mem.eql(u8, name, "output")) 1 else return null;
-    if (toObject(l, Socket, socket_name, v) == null) return null;
+/// Returns the port in user value `w` of the userdata `v`, which it
+/// creates on first use.
+fn portOf(l: *Thread, v: Value, w: usize, port: *const state.Port) Error!Value {
     const u = v.as(Userdata);
     const slot = &u.userValues()[w];
     if (slot.isNil()) {
-        const co = try coroutine.newPort(l, if (w == 0) &input_port else &output_port, v);
+        const co = try coroutine.newPort(l, port, v);
         l.top -= 1;
         slot.* = Value.obj(.thread, co);
         gc.barrierBack(l.g, &u.hdr);
@@ -2050,12 +2083,59 @@ fn socketField(l: *Thread, v: Value, key: Value) Error!?Value {
     return slot.*;
 }
 
+const accepted_port = state.Port{ .step = acceptedStep };
+
+fn serverField(l: *Thread, v: Value, key: Value) Error!?Value {
+    if (key.tag != .string or !std.mem.eql(u8, key.as(object.String).bytes(), "accepted")) return null;
+    if (toObject(l, Server, server_name, v) == null) return null;
+    return try portOf(l, v, 0, &accepted_port);
+}
+
+/// resume(server.accepted): the next connection, as `accept` returns it.
+/// The port ends when the server closes.
+fn acceptedStep(l: *Thread, co: *Thread, args: []const Value) Error!u32 {
+    _ = args;
+    const s = toObject(l, Server, server_name, co.port_ctx).?;
+    if (s.closed) {
+        co.status = .dead;
+        return 0;
+    }
+    _ = acceptOne(l, s) catch |e| switch (e) {
+        error.LusError, error.MetaCall => |x| {
+            // A server that closes while the port waits ends the port.
+            if (x == error.LusError and !l.yielding and s.closed) {
+                co.status = .dead;
+                return 0;
+            }
+            return x;
+        },
+        else => return failResult(l, "accept", e),
+    };
+    return 1;
+}
+
+fn socketField(l: *Thread, v: Value, key: Value) Error!?Value {
+    if (key.tag != .string) return null;
+    const name = key.as(object.String).bytes();
+    const w: usize = if (std.mem.eql(u8, name, "input")) 0 else if (std.mem.eql(u8, name, "output")) 1 else return null;
+    if (toObject(l, Socket, socket_name, v) == null) return null;
+    return try portOf(l, v, w, if (w == 0) &input_port else &output_port);
+}
+
+/// The open socket of the port `co`.
+fn portSocket(l: *Thread, co: *Thread) Error!*Socket {
+    const s = toObject(l, Socket, socket_name, co.port_ctx).?;
+    if (s.closed) return l.raiseFmt("attempt to use a closed socket", .{});
+    return s;
+}
+
 /// resume(conn.input, pattern, max_bytes): the next piece of input, read
 /// as `receive` reads it. At the end of the connection the port ends.
-fn inputStep(l: *Thread) Error!u32 {
-    const co = l.arg(1).as(Thread);
-    const s = try checkSocket(l, 1);
-    const n = try socketReceive(l);
+fn inputStep(l: *Thread, co: *Thread, args: []const Value) Error!u32 {
+    const pattern: Value = if (args.len > 0) args[0] else .nil;
+    const limit: Value = if (args.len > 1) args[1] else .nil;
+    const s = try portSocket(l, co);
+    const n = try receiveValues(l, s, pattern, limit);
     if (n == 1 and s.eof and s.buf.items.len == 0) {
         const r = l.stack[l.top - 1];
         if (r.tag == .vector and r.as(object.Vector).bytes.items.len == 0) {
@@ -2067,9 +2147,17 @@ fn inputStep(l: *Thread) Error!u32 {
     return n;
 }
 
-/// resume(conn.output, data): sends data as `send` does.
-fn outputStep(l: *Thread) Error!u32 {
-    return socketSend(l);
+/// resume(conn.output, data): sends all of `data`, a string or a vector.
+fn outputStep(l: *Thread, co: *Thread, args: []const Value) Error!u32 {
+    const v: Value = if (args.len > 0) args[0] else .nil;
+    const data = switch (v.tag) {
+        .string => v.as(object.String).bytes(),
+        .vector => v.as(object.Vector).bytes.items,
+        else => return l.raiseFmt("bad argument #1 to 'output' (string or vector expected, got {s})", .{l.typeNameOf(v)}),
+    };
+    const s = try portSocket(l, co);
+    try sendAll(l, s, data);
+    return 0;
 }
 
 fn outputClose(l: *Thread, co: *Thread) void {

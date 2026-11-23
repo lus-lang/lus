@@ -79,12 +79,14 @@ pub const NativeFn = *const fn (l: *Thread) Error!u32;
 /// none. It must not call Lus code.
 pub const FieldGetter = *const fn (l: *Thread, obj: Value, key: Value) Error!?Value;
 
-/// The behavior of a port. `step` runs with the arguments of `resume` in
-/// its frame, the port first, and returns its results like a native. It
-/// ends the port by setting the status of the port to dead. `close` runs
-/// when `coroutine.close` closes the port.
+/// The behavior of a port. `step` runs on the resuming thread with the
+/// port and the values of the resume, which live on the stack and must be
+/// read before the step pushes anything. It pushes its results and
+/// returns their count, as a native does, and ends the port by setting
+/// the status of the port to dead. A step that waits runs again from its
+/// start, as a native does. `close` runs when the port is closed.
 pub const Port = struct {
-    step: NativeFn,
+    step: *const fn (l: *Thread, co: *Thread, args: []const Value) Error!u32,
     close: ?*const fn (l: *Thread, co: *Thread) void = null,
 };
 
@@ -115,11 +117,6 @@ pub const Native = struct {
     /// The leaf computes only the first result of `func`, so it runs only
     /// for a call that wants at most one result.
     leaf_first: bool = false,
-    /// The native is the body of a coroutine that yields from inside it,
-    /// such as a stream of `network.fetch`. A resume after a yield runs it
-    /// again from its start, with the arguments it started with, rather
-    /// than returning the resume arguments from it.
-    generator: bool = false,
 
     pub inline fn upvalues(n: *Native) []Value {
         const base: [*]u8 = @ptrCast(n);

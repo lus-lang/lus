@@ -93,9 +93,41 @@ pub fn newPort(l: *Thread, port: *const state.Port, ctx: Value) Error!*Thread {
 /// the scheduler calls `resume` again, which calls the native again.
 inline fn resumePort(l: *Thread, co: *Thread, p: *const state.Port, nargs: u32) Error!u32 {
     if (co.status != .suspended) return notSuspended(l, co, nargs);
-    // The results are the top values. The arguments below them stay in
-    // the frame of `resume`, which drops them when it returns.
-    return p.step(l);
+    if (co.resumer) |r| {
+        if (r != l and portBusy(co, r)) {
+            l.top -= nargs;
+            return l.raise(try l.newStringValue("cannot resume non-suspended coroutine"));
+        }
+    }
+    // The resumer stays recorded while the native waits, so a second
+    // thread cannot read or write through the port meanwhile.
+    co.resumer = l;
+    const first = l.top - nargs;
+    const n = p.step(l, co, l.stack[first..l.top]) catch |e| {
+        if (!l.yielding) co.resumer = null;
+        return e;
+    };
+    co.resumer = null;
+    // The results replace the values of the resume, as they do for any
+    // coroutine.
+    const from = l.top - n;
+    if (from != first) {
+        var i: u32 = 0;
+        while (i < n) : (i += 1) l.stack[first + i] = l.stack[from + i];
+        l.top = first + n;
+    }
+    return n;
+}
+
+/// True while the thread `r` waits inside a resume of the port `co`. A
+/// thread that was cancelled or closed while it waited has left the port.
+fn portBusy(co: *Thread, r: *Thread) bool {
+    const t = sched.taskOf(r) orelse return false;
+    if (t.kind == .none or r.frames.items.len == 0) return false;
+    const fr = r.frame();
+    if (fr.native == null) return false;
+    const v = r.stack[fr.base];
+    return v.tag == .thread and v.as(Thread) == co;
 }
 
 fn notSuspended(l: *Thread, co: *Thread, nargs: u32) Error {
@@ -291,22 +323,6 @@ inline fn runCo(co: *Thread, mode: sched.Entry, nargs: u32) Outcome {
             if (co.hook_mask & Thread.hook_call != 0) interp.callHook(co, "call", null) catch |e| return handleStop(co, e);
         },
         .results => {
-            // A generator native that yielded runs again for the next
-            // value (`state.Native.generator`).
-            if (co.frame().native) |nat| {
-                if (nat.generator) {
-                    interp.rerunGenerator(co, nargs) catch |e| return handleStop(co, e);
-                    if (co.frames.items.len == 0) {
-                        co.transfer = co.top;
-                        return .returned;
-                    }
-                    if (co.frames.items.len > 0) {
-                        interp.execute(co, 0) catch |e| return handleStop(co, e);
-                    }
-                    co.transfer = co.top;
-                    return .returned;
-                }
-            }
             // Finish the pending `yield` call: its results are the resume
             // arguments now at the top of the stack.
             const fr = co.frame();
@@ -451,18 +467,6 @@ fn @"resume"(l: *Thread) Error!u32 {
     return n + 1;
 }
 
-/// Yields the top `n` values of `l` from inside a native, as
-/// `coroutine.yield` does. A generator native returns its result.
-pub fn yieldValues(l: *Thread, n: u32) Error {
-    if (l == l.g.main_thread or l.resumer == null) {
-        return l.raiseFmt("attempt to yield from outside a coroutine", .{});
-    }
-    l.transfer = n;
-    l.yielding = true;
-    l.status = .suspended;
-    return error.LusError;
-}
-
 pub fn resumeNative(l: *Thread) Error!u32 {
     return @"resume"(l);
 }
@@ -559,12 +563,28 @@ fn close(l: *Thread) Error!u32 {
         co.self_closed = true;
         return error.LusError;
     }
+    if (co.status != .suspended and co.status != .dead and co.status != .err and !co.event) {
+        return l.raiseFmt("cannot close a {s} coroutine", .{statusName(l, co)});
+    }
+    if (closeCo(l, co)) |err| {
+        try l.push(.false);
+        try l.push(err);
+        return 2;
+    }
+    return aux.retBool(l, true);
+}
+
+/// Closes the coroutine `co`, which is not the running one, and returns
+/// the error it ended with, if any. A coroutine that runs or that resumed
+/// another one stays as it is. `coroutine.close`, a to-be-closed variable
+/// that holds a coroutine, and a loop over a coroutine all close this way.
+pub fn closeCo(l: *Thread, co: *Thread) ?Value {
     if (co.port) |p| {
         if (co.status == .suspended) {
             co.status = .dead;
             if (p.close) |c| c(l, co);
         }
-        return aux.ret(l, .true);
+        return null;
     }
     // An event coroutine of the runtime that waits inside its native while
     // its resumer blocks (the main chunk, or a plain coroutine) ends its
@@ -572,22 +592,65 @@ fn close(l: *Thread) Error!u32 {
     if (co.event and co.status != .suspended and co.status != .dead and co.status != .err) {
         co.event_closed = true;
         if (sched.taskOf(co)) |t| sched.interruptWait(l.g, t);
-        return aux.retBool(l, true);
+        return null;
     }
     switch (co.status) {
         .suspended, .dead, .err => {},
-        else => return l.raiseFmt("cannot close a {s} coroutine", .{statusName(l, co)}),
+        else => return null,
     }
     // A detached coroutine that has not ended leaves the scheduler first.
     if (sched.taskOf(co)) |t| {
         if (t.detached) sched.cancel(l.g, t);
     }
-    if (closeThread(co)) |err| {
-        try l.push(.false);
-        try l.push(err);
-        return 2;
+    return closeThread(co);
+}
+
+// ---------------------------------------------------------------------
+// for x in co
+
+const iter_key = "coroutine.iterate";
+
+/// Sets up the generic for at `r` whose iterator is the coroutine in
+/// `R[r]`: the iterator becomes the native that resumes it, the state is
+/// the coroutine, and so is the closing value, so the loop closes the
+/// coroutine when it ends early.
+pub fn forPrep(l: *Thread, r: u32) Error!void {
+    const g = l.g;
+    const it: Value = if (g.ext.get(iter_key)) |p| Value.obj(.native, @as(*state.Native, @ptrCast(@alignCast(p)))) else blk: {
+        const v = try aux.native(l, iterate, "iterate");
+        try l.push(v);
+        defer l.top -= 1;
+        try aux.setField(l, g.registry.as(object.Table), iter_key, v);
+        g.ext.put(g.gpa, iter_key, v.as(state.Native)) catch return l.raiseMem();
+        break :blk v;
+    };
+    const co = l.stack[r];
+    l.stack[r] = it;
+    l.stack[r + 1] = co;
+    l.stack[r + 2] = .nil;
+    if (l.stack[r + 3].isNil()) l.stack[r + 3] = co;
+}
+
+/// The iterator of a loop over a coroutine: resumes it with no values.
+/// The values it yields are the values of the loop variables. When it
+/// ends, the loop ends, and the values it returned are dropped. An error
+/// in the coroutine closes it and leaves the loop with that error.
+fn iterate(l: *Thread) Error!u32 {
+    const co = l.arg(1).as(Thread);
+    // The control value stays out of the resume, so a port sees no
+    // arguments and reads with its defaults.
+    l.top = l.base() + 1;
+    const n = resumeCo(l, co, 0) catch {
+        if (passes(l)) return error.LusError;
+        var err = l.err;
+        if (co.status == .err) err = closeThread(co) orelse err;
+        return l.raise(err);
+    };
+    if (co.status == .dead) {
+        l.top -= n;
+        return 0;
     }
-    return aux.retBool(l, true);
+    return n;
 }
 
 /// coroutine.detach(co, ...): hands the suspended coroutine `co` to the
