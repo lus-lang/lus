@@ -74,6 +74,8 @@ pub const routines = [_]*const anyopaque{
     @ptrCast(&helpers.callNative),
     @ptrCast(&helpers.tailNative),
     @ptrCast(&helpers.returnAll),
+    @ptrCast(&helpers.ctxGet),
+    @ptrCast(&helpers.ctxSet),
 };
 
 /// The number of the routine at `addr`, or null.
