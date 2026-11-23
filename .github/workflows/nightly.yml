@@ -209,6 +209,28 @@ jobs:
           LUS_JIT: "off"
         run: runtime/zig-out/bin/lus tests/oom/run.lus --io --short --samples 50 --jobs 4 --timeout 120
 
+  tsan:
+    name: ThreadSanitizer
+    runs-on: macos-15
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Run the conformance suite and the stress program of workers
+        timeout-minutes: 200
+        env:
+          TSAN_OUT: tsan-reports
+        run: tools/tsan.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: tsan-reports
+          path: tsan-reports
+
   limits:
     name: Every limit at the limit and one past it
     runs-on: ubuntu-24.04

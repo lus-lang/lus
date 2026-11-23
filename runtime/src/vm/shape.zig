@@ -104,12 +104,20 @@ pub inline fn get(id: u16) *Shape {
     return registry[id].?;
 }
 
-/// Enters the root in the registry. Every state calls it when it is
-/// created, before it makes a table.
+/// Whether the root is in the registry.
+var prepared: std.atomic.Value(bool) = .init(false);
+
+/// Enters the root in the registry, once for the process. Every state
+/// calls it when it is created, before it makes a table. A state made
+/// later on another thread finds the root entered and writes nothing, so
+/// it never races with a thread that reads the registry.
 pub fn prepare() void {
+    if (prepared.load(.acquire)) return;
     lock();
     defer registry_lock.unlock();
+    if (prepared.load(.monotonic)) return;
     registry[0] = &root;
+    prepared.store(true, .release);
 }
 
 fn lock() void {
