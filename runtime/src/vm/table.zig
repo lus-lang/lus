@@ -681,6 +681,11 @@ fn rehash(gpa: Allocator, t: *Table, extra: Value, extra_val: Value) Error!void 
 
 const ArrayPlan = struct { best: usize, na: u32, total: u32 };
 
+/// The largest integer key that `arrayPlan` counts toward an array part.
+/// Larger keys stay in the hash part. On a 32-bit target the limit is the
+/// largest `usize`, so every counted key is a valid index.
+const max_counted_key: i64 = @min(1 << 40, std.math.maxInt(usize));
+
 /// The array size that `rehash` picks for the keys of `t` and `extra`,
 /// with the integer keys that land in it (`na`) and the count of every
 /// key (`total`).
@@ -722,7 +727,7 @@ fn arrayPlan(t: *Table, extra: Value) ArrayPlan {
         total += 1;
         if (t.keyTag(h) == .integer) {
             const k = t.key(h).asInt();
-            if (k >= 1 and k <= 1 << 40) {
+            if (k >= 1 and k <= max_counted_key) {
                 nums[ceilLog2(@intCast(k))] += 1;
                 total_int += 1;
                 max_int = @max(max_int, @as(usize, @intCast(k)));
@@ -731,7 +736,7 @@ fn arrayPlan(t: *Table, extra: Value) ArrayPlan {
     }
     if (extra.tag == .integer) {
         const k = extra.asInt();
-        if (k >= 1 and k <= 1 << 40) {
+        if (k >= 1 and k <= max_counted_key) {
             nums[ceilLog2(@intCast(k))] += 1;
             total_int += 1;
             max_int = @max(max_int, @as(usize, @intCast(k)));
