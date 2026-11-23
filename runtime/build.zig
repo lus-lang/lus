@@ -642,13 +642,12 @@ fn vendorSanitizeC() ?std.zig.SanitizeC {
 }
 
 /// Gives C sources for iOS the headers of the C library that Zig carries
-/// for every Darwin system when xcrun finds no iOS SDK, which lets a host
-/// with only the command line tools build the C libraries of the link
-/// object. The C libraries use only the POSIX part of libSystem, which is
-/// the same on macOS and iOS.
+/// for every Darwin system, so the C libraries of the link object build
+/// the same way on every host, with or without Xcode and its iOS SDKs.
+/// The C libraries use only the POSIX part of libSystem, which is the same
+/// on macOS and iOS.
 fn darwinHeaders(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     if (target.result.os.tag != .ios) return;
-    if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |_| return;
     mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ std.fs.path.dirname(b.graph.zig_exe) orelse ".", "lib", "libc", "include", "any-darwin-any" }) });
 }
 
