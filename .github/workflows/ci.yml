@@ -384,7 +384,8 @@ jobs:
       - name: Conformance tests on WebAssembly
         timeout-minutes: 20
         # Tests that need the network, workers, or processes fail under
-        # WASI. The run fails when the JIT modes disagree or a test crashes.
+        # WASI. The run fails when the JIT modes disagree, a test crashes,
+        # or a file runs longer than two minutes.
         if: runner.os == 'Linux'
         working-directory: packages/wasm
         run: node scripts/conformance.mjs --modes off,eager

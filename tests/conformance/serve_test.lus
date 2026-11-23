@@ -1583,6 +1583,23 @@ local function pause(seconds)
     coroutine.resume(coroutine.sleep(seconds))
 end
 
+-- Waits until `ready()` is true while the other coroutines run. The wait
+-- raises the error of `co` when that coroutine ends first, and gives up
+-- after ten seconds, so a server that never starts fails its test.
+local function wait_until(ready, co)
+    for _ = 1, 1000 do
+        if ready() then
+            return
+        end
+        if status(co) == "dead" then
+            local _, err = close(co)
+            error(err or "the server ended before it was ready", 0)
+        end
+        pause(0.01)
+    end
+    error("the server was not ready after ten seconds", 2)
+end
+
 local function closing_serve_closes_idle_connections_test()
     local server, port = listen()
     local co = spawn(network.serve, server, function()
@@ -1609,9 +1626,7 @@ local function closing_serve_lets_an_active_request_finish_test()
     local client = spawn(function()
         got = exchange(sock, get("/slow"))
     end)
-    while not started do
-        pause(0.01)
-    end
+    wait_until(function() return started end, co)
     assert(close(co))
     assert(resume(client))
     assert(got.status == 200 and got.body == "late")
@@ -1630,9 +1645,7 @@ local function the_drain_timeout_closes_the_rest_test()
     end, { drain_timeout = 0.1 })
     local sock <close> = connect(port)
     assert(sock:send(get("/slow")))
-    while not started do
-        pause(0.01)
-    end
+    wait_until(function() return started end, co)
     assert(close(co))
     assert(at_end(sock))
     server:close()
@@ -1649,9 +1662,7 @@ local function a_server_that_serve_bound_stops_listening_when_closed_test()
             return 200, "ok"
         end)
     end)
-    while not port do
-        pause(0.01)
-    end
+    wait_until(function() return port end, co)
     local sock <close> = connect(port)
     assert(exchange(sock, get("/")).body == "ok")
     assert(close(co))

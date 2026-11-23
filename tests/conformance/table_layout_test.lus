@@ -91,3 +91,25 @@ local function borders_follow_their_hint_test()
     t[51] = 51
     assert(#t == 51)
 end
+
+-- An integer key beyond the indexes of an array part stays in the hash
+-- part. Keys from 2^32 to 2^40 count toward an array part on 64-bit
+-- targets and lie beyond every index of a 32-bit one, such as lus.wasm.
+local function integer_keys_beyond_32_bits_stay_in_the_hash_part_test()
+    local keys = { 1 << 32, (1 << 32) + 1, 10737418240, 1 << 40, (1 << 40) + 1, 1 << 62, math.maxinteger }
+    local t = {}
+    for i, k in ipairs(keys) do
+        t[k] = i
+    end
+    t[2.0 ^ 33] = "float"
+    for i, k in ipairs(keys) do
+        assert(t[k] == i, k)
+    end
+    assert(t[1 << 33] == "float" and math.type(next({ [2.0 ^ 33] = true })) == "integer")
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    assert(n == #keys + 1 and #t == 0)
+    local list = { 1, 2, 3, [1 << 35] = "far" }
+    list[4] = 4
+    assert(#list == 4 and list[1 << 35] == "far")
+end
