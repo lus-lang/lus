@@ -103,6 +103,9 @@ pub const Class = enum(u8) {
     /// The word that names the direct entry of a piece of optimized
     /// code, which retiring the code clears.
     code,
+    /// The context array of the running coroutine, its length and its
+    /// values, and the defaults of context variables (`vm/context.zig`).
+    ctx,
 };
 
 pub const Cond = enum(u8) { eq, ne, lt, le, gt, ge, lo, ls, hi, hs };
@@ -134,6 +137,9 @@ pub const Op = enum(u8) {
     kint,
     kflt,
     kptr,
+    /// The running thread. It takes no operands and never changes while
+    /// optimized code runs.
+    thread,
     // Registers of the frame. `imm` is the slot, counted from register
     // zero of the root function.
     sload,

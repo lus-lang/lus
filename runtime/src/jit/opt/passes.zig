@@ -144,7 +144,7 @@ fn rewrite(f: *ir.Func, fwd: []Ref) !void {
 
 pub fn usesA(i: *const ir.Inst) bool {
     return switch (i.op) {
-        .nop, .knil, .kbool, .kint, .kflt, .kptr, .sload, .gslot, .scopy, .gpending, .gdebt, .gccheck, .jmp, .brtruthy, .brtag, .generic, .exit, .phi, .valloc, .param, .dlimit => false,
+        .nop, .knil, .kbool, .kint, .kflt, .kptr, .thread, .sload, .gslot, .scopy, .gpending, .gdebt, .gccheck, .jmp, .brtruthy, .brtag, .generic, .exit, .phi, .valloc, .param, .dlimit => false,
         else => true,
     };
 }
@@ -226,7 +226,7 @@ pub fn hoist(f: *ir.Func, cfg: *Cfg, loops: []const lower.Lower.LoopInfo, marks:
         if (w.collects) {
             // The collector clears entries of weak tables and queues
             // finalizers.
-            for ([_]ir.Class{ .node_val, .elem, .upval, .gc, .pending }) |c| w.classes[@backingInt(c)] = true;
+            for ([_]ir.Class{ .node_val, .elem, .upval, .gc, .pending, .ctx }) |c| w.classes[@backingInt(c)] = true;
         }
 
         // The nodes that close the loop.
@@ -276,7 +276,7 @@ fn movable(inst: *const ir.Inst, w: *const Writes, defined_in: []const bool) boo
             if (w.slots.contains(inst.imm)) return false;
             break :blk inst.cls == .upval;
         },
-        .add, .sub, .mul, .band, .bor, .bxor, .addi, .neg, .bnot, .addsh, .modi, .idivi => false,
+        .add, .sub, .mul, .band, .bor, .bxor, .addi, .neg, .bnot, .addsh, .modi, .idivi, .thread => false,
         .fadd, .fsub, .fmul, .fdiv, .fneg, .fabs, .fsqrt, .ffloor, .fceil, .i2f, .f2i, .bits2f, .f2bits => false,
         .guard, .guardi, .gfcmp => false,
         // A division by a register depends on the guards of its

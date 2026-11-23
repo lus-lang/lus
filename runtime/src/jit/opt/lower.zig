@@ -18,6 +18,7 @@ const flow_mod = @import("flow.zig");
 const opt = @import("opt.zig");
 const state = @import("../../vm/state.zig");
 const object = @import("../../vm/object.zig");
+const context = @import("../../vm/context.zig");
 const value = @import("../../vm/value.zig");
 const table = @import("../../vm/table.zig");
 const shape = @import("../../vm/shape.zig");
@@ -1501,6 +1502,8 @@ pub const Lower = struct {
             },
             .getupval => try b.getUpval(ra, rb),
             .setupval => try b.setUpval(ra, rb),
+            .getctx => try b.getCtx(ra, rb),
+            .setctx => try b.setCtx(ra, rb),
             .gettabup => try b.getField(ra, .{ .upval = rb }, p.constants[rc]),
             .getfield => try b.getField(ra, .{ .reg = rb }, p.constants[rc]),
             .settabup => try b.setField(.{ .upval = ra }, p.constants[rb], rc),
@@ -1815,6 +1818,106 @@ pub const Lower = struct {
         const u = try b.upvalLoc(i);
         const v = try b.loadValue(u.loc, 0, s.v, .upval, ir.none);
         try b.setReg(ra, v, s);
+        return true;
+    }
+
+    // -----------------------------------------------------------------
+    // Context variables (`vm/context.zig`)
+
+    /// The running thread.
+    fn threadRef(b: *Lower) Error!Ref {
+        return b.pure(.{ .op = .thread, .ty = .int });
+    }
+
+    /// The slot number of the context variable whose slot object is in
+    /// register `r`, guarded: the register holds a userdata whose
+    /// metatable is the metatable of slot objects. The state keeps that
+    /// metatable, so the code reads it through the thread and holds no
+    /// address of its own. Returns null when the sample is no slot object.
+    fn ctxSlot(b: *Lower, r: u32) Error!?CtxSlot {
+        const s = b.fr.regs[r].sample;
+        if (!s.exact or s.v.tag != .userdata) return null;
+        const u = s.v.as(object.Userdata);
+        const slot_mt = b.l.g.ctx.slot_mt orelse return null;
+        if (u.metatable != slot_mt or u.nuser != 0) return null;
+        if ((b.guess(r, 0) orelse return null) != .userdata) return null;
+        const so = try b.typed(r, .userdata);
+        const th = try b.threadRef();
+        const g = try b.load(th, @offsetOf(Thread, "g"), .int, 8, .fixed, ir.none);
+        const want = try b.load(g, @offsetOf(state.Global, "ctx") + @offsetOf(context.Store, "slot_mt"), .int, 8, .fixed, ir.none);
+        const mt = try b.load(so, @offsetOf(object.Userdata, "metatable"), .int, 8, .tab_meta, ir.none);
+        const ok = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.eq), .a = mt, .b = want });
+        const slot = try b.load(so, @sizeOf(object.Userdata), .int, 4, .fixed, ok);
+        return .{ .slot = slot, .n = @as(*const u32, @ptrCast(@alignCast(u.data()))).* };
+    }
+
+    const CtxSlot = struct { slot: Ref, n: u32 };
+
+    /// Where the pointer and the length of a slice lie in a struct whose
+    /// field `name` is the slice.
+    fn sliceLayout(comptime T: type, comptime name: []const u8) struct { ptr: i32, len: i32 } {
+        var a: T = undefined;
+        const base = @intFromPtr(&a);
+        return .{
+            .ptr = @intCast(@intFromPtr(&@field(a, name).ptr) - base),
+            .len = @intCast(@intFromPtr(&@field(a, name).len) - base),
+        };
+    }
+
+    /// R[A] = the context variable whose slot object is R[B], read from
+    /// the array of the running coroutine or from the defaults, whichever
+    /// held the value when the code was built.
+    fn getCtx(b: *Lower, ra: u32, rb: u32) Error!bool {
+        const cs = (try b.ctxSlot(rb)) orelse return false;
+        const l = b.l;
+        const th = try b.threadRef();
+        const arr = try b.load(th, @offsetOf(Thread, "ctx"), .int, 8, .ctx, ir.none);
+        var vals: Ref = undefined;
+        var dep: Ref = undefined;
+        var sample: Value = undefined;
+        if (l.ctx) |a| {
+            if (cs.n >= a.vals.len) return false;
+            const lay = sliceLayout(context.Array, "vals");
+            const present = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = arr, .imm = 0 });
+            const len = try b.load(arr, lay.len, .int, 8, .ctx, present);
+            dep = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.lo), .a = cs.slot, .b = len });
+            vals = try b.load(arr, lay.ptr, .int, 8, .ctx, dep);
+            sample = a.vals[cs.n];
+        } else {
+            if (cs.n >= l.g.ctx.defaults.items.len) return false;
+            dep = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = arr, .imm = 0 });
+            const g = try b.load(th, @offsetOf(Thread, "g"), .int, 8, .fixed, ir.none);
+            const lay = sliceLayout(std.ArrayList(Value), "items");
+            const at: i32 = @offsetOf(state.Global, "ctx") + @offsetOf(context.Store, "defaults") + lay.ptr;
+            vals = try b.load(g, at, .int, 8, .ctx, dep);
+            sample = l.g.ctx.defaults.items[cs.n];
+        }
+        const at = try b.pure(.{ .op = .addsh, .ty = .int, .a = vals, .b = cs.slot, .imm = 4 });
+        const v = try b.loadValue(at, 0, sample, .ctx, dep);
+        try b.setReg(ra, v, Sample.of(sample));
+        return true;
+    }
+
+    /// The context variable whose slot object is R[A] = R[B], stored in
+    /// place when the running coroutine owns its array alone and the
+    /// array covers the slot. Any other case runs the template.
+    fn setCtx(b: *Lower, ra: u32, rb: u32) Error!bool {
+        const a = b.l.ctx orelse return false;
+        if (a.refs != 1) return false;
+        const v = (try b.anyTyped(rb, 0)) orelse return false;
+        const cs = (try b.ctxSlot(ra)) orelse return false;
+        if (cs.n >= a.vals.len) return false;
+        const th = try b.threadRef();
+        const arr = try b.load(th, @offsetOf(Thread, "ctx"), .int, 8, .ctx, ir.none);
+        const lay = sliceLayout(context.Array, "vals");
+        const present = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = arr, .imm = 0 });
+        const refs = try b.load(arr, @offsetOf(context.Array, "refs"), .int, 4, .ctx, present);
+        const alone = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = refs, .imm = 1 });
+        const len = try b.load(arr, lay.len, .int, 8, .ctx, alone);
+        const inside = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.lo), .a = cs.slot, .b = len });
+        const vals = try b.load(arr, lay.ptr, .int, 8, .ctx, inside);
+        const at = try b.pure(.{ .op = .addsh, .ty = .int, .a = vals, .b = cs.slot, .imm = 4 });
+        try b.storeValue(at, 0, v, .ctx, false);
         return true;
     }
 

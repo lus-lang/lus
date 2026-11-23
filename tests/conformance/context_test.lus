@@ -151,3 +151,55 @@ local function invalid_declarations_are_compile_errors_test()
         assert(err:find(c[2], 1, true), err)
     end
 end
+
+-- Hot loops, which the optimizing tier compiles with the read and the
+-- write of a context variable inline.
+local hot <context> = 7
+
+local function sum_hot(n)
+    local s = 0
+    for _ = 1, n do s = s + hot end
+    return s
+end
+
+local function hot_reads_see_the_default_and_then_the_value_test()
+    assert(coroutine.wrap(function()
+        assert(sum_hot(5000) == 35000)
+        hot = 2
+        assert(sum_hot(5000) == 10000)
+        return true
+    end)())
+    -- The value stayed with that coroutine.
+    assert(coroutine.wrap(function() return sum_hot(5000) end)() == 35000)
+end
+
+local function one_compiled_loop_serves_coroutines_with_other_values_test()
+    local a = coroutine.create(function()
+        hot = 1
+        while true do coroutine.yield(sum_hot(3000)) end
+    end)
+    local b = coroutine.create(function()
+        while true do coroutine.yield(sum_hot(3000)) end
+    end)
+    for _ = 1, 20 do
+        local _, x = coroutine.resume(a)
+        local _, y = coroutine.resume(b)
+        assert(x == 3000 and y == 21000, `$x $y`)
+    end
+end
+
+local function hot_writes_copy_an_array_they_share_test()
+    coroutine.wrap(function()
+        hot = 0
+        local child = coroutine.create(function()
+            -- The child shares the array of its creator until it writes.
+            for i = 1, 5000 do hot = i end
+            return hot
+        end)
+        local _, last = coroutine.resume(child)
+        assert(last == 5000)
+        assert(hot == 0)
+        for i = 1, 5000 do hot = hot + 1 end
+        assert(hot == 5000)
+    end)()
+end
