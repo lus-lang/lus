@@ -205,7 +205,8 @@ jobs:
           version: "14.2"
           run: |
             cd runtime
-            zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
+            # The JIT compiles a function on its first call under eager.
+            LUS_JIT=eager zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
             zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
             cd ../tests/build
             ../../runtime/zig-out/bin/lus build --aot linked.lus -o "$HOME/linked"
