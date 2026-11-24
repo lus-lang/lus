@@ -291,7 +291,7 @@ pub const Codegen = struct {
         c.em.statusTail();
         c.em.scan();
         for (c.labels) |*x| x.* = a.newLabel();
-        for (c.exit_labels) |*x| x.* = a.newLabel();
+        for (c.exit_labels) |*x| x.* = a.newColdLabel();
         c.l_deopt = a.newLabel();
         c.l_trap = a.newLabel();
         c.l_entry = a.newLabel();
@@ -1298,7 +1298,7 @@ pub const Codegen = struct {
             },
             .callc => c.callc(r, i),
             .barrier => {
-                const s: Stub = .{ .entry = a.newLabel(), .back = a.newLabel(), .inst = r };
+                const s: Stub = .{ .entry = a.newColdLabel(), .back = a.newLabel(), .inst = r };
                 c.stubs.append(c.arena, s) catch {
                     c.em.oom = true;
                 };
@@ -1313,7 +1313,7 @@ pub const Codegen = struct {
                 a.bind(s.back);
             },
             .gccheck => {
-                const s: Stub = .{ .entry = a.newLabel(), .back = a.newLabel(), .inst = r };
+                const s: Stub = .{ .entry = a.newColdLabel(), .back = a.newLabel(), .inst = r };
                 c.stubs.append(c.arena, s) catch {
                     c.em.oom = true;
                 };

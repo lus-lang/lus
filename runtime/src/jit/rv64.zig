@@ -287,6 +287,9 @@ pub const Assembler = struct {
         };
         return @intCast(a.labels.items.len - 1);
     }
+    /// A label of out-of-line code, which this target treats as any
+    /// other.
+    pub const newColdLabel = newLabel;
 
     pub fn newLabels(a: *Assembler, count: usize) Label {
         const first: Label = @intCast(a.labels.items.len);

@@ -427,7 +427,7 @@ pub const Emitter = struct {
     }
 
     fn addCold(e: *Emitter, pc: u32, kind: Cold.Kind, resume_at: Label) Label {
-        const entry = e.a.newLabel();
+        const entry = e.a.newColdLabel();
         e.cold.append(e.gpa, .{ .entry = entry, .pc = pc, .kind = kind, .resume_at = resume_at }) catch {
             e.oom = true;
         };
