@@ -8,6 +8,7 @@ export interface ReleaseLinks {
   macosX64?: string
   linuxX64?: string
   linuxArm64?: string
+  linuxArm32?: string
   wasm?: string
   checksums?: string
   sourceZip?: string
@@ -50,6 +51,7 @@ const TARGET_ARCHIVES = {
   macosX64: "x86_64-macos.tar.gz",
   linuxX64: "x86_64-linux-musl.tar.gz",
   linuxArm64: "aarch64-linux-musl.tar.gz",
+  linuxArm32: "arm-linux-musleabihf.tar.gz",
 } as const
 
 export function parseAssetLinks(release: GitHubRelease): ReleaseLinks {

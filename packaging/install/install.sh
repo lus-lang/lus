@@ -89,6 +89,9 @@ detect_platform() {
       case "$ARCH" in
         x86_64|amd64)  TARGET="x86_64-linux-musl" ;;
         aarch64|arm64) TARGET="aarch64-linux-musl" ;;
+        # 32-bit ARM from ARMv7-A on, with hardware floating point, which
+        # a 32-bit system on an ARMv8 processor reports as armv8l.
+        armv7l|armv7|armv8l|armhf) TARGET="arm-linux-musleabihf" ;;
         *) unsupported "Linux on $ARCH" ;;
       esac
       ;;

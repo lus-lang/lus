@@ -26,6 +26,7 @@ test("maps every 2.0 release asset to its download link", () => {
     release([
       "lus-v2.0.0-x86_64-linux-musl.tar.gz",
       "lus-v2.0.0-aarch64-linux-musl.tar.gz",
+      "lus-v2.0.0-arm-linux-musleabihf.tar.gz",
       "lus-v2.0.0-x86_64-macos.tar.gz",
       "lus-v2.0.0-aarch64-macos.tar.gz",
       "lus-v2.0.0-x86_64-windows.zip",
@@ -44,6 +45,7 @@ test("maps every 2.0 release asset to its download link", () => {
     macosX64: `${BASE}/lus-v2.0.0-x86_64-macos.tar.gz`,
     linuxX64: `${BASE}/lus-v2.0.0-x86_64-linux-musl.tar.gz`,
     linuxArm64: `${BASE}/lus-v2.0.0-aarch64-linux-musl.tar.gz`,
+    linuxArm32: `${BASE}/lus-v2.0.0-arm-linux-musleabihf.tar.gz`,
     wasm: `${BASE}/lus.wasm`,
     checksums: `${BASE}/SHA256SUMS`,
     sourceZip: "https://api.github.com/repos/lus-lang/lus/zipball/v2.0.0",

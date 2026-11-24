@@ -49,7 +49,7 @@ mkdir lus && tar -xzf lus-$tag-${target}.tar.gz -C lus
 }
 
 export const INSTALL_LINUX = unixCommands(
-  "# x86_64. Use aarch64-linux-musl on 64-bit Arm.",
+  "# x86_64. Use aarch64-linux-musl on 64-bit Arm and arm-linux-musleabihf on 32-bit Arm.",
   "x86_64-linux-musl",
 )
 

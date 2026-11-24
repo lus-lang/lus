@@ -24,12 +24,15 @@ Every archive holds the `lus` interpreter, the embedding libraries, and the `lus
 | --- | --- | --- |
 | Linux | x86_64 | `lus-vX.Y.Z-x86_64-linux-musl.tar.gz` |
 | Linux | aarch64 | `lus-vX.Y.Z-aarch64-linux-musl.tar.gz` |
+| Linux | 32-bit ARM (ARMv7-A, hard float) | `lus-vX.Y.Z-arm-linux-musleabihf.tar.gz` |
 | macOS | x86_64 | `lus-vX.Y.Z-x86_64-macos.tar.gz` |
 | macOS | Apple Silicon | `lus-vX.Y.Z-aarch64-macos.tar.gz` |
 | Windows | x86_64 | `lus-vX.Y.Z-x86_64-windows.zip` |
 | Windows | aarch64 | `lus-vX.Y.Z-aarch64-windows.zip` |
 
 The Linux builds link musl statically, so the same `lus` binary runs on any Linux distribution of its architecture.
+
+The 32-bit ARM archive runs on ARMv7-A and later processors with hardware floating point, such as a Raspberry Pi 2 or newer running a 32-bit system. Its `bin` directory also holds `lus-runtime.lo`, the runtime as a link object, from which `lus build --aot` links an executable that keeps only the parts of the runtime the program reaches.
 
 On Linux and macOS, the `install.sh` script downloads the archive for the machine it runs on and checks it against `SHA256SUMS`. It then unpacks the archive into `~/.lus/versions` and adds `~/.lus/bin` to `PATH` in the profile of the shell. On Windows, `lus-setup.exe` installs the x86_64 archive into `%LOCALAPPDATA%\lus` the same way and adds its `bin` directory to `PATH`. It installs for the current user by default. Run it with `/ALLUSERS` from an elevated prompt to install for every user.
 

@@ -113,6 +113,48 @@ jobs:
         working-directory: runtime
         run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} --prefix zig-out-cross
 
+  arm-link:
+    name: The linker of lus build --aot on 32-bit ARM
+    # qemu-user runs what the linker writes for 32-bit ARM: the whole of
+    # lus linked from its link object, and an executable that lus build
+    # --aot links (spec/design/platforms.md, "32-bit ARM").
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Install qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+      - name: Build lus and the link object
+        timeout-minutes: 40
+        working-directory: runtime
+        run: |
+          zig build -Doptimize=ReleaseSafe -Dtarget=arm-linux-musleabihf --prefix zig-out-arm
+          zig build link-object -Doptimize=ReleaseSafe -Dtarget=arm-linux-musleabihf -p "$RUNNER_TEMP/lo"
+          "$RUNNER_TEMP/lo/bin/lus-link" "$RUNNER_TEMP/lo/lib/lus.lo" "$RUNNER_TEMP/lus-linked"
+      - name: Conformance tests on lus linked from the link object
+        timeout-minutes: 35
+        working-directory: runtime
+        env:
+          LUS_EMULATED: "1"
+        run: |
+          "$RUNNER_TEMP/lus-linked" test --timeout 300 ../tests/conformance ../packages/language-server/tests
+      - name: lus build --aot linked from the link object
+        timeout-minutes: 10
+        working-directory: tests/build
+        run: |
+          # The limit sits about 5% above the measured size of linked.lus,
+          # 1.72 MB in ReleaseSafe.
+          ../../runtime/zig-out-arm/bin/lus build --aot --link-object "$RUNNER_TEMP/lo/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/linked"
+          test "$("$RUNNER_TEMP/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+          test "$(wc -c < "$RUNNER_TEMP/linked")" -lt 1810000
+          LUS_AOT_REPORT=1 "$RUNNER_TEMP/linked" 2>&1 | grep -E "aot: [1-9][0-9]* functions and [1-9][0-9]* units installed"
+
   runtime:
     name: Runtime (${{ matrix.os }})
     strategy:

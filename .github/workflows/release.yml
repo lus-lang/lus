@@ -78,10 +78,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ../dist
-          for target in x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos x86_64-windows aarch64-windows; do
+          for target in x86_64-linux-musl aarch64-linux-musl arm-linux-musleabihf x86_64-macos aarch64-macos x86_64-windows aarch64-windows; do
             prefix="../out/$target"
             zig build -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
             zig build lib -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
+            # On 32-bit ARM `lus build --aot` links from the link object of
+            # the runtime, which it finds next to `lus`
+            # (spec/design/aot.md, "The link object").
+            if [ "$target" = arm-linux-musleabihf ]; then
+              zig build link-object -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "../out/lo-$target"
+              cp "../out/lo-$target/lib/lus-runtime.lo" "$prefix/bin/lus-runtime.lo"
+            fi
             # The license of Lus and of every component compiled into the
             # archive ship at its root.
             cp ../LICENSE.md "$prefix/LICENSE.md"
@@ -91,7 +98,7 @@ jobs:
               cp "../packaging/licenses/LICENSE.$license.txt" "$prefix/licenses/"
             done
             case "$target" in
-              *linux-musl) cp ../packaging/licenses/LICENSE.MUSL.txt "$prefix/licenses/" ;;
+              *linux-musl*) cp ../packaging/licenses/LICENSE.MUSL.txt "$prefix/licenses/" ;;
             esac
             name="lus-$TAG-$target"
             case "$target" in
@@ -255,7 +262,7 @@ jobs:
         run: |
           set -euo pipefail
           expected=(lus.wasm lus-setup.exe)
-          for target in x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos; do
+          for target in x86_64-linux-musl aarch64-linux-musl arm-linux-musleabihf x86_64-macos aarch64-macos; do
             expected+=("lus-$TAG-$target.tar.gz")
           done
           for target in x86_64-windows aarch64-windows; do

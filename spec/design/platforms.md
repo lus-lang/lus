@@ -33,7 +33,7 @@ Four facts from the table shape our order.
 | x86-64 Linux | yes | yes | yes | yes | yes, static musl |
 | x86-64 Windows | yes |  |  |  | yes |
 | arm64 Windows | yes |  |  |  | yes |
-| 32-bit ARM Linux | yes | yes | yes | yes | not yet |
+| 32-bit ARM Linux | yes | yes | yes | yes | yes, static musl |
 | s390x Linux | yes | yes | yes | yes | not yet |
 | FreeBSD (aarch64, x86-64) | yes | yes | yes | yes | not yet |
 | wasm32 WASI | yes | WebAssembly modules |  |  | the npm package |
