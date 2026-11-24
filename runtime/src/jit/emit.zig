@@ -375,6 +375,11 @@ pub const Emitter = struct {
         a.jumpIfImm(.eq, A.ret0, 0, l_interp);
         a.mov(A.base, A.ret1);
         e.reloadBp();
+        // The code after a call reads the result count of its callee
+        // here, where a lean return leaves it. A frame that returned
+        // through its step routine continues there too (`jit.dispatch`).
+        a.movImm(A.t6, @intFromPtr(&e.g.jit.resume_count));
+        a.loadWord(A.t6, .{ .base = A.t6 });
         a.jmpReg(A.ret0);
         a.bind(l_interp);
         a.movImm(A.ret0, Step.interpret);

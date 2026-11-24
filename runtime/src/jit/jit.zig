@@ -117,6 +117,13 @@ pub const State = if (enabled) struct {
     aot_report: bool = false,
     /// Bytes of tables that optimized code did not allocate since the
     /// last collection it asked for, and the count at which it asks.
+    /// Set by the step routine of a return that popped a lean frame:
+    /// the address in native code where the caller continues, and the
+    /// number of results. `dispatch` hands the address out once, so the
+    /// caller goes on where a lean return would have taken it, which may
+    /// be inside optimized code.
+    resume_addr: usize = 0,
+    resume_count: usize = 0,
     sunk: u64 = 0,
     sunk_limit: u64 = opt.sunk_step,
     /// Whether optimized code calls optimized code at its direct entry.
@@ -432,6 +439,12 @@ pub const Target = extern struct {
 /// every step that changed the frame or the pc.
 pub fn dispatch(l: *Thread) callconv(cc) Target {
     const fr = l.frame();
+    const js = &l.g.jit;
+    if (js.resume_addr != 0) {
+        const addr = js.resume_addr;
+        js.resume_addr = 0;
+        return .{ .addr = addr, .base = fr.base };
+    }
     const none: Target = .{ .addr = 0, .base = 0 };
     const cl = fr.closure orelse return none;
     const p = cl.proto;
