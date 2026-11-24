@@ -76,7 +76,23 @@ pub const Reg = enum(u8) {
     stop,
     /// r13.
     sp,
+    /// The 64-bit words of the native stack, counted from the stack
+    /// pointer up. The code generator names a spilled value as one of
+    /// them, and an operation reads its words where they are.
+    _,
+
+    const first_slot = 32;
 };
+
+/// The register that names word `k` of the native stack, when there is
+/// one.
+pub fn spillReg(k: u32) ?Reg {
+    return if (k < 256 - Reg.first_slot) @fromBackingInt(@as(u8, @intCast(Reg.first_slot + k))) else null;
+}
+/// The offset from the stack pointer of the word that a register names.
+fn slotOf(r: Reg) i32 {
+    return 8 * (@as(i32, @backingInt(r)) - Reg.first_slot);
+}
 
 pub const FReg = enum(u4) {
     d0,
@@ -172,6 +188,7 @@ fn lo(r: Reg) W {
         .base => W.at(slot_base),
         .stop => W.at(slot_stop),
         .t5, .t6, .c1, .v0, .v1, .v2, .v3, .v4, .v5 => W.at(home(r)),
+        _ => .{ .m = .{ .b = sp_r, .d = slotOf(r) } },
     };
 }
 
@@ -184,6 +201,7 @@ fn hi(r: Reg) W {
         .t4 => W.at(slot_t4_hi),
         .thread, .bp, .sp, .base, .stop => .zero,
         .t5, .t6, .c0, .c1, .v0, .v1, .v2, .v3, .v4, .v5 => W.at(home(r) + 4),
+        _ => .{ .m = .{ .b = sp_r, .d = slotOf(r) + 4 } },
     };
 }
 
@@ -371,6 +389,9 @@ pub const Assembler = struct {
     /// words unwritten. Each goes through a few instructions, emitted
     /// after everything else, that write the words and jump on.
     ramps: std.ArrayList(Ramp) = .empty,
+    /// Bytes that the operation being emitted has pushed, which a word
+    /// of the native stack lies further from the stack pointer by.
+    pushed: i32 = 0,
 
     const unbound: u32 = 0xFFFF_FFFF;
 
@@ -632,8 +653,11 @@ pub const Assembler = struct {
     // -----------------------------------------------------------------
     // Words of registers
 
+    /// The bit of a register in the record of high words. A word of
+    /// the native stack has none, and its high word is always written.
     fn bit(r: Reg) u32 {
-        return @as(u32, 1) << @as(u5, @intCast(@backingInt(r)));
+        const n = @backingInt(r);
+        return if (n < Reg.first_slot) @as(u32, 1) << @as(u5, @intCast(n)) else 0;
     }
     /// Declares that a register holds no value that later code reads,
     /// which saves the write of its high word.
@@ -667,6 +691,7 @@ pub const Assembler = struct {
     /// written. A word in the frame is written later, if ever.
     fn zeroHi(a: *Assembler, dst: Reg) void {
         const b = bit(dst);
+        if (b == 0) return a.immW(hi(dst), 0);
         if (a.kz & b != 0) return;
         switch (hi(dst)) {
             .zero => return,
@@ -704,12 +729,17 @@ pub const Assembler = struct {
         a.kz = 0;
     }
 
+    /// The offset of a word in memory, which counts what the operation
+    /// pushed when the base is the stack pointer.
+    fn dispOf(a: *const Assembler, b: P, d: i32) i32 {
+        return if (b == sp_r) d + a.pushed else d;
+    }
     /// The machine register that holds the word, which is `s` after a
     /// load when the word lives in the frame.
     fn get(a: *Assembler, w: W, s: P) P {
         switch (w) {
             .r => |p| return p,
-            .m => |m| a.ldr(s, m.b, m.d),
+            .m => |m| a.ldr(s, m.b, a.dispOf(m.b, m.d)),
             .zero => a.dp(al, op_mov, false, 0, s, immOp(0).?),
         }
         return s;
@@ -723,7 +753,7 @@ pub const Assembler = struct {
     fn put(a: *Assembler, w: W, p: P) void {
         switch (w) {
             .r => |q| a.movP(q, p),
-            .m => |m| a.str(p, m.b, m.d),
+            .m => |m| a.str(p, m.b, a.dispOf(m.b, m.d)),
             .zero => {},
         }
     }
@@ -1141,6 +1171,7 @@ pub const Assembler = struct {
         // The routine writes the remainder into the two words above the
         // address that it takes as its third argument on the stack.
         a.addP(sp_r, sp_r, -16);
+        a.pushed += 16;
         a.addP(S0, sp_r, 8);
         a.str(S0, sp_r, 0);
         a.rtArg(r0, xw.l, 16);
@@ -1156,6 +1187,7 @@ pub const Assembler = struct {
         a.ldr(S0, sp_r, 12);
         a.rtResult(rh, S0, 16);
         a.addP(sp_r, sp_r, 16);
+        a.pushed -= 16;
         a.rtLeave();
     }
 
@@ -1172,17 +1204,19 @@ pub const Assembler = struct {
     fn rtEnter(a: *Assembler) void {
         a.push(0x000F);
         a.vpush(.d0, 8);
+        a.pushed += 16 + rt_floats;
     }
     fn rtLeave(a: *Assembler) void {
         a.vpop(.d0, 8);
         a.pop(0x000F);
+        a.pushed -= 16 + rt_floats;
     }
     /// Loads the word `w` into the argument register `to`, with `extra`
     /// bytes pushed since `rtEnter`.
     fn rtArg(a: *Assembler, to: P, w: W, extra: i32) void {
         switch (w) {
             .r => |p| if (p < 4) a.ldr(to, sp_r, rt_floats + extra + 4 * @as(i32, p)) else a.movP(to, p),
-            .m => |m| a.ldr(to, m.b, m.d),
+            .m => |m| a.ldr(to, m.b, a.dispOf(m.b, m.d)),
             .zero => a.imm32(to, 0),
         }
     }
@@ -1190,7 +1224,7 @@ pub const Assembler = struct {
     fn rtResult(a: *Assembler, w: W, p: P, extra: i32) void {
         switch (w) {
             .r => |q| if (q < 4) a.str(p, sp_r, rt_floats + extra + 4 * @as(i32, q)) else a.movP(q, p),
-            .m => |m| a.str(p, m.b, m.d),
+            .m => |m| a.str(p, m.b, a.dispOf(m.b, m.d)),
             .zero => {},
         }
     }
@@ -1314,7 +1348,10 @@ pub const Assembler = struct {
         // register loads the high words and the other gathers.
         const acc: P = if (in_regs) S1 else borrowed;
         const hs: P = if (in_regs) S0 else S1;
-        if (!in_regs) a.push(@as(u32, 1) << borrowed);
+        if (!in_regs) {
+            a.push(@as(u32, 1) << borrowed);
+            a.pushed += 4;
+        }
         var cross = false;
         if (!yz) {
             const p = a.get(lo(x), S0);
@@ -1338,7 +1375,10 @@ pub const Assembler = struct {
         if (cross) a.dp(al, op_add, false, th, th, acc);
         a.put(lo(dst), tl);
         a.put(hw, th);
-        if (!in_regs) a.pop(@as(u32, 1) << borrowed);
+        if (!in_regs) {
+            a.pop(@as(u32, 1) << borrowed);
+            a.pushed -= 4;
+        }
     }
     pub fn and3(a: *Assembler, dst: Reg, x: Reg, y: Reg) void {
         a.arith(op_and, op_and, dst, x, y);
@@ -2212,5 +2252,47 @@ test "arm copies between two operands that both need a scratch register" {
     try expectWords(&a, &.{
         0xE59BE020, 0xE59BC028, 0xE59CC010, 0xE58EC008, 0xE59BC028, 0xE59CC014, 0xE58EC00C, 0xE59BC02C,
         0xE59BE020, 0xE59EE00C, 0xE15C000E, 0xE59BC028, 0xE59BE020, 0xE59EE008, 0x015C000E, 0x0A000000,
+    });
+}
+
+test "arm reads the words of a spilled value from the native stack" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    const l = a.newLabel();
+    a.bind(l);
+    const n = spillReg(0).?;
+    const m = spillReg(2).?;
+    a.jumpIfImm(.lt, n, 2, l); // ldr ip, [sp]; cmp ip, #2; ldr ip, [sp, #4]; sbcs ip, ip, #0; blt
+    a.addImm3(.t1, n, -1); // ldr ip, [sp]; subs r3, ip, #1; ldr ip, [sp, #4]; sbc r8, ip, #0
+    a.add3(.t0, m, .t0); // ldr ip, [sp, #16]; adds r6, ip, r6; ldr ip, [sp, #20]; adc r7, ip, r7
+    // ldr ip, [sp, #20]; cmp ip, r7; ldr ip, [sp, #16]; cmpeq ip, r6; bne
+    a.jumpIf(.ne, m, .t0, l);
+    a.load32(.t2, .{ .base = m, .disp = 8 }); // ldr lr, [sp, #16]; ldr r2, [lr, #8]; mov r9, #0
+    // The high word of a word of the stack is written at once:
+    // str r2, [sp, #16]; mov ip, #0; str ip, [sp, #20]
+    a.mov(m, .t2);
+    // A register that is both operands loads once:
+    // ldr ip, [fp, #32]; adds ip, ip, ip; str ip, [fp, #32]; ldr ip, [fp, #36]; adc ip, ip, ip
+    // str ip, [fp, #36]
+    a.add(.t5, .t5);
+    // A borrowed register moves the stack pointer, and the offsets follow:
+    // push {r4}; ldr ip, [sp, #4]; ldr lr, [sp, #24]; mul r4, ip, lr; ldr lr, [sp, #20]
+    // ldr ip, [sp, #8]; mla r4, ip, lr, r4; ldr ip, [sp, #4]; ldr lr, [sp, #20]
+    // umull r6, r7, ip, lr; add r7, r7, r4; pop {r4}
+    a.mul3(.t0, n, m);
+    // The call of a routine moves it as well:
+    // push {r0-r3}; vpush {d0-d7}; ldr r0, [sp, #80]; ldr r1, [sp, #84]; ldr r2, [fp, #32]
+    // ldr r3, [fp, #36]; the call; mov r6, r0; mov r7, r1; vpop {d0-d7}; pop {r0-r3}
+    a.floorDiv(.t0, n, .t5, true, .c1, .c1);
+    try std.testing.expect(a.finish());
+    clearRoutines(&a);
+    try expectWords(&a, &.{
+        0xE59DC000, 0xE35C0002, 0xE59DC004, 0xE2DCC000, 0xBAFFFFFA, 0xE59DC000, 0xE25C3001, 0xE59DC004,
+        0xE2CC8000, 0xE59DC010, 0xE09C6006, 0xE59DC014, 0xE0AC7007, 0xE59DC014, 0xE15C0007, 0xE59DC010,
+        0x015C0006, 0x1AFFFFED, 0xE59DE010, 0xE59E2008, 0xE3A09000, 0xE58D2010, 0xE3A0C000, 0xE58DC014,
+        0xE59BC020, 0xE09CC00C, 0xE58BC020, 0xE59BC024, 0xE0ACC00C, 0xE58BC024, 0xE92D0010, 0xE59DC004,
+        0xE59DE018, 0xE0040E9C, 0xE59DE014, 0xE59DC008, 0xE0244E9C, 0xE59DC004, 0xE59DE014, 0xE0876E9C,
+        0xE0877004, 0xE8BD0010, 0xE92D000F, 0xED2D0B10, 0xE59D0050, 0xE59D1054, 0xE59B2020, 0xE59B3024,
+        0x00000000, 0x00000000, 0xE12FFF3C, 0xE1A06000, 0xE1A07001, 0xECBD0B10, 0xE8BD000F,
     });
 }

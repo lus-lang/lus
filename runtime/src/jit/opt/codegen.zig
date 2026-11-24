@@ -807,7 +807,15 @@ pub const Codegen = struct {
         const a = &c.em.a;
         switch (c.place(r)) {
             .g => |x| return x,
-            .spill => |k| a.load64(scratch, spillMem(k)),
+            .spill => |k| {
+                // A 32-bit target reads a word of the stack as cheaply
+                // as a word of a register that lives in its frame, so its
+                // assembler names the slot as an operand.
+                if (comptime @hasDecl(A, "spillReg")) {
+                    if (A.spillReg(k)) |x| return x;
+                }
+                a.load64(scratch, spillMem(k));
+            },
             .imm, .fimm => |v| a.movImmReloc(scratch, v, .literal),
             .ptr => |v| a.movImm(scratch, v),
             .f => |x| a.floatToBits(scratch, x),
@@ -830,6 +838,9 @@ pub const Codegen = struct {
     fn dst(c: *Codegen, r: Ref) A.Reg {
         return switch (c.ra.loc[r]) {
             .reg => |x| gpr_pool[x],
+            // The assembler of a 32-bit target writes the words of a
+            // result where they live on the stack.
+            .spill => |k| if (comptime @hasDecl(A, "spillReg")) A.spillReg(k) orelse sc0 else sc0,
             else => sc0,
         };
     }
@@ -842,7 +853,7 @@ pub const Codegen = struct {
     /// Stores a result that lives on the stack.
     fn done(c: *Codegen, r: Ref, reg: A.Reg) void {
         switch (c.ra.loc[r]) {
-            .spill => |k| c.em.a.store64(reg, spillMem(k)),
+            .spill => |k| if (reg == sc0) c.em.a.store64(reg, spillMem(k)),
             else => {},
         }
     }
