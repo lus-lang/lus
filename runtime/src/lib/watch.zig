@@ -445,10 +445,13 @@ const Inotify = struct {
             if (n <= 0) return;
             sched.opDone(l);
             var off: usize = 0;
+            // The kernel writes each event in the byte order of the
+            // machine.
+            const order = builtin.cpu.arch.endian();
             while (off + 16 <= @as(usize, @intCast(n))) {
-                const wd = std.mem.readInt(i32, buf[off..][0..4], .little);
-                const mask = std.mem.readInt(u32, buf[off + 4 ..][0..4], .little);
-                const len = std.mem.readInt(u32, buf[off + 12 ..][0..4], .little);
+                const wd = std.mem.readInt(i32, buf[off..][0..4], order);
+                const mask = std.mem.readInt(u32, buf[off + 4 ..][0..4], order);
+                const len = std.mem.readInt(u32, buf[off + 12 ..][0..4], order);
                 const raw = buf[off + 16 ..][0..len];
                 off += 16 + len;
                 const name = std.mem.sliceTo(raw, 0);
