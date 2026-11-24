@@ -157,8 +157,11 @@ jobs:
         working-directory: runtime
         env:
           LUS_EMULATED: "1"
+        # The tests of the command line start the binary that LUS_BIN
+        # names, or else runtime/zig-out/bin/lus, which this job leaves
+        # unbuilt.
         run: |
-          "$RUNNER_TEMP/lus-linked" test --timeout 300 ../tests/conformance ../packages/language-server/tests
+          LUS_BIN="$RUNNER_TEMP/lus-linked" "$RUNNER_TEMP/lus-linked" test --timeout 300 ../tests/conformance ../packages/language-server/tests
       - name: lus build --aot linked from the link object
         timeout-minutes: 10
         working-directory: tests/build
