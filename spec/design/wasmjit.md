@@ -102,7 +102,7 @@ The backend, the `warm` interpreter loop, and the step routines make `lus.wasm` 
 
 `packages/wasm/test/jit.test.js` runs under `node --test`. It compiles hot functions, runs programs that take every kind of fallback (floats, strings, metamethods, errors, cache misses, array misses, deep recursion, coroutines, finalizers, `__close`, and hooks) with the JIT off, on, and eager and compares their output, and covers a host without the JIT, a host that declines or fails to compile, background compilation, and the reuse of table slots.
 
-`packages/wasm/scripts/conformance.mjs` runs the conformance suite and the language server tests through `lus.wasm` with the JIT off, on, and eager. It fails when the modes disagree on any test, when a test traps the module, and when a file runs longer than two minutes. All three modes pass the same 6649 tests of 146 files, and no file traps. The tests that fail under WebAssembly in every mode need the network, workers, processes, or a real file system.
+`packages/wasm/scripts/conformance.mjs` runs the conformance suite and the language server tests through `lus.wasm` with the JIT off, on, and eager. It fails when the modes disagree on any test, when a test traps the module, and when a file runs longer than two minutes. All three modes pass the same 6653 tests of 146 files, and no file traps. The tests that fail under WebAssembly in every mode need the network, workers, processes, or a real file system.
 
 ## Open ends
 

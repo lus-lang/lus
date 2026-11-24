@@ -1,13 +1,13 @@
 -- `fs.watch`: a coroutine that hands over changes to files
 -- (spec/stdlib/fs/watch.md). A detached coroutine changes files while the
 -- test resumes the watch. Some sandboxes refuse file notifications, and
--- the tests skip there.
+-- WASI has none, so fs.watch is nil there. The tests skip in both cases.
 pledge("fs", "env")
 
 -- The directories of the tests take their names from a file that
 -- os.tmpname created exclusively, so two runs at once never share one.
 -- A system without a temporary directory, such as WASI, falls back to the
--- time, and its tests skip at the watch.
+-- time, and its tests skip in setup.
 local BASE = do
     local ok, name = catch os.tmpname()
     if ok then
@@ -32,6 +32,9 @@ end
 -- Every test watches a directory of its own, so that a late event of an
 -- earlier test never reaches it.
 local function setup()
+    if fs.watch == nil then
+        skip("fs.watch is nil on a system without file notifications")
+    end
     count = count + 1
     ROOT = BASE .. "-" .. count
     fs.createdirectory(fs.path.join(ROOT, "sub"), true)
