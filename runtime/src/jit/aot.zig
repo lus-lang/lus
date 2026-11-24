@@ -419,7 +419,7 @@ const DlInfo = extern struct {
 /// literal.
 fn inImage(v: usize) bool {
     // Every address of a user process lies below 2^48.
-    if (v < 4096 or v >> 48 != 0) return false;
+    if (v < 4096 or @as(u64, v) >> 48 != 0) return false;
     // An ELF executable lies between the symbols that every linker
     // defines at its first and its last byte. `dladdr` of a static
     // executable finds nothing.

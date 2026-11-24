@@ -56,6 +56,10 @@ pub const gpr_pool: []const A.Reg = switch (builtin.cpu.arch) {
     // The temporaries t0 to t6 in order, as on x86-64, so that the pool
     // overlaps the argument registers as it does there.
     .s390x => &.{ .r11, .r5, .r4, .r3, .r2, .r6, .r12 },
+    // The temporaries t0 to t6 in order, as on s390x, and six registers
+    // that live in the native frame of the entry sequence. The first
+    // three are pairs of machine registers.
+    .arm => &.{ .t0, .t1, .t2, .t3, .t4, .t5, .t6, .v0, .v1, .v2, .v3, .v4, .v5 },
     else => unreachable,
 };
 pub const fpr_pool: []const A.FReg = switch (builtin.cpu.arch) {
@@ -69,12 +73,16 @@ pub const fpr_pool: []const A.FReg = switch (builtin.cpu.arch) {
     .powerpc64le => &.{ .f1, .f2, .f3, .f4, .f5, .f6, .f7, .f8, .f9, .f10, .f11 },
     // f0 to f7, which a call may clobber.
     .s390x => &.{ .f0, .f1, .f2, .f3, .f4, .f5, .f6, .f7 },
+    // d0 to d7, which a call may clobber.
+    .arm => &.{ .d0, .d1, .d2, .d3, .d4, .d5, .d6, .d7 },
     else => unreachable,
 };
 /// Scratch registers of the code generator. On every target except
 /// aarch64 and s390x they are callee-saved registers that the entry
 /// sequence saves and baseline code leaves alone. On s390x the second and
-/// third are r1, which a call may clobber, as on aarch64.
+/// third are r1, which a call may clobber, as on aarch64. On 32-bit ARM
+/// they are two registers that live in the native frame of the entry
+/// sequence.
 const sc0: A.Reg = switch (builtin.cpu.arch) {
     .aarch64 => .x13,
     .x86_64 => .rbp,
@@ -82,6 +90,7 @@ const sc0: A.Reg = switch (builtin.cpu.arch) {
     .loongarch64 => .r27,
     .powerpc64le => .r18,
     .s390x => .r13,
+    .arm => .c0,
     else => unreachable,
 };
 const sc1: A.Reg = switch (builtin.cpu.arch) {
@@ -91,6 +100,7 @@ const sc1: A.Reg = switch (builtin.cpu.arch) {
     .loongarch64 => .r28,
     .powerpc64le => .r19,
     .s390x => .r1,
+    .arm => .c1,
     else => unreachable,
 };
 const sc2: A.Reg = switch (builtin.cpu.arch) {
@@ -100,6 +110,7 @@ const sc2: A.Reg = switch (builtin.cpu.arch) {
     .loongarch64 => .r29,
     .powerpc64le => .r20,
     .s390x => .r1,
+    .arm => .c1,
     else => unreachable,
 };
 const fsc0: A.FReg = switch (builtin.cpu.arch) {
@@ -109,6 +120,7 @@ const fsc0: A.FReg = switch (builtin.cpu.arch) {
     .loongarch64 => .f23,
     .powerpc64le => .f13,
     .s390x => .f8,
+    .arm => .d8,
     else => unreachable,
 };
 const fsc1: A.FReg = switch (builtin.cpu.arch) {
@@ -118,6 +130,7 @@ const fsc1: A.FReg = switch (builtin.cpu.arch) {
     .loongarch64 => .f22,
     .powerpc64le => .f12,
     .s390x => .f9,
+    .arm => .d9,
     else => unreachable,
 };
 const fret: A.FReg = switch (builtin.cpu.arch) {
@@ -127,6 +140,7 @@ const fret: A.FReg = switch (builtin.cpu.arch) {
     .loongarch64 => .f0,
     .powerpc64le => .f1,
     .s390x => .f0,
+    .arm => .d0,
     else => unreachable,
 };
 

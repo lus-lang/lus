@@ -189,6 +189,11 @@ pub fn install(block: []u8, code: []const u8) void {
         asm volatile ("ibar 0");
     } else if (builtin.cpu.arch == .powerpc64le) {
         syncCodePower(@intFromPtr(block.ptr), @intFromPtr(block.ptr) + code.len);
+    } else if (builtin.cpu.arch == .arm) {
+        // The cacheflush system call of ARM Linux makes every core that
+        // runs the process fetch the new code.
+        const start = @intFromPtr(block.ptr);
+        _ = std.os.linux.syscall3(.cacheflush, start, start + code.len, 0);
     }
 }
 
