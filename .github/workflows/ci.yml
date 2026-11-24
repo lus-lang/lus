@@ -120,7 +120,7 @@ jobs:
     # executable that lus build --aot links (spec/design/platforms.md).
     # Each limit sits about 5% above the measured size of linked.lus in
     # ReleaseSafe: 1.72 MB on 32-bit ARM, 1.62 MB on riscv64, 1.90 MB on
-    # loong64, and 3.87 MB on ppc64le.
+    # loong64, 3.87 MB on ppc64le, and 2.25 MB on s390x.
     strategy:
       fail-fast: false
       matrix:
@@ -133,6 +133,8 @@ jobs:
             limit: 1995000
           - target: powerpc64le-linux-musl
             limit: 4065000
+          - target: s390x-linux-musl
+            limit: 2360000
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:

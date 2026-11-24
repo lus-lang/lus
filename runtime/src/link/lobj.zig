@@ -27,6 +27,12 @@ pub const Arch = enum(u8) {
     riscv64,
     loongarch64,
     powerpc64le,
+    s390x,
+
+    /// The byte order of the architecture, which its code and data use.
+    pub fn endian(a: Arch) std.builtin.Endian {
+        return if (a == .s390x) .big else .little;
+    }
 
     /// The size of an address on the architecture.
     pub fn wordSize(a: Arch) u8 {
@@ -189,7 +195,10 @@ pub const Error = error{ BadLinkObject, OutOfMemory };
 
 /// Reads a link object. The result points into `buf`, which must stay
 /// alive and be aligned to 8 bytes.
-pub fn read(buf: []align(8) const u8) Error!Object {
+/// Reads the link object in `buf`. The file is little endian, so on a
+/// big-endian host the records of `buf` are swapped in place, and `buf`
+/// is read once.
+pub fn read(buf: []align(8) u8) Error!Object {
     var r: Reader = .{ .buf = buf };
     if (!std.mem.eql(u8, try r.take(magic.len), magic)) return error.BadLinkObject;
     const arch = std.enums.fromInt(Arch, try r.int(u8)) orelse return error.BadLinkObject;
@@ -254,10 +263,10 @@ pub fn zeroed(k: Kind) bool {
 }
 
 const Reader = struct {
-    buf: []align(8) const u8,
+    buf: []align(8) u8,
     pos: usize = 0,
 
-    fn take(r: *Reader, n: usize) Error![]const u8 {
+    fn take(r: *Reader, n: usize) Error![]u8 {
         if (n > r.buf.len - r.pos) return error.BadLinkObject;
         defer r.pos += n;
         return r.buf[r.pos..][0..n];
@@ -270,7 +279,9 @@ const Reader = struct {
     fn slice(r: *Reader, comptime T: type, n: usize) Error![]const T {
         r.pos = std.mem.alignForward(usize, r.pos, @alignOf(T));
         const b = try r.take(std.math.mul(usize, n, @sizeOf(T)) catch return error.BadLinkObject);
-        return @alignCast(std.mem.bytesAsSlice(T, b));
+        const items: []T = @alignCast(std.mem.bytesAsSlice(T, b));
+        if (@import("builtin").cpu.arch.endian() == .big) std.mem.byteSwapAllElements(T, items);
+        return items;
     }
 
     fn counted(r: *Reader, comptime T: type) Error![]const T {

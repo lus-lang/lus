@@ -257,6 +257,12 @@ The interpreter passes the conformance suite under `qemu-s390x` with those three
 
 The templates write a tag in three ways. On a big-endian target the tag belongs in the high byte of its word. A constant tag goes through `Value.tagWord`. A tag in a register goes through `storeTag`. A payload and a tag go through `storeValue`. Both are `store64` and `storePair64` on a little-endian target and store the tag byte at the start of its word on s390x. A tag that native code passes to the runtime is loaded as its byte. Frames need no change, because native code writes their fields one by one or as words that the runtime computes in the byte order of the target. The instruction fetch of z/Architecture follows stores, so installing code needs no cache maintenance.
 
+### Linking
+
+`lus build --aot` links the executable of s390x from `lus-runtime.lo`. s390x is big-endian, while the link object is little-endian on every target. The converter reads each header, symbol, and relocation of an object in the byte order of the object, and the bytes of the atoms keep the byte order of the target. A reader on a big-endian host swaps the records of a link object in place. The linker writes the headers, the slots of the global offset table, and every relocation in the byte order of the target. The relative relocations whose names end in `DBL` count halfwords, as `brasl` and `larl` do. The thread-local block lies below the thread pointer, as on x86-64.
+
+The whole of `lus`, linked from `lus.lo`, passes the conformance suite under `qemu-s390x` with the JIT off, the default tiers, eager, and optimizing. `lus build --aot`, run by `lus` on s390x, links `tests/build/linked.lus` into 2.25 MB, keeping 3114 KB of the 10309 KB of atoms of the runtime, and the executable installs its code compiled ahead of time. `tools/test-linux.sh --s390x` runs both.
+
 ## Windows on x86-64
 
 Windows is the largest desktop system by users. Lus already ships an interpreter build for it. The work is four changes in `jit/`, none of which touches the templates or the code generator.

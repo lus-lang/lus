@@ -282,6 +282,11 @@ pub const Linker = struct {
                 87, 88, 89, 90 => true, // GOT_TPREL16_DS, _LO_DS, _HI, _HA
                 else => null,
             },
+            .s390x => switch (ty) {
+                26 => false, // GOTENT
+                49 => true, // TLS_IEENT
+                else => null,
+            },
         };
     }
 
@@ -413,6 +418,7 @@ pub const Linker = struct {
             .arm => @intCast(off + std.mem.alignForward(u64, 8, l.tls.align_)),
             .riscv64, .loongarch64 => @intCast(off),
             .powerpc64le => @as(i64, @intCast(off)) - 0x7000,
+            .s390x => @as(i64, @intCast(off)) - @as(i64, @intCast(l.tls.memsz)),
         };
     }
 
@@ -444,7 +450,7 @@ pub const Linker = struct {
         for (l.got.keys(), 0..) |k, i| {
             const v: u64 = if (k.tls) @bitCast(l.tpOffset(l.symbol(k.target, k.sym))) else l.symbol(k.target, k.sym);
             const slot = out[index(l.got_addr - l.base) + word * i ..];
-            if (word == 4) put(u32, slot, @truncate(v)) else put(u64, slot, v);
+            if (word == 4) put(u32, slot, @truncate(v)) else std.mem.writeInt(u64, slot[0..8], v, o.arch.endian());
         }
         for (o.atoms, 0..) |a, i| {
             if (!l.live[i] or lobj.zeroed(a.kind)) continue;
@@ -507,6 +513,7 @@ pub const Linker = struct {
             .riscv64 => try l.applyRiscv(r, loc, sa, pi),
             .loongarch64 => try l.applyLoong(r, loc, sa, pi),
             .powerpc64le => try l.applyPpc(r, loc, sa, pi),
+            .s390x => try l.applyS390(r, loc, sa, pi),
             .aarch64 => switch (r.type) {
                 257 => put(u64, loc, @bitCast(sa)), // ABS64
                 258 => put(u32, loc, std.math.cast(u32, sa) orelse return error.RelocationOverflow), // ABS32
@@ -693,6 +700,26 @@ pub const Linker = struct {
         }
     }
 
+    /// The relocations of s390x, which is big-endian. The relative forms
+    /// whose names end in DBL count halfwords.
+    fn applyS390(l: *const Linker, r: lobj.Reloc, loc: []u8, sa: i64, pi: i64) Error!void {
+        const a = r.addend;
+        const got: i64 = if (l.usesGot(r.type)) |tls| @as(i64, @intCast(l.gotSlot(r, tls))) + a else 0;
+        switch (r.type) {
+            4 => std.mem.writeInt(u32, loc[0..4], std.math.cast(u32, sa) orelse return error.RelocationOverflow, .big), // 32
+            5 => try beI32(loc, sa - pi), // PC32
+            22 => std.mem.writeInt(u64, loc[0..8], @bitCast(sa), .big), // 64
+            23 => std.mem.writeInt(u64, loc[0..8], @bitCast(sa - pi), .big), // PC64
+            17, 18 => try beDbl(loc, sa - pi, 16), // PC16DBL, PLT16DBL
+            19, 20 => try beDbl(loc, sa - pi, 32), // PC32DBL, PLT32DBL
+            26, 49 => try beDbl(loc, got - pi, 32), // GOTENT, TLS_IEENT
+            37 => {}, // TLS_LOAD marks the load of the offset.
+            51 => std.mem.writeInt(u64, loc[0..8], @bitCast(l.tpOffset(l.symbol(r.target, r.sym)) + a), .big), // TLS_LE64
+            50 => try beI32(loc, l.tpOffset(l.symbol(r.target, r.sym)) + a), // TLS_LE32
+            else => return unsupported(l, r),
+        }
+    }
+
     fn unsupported(l: *const Linker, r: lobj.Reloc) Error {
         std.log.err("relocation type {d} of {s} is not supported", .{ r.type, @tagName(l.o.arch) });
         return error.UnsupportedRelocation;
@@ -710,6 +737,7 @@ pub const Linker = struct {
                 .riscv64 => .RISCV,
                 .loongarch64 => .LOONGARCH,
                 .powerpc64le => .PPC64,
+                .s390x => .S390,
                 .arm => unreachable,
             },
             .e_version = 1,
@@ -736,8 +764,11 @@ pub const Linker = struct {
         @memset(&eh.e_ident, 0);
         @memcpy(eh.e_ident[0..4], elf.MAGIC);
         eh.e_ident[elf.EI.CLASS] = elf.ELFCLASS64;
-        eh.e_ident[elf.EI.DATA] = elf.ELFDATA2LSB;
+        eh.e_ident[elf.EI.DATA] = if (o.arch.endian() == .big) elf.ELFDATA2MSB else elf.ELFDATA2LSB;
         eh.e_ident[elf.EI.VERSION] = 1;
+        // The headers take the byte order of the target.
+        const swap = o.arch.endian() != @import("builtin").cpu.arch.endian();
+        if (swap) std.mem.byteSwap(elf.Elf64_Ehdr, &eh);
         @memcpy(out[0..@sizeOf(elf.Elf64_Ehdr)], std.mem.asBytes(&eh));
         const phdr_size = @as(usize, l.phnum) * @sizeOf(Phdr);
         var ph: [6]Phdr = undefined;
@@ -745,6 +776,7 @@ pub const Linker = struct {
         for (l.seg, 1..) |s, k| ph[k] = .{ .p_type = PT_LOAD, .p_flags = s.flags, .p_offset = s.addr - l.base, .p_vaddr = s.addr, .p_paddr = s.addr, .p_filesz = s.filesz, .p_memsz = s.memsz, .p_align = l.page };
         ph[4] = .{ .p_type = PT_TLS, .p_flags = elf.PF_R, .p_offset = l.tls.addr - l.base, .p_vaddr = l.tls.addr, .p_paddr = l.tls.addr, .p_filesz = l.tls.filesz, .p_memsz = l.tls.memsz, .p_align = l.tls.align_ };
         ph[5] = .{ .p_type = PT_GNU_STACK, .p_flags = elf.PF_R | elf.PF_W, .p_offset = 0, .p_vaddr = 0, .p_paddr = 0, .p_filesz = 0, .p_memsz = 0, .p_align = 16 };
+        if (swap) std.mem.byteSwapAllElements(Phdr, &ph);
         @memcpy(out[@sizeOf(elf.Elf64_Ehdr)..][0..phdr_size], std.mem.sliceAsBytes(&ph));
     }
 
@@ -774,6 +806,8 @@ pub const Linker = struct {
         eh.e_ident[elf.EI.CLASS] = elf.ELFCLASS32;
         eh.e_ident[elf.EI.DATA] = elf.ELFDATA2LSB;
         eh.e_ident[elf.EI.VERSION] = 1;
+        const swap = @import("builtin").cpu.arch.endian() == .big;
+        if (swap) std.mem.byteSwap(elf.Elf32_Ehdr, &eh);
         @memcpy(out[0..ehsize], std.mem.asBytes(&eh));
         const phdr_size = @as(usize, l.phnum) * @sizeOf(Phdr32);
         const P = Phdr32;
@@ -787,6 +821,7 @@ pub const Linker = struct {
         for (l.seg, 1..) |s, k| ph[k] = .{ .p_type = PT_LOAD, .p_flags = s.flags, .p_offset = w32(s.addr - l.base), .p_vaddr = w32(s.addr), .p_paddr = w32(s.addr), .p_filesz = w32(s.filesz), .p_memsz = w32(s.memsz), .p_align = w32(l.page) };
         ph[4] = .{ .p_type = PT_TLS, .p_flags = elf.PF_R, .p_offset = w32(l.tls.addr - l.base), .p_vaddr = w32(l.tls.addr), .p_paddr = w32(l.tls.addr), .p_filesz = w32(l.tls.filesz), .p_memsz = w32(l.tls.memsz), .p_align = w32(l.tls.align_) };
         ph[5] = .{ .p_type = PT_GNU_STACK, .p_flags = elf.PF_R | elf.PF_W, .p_offset = 0, .p_vaddr = 0, .p_paddr = 0, .p_filesz = 0, .p_memsz = 0, .p_align = 16 };
+        if (swap) std.mem.byteSwapAllElements(P, &ph);
         @memcpy(out[ehsize..][0..phdr_size], std.mem.sliceAsBytes(&ph));
     }
 };
@@ -928,6 +963,22 @@ fn ppcBranch(loc: []u8, d: i64, mask: u32, reach: i64) Error!void {
     if (d & 3 != 0 or d < -reach or d >= reach) return error.RelocationOverflow;
     const v: u32 = @truncate(@as(u64, @bitCast(d)));
     put(u32, loc, (insn(loc) & ~mask) | (v & mask));
+}
+
+fn beI32(loc: []u8, v: i64) Error!void {
+    std.mem.writeInt(i32, loc[0..4], std.math.cast(i32, v) orelse return error.RelocationOverflow, .big);
+}
+
+/// A relative field of `bits` bits that counts halfwords, big-endian.
+fn beDbl(loc: []u8, d: i64, comptime bits: u7) Error!void {
+    if (d & 1 != 0) return error.RelocationOverflow;
+    const v = d >> 1;
+    if (v < -(@as(i64, 1) << (bits - 1)) or v >= (@as(i64, 1) << (bits - 1))) return error.RelocationOverflow;
+    switch (bits) {
+        16 => std.mem.writeInt(i16, loc[0..2], @intCast(v), .big),
+        32 => std.mem.writeInt(i32, loc[0..4], @intCast(v), .big),
+        else => comptime unreachable,
+    }
 }
 
 /// Whether a relocation of 32-bit ARM writes a branch in the ARM state,
@@ -1256,4 +1307,41 @@ test "the linker writes the calls and the table of contents of ppc64le" {
     const lo: i64 = std.mem.readInt(i16, out[at + 12 ..][0..2], .little);
     const toc: i64 = @intCast(l.got_addr + 0x8000);
     try std.testing.expectEqual(@as(i64, @intCast(l.addr[2] + 0x8123)), toc + (ha << 16) + lo);
+}
+
+test "the linker writes a big-endian executable for s390x" {
+    const gpa = std.testing.allocator;
+    var w: lobj.Writer = .{ .gpa = gpa, .arch = .s390x, .os = .linux };
+    defer w.deinit();
+    // _start: brasl %r14, f, then larl %r1, d.
+    const code = [_]u8{ 0xc0, 0xe5, 0, 0, 0, 0, 0xc0, 0x10, 0, 0, 0, 0 };
+    const start = try w.atom(.text, 2, &code, code.len, "_start");
+    try w.reloc(.{ .offset = 2, .type = 20, .target = .{ .index = 1, .space = .atom }, .addend = 2 });
+    try w.reloc(.{ .offset = 8, .type = 19, .target = .{ .index = 2, .space = .atom }, .addend = 2 + 0x40 });
+    _ = try w.atom(.text, 3, &[_]u8{ 0x07, 0xfe }, 2, "f");
+    _ = try w.atom(.data, 3, &@as([0x100]u8, @splat(0)), 0x100, "d");
+    w.entry = .{ .name = try w.string("_start"), .atom = start, .offset = 0 };
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    defer buf.deinit();
+    try w.write(&buf.writer);
+    const bytes = try gpa.alignedAlloc(u8, .@"8", buf.written().len);
+    defer gpa.free(bytes);
+    @memcpy(bytes, buf.written());
+    const o = try lobj.read(bytes);
+    const r = try link(gpa, &o, .all, .{});
+    defer gpa.free(r.bytes);
+    try std.testing.expectEqual(@as(u8, elf.ELFDATA2MSB), r.bytes[elf.EI.DATA]);
+    try std.testing.expectEqual(@as(u16, @backingInt(elf.EM.S390)), std.mem.readInt(u16, r.bytes[18..20], .big));
+    const entry = std.mem.readInt(u64, r.bytes[24..32], .big);
+    const at: usize = @intCast(entry - 0x200000);
+    // Both fields count halfwords from the start of the instruction.
+    const call = std.mem.readInt(i32, r.bytes[at + 2 ..][0..4], .big);
+    const addr = std.mem.readInt(i32, r.bytes[at + 8 ..][0..4], .big);
+    var l: Linker = .{ .gpa = gpa, .o = &o };
+    defer l.deinit();
+    try l.drop(.all);
+    try l.mark();
+    try l.layout();
+    try std.testing.expectEqual(@as(i64, @intCast(l.addr[1])) - @as(i64, @intCast(l.addr[0])), @as(i64, call) * 2);
+    try std.testing.expectEqual(@as(i64, @intCast(l.addr[2] + 0x40)) - @as(i64, @intCast(l.addr[0] + 6)), @as(i64, addr) * 2);
 }

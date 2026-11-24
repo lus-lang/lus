@@ -250,7 +250,8 @@ pub const Converter = struct {
 
     fn parseElfOf(c: *Converter, comptime E: type, name: []const u8, data: []const u8) !Input {
         if (data.len < @sizeOf(E.Ehdr)) return error.NotElf;
-        const eh = std.mem.bytesToValue(E.Ehdr, data[0..@sizeOf(E.Ehdr)]);
+        const big = data[elf.EI.DATA] == elf.ELFDATA2MSB;
+        const eh = readAs(E.Ehdr, data[0..@sizeOf(E.Ehdr)], big);
         if (eh.e_type != .REL) return error.NotRelocatable;
         const machine: elf.EM = switch (c.arch) {
             .x86_64 => .X86_64,
@@ -259,13 +260,14 @@ pub const Converter = struct {
             .riscv64 => .RISCV,
             .loongarch64 => .LOONGARCH,
             .powerpc64le => .PPC64,
+            .s390x => .S390,
         };
         if (eh.e_machine != machine or (E == Elf32) != (c.arch == .arm)) {
             std.log.err("{s}: built for another architecture", .{name});
             return error.WrongArchitecture;
         }
         const shdrs = try c.arena.alloc(E.Shdr, eh.e_shnum);
-        for (shdrs, 0..) |*sh, k| sh.* = std.mem.bytesToValue(E.Shdr, slice(data, eh.e_shoff + k * @sizeOf(E.Shdr), @sizeOf(E.Shdr)));
+        for (shdrs, 0..) |*sh, k| sh.* = readAs(E.Shdr, slice(data, eh.e_shoff + k * @sizeOf(E.Shdr), @sizeOf(E.Shdr)), big);
         const shstr = shdrs[eh.e_shstrndx];
         const secs = try c.arena.alloc(Sec, shdrs.len);
         var symtab: ?E.Shdr = null;
@@ -290,7 +292,7 @@ pub const Converter = struct {
             const n: usize = @intCast(st.sh_size / @sizeOf(E.Sym));
             syms = try c.arena.alloc(Sym, n);
             for (syms, 0..) |*s, k| {
-                const es = std.mem.bytesToValue(E.Sym, slice(data, st.sh_offset + k * @sizeOf(E.Sym), @sizeOf(E.Sym)));
+                const es = readAs(E.Sym, slice(data, st.sh_offset + k * @sizeOf(E.Sym), @sizeOf(E.Sym)), big);
                 s.* = .{
                     .name = cstr(data, strs.sh_offset + es.st_name),
                     .value = es.st_value,
@@ -318,7 +320,7 @@ pub const Converter = struct {
             if (sh.sh_type == elf.SHT_GROUP) {
                 const members = std.mem.bytesAsSlice(u32, slice(data, sh.sh_offset, sh.sh_size));
                 const m = try c.arena.alloc(u32, members.len - 1);
-                for (m, members[1..]) |*d, x| d.* = std.mem.littleToNative(u32, x);
+                for (m, members[1..]) |*d, x| d.* = if (big) std.mem.bigToNative(u32, x) else std.mem.littleToNative(u32, x);
                 try groups.append(c.arena, .{ .sig = syms[sh.sh_info].name, .members = m });
                 continue;
             }
@@ -334,12 +336,12 @@ pub const Converter = struct {
                 var info: @FieldType(E.Rel, "r_info") = undefined;
                 var addend: i64 = 0;
                 if (rela) {
-                    const r = std.mem.bytesToValue(E.Rela, slice(data, at, size));
+                    const r = readAs(E.Rela, slice(data, at, size), big);
                     offset = r.r_offset;
                     info = r.r_info;
                     addend = r.r_addend;
                 } else {
-                    const r = std.mem.bytesToValue(E.Rel, slice(data, at, size));
+                    const r = readAs(E.Rel, slice(data, at, size), big);
                     offset = r.r_offset;
                     info = r.r_info;
                 }
@@ -365,6 +367,14 @@ pub const Converter = struct {
             rels[sh.sh_info] = list[0..used];
         }
         return .{ .name = name, .data = data, .secs = secs, .syms = syms, .rels = rels, .groups = groups.items };
+    }
+
+    /// The record `T` of an ELF file at `bytes`, in the byte order of the
+    /// file.
+    fn readAs(comptime T: type, bytes: []const u8, big: bool) T {
+        var v = std.mem.bytesToValue(T, bytes);
+        if (big) std.mem.byteSwap(T, &v);
+        return v;
     }
 
     /// The addend of a relocation of 32-bit ARM from the word it patches,
@@ -418,7 +428,7 @@ pub const Converter = struct {
             .x86_64 => 0x01000007,
             .aarch64 => 0x0100000c,
             .arm => 12,
-            .riscv64, .loongarch64, .powerpc64le => 0,
+            .riscv64, .loongarch64, .powerpc64le, .s390x => 0,
         };
         if (rd(u32, data, 4) != cpu) {
             std.log.err("{s}: built for another architecture", .{name});
@@ -703,6 +713,7 @@ pub const Converter = struct {
             .riscv64 => 0x5064,
             .loongarch64 => 0x6264,
             .powerpc64le => 0x1f1,
+            .s390x => 0,
         };
     }
 
@@ -1246,7 +1257,7 @@ pub const Converter = struct {
             const s = in.syms[e.value_ptr.sym];
             if (std.mem.eql(u8, name, "lus.reg_layout")) {
                 const b = (in.secs[s.shndx].bytes orelse return badRegistration(name, "its layout is in a zeroed section"))[@intCast(s.value)..][0..12];
-                for (&c.w.reg_layout, 0..) |*f, k| f.* = std.mem.readInt(u32, b[k * 4 ..][0..4], .little);
+                for (&c.w.reg_layout, 0..) |*f, k| f.* = std.mem.readInt(u32, b[k * 4 ..][0..4], c.arch.endian());
                 continue;
             }
             if (!std.mem.startsWith(u8, name, "lus.reg:")) continue;

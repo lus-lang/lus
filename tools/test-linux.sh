@@ -22,12 +22,11 @@
 # host, so --arm registers it for the running VM first. The 32-bit ARM
 # binary also runs the suite under LUS_JIT_AOT=reload, which runs every
 # function from what the loader of code compiled ahead of time makes of
-# it, and a line in the log of that run counts as a failure. --arm,
-# --riscv64, --loong64, and --ppc64le also build the link object of the
-# target. The whole of `lus` linked from it runs the suite with the
-# default tiers, and `lus build --aot` links `tests/build/linked.lus` from
-# it and checks the output. The VM is the
-# one LUS_LIMA_VM names, `boring` by default, and must be running.
+# it, and a line in the log of that run counts as a failure. Each of
+# these targets also builds its link object. The whole of `lus` linked
+# from it runs the suite with the default tiers, and `lus build --aot`
+# links `tests/build/linked.lus` from it and checks the output. The VM is
+# the one LUS_LIMA_VM names, `boring` by default, and must be running.
 #
 # The aarch64 runs decide the exit status. qemu-user emulates the memory
 # map of a process, and glibc then reports native stack bounds that are
@@ -88,12 +87,7 @@ for target in $extra; do
     wait_for_memory
     zig build -j1 -Doptimize=ReleaseSafe -Dtarget="$target" --prefix "zig-out-linux-${target%%-*}"
 done
-# The targets whose executables the linker of `lus build --aot` writes.
-linkable() {
-    case "$1" in arm-linux* | riscv64-linux* | loongarch64-linux* | powerpc64le-linux*) return 0 ;; *) return 1 ;; esac
-}
 for target in $extra; do
-    linkable "$target" || continue
     arch="${target%%-*}"
     wait_for_memory
     zig build link-object -j1 -Doptimize=ReleaseSafe -Dtarget="$target" --prefix "zig-out-linux-$arch-lo"
@@ -168,7 +162,7 @@ for target in $extra; do
         arm-linux*) run_suite arm off default eager baseline opt-eager reload ;;
         *) run_suite "${target%%-*}" off default eager baseline opt-eager ;;
     esac
-    if linkable "$target"; then run_linked "${target%%-*}"; fi
+    run_linked "${target%%-*}"
 done
 
 if [ "$emulated_failed" = 1 ]; then
