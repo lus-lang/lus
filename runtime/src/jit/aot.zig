@@ -76,6 +76,7 @@ pub const routines = [_]*const anyopaque{
     @ptrCast(&helpers.returnAll),
     @ptrCast(&helpers.ctxGet),
     @ptrCast(&helpers.ctxSet),
+    @ptrCast(&helpers.closeUpvals),
 };
 
 /// The routines that the assembler of the target calls on its own, which
@@ -622,7 +623,7 @@ pub fn reloadUnitMeta(l: *Thread, u: *opt.Unit) void {
 
 /// The version byte changes with the numbering of `routines`, which the
 /// step routines follow.
-const magic = "LUSAOT\x05\x00";
+const magic = "LUSAOT\x06\x00";
 
 /// The flag of a section whose code takes the static form.
 const flag_static: u32 = 1;

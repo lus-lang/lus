@@ -38,19 +38,30 @@ fn StepOf(comptime o: Op) type {
     };
 }
 
-/// The step routine of `ret0` and `ret1`, which return `n` values. A
-/// lean frame that needs the general return, because it has an upvalue
-/// or a variable to close, still returns to the address its caller left
-/// in it. The routine leaves that address for `jit.dispatch`, and native
-/// code continues there with the result count that a lean return
-/// passes. The general return has moved the result and set the stack
-/// top as the code at that address does again.
-fn ReturnOf(comptime o: Op, comptime n: usize) type {
+/// The step routine of a return. A lean frame that needs the general
+/// return, because it has a variable to close or returns several
+/// values, still returns to the address its caller left in it.
+/// The routine leaves that address for `jit.dispatch`, and native code
+/// continues there with the result count that a lean return passes. The
+/// general return has moved the results, padded them with nil to the
+/// wanted count, and set the stack top as the code at that address does
+/// again. That code stores nil after the first result of a call that
+/// wants two or more, so such a call continues in the step routine.
+fn ReturnOf(comptime o: Op) type {
     return struct {
         fn step(l: *Thread, pc: usize, stop: usize, ins: usize) callconv(jit.cc) usize {
             const depth = l.frames.items.len;
             const fr = &l.frames.items[depth - 1];
-            const back: usize = if (fr.lean and l.hook_mask == 0) fr.resume_at else 0;
+            const back: usize = if (fr.lean and l.hook_mask == 0 and fr.want <= 1) fr.resume_at else 0;
+            const n: usize = if (fr.want >= 0) @intCast(fr.want) else switch (o) {
+                .ret0 => 0,
+                .ret1 => 1,
+                else => blk: {
+                    const w: u32 = @truncate(ins);
+                    const nb = opc.b(w);
+                    break :blk if (nb != 0) nb - 1 else l.top - (fr.base + opc.a(w));
+                },
+            };
             const s = StepOf(o).step(l, pc, stop, ins);
             if (back != 0 and s == interp.Step.dispatch and l.frames.items.len == depth - 1) {
                 l.g.jit.resume_addr = back;
@@ -68,8 +79,7 @@ const op_count = op_values.len;
 pub const steps: [op_count]StepFn = blk: {
     var t: [op_count]StepFn = undefined;
     for (op_values) |v| t[v] = &StepOf(@fromBackingInt(v)).step;
-    t[@backingInt(Op.ret0)] = &ReturnOf(.ret0, 0).step;
-    t[@backingInt(Op.ret1)] = &ReturnOf(.ret1, 1).step;
+    for ([_]Op{ .ret, .ret0, .ret1 }) |o| t[@backingInt(o)] = &ReturnOf(o).step;
     break :blk t;
 };
 
@@ -158,6 +168,11 @@ pub fn length(x: *const Value, out: *Value) callconv(jit.cc) usize {
 }
 
 /// The slow part of the write barrier, for a store native code made.
+/// Closes the open upvalues at or above `level`, for a lean return.
+pub fn closeUpvals(l: *Thread, level: usize) callconv(jit.cc) void {
+    interp.closeUpvals(l, @intCast(level));
+}
+
 pub fn barrier(l: *Thread, h: *gc.Header) callconv(jit.cc) void {
     gc.barrierBack(l.g, h);
 }
