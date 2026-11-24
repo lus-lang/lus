@@ -41,6 +41,15 @@ pub const A = switch (builtin.cpu.arch) {
     else => @compileError("the JIT has no backend for this target"),
 };
 const Mem = A.Mem;
+
+/// Stores a 64-bit word that is an integer or the bits of a float. On a
+/// 64-bit target the value of a constant tells whether it can be an
+/// address. On a 32-bit target every address is one word, so the store
+/// names its word a literal, which keeps it away from the resolver of
+/// code compiled ahead of time (`reloc.zig`).
+pub fn storeLiteral(a: *A.Assembler, m: Mem, v: u64) void {
+    if (@sizeOf(usize) == 4) a.storeImm64Reloc(m, v, .literal) else a.storeImm64(m, v);
+}
 const Label = A.Label;
 
 const tag_int: u8 = @backingInt(Tag.integer);
@@ -444,7 +453,7 @@ pub const Emitter = struct {
         a.mov(A.args[0], A.thread);
         a.movImm(A.args[1], pc + 1);
         a.mov(A.args[2], A.stop);
-        a.movImm(A.args[3], e.p.code[pc]);
+        a.movImmReloc(A.args[3], e.p.code[pc], .literal);
         a.call(@intFromPtr(helpers.steps[@backingInt(o)]));
         a.jumpIfImm(.hi, A.ret0, @intCast(Step.skip), e.l_status);
         e.reloadBp();
@@ -456,17 +465,18 @@ pub const Emitter = struct {
         e.a.storeImm64(tagOf(r), Value.tagWordOf(tag));
     }
 
-    /// Stores a constant value into a register.
+    /// Stores a constant value into a register. Only the payload of an
+    /// object is an address.
     fn storeConst(e: *Emitter, r: u32, v: Value) void {
         const w: *const [2]u64 = @ptrCast(&v);
-        e.a.storeImm64(slot(r), w[0]);
+        if (v.tag.isCollectable()) e.a.storeImm64(slot(r), w[0]) else storeLiteral(&e.a, slot(r), w[0]);
         e.a.storeImm64(tagOf(r), w[1]);
     }
 
     fn loadInt(e: *Emitter, dst: A.Reg, o: Operand) void {
         switch (o) {
             .reg => |r| e.a.load64(dst, slot(r)),
-            .int => |v| e.a.movImm(dst, @bitCast(v)),
+            .int => |v| e.a.movImmReloc(dst, @bitCast(v), .literal),
             .float => unreachable,
         }
     }
@@ -476,11 +486,11 @@ pub const Emitter = struct {
         switch (o) {
             .reg => |r| e.a.loadF(dst, slot(r)),
             .int => |v| {
-                e.a.movImm(A.t0, @bitCast(@as(f64, @floatFromInt(v))));
+                e.a.movImmReloc(A.t0, @bitCast(@as(f64, @floatFromInt(v))), .literal);
                 e.a.bitsToFloat(dst, A.t0);
             },
             .float => |v| {
-                e.a.movImm(A.t0, @bitCast(v));
+                e.a.movImmReloc(A.t0, @bitCast(v), .literal);
                 e.a.bitsToFloat(dst, A.t0);
             },
         }
@@ -911,7 +921,7 @@ pub const Emitter = struct {
         a.lea(A.t1, .{ .base = A.t4, .disp = -1 });
         a.storePair32(A.t1, A.t4, .{ .base = A.t2, .disp = frameField("func") });
         a.storePair32(A.t1, A.t5, .{ .base = A.t2, .disp = frameField("ret") });
-        a.storeImm64(.{ .base = A.t2, .disp = frameField("boundary") }, Frame.lean_flags);
+        storeLiteral(a, .{ .base = A.t2, .disp = frameField("boundary") }, Frame.lean_flags);
         // The caller continues after the jump that follows its call.
         a.linkPastJump(A.t3);
         a.dropLink();
@@ -1326,7 +1336,7 @@ pub const Emitter = struct {
         a.load32(tmp, .{ .base = tab, .disp = tl.hash_used });
         a.movImm(slot_r, e.prediction(pc, il.ic_shape));
         a.load16(slot_r, .{ .base = slot_r });
-        a.movImm(tags, tl.shaped_bit);
+        a.movImmReloc(tags, tl.shaped_bit, .literal);
         a.@"or"(slot_r, tags);
         a.jumpIf(.ne, tmp, slot_r, other);
         a.movImm(slot_r, e.prediction(pc, il.ic_own));
@@ -1389,7 +1399,7 @@ pub const Emitter = struct {
         a.load32(A.t3, .{ .base = A.t0, .disp = tl.hash_used });
         a.movImm(A.t1, e.prediction(pc, il.ic_index));
         a.load16(A.t1, .{ .base = A.t1 });
-        a.movImm(A.t2, tl.shaped_bit);
+        a.movImmReloc(A.t2, tl.shaped_bit, .literal);
         a.@"or"(A.t1, A.t2);
         a.jumpIf(.ne, A.t3, A.t1, dict2);
         a.jumpIfByte(.eq, tagOf(v), tag_nil, miss);
@@ -1400,7 +1410,7 @@ pub const Emitter = struct {
         a.jumpIf(.hs, A.t1, A.t2, miss);
         a.movImm(A.t2, e.prediction(pc, il.ic_holder));
         a.load16(A.t2, .{ .base = A.t2 });
-        a.movImm(A.t4, tl.shaped_bit);
+        a.movImmReloc(A.t4, tl.shaped_bit, .literal);
         a.@"or"(A.t2, A.t4);
         a.store32(A.t2, .{ .base = A.t0, .disp = tl.hash_used });
         a.subScaled(A.t2, A.t3, A.t1, 0);
@@ -1447,7 +1457,7 @@ pub const Emitter = struct {
         a.jmp(done);
         a.bind(dict);
         a.load32(A.t1, .{ .base = A.t0, .disp = tl.hash_used });
-        a.movImm(A.t2, tl.shaped_bit);
+        a.movImmReloc(A.t2, tl.shaped_bit, .literal);
         a.jumpIf(.hs, A.t1, A.t2, miss);
         e.predictedNode(e.prediction(pc, il.ic_own), A.t0, e.p.constants[kc].as(object.String), A.t1, A.t2, A.t3, chain, chain);
         a.jumpIfByte(.eq, .{ .base = A.t2, .disp = tl.tag_val }, tag_nil, miss);
@@ -1666,7 +1676,7 @@ pub const Emitter = struct {
                 // Another number type compares in the step routine.
                 a.jumpIfByte(.ne, tagOf(x), tag_int, e.coldStep(pc));
                 a.load64(A.t0, slot(x));
-                a.movImm(A.t1, k.payload);
+                a.movImmReloc(A.t1, k.payload, .literal);
                 // Skip when the result differs from C.
                 a.jumpIf(if (c) .ne else .eq, A.t0, A.t1, skip);
             },
@@ -1751,7 +1761,7 @@ pub const Emitter = struct {
             .native_call => {
                 const other = a.newLabel();
                 a.mov(A.args[0], A.thread);
-                a.movImm(A.args[1], e.p.code[c.pc]);
+                a.movImmReloc(A.args[1], e.p.code[c.pc], .literal);
                 a.movImm(A.args[2], c.pc + 1);
                 a.call(@intFromPtr(&helpers.callNative));
                 a.jumpIfImm(.ne, A.ret0, 0, other);
@@ -1774,7 +1784,7 @@ pub const Emitter = struct {
                 const ins = e.p.code[c.pc];
                 a.mov(A.args[0], A.thread);
                 a.mov(A.args[1], A.bp);
-                a.movImm(A.args[2], ins);
+                a.movImmReloc(A.args[2], ins, .literal);
                 a.movImm(A.args[3], c.pc + 1);
                 a.callPair(@intFromPtr(&helpers.tailcall));
                 const refused = a.newLabel();
@@ -1791,7 +1801,7 @@ pub const Emitter = struct {
                 const ins = e.p.code[c.pc];
                 const ra: u32 = opc.a(ins);
                 a.mov(A.args[0], A.thread);
-                a.movImm(A.args[1], ins);
+                a.movImmReloc(A.args[1], ins, .literal);
                 a.movImm(A.args[2], c.pc + 1);
                 a.call(@intFromPtr(&helpers.tailNative));
                 a.jumpIfImm(.ne, A.ret0, 0, other);
@@ -1805,7 +1815,7 @@ pub const Emitter = struct {
                 a.bind(general);
                 a.mov(A.args[0], A.thread);
                 a.mov(A.args[1], A.stop);
-                a.movImm(A.args[2], ins);
+                a.movImmReloc(A.args[2], ins, .literal);
                 a.call(@intFromPtr(&helpers.returnAll));
                 a.jmp(e.l_status);
                 a.bind(other);
@@ -1842,7 +1852,7 @@ pub const Emitter = struct {
                 a.load32(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
                 a.addImm(A.t2, -1);
                 a.loadWord(A.t4, .{ .base = A.t0, .disp = e.lay.hash_ptr });
-                a.movImm(A.t3, s.hash);
+                a.movImmReloc(A.t3, s.hash, .literal);
                 a.movImm(A.t6, @intFromPtr(s));
                 a.bind(loop);
                 a.@"and"(A.t3, A.t2);
@@ -1910,7 +1920,7 @@ pub const Emitter = struct {
                     a.mov(A.t5, A.t2);
                     a.addImm(A.t2, -1);
                     a.loadWord(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
-                    a.movImm(A.t1, s.hash);
+                    a.movImmReloc(A.t1, s.hash, .literal);
                     a.movImm(A.t6, @intFromPtr(s));
                     a.bind(loop);
                     a.@"and"(A.t1, A.t2);

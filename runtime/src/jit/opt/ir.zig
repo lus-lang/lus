@@ -286,7 +286,9 @@ pub const Inst = struct {
         /// The callee of `callc` writes only the array part of the
         /// table it gets and its write barrier, and never collects.
         grows: bool = false,
-        _pad: u3 = 0,
+        /// The constant of this `guardi` or `bri` is an address.
+        address: bool = false,
+        _pad: u2 = 0,
     };
 
     pub fn isConst(i: *const Inst) bool {

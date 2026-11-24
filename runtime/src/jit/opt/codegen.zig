@@ -185,8 +185,12 @@ const Place = union(enum) {
     g: A.Reg,
     f: A.FReg,
     spill: u32,
+    /// An integer constant.
     imm: u64,
+    /// The bits of a float constant.
     fimm: u64,
+    /// A constant address, which code compiled ahead of time relocates.
+    ptr: u64,
 };
 
 const Move = struct {
@@ -470,7 +474,7 @@ pub const Codegen = struct {
         a.bind(c.l_root);
         c.root_off = a.offset();
         // sc1 = the bytes of native stack that the slots left allow.
-        a.movImm(sc1, Thread.max_stack - chain_margin);
+        a.movImmReloc(sc1, Thread.max_stack - chain_margin, .literal);
         a.sub(sc1, sc0);
         a.jumpIfImm(.le, sc1, 0, l_no);
         var mult: u32 = 16 / c.chain_ratio;
@@ -654,7 +658,7 @@ pub const Codegen = struct {
         a.mov(A.args[0], A.thread);
         a.movImm(A.args[1], pc + 1);
         a.mov(A.args[2], A.stop);
-        a.movImm(A.args[3], opc.abc(o, 0, 0, 0));
+        a.movImmReloc(A.args[3], opc.abc(o, 0, 0, 0), .literal);
         a.call(@intFromPtr(helpers.steps[@backingInt(o)]));
         a.jmp(c.em.l_status);
     }
@@ -783,7 +787,8 @@ pub const Codegen = struct {
     fn place(c: *Codegen, r: Ref) Place {
         const i = c.f.at(r);
         switch (i.op) {
-            .kint, .kptr, .kbool => return .{ .imm = @bitCast(i.imm) },
+            .kint, .kbool => return .{ .imm = @bitCast(i.imm) },
+            .kptr => return .{ .ptr = @bitCast(i.imm) },
             .kflt => return .{ .fimm = @bitCast(i.imm) },
             .knil => return .{ .imm = 0 },
             else => {},
@@ -803,8 +808,8 @@ pub const Codegen = struct {
         switch (c.place(r)) {
             .g => |x| return x,
             .spill => |k| a.load64(scratch, spillMem(k)),
-            .imm => |v| a.movImm(scratch, v),
-            .fimm => |v| a.movImm(scratch, v),
+            .imm, .fimm => |v| a.movImmReloc(scratch, v, .literal),
+            .ptr => |v| a.movImm(scratch, v),
             .f => |x| a.floatToBits(scratch, x),
         }
         return scratch;
@@ -815,7 +820,7 @@ pub const Codegen = struct {
         switch (c.place(r)) {
             .f => |x| return x,
             .spill => |k| a.loadF(scratch, spillMem(k)),
-            .fimm, .imm => |v| a.fmovImm(scratch, v),
+            .fimm, .imm, .ptr => |v| a.fmovImm(scratch, v),
             .g => |x| a.bitsToFloat(scratch, x),
         }
         return scratch;
@@ -868,6 +873,19 @@ pub const Codegen = struct {
         return v >= std.math.minInt(i32) and v <= std.math.maxInt(i32);
     }
 
+    /// Whether the constant of a guard or a branch travels as the 32-bit
+    /// integer of `jumpIfImm`. An address compiled ahead of time loads
+    /// into a register in its patchable form, which matters on a 32-bit
+    /// target, where an address fits 32 bits.
+    fn shortImm(c: *Codegen, i: *const ir.Inst) bool {
+        return fitsImm(i.imm) and !(i.flags.address and c.em.aot != null);
+    }
+    /// Loads the constant of a guard or a branch.
+    fn wideImm(c: *Codegen, to: A.Reg, i: *const ir.Inst) void {
+        const a = &c.em.a;
+        if (i.flags.address) a.movImm(to, @bitCast(i.imm)) else a.movImmReloc(to, @bitCast(i.imm), .literal);
+    }
+
     fn exitOf(c: *Codegen, i: *const ir.Inst) Label {
         return c.exit_labels[i.snap];
     }
@@ -891,13 +909,13 @@ pub const Codegen = struct {
                 .f => |d| switch (m.src) {
                     .f => |s| a.fmov(d, s),
                     .spill => |k| a.loadF(d, spillMem(k)),
-                    .fimm, .imm => |v| a.fmovImm(d, v),
+                    .fimm, .imm, .ptr => |v| a.fmovImm(d, v),
                     .g => |s| a.bitsToFloat(d, s),
                 },
                 .spill => |dk| switch (m.src) {
                     .f => |s| a.storeF(s, spillMem(dk)),
                     .spill => |k| a.copy8(spillMem(dk), spillMem(k)),
-                    .fimm, .imm => |v| a.storeImm64(spillMem(dk), v),
+                    .fimm, .imm, .ptr => |v| emit.storeLiteral(a, spillMem(dk), v),
                     .g => |s| a.store64(s, spillMem(dk)),
                 },
                 else => unreachable,
@@ -908,13 +926,15 @@ pub const Codegen = struct {
             .g => |d| switch (m.src) {
                 .g => |s| a.mov(d, s),
                 .spill => |k| a.load64(d, spillMem(k)),
-                .imm, .fimm => |v| a.movImm(d, v),
+                .imm, .fimm => |v| a.movImmReloc(d, v, .literal),
+                .ptr => |v| a.movImm(d, v),
                 .f => |s| a.floatToBits(d, s),
             },
             .spill => |dk| switch (m.src) {
                 .g => |s| a.store64(s, spillMem(dk)),
                 .spill => |k| a.copy8(spillMem(dk), spillMem(k)),
-                .imm, .fimm => |v| a.storeImm64(spillMem(dk), v),
+                .imm, .fimm => |v| emit.storeLiteral(a, spillMem(dk), v),
+                .ptr => |v| a.storeImm64(spillMem(dk), v),
                 .f => |s| a.storeF(s, spillMem(dk)),
             },
             else => unreachable,
@@ -1061,7 +1081,7 @@ pub const Codegen = struct {
                 if (fitsImm(i.imm)) {
                     a.addImm3(d, x, @intCast(i.imm));
                 } else {
-                    a.movImm(sc1, @bitCast(i.imm));
+                    a.movImmReloc(sc1, @bitCast(i.imm), .literal);
                     a.add3(d, x, sc1);
                 }
                 c.done(r, d);
@@ -1084,7 +1104,7 @@ pub const Codegen = struct {
                 const x = c.g(i.a, sc0);
                 var y: A.Reg = undefined;
                 if (i.op == .modi or i.op == .idivi) {
-                    a.movImm(sc1, @bitCast(i.imm));
+                    a.movImmReloc(sc1, @bitCast(i.imm), .literal);
                     y = sc1;
                 } else y = c.g(i.b, sc1);
                 const d = c.dst(r);
@@ -1183,10 +1203,12 @@ pub const Codegen = struct {
                     a.storeF(c.fl(i.b, fsc0), m);
                 } else if (v.isConst() and i.size != 1) {
                     const bits: u64 = @bitCast(v.imm);
+                    // Only the constant of `kptr` is an address, which
+                    // is 4 bytes wide on a 32-bit target.
                     switch (i.size) {
                         2 => a.storeImm16(m, @truncate(bits)),
-                        4 => a.storeImm32(m, @truncate(bits)),
-                        else => a.storeImm64(m, bits),
+                        4 => if (v.op == .kptr and @sizeOf(usize) == 4) a.storeImmWord(m, bits) else a.storeImm32(m, @truncate(bits)),
+                        else => if (v.op == .kptr) a.storeImm64(m, bits) else emit.storeLiteral(a, m, bits),
                     }
                 } else {
                     const x = c.g(i.b, sc1);
@@ -1238,10 +1260,10 @@ pub const Codegen = struct {
             },
             .guardi => {
                 const x = c.g(i.a, sc0);
-                if (fitsImm(i.imm)) {
+                if (c.shortImm(i)) {
                     a.jumpIfImm(cond(i.cond).invert(), x, @intCast(i.imm), c.exitOf(i));
                 } else {
-                    a.movImm(sc1, @bitCast(i.imm));
+                    c.wideImm(sc1, i);
                     a.jumpIf(cond(i.cond).invert(), x, sc1, c.exitOf(i));
                 }
             },
@@ -1317,10 +1339,10 @@ pub const Codegen = struct {
             },
             .bri => {
                 const x = c.g(i.a, sc0);
-                if (fitsImm(i.imm)) {
+                if (c.shortImm(i)) {
                     a.jumpIfImm(cond(i.cond), x, @intCast(i.imm), c.labels[i.t]);
                 } else {
-                    a.movImm(sc1, @bitCast(i.imm));
+                    c.wideImm(sc1, i);
                     a.jumpIf(cond(i.cond), x, sc1, c.labels[i.t]);
                 }
                 if (next == null or next.? != i.f) a.jmp(c.labels[i.f]);
@@ -1408,7 +1430,7 @@ pub const Codegen = struct {
             },
             .float => {
                 if (v.op == .kflt) {
-                    a.storeImm64(m, @bitCast(v.imm));
+                    emit.storeLiteral(a, m, @bitCast(v.imm));
                 } else switch (c.place(r)) {
                     .f => |x| a.storeF(x, m),
                     else => a.store64(c.g(r, sc0), m),
@@ -1416,8 +1438,10 @@ pub const Codegen = struct {
                 a.storeImm64(tag_m, Value.tagWord(.float));
             },
             else => {
-                if (v.isConst()) {
+                if (v.op == .kptr) {
                     a.storeImm64(m, @bitCast(v.imm));
+                } else if (v.isConst()) {
+                    emit.storeLiteral(a, m, @bitCast(v.imm));
                 } else {
                     a.store64(c.g(r, sc0), m);
                 }

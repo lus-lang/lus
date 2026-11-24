@@ -1988,7 +1988,7 @@ pub const Lower = struct {
         const hp = try b.load(t, b.hash_ptr, .int, ptr_size, .tab_hash, ir.none);
         const off: i32 = @intCast(idx << tl.node_shift);
         const k = try b.load(hp, off + tl.node_key, .int, 8, .node_key, g);
-        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(@as(u64, @intFromPtr(key_str))), .c = g });
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(@as(u64, @intFromPtr(key_str))), .c = g, .flags = .{ .address = true } });
         const g2 = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = tagDisp(idx) + tl.tag_key, .aux = @backingInt(Tag.string), .c = g });
         return .{ .hp = hp, .off = off, .tags = tagDisp(idx), .dep = g2 };
     }
@@ -2032,7 +2032,7 @@ pub const Lower = struct {
             // ahead of time can name only for an interned string.
             if (!nk.as(String).flags().interned) return false;
             const k = try b.load(hp, off + tl.node_key, .int, 8, .node_key, g);
-            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(nk.payload), .c = g });
+            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(nk.payload), .c = g, .flags = .{ .address = true } });
             _ = try b.guard(.{ .op = .gtag, .cls = .node_key, .cond = @backingInt(ir.Cond.eq), .a = hp, .imm = tagDisp(i) + tl.tag_key, .aux = @backingInt(Tag.string), .c = g });
             i = (i + 1) & mask;
         }
@@ -2181,7 +2181,7 @@ pub const Lower = struct {
         if (v2.isNil()) return false;
         const sv = try b.typed(rb, .string);
         const recv_sample = b.fr.regs[rb].sample;
-        const m = try b.load(try b.kint(@bitCast(@as(u64, @intFromPtr(slot_ptr)))), 0, .table, ptr_size, .tab_meta, ir.none);
+        const m = try b.load(try b.kptr(.int, @intFromPtr(slot_ptr)), 0, .table, ptr_size, .tab_meta, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
         const n1 = (try b.keyNode(m, mt, index_name)) orelse return false;
         const hv = try b.loadValueAt(n1.hp, n1.val(), n1.valTag(), h, .node_val, n1.dep);
@@ -2392,7 +2392,7 @@ pub const Lower = struct {
             .b = try b.kint(nc),
             // The inline cache entry of the instruction, which says how
             // the lists of the site fit (`ops.learnListKind`).
-            .c = try b.kint(@bitCast(@as(u64, @intFromPtr(&b.fr.proto.ic[b.pc])))),
+            .c = try b.kptr(.int, @intFromPtr(&b.fr.proto.ic[b.pc])),
             .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.newTable))),
             .flags = .{ .thread = true },
         });
@@ -2783,7 +2783,7 @@ pub const Lower = struct {
                 // constant is interned. A string becomes interned at most
                 // once and never stops being so.
                 _ = try b.guard(.{ .op = .gbit, .cls = .fixed, .a = v, .imm = String.flags_offset, .aux = @as(u64, @bitOffsetOf(String.Flags, "interned")) | (1 << 8) });
-                return b.branch(.{ .op = .bri, .cond = @backingInt(ir.Cond.eq), .a = v, .imm = @bitCast(@as(u64, kv.address())) }, k);
+                return b.branch(.{ .op = .bri, .cond = @backingInt(ir.Cond.eq), .a = v, .imm = @bitCast(@as(u64, kv.address())), .flags = .{ .address = true } }, k);
             },
             else => return b.generic(b.pc, last),
         }
@@ -3480,7 +3480,7 @@ pub const Lower = struct {
             _ = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.eq), .a = cv, .b = b.root.closure });
         } else {
             const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, ptr_size, .fixed, ir.none);
-            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))) });
+            _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))), .flags = .{ .address = true } });
         }
         if (unit) |u| {
             // Code that was retired takes no new calls.
@@ -3607,7 +3607,7 @@ pub const Lower = struct {
                 if (!b.inlinable(p)) return error.Unsupported;
                 const cv = try b.typed(ra, .closure);
                 const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, ptr_size, .fixed, ir.none);
-                _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))) });
+                _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))), .flags = .{ .address = true } });
                 const fl = try Flow.init(b.arena, p);
                 const cfg = Cfg.init(b.arena, fl, 0, false) catch return error.Unsupported;
                 if (cfg.loops.items.len != 0) return error.Unsupported;
@@ -3720,7 +3720,7 @@ pub const Lower = struct {
         const outer = parent.parent == null;
         const cv = try b.typed(ra, .closure);
         const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, ptr_size, .fixed, ir.none);
-        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))) });
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))), .flags = .{ .address = true } });
         b.inlineBody(ra, nargs, want, cl, cv) catch |e| switch (e) {
             error.Unsupported => {
                 if (!outer) return e;
@@ -3923,7 +3923,7 @@ pub const Lower = struct {
     fn guardNative(b: *Lower, ra: u32, f: state.NativeFn) Error!void {
         const nv = try b.typed(ra, .native);
         const fp = try b.load(nv, @offsetOf(state.Native, "func"), .int, ptr_size, .fixed, ir.none);
-        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = fp, .imm = @bitCast(@as(u64, @intFromPtr(f))) });
+        _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = fp, .imm = @bitCast(@as(u64, @intFromPtr(f))), .flags = .{ .address = true } });
     }
 
     /// Compiles a call of a library function that the tier knows as
