@@ -5,6 +5,7 @@
 //! bit or decline.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const opc = @import("../compile/opcodes.zig");
 const value = @import("value.zig");
 const object = @import("object.zig");
@@ -335,7 +336,7 @@ pub fn arithRaw(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
             .add => Value.int(x +% y),
             .sub => Value.int(x -% y),
             .mul => Value.int(x *% y),
-            .div => Value.float(@as(f64, @floatFromInt(x)) / @as(f64, @floatFromInt(y))),
+            .div => Value.float(numeric.intToFloat(x) / numeric.intToFloat(y)),
             .mod => blk: {
                 if (y == 0) return l.raiseFmt("attempt to perform 'n%0'", .{});
                 break :blk Value.int(imod(x, y));
@@ -344,7 +345,7 @@ pub fn arithRaw(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
                 if (y == 0) return l.raiseFmt("attempt to divide by zero", .{});
                 break :blk Value.int(idiv(x, y));
             },
-            .pow => Value.float(std.math.pow(f64, @floatFromInt(x), @floatFromInt(y))),
+            .pow => Value.float(std.math.pow(f64, numeric.intToFloat(x), numeric.intToFloat(y))),
             .unm => Value.int(0 -% x),
             .band => Value.int(x & y),
             .bor => Value.int(x | y),
@@ -384,15 +385,77 @@ pub fn arithRaw(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
 
 pub inline fn imod(x: i64, y: i64) i64 {
     if (y == -1) return 0;
-    const m = @rem(x, y);
+    const m = if (narrow_division and fitsWord(x) and fitsWord(y))
+        divideWords(@intCast(x), @intCast(y)).r
+    else
+        @rem(x, y);
     return if (m != 0 and (m ^ y) < 0) m + y else m;
 }
 
 pub inline fn idiv(x: i64, y: i64) i64 {
     if (y == -1) return 0 -% x;
-    var q = @divTrunc(x, y);
-    if (@rem(x, y) != 0 and ((x ^ y) < 0)) q -= 1;
+    var q: i64 = undefined;
+    var r: i64 = undefined;
+    if (narrow_division and fitsWord(x) and fitsWord(y)) {
+        const d = divideWords(@intCast(x), @intCast(y));
+        q = d.q;
+        r = d.r;
+    } else {
+        q = @divTrunc(x, y);
+        r = @rem(x, y);
+    }
+    if (r != 0 and ((x ^ y) < 0)) q -= 1;
     return q;
+}
+
+/// 32-bit ARM divides 64-bit integers in the routine `__aeabi_ldivmod`
+/// of the compiler. `imod` and `idiv` divide operands that fit in 32 bits
+/// as words, with `sdiv` on a processor that has it and with the 32-bit
+/// routine of the compiler on one that lacks it.
+const narrow_division = builtin.cpu.arch == .arm and @bitSizeOf(usize) == 32;
+
+inline fn fitsWord(x: i64) bool {
+    return x == @as(i32, @truncate(x));
+}
+
+const Words = struct { q: i32, r: i32 };
+
+/// Divides with truncation. The divisor is neither 0 nor -1, so the
+/// quotient fits in a word and `r` is `x - q * y` exactly.
+inline fn divideWords(x: i32, y: i32) Words {
+    const q: i32 = if (comptime std.Target.arm.featureSetHas(builtin.cpu.features, .hwdiv_arm))
+        @divTrunc(x, y)
+    else if (comptime !std.Target.arm.featureSetHas(builtin.cpu.features, .thumb_mode) and builtin.os.tag == .linux and builtin.link_libc) blk: {
+        if (cpuDivides()) {
+            // sdiv r0, r0, r1, which the baseline of the build leaves out.
+            break :blk asm (".inst 0xE710F110"
+                : [q] "={r0}" (-> i32),
+                : [x] "{r0}" (x),
+                  [y] "{r1}" (y),
+            );
+        }
+        break :blk @divTrunc(x, y);
+    } else @divTrunc(x, y);
+    return .{ .q = q, .r = x -% q *% y };
+}
+
+extern "c" fn getauxval(kind: c_ulong) c_ulong;
+
+/// 0 before the first query, then 1 when the processor has `sdiv` and 2
+/// when it lacks it. Every thread computes the same answer.
+var divides: u8 = 0;
+
+/// Whether the processor has `sdiv`, which ARMv7-A makes optional. The
+/// kernel reports it in the hardware capabilities of the process.
+fn cpuDivides() bool {
+    var d = @atomicLoad(u8, &divides, .monotonic);
+    if (d == 0) {
+        const at_hwcap = 16;
+        const hwcap_idiva = 1 << 17;
+        d = if (getauxval(at_hwcap) & hwcap_idiva != 0) 1 else 2;
+        @atomicStore(u8, &divides, d, .monotonic);
+    }
+    return d == 1;
 }
 
 pub inline fn shiftLeft(x: i64, y: i64) i64 {
@@ -404,7 +467,7 @@ pub inline fn shiftLeft(x: i64, y: i64) i64 {
 
 pub fn toFloat(v: Value) f64 {
     return switch (v.tag) {
-        .integer => @floatFromInt(v.asInt()),
+        .integer => numeric.intToFloat(v.asInt()),
         .float => v.asFloat(),
         else => std.math.nan(f64),
     };
@@ -472,7 +535,7 @@ pub fn rawEqual(l: *Thread, a: Value, b: Value) bool {
         };
     }
     if (a.isNumber() and b.isNumber()) {
-        if (a.tag == .integer and b.tag == .float) return @as(f64, @floatFromInt(a.asInt())) == b.asFloat() and floatToInt(b.asFloat()) == a.asInt();
+        if (a.tag == .integer and b.tag == .float) return numeric.intToFloat(a.asInt()) == b.asFloat() and floatToInt(b.asFloat()) == a.asInt();
         if (a.tag == .float and b.tag == .integer) return rawEqual(l, b, a);
         return numeric.compare(l.g.gpa, a, b) == .eq;
     }

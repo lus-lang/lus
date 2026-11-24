@@ -1061,7 +1061,7 @@ pub const Emitter = struct {
     }
 
     /// `ret0` (n = 0) and `ret1` (n = 1) with the result in register
-    /// `ra`. A lean frame with nothing to close returns here, as the lean
+    /// `ra`. A lean frame without a to-be-closed variable returns here, as the lean
     /// return of the interpreter does, and continues in the caller at the
     /// address its call left in the frame. The caller's code after the
     /// call finishes what `interp.fast.finishLean` does. Any other frame
@@ -1082,14 +1082,21 @@ pub const Emitter = struct {
         a.addScaled(A.t1, A.t1, A.t0, frame_shift);
         a.jumpIfByte(.eq, .{ .base = A.t1, .disp = frameField("lean") - frame_size }, 0, slow);
         a.jumpIfByte(.ne, .{ .base = thread, .disp = @offsetOf(Thread, "hook_mask") }, 0, slow);
-        // An open upvalue or a to-be-closed variable of this frame needs
-        // the general return.
+        // The open upvalues of this frame close in a call that returns
+        // here. A to-be-closed variable of this frame needs the general
+        // return.
         if (e.captures) {
             const none = a.newLabel();
             a.loadWord(A.t2, .{ .base = thread, .disp = @offsetOf(Thread, "open_upvals") });
             a.jumpIfImm(.eq, A.t2, 0, none);
             a.load32(A.t2, .{ .base = A.t2, .disp = @offsetOf(object.Upvalue, "level") });
-            a.jumpIf(.hs, A.t2, A.base, slow);
+            a.jumpIf(.lo, A.t2, A.base, none);
+            a.mov(A.args[1], A.base);
+            a.mov(A.args[0], thread);
+            a.call(@intFromPtr(&helpers.closeUpvals));
+            a.loadWord(A.t0, .{ .base = thread, .disp = lay.frames_len });
+            a.loadWord(A.t1, .{ .base = thread, .disp = lay.frames_ptr });
+            a.addScaled(A.t1, A.t1, A.t0, frame_shift);
             a.bind(none);
         }
         if (e.closes) {

@@ -423,9 +423,22 @@ pub fn arith(l: *Thread, op: ArithOp, a: Value, b: Value) Error!?Value {
     return bigArith(l, op, a, b);
 }
 
+/// Converts a 64-bit integer to the nearest float. The float unit of
+/// 32-bit ARM converts 32-bit integers only, and the routine of the
+/// compiler runtime for a 64-bit integer takes about seventy
+/// instructions. There the result is the signed high word times 2^32
+/// plus the unsigned low word. Both terms are exact, so the one addition
+/// rounds as the direct conversion does.
+pub inline fn intToFloat(x: i64) f64 {
+    if (comptime @import("builtin").cpu.arch != .arm) return @floatFromInt(x);
+    const low: u32 = @truncate(@as(u64, @bitCast(x)));
+    const high: i32 = @truncate(x >> 32);
+    return @as(f64, @floatFromInt(high)) * 4294967296.0 + @as(f64, @floatFromInt(low));
+}
+
 pub fn toFloat(gpa: Allocator, v: Value) f64 {
     return switch (v.tag) {
-        .integer => @floatFromInt(v.asInt()),
+        .integer => intToFloat(v.asInt()),
         .float => v.asFloat(),
         .bigint => bigToFloat(v.as(BigInt)),
         .decimal => decToFloat(gpa, v.as(Decimal)),
