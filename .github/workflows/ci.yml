@@ -119,8 +119,8 @@ jobs:
     # runner: the whole of lus linked from its link object, and an
     # executable that lus build --aot links (spec/design/platforms.md).
     # Each limit sits about 5% above the measured size of linked.lus in
-    # ReleaseSafe: 1.72 MB on 32-bit ARM, 1.62 MB on riscv64, and 1.90 MB
-    # on loong64.
+    # ReleaseSafe: 1.72 MB on 32-bit ARM, 1.62 MB on riscv64, 1.90 MB on
+    # loong64, and 3.87 MB on ppc64le.
     strategy:
       fail-fast: false
       matrix:
@@ -131,6 +131,8 @@ jobs:
             limit: 1700000
           - target: loongarch64-linux-musl
             limit: 1995000
+          - target: powerpc64le-linux-musl
+            limit: 4065000
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:

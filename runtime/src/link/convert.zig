@@ -27,7 +27,7 @@ pub const linker_defined = [_][]const u8{
     "__ehdr_start",          "__dso_handle",        "_end",               "__bss_start",
     "_etext",                "_edata",              "end",                "etext",
     "edata",                 "_mh_execute_header",  "__ImageBase",        "__image_base__",
-    "__global_pointer$",
+    "__global_pointer$",     ".TOC.",
 };
 
 const Sec = struct {
@@ -66,6 +66,9 @@ const Sym = struct {
     bind: Bind,
     /// A symbol that names its section, which the relocations of ELF use.
     section: bool = false,
+    /// The `st_other` of ELF, whose bits 5 to 7 give the local entry of a
+    /// function of ppc64le.
+    other: u8 = 0,
     /// For a weak external of COFF, the symbol it stands for when nothing
     /// defines its name.
     alias: ?u32 = null,
@@ -255,6 +258,7 @@ pub const Converter = struct {
             .arm => .ARM,
             .riscv64 => .RISCV,
             .loongarch64 => .LOONGARCH,
+            .powerpc64le => .PPC64,
         };
         if (eh.e_machine != machine or (E == Elf32) != (c.arch == .arm)) {
             std.log.err("{s}: built for another architecture", .{name});
@@ -303,6 +307,7 @@ pub const Converter = struct {
                         else => .global,
                     },
                     .section = es.st_info & 0xf == elf.STT_SECTION,
+                    .other = es.st_other,
                 };
             }
         }
@@ -413,7 +418,7 @@ pub const Converter = struct {
             .x86_64 => 0x01000007,
             .aarch64 => 0x0100000c,
             .arm => 12,
-            .riscv64, .loongarch64 => 0,
+            .riscv64, .loongarch64, .powerpc64le => 0,
         };
         if (rd(u32, data, 4) != cpu) {
             std.log.err("{s}: built for another architecture", .{name});
@@ -697,6 +702,7 @@ pub const Converter = struct {
             .arm => 0x1c4,
             .riscv64 => 0x5064,
             .loongarch64 => 0x6264,
+            .powerpc64le => 0x1f1,
         };
     }
 
@@ -1062,7 +1068,10 @@ pub const Converter = struct {
         }
     }
 
-    const Resolved = struct { target: lobj.Target, sym: u32 = 0, addend: i64 };
+    /// `local` is the distance from the global entry of a function of
+    /// ppc64le to its local entry, which a call from code that shares its
+    /// table of contents enters at.
+    const Resolved = struct { target: lobj.Target, sym: u32 = 0, addend: i64, local: u8 = 0 };
 
     fn target(c: *Converter, in: *const Input, sym_index: u32, addend: i64) !Resolved {
         const s = in.syms[sym_index];
@@ -1108,7 +1117,15 @@ pub const Converter = struct {
             std.log.err("{s}: a relocation names {s} in the section {s}, which is left out", .{ in.name, s.name, if (s.shndx < in.secs.len) in.secs[s.shndx].name else "?" });
             return error.Unsupported;
         };
-        return .{ .target = .{ .index = @intCast(a), .space = .atom }, .sym = @intCast(s.value + in.base[s.shndx]), .addend = addend };
+        return .{ .target = .{ .index = @intCast(a), .space = .atom }, .sym = @intCast(s.value + in.base[s.shndx]), .addend = addend, .local = localEntry(s.other) };
+    }
+
+    /// The offset of the local entry that the bits 5 to 7 of `st_other`
+    /// of ELFv2 encode: none for 0 and 1, else 2 to the power of the
+    /// value, in bytes.
+    fn localEntry(other: u8) u8 {
+        const v: u3 = @intCast(other >> 5);
+        return if (v < 2) 0 else @as(u8, 1) << v;
     }
 
     /// The data that the linker of the C library of Windows defines: the
@@ -1183,7 +1200,9 @@ pub const Converter = struct {
                 const a = in.atoms[k] orelse continue;
                 for (rels) |r| {
                     const res = try c.target(in, r.sym, r.addend);
-                    try lists[a].append(c.arena, .{ .offset = @intCast(r.offset + in.base[k]), .type = r.type, .target = res.target, .sym = res.sym, .addend = res.addend });
+                    // A call of ppc64le (REL24) enters at the local entry.
+                    const local: u32 = if (c.arch == .powerpc64le and r.type == 10) res.local else 0;
+                    try lists[a].append(c.arena, .{ .offset = @intCast(r.offset + in.base[k]), .type = r.type, .target = res.target, .sym = res.sym + local, .addend = res.addend });
                 }
             }
             // The jump of an import reads its slot.

@@ -277,6 +277,11 @@ pub const Linker = struct {
                 87, 88, 91, 92 => true, // TLS_IE_PC_HI20, TLS_IE_PC_LO12, TLS_IE_HI20, TLS_IE_LO12
                 else => null,
             },
+            .powerpc64le => switch (ty) {
+                14, 15, 16, 17 => false, // GOT16, GOT16_LO, GOT16_HI, GOT16_HA
+                87, 88, 89, 90 => true, // GOT_TPREL16_DS, _LO_DS, _HI, _HA
+                else => null,
+            },
         };
     }
 
@@ -371,6 +376,10 @@ pub const Linker = struct {
             // The global pointer of riscv64, which code reaches data
             // through only when a linker shortens it.
             .{ "__global_pointer$", l.seg[2].addr + 0x800 },
+            // The base of the table of contents of ppc64le, which
+            // functions reach their data through. Offsets from it are
+            // signed, so it sits 32 KB into the global offset table.
+            .{ ".TOC.", l.got_addr + 0x8000 },
         };
         inline for (table) |e| if (std.mem.eql(u8, name, e[0])) return e[1];
         // `_DYNAMIC` is null in a static executable.
@@ -403,6 +412,7 @@ pub const Linker = struct {
             .aarch64 => @intCast(off + std.mem.alignForward(u64, 16, l.tls.align_)),
             .arm => @intCast(off + std.mem.alignForward(u64, 8, l.tls.align_)),
             .riscv64, .loongarch64 => @intCast(off),
+            .powerpc64le => @as(i64, @intCast(off)) - 0x7000,
         };
     }
 
@@ -496,6 +506,7 @@ pub const Linker = struct {
             },
             .riscv64 => try l.applyRiscv(r, loc, sa, pi),
             .loongarch64 => try l.applyLoong(r, loc, sa, pi),
+            .powerpc64le => try l.applyPpc(r, loc, sa, pi),
             .aarch64 => switch (r.type) {
                 257 => put(u64, loc, @bitCast(sa)), // ABS64
                 258 => put(u32, loc, std.math.cast(u32, sa) orelse return error.RelocationOverflow), // ABS32
@@ -641,6 +652,47 @@ pub const Linker = struct {
         }
     }
 
+    fn applyPpc(l: *const Linker, r: lobj.Reloc, loc: []u8, sa: i64, pi: i64) Error!void {
+        const a = r.addend;
+        const toc: i64 = @intCast(l.got_addr + 0x8000);
+        const got: i64 = if (l.usesGot(r.type)) |tls| @as(i64, @intCast(l.gotSlot(r, tls))) + a - toc else 0;
+        const tp = l.tpOffset(l.symbol(r.target, r.sym)) + a;
+        switch (r.type) {
+            1 => put(u32, loc, std.math.cast(u32, sa) orelse return error.RelocationOverflow), // ADDR32
+            38 => put(u64, loc, @bitCast(sa)), // ADDR64
+            26 => try putI32(loc, sa - pi), // REL32
+            44 => put(u64, loc, @bitCast(sa - pi)), // REL64
+            10 => try ppcBranch(loc, sa - pi, 0x03ff_fffc, 1 << 25), // REL24
+            11 => try ppcBranch(loc, sa - pi, 0xfffc, 1 << 15), // REL14
+            51 => put(u64, loc, @bitCast(toc)), // TOC
+            47 => try ppcHalf(loc, sa - toc, .checked), // TOC16
+            48 => try ppcHalf(loc, sa - toc, .lo), // TOC16_LO
+            49 => try ppcHalf(loc, sa - toc, .hi), // TOC16_HI
+            50 => try ppcHalf(loc, sa - toc, .ha), // TOC16_HA
+            63 => try ppcHalf(loc, sa - toc, .ds), // TOC16_DS
+            64 => try ppcHalf(loc, sa - toc, .lo_ds), // TOC16_LO_DS
+            14 => try ppcHalf(loc, got, .checked), // GOT16
+            87 => try ppcHalf(loc, got, .ds), // GOT_TPREL16_DS
+            15 => try ppcHalf(loc, got, .lo), // GOT16_LO
+            88 => try ppcHalf(loc, got, .lo_ds), // GOT_TPREL16_LO_DS
+            16, 89 => try ppcHalf(loc, got, .hi), // GOT16_HI, GOT_TPREL16_HI
+            17, 90 => try ppcHalf(loc, got, .ha), // GOT16_HA, GOT_TPREL16_HA
+            67 => {}, // TLS marks the add of the thread pointer.
+            69 => try ppcHalf(loc, tp, .checked), // TPREL16
+            70 => try ppcHalf(loc, tp, .lo), // TPREL16_LO
+            71 => try ppcHalf(loc, tp, .hi), // TPREL16_HI
+            72 => try ppcHalf(loc, tp, .ha), // TPREL16_HA
+            73 => put(u64, loc, @bitCast(tp)), // TPREL64
+            95 => try ppcHalf(loc, tp, .ds), // TPREL16_DS
+            96 => try ppcHalf(loc, tp, .lo_ds), // TPREL16_LO_DS
+            249 => try ppcHalf(loc, sa - pi, .checked), // REL16
+            250 => try ppcHalf(loc, sa - pi, .lo), // REL16_LO
+            251 => try ppcHalf(loc, sa - pi, .hi), // REL16_HI
+            252 => try ppcHalf(loc, sa - pi, .ha), // REL16_HA
+            else => return unsupported(l, r),
+        }
+    }
+
     fn unsupported(l: *const Linker, r: lobj.Reloc) Error {
         std.log.err("relocation type {d} of {s} is not supported", .{ r.type, @tagName(l.o.arch) });
         return error.UnsupportedRelocation;
@@ -657,6 +709,7 @@ pub const Linker = struct {
                 .aarch64 => .AARCH64,
                 .riscv64 => .RISCV,
                 .loongarch64 => .LOONGARCH,
+                .powerpc64le => .PPC64,
                 .arm => unreachable,
             },
             .e_version = 1,
@@ -669,6 +722,8 @@ pub const Linker = struct {
                 .riscv64 => 0x5,
                 // Doubles in float registers, and the object ABI v1.
                 .loongarch64 => 0x43,
+                // Version 2 of the ABI.
+                .powerpc64le => 0x2,
                 else => 0,
             },
             .e_ehsize = @sizeOf(elf.Elf64_Ehdr),
@@ -839,6 +894,40 @@ fn laBranch(loc: []u8, d: i64, comptime bits: u6) Error!void {
         i = (i & ~rest) | ((u >> 16) & rest);
     }
     put(u32, loc, i);
+}
+
+/// How a relocation of ppc64le takes 16 bits of a value: all of a value
+/// that fits, the low half, the high half, the high half adjusted for a
+/// signed low half, and the DS forms whose low two bits belong to the
+/// instruction.
+const PpcHalf = enum { checked, lo, hi, ha, ds, lo_ds };
+
+/// Writes 16 bits of `v` into the low half of the instruction word at
+/// `loc`, which comes first in little-endian order.
+fn ppcHalf(loc: []u8, v: i64, comptime form: PpcHalf) Error!void {
+    const u: u64 = @bitCast(v);
+    const h: u16 = switch (form) {
+        .checked, .ds => blk: {
+            if (v < -0x8000 or v >= 0x8000) return error.RelocationOverflow;
+            break :blk @truncate(u);
+        },
+        .lo, .lo_ds => @truncate(u),
+        .hi => @truncate(u >> 16),
+        .ha => @truncate((u +% 0x8000) >> 16),
+    };
+    const old = half(loc);
+    if (form == .ds or form == .lo_ds) {
+        if (h & 3 != 0) return error.RelocationOverflow;
+        put(u16, loc, (old & 3) | h);
+    } else put(u16, loc, h);
+}
+
+/// A branch of ppc64le: the word offset in the bits of `mask`, which
+/// reaches `reach` bytes either way.
+fn ppcBranch(loc: []u8, d: i64, mask: u32, reach: i64) Error!void {
+    if (d & 3 != 0 or d < -reach or d >= reach) return error.RelocationOverflow;
+    const v: u32 = @truncate(@as(u64, @bitCast(d)));
+    put(u32, loc, (insn(loc) & ~mask) | (v & mask));
 }
 
 /// Whether a relocation of 32-bit ARM writes a branch in the ARM state,
@@ -1121,4 +1210,50 @@ test "the linker writes the calls and the address pairs of loong64" {
     const page = (@as(i64, @intCast(text + 8)) & ~@as(i64, 0xfff)) + (sext((word(out, at + 8) >> 5) & 0xfffff, 20) << 12);
     const addr = page + sext((word(out, at + 12) >> 10) & 0xfff, 12);
     try std.testing.expectEqual(@as(i64, @intCast(l.addr[2] + 0x9f0)), addr);
+}
+
+test "the linker writes the calls and the table of contents of ppc64le" {
+    const gpa = std.testing.allocator;
+    var w: lobj.Writer = .{ .gpa = gpa, .arch = .powerpc64le, .os = .linux };
+    defer w.deinit();
+    // _start: bl f, nop, then addis r3, r2 and addi r3, r3 with the
+    // offset of d from the table of contents.
+    const code = [_]u8{
+        0x01, 0x00, 0x00, 0x48, // bl .
+        0x00, 0x00, 0x00, 0x60, // nop
+        0x00, 0x00, 0x62, 0x3c, // addis r3, r2, 0
+        0x00, 0x00, 0x63, 0x38, // addi r3, r3, 0
+    };
+    const start = try w.atom(.text, 2, &code, code.len, "_start");
+    try w.reloc(.{ .offset = 0, .type = 10, .target = .{ .index = 1, .space = .atom }, .sym = 8, .addend = 0 });
+    try w.reloc(.{ .offset = 8, .type = 50, .target = .{ .index = 2, .space = .atom }, .addend = 0x8123 });
+    try w.reloc(.{ .offset = 12, .type = 48, .target = .{ .index = 2, .space = .atom }, .addend = 0x8123 });
+    _ = try w.atom(.text, 2, &@as([12]u8, @splat(0)), 12, "f");
+    _ = try w.atom(.data, 3, &@as([0x10000]u8, @splat(0)), 0x10000, "d");
+    w.entry = .{ .name = try w.string("_start"), .atom = start, .offset = 0 };
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    defer buf.deinit();
+    try w.write(&buf.writer);
+    const bytes = try gpa.alignedAlloc(u8, .@"8", buf.written().len);
+    defer gpa.free(bytes);
+    @memcpy(bytes, buf.written());
+    const o = try lobj.read(bytes);
+    var l: Linker = .{ .gpa = gpa, .o = &o };
+    defer l.deinit();
+    try l.drop(.all);
+    try l.mark();
+    try l.layout();
+    const out = try l.write();
+    defer gpa.free(out);
+    const at: usize = @intCast(l.addr[0] - l.base);
+    const word = std.mem.readInt(u32, out[at..][0..4], .little);
+    // The call enters f at its local entry, 8 bytes in, and links.
+    try std.testing.expectEqual(@as(u32, 0x4800_0001), word & 0xfc00_0003);
+    const li: i64 = @as(i32, @bitCast((word & 0x03ff_fffc) << 6)) >> 6;
+    try std.testing.expectEqual(@as(i64, @intCast(l.addr[1] + 8)) - @as(i64, @intCast(l.addr[0])), li);
+    // The pair adds the signed halves to the table of contents.
+    const ha: i64 = std.mem.readInt(i16, out[at + 8 ..][0..2], .little);
+    const lo: i64 = std.mem.readInt(i16, out[at + 12 ..][0..2], .little);
+    const toc: i64 = @intCast(l.got_addr + 0x8000);
+    try std.testing.expectEqual(@as(i64, @intCast(l.addr[2] + 0x8123)), toc + (ha << 16) + lo);
 }

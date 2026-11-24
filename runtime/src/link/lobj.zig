@@ -26,6 +26,7 @@ pub const Arch = enum(u8) {
     arm,
     riscv64,
     loongarch64,
+    powerpc64le,
 
     /// The size of an address on the architecture.
     pub fn wordSize(a: Arch) u8 {

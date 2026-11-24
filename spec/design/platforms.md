@@ -107,6 +107,12 @@ ppc64le gets `jit/ppc64.zig` for POWER8, the oldest processor that runs a little
 
 POWER8 has no pc-relative load, so a constant builds in place in at most five instructions and the assembler keeps no pool. It has no remainder instruction either, so a remainder is a division, a multiplication, and a subtraction. Integer and float conversions use `mtvsrd`, `mfvsrd`, `fcfid`, and `fctidz`. New code becomes visible to instruction fetch after `dcbst`, `sync`, `icbi`, `sync`, and `isync` over its cache lines.
 
+### Linking
+
+`lus build --aot` links the executable of ppc64le from `lus-runtime.lo`. Code reaches its data relative to the table of contents, whose base `.TOC.` the linker defines 32 KB into the global offset table, since the offsets are signed 16-bit halves. A function has a global entry, which computes the base from the address of the function in `r12`, and a local entry after it, which bits 5 to 7 of its `st_other` place. Every function shares the one table, so a call (`REL24`) enters at the local entry, which the converter adds to the target, and the `nop` after it stays. The thread pointer `r13` points 0x7000 bytes past the start of the thread-local block, as the ABI and musl place it.
+
+The whole of `lus`, linked from `lus.lo`, passes the conformance suite under `qemu-ppc64le` with the JIT off, the default tiers, eager, and optimizing. `lus build --aot` links `tests/build/linked.lus` into 3.87 MB, keeping 4689 KB of the 8728 KB of atoms of the runtime, and the executable installs its code compiled ahead of time. The other targets keep 2.3 to 2.8 MB. The map of the link shows anonymous atoms of data of about 32 KB each that name one another and reach parts of the runtime the program never calls, such as SQLite and the panic handler, and merged globals of the C libraries do the same. `tools/test-linux.sh --ppc64le` runs both.
+
 ## 32-bit ARM
 
 32-bit ARM has both tiers for ARMv7-A with VFPv3-D16, the target of every hard-float distribution. The value layout fits as it is, with a 64-bit payload and a tag word, since the WebAssembly build already runs it on a 32-bit target. The design keeps the second code path inside the assembler.
