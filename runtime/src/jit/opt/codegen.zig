@@ -1324,11 +1324,21 @@ pub const Codegen = struct {
 
             .gdebt => {
                 const js = &c.l.g.jit;
+                const limit: Mem = .{ .base = sc0, .disp = @intCast(@as(isize, @bitCast(@intFromPtr(&js.sunk_limit) -% @intFromPtr(&js.sunk)))) };
                 a.movImm(sc0, @intFromPtr(&js.sunk));
+                if (comptime @hasDecl(A.Assembler, "addMemImm")) {
+                    if (std.math.cast(u8, i.imm)) |n| {
+                        // A 32-bit target counts and compares the words
+                        // where they lie.
+                        a.addMemImm(.{ .base = sc0 }, n);
+                        a.jumpIfMems(.hs, .{ .base = sc0 }, limit, c.exitOf(i));
+                        return;
+                    }
+                }
                 a.load64(sc1, .{ .base = sc0 });
                 a.addImm(sc1, @intCast(i.imm));
                 a.store64(sc1, .{ .base = sc0 });
-                a.jumpIfMem(.hs, sc1, .{ .base = sc0, .disp = @intCast(@as(isize, @bitCast(@intFromPtr(&js.sunk_limit) -% @intFromPtr(&js.sunk)))) }, c.exitOf(i));
+                a.jumpIfMem(.hs, sc1, limit, c.exitOf(i));
             },
             .callc => c.callc(r, i),
             .barrier => {

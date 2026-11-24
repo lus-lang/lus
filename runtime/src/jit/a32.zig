@@ -1765,6 +1765,23 @@ pub const Assembler = struct {
     pub fn jumpIfMem(a: *Assembler, c: Cond, x: Reg, m: Mem, l: Label) void {
         a.compare(c, lo(x), a.chi(x), .{ .mem = m }, .{ .mem = .{ .base = m.base, .disp = m.disp + 4 } }, l);
     }
+    /// Adds a constant to the 64-bit word in memory, whose base is a
+    /// machine register.
+    pub fn addMemImm(a: *Assembler, m: Mem, v: u8) void {
+        const b = lo(m.base).r;
+        a.ldr(S0, b, m.disp);
+        a.dp(al, op_add, true, S0, S0, immOp(v).?);
+        a.str(S0, b, m.disp);
+        a.ldr(S0, b, m.disp + 4);
+        a.dp(al, op_adc, false, S0, S0, immOp(0).?);
+        a.str(S0, b, m.disp + 4);
+    }
+    /// Branches when the 64-bit word at `x` compares as `c` with the
+    /// one at `y`. The base of `x` is a machine register.
+    pub fn jumpIfMems(a: *Assembler, c: Cond, x: Mem, y: Mem, l: Label) void {
+        const b = lo(x.base).r;
+        a.compare(c, .{ .m = .{ .b = b, .d = x.disp } }, .{ .m = .{ .b = b, .d = x.disp + 4 } }, .{ .mem = y }, .{ .mem = .{ .base = y.base, .disp = y.disp + 4 } }, l);
+    }
     /// Branches when the register compares as `c` with a word in memory
     /// the size of a pointer.
     pub fn jumpIfMemWord(a: *Assembler, c: Cond, x: Reg, m: Mem, l: Label) void {
@@ -2542,5 +2559,23 @@ test "arm reads a 64-bit constant as the operands of its instructions" {
         0x00000000, 0x00000000, 0xE12FFF3C, 0xE58D0040, 0xE58B101C, 0xECBD0B10, 0xE8BD000F, 0xE92D000F,
         0xED2D0B10, 0xE1A00006, 0xE1A01007, 0xE3A02000, 0xE3A03001, 0x00000000, 0x00000000, 0xE12FFF3C,
         0xE1A06000, 0xE1A07001, 0xECBD0B10, 0xE8BD000F,
+    });
+}
+
+test "arm counts and compares 64-bit words where they lie in memory" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    const l = a.newLabel();
+    a.bind(l);
+    // ldr ip, [r10]; adds ip, ip, #72; str ip, [r10]; ldr ip, [r10, #4]; adc ip, ip, #0
+    // str ip, [r10, #4]
+    a.addMemImm(.{ .base = .c0 }, 72);
+    // ldr ip, [r10, #4]; ldr lr, [r10, #12]; cmp ip, lr; ldr ip, [r10]; ldr lr, [r10, #8]
+    // cmpeq ip, lr; bhs
+    a.jumpIfMems(.hs, .{ .base = .c0 }, .{ .base = .c0, .disp = 8 }, l);
+    try std.testing.expect(a.finish());
+    try expectWords(&a, &.{
+        0xE59AC000, 0xE29CC048, 0xE58AC000, 0xE59AC004, 0xE2ACC000, 0xE58AC004, 0xE59AC004, 0xE59AE00C,
+        0xE15C000E, 0xE59AC000, 0xE59AE008, 0x015C000E, 0x2AFFFFF2,
     });
 }
