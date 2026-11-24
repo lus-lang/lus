@@ -629,6 +629,12 @@ pub const Assembler = struct {
     fn bit(r: Reg) u32 {
         return @as(u32, 1) << @as(u5, @intCast(@backingInt(r)));
     }
+    /// Declares that a register holds no value that later code reads,
+    /// which saves the write of its high word.
+    pub fn dead(a: *Assembler, r: Reg) void {
+        a.kz &= ~bit(r);
+        a.stale &= ~bit(r);
+    }
     /// Whether the high word of the register is known to be zero.
     fn hiZero(a: *const Assembler, r: Reg) bool {
         return hi(r) == .zero or a.kz & bit(r) != 0;

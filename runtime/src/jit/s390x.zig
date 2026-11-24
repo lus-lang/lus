@@ -877,6 +877,12 @@ pub const Assembler = struct {
     /// Calls a function that takes five words. Every argument travels
     /// in a register on this target, as for `call`.
     pub const call5 = call;
+    /// Declares that a register holds no value that later code reads.
+    /// Every register of this target is whole, so nothing follows.
+    pub inline fn dead(a: *Assembler, r: Reg) void {
+        _ = a;
+        _ = r;
+    }
     /// Calls a routine that returns two words, such as `jit.Target`. The
     /// convention returns them through memory whose address goes in r2,
     /// so the arguments move up a register, 16 bytes of new frame receive

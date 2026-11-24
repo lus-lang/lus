@@ -1031,6 +1031,10 @@ pub const Codegen = struct {
     fn inst(c: *Codegen, blk: BlockId, r: Ref, next: ?BlockId) void {
         const a = &c.em.a;
         const i = c.f.at(r);
+        // The scratch registers hold nothing between instructions.
+        a.dead(sc0);
+        a.dead(sc1);
+        a.dead(sc2);
         switch (i.op) {
             .nop, .knil, .kbool, .kint, .kflt, .kptr, .phi, .valloc => {},
             .thread => {

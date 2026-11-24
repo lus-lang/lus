@@ -321,6 +321,8 @@ pub const Emitter = struct {
         const status = e.l_status;
         var pc: u32 = 0;
         while (pc < code.len) : (pc += 1) {
+            // No temporary holds a value across instructions.
+            inline for (.{ A.t0, A.t1, A.t2, A.t3, A.t4, A.t5, A.t6 }) |t| a.dead(t);
             a.bind(e.first + pc);
             e.instruction(pc, code[pc]);
             if (a.offset() - e.flushed_at >= flush_interval and pc + 1 < code.len) {
