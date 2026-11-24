@@ -33,7 +33,7 @@ Four facts from the table shape our order.
 | x86-64 Linux | yes | yes | yes | yes, static musl |
 | x86-64 Windows | yes | | | yes |
 | arm64 Windows | yes | | | yes |
-| 32-bit ARM Linux | yes | | | not yet |
+| 32-bit ARM Linux | yes | yes | yes | not yet |
 | s390x Linux | yes | yes | yes | not yet |
 | FreeBSD (aarch64, x86-64) | yes | yes | yes | not yet |
 | wasm32 WASI | yes | WebAssembly modules | | the npm package |
@@ -93,7 +93,7 @@ POWER8 has no pc-relative load, so a constant builds in place in at most five in
 
 ## 32-bit ARM
 
-32-bit ARM gets both tiers for ARMv7-A with VFPv3-D16, the target of every hard-float distribution. The value layout fits as it is, with a 64-bit payload and a tag word, since the WebAssembly build already runs it on a 32-bit target. The design keeps the second code path inside the assembler.
+32-bit ARM has both tiers for ARMv7-A with VFPv3-D16, the target of every hard-float distribution. The value layout fits as it is, with a 64-bit payload and a tag word, since the WebAssembly build already runs it on a 32-bit target. The design keeps the second code path inside the assembler.
 
 ### Work before the JIT
 
@@ -101,17 +101,53 @@ The interpreter builds for `arm-linux-musleabihf` and passes the conformance sui
 
 ### Pairs inside the assembler
 
-Every register of the interface is a pair of 32-bit registers inside `a32.zig`: a low word and a high word. Each operation of the interface keeps its 64-bit meaning, so an addition is `adds` and `adc`, a multiplication is `umull` and two `mla`, a shift spans both words, and a compare-and-branch compares the high words and then the low words unsigned. The templates and the code generator therefore keep one code path for every target.
+Every register of the interface holds 64 bits inside `jit/a32.zig`, as a low word and a high word. Each operation of the interface keeps its 64-bit meaning, so an addition is `adds` and `adc`, a multiplication is `umull` and two cross products, and a compare-and-branch compares the high words and then, when they are equal, the low words. A signed comparison subtracts both words and branches on the sign of the difference. The templates and the code generator therefore keep one code path for every target.
 
-The one distinction they gain is the width of a word in memory. A pointer, a count, or a stack index is 4 bytes on a 32-bit target, and a payload or a 64-bit counter is 8. The interface gains `loadWord` and `storeWord`, which are `load64` and `store64` on a 64-bit target. Every site that loads or stores a pointer-sized field names them. A word loaded into a pair clears its high half. A payload that holds a pointer keeps its high word zero, which is what `Value.make` writes, so a pointer read from a payload is its low word.
+The one distinction they gain is the width of a word in memory. A pointer, a count, or a stack index is 4 bytes on a 32-bit target, and a payload or a 64-bit counter is 8. The interface gains `loadWord` and `storeWord`, which are `load64` and `store64` on a 64-bit target. Every site that loads or stores a pointer-sized field names them. A word loaded into a register clears its high half. A payload that holds a pointer keeps its high word zero, which is what `Value.make` writes, so a pointer read from a payload is its low word. An address that `lea`, `addScaled`, or `subScaled` computes is a low word with a zero high word.
 
-A pair costs two registers, of the fourteen that 32-bit ARM has. The pinned registers keep their single registers, because each holds a pointer or an index: the thread and the address of register 0 in two callee-saved registers, and the index of register 0 and the stop depth in slots of the native frame, which the assembler loads where an instruction names them. The temporaries `t0` to `t3` are register pairs. The temporaries `t4` to `t6`, the fifth and sixth argument, and the pool registers of the optimizing tier beyond those pairs are slots of the native frame, which the assembler moves through a scratch pair. Code that uses them runs slower than code in registers. Code that uses only the first temporaries runs at the speed of register pairs. Floats use the sixteen double registers of VFPv3-D16 directly.
+### Registers
 
-A routine of the runtime takes words as arguments (see "Order"). The first four arguments of AAPCS travel in `r0` to `r3`, so the assembler passes the low word of each argument pair. Division calls the routine of the compiler runtime, because ARMv7-A has no 64-bit divide.
+32-bit ARM has thirteen general registers besides the stack pointer, the link register, and the program counter. The assembler places each word of each register of the interface in a machine register or in the native frame that the entry sequence opens, which `r11` points at.
 
-The assembler emits the A32 encoding, whose conditional branches reach 32 MB. Addresses are 32 bits and load with `movw` and `movt`. New code becomes visible to instruction fetch through the `cacheflush` system call of ARM Linux.
+| register of the interface | low word | high word |
+|---|---|---|
+| the thread, the address of register 0 | `r4`, `r5` | reads as zero |
+| the index of register 0, the stop depth | a word of the frame | reads as zero |
+| `t0`, `t1`, `t2` | `r6`, `r3`, `r2` | `r7`, `r8`, `r9` |
+| `t3`, `t4` | `r1`, `r0` | a word of the frame |
+| `t5`, `t6`, the two scratch registers of the code generator, six more pool registers | a word of the frame | a word of the frame |
+
+The scratch registers of the assembler are `r10`, `r12`, and the link register. A word that lives in the frame moves through one of them: an operation loads it, computes, and stores the result. Code that uses `t0` to `t2` runs at the speed of register pairs. Every other temporary costs a load or a store per word. The optimizing tier allocates thirteen registers, `t0` to `t6` and the six frame registers, lowest first, so the values of a small loop live in the three pairs. A value in a frame register costs what a spilled value costs on another target, since the code generator names it as an operand like any other register.
+
+Floats use the double registers of VFPv3-D16 directly. The optimizing tier allocates `d0` to `d7`, the code generator keeps `d8` and `d9` as scratch registers, and the assembler keeps `d10` to `d12`. The entry sequence saves `d8` to `d12` with the general registers that belong to its caller.
+
+### Calls
+
+The temporaries share their low words with the argument registers of AAPCS in the order of s390x: `t4` is the first argument and the first result, `t3` the second of each, `t2` the third argument, `t1` the fourth, and `t5` the fifth. The interface has three kinds of call.
+
+- **`call`** calls a routine whose arguments are words (see "Order"). The low words of the first four arguments are in `r0` to `r3` already. The low word of the fifth travels on the stack. The result is `r0`, whose register of the interface gets a zero high word after the call.
+- **`callWide`** calls a routine whose arguments and result are all 64-bit integers: the helpers of an array access and every routine that a `callc` instruction of the optimizing tier reaches. The first argument travels in `r0` and `r1`, the second in `r2` and `r3`, and the third and fourth on the stack. The result comes back in `r0` and `r1`.
+- **`callPair`** calls a routine that returns `jit.Target`, which AAPCS returns through memory. The assembler passes the address of two words of the frame in `r0`, moves the four word arguments up by one, the last of them onto the stack, and loads the two words into the result registers afterwards.
+
+The stack pointer is a multiple of eight at every call. The entry sequence leaves it so, the code generator moves it by multiples of sixteen, and the arguments on the stack take eight or sixteen bytes.
+
+A local call, which enters a call entry or a direct entry of optimized code, stores its return address in a word of the frame. The routine it calls reads the address from there whatever it ran in between, which frees the link register as a scratch register. `saveLink` copies the word into the native frame of an activation, where `opt.unwind` finds it as it does on every target.
+
+### Division and conversions
+
+ARMv7-A divides only 32-bit integers, so `divRem` and `floorDiv` call routines in `a32.zig` that divide in Zig. An operation of the interface keeps every register it does not name, so such a call saves `r0` to `r3` and `d0` to `d7` around itself. It reads an operand that lives in one of them from where it was saved. It writes a result that lives in one of them to the same place, so that the restore loads it. `floatToInt` calls a routine the same way.
+
+VFP converts only 32-bit integers. `intToFloat` converts the low word as an unsigned integer and the high word as a signed one, and adds the low float to the high float times 2^32 with `vmla`. Both the product and the low float are exact, so the one addition rounds as a direct conversion of the 64-bit integer does.
+
+### Encoding and memory
+
+The assembler emits the A32 encoding, whose branches reach 32 MB, so every branch is one instruction and the assembler keeps no pool. A constant builds in place with `mov`, `mvn`, or `movw` and `movt`. An offset that a load or a store cannot hold is added to the base in a scratch register first. New code becomes visible to instruction fetch through the `cacheflush` system call of ARM Linux.
 
 A frame of a 32-bit target is padded to 64 bytes, so that native code finds a frame with a shift and an add on every target.
+
+The C library of a static build finds the stack of the main thread by probing the pages below it with one system call each. Under qemu-user that walk covers the gigabyte of address space that the emulator reserves for a 32-bit program, which takes seconds. `stackBounds` therefore answers with zeros for the main thread of a static 32-bit ARM build, which gives a chain of direct calls there the 160 KB below its entry. Every other thread asks the C library, which answers from its own record of the thread.
+
+Code compiled ahead of time stays with the 64-bit targets. The assembler of 32-bit ARM writes every address in place for the running process, so a 32-bit ARM build reads `LUS_JIT_AOT` as unset.
 
 ## s390x
 
@@ -203,7 +239,7 @@ iOS and the game consoles refuse executable memory to ordinary programs, so the 
 
 qemu-user reports a stack for the main thread that includes memory below it, which made chains of direct calls overrun the stack in the x86-64 gate. `stackBounds` keeps its low bound within `RLIMIT_STACK` below the top of the stack, so the qemu gates run direct calls as native systems do. The emulated gates set `LUS_EMULATED`, which skips `a_slow_reader_loses_its_connection_test` in `serve_test.lus`, the one test whose bound qemu-user breaks by buffering sockets differently. qemu does not model the memory ordering or the instruction fetch of real hardware, so each qemu target is confirmed on native hardware, such as a cloud server, before it is announced.
 
-The interpreters of riscv64, ppc64le, and loong64 build from the same sources and pass the conformance suite under qemu-user in the VM, so a failure in the gate of a new JIT on those targets points at the new tier. Both tiers on riscv64 pass the whole suite under qemu-user in every JIT mode, with `LUS_JIT_DIRECT=1024`, and in a `-Dgc-stress=97 -Dgc-verify=true` build.
+The interpreters of riscv64, ppc64le, and loong64 build from the same sources and pass the conformance suite under qemu-user in the VM, so a failure in the gate of a new JIT on those targets points at the new tier. Both tiers on riscv64 pass the whole suite under qemu-user in every JIT mode, with `LUS_JIT_DIRECT=1024`, and in a `-Dgc-stress=97 -Dgc-verify=true` build. Both tiers on 32-bit ARM pass it the same way under `qemu-arm`.
 
 ## Ahead-of-time compilation
 

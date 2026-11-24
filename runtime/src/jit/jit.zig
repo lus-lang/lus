@@ -60,7 +60,7 @@ pub inline fn fromWide(comptime P: type, w: u64) P {
 pub const is_wasm = builtin.cpu.arch == .wasm32;
 
 /// Whether this build has the optimizing tier, which emits machine code.
-pub const has_opt = enabled and !is_wasm and builtin.cpu.arch != .arm;
+pub const has_opt = enabled and !is_wasm;
 
 /// Whether the assembler of the target records relocations, which the
 /// form of code compiled ahead of time needs (`aot.zig`). 32-bit ARM
@@ -528,8 +528,15 @@ fn stackBounds() Bounds {
             if (high > size and size != 0) b = .{ .low = high - size, .high = high };
         },
         .linux => {
+            // The C library of a static 32-bit ARM build finds the stack
+            // of the main thread by probing the pages below it with one
+            // system call each. Under qemu-user that walk covers the
+            // gigabyte of address space that the emulator reserves
+            // there. The main thread of such a build therefore gives its
+            // chains the budget below their entry (`setFloor`).
+            const probed = builtin.cpu.arch == .arm and builtin.abi.isMusl() and std.os.linux.gettid() == std.os.linux.getpid();
             var attr: std.c.pthread_attr_t = undefined;
-            if (pthread_getattr_np(std.c.pthread_self(), &attr) == 0) {
+            if (!probed and pthread_getattr_np(std.c.pthread_self(), &attr) == 0) {
                 var addr: ?*anyopaque = null;
                 var size: usize = 0;
                 if (pthread_attr_getstack(&attr, &addr, &size) == 0 and addr != null and size != 0) {
@@ -543,7 +550,7 @@ fn stackBounds() Bounds {
             // include memory below the stack, such as its guard page.
             if (b.low != 0) {
                 if (std.posix.getrlimit(.STACK)) |lim| {
-                    if (lim.cur != 0 and lim.cur < b.high) b.low = @max(b.low, b.high - lim.cur);
+                    if (lim.cur != 0 and lim.cur < b.high) b.low = @max(b.low, b.high - @as(usize, @intCast(lim.cur)));
                 } else |_| {}
             }
         },

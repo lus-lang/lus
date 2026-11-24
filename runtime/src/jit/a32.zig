@@ -272,33 +272,35 @@ const Y = union(enum) {
 /// divides only 32-bit integers and VFP converts only to them.
 const rt = struct {
     // The contract of the interface keeps a divisor of zero or minus one
-    // away from these routines, and they stay total all the same.
+    // away from these routines. They stay total all the same. Each
+    // divides once and finds the remainder with a multiplication. Most
+    // operands fit 32 bits, where the division is several times shorter.
     fn truncDiv(x: i64, y: i64) i64 {
         if (y == 0) return 0;
         if (y == -1) return 0 -% x;
+        const xn: i32 = @truncate(x);
+        const yn: i32 = @truncate(y);
+        if (xn == x and yn == y) return @divTrunc(xn, yn);
         return @divTrunc(x, y);
     }
-    fn truncRem(x: i64, y: i64) i64 {
-        if (y == 0 or y == -1) return 0;
-        return @rem(x, y);
-    }
     fn divRem(x: i64, y: i64, rem: *i64) callconv(.c) i64 {
-        rem.* = truncRem(x, y);
-        return truncDiv(x, y);
+        const q = truncDiv(x, y);
+        rem.* = x -% q *% y;
+        return q;
     }
     // The truncated results are right unless the remainder is not zero
     // and its sign differs from the sign of the divisor.
     fn floorDiv(x: i64, y: i64) callconv(.c) i64 {
-        const r = truncRem(x, y);
         const q = truncDiv(x, y);
+        const r = x -% q *% y;
         return if (r != 0 and (r ^ y) < 0) q -% 1 else q;
     }
     fn floorMod(x: i64, y: i64) callconv(.c) i64 {
-        const r = truncRem(x, y);
+        const r = x -% truncDiv(x, y) *% y;
         return if (r != 0 and (r ^ y) < 0) r +% y else r;
     }
     /// Truncates toward zero. A value outside the range gives the
-    /// nearest integer, and NaN gives zero.
+    /// nearest integer. NaN gives zero.
     fn floatToInt(bits: u64) callconv(.c) i64 {
         return std.math.lossyCast(i64, @as(f64, @bitCast(bits)));
     }
@@ -698,7 +700,7 @@ pub const Assembler = struct {
         a.ldstf(false, fzero, ad.b, ad.d + 8);
     }
     /// Copies 16 bytes a word at a time. A value is often written as
-    /// words just before it is copied, and a load of a double would wait
+    /// words just before it is copied, so a load of a double would wait
     /// for those stores to leave the store buffer.
     pub fn copy16(a: *Assembler, dst: Mem, src: Mem) void {
         a.copy(dst, src, 4);
@@ -852,9 +854,8 @@ pub const Assembler = struct {
     // interface. Such an operation keeps every register that it does not
     // name, so the call saves the registers that the convention lets a
     // routine clobber: r0 to r3 and d0 to d7. An operand that lives in
-    // one of them is read from where it was saved, and a result that
-    // lives in one of them is written there, so that the restore loads
-    // it.
+    // one of them is read from where it was saved. A result that lives
+    // in one of them is written there, so that the restore loads it.
 
     /// Bytes that `rtEnter` pushes below the saved r0 to r3.
     const rt_floats = 64;
@@ -909,8 +910,8 @@ pub const Assembler = struct {
     }
     /// Converts a signed integer to a float. VFP converts 32-bit
     /// integers, so the result is the unsigned low word plus the signed
-    /// high word times 2^32. Both products are exact, and the one
-    /// addition rounds as a direct conversion does.
+    /// high word times 2^32. The low float and the product are exact,
+    /// so the one addition rounds as a direct conversion does.
     pub fn intToFloat(a: *Assembler, dst: FReg, src: Reg) void {
         const low = a.get(lo(src), S0);
         a.word(0xEE000A10 | dst.n() << 16 | @as(u32, low) << 12); // vmov s(2 dst), low
@@ -1223,7 +1224,7 @@ pub const Assembler = struct {
 
     /// Calls a function at an absolute address whose arguments are
     /// words. The low words of the first four arguments are in r0 to r3
-    /// already, and the low word of the fifth travels on the stack. The
+    /// already. The low word of the fifth travels on the stack. The
     /// result is a word in r0.
     pub fn call(a: *Assembler, address: usize) void {
         const fifth = a.get(lo(args[4]), S0);
@@ -1429,6 +1430,19 @@ test "arm memory forms" {
     });
 }
 
+test "arm offsets beyond the reach of a load go through a scratch register" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.load16(.t0, .{ .base = .bp, .disp = 300 }); // add r10, r5, #256; ldrh r6, [r10, #44]; mov r7, #0
+    a.load64(.t1, .{ .base = .thread, .disp = -5000 }); // sub r10, r4, #8192; ldr r3, [r10, #3192]; ldr r8, [r10, #3196]
+    a.loadF(.d2, .{ .base = .bp, .disp = 6 }); // add r10, r5, #6; vldr d2, [r10]
+    a.moveSp(-4104); // sub sp, sp, #8; sub sp, sp, #4096
+    try expectWords(&a, &.{
+        0xE285AC01, 0xE1DA62BC, 0xE3A07000, 0xE244AA02, 0xE59A3C78, 0xE59A8C7C, 0xE285A006, 0xED9A2B00,
+        0xE24DD008, 0xE24DDA01,
+    });
+}
+
 test "arm arithmetic on pairs and on words of the frame" {
     var a = Assembler.init(std.testing.allocator);
     defer a.deinit();
@@ -1563,7 +1577,46 @@ test "arm division routines round as the interpreter does" {
     try std.testing.expectEqual(@as(i64, 2), rt.floorMod(-7, 3));
     try std.testing.expectEqual(@as(i64, -2), rt.floorMod(7, -3));
     try std.testing.expectEqual(@as(i64, 2), rt.floorDiv(7, 3));
+    // Operands beyond 32 bits take the long division.
+    try std.testing.expectEqual(@as(i64, -3_000_000_001), rt.floorDiv(-9_000_000_001, 3));
+    try std.testing.expectEqual(@as(i64, 2), rt.floorMod(-9_000_000_001, 3));
+    try std.testing.expectEqual(@as(i64, std.math.minInt(i32)), rt.divRem(std.math.minInt(i32), 1, &rem));
+    try std.testing.expectEqual(@as(i64, 1 << 31), rt.floorDiv(std.math.minInt(i32), -1));
     try std.testing.expectEqual(@as(i64, -3), rt.floatToInt(@bitCast(@as(f64, -3.9))));
     try std.testing.expectEqual(@as(i64, std.math.maxInt(i64)), rt.floatToInt(@bitCast(@as(f64, 1e300))));
     try std.testing.expectEqual(@as(i64, 0), rt.floatToInt(@bitCast(std.math.nan(f64))));
+}
+
+test "arm division saves the registers that a routine may clobber" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    // push {r0-r3}; vpush {d0-d7}; ldr r0, [sp, #76]; mov r1, r8; ldr r2, [sp, #64]
+    // ldr r3, [fp, #28]; movw ip; movt ip; blx ip; mov r6, r0; mov r7, r1
+    // vpop {d0-d7}; pop {r0-r3}
+    a.floorDiv(.t0, .t1, .t4, false, .c1, .c1);
+    var w: [13]u32 = undefined;
+    try std.testing.expectEqual(@sizeOf(@TypeOf(w)), a.buf.items.len);
+    @memcpy(std.mem.sliceAsBytes(&w), a.buf.items);
+    for (&w) |*x| x.* = std.mem.littleToNative(u32, x.*);
+    // The address of the routine fills the seventh and eighth words.
+    try std.testing.expectEqualSlices(u32, &.{ 0xE92D000F, 0xED2D0B10, 0xE59D004C, 0xE1A01008, 0xE59D2040, 0xE59B301C }, w[0..6]);
+    try std.testing.expectEqualSlices(u32, &.{ 0xE12FFF3C, 0xE1A06000, 0xE1A07001, 0xECBD0B10, 0xE8BD000F }, w[8..]);
+}
+
+test "arm indexed words, pairs of words, and words in memory" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    const l = a.newLabel();
+    a.loadIdx64(.t0, .t1, .t2); // add r10, r3, r2, lsl #3; ldr r6, [r10]; ldr r7, [r10, #4]
+    a.storePair32(.t1, .t4, .{ .base = .t2, .disp = 8 }); // str r3, [r2, #8]; str r0, [r2, #12]
+    // ldr ip, [fp, #36]; ldr lr, [r6, #12]; cmp ip, lr; ldr ip, [fp, #32]; ldr lr, [r6, #8]
+    // cmpeq ip, lr; bne
+    a.jumpIfMem(.ne, .t5, .{ .base = .t0, .disp = 8 }, l);
+    a.bind(l);
+    a.fmovImm(.d1, 0x3FF0_0000_0000_0000); // mov ip, #0; movw lr, #0; movt lr, #0x3ff0; vmov d1, ip, lr
+    try std.testing.expect(a.finish());
+    try expectWords(&a, &.{
+        0xE083A182, 0xE59A6000, 0xE59A7004, 0xE5823008, 0xE582000C, 0xE59BC024, 0xE596E00C, 0xE15C000E,
+        0xE59BC020, 0xE596E008, 0x015C000E, 0x1AFFFFFF, 0xE3A0C000, 0xE300E000, 0xE343EFF0, 0xEC4ECB11,
+    });
 }
