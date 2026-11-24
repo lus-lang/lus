@@ -179,9 +179,11 @@ fn decode(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!Step {
             },
             .chunked => switch (b.chunk) {
                 .line => {
+                    // A chunk decoded in this call goes to the reader
+                    // before the decoder waits for the line of the next.
                     const le = lineEnd(b, buf, pos) orelse {
                         if (b.request and buf.len - pos > request_limits.chunk_line) break :step refuse(b, 400, "malformed chunked body");
-                        break :step .more;
+                        break :step if (pos > 0) .progress else .more;
                     };
                     const line = buf[pos..le.end];
                     if (b.request and line.len > request_limits.chunk_line) break :step refuse(b, 400, "malformed chunked body");
