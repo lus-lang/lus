@@ -639,6 +639,21 @@ fn accumulate(l: *Thread, len: i64, comptime term: Term, m: f64) Error!Lanes {
     return a;
 }
 
+/// Converts 64-bit integers to floats. The float unit of 32-bit ARM
+/// converts 32-bit integers only, and the routine of the compiler
+/// runtime for a 64-bit integer takes about seventy instructions. There
+/// the result is the signed high word times 2^32 plus the unsigned low
+/// word. Both terms are exact, so the one addition rounds as the direct
+/// conversion does.
+inline fn intsToFloats(x: anytype) @Vector(@typeInfo(@TypeOf(x)).vector.len, f64) {
+    const n = @typeInfo(@TypeOf(x)).vector.len;
+    if (comptime @import("builtin").cpu.arch != .arm) return @floatFromInt(x);
+    const low: @Vector(n, u32) = @truncate(@as(@Vector(n, u64), @bitCast(x)));
+    const high: @Vector(n, i32) = @truncate(x >> @splat(32));
+    const scale: @Vector(n, f64) = @splat(4294967296.0);
+    return @as(@Vector(n, f64), @floatFromInt(high)) * scale + @as(@Vector(n, f64), @floatFromInt(low));
+}
+
 fn accumulateWords(comptime kind: Table.ArrayKind, w: []const u64, a: *Lanes, comptime term: Term, m: f64) void {
     var acc: F64s = a.acc;
     var count: i64 = 0;
@@ -647,7 +662,7 @@ fn accumulateWords(comptime kind: Table.ArrayKind, w: []const u64, a: *Lanes, co
     while (k + lanes <= w.len) : (k += lanes) {
         const x: U64s = w[k..][0..lanes].*;
         const live = x != @as(U64s, @splat(Table.hole));
-        const xf: F64s = if (kind == .float) @bitCast(x) else @floatFromInt(@as(I64s, @bitCast(x)));
+        const xf: F64s = if (kind == .float) @bitCast(x) else intsToFloats(@as(I64s, @bitCast(x)));
         acc = @select(f64, live, acc + termOf(term, xf, mv), acc);
         count += @popCount(@as(u8, @bitCast(live)));
     }
@@ -655,7 +670,7 @@ fn accumulateWords(comptime kind: Table.ArrayKind, w: []const u64, a: *Lanes, co
     a.count += count;
     while (k < w.len) : (k += 1) {
         if (w[k] == Table.hole) continue;
-        const x: f64 = if (kind == .float) @bitCast(w[k]) else @floatFromInt(@as(i64, @bitCast(w[k])));
+        const x: f64 = if (kind == .float) @bitCast(w[k]) else intsToFloats(@as(@Vector(1, i64), @splat(@as(i64, @bitCast(w[k])))))[0];
         a.add(term, @intCast(k + 1), x, m);
     }
 }
