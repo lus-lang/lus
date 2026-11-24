@@ -918,7 +918,7 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
 /// receives a value no unboxed kind holds is made boxed directly.
 fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value, val: Value) Error!void {
     try resizeParts(gpa, t, asize, hcount, key, val);
-    inv.assert(layoutOk(t) and arrayOk(t));
+    if (inv.enabled) inv.assert(layoutOk(t) and arrayOk(t));
 }
 
 /// Whether the array part of `t` holds what its kind says: holes alone

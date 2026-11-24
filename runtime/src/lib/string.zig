@@ -617,7 +617,7 @@ fn split(l: *Thread) Error!u32 {
     }
     var pos: usize = 0;
     while (true) : (idx += 1) {
-        const found = std.mem.indexOfPos(u8, src, pos, delim) orelse {
+        const found = findBytes(src, pos, delim) orelse {
             try ops.rawSet(l, t, Value.int(idx), try substring(l, s, pos, src.len));
             break;
         };
@@ -720,6 +720,9 @@ pub fn MatcherFor(comptime bytewise: bool) type {
         /// later offsets without rescanning from the start.
         anchor_byte: usize = 0,
         anchor_char: usize = 0,
+        /// The compiled form of the pattern from the start byte the
+        /// search uses, for the bytewise matcher.
+        prog: ?*const state.PatternProgram = null,
 
         pub fn init(src: []const u8, pat: []const u8, ascii: bool) M {
             return .{ .src = src, .pat = pat, .ascii = bytewise or ascii };
@@ -757,6 +760,102 @@ pub fn MatcherFor(comptime bytewise: bool) type {
         inline fn before(m: *const M, s: usize) usize {
             if (bytewise) return s - 1;
             return prevChar(m.src, s);
+        }
+
+        /// Starts a match attempt of the pattern from byte `p` at source
+        /// byte `s`, on the compiled program when there is one. The
+        /// program starts at the same byte of the pattern as `p`.
+        pub fn attempt(m: *M, s: usize, p: usize) PatternError!?usize {
+            if (bytewise) if (m.prog) |prog| return m.run(prog, s, 0);
+            return m.match(s, p);
+        }
+
+        /// Matches the program from op `pc` against the source from byte
+        /// `s`. It recurses where `match` recurses, so both reach the
+        /// depth limit on the same patterns.
+        fn run(m: *M, prog: *const state.PatternProgram, s_in: usize, pc_in: usize) PatternError!?usize {
+            if (m.depth == 0) return error.TooComplex;
+            m.depth -= 1;
+            defer m.depth += 1;
+            const src = m.src;
+            var s = s_in;
+            var pc = pc_in;
+            while (pc < prog.nops) {
+                const op = &prog.ops[pc];
+                switch (op.kind) {
+                    .open, .open_position => {
+                        if (m.level >= max_captures) return error.TooManyCaptures;
+                        m.capture[m.level] = .{ .init = s, .len = if (op.kind == .open) cap_unfinished else cap_position };
+                        m.level += 1;
+                        const r = try m.run(prog, s, pc + 1);
+                        if (r == null) m.level -= 1;
+                        return r;
+                    },
+                    .close => {
+                        const lv = try m.captureToClose();
+                        m.capture[lv].len = @intCast(s - m.capture[lv].init);
+                        const r = try m.run(prog, s, pc + 1);
+                        if (r == null) m.capture[lv].len = cap_unfinished;
+                        return r;
+                    },
+                    .end => return if (s == src.len) s else null,
+                    .literal => {
+                        const lit = prog.text[op.from..][0..op.len];
+                        if (!std.mem.startsWith(u8, src[s..], lit)) return null;
+                        s += lit.len;
+                        pc += 1;
+                    },
+                    .single => {
+                        if (s >= src.len or !inByteSet(op.set, src[s])) {
+                            if (op.rep == '*' or op.rep == '?' or op.rep == '-') {
+                                pc += 1;
+                                continue;
+                            }
+                            return null;
+                        }
+                        switch (op.rep) {
+                            '?' => {
+                                if (try m.run(prog, s + 1, pc + 1)) |r| return r;
+                                pc += 1;
+                            },
+                            '+' => return m.runMax(prog, s + 1, pc),
+                            '*' => return m.runMax(prog, s, pc),
+                            '-' => return m.runMin(prog, s, pc),
+                            else => {
+                                s += 1;
+                                pc += 1;
+                            },
+                        }
+                    },
+                }
+            }
+            return s;
+        }
+
+        fn runMax(m: *M, prog: *const state.PatternProgram, s: usize, pc: usize) PatternError!?usize {
+            const op = &prog.ops[pc];
+            const src = m.src;
+            var e = s;
+            if (op.scan) {
+                e = std.mem.indexOfScalarPos(u8, src, s, op.stop) orelse src.len;
+            } else {
+                while (e < src.len and inByteSet(op.set, src[e])) e += 1;
+            }
+            while (true) {
+                if (try m.run(prog, e, pc + 1)) |r| return r;
+                if (e == s) return null;
+                e -= 1;
+            }
+        }
+
+        fn runMin(m: *M, prog: *const state.PatternProgram, s: usize, pc: usize) PatternError!?usize {
+            const set = prog.ops[pc].set;
+            var cur = s;
+            while (true) {
+                if (try m.run(prog, cur, pc + 1)) |r| return r;
+                if (cur >= m.src.len or !inByteSet(set, m.src[cur])) return null;
+                cur += 1;
+            }
         }
 
         /// Matches the pattern from byte `p` against the source from byte
@@ -1207,6 +1306,147 @@ fn firstSetCached(l: *Thread, pat: []const u8, p: usize) ?u128 {
     return set;
 }
 
+/// The first occurrence of `needle` in `hay` at or after byte `start`.
+/// It tests the first and the last byte of the needle at 16 positions at
+/// once and compares the rest only where both agree, so short subjects
+/// pay no setup and long ones skip ahead a vector at a time.
+pub fn findBytes(hay: []const u8, start: usize, needle: []const u8) ?usize {
+    if (start > hay.len or needle.len > hay.len - start) return null;
+    if (needle.len < 2) return if (needle.len == 0) start else std.mem.indexOfScalarPos(u8, hay, start, needle[0]);
+    const V = @Vector(16, u8);
+    const first: V = @splat(needle[0]);
+    const last: V = @splat(needle[needle.len - 1]);
+    const middle = needle[1 .. needle.len - 1];
+    // The last offset a match can start at.
+    const end = hay.len - needle.len;
+    var misses: usize = 0;
+    var i = start;
+    while (i + 15 <= end) : (i += 16) {
+        const a: V = hay[i..][0..16].*;
+        const b: V = hay[i + needle.len - 1 ..][0..16].*;
+        var mask = @as(u16, @bitCast(a == first)) & @as(u16, @bitCast(b == last));
+        while (mask != 0) : (mask &= mask - 1) {
+            const at = i + @ctz(mask);
+            if (std.mem.eql(u8, hay[at + 1 ..][0..middle.len], middle)) return at;
+            misses += 1;
+        }
+        // A subject full of near matches goes to a search whose cost
+        // does not grow with them.
+        if (misses > 64 and middle.len > 8) return std.mem.indexOfPos(u8, hay, i + 16, needle);
+    }
+    while (i <= end) : (i += 1) {
+        if (hay[i] == needle[0] and std.mem.eql(u8, hay[i..][0..needle.len], needle)) return i;
+    }
+    return null;
+}
+
+/// Whether ASCII byte `c` is in `set`.
+inline fn inByteSet(set: u128, c: u8) bool {
+    // One 64-bit half and one shift, which is cheaper than shifting the
+    // whole set.
+    const halves: [2]u64 = @bitCast(set);
+    return (halves[c >> 6] >> @as(u6, @truncate(c))) & 1 != 0;
+}
+
+/// Compiles `pat` from byte `start` for the bytewise matcher into `out`,
+/// returning false for a pattern outside the compiled forms: one with
+/// `%b`, `%f` or a back reference, a malformed one, or one with more ops
+/// or literal bytes than a program holds. Those run on the interpreter,
+/// which also reports their errors.
+fn compileProgram(pat: []const u8, start: usize, out: *state.PatternProgram) bool {
+    var m = MatcherFor(true).init("", pat, true);
+    var n: usize = 0;
+    var text_len: usize = 0;
+    var unclosed: usize = 0;
+    var captures: usize = 0;
+    var p = start;
+    while (p < pat.len) {
+        if (n == state.PatternProgram.max_ops) return false;
+        switch (pat[p]) {
+            '(' => {
+                if (captures == max_captures) return false;
+                captures += 1;
+                if (p + 1 < pat.len and pat[p + 1] == ')') {
+                    out.ops[n] = .{ .kind = .open_position };
+                    p += 2;
+                } else {
+                    out.ops[n] = .{ .kind = .open };
+                    unclosed += 1;
+                    p += 1;
+                }
+                n += 1;
+                continue;
+            },
+            ')' => {
+                if (unclosed == 0) return false;
+                unclosed -= 1;
+                out.ops[n] = .{ .kind = .close };
+                n += 1;
+                p += 1;
+                continue;
+            },
+            '$' => if (p + 1 == pat.len) {
+                out.ops[n] = .{ .kind = .end };
+                n += 1;
+                p += 1;
+                continue;
+            },
+            '%' => if (p + 1 < pat.len) switch (pat[p + 1]) {
+                'b', 'f', '0'...'9' => return false,
+                else => {},
+            },
+            else => {},
+        }
+        const ep = m.classEnd(p) catch return false;
+        const suffix: u8 = if (ep < pat.len) pat[ep] else 0;
+        const repeat: u8 = switch (suffix) {
+            '?', '*', '+', '-' => suffix,
+            else => 0,
+        };
+        const set = m.classSet(p, ep);
+        p = if (repeat != 0) ep + 1 else ep;
+        if (repeat == 0 and @popCount(set) == 1) {
+            // One byte that must match once joins the literal run before it.
+            if (text_len == out.text.len) return false;
+            out.text[text_len] = @intCast(@ctz(set));
+            text_len += 1;
+            if (n > 0 and out.ops[n - 1].kind == .literal) {
+                out.ops[n - 1].len += 1;
+            } else {
+                out.ops[n] = .{ .kind = .literal, .from = @intCast(text_len - 1), .len = 1 };
+                n += 1;
+            }
+            continue;
+        }
+        out.ops[n] = .{ .kind = .single, .set = set, .rep = repeat };
+        if (@popCount(~set) == 1) {
+            out.ops[n].scan = true;
+            out.ops[n].stop = @intCast(@ctz(~set));
+        }
+        n += 1;
+    }
+    out.nops = @intCast(n);
+    return true;
+}
+
+/// The compiled program of `pat` from byte `start`, through the cache of
+/// the state, or null for a pattern that does not compile. The program
+/// stays valid until the next call, which may replace it.
+fn programFor(l: *Thread, pat: []const u8, start: usize) ?*const state.PatternProgram {
+    const c = &l.g.patterns;
+    for (&c.entries) |*e| {
+        if (e.len == pat.len and e.start == start and std.mem.eql(u8, e.key[0..pat.len], pat)) return if (e.ok) e else null;
+    }
+    const e = &c.entries[c.next];
+    if (pat.len > e.key.len) return null;
+    c.next = @intCast((c.next + 1) % c.entries.len);
+    @memcpy(e.key[0..pat.len], pat);
+    e.len = pat.len;
+    e.start = start;
+    e.ok = compileProgram(pat, start, e);
+    return if (e.ok) e else null;
+}
+
 /// The first byte at or after `pos` that is in `set`, or `src.len`.
 inline fn skipTo(src: []const u8, pos: usize, set: u128) usize {
     var i = pos;
@@ -1262,7 +1502,7 @@ fn findAux(l: *Thread, is_find: bool) Error!u32 {
     const pat = p.bytes();
     const init_b = charOffset(l, s, init_c);
     if (is_find and (l.arg(4).truthy() or noSpecials(pat))) {
-        const rel = std.mem.indexOf(u8, src[init_b..], pat) orelse return aux.retNil(l);
+        const rel = findBytes(src[init_b..], 0, pat) orelse return aux.retNil(l);
         const start = init_c + charsIn(s, src[init_b..][0..rel]);
         try l.push(Value.int(@intCast(start + 1)));
         try l.push(Value.int(@intCast(start + p.chars())));
@@ -1284,11 +1524,12 @@ fn search(comptime M: type, l: *Thread, m: *M, s: *String, p: *String, init_b: u
     const pstart: usize = if (anchor) 1 else 0;
     const prefix = if (anchor) "" else literalPrefix(pat, pstart);
     const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSetCached(l, pat, pstart) else null;
+    if (M == MatcherFor(true)) m.prog = programFor(l, pat, pstart);
     var s1 = init_b;
     var c1 = init_c;
     while (true) {
         if (prefix.len > 0) {
-            const at = std.mem.indexOfPos(u8, src, s1, prefix) orelse break;
+            const at = findBytes(src, s1, prefix) orelse break;
             c1 += charsIn(s, src[s1..at]);
             s1 = at;
         } else if (first) |set| {
@@ -1299,7 +1540,7 @@ fn search(comptime M: type, l: *Thread, m: *M, s: *String, p: *String, init_b: u
             s1 = at;
         }
         m.reset(s1, c1);
-        const res = m.match(s1, pstart) catch |err| return patternError(l, m, err);
+        const res = m.attempt(s1, pstart) catch |err| return patternError(l, m, err);
         if (res) |e| return .{ .start_b = s1, .start_c = c1, .end = e };
         if (s1 >= src.len or anchor) break;
         s1 += wtf8.seqLen(src[s1]);
@@ -1338,7 +1579,7 @@ fn findLeaf(l: *Thread, args: [*]const Value, nargs: u32) callconv(.c) Value {
     const pat = p.bytes();
     const init_b = charOffset(l, s, init_c);
     if (plain or noSpecials(pat)) {
-        const rel = std.mem.indexOf(u8, src[init_b..], pat) orelse return .nil;
+        const rel = findBytes(src[init_b..], 0, pat) orelse return .nil;
         return Value.int(@intCast(init_c + charsIn(s, src[init_b..][0..rel]) + 1));
     }
     const top = l.top;
@@ -1402,6 +1643,7 @@ fn gmatchWith(comptime M: type, l: *Thread, ups: []Value, s: *String, p: *String
     const src = s.bytes();
     const pat = p.bytes();
     var m = M.init(src, pat, s.flags().ascii);
+    if (M == MatcherFor(true)) m.prog = programFor(l, pat, 0);
     const prefix = literalPrefix(pat, 0);
     const first: ?u128 = if (M == MatcherFor(true) and prefix.len == 0) firstSetCached(l, pat, 0) else null;
     var pos: usize = @intCast(ups[gm_pos].asInt());
@@ -1409,7 +1651,7 @@ fn gmatchWith(comptime M: type, l: *Thread, ups: []Value, s: *String, p: *String
     const last = ups[gm_last].asInt();
     while (pos <= src.len) {
         if (prefix.len > 0) {
-            const at = std.mem.indexOfPos(u8, src, pos, prefix) orelse break;
+            const at = findBytes(src, pos, prefix) orelse break;
             c += charsIn(s, src[pos..at]);
             pos = at;
         } else if (first) |set| {
@@ -1419,7 +1661,7 @@ fn gmatchWith(comptime M: type, l: *Thread, ups: []Value, s: *String, p: *String
             pos = at;
         }
         m.reset(pos, c);
-        const res = m.match(pos, 0) catch |err| return patternError(l, &m, err);
+        const res = m.attempt(pos, 0) catch |err| return patternError(l, &m, err);
         if (res) |e| {
             if (@as(i64, @intCast(e)) != last) {
                 ups[gm_pos] = Value.int(@intCast(e));
@@ -1567,6 +1809,17 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
     const prefix = if (anchor) "" else literalPrefix(pat, pstart);
     const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSetCached(l, pat, pstart) else null;
     var m = M.init(src, pat, s.flags().ascii);
+    // A replacement function or metamethod can run searches that replace
+    // the entries of the cache, so the matcher then keeps its own copy.
+    var own: state.PatternProgram = undefined;
+    if (M == MatcherFor(true)) if (programFor(l, pat, pstart)) |prog| {
+        if (kind == .string) {
+            m.prog = prog;
+        } else {
+            own = prog.*;
+            m.prog = &own;
+        }
+    };
     var b: Builder = undefined;
     b.init(l);
     defer b.deinit();
@@ -1602,7 +1855,7 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
     var changed = false;
     while (n < max_s) {
         if (prefix.len > 0) {
-            const at = std.mem.indexOfPos(u8, src, pos, prefix) orelse break;
+            const at = findBytes(src, pos, prefix) orelse break;
             cpos += charsIn(s, src[pos..at]);
             pos = at;
         } else if (first) |set| {
@@ -1612,7 +1865,7 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
             pos = at;
         }
         m.reset(pos, cpos);
-        const res = m.match(pos, pstart) catch |err| return patternError(l, &m, err);
+        const res = m.attempt(pos, pstart) catch |err| return patternError(l, &m, err);
         if (res != null and res != last) {
             const e = res.?;
             n += 1;
@@ -2205,6 +2458,101 @@ test "bytewise sets agree with the general matcher" {
             try testing.expectEqual(try g.match(start, 0), try b.match(start, 0));
         }
     }
+}
+
+test "findBytes agrees with a plain search" {
+    var prng = std.Random.DefaultPrng.init(7);
+    const r = prng.random();
+    var hay: [300]u8 = undefined;
+    var needle: [24]u8 = undefined;
+    for (0..2000) |_| {
+        // A small alphabet makes partial matches common.
+        const hn = r.uintAtMost(usize, hay.len);
+        const nn = r.uintAtMost(usize, needle.len);
+        for (hay[0..hn]) |*c| c.* = 'a' + r.uintLessThan(u8, 3);
+        for (needle[0..nn]) |*c| c.* = 'a' + r.uintLessThan(u8, 3);
+        const start = r.uintAtMost(usize, hn + 1);
+        const want = if (start > hn) null else std.mem.indexOfPosLinear(u8, hay[0..hn], start, needle[0..nn]);
+        try testing.expectEqual(want, findBytes(hay[0..hn], start, needle[0..nn]));
+    }
+    // Long runs of near matches.
+    var long: [200]u8 = @splat('a');
+    var near: [31]u8 = @splat('a');
+    near[30] = 'b';
+    try testing.expectEqual(@as(?usize, null), findBytes(&long, 0, &near));
+    @memset(long[160..], 'b');
+    try testing.expectEqual(@as(?usize, 130), findBytes(&long, 0, &near));
+}
+
+test "compiled patterns agree with the interpreter" {
+    const B = MatcherFor(true);
+    const pats = [_][]const u8{
+        "^(%S+) %- %- %[[^%]]*%] \"(%u+) /(%S*) HTTP/1%.1\" (%d+) (%d+)$",
+        "%a+",
+        "[^\n]+",
+        "(%d+)-(%d+)",
+        "a?b",
+        "a*b",
+        "a-b",
+        "<(.-)>",
+        "<.*>",
+        "()x()",
+        "(a(b)c)",
+        "[%w_]+$",
+        "x$y",
+        "^^a",
+        "[]]+",
+        "[^]]+",
+        "%.%%",
+        "(a*(.)%w(%s*))",
+        "[a-c]+",
+        "k=(%w*)",
+        "(h)(e)(l)",
+        "%s*$",
+        "a+$",
+        "(",
+        "a)",
+        "[a",
+        "%",
+        "%ba(",
+        "%f[%a]",
+        "(.)%1",
+        "",
+        "^",
+    };
+    const srcs = [_][]const u8{
+        "10.1.2.3 - - [20/Nov/2026:10:01:02 +0000] \"GET /api/v1/items/7 HTTP/1.1\" 200 512",
+        "hello world 12-34 k=v_1 <a><b> abcab aab b",
+        "x$y ^^a ]]] [z] .% (abc) help \n line two\n",
+        "",
+    };
+    for (pats) |pat| {
+        const anchor = pat.len > 0 and pat[0] == '^';
+        const pstart: usize = if (anchor) 1 else 0;
+        var prog: state.PatternProgram = .{};
+        if (!compileProgram(pat, pstart, &prog)) continue;
+        for (srcs) |src| {
+            for (0..src.len + 1) |at| {
+                var a = B.init(src, pat, true);
+                var b = B.init(src, pat, true);
+                b.prog = &prog;
+                a.reset(at, at);
+                b.reset(at, at);
+                const ra = a.attempt(at, pstart);
+                const rb = b.attempt(at, pstart);
+                if (ra) |ea| {
+                    try testing.expectEqual(ea, try rb);
+                    if (ea != null) {
+                        try testing.expectEqual(a.level, b.level);
+                        for (0..a.level) |i| try testing.expectEqual(a.getCapture(i, at, ea.?), b.getCapture(i, at, ea.?));
+                    }
+                } else |err| try testing.expectError(err, rb);
+            }
+        }
+    }
+    // Patterns the program does not cover stay on the interpreter.
+    var prog: state.PatternProgram = .{};
+    for ([_][]const u8{ "%b()", "%f[%a]", "(.)%1", "[a", "%", "a)" }) |pat| try testing.expect(!compileProgram(pat, 0, &prog));
 }
 
 test "pattern basics" {

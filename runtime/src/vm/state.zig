@@ -360,6 +360,9 @@ pub const Global = struct {
     /// The last pattern whose start bytes a search computed, by its text
     /// (`firstSet` in `lib/string.zig`).
     first_set: FirstSetCache = .{},
+    /// The patterns most recently compiled for the bytewise matcher, by
+    /// their text (`compileProgram` in `lib/string.zig`).
+    patterns: PatternCache = .{},
     /// The string of each ASCII character that the program made, which
     /// lives as long as the state, so `newStringKnown` returns it without
     /// a lookup.
@@ -902,7 +905,7 @@ pub fn newLongUninit(g: *Global, len: usize) Allocator.Error!*String {
 /// Completes a string from `newLongUninit` once its bytes, valid WTF-8,
 /// are written.
 pub fn finishLong(g: *Global, s: *String, ascii: bool, chars: usize) void {
-    inv.assert(textMatches(s.bytesMut(), ascii, chars));
+    if (inv.enabled) inv.assert(textMatches(s.bytesMut(), ascii, chars));
     s.setChars(@intCast(chars));
     s.flags().ascii = ascii;
     s.hash = object.hashBytes(g.seed, s.bytesMut());
@@ -977,7 +980,7 @@ pub noinline fn intern(g: *Global, s: *String) Allocator.Error!*String {
     }
     try g.strings.insert(g.gpa, s);
     s.flags().interned = true;
-    inv.assert(internedOk(g, s));
+    if (inv.enabled) inv.assert(internedOk(g, s));
     return s;
 }
 
@@ -1003,11 +1006,11 @@ inline fn createStringAs(g: *Global, b: []const u8, ascii: bool, chars: usize, h
     s.flags().* = .{ .ascii = ascii, .interned = short, .crumb_slot = slot };
     s.initCrumbs();
     @memcpy(s.bytesMut(), b);
-    inv.assert(textMatches(b, ascii, chars));
+    if (inv.enabled) inv.assert(textMatches(b, ascii, chars));
     const base: [*]u8 = @ptrCast(s);
     base[@sizeOf(String) + b.len] = 0;
     if (short) try g.strings.insert(g.gpa, s);
-    inv.assert(internedOk(g, s));
+    if (inv.enabled) inv.assert(internedOk(g, s));
     return s;
 }
 
@@ -1025,6 +1028,47 @@ pub const FirstSetCache = struct {
     len: usize = std.math.maxInt(usize),
     start: usize = 0,
     set: ?u128 = null,
+};
+
+/// A pattern compiled for the bytewise matcher. Every op is one class
+/// with its repetition, a run of literal bytes, a capture boundary, or
+/// the final anchor, so a match tests precomputed byte sets and never
+/// parses the pattern text.
+pub const PatternProgram = struct {
+    pub const max_ops = 24;
+    pub const Op = struct {
+        /// The bytes a `single` op matches.
+        set: u128 = 0,
+        kind: enum(u8) { single, literal, open, open_position, close, end },
+        /// The repetition of a `single` op: 0, '?', '*', '+' or '-'.
+        rep: u8 = 0,
+        /// The bytes of a `literal` op, in `text`.
+        from: u8 = 0,
+        len: u8 = 0,
+        /// Set when `set` holds every ASCII byte but `stop`, as `[^\n]`
+        /// does, so a repetition ends at the next `stop`.
+        scan: bool = false,
+        stop: u8 = 0,
+    };
+    /// Patterns longer than the key are never compiled.
+    key: [64]u8 = undefined,
+    len: usize = std.math.maxInt(usize),
+    /// The byte of the pattern the program starts at, 1 after an anchor.
+    start: usize = 0,
+    /// Whether the pattern compiled. Every other pattern runs on the
+    /// interpreter of the matcher.
+    ok: bool = false,
+    nops: u8 = 0,
+    ops: [max_ops]Op = undefined,
+    text: [64]u8 = undefined,
+};
+
+/// A few compiled patterns, replaced in turn, so that a loop alternating
+/// between patterns, such as `gmatch` over lines and `match` on each
+/// line, keeps all of them.
+pub const PatternCache = struct {
+    entries: [4]PatternProgram = @splat(.{}),
+    next: u8 = 0,
 };
 
 pub const NewTableSite = struct {

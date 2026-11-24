@@ -2,8 +2,9 @@
 //! and `NEVER` macros of SQLite.
 //!
 //! The checks run in Debug builds, in the unit tests, and in any build
-//! with `-Dinvariants=true`. Elsewhere `assert` compiles to nothing and
-//! costs nothing, so a check may walk a whole structure.
+//! with `-Dinvariants=true`. Elsewhere a check behind `if (inv.enabled)`
+//! compiles to nothing and costs nothing, so it may walk a whole
+//! structure.
 //!
 //! `always(c)` and `never(c)` guard a defensive branch that no input
 //! should reach: `if (inv.never(len > limit)) return error.Corrupt`. A
@@ -22,8 +23,10 @@ pub const enabled = build_options.invariants or builtin.mode == .debug or builti
 /// True in the coverage build, where marked branches fold away.
 const folding = build_options.coverage;
 
-/// Panics when `c` is false in a checking build. `c` must have no effect,
-/// since a release build leaves it out.
+/// Panics when `c` is false in a checking build. `c` must have no effect.
+/// The argument is evaluated before the call, so a check that calls a
+/// function goes behind `if (inv.enabled)`, which leaves it out of a
+/// release build.
 pub inline fn assert(c: bool) void {
     if (enabled and !c) failed("invariant", @returnAddress());
 }
