@@ -1093,9 +1093,9 @@ pub const Codegen = struct {
     }
 
     /// A value as an argument, read after `saveAll` moved the stack.
-    fn argPlace(c: *Codegen, r: Ref, saved: bool) Place {
+    fn argPlace(c: *Codegen, r: Ref, saved: i32) Place {
         const p = c.place(r);
-        if (saved and p == .spill) return .{ .spill = p.spill + @as(u32, @intCast(@divExact(save_bytes, 8))) };
+        if (p == .spill) return .{ .spill = p.spill + @as(u32, @intCast(@divExact(saved, 8))) };
         return p;
     }
 
@@ -1622,7 +1622,12 @@ pub const Codegen = struct {
         const a = &c.em.a;
         const i = c.f.at(s.inst);
         a.bind(s.entry);
-        c.saveAll();
+        // A barrier reads no register of optimized code, so an assembler
+        // whose pool lives partly in memory saves only what the call
+        // and its arguments overwrite.
+        const light = comptime @hasDecl(A.Assembler, "saveVolatile");
+        var saved: i32 = save_bytes;
+        if (light and i.op == .barrier) saved = a.saveVolatile() else c.saveAll();
         switch (i.op) {
             .gccheck => {
                 a.mov(A.args[0], A.thread);
@@ -1635,7 +1640,7 @@ pub const Codegen = struct {
             .barrier => {
                 var buf: [3]Move = undefined;
                 var n: usize = 0;
-                buf[n] = .{ .dst = .{ .g = A.args[1] }, .src = c.argPlace(i.a, true), .float = false };
+                buf[n] = .{ .dst = .{ .g = A.args[1] }, .src = c.argPlace(i.a, saved), .float = false };
                 n += 1;
                 switch (i.aux & 3) {
                     0 => {
@@ -1643,7 +1648,7 @@ pub const Codegen = struct {
                         if (v.ty == .nil) {
                             buf[n] = .{ .dst = .{ .g = A.args[2] }, .src = .{ .imm = 0 }, .float = false };
                         } else {
-                            buf[n] = .{ .dst = .{ .g = A.args[2] }, .src = c.argPlace(i.b, true), .float = false };
+                            buf[n] = .{ .dst = .{ .g = A.args[2] }, .src = c.argPlace(i.b, saved), .float = false };
                         }
                         n += 1;
                         c.parallel(buf[0..n]);
@@ -1675,7 +1680,7 @@ pub const Codegen = struct {
             },
             else => unreachable,
         }
-        c.restoreAll();
+        if (light and i.op == .barrier) a.restoreVolatile() else c.restoreAll();
         a.jmp(s.back);
     }
 };

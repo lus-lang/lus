@@ -1788,6 +1788,45 @@ pub const Assembler = struct {
         a.compare(c, lo(x), a.chi(x), .{ .mem = m }, .{ .w = .zero }, l);
     }
 
+    /// Saves what a call of the runtime and its five arguments
+    /// overwrite: the words of the argument registers, which are r0 to
+    /// r3, r8, r9, and four words of the frame, and d0 to d7. Every other
+    /// word of a register survives the call, in a machine register that
+    /// belongs to the caller or in the frame. Returns the bytes pushed.
+    pub fn saveVolatile(a: *Assembler) i32 {
+        a.sync();
+        a.push(volatile_regs);
+        for (volatile_words) |pair| {
+            a.ldr(S0, fp, pair[0]);
+            a.ldr(S1, fp, pair[1]);
+            a.push(@as(u32, 1) << S0 | @as(u32, 1) << S1);
+        }
+        a.vpush(.d0, 8);
+        return 4 * @popCount(volatile_regs) + 8 * volatile_words.len + rt_floats;
+    }
+    /// Restores what `saveVolatile` saved. Nothing is known about a high
+    /// word afterwards.
+    pub fn restoreVolatile(a: *Assembler) void {
+        a.vpop(.d0, 8);
+        var k: usize = volatile_words.len;
+        while (k > 0) {
+            k -= 1;
+            a.pop(@as(u32, 1) << S0 | @as(u32, 1) << S1);
+            a.str(S0, fp, volatile_words[k][0]);
+            a.str(S1, fp, volatile_words[k][1]);
+        }
+        a.pop(volatile_regs);
+        a.leave();
+    }
+    /// r0 to r3, and the high words of `t1` and `t2` in r8 and r9.
+    const volatile_regs: u32 = 0x030F;
+    /// The words of the frame that belong to the argument registers: the
+    /// high words of `t3` and `t4`, and both words of `t5`.
+    const volatile_words = [_][2]i32{
+        .{ slot_t3_hi, slot_t4_hi },
+        .{ slot_regs, slot_regs + 4 },
+    };
+
     // Calls of the runtime follow AAPCS. The stack pointer is a multiple
     // of eight at every call: the entry sequence leaves it so, the code
     // generator moves it by multiples of sixteen, and the arguments that
@@ -2577,5 +2616,20 @@ test "arm counts and compares 64-bit words where they lie in memory" {
     try expectWords(&a, &.{
         0xE59AC000, 0xE29CC048, 0xE58AC000, 0xE59AC004, 0xE2ACC000, 0xE58AC004, 0xE59AC004, 0xE59AE00C,
         0xE15C000E, 0xE59AC000, 0xE59AE008, 0x015C000E, 0x2AFFFFF2,
+    });
+}
+
+test "arm saves around a barrier only what its call overwrites" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    // push {r0-r3, r8, r9}; ldr ip, [fp, #24]; ldr lr, [fp, #28]; push {ip, lr}
+    // ldr ip, [fp, #32]; ldr lr, [fp, #36]; push {ip, lr}; vpush {d0-d7}
+    try std.testing.expectEqual(@as(i32, 104), a.saveVolatile());
+    // vpop {d0-d7}; pop {ip, lr}; str ip, [fp, #32]; str lr, [fp, #36]; pop {ip, lr}
+    // str ip, [fp, #24]; str lr, [fp, #28]; pop {r0-r3, r8, r9}
+    a.restoreVolatile();
+    try expectWords(&a, &.{
+        0xE92D030F, 0xE59BC018, 0xE59BE01C, 0xE92D5000, 0xE59BC020, 0xE59BE024, 0xE92D5000, 0xED2D0B10,
+        0xECBD0B10, 0xE8BD5000, 0xE58BC020, 0xE58BE024, 0xE8BD5000, 0xE58BC018, 0xE58BE01C, 0xE8BD030F,
     });
 }
