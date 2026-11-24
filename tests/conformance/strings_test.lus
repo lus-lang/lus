@@ -1029,3 +1029,23 @@ local function join_follows_the_length_metamethod_test()
     assert(string.join({"a", 2, "c"}, "-") == "a-2-c")
     assert(string.join({"a", nil, "c"}, "-") == "a")
 end
+
+-- A split gathers its pieces in batches of 256, so results of every
+-- size around the batch keep every piece in order, and they take
+-- values of every kind afterwards.
+local function string_split_keeps_every_piece_across_batches_test()
+    for _, n in ipairs({ 1, 2, 255, 256, 257, 511, 512, 513, 1000 }) do
+        local pieces = {}
+        for i = 1, n do pieces[i] = tostring(i) end
+        local back = string.split(table.concat(pieces, ","), ",")
+        assert(#back == n)
+        for i = 1, n do assert(back[i] == pieces[i]) end
+        local chars = string.split(string.rep("é", n), "")
+        assert(#chars == n and chars[1] == "é" and chars[n] == "é")
+    end
+    local t = string.split("a,b,c", ",")
+    t[2] = 7
+    t[4] = { "x" }
+    assert(t[1] == "a" and t[2] == 7 and t[3] == "c" and t[4][1] == "x" and #t == 4)
+    assert(#string.split("", "") == 0)
+end

@@ -21,6 +21,7 @@ const object = @import("../vm/object.zig");
 const state = @import("../vm/state.zig");
 const ops = @import("../vm/ops.zig");
 const vmtable = @import("../vm/table.zig");
+const gc = @import("../vm/gc.zig");
 const wtf8 = @import("../vm/wtf8.zig");
 const numeric = @import("../vm/numeric.zig");
 const aux = @import("auxlib.zig");
@@ -603,29 +604,75 @@ fn split(l: *Thread) Error!u32 {
     const d = try aux.checkString(l, 2);
     const src = s.bytes();
     const delim = d.bytes();
-    const t = try l.newTable(if (delim.len == 0) s.chars() else 0, 0);
-    try l.push(Value.obj(.table, t));
-    var idx: i64 = 1;
+    var parts: SplitList = .{ .l = l, .slot = l.top };
+    try l.push(.nil);
     if (delim.len == 0) {
         var i: usize = 0;
-        while (i < src.len) : (idx += 1) {
+        while (i < src.len) {
             const k = wtf8.seqLen(src[i]);
-            try ops.rawSet(l, t, Value.int(idx), try substring(l, s, i, i + k));
+            try parts.add(try substring(l, s, i, i + k));
             i += k;
         }
-        return 1;
+        return parts.finish();
     }
     var pos: usize = 0;
-    while (true) : (idx += 1) {
+    while (true) {
         const found = findBytes(src, pos, delim) orelse {
-            try ops.rawSet(l, t, Value.int(idx), try substring(l, s, pos, src.len));
+            try parts.add(try substring(l, s, pos, src.len));
             break;
         };
-        try ops.rawSet(l, t, Value.int(idx), try substring(l, s, pos, found));
+        try parts.add(try substring(l, s, pos, found));
         pos = found + delim.len;
     }
-    return 1;
+    return parts.finish();
 }
+
+/// The pieces of `split`, which wait on the stack above `slot` and go to
+/// the result in batches. A result of one batch is made at its exact
+/// size, one word per piece in the cell of its table.
+const SplitList = struct {
+    l: *Thread,
+    /// The stack slot that holds the result once it exists.
+    slot: u32,
+    t: ?*Table = null,
+    n: usize = 0,
+
+    const batch = 256;
+
+    fn add(p: *SplitList, v: Value) Error!void {
+        try p.l.push(v);
+        if (p.l.top - p.slot - 1 >= batch) try p.flush(false);
+    }
+
+    fn flush(p: *SplitList, last: bool) Error!void {
+        const l = p.l;
+        const vals = l.stack[p.slot + 1 .. l.top];
+        if (p.t == null) {
+            // Making the table can collect, and the pieces are on the
+            // stack, which keeps them alive.
+            const t = state.newListIn(l.g, vals) catch return l.raiseMem();
+            l.stack[p.slot] = Value.obj(.table, t);
+            p.t = t;
+        } else {
+            const t = p.t.?;
+            const end = p.n + vals.len;
+            if (end > t.asize) {
+                const grow = if (last) end else @max(end, 2 * @as(usize, t.asize));
+                vmtable.resize(l.g.gpa, t, grow, vmtable.hashCount(t)) catch return l.raiseMem();
+            }
+            vmtable.storeList(l.g.gpa, t, p.n, vals) catch return l.raiseMem();
+        }
+        p.n += vals.len;
+        gc.barrierBack(l.g, &p.t.?.hdr);
+        l.top = p.slot + 1;
+    }
+
+    fn finish(p: *SplitList) Error!u32 {
+        if (p.t == null or p.l.top > p.slot + 1) try p.flush(true);
+        p.l.top = p.slot + 1;
+        return 1;
+    }
+};
 
 fn join(l: *Thread) Error!u32 {
     _ = try aux.checkTable(l, 1);
