@@ -464,7 +464,7 @@ pub const Emitter = struct {
         const o = opc.op(e.p.code[pc]);
         a.mov(A.args[0], A.thread);
         a.movImm(A.args[1], pc + 1);
-        a.mov(A.args[2], A.stop);
+        if (@hasDecl(A.Assembler, "loadStop")) a.loadStop(A.args[2]) else a.mov(A.args[2], A.stop);
         a.movImmReloc(A.args[3], e.p.code[pc], .literal);
         a.call(@intFromPtr(helpers.steps[@backingInt(o)]));
         a.jumpIfImm(.hi, A.ret0, @intCast(Step.skip), e.l_status);
@@ -1839,7 +1839,7 @@ pub const Emitter = struct {
                 e.leanReturnOr(1, ra, general);
                 a.bind(general);
                 a.mov(A.args[0], A.thread);
-                a.mov(A.args[1], A.stop);
+                if (@hasDecl(A.Assembler, "loadStop")) a.loadStop(A.args[1]) else a.mov(A.args[1], A.stop);
                 a.movImmReloc(A.args[2], ins, .literal);
                 a.call(@intFromPtr(&helpers.returnAll));
                 a.jmp(e.l_status);

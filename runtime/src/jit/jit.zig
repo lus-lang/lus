@@ -703,6 +703,7 @@ test {
     _ = @import("a32.zig");
     _ = @import("reloc.zig");
     _ = @import("aot.zig");
+    _ = @import("winunwind.zig");
     if (enabled) {
         _ = mem;
         _ = emit;

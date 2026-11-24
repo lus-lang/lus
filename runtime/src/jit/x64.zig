@@ -62,6 +62,13 @@ pub const sp: Reg = .rsp;
 
 // The registers the emitter uses. Pinned registers are callee-saved, so
 // they survive calls into the runtime.
+/// Whether native code keeps `r12` at the frame of the entry sequence,
+/// on Windows, where the unwind information of every block finds the
+/// frame from it (`winunwind.zig`). The stop depth that `r12` holds on
+/// the other systems then lives in the slot of the frame that `r12`
+/// points at, which `loadStop` reads.
+pub const frame_pointer = builtin.os.tag == .windows;
+
 pub const thread: Reg = .rbx;
 pub const bp: Reg = .r14;
 pub const base: Reg = .r15;
@@ -955,12 +962,19 @@ pub const Assembler = struct {
         a.bytes(&.{ 0x41, 0x56 }); // push r14
         a.bytes(&.{ 0x41, 0x57 }); // push r15
         a.bytes(&.{ 0x48, 0x83, 0xEC, 0x08 }); // sub rsp, 8
+        if (frame_pointer) {
+            a.bytes(&.{ 0x48, 0x89, 0x34, 0x24 }); // mov [rsp], rsi
+            a.bytes(&.{ 0x49, 0x89, 0xE4 }); // mov r12, rsp
+        } else a.mov(stop, .rsi);
         a.mov(thread, .rdi);
-        a.mov(stop, .rsi);
         a.mov(base, .rcx);
         // The address to continue at moves to the register the emitter
         // expects it in.
         a.mov(.rax, .rdx);
+    }
+    /// dst = the stop depth that the entry sequence was given.
+    pub fn loadStop(a: *Assembler, dst: Reg) void {
+        if (frame_pointer) a.load64(dst, .{ .base = stop }) else a.mov(dst, stop);
     }
     /// Returns to the caller of the entry sequence with the status in the
     /// first result register.

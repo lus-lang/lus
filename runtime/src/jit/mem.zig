@@ -32,6 +32,18 @@ extern "kernel32" fn VirtualProtect(addr: *anyopaque, size: usize, protect: u32,
 extern "kernel32" fn GetCurrentProcess() callconv(.winapi) *anyopaque;
 extern "kernel32" fn FlushInstructionCache(process: *anyopaque, addr: ?*const anyopaque, size: usize) callconv(.winapi) i32;
 
+/// On Windows on x86-64 each chunk registers a function table of one
+/// entry that covers its blocks, so the exception dispatcher, debuggers,
+/// and profilers walk through native code (`winunwind.zig`). Native code
+/// keeps `r12` at the frame of the entry sequence, so one record of
+/// unwind information at the start of the chunk describes every block.
+const unwinds = windows and builtin.cpu.arch == .x86_64 and @import("x64.zig").frame_pointer;
+const winunwind = @import("winunwind.zig");
+/// The bytes at the start of a chunk that hold its unwind information.
+const header = if (unwinds) 64 else 0;
+extern "ntdll" fn RtlAddGrowableFunctionTable(table: *?*anyopaque, entries: *winunwind.RuntimeFunction, count: u32, max: u32, range_base: usize, range_end: usize) callconv(.winapi) u32;
+extern "ntdll" fn RtlDeleteGrowableFunctionTable(table: *anyopaque) callconv(.winapi) void;
+
 const chunk_size = 1 << 20;
 const block_align = 16;
 
@@ -40,15 +52,23 @@ const Span = struct {
     len: usize,
 };
 
+/// A chunk mapped from the system, with the function table it registered
+/// on Windows on x86-64.
+const Chunk = struct {
+    span: Span,
+    table: ?*anyopaque = null,
+    entry: ?*winunwind.RuntimeFunction = null,
+};
+
 pub const Arena = struct {
-    chunks: std.ArrayList(Span) = .empty,
+    chunks: std.ArrayList(Chunk) = .empty,
     /// Free spans, sorted by address, with neighbors merged.
     free: std.ArrayList(Span) = .empty,
     /// Bytes handed out and not yet freed.
     used: usize = 0,
 
     pub fn deinit(a: *Arena, gpa: std.mem.Allocator) void {
-        for (a.chunks.items) |c| unmap(c);
+        for (a.chunks.items) |c| drop(gpa, c);
         a.chunks.deinit(gpa);
         a.free.deinit(gpa);
         a.* = .{};
@@ -77,8 +97,13 @@ pub const Arena = struct {
             a.chunks.ensureUnusedCapacity(gpa, 1) catch return null;
             a.free.ensureUnusedCapacity(gpa, 2) catch return null;
             const c = map(size) orelse return null;
-            a.chunks.appendAssumeCapacity(c);
-            a.insertFree(c);
+            var chunk: Chunk = .{ .span = c };
+            if (unwinds) register(gpa, &chunk) catch {
+                unmap(c);
+                return null;
+            };
+            a.chunks.appendAssumeCapacity(chunk);
+            a.insertFree(usable(c));
         }
         return null;
     }
@@ -89,7 +114,7 @@ pub const Arena = struct {
         // every chunk and stays where it is.
         const start = @intFromPtr(block.ptr);
         const owned = for (a.chunks.items) |c| {
-            if (start >= c.start and start < c.start + c.len) break true;
+            if (start >= c.span.start and start < c.span.start + c.span.len) break true;
         } else false;
         if (!owned) return;
         a.used -= block.len;
@@ -99,11 +124,12 @@ pub const Arena = struct {
         a.insertFree(.{ .start = @intFromPtr(block.ptr), .len = block.len });
         // Drop a chunk that is entirely free again.
         for (a.chunks.items, 0..) |c, ci| {
+            const u = usable(c.span);
             for (a.free.items, 0..) |s, si| {
-                if (s.start == c.start and s.len == c.len) {
+                if (s.start == u.start and s.len == u.len) {
                     _ = a.free.orderedRemove(si);
                     _ = a.chunks.swapRemove(ci);
-                    unmap(c);
+                    drop(gpa, c);
                     return;
                 }
             }
@@ -129,11 +155,45 @@ pub const Arena = struct {
     fn mergeable(a: *const Arena, lo: Span, hi: Span) bool {
         if (lo.start + lo.len != hi.start) return false;
         for (a.chunks.items) |c| {
-            if (lo.start >= c.start and lo.start < c.start + c.len) return hi.start < c.start + c.len;
+            if (lo.start >= c.span.start and lo.start < c.span.start + c.span.len) return hi.start < c.span.start + c.span.len;
         }
         return false;
     }
 };
+
+/// The part of a chunk that blocks are carved from, after its header.
+fn usable(c: Span) Span {
+    return .{ .start = c.start + header, .len = c.len - header };
+}
+
+/// Writes the unwind information at the start of a new chunk and
+/// registers a function table whose one entry covers the rest of it.
+fn register(gpa: std.mem.Allocator, c: *Chunk) error{OutOfMemory}!void {
+    var buf: [winunwind.max_info]u8 = undefined;
+    const rec = winunwind.info(&buf, .{ .prologue = false, .frame_pointer = true });
+    const base: [*]u8 = @ptrFromInt(c.span.start);
+    var old: u32 = 0;
+    if (VirtualProtect(base, header, page_readwrite, &old) == 0) return error.OutOfMemory;
+    @memcpy(base[0..rec.len], rec);
+    if (VirtualProtect(base, header, page_execute_read, &old) == 0) return error.OutOfMemory;
+    const entry = try gpa.create(winunwind.RuntimeFunction);
+    errdefer gpa.destroy(entry);
+    entry.* = .{ .begin = header, .end = @intCast(c.span.len), .unwind = 0 };
+    var table: ?*anyopaque = null;
+    if (RtlAddGrowableFunctionTable(&table, entry, 1, 1, c.span.start, c.span.start + c.span.len) != 0) return error.OutOfMemory;
+    c.table = table;
+    c.entry = entry;
+}
+
+/// Unregisters the function table of a chunk and returns it to the
+/// system.
+fn drop(gpa: std.mem.Allocator, c: Chunk) void {
+    if (unwinds) {
+        if (c.table) |t| RtlDeleteGrowableFunctionTable(t);
+        if (c.entry) |e| gpa.destroy(e);
+    }
+    unmap(c.span);
+}
 
 /// Set when the process may map no executable memory: on an iOS device,
 /// which grants it only to the system, and under `LUS_JIT_NO_EXEC`.
@@ -313,4 +373,59 @@ test "installed code runs" {
     const f: *const fn () callconv(.c) u32 = @ptrFromInt(@intFromPtr(block.ptr));
     try std.testing.expectEqual(@as(u32, 42), f());
     a.release(gpa, block);
+}
+
+/// What the walk of `unwindHelper` found: whether it passed through the
+/// block of native code, and the start of the function it reached next.
+var unwind_walk: struct { in_block: bool = false, reached: usize = 0 } = .{};
+var unwind_block: [2]usize = .{ 0, 0 };
+
+/// Called by native code: unwinds its own frame, then the frame of the
+/// block that called it, with the function tables of the system.
+fn unwindHelper() callconv(.{ .x86_64_sysv = .{} }) void {
+    const w = std.os.windows;
+    var ctx: w.CONTEXT = undefined;
+    w.ntdll.RtlCaptureContext(&ctx);
+    var history = std.mem.zeroes(w.UNWIND_HISTORY_TABLE);
+    for (0..4) |_| {
+        var image: usize = 0;
+        const fe = w.ntdll.RtlLookupFunctionEntry(ctx.Rip, &image, &history) orelse return;
+        if (ctx.Rip >= unwind_block[0] and ctx.Rip < unwind_block[1]) {
+            unwind_walk.in_block = true;
+        } else if (unwind_walk.in_block) {
+            unwind_walk.reached = image + fe.BeginAddress;
+            return;
+        }
+        var data: ?*anyopaque = null;
+        var frame: usize = 0;
+        _ = w.ntdll.RtlVirtualUnwind(0, image, ctx.Rip, fe, &ctx, &data, &frame, null);
+    }
+}
+
+/// Enters the block as the runtime enters native code.
+noinline fn unwindEnter(f: *const fn () callconv(.{ .x86_64_sysv = .{} }) void) void {
+    f();
+}
+
+test "the stack unwinds through native code on Windows" {
+    if (!unwinds) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const x64 = @import("x64.zig");
+    var a: Arena = .{};
+    defer a.deinit(gpa);
+    // The entry sequence, a call of the helper, and the return.
+    var as = x64.Assembler.init(gpa);
+    defer as.deinit();
+    as.prologue();
+    as.call(@intFromPtr(&unwindHelper));
+    as.epilogue();
+    const code = as.buf.items;
+    const block = a.alloc(gpa, code.len) orelse return error.SkipZigTest;
+    defer a.release(gpa, block);
+    install(block, code);
+    unwind_block = .{ @intFromPtr(block.ptr), @intFromPtr(block.ptr) + code.len };
+    unwind_walk = .{};
+    unwindEnter(@ptrFromInt(@intFromPtr(block.ptr)));
+    try std.testing.expect(unwind_walk.in_block);
+    try std.testing.expectEqual(@intFromPtr(&unwindEnter), unwind_walk.reached);
 }

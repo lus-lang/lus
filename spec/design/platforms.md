@@ -49,7 +49,7 @@ The native tiers depend on the target in six places.
 - **The word size.** A value is 16 bytes on every target, a 64-bit payload and a tag word. The WebAssembly build already runs it on a 32-bit target. The native tiers keep a payload in one machine register. The shared assembler interface has 64-bit loads, stores, and arithmetic as its primitives.
 - **The byte order.** `Value.make` writes the tag as the low byte of the second 64-bit word, which is the `tag` field only on a little-endian target. The word of frame flags packs its bits the same way. A compile-time assertion in `vm/state.zig` stops a big-endian build there. Every target Lus builds today is little-endian.
 
-Native code carries no unwind information. Lus itself never unwinds through it, because errors are return values and the runtime uses no `setjmp` or `longjmp`. Debuggers, profilers, and crash reporters stop at the first frame of native code.
+Native code carries unwind information on Windows on x86-64 ("Unwind information" below) and on no other system. Lus itself never unwinds through it, because errors are return values and the runtime uses no `setjmp` or `longjmp`. On the other systems debuggers, profilers, and crash reporters stop at the first frame of native code.
 
 ## Order
 
@@ -285,14 +285,11 @@ The same write then protect sequence, with `mprotect`, also serves OpenBSD, whic
 
 ### Unwind information
 
-Each chunk registers a function table with `RtlAddGrowableFunctionTable`. A `RUNTIME_FUNCTION` entry covers each range of code whose stack pointer sits at a fixed distance from the frame of the entry sequence.
+Native code on Windows keeps `r12` at the frame of the entry sequence. After its six pushes and its subtraction of 8, the entry sequence stores the stop depth, which `r12` holds on the other systems, in the slot that the subtraction made and sets `r12` to the stack pointer. The three places that pass the stop depth to a routine load it from that slot (`loadStop`). Code that runs at any depth below the frame, in baseline code, in a unit of optimized code, or in a body for direct entry, then unwinds from `r12`, so one record of unwind information describes all of it (`jit/winunwind.zig`): the frame register `r12`, the allocation of 8, and the six pushes, with a prologue of length zero. Every register keeps its role, so the allocator of the optimizing tier has the same registers as on the other systems.
 
-- Baseline code runs under the frame of the entry sequence: six pushes and a subtraction of 8. Its entries carry those unwind codes with a prologue of length zero, so the unwinder finds the caller of the entry sequence from any instruction of baseline code.
-- A unit of optimized code also lowers the stack pointer by its block of the native stack. A body for direct entry pushes one native frame per activation. Each such body gets its own entry, which describes its own frame and leads to the frame below it.
+Each chunk of executable memory holds that record in its first 64 bytes and registers a function table of one entry that covers the rest of the chunk, with `RtlAddGrowableFunctionTable` when it is mapped and `RtlDeleteGrowableFunctionTable` when it goes back to the system. Blocks come and go inside a chunk without touching its table. A walk from a routine that native code called reaches the caller of the entry sequence in one step, so the frames of native code between them do not appear in it. The first instructions of a block, before the entry sequence sets `r12`, call nothing.
 
-The entries of a chunk stay sorted by address, because the arena reuses freed spans. A block that is freed or carved out of a reused span rewrites the sorted array of its chunk and registers it again, which happens at most once per compilation.
-
-The exception dispatcher of Windows walks the stack with these tables. Without them a fault inside a routine that native code called ends the process without a usable report. WinDbg, Visual Studio, and the ETW profilers also stop at native code.
+The exception dispatcher of Windows, WinDbg, Visual Studio, and the ETW profilers walk the stack with these tables. A unit test in `jit/mem.zig` installs an entry sequence that calls a routine, which walks the stack with `RtlLookupFunctionEntry` and `RtlVirtualUnwind` and checks that the walk passes through the block and reaches the function that entered it. The encoder of the records is a pure function, so byte-level tests of it run on every host.
 
 ### The stack
 
@@ -304,7 +301,7 @@ The `windows-2022` runner of `ci.yml` already runs `zig build test test-embed te
 
 1. A step that fails unless native code runs: `LUS_JIT=eager lus -e "local function f() end f() assert(debug.jit(f))"`. A silent fallback to the interpreter would otherwise pass every other step.
 2. The conformance suite with `LUS_JIT=baseline`, and with `LUS_JIT=opt-eager LUS_JIT_DIRECT=1024`, which ends every chain of direct calls after a few activations and so exercises the probes and the unwinding of exits.
-3. A unit test in `jit/tests.zig` that calls `RtlVirtualUnwind` from a routine that native code called, at each kind of frame, and checks that the walk reaches the caller of the entry sequence. The encoder of the unwind codes is a pure function, so byte-level tests of it run on every host.
+3. The unit test in `jit/mem.zig` that walks the stack with `RtlVirtualUnwind` from a routine that native code called, and the byte-level tests of `jit/winunwind.zig`.
 4. A `-Dgc-stress=1 -Dgc-verify=true` build that runs the conformance suite with `LUS_JIT` set to `off`, `eager`, and `opt-eager`, in the `windows-2022` entry of the nightly stress job. The differential tester starts its programs through a POSIX shell, so it joins the Windows runs once it starts them directly.
 
 Locally, `zig build -Dtarget=x86_64-windows` and `zig build test -Dtarget=x86_64-windows` check that everything compiles. The macOS and Linux gates check that the shared code is unchanged.

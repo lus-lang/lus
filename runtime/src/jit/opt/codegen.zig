@@ -720,7 +720,7 @@ pub const Codegen = struct {
         };
         a.mov(A.args[0], A.thread);
         a.movImm(A.args[1], pc + 1);
-        a.mov(A.args[2], A.stop);
+        if (@hasDecl(A.Assembler, "loadStop")) a.loadStop(A.args[2]) else a.mov(A.args[2], A.stop);
         a.movImmReloc(A.args[3], opc.abc(o, 0, 0, 0), .literal);
         a.call(@intFromPtr(helpers.steps[@backingInt(o)]));
         a.jmp(c.em.l_status);
