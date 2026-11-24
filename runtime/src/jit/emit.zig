@@ -37,6 +37,7 @@ pub const A = switch (builtin.cpu.arch) {
     .loongarch64 => @import("la64.zig"),
     .powerpc64le => @import("ppc64.zig"),
     .s390x => @import("s390x.zig"),
+    .arm => @import("a32.zig"),
     else => @compileError("the JIT has no backend for this target"),
 };
 const Mem = A.Mem;
@@ -58,8 +59,9 @@ const frame_size: i32 = @sizeOf(Frame);
 const frame_shift: u6 = std.math.log2_int(usize, @sizeOf(Frame));
 comptime {
     std.debug.assert(@sizeOf(Frame) == @as(usize, 1) << frame_shift);
-    // The templates load sizes and addresses as 64-bit words.
-    std.debug.assert(@sizeOf(usize) == 8);
+    // The templates load sizes and addresses as words the size of a
+    // pointer, which is 64 bits or, on 32-bit ARM, 32 bits.
+    std.debug.assert(@sizeOf(usize) == 8 or builtin.cpu.arch == .arm);
 }
 
 fn frameField(comptime name: []const u8) i32 {

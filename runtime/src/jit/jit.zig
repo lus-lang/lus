@@ -36,6 +36,7 @@ pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
         else => false,
     },
     .riscv64, .loongarch64, .powerpc64le, .s390x => builtin.os.tag == .linux,
+    .arm => builtin.os.tag == .linux,
     .wasm32 => builtin.os.tag == .wasi,
     else => false,
 };
@@ -59,7 +60,12 @@ pub inline fn fromWide(comptime P: type, w: u64) P {
 pub const is_wasm = builtin.cpu.arch == .wasm32;
 
 /// Whether this build has the optimizing tier, which emits machine code.
-pub const has_opt = enabled and !is_wasm;
+pub const has_opt = enabled and !is_wasm and builtin.cpu.arch != .arm;
+
+/// Whether the assembler of the target records relocations, which the
+/// form of code compiled ahead of time needs (`aot.zig`). 32-bit ARM
+/// compiles for the running process alone.
+const has_aot = builtin.cpu.arch != .arm;
 
 const mem = @import("mem.zig");
 const aot = @import("aot.zig");
@@ -95,7 +101,7 @@ pub const State = if (enabled) struct {
     compiled: usize = 0,
     /// The optimizing tier: its setting, the events in baseline code
     /// before it compiles, and its counters.
-    opt: opt.Setting = if (is_wasm) .off else .on,
+    opt: opt.Setting = if (has_opt) .on else .off,
     opt_threshold: u32 = opt.default_threshold,
     optimized: usize = 0,
     exits: usize = 0,
@@ -187,7 +193,7 @@ fn setup(g: *Global) void {
         } else if (std.mem.eql(u8, v, "opt-eager")) {
             js.setting = .eager;
             js.threshold = 1;
-            js.opt = if (is_wasm) .off else .eager;
+            js.opt = if (has_opt) .eager else .off;
             js.opt_threshold = 1;
         }
     }
@@ -203,7 +209,7 @@ fn setup(g: *Global) void {
     // on macOS show that code in place needs none.
     if (env.get("LUS_JIT_NO_EXEC") != null) mem.refuse_exec = true;
     js.no_compile = mem.refuse_exec;
-    if (env.get("LUS_JIT_AOT")) |v| {
+    if (has_aot) if (env.get("LUS_JIT_AOT")) |v| {
         js.aot = aot.State.fromEnv(g.gpa, v);
         if (js.aot != null) aot.noteImage();
         // A training run compiles every function it reaches to baseline
@@ -222,7 +228,7 @@ fn setup(g: *Global) void {
                 while (it.next()) |kv| s.ids.put(s.gpa, kv.value_ptr.*, kv.key_ptr.*) catch {};
             }
         };
-    }
+    };
     if (env.get("LUS_JIT_DIRECT")) |v| {
         if (std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "0")) {
             js.direct = false;
@@ -679,6 +685,7 @@ test {
     _ = @import("la64.zig");
     _ = @import("ppc64.zig");
     _ = @import("s390x.zig");
+    _ = @import("a32.zig");
     _ = @import("reloc.zig");
     _ = @import("aot.zig");
     if (enabled) {

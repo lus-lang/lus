@@ -522,9 +522,9 @@ const save_words: usize = @intCast(@divExact(codegen.save_bytes, 8));
 
 fn valueOf(v: Val, regs: [*]const u64) Value {
     const bits: u64 = switch (v.kind) {
-        .reg => regs[v.bits],
-        .freg => regs[codegen.gpr_pool.len + v.bits],
-        .spill => regs[save_words + v.bits],
+        .reg => regs[@intCast(v.bits)],
+        .freg => regs[codegen.gpr_pool.len + @as(usize, @intCast(v.bits))],
+        .spill => regs[save_words + @as(usize, @intCast(v.bits))],
         .imm => v.bits,
         .virt => unreachable,
         // A callee that returned nothing leaves nil.
@@ -554,7 +554,7 @@ fn writeBackAt(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, tables: ?[]c
                 // Without the tables, the slot holds nil rather than what
                 // it held before, which the program may have dropped and
                 // which the collector must then be free to collect.
-                l.stack[base + e.slot] = if (tables) |t| Value.obj(.table, t[e.val.bits]) else .nil;
+                l.stack[base + e.slot] = if (tables) |t| Value.obj(.table, t[@intCast(e.val.bits)]) else .nil;
                 continue;
             }
             l.stack[base + e.slot] = valueOf(e.val, regs);
@@ -581,14 +581,14 @@ fn materialize(l: *Thread, u: *Unit, snap: u32, regs: [*]const u64, out: *[max_v
             sh = g.shapes.transition(g.gpa, cur, @ptrFromInt(@as(usize, @intCast(x.key))), g) catch null;
         }
         const t = if (sh) |shp| blk: {
-            const t = rt.newShapedTable(l, @max(v.count, @min(v.nc, shape.max_keys)), shp.id) orelse return null;
+            const t = rt.shapedTable(l, @max(v.count, @min(v.nc, shape.max_keys)), shp.id) orelse return null;
             for (fields) |x| {
                 const slot = shp.find(@ptrFromInt(@as(usize, @intCast(x.key)))).?;
                 t.setSlot(slot, valueOf(x.val, regs));
             }
             break :blk t;
         } else blk: {
-            const t = rt.newVirtualTable(l, 0, v.nc) orelse return null;
+            const t = rt.virtualTable(l, 0, v.nc) orelse return null;
             for (fields) |x| {
                 t.setKey(x.node, Value.make(x.key, .string));
                 t.setVal(x.node, valueOf(x.val, regs));
@@ -1056,10 +1056,21 @@ pub const rt = struct {
         gc.barrierBack(l.g, h);
     }
 
+    // The routines that `callc` reaches take and return 64-bit integers
+    // only, and native code calls them with `callWide`. A table comes
+    // back as its address, which is zero when memory ran out.
+
     /// A new table, as `state.newTableIn` makes it, without the
-    /// collector check, which optimized code makes first. Returns null
-    /// when memory ran out.
-    pub fn newTable(l: *Thread, narr: usize, nhash: usize, ic: ?*const object.IcEntry) callconv(jit.cc) ?*Table {
+    /// collector check, which optimized code makes first.
+    pub fn newTable(lw: u64, narr_w: u64, nhash_w: u64, icw: u64) callconv(jit.cc) u64 {
+        const l = jit.fromWide(*Thread, lw);
+        const narr: usize = @intCast(narr_w);
+        const nhash: usize = @intCast(nhash_w);
+        const ic = jit.fromWide(?*const object.IcEntry, icw);
+        return @intFromPtr(plainTable(l, narr, nhash, ic));
+    }
+
+    fn plainTable(l: *Thread, narr: usize, nhash: usize, ic: ?*const object.IcEntry) ?*Table {
         const g = l.g;
         // A site whose lists fit an unboxed kind keeps them in one word
         // per slot (`state.newTableAt`).
@@ -1083,7 +1094,11 @@ pub const rt = struct {
     /// A record that optimized code kept unallocated until now, with the
     /// shape `id` and `cap` empty slots in its cell, which the code then
     /// fills. Its constructor already counted the table as sunk.
-    pub fn newShapedTable(l: *Thread, cap: usize, id: usize) callconv(jit.cc) ?*Table {
+    pub fn newShapedTable(lw: u64, cap: u64, id: u64) callconv(jit.cc) u64 {
+        return @intFromPtr(shapedTable(jit.fromWide(*Thread, lw), @intCast(cap), @intCast(id)));
+    }
+
+    fn shapedTable(l: *Thread, cap: usize, id: usize) ?*Table {
         const g = l.g;
         const units = table.inlineUnitsSlots(0, cap, @sizeOf(Value));
         g.jit.sunk -|= @sizeOf(Table) + units * Table.inline_unit;
@@ -1094,7 +1109,11 @@ pub const rt = struct {
         return t;
     }
 
-    pub fn newVirtualTable(l: *Thread, narr: usize, nhash: usize) callconv(jit.cc) ?*Table {
+    pub fn newVirtualTable(lw: u64, narr: u64, nhash: u64) callconv(jit.cc) u64 {
+        return @intFromPtr(virtualTable(jit.fromWide(*Thread, lw), @intCast(narr), @intCast(nhash)));
+    }
+
+    fn virtualTable(l: *Thread, narr: usize, nhash: usize) ?*Table {
         const g = l.g;
         g.jit.sunk -|= @sizeOf(Table) + table.inlineUnits(narr, nhash) * Table.inline_unit;
         // Optimized code writes the fields of the record into hash nodes
@@ -1110,9 +1129,6 @@ pub const rt = struct {
         }
         return t;
     }
-
-    // The routines that `callc` reaches take and return 64-bit integers
-    // only, and native code calls them with `callWide`.
 
     pub fn tableLength(t: u64) callconv(jit.cc) i64 {
         return table.length(jit.fromWide(*Table, t));
