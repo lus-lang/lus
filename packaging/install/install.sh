@@ -92,6 +92,10 @@ detect_platform() {
         # 32-bit ARM from ARMv7-A on, with hardware floating point, which
         # a 32-bit system on an ARMv8 processor reports as armv8l.
         armv7l|armv7|armv8l|armhf) TARGET="arm-linux-musleabihf" ;;
+        riscv64)       TARGET="riscv64-linux-musl" ;;
+        loongarch64)   TARGET="loongarch64-linux-musl" ;;
+        ppc64le)       TARGET="powerpc64le-linux-musl" ;;
+        s390x)         TARGET="s390x-linux-musl" ;;
         *) unsupported "Linux on $ARCH" ;;
       esac
       ;;

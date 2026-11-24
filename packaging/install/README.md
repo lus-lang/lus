@@ -17,9 +17,9 @@ SHA-256 digest of every asset in `SHA256SUMS`.
   ```
 
   The script picks the archive for the host. Linux hosts with glibc or musl
-  both get the static `x86_64-linux-musl`, `aarch64-linux-musl`, or
-  `arm-linux-musleabihf` build, and macOS hosts get `aarch64-macos` or
-  `x86_64-macos`. It downloads `SHA256SUMS` first. A pinned version
+  both get the static build of their architecture, such as
+  `x86_64-linux-musl` or `riscv64-linux-musl`, and macOS hosts get
+  `aarch64-macos` or `x86_64-macos`. It downloads `SHA256SUMS` first. A pinned version
   (`--version v2.0.0` or `LUS_VERSION`) names the archive directly. For
   the latest release, the one `lus-v*-<target>.tar.gz` entry in the
   manifest of the latest release gives the archive name and so the tag.
