@@ -134,7 +134,8 @@ const Parser = struct {
             if (last or l.top - slot > flush_at) {
                 const count = l.top - slot - 1;
                 if (r == null) {
-                    const t = try l.newTable(if (last) count else @max(count, p.width), 0);
+                    // Every field is a string, so the row keeps one word per field.
+                    const t = state.newWordListIn(l.g, if (last) count else @max(count, p.width)) catch return l.raiseMem();
                     l.stack[slot] = Value.obj(.table, t);
                     r = t;
                 }

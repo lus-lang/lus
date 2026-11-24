@@ -798,3 +798,22 @@ local function many_single_column_rows_survive_a_round_trip_test()
     assert(back[500][1] == "v500")
 end
 
+
+-- A row keeps its string fields in one word each, and it takes values of
+-- every other kind as any table does.
+local function a_parsed_row_takes_values_of_every_kind_test()
+    local rows = fromcsv("a,b,c\nd,e,f\n")
+    local row = rows[2]
+    row[1] = 42
+    row[2] = { "nested" }
+    row[4] = 1.5
+    row[5] = true
+    row.name = "extra"
+    assert(row[1] == 42 and row[2][1] == "nested" and row[3] == "f")
+    assert(row[4] == 1.5 and row[5] == true and #row == 5)
+    assert(row.name == "extra")
+    collectgarbage()
+    assert(rows[1][1] == "a" and rows[1][3] == "c" and row[3] == "f")
+    table.insert(rows[1], 1, 0)
+    assert(rows[1][1] == 0 and rows[1][2] == "a" and #rows[1] == 4)
+end
