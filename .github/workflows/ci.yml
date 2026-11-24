@@ -211,6 +211,36 @@ jobs:
             ../../runtime/zig-out/bin/lus build --aot linked.lus -o "$HOME/linked"
             test "$("$HOME/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
 
+  windows-arm64:
+    name: Windows on arm64
+    # The free arm64 runner of GitHub for public repositories. The JIT of
+    # Windows on arm64 stays off until this job gates it
+    # (spec/design/platforms.md, "Windows on arm64").
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: The runner
+        run: |
+          echo "$env:PROCESSOR_ARCHITECTURE"
+          zig env
+      - name: Unit, embedding, and tool tests
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig build test test-embed test-bundle test-runtime test-check test-doc -Doptimize=ReleaseSafe
+      - name: Build
+        timeout-minutes: 15
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Conformance tests
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+
   runtime:
     name: Runtime (${{ matrix.os }})
     strategy:
