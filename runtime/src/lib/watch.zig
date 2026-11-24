@@ -676,41 +676,83 @@ const FsEvents = struct {
 const WinWatch = struct {
     dir: ?std.os.windows.HANDLE = null,
     thread: ?std.Thread = null,
+    io: ?*Io = null,
 
     const w = std.os.windows;
     const FILE_LIST_DIRECTORY: w.DWORD = 0x1;
     const FILE_FLAG_BACKUP_SEMANTICS: w.DWORD = 0x02000000;
+    const FILE_FLAG_OVERLAPPED: w.DWORD = 0x40000000;
+    const INFINITE: w.DWORD = 0xFFFF_FFFF;
     const filter: w.DWORD = 0x1 | 0x2 | 0x8 | 0x10 | 0x40; // names, attributes, size, last write, creation
+    const Overlapped = extern struct { internal: usize = 0, internal_high: usize = 0, offset: u32 = 0, offset_high: u32 = 0, event: ?w.HANDLE = null };
     extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: w.DWORD, share: w.DWORD, attributes: ?*anyopaque, disposition: w.DWORD, flags: w.DWORD, template: ?w.HANDLE) callconv(.winapi) w.HANDLE;
-    extern "kernel32" fn ReadDirectoryChangesW(dir: w.HANDLE, buf: *anyopaque, len: w.DWORD, subtree: w.BOOL, filter: w.DWORD, returned: ?*w.DWORD, overlapped: ?*anyopaque, routine: ?*anyopaque) callconv(.winapi) w.BOOL;
-    extern "kernel32" fn CancelIoEx(handle: w.HANDLE, overlapped: ?*anyopaque) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn ReadDirectoryChangesW(dir: w.HANDLE, buf: *anyopaque, len: w.DWORD, subtree: w.BOOL, filter: w.DWORD, returned: ?*w.DWORD, overlapped: ?*Overlapped, routine: ?*anyopaque) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn GetOverlappedResult(handle: w.HANDLE, overlapped: *Overlapped, transferred: *w.DWORD, wait: w.BOOL) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn CancelIoEx(handle: w.HANDLE, overlapped: ?*Overlapped) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn CreateEventW(attributes: ?*anyopaque, manual_reset: w.BOOL, initial_state: w.BOOL, name: ?[*:0]const u16) callconv(.winapi) ?w.HANDLE;
+    extern "kernel32" fn SetEvent(handle: w.HANDLE) callconv(.winapi) w.BOOL;
+    extern "kernel32" fn WaitForMultipleObjects(count: w.DWORD, handles: [*]const w.HANDLE, wait_all: w.BOOL, ms: w.DWORD) callconv(.winapi) w.DWORD;
 
+    /// The state of the read in flight, which the system writes to until
+    /// the read ends. The quit event tells the thread to cancel the read
+    /// and return.
+    const Io = struct {
+        buf: [64 * 1024]u8 align(@alignOf(u32)) = undefined,
+        ov: Overlapped = .{},
+        quit: w.HANDLE,
+
+        fn read(io: *Io, h: w.HANDLE, s: *Shared) bool {
+            return ReadDirectoryChangesW(h, &io.buf, io.buf.len, if (s.recursive) .TRUE else .FALSE, filter, null, &io.ov, null).toBool();
+        }
+    };
+
+    // The first read starts before fs.watch returns, because the system
+    // records the changes of a directory only from the first read on. From
+    // then on it keeps the changes that happen between two reads.
     fn start(b: *WinWatch, l: *Thread, s: *Shared) StartError!void {
         _ = l;
         const target = if (s.is_file) std.fs.path.dirname(s.root_real) orelse s.root_real else s.root_real;
         const name = std.unicode.wtf8ToWtf16LeAllocZ(gpa, target) catch return error.Failed;
         defer gpa.free(name);
-        const h = CreateFileW(name, FILE_LIST_DIRECTORY, 0x1 | 0x2 | 0x4, null, 3, FILE_FLAG_BACKUP_SEMANTICS, null);
+        const h = CreateFileW(name, FILE_LIST_DIRECTORY, 0x1 | 0x2 | 0x4, null, 3, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, null);
         if (h == w.INVALID_HANDLE_VALUE) return error.Failed;
-        b.dir = h;
-        b.thread = std.Thread.spawn(.{}, run, .{ h, s }) catch {
-            w.CloseHandle(h);
-            b.dir = null;
+        errdefer w.CloseHandle(h);
+        const done = CreateEventW(null, .FALSE, .FALSE, null) orelse return error.Failed;
+        errdefer w.CloseHandle(done);
+        const quit = CreateEventW(null, .TRUE, .FALSE, null) orelse return error.Failed;
+        errdefer w.CloseHandle(quit);
+        const io = gpa.create(Io) catch return error.Failed;
+        errdefer gpa.destroy(io);
+        io.* = .{ .quit = quit };
+        io.ov.event = done;
+        if (!io.read(h, s)) return error.Failed;
+        b.thread = std.Thread.spawn(.{}, run, .{ h, io, s }) catch {
+            _ = CancelIoEx(h, &io.ov);
+            var got: w.DWORD = 0;
+            _ = GetOverlappedResult(h, &io.ov, &got, .TRUE);
             return error.Failed;
         };
+        b.dir = h;
+        b.io = io;
     }
 
-    fn run(h: w.HANDLE, s: *Shared) void {
-        var buf: [64 * 1024]u8 align(@alignOf(u32)) = undefined;
+    fn run(h: w.HANDLE, io: *Io, s: *Shared) void {
         while (true) {
+            const handles = [_]w.HANDLE{ io.ov.event.?, io.quit };
             var got: w.DWORD = 0;
-            if (!ReadDirectoryChangesW(h, &buf, buf.len, if (s.recursive) .TRUE else .FALSE, filter, &got, null, null).toBool()) return;
+            if (WaitForMultipleObjects(2, &handles, .FALSE, INFINITE) != 0) {
+                _ = CancelIoEx(h, &io.ov);
+                _ = GetOverlappedResult(h, &io.ov, &got, .TRUE);
+                return;
+            }
+            if (!GetOverlappedResult(h, &io.ov, &got, .FALSE).toBool()) return;
             const at = monotonic();
             s.lock();
             if (got == 0) {
                 // The buffer overflowed.
                 s.pushLocked(.rescan, s.root, at);
             } else {
+                const buf = &io.buf;
                 var off: usize = 0;
                 while (true) {
                     const next = std.mem.readInt(u32, buf[off..][0..4], .little);
@@ -753,17 +795,23 @@ const WinWatch = struct {
             }
             sched.notify(s.g);
             s.unlock();
+            if (!io.read(h, s)) return;
         }
     }
 
     fn stop(b: *WinWatch, s: *Shared) void {
         _ = s;
         const h = b.dir orelse return;
-        _ = CancelIoEx(h, null);
-        w.CloseHandle(h);
+        const io = b.io.?;
+        _ = SetEvent(io.quit);
         if (b.thread) |t| t.join();
+        w.CloseHandle(io.ov.event.?);
+        w.CloseHandle(io.quit);
+        w.CloseHandle(h);
+        gpa.destroy(io);
         b.dir = null;
         b.thread = null;
+        b.io = null;
     }
 
     fn poll(_: *WinWatch, _: *Thread, _: *Shared) void {}

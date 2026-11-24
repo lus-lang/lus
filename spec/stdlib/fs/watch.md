@@ -15,7 +15,7 @@ params:
 returns: thread
 ---
 
-Starts watching the file or directory at `path` and returns a coroutine that hands over each change, one per resume.
+Starts watching the file or directory at `path` and returns a coroutine that hands over each change, one per resume. The watch covers every change that happens after the call returns.
 
 Resuming the coroutine waits for the next change, then returns `true` and an event, which is a table with two fields. `kind` is one of these strings.
 
