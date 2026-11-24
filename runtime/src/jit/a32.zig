@@ -169,6 +169,8 @@ const W = union(enum) {
     m: struct { b: P, d: i32 },
     /// A high word that reads as zero. A write to it is dropped.
     zero,
+    /// A word of a constant operand, which is only read.
+    k: u32,
 
     fn at(d: i32) W {
         return .{ .m = .{ .b = fp, .d = d } };
@@ -720,6 +722,7 @@ pub const Assembler = struct {
             .zero => return,
             .r => |p| a.dp(al, op_mov, false, 0, p, immOp(0).?),
             .m => a.stale |= b,
+            .k => unreachable,
         }
         a.kz |= b;
     }
@@ -764,12 +767,17 @@ pub const Assembler = struct {
             .r => |p| return p,
             .m => |m| a.ldr(s, m.b, a.dispOf(m.b, m.d)),
             .zero => a.dp(al, op_mov, false, 0, s, immOp(0).?),
+            .k => |v| a.imm32(s, v),
         }
         return s;
     }
     /// The word as the second operand of a data-processing instruction.
     fn op2(a: *Assembler, w: W, s: P) u32 {
-        if (w == .zero) return immOp(0).?;
+        switch (w) {
+            .zero => return immOp(0).?,
+            .k => |v| if (immOp(v)) |o| return o,
+            else => {},
+        }
         return a.get(w, s);
     }
     /// Writes the word from the machine register `p`.
@@ -778,6 +786,7 @@ pub const Assembler = struct {
             .r => |q| a.movP(q, p),
             .m => |m| a.str(p, m.b, a.dispOf(m.b, m.d)),
             .zero => {},
+            .k => unreachable,
         }
     }
     fn movW(a: *Assembler, d: W, s: W) void {
@@ -1323,6 +1332,7 @@ pub const Assembler = struct {
             .r => |p| if (p < 4) a.ldr(to, sp_r, rt_floats + extra + 4 * @as(i32, p)) else a.movP(to, p),
             .m => |m| a.ldr(to, m.b, a.dispOf(m.b, m.d)),
             .zero => a.imm32(to, 0),
+            .k => |v| a.imm32(to, v),
         }
     }
     /// Writes the word `w` from `p` after the call.
@@ -1331,6 +1341,7 @@ pub const Assembler = struct {
             .r => |q| if (q < 4) a.str(p, sp_r, rt_floats + extra + 4 * @as(i32, q)) else a.movP(q, p),
             .m => |m| a.str(p, m.b, a.dispOf(m.b, m.d)),
             .zero => {},
+            .k => unreachable,
         }
     }
 
@@ -1533,14 +1544,33 @@ pub const Assembler = struct {
     pub fn floorDiv(a: *Assembler, dst: Reg, x: Reg, y: Reg, mod: bool, tmp: Reg, tmp2: Reg) void {
         _ = tmp;
         _ = tmp2;
+        a.floorDivBy(dst, x, .{ .reg = y }, mod);
+    }
+    /// `floorDiv` by a constant, which a 32-bit target reads as the
+    /// operands of its instructions.
+    pub fn floorDivImm(a: *Assembler, dst: Reg, x: Reg, v: i64, mod: bool) void {
+        a.floorDivBy(dst, x, .{ .imm = v }, mod);
+    }
+    const Divisor = union(enum) { reg: Reg, imm: i64 };
+    fn floorDivBy(a: *Assembler, dst: Reg, x: Reg, y: Divisor, mod: bool) void {
         const xw = a.wordsOf(x);
-        const yw = a.wordsOf(y);
+        const yw: Words = switch (y) {
+            .reg => |r| a.wordsOf(r),
+            .imm => |v| .{ .l = .{ .k = @truncate(@as(u64, @bitCast(v))) }, .h = .{ .k = @truncate(@as(u64, @bitCast(v)) >> 32) } },
+        };
+        const small = switch (y) {
+            .reg => true,
+            .imm => |v| v == @as(i32, @truncate(v)),
+        };
         var done: ?u32 = null;
-        if (a.idiv and !a.aot) {
+        if (a.idiv and !a.aot and small) {
             a.fits32(x);
             const wide_x = a.skip(cc_ne);
-            a.fits32(y);
-            const wide_y = a.skip(cc_ne);
+            var wide_y: ?u32 = null;
+            if (y == .reg) {
+                a.fits32(y.reg);
+                wide_y = a.skip(cc_ne);
+            }
             const tm = a.divTemps(xw.l, yw.l, if (mod) 1 else 2);
             const xl = a.get(xw.l, S0);
             const yl = a.get(yw.l, S1);
@@ -1561,7 +1591,7 @@ pub const Assembler = struct {
             a.freeTemps(tm);
             done = a.skip(al);
             a.land(wide_x);
-            a.land(wide_y);
+            if (wide_y) |at| a.land(at);
         }
         const hw = a.whi(dst);
         a.rtEnter();
@@ -1691,6 +1721,12 @@ pub const Assembler = struct {
             return a.branch(@backingInt(c), l);
         }
         a.compare(c, lo(x), xh, .{ .imm = @bitCast(v) }, .{ .imm = if (v < 0) 0xFFFF_FFFF else 0 }, l);
+    }
+    /// Branches when the register compares as `c` with a 64-bit
+    /// integer, whose words are the operands of the comparison.
+    pub fn jumpIfWide(a: *Assembler, c: Cond, x: Reg, v: i64, l: Label) void {
+        const u: u64 = @bitCast(v);
+        a.compare(c, lo(x), a.chi(x), .{ .imm = @truncate(u) }, .{ .imm = @truncate(u >> 32) }, l);
     }
     /// Branches when the low 32 bits of the register are zero or not.
     pub fn jumpIfZero32(a: *Assembler, x: Reg, zero: bool, l: Label) void {
@@ -2479,5 +2515,32 @@ test "arm reads the words of a spilled value from the native stack" {
         0x1134000E, 0x4084400E, 0xE1A06004, 0xE1A07FC4, 0xE8BD0010, 0xEA00000C, 0xE92D000F, 0xED2D0B10,
         0xE59D0050, 0xE59D1054, 0xE59B2020, 0xE59B3024, 0x00000000, 0x00000000, 0xE12FFF3C, 0xE1A06000,
         0xE1A07001, 0xECBD0B10, 0xE8BD000F,
+    });
+}
+
+test "arm reads a 64-bit constant as the operands of its instructions" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.idiv = true;
+    const l = a.newLabel();
+    a.bind(l);
+    // movw lr, #0; movt lr, #0x7ff4; cmp r9, lr; cmpeq r2, #0; beq
+    a.jumpIfWide(.eq, .t2, 0x7FF4_0000_0000_0000, l);
+    // A divisor of 32 bits needs no test of its own:
+    // ldr lr, [fp, #28]; cmp lr, r0, asr #31; bne call; mov lr, #7; sdiv ip, r0, lr
+    // mls ip, ip, lr, r0; cmp ip, #0; teqne ip, lr; addmi ip, ip, lr; mov r0, ip
+    // asr ip, ip, #31; str ip, [fp, #28]; b done; call: the call of the routine; done:
+    a.floorDivImm(.t4, .t4, 7, true);
+    // A wider divisor goes to the routine at once.
+    a.floorDivImm(.t0, .t0, 0x1_0000_0000, false);
+    try std.testing.expect(a.finish());
+    clearRoutines(&a);
+    try expectWords(&a, &.{
+        0xE300E000, 0xE347EFF4, 0xE159000E, 0x03520000, 0x0AFFFFFA, 0xE59BE01C, 0xE15E0FC0, 0x1A000009,
+        0xE3A0E007, 0xE71CFE10, 0xE06C0E9C, 0xE35C0000, 0x113C000E, 0x408CC00E, 0xE1A0000C, 0xE1A0CFCC,
+        0xE58BC01C, 0xEA00000C, 0xE92D000F, 0xED2D0B10, 0xE59D0040, 0xE59B101C, 0xE3A02007, 0xE3A03000,
+        0x00000000, 0x00000000, 0xE12FFF3C, 0xE58D0040, 0xE58B101C, 0xECBD0B10, 0xE8BD000F, 0xE92D000F,
+        0xED2D0B10, 0xE1A00006, 0xE1A01007, 0xE3A02000, 0xE3A03001, 0x00000000, 0x00000000, 0xE12FFF3C,
+        0xE1A06000, 0xE1A07001, 0xECBD0B10, 0xE8BD000F,
     });
 }

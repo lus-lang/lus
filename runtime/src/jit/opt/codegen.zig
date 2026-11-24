@@ -38,6 +38,9 @@ const tl = table.layout;
 
 const is_a64 = builtin.cpu.arch == .aarch64;
 const is_x64 = builtin.cpu.arch == .x86_64;
+/// Whether the assembler compares a register with a 64-bit integer that
+/// is no address, as a 32-bit target does one word at a time.
+const wide_compare = @hasDecl(A.Assembler, "jumpIfWide");
 
 /// The registers that hold values. Every one of them belongs to the
 /// callee across a call into the runtime.
@@ -1123,13 +1126,18 @@ pub const Codegen = struct {
             },
             .mod, .idiv, .modi, .idivi => {
                 const x = c.g(i.a, sc0);
+                const by_imm = i.op == .modi or i.op == .idivi;
+                // A 32-bit target takes a constant divisor as it is.
+                const direct = comptime @hasDecl(A.Assembler, "floorDivImm");
                 var y: A.Reg = undefined;
-                if (i.op == .modi or i.op == .idivi) {
-                    a.movImmReloc(sc1, @bitCast(i.imm), .literal);
+                if (by_imm) {
+                    if (!direct) a.movImmReloc(sc1, @bitCast(i.imm), .literal);
                     y = sc1;
                 } else y = c.g(i.b, sc1);
                 const d = c.dst(r);
-                if (!is_x64) {
+                if (direct and by_imm) {
+                    a.floorDivImm(d, x, i.imm, i.op == .modi);
+                } else if (!is_x64) {
                     a.floorDiv(d, x, y, i.op == .mod or i.op == .modi, sc2, sc2);
                 } else {
                     a.floorDiv(d, x, y, i.op == .mod or i.op == .modi, sc0, sc1);
@@ -1283,6 +1291,11 @@ pub const Codegen = struct {
                 const x = c.g(i.a, sc0);
                 if (c.shortImm(i)) {
                     a.jumpIfImm(cond(i.cond).invert(), x, @intCast(i.imm), c.exitOf(i));
+                } else if (comptime wide_compare) {
+                    if (i.flags.address) {
+                        c.wideImm(sc1, i);
+                        a.jumpIf(cond(i.cond).invert(), x, sc1, c.exitOf(i));
+                    } else a.jumpIfWide(cond(i.cond).invert(), x, i.imm, c.exitOf(i));
                 } else {
                     c.wideImm(sc1, i);
                     a.jumpIf(cond(i.cond).invert(), x, sc1, c.exitOf(i));
@@ -1362,6 +1375,11 @@ pub const Codegen = struct {
                 const x = c.g(i.a, sc0);
                 if (c.shortImm(i)) {
                     a.jumpIfImm(cond(i.cond), x, @intCast(i.imm), c.labels[i.t]);
+                } else if (comptime wide_compare) {
+                    if (i.flags.address) {
+                        c.wideImm(sc1, i);
+                        a.jumpIf(cond(i.cond), x, sc1, c.labels[i.t]);
+                    } else a.jumpIfWide(cond(i.cond), x, i.imm, c.labels[i.t]);
                 } else {
                     c.wideImm(sc1, i);
                     a.jumpIf(cond(i.cond), x, sc1, c.labels[i.t]);
