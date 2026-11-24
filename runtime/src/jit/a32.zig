@@ -15,6 +15,7 @@
 //! lives in the frame only where another path joins the code.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const reloc = @import("reloc.zig");
 
 /// A machine register.
@@ -274,6 +275,7 @@ const op_adc: u4 = 5;
 const op_sbc: u4 = 6;
 const op_rsc: u4 = 7;
 const op_tst: u4 = 8;
+const op_teq: u4 = 9;
 const op_cmp: u4 = 10;
 const op_orr: u4 = 12;
 const op_mov: u4 = 13;
@@ -389,6 +391,8 @@ pub const Assembler = struct {
     /// words unwritten. Each goes through a few instructions, emitted
     /// after everything else, that write the words and jump on.
     ramps: std.ArrayList(Ramp) = .empty,
+    /// Whether the processor divides 32-bit integers.
+    idiv: bool,
     /// Bytes that the operation being emitted has pushed, which a word
     /// of the native stack lies further from the stack pointer by.
     pushed: i32 = 0,
@@ -402,7 +406,7 @@ pub const Assembler = struct {
     };
 
     pub fn init(gpa: std.mem.Allocator) Assembler {
-        return .{ .gpa = gpa };
+        return .{ .gpa = gpa, .idiv = cpuDivides() };
     }
 
     pub fn deinit(a: *Assembler) void {
@@ -518,6 +522,12 @@ pub const Assembler = struct {
     }
     fn cmpP(a: *Assembler, c: u4, x: P, operand: u32) void {
         a.dp(c, op_cmp, true, x, 0, operand);
+    }
+    /// The second operand that is `p` shifted right by 31 bits as a
+    /// signed word: the high word of the 64-bit integer that `p` is the
+    /// low word of.
+    fn signOf(p: P) u32 {
+        return 31 << 7 | 2 << 5 | @as(u32, p);
     }
     /// Loads a 32-bit constant.
     fn imm32(a: *Assembler, dst: P, v: u32) void {
@@ -648,6 +658,19 @@ pub const Assembler = struct {
             a.oom = true;
         };
         a.branchRaw(c, entry);
+    }
+    /// A branch forward inside one operation, to the offset that `land`
+    /// receives. Both paths write the same words.
+    fn skip(a: *Assembler, c: u4) u32 {
+        const at = a.pos();
+        a.word(@as(u32, c) << 28 | 0x0A000000);
+        return at;
+    }
+    fn land(a: *Assembler, at: u32) void {
+        if (a.oom) return;
+        const delta: u32 = (a.pos() - at - 8) / 4;
+        const p: *align(1) u32 = @ptrCast(a.buf.items[at..].ptr);
+        p.* = std.mem.nativeToLittle(u32, std.mem.littleToNative(u32, p.*) | delta);
     }
 
     // -----------------------------------------------------------------
@@ -1154,10 +1177,73 @@ pub const Assembler = struct {
         a.put(hw, t);
     }
 
+    // Division. A processor that divides 32-bit integers does so in
+    // place when both operands are signed 32-bit integers, which the
+    // quotient and the remainder then are as well. Every other division
+    // calls a routine of this file, and so does all code compiled ahead
+    // of time, which may run on a processor that has no such instruction.
+
     /// The words of a register, read before an operation writes any.
     const Words = struct { l: W, h: W };
     fn wordsOf(a: *const Assembler, r: Reg) Words {
         return .{ .l = lo(r), .h = a.rhi(r) };
+    }
+    /// Sets the Z flag when the register holds a signed 32-bit integer.
+    fn fits32(a: *Assembler, r: Reg) void {
+        const p = a.get(lo(r), S0);
+        if (a.hiZero(r)) {
+            a.dp(al, op_tst, true, p, 0, immOp(0x8000_0000).?);
+        } else {
+            a.cmpP(al, a.get(hi(r), S1), signOf(p));
+        }
+    }
+    /// The scratch registers of a division in place: the ones that hold
+    /// no operand, then registers saved on the stack.
+    const Temps = struct { t: [2]P, saved: u32 };
+    fn divTemps(a: *Assembler, xl: W, yl: W, need: usize) Temps {
+        var r: Temps = .{ .t = .{ 0, 0 }, .saved = 0 };
+        var n: usize = 0;
+        if (xl == .r) {
+            r.t[n] = S0;
+            n += 1;
+        }
+        if (yl == .r and n < need) {
+            r.t[n] = S1;
+            n += 1;
+        }
+        for ([_]P{ borrowed, 5 }) |b| {
+            if (n >= need) break;
+            r.t[n] = b;
+            n += 1;
+            r.saved |= @as(u32, 1) << b;
+        }
+        if (r.saved != 0) {
+            a.push(r.saved);
+            a.pushed += 4 * @as(i32, @popCount(r.saved));
+        }
+        return r;
+    }
+    fn freeTemps(a: *Assembler, tm: Temps) void {
+        if (tm.saved == 0) return;
+        a.pop(tm.saved);
+        a.pushed -= 4 * @as(i32, @popCount(tm.saved));
+    }
+    fn sdiv(a: *Assembler, d: P, n: P, m: P) void {
+        a.word(0xE710F010 | @as(u32, d) << 16 | @as(u32, m) << 8 | n);
+    }
+    /// d = from - n * m.
+    fn mls(a: *Assembler, d: P, n: P, m: P, from: P) void {
+        a.word(0xE0600090 | @as(u32, d) << 16 | @as(u32, from) << 12 | @as(u32, m) << 8 | n);
+    }
+    /// Writes the signed word in `p` to a register as a 64-bit integer.
+    /// `p` is free afterwards.
+    fn putSigned(a: *Assembler, dst: Reg, p: P) void {
+        a.put(lo(dst), p);
+        const hw = a.whi(dst);
+        if (hw == .zero) return;
+        const th = target(hw, p);
+        a.dp(al, op_mov, false, 0, th, signOf(p));
+        a.put(hw, th);
     }
 
     /// Signed division and remainder that truncate toward zero. The
@@ -1165,6 +1251,24 @@ pub const Assembler = struct {
     pub fn divRem(a: *Assembler, quot: Reg, rem: Reg, x: Reg, y: Reg) void {
         const xw = a.wordsOf(x);
         const yw = a.wordsOf(y);
+        var done: ?u32 = null;
+        if (a.idiv and !a.aot) {
+            a.fits32(x);
+            const wide_x = a.skip(cc_ne);
+            a.fits32(y);
+            const wide_y = a.skip(cc_ne);
+            const tm = a.divTemps(lo(x), lo(y), 2);
+            const xl = a.get(lo(x), S0);
+            const yl = a.get(lo(y), S1);
+            a.sdiv(tm.t[0], xl, yl);
+            a.mls(tm.t[1], tm.t[0], yl, xl);
+            a.putSigned(quot, tm.t[0]);
+            a.putSigned(rem, tm.t[1]);
+            a.freeTemps(tm);
+            done = a.skip(al);
+            a.land(wide_x);
+            a.land(wide_y);
+        }
         const qh = a.whi(quot);
         const rh = a.whi(rem);
         a.rtEnter();
@@ -1189,6 +1293,7 @@ pub const Assembler = struct {
         a.addP(sp_r, sp_r, 16);
         a.pushed -= 16;
         a.rtLeave();
+        if (done) |at| a.land(at);
     }
 
     // A call of a routine of this file from inside one operation of the
@@ -1423,13 +1528,41 @@ pub const Assembler = struct {
         a.str(a.get(a.rhi(src), S0), S1, 4);
     }
     /// dst = x mod y or the floor of x / y, rounded toward minus
-    /// infinity. The divisor is neither zero nor minus one. The routine
-    /// that divides needs neither `tmp` nor `tmp2`.
+    /// infinity. The divisor is neither zero nor minus one. Neither
+    /// path needs `tmp` or `tmp2`.
     pub fn floorDiv(a: *Assembler, dst: Reg, x: Reg, y: Reg, mod: bool, tmp: Reg, tmp2: Reg) void {
         _ = tmp;
         _ = tmp2;
         const xw = a.wordsOf(x);
         const yw = a.wordsOf(y);
+        var done: ?u32 = null;
+        if (a.idiv and !a.aot) {
+            a.fits32(x);
+            const wide_x = a.skip(cc_ne);
+            a.fits32(y);
+            const wide_y = a.skip(cc_ne);
+            const tm = a.divTemps(xw.l, yw.l, if (mod) 1 else 2);
+            const xl = a.get(xw.l, S0);
+            const yl = a.get(yw.l, S1);
+            const q = tm.t[0];
+            a.sdiv(q, xl, yl);
+            // The truncated results are right unless the remainder is
+            // not zero and its sign differs from the sign of the divisor.
+            const r = if (mod) q else tm.t[1];
+            a.mls(r, q, yl, xl);
+            a.cmpP(al, r, immOp(0).?);
+            a.dp(cc_ne, op_teq, true, r, 0, yl);
+            if (mod) {
+                a.dp(cc_mi, op_add, false, r, r, yl);
+            } else {
+                a.dp(cc_mi, op_sub, false, q, q, immOp(1).?);
+            }
+            a.putSigned(dst, q);
+            a.freeTemps(tm);
+            done = a.skip(al);
+            a.land(wide_x);
+            a.land(wide_y);
+        }
         const hw = a.whi(dst);
         a.rtEnter();
         a.rtArg(r0, xw.l, 0);
@@ -1441,6 +1574,7 @@ pub const Assembler = struct {
         a.rtResult(lo(dst), r0, 0);
         a.rtResult(hw, r1, 0);
         a.rtLeave();
+        if (done) |at| a.land(at);
     }
     /// Copies one 64-bit word.
     pub fn copy8(a: *Assembler, dst: Mem, src: Mem) void {
@@ -1799,6 +1933,17 @@ pub const Assembler = struct {
         a.leave();
     }
 };
+
+extern "c" fn getauxval(kind: c_ulong) c_ulong;
+
+/// Whether the processor has `sdiv`, which ARMv7-A makes optional. The
+/// kernel reports it in the hardware capabilities of the process.
+fn cpuDivides() bool {
+    if (builtin.cpu.arch != .arm or builtin.os.tag != .linux or !builtin.link_libc) return false;
+    const at_hwcap = 16;
+    const hwcap_idiva = 1 << 17;
+    return getauxval(at_hwcap) & hwcap_idiva != 0;
+}
 
 comptime {
     std.debug.assert(frame_size % 8 == 0 and home(.v5) + 8 == frame_size);
@@ -2240,6 +2385,40 @@ test "arm multiplies words of the frame through a borrowed register" {
     });
 }
 
+test "arm divides signed 32-bit integers in place on a processor that divides" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.idiv = true;
+    a.movImm(.c1, 7); // mov ip, #7; str ip, [fp, #56]
+    // The remainder takes the sign of the divisor:
+    // ldr lr, [fp, #28]; cmp lr, r0, asr #31; bne call; ldr ip, [fp, #56]; tst ip, #0x80000000; bne call
+    // ldr lr, [fp, #56]; sdiv ip, r0, lr; mls ip, ip, lr, r0; cmp ip, #0; teqne ip, lr; addmi ip, ip, lr
+    // mov r6, ip; asr r7, ip, #31; b done; call: the call of the routine; done:
+    a.floorDiv(.t0, .t4, .c1, true, .c1, .c1);
+    // cmp r7, r6, asr #31; bne call; cmp r8, r3, asr #31; bne call; sdiv ip, r6, r3; mls lr, ip, r3, r6
+    // cmp lr, #0; teqne lr, r3; submi ip, ip, #1; mov r6, ip; asr r7, ip, #31; b done
+    a.floorDiv(.t0, .t0, .t1, false, .c1, .c1);
+    // ldr lr, [fp, #24]; cmp lr, r1, asr #31; bne call; ldr lr, [fp, #28]; cmp lr, r0, asr #31; bne call
+    // sdiv ip, r1, r0; mls lr, ip, r0, r1; str ip, [fp, #32]; asr ip, ip, #31; str ip, [fp, #36]
+    // mov r3, lr; asr r8, lr, #31; b done
+    a.divRem(.t5, .t1, .t3, .t4);
+    clearRoutines(&a);
+    try expectWords(&a, &.{
+        0xE3A0C007, 0xE58BC038, 0xE59BE01C, 0xE15E0FC0, 0x1A00000B, 0xE59BC038, 0xE31C0102, 0x1A000008,
+        0xE59BE038, 0xE71CFE10, 0xE06C0E9C, 0xE35C0000, 0x113C000E, 0x408CC00E, 0xE1A0600C, 0xE1A07FCC,
+        0xEA00000C, 0xE92D000F, 0xED2D0B10, 0xE59D0040, 0xE59B101C, 0xE59B2038, 0xE3A03000, 0x00000000,
+        0x00000000, 0xE12FFF3C, 0xE1A06000, 0xE1A07001, 0xECBD0B10, 0xE8BD000F, 0xE1570FC6, 0x1A000009,
+        0xE1580FC3, 0x1A000007, 0xE71CF316, 0xE06E639C, 0xE35E0000, 0x113E0003, 0x424CC001, 0xE1A0600C,
+        0xE1A07FCC, 0xEA00000C, 0xE92D000F, 0xED2D0B10, 0xE1A00006, 0xE1A01007, 0xE59D204C, 0xE1A03008,
+        0x00000000, 0x00000000, 0xE12FFF3C, 0xE1A06000, 0xE1A07001, 0xECBD0B10, 0xE8BD000F, 0xE59BE018,
+        0xE15E0FC1, 0x1A00000A, 0xE59BE01C, 0xE15E0FC0, 0x1A000007, 0xE71CF011, 0xE06E109C, 0xE58BC020,
+        0xE1A0CFCC, 0xE58BC024, 0xE1A0300E, 0xE1A08FCE, 0xEA000014, 0xE92D000F, 0xED2D0B10, 0xE24DD010,
+        0xE28DC008, 0xE58DC000, 0xE59D0054, 0xE59B1018, 0xE59D2050, 0xE59B301C, 0x00000000, 0x00000000,
+        0xE12FFF3C, 0xE58B0020, 0xE58B1024, 0xE59DC008, 0xE58DC05C, 0xE59DC00C, 0xE1A0800C, 0xE28DD010,
+        0xECBD0B10, 0xE8BD000F,
+    });
+}
+
 test "arm copies between two operands that both need a scratch register" {
     var a = Assembler.init(std.testing.allocator);
     defer a.deinit();
@@ -2258,6 +2437,7 @@ test "arm copies between two operands that both need a scratch register" {
 test "arm reads the words of a spilled value from the native stack" {
     var a = Assembler.init(std.testing.allocator);
     defer a.deinit();
+    a.idiv = true;
     const l = a.newLabel();
     a.bind(l);
     const n = spillReg(0).?;
@@ -2280,9 +2460,11 @@ test "arm reads the words of a spilled value from the native stack" {
     // ldr ip, [sp, #8]; mla r4, ip, lr, r4; ldr ip, [sp, #4]; ldr lr, [sp, #20]
     // umull r6, r7, ip, lr; add r7, r7, r4; pop {r4}
     a.mul3(.t0, n, m);
-    // The call of a routine moves it as well:
-    // push {r0-r3}; vpush {d0-d7}; ldr r0, [sp, #80]; ldr r1, [sp, #84]; ldr r2, [fp, #32]
-    // ldr r3, [fp, #36]; the call; mov r6, r0; mov r7, r1; vpop {d0-d7}; pop {r0-r3}
+    // ldr ip, [sp]; ldr lr, [sp, #4]; cmp lr, ip, asr #31; bne call; ldr ip, [fp, #32]
+    // ldr lr, [fp, #36]; cmp lr, ip, asr #31; bne call; push {r4}; ldr ip, [sp, #4]
+    // ldr lr, [fp, #32]; sdiv r4, ip, lr; mls r4, r4, lr, ip; cmp r4, #0; teqne r4, lr
+    // addmi r4, r4, lr; mov r6, r4; asr r7, r4, #31; pop {r4}; b done
+    // call: push {r0-r3}; vpush {d0-d7}; ldr r0, [sp, #80]; ldr r1, [sp, #84]; ...
     a.floorDiv(.t0, n, .t5, true, .c1, .c1);
     try std.testing.expect(a.finish());
     clearRoutines(&a);
@@ -2292,7 +2474,10 @@ test "arm reads the words of a spilled value from the native stack" {
         0x015C0006, 0x1AFFFFED, 0xE59DE010, 0xE59E2008, 0xE3A09000, 0xE58D2010, 0xE3A0C000, 0xE58DC014,
         0xE59BC020, 0xE09CC00C, 0xE58BC020, 0xE59BC024, 0xE0ACC00C, 0xE58BC024, 0xE92D0010, 0xE59DC004,
         0xE59DE018, 0xE0040E9C, 0xE59DE014, 0xE59DC008, 0xE0244E9C, 0xE59DC004, 0xE59DE014, 0xE0876E9C,
-        0xE0877004, 0xE8BD0010, 0xE92D000F, 0xED2D0B10, 0xE59D0050, 0xE59D1054, 0xE59B2020, 0xE59B3024,
-        0x00000000, 0x00000000, 0xE12FFF3C, 0xE1A06000, 0xE1A07001, 0xECBD0B10, 0xE8BD000F,
+        0xE0877004, 0xE8BD0010, 0xE59DC000, 0xE59DE004, 0xE15E0FCC, 0x1A00000F, 0xE59BC020, 0xE59BE024,
+        0xE15E0FCC, 0x1A00000B, 0xE92D0010, 0xE59DC004, 0xE59BE020, 0xE714FE1C, 0xE064CE94, 0xE3540000,
+        0x1134000E, 0x4084400E, 0xE1A06004, 0xE1A07FC4, 0xE8BD0010, 0xEA00000C, 0xE92D000F, 0xED2D0B10,
+        0xE59D0050, 0xE59D1054, 0xE59B2020, 0xE59B3024, 0x00000000, 0x00000000, 0xE12FFF3C, 0xE1A06000,
+        0xE1A07001, 0xECBD0B10, 0xE8BD000F,
     });
 }
