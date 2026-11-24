@@ -899,6 +899,11 @@ pub const Assembler = struct {
     /// Calls a function that takes five words. Every argument travels
     /// in a register on this target, as for `call`.
     pub const call5 = call;
+    /// Arithmetic on words the size of a pointer, such as a stack index
+    /// or a count, which a register of this target holds whole.
+    pub const addWord = add;
+    pub const subWord = sub;
+    pub const addImmWord = addImm;
     /// Declares that a register holds no value that later code reads.
     /// Every register of this target is whole, so nothing follows.
     pub inline fn dead(a: *Assembler, r: Reg) void {

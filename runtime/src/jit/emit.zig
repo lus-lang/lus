@@ -799,7 +799,7 @@ pub const Emitter = struct {
                 } else {
                     // The arguments run up to the stack top.
                     a.load32(A.t6, .{ .base = A.thread, .disp = @offsetOf(Thread, "top") });
-                    a.sub(A.t6, A.t4);
+                    a.subWord(A.t6, A.t4);
                 }
                 a.callReg(A.t2);
                 // The callee returns to the code after this jump, with its
@@ -810,8 +810,8 @@ pub const Emitter = struct {
                     // Every result is wanted, and the stack top marks
                     // their end.
                     a.mov(A.t0, A.base);
-                    a.add(A.t0, A.t6);
-                    a.addImm(A.t0, @intCast(ra));
+                    a.addWord(A.t0, A.t6);
+                    a.addImmWord(A.t0, @intCast(ra));
                 } else {
                     // Results the callee did not return are nil, and the
                     // register window of this function comes back.
@@ -824,7 +824,7 @@ pub const Emitter = struct {
                         while (i + 1 < rc) : (i += 1) e.storeConst(ra + i, .nil);
                     }
                     a.mov(A.t0, A.base);
-                    a.addImm(A.t0, e.p.max_stack);
+                    a.addImmWord(A.t0, e.p.max_stack);
                 }
                 a.store32(A.t0, .{ .base = A.thread, .disp = @offsetOf(Thread, "top") });
                 a.bind(done);
@@ -856,8 +856,8 @@ pub const Emitter = struct {
                 } else {
                     // The arguments run up to the stack top.
                     a.load32(A.t6, .{ .base = A.thread, .disp = @offsetOf(Thread, "top") });
-                    a.sub(A.t6, A.base);
-                    a.addImm(A.t6, -@as(i32, @intCast(ra + 1)));
+                    a.subWord(A.t6, A.base);
+                    a.addImmWord(A.t6, -@as(i32, @intCast(ra + 1)));
                 }
                 a.callReg(A.t2);
                 a.jmp(helper);
@@ -895,7 +895,7 @@ pub const Emitter = struct {
             // and `jit.dispatch` then compiles the function.
             a.movImm(A.t1, @intFromPtr(&e.p.opt_hot));
             a.load32(A.t2, .{ .base = A.t1 });
-            a.addImm(A.t2, -1);
+            a.addImmWord(A.t2, -1);
             a.store32(A.t2, .{ .base = A.t1 });
             a.jumpIfZero32(A.t2, true, fail);
         }
@@ -906,15 +906,15 @@ pub const Emitter = struct {
         a.loadWord(A.t1, .{ .base = thread, .disp = lay.frames_len });
         a.jumpIfMemWord(.eq, A.t1, .{ .base = thread, .disp = lay.frames_cap }, fail);
         a.mov(A.t2, A.t4);
-        a.add(A.t2, A.t6);
-        a.addImm(A.t2, max_stack + 8);
+        a.addWord(A.t2, A.t6);
+        a.addImmWord(A.t2, max_stack + 8);
         a.jumpIfMemWord(.hi, A.t2, .{ .base = thread, .disp = lay.stack_len }, fail);
 
         // Nothing fails from here on.
         // t2 = the new frame, one past the caller's.
         a.loadWord(A.t2, .{ .base = thread, .disp = lay.frames_ptr });
         a.addScaled(A.t2, A.t2, A.t1, frame_shift);
-        a.addImm(A.t1, 1);
+        a.addImmWord(A.t1, 1);
         a.storeWord(A.t1, .{ .base = thread, .disp = lay.frames_len });
         a.store32(A.t3, .{ .base = A.t2, .disp = frameField("pc") - frame_size });
         const zero: A.Reg = A.Assembler.zero_reg orelse blk: {
@@ -933,7 +933,7 @@ pub const Emitter = struct {
         a.linkPastJump(A.t3);
         a.dropLink();
         a.storeWord(A.t3, .{ .base = A.t2, .disp = frameField("resume_at") });
-        a.addImm(A.t1, 1 + max_stack);
+        a.addImmWord(A.t1, 1 + max_stack);
         a.store32(A.t1, .{ .base = thread, .disp = @offsetOf(Thread, "top") });
         a.mov(A.base, A.t4);
         e.reloadBp();
@@ -961,7 +961,7 @@ pub const Emitter = struct {
             a.bind(loop);
             a.addScaled(A.t1, A.bp, A.t6, 4);
             a.zero16(.{ .base = A.t1 });
-            a.addImm(A.t6, 1);
+            a.addImmWord(A.t6, 1);
             a.jumpIfImm(.lo, A.t6, @intCast(np), loop);
             a.bind(fixed);
         }
@@ -975,8 +975,8 @@ pub const Emitter = struct {
             a.movImm(A.t3, count);
             a.bind(loop);
             a.zero16(.{ .base = A.t1 });
-            a.addImm(A.t1, 16);
-            a.addImm(A.t3, -1);
+            a.addImmWord(A.t1, 16);
+            a.addImmWord(A.t3, -1);
             a.jumpIfImm(.ne, A.t3, 0, loop);
         }
     }
@@ -1006,8 +1006,8 @@ pub const Emitter = struct {
         a.addScaled(A.t1, A.t2, A.t1, frame_shift);
         a.load32(A.t2, .{ .base = A.t1, .disp = frameField("ret") - frame_size });
         a.mov(A.t3, A.t2);
-        a.add(A.t3, A.t6);
-        a.addImm(A.t3, max_stack + 9);
+        a.addWord(A.t3, A.t6);
+        a.addImmWord(A.t3, max_stack + 9);
         a.jumpIfMemWord(.hi, A.t3, .{ .base = thread, .disp = lay.stack_len }, fail);
 
         // Nothing fails from here on.
@@ -1015,12 +1015,12 @@ pub const Emitter = struct {
         a.loadWord(A.t3, .{ .base = thread, .disp = lay.stack_ptr });
         a.addScaled(A.t3, A.t3, A.t2, 4);
         a.mov(A.t5, A.t6);
-        a.addImm(A.t5, 1);
+        a.addImmWord(A.t5, 1);
         a.bind(loop);
         a.copy16(.{ .base = A.t3 }, .{ .base = A.t4 });
-        a.addImm(A.t3, 16);
-        a.addImm(A.t4, 16);
-        a.addImm(A.t5, -1);
+        a.addImmWord(A.t3, 16);
+        a.addImmWord(A.t4, 16);
+        a.addImmWord(A.t5, -1);
         a.jumpIfImm(.ne, A.t5, 0, loop);
 
         a.storeWord(A.t0, .{ .base = A.t1, .disp = frameField("closure") - frame_size });
@@ -1050,7 +1050,7 @@ pub const Emitter = struct {
         const a = &e.a;
         a.movImm(A.t0, @intFromPtr(&e.p.opt_hot));
         a.load32(A.t1, .{ .base = A.t0 });
-        a.addImm(A.t1, -1);
+        a.addImmWord(A.t1, -1);
         a.store32(A.t1, .{ .base = A.t0 });
         a.jumpIfZero32(A.t1, true, e.addCold(pc, .{ .opt_loop = target }, 0));
     }
@@ -1102,7 +1102,7 @@ pub const Emitter = struct {
         if (n == 1) a.copy16(.{ .base = A.bp, .disp = -16 }, slot(ra));
         // Pop the frame and continue in the caller, which adjusts the
         // result count.
-        a.addImm(A.t0, -1);
+        a.addImmWord(A.t0, -1);
         a.storeWord(A.t0, .{ .base = thread, .disp = lay.frames_len });
         a.load32(A.base, .{ .base = A.t1, .disp = frameField("base") - 2 * frame_size });
         a.loadWord(A.t3, .{ .base = A.t1, .disp = frameField("resume_at") - frame_size });

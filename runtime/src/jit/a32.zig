@@ -1158,6 +1158,31 @@ pub const Assembler = struct {
         a.dp(al, op_mvn, false, 0, th, q);
         a.put(hw, th);
     }
+    // Arithmetic on words the size of a pointer, such as a stack index
+    // or a count. The operands and the result have zero high words, so
+    // one instruction computes the low word.
+    pub fn addWord(a: *Assembler, dst: Reg, src: Reg) void {
+        a.wordOp(op_add, dst, a.op2(lo(src), S1));
+    }
+    pub fn subWord(a: *Assembler, dst: Reg, src: Reg) void {
+        a.wordOp(op_sub, dst, a.op2(lo(src), S1));
+    }
+    pub fn addImmWord(a: *Assembler, dst: Reg, v: i32) void {
+        if (v == 0) return;
+        const mag: u32 = @abs(v);
+        const o = immOp(mag) orelse blk: {
+            a.imm32(S1, mag);
+            break :blk @as(u32, S1);
+        };
+        a.wordOp(if (v > 0) op_add else op_sub, dst, o);
+    }
+    fn wordOp(a: *Assembler, op: u4, dst: Reg, operand: u32) void {
+        const p = a.get(lo(dst), S0);
+        const t = target(lo(dst), S0);
+        a.dp(al, op, false, p, t, operand);
+        a.put(lo(dst), t);
+        a.zeroHi(dst);
+    }
     pub fn addImm(a: *Assembler, dst: Reg, v: i32) void {
         if (v == 0) return;
         a.addImm3(dst, dst, v);
@@ -2631,5 +2656,19 @@ test "arm saves around a barrier only what its call overwrites" {
     try expectWords(&a, &.{
         0xE92D030F, 0xE59BC018, 0xE59BE01C, 0xE92D5000, 0xE59BC020, 0xE59BE024, 0xE92D5000, 0xED2D0B10,
         0xECBD0B10, 0xE8BD5000, 0xE58BC020, 0xE58BE024, 0xE8BD5000, 0xE58BC018, 0xE58BE01C, 0xE8BD030F,
+    });
+}
+
+test "arm adds words the size of a pointer in one instruction" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.mov(.t2, .t4); // mov r2, r0; ldr r9, [fp, #28]
+    a.addWord(.t2, .t6); // ldr lr, [fp, #40]; add r2, r2, lr; mov r9, #0
+    a.addImmWord(.t2, 11); // add r2, r2, #11
+    a.subWord(.t6, .t4); // ldr ip, [fp, #40]; sub ip, ip, r0; str ip, [fp, #40]
+    a.addImmWord(.t6, -1); // ldr ip, [fp, #40]; sub ip, ip, #1; str ip, [fp, #40]
+    try expectWords(&a, &.{
+        0xE1A02000, 0xE59B901C, 0xE59BE028, 0xE082200E, 0xE3A09000, 0xE282200B, 0xE59BC028, 0xE04CC000,
+        0xE58BC028, 0xE59BC028, 0xE24CC001, 0xE58BC028,
     });
 }
