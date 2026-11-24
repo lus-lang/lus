@@ -122,11 +122,17 @@ pub const ret1: Reg = .t3;
 pub const entry_target: Reg = .t2;
 pub const f0: FReg = .d0;
 pub const f1: FReg = .d1;
-/// Float scratch registers of the assembler itself, and the register
-/// that `zeroPrepare` clears. The entry sequence saves d8 to d12.
+/// Float scratch registers of the assembler itself.
 const fs0: FReg = .d10;
 const fs1: FReg = .d11;
+/// Registers that hold the 64-bit words native code stores most, which
+/// then take one store each. The entry sequence saves d8 to d14 and
+/// loads these three: zero, and the two words of `stored_words`.
 const fzero: FReg = .d12;
+const fwords = [_]FReg{ .d13, .d14 };
+/// The tag words of an integer and of a float. `emit.zig` checks them
+/// against the layout of a value.
+pub const stored_words = [_]u64{ 3, 4 };
 
 // The frame of the entry sequence, from its base upward.
 const slot_base = 0;
@@ -923,7 +929,15 @@ pub const Assembler = struct {
         if (a.candidate64(v)) |r| return a.storeImm64Reloc(m, v, r);
         a.storeImm64Raw(m, v);
     }
+    /// The register that holds the constant from the entry sequence on,
+    /// when one does.
+    fn wordReg(v: u64) ?FReg {
+        if (v == 0) return fzero;
+        for (stored_words, fwords) |w, r| if (w == v) return r;
+        return null;
+    }
     fn storeImm64Raw(a: *Assembler, m: Mem, v: u64) void {
+        if (wordReg(v)) |r| return a.storeF(r, m);
         const ad = a.addr(m, 4, 4095, S1);
         const low: u32 = @truncate(v);
         const high: u32 = @truncate(v >> 32);
@@ -937,11 +951,10 @@ pub const Assembler = struct {
         a.imm32(S0, v);
         a.str(S0, ad.b, ad.d);
     }
-    /// Prepares `zero16`, which may then run any number of times before
-    /// the next copy or call.
+    /// Prepares `zero16`. The register that it stores holds zero from
+    /// the entry sequence on.
     pub fn zeroPrepare(a: *Assembler) void {
-        a.imm32(S0, 0);
-        a.word(0xEC400B10 | @as(u32, S0) << 16 | @as(u32, S0) << 12 | fzero.n()); // vmov d12, ip, ip
+        _ = a;
     }
     /// Clears 16 bytes with two stores.
     pub fn zero16(a: *Assembler, m: Mem) void {
@@ -1722,24 +1735,26 @@ pub const Assembler = struct {
     /// stop depth, the address to continue at, and the frame base. It
     /// saves the registers that belong to its caller, opens the frame
     /// that holds the registers without a machine register, and loads
-    /// the pinned registers. Ten words and five doubles keep the stack
-    /// pointer a multiple of eight.
+    /// the pinned registers and the registers of constants. Ten words
+    /// and seven doubles keep the stack pointer a multiple of eight.
     pub fn prologue(a: *Assembler) void {
         a.join();
         a.push(0x4FF8); // push {r3-r11, lr}
-        a.vpush(.d8, 5); // vpush {d8-d12}
+        a.vpush(.d8, 7); // vpush {d8-d14}
         a.addP(sp_r, sp_r, -frame_size);
         a.movP(fp, sp_r);
         a.movP(4, r0);
         a.str(r1, fp, slot_stop);
         a.str(r3, fp, slot_base);
+        a.fmovImm(fzero, 0);
+        for (stored_words, fwords) |w, r| a.fmovImm(r, w);
     }
     /// Returns to the caller of the entry sequence with the status in the
     /// first result register. The frame goes, and the high words that
     /// were never written with it.
     pub fn epilogue(a: *Assembler) void {
         a.addP(sp_r, fp, frame_size);
-        a.vpop(.d8, 5);
+        a.vpop(.d8, 7);
         a.pop(0x8FF8); // pop {r3-r11, pc}
         a.leave();
     }
@@ -1897,14 +1912,16 @@ test "arm memory forms" {
     a.loadF(.d0, .{ .base = .bp, .disp = 32 }); // vldr d0, [r5, #32]
     a.storeF(.d1, .{ .base = .bp, .disp = 4096 }); // add lr, r5, #4096; vstr d1, [lr]
     a.copy8(.{ .base = .bp, .disp = 32 }, .{ .base = .bp, .disp = 48 }); // ldr ip, [r5, #48]; str ip, [r5, #32]; ldr ip, [r5, #52]; str ip, [r5, #36]
-    a.storeImm64(.{ .base = .bp, .disp = 8 }, 3); // mov ip, #3; str ip, [r5, #8]; mov ip, #0; str ip, [r5, #12]
-    a.zeroPrepare(); // mov ip, #0; vmov d12, ip, ip
+    // The tag word of an integer waits in a register.
+    a.storeImm64(.{ .base = .bp, .disp = 8 }, 3); // vstr d13, [r5, #8]
+    a.storeImm64(.{ .base = .bp, .disp = 8 }, 9); // mov ip, #9; str ip, [r5, #8]; mov ip, #0; str ip, [r5, #12]
+    a.zeroPrepare();
     a.zero16(.{ .base = .bp, .disp = 16 }); // vstr d12, [r5, #16]; vstr d12, [r5, #24]
     try expectWords(&a, &.{
         0xE5956010, 0xE5957014, 0xE596700C, 0xE5966008, 0xE5053010, 0xE505800C, 0xE5941004, 0xE5D56008,
         0xE3A07000, 0xE1D330B0, 0xE3A08000, 0xED950B08, 0xE285EA01, 0xED8E1B00, 0xE595C030, 0xE585C020,
-        0xE595C034, 0xE585C024, 0xE3A0C003, 0xE585C008, 0xE3A0C000, 0xE585C00C, 0xE3A0C000, 0xEC4CCB1C,
-        0xED85CB04, 0xED85CB06,
+        0xE595C034, 0xE585C024, 0xED85DB02, 0xE3A0C009, 0xE585C008, 0xE3A0C000, 0xE585C00C, 0xED85CB04,
+        0xED85CB06,
     });
 }
 
@@ -2030,15 +2047,17 @@ test "arm local calls keep the return address in the frame" {
 test "arm entry sequence" {
     var a = Assembler.init(std.testing.allocator);
     defer a.deinit();
-    // push {r3-r11, lr}; vpush {d8-d12}; sub sp, sp, #112; mov fp, sp; mov r4, r0
-    // str r1, [fp, #4]; str r3, [fp]
+    // push {r3-r11, lr}; vpush {d8-d14}; sub sp, sp, #112; mov fp, sp; mov r4, r0
+    // str r1, [fp, #4]; str r3, [fp]; mov ip, #0; vmov d12, ip, ip; mov ip, #3; mov lr, #0
+    // vmov d13, ip, lr; mov ip, #4; mov lr, #0; vmov d14, ip, lr
     a.prologue();
-    a.epilogue(); // add sp, fp, #112; vpop {d8-d12}; pop {r3-r11, pc}
+    a.epilogue(); // add sp, fp, #112; vpop {d8-d14}; pop {r3-r11, pc}
     a.trap(); // udf #0
     a.jmpReg(entry_target); // bx r2
     try expectWords(&a, &.{
-        0xE92D4FF8, 0xED2D8B0A, 0xE24DD070, 0xE1A0B00D, 0xE1A04000, 0xE58B1004, 0xE58B3000, 0xE28BD070,
-        0xECBD8B0A, 0xE8BD8FF8, 0xE7F000F0, 0xE12FFF12,
+        0xE92D4FF8, 0xED2D8B0E, 0xE24DD070, 0xE1A0B00D, 0xE1A04000, 0xE58B1004, 0xE58B3000, 0xE3A0C000,
+        0xEC4CCB1C, 0xE3A0C003, 0xE3A0E000, 0xEC4ECB1D, 0xE3A0C004, 0xE3A0E000, 0xEC4ECB1E, 0xE28BD070,
+        0xECBD8B0E, 0xE8BD8FF8, 0xE7F000F0, 0xE12FFF12,
     });
 }
 

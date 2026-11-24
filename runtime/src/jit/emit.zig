@@ -71,6 +71,11 @@ comptime {
     // The templates load sizes and addresses as words the size of a
     // pointer, which is 64 bits or, on 32-bit ARM, 32 bits.
     std.debug.assert(@sizeOf(usize) == 8 or builtin.cpu.arch == .arm);
+    // An assembler that keeps the tag words of an integer and of a float
+    // in registers names the words it expects.
+    if (@hasDecl(A, "stored_words")) {
+        std.debug.assert(A.stored_words[0] == Value.tagWordOf(tag_int) and A.stored_words[1] == Value.tagWordOf(tag_float));
+    }
 }
 
 fn frameField(comptime name: []const u8) i32 {
