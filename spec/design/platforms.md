@@ -109,7 +109,7 @@ The one distinction they gain is the width of a word in memory. A pointer, a cou
 
 ### Registers
 
-32-bit ARM has thirteen general registers besides the stack pointer, the link register, and the program counter. The assembler places each word of each register of the interface in a machine register or in the native frame that the entry sequence opens, which `r11` points at.
+32-bit ARM has thirteen general registers besides the stack pointer, the link register, and the program counter. The assembler places each word of each register of the interface in a machine register, in the native frame that the entry sequence opens, which `r11` points at, or on the native stack.
 
 | register of the interface | low word | high word |
 |---|---|---|
@@ -117,17 +117,38 @@ The one distinction they gain is the width of a word in memory. A pointer, a cou
 | the index of register 0, the stop depth | a word of the frame | reads as zero |
 | `t0`, `t1`, `t2` | `r6`, `r3`, `r2` | `r7`, `r8`, `r9` |
 | `t3`, `t4` | `r1`, `r0` | a word of the frame |
-| `t5`, `t6`, the two scratch registers of the code generator, six more pool registers | a word of the frame | a word of the frame |
+| the first scratch register of the code generator | `r10` | a word of the frame |
+| `t5`, `t6`, the second scratch register of the code generator, six more pool registers | a word of the frame | a word of the frame |
+| a spilled value of the optimizing tier | a word of the native stack | the word after it |
 
-The scratch registers of the assembler are `r10`, `r12`, and the link register. A word that lives in the frame moves through one of them: an operation loads it, computes, and stores the result. Code that uses `t0` to `t2` runs at the speed of register pairs. Every other temporary costs a load or a store per word. The optimizing tier allocates thirteen registers, `t0` to `t6` and the six frame registers, lowest first, so the values of a small loop live in the three pairs. A value in a frame register costs what a spilled value costs on another target, since the code generator names it as an operand like any other register.
+The scratch registers of the assembler are `r12` and the link register. A word that lives in the frame or on the stack moves through one of them: an operation loads it, computes, and stores the result. A multiplication or a division whose low words live in memory needs a third scratch register, so it saves `r4` on the stack while it runs. Code that uses `t0` to `t2` runs at the speed of register pairs. The optimizing tier allocates thirteen registers, `t0` to `t6` and the six frame registers, lowest first, so the values of a small loop live in the three pairs.
 
-Floats use the double registers of VFPv3-D16 directly. The optimizing tier allocates `d0` to `d7`, the code generator keeps `d8` and `d9` as scratch registers, and the assembler keeps `d10` to `d12`. The entry sequence saves `d8` to `d12` with the general registers that belong to its caller.
+A spilled value is an operand where it lies. `spillReg` names a word of the native stack as a register of the interface. The code generator passes that name where another target loads the value into a scratch register first. The assembler reads and writes the two words in place. An operation that moves the stack pointer while it runs, such as the call of a division routine, adds the bytes it pushed to the offsets. In `fib.lus`, whose every call keeps its argument and a partial sum on the stack, this took the instructions that native code executes for `fib(24)` from 8.65 to 7.15 million.
+
+Floats use the double registers of VFPv3-D16 directly. The optimizing tier allocates `d0` to `d7`, the code generator keeps `d8` and `d9` as scratch registers, the assembler keeps `d10` and `d11`, and `d12` to `d14` hold constants. The entry sequence saves `d8` to `d14` with the general registers that belong to its caller.
+
+### High words
+
+Most registers hold a pointer, a count, a tag, or a stack index, whose high word is zero. While the assembler emits straight-line code it records which high words it knows to be zero. A load of a word or a byte, an address, a constant below 2^32, the result of `call`, and a bitwise operation on such registers each set the record. An operation that reads a recorded register works on one word. A comparison of two such registers is one `cmp` with an unsigned condition. A test against zero reads the low word.
+
+A recorded high word that lives in the frame stays unwritten at first. The assembler writes the pending zeros where a path that never passed the record can reach the code: at a label, before an unconditional jump, a local call, or a return, and at `offset`, which marks a point that code enters from elsewhere. A conditional branch writes them between its comparison and its branch, with a `mov` and stores that keep the flags. A conditional branch to out-of-line code, whose label comes from `newColdLabel`, goes through a *ramp*: a few instructions after the rest of the code that write the zeros and jump on. The path that falls through such a branch pays nothing, which matters because it is the hot path of every guard and of every template. The record is empty after a label.
+
+`dead` tells the assembler that a register holds no value that later code reads, which drops its pending zero. The templates call it for the temporaries at every instruction boundary. The code generator calls it for its scratch registers before every instruction of the intermediate representation.
+
+Only out-of-line code is reached through a ramp because of what a far jump costs under `qemu-arm`. The emulator chains translated blocks inside one 4 KB page, so a branch to another page costs about as much as ten instructions. A build that sent every conditional branch through a ramp ran `methods.lus` in 207 ms against 146 ms before the record existed, while it executed fewer instructions, because the branch that closes the loop left through a ramp on another page.
+
+### Constants and words in memory
+
+The entry sequence loads three float registers with the 64-bit words that native code stores most: zero in `d12`, the tag word of an integer in `d13`, and the tag word of a float in `d14`. `storeImm64` of one of them is one `vstr`, where two words built in a scratch register take four instructions. `emit.zig` asserts that the two tag words are the ones the layout of a value defines.
+
+The code generator finds four operations with `@hasDecl` that only this assembler has, where a 64-bit target loads a scratch register. `jumpIfWide` compares a register with a 64-bit integer one word at a time, so the guard of an array read against the bits of the absent marker takes five instructions. `floorDivImm` divides by a constant. `addMemImm` and `jumpIfMems` count the bytes of sunk allocations and compare them with their limit where the two words lie. The second scratch register of the code generator lives in the frame, so each of these operations saves the stores and loads of a 64-bit temporary.
 
 ### Calls
 
-The temporaries share their low words with the argument registers of AAPCS in the order of s390x: `t4` is the first argument and the first result, `t3` the second of each, `t2` the third argument, `t1` the fourth, and `t5` the fifth. The interface has three kinds of call.
+The temporaries share their low words with the argument registers of AAPCS in the order of s390x: `t4` is the first argument and the first result, `t3` the second of each, `t2` the third argument, `t1` the fourth, and `t5` the fifth. The interface has four kinds of call.
 
-- **`call`** calls a routine whose arguments are words (see "Order"). The low words of the first four arguments are in `r0` to `r3` already. The low word of the fifth travels on the stack. The result is `r0`, whose register of the interface gets a zero high word after the call.
+- **`call`** calls a routine that takes up to four words (see "Order"). Their low words are in `r0` to `r3` already. The result is `r0`, whose register of the interface gets a zero high word in the record of the assembler.
+- **`call5`** calls a routine that takes five words. The low word of the fifth travels on the stack. On every other target it is `call`.
 - **`callWide`** calls a routine whose arguments and result are all 64-bit integers: the helpers of an array access and every routine that a `callc` instruction of the optimizing tier reaches. The first argument travels in `r0` and `r1`, the second in `r2` and `r3`, and the third and fourth on the stack. The result comes back in `r0` and `r1`.
 - **`callPair`** calls a routine that returns `jit.Target`, which AAPCS returns through memory. The assembler passes the address of two words of the frame in `r0`, moves the four word arguments up by one, the last of them onto the stack, and loads the two words into the result registers afterwards.
 
@@ -137,7 +158,9 @@ A local call, which enters a call entry or a direct entry of optimized code, sto
 
 ### Division and conversions
 
-ARMv7-A divides only 32-bit integers, so `divRem` and `floorDiv` call routines in `a32.zig` that divide in Zig. An operation of the interface keeps every register it does not name, so such a call saves `r0` to `r3` and `d0` to `d7` around itself. It reads an operand that lives in one of them from where it was saved. It writes a result that lives in one of them to the same place, so that the restore loads it. `floatToInt` calls a routine the same way.
+ARMv7-A makes the division of 32-bit integers optional. The kernel reports it in the hardware capabilities of the process. On a processor that divides, `divRem` and `floorDiv` first test that both operands are signed 32-bit integers, which holds when the high word equals the sign of the low word. They then divide in place with `sdiv` and find the remainder with `mls`. Two conditional instructions turn the truncated results into the floor of the quotient and the remainder with the sign of the divisor. A constant divisor of 32 bits needs no test of its own.
+
+Every other division calls a routine in `a32.zig` that divides in Zig. So does all code compiled ahead of time, which may run on a processor that has no `sdiv`. An operation of the interface keeps every register it does not name, so the call of a routine saves `r0` to `r3` and `d0` to `d7` around itself. It reads an operand that lives in one of them from where it was saved. It writes a result that lives in one of them to the same place, so that the restore loads it. `floatToInt` calls a routine the same way.
 
 VFP converts only 32-bit integers. `intToFloat` converts the low word as an unsigned integer and the high word as a signed one, and adds the low float to the high float times 2^32 with `vmla`. Both the product and the low float are exact, so the one addition rounds as a direct conversion of the 64-bit integer does.
 
@@ -153,7 +176,7 @@ The C library of a static build finds the stack of the main thread by probing th
 
 `LUS_JIT_AOT` and `lus build --aot` work on 32-bit ARM as they do on the 64-bit targets (`aot.md`). On a 64-bit target the value of a constant tells whether it can be an address, since the heap and the code lie above 4 GB. On 32-bit ARM an address is one word, so the interface says which constants can be addresses, and the emitters name the integers among them.
 
-- **Constants the size of a pointer.** `movImm`, `storeImm64`, `storeImmWord`, and the three kinds of call take a constant that may be an address. Ahead of time the assembler hands the resolver each of them whose high word is zero and whose low word is at least 64 KB, where the image, the heap, and the code of a process begin. The resolver names the address, calls the value a literal, or calls it unknown, as on every target. The instruction counts, slot numbers, and tags that the emitters write lie below 64 KB and build in place.
+- **Constants the size of a pointer.** `movImm`, `storeImm64`, `storeImmWord`, and every kind of call take a constant that may be an address. Ahead of time the assembler hands the resolver each of them whose high word is zero and whose low word is at least 64 KB, where the image, the heap, and the code of a process begin. The resolver names the address, calls the value a literal, or calls it unknown, as on every target. The instruction counts, slot numbers, and tags that the emitters write lie below 64 KB and build in place.
 - **32-bit integers.** The constants of `addImm`, `jumpIfImm`, and `storeImm32` are 32-bit integers on every target and build in place. A guard or a branch of the optimizing tier whose constant is an address carries the flag `address`. Ahead of time such a constant loads into a register through `movImm`, and the comparison takes two registers.
 - **Integers the size of a pointer.** The baseline templates and the code generator pass an instruction word, a hash, an integer or float constant of the program, and the shaped bit of a table through `movImmReloc` with the `literal` name, or through `storeLiteral`. Those values never reach the resolver. In the intermediate representation `kint` holds only integers, and every constant address is a `kptr`.
 
@@ -162,6 +185,27 @@ An address takes the form `movw` and `movt`, whose two 16-bit fields the loader 
 The executable of 32-bit ARM is static and loads at 64 KB. An integer that reaches the resolver without a `literal` name and lands in the image, the heap, or the executable memory is unknown, so its function or unit stays out of the code section (`aot.md`, "Testing"). The linker of `lus build` writes x86-64 and aarch64 executables, so `lus build --aot` on 32-bit ARM appends the code section to the prebuilt runtime, which relocates it at load.
 
 Under `qemu-arm`, the executable that `lus build --aot` makes of `tests/build/aot.lus` on `lus-runtime` prints the output of `zig build test-runtime`, and `LUS_AOT_REPORT` counts 9 functions and 6 units installed and both loop units entered. The benchmarks `fib`, `loop`, `methods`, `arrays`, `tables`, `closures`, `strings`, `data`, `unicode`, and `patterns` give the same output compiled ahead of time, bundled on `lus-runtime`, and bundled on `lus`. `fib` takes 0.18 s compiled ahead of time against 0.88 s interpreted on `lus-runtime` and 0.21 s under the JIT, and `methods` takes 0.16 s against 5.40 s and 0.14 s, in ReleaseSafe builds under `qemu-arm` on an Apple silicon Mac.
+
+### Measurements
+
+The table gives the time of each benchmark of `tests/bench` in milliseconds before and after the changes that this section describes: the record of high words, `call5`, `dead`, the constants in float registers, the words of the stack as registers, the check of the chain limit, the division in place, the wide constants, and the counter of sunk allocations. Each time is the best of 3 runs under `qemu-arm` in the VM, with the two builds interleaved, in ReleaseSafe on an Apple silicon Mac.
+
+| benchmark | off, before | off, after | baseline, before | baseline, after | default, before | default, after |
+|---|---|---|---|---|---|---|
+| `fib` | 813 | 811 | 383 | 361 | 213 | 159 |
+| `loop` | 20317 | 20929 | 13990 | 1767 | 13550 | 827 |
+| `arrays` | 5951 | 5901 | 2910 | 2604 | 1129 | 681 |
+| `closures` | 1735 | 1709 | 1412 | 1383 | 1545 | 1375 |
+| `methods` | 4903 | 5070 | 3850 | 3683 | 148 | 187 |
+| `tables` | 2081 | 2043 | 1815 | 1650 | 1692 | 1573 |
+| `strings` | 2007 | 1967 | 2094 | 1970 | 2128 | 2041 |
+| `data` | 1889 | 1890 | 1823 | 1721 | 1717 | 1610 |
+
+The translation log of qemu counts the instructions that native code executes, and the count stays the same under any load on the VM. In the default mode the count went from 11.1 to 6.7 million for `fib(24)`, from 70.5 to 48.5 million for `arrays.lus` with 20000 elements, from 33.2 to 24.8 million for 40000 iterations of `closures.lus`, and from 18.0 to 13.7 million for 300000 iterations of `methods.lus`. `loop.lus`, whose body is one modulo, spent 66 of its 76 million instructions for 300000 iterations in the division routines of the runtime. It now executes 9.3 million in all.
+
+`methods.lus` takes longer in the default mode although its loop executes fewer instructions. The two halves of that loop lie on two 4 KB pages in the later builds. `qemu-arm` chains translated blocks only inside one page, so every iteration looks up two blocks. The build with only the record of high words, in which the loop lies inside one page, runs the benchmark in 143 ms.
+
+`closures.lus`, `tables.lus`, `strings.lus`, and `data.lus` spend most of their time in the runtime, so native code moves them little. After the changes native code executes 38 percent of the instructions of `closures.lus`, whose other instructions create closures, return through the step routine, and sweep. `data.lus` spends 36 percent of its instructions in the routine of the compiler runtime that converts a 64-bit integer to a float.
 
 ## s390x
 
