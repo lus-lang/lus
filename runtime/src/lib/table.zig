@@ -287,6 +287,24 @@ fn concat(l: *Thread) Error!u32 {
             state.finishLong(l.g, r, ascii_all, chars_all);
             return aux.ret(l, Value.obj(.string, r));
         }
+        // A short result of strings alone is copied once on the stack.
+        if (exact and room <= stack.len) {
+            var at: usize = 0;
+            j = i;
+            while (true) : (j += 1) {
+                const b = table.getInt(tab, j).as(String).bytes();
+                @memcpy(stack[at..][0..b.len], b);
+                at += b.len;
+                if (j == last) break;
+                if (sep_given) {
+                    const sb = sep.as(String).bytes();
+                    @memcpy(stack[at..][0..sb.len], sb);
+                    at += sb.len;
+                }
+            }
+            const r = state.newStringFresh(l.g, stack[0..at], ascii_all, chars_all) catch return l.raiseMem();
+            return aux.ret(l, Value.obj(.string, r));
+        }
         // A long result is built where its string will live.
         if (ops.longResult(room)) gpa = strbuf.allocator();
         buf.ensureTotalCapacityPrecise(gpa, room) catch return l.raiseMem();

@@ -543,3 +543,17 @@ local function repetitions_that_cannot_give_back_test()
     for w, n in ("ab1x cd x ef2x"):gmatch("(%a+)(%d?)x") do words[#words + 1] = w .. n end
     assert(table.concat(words, ",") == "ab1,ef2")
 end
+
+-- A replacement table whose lookups run other searches leaves the gsub
+-- that called it with its own pattern, and a plain table needs no copy.
+local function a_gsub_table_may_search_with_other_patterns_test()
+    local lookups = setmetatable({}, { __index = function(_, k)
+        local a, b = ("x=1 y=2"):match("(%a)=(%d)")
+        for w in ("p q r"):gmatch("%a") do a = a .. w end
+        return `<$k$a$b>`
+    end })
+    assert(("ab-cd"):gsub("(%a+)", lookups) == "<abxpqr1>-<cdxpqr1>")
+    local plain = { ab = "AB", cd = "CD" }
+    assert(("ab-cd-ef"):gsub("%a+", plain) == "AB-CD-ef")
+    assert((("a<b>&'c'"):gsub("[&<>']", { ["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;", ["'"] = "&#39;" })) == "a&lt;b&gt;&amp;&#39;c&#39;")
+end

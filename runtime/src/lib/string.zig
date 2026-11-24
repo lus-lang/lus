@@ -1491,7 +1491,7 @@ fn programFor(l: *Thread, pat: []const u8, start: usize) ?*const state.PatternPr
 /// The first byte at or after `pos` that is in `set`, or `src.len`.
 inline fn skipTo(src: []const u8, pos: usize, set: u128) usize {
     var i = pos;
-    while (i < src.len and (set >> @intCast(src[i])) & 1 == 0) i += 1;
+    while (i < src.len and !inByteSet(set, src[i])) i += 1;
     return i;
 }
 
@@ -1881,17 +1881,6 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
     const prefix = if (anchor) "" else literalPrefix(pat, pstart);
     const first: ?u128 = if (M == MatcherFor(true) and !anchor and prefix.len == 0) firstSetCached(l, pat, pstart) else null;
     var m = M.init(src, pat, s.flags().ascii);
-    // A replacement function or metamethod can run searches that replace
-    // the entries of the cache, so the matcher then keeps its own copy.
-    var own: state.PatternProgram = undefined;
-    if (M == MatcherFor(true)) if (programFor(l, pat, pstart)) |prog| {
-        if (kind == .string) {
-            m.prog = prog;
-        } else {
-            own = prog.*;
-            m.prog = &own;
-        }
-    };
     var b: Builder = undefined;
     b.init(l);
     defer b.deinit();
@@ -1917,6 +1906,19 @@ fn gsubWith(comptime M: type, l: *Thread, s: *String, p: *String, kind: ReplKind
             return .{ .str = try b.finish(), .n = n };
         }
     }
+    // A replacement function, or a metamethod of a replacement table, can
+    // run searches that replace the entries of the cache, so the matcher
+    // then keeps its own copy of the program.
+    var own: state.PatternProgram = undefined;
+    if (M == MatcherFor(true)) if (programFor(l, pat, pstart)) |prog| {
+        const shared = kind == .string or (kind == .table and repl.as(Table).metatable == null);
+        if (shared) {
+            m.prog = prog;
+        } else {
+            own = prog.*;
+            m.prog = &own;
+        }
+    };
     var pos: usize = 0;
     var cpos: usize = 0;
     // Source text before `copied` is already in the builder. Unmatched
@@ -2554,6 +2556,20 @@ test "findBytes agrees with a plain search" {
     try testing.expectEqual(@as(?usize, null), findBytes(&long, 0, &near));
     @memset(long[160..], 'b');
     try testing.expectEqual(@as(?usize, 130), findBytes(&long, 0, &near));
+}
+
+test "skipTo finds the first byte of a set" {
+    const src = "plain text with <tags> & \"quotes\" and it's 0123456789 abcdefghijklmnop";
+    const sets = [_][]const u8{ "&<>\"'", "<", "z", "0123456789", "ab", "\n" };
+    for (sets) |members| {
+        var set: u128 = 0;
+        for (members) |c| set |= @as(u128, 1) << @intCast(c);
+        for (0..src.len + 1) |pos| {
+            var want = pos;
+            while (want < src.len and (set >> @intCast(src[want])) & 1 == 0) want += 1;
+            try testing.expectEqual(want, skipTo(src, pos, set));
+        }
+    }
 }
 
 test "compiled patterns agree with the interpreter" {

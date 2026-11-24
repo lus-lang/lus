@@ -38,6 +38,21 @@ local function concat_joins_surrogate_halves_test()
     assert(table.concat({ "x", "y" }, "\u{D800}") ~= "")
 end
 
+-- Short joins of strings alone are copied once, and they keep the
+-- length, the character count, and the equality of any other string.
+local function short_concats_keep_their_text_test()
+    local tags = { "a&b", "it's", "x" }
+    local s = table.concat(tags, ", ")
+    assert(s == "a&b, it's, x" and #s == 12)
+    assert(table.concat({ "é", "ü" }, "-") == "é-ü" and utf8.len(table.concat({ "é", "ü" }, "-")) == 3)
+    assert(table.concat({}, ", ") == "" and table.concat({ "", "" }) == "")
+    assert(table.concat({ "one" }) == "one" and table.concat({ "a", "b", "c" }, "", 2, 3) == "bc")
+    local seen = {}
+    seen[table.concat({ "k", "ey" })] = true
+    assert(seen.key and seen[table.concat({ "ke", "y" }, "")])
+    assert(table.concat({ "x", 1, 2.5 }, " ") == "x 1 2.5")
+end
+
 local function sort_handles_long_ordered_ranges_test()
     for _, n in ipairs{ 1000, 3000 } do
         local desc, asc = {}, {}
