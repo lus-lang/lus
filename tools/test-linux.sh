@@ -22,7 +22,10 @@
 # host, so --arm registers it for the running VM first. The 32-bit ARM
 # binary also runs the suite under LUS_JIT_AOT=reload, which runs every
 # function from what the loader of code compiled ahead of time makes of
-# it, and a line in the log of that run counts as a failure. The VM is the
+# it, and a line in the log of that run counts as a failure. --arm also
+# builds the link object of 32-bit ARM. The whole of `lus` linked from it
+# runs the suite with the default tiers, and `lus build --aot` links
+# `tests/build/linked.lus` from it and checks the output. The VM is the
 # one LUS_LIMA_VM names, `boring` by default, and must be running.
 #
 # The aarch64 runs decide the exit status. qemu-user emulates the memory
@@ -84,6 +87,14 @@ for target in $extra; do
     wait_for_memory
     zig build -j1 -Doptimize=ReleaseSafe -Dtarget="$target" --prefix "zig-out-linux-${target%%-*}"
 done
+case "$extra" in
+    *arm-linux*)
+        wait_for_memory
+        zig build link-object -j1 -Doptimize=ReleaseSafe -Dtarget=arm-linux-musleabihf --prefix zig-out-linux-arm-lo
+        mkdir -p zig-out-linux-arm-linked/bin
+        zig-out-linux-arm-lo/bin/lus-link zig-out-linux-arm-lo/lib/lus.lo zig-out-linux-arm-linked/bin/lus
+        ;;
+esac
 
 # The trees the conformance suite and the language server tests read.
 stage="$(mktemp -d "${TMPDIR:-/tmp}/lus-linux.XXXXXX")"
@@ -132,7 +143,19 @@ case "$extra" in
 esac
 for target in $extra; do
     case "$target" in
-        arm-linux*) run_suite arm off default eager baseline opt-eager reload ;;
+        arm-linux*)
+            run_suite arm off default eager baseline opt-eager reload
+            echo "== arm, lus build --aot linked from the link object"
+            dir="lus-linux-arm-$checkout"
+            limactl shell "$vm" -- sh -c "cat > ~/$dir/lus-runtime.lo" < zig-out-linux-arm-lo/lib/lus-runtime.lo
+            want="$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+            got="$(limactl shell "$vm" -- sh -c "cd ~/$dir/tests/build && ../../runtime/zig-out/bin/lus build --aot --link-object ~/$dir/lus-runtime.lo linked.lus -o ~/$dir/linked >/dev/null && ~/$dir/linked" || true)"
+            if [ "$got" != "$want" ]; then
+                printf 'the linked executable printed:\n%s\n' "$got"
+                emulated_failed=1
+            fi
+            run_suite arm-linked default
+            ;;
         *) run_suite "${target%%-*}" off default eager baseline opt-eager ;;
     esac
 done

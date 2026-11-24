@@ -19,7 +19,17 @@ const Allocator = std.mem.Allocator;
 
 pub const magic = "LUSLINK\x02";
 
-pub const Arch = enum(u8) { x86_64, aarch64 };
+pub const Arch = enum(u8) {
+    x86_64,
+    aarch64,
+    /// 32-bit ARM, ARMv7-A in the ARM state with the hard-float ABI.
+    arm,
+
+    /// The size of an address on the architecture.
+    pub fn wordSize(a: Arch) u8 {
+        return if (a == .arm) 4 else 8;
+    }
+};
 
 /// The relocation types that only PE has, numbered past those of ELF: the
 /// address of a target from the start of the image, and its offset from
