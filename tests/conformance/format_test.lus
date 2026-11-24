@@ -475,3 +475,27 @@ local conversion_errors_at_their_edges_cases = {
 local function conversion_errors_at_their_edges_test(fmt, arg, pattern)
     raises(function() string.format(fmt, arg) end, pattern)
 end
+
+-- Plain and zero-padded integers write their digits on one path below
+-- 10^8 and on another above it, so every count of digits and every
+-- width up to 9 renders as the digits padded by hand do.
+local function zero_padded_integers_across_digit_counts_test()
+    local function padded(n, width)
+        local digits = tostring(n < 0 and -n or n)
+        local sign = n < 0 and "-" or ""
+        local fill = width - #sign - #digits
+        return sign .. string.rep("0", fill > 0 and fill or 0) .. digits
+    end
+    local p = 1
+    for _ = 0, 10 do
+        for _, n in ipairs({ p - 1, p, p + 7, -(p - 1), -p }) do
+            assert(string.format("%d", n) == tostring(n))
+            for width = 1, 9 do
+                assert(string.format(`%0$(width)d`, n) == padded(n, width))
+            end
+        end
+        p = p * 10
+    end
+    assert(string.format("%02d:%02d", 4, 30) == "04:30")
+    assert(string.format("%05d", math.mininteger) == tostring(math.mininteger))
+end
