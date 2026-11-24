@@ -239,6 +239,13 @@ pub const StringSet = struct {
         }
     }
 
+    /// Starts loading the slots a lookup of a string with hash `h`
+    /// reads first, so that several lookups wait for memory together.
+    pub inline fn prefetch(s: *const StringSet, h: u32) void {
+        if (s.slots.len == 0) return;
+        @prefetch(&s.slots[h & (s.slots.len - 1)], .{});
+    }
+
     noinline fn findFrom(s: *StringSet, b: []const u8, h: u32, start: usize) ?*String {
         const mask = s.slots.len - 1;
         var i = start;
@@ -1052,6 +1059,12 @@ pub const PatternProgram = struct {
         /// does, so a repetition ends at the next `stop`.
         scan: bool = false,
         stop: u8 = 0,
+        /// Set on a `single` op with '?', '*' or '+' when no byte of
+        /// `set` can start what follows it. A shorter repetition then
+        /// leaves a byte of `set` where the rest must start, so the
+        /// longest one is the only one that can match, and the runner
+        /// takes it without trying the others.
+        possessive: bool = false,
     };
     /// Patterns longer than the key are never compiled.
     key: [64]u8 = undefined,
@@ -1062,6 +1075,10 @@ pub const PatternProgram = struct {
     /// interpreter of the matcher.
     ok: bool = false,
     nops: u8 = 0,
+    /// Set when every repetition of the program is possessive, so an
+    /// attempt never goes back to try another way. Captures then open and
+    /// close in the loop of the runner, without a call to undo them.
+    linear: bool = false,
     ops: [max_ops]Op = undefined,
     text: [64]u8 = undefined,
 };

@@ -521,3 +521,25 @@ local function plain_find_at_every_offset_test()
     assert(("x"):find("", 2, true) == 2)
     assert(("x"):find("xy", 1, true) == nil)
 end
+
+-- A repetition that no byte of what follows can end takes its longest
+-- run at once. Lines that fail, captures after such repetitions, and
+-- repetitions that must give bytes back keep their results.
+local function repetitions_that_cannot_give_back_test()
+    local pattern = '^(%S+) %- %- %[[^%]]*%] "(%u+) /(%S*) HTTP/1%.1" (%d+) (%d+)$'
+    local ip, method, path, status, bytes = ('10.1.2.3 - - [x] "GET /a/b HTTP/1.1" 200 512'):match(pattern)
+    assert(ip == "10.1.2.3" and method == "GET" and path == "a/b" and status == "200" and bytes == "512")
+    assert(('10.1.2.3 - - [x] "GET /a/b HTTP/1.1" 200 512 extra'):match(pattern) == nil)
+    assert(('10.1.2.3 - - [x] "get /a/b HTTP/1.1" 200 512'):match(pattern) == nil)
+    assert(("12.5"):match("(%d+)%.(%d+)") == "12")
+    assert(select(2, ("12.5"):match("(%d+)%.(%d+)")) == "5")
+    assert(("123"):match("%d*%d") == "123" and ("aab"):match("%a+b") == "aab")
+    assert(("abab"):match("[ab]+b") == "abab" and ("x1"):match("%a?%d") == "x1")
+    local a, b = ("k=;"):match("(%a+)=(%d*);")
+    assert(a == "k" and b == "")
+    local s, e = ("  42 "):match("()%d+()%s")
+    assert(s == 3 and e == 5)
+    local words = {}
+    for w, n in ("ab1x cd x ef2x"):gmatch("(%a+)(%d?)x") do words[#words + 1] = w .. n end
+    assert(table.concat(words, ",") == "ab1,ef2")
+end

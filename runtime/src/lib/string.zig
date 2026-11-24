@@ -787,6 +787,10 @@ pub fn MatcherFor(comptime bytewise: bool) type {
                         if (m.level >= max_captures) return error.TooManyCaptures;
                         m.capture[m.level] = .{ .init = s, .len = if (op.kind == .open) cap_unfinished else cap_position };
                         m.level += 1;
+                        if (prog.linear) {
+                            pc += 1;
+                            continue;
+                        }
                         const r = try m.run(prog, s, pc + 1);
                         if (r == null) m.level -= 1;
                         return r;
@@ -794,6 +798,10 @@ pub fn MatcherFor(comptime bytewise: bool) type {
                     .close => {
                         const lv = try m.captureToClose();
                         m.capture[lv].len = @intCast(s - m.capture[lv].init);
+                        if (prog.linear) {
+                            pc += 1;
+                            continue;
+                        }
                         const r = try m.run(prog, s, pc + 1);
                         if (r == null) m.capture[lv].len = cap_unfinished;
                         return r;
@@ -812,6 +820,11 @@ pub fn MatcherFor(comptime bytewise: bool) type {
                                 continue;
                             }
                             return null;
+                        }
+                        if (op.possessive) {
+                            s = if (op.rep == '?') s + 1 else longest(op, src, s + 1);
+                            pc += 1;
+                            continue;
                         }
                         switch (op.rep) {
                             '?' => {
@@ -832,15 +845,17 @@ pub fn MatcherFor(comptime bytewise: bool) type {
             return s;
         }
 
+        /// The end of the longest run of bytes of the set of `op` from `s`.
+        inline fn longest(op: *const state.PatternProgram.Op, src: []const u8, s: usize) usize {
+            if (op.scan) return std.mem.indexOfScalarPos(u8, src, s, op.stop) orelse src.len;
+            var e = s;
+            while (e < src.len and inByteSet(op.set, src[e])) e += 1;
+            return e;
+        }
+
         fn runMax(m: *M, prog: *const state.PatternProgram, s: usize, pc: usize) PatternError!?usize {
             const op = &prog.ops[pc];
-            const src = m.src;
-            var e = s;
-            if (op.scan) {
-                e = std.mem.indexOfScalarPos(u8, src, s, op.stop) orelse src.len;
-            } else {
-                while (e < src.len and inByteSet(op.set, src[e])) e += 1;
-            }
+            var e = longest(op, m.src, s);
             while (true) {
                 if (try m.run(prog, e, pc + 1)) |r| return r;
                 if (e == s) return null;
@@ -1426,7 +1441,33 @@ fn compileProgram(pat: []const u8, start: usize, out: *state.PatternProgram) boo
         n += 1;
     }
     out.nops = @intCast(n);
+    for (out.ops[0..n], 0..) |*op, i| {
+        if (op.kind != .single or (op.rep != '?' and op.rep != '*' and op.rep != '+')) continue;
+        if (followSet(out, i + 1)) |follow| op.possessive = follow & op.set == 0;
+    }
+    out.linear = for (out.ops[0..n]) |op| {
+        if (op.kind == .single and op.rep != 0 and !op.possessive) break false;
+    } else true;
     return true;
+}
+
+/// The bytes that can start what the ops of `prog` from `pc` on match,
+/// or null when they do not settle them. Captures consume nothing, so
+/// the op after them decides. A program that ends, or reaches its final
+/// `$`, there leaves no byte to start anything, which the empty set
+/// stands for.
+fn followSet(prog: *const state.PatternProgram, pc: usize) ?u128 {
+    var j = pc;
+    while (j < prog.nops) : (j += 1) {
+        const op = &prog.ops[j];
+        switch (op.kind) {
+            .open, .open_position, .close => continue,
+            .end => return 0,
+            .literal => return @as(u128, 1) << @intCast(prog.text[op.from]),
+            .single => return if (op.rep == 0 or op.rep == '+') op.set else null,
+        }
+    }
+    return 0;
 }
 
 /// The compiled program of `pat` from byte `start`, through the cache of
@@ -1482,6 +1523,18 @@ fn pushCapture(l: *Thread, str: *String, m: anytype, i: usize, s: usize, e: usiz
 fn pushCaptures(l: *Thread, str: *String, m: anytype, s: ?usize, e: usize) Error!u32 {
     const n: usize = if (m.level == 0 and s != null) 1 else m.level;
     try l.ensure(n);
+    // Each short capture looks up the string table, and the slots of a
+    // large table are seldom in the cache. Loading them for every capture
+    // first lets those reads overlap.
+    if (n > 1) {
+        const src = str.bytes();
+        for (0..n) |i| {
+            const c = m.capture[i];
+            if (c.len < 2 or c.len > String.short_max) continue;
+            const b = src[c.init..][0..@intCast(c.len)];
+            l.g.strings.prefetch(object.hashBytes(l.g.seed, b));
+        }
+    }
     var i: usize = 0;
     while (i < n) : (i += 1) try pushCapture(l, str, m, i, s orelse 0, e);
     return @intCast(n);
@@ -1610,6 +1663,14 @@ const gm_pattern = 1;
 const gm_pos = 2; // byte offset of the next attempt
 const gm_char = 3; // character index of that offset
 const gm_last = 4; // end of the last match, or -1
+// The literal prefix of the pattern, as the byte range `gm_prefix` of
+// it packed into one integer, and the two halves of its first set, or
+// nil when the pattern has none. They depend on the pattern alone, so
+// `gmatch` finds them once for every step of the loop.
+const gm_prefix = 5;
+const gm_first_lo = 6;
+const gm_first_hi = 7;
+const gm_count = 8;
 
 fn gmatch(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);
@@ -1621,13 +1682,20 @@ fn gmatch(l: *Thread) Error!u32 {
         pos_b = charOffset(l, s, init_c);
         pos_c = init_c;
     }
-    const it = state.newNative(l.g, gmatchAux, null, 5) catch return l.raiseMem();
+    const pat = p.bytes();
+    const prefix = literalPrefix(pat, 0);
+    const from = @intFromPtr(prefix.ptr) - @intFromPtr(pat.ptr);
+    const first: ?u128 = if (bothAscii(s, p) and prefix.len == 0) firstSet(pat, 0) else null;
+    const it = state.newNative(l.g, gmatchAux, null, gm_count) catch return l.raiseMem();
     const ups = it.upvalues();
     ups[gm_subject] = Value.obj(.string, s);
     ups[gm_pattern] = Value.obj(.string, p);
     ups[gm_pos] = Value.int(@intCast(pos_b));
     ups[gm_char] = Value.int(@intCast(pos_c));
     ups[gm_last] = Value.int(-1);
+    ups[gm_prefix] = Value.int(@intCast((from << 32) | prefix.len));
+    ups[gm_first_lo] = if (first) |f| Value.int(@bitCast(@as(u64, @truncate(f)))) else .nil;
+    ups[gm_first_hi] = if (first) |f| Value.int(@bitCast(@as(u64, @truncate(f >> 64)))) else .nil;
     return aux.ret(l, Value.obj(.native, it));
 }
 
@@ -1644,8 +1712,12 @@ fn gmatchWith(comptime M: type, l: *Thread, ups: []Value, s: *String, p: *String
     const pat = p.bytes();
     var m = M.init(src, pat, s.flags().ascii);
     if (M == MatcherFor(true)) m.prog = programFor(l, pat, 0);
-    const prefix = literalPrefix(pat, 0);
-    const first: ?u128 = if (M == MatcherFor(true) and prefix.len == 0) firstSetCached(l, pat, 0) else null;
+    const packed_prefix: u64 = @bitCast(ups[gm_prefix].asInt());
+    const prefix = pat[@intCast(packed_prefix >> 32)..][0..@intCast(packed_prefix & 0xFFFF_FFFF)];
+    const first: ?u128 = if (M == MatcherFor(true) and !ups[gm_first_lo].isNil())
+        @as(u128, @as(u64, @bitCast(ups[gm_first_hi].asInt()))) << 64 | @as(u64, @bitCast(ups[gm_first_lo].asInt()))
+    else
+        null;
     var pos: usize = @intCast(ups[gm_pos].asInt());
     var c: usize = @intCast(ups[gm_char].asInt());
     const last = ups[gm_last].asInt();
@@ -2519,11 +2591,29 @@ test "compiled patterns agree with the interpreter" {
         "(.)%1",
         "",
         "^",
+        "%d+%.%d+",
+        "%d*%d",
+        "%a+%a",
+        "%a?b",
+        "%a?%d",
+        "(%w+)=(%w*);",
+        "%s*()$",
+        "[^,]*,[^,]*",
+        "%d+%s?%d+",
+        "x*()x",
+        "[ab]+b",
+        "%S+ %S+$",
+        "(%d+)%.(%d+)",
+        "(%a+)=(%d*);",
+        "((%a+) (%d+))$",
+        "()%d+()%s",
+        "(%a+)(%d?)x",
     };
     const srcs = [_][]const u8{
         "10.1.2.3 - - [20/Nov/2026:10:01:02 +0000] \"GET /api/v1/items/7 HTTP/1.1\" 200 512",
         "hello world 12-34 k=v_1 <a><b> abcab aab b",
         "x$y ^^a ]]] [z] .% (abc) help \n line two\n",
+        "12.5 3 4 a=1;b=;cc a,b,,c xxx abab 77 8",
         "",
     };
     for (pats) |pat| {
