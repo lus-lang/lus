@@ -1251,6 +1251,13 @@ noinline fn newShapedIn(g: *Global, narr: usize, nhash: usize, slot: usize, id: 
     return t;
 }
 
+/// A new table for a list of `narr` values of one unboxed kind, such as
+/// strings, which keeps one word per slot in its cell. A value of another
+/// kind stored later boxes the list as it would in any table.
+pub fn newWordListIn(g: *Global, narr: usize) Allocator.Error!*Table {
+    return newTableSlotsIn(g, narr, 0, @sizeOf(u64));
+}
+
 fn newTableSlotsIn(g: *Global, narr: usize, nhash: usize, slot: usize) Allocator.Error!*Table {
     if (g.dict_tables and narr == 0) return newDictIn(g, nhash);
     gc.maybeCollect(g);
