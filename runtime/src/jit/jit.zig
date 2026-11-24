@@ -50,6 +50,11 @@ pub const cc: std.builtin.CallingConvention = if (builtin.os.tag == .windows and
 else
     .c;
 
+/// The address in a 64-bit argument of a routine that `callWide` calls.
+pub inline fn fromWide(comptime P: type, w: u64) P {
+    return @ptrFromInt(@as(usize, @intCast(w)));
+}
+
 /// Whether the backend emits WebAssembly modules rather than machine code.
 pub const is_wasm = builtin.cpu.arch == .wasm32;
 

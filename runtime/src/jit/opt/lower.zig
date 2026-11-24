@@ -32,6 +32,9 @@ const Table = object.Table;
 const String = object.String;
 const Value = value.Value;
 const big_endian = @import("builtin").cpu.arch.endian() == .big;
+/// The width in memory of a pointer, a count, or another field the size
+/// of a pointer.
+const ptr_size: u8 = @sizeOf(usize);
 const Tag = value.Tag;
 const Ref = ir.Ref;
 const Ty = ir.Ty;
@@ -600,8 +603,8 @@ pub const Lower = struct {
         if (!fresh) b.clobber(cls);
         const st = try b.emit(.{ .op = .store, .size = size, .cls = cls, .a = base, .b = v, .imm = disp, .flags = .{ .fresh = fresh } });
         // A load of the same word yields the stored value.
-        if (size == 8) {
-            const probe: Inst = .{ .op = .load, .ty = b.tyOf(v), .size = 8, .cls = cls, .a = base, .imm = disp };
+        if (size == 8 or size == ptr_size) {
+            const probe: Inst = .{ .op = .load, .ty = b.tyOf(v), .size = size, .cls = cls, .a = base, .imm = disp };
             try b.cse.put(b.arena, b.keyOf(&probe), v);
         }
         return st;
@@ -1756,7 +1759,7 @@ pub const Lower = struct {
             },
             .table => {
                 const t = try b.typed(rb, .table);
-                const m = try b.load(t, tl.metatable, .int, 8, .tab_meta, ir.none);
+                const m = try b.load(t, tl.metatable, .int, ptr_size, .tab_meta, ir.none);
                 _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = m, .imm = 0 });
                 // The border search reads the array part and keeps a
                 // hint in the table.
@@ -1780,8 +1783,8 @@ pub const Lower = struct {
     /// The address that upvalue `i` keeps its value at, and the upvalue.
     fn upvalLoc(b: *Lower, i: u32) Error!struct { loc: Ref, uv: Ref } {
         const cl = try b.closureRef();
-        const uv = try b.load(cl, @intCast(@sizeOf(Closure) + i * @sizeOf(usize)), .int, 8, .closure_up, ir.none);
-        const loc = try b.load(uv, @offsetOf(object.Upvalue, "loc"), .int, 8, .upval_loc, ir.none);
+        const uv = try b.load(cl, @intCast(@sizeOf(Closure) + i * @sizeOf(usize)), .int, ptr_size, .closure_up, ir.none);
+        const loc = try b.load(uv, @offsetOf(object.Upvalue, "loc"), .int, ptr_size, .upval_loc, ir.none);
         return .{ .loc = loc, .uv = uv };
     }
 
@@ -1843,9 +1846,9 @@ pub const Lower = struct {
         if ((b.guess(r, 0) orelse return null) != .userdata) return null;
         const so = try b.typed(r, .userdata);
         const th = try b.threadRef();
-        const g = try b.load(th, @offsetOf(Thread, "g"), .int, 8, .fixed, ir.none);
-        const want = try b.load(g, @offsetOf(state.Global, "ctx") + @offsetOf(context.Store, "slot_mt"), .int, 8, .fixed, ir.none);
-        const mt = try b.load(so, @offsetOf(object.Userdata, "metatable"), .int, 8, .tab_meta, ir.none);
+        const g = try b.load(th, @offsetOf(Thread, "g"), .int, ptr_size, .fixed, ir.none);
+        const want = try b.load(g, @offsetOf(state.Global, "ctx") + @offsetOf(context.Store, "slot_mt"), .int, ptr_size, .fixed, ir.none);
+        const mt = try b.load(so, @offsetOf(object.Userdata, "metatable"), .int, ptr_size, .tab_meta, ir.none);
         const ok = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.eq), .a = mt, .b = want });
         const slot = try b.load(so, @sizeOf(object.Userdata), .int, 4, .fixed, ok);
         return .{ .slot = slot, .n = @as(*const u32, @ptrCast(@alignCast(u.data()))).* };
@@ -1871,7 +1874,7 @@ pub const Lower = struct {
         const cs = (try b.ctxSlot(rb)) orelse return false;
         const l = b.l;
         const th = try b.threadRef();
-        const arr = try b.load(th, @offsetOf(Thread, "ctx"), .int, 8, .ctx, ir.none);
+        const arr = try b.load(th, @offsetOf(Thread, "ctx"), .int, ptr_size, .ctx, ir.none);
         var vals: Ref = undefined;
         var dep: Ref = undefined;
         var sample: Value = undefined;
@@ -1879,17 +1882,17 @@ pub const Lower = struct {
             if (cs.n >= a.vals.len) return false;
             const lay = sliceLayout(context.Array, "vals");
             const present = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = arr, .imm = 0 });
-            const len = try b.load(arr, lay.len, .int, 8, .ctx, present);
+            const len = try b.load(arr, lay.len, .int, ptr_size, .ctx, present);
             dep = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.lo), .a = cs.slot, .b = len });
-            vals = try b.load(arr, lay.ptr, .int, 8, .ctx, dep);
+            vals = try b.load(arr, lay.ptr, .int, ptr_size, .ctx, dep);
             sample = a.vals[cs.n];
         } else {
             if (cs.n >= l.g.ctx.defaults.items.len) return false;
             dep = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = arr, .imm = 0 });
-            const g = try b.load(th, @offsetOf(Thread, "g"), .int, 8, .fixed, ir.none);
+            const g = try b.load(th, @offsetOf(Thread, "g"), .int, ptr_size, .fixed, ir.none);
             const lay = sliceLayout(std.ArrayList(Value), "items");
             const at: i32 = @offsetOf(state.Global, "ctx") + @offsetOf(context.Store, "defaults") + lay.ptr;
-            vals = try b.load(g, at, .int, 8, .ctx, dep);
+            vals = try b.load(g, at, .int, ptr_size, .ctx, dep);
             sample = l.g.ctx.defaults.items[cs.n];
         }
         const at = try b.pure(.{ .op = .addsh, .ty = .int, .a = vals, .b = cs.slot, .imm = 4 });
@@ -1908,14 +1911,14 @@ pub const Lower = struct {
         const cs = (try b.ctxSlot(ra)) orelse return false;
         if (cs.n >= a.vals.len) return false;
         const th = try b.threadRef();
-        const arr = try b.load(th, @offsetOf(Thread, "ctx"), .int, 8, .ctx, ir.none);
+        const arr = try b.load(th, @offsetOf(Thread, "ctx"), .int, ptr_size, .ctx, ir.none);
         const lay = sliceLayout(context.Array, "vals");
         const present = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = arr, .imm = 0 });
         const refs = try b.load(arr, @offsetOf(context.Array, "refs"), .int, 4, .ctx, present);
         const alone = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = refs, .imm = 1 });
-        const len = try b.load(arr, lay.len, .int, 8, .ctx, alone);
+        const len = try b.load(arr, lay.len, .int, ptr_size, .ctx, alone);
         const inside = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.lo), .a = cs.slot, .b = len });
-        const vals = try b.load(arr, lay.ptr, .int, 8, .ctx, inside);
+        const vals = try b.load(arr, lay.ptr, .int, ptr_size, .ctx, inside);
         const at = try b.pure(.{ .op = .addsh, .ty = .int, .a = vals, .b = cs.slot, .imm = 4 });
         try b.storeValue(at, 0, v, .ctx, false);
         return true;
@@ -1982,7 +1985,7 @@ pub const Lower = struct {
     fn hashNode(b: *Lower, t: Ref, idx: usize, key_str: *String) Error!Node {
         const len = try b.load(t, b.hash_len, .int, 4, .tab_hash, ir.none);
         const g = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.hi), .a = len, .imm = @intCast(idx) });
-        const hp = try b.load(t, b.hash_ptr, .int, 8, .tab_hash, ir.none);
+        const hp = try b.load(t, b.hash_ptr, .int, ptr_size, .tab_hash, ir.none);
         const off: i32 = @intCast(idx << tl.node_shift);
         const k = try b.load(hp, off + tl.node_key, .int, 8, .node_key, g);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = k, .imm = @bitCast(@as(u64, @intFromPtr(key_str))), .c = g });
@@ -2009,7 +2012,7 @@ pub const Lower = struct {
         const len = try b.load(t, b.hash_len, .int, 4, .tab_hash, ir.none);
         const g = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = len, .imm = @intCast(st.hash_len) });
         if (st.hash_len == 0) return true;
-        const hp = try b.load(t, b.hash_ptr, .int, 8, .tab_hash, ir.none);
+        const hp = try b.load(t, b.hash_ptr, .int, ptr_size, .tab_hash, ir.none);
         const mask = st.hash_len - 1;
         var i: usize = key_str.hash & mask;
         // A hash part may hold a key in every node, so the walk visits
@@ -2049,7 +2052,7 @@ pub const Lower = struct {
     /// The slot `idx` of the shaped table `t`, whose shape is guarded by
     /// `dep`: its payload is at `off` and its tag at `tags` from `hp`.
     fn shapedSlot(b: *Lower, t: Ref, idx: usize, dep: Ref) Error!Node {
-        const hp = try b.load(t, b.hash_ptr, .int, 8, .tab_hash, dep);
+        const hp = try b.load(t, b.hash_ptr, .int, ptr_size, .tab_hash, dep);
         const i: i32 = @intCast(idx);
         return .{ .hp = hp, .off = i * 8 - tl.node_val, .tags = tl.slot_tag - i - tl.tag_val, .dep = dep };
     }
@@ -2067,12 +2070,12 @@ pub const Lower = struct {
                 return .{ .ref = try b.loadValueAt(n.hp, n.val(), n.valTag(), v, .node_val, n.dep), .sample = Sample.of(v) };
             }
             const mt0 = st.metatable orelse {
-                const m = try b.load(t, tl.metatable, .int, 8, .tab_meta, ir.none);
+                const m = try b.load(t, tl.metatable, .int, ptr_size, .tab_meta, ir.none);
                 _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = m, .imm = 0 });
                 return .{ .ref = try b.knil(), .sample = Sample.of(.nil) };
             };
             if (!b.reachable(mt0, key_str)) return null;
-            const m = try b.load(t, tl.metatable, .table, 8, .tab_meta, ir.none);
+            const m = try b.load(t, tl.metatable, .table, ptr_size, .tab_meta, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
             return b.viaMetatable(m, mt0, key_str);
         }
@@ -2085,13 +2088,13 @@ pub const Lower = struct {
         // The key is absent, so the metatable decides.
         const mt = st.metatable orelse {
             if (!try b.absent(t, st, key_str)) return null;
-            const m = try b.load(t, tl.metatable, .int, 8, .tab_meta, ir.none);
+            const m = try b.load(t, tl.metatable, .int, ptr_size, .tab_meta, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = m, .imm = 0 });
             return .{ .ref = try b.knil(), .sample = Sample.of(.nil) };
         };
         if (!b.reachable(mt, key_str)) return null;
         if (!try b.absent(t, st, key_str)) return null;
-        const m = try b.load(t, tl.metatable, .table, 8, .tab_meta, ir.none);
+        const m = try b.load(t, tl.metatable, .table, ptr_size, .tab_meta, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
         return b.viaMetatable(m, mt, key_str);
     }
@@ -2178,7 +2181,7 @@ pub const Lower = struct {
         if (v2.isNil()) return false;
         const sv = try b.typed(rb, .string);
         const recv_sample = b.fr.regs[rb].sample;
-        const m = try b.load(try b.kint(@bitCast(@as(u64, @intFromPtr(slot_ptr)))), 0, .table, 8, .tab_meta, ir.none);
+        const m = try b.load(try b.kint(@bitCast(@as(u64, @intFromPtr(slot_ptr)))), 0, .table, ptr_size, .tab_meta, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
         const n1 = (try b.keyNode(m, mt, index_name)) orelse return false;
         const hv = try b.loadValueAt(n1.hp, n1.val(), n1.valTag(), h, .node_val, n1.dep);
@@ -2201,10 +2204,10 @@ pub const Lower = struct {
         const ro = try b.load(t.ref, tl.readonly, .int, 1, .tab_meta, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = ro, .imm = 0 });
         if (st.metatable == null) {
-            const m = try b.load(t.ref, tl.metatable, .int, 8, .tab_meta, ir.none);
+            const m = try b.load(t.ref, tl.metatable, .int, ptr_size, .tab_meta, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = m, .imm = 0 });
         } else {
-            const m = try b.load(t.ref, tl.metatable, .table, 8, .tab_meta, ir.none);
+            const m = try b.load(t.ref, tl.metatable, .table, ptr_size, .tab_meta, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
             _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = m, .imm = tl.tm_absent + il.absent_newindex / 8, .aux = @as(u64, il.absent_newindex % 8) | (1 << 8) });
         }
@@ -2286,7 +2289,7 @@ pub const Lower = struct {
         const c = (g.shapes.transition(g.gpa, sh, key_str, g) catch return false) orelse return false;
         if (!try b.rawStore(t)) return false;
         const sg = try b.shapeGuard(t.ref, t.sample);
-        const hp = try b.load(t.ref, b.hash_ptr, .int, 8, .tab_hash, sg);
+        const hp = try b.load(t.ref, b.hash_ptr, .int, ptr_size, .tab_hash, sg);
         const cap = try b.load(hp, -1, .int, 1, .tab_hash, sg);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.hi), .a = cap, .imm = sh.n, .c = sg });
         _ = try b.store(t.ref, tl.hash_used, try b.kint(Table.shaped_bit | @as(u32, c.id)), 4, .tab_hash, false);
@@ -2465,7 +2468,7 @@ pub const Lower = struct {
         }
         const kind = try b.load(t.ref, tl.kind, .int, 1, .tab_array, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = kind, .imm = @backingInt(st.kind) });
-        const ap = try b.load(t.ref, tl.array_ptr, .int, 8, .tab_array, ir.none);
+        const ap = try b.load(t.ref, tl.array_ptr, .int, ptr_size, .tab_array, ir.none);
         return .{ .t = t, .zi = zi, .ap = ap, .dep = dep, .kind = st.kind, .at = at };
     }
 
@@ -2556,7 +2559,7 @@ pub const Lower = struct {
             const bits = try b.storeBits(st.kind, v);
             const asize = try b.load(t.ref, tl.asize, .int, 4, .tab_array, ir.none);
             const zi = try b.pure(.{ .op = .addi, .ty = .int, .a = key_ref, .imm = -1 });
-            const ap = try b.load(t.ref, tl.array_ptr, .int, 8, .tab_array, ir.none);
+            const ap = try b.load(t.ref, tl.array_ptr, .int, ptr_size, .tab_array, ir.none);
             const fast = try b.f.newBlock();
             const slow = try b.f.newBlock();
             for ([_]BlockId{ fast, slow }) |x| {
@@ -2887,7 +2890,7 @@ pub const Lower = struct {
         }
         try b.guardNative(ra, ipairs_fn);
         const t = try b.typed(ra + 1, .table);
-        const m = try b.load(t, tl.metatable, .int, 8, .tab_meta, ir.none);
+        const m = try b.load(t, tl.metatable, .int, ptr_size, .tab_meta, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = m, .imm = 0 });
         const kind = try b.load(t, tl.kind, .int, 1, .tab_array, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = kind, .imm = @backingInt(st.kind) });
@@ -2920,7 +2923,7 @@ pub const Lower = struct {
         // Inside it: the slot, and a nil there ends the loop.
         b.cur = inb;
         b.cse.clearRetainingCapacity();
-        const ap = try b.load(t, tl.array_ptr, .int, 8, .tab_array, ir.none);
+        const ap = try b.load(t, tl.array_ptr, .int, ptr_size, .tab_array, ir.none);
         var empty: Ref = undefined;
         var word: Ref = ir.none;
         var ea: Ref = ir.none;
@@ -3170,7 +3173,7 @@ pub const Lower = struct {
                 fz.nodes[i] = @intCast(i);
             }
             if (v.mt != ir.none) {
-                _ = try b.store(t, tl.metatable, v.mt, 8, .tab_meta, true);
+                _ = try b.store(t, tl.metatable, v.mt, ptr_size, .tab_meta, true);
                 _ = try b.emit(.{ .op = .barrier, .a = t, .aux = 1 });
             }
             var it: ?*Frame = b.fr;
@@ -3207,7 +3210,7 @@ pub const Lower = struct {
         }
         if (v.used != 0) _ = try b.emit(.{ .op = .store, .size = 4, .cls = .tab_hash, .a = t, .b = try b.kint(v.used), .imm = tl.hash_used, .flags = .{ .fresh = true } });
         if (v.mt != ir.none) {
-            _ = try b.store(t, tl.metatable, v.mt, 8, .tab_meta, true);
+            _ = try b.store(t, tl.metatable, v.mt, ptr_size, .tab_meta, true);
             _ = try b.emit(.{ .op = .barrier, .a = t, .aux = 1 });
         }
         var it: ?*Frame = b.fr;
@@ -3476,13 +3479,13 @@ pub const Lower = struct {
         if (self and b.root.closure_sample == cl) {
             _ = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.eq), .a = cv, .b = b.root.closure });
         } else {
-            const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, 8, .fixed, ir.none);
+            const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, ptr_size, .fixed, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))) });
         }
         if (unit) |u| {
             // Code that was retired takes no new calls.
             const cell = try b.kptr(.int, @intFromPtr(&u.cell));
-            const live = try b.load(cell, 0, .int, 8, .code, ir.none);
+            const live = try b.load(cell, 0, .int, ptr_size, .code, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = live, .imm = 0 });
         }
         var args: [ir.max_direct_params]Ref = @splat(ir.none);
@@ -3603,7 +3606,7 @@ pub const Lower = struct {
                 const p = cl.proto;
                 if (!b.inlinable(p)) return error.Unsupported;
                 const cv = try b.typed(ra, .closure);
-                const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, 8, .fixed, ir.none);
+                const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, ptr_size, .fixed, ir.none);
                 _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))) });
                 const fl = try Flow.init(b.arena, p);
                 const cfg = Cfg.init(b.arena, fl, 0, false) catch return error.Unsupported;
@@ -3716,7 +3719,7 @@ pub const Lower = struct {
         const call_pc = b.pc;
         const outer = parent.parent == null;
         const cv = try b.typed(ra, .closure);
-        const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, 8, .fixed, ir.none);
+        const pr = try b.load(cv, @offsetOf(Closure, "proto"), .int, ptr_size, .fixed, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = pr, .imm = @bitCast(@as(u64, @intFromPtr(p))) });
         b.inlineBody(ra, nargs, want, cl, cv) catch |e| switch (e) {
             error.Unsupported => {
@@ -3900,7 +3903,7 @@ pub const Lower = struct {
         @memcpy(b.fr.regs, before);
         try b.setVobjs(before_vobjs);
         b.clobberAll();
-        const ap = try b.load(t.ref, tl.array_ptr, .int, 8, .tab_array, ir.none);
+        const ap = try b.load(t.ref, tl.array_ptr, .int, ptr_size, .tab_array, ir.none);
         try b.elemStore(st.kind, t.ref, ap, zi, v, bits);
         b.clobber(.tab_array);
         const fast_inc = try b.incomingOf(b.cur);
@@ -3919,7 +3922,7 @@ pub const Lower = struct {
     /// Guards that register `ra` holds the native function `f`.
     fn guardNative(b: *Lower, ra: u32, f: state.NativeFn) Error!void {
         const nv = try b.typed(ra, .native);
-        const fp = try b.load(nv, @offsetOf(state.Native, "func"), .int, 8, .fixed, ir.none);
+        const fp = try b.load(nv, @offsetOf(state.Native, "func"), .int, ptr_size, .fixed, ir.none);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = fp, .imm = @bitCast(@as(u64, @intFromPtr(f))) });
     }
 
@@ -3980,14 +3983,14 @@ pub const Lower = struct {
             const mt = try b.typed(a1 + 1, .table);
             // A table with a metatable may protect it, and a read-only
             // table keeps the metatable it has.
-            const old = try b.load(t, tl.metatable, .int, 8, .tab_meta, ir.none);
+            const old = try b.load(t, tl.metatable, .int, ptr_size, .tab_meta, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = old, .imm = 0 });
             const ro = try b.load(t, tl.readonly, .int, 1, .tab_meta, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = ro, .imm = 0 });
             const bit: u8 = @backingInt(state.TM.gc);
             _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + bit / 8, .aux = @as(u64, bit % 8) | (1 << 8) });
             const is_fresh = if (b.fresh) |fz| fz.ref == t else false;
-            _ = try b.store(t, tl.metatable, mt, 8, .tab_meta, is_fresh);
+            _ = try b.store(t, tl.metatable, mt, ptr_size, .tab_meta, is_fresh);
             _ = try b.emit(.{ .op = .barrier, .a = t, .aux = 1 });
             if (b.fresh) |*fz| {
                 if (fz.ref == t) fz.metatable = true;

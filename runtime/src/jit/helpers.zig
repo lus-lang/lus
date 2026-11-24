@@ -112,14 +112,16 @@ pub fn setStr(l: *Thread, t: *const Value, key: *const Value, ic: *IcEntry, v: *
     return @intFromBool(!interp.fast.setStr(l, ic, t, key, v));
 }
 
-/// out = tab[i] for an integer key.
-pub fn getArray(tab: *object.Table, i: i64, out: *Value) callconv(jit.cc) usize {
-    return @intFromBool(!interp.fast.getArray(tab, i, out));
+/// out = tab[i] for an integer key. This routine and `setArray` take and
+/// return 64-bit integers only, and native code calls them with
+/// `callWide`.
+pub fn getArray(tab: u64, i: i64, out: u64) callconv(jit.cc) u64 {
+    return @intFromBool(!interp.fast.getArray(jit.fromWide(*object.Table, tab), i, jit.fromWide(*Value, out)));
 }
 
 /// tab[i] = v for an integer key.
-pub fn setArray(l: *Thread, tab: *object.Table, i: i64, v: *const Value) callconv(jit.cc) usize {
-    return @intFromBool(!interp.fast.setArray(l, tab, i, v));
+pub fn setArray(l: u64, tab: u64, i: i64, v: u64) callconv(jit.cc) u64 {
+    return @intFromBool(!interp.fast.setArray(jit.fromWide(*Thread, l), jit.fromWide(*object.Table, tab), i, jit.fromWide(*const Value, v)));
 }
 
 pub fn getIndex(t: *const Value, i: usize, out: *Value) callconv(jit.cc) usize {

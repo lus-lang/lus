@@ -1044,7 +1044,9 @@ pub const rt = struct {
         l.top = saved;
     }
 
-    pub fn barrierTable(l: *Thread, tab: *Table, payload: u64, tag: u64, key: usize) callconv(jit.cc) void {
+    /// The barrier needs only a collectable value, whose payload is an
+    /// address, so the payload travels as a word.
+    pub fn barrierTable(l: *Thread, tab: *Table, payload: usize, tag: usize, key: usize) callconv(jit.cc) void {
         const v = Value.make(payload, @fromBackingInt(@as(u8, @truncate(tag))));
         const k: Value = if (key != 0) Value.make(key, .string) else .nil;
         gc.barrierTable(l.g, tab, k, v);
@@ -1109,21 +1111,26 @@ pub const rt = struct {
         return t;
     }
 
-    pub fn tableLength(t: *Table) callconv(jit.cc) i64 {
-        return table.length(t);
+    // The routines that `callc` reaches take and return 64-bit integers
+    // only, and native code calls them with `callWide`.
+
+    pub fn tableLength(t: u64) callconv(jit.cc) i64 {
+        return table.length(jit.fromWide(*Table, t));
     }
 
     /// Whether a table without a metatable has no value at the integer
     /// key `k`, which lies past its array part.
-    pub fn intKeyAbsent(t: *Table, k: i64) callconv(jit.cc) i64 {
-        return @intFromBool(table.getInt(t, k).isNil());
+    pub fn intKeyAbsent(t: u64, k: i64) callconv(jit.cc) i64 {
+        return @intFromBool(table.getInt(jit.fromWide(*Table, t), k).isNil());
     }
 
     /// `table.insert(t, v)` on a table without a metatable whose array
     /// part is full: grows the array part and stores the value made of
     /// `payload` and `tag` after it. Returns 1 and changes nothing when the
     /// table needs the general path. The collector never runs here.
-    pub fn tableAppend(l: *Thread, t: *Table, payload: u64, tag: u64) callconv(jit.cc) i64 {
+    pub fn tableAppend(lw: u64, tw: u64, payload: u64, tag: u64) callconv(jit.cc) i64 {
+        const l = jit.fromWide(*Thread, lw);
+        const t = jit.fromWide(*Table, tw);
         const v = Value.make(payload, @fromBackingInt(@as(u8, @truncate(tag))));
         const ok = table.appendArray(l.g.gpa, t, v) catch return 1;
         if (!ok) return 1;
@@ -1141,7 +1148,9 @@ pub const rt = struct {
 
     /// The code point of character `i` of `s`, as `string.byte(s, i)`
     /// returns it, or minus one for a position outside the string.
-    pub fn stringByte(l: *Thread, s: *object.String, i: i64) callconv(jit.cc) i64 {
+    pub fn stringByte(lw: u64, sw: u64, i: i64) callconv(jit.cc) i64 {
+        const l = jit.fromWide(*Thread, lw);
+        const s = jit.fromWide(*object.String, sw);
         const n: i64 = s.chars();
         const pos: i64 = if (i > 0) i else if (i == 0 or i < -n) 1 else n + i + 1;
         // The end position is the start position, clipped like the

@@ -507,6 +507,20 @@ pub const Assembler = struct {
     pub fn store64(a: *Assembler, src: Reg, m: Mem) void {
         a.store(3, src.n(), m, op_store);
     }
+
+    // Words the size of a pointer, such as a pointer, a count, or a stack
+    // index, which are 64 bits on this target (spec/design/platforms.md,
+    // "32-bit ARM").
+    pub const loadWord = load64;
+    pub const storeWord = store64;
+    pub const storePairWord = storePair64;
+    pub const storeImmWord = storeImm64;
+    pub const jumpIfMemWord = jumpIfMem;
+    /// A call of a routine whose arguments and result are all 64-bit
+    /// integers, which on a 64-bit target is a plain call.
+    pub const callWide = call;
+    pub const callWideReloc = callReloc;
+
     /// Loads 32 bits, zero-extended.
     pub fn load32(a: *Assembler, dst: Reg, m: Mem) void {
         a.load(6, dst.n(), m, op_load);

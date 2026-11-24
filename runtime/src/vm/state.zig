@@ -495,6 +495,9 @@ pub const Frame = extern struct {
     /// On the frame of a native, nonzero once the call waited with a
     /// deadline that its scheduler record still holds (`sched.waitIo`).
     wait_mark: usize = 0,
+    /// Pads a frame of 32-bit ARM, whose words are 4 bytes, to the 64
+    /// bytes of a frame on the other targets with a JIT.
+    pad: [if (@import("builtin").cpu.arch == .arm) 16 else 0]u8 = @splat(0),
 
     /// The word that holds the flags and the finish action, as a lean
     /// frame has it.
@@ -555,10 +558,10 @@ pub const Frame = extern struct {
 
     comptime {
         std.debug.assert(@offsetOf(Finish.Packed, "kind") == 0);
-        // Native code exists only on 64-bit targets.
+        // The frame of every target with native code is 64 bytes.
+        if (@sizeOf(usize) == 8 or @import("builtin").cpu.arch == .arm) std.debug.assert(@sizeOf(Frame) == 64);
         if (@sizeOf(usize) == 8) {
             const assert = std.debug.assert;
-            assert(@sizeOf(Frame) == 64);
             // The pairs and words that a lean call stores at once.
             assert(@offsetOf(Frame, "native") == @offsetOf(Frame, "closure") + 8);
             assert(@offsetOf(Frame, "base") == @offsetOf(Frame, "func") + 4);

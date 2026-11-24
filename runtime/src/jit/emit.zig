@@ -411,7 +411,7 @@ pub const Emitter = struct {
     /// bp = stack + base * 16. Runs after anything that may have moved
     /// the stack or changed the frame.
     pub fn reloadBp(e: *Emitter) void {
-        e.a.load64(A.bp, .{ .base = A.thread, .disp = e.lay.stack_ptr });
+        e.a.loadWord(A.bp, .{ .base = A.thread, .disp = e.lay.stack_ptr });
         e.a.addScaled(A.bp, A.bp, A.base, 4);
     }
 
@@ -702,8 +702,8 @@ pub const Emitter = struct {
                 if (off < 0) {
                     // A backward jump is a safe point for finalizers,
                     // which the step routine runs.
-                    a.load64(A.t0, .{ .base = A.thread, .disp = e.lay.global });
-                    a.load64(A.t0, .{ .base = A.t0, .disp = e.lay.pending });
+                    a.loadWord(A.t0, .{ .base = A.thread, .disp = e.lay.global });
+                    a.loadWord(A.t0, .{ .base = A.t0, .disp = e.lay.pending });
                     a.jumpIfImm(.ne, A.t0, 0, e.coldStep(pc));
                     e.countLoop(pc, target);
                 }
@@ -769,8 +769,8 @@ pub const Emitter = struct {
                 const done = a.newLabel();
                 a.jumpIfByte(.ne, tagOf(ra), tag_closure, e.addCold(pc, .native_call, done));
                 a.load64(A.t0, slot(ra));
-                a.load64(A.t1, .{ .base = A.t0, .disp = @offsetOf(object.Closure, "proto") });
-                a.load64(A.t2, .{ .base = A.t1, .disp = @offsetOf(Proto, "jit_entry") });
+                a.loadWord(A.t1, .{ .base = A.t0, .disp = @offsetOf(object.Closure, "proto") });
+                a.loadWord(A.t2, .{ .base = A.t1, .disp = @offsetOf(Proto, "jit_entry") });
                 a.jumpIfImm(.eq, A.t2, 0, slow);
                 a.movImm(A.t3, pc + 1);
                 a.lea(A.t4, .{ .base = A.base, .disp = @intCast(ra + 1) });
@@ -819,13 +819,13 @@ pub const Emitter = struct {
                 // A native function is called and its results returned.
                 a.jumpIfByte(.ne, tagOf(ra), tag_closure, e.addCold(pc, .native_tail, 0));
                 a.load64(A.t0, slot(ra));
-                a.load64(A.t1, .{ .base = A.t0, .disp = @offsetOf(object.Closure, "proto") });
-                a.load64(A.t2, .{ .base = A.t1, .disp = @offsetOf(Proto, "jit_tail") });
+                a.loadWord(A.t1, .{ .base = A.t0, .disp = @offsetOf(object.Closure, "proto") });
+                a.loadWord(A.t2, .{ .base = A.t1, .disp = @offsetOf(Proto, "jit_tail") });
                 a.jumpIfImm(.eq, A.t2, 0, helper);
                 if (e.captures) {
                     // The helper closes the upvalues of this frame.
                     const none = a.newLabel();
-                    a.load64(A.t1, .{ .base = A.thread, .disp = @offsetOf(Thread, "open_upvals") });
+                    a.loadWord(A.t1, .{ .base = A.thread, .disp = @offsetOf(Thread, "open_upvals") });
                     a.jumpIfImm(.eq, A.t1, 0, none);
                     a.load32(A.t1, .{ .base = A.t1, .disp = @offsetOf(object.Upvalue, "level") });
                     a.jumpIf(.hs, A.t1, A.base, helper);
@@ -881,28 +881,28 @@ pub const Emitter = struct {
             a.jumpIfZero32(A.t2, true, fail);
         }
         e.call_entry_plain = a.offset();
-        a.load64(A.t1, .{ .base = thread, .disp = lay.global });
-        a.load64(A.t1, .{ .base = A.t1, .disp = lay.pending });
+        a.loadWord(A.t1, .{ .base = thread, .disp = lay.global });
+        a.loadWord(A.t1, .{ .base = A.t1, .disp = lay.pending });
         a.jumpIfImm(.ne, A.t1, 0, fail);
-        a.load64(A.t1, .{ .base = thread, .disp = lay.frames_len });
-        a.jumpIfMem(.eq, A.t1, .{ .base = thread, .disp = lay.frames_cap }, fail);
+        a.loadWord(A.t1, .{ .base = thread, .disp = lay.frames_len });
+        a.jumpIfMemWord(.eq, A.t1, .{ .base = thread, .disp = lay.frames_cap }, fail);
         a.mov(A.t2, A.t4);
         a.add(A.t2, A.t6);
         a.addImm(A.t2, max_stack + 8);
-        a.jumpIfMem(.hi, A.t2, .{ .base = thread, .disp = lay.stack_len }, fail);
+        a.jumpIfMemWord(.hi, A.t2, .{ .base = thread, .disp = lay.stack_len }, fail);
 
         // Nothing fails from here on.
         // t2 = the new frame, one past the caller's.
-        a.load64(A.t2, .{ .base = thread, .disp = lay.frames_ptr });
+        a.loadWord(A.t2, .{ .base = thread, .disp = lay.frames_ptr });
         a.addScaled(A.t2, A.t2, A.t1, frame_shift);
         a.addImm(A.t1, 1);
-        a.store64(A.t1, .{ .base = thread, .disp = lay.frames_len });
+        a.storeWord(A.t1, .{ .base = thread, .disp = lay.frames_len });
         a.store32(A.t3, .{ .base = A.t2, .disp = frameField("pc") - frame_size });
         const zero: A.Reg = A.Assembler.zero_reg orelse blk: {
             a.movImm(A.t3, 0);
             break :blk A.t3;
         };
-        a.storePair64(A.t0, zero, .{ .base = A.t2, .disp = frameField("closure") });
+        a.storePairWord(A.t0, zero, .{ .base = A.t2, .disp = frameField("closure") });
         a.store64(zero, .{ .base = A.t2, .disp = frameField("pc") });
         // The function value sits below the base, and the result goes
         // there.
@@ -913,7 +913,7 @@ pub const Emitter = struct {
         // The caller continues after the jump that follows its call.
         a.linkPastJump(A.t3);
         a.dropLink();
-        a.store64(A.t3, .{ .base = A.t2, .disp = frameField("resume_at") });
+        a.storeWord(A.t3, .{ .base = A.t2, .disp = frameField("resume_at") });
         a.addImm(A.t1, 1 + max_stack);
         a.store32(A.t1, .{ .base = thread, .disp = @offsetOf(Thread, "top") });
         a.mov(A.base, A.t4);
@@ -982,18 +982,18 @@ pub const Emitter = struct {
         const loop = a.newLabel();
         e.tail_entry = a.offset();
         // t1 = the end of the running frame, t2 = its return slot.
-        a.load64(A.t1, .{ .base = thread, .disp = lay.frames_len });
-        a.load64(A.t2, .{ .base = thread, .disp = lay.frames_ptr });
+        a.loadWord(A.t1, .{ .base = thread, .disp = lay.frames_len });
+        a.loadWord(A.t2, .{ .base = thread, .disp = lay.frames_ptr });
         a.addScaled(A.t1, A.t2, A.t1, frame_shift);
         a.load32(A.t2, .{ .base = A.t1, .disp = frameField("ret") - frame_size });
         a.mov(A.t3, A.t2);
         a.add(A.t3, A.t6);
         a.addImm(A.t3, max_stack + 9);
-        a.jumpIfMem(.hi, A.t3, .{ .base = thread, .disp = lay.stack_len }, fail);
+        a.jumpIfMemWord(.hi, A.t3, .{ .base = thread, .disp = lay.stack_len }, fail);
 
         // Nothing fails from here on.
         a.dropLink();
-        a.load64(A.t3, .{ .base = thread, .disp = lay.stack_ptr });
+        a.loadWord(A.t3, .{ .base = thread, .disp = lay.stack_ptr });
         a.addScaled(A.t3, A.t3, A.t2, 4);
         a.mov(A.t5, A.t6);
         a.addImm(A.t5, 1);
@@ -1004,7 +1004,7 @@ pub const Emitter = struct {
         a.addImm(A.t5, -1);
         a.jumpIfImm(.ne, A.t5, 0, loop);
 
-        a.store64(A.t0, .{ .base = A.t1, .disp = frameField("closure") - frame_size });
+        a.storeWord(A.t0, .{ .base = A.t1, .disp = frameField("closure") - frame_size });
         a.lea(A.t4, .{ .base = A.t2, .disp = 1 });
         a.storePair32(A.t2, A.t4, .{ .base = A.t1, .disp = frameField("func") - frame_size });
         a.movImm(A.t3, 0);
@@ -1053,8 +1053,8 @@ pub const Emitter = struct {
         const lay = e.lay;
         const thread: A.Reg = A.thread;
         // t1 = the end of the running frame.
-        a.load64(A.t0, .{ .base = thread, .disp = lay.frames_len });
-        a.load64(A.t1, .{ .base = thread, .disp = lay.frames_ptr });
+        a.loadWord(A.t0, .{ .base = thread, .disp = lay.frames_len });
+        a.loadWord(A.t1, .{ .base = thread, .disp = lay.frames_ptr });
         a.addScaled(A.t1, A.t1, A.t0, frame_shift);
         a.jumpIfByte(.eq, .{ .base = A.t1, .disp = frameField("lean") - frame_size }, 0, slow);
         a.jumpIfByte(.ne, .{ .base = thread, .disp = @offsetOf(Thread, "hook_mask") }, 0, slow);
@@ -1062,7 +1062,7 @@ pub const Emitter = struct {
         // the general return.
         if (e.captures) {
             const none = a.newLabel();
-            a.load64(A.t2, .{ .base = thread, .disp = @offsetOf(Thread, "open_upvals") });
+            a.loadWord(A.t2, .{ .base = thread, .disp = @offsetOf(Thread, "open_upvals") });
             a.jumpIfImm(.eq, A.t2, 0, none);
             a.load32(A.t2, .{ .base = A.t2, .disp = @offsetOf(object.Upvalue, "level") });
             a.jumpIf(.hs, A.t2, A.base, slow);
@@ -1070,9 +1070,9 @@ pub const Emitter = struct {
         }
         if (e.closes) {
             const none = a.newLabel();
-            a.load64(A.t2, .{ .base = thread, .disp = lay.tbc_len });
+            a.loadWord(A.t2, .{ .base = thread, .disp = lay.tbc_len });
             a.jumpIfImm(.eq, A.t2, 0, none);
-            a.load64(A.t3, .{ .base = thread, .disp = lay.tbc_ptr });
+            a.loadWord(A.t3, .{ .base = thread, .disp = lay.tbc_ptr });
             a.addScaled(A.t3, A.t3, A.t2, 2);
             a.load32(A.t2, .{ .base = A.t3, .disp = -4 });
             a.jumpIf(.hs, A.t2, A.base, slow);
@@ -1084,9 +1084,9 @@ pub const Emitter = struct {
         // Pop the frame and continue in the caller, which adjusts the
         // result count.
         a.addImm(A.t0, -1);
-        a.store64(A.t0, .{ .base = thread, .disp = lay.frames_len });
+        a.storeWord(A.t0, .{ .base = thread, .disp = lay.frames_len });
         a.load32(A.base, .{ .base = A.t1, .disp = frameField("base") - 2 * frame_size });
-        a.load64(A.t3, .{ .base = A.t1, .disp = frameField("resume_at") - frame_size });
+        a.loadWord(A.t3, .{ .base = A.t1, .disp = frameField("resume_at") - frame_size });
         a.movImm(A.t6, n);
         e.reloadBp();
         a.jmpReg(A.t3);
@@ -1098,8 +1098,8 @@ pub const Emitter = struct {
         const a = &e.a;
         // The closure is the value below register 0.
         a.load64(uv, .{ .base = A.bp, .disp = -16 });
-        a.load64(uv, .{ .base = uv, .disp = @intCast(@sizeOf(object.Closure) + i * @sizeOf(usize)) });
-        a.load64(dst, .{ .base = uv, .disp = e.lay.upval_loc });
+        a.loadWord(uv, .{ .base = uv, .disp = @intCast(@sizeOf(object.Closure) + i * @sizeOf(usize)) });
+        a.loadWord(dst, .{ .base = uv, .disp = e.lay.upval_loc });
     }
 
     /// Passes the address of a value as argument `n`.
@@ -1154,7 +1154,7 @@ pub const Emitter = struct {
         // The length is 32 bits wide.
         a.load32(tmp, .{ .base = tab, .disp = e.lay.hash_len });
         a.jumpIf(.hs, node, tmp, out_of_range);
-        a.load64(tmp, .{ .base = tab, .disp = e.lay.hash_ptr });
+        a.loadWord(tmp, .{ .base = tab, .disp = e.lay.hash_ptr });
         a.subScaled(tags, tmp, node, tl.tag_shift);
         a.addScaled(node, tmp, node, tl.node_shift);
         a.movImm(tmp, @intFromPtr(key));
@@ -1184,7 +1184,7 @@ pub const Emitter = struct {
         a.load32(A.t1, .{ .base = A.t0, .disp = tl.hash_used });
         a.jumpIf(.hs, A.t1, A.t2, call);
         a.addImm(A.t2, -1);
-        a.load64(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+        a.loadWord(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
         a.load32(A.t1, .{ .base = A.t6, .disp = @offsetOf(object.String, "hash") });
         a.bind(loop);
         a.@"and"(A.t1, A.t2);
@@ -1202,7 +1202,7 @@ pub const Emitter = struct {
         a.jmp(done);
         // Absent, or present with nil: nil unless `__index` may apply.
         a.bind(absent);
-        a.load64(A.t1, .{ .base = A.t0, .disp = tl.metatable });
+        a.loadWord(A.t1, .{ .base = A.t0, .disp = tl.metatable });
         a.jumpIfImm(.eq, A.t1, 0, nil_result);
         a.jumpIfBit(.{ .base = A.t1, .disp = tl.tm_absent + il.absent_index / 8 }, il.absent_index % 8, false, call);
         a.bind(nil_result);
@@ -1230,7 +1230,7 @@ pub const Emitter = struct {
         a.load32(A.t1, .{ .base = A.t0, .disp = tl.hash_used });
         a.jumpIf(.hs, A.t1, A.t2, call);
         a.addImm(A.t2, -1);
-        a.load64(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+        a.loadWord(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
         a.load32(A.t1, .{ .base = A.t6, .disp = @offsetOf(object.String, "hash") });
         a.bind(loop);
         a.@"and"(A.t1, A.t2);
@@ -1295,7 +1295,7 @@ pub const Emitter = struct {
         const a = &e.a;
         const plain = a.newLabel();
         a.jumpIfByte(.ne, .{ .base = tab, .disp = tl.readonly }, 0, miss);
-        a.load64(tmp, .{ .base = tab, .disp = tl.metatable });
+        a.loadWord(tmp, .{ .base = tab, .disp = tl.metatable });
         a.jumpIfImm(.eq, tmp, 0, plain);
         a.jumpIfBit(.{ .base = tmp, .disp = tl.tm_absent + il.absent_newindex / 8 }, il.absent_newindex % 8, false, miss);
         a.bind(plain);
@@ -1332,7 +1332,7 @@ pub const Emitter = struct {
         // The cache records that the shape lacks the key.
         a.movImm(tags, object.IcEntry.none);
         a.jumpIf(.eq, slot_r, tags, absent);
-        a.load64(tmp, .{ .base = tab, .disp = e.lay.hash_ptr });
+        a.loadWord(tmp, .{ .base = tab, .disp = e.lay.hash_ptr });
         a.subScaled(tags, tmp, slot_r, 0);
         a.addScaled(slot_r, tmp, slot_r, tl.word_shift);
     }
@@ -1393,7 +1393,7 @@ pub const Emitter = struct {
         a.jumpIfByte(.eq, tagOf(v), tag_nil, miss);
         a.movImm(A.t1, e.prediction(pc, il.ic_own));
         a.load16(A.t1, .{ .base = A.t1 });
-        a.load64(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+        a.loadWord(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
         a.load8(A.t2, .{ .base = A.t3, .disp = -1 });
         a.jumpIf(.hs, A.t1, A.t2, miss);
         a.movImm(A.t2, e.prediction(pc, il.ic_holder));
@@ -1463,7 +1463,7 @@ pub const Emitter = struct {
         // An index below one wrapped around to a large unsigned number.
         a.load32(A.t2, .{ .base = A.t0, .disp = tl.asize });
         a.jumpIf(.hs, A.t1, A.t2, outside);
-        a.load64(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
+        a.loadWord(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
         a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
         a.jumpIfImm(.eq, A.t3, tl.kind_boxed, boxed);
         // An unboxed slot is the payload, and the kind is its tag. A part
@@ -1492,7 +1492,7 @@ pub const Emitter = struct {
         a.load32(A.t2, .{ .base = A.t0, .disp = tl.asize });
         a.jumpIf(.hs, A.t1, A.t2, outside);
         e.guardRawStore(A.t0, A.t2, miss);
-        a.load64(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
+        a.loadWord(A.t2, .{ .base = A.t0, .disp = tl.array_ptr });
         a.load8(A.t3, .{ .base = A.t0, .disp = tl.kind });
         a.load8(A.t4, tagOf(v));
         a.jumpIfImm(.eq, A.t3, tl.kind_boxed, boxed);
@@ -1839,7 +1839,7 @@ pub const Emitter = struct {
                 a.jumpIfByte(.eq, tagOf(v), tag_nil, helper);
                 a.load32(A.t2, .{ .base = A.t0, .disp = e.lay.hash_len });
                 a.addImm(A.t2, -1);
-                a.load64(A.t4, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+                a.loadWord(A.t4, .{ .base = A.t0, .disp = e.lay.hash_ptr });
                 a.movImm(A.t3, s.hash);
                 a.movImm(A.t6, @intFromPtr(s));
                 a.bind(loop);
@@ -1889,7 +1889,7 @@ pub const Emitter = struct {
                 // all strings share.
                 a.jumpIfByte(.ne, tagOf(m.rb), tag_string, helper);
                 a.movImm(A.t1, @intFromPtr(&g.type_metatables[value.typeSlot(.string)]));
-                a.load64(A.t1, .{ .base = A.t1 });
+                a.loadWord(A.t1, .{ .base = A.t1 });
                 a.jmp(have_metatable);
 
                 // The receiver is a table whose prediction missed. The
@@ -1907,7 +1907,7 @@ pub const Emitter = struct {
                     a.jumpIfImm(.eq, A.t2, 0, in_metatable);
                     a.mov(A.t5, A.t2);
                     a.addImm(A.t2, -1);
-                    a.load64(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
+                    a.loadWord(A.t3, .{ .base = A.t0, .disp = e.lay.hash_ptr });
                     a.movImm(A.t1, s.hash);
                     a.movImm(A.t6, @intFromPtr(s));
                     a.bind(loop);
@@ -1925,7 +1925,7 @@ pub const Emitter = struct {
                 // The first step of `interp.indexChain`: `__index` of the
                 // metatable names a table, and that table holds the key.
                 a.bind(in_metatable);
-                a.load64(A.t1, .{ .base = A.t0, .disp = tl.metatable });
+                a.loadWord(A.t1, .{ .base = A.t0, .disp = tl.metatable });
                 a.bind(have_metatable);
                 a.jumpIfImm(.eq, A.t1, 0, helper);
                 a.jumpIfBit(.{ .base = A.t1, .disp = tl.tm_absent + il.absent_index / 8 }, il.absent_index % 8, true, helper);
@@ -1943,7 +1943,7 @@ pub const Emitter = struct {
                 a.load64(A.args[0], slot(g.t));
                 a.load64(A.args[1], slot(g.key));
                 a.lea(A.args[2], slot(g.dst));
-                a.call(@intFromPtr(&helpers.getArray));
+                a.callWide(@intFromPtr(&helpers.getArray));
                 a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
                 e.step(c.pc, false);
             },
@@ -1952,7 +1952,7 @@ pub const Emitter = struct {
                 a.load64(A.args[1], slot(g.t));
                 a.load64(A.args[2], slot(g.key));
                 a.lea(A.args[3], slot(g.v));
-                a.call(@intFromPtr(&helpers.setArray));
+                a.callWide(@intFromPtr(&helpers.setArray));
                 a.jumpIfImm(.eq, A.ret0, 0, c.resume_at);
                 e.step(c.pc, false);
             },

@@ -347,8 +347,8 @@ pub const Codegen = struct {
             // is running, and the native stack returns to where the
             // entry sequence left it.
             a.callPair(@intFromPtr(&opt.rt.deoptDirect));
-            a.load64(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
-            a.load64(sc0, .{ .base = sc0, .disp = @intCast(@intFromPtr(&c.l.g.jit.exit_sp) - @intFromPtr(c.l.g)) });
+            a.loadWord(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
+            a.loadWord(sc0, .{ .base = sc0, .disp = @intCast(@intFromPtr(&c.l.g.jit.exit_sp) - @intFromPtr(c.l.g)) });
             a.setSp(sc0);
         } else {
             a.callPair(@intFromPtr(&opt.rt.deopt));
@@ -394,10 +394,10 @@ pub const Codegen = struct {
         const bail = a.newLabel();
         const ok = a.newLabel();
         a.lea(sc0, .{ .base = A.base, .disp = @intCast(c.f.extent + c.f.scratch + 16) });
-        a.jumpIfMem(.hi, sc0, .{ .base = A.thread, .disp = lay.stack_len }, bail);
-        a.load64(sc0, .{ .base = A.thread, .disp = lay.frames_len });
+        a.jumpIfMemWord(.hi, sc0, .{ .base = A.thread, .disp = lay.stack_len }, bail);
+        a.loadWord(sc0, .{ .base = A.thread, .disp = lay.frames_len });
         a.addImm(sc0, @intCast(c.f.depth + 1));
-        a.jumpIfMem(.ls, sc0, .{ .base = A.thread, .disp = lay.frames_cap }, ok);
+        a.jumpIfMemWord(.ls, sc0, .{ .base = A.thread, .disp = lay.frames_cap }, ok);
         a.bind(bail);
         a.mov(A.args[0], A.thread);
         a.movImm(A.args[1], c.f.extent + c.f.scratch + 16);
@@ -461,15 +461,15 @@ pub const Codegen = struct {
         a.jumpIfImm(.le, sc1, 0, l_no);
         var mult: u32 = 16 / c.chain_ratio;
         while (mult > 1) : (mult /= 2) a.add(sc1, sc1);
-        a.load64(spare0, .{ .base = A.thread, .disp = c.em.lay.global });
-        a.load64(spare1, .{ .base = spare0, .disp = c.jitField(&js.stack_floor) });
+        a.loadWord(spare0, .{ .base = A.thread, .disp = c.em.lay.global });
+        a.loadWord(spare1, .{ .base = spare0, .disp = c.jitField(&js.stack_floor) });
         a.leaSp(sc0, 0);
         a.jumpIf(.lo, sc0, spare1, l_no);
         a.sub(sc0, sc1);
         a.jumpIf(.hs, sc0, spare1, l_store);
         a.mov(sc0, spare1);
         a.bind(l_store);
-        a.store64(sc0, .{ .base = spare0, .disp = c.jitField(&js.chain_limit) });
+        a.storeWord(sc0, .{ .base = spare0, .disp = c.jitField(&js.chain_limit) });
         a.jmp(l_body);
         a.bind(l_no);
         a.movImm(dret_tag, no_entry);
@@ -513,12 +513,12 @@ pub const Codegen = struct {
         const fin = a.newLabel();
         c.em.call_entry = a.offset();
         c.em.call_entry_plain = a.offset();
-        a.load64(A.t1, .{ .base = A.thread, .disp = lay.global });
-        a.load64(A.t1, .{ .base = A.t1, .disp = lay.pending });
+        a.loadWord(A.t1, .{ .base = A.thread, .disp = lay.global });
+        a.loadWord(A.t1, .{ .base = A.t1, .disp = lay.pending });
         a.jumpIfImm(.ne, A.t1, 0, fail);
         if (np > 0) a.jumpIfImm(.lo, A.t6, @intCast(np), fail);
         // t1 = the address of register 0 of the callee.
-        a.load64(A.t1, .{ .base = A.thread, .disp = lay.stack_ptr });
+        a.loadWord(A.t1, .{ .base = A.thread, .disp = lay.stack_ptr });
         a.addScaled(A.t1, A.t1, A.t4, 4);
         for (0..np) |i| {
             const tag_m: Mem = .{ .base = A.t1, .disp = @intCast(i * 16 + 8) };
@@ -548,7 +548,7 @@ pub const Codegen = struct {
         // The result goes to the slot of the called function, and the
         // caller gets the count in t6, as after a lean return.
         a.load32(A.t6, .{ .base = A.sp, .disp = 8 });
-        a.load64(A.t5, .{ .base = A.thread, .disp = lay.stack_ptr });
+        a.loadWord(A.t5, .{ .base = A.thread, .disp = lay.stack_ptr });
         a.addScaled(A.t5, A.t5, A.t6, 4);
         a.jumpIfImm(.eq, dret_tag, @intCast(no_result), zero);
         a.store64(dret_payload, .{ .base = A.t5, .disp = -16 });
@@ -569,7 +569,7 @@ pub const Codegen = struct {
         // registers the caller passed.
         a.bind(deep);
         a.load32(A.t4, .{ .base = A.sp, .disp = 8 });
-        a.load64(A.t1, .{ .base = A.thread, .disp = lay.stack_ptr });
+        a.loadWord(A.t1, .{ .base = A.thread, .disp = lay.stack_ptr });
         a.addScaled(A.t1, A.t1, A.t4, 4);
         a.load64(A.t0, .{ .base = A.t1, .disp = -16 });
         a.load32(A.t3, .{ .base = A.sp, .disp = 0 });
@@ -1247,8 +1247,8 @@ pub const Codegen = struct {
             },
             .gnokey => unreachable,
             .gpending => {
-                a.load64(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
-                a.load64(sc0, .{ .base = sc0, .disp = c.em.lay.pending });
+                a.loadWord(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
+                a.loadWord(sc0, .{ .base = sc0, .disp = c.em.lay.pending });
                 a.jumpIfImm(.ne, sc0, 0, c.exitOf(i));
             },
 
@@ -1284,9 +1284,9 @@ pub const Codegen = struct {
                 if (gc_stress) {
                     a.jmp(s.entry);
                 } else {
-                    a.load64(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
-                    a.load64(sc1, .{ .base = sc0, .disp = c.gc_bytes });
-                    a.jumpIfMem(.hs, sc1, .{ .base = sc0, .disp = c.gc_next }, s.entry);
+                    a.loadWord(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
+                    a.loadWord(sc1, .{ .base = sc0, .disp = c.gc_bytes });
+                    a.jumpIfMemWord(.hs, sc1, .{ .base = sc0, .disp = c.gc_next }, s.entry);
                 }
                 a.bind(s.back);
             },
@@ -1331,9 +1331,9 @@ pub const Codegen = struct {
 
             .param => {},
             .dlimit => {
-                a.load64(sc1, .{ .base = A.thread, .disp = c.em.lay.global });
+                a.loadWord(sc1, .{ .base = A.thread, .disp = c.em.lay.global });
                 a.leaSp(sc0, 0);
-                a.jumpIfMem(.lo, sc0, .{ .base = sc1, .disp = c.jitField(&c.l.g.jit.chain_limit) }, c.exitOf(i));
+                a.jumpIfMemWord(.lo, sc0, .{ .base = sc1, .disp = c.jitField(&c.l.g.jit.chain_limit) }, c.exitOf(i));
             },
             .dgate => a.jumpIfImm(.eq, dret_tag, @intCast(no_entry), c.exitOf(i)),
             .darg => c.dargs[@intCast(i.imm)] = i.a,
@@ -1413,7 +1413,8 @@ pub const Codegen = struct {
     }
 
     /// A call into the runtime with up to three arguments, after the
-    /// thread when the instruction asks for it.
+    /// thread when the instruction asks for it. Every argument and the
+    /// result are 64-bit integers.
     fn callc(c: *Codegen, r: Ref, i: *const ir.Inst) void {
         const a = &c.em.a;
         var buf: [4]Move = undefined;
@@ -1429,7 +1430,7 @@ pub const Codegen = struct {
         }
         c.parallel(buf[0..n]);
         if (i.flags.thread) a.mov(A.args[0], A.thread);
-        a.call(@bitCast(i.imm));
+        a.callWide(@bitCast(i.imm));
         if (i.ty == .void) return;
         if (i.ty == .float) {
             const d = c.fdst(r);
