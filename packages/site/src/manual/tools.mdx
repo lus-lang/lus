@@ -530,6 +530,33 @@ lus build app.lus -P fs:read -P network -F release
 
 The executable passes every command line argument to the program, including arguments that look like options of `lus`. The program reads them from `arg` and `...` as a script does, with the path of the executable in `arg[0]`.
 
+### Compiling ahead of time
+
+`--aot` compiles the program to machine code while it builds, so the executable starts with its hot code in place and needs no JIT. `lus build` first runs the bundle once, the training run, and puts every function that the JIT compiles during that run into the executable. `--train` gives the arguments of the training run, separated by spaces. The training run prints what the program prints. A training run that exits with a status other than 0 stops the build.
+
+```sh
+lus build --aot --train "input.csv 100" -o report report.lus
+./report input.csv 1000
+```
+
+The executable starts from `lus-runtime`, the runtime that the release installs next to `lus`. The runtime holds neither the parser nor the compiler, so `load` of source text returns nil and the message "the compiler is not part of this executable". A function that the training run never made hot runs in the interpreter. `--aot-keep-jit` starts the executable from the running `lus` instead, which keeps the JIT and the compiler, so such a function still compiles when the program runs. Code compiled ahead of time runs only on the architecture and the system of the `lus` that trained it.
+
+`LUS_AOT_REPORT=1` makes the executable print, as it exits, how many functions and optimized units of code compiled ahead of time it installed.
+
+### Linking the runtime
+
+On Linux, on macOS on Apple Silicon, and on Windows on x86_64, the release also installs `lus-runtime.lo`, the runtime as a link object. `lus build --aot` then links the executable from it and keeps only the parts of the runtime that the program reaches: the libraries it requires, the functions of those libraries that it calls, and the code they need in turn. An executable linked this way is a fraction of the size of the runtime.
+
+`--link-object FILE` links from the link object `FILE`, with or without `--aot`. A link object of another target links an executable for that target, so a program builds on one system for another when the build compiles nothing ahead of time.
+
+```sh
+lus build --link-object linux-x64/lus-runtime.lo -o app-linux app.lus
+```
+
+A program that loads code dynamically, as described in [Including modules](#including-modules), might reach any function of any library, so the linker keeps every library function and prints the line that made it do so. `--link-all` keeps every library function from the start. `--link-map FILE` writes one line for each part that the linker kept, with its size and the part that first reached it, largest first.
+
+`--runtime FILE` starts the executable from the runtime `FILE` in place of the one next to `lus`. `--aot-static` compiles ahead of time for a system that refuses executable memory to programs, such as iOS. The code then becomes part of the executable itself, which takes a link object for aarch64 macOS or iOS.
+
 ```lus nocheck
 -- ./app foo bar
 print(arg[0])  --> ./app

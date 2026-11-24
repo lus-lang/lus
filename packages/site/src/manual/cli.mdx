@@ -162,6 +162,14 @@ Bundles a script and the modules it requires into one executable, which runs on 
 | `-P perm`, `--pledge perm` | Grant a permission every time the executable runs. |
 | `-F name[=value]`, `--flag name[=value]` | Define a build flag for the bundled code. |
 | `--include path[:alias]` | Bundle a module file or directory that no literal `require` names. |
+| `--aot` | Compile the program to machine code from a training run, and start the executable from `lus-runtime`. [Compiling ahead of time](/manual/tools#compiling-ahead-of-time) describes it. |
+| `--train args` | The arguments of the training run of `--aot`, separated by spaces. |
+| `--aot-keep-jit` | Start the executable from the running `lus`, which keeps the JIT and the compiler. |
+| `--aot-static` | Compile ahead of time into the executable itself, for a system without executable memory. |
+| `--runtime FILE` | Start the executable from the runtime `FILE`. |
+| `--link-object FILE` | Link the executable from the link object `FILE`, keeping only what the program reaches. [Linking the runtime](/manual/tools#linking-the-runtime) describes it. |
+| `--link-all` | Keep every library function of the link object. |
+| `--link-map FILE` | Write the size of each linked part of the runtime and what reached it. |
 
 ## lus compile
 
