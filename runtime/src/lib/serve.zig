@@ -560,11 +560,40 @@ const Parse = union(enum) {
     bad: u16,
 };
 
+/// Whether `c` may appear in a token, such as a method or a header name.
 fn isToken(c: u8) bool {
-    return switch (c) {
+    return token_bytes[c];
+}
+
+const token_bytes = blk: {
+    var t: [256]bool = @splat(false);
+    for (0..256) |i| t[i] = switch (i) {
         '0'...'9', 'a'...'z', 'A'...'Z', '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~' => true,
         else => false,
     };
+    break :blk t;
+};
+
+/// The offset of the first "\r\n" of `buf` at or after `from`. Each line
+/// ends at a newline, which the search finds a vector of bytes at a time.
+fn findCrlf(buf: []const u8, from: usize) ?usize {
+    var i = from;
+    while (std.mem.indexOfScalarPos(u8, buf, i, '\n')) |nl| {
+        if (nl > from and buf[nl - 1] == '\r') return nl - 1;
+        i = nl + 1;
+    }
+    return null;
+}
+
+/// The offset of the first "\r\n\r\n" of `buf` at or after `from`, the
+/// end of a request head.
+fn findHeadEnd(buf: []const u8, from: usize) ?usize {
+    var i = from;
+    while (std.mem.indexOfScalarPos(u8, buf, i, '\n')) |nl| {
+        if (nl >= from + 3 and std.mem.eql(u8, buf[nl - 3 .. nl], "\r\n\r")) return nl - 3;
+        i = nl + 1;
+    }
+    return null;
 }
 
 fn span(off: usize, len: usize) Span {
@@ -594,7 +623,7 @@ fn hasToken(list: []const u8, comptime token: []const u8) bool {
 /// status that refuses the request, or zero.
 fn parseHead(l: *Thread, h: *Http, buf: []const u8, end: usize) Error!u16 {
     const gpa = l.g.gpa;
-    const line_end = std.mem.indexOf(u8, buf[0..end], "\r\n").?;
+    const line_end = findCrlf(buf[0..end], 0).?;
     const line = buf[0..line_end];
     const sp1 = std.mem.indexOfScalar(u8, line, ' ') orelse return 400;
     const sp2 = std.mem.lastIndexOfScalar(u8, line, ' ').?;
@@ -623,7 +652,7 @@ fn parseHead(l: *Thread, h: *Http, buf: []const u8, end: usize) Error!u16 {
 
     var pos = line_end + 2;
     while (pos < end - 2) {
-        const eol = std.mem.indexOfPos(u8, buf[0..end], pos, "\r\n").?;
+        const eol = findCrlf(buf[0..end], pos).?;
         const hl = buf[pos..eol];
         const colon = std.mem.indexOfScalar(u8, hl, ':') orelse return 400;
         if (colon == 0 or colon > 256) return 400;
@@ -673,7 +702,7 @@ fn parse(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
         }
         const buf = s.buf.items;
         const from = if (h.scan > 3) h.scan - 3 else 0;
-        const at = std.mem.indexOfPos(u8, buf, from, "\r\n\r\n") orelse {
+        const at = findHeadEnd(buf, from) orelse {
             if (buf.len > max_head) return .{ .bad = 431 };
             h.scan = buf.len;
             return .{ .more = 16384 };
@@ -1152,4 +1181,18 @@ fn readerOf(l: *Thread) Error!u32 {
     const s = try net.checkSocket(l, 1);
     const h = try httpOf(l, s);
     return http.requestStream(l, s, h.req_id);
+}
+
+test "the line searches find what a substring search finds" {
+    var prng = std.Random.DefaultPrng.init(7);
+    const r = prng.random();
+    const alphabet = "\r\nab";
+    var buf: [40]u8 = undefined;
+    for (0..20000) |_| {
+        const n = r.uintLessThan(usize, buf.len + 1);
+        for (buf[0..n]) |*c| c.* = alphabet[r.uintLessThan(usize, alphabet.len)];
+        const from = r.uintLessThan(usize, n + 1);
+        try std.testing.expectEqual(std.mem.indexOfPos(u8, buf[0..n], from, "\r\n"), findCrlf(buf[0..n], from));
+        try std.testing.expectEqual(std.mem.indexOfPos(u8, buf[0..n], from, "\r\n\r\n"), findHeadEnd(buf[0..n], from));
+    }
 }

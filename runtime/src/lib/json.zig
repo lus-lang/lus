@@ -511,8 +511,15 @@ const Writer = struct {
     sb: state.StringBuffer,
     filter: Value,
     /// Tables on the current path, for cycle detection. The path is as
-    /// long as the nesting, which `max_depth` bounds.
+    /// long as the nesting, which `max_depth` bounds. The first tables
+    /// stay in `near`, and the deeper ones in `path`.
+    near: [path_near]*Table = undefined,
+    depth_path: usize = 0,
     path: std.ArrayList(*Table) = .empty,
+    /// The first bytes of the text, so a short document allocates no
+    /// buffer. Text that outgrows them moves to a buffer of `sb`.
+    stack: [stack_len]u8 = undefined,
+    on_stack: bool = false,
     depth: usize = 0,
     /// Continuation bytes written so far, so the result needs no second
     /// pass to count its characters.
@@ -531,11 +538,42 @@ const Writer = struct {
     }
 
     noinline fn writeSlow(w: *Writer, b: []const u8) Error!void {
+        if (w.on_stack) {
+            var grown: std.ArrayList(u8) = .empty;
+            grown.ensureTotalCapacity(w.sb.allocator(), @max(2 * stack_len, w.out.items.len + b.len)) catch return w.l.raiseMem();
+            grown.appendSliceAssumeCapacity(w.out.items);
+            w.out = grown;
+            w.on_stack = false;
+        }
         w.out.appendSlice(w.sb.allocator(), b) catch return w.l.raiseMem();
     }
 
+    const stack_len = 256;
+    const path_near = 16;
+
+    /// Starts the text in the buffer of the writer, which must stay where
+    /// it is until the writer is done.
+    fn begin(w: *Writer) void {
+        w.out = .initBuffer(&w.stack);
+        w.on_stack = true;
+    }
+
+    fn deinit(w: *Writer) void {
+        if (!w.on_stack) w.out.deinit(w.sb.allocator());
+        w.path.deinit(w.l.g.gpa);
+    }
+
+    /// The string of the text.
+    fn finish(w: *Writer) Error!*object.String {
+        const g = w.l.g;
+        const chars = w.out.items.len - w.cont;
+        if (w.on_stack) return state.newStringKnown(g, w.out.items, w.cont == 0, chars) catch return w.l.raiseMem();
+        return state.stringFromBuffer(g, &w.sb, &w.out, w.cont == 0, chars) catch return w.l.raiseMem();
+    }
+
     fn onPath(w: *Writer, t: *Table) bool {
-        return std.mem.indexOfScalar(*Table, w.path.items, t) != null;
+        const near = w.near[0..@min(w.depth_path, path_near)];
+        return std.mem.indexOfScalar(*Table, near, t) != null or std.mem.indexOfScalar(*Table, w.path.items, t) != null;
     }
 
     fn str(w: *Writer, s: *String) Error!void {
@@ -742,11 +780,17 @@ const Writer = struct {
         // the interpreter's native call budget and deep nesting raises a
         // catchable C stack overflow.
         if (l.g.native_depth >= Thread.max_ncalls) return l.raiseFmt("C stack overflow", .{});
-        w.path.append(l.g.gpa, t) catch return l.raiseMem();
+        if (w.depth_path < path_near) {
+            w.near[w.depth_path] = t;
+        } else {
+            w.path.append(l.g.gpa, t) catch return l.raiseMem();
+        }
+        w.depth_path += 1;
         w.depth += 1;
         l.g.native_depth += 1;
         defer {
-            _ = w.path.pop();
+            w.depth_path -= 1;
+            if (w.depth_path >= path_near) _ = w.path.pop();
             w.depth -= 1;
             l.g.native_depth -= 1;
         }
@@ -885,12 +929,10 @@ fn tojson(l: *Thread) Error!u32 {
     const filter = l.arg(2);
     if (!filter.isNil() and filter.tag != .closure and filter.tag != .native) return aux.typeError(l, 2, "function");
     var w: Writer = .{ .l = l, .filter = filter, .sb = .{ .g = l.g } };
-    defer w.out.deinit(w.sb.allocator());
-    defer w.path.deinit(l.g.gpa);
+    w.begin();
+    defer w.deinit();
     const fresh = w.mayRun(v);
     const root = (try w.transform(.nil, v)) orelse Value.nil;
     try w.item_(if (Writer.serializable(root)) root else .nil, fresh);
-    const chars = w.out.items.len - w.cont;
-    const r = state.stringFromBuffer(l.g, &w.sb, &w.out, w.cont == 0, chars) catch return l.raiseMem();
-    return aux.ret(l, Value.obj(.string, r));
+    return aux.ret(l, Value.obj(.string, try w.finish()));
 }
