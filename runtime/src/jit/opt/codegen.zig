@@ -1429,41 +1429,46 @@ pub const Codegen = struct {
                 c.phiMoves(blk, i.t);
                 if (next == null or next.? != i.t) a.jmp(c.labels[i.t]);
             },
-            .br => {
-                const x = c.g(i.a, sc0);
-                const y = c.g(i.b, sc1);
-                a.jumpIf(cond(i.cond), x, y, c.labels[i.t]);
-                if (next == null or next.? != i.f) a.jmp(c.labels[i.f]);
-            },
-            .bri => {
-                const x = c.g(i.a, sc0);
-                if (c.shortImm(i)) {
-                    a.jumpIfImm(cond(i.cond), x, @intCast(i.imm), c.labels[i.t]);
-                } else if (comptime wide_compare) {
-                    if (i.flags.address) {
-                        c.wideImm(sc1, i);
-                        a.jumpIf(cond(i.cond), x, sc1, c.labels[i.t]);
-                    } else a.jumpIfWide(cond(i.cond), x, i.imm, c.labels[i.t]);
-                } else {
-                    c.wideImm(sc1, i);
-                    a.jumpIf(cond(i.cond), x, sc1, c.labels[i.t]);
+            .br, .bri, .fbr, .brtruthy, .brtag => {
+                // When the block that follows is the one the branch
+                // leads to, the opposite condition branches to the
+                // other block, and the taken path falls through.
+                const flip = next != null and next.? == i.t and i.t != i.f;
+                const to = c.labels[if (flip) i.f else i.t];
+                const other = if (flip) i.t else i.f;
+                switch (i.op) {
+                    .br => {
+                        const x = c.g(i.a, sc0);
+                        const y = c.g(i.b, sc1);
+                        a.jumpIf(if (flip) cond(i.cond).invert() else cond(i.cond), x, y, to);
+                    },
+                    .bri => {
+                        const x = c.g(i.a, sc0);
+                        const cc = if (flip) cond(i.cond).invert() else cond(i.cond);
+                        if (c.shortImm(i)) {
+                            a.jumpIfImm(cc, x, @intCast(i.imm), to);
+                        } else if (comptime wide_compare) {
+                            if (i.flags.address) {
+                                c.wideImm(sc1, i);
+                                a.jumpIf(cc, x, sc1, to);
+                            } else a.jumpIfWide(cc, x, i.imm, to);
+                        } else {
+                            c.wideImm(sc1, i);
+                            a.jumpIf(cc, x, sc1, to);
+                        }
+                    },
+                    .fbr => {
+                        const x = c.fl(i.a, fsc0);
+                        const y = c.fl(i.b, fsc1);
+                        a.jumpIfFloat(fcond(i.cond, flip), x, y, to);
+                    },
+                    .brtruthy => {
+                        a.load8(sc0, tagOf(i.imm));
+                        a.jumpIfImm(if (flip) .ls else .hi, sc0, @backingInt(Tag.false), to);
+                    },
+                    else => a.jumpIfByte(if (flip) .ne else .eq, tagOf(i.imm), @intCast(i.aux), to),
                 }
-                if (next == null or next.? != i.f) a.jmp(c.labels[i.f]);
-            },
-            .fbr => {
-                const x = c.fl(i.a, fsc0);
-                const y = c.fl(i.b, fsc1);
-                a.jumpIfFloat(fcond(i.cond, false), x, y, c.labels[i.t]);
-                if (next == null or next.? != i.f) a.jmp(c.labels[i.f]);
-            },
-            .brtruthy => {
-                a.load8(sc0, tagOf(i.imm));
-                a.jumpIfImm(.hi, sc0, @backingInt(Tag.false), c.labels[i.t]);
-                if (next == null or next.? != i.f) a.jmp(c.labels[i.f]);
-            },
-            .brtag => {
-                a.jumpIfByte(.eq, tagOf(i.imm), @intCast(i.aux), c.labels[i.t]);
-                if (next == null or next.? != i.f) a.jmp(c.labels[i.f]);
+                if (next == null or next.? != other) a.jmp(c.labels[other]);
             },
             .generic => c.generic(i),
             .exit => a.jmp(c.exitOf(i)),
