@@ -66,6 +66,10 @@ pub const target_name: []const u8 = switch (builtin.os.tag) {
     else => switch (builtin.cpu.arch) {
         .aarch64 => "aarch64-linux-musl",
         .arm => "arm-linux-musleabihf",
+        .riscv64 => "riscv64-linux-musl",
+        .loongarch64 => "loongarch64-linux-musl",
+        .powerpc64le => "powerpc64le-linux-musl",
+        .s390x => "s390x-linux-musl",
         else => "x86_64-linux-musl",
     },
 };

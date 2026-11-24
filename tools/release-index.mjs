@@ -26,6 +26,10 @@ export const targets = [
   "aarch64-linux-musl",
   "x86_64-linux-musl",
   "arm-linux-musleabihf",
+  "riscv64-linux-musl",
+  "loongarch64-linux-musl",
+  "powerpc64le-linux-musl",
+  "s390x-linux-musl",
   "x86_64-windows",
   "aarch64-windows",
 ];

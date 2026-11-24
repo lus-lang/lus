@@ -9,6 +9,10 @@ export interface ReleaseLinks {
   linuxX64?: string
   linuxArm64?: string
   linuxArm32?: string
+  linuxRiscv64?: string
+  linuxLoong64?: string
+  linuxPpc64le?: string
+  linuxS390x?: string
   wasm?: string
   checksums?: string
   sourceZip?: string
@@ -52,6 +56,10 @@ const TARGET_ARCHIVES = {
   linuxX64: "x86_64-linux-musl.tar.gz",
   linuxArm64: "aarch64-linux-musl.tar.gz",
   linuxArm32: "arm-linux-musleabihf.tar.gz",
+  linuxRiscv64: "riscv64-linux-musl.tar.gz",
+  linuxLoong64: "loongarch64-linux-musl.tar.gz",
+  linuxPpc64le: "powerpc64le-linux-musl.tar.gz",
+  linuxS390x: "s390x-linux-musl.tar.gz",
 } as const
 
 export function parseAssetLinks(release: GitHubRelease): ReleaseLinks {
