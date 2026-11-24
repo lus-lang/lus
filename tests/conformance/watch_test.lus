@@ -4,7 +4,18 @@
 -- the tests skip there.
 pledge("fs", "env")
 
-local BASE = fs.path.join(os.getenv("TMPDIR") or os.getenv("TEMP") or "/tmp", "lus-watch-test-" .. os.time() .. "-" .. tostring({}):sub(-6))
+-- The directories of the tests take their names from a file that
+-- os.tmpname created exclusively, so two runs at once never share one.
+-- A system without a temporary directory, such as WASI, falls back to the
+-- time, and its tests skip at the watch.
+local BASE = do
+    local ok, name = catch os.tmpname()
+    if ok then
+        fs.remove(name)
+        provide name .. "-watch"
+    end
+    provide fs.path.join(os.getenv("TMPDIR") or os.getenv("TEMP") or "/tmp", "lus-watch-test-" .. os.time())
+end
 local ROOT
 local count = 0
 
@@ -55,24 +66,39 @@ local function in_background(f)
     end))
 end
 
+-- Resumes the watch until an event other than a change of `name`
+-- arrives, and returns it as "kind name".
+local function past_changes(w, name)
+    while true do
+        local event = collect(w, 1)
+        if event ~= "modify " .. name then
+            return event
+        end
+    end
+end
+
+-- Each step waits for the watch to hand over the one before it. The steps
+-- of one write may reach the program in more than one notification when
+-- the machine is busy, so a step can bring more than one change, and only
+-- the order of the kinds is fixed.
 local function reports_creation_change_and_removal_test()
     setup()
     local w = watching()
     local a = fs.path.join(ROOT, "a.txt")
-    local actions = in_background(function()
-        write(a, "one")
-        pause(0.2)
-        write(a, "two")
-        pause(0.2)
-        fs.remove(a)
-    end)
-    assert(collect(w, 3) == "create a.txt, modify a.txt, remove a.txt")
-    assert(coroutine.resume(actions))
+    write(a, "one")
+    assert(collect(w, 1) == "create a.txt")
+    write(a, "two")
+    assert(collect(w, 1) == "modify a.txt")
+    fs.remove(a)
+    assert(past_changes(w, "a.txt") == "remove a.txt")
     coroutine.close(w)
     fs.remove(ROOT, true)
 end
 
-local function quick_changes_of_one_path_merge_test()
+-- The merge of events in time is a unit test of the queue in watch.zig,
+-- which sets the clock itself. Here the writes only have to arrive in
+-- order, with the creation first.
+local function quick_changes_of_one_path_start_with_the_creation_test()
     setup()
     local w = watching()
     local a = fs.path.join(ROOT, "a.txt")
@@ -80,10 +106,10 @@ local function quick_changes_of_one_path_merge_test()
         write(a, "one")
         write(a, "two")
         write(a, "three")
-        pause(0.3)
         write(fs.path.join(ROOT, "marker"), "")
     end)
-    assert(collect(w, 2) == "create a.txt, create marker")
+    assert(collect(w, 1) == "create a.txt")
+    assert(past_changes(w, "a.txt") == "create marker")
     coroutine.resume(actions)
     coroutine.close(w)
     fs.remove(ROOT, true)

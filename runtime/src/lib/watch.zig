@@ -772,3 +772,81 @@ const WinWatch = struct {
         try sched.waitNotifyFor(l, ms);
     }
 };
+
+// ---------------------------------------------------------------------
+// Tests of the queue, which set the clock themselves
+
+fn testShared() Shared {
+    return .{ .g = undefined, .root = &[_]u8{}, .root_real = &[_]u8{}, .recursive = false, .is_file = false };
+}
+
+fn freeQueue(s: *Shared) void {
+    for (s.queue.items) |e| gpa.free(e.path);
+    s.queue.deinit(gpa);
+}
+
+fn expectTake(s: *Shared, now: u64, kind: Kind, path: []const u8) !void {
+    const e = switch (s.take(now)) {
+        .event => |e| e,
+        else => return error.TestExpectedEvent,
+    };
+    defer gpa.free(e.path);
+    try std.testing.expectEqual(kind, e.kind);
+    try std.testing.expectEqualStrings(path, e.path);
+}
+
+fn expectEmpty(s: *Shared, now: u64) !void {
+    try std.testing.expect(s.take(now) == .empty);
+}
+
+const milli = std.time.ns_per_ms;
+
+test "changes of one path within the window merge into its creation" {
+    var s = testShared();
+    defer freeQueue(&s);
+    s.pushLocked(.create, "a", 0);
+    s.pushLocked(.modify, "a", 10 * milli);
+    s.pushLocked(.modify, "a", 20 * milli);
+    // The window runs from the last change.
+    try std.testing.expectEqual(@as(u64, 40 * milli), s.take(30 * milli).wait_ns);
+    try expectTake(&s, 70 * milli, .create, "a");
+    try expectEmpty(&s, 70 * milli);
+}
+
+test "a creation and a removal in one window leave nothing" {
+    var s = testShared();
+    defer freeQueue(&s);
+    s.pushLocked(.create, "a", 0);
+    s.pushLocked(.remove, "a", 10 * milli);
+    try expectEmpty(&s, 100 * milli);
+}
+
+test "a removal and a creation in one window make a change" {
+    var s = testShared();
+    defer freeQueue(&s);
+    s.pushLocked(.remove, "a", 0);
+    s.pushLocked(.create, "a", 10 * milli);
+    try expectTake(&s, 100 * milli, .modify, "a");
+}
+
+test "a change after a delivered event is an event of its own" {
+    var s = testShared();
+    defer freeQueue(&s);
+    s.pushLocked(.create, "a", 0);
+    try expectTake(&s, 50 * milli, .create, "a");
+    s.pushLocked(.modify, "a", 60 * milli);
+    try expectTake(&s, 110 * milli, .modify, "a");
+}
+
+test "events of different paths stay apart and keep their order" {
+    var s = testShared();
+    defer freeQueue(&s);
+    s.pushLocked(.create, "a", 0);
+    s.pushLocked(.create, "b", 1 * milli);
+    s.pushLocked(.rescan, "", 2 * milli);
+    // A rescan is handed over without a window.
+    try expectTake(&s, 2 * milli, .rescan, "");
+    try expectTake(&s, 60 * milli, .create, "a");
+    try expectTake(&s, 60 * milli, .create, "b");
+    try expectEmpty(&s, 60 * milli);
+}

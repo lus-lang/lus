@@ -148,4 +148,5 @@ test {
     _ = @import("lib/shell.zig");
     _ = @import("lib/glob.zig");
     _ = @import("lib/process.zig");
+    _ = @import("lib/watch.zig");
 }
