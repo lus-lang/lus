@@ -318,15 +318,21 @@ fn install(a: *ClassAlloc, p: *Page) void {
     p.young = true;
 }
 
-const max_refill_sweeps = 4;
+/// The most waiting pages a refill sweeps before it takes a fresh page.
+/// A fresh page stays in the heap until every object on it dies, so a
+/// refill that gave up early grew the heap of a program whose objects
+/// die one by one while pages full of free cells waited for a sweep. A
+/// page of dead strings sweeps in about 12 microseconds, since each cell
+/// frees its body, so the budget keeps a refill under half a millisecond.
+const max_refill_sweeps = 32;
 
 fn refill(g: *Global, comptime kind: Kind, class: u8) Allocator.Error![*]u8 {
     const h = &g.heap;
     const a = &h.classes[@backingInt(kind)][class];
     retire(a);
     const cell = classBytes(class);
-    // A run of full pages is left to the collector steps after a few
-    // sweeps, so one allocation never sweeps a large part of the heap.
+    // A run of full pages is left to the collector steps once the budget
+    // is spent, so one allocation never sweeps a large part of the heap.
     var swept: u32 = 0;
     while (a.cursor) |p| {
         if (p.needs_sweep) {
@@ -463,7 +469,15 @@ pub fn sweepPage(g: *Global, p: *Page) void {
     p.needs_sweep = false;
     g.heap.pending_pages -= 1;
     const before = g.counter.bytes;
-    defer g.gcs.swept += before -| g.counter.bytes;
+    defer {
+        // The steps of the sweep follow what the program allocates. A
+        // refill that frees cells lowers the heap count, and the next
+        // step comes sooner by as much, so the bytes the sweep has yet
+        // to free wait no longer than one step of allocation.
+        const freed_bytes = before -| g.counter.bytes;
+        g.gcs.swept += freed_bytes;
+        g.gcs.next_check -|= freed_bytes;
+    }
     const base = p.base();
     const masks = &start_masks[p.class];
     const halves = &half_masks[p.class];
