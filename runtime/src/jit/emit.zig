@@ -71,6 +71,11 @@ comptime {
     // The templates load sizes and addresses as words the size of a
     // pointer, which is 64 bits or, on 32-bit ARM, 32 bits.
     std.debug.assert(@sizeOf(usize) == 8 or builtin.cpu.arch == .arm);
+    // An assembler that keeps the tag words of an integer and of a float
+    // in registers names the words it expects.
+    if (@hasDecl(A, "stored_words")) {
+        std.debug.assert(A.stored_words[0] == Value.tagWordOf(tag_int) and A.stored_words[1] == Value.tagWordOf(tag_float));
+    }
 }
 
 fn frameField(comptime name: []const u8) i32 {
@@ -321,6 +326,8 @@ pub const Emitter = struct {
         const status = e.l_status;
         var pc: u32 = 0;
         while (pc < code.len) : (pc += 1) {
+            // No temporary holds a value across instructions.
+            inline for (.{ A.t0, A.t1, A.t2, A.t3, A.t4, A.t5, A.t6 }) |t| a.dead(t);
             a.bind(e.first + pc);
             e.instruction(pc, code[pc]);
             if (a.offset() - e.flushed_at >= flush_interval and pc + 1 < code.len) {
@@ -427,7 +434,7 @@ pub const Emitter = struct {
     }
 
     fn addCold(e: *Emitter, pc: u32, kind: Cold.Kind, resume_at: Label) Label {
-        const entry = e.a.newLabel();
+        const entry = e.a.newColdLabel();
         e.cold.append(e.gpa, .{ .entry = entry, .pc = pc, .kind = kind, .resume_at = resume_at }) catch {
             e.oom = true;
         };
@@ -1549,7 +1556,7 @@ pub const Emitter = struct {
         e.passPlace(2, key);
         a.movImm(A.args[3], @intFromPtr(&e.p.ic[pc]));
         e.passPlace(4, v);
-        a.call(helper);
+        a.call5(helper);
     }
 
     /// R[dst] = x op y. Integer operands run inline, float operands out

@@ -164,6 +164,9 @@ pub const Assembler = struct {
         };
         return @intCast(a.labels.items.len - 1);
     }
+    /// A label of out-of-line code, which this target treats as any
+    /// other.
+    pub const newColdLabel = newLabel;
 
     pub fn newLabels(a: *Assembler, count: usize) Label {
         const first: Label = @intCast(a.labels.items.len);
@@ -845,6 +848,15 @@ pub const Assembler = struct {
     pub fn call(a: *Assembler, addr: usize) void {
         a.movImm(.rax, addr);
         a.bytes(&.{ 0xFF, 0xD0 });
+    }
+    /// Calls a function that takes five words. Every argument travels
+    /// in a register on this target, as for `call`.
+    pub const call5 = call;
+    /// Declares that a register holds no value that later code reads.
+    /// Every register of this target is whole, so nothing follows.
+    pub inline fn dead(a: *Assembler, r: Reg) void {
+        _ = a;
+        _ = r;
     }
     /// Calls a routine that returns two words in the two result
     /// registers, such as `jit.Target`.

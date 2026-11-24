@@ -38,6 +38,9 @@ const tl = table.layout;
 
 const is_a64 = builtin.cpu.arch == .aarch64;
 const is_x64 = builtin.cpu.arch == .x86_64;
+/// Whether the assembler compares a register with a 64-bit integer that
+/// is no address, as a 32-bit target does one word at a time.
+const wide_compare = @hasDecl(A.Assembler, "jumpIfWide");
 
 /// The registers that hold values. Every one of them belongs to the
 /// callee across a call into the runtime.
@@ -291,7 +294,7 @@ pub const Codegen = struct {
         c.em.statusTail();
         c.em.scan();
         for (c.labels) |*x| x.* = a.newLabel();
-        for (c.exit_labels) |*x| x.* = a.newLabel();
+        for (c.exit_labels) |*x| x.* = a.newColdLabel();
         c.l_deopt = a.newLabel();
         c.l_trap = a.newLabel();
         c.l_entry = a.newLabel();
@@ -478,12 +481,18 @@ pub const Codegen = struct {
         a.sub(sc1, sc0);
         a.jumpIfImm(.le, sc1, 0, l_no);
         var mult: u32 = 16 / c.chain_ratio;
-        while (mult > 1) : (mult /= 2) a.add(sc1, sc1);
+        // A 32-bit target doubles a 64-bit register in six instructions,
+        // so there the subtraction takes the shift.
+        const scaled = comptime @sizeOf(usize) == 4;
+        var shift: u6 = 0;
+        while (mult > 1) : (mult /= 2) {
+            if (scaled) shift += 1 else a.add(sc1, sc1);
+        }
         a.loadWord(spare0, .{ .base = A.thread, .disp = c.em.lay.global });
         a.loadWord(spare1, .{ .base = spare0, .disp = c.jitField(&js.stack_floor) });
         a.leaSp(sc0, 0);
         a.jumpIf(.lo, sc0, spare1, l_no);
-        a.sub(sc0, sc1);
+        if (scaled) a.subScaled(sc0, sc0, sc1, shift) else a.sub(sc0, sc1);
         a.jumpIf(.hs, sc0, spare1, l_store);
         a.mov(sc0, spare1);
         a.bind(l_store);
@@ -807,7 +816,15 @@ pub const Codegen = struct {
         const a = &c.em.a;
         switch (c.place(r)) {
             .g => |x| return x,
-            .spill => |k| a.load64(scratch, spillMem(k)),
+            .spill => |k| {
+                // A 32-bit target reads a word of the stack as cheaply
+                // as a word of a register that lives in its frame, so its
+                // assembler names the slot as an operand.
+                if (comptime @hasDecl(A, "spillReg")) {
+                    if (A.spillReg(k)) |x| return x;
+                }
+                a.load64(scratch, spillMem(k));
+            },
             .imm, .fimm => |v| a.movImmReloc(scratch, v, .literal),
             .ptr => |v| a.movImm(scratch, v),
             .f => |x| a.floatToBits(scratch, x),
@@ -830,6 +847,9 @@ pub const Codegen = struct {
     fn dst(c: *Codegen, r: Ref) A.Reg {
         return switch (c.ra.loc[r]) {
             .reg => |x| gpr_pool[x],
+            // The assembler of a 32-bit target writes the words of a
+            // result where they live on the stack.
+            .spill => |k| if (comptime @hasDecl(A, "spillReg")) A.spillReg(k) orelse sc0 else sc0,
             else => sc0,
         };
     }
@@ -842,7 +862,7 @@ pub const Codegen = struct {
     /// Stores a result that lives on the stack.
     fn done(c: *Codegen, r: Ref, reg: A.Reg) void {
         switch (c.ra.loc[r]) {
-            .spill => |k| c.em.a.store64(reg, spillMem(k)),
+            .spill => |k| if (reg == sc0) c.em.a.store64(reg, spillMem(k)),
             else => {},
         }
     }
@@ -1031,6 +1051,10 @@ pub const Codegen = struct {
     fn inst(c: *Codegen, blk: BlockId, r: Ref, next: ?BlockId) void {
         const a = &c.em.a;
         const i = c.f.at(r);
+        // The scratch registers hold nothing between instructions.
+        a.dead(sc0);
+        a.dead(sc1);
+        a.dead(sc2);
         switch (i.op) {
             .nop, .knil, .kbool, .kint, .kflt, .kptr, .phi, .valloc => {},
             .thread => {
@@ -1102,13 +1126,18 @@ pub const Codegen = struct {
             },
             .mod, .idiv, .modi, .idivi => {
                 const x = c.g(i.a, sc0);
+                const by_imm = i.op == .modi or i.op == .idivi;
+                // A 32-bit target takes a constant divisor as it is.
+                const direct = comptime @hasDecl(A.Assembler, "floorDivImm");
                 var y: A.Reg = undefined;
-                if (i.op == .modi or i.op == .idivi) {
-                    a.movImmReloc(sc1, @bitCast(i.imm), .literal);
+                if (by_imm) {
+                    if (!direct) a.movImmReloc(sc1, @bitCast(i.imm), .literal);
                     y = sc1;
                 } else y = c.g(i.b, sc1);
                 const d = c.dst(r);
-                if (!is_x64) {
+                if (direct and by_imm) {
+                    a.floorDivImm(d, x, i.imm, i.op == .modi);
+                } else if (!is_x64) {
                     a.floorDiv(d, x, y, i.op == .mod or i.op == .modi, sc2, sc2);
                 } else {
                     a.floorDiv(d, x, y, i.op == .mod or i.op == .modi, sc0, sc1);
@@ -1262,6 +1291,11 @@ pub const Codegen = struct {
                 const x = c.g(i.a, sc0);
                 if (c.shortImm(i)) {
                     a.jumpIfImm(cond(i.cond).invert(), x, @intCast(i.imm), c.exitOf(i));
+                } else if (comptime wide_compare) {
+                    if (i.flags.address) {
+                        c.wideImm(sc1, i);
+                        a.jumpIf(cond(i.cond).invert(), x, sc1, c.exitOf(i));
+                    } else a.jumpIfWide(cond(i.cond).invert(), x, i.imm, c.exitOf(i));
                 } else {
                     c.wideImm(sc1, i);
                     a.jumpIf(cond(i.cond).invert(), x, sc1, c.exitOf(i));
@@ -1290,15 +1324,25 @@ pub const Codegen = struct {
 
             .gdebt => {
                 const js = &c.l.g.jit;
+                const limit: Mem = .{ .base = sc0, .disp = @intCast(@as(isize, @bitCast(@intFromPtr(&js.sunk_limit) -% @intFromPtr(&js.sunk)))) };
                 a.movImm(sc0, @intFromPtr(&js.sunk));
+                if (comptime @hasDecl(A.Assembler, "addMemImm")) {
+                    if (std.math.cast(u8, i.imm)) |n| {
+                        // A 32-bit target counts and compares the words
+                        // where they lie.
+                        a.addMemImm(.{ .base = sc0 }, n);
+                        a.jumpIfMems(.hs, .{ .base = sc0 }, limit, c.exitOf(i));
+                        return;
+                    }
+                }
                 a.load64(sc1, .{ .base = sc0 });
                 a.addImm(sc1, @intCast(i.imm));
                 a.store64(sc1, .{ .base = sc0 });
-                a.jumpIfMem(.hs, sc1, .{ .base = sc0, .disp = @intCast(@as(isize, @bitCast(@intFromPtr(&js.sunk_limit) -% @intFromPtr(&js.sunk)))) }, c.exitOf(i));
+                a.jumpIfMem(.hs, sc1, limit, c.exitOf(i));
             },
             .callc => c.callc(r, i),
             .barrier => {
-                const s: Stub = .{ .entry = a.newLabel(), .back = a.newLabel(), .inst = r };
+                const s: Stub = .{ .entry = a.newColdLabel(), .back = a.newLabel(), .inst = r };
                 c.stubs.append(c.arena, s) catch {
                     c.em.oom = true;
                 };
@@ -1313,7 +1357,7 @@ pub const Codegen = struct {
                 a.bind(s.back);
             },
             .gccheck => {
-                const s: Stub = .{ .entry = a.newLabel(), .back = a.newLabel(), .inst = r };
+                const s: Stub = .{ .entry = a.newColdLabel(), .back = a.newLabel(), .inst = r };
                 c.stubs.append(c.arena, s) catch {
                     c.em.oom = true;
                 };
@@ -1341,6 +1385,11 @@ pub const Codegen = struct {
                 const x = c.g(i.a, sc0);
                 if (c.shortImm(i)) {
                     a.jumpIfImm(cond(i.cond), x, @intCast(i.imm), c.labels[i.t]);
+                } else if (comptime wide_compare) {
+                    if (i.flags.address) {
+                        c.wideImm(sc1, i);
+                        a.jumpIf(cond(i.cond), x, sc1, c.labels[i.t]);
+                    } else a.jumpIfWide(cond(i.cond), x, i.imm, c.labels[i.t]);
                 } else {
                     c.wideImm(sc1, i);
                     a.jumpIf(cond(i.cond), x, sc1, c.labels[i.t]);
@@ -1367,9 +1416,17 @@ pub const Codegen = struct {
 
             .param => {},
             .dlimit => {
-                a.loadWord(sc1, .{ .base = A.thread, .disp = c.em.lay.global });
-                a.leaSp(sc0, 0);
-                a.jumpIfMemWord(.lo, sc0, .{ .base = sc1, .disp = c.jitField(&c.l.g.jit.chain_limit) }, c.exitOf(i));
+                if (comptime @sizeOf(usize) == 4) {
+                    // The stack pointer of a 32-bit target is an operand
+                    // of a comparison, and its first scratch register
+                    // is a machine register.
+                    a.loadWord(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
+                    a.jumpIfMemWord(.lo, A.sp, .{ .base = sc0, .disp = c.jitField(&c.l.g.jit.chain_limit) }, c.exitOf(i));
+                } else {
+                    a.loadWord(sc1, .{ .base = A.thread, .disp = c.em.lay.global });
+                    a.leaSp(sc0, 0);
+                    a.jumpIfMemWord(.lo, sc0, .{ .base = sc1, .disp = c.jitField(&c.l.g.jit.chain_limit) }, c.exitOf(i));
+                }
             },
             .dgate => a.jumpIfImm(.eq, dret_tag, @intCast(no_entry), c.exitOf(i)),
             .darg => c.dargs[@intCast(i.imm)] = i.a,
@@ -1519,7 +1576,7 @@ pub const Codegen = struct {
                 a.movImm(A.args[2], i.snap);
                 a.leaSp(A.args[3], 0);
                 a.movImm(A.args[4], i.aux);
-                a.call(@intFromPtr(&opt.rt.collect));
+                a.call5(@intFromPtr(&opt.rt.collect));
             },
             .barrier => {
                 var buf: [3]Move = undefined;
@@ -1544,7 +1601,7 @@ pub const Codegen = struct {
                         }
                         a.movImm(A.args[4], @bitCast(i.imm));
                         a.mov(A.args[0], A.thread);
-                        a.call(@intFromPtr(&opt.rt.barrierTable));
+                        a.call5(@intFromPtr(&opt.rt.barrierTable));
                     },
                     1 => {
                         c.parallel(buf[0..n]);
@@ -1558,7 +1615,7 @@ pub const Codegen = struct {
                         a.load8(A.args[3], tagOf(sl));
                         a.movImm(A.args[4], @bitCast(i.imm));
                         a.mov(A.args[0], A.thread);
-                        a.call(@intFromPtr(&opt.rt.barrierTable));
+                        a.call5(@intFromPtr(&opt.rt.barrierTable));
                     },
                 }
             },
