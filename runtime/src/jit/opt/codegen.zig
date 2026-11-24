@@ -478,12 +478,18 @@ pub const Codegen = struct {
         a.sub(sc1, sc0);
         a.jumpIfImm(.le, sc1, 0, l_no);
         var mult: u32 = 16 / c.chain_ratio;
-        while (mult > 1) : (mult /= 2) a.add(sc1, sc1);
+        // A 32-bit target doubles a 64-bit register in six instructions,
+        // so there the subtraction takes the shift.
+        const scaled = comptime @sizeOf(usize) == 4;
+        var shift: u6 = 0;
+        while (mult > 1) : (mult /= 2) {
+            if (scaled) shift += 1 else a.add(sc1, sc1);
+        }
         a.loadWord(spare0, .{ .base = A.thread, .disp = c.em.lay.global });
         a.loadWord(spare1, .{ .base = spare0, .disp = c.jitField(&js.stack_floor) });
         a.leaSp(sc0, 0);
         a.jumpIf(.lo, sc0, spare1, l_no);
-        a.sub(sc0, sc1);
+        if (scaled) a.subScaled(sc0, sc0, sc1, shift) else a.sub(sc0, sc1);
         a.jumpIf(.hs, sc0, spare1, l_store);
         a.mov(sc0, spare1);
         a.bind(l_store);
@@ -1382,9 +1388,17 @@ pub const Codegen = struct {
 
             .param => {},
             .dlimit => {
-                a.loadWord(sc1, .{ .base = A.thread, .disp = c.em.lay.global });
-                a.leaSp(sc0, 0);
-                a.jumpIfMemWord(.lo, sc0, .{ .base = sc1, .disp = c.jitField(&c.l.g.jit.chain_limit) }, c.exitOf(i));
+                if (comptime @sizeOf(usize) == 4) {
+                    // The stack pointer of a 32-bit target is an operand
+                    // of a comparison, and its first scratch register
+                    // is a machine register.
+                    a.loadWord(sc0, .{ .base = A.thread, .disp = c.em.lay.global });
+                    a.jumpIfMemWord(.lo, A.sp, .{ .base = sc0, .disp = c.jitField(&c.l.g.jit.chain_limit) }, c.exitOf(i));
+                } else {
+                    a.loadWord(sc1, .{ .base = A.thread, .disp = c.em.lay.global });
+                    a.leaSp(sc0, 0);
+                    a.jumpIfMemWord(.lo, sc0, .{ .base = sc1, .disp = c.jitField(&c.l.g.jit.chain_limit) }, c.exitOf(i));
+                }
             },
             .dgate => a.jumpIfImm(.eq, dret_tag, @intCast(no_entry), c.exitOf(i)),
             .darg => c.dargs[@intCast(i.imm)] = i.a,
