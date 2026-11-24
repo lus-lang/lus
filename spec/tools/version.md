@@ -116,7 +116,7 @@ A key of the list signs the index. The `signed` time of the index must fall with
 
 - `channels` names the newest version of each channel.
 - `releases` lists every release with its version, its channel, its time of publication, and its archives by target. An archive has a URL, the lowercase hexadecimal SHA-256 digest of its bytes, and its size in bytes.
-- The targets are `aarch64-macos`, `x86_64-macos`, `aarch64-linux-musl`, `x86_64-linux-musl`, `arm-linux-musleabihf`, `riscv64-linux-musl`, `loongarch64-linux-musl`, `powerpc64le-linux-musl`, `s390x-linux-musl`, `x86_64-windows`, and `aarch64-windows`. The Linux builds are static, so every Linux system uses the `linux-musl` archive. An archive for Windows is a zip file. Every other archive is a gzip-compressed tar file.
+- The targets are `aarch64-macos`, `x86_64-macos`, `aarch64-linux-musl`, `x86_64-linux-musl`, `arm-linux-musleabihf`, `riscv64-linux-musl`, `loongarch64-linux-musl`, `powerpc64le-linux-musl`, `s390x-linux-musl`, `x86_64-freebsd`, `aarch64-freebsd`, `x86_64-windows`, and `aarch64-windows`. The Linux builds are static, so every Linux system uses the `linux-musl` archive. An archive for Windows is a zip file. Every other archive is a gzip-compressed tar file.
 
 `install` installs nothing unless every check below passes.
 

@@ -700,6 +700,9 @@ fn addTlsSources(b: *std.Build, mod: *std.Build.Module) void {
     const flags: []const []const u8 = if (vendor_sanitize) &.{} else &.{"-fno-sanitize=undefined"};
     const mbedtls = b.dependency("mbedtls", .{});
     mod.addCMacro("MBEDTLS_USER_CONFIG_FILE", "\"lus_mbedtls_config.h\"");
+    // Mbed TLS defines _POSIX_C_SOURCE, which hides `explicit_bzero` in the
+    // headers of FreeBSD, and calls it there.
+    if (mod.resolved_target) |t| if (t.result.os.tag == .freebsd) mod.addCMacro("__BSD_VISIBLE", "1");
     mod.addIncludePath(b.path("src/tls"));
     mod.addIncludePath(mbedtls.path("include"));
     mod.addIncludePath(mbedtls.path("library"));

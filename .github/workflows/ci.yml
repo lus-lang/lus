@@ -177,6 +177,40 @@ jobs:
           test "$(wc -c < "$RUNNER_TEMP/linked")" -lt ${{ matrix.limit }}
           LUS_AOT_REPORT=1 "$RUNNER_TEMP/linked" 2>&1 | grep -E "aot: [1-9][0-9]* functions and [1-9][0-9]* units installed"
 
+  freebsd:
+    name: FreeBSD (x86-64)
+    # A FreeBSD virtual machine on a Linux runner runs the build that the
+    # release ships, which the runner cross-compiles
+    # (spec/design/platforms.md, "FreeBSD and Android").
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build lus and lus-runtime
+        timeout-minutes: 40
+        working-directory: runtime
+        run: |
+          zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
+          zig build runtime -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
+      - name: Conformance tests and lus build --aot in a FreeBSD virtual machine
+        timeout-minutes: 75
+        uses: cross-platform-actions/action@30cde56b87a128507bebea9531205087890ee360 # v1.8.0
+        with:
+          operating_system: freebsd
+          architecture: x86-64
+          version: "14.2"
+          run: |
+            cd runtime
+            zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
+            zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+            cd ../tests/build
+            ../../runtime/zig-out/bin/lus build --aot linked.lus -o "$HOME/linked"
+            test "$("$HOME/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+
   runtime:
     name: Runtime (${{ matrix.os }})
     strategy:

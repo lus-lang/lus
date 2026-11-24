@@ -29,12 +29,14 @@ Every archive holds the `lus` interpreter, the embedding libraries, and the `lus
 | Linux | loong64 | `lus-vX.Y.Z-loongarch64-linux-musl.tar.gz` |
 | Linux | ppc64le (POWER8 and later) | `lus-vX.Y.Z-powerpc64le-linux-musl.tar.gz` |
 | Linux | s390x | `lus-vX.Y.Z-s390x-linux-musl.tar.gz` |
+| FreeBSD | x86_64 | `lus-vX.Y.Z-x86_64-freebsd.tar.gz` |
+| FreeBSD | aarch64 | `lus-vX.Y.Z-aarch64-freebsd.tar.gz` |
 | macOS | x86_64 | `lus-vX.Y.Z-x86_64-macos.tar.gz` |
 | macOS | Apple Silicon | `lus-vX.Y.Z-aarch64-macos.tar.gz` |
 | Windows | x86_64 | `lus-vX.Y.Z-x86_64-windows.zip` |
 | Windows | aarch64 | `lus-vX.Y.Z-aarch64-windows.zip` |
 
-The Linux builds link musl statically, so the same `lus` binary runs on any Linux distribution of its architecture.
+The Linux builds link musl statically, so the same `lus` binary runs on any Linux distribution of its architecture. The FreeBSD builds link the C library of FreeBSD, which every release of FreeBSD 14 and later provides.
 
 The 32-bit ARM archive runs on ARMv7-A and later processors with hardware floating point, such as a Raspberry Pi 2 or newer running a 32-bit system.
 

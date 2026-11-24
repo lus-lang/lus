@@ -13,6 +13,8 @@ export interface ReleaseLinks {
   linuxLoong64?: string
   linuxPpc64le?: string
   linuxS390x?: string
+  freebsdX64?: string
+  freebsdArm64?: string
   wasm?: string
   checksums?: string
   sourceZip?: string
@@ -60,6 +62,8 @@ const TARGET_ARCHIVES = {
   linuxLoong64: "loongarch64-linux-musl.tar.gz",
   linuxPpc64le: "powerpc64le-linux-musl.tar.gz",
   linuxS390x: "s390x-linux-musl.tar.gz",
+  freebsdX64: "x86_64-freebsd.tar.gz",
+  freebsdArm64: "aarch64-freebsd.tar.gz",
 } as const
 
 export function parseAssetLinks(release: GitHubRelease): ReleaseLinks {

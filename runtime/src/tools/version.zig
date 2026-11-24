@@ -63,6 +63,10 @@ pub const target_name: []const u8 = switch (builtin.os.tag) {
         .aarch64 => "aarch64-windows",
         else => "x86_64-windows",
     },
+    .freebsd => switch (builtin.cpu.arch) {
+        .aarch64 => "aarch64-freebsd",
+        else => "x86_64-freebsd",
+    },
     else => switch (builtin.cpu.arch) {
         .aarch64 => "aarch64-linux-musl",
         .arm => "arm-linux-musleabihf",

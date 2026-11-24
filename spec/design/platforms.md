@@ -35,7 +35,7 @@ Four facts from the table shape our order.
 | arm64 Windows | yes |  |  |  | yes |
 | 32-bit ARM Linux | yes | yes | yes | yes | yes, static musl |
 | s390x Linux | yes | yes | yes | yes | yes, static musl |
-| FreeBSD (aarch64, x86-64) | yes | yes | yes | yes | not yet |
+| FreeBSD (aarch64, x86-64) | yes | yes | yes | yes | yes, against the C library of FreeBSD |
 | wasm32 WASI | yes | WebAssembly modules |  |  | the npm package |
 
 The column "ahead of time" marks the targets whose assembler records relocations, so that `LUS_JIT_AOT` and `lus build --aot` work there (`aot.md`).
@@ -317,7 +317,7 @@ CI adds a `windows-11-arm` runner to the runtime matrix with the same steps as `
 
 ## FreeBSD and Android
 
-FreeBSD and Android run the instruction sets that already have backends. FreeBSD maps memory writable and executable by default, so its gate opens with its stack query, `pthread_attr_get_np`, in `stackBounds`. Zig treats Android as Linux with the Android ABI, so it takes the Linux gate and the `pthread_getattr_np` of bionic as they are. The x86-64 FreeBSD build compiles. The nightly workflow cross-builds it on a Linux runner and runs the conformance suite in a FreeBSD virtual machine there, through `cross-platform-actions/action`, in the default mode, `eager`, and `opt-eager`. Android is cross-built, and checked on an emulator image when one is available to a runner.
+FreeBSD and Android run the instruction sets that already have backends. FreeBSD maps memory writable and executable by default, so its gate opens with its stack query, `pthread_attr_get_np`, in `stackBounds`. Zig treats Android as Linux with the Android ABI, so it takes the Linux gate and the `pthread_getattr_np` of bionic as they are. Both FreeBSD builds link the C library of FreeBSD dynamically and ship with each release, with `lus-runtime`. The linker of `lus build --aot` writes no FreeBSD executables, so `lus build --aot` bundles on `lus-runtime` there. Mbed TLS defines `_POSIX_C_SOURCE`, which hides `explicit_bzero` in the headers of FreeBSD while the library still calls it, so its sources compile with `__BSD_VISIBLE`. CI cross-builds the x86-64 build on a Linux runner and runs the conformance suite and `lus build --aot` in a FreeBSD virtual machine there, through `cross-platform-actions/action`. The nightly workflow adds `eager` and `opt-eager`. Android is cross-built, and checked on an emulator image when one is available to a runner.
 
 iOS and the game consoles refuse executable memory to ordinary programs, so the only native code they can run is code compiled ahead of time.
 

@@ -53,15 +53,18 @@ When piping to sh, pass options as environment variables:
 EOF
 }
 
-# fetch URL DEST: curl preferred, wget fallback. Both fail on HTTP
-# errors so a 404 page can't masquerade as an archive.
+# fetch URL DEST: curl preferred, then wget, then the fetch(1) of the
+# FreeBSD base system. All of them fail on HTTP errors so a 404 page
+# can't masquerade as an archive.
 fetch() {
   if need curl; then
     curl -fsSL --proto '=https' -o "$2" "$1"
   elif need wget; then
     wget -q -O "$2" "$1"
+  elif [ -x /usr/bin/fetch ]; then
+    /usr/bin/fetch -q -o "$2" "$1"
   else
-    die "neither curl nor wget is available"
+    die "none of curl, wget, and fetch is available"
   fi
 }
 
@@ -114,7 +117,14 @@ detect_platform() {
         *) unsupported "macOS on $ARCH" ;;
       esac
       ;;
-    FreeBSD)   unsupported "FreeBSD" ;;
+    FreeBSD)
+      # The FreeBSD archives link the C library of the system.
+      case "$ARCH" in
+        amd64|x86_64)  TARGET="x86_64-freebsd" ;;
+        arm64|aarch64) TARGET="aarch64-freebsd" ;;
+        *) unsupported "FreeBSD on $ARCH" ;;
+      esac
+      ;;
     OpenBSD)   unsupported "OpenBSD" ;;
     NetBSD)    unsupported "NetBSD" ;;
     DragonFly) unsupported "DragonFly BSD" ;;
@@ -169,8 +179,10 @@ verify_checksum() {
     actual=$(sha256sum "$1" | awk '{ print $1 }')
   elif need shasum; then
     actual=$(shasum -a 256 "$1" | awk '{ print $1 }')
+  elif need sha256; then
+    actual=$(sha256 -q "$1")
   else
-    die "sha256sum or shasum is required to verify the release"
+    die "sha256sum, shasum, or sha256 is required to verify the release"
   fi
 
   if [ "$actual" != "$expected" ]; then
