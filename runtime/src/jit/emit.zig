@@ -1549,7 +1549,7 @@ pub const Emitter = struct {
         e.passPlace(2, key);
         a.movImm(A.args[3], @intFromPtr(&e.p.ic[pc]));
         e.passPlace(4, v);
-        a.call(helper);
+        a.call5(helper);
     }
 
     /// R[dst] = x op y. Integer operands run inline, float operands out

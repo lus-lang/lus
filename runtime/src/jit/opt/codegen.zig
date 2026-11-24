@@ -1519,7 +1519,7 @@ pub const Codegen = struct {
                 a.movImm(A.args[2], i.snap);
                 a.leaSp(A.args[3], 0);
                 a.movImm(A.args[4], i.aux);
-                a.call(@intFromPtr(&opt.rt.collect));
+                a.call5(@intFromPtr(&opt.rt.collect));
             },
             .barrier => {
                 var buf: [3]Move = undefined;
@@ -1544,7 +1544,7 @@ pub const Codegen = struct {
                         }
                         a.movImm(A.args[4], @bitCast(i.imm));
                         a.mov(A.args[0], A.thread);
-                        a.call(@intFromPtr(&opt.rt.barrierTable));
+                        a.call5(@intFromPtr(&opt.rt.barrierTable));
                     },
                     1 => {
                         c.parallel(buf[0..n]);
@@ -1558,7 +1558,7 @@ pub const Codegen = struct {
                         a.load8(A.args[3], tagOf(sl));
                         a.movImm(A.args[4], @bitCast(i.imm));
                         a.mov(A.args[0], A.thread);
-                        a.call(@intFromPtr(&opt.rt.barrierTable));
+                        a.call5(@intFromPtr(&opt.rt.barrierTable));
                     },
                 }
             },

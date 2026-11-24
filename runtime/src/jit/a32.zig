@@ -1547,12 +1547,16 @@ pub const Assembler = struct {
     // generator moves it by multiples of sixteen, and the arguments that
     // travel on the stack take eight or sixteen bytes.
 
-    /// Calls a function at an absolute address whose arguments are
-    /// words. The low words of the first four arguments are in r0 to r3
-    /// already. The low word of the fifth travels on the stack. The
-    /// result is a word in r0.
+    /// Calls a function at an absolute address that takes up to four
+    /// arguments, all words. Their low words are in r0 to r3 already.
+    /// The result is a word in r0.
     pub fn call(a: *Assembler, address: usize) void {
-        a.callNamed(address, null);
+        a.callNamed(address, null, false);
+    }
+    /// Calls a function that takes five words. The low word of the
+    /// fifth travels on the stack.
+    pub fn call5(a: *Assembler, address: usize) void {
+        a.callNamed(address, null, true);
     }
     /// Loads the address of a routine: the one that `r` names, or one
     /// that the resolver names ahead of time.
@@ -1560,12 +1564,14 @@ pub const Assembler = struct {
         if (r) |x| return a.immNamed(S0, @truncate(address), x);
         a.immAny(S0, @truncate(address));
     }
-    fn callNamed(a: *Assembler, address: usize, r: ?reloc.Reloc) void {
-        const fifth = a.get(lo(args[4]), S0);
-        a.word(0xE52D0008 | @as(u32, fifth) << 12); // str fifth, [sp, #-8]!
+    fn callNamed(a: *Assembler, address: usize, r: ?reloc.Reloc, five: bool) void {
+        if (five) {
+            const fifth = a.get(lo(args[4]), S0);
+            a.word(0xE52D0008 | @as(u32, fifth) << 12); // str fifth, [sp, #-8]!
+        }
         a.routine(address, r);
         a.blx(S0);
-        a.addP(sp_r, sp_r, 8);
+        if (five) a.addP(sp_r, sp_r, 8);
         // The routine left the high word of the result register alone,
         // so only a record of zero that still holds saves the write.
         a.zeroHi(ret0);
@@ -1615,7 +1621,7 @@ pub const Assembler = struct {
     }
     /// Calls the routine that `r` names, at `address` in this process.
     pub fn callReloc(a: *Assembler, address: usize, r: reloc.Reloc) void {
-        a.callNamed(address, r);
+        a.callNamed(address, r, false);
     }
     /// `callWide` for the routine that `r` names.
     pub fn callWideReloc(a: *Assembler, address: u64, r: reloc.Reloc) void {
@@ -1975,9 +1981,9 @@ test "arm calls pass words, 64-bit integers, and a result of two words" {
     defer a.deinit();
     // The high word of the result is zero in the record of the
     // assembler, which writes it only where another path joins.
-    // ldr ip, [fp, #32]; str ip, [sp, #-8]!; movw ip, #0x5678; movt ip, #0x1234; blx ip
-    // add sp, sp, #8
-    a.call(0x12345678);
+    a.call(0x12345678); // movw ip, #0x5678; movt ip, #0x1234; blx ip
+    // ldr ip, [fp, #32]; str ip, [sp, #-8]!; movw ip; movt ip; blx ip; add sp, sp, #8
+    a.call5(0x12345678);
     // sub sp, sp, #16; str r2, [sp]; str r9, [sp, #4]; str r3, [sp, #8]; str r8, [sp, #12]
     // mov r2, r1; ldr r3, [fp, #24]; mov r1, #0; movw ip; movt ip; blx ip
     // add sp, sp, #16; str r1, [fp, #28]
@@ -1986,10 +1992,11 @@ test "arm calls pass words, 64-bit integers, and a result of two words" {
     // blx ip; add sp, sp, #8; ldr r0, [fp, #16]; ldr r1, [fp, #20]
     a.callPair(0x12345678);
     try expectWords(&a, &.{
-        0xE59BC020, 0xE52DC008, 0xE305C678, 0xE341C234, 0xE12FFF3C, 0xE28DD008, 0xE24DD010, 0xE58D2000,
-        0xE58D9004, 0xE58D3008, 0xE58D800C, 0xE1A02001, 0xE59B3018, 0xE3A01000, 0xE305C678, 0xE341C234,
-        0xE12FFF3C, 0xE28DD010, 0xE58B101C, 0xE52D3008, 0xE1A03002, 0xE1A02001, 0xE1A01000, 0xE28B0010,
-        0xE305C678, 0xE341C234, 0xE12FFF3C, 0xE28DD008, 0xE59B0010, 0xE59B1014,
+        0xE305C678, 0xE341C234, 0xE12FFF3C, 0xE59BC020, 0xE52DC008, 0xE305C678, 0xE341C234, 0xE12FFF3C,
+        0xE28DD008, 0xE24DD010, 0xE58D2000, 0xE58D9004, 0xE58D3008, 0xE58D800C, 0xE1A02001, 0xE59B3018,
+        0xE3A01000, 0xE305C678, 0xE341C234, 0xE12FFF3C, 0xE28DD010, 0xE58B101C, 0xE52D3008, 0xE1A03002,
+        0xE1A02001, 0xE1A01000, 0xE28B0010, 0xE305C678, 0xE341C234, 0xE12FFF3C, 0xE28DD008, 0xE59B0010,
+        0xE59B1014,
     });
 }
 

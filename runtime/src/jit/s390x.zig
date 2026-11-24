@@ -874,6 +874,9 @@ pub const Assembler = struct {
         a.movImm(.r14, addr);
         a.h2(0x0DEE); // basr r14, r14
     }
+    /// Calls a function that takes five words. Every argument travels
+    /// in a register on this target, as for `call`.
+    pub const call5 = call;
     /// Calls a routine that returns two words, such as `jit.Target`. The
     /// convention returns them through memory whose address goes in r2,
     /// so the arguments move up a register, 16 bytes of new frame receive

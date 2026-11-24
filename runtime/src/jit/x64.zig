@@ -849,6 +849,9 @@ pub const Assembler = struct {
         a.movImm(.rax, addr);
         a.bytes(&.{ 0xFF, 0xD0 });
     }
+    /// Calls a function that takes five words. Every argument travels
+    /// in a register on this target, as for `call`.
+    pub const call5 = call;
     /// Calls a routine that returns two words in the two result
     /// registers, such as `jit.Target`.
     pub fn callPair(a: *Assembler, addr: usize) void {
