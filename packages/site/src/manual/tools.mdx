@@ -545,7 +545,7 @@ The executable starts from `lus-runtime`, the runtime that the release installs 
 
 ### Linking the runtime
 
-On Linux, on macOS on Apple Silicon, and on Windows on x86_64, the release also installs `lus-runtime.lo`, the runtime as a link object. `lus build --aot` then links the executable from it and keeps only the parts of the runtime that the program reaches: the libraries it requires, the functions of those libraries that it calls, and the code they need in turn. An executable linked this way is a fraction of the size of the runtime.
+On Linux, on macOS, and on Windows on x86_64, the release also installs `lus-runtime.lo`, the runtime as a link object. `lus build --aot` then links the executable from it and keeps only the parts of the runtime that the program reaches: the libraries it requires, the functions of those libraries that it calls, and the code they need in turn. An executable linked this way is a fraction of the size of the runtime.
 
 `--link-object FILE` links from the link object `FILE`, with or without `--aot`. A link object of another target links an executable for that target, so a program builds on one system for another when the build compiles nothing ahead of time.
 

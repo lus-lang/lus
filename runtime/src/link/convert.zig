@@ -434,10 +434,11 @@ pub const Converter = struct {
             std.log.err("{s}: built for another architecture", .{name});
             return error.WrongArchitecture;
         }
-        if (c.arch != .aarch64) {
+        if (c.arch != .aarch64 and c.arch != .x86_64) {
             std.log.err("{s}: Mach-O objects of {s} are not supported", .{ name, @tagName(c.arch) });
             return error.Unsupported;
         }
+        const x64 = c.arch == .x86_64;
         if (rd(u32, data, 12) != 1) return error.NotRelocatable;
         const ncmds = rd(u32, data, 16);
         const subsections = rd(u32, data, 24) & 0x2000 != 0;
@@ -583,7 +584,7 @@ pub const Converter = struct {
                 const length: u2 = @truncate(info >> 25);
                 const ext = info & (1 << 27) != 0;
                 const ty: u4 = @truncate(info >> 28);
-                if (ty == 10) { // ARM64_RELOC_ADDEND
+                if (!x64 and ty == 10) { // ARM64_RELOC_ADDEND
                     addend = @as(i24, @bitCast(@as(u24, @truncate(num))));
                     continue;
                 }
@@ -606,8 +607,27 @@ pub const Converter = struct {
                     2 => std.mem.readInt(i32, loc[0..4], .little),
                     else => 0,
                 };
+                // The bytes after the displacement of a relative
+                // relocation of x86-64, which the processor counts from:
+                // SIGNED_1, SIGNED_2, and SIGNED_4 have an immediate after it.
+                const after: i64 = if (!x64) 0 else switch (ty) {
+                    6 => 5,
+                    7 => 6,
+                    8 => 8,
+                    else => 4,
+                };
                 if (ext) {
                     sym = sym_map[num] orelse return error.BadRelocation;
+                } else if (x64 and info & (1 << 24) != 0) {
+                    // A relative relocation by section of x86-64 holds
+                    // the distance from the end of the instruction to its
+                    // target in the layout of the object.
+                    if (num == 0) return error.BadRelocation;
+                    const target_addr = @as(i64, @intCast(ms.addr + addr)) + after + inplace;
+                    const tp = piece(bounds[num - 1].items, first[num - 1], @bitCast(target_addr));
+                    sym = @intCast(syms.items.len);
+                    try syms.append(c.arena, .{ .name = "", .value = tp.off, .size = 0, .shndx = tp.sec, .bind = .local, .section = true });
+                    inplace = 0;
                 } else {
                     if (ty != 0 or num == 0) {
                         std.log.err("{s}: a relocation of type {d} by section", .{ name, ty });
@@ -618,11 +638,42 @@ pub const Converter = struct {
                     try syms.append(c.arena, .{ .name = "", .value = tp.off, .size = 0, .shndx = tp.sec, .bind = .local, .section = true });
                     inplace = 0;
                 }
-                if (ty == 1) { // ARM64_RELOC_SUBTRACTOR
+                if ((!x64 and ty == 1) or (x64 and ty == 5)) { // SUBTRACTOR
                     sub = sym;
                     continue;
                 }
-                const r: Rel = switch (ty) {
+                const r: Rel = if (x64) switch (ty) {
+                    0 => blk: { // UNSIGNED
+                        if (sub) |m| {
+                            const ms_ = syms.items[m];
+                            if (ms_.shndx != pc.sec) {
+                                std.log.err("{s}: a difference of symbols across atoms in {s}", .{ name, ms.sectname });
+                                return error.Unsupported;
+                            }
+                            const delta = @as(i64, @intCast(pc.off)) - @as(i64, @intCast(ms_.value));
+                            break :blk .{ .offset = pc.off, .type = if (length == 3) 24 else 2, .sym = sym, .addend = inplace + delta };
+                        }
+                        const ts = syms.items[sym];
+                        const tls_target = ts.shndx < secs.items.len and (secs.items[ts.shndx].kind == .tdata or secs.items[ts.shndx].kind == .tbss);
+                        if (sec.kind == .thread_vars and tls_target) break :blk .{ .offset = pc.off, .type = 1028, .sym = sym, .addend = inplace };
+                        break :blk .{ .offset = pc.off, .type = if (length == 3) 1 else 10, .sym = sym, .addend = inplace };
+                    },
+                    // The ELF forms count from the place of the
+                    // displacement. An external relocation stores its
+                    // addend so that the linker subtracts the 4 bytes of
+                    // the displacement whatever follows it. One by section
+                    // already names its target, past the instruction.
+                    1, 6, 7, 8 => .{ .offset = pc.off, .type = 2, .sym = sym, .addend = if (ext) inplace - 4 else -after }, // SIGNED: PC32
+                    2 => .{ .offset = pc.off, .type = 4, .sym = sym, .addend = inplace - 4 }, // BRANCH: PLT32
+                    // A load of the address of a symbol, or of the
+                    // descriptor of a thread-local variable, from a slot
+                    // of the global offset table.
+                    3, 4, 9 => .{ .offset = pc.off, .type = 9, .sym = sym, .addend = inplace - 4 }, // GOT_LOAD, GOT, TLV: GOTPCREL
+                    else => {
+                        std.log.err("{s}: relocation type {d} of Mach-O in {s},{s}", .{ name, ty, ms.segname, ms.sectname });
+                        return error.Unsupported;
+                    },
+                } else switch (ty) {
                     0 => blk: { // UNSIGNED
                         if (sub) |m| {
                             // The difference of two symbols: relative to

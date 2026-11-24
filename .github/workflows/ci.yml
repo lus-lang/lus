@@ -364,6 +364,16 @@ jobs:
             head -2 "$RUNNER_TEMP/static.out" | cmp - <(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil\n')
             grep -E "aot: [1-9][0-9]* functions .* [1-9][0-9]* placed" "$RUNNER_TEMP/static.out"
             LUS_JIT_NO_EXEC=1 LUS_AOT_REPORT=1 "$RUNNER_TEMP/linked" 2>&1 | grep "aot: 0 functions and 0 units installed"
+            # The whole of lus for x86-64 macOS links from its link object,
+            # and runs under Rosetta where the runner has it.
+            cd ../../runtime
+            zig build link-object -Doptimize=ReleaseSafe -Dtarget=x86_64-macos -p "$RUNNER_TEMP/lo-x64"
+            "$RUNNER_TEMP/lo-x64/bin/lus-link" "$RUNNER_TEMP/lo-x64/lib/lus.lo" "$RUNNER_TEMP/lus-linked-x64"
+            codesign -v "$RUNNER_TEMP/lus-linked-x64"
+            if arch -x86_64 /usr/bin/true 2>/dev/null; then
+              test "$(arch -x86_64 "$RUNNER_TEMP/lus-linked-x64" -e 'print(1 + 1)')" = 2
+            fi
+            cd ../tests/build
             # The same program for iOS, trained here and linked from the
             # link object of the simulator, runs in an iOS simulator under
             # the refusal of executable memory that an iOS device imposes.

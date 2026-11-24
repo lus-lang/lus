@@ -89,7 +89,7 @@ jobs:
             # object").
             zig build runtime -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
             case "$target" in
-              *linux-musl* | aarch64-macos | x86_64-windows)
+              *linux-musl* | *-macos | x86_64-windows)
                 zig build link-object -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "../out/lo-$target"
                 cp "../out/lo-$target/lib/lus-runtime.lo" "$prefix/bin/lus-runtime.lo"
                 ;;

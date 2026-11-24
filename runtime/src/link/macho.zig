@@ -90,8 +90,19 @@ const MachO = struct {
         m.sects.deinit(m.gpa);
     }
 
-    fn isBranch(ty: u32) bool {
-        return ty == 282 or ty == 283;
+    /// The ELF types of a call, an absolute 64-bit address, and an
+    /// absolute 32-bit address, which `convert.zig` maps the relocations
+    /// of Mach-O onto.
+    fn isBranch(m: *const MachO, ty: u32) bool {
+        return if (m.l.o.arch == .x86_64) ty == 4 else ty == 282 or ty == 283;
+    }
+
+    fn abs64(m: *const MachO) u32 {
+        return if (m.l.o.arch == .x86_64) 1 else 257;
+    }
+
+    fn abs32(m: *const MachO) u32 {
+        return if (m.l.o.arch == .x86_64) 10 else 258;
     }
 
     /// Sorts the kept atoms into sections and finds the imports, the
@@ -99,18 +110,18 @@ const MachO = struct {
     fn classify(m: *MachO) Error!void {
         const l = m.l;
         const o = l.o;
-        if (o.arch != .aarch64) return error.UnsupportedTarget;
+        if (o.arch != .aarch64 and o.arch != .x86_64) return error.UnsupportedTarget;
         m.place_of = try m.gpa.alloc(Place, o.atoms.len);
         for (o.atoms, 0..) |a, i| {
             if (!l.live[i]) continue;
             var fixed = false;
             for (o.atomRelocs(a)) |r| {
                 if (l.isDropped(i, r.offset)) continue;
-                if (r.type == 257 and r.target.space != .none) fixed = true;
+                if (r.type == m.abs64() and r.target.space != .none) fixed = true;
                 if (r.target.space == .import) {
-                    if (l.usesGot(r.type) != null or r.type == 257) {
+                    if (l.usesGot(r.type) != null or r.type == m.abs64()) {
                         try m.imports.put(m.gpa, r.target.index, {});
-                    } else if (isBranch(r.type)) {
+                    } else if (m.isBranch(r.type)) {
                         try m.imports.put(m.gpa, r.target.index, {});
                         try m.stubs.put(m.gpa, r.target.index, {});
                     } else {
@@ -301,10 +312,18 @@ const MachO = struct {
         }
         for (l.got.keys(), 0..) |k, i| try m.pointer(out, l.got_addr + 8 * i, k.target, k.sym, 0);
         // A stub: adrp x16, slot@PAGE; ldr x16, [x16, slot@PAGEOFF];
-        // br x16.
+        // br x16. On x86-64: jmp *slot(%rip), and traps after it.
         for (m.stubs.keys(), 0..) |im, k| {
             const at = m.stubs_addr + 12 * k;
             const loc = out[link.index(at - base)..][0..12];
+            if (o.arch == .x86_64) {
+                const slot = l.gotSlot(.{ .offset = 0, .type = 0, .target = .{ .index = @intCast(im), .space = .import }, .addend = 0 }, false);
+                @memset(loc, 0xcc);
+                loc[0] = 0xff;
+                loc[1] = 0x25;
+                std.mem.writeInt(i32, loc[2..6], @intCast(@as(i64, @intCast(slot)) - @as(i64, @intCast(at + 6))), .little);
+                continue;
+            }
             std.mem.writeInt(u32, loc[0..4], 0x9000_0010, .little);
             std.mem.writeInt(u32, loc[4..8], 0xf940_0210, .little);
             std.mem.writeInt(u32, loc[8..12], 0xd61f_0200, .little);
@@ -322,17 +341,16 @@ const MachO = struct {
                     @memset(loc[0..8], 0);
                     continue;
                 }
-                switch (r.type) {
-                    257 => try m.pointer(out, p, r.target, r.sym, r.addend),
+                if (r.type == m.abs64()) {
+                    try m.pointer(out, p, r.target, r.sym, r.addend);
+                } else if (r.type == 1028) {
                     // The offset of a thread-local variable in the
                     // template, in its descriptor.
-                    1028 => std.mem.writeInt(u64, loc[0..8], l.symbol(r.target, r.sym) +% @as(u64, @bitCast(r.addend)), .little),
-                    258 => if (r.target.space != .none) {
-                        std.log.err("{s}: a 32-bit absolute address in a position-independent executable", .{o.string(a.name)});
-                        return error.UnsupportedRelocation;
-                    } else try l.apply(r, loc, p),
-                    else => try l.apply(r, loc, p),
-                }
+                    std.mem.writeInt(u64, loc[0..8], l.symbol(r.target, r.sym) +% @as(u64, @bitCast(r.addend)), .little);
+                } else if (r.type == m.abs32() and r.target.space != .none) {
+                    std.log.err("{s}: a 32-bit absolute address in a position-independent executable", .{o.string(a.name)});
+                    return error.UnsupportedRelocation;
+                } else try l.apply(r, loc, p);
             }
         }
         return out;
