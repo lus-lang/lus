@@ -1155,3 +1155,30 @@ end
 local function fmod_of_bigints_by_zero_raises_test()
     raises(function() return math.fmod(5n, 0n) end, "to 'math.fmod' %(zero%)")
 end
+
+local word_edges = {0, 1, -1, 2, -2, 3, -3, 7, -7, 0x7FFFFFFF, -0x7FFFFFFF, -0x80000000, 0x80000000, -0x80000001, 0xFFFFFFFF, 0x100000000, -0x100000000, 0x123456789, minint, maxint, minint + 1}
+
+local function floor_division_and_modulo_at_word_edges_test()
+    for _, a in ipairs(word_edges) do
+        for _, b in ipairs(word_edges) do
+            if b ~= 0 then
+                local q, r = a // b, a % b
+                assert(q * b + r == a, `{a} // {b}`)
+                assert(r == 0 or (r < 0) == (b < 0), `{a} % {b}`)
+                assert(b == minint or math.abs(r) < math.abs(b), `{a} % {b}`)
+            end
+        end
+    end
+    assert(-0x80000000 // -1 == 0x80000000 and -0x80000000 % -1 == 0)
+    assert(-7 // 2 == -4 and -7 % 2 == 1 and 7 // -2 == -4 and 7 % -2 == -1)
+    assert(0x7FFFFFFF // -0x80000000 == -1 and 0x7FFFFFFF % -0x80000000 == -1)
+end
+
+local function division_of_integers_rounds_once_test()
+    assert(((1 << 53) + 1) / 1 == 2.0^53 and ((1 << 53) + 3) / 1 == 2.0^53 + 4)
+    assert(maxint / 1 == 2.0^63 and minint / 1 == -2.0^63)
+    assert((0x100000000 - 1) / 1 == 4294967295.0 and -0x100000001 / 1 == -4294967297.0)
+    assert(((1 << 62) + (1 << 9) + 1) / 1 == 2.0^62 + 2.0^10)
+    assert(((1 << 62) + (1 << 9)) / 1 == 2.0^62)
+    assert(((1 << 40) + 3) == 2.0^40 + 3)
+end

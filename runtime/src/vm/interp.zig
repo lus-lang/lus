@@ -759,7 +759,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             const y = &c.bp[opc.c(ins)];
             if (x.tag == .integer and y.tag == .integer) {
                 if (op == .div) {
-                    c.bp[a] = Value.float(@as(f64, @floatFromInt(x.asInt())) / @as(f64, @floatFromInt(y.asInt())));
+                    c.bp[a] = Value.float(numeric.intToFloat(x.asInt()) / numeric.intToFloat(y.asInt()));
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
                 if (intArith(op, x.asInt(), y.asInt())) |r| {
@@ -787,7 +787,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             const y = &c.k(mode)[opc.c(ins)];
             if (x.tag == .integer and y.tag == .integer) {
                 if (op == .div) {
-                    c.bp[a] = Value.float(@as(f64, @floatFromInt(x.asInt())) / @as(f64, @floatFromInt(y.asInt())));
+                    c.bp[a] = Value.float(numeric.intToFloat(x.asInt()) / numeric.intToFloat(y.asInt()));
                     continue :sw try fetch(l, &c, &pc, &ins, hooked);
                 }
                 if (intArith(op, x.asInt(), y.asInt())) |r| {
