@@ -1,7 +1,17 @@
 -- `fs.stat` (spec/stdlib/fs/stat.md).
 pledge("fs", "env")
 
-local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-stat-test-" .. os.time() .. tostring({}):sub(-6))
+-- The directory takes its name from a file that os.tmpname created
+-- exclusively, so two runs at once never share one. A system without a
+-- temporary directory, such as WASI, falls back to the time.
+local dir = do
+    local ok, name = catch os.tmpname()
+    if ok then
+        fs.remove(name)
+        provide name .. "-stat"
+    end
+    provide fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-stat-test-" .. os.time() .. "-" .. tostring({}):sub(-6))
+end
 
 local function a_file_reports_its_size_and_time_test()
     fs.createdirectory(dir, true)

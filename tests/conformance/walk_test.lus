@@ -10,7 +10,17 @@ pledge("fs", "env")
 ]]
 
 local SEP = fs.path.separator
-local ROOT = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-walk-test-" .. os.time() .. "-" .. tostring({}):sub(-6))
+-- The directory takes its name from a file that os.tmpname created
+-- exclusively, so two runs at once never share one. A system without a
+-- temporary directory, such as WASI, falls back to the time.
+local ROOT = do
+    local ok, name = catch os.tmpname()
+    if ok then
+        fs.remove(name)
+        provide name .. "-walk"
+    end
+    provide fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-walk-test-" .. os.time() .. "-" .. tostring({}):sub(-6))
+end
 
 local function touch(...)
     io.open(fs.path.join(ROOT, ...), "w"):close()
