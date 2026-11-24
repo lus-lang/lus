@@ -1684,7 +1684,7 @@ fn gmatch(l: *Thread) Error!u32 {
     }
     const pat = p.bytes();
     const prefix = literalPrefix(pat, 0);
-    const from = @intFromPtr(prefix.ptr) - @intFromPtr(pat.ptr);
+    const from: u64 = @intFromPtr(prefix.ptr) - @intFromPtr(pat.ptr);
     const first: ?u128 = if (bothAscii(s, p) and prefix.len == 0) firstSet(pat, 0) else null;
     const it = state.newNative(l.g, gmatchAux, null, gm_count) catch return l.raiseMem();
     const ups = it.upvalues();
