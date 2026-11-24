@@ -108,12 +108,20 @@ jobs:
           done
 
   freebsd:
-    name: FreeBSD (x86-64)
+    name: FreeBSD (${{ matrix.arch }})
     # A FreeBSD virtual machine on a Linux runner runs a build that the
     # runner cross-compiles (spec/design/platforms.md, "FreeBSD and
-    # Android").
+    # Android"). The arm64 machine is emulated, so it runs slowly.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86-64
+            target: x86_64-freebsd
+          - arch: arm64
+            target: aarch64-freebsd
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -123,12 +131,14 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - name: Build
         working-directory: runtime
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
+        run: |
+          zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+          zig build runtime -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
       - name: Conformance tests in a FreeBSD virtual machine
         uses: cross-platform-actions/action@30cde56b87a128507bebea9531205087890ee360 # v1.8.0
         with:
           operating_system: freebsd
-          architecture: x86-64
+          architecture: ${{ matrix.arch }}
           version: "14.2"
           run: |
             cd runtime
@@ -137,6 +147,9 @@ jobs:
               echo "== LUS_JIT=$mode"
               LUS_JIT=$mode zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
             done
+            cd ../tests/build
+            ../../runtime/zig-out/bin/lus build --aot linked.lus -o "$HOME/linked"
+            test "$("$HOME/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
 
   differential:
     name: Differential tests (${{ matrix.os }})
