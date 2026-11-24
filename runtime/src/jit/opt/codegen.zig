@@ -333,9 +333,10 @@ pub const Codegen = struct {
         }
         a.jmp(c.labels[f.entry]);
 
-        for (c.ra.order, 0..) |b, oi| {
+        const order = c.layout() catch return false;
+        for (order, 0..) |b, oi| {
             a.bind(c.labels[b]);
-            const next: ?BlockId = if (oi + 1 < c.ra.order.len) c.ra.order[oi + 1] else null;
+            const next: ?BlockId = if (oi + 1 < order.len) order[oi + 1] else null;
             for (f.blocks.items[b].insts.items) |r| c.inst(b, r, next);
             if (a.offset() > 512 * 1024) return false;
         }
@@ -405,6 +406,59 @@ pub const Codegen = struct {
         c.em.flushCold();
         if (c.em.oom) return false;
         return a.finish();
+    }
+
+    /// The order the blocks are emitted in: the order of the register
+    /// allocator, with the blocks of each loop next to each other. The
+    /// reverse postorder puts the blocks that leave a loop between its
+    /// header and the block that closes it. They move behind that block,
+    /// so the path of an iteration stays within a few hundred bytes.
+    fn layout(c: *Codegen) ![]BlockId {
+        const blocks = c.f.blocks.items;
+        const out = try c.arena.dupe(BlockId, c.ra.order);
+        const pos = try c.arena.alloc(u32, blocks.len);
+        const member = try c.arena.alloc(bool, blocks.len);
+        const rest = try c.arena.alloc(BlockId, out.len);
+        var work: std.ArrayList(BlockId) = .empty;
+        const absent = std.math.maxInt(u32);
+        var i: usize = 0;
+        while (i < out.len) : (i += 1) {
+            const h = out[i];
+            if (!blocks[h].loop_header) continue;
+            @memset(pos, absent);
+            for (out, 0..) |b, k| pos[b] = @intCast(k);
+            // The loop is every block that reaches a block that jumps
+            // back to the header.
+            @memset(member, false);
+            member[h] = true;
+            var last = i;
+            for (blocks[h].preds.items) |p| {
+                if (pos[p] == absent or pos[p] <= i or member[p]) continue;
+                member[p] = true;
+                try work.append(c.arena, p);
+            }
+            while (work.pop()) |b| {
+                last = @max(last, pos[b]);
+                for (blocks[b].preds.items) |p| {
+                    if (pos[p] == absent or pos[p] <= i or member[p]) continue;
+                    member[p] = true;
+                    try work.append(c.arena, p);
+                }
+            }
+            var n = i + 1;
+            var nrest: usize = 0;
+            for (out[i + 1 .. last + 1]) |b| {
+                if (member[b]) {
+                    out[n] = b;
+                    n += 1;
+                } else {
+                    rest[nrest] = b;
+                    nrest += 1;
+                }
+            }
+            @memcpy(out[n..][0..nrest], rest[0..nrest]);
+        }
+        return out;
     }
 
     /// Leaves for baseline code at once when the stack or the frame
