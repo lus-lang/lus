@@ -808,8 +808,8 @@ pub const Emitter = struct {
                 }
                 a.callReg(A.t2);
                 // The callee returns to the code after this jump, with its
-                // result count (zero or one) in t6 and its result, if any,
-                // already in R[A].
+                // result count in t6 and its results already in place from
+                // R[A] on.
                 a.jmp(slow);
                 if (rc == 0) {
                     // Every result is wanted, and the stack top marks
@@ -819,14 +819,20 @@ pub const Emitter = struct {
                     a.addImmWord(A.t0, @intCast(ra));
                 } else {
                     // Results the callee did not return are nil, and the
-                    // register window of this function comes back.
+                    // register window of this function comes back. A
+                    // lean return passes at most one result. The general
+                    // return, which resumes here with the wanted count,
+                    // has stored every wanted result already.
                     if (rc >= 2) {
                         const has_one = a.newLabel();
+                        const has_all = a.newLabel();
+                        if (rc >= 3) a.jumpIfImm(.hs, A.t6, @intCast(rc - 1), has_all);
                         a.jumpIfImm(.ne, A.t6, 0, has_one);
                         e.storeConst(ra, .nil);
                         a.bind(has_one);
                         var i: u32 = 1;
                         while (i + 1 < rc) : (i += 1) e.storeConst(ra + i, .nil);
+                        a.bind(has_all);
                     }
                     a.mov(A.t0, A.base);
                     a.addImmWord(A.t0, e.p.max_stack);

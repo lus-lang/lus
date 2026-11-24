@@ -1438,3 +1438,33 @@ local function strings_test()
     local function slice(s) return s[2, 3] end
     assert(hot(slice, "abcd") == "bc")
 end
+
+local function results_of_a_general_return_test()
+    local function three(i)
+        return i, i + 1, i + 2
+    end
+    local function short(i)
+        if i % 2 == 0 then return i end
+        return i, -i
+    end
+    local function closing(i)
+        local function get() return i end
+        return get(), i * 2, i * 3
+    end
+    for i = 1, 300 do
+        local a, b, c, d = three(i)
+        assert(a == i and b == i + 1 and c == i + 2 and d == nil)
+        local x, y, z = short(i)
+        if i % 2 == 0 then
+            assert(x == i and y == nil and z == nil)
+        else
+            assert(x == i and y == -i and z == nil)
+        end
+        local p, q = closing(i)
+        assert(p == i and q == i * 2)
+        local t = {three(i)}
+        assert(#t == 3 and t[3] == i + 2)
+        local u, v = three(i), 0
+        assert(u == i and v == 0)
+    end
+end

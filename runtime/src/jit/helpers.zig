@@ -45,14 +45,14 @@ fn StepOf(comptime o: Op) type {
 /// continues there with the result count that a lean return passes. The
 /// general return has moved the results, padded them with nil to the
 /// wanted count, and set the stack top as the code at that address does
-/// again. That code stores nil after the first result of a call that
-/// wants two or more, so such a call continues in the step routine.
+/// again. A call that wants a fixed count finds that count, and the code
+/// after it stores no nil.
 fn ReturnOf(comptime o: Op) type {
     return struct {
         fn step(l: *Thread, pc: usize, stop: usize, ins: usize) callconv(jit.cc) usize {
             const depth = l.frames.items.len;
             const fr = &l.frames.items[depth - 1];
-            const back: usize = if (fr.lean and l.hook_mask == 0 and fr.want <= 1) fr.resume_at else 0;
+            const back: usize = if (fr.lean and l.hook_mask == 0) fr.resume_at else 0;
             const n: usize = if (fr.want >= 0) @intCast(fr.want) else switch (o) {
                 .ret0 => 0,
                 .ret1 => 1,
