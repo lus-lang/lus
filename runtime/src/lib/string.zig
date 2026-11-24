@@ -2342,6 +2342,76 @@ fn fmtFloat64(comptime leaf: bool, l: *Thread, args: []const Value, arg: u32) Er
     return aux.checkFloat(l, arg);
 }
 
+/// The zero-padded width of an integer conversion whose specification is
+/// empty or a zero and one digit, as `%d` and `%02d` are, or null for any
+/// other specification. These are the common forms, which `appendInt`
+/// writes without parsing the specification.
+inline fn plainWidth(spec: []const u8) ?u8 {
+    if (spec.len == 0) return 0;
+    if (spec.len == 2 and spec[0] == '0' and spec[1] >= '1' and spec[1] <= '9') return spec[1] - '0';
+    return null;
+}
+
+/// Appends the decimal digits of `n`, after its sign and enough zeros to
+/// fill `width` bytes, as `%0Nd` does.
+fn appendInt(b: *Builder, n: i64, width: u8) Error!void {
+    const u = @abs(n);
+    const room = b.buf.unusedCapacitySlice();
+    if (u < 100_000_000 and room.len >= 9) {
+        // Eight digits with leading zeros, built at once in one word,
+        // so a number costs the same whatever its count of digits.
+        const neg = @intFromBool(n < 0);
+        const digits = 1 + @as(usize, @intFromBool(u >= 10)) + @intFromBool(u >= 100) + @intFromBool(u >= 1000) +
+            @intFromBool(u >= 10_000) + @intFromBool(u >= 100_000) + @intFromBool(u >= 1_000_000) + @intFromBool(u >= 10_000_000);
+        const fill: usize = if (width > neg + digits) width - neg else digits;
+        if (fill <= 8) {
+            room[0] = '-';
+            const word = eightDigits(@intCast(u)) >> @intCast(8 * (8 - fill));
+            std.mem.writeInt(u64, room[neg..][0..8], word, .little);
+            b.buf.items.len += neg + fill;
+            return;
+        }
+    }
+    var tmp: [20]u8 = undefined;
+    const start = ops.intDigits(&tmp, u);
+    const digits = tmp[start..];
+    var out: [32]u8 = undefined;
+    var at: usize = 0;
+    if (n < 0) {
+        out[0] = '-';
+        at = 1;
+    }
+    const used = at + digits.len;
+    if (width > used) {
+        @memset(out[at..][0 .. width - used], '0');
+        at += width - used;
+    }
+    @memcpy(out[at..][0..digits.len], digits);
+    return b.append(out[0 .. at + digits.len]);
+}
+
+/// The eight decimal digits of `u`, below 10^8, with leading zeros, as
+/// the ASCII bytes of a little-endian word whose first byte is the first
+/// digit. Each step splits every lane of the word in two, by
+/// multiplications that stand for divisions by 10000, 100 and 10.
+fn eightDigits(u: u32) u64 {
+    const v: u64 = (u / 10_000) | (@as(u64, u % 10_000) << 32);
+    const hundreds = ((v * 5243) >> 19) & 0x0000_007F_0000_007F;
+    const pairs = hundreds | ((v - hundreds * 100) << 16);
+    const tens = ((pairs * 103) >> 10) & 0x000F_000F_000F_000F;
+    const d = tens | ((pairs - tens * 10) << 8);
+    return d + 0x3030_3030_3030_3030;
+}
+
+/// Whether `c` may appear between '%' and the conversion letter: a flag,
+/// a digit of the width or the precision, or the point between them.
+inline fn isSpecByte(c: u8) bool {
+    return switch (c) {
+        '-', '+', '#', ' ', '.', '0'...'9' => true,
+        else => false,
+    };
+}
+
 fn formatInto(comptime leaf: bool, l: *Thread, b: *Builder, fmt: []const u8, args: []const Value) Error!void {
     const top: u32 = @intCast(args.len);
     var arg: u32 = 1;
@@ -2359,7 +2429,7 @@ fn formatInto(comptime leaf: bool, l: *Thread, b: *Builder, fmt: []const u8, arg
         arg += 1;
         if (arg > top) return if (leaf) error.LusError else aux.argError(l, arg, "no value", .{});
         var k = i;
-        while (k < fmt.len and std.mem.indexOfScalar(u8, "-+#0 123456789.", fmt[k]) != null) k += 1;
+        while (k < fmt.len and isSpecByte(fmt[k])) k += 1;
         const spec = fmt[i..k];
         if (spec.len + 1 >= 22) return l.raiseFmt("invalid format (too long)", .{});
         if (k == fmt.len) return l.raiseFmt("invalid conversion '%{s}' to 'format'", .{spec});
@@ -2376,6 +2446,13 @@ fn formatInto(comptime leaf: bool, l: *Thread, b: *Builder, fmt: []const u8, arg
                 try pad(b, sp, "", tmp[0..n], 1, false);
             },
             'd', 'i', 'u', 'o', 'x', 'X' => {
+                const v0 = args[arg - 1];
+                if ((conv == 'd' or conv == 'i') and v0.tag == .integer) {
+                    if (plainWidth(spec)) |width| {
+                        try appendInt(b, v0.asInt(), width);
+                        continue;
+                    }
+                }
                 const flags = switch (conv) {
                     'd', 'i' => flags_int,
                     'u' => flags_uint,
