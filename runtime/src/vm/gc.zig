@@ -795,6 +795,14 @@ fn finishSweep(g: *Global) void {
             s.skip_minors -= 1;
             s.major_pending = true;
         } else s.major_pending = false;
+    } else if (@as(u64, live) * 100 > @as(u64, s.gen_base) * (100 + s.minormajor)) {
+        s.poor_minor = false;
+        if (s.minors < 2) failedMinors(s);
+        // The old generation grew too much since the last major
+        // collection. That calls for a major collection even while minor
+        // collections probe a program that builds its data, since the
+        // growth already says what the probes would find.
+        s.major_pending = true;
     } else if (poorMinor(s, live, before) and (s.poor_minor or s.probes > 0)) {
         // Two minor collections in a row that freed less than
         // `majorminor` percent of what the program allocated before each
@@ -815,12 +823,6 @@ fn finishSweep(g: *Global) void {
         s.probes = 0;
         s.major_pending = true;
         return setThresholdFrom(g, s.gen_base);
-    } else if (@as(u64, live) * 100 > @as(u64, s.gen_base) * (100 + s.minormajor)) {
-        s.poor_minor = false;
-        if (s.minors < 2) failedMinors(s);
-        // The old generation grew too much since the last major
-        // collection.
-        s.major_pending = true;
     } else {
         s.poor_minor = poorMinor(s, live, before);
         if (!s.poor_minor) s.backoff = 0;

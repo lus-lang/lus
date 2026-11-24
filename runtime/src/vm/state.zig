@@ -344,7 +344,7 @@ pub const Global = struct {
     /// The allocator the state was created with, which owns the Global.
     parent_gpa: Allocator = undefined,
     threshold: usize = 1 << 20,
-    pause: usize = 175,
+    pause: usize = 150,
     /// The longest string in bytes that the state makes. A longer result
     /// raises the memory error. Tests lower it to reach the limit with
     /// small strings.
