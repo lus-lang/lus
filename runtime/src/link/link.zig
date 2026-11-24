@@ -28,6 +28,17 @@ const Phdr = extern struct {
     p_memsz: u64,
     p_align: u64,
 };
+/// A program header of ELF32.
+const Phdr32 = extern struct {
+    p_type: u32,
+    p_offset: u32,
+    p_vaddr: u32,
+    p_paddr: u32,
+    p_filesz: u32,
+    p_memsz: u32,
+    p_flags: u32,
+    p_align: u32,
+};
 const PT_LOAD = 1;
 const PT_PHDR = 6;
 const PT_TLS = 7;
@@ -251,6 +262,11 @@ pub const Linker = struct {
                 541, 542 => true, // TLSIE_ADR_GOTTPREL_PAGE21, TLSIE_LD64_GOTTPREL_LO12_NC
                 else => null,
             },
+            .arm => switch (ty) {
+                26, 96 => false, // GOT_BREL, GOT_PREL
+                107 => true, // TLS_IE32
+                else => null,
+            },
         };
     }
 
@@ -267,7 +283,11 @@ pub const Linker = struct {
 
     fn layout(l: *Linker) Error!void {
         const o = l.o;
-        if (o.arch == .x86_64) l.page = 0x1000;
+        if (o.arch != .aarch64) l.page = 0x1000;
+        // A 32-bit program starts low, where the address space of a
+        // static ARM executable usually starts.
+        if (o.arch == .arm) l.base = 0x10000;
+        const word: u64 = o.arch.wordSize();
         l.addr = try l.gpa.alloc(u64, o.atoms.len);
         @memset(l.addr, no_addr);
         for (o.atoms, 0..) |a, i| {
@@ -278,7 +298,7 @@ pub const Linker = struct {
             }
         }
         l.phnum = 6;
-        const header_size = @sizeOf(elf.Elf64_Ehdr) + @as(u64, l.phnum) * @sizeOf(Phdr);
+        const header_size = l.headerSize();
         // The first segment, read only: the headers and the constants.
         var pos = l.base + header_size;
         l.place(&pos, &.{.rodata});
@@ -292,7 +312,7 @@ pub const Linker = struct {
         // offset table, the thread-local template, then the zeroed data.
         pos = std.mem.alignForward(u64, pos, l.page);
         const data = pos;
-        pos = std.mem.alignForward(u64, pos, 8);
+        pos = std.mem.alignForward(u64, pos, word);
         l.init_start = pos;
         l.place(&pos, &.{.init_array});
         l.init_end = pos;
@@ -300,11 +320,11 @@ pub const Linker = struct {
         l.place(&pos, &.{.fini_array});
         l.fini_end = pos;
         l.place(&pos, &.{.data});
-        pos = std.mem.alignForward(u64, pos, 8);
+        pos = std.mem.alignForward(u64, pos, word);
         l.dso_handle = pos;
-        pos += 8;
+        pos += word;
         l.got_addr = pos;
-        pos += 8 * @as(u64, l.got.count());
+        pos += word * @as(u64, l.got.count());
         // Thread-local atoms get offsets in the block, which starts at
         // its alignment in memory.
         var tls_align: u64 = 1;
@@ -363,17 +383,26 @@ pub const Linker = struct {
 
     /// The offset from the thread pointer of the thread-local offset
     /// `off`: below the pointer on x86-64, after a header of 16 bytes on
-    /// aarch64.
+    /// aarch64 and of 8 bytes on 32-bit ARM.
     fn tpOffset(l: *const Linker, off: u64) i64 {
         return switch (l.o.arch) {
             .x86_64 => @as(i64, @intCast(off)) - @as(i64, @intCast(l.tls.memsz)),
             .aarch64 => @intCast(off + std.mem.alignForward(u64, 16, l.tls.align_)),
+            .arm => @intCast(off + std.mem.alignForward(u64, 8, l.tls.align_)),
         };
     }
 
     pub fn gotSlot(l: *const Linker, r: lobj.Reloc, tls: bool) u64 {
         const i = l.got.getIndex(.{ .target = r.target, .sym = r.sym, .tls = tls }).?;
-        return l.got_addr + 8 * i;
+        return l.got_addr + l.o.arch.wordSize() * i;
+    }
+
+    /// The size of the ELF header and the program headers.
+    fn headerSize(l: *const Linker) u64 {
+        return if (l.o.arch == .arm)
+            @sizeOf(elf.Elf32_Ehdr) + @as(u64, l.phnum) * @sizeOf(Phdr32)
+        else
+            @sizeOf(elf.Elf64_Ehdr) + @as(u64, l.phnum) * @sizeOf(Phdr);
     }
 
     fn write(l: *Linker) Error![]u8 {
@@ -387,9 +416,11 @@ pub const Linker = struct {
             const at = if (a.kind == .tdata) l.tls.addr + l.addr[i] else l.addr[i];
             @memcpy(out[index(at - l.base)..][0..index(a.size)], o.bytes(a));
         }
+        const word = o.arch.wordSize();
         for (l.got.keys(), 0..) |k, i| {
             const v: u64 = if (k.tls) @bitCast(l.tpOffset(l.symbol(k.target, k.sym))) else l.symbol(k.target, k.sym);
-            std.mem.writeInt(u64, out[index(l.got_addr - l.base) + 8 * i ..][0..8], v, .little);
+            const slot = out[index(l.got_addr - l.base) + word * i ..];
+            if (word == 4) put(u32, slot, @truncate(v)) else put(u64, slot, v);
         }
         for (o.atoms, 0..) |a, i| {
             if (!l.live[i] or lobj.zeroed(a.kind)) continue;
@@ -397,7 +428,7 @@ pub const Linker = struct {
             for (o.atomRelocs(a)) |r| {
                 const loc = out[index(at - l.base + r.offset)..];
                 if (l.isDropped(i, r.offset)) {
-                    @memset(loc[0..8], 0);
+                    @memset(loc[0..word], 0);
                     continue;
                 }
                 try l.apply(r, loc, at + r.offset);
@@ -427,6 +458,27 @@ pub const Linker = struct {
                 lobj.pe_addr32nb => put(u32, loc, std.math.cast(u32, sa - @as(i64, @intCast(l.base))) orelse return error.RelocationOverflow),
                 lobj.pe_secrel => try putI32(loc, sa - @as(i64, @intCast(l.tls.addr))),
                 else => return unsupported(l, r),
+            },
+            .arm => {
+                if (s & 1 != 0 and armBranch(r.type)) return unsupported(l, r);
+                const got: i64 = @intCast(l.got_addr);
+                switch (r.type) {
+                    2, 38 => put(u32, loc, @truncate(@as(u64, @bitCast(sa)))), // ABS32, TARGET1
+                    3 => put(u32, loc, @truncate(@as(u64, @bitCast(sa - pi)))), // REL32
+                    42 => put(u32, loc, (insn(loc) & 0x8000_0000) | (@as(u32, @truncate(@as(u64, @bitCast(sa - pi)))) & 0x7fff_ffff)), // PREL31
+                    1, 28, 29 => try armBranch24(loc, sa - pi), // PC24, CALL, JUMP24
+                    43 => armImm16(loc, @truncate(@as(u64, @bitCast(sa)))), // MOVW_ABS_NC
+                    44 => armImm16(loc, @truncate(@as(u64, @bitCast(sa)) >> 16)), // MOVT_ABS
+                    45 => armImm16(loc, @truncate(@as(u64, @bitCast(sa - pi)))), // MOVW_PREL_NC
+                    46 => armImm16(loc, @truncate(@as(u64, @bitCast(sa - pi)) >> 16)), // MOVT_PREL
+                    24 => put(u32, loc, @truncate(@as(u64, @bitCast(sa - got)))), // GOTOFF32
+                    25 => put(u32, loc, @truncate(@as(u64, @bitCast(got + a - pi)))), // BASE_PREL
+                    26 => put(u32, loc, @truncate(@as(u64, @bitCast(@as(i64, @intCast(l.gotSlot(r, false))) + a - got)))), // GOT_BREL
+                    96 => put(u32, loc, @truncate(@as(u64, @bitCast(@as(i64, @intCast(l.gotSlot(r, false))) + a - pi)))), // GOT_PREL
+                    107 => put(u32, loc, @truncate(@as(u64, @bitCast(@as(i64, @intCast(l.gotSlot(r, true))) + a - pi)))), // TLS_IE32
+                    108 => put(u32, loc, @truncate(@as(u64, @bitCast(l.tpOffset(s) + a)))), // TLS_LE32
+                    else => return unsupported(l, r),
+                }
             },
             .aarch64 => switch (r.type) {
                 257 => put(u64, loc, @bitCast(sa)), // ABS64
@@ -461,6 +513,7 @@ pub const Linker = struct {
     }
 
     fn headers(l: *const Linker, out: []u8) void {
+        if (l.o.arch == .arm) return l.headers32(out);
         const o = l.o;
         var eh: elf.Elf64_Ehdr = .{
             .e_ident = undefined,
@@ -468,6 +521,7 @@ pub const Linker = struct {
             .e_machine = switch (o.arch) {
                 .x86_64 => .X86_64,
                 .aarch64 => .AARCH64,
+                .arm => unreachable,
             },
             .e_version = 1,
             .e_entry = l.addr[o.entry.atom] + o.entry.offset,
@@ -495,7 +549,69 @@ pub const Linker = struct {
         ph[5] = .{ .p_type = PT_GNU_STACK, .p_flags = elf.PF_R | elf.PF_W, .p_offset = 0, .p_vaddr = 0, .p_paddr = 0, .p_filesz = 0, .p_memsz = 0, .p_align = 16 };
         @memcpy(out[@sizeOf(elf.Elf64_Ehdr)..][0..phdr_size], std.mem.sliceAsBytes(&ph));
     }
+
+    /// The headers of an ELF32 executable for 32-bit ARM, with the
+    /// version 5 of the ABI and the hard-float convention in its flags.
+    fn headers32(l: *const Linker, out: []u8) void {
+        const o = l.o;
+        const ehsize = @sizeOf(elf.Elf32_Ehdr);
+        var eh: elf.Elf32_Ehdr = .{
+            .e_ident = undefined,
+            .e_type = .EXEC,
+            .e_machine = .ARM,
+            .e_version = 1,
+            .e_entry = @intCast(l.addr[o.entry.atom] + o.entry.offset),
+            .e_phoff = ehsize,
+            .e_shoff = 0,
+            .e_flags = 0x0500_0400,
+            .e_ehsize = ehsize,
+            .e_phentsize = @sizeOf(Phdr32),
+            .e_phnum = l.phnum,
+            .e_shentsize = @sizeOf(elf.Elf32_Shdr),
+            .e_shnum = 0,
+            .e_shstrndx = 0,
+        };
+        @memset(&eh.e_ident, 0);
+        @memcpy(eh.e_ident[0..4], elf.MAGIC);
+        eh.e_ident[elf.EI.CLASS] = elf.ELFCLASS32;
+        eh.e_ident[elf.EI.DATA] = elf.ELFDATA2LSB;
+        eh.e_ident[elf.EI.VERSION] = 1;
+        @memcpy(out[0..ehsize], std.mem.asBytes(&eh));
+        const phdr_size = @as(usize, l.phnum) * @sizeOf(Phdr32);
+        const P = Phdr32;
+        const w32 = struct {
+            fn f(v: u64) u32 {
+                return @intCast(v);
+            }
+        }.f;
+        var ph: [6]P = undefined;
+        ph[0] = .{ .p_type = PT_PHDR, .p_flags = elf.PF_R, .p_offset = ehsize, .p_vaddr = w32(l.base + ehsize), .p_paddr = w32(l.base + ehsize), .p_filesz = @intCast(phdr_size), .p_memsz = @intCast(phdr_size), .p_align = 4 };
+        for (l.seg, 1..) |s, k| ph[k] = .{ .p_type = PT_LOAD, .p_flags = s.flags, .p_offset = w32(s.addr - l.base), .p_vaddr = w32(s.addr), .p_paddr = w32(s.addr), .p_filesz = w32(s.filesz), .p_memsz = w32(s.memsz), .p_align = w32(l.page) };
+        ph[4] = .{ .p_type = PT_TLS, .p_flags = elf.PF_R, .p_offset = w32(l.tls.addr - l.base), .p_vaddr = w32(l.tls.addr), .p_paddr = w32(l.tls.addr), .p_filesz = w32(l.tls.filesz), .p_memsz = w32(l.tls.memsz), .p_align = w32(l.tls.align_) };
+        ph[5] = .{ .p_type = PT_GNU_STACK, .p_flags = elf.PF_R | elf.PF_W, .p_offset = 0, .p_vaddr = 0, .p_paddr = 0, .p_filesz = 0, .p_memsz = 0, .p_align = 16 };
+        @memcpy(out[ehsize..][0..phdr_size], std.mem.sliceAsBytes(&ph));
+    }
 };
+
+/// Whether a relocation of 32-bit ARM writes a branch in the ARM state,
+/// which cannot reach Thumb code.
+fn armBranch(ty: u32) bool {
+    return ty == 1 or ty == 28 or ty == 29;
+}
+
+fn armBranch24(loc: []u8, delta: i64) Error!void {
+    if (delta & 3 != 0) return error.RelocationOverflow;
+    const v = delta >> 2;
+    if (v < -(1 << 23) or v >= (1 << 23)) return error.RelocationOverflow;
+    put(u32, loc, (insn(loc) & 0xff00_0000) | (@as(u32, @truncate(@as(u64, @bitCast(v)))) & 0x00ff_ffff));
+}
+
+/// Writes the 16-bit immediate of `movw` or `movt`, split into the four
+/// bits at 16 and the twelve bits at 0.
+fn armImm16(loc: []u8, v: u16) void {
+    const i = insn(loc) & 0xfff0_f000;
+    put(u32, loc, i | (@as(u32, v >> 12) << 16) | (v & 0xfff));
+}
 
 /// The index into the output of an offset in it. The output fits in
 /// memory, which `write` checks when it allocates it, so every offset in
@@ -593,4 +709,52 @@ test "the linker keeps what the entry reaches and clears a dropped builtin" {
     const reg_off = std.mem.alignForward(usize, reg_at, 8);
     try std.testing.expect(std.mem.readInt(u64, r.bytes[reg_off..][0..8], .little) != 0);
     try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, r.bytes[reg_off + 16 ..][0..8], .little));
+}
+
+test "the linker writes an ELF32 executable for 32-bit ARM" {
+    const gpa = std.testing.allocator;
+    var w: lobj.Writer = .{ .gpa = gpa, .arch = .arm, .os = .linux };
+    defer w.deinit();
+    // _start: bl f, movw r0, #:lower16:d, movt r0, #:upper16:d, and a word
+    // that holds the address of d.
+    const code = [_]u8{
+        0xfe, 0xff, 0xff, 0xeb, // bl . (the addend of REL is -8)
+        0x00, 0x00, 0x00, 0xe3, // movw r0, #0
+        0x00, 0x00, 0x40, 0xe3, // movt r0, #0
+        0x00, 0x00, 0x00, 0x00,
+    };
+    const start = try w.atom(.text, 2, &code, code.len, "_start");
+    try w.reloc(.{ .offset = 0, .type = 28, .target = .{ .index = 1, .space = .atom }, .addend = -8 });
+    try w.reloc(.{ .offset = 4, .type = 43, .target = .{ .index = 2, .space = .atom }, .addend = 0 });
+    try w.reloc(.{ .offset = 8, .type = 44, .target = .{ .index = 2, .space = .atom }, .addend = 0 });
+    try w.reloc(.{ .offset = 12, .type = 2, .target = .{ .index = 2, .space = .atom }, .addend = 4 });
+    _ = try w.atom(.text, 2, &[_]u8{ 0x1e, 0xff, 0x2f, 0xe1 }, 4, "f");
+    _ = try w.atom(.data, 2, &@as([8]u8, @splat(0)), 8, "d");
+    w.entry = .{ .name = try w.string("_start"), .atom = start, .offset = 0 };
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    defer buf.deinit();
+    try w.write(&buf.writer);
+    const bytes = try gpa.alignedAlloc(u8, .@"8", buf.written().len);
+    defer gpa.free(bytes);
+    @memcpy(bytes, buf.written());
+    const o = try lobj.read(bytes);
+    const r = try link(gpa, &o, .all, .{});
+    defer gpa.free(r.bytes);
+    const eh = std.mem.bytesToValue(elf.Elf32_Ehdr, r.bytes[0..@sizeOf(elf.Elf32_Ehdr)]);
+    try std.testing.expectEqual(elf.EM.ARM, eh.e_machine);
+    try std.testing.expectEqual(@as(u8, elf.ELFCLASS32), eh.e_ident[elf.EI.CLASS]);
+    const text: usize = eh.e_entry - 0x10000;
+    const word = struct {
+        fn f(b: []const u8, at: usize) u32 {
+            return std.mem.readInt(u32, b[at..][0..4], .little);
+        }
+    }.f;
+    // f is the next atom, 16 bytes on: (16 - 8) / 4 words.
+    try std.testing.expectEqual(@as(u32, 0xeb000002), word(r.bytes, text));
+    const d: u32 = word(r.bytes, text + 12) - 4;
+    const movw = word(r.bytes, text + 4);
+    const movt = word(r.bytes, text + 8);
+    try std.testing.expectEqual(d & 0xffff, ((movw >> 4) & 0xf000) | (movw & 0xfff));
+    try std.testing.expectEqual(d >> 16, ((movt >> 4) & 0xf000) | (movt & 0xfff));
+    try std.testing.expect(d >= 0x10000 and d % 4 == 0);
 }

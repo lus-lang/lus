@@ -212,27 +212,61 @@ pub const Converter = struct {
     }
 
     fn parseElf(c: *Converter, name: []const u8, data: []const u8) !Input {
-        if (data.len < @sizeOf(elf.Elf64_Ehdr) or !std.mem.startsWith(u8, data, elf.MAGIC)) return error.NotElf;
-        const eh = std.mem.bytesToValue(elf.Elf64_Ehdr, data[0..@sizeOf(elf.Elf64_Ehdr)]);
+        if (data.len < @sizeOf(elf.Elf32_Ehdr) or !std.mem.startsWith(u8, data, elf.MAGIC)) return error.NotElf;
+        return if (data[elf.EI.CLASS] == elf.ELFCLASS32) c.parseElfOf(Elf32, name, data) else c.parseElfOf(Elf64, name, data);
+    }
+
+    const Elf64 = struct {
+        const Ehdr = elf.Elf64_Ehdr;
+        const Shdr = elf.Elf64_Shdr;
+        const Sym = elf.Elf64_Sym;
+        const Rela = elf.Elf64_Rela;
+        const Rel = elf.Elf64_Rel;
+        fn relType(info: u64) u32 {
+            return @truncate(info);
+        }
+        fn relSym(info: u64) u32 {
+            return @intCast(info >> 32);
+        }
+    };
+
+    const Elf32 = struct {
+        const Ehdr = elf.Elf32_Ehdr;
+        const Shdr = elf.Elf32_Shdr;
+        const Sym = elf.Elf32_Sym;
+        const Rela = elf.Elf32_Rela;
+        const Rel = elf.Elf32_Rel;
+        fn relType(info: u32) u32 {
+            return info & 0xff;
+        }
+        fn relSym(info: u32) u32 {
+            return info >> 8;
+        }
+    };
+
+    fn parseElfOf(c: *Converter, comptime E: type, name: []const u8, data: []const u8) !Input {
+        if (data.len < @sizeOf(E.Ehdr)) return error.NotElf;
+        const eh = std.mem.bytesToValue(E.Ehdr, data[0..@sizeOf(E.Ehdr)]);
         if (eh.e_type != .REL) return error.NotRelocatable;
         const machine: elf.EM = switch (c.arch) {
             .x86_64 => .X86_64,
             .aarch64 => .AARCH64,
+            .arm => .ARM,
         };
-        if (eh.e_machine != machine) {
+        if (eh.e_machine != machine or (E == Elf32) != (c.arch == .arm)) {
             std.log.err("{s}: built for another architecture", .{name});
             return error.WrongArchitecture;
         }
-        const shdrs = try c.arena.alloc(elf.Elf64_Shdr, eh.e_shnum);
-        for (shdrs, 0..) |*sh, k| sh.* = std.mem.bytesToValue(elf.Elf64_Shdr, slice(data, eh.e_shoff + k * @sizeOf(elf.Elf64_Shdr), @sizeOf(elf.Elf64_Shdr)));
+        const shdrs = try c.arena.alloc(E.Shdr, eh.e_shnum);
+        for (shdrs, 0..) |*sh, k| sh.* = std.mem.bytesToValue(E.Shdr, slice(data, eh.e_shoff + k * @sizeOf(E.Shdr), @sizeOf(E.Shdr)));
         const shstr = shdrs[eh.e_shstrndx];
         const secs = try c.arena.alloc(Sec, shdrs.len);
-        var symtab: ?elf.Elf64_Shdr = null;
+        var symtab: ?E.Shdr = null;
         for (shdrs, secs) |sh, *s| {
             const sname = cstr(data, shstr.sh_offset + sh.sh_name);
             s.* = .{
                 .name = sname,
-                .kind = elfKind(sname, sh),
+                .kind = elfKind(sname, sh.sh_type, sh.sh_flags, sh.sh_size),
                 .bytes = null,
                 .size = sh.sh_size,
                 .align_log2 = if (sh.sh_addralign <= 1) 0 else @intCast(std.math.log2_int(u64, sh.sh_addralign)),
@@ -246,10 +280,10 @@ pub const Converter = struct {
         var syms: []Sym = &.{};
         if (symtab) |st| {
             const strs = shdrs[st.sh_link];
-            const n: usize = @intCast(st.sh_size / @sizeOf(elf.Elf64_Sym));
+            const n: usize = @intCast(st.sh_size / @sizeOf(E.Sym));
             syms = try c.arena.alloc(Sym, n);
             for (syms, 0..) |*s, k| {
-                const es = std.mem.bytesToValue(elf.Elf64_Sym, slice(data, st.sh_offset + k * @sizeOf(elf.Elf64_Sym), @sizeOf(elf.Elf64_Sym)));
+                const es = std.mem.bytesToValue(E.Sym, slice(data, st.sh_offset + k * @sizeOf(E.Sym), @sizeOf(E.Sym)));
                 s.* = .{
                     .name = cstr(data, strs.sh_offset + es.st_name),
                     .value = es.st_value,
@@ -280,15 +314,39 @@ pub const Converter = struct {
                 try groups.append(c.arena, .{ .sig = syms[sh.sh_info].name, .members = m });
                 continue;
             }
-            if (sh.sh_type != elf.SHT_RELA or sh.sh_info >= shdrs.len) continue;
-            const n: usize = @intCast(sh.sh_size / @sizeOf(elf.Elf64_Rela));
+            const rela = sh.sh_type == elf.SHT_RELA;
+            if ((!rela and sh.sh_type != elf.SHT_REL) or sh.sh_info >= shdrs.len) continue;
+            const size: usize = if (rela) @sizeOf(E.Rela) else @sizeOf(E.Rel);
+            const n: usize = @intCast(sh.sh_size / size);
             const list = try c.arena.alloc(Rel, n);
             var used: usize = 0;
             for (0..n) |k| {
-                const r = std.mem.bytesToValue(elf.Elf64_Rela, slice(data, sh.sh_offset + k * @sizeOf(elf.Elf64_Rela), @sizeOf(elf.Elf64_Rela)));
-                const ty: u32 = @truncate(r.r_info);
+                const at = sh.sh_offset + k * size;
+                var offset: u64 = undefined;
+                var info: @FieldType(E.Rel, "r_info") = undefined;
+                var addend: i64 = 0;
+                if (rela) {
+                    const r = std.mem.bytesToValue(E.Rela, slice(data, at, size));
+                    offset = r.r_offset;
+                    info = r.r_info;
+                    addend = r.r_addend;
+                } else {
+                    const r = std.mem.bytesToValue(E.Rel, slice(data, at, size));
+                    offset = r.r_offset;
+                    info = r.r_info;
+                }
+                const ty = E.relType(info);
                 if (ty == 0) continue;
-                list[used] = .{ .offset = r.r_offset, .type = ty, .sym = @intCast(r.r_info >> 32), .addend = r.r_addend };
+                if (!rela) {
+                    // A relocation of REL keeps its addend in the place it
+                    // patches. Sections that executables leave out carry
+                    // only relocations that never apply.
+                    const patched = shdrs[sh.sh_info];
+                    if (secs[sh.sh_info].bytes == null) continue;
+                    const place = slice(data, patched.sh_offset + offset, 4);
+                    addend = armAddend(ty, std.mem.readInt(u32, place[0..4], .little)) orelse continue;
+                }
+                list[used] = .{ .offset = offset, .type = ty, .sym = E.relSym(info), .addend = addend };
                 used += 1;
             }
             rels[sh.sh_info] = list[0..used];
@@ -296,15 +354,39 @@ pub const Converter = struct {
         return .{ .name = name, .data = data, .secs = secs, .syms = syms, .rels = rels, .groups = groups.items };
     }
 
-    fn elfKind(name: []const u8, sh: elf.Elf64_Shdr) ?lobj.Kind {
-        if (sh.sh_flags & elf.SHF_ALLOC == 0 or sh.sh_size == 0) return null;
+    /// The addend of a relocation of 32-bit ARM from the word it patches,
+    /// or null for a relocation that patches nothing (`R_ARM_V4BX`). The
+    /// linker applies the addend as a relocation of RELA would.
+    fn armAddend(ty: u32, w: u32) ?i64 {
+        return switch (ty) {
+            // ABS32, REL32, GOTOFF32, BASE_PREL, TARGET1, TLS_LE32,
+            // GOT_PREL, TLS_IE32, TLS_LDO32, TLS_GD32, TLS_LDM32.
+            2, 3, 24, 25, 38, 108, 96, 107, 106, 104, 105 => @as(i32, @bitCast(w)),
+            // PREL31.
+            42 => @as(i32, @bitCast(w << 1)) >> 1,
+            // CALL, JUMP24, PC24: a signed word offset in 24 bits.
+            28, 29, 1 => @as(i64, @as(i32, @bitCast(w << 8)) >> 8) * 4,
+            // MOVW_ABS_NC, MOVT_ABS, MOVW_PREL_NC, MOVT_PREL: a signed
+            // 16-bit immediate split into 4 and 12 bits.
+            43, 44, 45, 46 => @as(i16, @bitCast(@as(u16, @truncate(((w >> 4) & 0xf000) | (w & 0xfff))))),
+            // V4BX marks a `bx` for ARMv4.
+            40 => null,
+            // The linker reports any other type.
+            else => @as(i32, @bitCast(w)),
+        };
+    }
+
+    fn elfKind(name: []const u8, sh_type: u32, sh_flags: u64, sh_size: u64) ?lobj.Kind {
+        if (sh_flags & elf.SHF_ALLOC == 0 or sh_size == 0) return null;
         if (std.mem.startsWith(u8, name, ".eh_frame") or std.mem.startsWith(u8, name, ".note") or std.mem.eql(u8, name, ".llvm_addrsig")) return null;
-        if (sh.sh_flags & elf.SHF_TLS != 0) return if (sh.sh_type == elf.SHT_NOBITS) .tbss else .tdata;
-        if (sh.sh_type == elf.SHT_NOBITS) return .bss;
-        if (sh.sh_type == elf.SHT_INIT_ARRAY or sh.sh_type == elf.SHT_PREINIT_ARRAY) return .init_array;
-        if (sh.sh_type == elf.SHT_FINI_ARRAY) return .fini_array;
-        if (sh.sh_flags & elf.SHF_EXECINSTR != 0) return .text;
-        if (sh.sh_flags & elf.SHF_WRITE != 0) return .data;
+        // The unwind tables of 32-bit ARM, which only an unwinder reads.
+        if (std.mem.startsWith(u8, name, ".ARM.exidx") or std.mem.startsWith(u8, name, ".ARM.extab")) return null;
+        if (sh_flags & elf.SHF_TLS != 0) return if (sh_type == elf.SHT_NOBITS) .tbss else .tdata;
+        if (sh_type == elf.SHT_NOBITS) return .bss;
+        if (sh_type == elf.SHT_INIT_ARRAY or sh_type == elf.SHT_PREINIT_ARRAY) return .init_array;
+        if (sh_type == elf.SHT_FINI_ARRAY) return .fini_array;
+        if (sh_flags & elf.SHF_EXECINSTR != 0) return .text;
+        if (sh_flags & elf.SHF_WRITE != 0) return .data;
         return .rodata;
     }
 
@@ -322,6 +404,7 @@ pub const Converter = struct {
         const cpu: u32 = switch (c.arch) {
             .x86_64 => 0x01000007,
             .aarch64 => 0x0100000c,
+            .arm => 12,
         };
         if (rd(u32, data, 4) != cpu) {
             std.log.err("{s}: built for another architecture", .{name});
@@ -602,6 +685,7 @@ pub const Converter = struct {
         return switch (arch) {
             .x86_64 => 0x8664,
             .aarch64 => 0xaa64,
+            .arm => 0x1c4,
         };
     }
 

@@ -714,6 +714,7 @@ fn linkImage(io: std.Io, gpa: Allocator, path: []const u8, proof: *libproof.Proo
         const host_arch: ?lobj.Arch = switch (builtin.cpu.arch) {
             .x86_64 => .x86_64,
             .aarch64 => .aarch64,
+            .arm => .arm,
             else => null,
         };
         const host_os: ?lobj.Os = switch (builtin.os.tag) {
