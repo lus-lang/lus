@@ -144,6 +144,8 @@ The tier allocates 13 integer and 16 float registers on aarch64, and 7 integer a
 
 `codegen.zig` is written against the assembler interface that `a64.zig` and `x64.zig` share, as the baseline emitter is, so the tier has one code generator for both targets. The assemblers gained three-operand arithmetic, float moves, indexed loads, and a floor division that preserves the registers the x86-64 division needs.
 
+The code generator emits the blocks in the order of the register allocator, except that the blocks of a loop stay next to each other. The reverse postorder puts the blocks that leave a loop between its header and the block that closes it, so the code generator moves them behind the closing block. A block belongs to the loop when it reaches a block that jumps back to the header. A conditional branch whose first target comes next branches to its second target on the opposite condition, so the path of an iteration falls through. On aarch64, run natively in a Linux VM on an Apple silicon Mac, `loop.lus` went from 77 to 54 ms in ReleaseSafe, best of 5. Under `qemu-arm`, which chains translated blocks only inside one 4 KB page, `methods.lus` went from 173 to 127 ms once the two halves of its loop lay on one page.
+
 ## Controls
 
 - `LUS_JIT=on`, the default, runs both tiers. `LUS_JIT=baseline` runs the baseline tier alone, and so does `LUS_JIT=eager`, which compiles every function on its first call.
