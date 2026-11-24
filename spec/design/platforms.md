@@ -315,7 +315,7 @@ iOS and the game consoles refuse executable memory to ordinary programs, so the 
 
 ## Testing each target
 
-`tools/test-linux.sh --riscv64 --loong64 --ppc64le` runs the gates of those three targets. Every Linux target is gated locally by a static musl build under qemu-user in the lima VM "boring", with the conformance suite under `LUS_JIT` set to `off`, the default, `eager`, `baseline`, and `opt-eager`, and with a `-Dgc-stress=97 -Dgc-verify=true` build under `eager` and `opt-eager`. CI cross-builds every target on every pull request. A nightly Linux job runs the same suite under `qemu-user-static` for each of them. The encodings of each assembler get byte-level unit tests against the output of a system assembler, as `a64.zig` and `x64.zig` have.
+`tools/test-linux.sh --riscv64 --loong64 --ppc64le` runs the gates of those three targets. Every Linux target is gated locally by a static musl build under qemu-user in the lima VM "boring", with the conformance suite under `LUS_JIT` set to `off`, the default, `eager`, `baseline`, and `opt-eager`, and with a `-Dgc-stress=97 -Dgc-verify=true` build under `eager` and `opt-eager`. CI cross-builds every target on every pull request. A nightly Linux job runs the same suite for each of them under qemu-user 10.2.3, which `docker/setup-qemu-action` registers from a pinned image, and a CI job runs the suite on each `lus` linked from its link object under the same emulator. The qemu-user 8.2 of Ubuntu 24.04 gives wrong results for AES-GCM compiled with the LSX vectors of loong64, which qemu 10 runs correctly. The encodings of each assembler get byte-level unit tests against the output of a system assembler, as `a64.zig` and `x64.zig` have.
 
 | target | local gate | CI |
 |---|---|---|
