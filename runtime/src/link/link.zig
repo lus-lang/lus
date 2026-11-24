@@ -267,6 +267,11 @@ pub const Linker = struct {
                 107 => true, // TLS_IE32
                 else => null,
             },
+            .riscv64 => switch (ty) {
+                20 => false, // GOT_HI20
+                21 => true, // TLS_GOT_HI20
+                else => null,
+            },
         };
     }
 
@@ -350,14 +355,17 @@ pub const Linker = struct {
 
     fn linkerSymbol(l: *const Linker, name: []const u8) u64 {
         const table = .{
-            .{ "__init_array_start", l.init_start },       .{ "__init_array_end", l.init_end },
-            .{ "__preinit_array_start", l.init_start },    .{ "__preinit_array_end", l.init_start },
-            .{ "__fini_array_start", l.fini_start },       .{ "__fini_array_end", l.fini_end },
-            .{ "_GLOBAL_OFFSET_TABLE_", l.got_addr },      .{ "__ehdr_start", l.base },
-            .{ "__dso_handle", l.dso_handle },             .{ "_end", l.end },
-            .{ "end", l.end },                             .{ "__bss_start", l.bss_start },
-            .{ "_etext", l.seg[1].addr + l.seg[1].memsz }, .{ "etext", l.seg[1].addr + l.seg[1].memsz },
-            .{ "_edata", l.bss_start },                    .{ "edata", l.bss_start },
+            .{ "__init_array_start", l.init_start },         .{ "__init_array_end", l.init_end },
+            .{ "__preinit_array_start", l.init_start },      .{ "__preinit_array_end", l.init_start },
+            .{ "__fini_array_start", l.fini_start },         .{ "__fini_array_end", l.fini_end },
+            .{ "_GLOBAL_OFFSET_TABLE_", l.got_addr },        .{ "__ehdr_start", l.base },
+            .{ "__dso_handle", l.dso_handle },               .{ "_end", l.end },
+            .{ "end", l.end },                               .{ "__bss_start", l.bss_start },
+            .{ "_etext", l.seg[1].addr + l.seg[1].memsz },   .{ "etext", l.seg[1].addr + l.seg[1].memsz },
+            .{ "_edata", l.bss_start },                      .{ "edata", l.bss_start },
+            // The global pointer of riscv64, which code reaches data
+            // through only when a linker shortens it.
+            .{ "__global_pointer$", l.seg[2].addr + 0x800 },
         };
         inline for (table) |e| if (std.mem.eql(u8, name, e[0])) return e[1];
         // `_DYNAMIC` is null in a static executable.
@@ -389,6 +397,7 @@ pub const Linker = struct {
             .x86_64 => @as(i64, @intCast(off)) - @as(i64, @intCast(l.tls.memsz)),
             .aarch64 => @intCast(off + std.mem.alignForward(u64, 16, l.tls.align_)),
             .arm => @intCast(off + std.mem.alignForward(u64, 8, l.tls.align_)),
+            .riscv64 => @intCast(off),
         };
     }
 
@@ -480,6 +489,7 @@ pub const Linker = struct {
                     else => return unsupported(l, r),
                 }
             },
+            .riscv64 => try l.applyRiscv(r, loc, sa, pi),
             .aarch64 => switch (r.type) {
                 257 => put(u64, loc, @bitCast(sa)), // ABS64
                 258 => put(u32, loc, std.math.cast(u32, sa) orelse return error.RelocationOverflow), // ABS32
@@ -507,6 +517,69 @@ pub const Linker = struct {
         }
     }
 
+    /// The value that the HI20 relocation of riscv64 at `offset` of atom
+    /// `atom` computes, which the LO12 relocation that names its place
+    /// completes.
+    fn riscvHi(l: *const Linker, atom: u32, offset: u32) Error!i64 {
+        const a = l.o.atoms[atom];
+        for (l.o.atomRelocs(a)) |h| {
+            if (h.offset != offset) continue;
+            const p: i64 = @intCast(l.addr[atom] + h.offset);
+            return switch (h.type) {
+                23 => @as(i64, @bitCast(l.symbol(h.target, h.sym))) +% h.addend - p, // PCREL_HI20
+                20 => @as(i64, @intCast(l.gotSlot(h, false))) + h.addend - p, // GOT_HI20
+                21 => @as(i64, @intCast(l.gotSlot(h, true))) + h.addend - p, // TLS_GOT_HI20
+                else => continue,
+            };
+        }
+        std.log.err("a LO12 relocation of riscv64 names a place without a HI20 relocation", .{});
+        return error.UnsupportedRelocation;
+    }
+
+    fn applyRiscv(l: *const Linker, r: lobj.Reloc, loc: []u8, sa: i64, pi: i64) Error!void {
+        const a = r.addend;
+        switch (r.type) {
+            1 => put(u32, loc, std.math.cast(u32, sa) orelse return error.RelocationOverflow), // 32
+            2 => put(u64, loc, @bitCast(sa)), // 64
+            16 => try rvBranch(loc, sa - pi), // BRANCH
+            17 => try rvJal(loc, sa - pi), // JAL
+            18, 19 => { // CALL, CALL_PLT: auipc and jalr
+                const v = sa - pi;
+                try rvHi20(loc, v);
+                rvLo12I(loc[4..], v);
+            },
+            20 => try rvHi20(loc, @as(i64, @intCast(l.gotSlot(r, false))) + a - pi), // GOT_HI20
+            21 => try rvHi20(loc, @as(i64, @intCast(l.gotSlot(r, true))) + a - pi), // TLS_GOT_HI20
+            23 => try rvHi20(loc, sa - pi), // PCREL_HI20
+            24 => rvLo12I(loc, try l.riscvHi(r.target.index, r.sym)), // PCREL_LO12_I
+            25 => rvLo12S(loc, try l.riscvHi(r.target.index, r.sym)), // PCREL_LO12_S
+            26 => try rvHi20(loc, sa), // HI20
+            27 => rvLo12I(loc, sa), // LO12_I
+            28 => rvLo12S(loc, sa), // LO12_S
+            29 => try rvHi20(loc, l.tpOffset(@bitCast(l.symbol(r.target, r.sym))) + a), // TPREL_HI20
+            30 => rvLo12I(loc, l.tpOffset(@bitCast(l.symbol(r.target, r.sym))) + a), // TPREL_LO12_I
+            31 => rvLo12S(loc, l.tpOffset(@bitCast(l.symbol(r.target, r.sym))) + a), // TPREL_LO12_S
+            32 => {}, // TPREL_ADD marks the add of the thread pointer.
+            33 => loc[0] +%= @truncate(@as(u64, @bitCast(sa))), // ADD8
+            34 => put(u16, loc, std.mem.readInt(u16, loc[0..2], .little) +% @as(u16, @truncate(@as(u64, @bitCast(sa))))), // ADD16
+            35 => put(u32, loc, insn(loc) +% @as(u32, @truncate(@as(u64, @bitCast(sa))))), // ADD32
+            36 => put(u64, loc, std.mem.readInt(u64, loc[0..8], .little) +% @as(u64, @bitCast(sa))), // ADD64
+            37 => loc[0] -%= @truncate(@as(u64, @bitCast(sa))), // SUB8
+            38 => put(u16, loc, std.mem.readInt(u16, loc[0..2], .little) -% @as(u16, @truncate(@as(u64, @bitCast(sa))))), // SUB16
+            39 => put(u32, loc, insn(loc) -% @as(u32, @truncate(@as(u64, @bitCast(sa))))), // SUB32
+            40 => put(u64, loc, std.mem.readInt(u64, loc[0..8], .little) -% @as(u64, @bitCast(sa))), // SUB64
+            44 => try rvcBranch(loc, sa - pi), // RVC_BRANCH
+            45 => try rvcJump(loc, sa - pi), // RVC_JUMP
+            52 => loc[0] = (loc[0] & 0xc0) | ((loc[0] -% @as(u8, @truncate(@as(u64, @bitCast(sa))))) & 0x3f), // SUB6
+            53 => loc[0] = (loc[0] & 0xc0) | (@as(u8, @truncate(@as(u64, @bitCast(sa)))) & 0x3f), // SET6
+            54 => loc[0] = @truncate(@as(u64, @bitCast(sa))), // SET8
+            55 => put(u16, loc, @truncate(@as(u64, @bitCast(sa)))), // SET16
+            56 => put(u32, loc, @truncate(@as(u64, @bitCast(sa)))), // SET32
+            57 => try putI32(loc, sa - pi), // 32_PCREL
+            else => return unsupported(l, r),
+        }
+    }
+
     fn unsupported(l: *const Linker, r: lobj.Reloc) Error {
         std.log.err("relocation type {d} of {s} is not supported", .{ r.type, @tagName(l.o.arch) });
         return error.UnsupportedRelocation;
@@ -521,13 +594,16 @@ pub const Linker = struct {
             .e_machine = switch (o.arch) {
                 .x86_64 => .X86_64,
                 .aarch64 => .AARCH64,
+                .riscv64 => .RISCV,
                 .arm => unreachable,
             },
             .e_version = 1,
             .e_entry = l.addr[o.entry.atom] + o.entry.offset,
             .e_phoff = @sizeOf(elf.Elf64_Ehdr),
             .e_shoff = 0,
-            .e_flags = 0,
+            // riscv64 code uses compressed instructions and passes
+            // doubles in float registers.
+            .e_flags = if (o.arch == .riscv64) 0x5 else 0,
             .e_ehsize = @sizeOf(elf.Elf64_Ehdr),
             .e_phentsize = @sizeOf(Phdr),
             .e_phnum = l.phnum,
@@ -592,6 +668,72 @@ pub const Linker = struct {
         @memcpy(out[ehsize..][0..phdr_size], std.mem.sliceAsBytes(&ph));
     }
 };
+
+/// The upper 20 bits of `v` for `auipc` or `lui`, rounded so that the
+/// signed lower 12 bits complete it.
+fn rvHi20(loc: []u8, v: i64) Error!void {
+    const hi = (v + 0x800) >> 12;
+    if (hi < -(1 << 19) or hi >= (1 << 19)) return error.RelocationOverflow;
+    const imm: u32 = @truncate(@as(u64, @bitCast(hi)));
+    put(u32, loc, (insn(loc) & 0xfff) | (imm << 12));
+}
+
+/// The signed lower 12 bits of `v`.
+fn rvLo12(v: i64) u32 {
+    return @truncate(@as(u64, @bitCast(v)) & 0xfff);
+}
+
+fn rvLo12I(loc: []u8, v: i64) void {
+    put(u32, loc, (insn(loc) & 0x000f_ffff) | (rvLo12(v) << 20));
+}
+
+fn rvLo12S(loc: []u8, v: i64) void {
+    const lo = rvLo12(v);
+    put(u32, loc, (insn(loc) & 0x01ff_f07f) | ((lo >> 5) << 25) | ((lo & 0x1f) << 7));
+}
+
+fn rvBranch(loc: []u8, d: i64) Error!void {
+    if (d & 1 != 0 or d < -(1 << 12) or d >= (1 << 12)) return error.RelocationOverflow;
+    const v: u32 = @truncate(@as(u64, @bitCast(d)));
+    const imm = ((v >> 12) & 1) << 31 | ((v >> 5) & 0x3f) << 25 | ((v >> 1) & 0xf) << 8 | ((v >> 11) & 1) << 7;
+    put(u32, loc, (insn(loc) & 0x01ff_f07f) | imm);
+}
+
+fn rvJal(loc: []u8, d: i64) Error!void {
+    if (d & 1 != 0 or d < -(1 << 20) or d >= (1 << 20)) return error.RelocationOverflow;
+    const v: u32 = @truncate(@as(u64, @bitCast(d)));
+    const imm = ((v >> 20) & 1) << 31 | ((v >> 1) & 0x3ff) << 21 | ((v >> 11) & 1) << 20 | ((v >> 12) & 0xff) << 12;
+    put(u32, loc, (insn(loc) & 0xfff) | imm);
+}
+
+fn half(loc: []u8) u16 {
+    return std.mem.readInt(u16, loc[0..2], .little);
+}
+
+/// The offset of `c.beqz` and `c.bnez`: bits 8, 4 and 3 at 12 to 10, and
+/// bits 7, 6, 2, 1, and 5 at 6 to 2.
+fn rvcBranch(loc: []u8, d: i64) Error!void {
+    if (d & 1 != 0 or d < -(1 << 8) or d >= (1 << 8)) return error.RelocationOverflow;
+    const v: u16 = @truncate(@as(u64, @bitCast(d)));
+    const b = struct {
+        fn f(x: u16, i: u4) u16 {
+            return (x >> i) & 1;
+        }
+    }.f;
+    const imm = b(v, 8) << 12 | b(v, 4) << 11 | b(v, 3) << 10 | b(v, 7) << 6 | b(v, 6) << 5 | b(v, 2) << 4 | b(v, 1) << 3 | b(v, 5) << 2;
+    put(u16, loc, (half(loc) & 0xe383) | imm);
+}
+
+/// The offset of `c.j`: bits 11, 4, 9, 8, 10, 6, 7, 3, 2, 1, and 5 at 12
+/// to 2.
+fn rvcJump(loc: []u8, d: i64) Error!void {
+    if (d & 1 != 0 or d < -(1 << 11) or d >= (1 << 11)) return error.RelocationOverflow;
+    const v: u16 = @truncate(@as(u64, @bitCast(d)));
+    const order = [_]u4{ 11, 4, 9, 8, 10, 6, 7, 3, 2, 1, 5 };
+    var imm: u16 = 0;
+    for (order, 0..) |bit, k| imm |= ((v >> bit) & 1) << @intCast(12 - k);
+    put(u16, loc, (half(loc) & 0xe003) | imm);
+}
 
 /// Whether a relocation of 32-bit ARM writes a branch in the ARM state,
 /// which cannot reach Thumb code.
@@ -757,4 +899,64 @@ test "the linker writes an ELF32 executable for 32-bit ARM" {
     try std.testing.expectEqual(d & 0xffff, ((movw >> 4) & 0xf000) | (movw & 0xfff));
     try std.testing.expectEqual(d >> 16, ((movt >> 4) & 0xf000) | (movt & 0xfff));
     try std.testing.expect(d >= 0x10000 and d % 4 == 0);
+}
+
+test "the linker writes the calls and the address pairs of riscv64" {
+    const gpa = std.testing.allocator;
+    var w: lobj.Writer = .{ .gpa = gpa, .arch = .riscv64, .os = .linux };
+    defer w.deinit();
+    // _start: call f (auipc ra and jalr ra), then auipc a0 and addi a0
+    // with the address of d, then beq zero, zero to f.
+    const code = [_]u8{
+        0x97, 0x00, 0x00, 0x00, // auipc ra, 0
+        0xe7, 0x80, 0x00, 0x00, // jalr ra, 0(ra)
+        0x17, 0x05, 0x00, 0x00, // auipc a0, 0
+        0x13, 0x05, 0x05, 0x00, // addi a0, a0, 0
+        0x63, 0x00, 0x00, 0x00, // beq zero, zero, 0
+    };
+    const start = try w.atom(.text, 2, &code, code.len, "_start");
+    try w.reloc(.{ .offset = 0, .type = 19, .target = .{ .index = 1, .space = .atom }, .addend = 0 });
+    try w.reloc(.{ .offset = 8, .type = 23, .target = .{ .index = 2, .space = .atom }, .addend = 0x123 });
+    try w.reloc(.{ .offset = 12, .type = 24, .target = .{ .index = 0, .space = .atom }, .sym = 8, .addend = 0 });
+    try w.reloc(.{ .offset = 16, .type = 16, .target = .{ .index = 1, .space = .atom }, .addend = 0 });
+    _ = try w.atom(.text, 2, &[_]u8{ 0x67, 0x80, 0x00, 0x00 }, 4, "f");
+    _ = try w.atom(.data, 3, &@as([0x200]u8, @splat(0)), 0x200, "d");
+    w.entry = .{ .name = try w.string("_start"), .atom = start, .offset = 0 };
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    defer buf.deinit();
+    try w.write(&buf.writer);
+    const bytes = try gpa.alignedAlloc(u8, .@"8", buf.written().len);
+    defer gpa.free(bytes);
+    @memcpy(bytes, buf.written());
+    const o = try lobj.read(bytes);
+    var l: Linker = .{ .gpa = gpa, .o = &o };
+    defer l.deinit();
+    try l.drop(.all);
+    try l.mark();
+    try l.layout();
+    const out = try l.write();
+    defer gpa.free(out);
+    const text = l.addr[0];
+    const word = struct {
+        fn f(b: []const u8, at: u64) u32 {
+            return std.mem.readInt(u32, b[@intCast(at)..][0..4], .little);
+        }
+    }.f;
+    const sext = struct {
+        fn f(v: u32, bits: u5) i64 {
+            const sh: u6 = 32 - @as(u6, bits);
+            return @as(i32, @bitCast(v << @intCast(sh))) >> @intCast(sh);
+        }
+    }.f;
+    const at = text - l.base;
+    // The pair of the call reaches f.
+    const call = (sext(word(out, at) >> 12, 20) << 12) + sext(word(out, at + 4) >> 20, 12);
+    try std.testing.expectEqual(@as(i64, @intCast(l.addr[1])) - @as(i64, @intCast(text)), call);
+    // The pair of the address reaches d + 0x123 from the auipc.
+    const addr = (sext(word(out, at + 8) >> 12, 20) << 12) + sext(word(out, at + 12) >> 20, 12);
+    try std.testing.expectEqual(@as(i64, @intCast(l.addr[2] + 0x123)) - @as(i64, @intCast(text + 8)), addr);
+    // The branch reaches f from its own place.
+    const b = word(out, at + 16);
+    const boff = (@as(i64, b >> 31) << 12) | (@as(i64, (b >> 7) & 1) << 11) | (@as(i64, (b >> 25) & 0x3f) << 5) | (@as(i64, (b >> 8) & 0xf) << 1);
+    try std.testing.expectEqual(@as(i64, @intCast(l.addr[1])) - @as(i64, @intCast(text + 16)), boff);
 }

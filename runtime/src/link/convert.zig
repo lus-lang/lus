@@ -27,6 +27,7 @@ pub const linker_defined = [_][]const u8{
     "__ehdr_start",          "__dso_handle",        "_end",               "__bss_start",
     "_etext",                "_edata",              "end",                "etext",
     "edata",                 "_mh_execute_header",  "__ImageBase",        "__image_base__",
+    "__global_pointer$",
 };
 
 const Sec = struct {
@@ -252,6 +253,7 @@ pub const Converter = struct {
             .x86_64 => .X86_64,
             .aarch64 => .AARCH64,
             .arm => .ARM,
+            .riscv64 => .RISCV,
         };
         if (eh.e_machine != machine or (E == Elf32) != (c.arch == .arm)) {
             std.log.err("{s}: built for another architecture", .{name});
@@ -337,6 +339,9 @@ pub const Converter = struct {
                 }
                 const ty = E.relType(info);
                 if (ty == 0) continue;
+                // RELAX and ALIGN of riscv64 permit the linker to shorten
+                // code, and code that keeps its length needs neither.
+                if (c.arch == .riscv64 and (ty == 51 or ty == 43)) continue;
                 if (!rela) {
                     // A relocation of REL keeps its addend in the place it
                     // patches. Sections that executables leave out carry
@@ -405,6 +410,7 @@ pub const Converter = struct {
             .x86_64 => 0x01000007,
             .aarch64 => 0x0100000c,
             .arm => 12,
+            .riscv64 => 24,
         };
         if (rd(u32, data, 4) != cpu) {
             std.log.err("{s}: built for another architecture", .{name});
@@ -686,6 +692,7 @@ pub const Converter = struct {
             .x86_64 => 0x8664,
             .aarch64 => 0xaa64,
             .arm => 0x1c4,
+            .riscv64 => 0x5064,
         };
     }
 

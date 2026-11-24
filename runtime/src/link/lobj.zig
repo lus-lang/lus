@@ -24,6 +24,7 @@ pub const Arch = enum(u8) {
     aarch64,
     /// 32-bit ARM, ARMv7-A in the ARM state with the hard-float ABI.
     arm,
+    riscv64,
 
     /// The size of an address on the architecture.
     pub fn wordSize(a: Arch) u8 {
