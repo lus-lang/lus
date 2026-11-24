@@ -82,13 +82,18 @@ jobs:
             prefix="../out/$target"
             zig build -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
             zig build lib -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
-            # On 32-bit ARM `lus build --aot` links from the link object of
-            # the runtime, which it finds next to `lus`
-            # (spec/design/aot.md, "The link object").
-            if [ "$target" = arm-linux-musleabihf ]; then
-              zig build link-object -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "../out/lo-$target"
-              cp "../out/lo-$target/lib/lus-runtime.lo" "$prefix/bin/lus-runtime.lo"
-            fi
+            # `lus build --aot` links from the link object of the runtime
+            # where the linker writes executables for the target, and
+            # bundles on the prebuilt runtime elsewhere. It finds both next
+            # to `lus` (spec/design/aot.md, "The executable" and "The link
+            # object").
+            zig build runtime -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
+            case "$target" in
+              *linux-musl* | aarch64-macos | x86_64-windows)
+                zig build link-object -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "../out/lo-$target"
+                cp "../out/lo-$target/lib/lus-runtime.lo" "$prefix/bin/lus-runtime.lo"
+                ;;
+            esac
             # The license of Lus and of every component compiled into the
             # archive ship at its root.
             cp ../LICENSE.md "$prefix/LICENSE.md"

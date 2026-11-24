@@ -32,7 +32,9 @@ Every archive holds the `lus` interpreter, the embedding libraries, and the `lus
 
 The Linux builds link musl statically, so the same `lus` binary runs on any Linux distribution of its architecture.
 
-The 32-bit ARM archive runs on ARMv7-A and later processors with hardware floating point, such as a Raspberry Pi 2 or newer running a 32-bit system. Its `bin` directory also holds `lus-runtime.lo`, the runtime as a link object, from which `lus build --aot` links an executable that keeps only the parts of the runtime the program reaches.
+The 32-bit ARM archive runs on ARMv7-A and later processors with hardware floating point, such as a Raspberry Pi 2 or newer running a 32-bit system.
+
+The `bin` directory of every archive also holds `lus-runtime`, the runtime that [`lus build --aot`](/manual/cli#lus-build) starts the executable from. The archives for Linux, for macOS on Apple Silicon, and for Windows on x86_64 also hold `lus-runtime.lo`, the runtime as a link object, from which `lus build --aot` links an executable that keeps only the parts of the runtime the program reaches.
 
 On Linux and macOS, the `install.sh` script downloads the archive for the machine it runs on and checks it against `SHA256SUMS`. It then unpacks the archive into `~/.lus/versions` and adds `~/.lus/bin` to `PATH` in the profile of the shell. On Windows, `lus-setup.exe` installs the x86_64 archive into `%LOCALAPPDATA%\lus` the same way and adds its `bin` directory to `PATH`. It installs for the current user by default. Run it with `/ALLUSERS` from an elevated prompt to install for every user.
 

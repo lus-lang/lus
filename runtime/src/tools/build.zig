@@ -643,11 +643,12 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
                 return 1;
             };
             defer gpa.free(dir);
-            break :blk try std.fs.path.join(gpa, &.{ dir, "lus-runtime" });
+            break :blk try std.fs.path.join(gpa, &.{ dir, if (builtin.os.tag == .windows) "lus-runtime.exe" else "lus-runtime" });
         };
         defer if (base) |b| if (opts.runtime == null) gpa.free(b);
-        // Releases ship the link object of the runtime next to it.
-        const default_lo = if (base) |b| try std.fmt.allocPrint(gpa, "{s}.lo", .{b}) else null;
+        // Releases ship the link object of the runtime next to it, named
+        // without the extension of an executable.
+        const default_lo = if (base) |b| try std.fmt.allocPrint(gpa, "{s}.lo", .{if (std.mem.endsWith(u8, b, ".exe")) b[0 .. b.len - 4] else b}) else null;
         defer if (default_lo) |d| gpa.free(d);
         const lo_path = opts.link_object orelse if (default_lo) |d| (if (exists(io, d)) d else null) else null;
         var modules: std.ArrayList(bundle.Module) = .empty;
