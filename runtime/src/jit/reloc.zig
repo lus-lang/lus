@@ -77,6 +77,10 @@ pub const Form = enum(u8) {
     /// a data atom with `adrp` and `ldr`, and the loader writes the slot
     /// (`spec/design/aot.md`, "The linker").
     slot,
+    /// The two instructions of 32-bit ARM that build an address 16 bits
+    /// at a time: `movw` and `movt`. An address of a 32-bit target is one
+    /// word, and the register pair that holds it has a zero high word.
+    arm_pair,
 
     /// The number of bytes the form covers.
     pub fn size(f: Form) usize {
@@ -85,6 +89,7 @@ pub const Form = enum(u8) {
             .ppc_seq => 20,
             .s390_pair => 12,
             .slot => 8,
+            .arm_pair => 8,
         };
     }
 };
@@ -145,6 +150,14 @@ pub fn apply(code: []u8, e: Entry, addr: u64) void {
             std.mem.writeInt(u32, code[e.at + 8 ..][0..4], @truncate(addr), .big);
         },
         .slot => if (slotTarget(code, e.at)) |t| std.mem.writeInt(u64, code[t..][0..8], addr, .little),
+        .arm_pair => {
+            const halves = [_]u32{ @as(u16, @truncate(addr)), @as(u16, @truncate(addr >> 16)) };
+            for (halves, 0..) |h, i| {
+                const p = code[e.at + i * 4 ..][0..4];
+                const w = std.mem.readInt(u32, p, .little);
+                std.mem.writeInt(u32, p, (w & 0xFFF0_F000) | (h >> 12) << 16 | (h & 0xFFF), .little);
+            }
+        },
     }
 }
 
@@ -161,13 +174,28 @@ pub fn wide(v: u64) bool {
     return s < std.math.minInt(i32) or s > std.math.maxInt(u32) or (v >= image.lo and v < image.hi);
 }
 
+/// Whether an immediate of a 32-bit target needs a relocation or a
+/// `literal` name when the assembler compiles ahead of time. Every
+/// address of such a target is one word, so the resolver decides for
+/// each value with a zero high word that lies above the first 64 KB,
+/// where the image, the heap, and the code of a process begin. The
+/// instruction counts, the slot numbers, and the tags that the emitters
+/// write lie below.
+pub fn wide32(v: u64) bool {
+    return v >> 32 == 0 and v >= 0x10000;
+}
+
 fn expectPatchable(comptime M: type, dst: M.Reg) !void {
+    try expectPatchableAt(M, dst, 0x1122334455667788, 0x0000_7FFF_ABCD_0123);
+}
+
+fn expectPatchableAt(comptime M: type, dst: M.Reg, first: u64, second: u64) !void {
     const gpa = std.testing.allocator;
     const r: Reloc = .{ .kind = .routine, .a = 7 };
     var a = M.Assembler.init(gpa);
     defer a.deinit();
     a.aot = true;
-    a.movImmReloc(dst, 0x1122334455667788, r);
+    a.movImmReloc(dst, first, r);
     a.trap();
     try std.testing.expect(a.finish());
     try std.testing.expectEqual(@as(usize, 1), a.relocs.items.len);
@@ -176,10 +204,10 @@ fn expectPatchable(comptime M: type, dst: M.Reg) !void {
     var b = M.Assembler.init(gpa);
     defer b.deinit();
     b.aot = true;
-    b.movImmReloc(dst, 0x0000_7FFF_ABCD_0123, r);
+    b.movImmReloc(dst, second, r);
     b.trap();
     try std.testing.expect(b.finish());
-    apply(a.buf.items, a.relocs.items[0], 0x0000_7FFF_ABCD_0123);
+    apply(a.buf.items, a.relocs.items[0], second);
     try std.testing.expectEqualSlices(u8, b.buf.items, a.buf.items);
 }
 
@@ -190,6 +218,10 @@ test "every assembler writes a patchable address" {
     try expectPatchable(@import("la64.zig"), .r12);
     try expectPatchable(@import("ppc64.zig"), .r21);
     try expectPatchable(@import("s390x.zig"), .r11);
+    // An address of 32-bit ARM is one word. The first value takes one
+    // instruction outside the patchable form, and the pair holds it too.
+    try expectPatchableAt(@import("a32.zig"), .t0, 0x0000_FF00, 0xABCD_0123);
+    try expectPatchableAt(@import("a32.zig"), .t5, 0x1122_3344, 0x7FFF_0000);
 }
 
 test "a wide immediate without a relocation is counted ahead of time" {

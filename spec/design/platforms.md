@@ -22,21 +22,23 @@ Four facts from the table shape our order.
 
 ## What Lus supports today
 
-| target | interpreter | baseline tier | optimizing tier | release artifact |
-|---|---|---|---|---|
-| aarch64 macOS | yes | yes | yes | yes |
-| x86-64 macOS | yes | yes | yes | yes |
-| aarch64 Linux | yes | yes | yes | yes, static musl |
-| riscv64 Linux | yes | yes | yes | not yet |
-| loong64 Linux | yes | yes | yes | not yet |
-| ppc64le Linux | yes | yes | yes | not yet |
-| x86-64 Linux | yes | yes | yes | yes, static musl |
-| x86-64 Windows | yes | | | yes |
-| arm64 Windows | yes | | | yes |
-| 32-bit ARM Linux | yes | yes | yes | not yet |
-| s390x Linux | yes | yes | yes | not yet |
-| FreeBSD (aarch64, x86-64) | yes | yes | yes | not yet |
-| wasm32 WASI | yes | WebAssembly modules | | the npm package |
+| target | interpreter | baseline tier | optimizing tier | ahead of time | release artifact |
+|---|---|---|---|---|---|
+| aarch64 macOS | yes | yes | yes | yes | yes |
+| x86-64 macOS | yes | yes | yes | yes | yes |
+| aarch64 Linux | yes | yes | yes | yes | yes, static musl |
+| riscv64 Linux | yes | yes | yes | yes | not yet |
+| loong64 Linux | yes | yes | yes | yes | not yet |
+| ppc64le Linux | yes | yes | yes | yes | not yet |
+| x86-64 Linux | yes | yes | yes | yes | yes, static musl |
+| x86-64 Windows | yes |  |  |  | yes |
+| arm64 Windows | yes |  |  |  | yes |
+| 32-bit ARM Linux | yes | yes | yes | yes | not yet |
+| s390x Linux | yes | yes | yes | yes | not yet |
+| FreeBSD (aarch64, x86-64) | yes | yes | yes | yes | not yet |
+| wasm32 WASI | yes | WebAssembly modules |  |  | the npm package |
+
+The column "ahead of time" marks the targets whose assembler records relocations, so that `LUS_JIT_AOT` and `lus build --aot` work there (`aot.md`).
 
 The native tiers depend on the target in six places.
 
@@ -147,7 +149,19 @@ A frame of a 32-bit target is padded to 64 bytes, so that native code finds a fr
 
 The C library of a static build finds the stack of the main thread by probing the pages below it with one system call each. Under qemu-user that walk covers the gigabyte of address space that the emulator reserves for a 32-bit program, which takes seconds. `stackBounds` therefore answers with zeros for the main thread of a static 32-bit ARM build, which gives a chain of direct calls there the 160 KB below its entry. Every other thread asks the C library, which answers from its own record of the thread.
 
-Code compiled ahead of time stays with the 64-bit targets. The assembler of 32-bit ARM writes every address in place for the running process, so a 32-bit ARM build reads `LUS_JIT_AOT` as unset.
+### Code compiled ahead of time
+
+`LUS_JIT_AOT` and `lus build --aot` work on 32-bit ARM as they do on the 64-bit targets (`aot.md`). On a 64-bit target the value of a constant tells whether it can be an address, since the heap and the code lie above 4 GB. On 32-bit ARM an address is one word, so the interface says which constants can be addresses, and the emitters name the integers among them.
+
+- **Constants the size of a pointer.** `movImm`, `storeImm64`, `storeImmWord`, and the three kinds of call take a constant that may be an address. Ahead of time the assembler hands the resolver each of them whose high word is zero and whose low word is at least 64 KB, where the image, the heap, and the code of a process begin. The resolver names the address, calls the value a literal, or calls it unknown, as on every target. The instruction counts, slot numbers, and tags that the emitters write lie below 64 KB and build in place.
+- **32-bit integers.** The constants of `addImm`, `jumpIfImm`, and `storeImm32` are 32-bit integers on every target and build in place. A guard or a branch of the optimizing tier whose constant is an address carries the flag `address`. Ahead of time such a constant loads into a register through `movImm`, and the comparison takes two registers.
+- **Integers the size of a pointer.** The baseline templates and the code generator pass an instruction word, a hash, an integer or float constant of the program, and the shaped bit of a table through `movImmReloc` with the `literal` name, or through `storeLiteral`. Those values never reach the resolver. In the intermediate representation `kint` holds only integers, and every constant address is a `kptr`.
+
+An address takes the form `movw` and `movt`, whose two 16-bit fields the loader patches (`reloc.Form.arm_pair`). The high word of the register pair that holds an address is zero in every process, so it builds in place. The division and truncation routines of `a32.zig` take the routine numbers after the step routines.
+
+The executable of 32-bit ARM is static and loads at 64 KB. An integer that reaches the resolver without a `literal` name and lands in the image, the heap, or the executable memory is unknown, so its function or unit stays out of the code section (`aot.md`, "Testing"). The linker of `lus build` writes x86-64 and aarch64 executables, so `lus build --aot` on 32-bit ARM appends the code section to the prebuilt runtime, which relocates it at load.
+
+Under `qemu-arm`, the executable that `lus build --aot` makes of `tests/build/aot.lus` on `lus-runtime` prints the output of `zig build test-runtime`, and `LUS_AOT_REPORT` counts 9 functions and 6 units installed and both loop units entered. The benchmarks `fib`, `loop`, `methods`, `arrays`, `tables`, `closures`, `strings`, `data`, `unicode`, and `patterns` give the same output compiled ahead of time, bundled on `lus-runtime`, and bundled on `lus`. `fib` takes 0.18 s compiled ahead of time against 0.88 s interpreted on `lus-runtime` and 0.21 s under the JIT, and `methods` takes 0.16 s against 5.40 s and 0.14 s, in ReleaseSafe builds under `qemu-arm` on an Apple silicon Mac.
 
 ## s390x
 
@@ -239,7 +253,7 @@ iOS and the game consoles refuse executable memory to ordinary programs, so the 
 
 qemu-user reports a stack for the main thread that includes memory below it, which made chains of direct calls overrun the stack in the x86-64 gate. `stackBounds` keeps its low bound within `RLIMIT_STACK` below the top of the stack, so the qemu gates run direct calls as native systems do. The emulated gates set `LUS_EMULATED`, which skips `a_slow_reader_loses_its_connection_test` in `serve_test.lus`, the one test whose bound qemu-user breaks by buffering sockets differently. qemu does not model the memory ordering or the instruction fetch of real hardware, so each qemu target is confirmed on native hardware, such as a cloud server, before it is announced.
 
-The interpreters of riscv64, ppc64le, and loong64 build from the same sources and pass the conformance suite under qemu-user in the VM, so a failure in the gate of a new JIT on those targets points at the new tier. Both tiers on riscv64 pass the whole suite under qemu-user in every JIT mode, with `LUS_JIT_DIRECT=1024`, and in a `-Dgc-stress=97 -Dgc-verify=true` build. Both tiers on 32-bit ARM pass it the same way under `qemu-arm`.
+The interpreters of riscv64, ppc64le, and loong64 build from the same sources and pass the conformance suite under qemu-user in the VM, so a failure in the gate of a new JIT on those targets points at the new tier. Both tiers on riscv64 pass the whole suite under qemu-user in every JIT mode, with `LUS_JIT_DIRECT=1024`, and in a `-Dgc-stress=97 -Dgc-verify=true` build. Both tiers on 32-bit ARM pass it the same way under `qemu-arm`. The suite and the tests of the language server also pass there under `LUS_JIT_AOT=reload` with an empty log, in the default mode, `eager`, and `opt-eager`, and `tools/test-linux.sh --arm` runs the default mode of that check.
 
 ## Ahead-of-time compilation
 

@@ -310,6 +310,16 @@ fn addrOf(f: anytype) u32 {
     return @truncate(@intFromPtr(f));
 }
 
+/// The routines of this file that native code calls, which the
+/// relocations of code compiled ahead of time number after the routines
+/// that every target shares (`aot.routineId`).
+pub const routines = [_]*const anyopaque{
+    @ptrCast(&rt.divRem),
+    @ptrCast(&rt.floorDiv),
+    @ptrCast(&rt.floorMod),
+    @ptrCast(&rt.floatToInt),
+};
+
 pub const Assembler = struct {
     gpa: std.mem.Allocator,
     buf: std.ArrayList(u8) = .empty,
@@ -317,12 +327,14 @@ pub const Assembler = struct {
     labels: std.ArrayList(u32) = .empty,
     fixups: std.ArrayList(Fixup) = .empty,
     oom: bool = false,
-    /// The fields that the emitter sets when it compiles ahead of time,
-    /// which this target leaves to the others: the gate in `jit.zig`
-    /// keeps them at their defaults.
+    /// Set when the code is compiled ahead of time (`reloc.zig`). The
+    /// routines that write addresses record relocations.
     aot: bool = false,
     relocs: std.ArrayList(reloc.Entry) = .empty,
+    /// How many candidate immediates the resolver called unknown, or
+    /// found no resolver for, while `aot` was set.
     unrelocated: u32 = 0,
+    /// Decides what a candidate immediate is.
     resolver: ?reloc.Resolver = null,
     /// Set when a branch cannot reach its label.
     overflow: bool = false,
@@ -374,8 +386,8 @@ pub const Assembler = struct {
         };
     }
 
-    /// Every constant builds in place with `movw` and `movt`, so the
-    /// assembler keeps no pool.
+    /// Every constant builds in place with `mov`, `mvn`, or `movw` and
+    /// `movt`, so the assembler keeps no pool.
     pub fn flushPool(a: *Assembler) void {
         _ = a;
     }
@@ -416,6 +428,43 @@ pub const Assembler = struct {
         if (immOp(~v)) |o| return a.dp(al, op_mvn, false, 0, dst, o);
         a.word(0xE3000000 | (v >> 12 & 0xF) << 16 | @as(u32, dst) << 12 | (v & 0xFFF));
         if (v >> 16 != 0) a.word(0xE3400000 | (v >> 28) << 16 | @as(u32, dst) << 12 | (v >> 16 & 0xFFF));
+    }
+    /// Loads an address in the form whose bytes the loader patches: a
+    /// `movw` and a `movt`, whatever the value.
+    fn immReloc(a: *Assembler, dst: P, v: u32, r: reloc.Reloc) void {
+        a.relocs.append(a.gpa, .{ .at = a.offset(), .form = .arm_pair, .r = r }) catch {
+            a.oom = true;
+        };
+        a.word(0xE3000000 | (v >> 12 & 0xF) << 16 | @as(u32, dst) << 12 | (v & 0xFFF));
+        a.word(0xE3400000 | (v >> 28) << 16 | @as(u32, dst) << 12 | (v >> 16 & 0xFFF));
+    }
+    /// What a constant the size of a pointer is, when the code is
+    /// compiled ahead of time: the relocation of an address, or null for
+    /// a value that builds in place. Every address of this target is one
+    /// word, so the resolver sees each such constant above the first
+    /// 64 KB, and one that it cannot name is counted. The constants of
+    /// `addImm`, `jumpIfImm`, and `storeImm32` are 32-bit integers on
+    /// every target and build in place.
+    fn candidate(a: *Assembler, v: u32) ?reloc.Reloc {
+        if (!a.aot or !reloc.wide32(v)) return null;
+        const res: reloc.Resolution = if (a.resolver) |rs| rs.resolve(rs.ctx, v) else .unknown;
+        switch (res) {
+            .address => |r| return r,
+            .literal => {},
+            .unknown => a.unrelocated += 1,
+        }
+        return null;
+    }
+    /// Loads a word that may be an address.
+    fn immAny(a: *Assembler, dst: P, v: u32) void {
+        if (a.candidate(v)) |r| return a.immReloc(dst, v, r);
+        a.imm32(dst, v);
+    }
+    /// Loads a word that `r` names: an address in its patchable form
+    /// ahead of time, and a literal in place.
+    fn immNamed(a: *Assembler, dst: P, v: u32, r: reloc.Reloc) void {
+        if (a.aot and r.kind != .literal) return a.immReloc(dst, v, r);
+        a.imm32(dst, v);
     }
     /// dst = src + v, in as many additions as `v` has bytes that a
     /// rotated constant holds.
@@ -546,18 +595,36 @@ pub const Assembler = struct {
         a.movW(hi(dst), hi(src));
     }
 
-    /// Loads a 64-bit constant, one word at a time.
+    /// Loads a 64-bit constant, one word at a time. Ahead of time, the
+    /// resolver decides whether a constant with a zero high word is an
+    /// address, which then takes the form of `movImmReloc`.
     pub fn movImm(a: *Assembler, dst: Reg, v: u64) void {
+        if (a.candidate64(v)) |r| return a.movImmReloc(dst, v, r);
         a.immW(lo(dst), @truncate(v));
         a.immW(hi(dst), @truncate(v >> 32));
     }
+    /// Loads an address, or a value that `r` names as a literal. Ahead of
+    /// time the low word of an address takes a form whose bytes the
+    /// loader patches. Its high word is zero in every process.
     pub fn movImmReloc(a: *Assembler, dst: Reg, v: u64, r: reloc.Reloc) void {
-        _ = r;
-        a.movImm(dst, v);
+        if (lo(dst) != .zero) {
+            const t = target(lo(dst), S0);
+            a.immNamed(t, @truncate(v), r);
+            a.put(lo(dst), t);
+        }
+        a.immW(hi(dst), @truncate(v >> 32));
     }
+    /// Stores an address, or a value that `r` names as a literal.
     pub fn storeImm64Reloc(a: *Assembler, m: Mem, v: u64, r: reloc.Reloc) void {
-        _ = r;
-        a.storeImm64(m, v);
+        if (!a.aot or r.kind == .literal) return a.storeImm64Raw(m, v);
+        const ad = a.addr(m, 4, 4095, S2);
+        a.immReloc(S0, @truncate(v), r);
+        a.str(S0, ad.b, ad.d);
+        a.imm32(S0, @truncate(v >> 32));
+        a.str(S0, ad.b, ad.d + 4);
+    }
+    fn candidate64(a: *Assembler, v: u64) ?reloc.Reloc {
+        return if (v >> 32 == 0) a.candidate(@truncate(v)) else null;
     }
 
     // -----------------------------------------------------------------
@@ -594,8 +661,12 @@ pub const Assembler = struct {
     pub const loadWord = load32;
     pub const storeWord = store32;
     pub const storePairWord = storePair32;
+    /// Stores a constant the size of a pointer, which ahead of time may
+    /// be an address, as the constant of `movImm` may.
     pub fn storeImmWord(a: *Assembler, m: Mem, v: u64) void {
-        a.storeImm32(m, @truncate(v));
+        const ad = a.addr(m, 0, 4095, S2);
+        a.immAny(S0, @truncate(v));
+        a.str(S0, ad.b, ad.d);
     }
 
     /// Loads 32 bits, zero-extended.
@@ -672,8 +743,13 @@ pub const Assembler = struct {
     pub fn storeValue(a: *Assembler, payload: Reg, tag: Reg, m: Mem) void {
         a.storePair64(payload, tag, m);
     }
-    /// Stores a 64-bit constant.
+    /// Stores a 64-bit constant. Ahead of time, the resolver decides
+    /// whether a constant with a zero high word is an address.
     pub fn storeImm64(a: *Assembler, m: Mem, v: u64) void {
+        if (a.candidate64(v)) |r| return a.storeImm64Reloc(m, v, r);
+        a.storeImm64Raw(m, v);
+    }
+    fn storeImm64Raw(a: *Assembler, m: Mem, v: u64) void {
         const ad = a.addr(m, 4, 4095, S2);
         const low: u32 = @truncate(v);
         const high: u32 = @truncate(v >> 32);
@@ -838,7 +914,7 @@ pub const Assembler = struct {
         a.rtArg(r1, hi(x), 16);
         a.rtArg(r2, lo(y), 16);
         a.rtArg(r3, hi(y), 16);
-        a.imm32(S0, addrOf(&rt.divRem));
+        a.immAny(S0, addrOf(&rt.divRem));
         a.blx(S0);
         a.rtResult(lo(quot), r0, 16);
         a.rtResult(hi(quot), r1, 16);
@@ -963,7 +1039,7 @@ pub const Assembler = struct {
     pub fn floatToInt(a: *Assembler, dst: Reg, src: FReg) void {
         a.rtEnter();
         a.word(0xEC500B10 | @as(u32, r1) << 16 | @as(u32, r0) << 12 | src.n()); // vmov r0, r1, src
-        a.imm32(S0, addrOf(&rt.floatToInt));
+        a.immAny(S0, addrOf(&rt.floatToInt));
         a.blx(S0);
         a.rtResult(lo(dst), r0, 0);
         a.rtResult(hi(dst), r1, 0);
@@ -1063,7 +1139,7 @@ pub const Assembler = struct {
         a.rtArg(r1, hi(x), 0);
         a.rtArg(r2, lo(y), 0);
         a.rtArg(r3, hi(y), 0);
-        a.imm32(S0, if (mod) addrOf(&rt.floorMod) else addrOf(&rt.floorDiv));
+        a.immAny(S0, if (mod) addrOf(&rt.floorMod) else addrOf(&rt.floorDiv));
         a.blx(S0);
         a.rtResult(lo(dst), r0, 0);
         a.rtResult(hi(dst), r1, 0);
@@ -1227,9 +1303,18 @@ pub const Assembler = struct {
     /// already. The low word of the fifth travels on the stack. The
     /// result is a word in r0.
     pub fn call(a: *Assembler, address: usize) void {
+        a.callNamed(address, null);
+    }
+    /// Loads the address of a routine: the one that `r` names, or one
+    /// that the resolver names ahead of time.
+    fn routine(a: *Assembler, address: u64, r: ?reloc.Reloc) void {
+        if (r) |x| return a.immNamed(S0, @truncate(address), x);
+        a.immAny(S0, @truncate(address));
+    }
+    fn callNamed(a: *Assembler, address: usize, r: ?reloc.Reloc) void {
         const fifth = a.get(lo(args[4]), S0);
         a.word(0xE52D0008 | @as(u32, fifth) << 12); // str fifth, [sp, #-8]!
-        a.imm32(S0, @truncate(address));
+        a.routine(address, r);
         a.blx(S0);
         a.addP(sp_r, sp_r, 8);
         a.zeroHi(ret0);
@@ -1239,6 +1324,9 @@ pub const Assembler = struct {
     /// r2 and r3, and the third and fourth on the stack. The result
     /// comes back in r0 and r1.
     pub fn callWide(a: *Assembler, address: u64) void {
+        a.callWideNamed(address, null);
+    }
+    fn callWideNamed(a: *Assembler, address: u64, r: ?reloc.Reloc) void {
         a.addP(sp_r, sp_r, -16);
         a.str(a.get(lo(args[2]), S0), sp_r, 0);
         a.str(a.get(hi(args[2]), S0), sp_r, 4);
@@ -1247,7 +1335,7 @@ pub const Assembler = struct {
         a.movP(r2, a.get(lo(args[1]), r2));
         a.movP(r3, a.get(hi(args[1]), r3));
         a.movP(r1, a.get(hi(args[0]), r1));
-        a.imm32(S0, @truncate(address));
+        a.routine(address, r);
         a.blx(S0);
         a.addP(sp_r, sp_r, 16);
         a.put(hi(ret0), r1);
@@ -1258,12 +1346,15 @@ pub const Assembler = struct {
     /// them onto the stack, and the two words load into the result
     /// registers afterwards.
     pub fn callPair(a: *Assembler, address: usize) void {
+        a.callPairNamed(address, null);
+    }
+    fn callPairNamed(a: *Assembler, address: usize, r: ?reloc.Reloc) void {
         a.word(0xE52D0008 | @as(u32, r3) << 12); // str r3, [sp, #-8]!
         a.movP(r3, r2);
         a.movP(r2, r1);
         a.movP(r1, r0);
         a.addP(r0, fp, slot_pair);
-        a.imm32(S0, @truncate(address));
+        a.routine(address, r);
         a.blx(S0);
         a.addP(sp_r, sp_r, 8);
         a.ldr(r0, fp, slot_pair);
@@ -1272,17 +1363,17 @@ pub const Assembler = struct {
         a.str(S0, fp, slot_t4_hi);
         a.str(S0, fp, slot_t3_hi);
     }
+    /// Calls the routine that `r` names, at `address` in this process.
     pub fn callReloc(a: *Assembler, address: usize, r: reloc.Reloc) void {
-        _ = r;
-        a.call(address);
+        a.callNamed(address, r);
     }
+    /// `callWide` for the routine that `r` names.
     pub fn callWideReloc(a: *Assembler, address: u64, r: reloc.Reloc) void {
-        _ = r;
-        a.callWide(address);
+        a.callWideNamed(address, r);
     }
+    /// `callPair` for the routine that `r` names.
     pub fn callPairReloc(a: *Assembler, address: usize, r: reloc.Reloc) void {
-        _ = r;
-        a.callPair(address);
+        a.callPairNamed(address, r);
     }
 
     // A local call stores its return address in the frame of the entry
@@ -1405,6 +1496,102 @@ test "arm moves and immediates" {
         0xE1A06003, 0xE1A07008, 0xE1A00004, 0xE3A0C000, 0xE58BC01C, 0xE58B1000, 0xE3016234, 0xE3A07001,
         0xE3E0C001, 0xE58BC020, 0xE3E0C000, 0xE58BC024, 0xE3053678, 0xE3413234, 0xE3A08000,
     });
+}
+
+test "arm writes an address as a pair that the loader patches" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.aot = true;
+    const r: reloc.Reloc = .{ .kind = .routine, .a = 3 };
+    a.movImmReloc(.t0, 0xFF00, r); // movw r6, #0xff00; movt r6, #0; mov r7, #0
+    a.movImmReloc(.t0, 0x12345678, .literal); // movw r6, #0x5678; movt r6, #0x1234; mov r7, #0
+    a.movImmReloc(.t5, 0x12345678, r); // movw ip, #0x5678; movt ip, #0x1234; str ip, [fp, #32]; mov ip, #0; str ip, [fp, #36]
+    try expectWords(&a, &.{
+        0xE30F6F00, 0xE3406000, 0xE3A07000, 0xE3056678, 0xE3416234, 0xE3A07000,
+        0xE305C678, 0xE341C234, 0xE58BC020, 0xE3A0C000, 0xE58BC024,
+    });
+    try std.testing.expectEqual(@as(usize, 2), a.relocs.items.len);
+    try std.testing.expectEqual(@as(u32, 0), a.relocs.items[0].at);
+    try std.testing.expectEqual(@as(u32, 24), a.relocs.items[1].at);
+    try std.testing.expectEqual(reloc.Form.arm_pair, a.relocs.items[1].form);
+    reloc.apply(a.buf.items, a.relocs.items[1], 0xABCD0123);
+    const got = std.mem.bytesAsSlice(u32, a.buf.items);
+    try std.testing.expectEqual(@as(u32, 0xE300C123), std.mem.littleToNative(u32, got[6]));
+    try std.testing.expectEqual(@as(u32, 0xE34ACBCD), std.mem.littleToNative(u32, got[7]));
+}
+
+test "arm asks the resolver about every word that may be an address" {
+    const Names = struct {
+        /// Names one address, calls one value unknown, and calls every
+        /// other value a literal.
+        fn resolve(_: *anyopaque, v: u64) reloc.Resolution {
+            if (v == 0x20000) return .{ .address = .{ .kind = .global, .a = 8 } };
+            if (v == 0x30000) return .unknown;
+            return .literal;
+        }
+    };
+    var ctx: u8 = 0;
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    a.aot = true;
+    a.resolver = .{ .ctx = &ctx, .resolve = Names.resolve };
+    const l = a.newLabel();
+    a.bind(l);
+    a.movImm(.t0, 0x20000);
+    a.storeImm64(.{ .base = .bp, .disp = 0 }, 0x20000);
+    a.storeImmWord(.{ .base = .bp, .disp = 0 }, 0x20000);
+    a.call(0x20000);
+    a.callWide(0x20000);
+    a.callPair(0x20000);
+    try std.testing.expectEqual(@as(usize, 6), a.relocs.items.len);
+    try std.testing.expectEqual(@as(u32, 0), a.unrelocated);
+    for (a.relocs.items) |e| {
+        try std.testing.expectEqual(reloc.Form.arm_pair, e.form);
+        try std.testing.expectEqual(reloc.Kind.global, e.r.kind);
+        const w = std.mem.bytesAsSlice(u32, a.buf.items)[e.at / 4 ..];
+        // movw and movt of the same register.
+        try std.testing.expectEqual(@as(u32, 0xE3000000), std.mem.littleToNative(u32, w[0]) & 0xFFF00FFF);
+        try std.testing.expectEqual(@as(u32, 0xE3400002), std.mem.littleToNative(u32, w[1]) & 0xFFF00FFF);
+    }
+    // A literal, a value with a high word, a small value, a value that
+    // the caller names a literal, and the 32-bit integers of the
+    // interface build in place.
+    a.movImm(.t0, 0x40000);
+    a.movImm(.t0, 0x1_0002_0000);
+    a.movImm(.t0, 0xFFFF);
+    a.movImmReloc(.t0, 0x30000, .literal);
+    a.storeImm64Reloc(.{ .base = .bp, .disp = 0 }, 0x30000, .literal);
+    a.storeImm32(.{ .base = .bp, .disp = 0 }, 0x30000);
+    a.addImm3(.t0, .t1, 0x30000);
+    a.jumpIfImm(.eq, .t0, 0x30000, l);
+    try std.testing.expectEqual(@as(usize, 6), a.relocs.items.len);
+    try std.testing.expectEqual(@as(u32, 0), a.unrelocated);
+    a.movImm(.t0, 0x30000);
+    a.storeImm64(.{ .base = .bp, .disp = 0 }, 0x30000);
+    try std.testing.expectEqual(@as(u32, 2), a.unrelocated);
+    try std.testing.expect(a.finish());
+}
+
+test "arm compiles for the running process as before when nothing is ahead of time" {
+    var a = Assembler.init(std.testing.allocator);
+    defer a.deinit();
+    var b = Assembler.init(std.testing.allocator);
+    defer b.deinit();
+    const r: reloc.Reloc = .{ .kind = .routine, .a = 3 };
+    a.movImm(.t0, 0x20000);
+    b.movImmReloc(.t0, 0x20000, r);
+    a.storeImm64(.{ .base = .bp, .disp = 8 }, 0x20000);
+    b.storeImm64Reloc(.{ .base = .bp, .disp = 8 }, 0x20000, r);
+    a.call(0x20000);
+    b.callReloc(0x20000, r);
+    a.callWide(0x20000);
+    b.callWideReloc(0x20000, r);
+    a.callPair(0x20000);
+    b.callPairReloc(0x20000, r);
+    try std.testing.expectEqualSlices(u8, a.buf.items, b.buf.items);
+    try std.testing.expectEqual(@as(usize, 0), b.relocs.items.len);
+    // mov r6, #0x20000; mov r7, #0
+    try std.testing.expectEqual(@as(u32, 0xE3A06802), std.mem.littleToNative(u32, std.mem.bytesAsSlice(u32, a.buf.items)[0]));
 }
 
 test "arm memory forms" {

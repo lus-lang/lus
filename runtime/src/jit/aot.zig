@@ -78,10 +78,16 @@ pub const routines = [_]*const anyopaque{
     @ptrCast(&helpers.ctxSet),
 };
 
+/// The routines that the assembler of the target calls on its own, which
+/// take the numbers after the step routines. 32-bit ARM divides 64-bit
+/// integers and truncates floats in routines of `a32.zig`.
+const target_routines: []const *const anyopaque = if (builtin.cpu.arch == .arm) &@import("a32.zig").routines else &.{};
+
 /// The number of the routine at `addr`, or null.
 pub fn routineId(addr: usize) ?u32 {
     for (routines, 0..) |r, i| if (@intFromPtr(r) == addr) return @intCast(i);
     for (helpers.steps, 0..) |s, i| if (@intFromPtr(s) == addr) return @intCast(routines.len + i);
+    for (target_routines, 0..) |r, i| if (@intFromPtr(r) == addr) return @intCast(routines.len + helpers.steps.len + i);
     return null;
 }
 
@@ -90,6 +96,8 @@ fn routineAddr(id: u32) ?usize {
     if (id < routines.len) return @intFromPtr(routines[id]);
     const s = id - routines.len;
     if (s < helpers.steps.len) return @intFromPtr(helpers.steps[s]);
+    const t = s - helpers.steps.len;
+    if (t < target_routines.len) return @intFromPtr(target_routines[t]);
     return null;
 }
 

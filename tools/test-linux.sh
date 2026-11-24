@@ -19,8 +19,11 @@
 # binary for that architecture and run it under the qemu-user of the VM
 # with the JIT off, with the default tiers, eager, baseline, and
 # optimizing. Fedora registers no qemu-user for 32-bit ARM on an aarch64
-# host, so --arm registers it for the running VM first. The VM is the one LUS_LIMA_VM names, `boring`
-# by default, and must be running.
+# host, so --arm registers it for the running VM first. The 32-bit ARM
+# binary also runs the suite under LUS_JIT_AOT=reload, which runs every
+# function from what the loader of code compiled ahead of time makes of
+# it, and a line in the log of that run counts as a failure. The VM is the
+# one LUS_LIMA_VM names, `boring` by default, and must be running.
 #
 # The aarch64 runs decide the exit status. qemu-user emulates the memory
 # map of a process, and glibc then reports native stack bounds that are
@@ -105,10 +108,11 @@ run_suite() {
         echo "== $arch, LUS_JIT=$mode"
         jit="LUS_JIT=$mode"
         [ "$mode" = default ] && jit=""
+        [ "$mode" = reload ] && jit="LUS_JIT_AOT=reload:\$HOME/lus-linux-$arch-$checkout/aot.log"
         case "$arch" in arm64*) ;; *) jit="$jit LUS_EMULATED=1" ;; esac
         # The status of `lus test` decides, and the report shows every line
         # except the files that passed.
-        if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch-$checkout/runtime && env TMPDIR=\$HOME/lus-linux-$arch-$checkout/tmp $jit zig-out/bin/lus test --timeout 120 ../tests/conformance ../packages/language-server/tests > ../report.txt 2>&1; s=\$?; grep -a -v '^ok ' ../report.txt; exit \$s"; then
+        if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch-$checkout/runtime && env TMPDIR=\$HOME/lus-linux-$arch-$checkout/tmp $jit zig-out/bin/lus test --timeout 120 ../tests/conformance ../packages/language-server/tests > ../report.txt 2>&1; s=\$?; grep -a -v '^ok ' ../report.txt; if [ -s ../aot.log ]; then head -5 ../aot.log; s=1; fi; exit \$s"; then
             case "$arch" in arm64*) failed=1 ;; *) emulated_failed=1 ;; esac
         fi
     done
@@ -126,7 +130,12 @@ case "$extra" in
         limactl shell "$vm" -- sh -c 'test -e /proc/sys/fs/binfmt_misc/qemu-arm || printf ":qemu-arm:M::\\x7fELF\\x01\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x28\\x00:\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:/usr/bin/qemu-arm-static:F\\n" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null'
         ;;
 esac
-for target in $extra; do run_suite "${target%%-*}" off default eager baseline opt-eager; done
+for target in $extra; do
+    case "$target" in
+        arm-linux*) run_suite arm off default eager baseline opt-eager reload ;;
+        *) run_suite "${target%%-*}" off default eager baseline opt-eager ;;
+    esac
+done
 
 if [ "$emulated_failed" = 1 ]; then
     echo "an architecture under qemu-user had failures, which the notes at the top of tools/test-linux.sh explain"
