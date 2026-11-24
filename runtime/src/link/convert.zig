@@ -254,6 +254,7 @@ pub const Converter = struct {
             .aarch64 => .AARCH64,
             .arm => .ARM,
             .riscv64 => .RISCV,
+            .loongarch64 => .LOONGARCH,
         };
         if (eh.e_machine != machine or (E == Elf32) != (c.arch == .arm)) {
             std.log.err("{s}: built for another architecture", .{name});
@@ -339,9 +340,11 @@ pub const Converter = struct {
                 }
                 const ty = E.relType(info);
                 if (ty == 0) continue;
-                // RELAX and ALIGN of riscv64 permit the linker to shorten
-                // code, and code that keeps its length needs neither.
+                // RELAX and ALIGN of riscv64 and loong64 permit the linker
+                // to shorten code, and code that keeps its length needs
+                // neither.
                 if (c.arch == .riscv64 and (ty == 51 or ty == 43)) continue;
+                if (c.arch == .loongarch64 and (ty == 100 or ty == 102)) continue;
                 if (!rela) {
                     // A relocation of REL keeps its addend in the place it
                     // patches. Sections that executables leave out carry
@@ -410,7 +413,7 @@ pub const Converter = struct {
             .x86_64 => 0x01000007,
             .aarch64 => 0x0100000c,
             .arm => 12,
-            .riscv64 => 24,
+            .riscv64, .loongarch64 => 0,
         };
         if (rd(u32, data, 4) != cpu) {
             std.log.err("{s}: built for another architecture", .{name});
@@ -693,6 +696,7 @@ pub const Converter = struct {
             .aarch64 => 0xaa64,
             .arm => 0x1c4,
             .riscv64 => 0x5064,
+            .loongarch64 => 0x6264,
         };
     }
 

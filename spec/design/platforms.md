@@ -84,9 +84,17 @@ The pinned registers are callee-saved `s` registers. The temporaries of the base
 
 The whole of `lus`, linked from `lus.lo`, passes the conformance suite under `qemu-riscv64` with the JIT off, the default tiers, eager, and optimizing. `lus build --aot` links `tests/build/linked.lus` into 1.62 MB, keeping 2512 KB of the 7862 KB of atoms of the runtime, and the executable installs its code compiled ahead of time. `tools/test-linux.sh --riscv64` runs both.
 
+Zig compiles riscv64 without the `relax` feature, so no object of the runtime, SQLite, the codecs, or TLS carries `R_RISCV_RELAX`. The assembler resolves the branches inside a function without relocations, and the linker therefore never shortens code. Shortening would take the link objects built with `relax` and a linker that deletes bytes and moves every offset after them. Its most is the 46945 calls of the runtime as `jal` instead of `auipc` and `jalr`, 188 KB or 4.7 percent of its 3.98 MB of code, and a linked executable keeps only part of those. Addresses relative to `gp` would add little, since only data within 2 KB of the pointer qualifies. The linker writes every instruction as the compiler placed it.
+
 ## loong64
 
 loong64 is little-endian and 64-bit, with fixed-width instructions and compare-and-branch instructions, which is the shape of riscv64. `jit/la64.zig` follows `rv64.zig` routine by routine. A branch on two registers reaches 128 KB, a branch on zero 4 MB, and `b` and `bl` 128 MB. A conditional branch to a label that is unbound or out of reach is the inverted branch over a `b`, and `b` reaches every label of a function, so loong64 needs no islands. Pool loads use `pcaddu12i` and `ld.d`. Integer and float conversions run inside the float registers, so `floatToInt` goes through `ft13`, the float scratch register of the assembler. The convention reserves `r21`, which no pool uses. The optimizing tier allocates 15 integer registers, `a0` to `a7` and `t0` to `t6`, and 16 float registers. New code becomes visible to instruction fetch after `ibar 0`, because the hardware keeps the instruction caches of the cores coherent with stores.
+
+### Linking
+
+`lus build --aot` links the executable of loong64 from `lus-runtime.lo`, as on riscv64. A call is `pcaddu18i` and `jirl` with `R_LARCH_CALL36`, which reaches 128 GB. An address is `pcalau12i` and an add or a load with `PCALA_HI20` and `PCALA_LO12`. The low 12 bits are signed, so the page of the high half rounds up past the middle of a page. Thread-local offsets use the `_R` form of `TLS_LE`, whose add of the thread pointer carries a relocation that writes nothing. The thread-local block starts at the thread pointer. As on riscv64, the objects carry no `R_LARCH_RELAX`, and the linker writes every instruction as the compiler placed it.
+
+The whole of `lus`, linked from `lus.lo`, passes the conformance suite under `qemu-loongarch64` with the JIT off, the default tiers, eager, and optimizing. `lus build --aot` links `tests/build/linked.lus` into 1.90 MB, keeping 2763 KB of the 8716 KB of atoms of the runtime, and the executable installs its code compiled ahead of time. `tools/test-linux.sh --loong64` runs both.
 
 ## ppc64le
 

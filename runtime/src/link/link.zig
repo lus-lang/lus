@@ -272,6 +272,11 @@ pub const Linker = struct {
                 21 => true, // TLS_GOT_HI20
                 else => null,
             },
+            .loongarch64 => switch (ty) {
+                75, 76, 79, 80 => false, // GOT_PC_HI20, GOT_PC_LO12, GOT_HI20, GOT_LO12
+                87, 88, 91, 92 => true, // TLS_IE_PC_HI20, TLS_IE_PC_LO12, TLS_IE_HI20, TLS_IE_LO12
+                else => null,
+            },
         };
     }
 
@@ -397,7 +402,7 @@ pub const Linker = struct {
             .x86_64 => @as(i64, @intCast(off)) - @as(i64, @intCast(l.tls.memsz)),
             .aarch64 => @intCast(off + std.mem.alignForward(u64, 16, l.tls.align_)),
             .arm => @intCast(off + std.mem.alignForward(u64, 8, l.tls.align_)),
-            .riscv64 => @intCast(off),
+            .riscv64, .loongarch64 => @intCast(off),
         };
     }
 
@@ -490,6 +495,7 @@ pub const Linker = struct {
                 }
             },
             .riscv64 => try l.applyRiscv(r, loc, sa, pi),
+            .loongarch64 => try l.applyLoong(r, loc, sa, pi),
             .aarch64 => switch (r.type) {
                 257 => put(u64, loc, @bitCast(sa)), // ABS64
                 258 => put(u32, loc, std.math.cast(u32, sa) orelse return error.RelocationOverflow), // ABS32
@@ -580,6 +586,61 @@ pub const Linker = struct {
         }
     }
 
+    fn applyLoong(l: *const Linker, r: lobj.Reloc, loc: []u8, sa: i64, pi: i64) Error!void {
+        const a = r.addend;
+        const got: i64 = if (l.usesGot(r.type)) |tls| @as(i64, @intCast(l.gotSlot(r, tls))) + a else 0;
+        const tp = l.tpOffset(@bitCast(l.symbol(r.target, r.sym))) + a;
+        switch (r.type) {
+            1 => put(u32, loc, std.math.cast(u32, sa) orelse return error.RelocationOverflow), // 32
+            2 => put(u64, loc, @bitCast(sa)), // 64
+            47 => loc[0] +%= @truncate(@as(u64, @bitCast(sa))), // ADD8
+            48 => put(u16, loc, half(loc) +% @as(u16, @truncate(@as(u64, @bitCast(sa))))), // ADD16
+            50 => put(u32, loc, insn(loc) +% @as(u32, @truncate(@as(u64, @bitCast(sa))))), // ADD32
+            51 => put(u64, loc, std.mem.readInt(u64, loc[0..8], .little) +% @as(u64, @bitCast(sa))), // ADD64
+            52 => loc[0] -%= @truncate(@as(u64, @bitCast(sa))), // SUB8
+            53 => put(u16, loc, half(loc) -% @as(u16, @truncate(@as(u64, @bitCast(sa))))), // SUB16
+            55 => put(u32, loc, insn(loc) -% @as(u32, @truncate(@as(u64, @bitCast(sa))))), // SUB32
+            56 => put(u64, loc, std.mem.readInt(u64, loc[0..8], .little) -% @as(u64, @bitCast(sa))), // SUB64
+            64 => try laBranch(loc, sa - pi, 16), // B16
+            65 => try laBranch(loc, sa - pi, 21), // B21
+            66 => try laBranch(loc, sa - pi, 26), // B26
+            67 => laSi20(loc, sa >> 12), // ABS_HI20
+            79, 91 => laSi20(loc, got >> 12), // GOT_HI20, TLS_IE_HI20
+            68 => laImm12(loc, sa), // ABS_LO12
+            80, 92 => laImm12(loc, got), // GOT_LO12, TLS_IE_LO12
+            69 => laSi20(loc, sa >> 32), // ABS64_LO20
+            70 => laImm12(loc, sa >> 52), // ABS64_HI12
+            71 => try laPage(loc, sa, pi), // PCALA_HI20
+            72 => laImm12(loc, sa), // PCALA_LO12
+            75, 87 => try laPage(loc, got, pi), // GOT_PC_HI20, TLS_IE_PC_HI20
+            76, 88 => laImm12(loc, got), // GOT_PC_LO12, TLS_IE_PC_LO12
+            83 => laSi20(loc, tp >> 12), // TLS_LE_HI20
+            84 => laImm12(loc, tp), // TLS_LE_LO12
+            // The relaxable form of the pair of a thread-local offset,
+            // whose low 12 bits are signed, around an add of the thread
+            // pointer.
+            121 => laSi20(loc, (tp + 0x800) >> 12), // TLS_LE_HI20_R
+            122 => {}, // TLS_LE_ADD_R
+            123 => laImm12(loc, tp), // TLS_LE_LO12_R
+            99 => try putI32(loc, sa - pi), // 32_PCREL
+            109 => put(u64, loc, @bitCast(sa - pi)), // 64_PCREL
+            103 => { // PCREL20_S2: pcaddi
+                const d = sa - pi;
+                if (d & 3 != 0 or d < -(1 << 21) or d >= (1 << 21)) return error.RelocationOverflow;
+                laSi20(loc, d >> 2);
+            },
+            110 => { // CALL36: pcaddu18i and jirl
+                const d = sa - pi;
+                if (d & 3 != 0 or d < -(1 << 37) or d >= (1 << 37)) return error.RelocationOverflow;
+                const hi = (d + 0x20000) >> 18;
+                laSi20(loc, hi);
+                const lo: u32 = @truncate(@as(u64, @bitCast((d - (hi << 18)) >> 2)));
+                put(u32, loc[4..], (insn(loc[4..]) & ~@as(u32, 0xffff << 10)) | ((lo & 0xffff) << 10));
+            },
+            else => return unsupported(l, r),
+        }
+    }
+
     fn unsupported(l: *const Linker, r: lobj.Reloc) Error {
         std.log.err("relocation type {d} of {s} is not supported", .{ r.type, @tagName(l.o.arch) });
         return error.UnsupportedRelocation;
@@ -595,6 +656,7 @@ pub const Linker = struct {
                 .x86_64 => .X86_64,
                 .aarch64 => .AARCH64,
                 .riscv64 => .RISCV,
+                .loongarch64 => .LOONGARCH,
                 .arm => unreachable,
             },
             .e_version = 1,
@@ -603,7 +665,12 @@ pub const Linker = struct {
             .e_shoff = 0,
             // riscv64 code uses compressed instructions and passes
             // doubles in float registers.
-            .e_flags = if (o.arch == .riscv64) 0x5 else 0,
+            .e_flags = switch (o.arch) {
+                .riscv64 => 0x5,
+                // Doubles in float registers, and the object ABI v1.
+                .loongarch64 => 0x43,
+                else => 0,
+            },
             .e_ehsize = @sizeOf(elf.Elf64_Ehdr),
             .e_phentsize = @sizeOf(Phdr),
             .e_phnum = l.phnum,
@@ -733,6 +800,45 @@ fn rvcJump(loc: []u8, d: i64) Error!void {
     var imm: u16 = 0;
     for (order, 0..) |bit, k| imm |= ((v >> bit) & 1) << @intCast(12 - k);
     put(u16, loc, (half(loc) & 0xe003) | imm);
+}
+
+/// The 20-bit field at bit 5 of `lu12i.w`, `lu32i.d`, `pcalau12i`,
+/// `pcaddi`, and `pcaddu18i`.
+fn laSi20(loc: []u8, v: i64) void {
+    const imm: u32 = @truncate(@as(u64, @bitCast(v)) & 0xfffff);
+    put(u32, loc, (insn(loc) & ~@as(u32, 0xfffff << 5)) | (imm << 5));
+}
+
+/// The 12-bit field at bit 10 of `addi.d`, `ori`, `lu52i.d`, and the
+/// loads and stores, which takes the low 12 bits of `v`.
+fn laImm12(loc: []u8, v: i64) void {
+    const imm: u32 = @truncate(@as(u64, @bitCast(v)) & 0xfff);
+    put(u32, loc, (insn(loc) & ~@as(u32, 0xfff << 10)) | (imm << 10));
+}
+
+/// The page of `target` from the page of `p` for `pcalau12i`. The low 12
+/// bits that complete it are signed, so the page of `target` rounds up
+/// past the middle of a page.
+fn laPage(loc: []u8, target: i64, p: i64) Error!void {
+    const d = ((target + 0x800) & ~@as(i64, 0xfff)) - (p & ~@as(i64, 0xfff));
+    if (d < -(@as(i64, 1) << 31) or d >= (@as(i64, 1) << 31)) return error.RelocationOverflow;
+    laSi20(loc, d >> 12);
+}
+
+/// A branch of `bits` bits of words: the low 16 at bit 10, and the rest
+/// at bit 0 for the 21-bit and 26-bit forms.
+fn laBranch(loc: []u8, d: i64, comptime bits: u6) Error!void {
+    if (d & 3 != 0) return error.RelocationOverflow;
+    const v = d >> 2;
+    if (v < -(@as(i64, 1) << (bits - 1)) or v >= (@as(i64, 1) << (bits - 1))) return error.RelocationOverflow;
+    const u: u32 = @truncate(@as(u64, @bitCast(v)));
+    var i = insn(loc) & ~@as(u32, 0xffff << 10);
+    i |= (u & 0xffff) << 10;
+    if (bits > 16) {
+        const rest: u32 = (1 << (bits - 16)) - 1;
+        i = (i & ~rest) | ((u >> 16) & rest);
+    }
+    put(u32, loc, i);
 }
 
 /// Whether a relocation of 32-bit ARM writes a branch in the ARM state,
@@ -959,4 +1065,60 @@ test "the linker writes the calls and the address pairs of riscv64" {
     const b = word(out, at + 16);
     const boff = (@as(i64, b >> 31) << 12) | (@as(i64, (b >> 7) & 1) << 11) | (@as(i64, (b >> 25) & 0x3f) << 5) | (@as(i64, (b >> 8) & 0xf) << 1);
     try std.testing.expectEqual(@as(i64, @intCast(l.addr[1])) - @as(i64, @intCast(text + 16)), boff);
+}
+
+test "the linker writes the calls and the address pairs of loong64" {
+    const gpa = std.testing.allocator;
+    var w: lobj.Writer = .{ .gpa = gpa, .arch = .loongarch64, .os = .linux };
+    defer w.deinit();
+    // _start: pcaddu18i ra and jirl ra to f, then pcalau12i a0 and
+    // addi.d a0 with the address of d.
+    const code = [_]u8{
+        0x01, 0x00, 0x00, 0x1e, // pcaddu18i ra, 0
+        0x21, 0x00, 0x00, 0x4c, // jirl ra, ra, 0
+        0x04, 0x00, 0x00, 0x1a, // pcalau12i a0, 0
+        0x84, 0x00, 0xc0, 0x02, // addi.d a0, a0, 0
+    };
+    const start = try w.atom(.text, 2, &code, code.len, "_start");
+    try w.reloc(.{ .offset = 0, .type = 110, .target = .{ .index = 1, .space = .atom }, .addend = 0 });
+    try w.reloc(.{ .offset = 8, .type = 71, .target = .{ .index = 2, .space = .atom }, .addend = 0x9f0 });
+    try w.reloc(.{ .offset = 12, .type = 72, .target = .{ .index = 2, .space = .atom }, .addend = 0x9f0 });
+    _ = try w.atom(.text, 2, &[_]u8{ 0x20, 0x00, 0x00, 0x4c }, 4, "f");
+    _ = try w.atom(.data, 3, &@as([0x1000]u8, @splat(0)), 0x1000, "d");
+    w.entry = .{ .name = try w.string("_start"), .atom = start, .offset = 0 };
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    defer buf.deinit();
+    try w.write(&buf.writer);
+    const bytes = try gpa.alignedAlloc(u8, .@"8", buf.written().len);
+    defer gpa.free(bytes);
+    @memcpy(bytes, buf.written());
+    const o = try lobj.read(bytes);
+    var l: Linker = .{ .gpa = gpa, .o = &o };
+    defer l.deinit();
+    try l.drop(.all);
+    try l.mark();
+    try l.layout();
+    const out = try l.write();
+    defer gpa.free(out);
+    const text = l.addr[0];
+    const at: usize = @intCast(text - l.base);
+    const word = struct {
+        fn f(b: []const u8, i: usize) u32 {
+            return std.mem.readInt(u32, b[i..][0..4], .little);
+        }
+    }.f;
+    const sext = struct {
+        fn f(v: u32, bits: u5) i64 {
+            const sh: u5 = @intCast(32 - @as(u6, bits));
+            return @as(i32, @bitCast(v << sh)) >> sh;
+        }
+    }.f;
+    // pcaddu18i adds its field times 2^18, and jirl its field times 4.
+    const call = (sext((word(out, at) >> 5) & 0xfffff, 20) << 18) + (sext((word(out, at + 4) >> 10) & 0xffff, 16) << 2);
+    try std.testing.expectEqual(@as(i64, @intCast(l.addr[1])) - @as(i64, @intCast(text)), call);
+    // pcalau12i gives the page from the page of its place, and addi.d
+    // adds the signed low 12 bits.
+    const page = (@as(i64, @intCast(text + 8)) & ~@as(i64, 0xfff)) + (sext((word(out, at + 8) >> 5) & 0xfffff, 20) << 12);
+    const addr = page + sext((word(out, at + 12) >> 10) & 0xfff, 12);
+    try std.testing.expectEqual(@as(i64, @intCast(l.addr[2] + 0x9f0)), addr);
 }

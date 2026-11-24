@@ -22,8 +22,8 @@
 # host, so --arm registers it for the running VM first. The 32-bit ARM
 # binary also runs the suite under LUS_JIT_AOT=reload, which runs every
 # function from what the loader of code compiled ahead of time makes of
-# it, and a line in the log of that run counts as a failure. --arm and
-# --riscv64 also build the link object of the target. The whole of `lus`
+# it, and a line in the log of that run counts as a failure. --arm,
+# --riscv64, and --loong64 also build the link object of the target. The whole of `lus`
 # linked from it runs the suite with the default tiers, and `lus build
 # --aot` links `tests/build/linked.lus` from it and checks the output. The
 # VM is the
@@ -90,7 +90,7 @@ for target in $extra; do
 done
 # The targets whose executables the linker of `lus build --aot` writes.
 linkable() {
-    case "$1" in arm-linux* | riscv64-linux*) return 0 ;; *) return 1 ;; esac
+    case "$1" in arm-linux* | riscv64-linux* | loongarch64-linux*) return 0 ;; *) return 1 ;; esac
 }
 for target in $extra; do
     linkable "$target" || continue
