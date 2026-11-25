@@ -1,12 +1,16 @@
 //! `lus check`: reports errors and lint warnings without running code.
 //!
-//! Usage: lus check [--json] [--list] [--explain CODE] [FILE...]
+//! Usage: lus check [--json] [--fix] [--list] [--explain CODE] [FILE...]
 //!
 //! Every file is parsed, linted (`syntax/lint.zig`), and compiled. Each
 //! problem is printed as `file:line:column: severity: message [code]`.
 //! With `--json` the output is one JSON array of objects with the fields
 //! `file`, `line`, `column`, `endLine`, `endColumn`, `severity`, `code`,
 //! and `message`, so editors and the language server can read it.
+//! `--fix` applies the fix of every diagnostic that has one, a rewrite
+//! that keeps what the program does, writes the file, and reports what
+//! remains. A comment `-- lus: allow(CODE)` suppresses a warning or a hint
+//! (`syntax/suppress.zig`).
 //! `--list` prints every diagnostic code with its severity and summary,
 //! and `--explain CODE` prints the explanation of one code with an example
 //! that reports it and the same example fixed (`syntax/explain.zig`).
@@ -35,11 +39,14 @@ const object = lus.vm.object;
 const table = lus.vm.table;
 
 const explain = @import("../syntax/explain.zig");
+const suppress = @import("../syntax/suppress.zig");
+const fixes = @import("../syntax/fix.zig");
 
 const usage =
-    \\usage: lus check [--json] [--list] [--explain CODE] [FILE...]
+    \\usage: lus check [--json] [--fix] [--list] [--explain CODE] [FILE...]
     \\
     \\  --json          print the diagnostics as a JSON array
+    \\  --fix           apply the rewrites that keep behavior, then report the rest
     \\  --list          print every diagnostic code and exit
     \\  --explain CODE  explain a diagnostic code with an example and exit
     \\
@@ -54,17 +61,22 @@ pub const test_globals = [_][]const u8{ "raises", "same", "skip", "snapshot", "T
 const Entry = struct {
     file: []const u8,
     d: lint.Diagnostic,
+    /// The source the diagnostic refers to, for the positions of a fix.
+    src: []const u8 = "",
 };
 
 pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     const gpa = init.gpa;
     const io = init.io;
     var json = false;
+    var fix = false;
     var files: std.ArrayList([]const u8) = .empty;
     defer files.deinit(gpa);
     for (args) |a| {
         if (std.mem.eql(u8, a, "--json")) {
             json = true;
+        } else if (std.mem.eql(u8, a, "--fix")) {
+            fix = true;
         } else if (std.mem.eql(u8, a, "--list")) {
             return listCodes(gpa, io);
         } else if (std.mem.eql(u8, a, "--explain") or std.mem.startsWith(u8, a, "--explain=")) {
@@ -112,8 +124,36 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         const chunkname = if (from_stdin) "=stdin" else try std.fmt.allocPrint(arena, "@{s}", .{file});
         const is_test = !from_stdin and paths.isTestFile(file);
         const opts: lint.Options = .{ .builtins = if (is_test) &test_builtins else &builtins, .test_file = is_test };
-        for (try checkSource(gpa, arena, l.g, src, chunkname, opts)) |d| {
-            try entries.append(arena, .{ .file = display, .d = d });
+        var diags = try checkSource(gpa, arena, l.g, src, chunkname, opts);
+        var current: []const u8 = src;
+        if (fix and !from_stdin) {
+            // A fix can make another one possible, as a tostring removed
+            // from a concatenation that can then become an interpolation,
+            // so the file is checked again after each round, up to four
+            // rounds. A round that leaves the file with an error it did not
+            // have is discarded, which keeps a faulty fix from breaking it.
+            var text: []const u8 = src;
+            var applied: usize = 0;
+            var round: usize = 0;
+            while (round < 4) : (round += 1) {
+                const r = try fixes.apply(arena, text, diags) orelse break;
+                const next = try checkSource(gpa, arena, l.g, r.text, chunkname, opts);
+                if (errorCount(next) > errorCount(diags)) break;
+                text = r.text;
+                applied += r.count;
+                diags = next;
+            }
+            current = text;
+            if (applied > 0) {
+                std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file, .data = text }) catch |e| {
+                    std.debug.print("lus check: cannot write {s} ({s})\n", .{ file, @errorName(e) });
+                    status = 2;
+                };
+                std.debug.print("lus check: {s}: applied {d} {s}\n", .{ file, applied, if (applied == 1) "fix" else "fixes" });
+            }
+        }
+        for (diags) |d| {
+            try entries.append(arena, .{ .file = display, .d = d, .src = current });
         }
     }
 
@@ -134,6 +174,14 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         status = 1;
     };
     return status;
+}
+
+fn errorCount(diags: []const lint.Diagnostic) usize {
+    var n: usize = 0;
+    for (diags) |d| {
+        if (d.severity == .@"error") n += 1;
+    }
+    return n;
 }
 
 /// Parses, lints, and compiles one source. A syntax error stops the
@@ -158,7 +206,7 @@ pub fn checkSource(gpa: std.mem.Allocator, arena: std.mem.Allocator, g: *lus.vm.
         else => return e,
     };
     var list: std.ArrayList(lint.Diagnostic) = .empty;
-    try list.appendSlice(arena, try lint.lint(arena, chunk, opts));
+    try list.appendSlice(arena, try suppress.apply(arena, src, chunk, try lint.lint(arena, chunk, opts)));
 
     const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = chunkname, .meta_eval = false });
     switch (r) {
@@ -249,6 +297,17 @@ fn writeJson(w: *std.Io.Writer, entries: []const Entry) std.Io.Writer.Error!void
         try astexport.jsonString(w, e.file);
         try w.print(", \"line\": {d}, \"column\": {d}, \"endLine\": {d}, \"endColumn\": {d}, \"severity\": \"{s}\", \"code\": \"{s}\", \"message\": ", .{ e.d.line, e.d.column, e.d.end_line, e.d.end_column, e.d.severity.label(), e.d.code });
         try astexport.jsonString(w, e.d.message);
+        if (e.d.fix.len > 0) {
+            try w.writeAll(", \"fix\": [");
+            for (e.d.fix, 0..) |f, j| {
+                const s = lint.position(e.src, f.span.start);
+                const t = lint.position(e.src, f.span.end);
+                try w.print("{s}{{\"line\": {d}, \"column\": {d}, \"endLine\": {d}, \"endColumn\": {d}, \"text\": ", .{ if (j == 0) "" else ", ", s.line, s.column, t.line, t.column });
+                try astexport.jsonString(w, f.text);
+                try w.writeAll("}");
+            }
+            try w.writeAll("]");
+        }
         try w.writeAll("}");
     }
     try w.writeAll(if (entries.len == 0) "]\n" else "\n]\n");

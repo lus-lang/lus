@@ -23,9 +23,14 @@ pub const Explanation = struct {
 pub const check_codes = [_]struct { code: []const u8, severity: lint.Severity, summary: []const u8 }{
     .{ .code = "syntax", .severity = .@"error", .summary = "The file does not parse." },
     .{ .code = "compile", .severity = .@"error", .summary = "The compiler rejects the file for another reason." },
+    .{ .code = "unknown-allow", .severity = .warning, .summary = "A lus: allow comment names a code that no diagnostic has." },
 };
 
 pub const all = [_]Explanation{
+    .{
+        .code = "unknown-allow",
+        .text = "A comment `-- lus: allow(CODE)` suppresses the warnings and hints with that code. At the end of a line of code it covers that line, on a line of its own it covers the next statement, and in the header doc comment of a module it covers the file. A code that no diagnostic has suppresses nothing, which usually means a misspelled code. `lus check --list` prints every code.",
+    },
     .{
         .code = "syntax",
         .text = "The parser stops at the first error in a file, so `lus check` reports nothing else for that file until the error is fixed. The message names the token where parsing failed, which often follows the real mistake. An unclosed parenthesis is reported at the end of the file. A missing `end` is reported at the next statement that cannot continue the block.",

@@ -24,7 +24,7 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 | `cargo update`, `Cargo.lock` | A stable atmosphere line receives patch releases only. A program that needs one exact release requires its pinned URL. | by design | |
 | `cargo publish` | `atmos publish` checks, tags, signs, and pushes a release. | closed | |
 | `cargo install` | `lus build` produces the executable, which the user copies onto `PATH`. A one-step `lus install URL` is missing. | open | medium |
-| `cargo fix` | The language server offers quick fixes for an undeclared global and an unused name. `lus check` applies none. | open | medium |
+| `cargo fix` | `lus check --fix` applies every rewrite that keeps what the program does. `--json` lists the edits of each fix. | closed | |
 | `cargo tree` | `lus tree FILE` prints the require tree that `lus build` bundles, with the require scan of `src/modtree.zig`. | closed | |
 | `cargo metadata` | `lus check --json`, `lus doc --format json`, `lus ast`, and `lus version --json` cover diagnostics, API, syntax, and installs. | partial | |
 | workspaces | A directory of packages tests as one with `lus test DIR`. Packages share nothing else. | by design | |
@@ -48,9 +48,9 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 | `rustfmt.toml` | `--indent` is the only setting. | by design | |
 | clippy | `lus check` reports each lint code with one of three severities (error, warning, hint), including speed hints measured in `spec/design/hints.md`. | closed | |
 | clippy lint levels (`allow`, `warn`, `deny`) | Each code has a fixed severity. Hints never change the exit status. | partial | medium |
-| `#[allow(...)]` on an item | A name that starts with `_` silences the unused checks. Other codes have no inline suppression. | open | medium |
+| `#[allow(...)]` on an item | `-- lus: allow(CODE)` covers a line, the next statement, or the whole file from the module header. | closed | |
 | clippy categories (`style`, `perf`, ...) | The hint severity groups the suggestions. The code names group the rest. | partial | |
-| `clippy --fix` | Missing. | open | medium |
+| `clippy --fix` | `lus check --fix`, for the unused names and the hints whose rewrite is exact. | closed | |
 | `rustc --explain E0382` | `lus check --list` prints a one-line summary per code. `lus check --explain CODE` prints a full explanation with an example and its fix. | closed | |
 
 ## Editor support
@@ -114,4 +114,4 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 
 The small gaps that remain are the caret snippet and `lus test --list`.
 
-The medium gaps follow in this order: `lus check --fix` with inline suppression, test lenses and a test explorer in the editor, more code actions, call hierarchy, and HTML documentation with intra-doc links and search. A fuzz harness for user code stays open.
+The medium gaps follow in this order: test lenses and a test explorer in the editor, more code actions, call hierarchy, and HTML documentation with intra-doc links and search. A fuzz harness for user code stays open.

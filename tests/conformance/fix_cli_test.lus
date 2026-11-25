@@ -1,0 +1,128 @@
+--[[
+    `lus check --fix` applies the rewrites that keep what a program does,
+    and `-- lus: allow(CODE)` suppresses a warning or a hint. The fixed
+    program must print what the original prints. `lus check --json` lists
+    the edits of each fix. Each case writes its files into the temporary
+    directory of this test.
+]]
+
+pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
+
+local LUS = os.getenv("LUS_EXE")
+
+local ORIGINAL = [==[
+global print, string, ipairs, tostring, config
+
+config = { host = "h", port = 1, db = { url = "u" } }
+
+local function show(items, extra)
+    for i, item in ipairs(items) do
+        print(item)
+    end
+end
+
+local host, port = config.host, config.port
+print(host, port)
+
+local url = config and config.db and config.db.url
+print(url)
+
+print(string.format("%s has %s", host, port))
+
+for n = 1, 2 do
+    print("n=" .. tostring(n) .. "!")
+    print("item " .. tostring(n * 2))
+end
+
+local spare = 5 -- lus: allow(unused-local)
+local other = 6
+show({ "a" }, nil)
+]==]
+
+local FIXED = [==[
+global print, string, ipairs, tostring, config
+
+config = { host = "h", port = 1, db = { url = "u" } }
+
+local function show(items, _extra)
+    for _i, item in ipairs(items) do
+        print(item)
+    end
+end
+
+local host, port from config
+print(host, port)
+
+local url = config?.db?.url
+print(url)
+
+print(`$host has $port`)
+
+for n = 1, 2 do
+    print(`n=$n!`)
+    print("item " .. (n * 2))
+end
+
+local spare = 5 -- lus: allow(unused-local)
+local _other = 6
+show({ "a" }, nil)
+]==]
+
+local function write(path, text)
+    local f = assert(io.open(path, "w"))
+    f:write(text)
+    f:close()
+end
+
+local function read(path)
+    local f <close> = assert(io.open(path))
+    return f:read("a")
+end
+
+local function run(args)
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    local p = io.popen(`"$LUS" $args 2>&1`)
+    local out = p:read("a")
+    local ok = p:close()
+    return (ok == true or ok == 0), out
+end
+
+local function fix_rewrites_the_file_test()
+    write("prog.lus", ORIGINAL)
+    local ok, out = run("check --fix prog.lus")
+    assert(ok, out)
+    assert(out:find("applied 9 fixes", 1, true), out)
+    assert(read("prog.lus") == FIXED, read("prog.lus"))
+    -- A second run finds nothing left.
+    ok, out = run("check prog.lus")
+    assert(ok and out == "", out)
+end
+
+local function the_fixed_program_prints_the_same_test()
+    write("orig.lus", ORIGINAL)
+    write("fixed.lus", FIXED)
+    local ok1, before = run("orig.lus")
+    local ok2, after = run("fixed.lus")
+    assert(ok1 and ok2, before .. after)
+    assert(before == after, after)
+end
+
+local function allow_suppresses_a_warning_test()
+    write("a.lus", "local a = 1 -- lus: allow(unused-local)\nlocal b = 2\n")
+    local ok, out = run("check a.lus")
+    assert(not ok, out)
+    assert(not out:find("a.lus:1:", 1, true), out)
+    assert(out:find("a.lus:2:7: warning: unused local 'b'", 1, true), out)
+    write("b.lus", "local a = 1 -- lus: allow(unused-lokal)\n")
+    ok, out = run("check b.lus")
+    assert(out:find("[unknown-allow]", 1, true), out)
+    assert(out:find("[unused-local]", 1, true), out)
+end
+
+local function json_lists_the_edits_test()
+    write("c.lus", "local c = 1\n")
+    local _, out = run("check --json c.lus")
+    local list = fromjson(out)
+    local edit = list[1].fix[1]
+    assert(edit.line == 1 and edit.column == 7 and edit.endColumn == 7 and edit.text == "_", out)
+end

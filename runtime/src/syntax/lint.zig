@@ -39,6 +39,16 @@ pub const Diagnostic = struct {
     severity: Severity,
     code: []const u8,
     message: []const u8,
+    /// The edits of a rewrite that resolves the diagnostic without changing
+    /// what the program does, which `lus check --fix` applies together
+    /// (`syntax/fix.zig`). Empty when the diagnostic has no such rewrite.
+    fix: []const Edit = &.{},
+};
+
+/// Replaces the bytes of `span` with `text`. An empty span inserts.
+pub const Edit = struct {
+    span: Span,
+    text: []const u8,
 };
 
 pub const Options = struct {
@@ -114,12 +124,36 @@ const Linter = struct {
     const Nested = struct { block: *ast.Block, in_loop: LoopCtx };
 
     fn report(l: *Linter, span: Span, severity: Severity, code: []const u8, comptime fmt: []const u8, args: anytype) Allocator.Error!void {
+        try l.reportFix(span, severity, code, &.{}, fmt, args);
+    }
+
+    fn reportFix(l: *Linter, span: Span, severity: Severity, code: []const u8, fix: []const Edit, comptime fmt: []const u8, args: anytype) Allocator.Error!void {
         try l.out.append(l.arena, .{
             .span = span,
             .severity = severity,
             .code = code,
             .message = try std.fmt.allocPrint(l.arena, fmt, args),
+            .fix = fix,
         });
+    }
+
+    /// One edit that replaces `span` with `text`.
+    fn edit(l: *Linter, span: Span, text_: []const u8) Allocator.Error![]const Edit {
+        const list = try l.arena.alloc(Edit, 1);
+        list[0] = .{ .span = span, .text = text_ };
+        return list;
+    }
+
+    /// The edit that starts the name of an unused binding with `_`. A
+    /// binding that is assigned keeps its name, because the assignments
+    /// would then reach another variable. So does a local group or a local
+    /// with attributes, whose handlers receive the name. The debug library
+    /// sees the new name, as `debug.getlocal` does.
+    fn underscore(l: *Linter, b: *const resolve.Binding) Allocator.Error![]const Edit {
+        if (b.writes > 0 or b.kind == .group) return &.{};
+        const after = std.mem.trimStart(u8, l.chunk.source[@min(b.span.end, l.chunk.source.len)..], " \t");
+        if (after.len > 0 and after[0] == '<') return &.{};
+        return l.edit(.{ .start = b.span.start, .end = b.span.start }, "_");
     }
 
     fn text(l: *Linter, span: Span) []const u8 {
@@ -149,13 +183,13 @@ const Linter = struct {
             if (b.kind == .param and std.mem.eql(u8, b.name, "self")) continue;
             if (l.opts.test_file and l.isTestEntry(b)) continue;
             switch (b.kind) {
-                .param => try l.report(b.span, .warning, "unused-param", "unused parameter '{s}'", .{b.name}),
-                .loop_var => try l.report(b.span, .warning, "unused-loop-var", "unused loop variable '{s}'", .{b.name}),
-                .function => try l.report(b.span, .warning, "unused-function", "unused local function '{s}'", .{b.name}),
+                .param => try l.reportFix(b.span, .warning, "unused-param", try l.underscore(b), "unused parameter '{s}'", .{b.name}),
+                .loop_var => try l.reportFix(b.span, .warning, "unused-loop-var", try l.underscore(b), "unused loop variable '{s}'", .{b.name}),
+                .function => try l.reportFix(b.span, .warning, "unused-function", try l.underscore(b), "unused local function '{s}'", .{b.name}),
                 else => if (b.writes > 0)
                     try l.report(b.span, .warning, "unused-local", "local '{s}' is assigned but never read", .{b.name})
                 else
-                    try l.report(b.span, .warning, "unused-local", "unused local '{s}'", .{b.name}),
+                    try l.reportFix(b.span, .warning, "unused-local", try l.underscore(b), "unused local '{s}'", .{b.name}),
             }
         }
     }
@@ -294,7 +328,14 @@ const Linter = struct {
                 if (!std.mem.eql(u8, bn, obj.kind.name.text)) return;
             } else base = obj.kind.name.text;
         }
-        try l.report(s.span, .hint, "use-from", "use 'from' destructuring: local ... from {s}", .{base.?});
+        var rewrite: std.ArrayList(u8) = .empty;
+        try rewrite.appendSlice(l.arena, "local ");
+        for (names, 0..) |n, i| {
+            if (i > 0) try rewrite.appendSlice(l.arena, ", ");
+            try rewrite.appendSlice(l.arena, n.name.text);
+        }
+        try rewrite.print(l.arena, " from {s}", .{base.?});
+        try l.reportFix(s.span, .hint, "use-from", try l.edit(s.span, rewrite.items), "use 'from' destructuring: local ... from {s}", .{base.?});
     }
 
     fn selfAssign(l: *Linter, targets: []*ast.Expr, values: []*ast.Expr) Allocator.Error!void {
@@ -501,6 +542,9 @@ const Linter = struct {
         if (l.inner_ands.contains(e)) return;
         var depth: u32 = 0;
         var cur = e;
+        // The chain is whole when every operand indexes the one before,
+        // down to the first, which a rewrite then keeps as its root.
+        var root: ?*ast.Expr = null;
         while (cur.kind == .binop and cur.kind.binop.op == .@"and") {
             const lhs = cur.kind.binop.lhs;
             const rhs = cur.kind.binop.rhs;
@@ -510,10 +554,39 @@ const Linter = struct {
             if (lhs.kind == .binop and lhs.kind.binop.op == .@"and") {
                 try l.inner_ands.put(l.arena, lhs, {});
                 cur = lhs;
-            } else break;
+            } else {
+                root = lhs;
+                break;
+            }
         }
         if (depth >= 2) {
-            try l.report(e.span, .hint, "use-optional-chain", "and-chain can use optional chaining: x?.y?.z", .{});
+            // `a and a.b and a.b.c` yields what `a?.b?.c` yields, `nil` or
+            // `false` included, when every step is a field named by `.`.
+            var fix: []const Edit = &.{};
+            if (root) |r| {
+                var steps: std.ArrayList([]const u8) = .empty;
+                var x = e.kind.binop.rhs;
+                var ok = true;
+                for (0..depth) |_| {
+                    if (x.kind != .index or !x.kind.index.dot or x.kind.index.key.kind != .string) {
+                        ok = false;
+                        break;
+                    }
+                    try steps.append(l.arena, x.kind.index.key.kind.string);
+                    x = x.kind.index.obj;
+                }
+                if (ok and exprEqual(x, r)) {
+                    var rewrite: std.ArrayList(u8) = .empty;
+                    try rewrite.appendSlice(l.arena, l.text(r.span));
+                    var i = steps.items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try rewrite.print(l.arena, "?.{s}", .{steps.items[i]});
+                    }
+                    fix = try l.edit(e.span, rewrite.items);
+                }
+            }
+            try l.reportFix(e.span, .hint, "use-optional-chain", fix, "and-chain can use optional chaining: x?.y?.z", .{});
         }
     }
 
@@ -804,6 +877,54 @@ const Hints = struct {
         try h.l.report(span, .hint, code, fmt, args);
     }
 
+    fn reportFix(h: *Hints, span: Span, code: []const u8, fix: []const Edit, comptime fmt: []const u8, args: anytype) Allocator.Error!void {
+        try h.l.reportFix(span, .hint, code, fix, fmt, args);
+    }
+
+    /// Whether `e` is a number whatever its operands hold: a numeric
+    /// literal, a numeric `for` variable, or arithmetic on such values,
+    /// which no metamethod can turn into another type.
+    fn isNumberStrict(h: *Hints, e: *const ast.Expr) bool {
+        const x = unparen(e);
+        return switch (x.kind) {
+            .integer, .float => true,
+            .binop => |b| switch (b.op) {
+                .add, .sub, .mul, .div, .idiv, .mod, .pow, .band, .bor, .bxor, .shl, .shr => h.isNumberStrict(b.lhs) and h.isNumberStrict(b.rhs),
+                else => false,
+            },
+            .unop => |u| (u.op == .neg or u.op == .bnot) and h.isNumberStrict(u.operand),
+            .name => blk: {
+                const b = h.localOf(x) orelse break :blk false;
+                break :blk b.kind == .loop_var and h.isNumericForVar(b);
+            },
+            else => false,
+        };
+    }
+
+    /// Appends `value` as the text of a string with interpolation.
+    fn interpText(h: *Hints, out: *std.ArrayList(u8), value: []const u8) Allocator.Error!void {
+        for (value) |c| switch (c) {
+            '\\' => try out.appendSlice(h.l.arena, "\\\\"),
+            '`' => try out.appendSlice(h.l.arena, "\\`"),
+            '$' => try out.appendSlice(h.l.arena, "\\$"),
+            '\n' => try out.appendSlice(h.l.arena, "\\n"),
+            '\r' => try out.appendSlice(h.l.arena, "\\r"),
+            '\t' => try out.appendSlice(h.l.arena, "\\t"),
+            0...8, 11, 12, 14...31, 127 => try out.print(h.l.arena, "\\{d:0>3}", .{c}),
+            else => try out.append(h.l.arena, c),
+        };
+    }
+
+    /// Appends `e` as an interpolated value: `$name` for a name that the
+    /// next text cannot extend, `$(expression)` otherwise.
+    fn interpValue(h: *Hints, out: *std.ArrayList(u8), e: *const ast.Expr, next: []const u8) Allocator.Error!void {
+        const x = unparen(e);
+        const extends = next.len > 0 and (std.ascii.isAlphanumeric(next[0]) or next[0] == '_' or next[0] == '.' or next[0] == '(' or next[0] == '[' or next[0] == ':');
+        if (x.kind == .name and !extends) {
+            try out.print(h.l.arena, "${s}", .{x.kind.name.text});
+        } else try out.print(h.l.arena, "$({s})", .{h.l.text(e.span)});
+    }
+
     fn inLoop(h: *Hints) bool {
         return h.loop != null;
     }
@@ -871,19 +992,20 @@ const Hints = struct {
                 try h.report(e.span, "select-in-loop", "select(i, ...) in a loop copies the arguments on each pass: call table.pack(...) once and index it", .{});
             }
         }
-        if (h.isLibCall(c.callee, "string", "format") and c.args.len >= 1) try h.formatHint(e, c.args[0], c.args.len - 1);
+        if (h.isLibCall(c.callee, "string", "format") and c.args.len >= 1) try h.formatHint(e, c.args[0], c.args[1..]);
     }
 
     fn methodHints(h: *Hints, e: *ast.Expr) Allocator.Error!void {
         const m = e.kind.method;
         if (std.mem.eql(u8, m.name.text, "format")) {
             const obj = unparen(m.obj);
-            if (obj.kind == .string) try h.formatHint(e, obj, m.args.len);
+            if (obj.kind == .string) try h.formatHint(e, obj, m.args);
         }
     }
 
     /// `string.format` with a literal format of text and `%s` only.
-    fn formatHint(h: *Hints, e: *ast.Expr, fmt: *const ast.Expr, nargs: usize) Allocator.Error!void {
+    fn formatHint(h: *Hints, e: *ast.Expr, fmt: *const ast.Expr, args: []*ast.Expr) Allocator.Error!void {
+        const nargs = args.len;
         const f = unparen(fmt);
         if (f.kind != .string) return;
         const text = f.kind.string;
@@ -900,7 +1022,28 @@ const Hints = struct {
             i += 1;
         }
         if (n == 0 or n != nargs) return;
-        try h.report(e.span, "format-to-interpolation", "this format holds only %s: a string with interpolation is faster", .{});
+        // `%s` converts a value as interpolation does, so the rewrite
+        // writes the same string.
+        var rewrite: std.ArrayList(u8) = .empty;
+        try rewrite.append(h.l.arena, '`');
+        var arg: usize = 0;
+        var j: usize = 0;
+        while (j < text.len) : (j += 1) {
+            if (text[j] == '%' and text[j + 1] == '%') {
+                try h.interpText(&rewrite, "%");
+                j += 1;
+            } else if (text[j] == '%') {
+                const next_text = blk: {
+                    const rest = text[j + 2 ..];
+                    break :blk if (rest.len > 0 and rest[0] == '%' and rest.len > 1 and rest[1] == 's') "" else rest;
+                };
+                try h.interpValue(&rewrite, args[arg], next_text);
+                arg += 1;
+                j += 1;
+            } else try h.interpText(&rewrite, text[j .. j + 1]);
+        }
+        try rewrite.append(h.l.arena, '`');
+        try h.reportFix(e.span, "format-to-interpolation", try h.l.edit(e.span, rewrite.items), "this format holds only %s: a string with interpolation is faster", .{});
     }
 
     /// `local t = { a = ..., b = ... }` in a function, where every use of
@@ -1069,11 +1212,45 @@ const Hints = struct {
             const x = unparen(op);
             if (x.kind == .string) literals += 1 else values += 1;
             if (x.kind == .call and h.l.isFree(x.kind.call.callee, "tostring") and x.kind.call.args.len == 1 and h.isNumber(x.kind.call.args[0])) {
-                try h.report(x.span, "redundant-tostring", "concatenation converts the number itself: tostring is redundant here", .{});
+                // Without tostring, `..` converts the number to the same
+                // text. Only a number that no metamethod can replace keeps
+                // the rewrite exact.
+                const arg = x.kind.call.args[0];
+                var fix: []const Edit = &.{};
+                if (h.isNumberStrict(arg)) {
+                    const inner = h.l.text(arg.span);
+                    const a = unparen(arg);
+                    fix = try h.l.edit(x.span, if (a.kind == .binop) try std.fmt.allocPrint(h.l.arena, "({s})", .{inner}) else inner);
+                }
+                try h.reportFix(x.span, "redundant-tostring", fix, "concatenation converts the number itself: tostring is redundant here", .{});
             }
         }
         if (operands.items.len >= 3 and literals > 0 and values > 0) {
-            try h.report(e.span, "use-interpolation", "a string with interpolation writes this concatenation in one piece", .{});
+            // `..` raises an error for a value that is no string or number,
+            // which interpolation would write, so the rewrite applies only
+            // when every value is known to be a number.
+            var exact = true;
+            for (operands.items) |op| {
+                const x = unparen(op);
+                if (x.kind != .string and !h.isNumberStrict(x)) exact = false;
+            }
+            var fix: []const Edit = &.{};
+            if (exact) {
+                var rewrite: std.ArrayList(u8) = .empty;
+                try rewrite.append(h.l.arena, '`');
+                for (operands.items, 0..) |op, i| {
+                    const x = unparen(op);
+                    if (x.kind == .string) {
+                        try h.interpText(&rewrite, x.kind.string);
+                    } else {
+                        const next = if (i + 1 < operands.items.len and unparen(operands.items[i + 1]).kind == .string) unparen(operands.items[i + 1]).kind.string else "";
+                        try h.interpValue(&rewrite, op, next);
+                    }
+                }
+                try rewrite.append(h.l.arena, '`');
+                fix = try h.l.edit(e.span, rewrite.items);
+            }
+            try h.reportFix(e.span, "use-interpolation", fix, "a string with interpolation writes this concatenation in one piece", .{});
         }
     }
 
@@ -1225,9 +1402,11 @@ pub fn locate(src: []const u8, list: []Diagnostic) void {
     }
 }
 
-const Position = struct { line: u32, column: u32 };
+pub const Position = struct { line: u32, column: u32 };
 
-fn position(src: []const u8, offset: u32) Position {
+/// The one-based line and column of a byte offset. Columns count
+/// characters.
+pub fn position(src: []const u8, offset: u32) Position {
     var line: u32 = 1;
     var col: u32 = 1;
     const end = @min(offset, src.len);

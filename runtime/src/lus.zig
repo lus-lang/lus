@@ -146,6 +146,8 @@ test {
     _ = @import("tools/agents.zig");
     _ = @import("tools/tree.zig");
     _ = @import("syntax/explain.zig");
+    _ = @import("syntax/suppress.zig");
+    _ = @import("syntax/fix.zig");
     _ = @import("tools/test.zig");
     _ = @import("tools/lsp.zig");
     _ = @import("tools/paths.zig");

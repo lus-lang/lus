@@ -233,12 +233,41 @@ The hints cover compound assignment such as `+=`, the increment `++`, comments t
 
 A file whose name ends in `_test.lus` is checked as a [test file](/manual/testing). The helpers `snapshot`, `raises`, `same`, and `skip` and the global `TEST_DIR` count as defined. The top-level `NAME_test` functions and `NAME_cases` tables that the runner reads count as used.
 
-`--json` prints all diagnostics as one JSON array, for editors and other tools. Each object has the fields `file`, `line`, `column`, `endLine`, `endColumn`, `severity`, `code`, and `message`.
+`--json` prints all diagnostics as one JSON array, for editors and other tools. Each object has the fields `file`, `line`, `column`, `endLine`, `endColumn`, `severity`, `code`, and `message`. A diagnostic with a fix also has the field `fix`, a list of edits, each with `line`, `column`, `endLine`, `endColumn`, and the replacement `text`.
 
 ```
 [
   {"file": "messy.lus", "line": 1, "column": 7, "endLine": 1, "endColumn": 13, "severity": "warning", "code": "unused-local", "message": "unused local 'unused'"}
 ]
+```
+
+### Fixes
+
+`lus check --fix` rewrites the code that a diagnostic points at, when a rewrite resolves it without changing what the program does, then reports what remains. It writes each changed file and prints how many fixes it applied. A fix can make another one possible, so the checker runs again after each round of fixes, for up to four rounds. A round that would leave a file with an error it did not have is discarded.
+
+| Code | Rewrite |
+| --- | --- |
+| `unused-local`, `unused-param`, `unused-loop-var`, `unused-function` | The name starts with `_`. A variable that is assigned, a local group, and a local with attributes keep their names, because the assignments or the attribute handlers would see the change. |
+| `redundant-tostring` | `tostring(x)` becomes `x`, when `x` is a number whatever the values of its operands, such as a numeric `for` variable or arithmetic on one. |
+| `format-to-interpolation` | `string.format` becomes a string with interpolation, which converts each value as `%s` does. |
+| `use-interpolation` | The concatenation becomes a string with interpolation, when every value in it is known to be a number, because `..` raises an error for other values where interpolation writes them. |
+| `use-from` | The locals become `local a, b from t`. |
+| `use-optional-chain` | `a and a.b and a.b.c` becomes `a?.b?.c`, which yields the same `nil` or `false` when a step is missing. |
+
+The other diagnostics keep their place in the report, because their rewrites could change what a program does. The debug library sees a renamed variable under its new name, so `debug.getlocal` reports `_x` where it reported `x`.
+
+### Suppressing a diagnostic
+
+A comment `-- lus: allow(CODE, ...)` suppresses the warnings and hints with the codes it names. At the end of a line of code it covers that line. On a line of its own it covers the next statement, all its lines included, so a comment above a function covers the whole function. In the header doc comment of a module it covers the whole file. Errors stay reported, because the compiler rejects the chunk whatever a comment says. A code that no diagnostic has is reported as `unknown-allow`.
+
+```lus nocheck
+local spare = compute() -- lus: allow(unused-local)
+
+-- lus: allow(shadowed-local)
+local function parse(text)
+    local text = text:lower()
+    return text
+end
 ```
 
 ## Documentation

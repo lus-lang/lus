@@ -9,6 +9,8 @@ pub fn Visitor(comptime Ctx: type) type {
     return struct {
         ctx: Ctx,
         func: *const fn (Ctx, **ast.Expr) anyerror!void,
+        /// Called on every statement before its parts, when set.
+        stat_func: ?*const fn (Ctx, *ast.Stat) anyerror!void = null,
 
         const Self = @This();
 
@@ -48,6 +50,7 @@ pub fn Visitor(comptime Ctx: type) type {
         }
 
         pub fn stat(v: Self, s: *ast.Stat) anyerror!void {
+            if (v.stat_func) |f| try f(v.ctx, s);
             switch (s.kind) {
                 .empty, .break_, .continue_, .goto_, .label, .recovered => {},
                 .expr => |*e| try v.slot(e),
