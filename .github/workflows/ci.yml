@@ -246,10 +246,28 @@ jobs:
         timeout-minutes: 30
         working-directory: runtime
         run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-android -Dandroid-ndk="$ANDROID_NDK_HOME" -Dandroid-static=true --prefix zig-out-android
-      - name: Native code
+      - name: Startup and native code
         working-directory: runtime
-        # The JIT compiles a function on its first call under eager.
-        run: LUS_JIT=eager zig-out-android/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
+        # Each run starts the interpreter one step further: without the JIT,
+        # with the default tiers, and with a function compiled on its first
+        # call under eager. A crash prints its backtrace under gdb, which
+        # the runner installs from the archive of Ubuntu.
+        run: |
+          lus=zig-out-android/bin/lus
+          file "$lus"
+          failed=
+          for mode in off default eager; do
+            echo "== $mode"
+            if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
+            if ! "$lus" -e "local function f() end f() print(1, debug.jit(f))"; then
+              failed=1
+              command -v gdb > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gdb > /dev/null; }
+              gdb -batch -ex run -ex bt -ex "info registers" -ex "x/8i \$pc" --args "$lus" -e "local function f() end f() print(1, debug.jit(f))"
+            fi
+          done
+          test -z "$failed"
+          # The JIT compiles a function on its first call under eager.
+          LUS_JIT=eager "$lus" -e "local function f() end f() assert(debug.jit(f), 'no native code')"
       - name: Conformance tests
         timeout-minutes: 40
         working-directory: runtime
