@@ -6,19 +6,21 @@ group: use
 shortdesc: "The lush command: the Pi coding agent with the Lus language server, the lus tools, permission-aware runs, and a mode for working on Lus itself."
 ---
 
-The Lus harness is a set of extensions for [Pi](https://pi.dev), a coding agent that runs in the terminal. With the harness loaded, the agent sees the diagnostics of every Lus file it edits on the turn that it edits it, runs `lus check`, `lus fmt`, `lus test`, and `lus doc` as tools, and runs scripts only with the permissions that the person at the terminal approves. In a checkout of the Lus repository, the harness also builds the runtime under the build lock and runs the conformance suite under every JIT mode.
+The Lus harness is a set of extensions for [Pi](https://pi.dev), a coding agent that runs in the terminal. With the harness loaded, the agent receives the diagnostics of a Lus file in the same turn that it edits the file, runs `lus check`, `lus fmt`, `lus test`, and `lus doc` as tools, and runs scripts only with the permissions that the person at the terminal approves. In a checkout of the Lus repository, the harness also builds the runtime under the build lock and runs the conformance suite under every JIT mode.
 
 The `lush` command starts Pi with the harness loaded. The harness uses the Pi settings, logins, and packages of the person who runs it, so `lush` works with every model that Pi works with.
 
 ## Installing
 
-The installer needs a Lus 2 runtime, which the [installer of Lus](/manual/releases) provides. The installer then finds the `pi` command on `PATH`, or asks before it installs Pi with its own installer from pi.dev. It writes the `lush` launcher into `~/.lus/bin`, the directory that holds `lus`:
+Install a Lus 2 runtime with the [installer of Lus](/manual/releases) first, then run the installer of the harness:
 
 ```bash
 curl -fsSL https://lus.dev/harness.sh | sh
 ```
 
-The installer downloads the harness from the source archive on GitHub of the release that matches the installed `lus`. In a checkout of the [repository](https://github.com/lus-lang/lus), the installer makes the launcher load the harness from the checkout, so a `git pull` updates it:
+The installer uses the `pi` command on `PATH`, or asks before it installs Pi with its own installer from pi.dev. It downloads the harness from the GitHub source archive of the release that matches the installed `lus`, or from the `main` branch for a development build of `lus`. It then writes the `lush` launcher into `~/.lus/bin`, the directory that holds `lus`.
+
+In a checkout of the [repository](https://github.com/lus-lang/lus), run the installer from the checkout. The launcher then loads the harness from the checkout, so a `git pull` updates it:
 
 ```bash
 sh packages/harness/install.sh
@@ -54,11 +56,11 @@ When the agent edits or writes a `.lus` file, the harness checks the file and ad
     9:10 unexpected symbol near '!' (not equal is written '~=') syntax
 ```
 
-Hints, such as an unused local, count in the summary without being shown. The language server starts on the first edit of a Lus file and stops when the session ends. The `lus_lsp` tool sends it hover, definition, references, and symbols requests, so the agent can find where a name is defined without searching the text of every file.
+Hints are left out, so the agent reads only errors and warnings. The language server starts on the first edit of a Lus file and stops when the session ends. The `lus_lsp` tool sends it hover, definition, references, and symbols requests, so the agent can find where a name is defined without searching the text of every file.
 
 ## Tools
 
-The harness gives the agent the following tools. Each runs the `lus` command and shows a one-line summary of the result, such as `7 passed · 0 failed · 0.21s`.
+The harness gives the agent the following tools. Each shows a one-line summary of its result, such as `7 passed · 0 failed · 0.21s`.
 
 | Tool | Effect |
 | --- | --- |
@@ -69,15 +71,15 @@ The harness gives the agent the following tools. Each runs the `lus` command and
 | `lus_lsp` | Asks the language server about a position or a file. |
 | `lus_run` | Runs a script with the permissions that the person approves. |
 
-The commands `/check`, `/fmt`, `/test`, and `/doc` ask the agent to run the matching tool, so the result enters the conversation and the next prompt can refer to it.
+The commands `/check`, `/fmt`, `/test`, and `/doc` ask the agent to run the matching tool, so the result is part of the conversation and the next prompt can refer to it.
 
-The agent reads the agent skills `lus`, `lus-rewrite`, and `lus-writing` when a task needs them. The system prompt lists the pages of the manual from [`llms.txt`](/llms.txt). A project that has its own copy of the skills in `.agents/skills`, such as one set up by [`lus agents init`](/manual/cli#lus-agents), keeps its copy.
+The agent reads the agent skills `lus`, `lus-rewrite`, and `lus-writing` when a task needs them. The system prompt lists the pages of the manual from [`llms.txt`](/llms.txt). In a project with its own copy of the skills in `.agents/skills`, such as one set up by [`lus agents init`](/manual/cli#lus-agents), the agent reads that copy.
 
 ## Running scripts
 
 A script that `lus` starts without the `-P` option may pledge any [permission](/manual/permissions). `lus_run` therefore always starts a script with `-P` grants, which limit what the script may pledge to what the grants cover. Every run may read the files of the project and load its modules. Any other permission is approved by the person at the terminal, who allows it once, allows it for the rest of the session, or denies it.
 
-Before a run, `lus_run` reads the permissions that the agent requested and the `pledge` calls of the script whose arguments are written as strings, then asks about the ones that no grant covers yet:
+Before a run, `lus_run` reads the permissions that the agent requested and the `pledge` calls in the script that name permissions as string literals, then asks about the ones that no grant covers yet:
 
 ```
  main.lus asks for
@@ -88,7 +90,7 @@ Before a run, `lus_run` reads the permissions that the agent requested and the `
    Deny
 ```
 
-A run that stops with an error such as `permission "fs:write" denied for 'out/report.csv'` asks about a grant for that value, which is the absolute path for a file and the host for a URL, and runs the script again when the person allows it. A script that has already written files or sent requests before the error repeats that work on the second run.
+When a run stops with an error such as `permission "fs:write" denied for 'out/report.csv'`, `lus_run` asks about a grant for that value and runs the script again when the person allows it. The grant names the absolute path of a file or the host of a URL. A script that wrote files or sent requests before the error repeats that work on the second run.
 
 A `lus script.lus` command that the agent types into the shell without `-P` does not run. The agent receives a message that tells it to use `lus_run`. A shell command with `-P` grants runs after the person approves the grants beyond reading the project. `/grants` shows how many grants the session holds. `/grants clear` drops them.
 
@@ -106,11 +108,11 @@ The build lock lets one build run at a time across every checkout and worktree o
 
 `lus_conformance` shows one mark per JIT mode, such as `on ✓  off ✓  eager ✓  opt-eager ✗ 1`, with the failing tests beneath it, and states how long ago the runtime was built. Modes that fail the same tests share one list.
 
-After an edit of a file of the repository, the result carries the findings of `tools/lint-repo.js` for that file. An edit of a Markdown file is also checked for semicolons in prose, following the [prose style](https://github.com/lus-lang/lus/blob/main/spec/design/style.md). The system prompt includes `runtime/HACKING.md`. The commands `/build`, `/conformance`, `/mise`, and `/lint` ask the agent to run the matching tool.
+After an edit of a file of the repository, the result includes the findings of `tools/lint-repo.js` for that file. An edit of a Markdown file is also checked for semicolons in prose, following the [prose style](/agents/skills/lus-writing/references/style.md). The system prompt includes `runtime/HACKING.md`. The commands `/build`, `/conformance`, `/mise`, and `/lint` ask the agent to run the matching tool.
 
 ## Themes
 
-The harness includes the theme `lus` for dark terminals and `lus-light` for light ones, in the colors of this site. `lush` selects `lus-light/lus`, which follows the light or dark appearance of the terminal. A `--use-theme` option on the command line, or the environment variable `LUS_HARNESS_THEME`, selects another theme.
+The harness includes the theme `lus` for dark terminals and `lus-light` for light ones, in the colors of lus.dev. `lush` selects `lus-light/lus`, which follows the light or dark appearance of the terminal. A `--use-theme` option on the command line, or the environment variable `LUS_HARNESS_THEME`, selects another theme.
 
 ## Choosing the runtime
 
