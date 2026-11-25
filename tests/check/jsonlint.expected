@@ -1,4 +1,4 @@
 [
-  {"file": "jsonlint.lus", "line": 2, "column": 7, "endLine": 2, "endColumn": 13, "severity": "warning", "code": "unused-local", "message": "unused local 'unused'"},
+  {"file": "jsonlint.lus", "line": 2, "column": 7, "endLine": 2, "endColumn": 13, "severity": "warning", "code": "unused-local", "message": "unused local 'unused'", "fix": [{"line": 2, "column": 7, "endLine": 2, "endColumn": 7, "text": "_"}]},
   {"file": "jsonlint.lus", "line": 3, "column": 12, "endLine": 3, "endColumn": 16, "severity": "warning", "code": "undefined-global", "message": "undefined global 'nope'"}
 ]
