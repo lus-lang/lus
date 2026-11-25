@@ -25,6 +25,16 @@ on:
         description: Publish an unstable build when the run passes
         type: boolean
         default: false
+  # The nightly.yml of main calls this file at rewrite with the same
+  # schedules, since GitHub starts scheduled and manual runs only from the
+  # default branch. The context of a called run is the context of its
+  # caller, so the schedule and the unstable input arrive unchanged.
+  workflow_call:
+    inputs:
+      unstable:
+        description: Publish an unstable build when the run passes
+        type: boolean
+        default: false
 
 permissions:
   contents: read
