@@ -3576,7 +3576,7 @@ A task that mostly waits belongs in a detached coroutine. A task that mostly com
 
 A program can use both. `worker.receive` pauses a detached coroutine while it waits, so a server that handles each connection in a detached coroutine may pass a heavy computation to a worker. The server keeps answering other connections while that coroutine waits for the result.
 
-[`network.fetch`](/manual/api#network.fetch) behaves differently from the other network operations. Called from the top-level code of a script, it lets the detached coroutines run while it waits, but called inside a detached coroutine, it blocks every other coroutine until its response arrives. In both cases it waits for one response at a time, so a program that sends several HTTP requests at the same time calls `fetch` from one worker per request.
+[`network.fetch`](/manual/api#network.fetch) waits as the other network operations do, so a detached coroutine that fetches a page pauses while the other coroutines run. A program that sends several HTTP requests at the same time calls `fetch` from one detached coroutine per request.
 
 [Coroutines and workers](/manual/concurrency) lists every operation that pauses a detached coroutine, the timeouts, and the rules for values that cross between workers.
 

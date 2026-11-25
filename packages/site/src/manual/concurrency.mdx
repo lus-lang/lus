@@ -246,11 +246,12 @@ A _suspension point_ is an operation that waits for something outside the progra
 - [`worker.receive`](/manual/api#worker.receive).
 - [`worker.peek`](/manual/api#worker.peek) inside a worker.
 - `read` and `write` on the pipes of a process that [`os.spawn`](/manual/processes) started.
+- [`network.fetch`](/manual/api#network.fetch), while it connects, sends the request, and reads the response.
 - Resuming a coroutine that waits for an event: the exit of a process (`p.exit`), a signal ([`os.signal`](/manual/api#os.signal)), a change to a file ([`fs.watch`](/manual/api#fs.watch)), or the end of a time ([`coroutine.sleep`](/manual/api#coroutine.sleep)).
 
 Inside a detached coroutine, a suspension point suspends the coroutine until it can continue. During the wait, `coroutine.status` reports `"suspended"` for it. In the main chunk, or in a plain coroutine that no detached coroutine resumed, the same operation blocks its caller while the detached coroutines run. In the server example of [Detached coroutines](#detached-coroutines), the acceptor and the connections run during the `receive` calls of the main chunk.
 
-Every other operation that takes time, such as reading and writing files, SQLite calls, `os.execute`, or `io.popen`, blocks the whole program, detached coroutines included. [`network.fetch`](/manual/api#network.fetch) behaves in both ways. The detached coroutines run while `fetch` waits in the top-level code of a script, as they do at a suspension point, but a `fetch` inside a detached coroutine blocks the whole program.
+Every other operation that takes time, such as reading and writing files, SQLite calls, `os.execute`, or `io.popen`, blocks the whole program, detached coroutines included.
 
 A plain coroutine that reads a socket inside a detached coroutine suspends the detached coroutine with it. A line iterator written with `coroutine.wrap` therefore works unchanged on a connection that a detached coroutine serves. A suspension point reached inside a function that a library function calls back, such as the comparison function of `table.sort`, cannot suspend its coroutine, so it blocks the coroutine while the other coroutines run.
 

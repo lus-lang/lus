@@ -1053,7 +1053,7 @@ print(worker.receive(low) + worker.receive(high))   --> 9592
 | --- | --- |
 | Many operations that wait on sockets, such as connections and timeouts | Detached coroutines |
 | Computation that should use several processor cores | Workers |
-| Several HTTP requests with `network.fetch` at once, since `fetch` blocks its thread | Workers |
+| Several HTTP requests with `network.fetch` at once | Detached coroutines |
 | A sequence of values produced on demand, such as an iterator | Plain coroutines, as in Lua |
 
 [Coroutines and workers](/manual/concurrency) describes both in full.

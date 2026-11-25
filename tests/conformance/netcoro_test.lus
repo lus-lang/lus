@@ -851,6 +851,34 @@ local function fetch_reads_a_body_that_ends_with_the_connection_while_coroutines
     server:close()
 end
 
+-- A fetch inside a detached coroutine suspends that coroutine alone, so
+-- the coroutine of the peer runs and answers while the fetch waits. A
+-- fetch that blocked the program would leave the peer waiting until the
+-- timeout of the fetch.
+local function fetch_in_a_detached_coroutine_suspends_only_that_coroutine_test()
+    local server, port = listen()
+    server:settimeout(10)
+    local fetcher
+    local seen
+    local peer = spawn(function()
+        local sock <close> = assert(server:accept())
+        sock:settimeout(10)
+        while #sock:receive("*l") > 0 do
+        end
+        seen = status(fetcher)
+        sock:send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+    end)
+    fetcher = spawn(function()
+        local code, body = network.fetch("http://127.0.0.1:" .. port .. "/", "GET", nil, nil, { timeout = 10 })
+        return code, txt(body)
+    end)
+    local r = pack(resume(fetcher))
+    assert(r[1] == true and r[2] == 200 and r[3] == "ok", tostring(r[2]))
+    assert(seen == "suspended", tostring(seen))
+    assert(resume(peer))
+    server:close()
+end
+
 local function an_https_fetch_from_a_plain_http_peer_raises_test()
     local server, port = listen()
     -- Every wait of the peer has an end, so a fetch that fails before it
