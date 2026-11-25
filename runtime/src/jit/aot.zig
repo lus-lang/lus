@@ -395,8 +395,12 @@ fn inHeap(g: *Global, v: usize) bool {
 /// Whether `v` points into the executable memory of the JIT, which other
 /// code compiled ahead of time cannot name.
 fn inArena(g: *Global, v: usize) bool {
-    for (g.jit.arena.chunks.items) |c| if (v >= c.span.start and v < c.span.start + c.span.len) return true;
-    return false;
+    if (@TypeOf(g.jit.arena) == jit.NoArena) {
+        return false;
+    } else {
+        for (g.jit.arena.chunks.items) |c| if (v >= c.span.start and v < c.span.start + c.span.len) return true;
+        return false;
+    }
 }
 
 extern "c" fn dladdr(addr: *const anyopaque, info: *DlInfo) c_int;

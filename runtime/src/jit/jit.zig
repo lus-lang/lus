@@ -77,7 +77,21 @@ const max_instructions = 30_000;
 
 pub const Setting = enum { off, on, eager };
 
-pub const State = if (enabled) struct {
+/// The executable memory of a build that maps none: WebAssembly, whose
+/// host instantiates modules, and a build without the JIT. It hands out
+/// no block.
+pub const NoArena = struct {
+    pub fn alloc(_: *NoArena, _: std.mem.Allocator, _: usize) ?[]u8 {
+        return null;
+    }
+    pub fn release(_: *NoArena, _: std.mem.Allocator, _: []u8) void {}
+    pub fn deinit(_: *NoArena, _: std.mem.Allocator) void {}
+};
+
+/// The state of the JIT in each global state. A build without the JIT
+/// keeps the same fields, which the code shared by every build reads,
+/// and maps no executable memory.
+pub const State = struct {
     ready: bool = false,
     setting: Setting = .on,
     /// Set once the process may map no executable memory. Nothing new
@@ -89,7 +103,7 @@ pub const State = if (enabled) struct {
     /// Length of the current sampling period of the interpreter.
     period: u32 = 1,
     seed: u32 = 12345,
-    arena: if (is_wasm) void else mem.Arena = if (is_wasm) {} else .{},
+    arena: if (is_wasm or !enabled) NoArena else mem.Arena = .{},
     /// Functions that have native code now.
     live: usize = 0,
     /// Functions compiled since the state started.
@@ -115,8 +129,6 @@ pub const State = if (enabled) struct {
     /// code compiled ahead of time it installed, and how much of it ran
     /// in place from the executable.
     aot_report: bool = false,
-    /// Bytes of tables that optimized code did not allocate since the
-    /// last collection it asked for, and the count at which it asks.
     /// Set by the step routine of a return that popped a lean frame:
     /// the address in native code where the caller continues, and the
     /// number of results. `dispatch` hands the address out once, so the
@@ -124,6 +136,8 @@ pub const State = if (enabled) struct {
     /// be inside optimized code.
     resume_addr: usize = 0,
     resume_count: usize = 0,
+    /// Bytes of tables that optimized code did not allocate since the
+    /// last collection it asked for, and the count at which it asks.
     sunk: u64 = 0,
     sunk_limit: u64 = opt.sunk_step,
     /// Whether optimized code calls optimized code at its direct entry.
@@ -142,7 +156,7 @@ pub const State = if (enabled) struct {
     /// The lowest address that the chain of direct calls that runs now
     /// may reach. The call that starts a chain sets it.
     chain_limit: usize = 0,
-} else struct {};
+};
 
 /// The native code of one function.
 pub const Code = extern struct {
