@@ -56,9 +56,22 @@ jobs:
       - name: Plan
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.ref_name }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          node tools/ci/areas.mjs plan --base "$BASE" --head HEAD --testmap "$RUNNER_TEMP/testmap/testmap.json" > "$RUNNER_TEMP/plan.json"
+          # A push plans from the newest commit of its branch whose run
+          # passed, so a check that failed runs again on every later push
+          # until it passes, whatever those pushes change. A force push
+          # that drops that commit plans from the commit before the push.
+          base="$BASE"
+          if [ "$EVENT" = push ]; then
+            green=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BRANCH" --event push --status success --limit 1 --json headSha --jq '.[0].headSha // empty' || true)
+            if [ -n "$green" ] && git merge-base --is-ancestor "$green" HEAD; then base="$green"; fi
+          fi
+          echo "base: $base"
+          node tools/ci/areas.mjs plan --base "$base" --head HEAD --testmap "$RUNNER_TEMP/testmap/testmap.json" > "$RUNNER_TEMP/plan.json"
           { echo '```json'; cat "$RUNNER_TEMP/plan.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   lint:

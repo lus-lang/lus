@@ -81,11 +81,11 @@ test("a path no area knows runs the fallback", () => {
   assert.equal(p.contributor.verdict, "denied");
 });
 
-test("documentation builds nothing of the runtime", () => {
+test("a design note runs the doc tests and the spec test alone", () => {
   const p = planFor("spec/design/gc.md");
   assert.equal(p.runtime.length, 1);
   assert.deepEqual(p.runtime[0].checks, ["doc"]);
-  assert.equal(p.runtime[0].tests, "");
+  assert.equal(p.runtime[0].tests, "../tests/conformance/spec_test.lus");
 });
 
 test("contributor rules", () => {
@@ -144,4 +144,67 @@ test("CODEOWNERS lists the paths that the map denies", async () => {
   const {codeowners, restrictedPatterns} = await import("./areas.mjs");
   const text = fs.readFileSync(path.join(ROOT, ".github/CODEOWNERS"), "utf8");
   assert.equal(codeowners(text, restrictedPatterns(map, tracked)), text, "run node tools/ci/areas.mjs codeowners --write");
+});
+
+// The checks of ci.yml that run the tool tests, and the directories under
+// tests/ whose files each one reads, from the steps of runtime/build.zig.
+const TOOL_DIRS = {
+  unit: ["tests/check", "tests/doc", "tests/build", "tests/embed"],
+  debug: ["tests/debug"],
+  version: ["tests/version", "tests/remote", "tests/lib"],
+};
+
+const plansSomething = (p) => p.runtime.some((r) => r.checks.length > 0 || r.suite || r.tests) || p.full.length > 0 || p.ci || p.benches.length > 0;
+
+test("every test directory is planned by an area", () => {
+  const dirs = [...new Set(tracked.filter((f) => f.startsWith("tests/")).map((f) => f.split("/").slice(0, 2).join("/")))];
+  for (const dir of dirs) {
+    for (const file of tracked.filter((f) => f.startsWith(`${dir}/`))) {
+      const areas = areasOf(map, file);
+      assert.ok(areas.length > 0, `${file} belongs to no area`);
+      if (areas.every((a) => a.unplanned)) continue;
+      assert.ok(plansSomething(planFor(file)), `${file} plans no check and no test`);
+    }
+  }
+});
+
+test("an unplanned area plans nothing", () => {
+  for (const area of map.areas.filter((a) => a.unplanned)) {
+    assert.deepEqual([area.checks ?? [], area.tests ?? [], area.extra ?? []], [[], [], []], area.name);
+  }
+});
+
+test("the build steps read only the tool directories the map knows", () => {
+  const build = fs.readFileSync(path.join(ROOT, "runtime/build.zig"), "utf8");
+  const read = new Set([...build.matchAll(/"\.\.\/tests\/([a-z]+)/g)].map((m) => `tests/${m[1]}`));
+  // test-check and test-doc name their directory by the command they run.
+  read.add("tests/check");
+  read.add("tests/doc");
+  const known = new Set(Object.values(TOOL_DIRS).flat());
+  for (const dir of read) assert.ok(known.has(dir), `runtime/build.zig reads ${dir}, which TOOL_DIRS leaves out`);
+});
+
+test("a tool fixture plans the check that runs it", () => {
+  for (const [check, dirs] of Object.entries(TOOL_DIRS)) {
+    for (const dir of dirs) {
+      const files = tracked.filter((f) => f.startsWith(`${dir}/`));
+      assert.ok(files.length > 0, `${dir} holds no tracked file`);
+      for (const file of files) {
+        assert.ok(planFor(file).runtime.some((r) => r.checks.includes(check)), `${file} does not plan ${check}`);
+      }
+    }
+  }
+});
+
+test("the sources of the tool fixtures and the embedded documents plan the unit check", () => {
+  const sources = ["runtime/src/syntax/parser.zig", "runtime/src/tools/check.zig", "runtime/src/tools/doc.zig", "runtime/src/tools/help.zig", "runtime/src/tools/test.zig", "spec/stdlib/base/assert.md", ".agents/skills/lus/SKILL.md"];
+  for (const file of sources) {
+    assert.ok(planFor(file).runtime.some((r) => r.checks.includes("unit")), `${file} does not plan unit`);
+  }
+});
+
+test("the spec and the examples run the conformance files that read them", () => {
+  const tests = (file) => planFor(file).runtime.map((r) => r.tests).join(" ");
+  assert.match(tests("spec/design/gc.md"), /spec_test\.lus/);
+  assert.match(tests("examples/json.lus"), /examples_test\.lus/);
 });

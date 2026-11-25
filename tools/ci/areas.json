@@ -374,12 +374,15 @@
       "name": "nightly-only-tests",
       "about": "These run in nightly.yml only.",
       "paths": ["tests/coverage/**", "tests/mutate/**", "tests/limits/**", "tests/tsan/**"],
-      "labels": ["tests"]
+      "labels": ["tests"],
+      "unplanned": true
     },
     {
       "name": "benchmarks",
+      "about": "The perf job follows tests/bench/perf-map.json, and nightly.yml runs every benchmark.",
       "paths": ["tests/bench/**"],
-      "labels": ["perf"]
+      "labels": ["perf"],
+      "unplanned": true
     },
     {
       "name": "language-server",
@@ -439,7 +442,15 @@
       "name": "spec",
       "paths": ["spec/**"],
       "labels": ["spec", "docs"],
+      "tests": ["tests/conformance/spec_test.lus"],
       "checks": ["doc"]
+    },
+    {
+      "name": "embedded-docs",
+      "about": "The executable embeds these files for lus help and lus agents, whose unit tests read every entry.",
+      "paths": ["spec/stdlib/**", ".agents/skills/**"],
+      "labels": ["docs"],
+      "checks": ["unit"]
     },
     {
       "name": "agent-docs",
@@ -453,6 +464,7 @@
       "name": "examples",
       "paths": ["examples/**"],
       "labels": ["examples", "docs"],
+      "tests": ["tests/conformance/examples_test.lus"],
       "checks": ["syntax", "web"]
     },
     {
