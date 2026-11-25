@@ -2093,6 +2093,8 @@ end
 print(average({ 4, 6, 8 }))   --> 6.0
 ```
 
+When the message is a string, `assert` puts the position of its call in front of it, as `error` does. A call of `average({})` in a file named `stats.lus` raises `stats.lus:2: average needs at least one value`. A check whose message is for the user of the program calls `error(message, 0)`, because `assert` has no level argument that omits the position.
+
 ### Catching errors
 
 Some errors are expected, so the program should handle them and continue. Text from outside the program is the usual case. [`fromjson`](/manual/api#fromjson) converts JSON text to a value and raises an error when the text is not valid JSON. A program that reads a settings file should report that error to the user and keep running. `catch` before an expression captures any error that the expression raises.

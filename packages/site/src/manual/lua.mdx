@@ -29,7 +29,7 @@ The following parts of Lua behave the same in Lus. Library functions that access
 - The syntax of Lua 5.5, including `goto`, integer division, the bitwise operators, `global` declarations, and the `<const>` and `<close>` attributes.
 - Integers and floats, with the same arithmetic, conversions, and wraparound on integer overflow.
 - Tables, metatables, and every metamethod, including `__index`, `__close`, `__gc`, and `__pairs`.
-- Coroutines, `error`, `assert`, `require`, `load`, and `_ENV` environments.
+- Coroutines, `error`, `require`, `load`, and `_ENV` environments.
 - The `table`, `math`, `os`, `coroutine`, `debug`, and `package` libraries, except the [removed functions](#removed-functions).
 - The `string`, `utf8`, and `io` libraries, except that positions count characters and binary data is a vector. [Strings and bytes](#strings-and-bytes) lists these differences.
 - String patterns, with the same items and the same functions. A pattern item matches a whole character. The classes such as `%a` and `%w` match ASCII characters only, as in Lua, so `%a` does not match `é`.
@@ -275,7 +275,7 @@ catch fs.remove("cache.tmp")   -- the file may not exist
 print("done")                  --> done
 ```
 
-The protected expression is part of the enclosing function, so it can use the local variables and the `...` of that function. `error`, `assert`, and error objects of any type work as in Lua. [Do expressions](#do-expressions) shows how `catch` protects several statements.
+The protected expression is part of the enclosing function, so it can use the local variables and the `...` of that function. `error` and error objects of any type work as in Lua. Lua raises the message of `assert` unchanged, which leaves the message exactly as the program wrote it. Lus puts the position of the call in front of a string message, as `error` does, so the message of a failed check names its line. [Do expressions](#do-expressions) shows how `catch` protects several statements.
 
 ### Optional chaining
 
