@@ -1,10 +1,10 @@
 {
   "about": [
-    "Benchmarks for performance tracking, the source paths that reach each one, and the change of the median that counts as a regression.",
-    "time and rss are relative thresholds. They are three times the largest relative median absolute deviation of one run, measured over 11 interleaved rounds of four ReleaseFast and ReleaseSafe builds on an Apple M-series Mac, with a floor of 3 percent for time and 2 percent for memory and a ceiling of 25 percent.",
+    "perf-map.json lists the benchmarks of performance tracking, the source paths that reach each one, and the change of the median that counts as a regression.",
+    "The fields time and rss are relative thresholds. Each is three times the largest relative median absolute deviation of one run, measured over 11 interleaved rounds of four ReleaseFast and ReleaseSafe builds on an Apple M-series Mac, with a floor of 3 percent for time and 2 percent for memory and a ceiling of 25 percent.",
     "A comparison of medians over N runs on the CI runner also requires the move to exceed 3 MAD of that runner, so these numbers are a floor on the effect size. Benchmarks marked short run under 40 ms, where process start dominates, and need more runs.",
-    "noise null means the benchmark has no measurement yet, and the thresholds are the defaults of the tracking plan.",
-    "paths map globs to benchmark ids. all selects every benchmark. changed selects the benchmarks whose own files changed."
+    "A benchmark whose noise is null has no measurement yet, so its thresholds are the defaults of the tracking plan.",
+    "The list paths maps globs to benchmark ids. The value all selects every benchmark. The value changed selects the benchmarks whose own files changed."
   ],
   "measured": {
     "commit": "0e7a4ae7",

@@ -300,8 +300,8 @@ pub inline fn allocSmall(g: *Global, comptime kind: Kind, size: usize) Allocator
 /// Hands the remaining free cells of the allocation page back to it.
 fn retire(a: *ClassAlloc) void {
     const p = a.page orelse return;
-    // The allocation page is the current page of its class, and the bump
-    // range lies inside its usable bytes.
+    // The allocation page is the current page of its class, with its bump
+    // range inside its usable bytes.
     inv.assert(p.current and a.bump <= a.end and a.end == p.base() + p.usable);
     p.free = a.free;
     p.top = @intCast(a.bump - p.base());

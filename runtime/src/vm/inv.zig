@@ -1,6 +1,6 @@
 //! Checks of internal invariants, in the manner of the `assert`, `ALWAYS`,
 //! and `NEVER` macros of SQLite. Every runtime check of an internal
-//! invariant goes through this module. A user error is raised as a Lus
+//! invariant uses this module. A user error is raised as a Lus
 //! error and never reaches these checks.
 //!
 //! The checks have two levels.
@@ -8,7 +8,7 @@
 //! - `inv.assert(c)`, `inv.always(c)`, and `inv.never(c)` run in Debug
 //!   and ReleaseSafe builds, in the unit tests, and in any build with
 //!   `-Dinvariants=true`. A check at this level costs a compare and a
-//!   branch, so it guards single fields: a bound, a state, a count.
+//!   branch, so it checks single fields: a bound, a state, a count.
 //! - A check behind `if (inv.deep)` runs in Debug builds, in the unit
 //!   tests, and with `-Dinvariants=true`. It may walk a whole structure,
 //!   such as the heap, a table, or the bytes of a string.
