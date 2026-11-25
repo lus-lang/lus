@@ -1,0 +1,475 @@
+{
+  "about": "Maps every path of the repository to an area. tools/ci/areas.mjs reads it to choose the tests and benchmarks of a change, its labels, and whether an outside contributor may touch it. A path takes the union of every area it matches, and the strictest contributor rule among them. tools/ci/areas.test.mjs fails when a tracked file matches no area.",
+  "runners": {
+    "linux": "ubuntu-24.04",
+    "macos": "macos-15",
+    "windows": "windows-2022"
+  },
+  "suite": ["tests/conformance", "packages/language-server/tests"],
+  "fallback": {
+    "about": "A changed path that matches no area runs this.",
+    "label": "triage",
+    "tests": ["suite"],
+    "checks": ["unit"],
+    "contributor": "denied"
+  },
+  "areas": [
+    {
+      "name": "vm",
+      "paths": ["runtime/src/vm/**"],
+      "labels": ["runtime"],
+      "tests": ["suite"],
+      "checks": ["unit", "diff", "oom", "doc"],
+      "benches": ["interp.lus", "loop.lus", "methods.lus", "closures.lus", "tables.lus"]
+    },
+    {
+      "name": "gc",
+      "paths": ["runtime/src/vm/gc.zig", "runtime/src/vm/gcpar.zig", "runtime/src/vm/heap.zig", "runtime/src/vm/heapcount.zig", "runtime/src/vm/sweep.zig", "runtime/src/vm/object.zig"],
+      "labels": ["gc"],
+      "checks": ["stress"],
+      "platforms": ["linux", "macos", "windows"],
+      "benches": ["fullgc.lus", "gcpause.lus", "observe.lus"]
+    },
+    {
+      "name": "stores",
+      "about": "HACKING.md asks for a gc-stress run after a change to a store, since the verifier finds a missing barrier.",
+      "paths": ["runtime/src/vm/table.zig", "runtime/src/vm/shape.zig", "runtime/src/vm/interp.zig", "runtime/src/vm/state.zig"],
+      "labels": ["runtime"],
+      "checks": ["stress", "direct"],
+      "benches": ["tables.lus", "arrays.lus"]
+    },
+    {
+      "name": "vm-os",
+      "about": "Scheduler, signals, faults, and memory code that differ per operating system.",
+      "paths": ["runtime/src/vm/sched.zig", "runtime/src/vm/sigwatch.zig", "runtime/src/vm/pledge.zig", "runtime/src/vm/faultio.zig", "runtime/src/vm/faultcrash.zig", "runtime/src/vm/ops.zig"],
+      "labels": ["runtime"],
+      "platforms": ["linux", "macos", "windows"],
+      "checks": ["unit", "faults"]
+    },
+    {
+      "name": "strings",
+      "paths": ["runtime/src/vm/wtf8.zig", "runtime/src/lib/string.zig", "runtime/src/lib/utf8.zig"],
+      "labels": ["runtime"],
+      "benches": ["strings.lus", "unicode.lus", "patterns.lus"]
+    },
+    {
+      "name": "query",
+      "paths": ["runtime/src/vm/query.zig", "runtime/src/compile/query_gen.zig"],
+      "labels": ["runtime"],
+      "benches": ["queries.lus"]
+    },
+    {
+      "name": "compile",
+      "paths": ["runtime/src/compile/**"],
+      "labels": ["runtime"],
+      "tests": ["suite"],
+      "checks": ["unit", "diff", "syntax", "doc"],
+      "benches": ["startup.lus", "interp.lus"]
+    },
+    {
+      "name": "syntax",
+      "paths": ["runtime/src/syntax/**"],
+      "labels": ["runtime"],
+      "tests": ["suite"],
+      "checks": ["unit", "syntax", "doc"],
+      "benches": ["startup.lus"]
+    },
+    {
+      "name": "jit",
+      "paths": ["runtime/src/jit/**"],
+      "labels": ["jit"],
+      "tests": ["suite"],
+      "checks": ["unit", "diff", "direct", "stress"],
+      "platforms": ["linux", "macos", "windows"],
+      "benches": ["interp.lus", "loop.lus", "fib.lus", "methods.lus", "closures.lus", "forfrom.lus"]
+    },
+    {
+      "name": "jit-x64",
+      "paths": ["runtime/src/jit/x64.zig", "runtime/src/jit/winunwind.zig"],
+      "labels": ["jit"],
+      "platforms": ["linux", "windows"]
+    },
+    {
+      "name": "jit-a64",
+      "paths": ["runtime/src/jit/a64.zig", "runtime/src/jit/winunwind.zig"],
+      "labels": ["jit"],
+      "platforms": ["macos"],
+      "extra": ["windows-arm64", "android"]
+    },
+    {
+      "name": "jit-a32",
+      "paths": ["runtime/src/jit/a32.zig"],
+      "labels": ["jit"],
+      "cross": ["arm-linux-musleabihf"]
+    },
+    {
+      "name": "jit-rv64",
+      "paths": ["runtime/src/jit/rv64.zig"],
+      "labels": ["jit"],
+      "cross": ["riscv64-linux-musl"]
+    },
+    {
+      "name": "jit-la64",
+      "paths": ["runtime/src/jit/la64.zig"],
+      "labels": ["jit"],
+      "cross": ["loongarch64-linux-musl"]
+    },
+    {
+      "name": "jit-ppc64",
+      "paths": ["runtime/src/jit/ppc64.zig"],
+      "labels": ["jit"],
+      "cross": ["powerpc64le-linux-musl"]
+    },
+    {
+      "name": "jit-s390x",
+      "paths": ["runtime/src/jit/s390x.zig"],
+      "labels": ["jit"],
+      "cross": ["s390x-linux-musl"]
+    },
+    {
+      "name": "jit-reloc",
+      "paths": ["runtime/src/jit/reloc.zig"],
+      "labels": ["jit"],
+      "extra": ["runtime"],
+      "cross": ["*"]
+    },
+    {
+      "name": "wasm-jit",
+      "paths": ["runtime/src/jit/wasm.zig", "runtime/src/wasm.zig"],
+      "labels": ["jit", "wasm"],
+      "checks": ["wasm"]
+    },
+    {
+      "name": "aot",
+      "paths": ["runtime/src/jit/aot.zig", "runtime/src/link/**", "runtime/src/bundle.zig", "tests/build/**"],
+      "labels": ["runtime"],
+      "about": "The linker and lus build --aot run in the runtime job of full.yml on every runner, which this area calls.",
+      "checks": ["unit"],
+      "extra": ["runtime", "freebsd"],
+      "cross": ["*"]
+    },
+    {
+      "name": "link-pe",
+      "paths": ["runtime/src/link/pe.zig"],
+      "labels": ["windows"],
+      "extra": ["windows-arm64"]
+    },
+    {
+      "name": "lib",
+      "about": "A library runs the conformance files named after it, as stem*_test.lus.",
+      "paths": ["runtime/src/lib/**"],
+      "labels": ["lib"],
+      "tests": ["tests/conformance/{stem}*_test.lus"],
+      "checks": ["unit"]
+    },
+    {
+      "name": "lib-core",
+      "about": "Every program reaches these libraries.",
+      "paths": ["runtime/src/lib/base.zig", "runtime/src/lib/auxlib.zig", "runtime/src/lib/init.zig", "runtime/src/lib/table.zig", "runtime/src/lib/coroutine.zig", "runtime/src/lib/math.zig", "runtime/src/lib/out.zig"],
+      "labels": ["lib"],
+      "tests": ["suite"],
+      "checks": ["doc"]
+    },
+    {
+      "name": "lib-os",
+      "about": "Libraries with code of their own on each operating system.",
+      "paths": ["runtime/src/lib/fs.zig", "runtime/src/lib/io.zig", "runtime/src/lib/os.zig", "runtime/src/lib/process.zig", "runtime/src/lib/shell.zig", "runtime/src/lib/signal.zig", "runtime/src/lib/term.zig", "runtime/src/lib/time.zig", "runtime/src/lib/timecore.zig", "runtime/src/lib/winzones.zig", "runtime/src/lib/watch.zig", "runtime/src/lib/walk.zig", "runtime/src/lib/package.zig"],
+      "labels": ["lib"],
+      "checks": ["unit"],
+      "platforms": ["linux", "macos", "windows"]
+    },
+    {
+      "name": "lib-files",
+      "paths": ["runtime/src/lib/fs.zig", "runtime/src/lib/io.zig", "runtime/src/lib/sqlite.zig", "runtime/src/lib/walk.zig", "runtime/src/lib/watch.zig"],
+      "labels": ["lib"],
+      "tests": ["tests/conformance/fs_paths_test.lus", "tests/conformance/files_test.lus", "tests/conformance/stat_test.lus", "tests/conformance/db_test.lus"],
+      "checks": ["crash"]
+    },
+    {
+      "name": "lib-net",
+      "paths": ["runtime/src/lib/network.zig", "runtime/src/lib/http.zig", "runtime/src/lib/serve.zig", "runtime/src/lib/tls.zig", "runtime/src/tls/**", "runtime/src/httpc.zig"],
+      "labels": ["lib"],
+      "tests": ["tests/conformance/network_test.lus", "tests/conformance/netcoro_test.lus", "tests/conformance/netcli_test.lus", "tests/conformance/serve_test.lus", "tests/conformance/tls_test.lus"],
+      "checks": ["unit", "faults"],
+      "platforms": ["linux", "macos", "windows"],
+      "benches": ["http_serve.lus"]
+    },
+    {
+      "name": "lib-workers",
+      "paths": ["runtime/src/lib/worker.zig", "runtime/src/lib/events.zig", "runtime/src/lib/context.zig", "runtime/src/vm/context.zig"],
+      "labels": ["lib"],
+      "tests": ["tests/conformance/worker_test.lus", "tests/conformance/workercoro_test.lus", "tests/conformance/worker_exit_cli_test.lus", "tests/conformance/events_test.lus", "tests/conformance/context_test.lus", "tests/conformance/detach_test.lus"],
+      "checks": ["unit", "faults"],
+      "platforms": ["linux", "macos", "windows"],
+      "benches": ["messages.lus", "context.lus"]
+    },
+    {
+      "name": "lib-parsers",
+      "about": "Decoders that the corrupted input sweep feeds.",
+      "paths": ["runtime/src/lib/json.zig", "runtime/src/lib/csv.zig", "runtime/src/lib/pack.zig", "runtime/src/lib/transcode.zig", "runtime/src/lib/archive.zig", "runtime/src/lib/time.zig", "runtime/src/lib/crypto.zig", "runtime/src/lib/cryptokey.zig"],
+      "labels": ["lib"],
+      "tests": ["tests/conformance/props_test.lus", "tests/conformance/dataproc_test.lus", "tests/conformance/datetime_test.lus"],
+      "checks": ["corrupt"],
+      "benches": ["data.lus"]
+    },
+    {
+      "name": "lib-data",
+      "paths": ["runtime/src/lib/data/**", "runtime/src/lib/lazy.zig", "runtime/src/lib/vector.zig", "runtime/src/lib/container.zig", "runtime/src/lib/glob.zig", "runtime/src/lib/debuglib.zig"],
+      "labels": ["lib"],
+      "benches": ["lazy.lus", "data.lus"]
+    },
+    {
+      "name": "embedding",
+      "paths": ["runtime/src/api.zig", "runtime/src/capi.zig", "runtime/src/lus.zig", "runtime/include/**", "tests/embed/**"],
+      "labels": ["runtime"],
+      "tests": ["suite"],
+      "checks": ["unit"],
+      "platforms": ["linux", "macos", "windows"]
+    },
+    {
+      "name": "cli",
+      "paths": ["runtime/src/main.zig", "runtime/src/tools.zig", "runtime/src/tools/**", "runtime/src/modtree.zig"],
+      "labels": ["runtime"],
+      "tests": ["tests/conformance/cli_test.lus", "tests/conformance/runner_test.lus", "tests/conformance/modtree_cli_test.lus", "tests/conformance/detach_cli_test.lus", "tests/conformance/authpath_cli_test.lus"],
+      "checks": ["unit", "doc"],
+      "platforms": ["linux", "macos", "windows"]
+    },
+    {
+      "name": "debugger",
+      "paths": ["runtime/src/tools/debug.zig", "runtime/src/tools/dap.zig", "runtime/src/vm/debug.zig", "tests/debug/**"],
+      "labels": ["runtime"],
+      "checks": ["debug"],
+      "platforms": ["linux", "macos"]
+    },
+    {
+      "name": "version-manager",
+      "paths": ["runtime/src/remote.zig", "runtime/src/home.zig", "runtime/src/semver.zig", "runtime/src/signed.zig", "runtime/src/tools/version.zig", "tests/version/**", "tests/remote/**", "tests/lib/**"],
+      "labels": ["runtime"],
+      "checks": ["version"],
+      "platforms": ["linux", "macos"]
+    },
+    {
+      "name": "release-keys",
+      "paths": ["runtime/src/release_keys.zig", "tools/release-index.mjs", "tools/signed-doc.mjs"],
+      "labels": ["packaging"],
+      "checks": ["version"],
+      "contributor": "egregious"
+    },
+    {
+      "name": "testing-tools",
+      "paths": ["runtime/src/coverage.zig", "runtime/src/coverage_runner.zig", "runtime/src/coverage_tls.c", "runtime/src/fuzz.zig", "runtime/src/fuzzlib.zig", "runtime/src/fuzztls.zig", "runtime/src/vm/inv.zig", "runtime/src/vm/opprofile.zig"],
+      "labels": ["tests"],
+      "checks": ["unit"]
+    },
+    {
+      "name": "build",
+      "paths": ["runtime/build.zig"],
+      "labels": ["runtime", "ci"],
+      "tests": ["suite"],
+      "checks": ["unit", "wasm"],
+      "platforms": ["linux", "macos", "windows"],
+      "cross": ["*"]
+    },
+    {
+      "name": "version",
+      "paths": ["runtime/build.zig.zon"],
+      "labels": ["packaging"],
+      "checks": ["unit"],
+      "contributor": "denied"
+    },
+    {
+      "name": "vendor",
+      "paths": ["runtime/vendor/**"],
+      "labels": ["runtime"],
+      "tests": ["tests/conformance/db_test.lus", "tests/conformance/sqlite_test.lus"],
+      "checks": ["unit"],
+      "contributor": "denied"
+    },
+    {
+      "name": "hacking",
+      "paths": ["runtime/HACKING.md"],
+      "labels": ["docs"]
+    },
+    {
+      "name": "conformance",
+      "about": "A changed test file runs itself. A changed fixture runs the suite.",
+      "paths": ["tests/conformance/**"],
+      "labels": ["tests"],
+      "tests": ["{path}"]
+    },
+    {
+      "name": "test-harnesses",
+      "paths": ["tests/check/**", "tests/doc/**", "tests/build/**", "tests/embed/**"],
+      "labels": ["tests"],
+      "checks": ["unit"]
+    },
+    {
+      "name": "differential",
+      "paths": ["tests/diff/**"],
+      "labels": ["tests"],
+      "checks": ["diff"]
+    },
+    {
+      "name": "allocation-failures",
+      "paths": ["tests/oom/**"],
+      "labels": ["tests"],
+      "checks": ["oom"]
+    },
+    {
+      "name": "corrupted-input",
+      "paths": ["tests/corrupt/**"],
+      "labels": ["tests"],
+      "checks": ["corrupt"]
+    },
+    {
+      "name": "mutated-source",
+      "paths": ["tests/syntax/**"],
+      "labels": ["tests"],
+      "checks": ["syntax"]
+    },
+    {
+      "name": "crash",
+      "paths": ["tests/crash/**"],
+      "labels": ["tests"],
+      "checks": ["crash"]
+    },
+    {
+      "name": "fault-injection",
+      "paths": ["tests/faults/**"],
+      "labels": ["tests"],
+      "checks": ["faults"]
+    },
+    {
+      "name": "nightly-only-tests",
+      "about": "These run in nightly.yml only.",
+      "paths": ["tests/coverage/**", "tests/mutate/**", "tests/limits/**", "tests/tsan/**"],
+      "labels": ["tests"]
+    },
+    {
+      "name": "benchmarks",
+      "paths": ["tests/bench/**"],
+      "labels": ["perf"],
+      "benches": ["{name}"]
+    },
+    {
+      "name": "language-server",
+      "paths": ["packages/language-server/**"],
+      "labels": ["lsp"],
+      "tests": ["packages/language-server/tests"],
+      "checks": ["web"]
+    },
+    {
+      "name": "vscode",
+      "paths": ["packages/vscode/**"],
+      "labels": ["vscode"],
+      "checks": ["web"]
+    },
+    {
+      "name": "grammar",
+      "paths": ["packages/textmate/**"],
+      "labels": ["vscode", "www"],
+      "checks": ["web"]
+    },
+    {
+      "name": "manual",
+      "paths": ["packages/site/src/manual/**"],
+      "labels": ["docs"],
+      "checks": ["doc", "web"]
+    },
+    {
+      "name": "site",
+      "about": "The pages, brand, and assets of lus.dev.",
+      "paths": ["packages/site/**"],
+      "labels": ["www"],
+      "checks": ["web"],
+      "contributor": "denied",
+      "exclude": ["packages/site/src/manual/**"]
+    },
+    {
+      "name": "wasm",
+      "paths": ["packages/wasm/**"],
+      "labels": ["wasm"],
+      "checks": ["wasm"]
+    },
+    {
+      "name": "stdlib-spec",
+      "about": "The spec of the standard library generates the data of the language server and the grammars.",
+      "paths": ["spec/stdlib/**"],
+      "labels": ["spec", "docs"],
+      "tests": ["packages/language-server/tests"],
+      "checks": ["doc", "web"]
+    },
+    {
+      "name": "spec",
+      "paths": ["spec/**"],
+      "labels": ["spec", "docs"],
+      "checks": ["doc"]
+    },
+    {
+      "name": "agent-docs",
+      "about": "The agent skills and prompts. An outside change here would steer every agent that reads the repository.",
+      "paths": [".agents/**", ".claude/**", ".claude-plugin/**", ".codex/**", "AGENTS.md", "CLAUDE.md"],
+      "labels": ["docs"],
+      "checks": ["doc"],
+      "contributor": "egregious"
+    },
+    {
+      "name": "examples",
+      "paths": ["examples/**"],
+      "labels": ["examples", "docs"],
+      "checks": ["syntax", "web"]
+    },
+    {
+      "name": "installer",
+      "paths": ["packaging/install/**"],
+      "labels": ["packaging"],
+      "checks": ["install"],
+      "platforms": ["linux", "macos"],
+      "contributor": "egregious"
+    },
+    {
+      "name": "packaging",
+      "paths": ["packaging/**"],
+      "labels": ["packaging"],
+      "contributor": "denied"
+    },
+    {
+      "name": "workflows",
+      "paths": [".github/**", "tools/ci/**", "tools/git-hooks/**", "tools/with-build-lock.sh", "tools/wait-for-memory.sh", "tools/prune-zig-cache.sh", "tools/security-review.sh", "tools/land-contribution.sh", "mise.toml"],
+      "labels": ["ci"],
+      "checks": ["ci"],
+      "contributor": "egregious"
+    },
+    {
+      "name": "generators",
+      "paths": ["tools/build-*.js", "tools/lint-repo.js", "tools/gen-*.js", "tools/op-ngrams.js", "tools/tsan.sh", "tools/test-linux.sh"],
+      "labels": ["ci"],
+      "checks": ["web"],
+      "contributor": "denied"
+    },
+    {
+      "name": "workspace",
+      "paths": ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", ".gitignore", ".gitattributes"],
+      "labels": ["ci"],
+      "checks": ["web"],
+      "contributor": "denied"
+    },
+    {
+      "name": "changelog",
+      "paths": ["CHANGELOG.md"],
+      "labels": ["docs"]
+    },
+    {
+      "name": "front-page",
+      "paths": ["README.md", "CONTRIBUTING.md", "SECURITY.md"],
+      "labels": ["docs"],
+      "contributor": "denied"
+    },
+    {
+      "name": "license",
+      "paths": ["LICENSE.md"],
+      "labels": ["packaging"],
+      "contributor": "egregious"
+    }
+  ]
+}

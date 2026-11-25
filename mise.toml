@@ -264,6 +264,14 @@ run = "node tools/gen-winzones.js"
 description = "Install JavaScript workspace dependencies"
 run = "pnpm install --frozen-lockfile"
 
+[tasks.setup]
+description = "Point git at tools/git-hooks and sign every commit and tag"
+run = "sh tools/git-hooks/setup.sh"
+
+[tasks."ci:test"]
+description = "Test the path map and the planner of CI"
+run = ["node --test tools/ci/*.test.mjs", "node tools/ci/areas.mjs unmatched"]
+
 [tasks.site]
 description = "Build the website"
 depends = ["install"]

@@ -7,7 +7,7 @@ name: Release index
 # releases/latest never points at it.
 #
 # A maintainer publishing a draft stable release starts this workflow.
-# unstable.yml calls it for each unstable build, because a release that
+# nightly.yml calls it for each unstable build, because a release that
 # the workflow token creates starts no other workflow.
 #
 # The signing key is the repository secret LUS_RELEASE_SIGNING_SEED with

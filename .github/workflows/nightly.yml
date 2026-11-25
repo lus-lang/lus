@@ -1,12 +1,30 @@
 name: Nightly
 
-# The long versions of the tests in spec/design/testing.md. Each job runs
-# on the rewrite branch once a day and can be started by hand.
+# The long versions of the tests in spec/design/testing.md, every job of
+# full.yml, and a canary build of every release artifact. Each job runs on
+# the rewrite branch once a day and can be started by hand. The run also
+# stores the map of sources to conformance files that ci.yml reads
+# (tools/ci/testmap.mjs).
+#
+# On Mondays, and on a manual run with `unstable` set, a run whose full
+# checks and canary build pass also publishes the unstable channel of
+# `lus version` (spec/tools/version.md). The newest tested commit is
+# tagged vX.Y.Z-unstable.N, where X.Y.Z-dev is the version in
+# runtime/build.zig.zon and N is the run number of this workflow, which
+# only grows. release.yml builds and publishes it as a prerelease, and
+# release-index.yml adds it to the signed release index.
 
 on:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 3 * * 0,2-6"
+    # The Monday run publishes the unstable channel.
+    - cron: "17 3 * * 1"
   workflow_dispatch:
+    inputs:
+      unstable:
+        description: Publish an unstable build when the run passes
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,6 +34,127 @@ env:
   NODE_VERSION: "24.7.0"
 
 jobs:
+  commit:
+    name: The commit under test
+    # Every job of the run tests this commit, so a push during the run
+    # cannot reach the unstable tag untested.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      version: ${{ steps.commit.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: rewrite
+      - id: commit
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)" >> "$GITHUB_OUTPUT"
+
+  full:
+    name: Full
+    needs: commit
+    uses: ./.github/workflows/full.yml
+    with:
+      ref: ${{ needs.commit.outputs.sha }}
+    secrets: inherit
+
+  canary:
+    name: Canary build
+    needs: commit
+    # The release builds every artifact and tests the installers. With
+    # `publish` false it releases nothing, so the write permission that
+    # release.yml declares is never used here.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: v${{ needs.commit.outputs.version }}
+      ref: ${{ needs.commit.outputs.sha }}
+      publish: false
+    secrets: inherit
+
+  testmap:
+    name: Map of sources to conformance files
+    needs: commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.commit.outputs.sha }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build with coverage
+        timeout-minutes: 20
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseFast -Dcoverage=true --prefix zig-out-cov
+      - name: Run each conformance file alone
+        timeout-minutes: 90
+        run: node tools/ci/testmap.mjs --lus runtime/zig-out-cov/bin/lus --out "$RUNNER_TEMP/testmap.json" --jobs 4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: testmap
+          path: ${{ runner.temp }}/testmap.json
+          retention-days: 14
+          if-no-files-found: error
+
+  unstable-tag:
+    name: Tag the unstable build
+    needs: [commit, full, canary]
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 3 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.unstable) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.commit.outputs.sha }}
+      - name: Create the tag
+        id: tag
+        shell: bash
+        env:
+          VERSION: ${{ needs.commit.outputs.version }}
+          SHA: ${{ needs.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          case "$VERSION" in
+            *-dev) ;;
+            *) echo "build.zig.zon holds $VERSION, and an unstable build needs X.Y.Z-dev" >&2; exit 1 ;;
+          esac
+          tag="v${VERSION%-dev}-unstable.$GITHUB_RUN_NUMBER"
+          git tag "$tag" "$SHA"
+          git push origin "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  unstable-release:
+    name: Build and publish the unstable build
+    needs: unstable-tag
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.unstable-tag.outputs.tag }}
+    secrets: inherit
+
+  unstable-index:
+    name: Add the unstable build to the release index
+    needs: [unstable-tag, unstable-release]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-index.yml
+    with:
+      tag: ${{ needs.unstable-tag.outputs.tag }}
+    secrets: inherit
+
   stress:
     name: Collect at every allocation (${{ matrix.os }})
     strategy:

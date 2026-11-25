@@ -298,7 +298,7 @@ The exception dispatcher of Windows, WinDbg, Visual Studio, and the ETW profiler
 
 ### What CI must run
 
-The `windows-2022` runner of `ci.yml` already runs `zig build test test-embed test-bundle test-check test-doc` and the conformance suite with `LUS_JIT` set to `off`, `eager`, and `opt-eager`. Those steps run interpreted today and test both tiers once the gate opens. The Windows work adds the following steps.
+The `windows-2022` runner of `full.yml` already runs `zig build test test-embed test-bundle test-check test-doc` and the conformance suite with `LUS_JIT` set to `off`, `eager`, and `opt-eager`. Those steps run interpreted today and test both tiers once the gate opens. The Windows work adds the following steps.
 
 1. A step that fails unless native code runs: `LUS_JIT=eager lus -e "local function f() end f() assert(debug.jit(f))"`. A silent fallback to the interpreter would otherwise pass every other step.
 2. The conformance suite with `LUS_JIT=baseline`, and with `LUS_JIT=opt-eager LUS_JIT_DIRECT=1024`, which ends every chain of direct calls after a few activations and so exercises the probes and the unwinding of exits.
@@ -323,7 +323,7 @@ The PE writer writes arm64 executables as well. The converter maps the relocatio
 
 An entry of the function table is 8 bytes, the start of the function and its unwind information. The base relocations name the addresses of 64 bits that `R_AARCH64_ABS64` writes. The headers name the machine ARM64 and Windows 6.2, the first version that runs on arm64.
 
-The `windows-11-arm` runner of `ci.yml`, which GitHub provides free of charge for public repositories, runs the unit tests, the conformance suite in every JIT mode, and the linker of `lus build --aot`.
+The `windows-11-arm` runner of `full.yml`, which GitHub provides free of charge for public repositories, runs the unit tests, the conformance suite in every JIT mode, and the linker of `lus build --aot`.
 
 ## FreeBSD and Android
 

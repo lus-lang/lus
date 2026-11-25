@@ -1,0 +1,696 @@
+name: Full
+
+# Every check that the runtime, the site, and the extension have, on every
+# runner. nightly.yml runs all of it once a day on the development branch.
+# ci.yml runs the jobs that a change reaches, which it names in `jobs`, and
+# the cross targets of a change to a back end, which it names in `targets`.
+# An empty list runs every job or every target.
+
+on:
+  workflow_call:
+    inputs:
+      jobs:
+        description: JSON array of the jobs to run, or [] for all
+        type: string
+        default: "[]"
+      targets:
+        description: JSON array of the cross targets to build, or [] for all
+        type: string
+        default: "[]"
+      ref:
+        description: Commit, branch, or tag to test, or empty for the commit of the event
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: JSON array of the jobs to run, or [] for all
+        default: "[]"
+      targets:
+        description: JSON array of the cross targets to build, or [] for all
+        default: "[]"
+      ref:
+        description: Commit, branch, or tag to test, or empty for the branch it starts on
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: "0.17.1"
+  NODE_VERSION: "24.7.0"
+  PNPM_VERSION: "10.18.0"
+
+jobs:
+  lint:
+    name: Lint and generated files
+    if: ${{ inputs.jobs == '[]' || contains(fromJSON(inputs.jobs), 'lint') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Repository lint
+        run: node tools/lint-repo.js
+      - name: Generator tests
+        run: node tools/build-lsp.test.js && node tools/build-grammar.test.js
+      - name: Generated files are current
+        run: node tools/build-lsp.js --check && node tools/build-grammar.js --check
+
+  web:
+    name: Site and VSCode extension
+    if: ${{ inputs.jobs == '[]' || contains(fromJSON(inputs.jobs), 'web') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install pnpm
+        run: npm install --global "pnpm@$PNPM_VERSION"
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - name: VSCode extension
+        working-directory: packages/vscode
+        run: pnpm typecheck && pnpm test && pnpm build
+      - name: Site
+        working-directory: packages/site
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm test && pnpm build
+
+  coverage:
+    name: Coverage ratchet
+    if: ${{ inputs.jobs == '[]' || contains(fromJSON(inputs.jobs), 'coverage') }}
+    runs-on: ubuntu-24.04
+    # The suite runs three times in an instrumented build, as in
+    # `mise run coverage`, so the numbers match the baseline.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build with coverage
+        timeout-minutes: 20
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseFast -Dcoverage=true -Dfail-alloc=true -Dfail-io=true --prefix zig-out-cov
+      - name: Run the conformance suite and the doc tests
+        timeout-minutes: 60
+        working-directory: runtime
+        # A failing test fails the runtime job. This job judges only the
+        # branches the suite reached.
+        run: |
+          mkdir -p runs
+          for mode in off default opt-eager; do
+            if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
+            LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests > /dev/null || true
+          done
+          unset LUS_JIT
+          LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents > /dev/null || true
+      - name: Compare with the baseline
+        timeout-minutes: 10
+        working-directory: runtime
+        run: |
+          LUS_COVERAGE_REPORT=$PWD/runs zig-out-cov/bin/lus > coverage.txt
+          { echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          LUS_JIT=off zig-out-cov/bin/lus ../tests/coverage/ratchet.lus coverage.txt ../tests/coverage/baseline.txt
+
+  cross:
+    name: Cross build (${{ matrix.target }})
+    if: ${{ inputs.jobs == '[]' || contains(fromJSON(inputs.jobs), 'cross') }}
+    # The nightly workflow runs these targets under qemu-user. Every change
+    # at least compiles for them. Each target builds on its own runner, so
+    # the five cold builds run side by side.
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.targets != '[]' && inputs.targets || '["riscv64-linux-musl", "loongarch64-linux-musl", "powerpc64le-linux-musl", "arm-linux-musleabihf", "s390x-linux-musl"]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} --prefix zig-out-cross
+
+  emulated-link:
+    name: The linker of lus build --aot (${{ matrix.target }})
+    if: ${{ inputs.jobs == '[]' || contains(fromJSON(inputs.jobs), 'emulated-link') }}
+    # qemu-user runs what the linker writes for each target without a
+    # runner: the whole of lus linked from its link object, and an
+    # executable that lus build --aot links (spec/design/platforms.md).
+    # Each limit sits about 5% above the measured size of linked.lus in
+    # ReleaseSafe: 1.72 MB on 32-bit ARM, 1.62 MB on riscv64, 1.90 MB on
+    # loong64, 3.87 MB on ppc64le, and 2.25 MB on s390x.
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.targets != '[]' && inputs.targets || '["arm-linux-musleabihf", "riscv64-linux-musl", "loongarch64-linux-musl", "powerpc64le-linux-musl", "s390x-linux-musl"]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      # The size limit of linked.lus for each target, in bytes.
+      LIMITS: '{"arm-linux-musleabihf": 1810000, "riscv64-linux-musl": 1700000, "loongarch64-linux-musl": 1995000, "powerpc64le-linux-musl": 4065000, "s390x-linux-musl": 2360000}'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      # One qemu-user for every emulated job, newer than the 8.2 of Ubuntu
+      # 24.04, whose emulation of the LSX vectors of loong64 gives wrong
+      # results for AES-GCM.
+      - name: Register qemu-user 10.2.3
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm,riscv64,loong64,ppc64le,s390x
+      - name: Build lus and the link object
+        timeout-minutes: 40
+        working-directory: runtime
+        run: |
+          zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} --prefix zig-out-target
+          zig build link-object -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -p "$RUNNER_TEMP/lo"
+          "$RUNNER_TEMP/lo/bin/lus-link" "$RUNNER_TEMP/lo/lib/lus.lo" "$RUNNER_TEMP/lus-linked"
+      - name: Conformance tests on lus linked from the link object
+        timeout-minutes: 35
+        working-directory: runtime
+        env:
+          LUS_EMULATED: "1"
+        # The tests of the command line start the binary that LUS_BIN
+        # names, or else runtime/zig-out/bin/lus, which this job leaves
+        # unbuilt.
+        run: |
+          LUS_BIN="$RUNNER_TEMP/lus-linked" "$RUNNER_TEMP/lus-linked" test --timeout 300 ../tests/conformance ../packages/language-server/tests
+      - name: lus build --aot linked from the link object
+        timeout-minutes: 10
+        working-directory: tests/build
+        run: |
+          ../../runtime/zig-out-target/bin/lus build --aot --link-object "$RUNNER_TEMP/lo/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/linked"
+          test "$("$RUNNER_TEMP/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+          test "$(wc -c < "$RUNNER_TEMP/linked")" -lt ${{ fromJSON(env.LIMITS)[matrix.target] }}
+          LUS_AOT_REPORT=1 "$RUNNER_TEMP/linked" 2>&1 | grep -E "aot: [1-9][0-9]* functions and [1-9][0-9]* units installed"
+
+  freebsd:
+    name: FreeBSD (x86-64)
+    if: ${{ inputs.jobs == '[]' || contains(fromJSON(inputs.jobs), 'freebsd') }}
+    # A FreeBSD virtual machine on a Linux runner runs the build that the
+    # release ships, which the runner cross-compiles, and lus linked from
+    # the link object, which the runner links (spec/design/platforms.md,
+    # "FreeBSD and Android").
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Build lus and lus-runtime
+        timeout-minutes: 40
+        working-directory: runtime
+        run: |
+          zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
+          zig build runtime -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
+      # The virtual machine sees the files of the workspace, so the link
+      # object and the linked lus stay in it.
+      - name: Build the link object and link lus from it
+        timeout-minutes: 40
+        working-directory: runtime
+        run: |
+          zig build link-object -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd -p zig-out-lo
+          zig-out-lo/bin/lus-link zig-out-lo/lib/lus.lo zig-out-lo/lus-linked
+      - name: Conformance tests and lus build --aot in a FreeBSD virtual machine
+        timeout-minutes: 130
+        uses: cross-platform-actions/action@30cde56b87a128507bebea9531205087890ee360 # v1.8.0
+        with:
+          operating_system: freebsd
+          architecture: x86-64
+          version: "14.2"
+          run: |
+            cd runtime
+            # The JIT compiles a function on its first call under eager.
+            LUS_JIT=eager zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
+            zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+            # lus linked from the link object, whose tests of the command
+            # line start the binary that LUS_BIN names.
+            LUS_BIN="$PWD/zig-out-lo/lus-linked" zig-out-lo/lus-linked test --timeout 300 ../tests/conformance ../packages/language-server/tests
+            cd ../tests/build
+            ../../runtime/zig-out/bin/lus build --aot linked.lus -o "$HOME/linked"
+            test "$("$HOME/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+            ../../runtime/zig-out/bin/lus build --aot --link-object ../../runtime/zig-out-lo/lib/lus-runtime.lo linked.lus -o "$HOME/linked-lo"
+            test "$("$HOME/linked-lo")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+            LUS_AOT_REPORT=1 "$HOME/linked-lo" 2>&1 | grep -E "aot: [1-9][0-9]* functions and [1-9][0-9]* units installed"
+            ls -l "$HOME/linked" "$HOME/linked-lo"
+
+  android:
+    name: Android (bionic)
+    if: ${{ inputs.jobs == '[]' || contains(fromJSON(inputs.jobs), 'android') }}
+    # Zig provides no C library for Android, so both builds link the C
+    # library of the NDK that the runner preinstalls. The arm64 build is the
+    # shape an Android device runs. The x86-64 build links bionic
+    # statically and runs the unit tests and the conformance suite on the
+    # Linux kernel of the runner (spec/design/platforms.md, "FreeBSD and
+    # Android").
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: The preinstalled NDK
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib"
+      - name: Build for arm64 Android
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-linux-android -Dandroid-ndk="$ANDROID_NDK_HOME" --prefix zig-out-android-arm64
+      - name: Unit tests, statically linked against bionic
+        timeout-minutes: 30
+        working-directory: runtime
+        run: |
+          zig build unit-binary -Dtarget=x86_64-linux-android -Dandroid-ndk="$ANDROID_NDK_HOME" -Dandroid-static=true --prefix zig-out-android
+          zig-out-android/bin/lus-unit
+      - name: Build for x86-64 Android, statically linked
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-android -Dandroid-ndk="$ANDROID_NDK_HOME" -Dandroid-static=true --prefix zig-out-android
+      - name: Startup and native code
+        working-directory: runtime
+        # Each run starts the interpreter one step further: without the JIT,
+        # with the default tiers, and with a function compiled on its first
+        # call under eager. A crash prints its backtrace under gdb, which
+        # the runner installs from the archive of Ubuntu.
+        run: |
+          lus=zig-out-android/bin/lus
+          file "$lus"
+          failed=
+          for mode in off default eager; do
+            echo "== $mode"
+            if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
+            if ! "$lus" -e "local function f() end f() print(1, debug.jit(f))"; then
+              failed=1
+              command -v gdb > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gdb > /dev/null; }
+              gdb -batch -ex run -ex bt -ex "info registers" -ex "x/8i \$pc" --args "$lus" -e "local function f() end f() print(1, debug.jit(f))"
+            fi
+          done
+          test -z "$failed"
+          # The JIT compiles a function on its first call under eager.
+          LUS_JIT=eager "$lus" -e "local function f() end f() assert(debug.jit(f), 'no native code')"
+      - name: Conformance tests
+        timeout-minutes: 40
+        working-directory: runtime
+        # The tests of the command line start the binary that LUS_BIN
+        # names.
+        run: |
+          export LUS_BIN="$PWD/zig-out-android/bin/lus"
+          for mode in off default eager opt-eager; do
+            echo "== $mode"
+            if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
+            "$LUS_BIN" test ../tests/conformance ../packages/language-server/tests
+          done
+
+  windows-arm64:
+    name: Windows on arm64
+    if: ${{ inputs.jobs == '[]' || contains(fromJSON(inputs.jobs), 'windows-arm64') }}
+    # The free arm64 runner of GitHub for public repositories. It gates
+    # the JIT of Windows on arm64 and the PE linker for arm64
+    # (spec/design/platforms.md, "Windows on arm64"), with the steps of
+    # the windows-2022 runtime job that reach either.
+    runs-on: windows-11-arm
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Unit, embedding, and tool tests
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig build test test-embed test-bundle test-runtime test-check test-doc -Doptimize=ReleaseSafe
+      - name: Build
+        timeout-minutes: 15
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Native code runs
+        timeout-minutes: 5
+        # A silent fall back to the interpreter would pass every other
+        # step.
+        working-directory: runtime
+        env:
+          LUS_JIT: eager
+        run: zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
+      - name: Conformance tests
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in native code
+        timeout-minutes: 30
+        working-directory: runtime
+        env:
+          LUS_JIT: eager
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests interpreted
+        timeout-minutes: 30
+        working-directory: runtime
+        env:
+          LUS_JIT: "off"
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in optimized code
+        timeout-minutes: 30
+        working-directory: runtime
+        env:
+          LUS_JIT: opt-eager
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: The linker of lus build --aot on Windows on arm64
+        timeout-minutes: 45
+        working-directory: runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          zig build link-object -Doptimize=ReleaseSafe -p "$env:RUNNER_TEMP\lo"
+          & "$env:RUNNER_TEMP\lo\bin\lus-link.exe" "$env:RUNNER_TEMP\lo\lib\lus.lo" "$env:RUNNER_TEMP\lus-linked.exe"
+          & "$env:RUNNER_TEMP\lus-linked.exe" test ../tests/conformance ../packages/language-server/tests
+          Set-Location ../tests/build
+          & ../../runtime/zig-out/bin/lus.exe build --aot --link-object "$env:RUNNER_TEMP\lo\lib\lus-runtime.lo" linked.lus -o "$env:RUNNER_TEMP\linked.exe"
+          $out = (& "$env:RUNNER_TEMP\linked.exe") -join "`n"
+          if ($out -ne "1:1 2:4 3:9 4:16 5:25`t6765`nLINKED`t7`tnil") { Write-Error "linked.exe printed: $out" }
+
+  runtime:
+    name: Runtime (${{ matrix.os }})
+    if: ${{ inputs.jobs == '[]' || contains(fromJSON(inputs.jobs), 'runtime') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    # The step limits below add up to 350 minutes on Linux, which runs
+    # every step. The job limit covers them and the setup steps, so a step
+    # always reaches its own limit before the job is cancelled. It is the
+    # most a hosted runner allows, so a new step on Linux takes its time
+    # from another step's limit.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Formatting
+        timeout-minutes: 5
+        if: runner.os == 'Linux'
+        working-directory: runtime
+        run: zig fmt --check src build.zig
+      - name: Unit, embedding, and tool tests
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig build test test-embed test-bundle test-runtime test-check test-doc -Doptimize=ReleaseSafe
+      - name: Debugger tests
+        timeout-minutes: 15
+        if: runner.os != 'Windows'
+        working-directory: runtime
+        run: zig build test-debug -Doptimize=ReleaseSafe
+      - name: Version manager and remote module tests
+        timeout-minutes: 15
+        # The fixtures build POSIX release archives. Windows installs are
+        # covered by the installer job of the release workflow.
+        if: runner.os != 'Windows'
+        working-directory: runtime
+        run: zig build test-version test-remote -Doptimize=ReleaseSafe
+      - name: Build
+        timeout-minutes: 15
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Native code runs
+        timeout-minutes: 5
+        # Every runner of this job has the JIT. A silent fall back to the
+        # interpreter would pass every other step.
+        working-directory: runtime
+        env:
+          LUS_JIT: eager
+        run: zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
+      - name: Conformance tests
+        timeout-minutes: 20
+        working-directory: runtime
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in native code
+        timeout-minutes: 20
+        # Every function compiles on its first call. A platform without
+        # the JIT runs the suite interpreted once more.
+        working-directory: runtime
+        env:
+          LUS_JIT: eager
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests interpreted
+        timeout-minutes: 20
+        working-directory: runtime
+        env:
+          LUS_JIT: "off"
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in optimized code
+        timeout-minutes: 20
+        # Every function goes through both JIT tiers on its first call.
+        working-directory: runtime
+        env:
+          LUS_JIT: opt-eager
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in baseline code
+        timeout-minutes: 20
+        if: runner.os == 'Windows'
+        working-directory: runtime
+        env:
+          LUS_JIT: baseline
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests with short chains of direct calls
+        timeout-minutes: 20
+        # Every chain of direct calls in optimized code ends after a few
+        # activations, which exercises the exits and the stack probes.
+        if: runner.os == 'Windows'
+        working-directory: runtime
+        env:
+          LUS_JIT: opt-eager
+          LUS_JIT_DIRECT: "1024"
+        run: zig-out/bin/lus test ../tests/conformance
+      - name: Native code runs as the loader of an executable relocates it
+        timeout-minutes: 30
+        # Both tiers compile in the form of code compiled ahead of time.
+        # Every relocated word is written again from the address that the
+        # loader finds, the metadata of every optimized unit goes through
+        # the code section, and the code runs from the result. An address
+        # without a relocation, or a relocation that the loader cannot
+        # resolve, appends a line to the log (spec/design/aot.md). The
+        # image of the executable is known to the resolver only where
+        # dladdr works, which macOS has.
+        if: runner.os == 'macOS'
+        working-directory: runtime
+        run: |
+          for mode in opt-eager on; do
+            LUS_JIT=$mode LUS_JIT_AOT="reload:$RUNNER_TEMP/aot.log" zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+          done
+          if [ -s "$RUNNER_TEMP/aot.log" ]; then cat "$RUNNER_TEMP/aot.log"; exit 1; fi
+      - name: The linker of lus build --aot
+        timeout-minutes: 35
+        # The link objects of the runtime and of the whole lus, the whole
+        # lus linked from its link object with every builtin, and the
+        # conformance suite on it. Then an executable compiled ahead of
+        # time, linked with only the builtins it reaches, against the
+        # output of lus (spec/design/aot.md, "Leaving out code"). Linux
+        # links a static ELF executable on musl, and macOS a Mach-O
+        # executable that its ad hoc signature lets run.
+        if: runner.os != 'Windows'
+        working-directory: runtime
+        run: |
+          # The limits sit about 5% above the measured sizes of linked.lus,
+          # 1.86 MB on x86-64 Linux and 1.41 MB on aarch64 macOS, so a
+          # change that keeps more of the runtime fails here. x86-64 code
+          # is about a sixth larger than aarch64 code for the same source
+          # (spec/design/aot.md, "Linking").
+          if [ "$RUNNER_OS" = Linux ]; then target=-Dtarget=x86_64-linux-musl; limit=1950000; else target=; limit=1480000; fi
+          zig build link-object -Doptimize=ReleaseSafe $target -p "$RUNNER_TEMP/lo"
+          "$RUNNER_TEMP/lo/bin/lus-link" "$RUNNER_TEMP/lo/lib/lus.lo" "$RUNNER_TEMP/lus-linked"
+          if [ "$RUNNER_OS" = macOS ]; then codesign -v "$RUNNER_TEMP/lus-linked"; fi
+          "$RUNNER_TEMP/lus-linked" test ../tests/conformance ../packages/language-server/tests
+          cd ../tests/build
+          ../../runtime/zig-out/bin/lus build --aot --link-object "$RUNNER_TEMP/lo/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/linked"
+          test "$("$RUNNER_TEMP/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+          test "$(wc -c < "$RUNNER_TEMP/linked")" -lt "$limit"
+          # On macOS the bundle is inside what the signature covers, for an
+          # executable linked here and for one on the prebuilt lus.
+          if [ "$RUNNER_OS" = macOS ]; then
+            codesign -v --strict "$RUNNER_TEMP/linked"
+            ../../runtime/zig-out/bin/lus build linked.lus -o "$RUNNER_TEMP/plain"
+            codesign -v --strict "$RUNNER_TEMP/plain"
+            test "$("$RUNNER_TEMP/plain")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+            # The static form runs from the signed image under a refusal
+            # of executable memory, which stands in for iOS, and the
+            # relocated form installs nothing under the same refusal.
+            ../../runtime/zig-out/bin/lus build --aot-static --link-object "$RUNNER_TEMP/lo/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/static"
+            codesign -v --strict "$RUNNER_TEMP/static"
+            LUS_JIT_NO_EXEC=1 LUS_AOT_REPORT=1 "$RUNNER_TEMP/static" > "$RUNNER_TEMP/static.out" 2>&1
+            head -2 "$RUNNER_TEMP/static.out" | cmp - <(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil\n')
+            grep -E "aot: [1-9][0-9]* functions .* [1-9][0-9]* placed" "$RUNNER_TEMP/static.out"
+            LUS_JIT_NO_EXEC=1 LUS_AOT_REPORT=1 "$RUNNER_TEMP/linked" 2>&1 | grep "aot: 0 functions and 0 units installed"
+            # The whole of lus for x86-64 macOS links from its link object,
+            # and runs under Rosetta where the runner has it.
+            cd ../../runtime
+            zig build link-object -Doptimize=ReleaseSafe -Dtarget=x86_64-macos -p "$RUNNER_TEMP/lo-x64"
+            "$RUNNER_TEMP/lo-x64/bin/lus-link" "$RUNNER_TEMP/lo-x64/lib/lus.lo" "$RUNNER_TEMP/lus-linked-x64"
+            codesign -v "$RUNNER_TEMP/lus-linked-x64"
+            if arch -x86_64 /usr/bin/true 2>/dev/null; then
+              test "$(arch -x86_64 "$RUNNER_TEMP/lus-linked-x64" -e 'print(1 + 1)')" = 2
+            fi
+            cd ../tests/build
+            # The same program for iOS, trained here and linked from the
+            # link object of the simulator, runs in an iOS simulator under
+            # the refusal of executable memory that an iOS device imposes.
+            cd ../../runtime
+            zig build link-object -Doptimize=ReleaseSafe -Dtarget=aarch64-ios-simulator -p "$RUNNER_TEMP/ios"
+            cd ../tests/build
+            ../../runtime/zig-out/bin/lus build --aot-static --link-object "$RUNNER_TEMP/ios/lib/lus-runtime.lo" linked.lus -o "$RUNNER_TEMP/ios-linked"
+            codesign -v --strict "$RUNNER_TEMP/ios-linked"
+            device=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
+            xcrun simctl boot "$device"
+            xcrun simctl bootstatus "$device"
+            SIMCTL_CHILD_LUS_JIT_NO_EXEC=1 SIMCTL_CHILD_LUS_AOT_REPORT=1 xcrun simctl spawn "$device" "$RUNNER_TEMP/ios-linked" > "$RUNNER_TEMP/ios.out" 2>&1
+            cat "$RUNNER_TEMP/ios.out"
+            head -2 "$RUNNER_TEMP/ios.out" | cmp - <(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil\n')
+            grep -E "aot: [1-9][0-9]* functions .* [1-9][0-9]* placed" "$RUNNER_TEMP/ios.out"
+          fi
+      - name: The linker of lus build --aot on Windows
+        timeout-minutes: 35
+        # The same checks as on Linux and macOS, on a PE executable that
+        # loads the C runtime of Windows and the system libraries.
+        if: runner.os == 'Windows'
+        working-directory: runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          zig build link-object -Doptimize=ReleaseSafe -p "$env:RUNNER_TEMP\lo"
+          & "$env:RUNNER_TEMP\lo\bin\lus-link.exe" "$env:RUNNER_TEMP\lo\lib\lus.lo" "$env:RUNNER_TEMP\lus-linked.exe"
+          & "$env:RUNNER_TEMP\lus-linked.exe" test ../tests/conformance ../packages/language-server/tests
+          Set-Location ../tests/build
+          & ../../runtime/zig-out/bin/lus.exe build --aot --link-object "$env:RUNNER_TEMP\lo\lib\lus-runtime.lo" linked.lus -o "$env:RUNNER_TEMP\linked.exe"
+          $out = (& "$env:RUNNER_TEMP\linked.exe") -join "`n"
+          if ($out -ne "1:1 2:4 3:9 4:16 5:25`t6765`nLINKED`t7`tnil") { Write-Error "linked.exe printed: $out" }
+      - name: Documentation examples
+        timeout-minutes: 10
+        working-directory: runtime
+        run: zig-out/bin/lus test --doc ../packages/site/src/manual ../spec
+      - name: WebAssembly build
+        timeout-minutes: 30
+        if: runner.os == 'Linux'
+        working-directory: runtime
+        run: |
+          zig build wasm
+          mkdir -p ../packages/wasm/dist
+          cp zig-out/wasm/lus.wasm ../packages/wasm/dist/lus.wasm
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: runner.os != 'Windows'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Unix installer
+        timeout-minutes: 10
+        if: runner.os != 'Windows'
+        run: node --test packaging/install/install.test.mjs
+      - name: Differential tests
+        timeout-minutes: 20
+        # Generated programs must print the same under every JIT mode.
+        if: runner.os != 'Windows'
+        env:
+          LUS_JIT: "off"
+        run: runtime/zig-out/bin/lus tests/diff/run.lus --count 200 --start 1 --jobs 4 --timeout 120 --out "$RUNNER_TEMP/diff-findings"
+      - name: Differential tests on Windows
+        timeout-minutes: 15
+        # A short run of the same programs through cmd.exe. Windows gives a
+        # shell command no time limit, so the limit of this step stops a
+        # program that never ends.
+        if: runner.os == 'Windows'
+        env:
+          LUS_JIT: "off"
+        shell: pwsh
+        run: runtime\zig-out\bin\lus.exe tests/diff/run.lus --count 40 --start 1 --jobs 4 --lus runtime\zig-out\bin\lus.exe --out "$env:RUNNER_TEMP\diff-findings"
+      - name: Allocation failure sweep
+        timeout-minutes: 25
+        if: runner.os == 'Linux'
+        run: |
+          (cd runtime && zig build -Doptimize=ReleaseSafe -Dfail-alloc=true --prefix zig-out-oom)
+          LUS_JIT=off runtime/zig-out/bin/lus tests/oom/run.lus --samples 8 --jobs 4 --timeout 120
+      - name: Corrupted input
+        timeout-minutes: 10
+        if: runner.os != 'Windows'
+        # Every truncation and bit flip of seed inputs to each parser and
+        # decoder, one child process per batch of inputs.
+        run: LUS_JIT=off runtime/zig-out/bin/lus tests/corrupt/run.lus --lus runtime/zig-out/bin/lus
+      - name: Mutated source
+        timeout-minutes: 10
+        if: runner.os != 'Windows'
+        # Mutants of every conformance file, example, and language server
+        # file through the compiler, checker, syntax tree export, doc
+        # generator, and formatter.
+        run: LUS_JIT=off runtime/zig-out/bin/lus tests/syntax/run.lus --count 8 --seed ${{ github.run_number }}
+      - name: Crash tests
+        timeout-minutes: 20
+        if: runner.os != 'Windows'
+        # Each durability sequence of the manual, crashed at every I/O
+        # operation by kills and simulated power losses.
+        run: |
+          (cd runtime && zig build -Doptimize=ReleaseSafe -Dfail-io=true --prefix zig-out-io)
+          LUS_JIT=off runtime/zig-out-io/bin/lus tests/crash/run.lus --lus runtime/zig-out-io/bin/lus
+      - name: Faults
+        timeout-minutes: 25
+        if: runner.os != 'Windows'
+        # Each step of the message handling of a worker fails in turn, and
+        # on Linux each allocation of the worker thread too. Then each
+        # network operation fails, a detached coroutine is cancelled at
+        # each suspension, and the real clock jumps.
+        run: |
+          LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/workers.lus --lus runtime/zig-out-io/bin/lus
+          if [ "$RUNNER_OS" = Linux ]; then LUS_JIT=off runtime/zig-out/bin/lus tests/faults/workers.lus --alloc --lus runtime/zig-out-oom/bin/lus; fi
+          LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/network.lus --lus runtime/zig-out-io/bin/lus
+          LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/cancel.lus --lus runtime/zig-out-io/bin/lus
+          LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/clock.lus --lus runtime/zig-out-io/bin/lus
+      - name: WebAssembly host tests
+        timeout-minutes: 10
+        if: runner.os == 'Linux'
+        working-directory: packages/wasm
+        run: node --test
+      - name: Conformance tests on WebAssembly
+        timeout-minutes: 20
+        # Tests that need the network, workers, or processes fail under
+        # WASI. The run fails when the JIT modes disagree, a test crashes,
+        # or a file runs longer than two minutes.
+        if: runner.os == 'Linux'
+        working-directory: packages/wasm
+        run: node scripts/conformance.mjs --modes off,eager
+

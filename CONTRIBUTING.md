@@ -8,8 +8,24 @@ If you _do_ make a PR, make sure to:
 - **Test, test, test.** Run `mise run test` to make sure your changes aren't breaking anything, and compare `tests/bench` before and after to make sure you're not introducing a massive _performance_ regression as well. [`runtime/HACKING.md`](/runtime/HACKING.md) lists the extra checks that changes to the JIT or the heap need. If you are introducing a new language feature, please also add a test for it.
 - **Document, document, document.** Please document your changes in the [CHANGELOG](/CHANGELOG.md). Changes should be simple one-line summaries. Additional details can be added in the body of the PR.
 - **Format your code.** Zig code is formatted with `zig fmt`, and `mise run lint` checks it. Please pair it with an extension in your editor to automatically format your code when saving. No formatting, no merging.
+- **Sign every commit.** GitHub must show each commit of the PR as verified. See [Signed commits](#signed-commits).
+- **Disclose your agents.** The PR names every coding agent that wrote part of the change, and each commit it helped write carries its trailer. See [Agent disclosure](#agent-disclosure).
 
 If you haven't done any of the above, either submit a draft PR until you have or simply don't submit a PR at all. When all else fails, [Louka Ménard Blondin](https://louka.sh) is the BDFL of the project and has the final say on whether or not your contribution will be accepted.
+
+## Signed commits
+
+Every commit of a pull request is signed, and GitHub shows each one as verified. A PR with an unsigned commit, or with a signature that GitHub cannot verify, is closed before anyone reviews it.
+
+Run `mise run setup` once in your clone. It points git at the hooks in `tools/git-hooks`, which run the format, lint, and generated file checks before each commit, and it turns on signing for every commit and tag. It never creates a key. If you have none configured, it prints the two commands that sign with the SSH key you already use for GitHub. Add that key to your GitHub account a second time as a signing key, so that GitHub can verify what it signs.
+
+To sign commits that you already made, rebase them with `git rebase --exec 'git commit --amend --no-edit -S' origin/main` and push again.
+
+## Agent disclosure
+
+The pull request template asks which coding agents wrote part of the change. Name each agent you used, such as Claude Code or Codex, or answer that you used none.
+
+Each commit that an agent helped write carries that agent's `Co-Authored-By` trailer, as the agent adds it by default. Keep these trailers when you squash or rebase. A PR that names an agent without its trailer on the commits, or that carries an agent's trailer without naming the agent, is closed before anyone reviews it.
 
 ## Use of LLMs
 

@@ -9,9 +9,14 @@ name: Release
 # reviews it before publishing. Publishing it runs release-index.yml, which
 # adds it to the signed index that `lus version` reads.
 #
-# unstable.yml calls this workflow with a tag vX.Y.Z-unstable.N, where
-# build.zig.zon holds X.Y.Z-dev. The binaries then report that version,
-# and the release is published at once as a prerelease.
+# nightly.yml calls this workflow in two ways. Each night it builds a
+# canary of the development branch with the tag vX.Y.Z-dev, which is the
+# version in build.zig.zon, and with `publish` false, so every artifact is
+# built and tested and nothing is released. Once a week it calls it with a
+# tag vX.Y.Z-unstable.N, where build.zig.zon holds X.Y.Z-dev. The binaries
+# then report that version, and the release is published at once as a
+# prerelease. A release tag also runs every job of full.yml before the
+# release is created.
 
 on:
   push:
@@ -27,6 +32,14 @@ on:
         description: "Tag to build, such as v2.0.0-unstable.7"
         required: true
         type: string
+      publish:
+        description: "Create the release. A canary build passes false."
+        type: boolean
+        default: true
+      ref:
+        description: "Commit or branch to build, or empty for the tag"
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -43,6 +56,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
@@ -126,6 +141,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -179,6 +195,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -250,12 +267,25 @@ jobs:
           path: dist/lus-setup.exe
           if-no-files-found: error
 
+  # Every check of full.yml runs before a release tag publishes. A call
+  # from nightly.yml comes after that workflow ran full.yml itself.
+  full:
+    name: Full
+    if: ${{ github.event_name == 'push' }}
+    uses: ./.github/workflows/full.yml
+    with:
+      ref: ${{ github.ref }}
+    secrets: inherit
+
   publish:
     name: Create the draft release
-    needs: [build, vscode, windows-installer]
+    needs: [build, vscode, windows-installer, full]
+    if: ${{ !cancelled() && inputs.publish != false && needs.build.result == 'success' && needs.vscode.result == 'success' && needs.windows-installer.result == 'success' && (needs.full.result == 'success' || needs.full.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: release-*
