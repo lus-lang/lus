@@ -5,6 +5,7 @@ import {
 } from "vscode-languageclient/node";
 import { registerAtmosphereCompletion } from "./atmosphere";
 import { registerDebugger } from "./debugAdapter";
+import { registerTesting } from "./testing";
 import {
   createWasmTransports,
   WasmDispatcher,
@@ -210,6 +211,7 @@ export async function activate(
   context.subscriptions.push(lifecycleChannel);
   lifecycleLog = new LifecycleLog(lifecycleChannel);
   registerDebugger(context);
+  registerTesting(context);
   registerAtmosphereCompletion(context);
 
   context.subscriptions.push(

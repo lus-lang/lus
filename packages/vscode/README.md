@@ -14,6 +14,10 @@ The `lus` debug type runs a script under `lus debug`, the debug adapter built in
 
 Pressing F5 in a `.lus` file debugs that file. A launch configuration takes `program`, `args`, `cwd`, `stopOnEntry`, and `pledges`. The `lus.executablePath` setting names the `lus` command, which defaults to the one on the `PATH`.
 
+## Testing
+
+The Testing view lists every `*_test.lus` file of the workspace with its top-level `NAME_test` and `NAME_bench` functions, and the editor shows a run button beside each one. A run starts `lus test --json` on the file, with `--filter` when it runs one test, and marks each test with its result. A failed test shows its message at the line of the assertion. A case of a table-driven test that fails marks the whole test as failed. **Run with Coverage** adds `--coverage-out` and colors the lines of the code under test that ran. The tests run with the `lus` command that `lus.executablePath` names.
+
 ## Links
 
 - [Repository](https://github.com/lus-lang/lus)

@@ -15,7 +15,7 @@ export function registerDebugger(context: vscode.ExtensionContext): void {
 }
 
 /** The `lus` command named by the `lus.executablePath` setting. */
-function lusExecutable(folder: vscode.WorkspaceFolder | undefined): string {
+export function lusExecutable(folder: vscode.WorkspaceFolder | undefined): string {
   const configured = vscode.workspace
     .getConfiguration("lus", folder)
     .get<string>("executablePath", "lus")

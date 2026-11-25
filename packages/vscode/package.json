@@ -83,7 +83,7 @@
         "lus.executablePath": {
           "type": "string",
           "default": "lus",
-          "markdownDescription": "The `lus` command used to debug programs. A relative path with a directory part is relative to the workspace folder."
+          "markdownDescription": "The `lus` command used to debug programs and run tests. A relative path with a directory part is relative to the workspace folder."
         },
         "lus.atmosphere.servers": {
           "type": "array",

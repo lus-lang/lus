@@ -69,7 +69,7 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 | go to implementation | Lus has no traits. The nearest question is which tables share a metatable, which static analysis answers only for simple cases. | by design | |
 | expand macro | Lus has no macros. Folded flags and `<meta>` values are the nearest equivalent. Showing their values inline is open. | open | medium |
 | call hierarchy, type hierarchy | Missing. | open | medium |
-| run and debug code lenses, test explorer | The extension debugs with `lus debug`, but offers no lens or test explorer. | open | medium |
+| run and debug code lenses, test explorer | The Testing view of the extension lists the tests and benchmarks of each test file, with a run button beside each definition and a coverage profile. Debugging one test is open. | partial | small |
 | debugger | `lus debug` speaks DAP with breakpoints, stepping, pausing, stack, variables, and evaluation. | closed | |
 
 ## Documentation
@@ -114,4 +114,4 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 
 The small gaps that remain are the caret snippet and `lus test --list`.
 
-The medium gaps follow in this order: test lenses and a test explorer in the editor, more code actions, call hierarchy, and HTML documentation with intra-doc links and search. A fuzz harness for user code stays open.
+The medium gaps follow in this order: more code actions, call hierarchy, and HTML documentation with intra-doc links and search. A fuzz harness for user code stays open.
