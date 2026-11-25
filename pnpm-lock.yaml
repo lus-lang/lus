@@ -8,6 +8,8 @@ importers:
 
   .: {}
 
+  packages/harness: {}
+
   packages/site:
     dependencies:
       '@astrojs/mdx':

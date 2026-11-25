@@ -1,5 +1,8 @@
-# The installer script must read as plain text in browsers and curl
+# The installer scripts must read as plain text in browsers and curl
 /install.sh
+  Content-Type: text/x-shellscript; charset=utf-8
+
+/harness.sh
   Content-Type: text/x-shellscript; charset=utf-8
 
 # The documentation for agents reads as text in browsers and fetch tools
