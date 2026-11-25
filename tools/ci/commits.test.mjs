@@ -11,7 +11,7 @@ const bad = (text, pattern) => {
 };
 
 test("the areas are the labels of the path map", () => {
-  for (const area of ["runtime", "jit", "gc", "lib", "lsp", "vscode", "www", "docs", "ci", "packaging"]) assert.ok(AREAS.includes(area), area);
+  for (const area of ["runtime", "jit", "gc", "lib", "lsp", "vscode", "www", "docs", "ci", "packaging", "release", "tools", "agents", "marketing"]) assert.ok(AREAS.includes(area), area);
   assert.ok(!AREAS.includes("about"));
 });
 

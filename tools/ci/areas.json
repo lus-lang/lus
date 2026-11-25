@@ -17,7 +17,11 @@
     "wasm": "The WebAssembly build and its host",
     "windows": "Code that runs only on Windows",
     "ci": "Workflows, CI tools, hooks, and the workspace",
-    "packaging": "Versions, releases, installers, and licenses"
+    "packaging": "Versions, installers, and licenses",
+    "release": "The release workflows and the tools that version and publish a release",
+    "tools": "The generators, the repository lint, and the other tools of tools/",
+    "agents": "The agent skills, prompts, and instructions",
+    "marketing": "Plans for the launch and the promotion of Lus"
   },
   "status_labels": {
     "about": "Labels that the workflows set on pull requests and issues, apart from the areas.",
@@ -438,6 +442,13 @@
       "checks": ["doc", "web"]
     },
     {
+      "name": "marketing",
+      "about": "Plans for the launch, which the maintainer writes.",
+      "paths": ["spec/marketing/**"],
+      "labels": ["marketing"],
+      "contributor": "denied"
+    },
+    {
       "name": "spec",
       "paths": ["spec/**"],
       "labels": ["spec", "docs"],
@@ -447,7 +458,7 @@
       "name": "agent-docs",
       "about": "The agent skills and prompts. An outside change here would steer every agent that reads the repository.",
       "paths": [".agents/**", ".claude/**", ".claude-plugin/**", ".codex/**", "AGENTS.md", "CLAUDE.md"],
-      "labels": ["docs"],
+      "labels": ["agents"],
       "checks": ["doc"],
       "contributor": "egregious"
     },
@@ -468,7 +479,7 @@
     {
       "name": "release",
       "paths": [".github/workflows/ship.yml", ".github/workflows/release.yml", ".github/workflows/release-index.yml", ".github/workflows/publish-vscode.yml", "tools/release-version.mjs", "tools/release-version.test.mjs", "packaging/release/**"],
-      "labels": ["packaging", "ci"],
+      "labels": ["release"],
       "checks": ["ci"],
       "contributor": "egregious"
     },
@@ -488,7 +499,7 @@
     {
       "name": "generators",
       "paths": ["tools/build-*.js", "tools/lint-repo.js", "tools/gen-*.js", "tools/op-ngrams.js", "tools/tsan.sh", "tools/test-linux.sh", "tools/post-x.js", "tools/post-x.test.js"],
-      "labels": ["ci"],
+      "labels": ["tools"],
       "checks": ["web"],
       "contributor": "denied"
     },

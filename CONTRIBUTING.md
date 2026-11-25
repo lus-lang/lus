@@ -40,7 +40,7 @@ Lus 2 is frozen, so a pull request for a feature or a change of the language des
 The first line of a commit message is `type(area): subject`, at most 72 characters in all.
 
 - `type` is one of `fix`, `perf`, `feat`, `refactor`, `test`, `docs`, `ci`, `build`, and `chore`. `feat` is for tooling only, since the language is frozen.
-- `area` is one of the labels of [`tools/ci/areas.json`](/tools/ci/areas.json): `runtime`, `jit`, `gc`, `lib`, `lsp`, `vscode`, `www`, `docs`, `spec`, `tests`, `examples`, `perf`, `wasm`, `windows`, `ci`, and `packaging`.
+- `area` is one of the labels of [`tools/ci/areas.json`](/tools/ci/areas.json): `runtime`, `jit`, `gc`, `lib`, `lsp`, `vscode`, `www`, `docs`, `spec`, `tests`, `examples`, `perf`, `wasm`, `windows`, `ci`, `packaging`, `release`, `tools`, `agents`, and `marketing`. The site is `www`, and the workflows of `.github` are `ci`, apart from the release workflows, which are `release`.
 - `subject` is imperative, starts with a lowercase letter, and ends without a period.
 
 A body is optional. It follows a blank line, is written in plain prose that follows [`spec/design/style.md`](/spec/design/style.md), and holds no em dash, en dash, or semicolon outside code. A commit made with a coding agent carries that agent's `Co-Authored-By` trailer. For example:
