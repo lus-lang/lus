@@ -271,11 +271,14 @@ jobs:
       - name: Conformance tests
         timeout-minutes: 40
         working-directory: runtime
+        # The tests of the command line start the binary that LUS_BIN
+        # names.
         run: |
+          export LUS_BIN="$PWD/zig-out-android/bin/lus"
           for mode in off default eager opt-eager; do
             echo "== $mode"
             if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
-            zig-out-android/bin/lus test ../tests/conformance ../packages/language-server/tests
+            "$LUS_BIN" test ../tests/conformance ../packages/language-server/tests
           done
 
   windows-arm64:
