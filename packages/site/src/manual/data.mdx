@@ -291,27 +291,27 @@ The `table` library has functions that summarize, transform, group, and sort a l
 
 ### Statistics
 
-The statistics functions of the `table` library summarize the numbers in an array. A string that holds a number is treated as that number, so the functions accept the fields of a CSV row, while every other value is skipped. Each of the following functions returns a float:
+The statistics functions of the `table` library summarize the numbers in an array. A string that holds a number is treated as that number, so the functions accept the fields of a CSV row, while every other value is skipped. The following functions summarize an array:
 
-- [`table.sum`](/manual/api#table.sum) returns the sum. The sum of an array with no numbers is `0.0`.
-- [`table.mean`](/manual/api#table.mean) returns the average, which is the sum divided by the count.
-- [`table.median`](/manual/api#table.median) returns the middle value of the sorted numbers, or the average of the two middle values when their count is even. One unusually large or small value changes the median far less than the mean. The function leaves the array unchanged.
-- [`table.stdev(array, sample)`](/manual/api#table.stdev) returns the standard deviation, which measures how far the values spread around their mean. It divides by the count `n`, which is correct when the array holds every value of interest. When `sample` is `true`, it divides by `n - 1`, which is correct when the array is a sample of a larger set.
+- [`table.sum`](/manual/api#table.sum) returns the sum. The sum of integers is an integer, as with `+`. The sum of an array with no numbers is `0`.
+- [`table.mean`](/manual/api#table.mean) returns the average as a float, which is the sum divided by the count.
+- [`table.median`](/manual/api#table.median) returns the middle value of the sorted numbers, or the average of the two middle values as a float when their count is even. One unusually large or small value changes the median far less than the mean. The function leaves the array unchanged.
+- [`table.stdev(array, sample)`](/manual/api#table.stdev) returns the standard deviation as a float, which measures how far the values spread around their mean. It divides by the count `n`, which is correct when the array holds every value of interest. When `sample` is `true`, it divides by `n - 1`, which is correct when the array is a sample of a larger set.
 
 `table.mean`, `table.median`, and `table.stdev` return NaN when the array has no numeric values.
 
 ```lus
 global print, table
 
-print(table.sum({1, 2, 3, 4, 5}), table.sum({1, "skip", "2"}))  --> 15.0  3.0
-print(table.mean({10, 20}), table.median({5, 1, 3, 2, 4}))      --> 15.0  3.0
+print(table.sum({1, 2, 3, 4, 5}), table.sum({1, "skip", "2"}))  --> 15  3
+print(table.mean({10, 20}), table.median({5, 1, 3, 2, 4}))      --> 15.0  3
 print(table.median({1, 2, 3, 4}), table.mean({}))               --> 2.5  nan
 
 local values = {2, 4, 4, 4, 5, 5, 7, 9}
 print(table.stdev(values), table.stdev(values, true))           --> 2.0  2.138089935299395
 ```
 
-`table.sum`, `table.mean`, and `table.stdev` add their values in a fixed order, so the result is the same on every platform. The API entries give the order.
+`table.sum` of floats, `table.mean`, and `table.stdev` add their values in a fixed order, so the result is the same on every platform. The API entries give the order.
 
 ### Transforming arrays
 

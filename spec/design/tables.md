@@ -88,7 +88,7 @@ The parts that trail a table in its cell belong to the cell. Sweeping a dead tab
 
 ## Aggregates
 
-`table.sum`, `table.mean`, and `table.stdev` add their terms in a fixed order. The term for index i goes into accumulator (i - 1) % 8, and the eight accumulators combine pairwise: accumulator j with j + 4, then the first two of those sums with the last two, then the final pair. Integer and float array parts run this order eight slots at a time with Zig vector operations, and the nil word masks out holes. Boxed parts, tables with metatables, and keys beyond the array part follow the same order one element at a time. The results are therefore identical bit for bit across kinds and platforms, and the order is part of the specification of each function.
+`table.sum`, `table.mean`, and `table.stdev` add their terms in a fixed order. The term for index i goes into accumulator (i - 1) % 8, and the eight accumulators combine pairwise: accumulator j with j + 4, then the first two of those sums with the last two, then the final pair. Integer and float array parts run this order eight slots at a time with Zig vector operations, and the nil word masks out holes. Boxed parts, tables with metatables, and keys beyond the array part follow the same order one element at a time. The results are therefore identical bit for bit across kinds and platforms, and the order is part of the specification of each function. `table.sum` also keeps the exact sum of the values in index order while every value is an integer and no addition overflows, and returns that integer when both hold, as `+` would.
 
 ## Shapes
 

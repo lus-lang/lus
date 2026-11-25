@@ -42,7 +42,7 @@ for _, city in ipairs(cities) do
     local revenues = table.map(by_city[city], revenue)
     local total, mean = table.sum(revenues), table.mean(revenues)
     print(string.format("%-8s total %6.0f  mean %7.1f", city, total, mean))
-    report[#report + 1] = { city, math.tointeger(total), mean }
+    report[#report + 1] = { city, total, mean }
 end
 --> Berlin   total   2190  mean  1095.0
 --> London   total   2310  mean  1155.0

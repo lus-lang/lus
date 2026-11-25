@@ -558,13 +558,14 @@ fn compact(l: *Thread) Error!u32 {
 
 // ---------------------------------------------------------------------
 // Aggregation. Numbers and numeric strings count, other values are
-// skipped. Results are floats.
+// skipped. A sum of integers is an integer while it fits, and the other
+// results are floats, except the median of an odd count, which is the
+// middle value itself.
 
-fn numericValue(l: *Thread, v: Value) ?f64 {
-    if (v.isNumber()) return numeric.toFloat(l.g.gpa, v);
-    if (v.tag == .string) {
-        if (ops.toNumberCoerce(v)) |n| return numeric.toFloat(l.g.gpa, n);
-    }
+/// The number that `v` counts as, with a numeric string converted.
+fn numberOf(v: Value) ?Value {
+    if (v.isNumber()) return v;
+    if (v.tag == .string) return ops.toNumberCoerce(v);
     return null;
 }
 
@@ -583,6 +584,27 @@ const Term = enum { value, square };
 const Lanes = struct {
     acc: [lanes]f64 = @splat(0),
     count: i64 = 0,
+    /// The exact sum, which holds while every value is an integer and no
+    /// addition overflows.
+    isum: i64 = 0,
+    exact: bool = true,
+
+    /// Adds the number `n` at the one-based index `i`.
+    fn addNumber(a: *Lanes, g: anytype, comptime term: Term, i: i64, n: Value, m: f64) void {
+        a.add(term, i, numeric.toFloat(g.gpa, n), m);
+        a.addExact(n);
+    }
+
+    inline fn addExact(a: *Lanes, n: Value) void {
+        if (!a.exact) return;
+        if (n.tag != .integer) {
+            a.exact = false;
+            return;
+        }
+        const r = @addWithOverflow(a.isum, n.asInt());
+        a.isum = r[0];
+        if (r[1] != 0) a.exact = false;
+    }
 
     /// Adds the term for `x` at the one-based index `i`.
     inline fn add(a: *Lanes, comptime term: Term, i: i64, x: f64, m: f64) void {
@@ -625,16 +647,16 @@ fn accumulate(l: *Thread, len: i64, comptime term: Term, m: f64) Error!Lanes {
             // Converting a value never runs Lus code, so the array part
             // stays in place during the loop.
             .boxed => for (t.values()[0..n], 1..) |v, k| {
-                if (numericValue(l, v)) |x| a.add(term, @intCast(k), x, m);
+                if (numberOf(v)) |x| a.addNumber(l.g, term, @intCast(k), x, m);
             },
             .string, .table => for (0..n) |k| {
-                if (numericValue(l, table.arrayGet(t, k))) |x| a.add(term, @intCast(k + 1), x, m);
+                if (numberOf(table.arrayGet(t, k))) |x| a.addNumber(l.g, term, @intCast(k + 1), x, m);
             },
         }
         i = @as(i64, @intCast(n)) + 1;
     }
     while (i <= len) : (i += 1) {
-        if (numericValue(l, try geti(l, l.arg(1), i))) |x| a.add(term, i, x, m);
+        if (numberOf(try geti(l, l.arg(1), i))) |x| a.addNumber(l.g, term, i, x, m);
     }
     return a;
 }
@@ -655,6 +677,17 @@ inline fn intsToFloats(x: anytype) @Vector(@typeInfo(@TypeOf(x)).vector.len, f64
 }
 
 fn accumulateWords(comptime kind: Table.ArrayKind, w: []const u64, a: *Lanes, comptime term: Term, m: f64) void {
+    const before = a.count;
+    defer if (kind == .float and a.count > before) {
+        a.exact = false;
+    };
+    if (kind == .int and term == .value) {
+        for (w) |x| {
+            if (x == Table.hole) continue;
+            a.addExact(Value.int(@bitCast(x)));
+            if (!a.exact) break;
+        }
+    }
     var acc: F64s = a.acc;
     var count: i64 = 0;
     const mv: F64s = @splat(m);
@@ -679,6 +712,7 @@ fn sum(l: *Thread) Error!u32 {
     _ = try aux.checkTable(l, 1);
     const len = try lenOf(l, l.arg(1));
     const a = try accumulate(l, len, .value, 0);
+    if (a.exact) return aux.ret(l, Value.int(a.isum));
     return aux.ret(l, Value.float(a.total()));
 }
 
@@ -690,25 +724,33 @@ fn mean(l: *Thread) Error!u32 {
     return aux.ret(l, Value.float(a.total() / @as(f64, @floatFromInt(a.count))));
 }
 
-fn floatLess(_: void, a: f64, b: f64) bool {
-    return a < b;
+/// A value of a median: the number as a float for the ordering, and the
+/// number itself, an integer or a float.
+const Ranked = struct { x: f64, v: Value };
+
+fn rankedLess(_: void, a: Ranked, b: Ranked) bool {
+    if (a.v.tag == .integer and b.v.tag == .integer) return a.v.asInt() < b.v.asInt();
+    return a.x < b.x;
 }
 
 fn median(l: *Thread) Error!u32 {
     _ = try aux.checkTable(l, 1);
     const len = try lenOf(l, l.arg(1));
     const gpa = l.g.gpa;
-    var vals: std.ArrayList(f64) = .empty;
+    var vals: std.ArrayList(Ranked) = .empty;
     defer vals.deinit(gpa);
     var i: i64 = 1;
     while (i <= len) : (i += 1) {
-        if (numericValue(l, try geti(l, l.arg(1), i))) |x| vals.append(gpa, x) catch return l.raiseMem();
+        const v = numberOf(try geti(l, l.arg(1), i)) orelse continue;
+        const x = numeric.toFloat(gpa, v);
+        // A bigint or a decimal counts as its float, as in the sum.
+        vals.append(gpa, .{ .x = x, .v = if (v.tag == .integer) v else Value.float(x) }) catch return l.raiseMem();
     }
     const n = vals.items.len;
     if (n == 0) return aux.ret(l, Value.float(std.math.nan(f64)));
-    std.mem.sort(f64, vals.items, {}, floatLess);
-    const r = if (n % 2 == 1) vals.items[n / 2] else (vals.items[n / 2 - 1] + vals.items[n / 2]) / 2.0;
-    return aux.ret(l, Value.float(r));
+    std.mem.sort(Ranked, vals.items, {}, rankedLess);
+    if (n % 2 == 1) return aux.ret(l, vals.items[n / 2].v);
+    return aux.ret(l, Value.float((vals.items[n / 2 - 1].x + vals.items[n / 2].x) / 2.0));
 }
 
 fn stdev(l: *Thread) Error!u32 {

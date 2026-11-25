@@ -605,9 +605,10 @@ local function table_sum_of_an_empty_table_is_0_test()
     assert(table.sum({}) == 0)
 end
 
-local function table_sum_always_returns_a_float_subtype_test()
-    assert(math.type(table.sum({1, 2, 3})) == "float")
+local function table_sum_follows_the_subtype_rules_of_addition_test()
+    assert(math.type(table.sum({1, 2, 3})) == "integer")
     assert(table.sum({1, 2, 3}) == 6)
+    assert(math.type(table.sum({1, 2, 3.0})) == "float")
 end
 
 local function table_sum_coerces_numeric_strings_on_the_fastcall_path_test()

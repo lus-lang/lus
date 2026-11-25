@@ -823,6 +823,38 @@ local function statistics_of_no_numbers_are_nan_test()
     assert(table.median({3, 1, 2}) == 2)
 end
 
+-- table.sum follows the rules of `+`: integers give an integer, and any
+-- float gives a float. A sum that overflows the integers is a float.
+local function sum_of_integers_is_an_integer_test()
+    assert(math.type(table.sum({1, 2, 3})) == "integer" and table.sum({1, 2, 3}) == 6)
+    assert(math.type(table.sum({1, "2", 3, true})) == "integer")
+    assert(math.type(table.sum({})) == "integer" and table.sum({}) == 0)
+    assert(math.type(table.sum({1, 2.0})) == "float")
+    assert(math.type(table.sum({1, "2.5"})) == "float")
+    local big = table.sum({math.maxinteger, 1})
+    assert(math.type(big) == "float" and big == 2.0 ^ 63)
+    assert(table.sum({math.maxinteger, 1, -1}) == 2.0 ^ 63)
+    local boxed = {1, 2, "x", 4}
+    assert(math.type(table.sum(boxed)) == "integer" and table.sum(boxed) == 7)
+    local meta = setmetatable({}, {__index = function(_, i) return i end, __len = function() return 4 end})
+    assert(math.type(table.sum(meta)) == "integer" and table.sum(meta) == 10)
+    local holes = {1, 2, 3, 4}
+    holes[2] = nil
+    assert(math.type(table.sum(holes)) == "integer")
+end
+
+-- The mean and the deviation divide, so they are floats. The median of an
+-- odd count is the middle value itself, and the median of an even count is
+-- the mean of the two middle values.
+local function mean_median_and_stdev_follow_the_arithmetic_rules_test()
+    assert(math.type(table.mean({1, 2, 3})) == "float" and table.mean({1, 2, 3}) == 2.0)
+    assert(math.type(table.stdev({1, 2, 3})) == "float")
+    assert(math.type(table.median({3, 1, 2})) == "integer")
+    assert(math.type(table.median({3, 2.0, 1})) == "float")
+    assert(math.type(table.median({1, 2, 3, 4})) == "float")
+    assert(table.median({math.maxinteger, math.maxinteger - 1, 0}) == math.maxinteger - 1)
+end
+
 local function reduce_of_an_empty_table_needs_an_initial_value_test()
     raises(function() table.reduce({}, function(a, b) return a + b end) end, "'reduce' on empty table with no initial value")
     assert(table.reduce({}, function(a, b) return a + b end, 7) == 7)

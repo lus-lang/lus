@@ -4259,7 +4259,7 @@ The library also has functions that process a whole list in one call, each repla
 - [`table.filter`](/manual/api#table.filter) returns a new list with the elements for which a function returns a truthy value.
 - [`table.reduce`](/manual/api#table.reduce) combines all elements into one value by calling a function with the result so far and the next element.
 - [`table.groupby`](/manual/api#table.groupby) divides the elements into groups. It returns a table that maps each key the function returns to the list of elements with that key.
-- [`table.sum`](/manual/api#table.sum), [`table.mean`](/manual/api#table.mean), [`table.median`](/manual/api#table.median), and [`table.stdev`](/manual/api#table.stdev) compute the total, the average, the middle value, and the standard deviation of a list of numbers. Each returns a float.
+- [`table.sum`](/manual/api#table.sum), [`table.mean`](/manual/api#table.mean), [`table.median`](/manual/api#table.median), and [`table.stdev`](/manual/api#table.stdev) compute the total, the average, the middle value, and the standard deviation of a list of numbers. The total of integers is an integer, as with `+`. The average and the standard deviation are floats.
 
 The following planner holds the length of each task in minutes. It adds a buffer of 10 minutes to every task with `table.map`, computes the total and the average with `table.sum` and `table.mean`, selects the tasks of at most 30 minutes with `table.filter`, and finds the longest task with `table.reduce`.
 
@@ -4268,7 +4268,7 @@ local tasks = { 30, 45, 15, 90 }
 
 local buffered = table.map(tasks, function(minutes) return minutes + 10 end)
 print(table.concat(buffered, " "))               --> 40 55 25 100
-print(table.sum(tasks), table.mean(tasks))       --> 180.0  45.0
+print(table.sum(tasks), table.mean(tasks))       --> 180  45.0
 
 local quick = table.filter(tasks, function(minutes) return minutes <= 30 end)
 print(table.concat(quick, " "))                  --> 30 15
