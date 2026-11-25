@@ -495,7 +495,7 @@ fn flushHandle(g: *state.Global, h: *Handle) ?anyerror {
         .stdout, .stdin => unreachable,
         .stderr => {
             out.flushStdout(g);
-            std.Io.File.stderr().writeStreamingAll(g.io, bytes) catch |e| return e;
+            out.writeStderr(g, bytes);
         },
         .file => {
             const at = if (h.append) h.file.length(g.io) catch h.wstart else h.wstart;

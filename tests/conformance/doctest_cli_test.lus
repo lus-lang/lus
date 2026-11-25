@@ -74,3 +74,57 @@ local function a_source_file_without_examples_stays_quiet_test()
     assert(not out:find("plain.lus", 1, true), out)
     assert(out:find("guide.md (1 passed", 1, true), out)
 end
+
+-- Each `-->` comment of a block names a line that the block prints, to
+-- standard output or standard error. Whitespace runs compare equal and
+-- `...` matches any text.
+local OUTPUT = [=[
+Text.
+
+```lus
+print("total", 6)        --> total  6
+print(catch error("x"))  --> false  ...: x
+for i = 1, 2 do print(i * 10) end
+--> 10
+--> 20
+warn("@on")
+warn("low disk")         --> Lus warning: low disk
+```
+
+More.
+
+```lus
+print(1 + 1)   --> 3
+```
+]=]
+
+local function output_comments_are_compared_with_what_a_block_prints_test()
+    write("output.md", OUTPUT)
+    local ok, out = run("--doc output.md")
+    assert(not ok, out)
+    assert(out:find("output.md (1 passed, 1 failed", 1, true), out)
+    assert(out:find("FAIL line 16", 1, true), out)
+    assert(out:find('expects the output "3"', 1, true), out)
+end
+
+-- A block that pledges starts with no permissions, so the denial that its
+-- comment names happens. Any other block holds every permission.
+local PLEDGED = [=[
+Text.
+
+```lus
+pledge("fs:read=./*")
+print((catch io.open("/etc/hosts")))   --> false
+```
+
+```lus
+print((catch io.open("/etc/hosts")))   --> true
+```
+]=]
+
+local function a_block_that_pledges_starts_without_permissions_test()
+    write("pledged.md", PLEDGED)
+    local ok, out = run("--doc pledged.md")
+    assert(ok, out)
+    assert(out:find("pledged.md (2 passed", 1, true), out)
+end

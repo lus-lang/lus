@@ -252,7 +252,18 @@ ok   sort_test.lus (1 benchmark, 1130 ms)
 
 ## Doc tests
 
-An example in documentation becomes wrong when the code it describes changes. `lus test --doc` detects this by running the code blocks of Markdown files as tests. The arguments are Markdown files or directories, in which the runner finds the files whose names end in `.md` or `.mdx`. Every block fenced as ` ```lus ` is a test named after the line where its code starts, as in `line 12`. A block passes when it runs to the end without raising an error.
+An example in documentation becomes wrong when the code it describes changes. `lus test --doc` detects this by running the code blocks of Markdown files as tests. The arguments are Markdown files or directories, in which the runner finds the files whose names end in `.md` or `.mdx`. Every block fenced as ` ```lus ` is a test named after the line where its code starts, as in `line 12`. A block passes when it runs to the end without raising an error and prints every line that its `-->` comments name.
+
+The text after `-->` on a line of a block is a line that the block must print, to standard output or to standard error, in any order. Runs of spaces and tabs compare equal, so the tab that `print` puts between its values matches the spaces of a comment. `...` in a comment matches any text, such as the file name and the line number in front of an error message. A line that holds only a `-->` comment names output as well, which suits a loop that prints several lines.
+
+```lus
+for _, name in ipairs({ "ada", "grace" }) do
+    print(name:upper(), #name)
+end
+--> ADA  3
+--> GRACE  5
+print(catch error("disk full"))   --> false  ...: disk full
+```
 
 The examples in the [doc comments](/manual/tools#documentation) of a `.lus` file run the same way, so the example of a function stays correct with the function. With `--doc`, the runner also reads every `.lus` file it finds and runs each ` ```lus ` block inside a `---` comment or a `--[[- ... ]]` comment. The directory of the file comes first on `package.path`, so an example requires its own module by name. A source file whose doc comments hold no example stays out of the report.
 
@@ -268,7 +279,7 @@ function mathx.double(x)
 end
 ```
 
-Each block runs separately with every permission and none of the variables of the blocks before it. Its detached coroutines must end for it to pass. Fence a block that cannot run alone, such as a fragment or code that shows an error, as ` ```lus nocheck `, which the runner records as skipped. The manual, the standard library specification, and the agent skills of Lus are all tested with `lus test --doc`.
+Each block runs separately with none of the variables of the blocks before it. A block that calls `pledge` starts with no permissions, as the same code does under `lus`, so the denials that its comments show take place. Every other block holds every permission. Its detached coroutines must end for it to pass. Fence a block that cannot run alone, such as a fragment or code that shows an error, as ` ```lus nocheck `, which the runner records as skipped. The manual, the standard library specification, and the agent skills of Lus are all tested with `lus test --doc`.
 
 ```sh
 lus test --doc docs/

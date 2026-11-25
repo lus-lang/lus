@@ -1148,13 +1148,22 @@ fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []co
         api.close(l);
         return false;
     };
-    api.grantPledges(l, &.{"all"}) catch {};
+    // A block that pledges its permissions starts with none, as the same
+    // code does under `lus`, so the denials that its comments show
+    // happen. Any other block holds every permission.
+    if (std.mem.indexOf(u8, code, "pledge(") == null) api.grantPledges(l, &.{"all"}) catch {};
     if (module_dir) |dir| prependPath(l, dir) catch {};
     const chunkname = try std.fmt.allocPrint(gpa, "={s}:{d}", .{ std.fs.path.basename(path), line });
     defer gpa.free(chunkname);
     var ok = true;
     var msg: []u8 = &.{};
     defer gpa.free(msg);
+    // The block prints into a buffer, which its `-->` comments are then
+    // compared with.
+    var printed: std.ArrayList(u8) = .empty;
+    defer printed.deinit(gpa);
+    const o = try out.prepare(l.g);
+    o.capture = &printed;
     api.load(l, code, chunkname) catch {
         ok = false;
     };
@@ -1165,10 +1174,91 @@ fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []co
         ok = false;
         msg = try gpa.dupe(u8, api.errorMessage(l, l.err));
     }
+    out.flushAll(l.g);
+    o.capture = null;
     const duration = msSince(io, start);
     api.close(l);
+    if (ok) {
+        if (try missingOutput(gpa, code, printed.items)) |missing| {
+            ok = false;
+            msg = missing;
+        }
+    }
     writeRecord(gpa, io, if (ok) "pass" else "fail", name, msg, line, duration);
     return ok;
+}
+
+/// Compares the `-->` comments of a code block with what the block
+/// printed. Each comment must name a line of the output. Runs of
+/// whitespace compare equal, so the tabs of `print` match the spaces of a
+/// comment, and `...` in a comment matches any text, such as the position
+/// in an error message. Returns the message of the first comment that
+/// names no line, or null when every one does.
+pub fn missingOutput(gpa: std.mem.Allocator, code: []const u8, printed: []const u8) !?[]u8 {
+    var lines: std.ArrayList([]u8) = .empty;
+    defer {
+        for (lines.items) |x| gpa.free(x);
+        lines.deinit(gpa);
+    }
+    var it = std.mem.splitScalar(u8, printed, '\n');
+    while (it.next()) |line| try lines.append(gpa, try normalize(gpa, line));
+    var src = std.mem.splitScalar(u8, code, '\n');
+    var n: usize = 0;
+    while (src.next()) |line| {
+        n += 1;
+        const at = std.mem.indexOf(u8, line, "-->") orelse continue;
+        const want = try normalize(gpa, line[at + 3 ..]);
+        defer gpa.free(want);
+        var found = false;
+        for (lines.items) |got| {
+            if (globMatch(want, got)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return try std.fmt.allocPrint(gpa, "line {d} of the block expects the output \"{s}\". The block printed:\n{s}", .{ n, want, printed });
+        }
+    }
+    return null;
+}
+
+/// Collapses each run of whitespace into one space and trims both ends.
+fn normalize(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    var space = false;
+    for (std.mem.trim(u8, text, " \t\r")) |c| {
+        if (c == ' ' or c == '\t' or c == '\r') {
+            space = true;
+            continue;
+        }
+        if (space) try buf.append(gpa, ' ');
+        space = false;
+        try buf.append(gpa, c);
+    }
+    return buf.toOwnedSlice(gpa);
+}
+
+/// Matches `text` against `pattern`, where `...` matches any text.
+fn globMatch(pattern: []const u8, text: []const u8) bool {
+    const star = std.mem.indexOf(u8, pattern, "...") orelse return std.mem.eql(u8, pattern, text);
+    const head = pattern[0..star];
+    if (!std.mem.startsWith(u8, text, head)) return false;
+    const rest = pattern[star + 3 ..];
+    var i: usize = head.len;
+    while (i <= text.len) : (i += 1) {
+        if (globMatch(rest, text[i..])) return true;
+    }
+    return false;
+}
+
+test missingOutput {
+    const gpa = std.testing.allocator;
+    try std.testing.expectEqual(@as(?[]u8, null), try missingOutput(gpa, "print(1, 2)   --> 1  2\n", "1\t2\n"));
+    try std.testing.expectEqual(@as(?[]u8, null), try missingOutput(gpa, "print(e)  --> ...: bad input\n", "x.lus:3: bad input\n"));
+    const m = (try missingOutput(gpa, "print(3)  --> 4\n", "3\n")).?;
+    defer gpa.free(m);
+    try std.testing.expect(std.mem.indexOf(u8, m, "expects the output \"4\"") != null);
 }
 
 /// The path of the file a child runs, as the user named it, which every

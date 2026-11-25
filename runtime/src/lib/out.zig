@@ -21,6 +21,10 @@ pub const Out = struct {
     /// The first write error since the last one `io.write` or `flush`
     /// reported. `print` and the runtime's own writes leave it in place.
     failed: ?anyerror = null,
+    /// A buffer that receives the output in place of the file, which
+    /// `lus test --doc` sets to compare the output of a code block with
+    /// its `-->` comments.
+    capture: ?*std.ArrayList(u8) = null,
 
     pub const Mode = enum { no, line, full };
 
@@ -32,19 +36,27 @@ pub const Out = struct {
         };
         if (o.buf.items.len + bytes.len > o.limit) o.flush(g);
         if (bytes.len >= o.limit) {
-            o.file.writeStreamingAll(g.io, bytes) catch |e| o.fail(e);
+            o.send(g, bytes);
             return;
         }
         o.buf.appendSlice(g.gpa, bytes) catch {
             o.flush(g);
-            o.file.writeStreamingAll(g.io, bytes) catch |e| o.fail(e);
+            o.send(g, bytes);
         };
     }
 
     pub fn flush(o: *Out, g: *Global) void {
         if (o.buf.items.len == 0) return;
-        o.file.writeStreamingAll(g.io, o.buf.items) catch |e| o.fail(e);
+        o.send(g, o.buf.items);
         o.buf.clearRetainingCapacity();
+    }
+
+    fn send(o: *Out, g: *Global, bytes: []const u8) void {
+        if (o.capture) |c| {
+            c.appendSlice(g.gpa, bytes) catch |e| o.fail(e);
+            return;
+        }
+        o.file.writeStreamingAll(g.io, bytes) catch |e| o.fail(e);
     }
 
     fn fail(o: *Out, e: anyerror) void {
@@ -111,6 +123,20 @@ pub fn deinit(g: *Global) void {
 /// Writes directly to standard error after flushing standard output.
 pub fn stderr(g: *Global, bytes: []const u8) void {
     flushAll(g);
+    writeStderr(g, bytes);
+}
+
+/// Writes to standard error, or to the capture buffer of the standard
+/// output when `lus test --doc` has set one, so a code block that warns
+/// shows its warning in the output that its comments name.
+pub fn writeStderr(g: *Global, bytes: []const u8) void {
+    if (g.ext.get("out.stdout")) |p| {
+        const o: *Out = @ptrCast(@alignCast(p));
+        if (o.capture) |c| {
+            c.appendSlice(g.gpa, bytes) catch {};
+            return;
+        }
+    }
     std.Io.File.stderr().writeStreamingAll(g.io, bytes) catch {};
 }
 
