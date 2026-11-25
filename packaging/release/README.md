@@ -31,36 +31,46 @@ the root key signs, so every installed `lus` keeps accepting the index.
 
 `.github/workflows/ship.yml` releases the version that
 `runtime/build.zig.zon` holds, `X.Y.Z-dev`, from one start in the Actions
-tab. It checks that CI and the nightly tests passed on the commit, then
-builds, tests, and attests every target through `release.yml`. After a
-reviewer of the environment `release` approves, it pushes the tag `vX.Y.Z`,
-publishes the GitHub release as the latest, signs the release index,
-and publishes the VSIX to Open VSX and `lus-wasm` to npm. Last, it opens a
-pull request that dates the section of `CHANGELOG.md`, adds it to the news
-of the site, and starts `X.(Y+1).0-dev` (`tools/release-version.mjs`).
+tab. Its first job stops a real release unless CI passed on the commit,
+the last nightly run passed, the tag is new, and every secret is set.
+The run then executes every job of `full.yml` and runs `release.yml`,
+which builds, tests, and attests every target. After a reviewer of the
+environment `release` approves, the run pushes the tag `vX.Y.Z`,
+publishes the GitHub release as the latest, signs the release index, and
+publishes the VSIX to Open VSX and `lus-wasm` to npm. Last, it opens a
+pull request that dates the section of `CHANGELOG.md`, adds that section
+to the news of the site, and sets the version to `X.(Y+1).0-dev`.
+`tools/release-version.mjs` writes both the release commit and the
+changes of the pull request.
 
-The tag points to the release commit, whose parent is the commit of the
-run. That commit sets the version to `X.Y.Z` and no branch holds it, so
-the branch changes only through the pull request. A published release is
-immutable, so the workflow creates each release as a draft with all its
-assets and publishes it last. The release index lives on the branch
-`release-index`, which `https://lus.dev/releases/` redirects to.
+The tag points to the release commit, which sets the version to `X.Y.Z`
+and whose parent is the commit of the run. No branch holds the release
+commit, so the branch that the workflow runs on changes only when the
+pull request merges. A published release is immutable, so the workflow creates each
+release as a draft, uploads all its assets, and publishes it last.
+`https://lus.dev/releases/` redirects to the branch `release-index`,
+which holds the release index.
 
 The input `dry_run` is set by default. A dry run builds and checks
 everything, attests and publishes nothing, and lists in its summary each
 gate that a real release would stop at.
 
-A real release needs these settings of the repository.
+Before the first real release, set up the following in the repository.
 
-- The Lus app, the GitHub App of the project, with read and write access
-  to contents and to pull requests among its permissions. The ruleset of
-  `v*` tags lists it as a bypass actor, which lets it create the tag of a
-  release and of each unstable build. Each job asks for a token with only
-  the permissions it needs. Its identifier and a private key are the
-  secrets `LUS_APP_ID` and `LUS_APP_PRIVATE_KEY`.
-- The environment `release`, whose reviewers approve each release.
-- The secrets `LUS_RELEASE_SIGNING_SEED` and `LUS_RELEASE_SIGNING_KEY_ID`
-  with the file `keys.json`, `OVSX_PAT`, and `NPM_TOKEN`.
+- **The Lus app**, the GitHub App of the project. Its permissions must
+  include read and write access to contents and to pull requests. Add it
+  as a bypass actor of the ruleset of `v*` tags, which lets it create the
+  tag of a release and of each unstable build. Store its identifier and a
+  private key as the secrets `LUS_APP_ID` and `LUS_APP_PRIVATE_KEY`. Each
+  job mints a token that has only the permissions the job needs.
+- **The environment `release`**, whose reviewers approve each release.
+- **The signing key of the release index.** Commit the key list
+  `keys.json`, which the root key signs. Store the seed and the
+  identifier of the signing key as `LUS_RELEASE_SIGNING_SEED` and
+  `LUS_RELEASE_SIGNING_KEY_ID`.
+- **The publishing tokens** `OVSX_PAT` for Open VSX and `NPM_TOKEN`, an
+  npm automation token that can publish `lus-wasm`.
 
-`release.yml` attests the provenance of every file it builds, which
-`gh attestation verify FILE --repo lus-lang/lus` checks.
+`release.yml` attests the provenance of every file it builds.
+`gh attestation verify FILE --repo lus-lang/lus` checks the attestation
+of a file.

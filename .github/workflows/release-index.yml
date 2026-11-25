@@ -4,8 +4,8 @@ name: Release index
 # reads at https://lus.dev/releases/index.json (spec/tools/version.md).
 # The site redirects that address and keys.json to the branch
 # release-index, which holds only those two files and which only this
-# workflow changes. Published releases are immutable, so the index lives
-# on a branch where each update is a new commit.
+# workflow changes. A published release is immutable, so the index is
+# stored on a branch where each update is a new commit.
 #
 # A maintainer publishing a draft stable release starts this workflow.
 # nightly.yml and ship.yml call it, because a release that the workflow

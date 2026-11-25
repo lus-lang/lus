@@ -19,15 +19,16 @@ name: Release
 # release is created.
 #
 # ship.yml calls it with `patch`, the name of an artifact that holds the
-# changes of the release commit, which the jobs on Linux apply to their
-# checkout before they build, and with `publish` false, so ship.yml
-# publishes the assets itself. The installer takes its version from the
-# tag.
+# changes of the release commit. The jobs on Linux apply that patch to
+# their checkout before they build. The installer takes its version from
+# the tag. ship.yml also passes `publish` false, since it publishes
+# the assets itself.
 #
 # Every binary, link object, library, and archive gets a build provenance
 # attestation, which `gh attestation verify FILE --repo lus-lang/lus`
-# checks. A dry run of ship.yml passes `attest` false, since an
-# attestation is published to the transparency log of Sigstore.
+# checks. A dry run of ship.yml and the nightly canary pass `attest`
+# false, since each attestation is published to the transparency log of
+# Sigstore.
 
 on:
   push:
@@ -396,7 +397,7 @@ jobs:
         shell: bash
         run: |
           if [[ "$TAG" == *-unstable.* ]]; then
-            # A published release is immutable, so every asset goes up
+            # A published release is immutable, so every asset is uploaded
             # while it is a draft.
             gh release create "$TAG" dist/* --draft --prerelease --verify-tag --title "Lus ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
             gh release edit "$TAG" --draft=false

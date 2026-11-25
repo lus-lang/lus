@@ -9,9 +9,9 @@
 //       news page packages/site/src/news/changelog-X.Y.Z.md.
 //
 //   node tools/release-version.mjs next --version X.Y.Z
-//       Starts the version after the release X.Y.Z, which raises the minor
-//       number: build.zig.zon and packages/wasm hold X.(Y+1).0-dev, and
-//       CHANGELOG.md opens an undated section for X.(Y+1).0.
+//       Starts the version after the release X.Y.Z by raising the minor
+//       number. It sets build.zig.zon and packages/wasm to X.(Y+1).0-dev
+//       and adds an undated section for X.(Y+1).0 to CHANGELOG.md.
 //
 //   node tools/release-version.mjs notes --version X.Y.Z
 //       Prints the section of X.Y.Z in CHANGELOG.md without its date line.

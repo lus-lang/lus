@@ -14,8 +14,8 @@ name: Ship
 #   3. github waits for the approval of the environment release, then
 #      pushes the tag vX.Y.Z and publishes the release as the latest,
 #      which install.sh and lus-setup.exe download. The tag points to the
-#      release commit, whose parent is the commit of the run, and no branch
-#      holds it.
+#      release commit, whose parent is the commit of the run. No branch
+#      holds the release commit.
 #   4. index, vscode, and npm add the release to the signed index of
 #      `lus version`, publish the VSIX to Open VSX, and publish lus-wasm to
 #      npm.
@@ -24,14 +24,15 @@ name: Ship
 #      The site deploys from the branch, so merging it publishes the news
 #      and rebuilds the playground with the lus.wasm of the release.
 #
-# The rulesets let only repository administrators and the Lus app
-# create v* tags, and the branch takes changes only through reviewed pull
-# requests. The Lus app is the GitHub App of the project, which the
-# ruleset of the tags lists as a bypass actor. Each job asks for a token
-# with only the permissions it needs. One with write access to contents
-# pushes the tag, and one that can also write pull requests opens the
-# pull request, so that CI runs on it. Releases are immutable once published, so each one
-# is created as a draft with all its assets and then published.
+# The rulesets let only repository administrators and the Lus app create
+# v* tags. They also require a reviewed pull request for every change to
+# the branch. The Lus app is the GitHub App of the project, which the
+# ruleset of the tags lists as a bypass actor. Each job mints a token of
+# the app with only the permissions the job needs. The tag push uses a
+# token that writes contents. The pull request is opened with a token
+# that also writes pull requests, so CI runs on it. A published release
+# is immutable, so the workflow creates each release as a draft, uploads
+# all its assets, and publishes it last.
 #
 # A start from the Actions tab is a dry run unless `dry_run` is cleared. A
 # dry run does every step up to the point of publishing and then prints
@@ -203,7 +204,7 @@ jobs:
       attest: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
     secrets: inherit
 
-  # Every job of full.yml, on every runner, as the nightly run has it.
+  # Every job of full.yml runs before the tag, as it does each night.
   full:
     name: Full
     needs: prepare
@@ -223,8 +224,8 @@ jobs:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      # The tag goes up with the token of the Lus app, which a stored
-      # workflow token would override.
+      # The tag push uses the token of the Lus app. A stored workflow token
+      # would take precedence over it, so the checkout stores none.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -300,8 +301,8 @@ jobs:
             cat "$RUNNER_TEMP/notes.md"
             exit 0
           fi
-          # A published release is immutable, so every asset goes up while
-          # it is a draft.
+          # A published release is immutable, so every asset is uploaded
+          # while it is a draft.
           gh release create "$TAG" dist/* --draft --verify-tag --title "Lus $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
           gh release edit "$TAG" --draft=false --latest
 
@@ -402,8 +403,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch -q "$RUNNER_TEMP/commits/ship.bundle" HEAD
-          # One commit from the commit of the run to the next version: the
-          # dated changelog, the news page, and X.(Y+1).0-dev.
+          # The pull request holds one commit on top of the commit of the
+          # run, with the dated changelog, the news page, and X.(Y+1).0-dev.
           git checkout -q -b "release/$TAG" FETCH_HEAD
           git reset -q --soft "$GITHUB_SHA"
           next="$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)"

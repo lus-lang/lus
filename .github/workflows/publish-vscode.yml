@@ -65,8 +65,8 @@ jobs:
           vsix="lus-$version.vsix"
           publisher="lus-$version-open-vsx-publisher.cjs"
           mkdir anchor candidate
-          # A dry run has no tag yet, and the release commit leaves the
-          # manifest as the commit of the run holds it.
+          # A dry run has no tag yet. The release commit leaves the
+          # manifest unchanged, so the commit of the run holds the same one.
           ref="$TAG"
           if [ "$DRY_RUN" = true ]; then ref="$GITHUB_SHA"; fi
           gh api \
