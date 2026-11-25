@@ -40,10 +40,9 @@ test("a feature is closed, and an egregious path is locked", () => {
   assert.match(denied.failures[0], /build\.zig\.zon/);
 });
 
-test("an issue needs a signing key", () => {
-  const issue = {kind: "issue", item: {user: {login: "someone"}, author_association: "NONE"}, user: old, keys: 0, known: new Set(), now};
-  assert.equal(decide(issue).action, "fail");
-  assert.equal(decide({...issue, keys: 1}).action, "pass");
+test("an issue needs only the account age", () => {
+  const issue = {kind: "issue", item: {user: {login: "someone"}, author_association: "NONE"}, user: old, known: new Set(), now};
+  assert.equal(decide(issue).action, "pass");
 });
 
 test("the Lus app skips the gate", () => {

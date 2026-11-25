@@ -24,7 +24,7 @@
 // GitHub, which also shows that the account has a verified email bound to
 // its signing key, a valid Kind and agent disclosure (tools/ci/pr.mjs),
 // and only paths that contributors may change (tools/ci/areas.json). An
-// issue needs a GPG or SSH signing key on the account.
+// issue needs only the account age.
 //
 // A pull request that touches an egregious path is closed and locked. One
 // whose Kind asks for a feature or a design change is closed, and the
@@ -116,7 +116,7 @@ async function subject() {
 
 // Decides the gate from what the API returned. Kept apart from the calls
 // so the tests can drive it.
-export function decide({kind, item, user, commits, files, keys, known, now = Date.now()}) {
+export function decide({kind, item, user, commits, files, known, now = Date.now()}) {
   const login = item.user.login;
   const failures = [];
   let action = "pass";
@@ -129,9 +129,7 @@ export function decide({kind, item, user, commits, files, keys, known, now = Dat
 
   let verdict = "allowed";
   let fields = null;
-  if (kind === "issue") {
-    if (keys === 0) failures.push(`Add a GPG or SSH signing key to your account @${login}.`);
-  } else {
+  if (kind !== "issue") {
     const unsigned = commits.filter((c) => !c.commit.verification?.verified).map((c) => `${c.sha.slice(0, 10)} (${c.commit.verification?.reason ?? "unsigned"})`);
     if (unsigned.length) failures.push(`Sign these commits so that GitHub verifies them: ${unsigned.join(", ")}. CONTRIBUTING.md shows how.`);
     fields = checkPr(item.body ?? "", commits.map((c) => ({sha: c.sha, message: c.commit.message})));
@@ -219,16 +217,11 @@ async function runGate() {
   const user = await api("GET", `/users/${item.user.login}`);
   let commits = [];
   let files = [];
-  let keys = null;
   if (kind === "pr") {
     commits = await pages(`/repos/${REPO}/pulls/${number}/commits`, 3);
     files = await prFiles(number);
-  } else {
-    const gpg = await api("GET", `/users/${item.user.login}/gpg_keys`);
-    const ssh = await api("GET", `/users/${item.user.login}/ssh_signing_keys`);
-    keys = gpg.length + ssh.length;
   }
-  const decision = decide({kind, item, user, commits, files, keys, known});
+  const decision = decide({kind, item, user, commits, files, known});
   console.log(JSON.stringify({kind, number, login: item.user.login, ...decision, fields: undefined}, null, 2));
 
   if (!decision.exempt) {
