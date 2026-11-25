@@ -503,9 +503,9 @@ const HostResolver = struct {
     }
 };
 
-/// Canonical absolute path: realpath when the file exists, otherwise the
-/// realpath of its parent plus the final component. Returns null when the
-/// path cannot be resolved (which callers treat as denied).
+/// Canonical absolute path: the realpath of the longest prefix of `path`
+/// that exists, followed by the components that do not exist yet. Returns
+/// null when the path cannot be resolved, which callers treat as denied.
 pub fn canonicalize(g: *Global, path: []const u8) ?[]u8 {
     return canonicalizeWith(g.gpa, path, host_rules, HostResolver{ .g = g });
 }
@@ -514,11 +514,50 @@ fn canonicalizeWith(gpa: Allocator, path: []const u8, rules: PathRules, resolver
     const norm = normalizeSeparators(gpa, path, rules) catch return null;
     defer gpa.free(norm);
     if (!isOrdinaryPath(norm, rules)) return null;
-    if (resolver.resolve(norm)) |r| return ordinaryOrNull(gpa, r, rules) else |_| {}
-    const parent, const base = splitParent(norm, rules);
-    const rp = resolver.resolve(parent) catch return null;
-    defer gpa.free(rp);
-    return ordinaryOrNull(gpa, joinPath(gpa, rp, win32Component(base, rules)) orelse return null, rules);
+    return ordinaryOrNull(gpa, resolveExisting(gpa, norm, rules, resolver) orelse return null, rules);
+}
+
+/// The realpath of the longest existing prefix of `p`, a path whose
+/// separators are `/`, followed by the components of `p` that do not
+/// exist. Grants and requests both resolve this way, so a grant made
+/// before its directory exists and a later request inside that directory
+/// reach the same form. Null when no prefix resolves, or when a missing
+/// component is `..`, whose meaning depends on what is created later.
+fn resolveExisting(gpa: Allocator, p: []const u8, rules: PathRules, resolver: anytype) ?[]u8 {
+    const root = rootLen(p, rules);
+    var end = p.len;
+    while (true) {
+        const at_top = end <= root;
+        const dir = if (!at_top) p[0..end] else if (root > 0) p[0..root] else ".";
+        if (resolver.resolve(dir)) |rp| {
+            defer gpa.free(rp);
+            return appendMissing(gpa, rp, p[if (at_top) root else end..], rules);
+        } else |_| {}
+        if (at_top) return null;
+        end = if (std.mem.lastIndexOfScalar(u8, p[root..end], '/')) |sl| root + sl else root;
+    }
+}
+
+/// `dir` followed by each component of `rest` as Win32 opens it. Empty
+/// components and `.` drop out. Null when a component is `..` or empty
+/// once Win32 trims it.
+fn appendMissing(gpa: Allocator, dir: []const u8, rest: []const u8, rules: PathRules) ?[]u8 {
+    return appendMissingAlloc(gpa, dir, rest, rules) catch null;
+}
+
+fn appendMissingAlloc(gpa: Allocator, dir: []const u8, rest: []const u8, rules: PathRules) error{ OutOfMemory, Unresolvable }![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.appendSlice(gpa, dir);
+    var it = std.mem.splitScalar(u8, rest, '/');
+    while (it.next()) |raw| {
+        if (raw.len == 0 or std.mem.eql(u8, raw, ".")) continue;
+        const comp = win32Component(raw, rules);
+        if (std.mem.eql(u8, raw, "..") or comp.len == 0) return error.Unresolvable;
+        if (!std.mem.endsWith(u8, out.items, "/")) try out.append(gpa, '/');
+        try out.appendSlice(gpa, comp);
+    }
+    return out.toOwnedSlice(gpa);
 }
 
 /// `p` when it names an ordinary file, otherwise null after freeing it.
@@ -542,15 +581,15 @@ fn canonicalizeLinkWith(gpa: Allocator, path: []const u8, rules: PathRules, reso
     const trimmed = std.mem.trimEnd(u8, norm, "/");
     const parent, const base = splitParent(trimmed, rules);
     if (base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return canonicalizeWith(gpa, path, rules, resolver);
-    const rp = resolver.resolve(parent) catch return null;
+    const rp = resolveExisting(gpa, parent, rules, resolver) orelse return null;
     defer gpa.free(rp);
     return ordinaryOrNull(gpa, joinPath(gpa, rp, win32Component(base, rules)) orelse return null, rules);
 }
 
 /// Canonicalizes a granted path pattern. The directory part before the
-/// first wildcard (or the whole path without one) resolves through its
-/// deepest existing ancestor, so a grant made before its directory exists
-/// stays attached to the right place.
+/// first wildcard, or the whole path without one, resolves as a request
+/// does, so a grant made before its directory exists matches the requests
+/// made inside it once it does.
 fn canonicalPattern(g: *Global, raw: []const u8, keep_last: bool) Allocator.Error![]u8 {
     return canonicalPatternWith(g.gpa, raw, keep_last, host_rules, HostResolver{ .g = g });
 }
@@ -560,27 +599,17 @@ fn canonicalPatternWith(gpa: Allocator, raw: []const u8, keep_last: bool, rules:
     if (!isPathValue(pattern, rules)) return pattern;
     const wild = std.mem.indexOfAny(u8, pattern, "*?") orelse pattern.len;
     // Split at the last separator before the first wildcard.
-    const head = pattern[0..wild];
-    var cut = std.mem.lastIndexOfScalar(u8, head, '/') orelse return pattern;
+    var cut = std.mem.lastIndexOfScalar(u8, pattern[0..wild], '/') orelse return pattern;
     if (wild == pattern.len and !keep_last) cut = pattern.len; // no wildcard: resolve it all
-    const root = rootLen(pattern, rules);
-    var dir_end = cut;
-    while (true) {
-        // A walk that reaches the root resolves the root itself.
-        const at_root = root > 0 and dir_end <= root;
-        const dir = if (at_root) pattern[0..root] else pattern[0..dir_end];
-        if (resolver.resolve(dir)) |rp| {
-            defer gpa.free(rp);
-            defer gpa.free(pattern);
-            var rest = pattern[dir_end..];
-            // A root resolves to a path that already ends in a separator.
-            if (std.mem.endsWith(u8, rp, "/") and rest.len > 0 and rest[0] == '/') rest = rest[1..];
-            if (rest.len > 0 and rest[0] != '/' and !std.mem.endsWith(u8, rp, "/")) return std.mem.concat(gpa, u8, &.{ rp, "/", rest });
-            return std.mem.concat(gpa, u8, &.{ rp, rest });
-        } else |_| {}
-        if (at_root) return pattern;
-        dir_end = std.mem.lastIndexOfScalar(u8, pattern[0..dir_end], '/') orelse return pattern;
-    }
+    cut = @max(cut, rootLen(pattern, rules));
+    const rp = resolveExisting(gpa, pattern[0..cut], rules, resolver) orelse return pattern;
+    defer gpa.free(rp);
+    defer gpa.free(pattern);
+    var rest = pattern[cut..];
+    // A root resolves to a path that already ends in a separator.
+    if (std.mem.endsWith(u8, rp, "/") and rest.len > 0 and rest[0] == '/') rest = rest[1..];
+    if (rest.len > 0 and rest[0] != '/' and !std.mem.endsWith(u8, rp, "/")) return std.mem.concat(gpa, u8, &.{ rp, "/", rest });
+    return std.mem.concat(gpa, u8, &.{ rp, rest });
 }
 
 fn valueMatches(cap: Capability, granted: []const u8, requested: []const u8, canon_req: ?[]const u8) bool {
@@ -963,7 +992,16 @@ test "canonical paths under the POSIX rules" {
     try expectCanonical(f, "new.txt", "/work/new.txt");
     try expectCanonical(f, "/tmp", "/private/tmp");
     try expectCanonical(f, "/tmp/new", "/private/tmp/new");
-    try expectCanonical(f, "/nope/new", null);
+    // A path whose directory does not exist yet resolves through its
+    // longest existing prefix, as its grant does.
+    try expectCanonical(f, "/nope/new", "/nope/new");
+    try expectCanonical(f, "/tmp/new/x", "/private/tmp/new/x");
+    try expectPattern(f, "/tmp/new/*", false, "/private/tmp/new/*");
+    try expectCanonical(f, "missing/deeper/x", "/work/missing/deeper/x");
+    try expectCanonical(f, "/tmp/./new//x", "/private/tmp/new/x");
+    // A missing `..` names a place that depends on what is created later.
+    try expectCanonical(f, "/tmp/new/../../etc/passwd", null);
+    try expectPattern(f, "/tmp/new/../*", false, "/tmp/new/../*");
 }
 
 test "canonical paths under the Windows rules" {

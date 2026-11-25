@@ -8,8 +8,14 @@ pledge("exec", "env", "fs")
 
 local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
 
-local function run(grant, code)
-    local p = os.spawn({ lus_bin, "-P" .. grant, "-e", code }, { stdout = "pipe", stderr = "stdout" })
+local function run(grant, code, more)
+    local argv = { lus_bin, "-P" .. grant }
+    for _, g in ipairs(more or {}) do
+        argv[#argv + 1] = "-P" .. g
+    end
+    argv[#argv + 1] = "-e"
+    argv[#argv + 1] = code
+    local p = os.spawn(argv, { stdout = "pipe", stderr = "stdout" })
     local out = p.stdout:read("a")
     coroutine.resume(p.exit)
     return out
@@ -58,11 +64,29 @@ local function an_unscoped_grant_still_covers_an_unscoped_pledge_test()
 end
 
 local function a_scoped_pledge_within_the_grant_succeeds_test()
-    -- The directory exists, so the grant and the pledge resolve the same way.
-    fs.createdirectory("scoped")
     local out = run("fs:read=./scoped/*", [[
         print(pledge("fs:read=./scoped/a.txt"))
     ]])
-    fs.remove("scoped", true)
     assert(out == "true\n", out)
+end
+
+-- A grant names a directory that does not exist yet, under the temporary
+-- directory, which is reached through a symbolic link on macOS. The script
+-- creates the directory and then writes and reads a file inside it.
+local function a_grant_covers_a_directory_created_later_test()
+    local base = os.tmpname()
+    fs.remove(base)
+    local dir = `$(base)_dir`
+    local out = run(`fs=$dir`, `
+        local dir = $(string.format("%q", dir))
+        fs.createdirectory(dir)
+        local f = io.open(dir .. "/a.txt", "w")
+        f:write("inside")
+        f:close()
+        print(io.open(dir .. "/a.txt"):read("a"))
+    `, { `fs=$dir/*` })
+    if fs.type(dir) then
+        fs.remove(dir, true)
+    end
+    assert(out == "inside\n", out)
 end

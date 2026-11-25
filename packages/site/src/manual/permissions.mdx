@@ -118,7 +118,7 @@ coroutine.wrap(function()
 end)()
 ```
 
-Before Lus compares the granted path with the requested path, it makes both absolute and resolves their symbolic links. A link that leads out of a granted directory therefore gives no access to its target. If a requested file does not exist yet, Lus resolves its parent directory and appends the file name. On macOS, `/tmp` is a link to `/private/tmp`, so a grant for either name covers both. On Windows, matching ignores the case of ASCII letters and treats both `\` and `/` as separators.
+Before Lus compares the granted path with the requested path, it makes both absolute and resolves their symbolic links. A link that leads out of a granted directory therefore gives no access to its target. If part of a path does not exist yet, Lus resolves the longest part that exists and appends the rest, for a grant and for a request alike. A grant for a directory that the script creates later therefore covers the files the script opens inside it. A path whose missing part contains `..` matches no grant. On macOS, `/tmp` is a link to `/private/tmp`, so a grant for either name covers both. On Windows, matching ignores the case of ASCII letters and treats both `\` and `/` as separators.
 
 ### Network values
 
