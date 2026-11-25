@@ -1,21 +1,9 @@
 #!/bin/sh
-# Checks the message of a commit against the rules that every prose file
-# of the repository follows (tools/lint-repo.js). The format of the subject
-# and the body comes next.
+# Checks the message of a commit against the format of CONTRIBUTING.md:
+# a first line `type(area): subject` of at most 72 characters, and a body
+# that follows the prose rules of the repository (tools/ci/commits.mjs).
+# CI checks every commit of a pull request the same way.
 
 set -eu
-msg=$1
-# Lines that git strips from the message are left out.
-body=$(grep -v '^#' "$msg" || true)
-
-fail=0
-if printf '%s' "$body" | grep -q "$(printf '\342\200\223')\|$(printf '\342\200\224')"; then
-  echo "commit-msg: the message holds an em or en dash" >&2
-  fail=1
-fi
-name=$(printf '%s' l u a u)
-if printf '%s' "$body" | grep -qiE "(^|[^A-Za-z_])$name([^A-Za-z_]|\$)"; then
-  echo "commit-msg: the message names a dialect that the repository never names" >&2
-  fail=1
-fi
-exit "$fail"
+root=$(git rev-parse --show-toplevel)
+exec node "$root/tools/ci/commits.mjs" message "$1"

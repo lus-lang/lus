@@ -1,0 +1,19 @@
+{
+  "about": "The coding agents that .github/workflows/contributions.yml runs, and the limits of each run. Every run costs money, so each has a dollar budget that the CLI enforces and a job timeout in minutes. The CLI version is pinned, and the API key is the repository secret ANTHROPIC_API_KEY.",
+  "cli": "@anthropic-ai/claude-code@2.1.325",
+  "triage": {
+    "model": "claude-sonnet-5-5",
+    "budget_usd": 0.5,
+    "timeout_minutes": 10
+  },
+  "hunt": {
+    "model": "claude-fable-5-2",
+    "budget_usd": 8,
+    "timeout_minutes": 45
+  },
+  "review": {
+    "model": "claude-fable-5-2",
+    "budget_usd": 4,
+    "timeout_minutes": 30
+  }
+}

@@ -107,6 +107,70 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  perf:
+    name: Benchmarks
+    # Measures every benchmark, compares it with the last nightly run and
+    # with the newest release, and stores it on the perf-data branch. A
+    # regression against the last run, past the thresholds of
+    # tools/ci/perf.json, goes to the open issue labelled perf-regression,
+    # which the run opens when there is none. The maintainer closes it.
+    needs: commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.commit.outputs.sha }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build
+        timeout-minutes: 20
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseFast --prefix "$RUNNER_TEMP/lus"
+      - name: Measure
+        timeout-minutes: 50
+        run: node tools/ci/perf.mjs run --lus "$RUNNER_TEMP/lus/bin/lus" --out "$RUNNER_TEMP/current.json"
+      - name: Compare with the last nightly run and the newest release
+        run: |
+          data="$RUNNER_TEMP/perf-data"
+          git clone -q --depth 1 --branch perf-data "https://github.com/$GITHUB_REPOSITORY" "$data" 2> /dev/null || mkdir -p "$data"
+          echo '[]' > "$RUNNER_TEMP/regressions.json"
+          previous=$(ls "$data"/nightly/*.json 2> /dev/null | sort | tail -1 || true)
+          release=$(ls "$data"/release/*.json 2> /dev/null | sed 's|.*/release/||' | sort -V | tail -1 || true)
+          if [ -n "$previous" ]; then
+            node tools/ci/perf.mjs compare --current "$RUNNER_TEMP/current.json" --baseline "$previous" --name "Against the nightly run of $(basename "$previous" .json)" --summary "$RUNNER_TEMP/summary.md" --regressions "$RUNNER_TEMP/regressions.json"
+          fi
+          if [ -n "$release" ]; then
+            node tools/ci/perf.mjs compare --current "$RUNNER_TEMP/current.json" --baseline "$data/release/$release" --name "Against ${release%.json}" --summary "$RUNNER_TEMP/summary.md"
+          fi
+          [ -f "$RUNNER_TEMP/summary.md" ] || echo "The first nightly measurement has nothing to compare with." > "$RUNNER_TEMP/summary.md"
+          cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Store
+        run: sh tools/ci/perf-store.sh "nightly/$(date -u +%Y-%m-%d).json" "$RUNNER_TEMP/current.json"
+      - name: Report a regression
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.commit.outputs.sha }}
+        run: |
+          count=$(jq length "$RUNNER_TEMP/regressions.json")
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --label perf-regression --state open --json number --jq '.[0].number // empty')
+          if [ "$count" -gt 0 ]; then
+            { echo "The nightly run of $SHA regressed $count benchmarks against the run before it."; echo; cat "$RUNNER_TEMP/summary.md"; } > "$RUNNER_TEMP/issue.md"
+            if [ -n "$open" ]; then
+              gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/issue.md"
+            else
+              gh label create perf-regression --repo "$GITHUB_REPOSITORY" --color d93f0b --description "A benchmark became slower or larger past the threshold" 2> /dev/null || true
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "Nightly benchmarks regressed" --label perf-regression --body-file "$RUNNER_TEMP/issue.md"
+            fi
+          fi
+
   unstable-tag:
     name: Tag the unstable build
     needs: [commit, full, canary]

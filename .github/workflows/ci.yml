@@ -37,6 +37,7 @@ jobs:
       full: ${{ steps.plan.outputs.full }}
       targets: ${{ steps.plan.outputs.targets }}
       ci: ${{ steps.plan.outputs.ci }}
+      benches: ${{ steps.plan.outputs.benches }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -100,6 +101,8 @@ jobs:
         run: node --test tools/ci/*.test.mjs
       - name: Every file belongs to an area
         run: node tools/ci/areas.mjs unmatched
+      - name: CODEOWNERS agrees with the path map
+        run: node tools/ci/areas.mjs codeowners
 
   runtime:
     name: Runtime (${{ matrix.os }})
@@ -252,6 +255,81 @@ jobs:
           LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/cancel.lus --lus runtime/zig-out-io/bin/lus
           LUS_JIT=off runtime/zig-out-io/bin/lus tests/faults/clock.lus --lus runtime/zig-out-io/bin/lus
 
+  pull-request:
+    name: Commit messages and the fields of the pull request
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Commit messages
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node tools/ci/commits.mjs range "$BASE" "$HEAD"
+      - name: Kind and agent disclosure
+        if: ${{ !cancelled() }}
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          printf '%s' "$BODY" > "$RUNNER_TEMP/body.md"
+          node tools/ci/pr.mjs check --body-file "$RUNNER_TEMP/body.md" --base "$BASE" --head "$HEAD"
+
+  perf:
+    name: Benchmarks of the change
+    # The benchmarks of the paths of the change run on the base and on the
+    # head in turn, on one runner. The result goes to an artifact, and
+    # perf-label.yml labels the pull request from it, since the token of a
+    # pull request from a fork cannot.
+    needs: plan
+    if: ${{ github.event_name == 'pull_request' && needs.plan.outputs.benches != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build the base and the head
+        timeout-minutes: 30
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE"
+          (cd "$RUNNER_TEMP/base/runtime" && zig build -Doptimize=ReleaseFast --prefix "$RUNNER_TEMP/lus-base")
+          (cd runtime && zig build -Doptimize=ReleaseFast --prefix "$RUNNER_TEMP/lus-head")
+      - name: Measure
+        timeout-minutes: 25
+        env:
+          BENCHES: ${{ needs.plan.outputs.benches }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/perf"
+          only=$(echo "$BENCHES" | jq -r 'join(",")')
+          node tools/ci/perf.mjs ab --base "$RUNNER_TEMP/lus-base/bin/lus" --head "$RUNNER_TEMP/lus-head/bin/lus" --only "$only" --out "$RUNNER_TEMP/perf/ab.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          jq -n --arg number "$NUMBER" --arg sha "$HEAD" '{number: ($number | tonumber), sha: $sha}' > "$RUNNER_TEMP/perf/pr.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: perf
+          path: ${{ runner.temp }}/perf
+          retention-days: 7
+
   full:
     name: Full
     needs: plan
@@ -261,3 +339,21 @@ jobs:
       jobs: ${{ needs.plan.outputs.full }}
       targets: ${{ needs.plan.outputs.targets }}
     secrets: inherit
+
+  # The one check that branch rules require. The set of jobs differs from
+  # change to change, so this job waits for all of them and passes when
+  # each one passed or was left out by the plan.
+  ci-ok:
+    name: ci-ok
+    if: ${{ always() }}
+    needs: [plan, lint, tools, runtime, pull-request, perf, full]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was left out
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          bad=$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key] | join(", ")')
+          if [ -n "$bad" ]; then echo "failed or cancelled: $bad" >&2; exit 1; fi

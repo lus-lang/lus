@@ -1,0 +1,486 @@
+name: Contributions
+
+# The gate, the labels, and the agents of pull requests and issues
+# (spec/design/ci.md, "Contributions"). Both events run this file from the
+# default branch, with the token of the base repository, so no job checks
+# out or runs the code of a pull request. The review job reads its files
+# as data.
+#
+# 1. The gate (tools/ci/gate.mjs) checks the author, the commits, the
+#    fields of the description, and the paths, and refuses, closes, or
+#    locks what fails. Nothing below runs for a contribution that fails it.
+# 2. A pull request gets the labels of its areas and its Kind.
+# 3. A pull request that passes gets one review against the rules of the
+#    repository. The targeted tests of ci.yml run on its own event.
+# 4. An issue that passes is sorted. A suggestion, a design proposal, or a
+#    question is closed with a pointer to Discussions. A bug report runs
+#    its program without secrets, an agent looks for the cause and writes
+#    a fix and a regression test without running anything, CI checks that
+#    the test fails before the fix and passes after it, and the fix lands
+#    on the branch agent/issue-N for the maintainer to review.
+#
+# The models, the budgets in dollars, and the time limits of the agents
+# are in tools/ci/agents.json. A manual run checks one number as a dry run,
+# which prints each write and makes none.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  issues:
+    types: [opened, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Pull request or issue to check as a dry run
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contributions-${{ github.event.pull_request.number || github.event.issue.number || inputs.number }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.7.0"
+  ZIG_VERSION: "0.17.1"
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    outputs:
+      kind: ${{ steps.gate.outputs.kind }}
+      number: ${{ steps.gate.outputs.number }}
+      passed: ${{ steps.gate.outputs.passed }}
+      exempt: ${{ steps.gate.outputs.exempt }}
+      newly_passed: ${{ steps.gate.outputs.newly_passed }}
+      draft: ${{ steps.gate.outputs.draft }}
+      agents: ${{ steps.config.outputs.agents }}
+    steps:
+      # The default branch, which holds the scripts and the rules.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Gate
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NUMBER: ${{ inputs.number }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+        run: node tools/ci/gate.mjs gate
+      - name: Labels of the areas and the Kind
+        if: ${{ steps.gate.outputs.kind == 'pr' && steps.gate.outputs.action != 'lock' && steps.gate.outputs.action != 'reject' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NUMBER: ${{ inputs.number }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+        run: node tools/ci/gate.mjs labels
+      - name: Limits of the agents
+        id: config
+        run: echo "agents=$(jq -c . tools/ci/agents.json)" >> "$GITHUB_OUTPUT"
+
+  review:
+    name: Review against the rules
+    needs: gate
+    # Once per pull request and once more when it starts passing the gate,
+    # since every run costs money. Drafts wait until they are ready.
+    if: >-
+      ${{ github.event_name == 'pull_request_target' && needs.gate.outputs.passed == 'true' && needs.gate.outputs.draft != 'true' &&
+      (contains(fromJSON('["opened", "reopened", "ready_for_review"]'), github.event.action) || needs.gate.outputs.newly_passed == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.agents).review.timeout_minutes }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: base
+          persist-credentials: false
+      # The files of the pull request, as data. Nothing in this directory
+      # runs: no install, no build, and no hook.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install the agent
+        env:
+          CLI: ${{ fromJSON(needs.gate.outputs.agents).cli }}
+        run: npm install --no-save --prefix "$RUNNER_TEMP/cli" "$CLI"
+      - name: Gather the change and the rules
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          dir="$RUNNER_TEMP/review"
+          mkdir -p "$dir/rules/spec/design" "$dir/rules/runtime" "$RUNNER_TEMP/agent"
+          printf '# %s\n\n%s\n' "$TITLE" "$BODY" > "$dir/description.md"
+          gh api -H "Accept: application/vnd.github.diff" "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" > "$dir/change.diff"
+          cp base/AGENTS.md base/CONTRIBUTING.md "$dir/rules/"
+          cp base/spec/design/style.md "$dir/rules/spec/design/"
+          cp base/runtime/HACKING.md "$dir/rules/runtime/"
+      - name: Review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ fromJSON(needs.gate.outputs.agents).review.model }}
+          BUDGET: ${{ fromJSON(needs.gate.outputs.agents).review.budget_usd }}
+        # The agent starts in an empty directory, so no settings, hooks, or
+        # instruction files of the pull request load, and it can only read.
+        run: |
+          prompt=$(sed -e "s|PR_DIR|$GITHUB_WORKSPACE/pr|g" -e "s|REVIEW_DIR|$RUNNER_TEMP/review|g" base/tools/ci/prompts/review.md)
+          cd "$RUNNER_TEMP/agent"
+          "$RUNNER_TEMP/cli/node_modules/.bin/claude" -p "$prompt" \
+            --model "$MODEL" --max-budget-usd "$BUDGET" \
+            --tools Read Grep Glob --add-dir "$GITHUB_WORKSPACE/pr" "$RUNNER_TEMP/review" \
+            --setting-sources user --strict-mcp-config --no-session-persistence \
+            --output-format text > "$RUNNER_TEMP/review.md"
+      - name: The review holds no secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ] && grep -qF "$ANTHROPIC_API_KEY" "$RUNNER_TEMP/review.md"; then echo "the review holds the API key" >&2; exit 1; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: review
+          path: ${{ runner.temp }}/review.md
+          retention-days: 7
+
+  post-review:
+    name: Post the review
+    needs: [gate, review]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: review
+          path: ${{ runner.temp }}/review
+      - name: Comment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/ci/gate.mjs comment "${{ needs.gate.outputs.number }}" "$RUNNER_TEMP/review/review.md" "<!-- lus-review -->"
+
+  triage:
+    name: Sort the issue
+    needs: gate
+    if: >-
+      ${{ github.event_name == 'issues' && needs.gate.outputs.passed == 'true' &&
+      (contains(fromJSON('["opened", "reopened"]'), github.event.action) || needs.gate.outputs.newly_passed == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.agents).triage.timeout_minutes }}
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      kind: ${{ steps.sort.outputs.kind }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install the agent
+        env:
+          CLI: ${{ fromJSON(needs.gate.outputs.agents).cli }}
+        run: npm install --no-save --prefix "$RUNNER_TEMP/cli" "$CLI"
+      - name: Sort
+        id: sort
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ fromJSON(needs.gate.outputs.agents).triage.model }}
+          BUDGET: ${{ fromJSON(needs.gate.outputs.agents).triage.budget_usd }}
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
+        run: |
+          prompt=$(cat tools/ci/prompts/triage.md)
+          mkdir -p "$RUNNER_TEMP/triage"
+          printf '# %s\n\n%s\n' "$TITLE" "$BODY" > "$RUNNER_TEMP/triage/issue.md"
+          schema='{"type":"object","properties":{"kind":{"type":"string","enum":["bug","suggestion","design","question","other"]},"reason":{"type":"string"}},"required":["kind","reason"]}'
+          cd "$RUNNER_TEMP/triage"
+          "$RUNNER_TEMP/cli/node_modules/.bin/claude" -p "$prompt" \
+            --model "$MODEL" --max-budget-usd "$BUDGET" --tools Read \
+            --setting-sources user --strict-mcp-config --no-session-persistence \
+            --json-schema "$schema" --output-format json > "$RUNNER_TEMP/sorted.json"
+          kind=$(jq -r '(.structured_output // (.result | fromjson? // {})).kind // "other"' "$RUNNER_TEMP/sorted.json")
+          reason=$(jq -r '(.structured_output // (.result | fromjson? // {})).reason // ""' "$RUNNER_TEMP/sorted.json")
+          case "$kind" in bug|suggestion|design|question|other) ;; *) kind=other ;; esac
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$reason" > "$RUNNER_TEMP/reason.txt"
+          echo "$kind: $reason"
+      - name: Close what is not a bug
+        if: ${{ contains(fromJSON('["suggestion", "design", "question"]'), steps.sort.outputs.kind) }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KIND: ${{ steps.sort.outputs.kind }}
+        run: |
+          url="https://github.com/$GITHUB_REPOSITORY/discussions"
+          case "$KIND" in
+            question) text="Questions about using Lus are answered in [Discussions]($url), so this issue is closed. Issues are for bugs." ;;
+            *) text="Lus 2 is frozen, so the issue tracker takes bug reports only. Ideas and language design conversations live in [Discussions]($url), so this issue is closed." ;;
+          esac
+          printf '%s\n\nThe triage agent read it this way: %s\n' "$text" "$(cat "$RUNNER_TEMP/reason.txt")" > "$RUNNER_TEMP/close.md"
+          node tools/ci/gate.mjs close "${{ needs.gate.outputs.number }}" "$RUNNER_TEMP/close.md" rejected
+
+  reproduce:
+    name: Run the program of the report
+    needs: [gate, triage]
+    if: ${{ needs.triage.outputs.kind == 'bug' }}
+    # No secret reaches this job, and its token only reads, since it runs a
+    # program from the issue.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build
+        timeout-minutes: 15
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Run under each mode of the JIT
+        env:
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
+        run: |
+          out="$RUNNER_TEMP/report"
+          mkdir -p "$out"
+          printf '# %s\n\n%s\n' "$TITLE" "$BODY" > "$out/issue.md"
+          node tools/ci/issue.mjs "$out/issue.md" "$out"
+          {
+            if [ -f "$out/repro.lus" ]; then
+              for mode in off default eager; do
+                echo "## LUS_JIT=$mode"
+                echo
+                echo '```'
+                if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
+                status=0
+                (cd "$RUNNER_TEMP" && timeout 30 "$GITHUB_WORKSPACE/runtime/zig-out/bin/lus" "$out/repro.lus") > "$RUNNER_TEMP/run.txt" 2>&1 || status=$?
+                head -c 20000 "$RUNNER_TEMP/run.txt"
+                echo
+                echo "exit status $status"
+                echo '```'
+                echo
+              done
+            else
+              echo "The report holds no program."
+            fi
+          } > "$out/runs.md"
+          cat "$out/runs.md"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: report
+          path: ${{ runner.temp }}/report
+          retention-days: 7
+
+  hunt:
+    name: Look for the cause
+    needs: [gate, reproduce]
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.agents).hunt.timeout_minutes }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: report
+          path: ${{ runner.temp }}/report
+      - name: Install the agent
+        env:
+          CLI: ${{ fromJSON(needs.gate.outputs.agents).cli }}
+        run: npm install --no-save --prefix "$RUNNER_TEMP/cli" "$CLI"
+      - name: Hunt
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ fromJSON(needs.gate.outputs.agents).hunt.model }}
+          BUDGET: ${{ fromJSON(needs.gate.outputs.agents).hunt.budget_usd }}
+        # The agent reads and edits files and runs nothing, so text in the
+        # report cannot make it reach the key or the network.
+        run: |
+          prompt=$(sed "s|REPORT_DIR|$RUNNER_TEMP/report|g" tools/ci/prompts/hunt.md)
+          "$RUNNER_TEMP/cli/node_modules/.bin/claude" -p "$prompt" \
+            --model "$MODEL" --max-budget-usd "$BUDGET" \
+            --tools Read Grep Glob Edit Write --permission-mode acceptEdits \
+            --add-dir "$RUNNER_TEMP/report" \
+            --setting-sources user --strict-mcp-config --no-session-persistence \
+            --output-format text > "$RUNNER_TEMP/report/transcript.txt" || true
+          git add -N .
+          git diff > "$RUNNER_TEMP/report/fix.patch"
+          [ -f "$RUNNER_TEMP/report/verdict.json" ] || echo '{"found": false, "test": "", "subject": ""}' > "$RUNNER_TEMP/report/verdict.json"
+          [ -f "$RUNNER_TEMP/report/report.md" ] || echo "The agent wrote no report." > "$RUNNER_TEMP/report/report.md"
+      - name: The outputs hold no secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ] && grep -rqF "$ANTHROPIC_API_KEY" "$RUNNER_TEMP/report"; then echo "an output holds the API key" >&2; exit 1; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hunt
+          path: |
+            ${{ runner.temp }}/report/fix.patch
+            ${{ runner.temp }}/report/verdict.json
+            ${{ runner.temp }}/report/report.md
+          retention-days: 14
+
+  verify:
+    name: Test the fix
+    needs: [gate, hunt]
+    # The regression test must fail on the default branch and pass with the
+    # fix, and the tests of the areas of the fix must pass. No secret
+    # reaches this job.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      verified: ${{ steps.verify.outputs.verified }}
+      found: ${{ steps.verify.outputs.found }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: hunt
+          path: ${{ runner.temp }}/hunt
+      - name: Verify
+        id: verify
+        run: |
+          set -u
+          hunt="$RUNNER_TEMP/hunt"
+          found=$(jq -r '.found == true' "$hunt/verdict.json")
+          test=$(jq -r '.test // ""' "$hunt/verdict.json")
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+          fail() { echo "$1" | tee -a "$hunt/report.md" >&2; echo "verified=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          [ "$found" = true ] || fail ""
+          [ -s "$hunt/fix.patch" ] || fail "CI found no change in the fix."
+          files=$(git apply --numstat "$hunt/fix.patch" | cut -f3)
+          for f in $files; do
+            case "$f" in runtime/src/*|tests/conformance/*) ;; *) fail "CI refused the fix, which changes $f." ;; esac
+          done
+          case "$test" in tests/conformance/*_test.lus) ;; *) fail "CI found no regression test in the verdict." ;; esac
+          # The new test without the fix of the sources must fail.
+          git apply --include="$test" "$hunt/fix.patch"
+          (cd runtime && zig build -Doptimize=ReleaseSafe)
+          if (cd runtime && zig-out/bin/lus test "../$test" > "$RUNNER_TEMP/before.txt" 2>&1); then fail "The regression test passes without the fix, so it does not show the bug."; fi
+          git checkout -- . && git clean -fdq -- tests runtime/src
+          git apply "$hunt/fix.patch"
+          (cd runtime && zig build -Doptimize=ReleaseSafe) || fail "The runtime does not build with the fix."
+          plan=$(node tools/ci/areas.mjs plan --files $files)
+          tests=$(echo "$plan" | jq -r '.runtime[] | select(.os == "linux") | .tests')
+          for mode in off default eager opt-eager; do
+            if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
+            (cd runtime && zig-out/bin/lus test "../$test" $tests) > "$RUNNER_TEMP/after-$mode.txt" 2>&1 || fail "The tests fail with the fix under LUS_JIT=$mode."
+          done
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+          printf '\nCI checked that the regression test fails without the fix and passes with it, and that the tests of the areas of the fix pass in every mode of the JIT.\n' >> "$hunt/report.md"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified
+          path: ${{ runner.temp }}/hunt
+          retention-days: 14
+
+  publish:
+    name: Leave the fix for review
+    needs: [gate, verify]
+    if: ${{ !cancelled() && needs.verify.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified
+          path: ${{ runner.temp }}/hunt
+      - name: Push the branch and report
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+          VERIFIED: ${{ needs.verify.outputs.verified }}
+          FOUND: ${{ needs.verify.outputs.found }}
+        run: |
+          hunt="$RUNNER_TEMP/hunt"
+          if [ "$VERIFIED" = true ]; then
+            subject=$(jq -r '.subject // ""' "$hunt/verdict.json")
+            printf '%s\n' "$subject" > "$RUNNER_TEMP/subject.txt"
+            if ! node tools/ci/commits.mjs message "$RUNNER_TEMP/subject.txt"; then subject="fix(runtime): fix the bug of issue $NUMBER"; fi
+            branch="agent/issue-$NUMBER"
+            git switch -c "$branch"
+            git apply "$hunt/fix.patch"
+            git add -A runtime/src tests/conformance
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -F - << EOF
+          $subject
+
+          An agent found this fix for issue #$NUMBER, and CI checked its regression test.
+
+          Co-Authored-By: Claude <noreply@anthropic.com>
+          EOF
+            git push --force origin "$branch"
+            printf '\nThe fix is on the branch [%s](https://github.com/%s/compare/%s), which waits for the maintainer.\n' "$branch" "$GITHUB_REPOSITORY" "$branch" >> "$hunt/report.md"
+            node tools/ci/gate.mjs comment "$NUMBER" "$hunt/report.md" "<!-- lus-hunt -->"
+            gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-fix || true
+          else
+            node tools/ci/gate.mjs comment "$NUMBER" "$hunt/report.md" "<!-- lus-hunt -->"
+            if [ "$FOUND" != true ]; then gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label not-reproduced || true; fi
+          fi

@@ -1,0 +1,10 @@
+{
+  "about": "Coding agent harnesses that add a Co-Authored-By trailer to the commits they write by themselves. tools/ci/pr.mjs checks the commits of a pull request whose agent disclosure names one of them. A disclosure that names another harness is recorded on the pull request and not checked against the commits.",
+  "harnesses": [
+    {
+      "name": "Claude Code",
+      "names": ["claude code", "claude-code", "claude code cli", "claude desktop", "claude.ai/code"],
+      "trailer": "^Co-Authored-By: Claude\\b"
+    }
+  ]
+}

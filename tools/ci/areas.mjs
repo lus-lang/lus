@@ -5,11 +5,14 @@
 //   node tools/ci/areas.mjs plan --base SHA [--head SHA] [--testmap FILE]
 //   node tools/ci/areas.mjs plan --files a.zig b.lus
 //   node tools/ci/areas.mjs unmatched
+//   node tools/ci/areas.mjs codeowners [--write]
 //
 // `plan` prints the plan as JSON. Under GitHub Actions it also writes each
 // field to $GITHUB_OUTPUT, one line per field with the value as JSON.
 // `unmatched` prints every tracked file that no area matches and fails
-// when there is one.
+// when there is one. `codeowners` checks that the paths .github/CODEOWNERS
+// lists for contributors to leave alone are those the map denies, and
+// rewrites that section with --write.
 //
 // A path takes the union of the tests, checks, platforms, labels, and
 // benchmarks of every area it matches. Its contributor rule is the
@@ -212,10 +215,61 @@ export function plan({map, changed, tracked, testmap = null}) {
   };
 }
 
+// The contributor rule of one file, with the fallback for a file that no
+// area knows.
+export function ruleOf(map, file) {
+  const areas = areasOf(map, file);
+  if (areas.length === 0) return map.fallback.contributor;
+  return areas.reduce((rule, area) => stricter(rule, area.contributor ?? "allowed"), "allowed");
+}
+
+const OWNERS_BEGIN = "# BEGIN paths that contributors leave alone, written by `node tools/ci/areas.mjs codeowners --write`";
+const OWNERS_END = "# END paths that contributors leave alone";
+
+// Lists the paths that contributors may not change, as CODEOWNERS
+// patterns: each directory whose files are all denied or egregious, at
+// the highest such level, and each such file outside those directories.
+export function restrictedPatterns(map, tracked) {
+  const restricted = new Set(tracked.filter((f) => ruleOf(map, f) !== "allowed"));
+  const allowedDirs = new Set();
+  for (const f of tracked) {
+    if (restricted.has(f)) continue;
+    const parts = f.split("/");
+    for (let i = 1; i < parts.length; i++) allowedDirs.add(parts.slice(0, i).join("/"));
+  }
+  const patterns = new Set();
+  for (const f of restricted) {
+    const parts = f.split("/");
+    let pattern = "/" + f;
+    for (let i = 1; i < parts.length; i++) {
+      const dir = parts.slice(0, i).join("/");
+      if (!allowedDirs.has(dir)) {
+        pattern = "/" + dir + "/";
+        break;
+      }
+    }
+    patterns.add(pattern);
+  }
+  return [...patterns].sort();
+}
+
+// Rewrites the generated section of .github/CODEOWNERS and returns the
+// new text. The owner of each pattern is the owner of the `*` line.
+export function codeowners(text, patterns) {
+  const owner = /^\*\s+(.+)$/m.exec(text)?.[1].trim() ?? "";
+  const width = Math.max(...patterns.map((p) => p.length)) + 2;
+  const section = [OWNERS_BEGIN, ...patterns.map((p) => p.padEnd(width) + owner), OWNERS_END].join("\n");
+  const begin = text.indexOf(OWNERS_BEGIN);
+  const end = text.indexOf(OWNERS_END);
+  if (begin >= 0 && end > begin) return text.slice(0, begin) + section + text.slice(end + OWNERS_END.length);
+  return text.replace(/\n*$/, "\n\n") + section + "\n";
+}
+
 function parseArgs(argv) {
   const args = {_: []};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    if (a === "--write") continue;
     if (a === "--files") {
       args.files = argv.slice(i + 1);
       break;
@@ -234,6 +288,17 @@ function main() {
     const missing = tracked.filter((f) => areasOf(map, f).length === 0);
     for (const f of missing) console.log(f);
     process.exit(missing.length ? 1 : 0);
+  }
+  if (args._[0] === "codeowners") {
+    const file = path.join(ROOT, ".github/CODEOWNERS");
+    const text = fs.readFileSync(file, "utf8");
+    const next = codeowners(text, restrictedPatterns(map, tracked));
+    if (process.argv.includes("--write")) fs.writeFileSync(file, next);
+    else if (next !== text) {
+      console.error(".github/CODEOWNERS disagrees with tools/ci/areas.json, so run node tools/ci/areas.mjs codeowners --write");
+      process.exit(1);
+    }
+    process.exit(0);
   }
   if (args._[0] !== "plan") {
     console.error("usage: areas.mjs plan (--base SHA [--head SHA] | --files PATH...) [--testmap FILE] | areas.mjs unmatched");

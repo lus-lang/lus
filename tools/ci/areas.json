@@ -1,5 +1,37 @@
 {
   "about": "Maps every path of the repository to an area. tools/ci/areas.mjs reads it to choose the tests and benchmarks of a change, its labels, and whether an outside contributor may touch it. A path takes the union of every area it matches, and the strictest contributor rule among them. tools/ci/areas.test.mjs fails when a tracked file matches no area.",
+  "labels": {
+    "about": "The areas of the repository. A pull request gets the label of each area it touches, and the area of a commit message is one of these names.",
+    "runtime": "The interpreter, compiler, front end, and embedding interface",
+    "jit": "The baseline and optimizing JIT tiers and their back ends",
+    "gc": "The collector and the heap",
+    "lib": "The standard library",
+    "lsp": "The language server",
+    "vscode": "The VSCode extension and the TextMate grammar",
+    "www": "The pages of lus.dev",
+    "docs": "The manual, the spec, and the design notes",
+    "spec": "The specification of the standard library and the language",
+    "tests": "Test suites and test harnesses",
+    "examples": "The runnable examples",
+    "perf": "Benchmarks",
+    "wasm": "The WebAssembly build and its host",
+    "windows": "Code that runs only on Windows",
+    "ci": "Workflows, CI tools, hooks, and the workspace",
+    "packaging": "Versions, releases, installers, and licenses"
+  },
+  "status_labels": {
+    "about": "Labels that the workflows set on pull requests and issues, apart from the areas.",
+    "triage": "A path that no area of tools/ci/areas.json knows",
+    "gate-failed": "The contribution gate refused this pull request or issue",
+    "perf-regression": "A benchmark became slower or larger past the threshold",
+    "kind:bug": "Fixes a bug",
+    "kind:perf": "Makes something faster or smaller",
+    "kind:test": "Adds or improves tests",
+    "kind:docs": "Changes documentation only",
+    "agent-fix": "An agent found the bug and left a fix branch for review",
+    "not-reproduced": "The triage agent could not reproduce the bug",
+    "rejected": "Closed because the language is frozen or the request is out of scope"
+  },
   "runners": {
     "linux": "ubuntu-24.04",
     "macos": "macos-15",

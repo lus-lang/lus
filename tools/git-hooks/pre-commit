@@ -1,7 +1,8 @@
 #!/bin/sh
 # Checks a commit before git records it: the format of the staged Zig
 # files, the repository lint, the generated files when their sources are
-# staged, and that every new file belongs to an area of tools/ci/areas.json.
+# staged, that every new file belongs to an area of tools/ci/areas.json,
+# and that .github/CODEOWNERS agrees with that map.
 # `mise run setup` points git at this directory. `git commit --no-verify`
 # skips the hook, and CI runs the same checks.
 
@@ -45,6 +46,10 @@ if [ -n "$(git diff --cached --name-only --diff-filter=A)" ]; then
     printf '%s\n' "$missing" >&2
     fail=1
   fi
+fi
+
+if printf '%s\n' "$staged" | grep -qE '^(tools/ci/areas\.json|\.github/CODEOWNERS)$' || [ -n "$(git diff --cached --name-only --diff-filter=AD)" ]; then
+  if ! node tools/ci/areas.mjs codeowners; then fail=1; fi
 fi
 
 exit "$fail"

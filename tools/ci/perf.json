@@ -1,0 +1,11 @@
+{
+  "about": "The limits of tools/ci/perf.mjs. A benchmark regresses when its median grows by more than `ratio` and the growth is more than `mads` times the larger median absolute deviation of the two measurements, which is at least `floor` (seconds for time, bytes for memory).",
+  "runs": 7,
+  "mads": 3,
+  "timeout_seconds": 120,
+  "thresholds": {
+    "time": {"ratio": 0.07, "floor": 0.005},
+    "rss": {"ratio": 0.05, "floor": 262144}
+  },
+  "skip": []
+}

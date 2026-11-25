@@ -270,7 +270,7 @@ run = "sh tools/git-hooks/setup.sh"
 
 [tasks."ci:test"]
 description = "Test the path map and the planner of CI"
-run = ["node --test tools/ci/*.test.mjs", "node tools/ci/areas.mjs unmatched"]
+run = ["node --test tools/ci/*.test.mjs", "node tools/ci/areas.mjs unmatched", "node tools/ci/areas.mjs codeowners"]
 
 [tasks.site]
 description = "Build the website"

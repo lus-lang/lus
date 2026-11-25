@@ -4,8 +4,52 @@
 *                       @loukamb
 
 # Paths that contributors leave alone. tools/ci/areas.json marks them
-# as denied, and the gate closes pull requests that touch them.
-/runtime/build.zig.zon  @loukamb
-/packaging/             @loukamb
-/.github/               @loukamb
-/CODEOWNERS             @loukamb
+# as denied or egregious, the gate refuses or closes pull requests that
+# touch them, and tools/ci/areas.test.mjs keeps this list and the map in
+# agreement.
+
+# BEGIN paths that contributors leave alone, written by `node tools/ci/areas.mjs codeowners --write`
+/.agents/                             @loukamb
+/.claude-plugin/                      @loukamb
+/.claude/                             @loukamb
+/.codex/                              @loukamb
+/.gitattributes                       @loukamb
+/.github/                             @loukamb
+/.gitignore                           @loukamb
+/.npmrc                               @loukamb
+/AGENTS.md                            @loukamb
+/CLAUDE.md                            @loukamb
+/CONTRIBUTING.md                      @loukamb
+/LICENSE.md                           @loukamb
+/README.md                            @loukamb
+/SECURITY.md                          @loukamb
+/mise.toml                            @loukamb
+/package.json                         @loukamb
+/packages/site/.gitignore             @loukamb
+/packages/site/.prettierrc            @loukamb
+/packages/site/.vscode/               @loukamb
+/packages/site/astro.config.mjs       @loukamb
+/packages/site/package.json           @loukamb
+/packages/site/public/                @loukamb
+/packages/site/scripts/               @loukamb
+/packages/site/src/assets/            @loukamb
+/packages/site/src/components/        @loukamb
+/packages/site/src/content.config.ts  @loukamb
+/packages/site/src/data/              @loukamb
+/packages/site/src/lib/               @loukamb
+/packages/site/src/news/              @loukamb
+/packages/site/src/pages/             @loukamb
+/packages/site/src/scripts/           @loukamb
+/packages/site/src/styles/            @loukamb
+/packages/site/src/workers/           @loukamb
+/packages/site/test/                  @loukamb
+/packages/site/tsconfig.json          @loukamb
+/packages/site/wrangler.jsonc         @loukamb
+/packaging/                           @loukamb
+/pnpm-lock.yaml                       @loukamb
+/pnpm-workspace.yaml                  @loukamb
+/runtime/build.zig.zon                @loukamb
+/runtime/src/release_keys.zig         @loukamb
+/runtime/vendor/                      @loukamb
+/tools/                               @loukamb
+# END paths that contributors leave alone

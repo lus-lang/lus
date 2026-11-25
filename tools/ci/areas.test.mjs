@@ -126,3 +126,9 @@ test("a coverage map adds the tests that reach a file", () => {
   const p = plan({map, changed: ["runtime/src/lib/glob.zig"], tracked, testmap});
   assert.ok(p.runtime[0].tests.includes("../tests/conformance/fs_test.lus"));
 });
+
+test("CODEOWNERS lists the paths that the map denies", async () => {
+  const {codeowners, restrictedPatterns} = await import("./areas.mjs");
+  const text = fs.readFileSync(path.join(ROOT, ".github/CODEOWNERS"), "utf8");
+  assert.equal(codeowners(text, restrictedPatterns(map, tracked)), text, "run node tools/ci/areas.mjs codeowners --write");
+});
