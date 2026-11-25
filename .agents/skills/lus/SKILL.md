@@ -11,10 +11,12 @@ Lus is a small language derived from Lua 5.5. One `lus` executable runs scripts 
 
 Work in short cycles and let the tools judge the code. Every command below is fast enough to run after each edit.
 
-1. `lus check --json FILE...` parses, lints, and compiles without running. Fix every error and every warning. Each diagnostic has a stable `code`, and `lus check --list` explains all of them. A diagnostic with severity `hint` suggests a faster or shorter form of correct code and never changes the exit status.
+1. `lus check --json FILE...` parses, lints, and compiles without running. Fix every error and every warning. Each diagnostic has a stable `code`. `lus check --explain CODE` explains one code with an example, and `lus check --list` lists them all. A diagnostic with severity `hint` suggests a faster or shorter form of correct code and never changes the exit status.
 2. `lus fmt --write FILE...` formats in place with 4-space indentation. Run it before showing code to the user.
 3. `lus test --json` runs every `*_test.lus` file below the current directory, each in its own process and temporary directory. Write tests alongside the code they cover.
-4. `lus -P PERM FILE` runs a script with a permission granted from the command line, which is handy for a quick trial. Real programs pledge in code.
+4. `lus -P PERM FILE` runs a script with a permission granted from the command line. `lus --sandbox -P PERM FILE` also seals the grants, so the script can pledge nothing beyond them. Run a script you have not read this way. Real programs pledge in code.
+
+`lus lsp` runs the language server over standard input and output, for an editor or a harness that validates code as it is written. `lus tree FILE` prints the modules a script requires, as a tree.
 
 When a run fails, read the first line of the error. It carries `file:line:` and the message. Reproduce the failure in a test before fixing it.
 
@@ -84,7 +86,7 @@ Measure before and after a change that no hint suggests, with a test or a short 
 
 ## Testing
 
-A test is a function whose name ends in `_test` in a file whose name ends in `_test.lus`. `assert` in a test file reports the values on both sides of a failed comparison. `snapshot(value)` records a value the first time and compares later runs against the recording, and `lus test -u` accepts a new recording. `raises(fn, text)`, `same(a, b)`, and `skip(reason)` are available in every test file.
+A test is a function whose name ends in `_test` in a file whose name ends in `_test.lus`. `assert` in a test file reports the values of the names and fields on both sides of a failed comparison. A function whose name ends in `_bench` is a benchmark, which `lus test --bench` runs to report its median time, the spread, and the bytes it allocates per call. `snapshot(value)` records a value the first time and compares later runs against the recording, and `lus test -u` accepts a new recording. `raises(fn, text)`, `same(a, b)`, and `skip(reason)` are available in every test file.
 
 ```lus
 local function slugify(s)
