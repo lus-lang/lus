@@ -1,0 +1,11 @@
+# Every path has an owner, so GitHub requests a review from the
+# maintainer on each pull request. A ruleset that requires code owner
+# review then makes that review the gate for merging into main.
+*                       @loukamb
+
+# Paths that contributors leave alone. tools/ci/areas.json marks them
+# as denied, and the gate closes pull requests that touch them.
+/runtime/build.zig.zon  @loukamb
+/packaging/             @loukamb
+/.github/               @loukamb
+/CODEOWNERS             @loukamb

@@ -1,0 +1,60 @@
+name: Bug report
+description: Lus behaves differently from what the manual describes, crashes, or gives a wrong result.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. A short program that reproduces it is the most useful part of a report, because an agent tries it against the current runtime as soon as the issue opens.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `lus --version`.
+      placeholder: lus 2.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux x86-64
+        - Linux arm64
+        - Linux, another architecture
+        - macOS arm64
+        - macOS x86-64
+        - Windows x86-64
+        - Windows arm64
+        - FreeBSD
+        - Android
+        - WebAssembly
+        - Another platform
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The smallest program that shows the bug, and the command that runs it.
+      render: lus
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+      description: What you expected, what happened, and the full error output.
+    validations:
+      required: true
+  - type: dropdown
+    id: jit
+    attributes:
+      label: Does it depend on the JIT?
+      description: Run it again with `LUS_JIT=off` to find out.
+      options:
+        - It also happens with LUS_JIT=off
+        - It happens only with the JIT
+        - I have not checked
+    validations:
+      required: true

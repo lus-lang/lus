@@ -1,3 +1,20 @@
 # Text files keep LF line endings in every checkout, Windows included,
 # because the test fixtures compare output byte for byte.
 * text=auto eol=lf
+
+# GitHub has no Lus grammar yet, so .lus files are highlighted and
+# counted as Lua until Linguist knows the language.
+*.lus linguist-language=Lua
+
+# Generated files are collapsed in pull request diffs. `mise run gen`
+# writes them, and `mise run gen:check` fails when they are stale.
+packages/language-server/analysis/stdlib_data.lus linguist-generated
+packages/textmate/lus.tmLanguage.json linguist-generated
+packages/vscode/syntaxes/lus.tmLanguage.json linguist-generated
+.agents/skills/lus-writing/references/style.md linguist-generated
+runtime/src/lib/winzones.zig linguist-generated
+runtime/src/lib/data/** linguist-generated
+tests/bench/compare/results.json linguist-generated
+
+# Vendored sources stay out of the language statistics.
+runtime/vendor/** linguist-vendored
