@@ -397,6 +397,12 @@
       "checks": ["web"]
     },
     {
+      "name": "harness",
+      "paths": ["packages/harness/**"],
+      "labels": ["harness"],
+      "checks": ["web"]
+    },
+    {
       "name": "grammar",
       "paths": ["packages/textmate/**"],
       "labels": ["vscode", "www"],
