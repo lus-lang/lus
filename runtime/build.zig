@@ -347,6 +347,76 @@ pub fn build(b: *std.Build) void {
     const wasm = wasmModule(b, requested, wasm_optimize);
     const wasm_step = b.step("wasm", "Build lus.wasm for wasm32-wasi");
     wasm_step.dependOn(&b.addInstallArtifact(wasm, .{ .dest_dir = .{ .override = .{ .custom = "wasm" } } }).step);
+
+    if (target.result.abi.isAndroid()) androidLibc(b, target);
+}
+
+/// Points every compile step for an Android target at the C library of
+/// the NDK that `-Dandroid-ndk` names, since Zig provides no C library for
+/// Android. The executables link the C library dynamically, as programs
+/// on Android do, and `-Dandroid-static` links them statically, so the
+/// x86-64 build runs on a Linux host (`spec/design/platforms.md`, "FreeBSD
+/// and Android").
+fn androidLibc(b: *std.Build, target: std.Build.ResolvedTarget) void {
+    const ndk = b.option([]const u8, "android-ndk", "The NDK whose C library an Android build links, such as $ANDROID_NDK_HOME") orelse {
+        std.debug.print("an Android build needs -Dandroid-ndk=<the root of an NDK>\n", .{});
+        std.process.exit(1);
+    };
+    const static = b.option(bool, "android-static", "Link the executables of an Android build statically (default: false)") orelse false;
+    const t = target.result;
+    const triple = switch (t.cpu.arch) {
+        .arm => "arm-linux-androideabi",
+        .x86 => "i686-linux-android",
+        else => b.fmt("{s}-linux-android", .{@tagName(t.cpu.arch)}),
+    };
+    const host = switch (b.graph.host.result.os.tag) {
+        .macos => "darwin-x86_64",
+        .windows => "windows-x86_64",
+        else => "linux-x86_64",
+    };
+    const sysroot = b.pathJoin(&.{ ndk, "toolchains", "llvm", "prebuilt", host, "sysroot" });
+    const api = t.os.version_range.linux.android;
+    const libc_file = b.addWriteFiles().add("android-libc.txt", b.fmt(
+        \\include_dir={s}/usr/include
+        \\sys_include_dir={s}/usr/include/{s}
+        \\crt_dir={s}/usr/lib/{s}/{d}
+        \\msvc_lib_dir=
+        \\kernel32_lib_dir=
+        \\gcc_dir={s}/usr/lib/{s}/{d}
+        \\darwin_sdk_dir=
+        \\
+    , .{ sysroot, sysroot, triple, sysroot, triple, api, sysroot, triple, api }));
+    // The objects that start and end a program sit in the directory of
+    // each API level, which is the directory of the C compiler for Zig as
+    // well. The static archives of the C library sit one directory above.
+    const static_dir = b.pathJoin(&.{ sysroot, "usr", "lib", triple });
+    var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    var stack: std.ArrayList(*std.Build.Step) = .empty;
+    for (b.top_level_steps.values()) |top| stack.append(b.allocator, &top.step) catch @panic("OOM");
+    while (stack.pop()) |step| {
+        if ((seen.getOrPut(b.allocator, step) catch @panic("OOM")).found_existing) continue;
+        stack.appendSlice(b.allocator, step.dependencies.items) catch @panic("OOM");
+        const c = step.cast(std.Build.Step.Compile) orelse continue;
+        // Libraries that a module links become dependencies of the step
+        // only when it runs, so the walk follows the modules as well.
+        for (c.root_module.getGraph().modules) |m| for (m.link_objects.items) |lo| switch (lo) {
+            .other_step => |o| stack.append(b.allocator, &o.step) catch @panic("OOM"),
+            else => {},
+        };
+        const rt = c.root_module.resolved_target orelse continue;
+        if (!rt.result.abi.isAndroid()) continue;
+        c.setLibCFile(libc_file);
+        if (c.kind == .lib or c.kind == .obj) continue;
+        if (static) {
+            c.linkage = .static;
+            c.root_module.addLibraryPath(.{ .cwd_relative = static_dir });
+        } else {
+            // Android loads only executables that are independent of
+            // their position.
+            c.linkage = .dynamic;
+            c.pie = true;
+        }
+    }
 }
 
 /// Adds one run of `lus <command>` per fixture in `../tests/<command>`.

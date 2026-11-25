@@ -212,6 +212,54 @@ jobs:
             ../../runtime/zig-out/bin/lus build --aot linked.lus -o "$HOME/linked"
             test "$("$HOME/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
 
+  android:
+    name: Android (bionic)
+    # Zig provides no C library for Android, so both builds link the C
+    # library of the NDK that the runner preinstalls. The arm64 build is the
+    # shape an Android device runs. The x86-64 build links bionic
+    # statically and runs the unit tests and the conformance suite on the
+    # Linux kernel of the runner (spec/design/platforms.md, "FreeBSD and
+    # Android").
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: The preinstalled NDK
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib"
+      - name: Build for arm64 Android
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-linux-android -Dandroid-ndk="$ANDROID_NDK_HOME" --prefix zig-out-android-arm64
+      - name: Unit tests, statically linked against bionic
+        timeout-minutes: 30
+        working-directory: runtime
+        run: |
+          zig build unit-binary -Dtarget=x86_64-linux-android -Dandroid-ndk="$ANDROID_NDK_HOME" -Dandroid-static=true --prefix zig-out-android
+          zig-out-android/bin/lus-unit
+      - name: Build for x86-64 Android, statically linked
+        timeout-minutes: 30
+        working-directory: runtime
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-android -Dandroid-ndk="$ANDROID_NDK_HOME" -Dandroid-static=true --prefix zig-out-android
+      - name: Native code
+        working-directory: runtime
+        # The JIT compiles a function on its first call under eager.
+        run: LUS_JIT=eager zig-out-android/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
+      - name: Conformance tests
+        timeout-minutes: 40
+        working-directory: runtime
+        run: |
+          for mode in off default eager opt-eager; do
+            echo "== $mode"
+            if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
+            zig-out-android/bin/lus test ../tests/conformance ../packages/language-server/tests
+          done
+
   windows-arm64:
     name: Windows on arm64
     # The free arm64 runner of GitHub for public repositories. It gates
