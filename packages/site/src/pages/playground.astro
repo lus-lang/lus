@@ -1,6 +1,7 @@
 ---
 import PlaygroundLayout from "../components/PlaygroundLayout.astro"
 import CubeField from "../components/CubeField.astro"
+import index from "../../../../examples/index.json"
 
 // Import all .lus files from examples/
 const exampleFiles = import.meta.glob("../../../../examples/*.lus", {
@@ -20,12 +21,9 @@ for (const [path, content] of Object.entries(exampleFiles)) {
   }
 }
 
-// Sort with hello first, then alphabetically
-examples.sort((a, b) => {
-  if (a.name === "hello") return -1
-  if (b.name === "hello") return 1
-  return a.name.localeCompare(b.name)
-})
+// Keep the order of examples/index.json, which starts with hello.
+const order = index.sections.flatMap((section) => section.examples)
+examples.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name))
 
 // Default to hello.lus
 const defaultExample = examples.find((e) => e.name === "hello") || examples[0]

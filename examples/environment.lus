@@ -1,0 +1,31 @@
+-- Environment Variables: Read and set environment variables, with defaults for unset ones.
+-- playground: false
+global print, os, type, tonumber, pledge
+
+pledge("env:read", "env:write=GARDEN_*")
+
+-- getenv returns the value as a string. PATH is set on every system, but its
+-- value differs, so the example prints only its type.
+print(type(os.getenv("PATH")))  --> string
+
+-- A variable that is not set gives nil, so "or" supplies a default.
+local port = tonumber(os.getenv("GARDEN_PORT") or "8080")
+print(port)  --> 8080
+
+-- setenv changes the environment of the program and of the processes it
+-- starts afterwards.
+os.setenv("GARDEN_PORT", "9090")
+print(os.getenv("GARDEN_PORT"))  --> 9090
+
+-- An empty value is still a value, unlike an unset variable.
+os.setenv("GARDEN_MODE", "")
+print(os.getenv("GARDEN_MODE") == "")  --> true
+
+-- Setting a variable to nil removes it.
+os.setenv("GARDEN_PORT", nil)
+os.setenv("GARDEN_MODE", nil)
+print(os.getenv("GARDEN_PORT"))  --> nil
+
+-- The pledge at the top allows setting only the names that start with
+-- GARDEN_, so a change to PATH raises a permission error.
+print((catch os.setenv("PATH", "/tmp")))  --> false

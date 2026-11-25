@@ -1,169 +1,69 @@
--- Catch Expression: Handle errors without pcall/xpcall boilerplate.
+-- Catch: Capture errors as values with catch expressions, catch statements, and handlers.
 -- playground: true
--- cookbook: true
+global error, ipairs, math, print, tonumber, tostring, type
 
-global print, error, tonumber, type, pairs, tostring
-
--- Basic catch returns (true, results...) or (false, error_object).
-local ok, value = catch (1 + 2)
-print("1 + 2:", ok, value)  --> true    3
-
--- Catch an error
-local ok, err = catch error("Something went wrong!")
-print("Error caught:", ok, err)  --> false    Something went wrong!
-
--- Practical: safe number parsing
-local function parse_number(str)
-    local n = tonumber(str)
-    if not n then error("Invalid number: " .. str) end
-    return n
+local function parse_port(text)
+    local port = math.tointeger(tonumber(text))
+    if not port or port < 1 or port > 65535 then
+        error(`invalid port: $text`, 0)
+    end
+    return port
 end
 
-if ok, num = catch parse_number("42") then
-    print("Parsed successfully:", num)
-end
+-- A catch expression produces `true` and the values of its operand, or
+-- `false` and the error object.
+print(catch parse_port("8080"))  --> true 8080
+print(catch parse_port("http"))  --> false invalid port: http
 
-if ok, num = catch parse_number("hello") then
-    print("Parsed:", num)
-else
-    print("Failed to parse:", num)  -- num contains the error
-end
+-- The operand can be any expression, such as an operation.
+local ok, err = catch 10 // 0
+print(ok, err:match("attempt to .*$"))  --> false attempt to divide by zero
 
--- Catch in condition: clean error handling
-local function risky_divide(a, b)
-    if b == 0 then error("Division by zero") end
-    return a / b
-end
-
-if success, result = catch risky_divide(10, 2) then
-    print("10 / 2 =", result)
-end
-
-if success, result = catch risky_divide(10, 0) then
-    print("Result:", result)
-else
-    print("Error:", result)
-end
-
--- Multiple operations with catch
-local operations = {
-    {10, 2},
-    {20, 0},
-    {15, 3},
-    {8, 0},
-    {100, 4}
-}
-
-print("\nBatch operations:")
-for i, op in pairs(operations) do
-    if ok, result = catch risky_divide(op[1], op[2]) then
-        print("  ", op[1], "/", op[2], "=", result)
+-- A condition that declares variables tests the status and keeps the result.
+for _, text in ipairs({ "443", "99999" }) do
+    if ok, port = catch parse_port(text) then
+        print(`listening on $port`)
     else
-        print("  ", op[1], "/", op[2], "-> ERROR:", result)
+        print(`skipped: $port`)
     end
 end
+--> listening on 443
+--> skipped: invalid port: 99999
 
--- Nested catch for complex error handling
-local function complex_operation(x)
-    if x < 0 then error("Negative input") end
-    if x > 100 then error("Input too large") end
-    return x * 2
-end
+-- In parentheses, a catch produces only its status.
+print((catch parse_port("80")))  --> true
 
-local function safe_wrapper(x)
-    if ok, result = catch complex_operation(x) then
-        return result
-    else
-        return 0  -- Default on error
+-- A handler in brackets receives the error object. The result of the
+-- handler replaces the error object.
+local function as_table(e)
+    if type(e) == "table" then
+        return e
     end
+    return { code = "internal", message = tostring(e) }
 end
 
-print("\nSafe wrapper:")
-print("  safe_wrapper(10):", safe_wrapper(10))   --> 20
-print("  safe_wrapper(-5):", safe_wrapper(-5))   --> 0
-print("  safe_wrapper(200):", safe_wrapper(200)) --> 0
+local ok2, problem = catch[as_table] parse_port("-1")
+print(ok2, problem.code, problem.message)  --> false internal invalid port: -1
 
--- =============================================================================
--- Catch Handlers: Transform errors inline
--- =============================================================================
+local _, timeout = catch[as_table] error({ code = "timeout" })
+print(timeout.code)  --> timeout
 
-print("\n--- Catch Handlers ---")
-
--- Simplify error messages by extracting just the message part
-local function simplify(err)
-    -- Error format: "file:line: message\nstack traceback:..."
-    -- Use gsub to remove everything from newline onwards, then extract message
-    local first_line = err:gsub("\n.*", "")
-    local msg = first_line:match("^[^:]+:%d+: (.+)") or first_line
-    return msg
+-- A catch statement runs its operand and discards both the results and
+-- any error, so the loop reaches the third listener.
+local function save(event)
+    print("saved", event)
 end
 
-local ok, err = catch[simplify] error("Something went wrong!")
-print("Simplified error:", err)  --> Something went wrong!
-
--- Logging handler: log errors and pass them through
-local function logged(err)
-    print("[ERROR LOG]", err)
-    return err
+local function index(event)
+    error(`search index offline, $event not indexed`)
 end
 
-local ok, result = catch[logged] error("Database connection failed")
-print("Caught after logging:", ok, result ~= nil)
-
--- Error normalization: convert all errors to a standard format
-local function normalize(err)
-    if type(err) == "string" then
-        local first = err:gsub("\n.*", "")
-        local msg = first:match("^[^:]+:%d+: (.+)") or first
-        return { code = "ERR", message = msg }
-    elseif type(err) == "table" then
-        return err
-    else
-        return { code = "UNKNOWN", message = tostring(err) }
-    end
+local function audit(event)
+    print("logged", event)
 end
 
-local ok, err = catch[normalize] error("File not found")
-if not ok then
-    print("Normalized error:", err.code, "-", err.message)
+for _, listener in ipairs({ save, index, audit }) do
+    catch listener("upload")
 end
-
--- Handler with success: handler only called on error
-local handler_called = false
-local function track_handler(err)
-    handler_called = true
-    return err
-end
-
-local ok, val = catch[track_handler] (100 + 200)
-print("Success case - handler called?", handler_called)  --> false
-print("Success value:", val)  --> 300
-
--- Inline anonymous handler
-local ok, err = catch[function(e) 
-    local first = e:gsub("\n.*", "")
-    local msg = first:match("^[^:]+:%d+: (.+)") or first
-    return msg:upper() 
-end] error("lowercase error")
-print("Uppercased error:", err)  --> LOWERCASE ERROR
-
--- Practical: user-friendly error translation
-local translations = {
-    ["Division by zero"] = "Cannot divide by zero",
-    ["Negative input"] = "Please enter a positive number",
-}
-
-local function translate(err)
-    -- Extract just the message part before looking up
-    local first = err:gsub("\n.*", "")
-    local msg = first:match("^[^:]+:%d+: (.+)") or first
-    for pattern, message in pairs(translations) do
-        if msg:find(pattern, 1, true) then  -- plain match
-            return message
-        end
-    end
-    return "An unexpected error occurred"
-end
-
-local ok, friendly = catch[translate] risky_divide(10, 0)
-print("User-friendly message:", friendly)
+--> saved upload
+--> logged upload

@@ -1,0 +1,67 @@
+-- Walking a Directory Tree: Visit every file below a directory, depth first and in sorted order.
+-- playground: false
+global print, io, fs, pledge, ipairs
+
+pledge("fs")
+
+-- The program builds a small project to walk.
+for _, dir in ipairs({ "project/src/util", "project/docs", "project/vendor/json" }) do
+    fs.createdirectory(dir, true)
+end
+
+local files = {
+    "project/main.lus",
+    "project/src/parser.lus",
+    "project/src/util/strings.lus",
+    "project/docs/guide.md",
+    "project/vendor/json/json.lus",
+}
+for _, path in ipairs(files) do
+    io.open(path, "w"):write("-- source\n"):close()
+end
+
+-- Each step gives the path, its kind, and whether it is a link. A directory
+-- comes before its entries and names are sorted, so the order is the same on
+-- every system.
+for path, kind in fs.walk("project") do
+    print(kind, path)
+end
+--> directory project/docs
+--> file project/docs/guide.md
+--> file project/main.lus
+--> directory project/src
+--> file project/src/parser.lus
+--> directory project/src/util
+--> file project/src/util/strings.lus
+--> directory project/vendor
+--> directory project/vendor/json
+--> file project/vendor/json/json.lus
+
+-- A filter in the loop keeps the Lus files and skips the vendor directory.
+local count = 0
+for path, kind in fs.walk("project") do
+    local top = fs.path.split(path)[2]
+    if kind == "file" and path:match("%.lus$") and top ~= "vendor" then
+        count = count + 1
+    end
+end
+print(`$count Lus files`)  --> 3 Lus files
+
+-- The glob and exclude options do the same filtering inside the walk, and
+-- the walk never enters an excluded directory. depth limits how far it goes.
+for path in fs.walk("project", { glob = "*.lus", exclude = "vendor" }) do
+    print(path)
+end
+--> project/main.lus
+--> project/src/parser.lus
+--> project/src/util/strings.lus
+
+for path in fs.walk("project", { depth = 1 }) do
+    print(fs.path.name(path))
+end
+--> docs
+--> main.lus
+--> src
+--> vendor
+
+fs.remove("project", true)

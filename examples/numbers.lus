@@ -1,0 +1,40 @@
+-- Numbers: Integers, floats, bigints, and decimals are the four kinds of number.
+-- playground: true
+global print, math, decimal
+
+-- An integer has no fractional part. A float has one. `math.type` tells them apart.
+print(7 + 2, 7 + 2.0)  --> 9  9.0
+print(math.type(9), math.type(9.0))  --> integer  float
+
+-- `/` always gives a float. `//` rounds down and `%` gives the remainder.
+local seconds = 200
+print(seconds / 60)  --> 3.3333333333333335
+print(seconds // 60, seconds % 60)  --> 3  20
+print(-7 // 2, -7 % 2)  --> -4  1
+
+-- `math.tointeger` converts a float with no fractional part, or gives `nil`.
+print(math.tointeger(8.0), math.tointeger(8.5))  --> 8  nil
+
+-- Underscores separate the digits of a long literal.
+local population = 8_100_000_000
+print(population)  --> 8100000000
+
+-- An integer wraps around past `math.maxinteger`. A bigint, written with `n`, has no limit.
+print(math.maxinteger + 1)  --> -9223372036854775808
+print(math.maxinteger + 1n)  --> 9223372036854775808
+print(2n ^ 100)  --> 1267650600228229401496703205376
+print(12n * 12n, math.type(12n))  --> 144  bigint
+
+-- A float stores most fractions approximately, so 0.1 + 0.2 is not exactly 0.3.
+print(0.1 + 0.2)  --> 0.30000000000000004
+print(0.1 + 0.2 == 0.3)  --> false
+
+-- A decimal, written with `d`, keeps its digits exactly, which suits money.
+print(0.1d + 0.2d)  --> 0.3
+print(0.1d + 0.2d == 0.3d)  --> true
+local price = 19.99d
+print(price * 3, 10d / 4)  --> 59.97  2.5
+
+-- Arithmetic between a decimal and a float raises an error, so `decimal` converts the float first.
+local rate = 0.5
+print(price * decimal(rate))  --> 9.995

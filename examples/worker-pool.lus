@@ -1,30 +1,55 @@
--- Workers: Spawn an interpreter on the thread pool and stream results back.
+-- Worker Pool: Split a computation over several workers that run in parallel.
 -- playground: false
--- cookbook: true
-global worker, io, fs, pledge, print
+global fs, io, ipairs, os, pledge, print, table, worker
 
-pledge("fs", "load", "seal")
+pledge("fs", "load")
 
--- A worker runs a script file in its own interpreter state on the shared
--- process pool. For a self-contained example we write its body out first.
-local body = [[
-global worker, ipairs
-local args = ...
-for _, n in ipairs(args.numbers) do
-    worker.message(n * n)
+-- A worker runs a script file in a state of its own on another thread. This
+-- program writes the script to a temporary file first. The script counts
+-- the primes in the range it receives and sends the count back.
+local script = os.tmpname()
+io.open(script, "w"):write([[
+global math, worker
+
+local first, last = ...
+local count = 0
+for n = math.max(first, 2), last do
+    local prime = true
+    for d = 2, math.floor(math.sqrt(n)) do
+        if n % d == 0 then
+            prime = false
+            break
+        end
+    end
+    if prime then
+        count = count + 1
+    end
 end
-worker.message("done")
-]]
-local f = io.open("square-worker.lus", "w")
-f:write(body)
-f:close()
+worker.message({ first = first, count = count })
+]]):close()
 
--- Arguments are deep-copied into the worker's state.
-local w = worker.create("square-worker.lus", { numbers = { 1, 2, 3, 4, 5 } })
-
-while msg = worker.receive(w) do
-    if msg == "done" then break end
-    print(`square: $msg`)
+-- Each worker gets a quarter of the range. The arguments of `worker.create`
+-- are copied into the worker and become the values of `...` in its script.
+local size = 50000
+local pool = {}
+for i = 0, 3 do
+    pool[#pool + 1] = worker.create(script, i * size + 1, (i + 1) * size)
 end
 
-fs.remove("square-worker.lus")
+-- `worker.receive` waits for the next message of a worker. The workers ran
+-- at the same time, so collecting them in order costs no extra wait.
+local total = 0
+local parts = {}
+for _, handle in ipairs(pool) do
+    local result = worker.receive(handle)
+    total = total + result.count
+    parts[#parts + 1] = `$(result.first): $(result.count)`
+end
+
+print(table.concat(parts, ", "))  --> 1: 5133, 50001: 4459, 100001: 4256, 150001: 4136
+print(`$total primes up to $(4 * size)`)  --> 17984 primes up to 200000
+
+-- A worker that has ended and has no message left returns `nil`.
+print(worker.receive(pool[1]), worker.status(pool[1]))  --> nil  dead
+
+fs.remove(script)

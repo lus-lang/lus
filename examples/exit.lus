@@ -1,0 +1,47 @@
+-- Exit Codes: End a program with a status and read the status of a child program.
+-- playground: false
+global print, os, arg, coroutine, pledge, ipairs, select
+
+pledge(`exec=$(arg[-1])`)
+
+-- This helper runs a snippet in a child interpreter and returns how it ended
+-- and its status, the last two values that p.exit gives.
+local function run(code)
+    local child <close> = os.spawn({ arg[-1], "-e", code }, { stdout = "null", stderr = "null" })
+    local _, _, how, status = coroutine.resume(child.exit)
+    return how, status
+end
+
+-- os.exit ends the process at once with the given status. true or no
+-- argument means 0 and false means 1.
+print(run("os.exit(3)"))  --> exit  3
+print(run("os.exit(true)"))  --> exit  0
+print(run("os.exit(false)"))  --> exit  1
+
+-- A program that reaches the end of its main chunk exits with 0. An uncaught
+-- error exits with 1.
+print(run("local x = 1"))  --> exit  0
+print(run("error('config missing')"))  --> exit  1
+
+-- os.exit flushes buffered output but skips pending <close> variables, so
+-- the child below prints "saved" and never "closed".
+local snippet = [[
+local log <close> = setmetatable({}, { __close = function() io.write(" closed") end })
+io.write("saved")
+os.exit(2)
+]]
+
+do
+    local child <close> = os.spawn({ arg[-1], "-e", snippet }, { stdout = "pipe" })
+    print(child.stdout:read("a"))  --> saved
+    print(select(4, coroutine.resume(child.exit)))  --> 2
+end
+
+-- A parent can map the status of a child to its own decisions.
+local meanings = { [0] = "ok", [1] = "failed", [3] = "needs input" }
+for _, code in ipairs({ 0, 3 }) do
+    local _, status = run(`os.exit($code)`)
+    print(status, meanings[status])
+end
+--> 0 ok
+--> 3 needs input

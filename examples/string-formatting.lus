@@ -1,0 +1,50 @@
+-- String Formatting: Format numbers and text with string.format directives.
+-- playground: true
+global print, string, ipairs
+
+-- `%d` writes an integer. `%s` writes any value. `%%` writes a percent sign.
+print(string.format("%d of %d tests passed (%s%%)", 47, 50, 94))  --> 47 of 50 tests passed (94%)
+
+-- `%.2f` rounds a float to two decimals. A width pads the result on the left.
+print(string.format("%.2f", 3.14159))  --> 3.14
+print(string.format("[%8.2f]", 3.14159))  --> [    3.14]
+
+-- A `-` flag pads on the right. A `0` flag pads with zeros.
+print(string.format("[%-8s][%8s]", "left", "right"))  --> [left    ][   right]
+print(string.format("%05d", 42))  --> 00042
+print(string.format("%+d %+d", 5, -5))  --> +5 -5
+
+-- `%x` and `%X` write hexadecimal. `%o` writes octal.
+print(string.format("%x %X %o", 255, 255, 8))  --> ff FF 10
+print(string.format("#%02x%02x%02x", 30, 144, 255))  --> #1e90ff
+
+-- `%e` and `%g` write scientific and shortest notation.
+print(string.format("%e", 123456.789))  --> 1.234568e+05
+print(string.format("%g %g", 0.0001, 1e+20))  --> 0.0001 1e+20
+
+-- `%q` writes a value as a literal that reads back as the same value.
+print(string.format("%q", 'say "hi"'))  --> "say \"hi\""
+print(string.format("%q", 255))  --> 255
+
+-- Widths count characters, so accented names line up in a table.
+local rows = {
+    { name = "Zoë", qty = 3, price = 4.5 },
+    { name = "Mateus", qty = 12, price = 0.75 },
+    { name = "Ana", qty = 1, price = 19.99 },
+    { name = "Søren", qty = 140, price = 0.1 },
+}
+for _, row in ipairs(rows) do
+    print(string.format("%-8s %3d x %6.2f", row.name, row.qty, row.price))
+end
+--> Zoë        3 x   4.50
+--> Mateus    12 x   0.75
+--> Ana        1 x  19.99
+--> Søren    140 x   0.10
+
+-- Interpolation reads better when no padding or precision is needed.
+local user, count = "Mateus", 12
+print(`$user ordered $count items`)  --> Mateus ordered 12 items
+
+-- The two combine when one value needs a directive.
+local total = 9.0
+print(`Total: $(string.format("%.2f", total)) EUR`)  --> Total: 9.00 EUR

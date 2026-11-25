@@ -1,0 +1,53 @@
+-- Encryption: Encrypt and authenticate data with AES-256-GCM and detect tampering.
+-- playground: true
+global print, crypto, vector, string
+
+-- A key is 32 random bytes. Each message also takes a fresh nonce of 12 bytes.
+local key = crypto.random(32)
+local nonce = crypto.random(12)
+
+-- `encrypt` returns the ciphertext and a 16-byte tag that authenticates it.
+local message = '{"user":42,"role":"admin"}'
+local ciphertext, tag = crypto.encrypt("aes-256-gcm", key, nonce, message)
+print(#ciphertext == #message, #tag)  --> true 16
+
+-- `decrypt` checks the tag and returns the plaintext as a vector.
+local plain = crypto.decrypt("aes-256-gcm", key, nonce, ciphertext, tag)
+print(vector.tostring(plain))  --> {"user":42,"role":"admin"}
+
+-- Changing one bit of the ciphertext makes `decrypt` return nil.
+local forged = vector.clone(ciphertext)
+vector.set(forged, 0, vector.get(forged, 0) ~ 1)
+print(crypto.decrypt("aes-256-gcm", key, nonce, forged, tag))  --> nil
+
+-- A different key fails the same check.
+print(crypto.decrypt("aes-256-gcm", crypto.random(32), nonce, ciphertext, tag))  --> nil
+
+-- The nonce and tag travel with the ciphertext, so a cookie packs all three as base64.
+local function b64(bytes)
+    return string.transcode(bytes, "binary", "base64url")
+end
+
+local function unb64(text)
+    return string.transcode(text, "base64url", "binary")
+end
+
+local function seal(text, context)
+    local n = crypto.random(12)
+    local ct, t = crypto.encrypt("aes-256-gcm", key, n, text, context)
+    return `$(b64(n)).$(b64(ct)).$(b64(t))`
+end
+
+local function open(cookie, context)
+    local parts = string.split(cookie, ".")
+    local n, ct, t = unb64(parts[1]), unb64(parts[2]), unb64(parts[3])
+    if plaintext = crypto.decrypt("aes-256-gcm", key, n, ct, t, context) then
+        return vector.tostring(plaintext)
+    end
+    return nil
+end
+
+-- The additional data binds a cookie to its purpose without encrypting it.
+local cookie = seal("cart=3 items", "session")
+print(open(cookie, "session"))  --> cart=3 items
+print(open(cookie, "password-reset"))  --> nil

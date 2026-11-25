@@ -1,3 +1,5 @@
+-- Hello World: The smallest complete program prints one line.
+-- playground: true
 global print
 
-print("Hello, Lus!")
+print("Hello, Lus!")  --> Hello, Lus!

@@ -1,0 +1,66 @@
+-- Closures: Functions that keep the local variables of the scope where they were written.
+-- playground: true
+global print
+
+-- Each call of `counter` creates a new `count`, which only the returned
+-- function can reach.
+local function counter()
+    local count = 0
+    return function()
+        count = count + 1
+        return count
+    end
+end
+
+local next_ticket = counter()
+local next_order = counter()
+print(next_ticket(), next_ticket(), next_ticket())  --> 1 2 3
+print(next_order())  --> 1
+
+-- A closure captures the variable itself, so it sees later assignments.
+local greeting = "Hello"
+
+local function greet(name)
+    return `$greeting, $name`
+end
+
+greeting = "Welcome"
+print(greet("Ada"))  --> Welcome, Ada
+
+-- Two functions written in the same block share its variables.
+local function account(balance)
+    local function deposit(amount)
+        balance = balance + amount
+    end
+    local function report()
+        return `balance: $balance`
+    end
+    return deposit, report
+end
+
+local deposit, report = account(100)
+deposit(50)
+print(report())  --> balance: 150
+
+-- A function factory returns functions configured by its arguments.
+local function multiplier(factor)
+    return function(n)
+        return n * factor
+    end
+end
+
+local double = multiplier(2)
+local triple = multiplier(3)
+print(double(21), triple(21))  --> 42 63
+
+-- Each pass of a loop has its own control variable, so each closure
+-- keeps a different value.
+local callbacks = {}
+
+for i = 1, 3 do
+    callbacks[i] = function()
+        return i * 10
+    end
+end
+
+print(callbacks[1](), callbacks[3]())  --> 10 30

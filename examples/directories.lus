@@ -1,0 +1,42 @@
+-- Directories: Create directories, list and inspect their entries, and remove a whole tree.
+-- playground: false
+global print, io, fs, pledge, table, ipairs
+
+pledge("fs")
+
+-- With true as its second argument, createdirectory makes every missing
+-- directory along the path.
+fs.createdirectory("site/posts/2026", true)
+fs.createdirectory("site/drafts")
+for _, name in ipairs({ "site/index.html", "site/posts/2026/spring.md" }) do
+    io.open(name, "w"):write("# Garden notes\n"):close()
+end
+
+-- Creating a directory that exists is an error without the second argument.
+print((catch fs.createdirectory("site/drafts")))  --> false
+
+-- list returns the names of the entries in no particular order, so the
+-- example sorts them.
+local names = fs.list("site")
+table.sort(names)
+print(table.concat(names, " "))  --> drafts index.html posts
+
+-- type tells a directory from a file and reports whether the path is a link.
+for _, name in ipairs(names) do
+    print(name, (fs.type(fs.path.join("site", name))))
+end
+--> drafts directory
+--> index.html file
+--> posts directory
+
+-- stat adds the size in bytes and the time of the last change.
+local info = fs.stat("site/posts/2026/spring.md")
+print(info.kind, info.size)  --> file  15
+
+-- type raises an error for a missing path, so catch tests for existence.
+print((catch fs.type("site/about.html")))  --> false
+
+-- A directory with entries is removed with true as the second argument.
+print((catch fs.remove("site")))  --> false
+fs.remove("site", true)
+print((catch fs.type("site")))  --> false

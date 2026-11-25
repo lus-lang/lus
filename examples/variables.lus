@@ -1,0 +1,38 @@
+-- Variables: `local` declares a variable for one block, while `global` declares a shared name.
+-- playground: true
+global print
+global visits = 0
+
+-- `local` declares a variable with a first value. An assignment gives it a new one.
+local city = "Lisbon"
+city = "Porto"
+print(city)  --> Porto
+
+-- One statement can declare several variables. A name without a value gets `nil`.
+local width, height = 80, 24
+local title, subtitle = "Report"
+print(width, height, title, subtitle)  --> 80  24  Report  nil
+
+-- The right side is computed before any variable changes, so two variables swap in one line.
+local low, high = 9, 2
+low, high = high, low
+print(low, high)  --> 2  9
+
+-- A local exists from its declaration to the end of its block.
+-- After the block, `bonus` is an undeclared name, which is a compile error in this file.
+local total = 0
+do
+    local bonus = 5
+    total = total + bonus
+end
+print(total)  --> 5
+
+-- The `global` line at the top declares `visits`, so every function in the file can update it.
+local function record_visit()
+    visits = visits + 1
+end
+
+record_visit()
+record_visit()
+print(visits)  --> 2
+-- A misspelled name such as `visit = 1` is now a compile error: variable 'visit' not declared.

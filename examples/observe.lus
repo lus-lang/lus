@@ -1,0 +1,46 @@
+-- Observed Values: Keep variables computed from other variables current with `<observe>`.
+-- playground: true
+global print
+
+-- An observed variable whose initializer names other observed variables
+-- is derived. Each assignment to one of those computes it again. A
+-- derived variable is read-only, so `total = 0` is a compile error.
+local price <observe> = 12
+local quantity <observe> = 1
+local total <observe> = price * quantity
+local label <observe> = `total: $total`
+
+print(label)  --> total: 12
+quantity = 3
+print(label)  --> total: 36
+
+-- An assignment from a nested function updates the dependents too.
+local function apply_discount(percent)
+    price = price * (100 - percent) // 100
+end
+
+apply_discount(25)
+print(price, label)  --> 9 total: 27
+
+-- A variable without `<observe>` is an input that the initializer reads
+-- again at each update. Changing it alone recomputes nothing.
+local currency = "EUR"
+local receipt <observe> = `$total $currency`
+currency = "USD"
+print(receipt)  --> 27 EUR
+quantity = 4
+print(receipt)  --> 36 USD
+
+-- Each dependent is computed once per assignment, in the order of the
+-- declarations, so `summary` always sees the new values of both parts.
+local updates = 0
+local width <observe> = 4
+local area <observe> = width * width
+local perimeter <observe> = 4 * width
+local summary <observe> = do
+    updates = updates + 1
+    provide `area $area, perimeter $perimeter`
+end
+
+width = 5
+print(summary, updates)  --> area 25, perimeter 20 2

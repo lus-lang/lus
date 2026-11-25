@@ -1,0 +1,50 @@
+-- Coroutines: Pause a function in the middle and pass values in and out of it.
+-- playground: true
+global coroutine, error, print
+
+-- A coroutine runs a function that can stop at `coroutine.yield` and
+-- continue later from the same place. Creating it runs nothing yet.
+local counter = coroutine.create(function(start)
+    local n = start
+    while n < start + 3 do
+        local step = coroutine.yield(n)
+        n = n + step
+    end
+    return `done at $n`
+end)
+
+print(coroutine.status(counter))  --> suspended
+
+-- The first resume passes the arguments of the function. Each later resume
+-- passes the results of the pending yield. Every resume returns `true`
+-- followed by the values that the coroutine yielded or returned.
+print(coroutine.resume(counter, 10))  --> true  10
+print(coroutine.resume(counter, 1))  --> true  11
+print(coroutine.resume(counter, 2))  --> true  done at 13
+print(coroutine.status(counter))  --> dead
+
+-- A dead coroutine cannot run again.
+print(coroutine.resume(counter))  --> false  cannot resume dead coroutine
+
+-- Inside a coroutine, `coroutine.status` reports "running" for itself and
+-- "normal" for the coroutine that resumed it.
+local outer
+local inner = coroutine.create(function()
+    print(coroutine.status(outer))  --> normal
+end)
+
+outer = coroutine.create(function()
+    print(coroutine.status(outer))  --> running
+    coroutine.resume(inner)
+end)
+
+coroutine.resume(outer)
+
+-- An error inside a coroutine ends it. The `resume` then returns `false`
+-- with the error value, so the caller keeps running.
+local parser = coroutine.create(function(text)
+    error({ field = "age", text = text })
+end)
+
+local ok, err = coroutine.resume(parser, "forty")
+print(ok, err.field, err.text)  --> false  age  forty

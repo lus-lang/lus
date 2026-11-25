@@ -1,0 +1,44 @@
+-- Multiple Return Values: Return several values from one call and choose how many to keep.
+-- playground: true
+global print, select, table
+
+-- A function returns several values separated by commas.
+local function clock(seconds)
+    return seconds // 3600, seconds % 3600 // 60, seconds % 60
+end
+
+local hours, minutes, secs = clock(7384)
+print(hours, minutes, secs)  --> 2 3 4
+
+-- The name `_` marks a value that the program discards.
+local _, _, only_seconds = clock(7384)
+print(only_seconds)  --> 4
+
+-- Extra values are dropped and missing values are nil.
+local h, m = clock(3600)
+print(h, m)  --> 1 0
+local a, b, c, d = clock(61)
+print(a, b, c, d)  --> 0 1 1 nil
+
+-- A call keeps all its values only at the end of a list. Elsewhere, and
+-- inside parentheses, it produces its first value.
+print(clock(7384))  --> 2 3 4
+print(clock(7384), "end")  --> 2 end
+print((clock(7384)))  --> 2
+
+-- A common convention returns nil and a message on failure.
+local function find_user(id)
+    if id == 1 then
+        return "ada"
+    end
+    return nil, `no user with id $id`
+end
+
+print(find_user(1))  --> ada
+print(find_user(7))  --> nil no user with id 7
+
+-- `table.pack` collects every value into a table with a count in `n`,
+-- which also counts trailing nils.
+local results = table.pack(find_user(7))
+print(results.n, results[2])  --> 2 no user with id 7
+print(select("#", find_user(1)))  --> 1

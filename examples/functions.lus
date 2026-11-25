@@ -1,0 +1,58 @@
+-- Functions: Declare functions, pass them as values, and name arguments with a table.
+-- playground: true
+global print, ipairs, select, table
+
+-- A local function takes parameters and returns a result.
+local function area(width, height)
+    return width * height
+end
+
+print(area(3, 4))  --> 12
+
+-- A missing argument is nil, so `or` gives a parameter a default.
+local function greet(name, greeting)
+    greeting = greeting or "Hello"
+    return `$greeting, $name!`
+end
+
+print(greet("Ada"))  --> Hello, Ada!
+print(greet("Lin", "Hi"))  --> Hi, Lin!
+
+-- A function is a value, so a variable can hold it and a call can receive it.
+local double = function(n)
+    return n * 2
+end
+
+local function apply_all(list, transform)
+    local result = {}
+    for i, value in ipairs(list) do
+        result[i] = transform(value)
+    end
+    return result
+end
+
+local quantities = { 1, 2, 3 }
+print(table.concat(apply_all(quantities, double), " "))  --> 2 4 6
+
+-- A call with one table argument can omit the parentheses, which gives
+-- named arguments with defaults.
+local function connect(options)
+    local host = options.host or "localhost"
+    local port = options.port or 5432
+    local timeout = options.timeout or 30
+    return `$host:$port (timeout $(timeout)s)`
+end
+
+print(connect{ host = "db.internal", timeout = 5 })
+--> db.internal:5432 (timeout 5s)
+print(connect{})
+--> localhost:5432 (timeout 30s)
+
+-- A function that reaches its end without `return` returns no values.
+local function log(message)
+    print(`log: $message`)
+end
+
+print(select("#", log("started")))
+--> log: started
+--> 0

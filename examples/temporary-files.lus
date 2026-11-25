@@ -1,0 +1,41 @@
+-- Temporary Files: Create scratch files in the temporary directory and remove them afterwards.
+-- playground: false
+global print, io, fs, os, pledge
+
+pledge("fs")
+
+-- os.tmpname creates an empty file with a fresh name and returns its path.
+-- The path differs on every run, so the example prints facts about it.
+local path = os.tmpname()
+print((fs.type(path)), fs.stat(path).size)  --> file  0
+
+do
+    local file <close> = io.open(path, "w")
+    file:write("draft of the newsletter\n")
+end
+
+-- The file stays on disk until the program removes it.
+for line in io.lines(path) do
+    print(line)  --> draft of the newsletter
+end
+fs.remove(path)
+print((catch fs.type(path)))  --> false
+
+-- A temporary directory can borrow a fresh name with a suffix. The program
+-- later removes both the directory and the empty file that reserved the name.
+local base = os.tmpname()
+local dir = `$base.d`
+fs.createdirectory(dir)
+io.open(fs.path.join(dir, "part-1.txt"), "w"):write("one"):close()
+print(#fs.list(dir))  --> 1
+fs.remove(dir, true)
+fs.remove(base)
+
+-- io.tmpfile opens a file that has no name. The system frees it when the
+-- handle closes, so there is nothing to remove.
+do
+    local scratch <close> = io.tmpfile()
+    scratch:write("intermediate results")
+    scratch:seek("set")
+    print(scratch:read("a"))  --> intermediate results
+end

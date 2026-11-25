@@ -1,0 +1,72 @@
+-- Lazy Values: Compute a value the first time the program reads it, then keep it.
+-- playground: true
+global error, print, setmetatable
+
+-- The initializer of a `<lazy>` variable runs at the first read. Later
+-- reads return the same value. A program that never reads the variable
+-- never runs the initializer.
+local function load_settings()
+    print("reading settings")
+    return { host = "localhost", port = 8080 }
+end
+
+local settings <lazy> = load_settings()
+
+local function run(command)
+    if command == "version" then
+        return "2.0"
+    end
+    return `serving on $(settings.host):$(settings.port)`
+end
+
+print(run("version"))
+print(run("serve"))
+print(run("serve"))
+--> 2.0
+--> reading settings
+--> serving on localhost:8080
+--> serving on localhost:8080
+
+-- The initializer sees other variables as they are at the first read.
+local region = "eu"
+local endpoint <lazy> = `https://$region.api.internal`
+region = "us"
+print(endpoint)  --> https://us.api.internal
+
+-- When the initializer raises an error, the read raises it. The next read
+-- runs the initializer again.
+local attempts = 0
+
+local function connect()
+    attempts = attempts + 1
+    if attempts < 2 then
+        error("connection refused", 0)
+    end
+    return `connection $attempts`
+end
+
+local connection <lazy> = connect()
+print(catch connection)  --> false connection refused
+print(connection, attempts)  --> connection 2 2
+
+-- `<lazy, close>` opens a resource on first use and closes it at the end
+-- of the block only if the program read it.
+local LogFile = {}
+
+function LogFile.__close(file)
+    print(`close $(file.name)`)
+end
+
+local function open_log(name)
+    print(`open $name`)
+    return setmetatable({ name = name }, LogFile)
+end
+
+do
+    local unused <lazy, close> = open_log("unused.log")
+    local audit <lazy, close> = open_log("audit.log")
+    print(`writing to $(audit.name)`)
+end
+--> open audit.log
+--> writing to audit.log
+--> close audit.log

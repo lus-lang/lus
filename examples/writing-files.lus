@@ -1,0 +1,62 @@
+-- Writing Files: Create, overwrite, and append to files, with buffering and flushing.
+-- playground: false
+global print, io, fs, pledge, table
+
+pledge("fs")
+
+-- This helper reads a whole file and closes it again.
+local function contents(path)
+    local file <close> = io.open(path)
+    return file:read("a")
+end
+
+-- Mode "w" creates the file or empties an existing one. A file in a <close>
+-- variable closes when the block ends, which also writes out its buffer.
+do
+    local file <close> = io.open("journal.txt", "w")
+    file:write("Monday: planted tomatoes\n")
+    -- write takes several values, numbers included, and returns the file.
+    file:write("Tuesday: watered ", 12, " plants\n"):write("Wednesday: rain\n")
+end
+
+-- Mode "a" appends to the end of the file.
+do
+    local file <close> = io.open("journal.txt", "a")
+    file:write("Thursday: first flower\n")
+end
+
+print(contents("journal.txt"))
+--> Monday: planted tomatoes
+--> Tuesday: watered 12 plants
+--> Wednesday: rain
+--> Thursday: first flower
+
+-- flush writes out any output that the handle still buffers, so a program
+-- that follows the log sees each entry as soon as it is written.
+do
+    local log <close> = io.open("events.log", "w")
+    log:write("started\n")
+    print(log:flush() == log)  --> true
+    print(contents("events.log"))  --> started
+end
+
+-- Many small values can be collected in a table and written with one call.
+local squares = {}
+for n = 1, 100 do
+    squares[n] = n * n
+end
+
+do
+    local out <close> = io.open("squares.txt", "w")
+    out:write(table.concat(squares, "\n"), "\n")
+end
+
+local lines = 0
+for _ in io.lines("squares.txt") do
+    lines = lines + 1
+end
+print(`squares.txt has $lines lines`)  --> squares.txt has 100 lines
+
+fs.remove("journal.txt")
+fs.remove("events.log")
+fs.remove("squares.txt")

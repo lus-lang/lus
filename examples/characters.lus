@@ -1,0 +1,46 @@
+-- Characters and UTF-8: Work with characters, code points, and the bytes of UTF-8 text.
+-- playground: true
+global print, string, utf8, vector, io
+
+-- A string holds characters, so length and positions count characters, not bytes.
+local word = "naïve café"
+print(#word)  --> 10
+print(word:sub(3, 3), word[8, 10])  --> ï afé
+print(word:upper())  --> NAïVE CAFé
+
+-- The bytes of the string live in a vector, which counts the UTF-8 encoding.
+print(#vector.fromstring(word))  --> 12
+
+-- `string.byte` returns code points and `string.char` builds a string from them.
+print(string.byte("é"))  --> 233
+print(string.byte("Añb", 1, -1))  --> 65 241 98
+print(string.char(99, 97, 102, 233))  --> café
+
+-- `utf8.codes` walks a string and yields each position with its code point.
+for pos, cp in utf8.codes("€ 5") do
+    print(pos, string.format("U+%04X", cp))
+end
+--> 1 U+20AC
+--> 2 U+0020
+--> 3 U+0035
+
+-- A pattern dot matches one whole character, even outside ASCII.
+for ch in ("añ😀"):gmatch(".") do
+    io.write("[", ch, "]")
+end
+print()  --> [a][ñ][😀]
+
+-- A set with a range of code points finds any character outside ASCII.
+local function is_ascii(s)
+    return not s:find("[\u{80}-\u{10FFFF}]")
+end
+
+print(is_ascii("hello"), is_ascii("héllo"))  --> true false
+
+-- Bytes that are not valid UTF-8 raise an error naming the offset when decoded.
+-- The lossy mode replaces each invalid sequence with U+FFFD.
+local bytes = vector.fromstring("caf\u{E9}")
+local truncated = vector.tostring(bytes, 0, 4, "lossy")
+print(truncated, #truncated)  --> caf� 4
+local ok, err = catch vector.tostring(bytes, 0, 4)
+print(ok, (err:gsub("^.-:%d+: ", "")))  --> false invalid UTF-8 at byte 3

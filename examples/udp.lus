@@ -1,0 +1,43 @@
+-- UDP: Send and receive datagrams on the loopback interface.
+-- playground: false
+global coroutine, network, pledge, print, tostring, vector
+
+pledge("network:udp=127.0.0.1:*")
+
+-- A socket opened with an address and port 0 is bound to a free port that
+-- the system chooses. `getsockname` reports which one.
+local server <close> = network.udp.open(0, "127.0.0.1")
+local host, port = server:getsockname()
+
+-- The server answers each datagram with the same text in capitals, sent back
+-- to the address and port it came from. It runs in a detached coroutine, so
+-- its `receive` suspends only that task.
+local replies = coroutine.detach(coroutine.create(function()
+    for _ = 1, 2 do
+        local data, from_host, from_port = server:receive()
+        server:sendto(vector.tostring(data):upper(), from_host, from_port)
+    end
+end))
+
+-- A socket opened without arguments sends from a port that the system picks.
+-- `sendto` returns the number of bytes sent.
+local client <close> = network.udp.open()
+print(client:sendto("ping", host, port))  --> 4
+
+local data, from_host, from_port = client:receive()
+print(vector.tostring(data), from_host, from_port == port)  --> PING  127.0.0.1  true
+
+-- Each datagram arrives whole or not at all. A receive size smaller than the
+-- datagram returns its first bytes and drops the rest.
+client:sendto("hello world", host, port)
+local head = client:receive(5)
+print(vector.tostring(head))  --> HELLO
+
+-- The server task ends after its second answer, which the resume waits for.
+coroutine.resume(replies)
+
+-- UDP has no connection that could end, so a receive waits until a datagram
+-- arrives. A timeout bounds the wait.
+client:settimeout(0.05)
+local nothing, err = client:receive()
+print(nothing, err.code, tostring(err))  --> nil  timeout  receive timeout

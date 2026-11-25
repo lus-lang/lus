@@ -1,0 +1,54 @@
+-- Context Variables: Keep a value per coroutine, such as the id of a request.
+-- playground: true
+global coroutine, ipairs, print, table
+
+-- A `<context>` variable holds one value for each coroutine. Its initializer
+-- is the default, which every coroutine sees until it assigns its own value.
+local request_id <context> = "none"
+
+-- The logger reads the variable, so every line names the request of the task
+-- that wrote it, with no id passed through the calls.
+local lines = {}
+
+local function log(message)
+    lines[#lines + 1] = `[$request_id] $message`
+end
+
+local function handle(id, path)
+    request_id = id
+    log(`start $path`)
+    coroutine.yield()
+    log(`finish $path`)
+end
+
+log("server starting")
+
+local tasks = {}
+for i, path in ipairs({ "/users", "/orders" }) do
+    tasks[i] = coroutine.detach(coroutine.create(handle), `req-$i`, path)
+end
+
+for _, task in ipairs(tasks) do
+    coroutine.resume(task)
+end
+
+-- The two tasks interleaved, yet each line carries the id of its own task.
+-- The main chunk never assigned the variable, so it still reads the default.
+print(table.concat(lines, "\n"))
+--> [none] server starting
+--> [req-1] start /users
+--> [req-2] start /orders
+--> [req-1] finish /users
+--> [req-2] finish /orders
+
+-- A new coroutine starts with the values of the coroutine that created it.
+-- An assignment afterwards stays on the side that made it.
+request_id = "batch-7"
+local child = coroutine.create(function()
+    local inherited = request_id
+    request_id = "child"
+    return inherited
+end)
+
+print(coroutine.resume(child))  --> true  batch-7
+print(request_id)  --> batch-7

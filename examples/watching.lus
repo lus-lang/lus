@@ -1,0 +1,45 @@
+-- Watching Files: Receive the changes to a directory from a coroutine that fs.watch returns.
+-- playground: false
+global print, io, fs, pledge, coroutine
+
+pledge("fs")
+
+fs.createdirectory("inbox")
+
+-- The watch covers every change after the call. Each resume of the coroutine
+-- waits for the next change and returns true and an event table.
+local changes = fs.watch("inbox")
+
+-- A detached coroutine reads the events while the program goes on, and
+-- stops after the removal that ends the demonstration.
+local reader = coroutine.detach(coroutine.create(function()
+    while true do
+        local _, event = coroutine.resume(changes)
+        print(event.kind, fs.path.name(event.path))
+        if event.kind == "remove" then
+            return
+        end
+    end
+end))
+
+-- Changes to one path within 50 milliseconds merge into one event, so the
+-- program pauses between its steps to see each one.
+local function pause()
+    coroutine.resume(coroutine.sleep(0.2))
+end
+
+io.open("inbox/order.json", "w"):write("{}"):close()
+pause()
+io.open("inbox/order.json", "a"):write("\n"):close()
+pause()
+fs.remove("inbox/order.json")
+
+-- Resuming the detached reader waits for it to finish.
+coroutine.resume(reader)
+--> create order.json
+--> modify order.json
+--> remove order.json
+
+-- Closing the coroutine of the watch stops it.
+coroutine.close(changes)
+fs.remove("inbox")

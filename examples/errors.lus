@@ -1,0 +1,67 @@
+-- Error Values: Raise strings and tables as errors, tell them apart, and raise them again.
+-- playground: true
+global assert, error, ipairs, print, type
+
+-- `error` puts the file and line in front of a string. A level of 0
+-- leaves the message as written.
+local _, located = catch error("disk full")
+local _, plain = catch error("disk full", 0)
+print(located:match("^.-:%d+: (.*)$"), located == plain)  --> disk full false
+print(plain)  --> disk full
+
+-- Any value can be an error object. A table carries fields that the
+-- capturing code can read.
+local function fetch(path)
+    if path == "/slow" then
+        error({ code = "timeout", retry_after = 2 })
+    elseif path == "/missing" then
+        error({ code = "not_found", path = path })
+    elseif path == "/broken" then
+        local response = nil
+        return response.body
+    end
+    return "200 OK"
+end
+
+-- The kind of an error decides what happens next. Errors of unknown
+-- kinds go back up with `error(result, 0)`, which raises the same value
+-- without a second position.
+local function fetch_or_default(path)
+    local ok, result = catch fetch(path)
+    if ok then
+        return result
+    elseif type(result) == "table" and result.code == "not_found" then
+        return "404 Not Found"
+    elseif type(result) == "table" and result.code == "timeout" then
+        return `retry in $(result.retry_after)s`
+    end
+    error(result, 0)
+end
+
+for _, path in ipairs({ "/", "/missing", "/slow" }) do
+    print(path, fetch_or_default(path))
+end
+--> / 200 OK
+--> /missing 404 Not Found
+--> /slow retry in 2s
+
+-- A runtime error is a string, which the last branch raises again.
+local ok, err = catch fetch_or_default("/broken")
+print(ok, type(err), err:match("attempt to index .*$"))
+--> false string attempt to index a nil value (local 'response')
+
+-- `assert` returns its first argument when it is truthy, and raises its
+-- second argument otherwise.
+local function average(values)
+    assert(#values > 0, "average needs at least one value")
+    local sum = 0
+    for _, value in ipairs(values) do
+        sum = sum + value
+    end
+    return sum / #values
+end
+
+local scores = { 4, 6, 8 }
+print(average(scores))  --> 6.0
+local _, message = catch average({})
+print(message:match(": (.*)$"))  --> average needs at least one value

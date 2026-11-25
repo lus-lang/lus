@@ -1,0 +1,46 @@
+-- TCP Echo: Serve each TCP connection in a detached coroutine of its own.
+-- playground: false
+global coroutine, network, pledge, print, vector
+
+pledge("network:tcp=127.0.0.1:*")
+
+-- Each connection runs in its own detached coroutine. A loop over
+-- `conn.input` reads one line per pass and ends when the client closes its
+-- end. The `<close>` variable closes the connection on every path.
+local function echo(conn)
+    local closing <close> = conn
+    for line in conn.input do
+        conn:send(`echo: $(vector.tostring(line))\n`)
+    end
+end
+
+-- A loop over `server.accepted` takes one connection per pass and ends when
+-- the server closes. Port 0 lets the system choose a free port.
+local server = network.tcp.bind("127.0.0.1", 0)
+local host, port = server:getsockname()
+coroutine.detach(coroutine.create(function()
+    for conn in server.accepted do
+        coroutine.detach(coroutine.create(echo), conn)
+    end
+end))
+
+-- Two clients stay connected at the same time. The second gets its answer
+-- while the first is still open, because every connection has its own task.
+local first <close> = network.tcp.connect(host, port)
+local second <close> = network.tcp.connect(host, port)
+
+first:send("hello\n")
+second:send("from the second client\n")
+print(vector.tostring(second:receive()))  --> echo: from the second client
+print(vector.tostring(first:receive()))  --> echo: hello
+
+-- An empty line is a line too.
+first:send("\n")
+print(vector.tostring(first:receive()))  --> echo:
+
+-- Closing a client ends the loop of its connection. Closing the server ends
+-- the accept loop, so the program ends once every coroutine is done.
+first:close()
+second:close()
+server:close()
+print("server closed")  --> server closed

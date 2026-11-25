@@ -118,7 +118,7 @@ trap 'rm -rf "$stage"' EXIT
 # COPYFILE_DISABLE keeps macOS tar from adding AppleDouble `._` files, which
 # the runner would take for tests, and --no-xattrs keeps out the extended
 # attributes that GNU tar warns about.
-(cd "$root" && COPYFILE_DISABLE=1 tar -cf "$stage/trees.tar" --no-xattrs --exclude node_modules --exclude '._*' tests packages/language-server packages/textmate/test spec)
+(cd "$root" && COPYFILE_DISABLE=1 tar -cf "$stage/trees.tar" --no-xattrs --exclude node_modules --exclude '._*' tests packages/language-server packages/textmate/test examples spec)
 
 failed=0
 emulated_failed=0

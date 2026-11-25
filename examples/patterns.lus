@@ -1,0 +1,52 @@
+-- Patterns: Match, capture, and replace text with Lus patterns.
+-- playground: true
+global print, string, tonumber
+
+-- `match` returns the captures in parentheses, or the whole match without any.
+local date = "Released on 2026-11-25 in Lyon"
+print(date:match("%d+-%d+-%d+"))  --> 2026-11-25
+local year, month, day = date:match("(%d+)-(%d+)-(%d+)")
+print(tonumber(year) + 1, month, day)  --> 2027 11 25
+
+-- Character classes describe ASCII characters: `%d` digits, `%a` letters,
+-- `%s` whitespace, `%w` letters and digits. The uppercase form is the complement.
+print(("Order #A-1043"):match("%u%-(%d+)"))  --> 1043
+print(("  42 apples"):match("%S+"))  --> 42
+
+-- Anchors tie a pattern to the start `^` or the end `$` of the subject.
+print(("v1.4.2"):match("^v(%d+)"))  --> 1
+print(("2.0-beta"):match("^v(%d+)"))  --> nil
+print(("photo.JPEG"):match("%.(%w+)$"))  --> JPEG
+
+-- `-` repeats as few times as possible, while `*` and `+` repeat as many as possible.
+local html = "<b>bold</b> and <i>italic</i>"
+print(html:match("<(.-)>"))  --> b
+print(html:match("<(.*)>"))  --> b>bold</b> and <i>italic</i
+
+-- `gmatch` iterates over every match.
+local query = "page=2&sort=price&order=desc"
+for key, value in query:gmatch("(%w+)=(%w+)") do
+    print(key, value)
+end
+--> page 2
+--> sort price
+--> order desc
+
+-- `gsub` replaces every match and returns the count. `%1` refers to a capture.
+print(("John Smith"):gsub("(%w+) (%w+)", "%2, %1"))  --> Smith, John 1
+
+-- A table replacement looks up each capture as a key. A missing key keeps the match.
+local vars = { name = "Ada", lang = "Lus" }
+local text = ("Hello $name, welcome to $lang. Your id is $id."):gsub("%$(%w+)", vars)
+print(text)  --> Hello Ada, welcome to Lus. Your id is $id.
+
+-- A function replacement receives the captures and returns the new text.
+local prices = "apple 1.20, pear 0.80, plum 2.50"
+local doubled = prices:gsub("%d+%.%d+", function(p)
+    return string.format("%.2f", tonumber(p) * 2)
+end)
+print(doubled)  --> apple 2.40, pear 1.60, plum 5.00
+
+-- `%` escapes a magic character. A set such as `[éè]` matches whole characters.
+print(("100% sure"):gsub("%%", " percent"))  --> 100 percent sure 1
+print(("café crème"):gsub("[éè]", "e"))  --> cafe creme 2

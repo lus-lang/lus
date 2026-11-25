@@ -1,0 +1,59 @@
+-- HTTP Server: Serve a small JSON API with a router and stop it gracefully.
+-- playground: false
+global coroutine, fromjson, network, pledge, print, tojson, tonumber, vector
+
+pledge("network:tcp=127.0.0.1:*", "network:server", "network:http=127.0.0.1:*")
+
+-- The data of the API lives in a table that every request shares.
+local books = { { id = 1, title = "Dune" }, { id = 2, title = "Solaris" } }
+
+local json = { ["Content-Type"] = "application/json" }
+
+-- The router matches the method and the path of each request. A handler
+-- returns the status, the body, and the headers of the response.
+local function route(req)
+    if req.method == "GET" and req.path == "/books" then
+        return 200, tojson(books), json
+    end
+    if digits = req.path:match("^/books/(%d+)$") then
+        local id = tonumber(digits)
+        if req.method == "GET" and books[id] then
+            return 200, tojson(books[id]), json
+        end
+        return 404, tojson({ error = `no book $id` }), json
+    end
+    if req.method == "POST" and req.path == "/books" then
+        local book = fromjson(vector.tostring(req.body))
+        book.id = #books + 1
+        books[#books + 1] = book
+        return 201, tojson(book), json
+    end
+    return 404, tojson({ error = `no route for $(req.method) $(req.path)` }), json
+end
+
+-- Binding port 0 lets the system choose a free port. `network.serve` runs in
+-- a detached coroutine, so the main chunk can send requests to it.
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, route)
+local base = `http://127.0.0.1:$port`
+
+local status, body = network.fetch(`$base/books`)
+print(status, #fromjson(vector.tostring(body)))  --> 200  2
+
+status, body = network.fetch(`$base/books`, "POST", json, tojson({ title = "Neuromancer" }))
+print(status, fromjson(vector.tostring(body)).id)  --> 201  3
+
+status, body = network.fetch(`$base/books/3`)
+print(status, fromjson(vector.tostring(body)).title)  --> 200  Neuromancer
+
+status, body = network.fetch(`$base/books/9`)
+print(status, fromjson(vector.tostring(body)).error)  --> 404  no book 9
+
+status, body = network.fetch(`$base/authors`, "DELETE")
+print(status, fromjson(vector.tostring(body)).error)  --> 404  no route for DELETE /authors
+
+-- Closing the coroutine of `serve` stops accepting and lets open connections
+-- finish. The server was bound here, so it is closed here too.
+coroutine.close(serving)
+server:close()

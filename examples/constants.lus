@@ -1,0 +1,30 @@
+-- Constants: The `<const>` attribute fixes a variable to its first value.
+-- playground: true
+global print, ipairs
+
+-- A constant is declared like any local, with `<const>` after the name.
+local MAX_RETRIES <const> = 3
+local TIMEOUT <const> = MAX_RETRIES * 10
+print(MAX_RETRIES, TIMEOUT)  --> 3  30
+
+-- Assigning to a constant is a compile error, so Lus rejects the whole file before it runs.
+--
+--     MAX_RETRIES = 5
+--     -- attempt to assign to const variable 'MAX_RETRIES'
+
+-- The variable is fixed, while a table it holds still changes.
+local DEFAULTS <const> = { color = "blue", size = 10 }
+DEFAULTS.size = 12
+print(DEFAULTS.color, DEFAULTS.size)  --> blue  12
+
+-- Several constants can share one declaration.
+local KB <const>, MB <const> = 1024, 1024 * 1024
+print(`5 MB is $(5 * MB // KB) KB`)  --> 5 MB is 5120 KB
+
+-- A loop body can declare a constant, which gets a new value on each pass.
+for _, celsius in ipairs({ 0, 100 }) do
+    local fahrenheit <const> = celsius * 9 / 5 + 32
+    print(celsius, fahrenheit)
+end
+--> 0  32.0
+--> 100  212.0

@@ -1,0 +1,46 @@
+-- Objects and Methods: A class built from a metatable, `__index`, and methods that take `self`.
+-- playground: true
+global assert, getmetatable, print, rawget, setmetatable
+
+-- A class is a table that holds the methods and is the metatable of every
+-- object. `__index` sends a read of a missing field to the class.
+local Account = {}
+Account.__index = Account
+
+-- The constructor creates a table with the data of one object and attaches
+-- the class as its metatable.
+function Account.new(owner, balance)
+    balance = balance or 0
+    assert(balance >= 0, "the opening balance must not be negative")
+    return setmetatable({ owner = owner, balance = balance }, Account)
+end
+
+-- `function Account:deposit` declares a method with a hidden first
+-- parameter named `self`.
+function Account:deposit(amount)
+    self.balance = self.balance + amount
+    return self
+end
+
+function Account:describe()
+    return `$(self.owner) has $(self.balance)`
+end
+
+-- `ada:deposit(50)` is the same call as `Account.deposit(ada, 50)`.
+local ada = Account.new("Ada", 100)
+ada:deposit(50)
+Account.deposit(ada, 25)
+print(ada:describe())  --> Ada has 175
+
+-- Each object has its own data and shares the methods of the class.
+local lin = Account.new("Lin")
+print(lin:deposit(10):describe())  --> Lin has 10
+print(ada.deposit == lin.deposit)  --> true
+print(rawget(ada, "deposit"))  --> nil
+
+-- The metatable of an object identifies its class.
+print(getmetatable(lin) == Account)  --> true
+
+-- The constructor rejects invalid data.
+local ok, err = catch Account.new("Grace", -5)
+print(ok, err:match(": (.*)$"))  --> false the opening balance must not be negative

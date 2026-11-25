@@ -1,0 +1,38 @@
+-- Time Formatting and Parsing: Write instants as text with strftime patterns and read dates back.
+-- playground: true
+global print, time
+
+-- A fixed instant makes the output the same on every run.
+local meeting = time.instant(1795507200)
+
+-- `iso` writes ISO 8601 in UTC. `format` takes the strftime specifiers of `os.date`.
+print(meeting:iso())  --> 2026-11-24T08:00:00Z
+print(meeting:format("%Y-%m-%d %H:%M"))  --> 2026-11-24 08:00
+print(meeting:format("%A, %d %B %Y"))  --> Tuesday, 24 November 2026
+print(meeting:format("%a %b %e, %I:%M %p"))  --> Tue Nov 24, 08:00 AM
+
+-- A zoned value formats its wall-clock fields. `%Z` names the zone abbreviation.
+local tokyo = meeting:at(time.zone("Asia/Tokyo"))
+print(tokyo:iso())  --> 2026-11-24T17:00:00+09:00
+print(tokyo:format("%H:%M %Z"))  --> 17:00 JST
+
+-- `time.parse` reads ISO 8601 by default. Text without an offset reads as UTC.
+local parsed = time.parse("2026-11-24T08:00:00Z")
+print(parsed == meeting)  --> true
+print(time.parse("2026-11-24"):iso())  --> 2026-11-24T00:00:00Z
+
+-- Text with a numeric offset returns a zoned value in that offset.
+local offset = time.parse("2026-11-24T03:00:00-05:00")
+print(offset.offset, offset:instant() == meeting)  --> -18000 true
+
+-- A pattern reads other layouts, such as a log line or an HTTP date.
+local logged = time.parse("24/Nov/2026:08:00:00 +0000", "%d/%b/%Y:%H:%M:%S %z")
+print(logged:iso())  --> 2026-11-24T08:00:00Z
+local http = time.parse("Tue, 24 Nov 2026 08:00:00 GMT", "%a, %d %b %Y %H:%M:%S GMT")
+print(http == meeting)  --> true
+
+-- Text that does not fit raises an error that quotes it.
+local ok, err = catch time.parse("2026-02-30x")
+print(ok, (err:gsub("^.-:%d+: ", "")))  --> false trailing characters in '2026-02-30x'
+ok, err = catch time.parse("24.11.2026", "%d/%m/%Y")
+print(ok, (err:gsub("^.-:%d+: ", "")))  --> false '24.11.2026' does not match time format '%d/%m/%Y'

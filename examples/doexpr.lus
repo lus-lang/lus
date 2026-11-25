@@ -1,95 +1,74 @@
--- Do Expressions: Inline blocks that evaluate to a value via `provide`.
+-- Do-Expressions: A `do ... end` block computes a value, which `provide` returns.
 -- playground: true
--- cookbook: true
+global print, ipairs, math
 
-global print, math, pairs
-
--- Basic do expression: compute a value with local scope
+-- The block can hold temporary variables that end with it.
 local radius = 5
+
 local area = do
-    local pi = 3.14159
-    provide pi * radius * radius
+    local squared = radius * radius
+    provide math.floor(math.pi * squared)
 end
-print("Circle area:", area)  --> ~78.54
 
--- Configuration building with intermediate steps
-local config = do
-    local base_port = 8000
-    local env_offset = 80  -- e.g., from environment
-    provide {
-        port = base_port + env_offset,
-        host = "localhost",
-        debug = true
-    }
-end
-print("Server config:", config.host .. ":" .. config.port)
+print(area)  --> 78
 
--- Conditional initialization with provide
+-- Each `provide` ends the block, so a chain of `if` needs no `else`.
+-- The result can be `<const>`, because the declaration itself computes it.
 local score = 750
-local level = do
+
+local level <const> = do
     if score >= 1000 then
         provide "expert"
-    elseif score >= 500 then
+    end
+    if score >= 500 then
         provide "intermediate"
-    elseif score >= 100 then
-        provide "beginner"
-    else
-        provide "novice"
+    end
+    provide "beginner"
+end
+
+print(level)  --> intermediate
+
+-- A `provide` inside a loop is a search that stops at the first match.
+-- A block that ends without a `provide` gives `nil`.
+local users = { { name = "ada", admin = false }, { name = "grace", admin = true } }
+
+local admin = do
+    for _, user in ipairs(users) do
+        if user.admin then
+            provide user
+        end
     end
 end
-print("Level for", score .. ":", level)  --> intermediate
 
--- Multi-value provide for parallel assignment
-local data = {3, 1, 4, 1, 5, 9, 2, 6}
-local min_val, max_val = do
+print(admin.name)  --> grace
+
+-- `provide` can give several values, here the lowest and the highest reading.
+local readings = { 3, 9, 1 }
+
+local low, high = do
     local lo, hi = math.huge, -math.huge
-    for _, v in pairs(data) do
-        if v < lo then lo = v end
-        if v > hi then hi = v end
+    for _, value in ipairs(readings) do
+        lo = math.min(lo, value)
+        hi = math.max(hi, value)
     end
     provide lo, hi
 end
-print("Min/Max:", min_val, max_val)  --> 1    9
 
--- Do expressions in arithmetic
-local base = 100
-local adjusted = base + do
-    local modifier = 0.15
-    provide base * modifier
-end
-print("Adjusted value:", adjusted)  --> 115
+print(low, high)  --> 1  9
 
--- Nested do expressions
-local result = do
-    local outer = 10
-    local inner = do
-        provide outer * 2
-    end
-    provide inner + 5
-end
-print("Nested result:", result)  --> 25
+-- A do expression fits wherever an expression does, such as a table field.
+local hour = 14
 
--- Do expression as function argument
-local function greet(msg)
-    print("Greeting:", msg)
-end
+local banner = {
+    user = "ada",
+    unread = 3,
+    theme = "dark",
+    greeting = do
+        if hour < 12 then
+            provide "Good morning"
+        end
+        provide "Good afternoon"
+    end,
+}
 
-local hour = 14  -- 2 PM
-greet(do
-    if hour < 12 then
-        provide "Good morning!"
-    elseif hour < 18 then
-        provide "Good afternoon!"
-    else
-        provide "Good evening!"
-    end
-end)
-
--- Practical: building a formatted message
-local user = { name = "Alice", items = 3 }
-local message = do
-    local prefix = "[INFO]"
-    local content = user.name .. " has " .. user.items .. " items"
-    provide prefix .. " " .. content
-end
-print(message)
+print(`$(banner.greeting), $(banner.user)`)  --> Good afternoon, ada

@@ -1,0 +1,50 @@
+-- Line Filters: Read lines, transform each one, and write the result to a new file.
+-- playground: false
+global print, io, fs, pledge, tonumber
+
+pledge("fs")
+
+-- The input is a small access log that the program writes first.
+do
+    local file <close> = io.open("access.log", "w")
+    file:write("GET /index.html 200\n")
+    file:write("get /admin 403\n")
+    file:write("\n")
+    file:write("POST /login 401\n")
+    file:write("GET /missing 404\n")
+end
+
+-- The filter keeps the requests that failed, upper-cases the method, and
+-- skips blank lines, as a Unix pipeline of grep and tr would. It takes any
+-- line iterator and any file to write to, so filter(io.lines(), io.stdout)
+-- turns it into a command that reads standard input.
+local function filter(lines, out)
+    local kept = 0
+    for line in lines do
+        if line == "" then
+            continue
+        end
+        if method, path, status = line:match("^(%a+) (%S+) (%d+)$") then
+            if tonumber(status) >= 400 then
+                out:write(`$(method:upper()) $path $status\n`)
+                kept = kept + 1
+            end
+        end
+    end
+    return kept
+end
+
+do
+    local out <close> = io.open("errors.log", "w")
+    print(`kept $(filter(io.lines("access.log"), out)) lines`)  --> kept 3 lines
+end
+
+for line in io.lines("errors.log") do
+    print(line)
+end
+--> GET /admin 403
+--> POST /login 401
+--> GET /missing 404
+
+fs.remove("access.log")
+fs.remove("errors.log")

@@ -1,0 +1,54 @@
+-- Sleeping and Timers: Wait for a time to pass and repeat work at an interval.
+-- playground: true
+global coroutine, ipairs, print, table, time
+
+-- `coroutine.sleep` returns a coroutine whose resume waits for the time and
+-- then returns `true`. The time is a number of seconds or a duration from the
+-- time library. `time.monotonic` measures how long the wait took.
+local start = time.monotonic()
+print(coroutine.resume(coroutine.sleep(0.05)))  --> true
+
+local elapsed = time.monotonic() - start
+print(elapsed:seconds() >= 0.05)  --> true
+
+-- A periodic ticker is a loop over sleeps. This generator yields the number
+-- of each tick once its interval has passed.
+local function ticker(interval, count)
+    return coroutine.wrap(function()
+        for tick = 1, count do
+            coroutine.resume(coroutine.sleep(interval))
+            coroutine.yield(tick)
+        end
+    end)
+end
+
+start = time.monotonic()
+for tick in ticker(time.millis(20), 3) do
+    print("tick", tick)
+end
+--> tick  1
+--> tick  2
+--> tick  3
+
+print((time.monotonic() - start):seconds() >= 0.06)  --> true
+
+-- In a detached coroutine a sleep suspends only that task, so tasks with
+-- shorter sleeps finish first whatever order they started in.
+local finished = {}
+
+local function remind(message, seconds)
+    coroutine.resume(coroutine.sleep(seconds))
+    finished[#finished + 1] = message
+end
+
+local reminders = { { "stretch", 0.06 }, { "drink water", 0.02 }, { "check mail", 0.04 } }
+local tasks = {}
+for _, reminder in ipairs(reminders) do
+    tasks[#tasks + 1] = coroutine.detach(coroutine.create(remind), reminder[1], reminder[2])
+end
+
+for _, task in ipairs(tasks) do
+    coroutine.resume(task)
+end
+
+print(table.concat(finished, ", "))  --> drink water, check mail, stretch

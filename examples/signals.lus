@@ -1,0 +1,42 @@
+-- Signals: Handle a termination signal so a program can finish its work and exit cleanly.
+-- playground: false
+-- posix: true
+global print, os, arg, coroutine, pledge
+
+pledge(`exec=$(arg[-1])`)
+
+-- The worker program handles SIGTERM and SIGHUP. While a coroutine of
+-- os.signal handles a signal, the signal no longer ends the program. Each
+-- resume waits for the next signal and returns its name. Line buffering
+-- sends each line through the pipe as soon as the worker prints it.
+local worker = [[
+io.stdout:setvbuf("line")
+local signals = os.signal("terminate", "hangup")
+print("ready")
+while true do
+    local _, name = coroutine.resume(signals)
+    if name == "hangup" then
+        print("reloading settings")
+    else
+        print("saving state, then stopping")
+        break
+    end
+end
+coroutine.close(signals)
+]]
+
+-- The parent starts the worker and waits until it reports that it is ready,
+-- then sends it two signals with kill.
+local child <close> = os.spawn({ arg[-1], "-e", worker }, { stdout = "pipe" })
+print(child.stdout:read("l"))  --> ready
+
+child:kill("hangup")
+print(child.stdout:read("l"))  --> reloading settings
+
+child:kill("terminate")
+print(child.stdout:read("l"))  --> saving state, then stopping
+
+-- The worker handled SIGTERM itself, so it ends with status 0. An unhandled
+-- signal would end it with how = "signal" and the signal number.
+local _, _, how, status = coroutine.resume(child.exit)
+print(how, status)  --> exit  0

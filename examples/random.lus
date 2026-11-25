@@ -1,0 +1,46 @@
+-- Random Numbers: Draw reproducible random numbers, shuffle a list, and read secure random bytes.
+-- playground: true
+global print, math, crypto, string, table
+
+-- Without a seed, every run draws a different sequence. `math.random()` returns a float below 1.
+local r = math.random()
+print(r >= 0 and r < 1)  --> true
+
+-- A seed makes the sequence the same on every run and every platform.
+math.randomseed(2026)
+print(math.random(6), math.random(6), math.random(6))  --> 2 5 4
+print(math.random(10, 20))  --> 12
+print(string.format("%.4f", math.random()))  --> 0.8444
+
+-- The same seed replays the same values.
+math.randomseed(7)
+local first = math.random(1000)
+math.randomseed(7)
+print(math.random(1000) == first)  --> true
+
+-- A Fisher-Yates shuffle swaps each position with a random position at or before it.
+local function shuffle(list)
+    for i = #list, 2, -1 do
+        local j = math.random(i)
+        list[i], list[j] = list[j], list[i]
+    end
+    return list
+end
+
+math.randomseed(42)
+local deck = shuffle({
+    "ace",
+    "king",
+    "queen",
+    "jack",
+    "ten",
+})
+print(table.concat(deck, " "))  --> ace queen ten jack king
+
+-- Picking a random element is one call with the length of the list.
+print(deck[math.random(#deck)])  --> queen
+
+-- `math.random` is never for secrets. `crypto.random` reads the secure source of
+-- the operating system and returns a vector. `string.transcode` writes its bytes as hex.
+local token = string.transcode(crypto.random(16), "binary", "hex")
+print(#token, token:find("^%x+$") ~= nil)  --> 32 true

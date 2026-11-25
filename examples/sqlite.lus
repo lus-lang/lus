@@ -1,0 +1,58 @@
+-- SQLite: Store and query rows in an embedded SQLite database.
+-- playground: true
+global print, io, query, string, error
+
+-- An in-memory database needs no permission. `<close>` closes it at the end of the chunk.
+local db <close> = io.sqlite(":memory:")
+
+-- `exec` runs statements that return no rows.
+db:exec([[
+    CREATE TABLE books (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        author TEXT NOT NULL,
+        year INTEGER,
+        price REAL
+    )
+]])
+
+-- `run` binds each `?` to an argument, so text reaches the database as data.
+-- It returns the number of changed rows and the id of the last inserted row.
+local insert_sql = "INSERT INTO books (title, author, year, price) VALUES (?, ?, ?, ?)"
+local changed, id = db:run(insert_sql, "Dune", "Frank Herbert", 1965, 9.99)
+print(changed, id)  --> 1 1
+
+-- A prepared statement compiles once and runs many times.
+local insert <close> = db:prepare(insert_sql)
+insert:run("Solaris", "Stanisław Lem", 1961, 12.5)
+insert:run("Kindred", "Octavia E. Butler", 1979, 11.0)
+insert:run("The Dispossessed", "Ursula K. Le Guin", 1974, nil)
+
+-- `query` returns an iterator over rows keyed by column name. NULL reads back as nil.
+for book in db:query("SELECT title, year, price FROM books WHERE year < ? ORDER BY year", 1975) do
+    print(book.title, book.year, book.price)
+end
+--> Solaris 1961 12.5
+--> Dune 1965 9.99
+--> The Dispossessed 1974 nil
+
+-- Named placeholders bind from one table.
+for row in db:query("SELECT author FROM books WHERE title = :title", { title = "Kindred" }) do
+    print(row.author)  --> Octavia E. Butler
+end
+
+-- A transaction commits when the function returns and rolls back when it raises.
+local ok, err = catch db:transaction(function()
+    db:run("UPDATE books SET price = price * 0.5")
+    error("payment service unavailable", 0)
+end)
+print(ok, err)  --> false payment service unavailable
+
+for row in db:query("SELECT COUNT(*) AS n, SUM(price) AS total FROM books") do
+    print(row.n, string.format("%.2f", row.total))  --> 4 33.49
+end
+
+-- A query on `db.books` runs as a SELECT in SQLite.
+for row in query(@db.books as b where b.author == "Frank Herbert" select b.title) do
+    print(row.title)  --> Dune
+end

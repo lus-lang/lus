@@ -1,75 +1,52 @@
--- Assignment Conditions: Variables declared in if/while conditions.
+-- If-Assignment: A condition can declare variables, which hold the values it tests.
 -- playground: true
--- cookbook: true
+global print, tonumber, string, ipairs, table
 
-global print
-
--- Basic if-assignment: variable declared inline
-if x = 42 then
-    print("x is truthy:", x)
-end
-
--- Falsy values (nil, false) fail the condition
-if y = nil then
-    print("This won't print")
-else
-    print("y was nil, so we're in else")
-end
-
--- Multiple variables: ALL must be truthy
-if a, b, c = 1, 2, 3 then
-    print("All truthy:", a, b, c)
-end
-
-if a, b, c = 1, nil, 3 then
-    print("This won't print - b is nil")
-else
-    print("One was falsy!")
-end
-
--- Elseif chains - variables accumulate
-if first = nil then
-    print("first")
-elseif second = nil then
-    print("second")  
-elseif third = "winner" then
-    -- We can see first and second here too!
-    print("third:", third, "first:", first, "second:", second)
-end
-
--- Practical example: result checking
-local function divide(a, b)
-    if b == 0 then return nil end
-    return a / b
-end
-
-if result = divide(10, 2) then
-    print("10 / 2 =", result)
-end
-
-if result = divide(10, 0) then
-    print("This won't print")
-else
-    print("Division by zero!")
-end
-
--- While-assignment: loop until falsy
-local count = 5
-local function countdown()
-    if count > 0 then
-        count = count - 1
-        return count + 1
+-- `if name = expr then` declares `name` and runs the branch when it is truthy.
+for _, input in ipairs({ "42", "forty" }) do
+    if n = tonumber(input) then
+        print(`$input doubled is $(n * 2)`)
+    else
+        print(`$input is not a number`)
     end
-    return nil
+end
+--> 42 doubled is 84
+--> forty is not a number
+
+-- With several variables, the branch runs only when every one is truthy.
+local line = "level=warn"
+
+if first, last = string.find(line, "warn") then
+    print(`found at $first to $last`)  --> found at 7 to 10
 end
 
-print("Countdown:")
-while n = countdown() do
-    print("  ", n)
+-- An `elseif` can declare variables too. A later branch also sees the earlier variables.
+local settings = { port = "8080" }
+
+if host = settings.host then
+    print(`host $host`)
+elseif port = tonumber(settings.port) then
+    print(`port $port, host $host`)  --> port 8080, host nil
 end
 
--- Const attribute in conditions
-if pi <const> = 3.14159 then
-    print("Pi is", pi)
-    -- pi = 0  -- Would error: attempt to assign to const variable
+-- `while name = expr do` repeats until the expression gives `nil` or `false`.
+local csv = "tea,4.50,3,shelf 2"
+local fields = 1
+local start = 1
+
+while comma = string.find(csv, ",", start) do
+    fields = fields + 1
+    start = comma + 1
 end
+
+print(fields)  --> 4
+
+-- A queue drains with the same form, taking the first job on each pass.
+local jobs = { "build", "test", "deploy" }
+local finished = {}
+
+while job = table.remove(jobs, 1) do
+    finished[#finished + 1] = job
+end
+
+print(#jobs, #finished, finished[3])  --> 0  3  deploy

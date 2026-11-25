@@ -1,59 +1,45 @@
--- Groups: Structured bindings that unpack into individual variables.
+-- Local Groups: A `<group>` declares related locals under one name and creates no table.
 -- playground: true
--- cookbook: true
+global print, ipairs
 
-global print
-
--- Define a group with named fields
-local point <group> = {
-    x = 10,
-    y = 20,
-    z = 30
-}
-
--- Fields are accessed like table members, but they're real locals
-print("Point:", point.x, point.y, point.z)
-
--- Groups can have attributes on their fields
-local config <group> = {
-    host <const> = "localhost",  -- immutable field
-    port = 8080,
-    debug = true
-}
-
-print("Server:", config.host .. ":" .. config.port)
-
--- Multiple groups in one declaration
-local a <group>, b <group> = {val = 1}, {val = 2}
-print("Two groups:", a.val, b.val)
-
--- Nested groups for hierarchical data
-local player <group> = {
-    name = "Hero",
-    stats <group> = {
-        health = 100,
-        mana = 50
-    },
-    position <group> = {
-        x = 0,
-        y = 0
-    }
-}
-
-print("Player:", player.name)
-print("Stats:", player.stats.health, "HP,", player.stats.mana, "MP")
-print("Position:", player.position.x, player.position.y)
-
--- Groups in conditions
-if result <group> = {ok = true, value = 42} then
-    print("Result:", result.ok, result.value)
+-- Each field of a group is a local variable, read and written with the dot.
+local function centroid(points)
+    local sum <group> = { x = 0, y = 0 }
+    for _, point in ipairs(points) do
+        sum.x = sum.x + point.x
+        sum.y = sum.y + point.y
+    end
+    return sum.x / #points, sum.y / #points
 end
 
--- Deconstruct group fields with 'from'
-local name from player
-print("Extracted name:", name)
+local triangle = { { x = 0, y = 0 }, { x = 4, y = 2 }, { x = 2, y = 4 } }
+print(centroid(triangle))  --> 2.0  2.0
 
--- 'from' with if-condition
-if name from player then
-    print("Player name:", name)
+-- Assigning a constructor sets the listed fields and keeps the others.
+local stats <group> = { count = 4, sum = 22, max = 9 }
+stats = { count = 0, sum = 0 }
+print(stats.count, stats.sum, stats.max)  --> 0  0  9
+
+-- Assigning one group to another copies the fields with the same names.
+local start <group> = { x = 0, y = 0 }
+local cursor <group> = { x = 5, y = 7 }
+cursor = start
+print(cursor.x, cursor.y)  --> 0  0
+
+-- Fields take attributes, so a group can hold a constant and nested groups.
+local body <group> = {
+    name <const> = "probe",
+    mass <const> = 2,
+    position <group> = { x = 0, y = 0 },
+    velocity <group> = { x = 1, y = 3 },
+}
+
+for _ = 1, 3 do
+    body.position.x = body.position.x + body.velocity.x
+    body.position.y = body.position.y + body.velocity.y
 end
+
+print(body.name, body.mass, body.position.x, body.position.y)  --> probe  2  3  9
+-- A group is a set of variables, so it cannot be passed or printed whole.
+-- Its fields can be, as `centroid` returns them.
+-- Reading a field the declaration does not list, such as `stats.average`, is a compile error.

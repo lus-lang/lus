@@ -1,0 +1,46 @@
+-- Lists: A list is a table with the keys 1, 2, 3, and up, in order.
+-- playground: true
+global print, table, ipairs
+
+-- Braces create a list. `#` gives the number of items, which is also the last index.
+local days = { "Mon", "Tue", "Wed" }
+print(#days, days[1], days[#days])  --> 3  Mon  Wed
+
+-- Assigning to the index after the last item appends.
+days[#days + 1] = "Thu"
+print(#days, days[4])  --> 4  Thu
+
+-- `table.insert` appends or inserts at a position. `table.remove` takes an item out.
+local queue = { "b", "c" }
+table.insert(queue, "d")
+table.insert(queue, 1, "a")
+print(table.concat(queue, " "))  --> a b c d
+print(table.remove(queue), table.remove(queue, 1))  --> d  a
+print(table.concat(queue, " "))  --> b c
+
+-- `ipairs` visits each index with its item, in order.
+for index, day in ipairs(days) do
+    print(index, day)
+end
+--> 1  Mon
+--> 2  Tue
+--> 3  Wed
+--> 4  Thu
+
+-- An empty list has length 0, so `table.remove` finds nothing to return.
+local empty = {}
+print(#empty, table.remove(empty))  --> 0  nil
+
+-- A list can hold lists, such as the rows of a grid.
+local grid = { { 1, 2, 3 }, { 4, 5, 6 } }
+grid[2][3] = 60
+
+local total = 0
+
+for _, row in ipairs(grid) do
+    for _, cell in ipairs(row) do
+        total = total + cell
+    end
+end
+
+print(#grid, #grid[1], total)  --> 2  3  75

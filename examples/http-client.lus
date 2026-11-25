@@ -1,0 +1,52 @@
+-- HTTP Client: Send requests with network.fetch and read status, headers, and body.
+-- playground: false
+global coroutine, fromjson, network, pledge, print, tojson, vector
+
+pledge("network:tcp=127.0.0.1:*", "network:server", "network:http=127.0.0.1:*")
+
+-- A loopback server gives the client something to talk to. It answers every
+-- request with a JSON description of what it received.
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
+    if req.path == "/missing" then
+        return 404, "not found", { ["Content-Type"] = "text/plain" }
+    end
+    local echo = {
+        method = req.method,
+        path = req.path,
+        query = req.query,
+        token = req.headers["x-api-token"],
+        body = vector.tostring(req.body),
+    }
+    return 200, tojson(echo), { ["Content-Type"] = "application/json", ["X-Server"] = "demo" }
+end)
+
+local base = `http://127.0.0.1:$port`
+
+-- `network.fetch` returns the status, the body as a vector, and a table of
+-- headers whose names are in lowercase.
+local status, body, headers = network.fetch(`$base/search?q=lus`)
+print(status, headers["content-type"], headers["x-server"])  --> 200  application/json  demo
+
+local echo = fromjson(vector.tostring(body))
+print(echo.method, echo.path, echo.query)  --> GET  /search  q=lus
+
+-- The method, the headers, and the body follow the URL as positional
+-- arguments.
+local order = tojson({ item = "tea", quantity = 2 })
+status, body = network.fetch(`$base/orders`, "POST", { ["X-Api-Token"] = "s3cret" }, order)
+echo = fromjson(vector.tostring(body))
+print(echo.method, echo.token, fromjson(echo.body).quantity)  --> POST  s3cret  2
+
+-- Every status counts as a response, so a 404 comes back like a 200.
+status, body = network.fetch(`$base/missing`)
+print(status, vector.tostring(body))  --> 404  not found
+
+coroutine.close(serving)
+server:close()
+
+-- A request that cannot reach a server raises an error object, which `catch`
+-- captures. Its `code` field names the kind of failure.
+local ok, err = catch network.fetch(base)
+print(ok, err.code)  --> false  refused

@@ -1,0 +1,53 @@
+-- Bigints and Decimals: Compute exact integers of any size and exact base 10 amounts.
+-- playground: true
+global print, math, string, tonumber, tostring, decimal, bigint
+
+-- Integers wrap around at 64 bits. A bigint, written with an `n` suffix, never overflows.
+print(math.maxinteger + 1)  --> -9223372036854775808
+print(math.maxinteger + 1n)  --> 9223372036854775808
+print(2n ^ 100)  --> 1267650600228229401496703205376
+
+-- Arithmetic between bigints and integers stays exact, so a factorial keeps every digit.
+local function factorial(n)
+    local result = 1n
+    for i = 2, n do
+        result = result * i
+    end
+    return result
+end
+
+local f30 = factorial(30)
+print(f30)  --> 265252859812191058636308480000000
+print(#tostring(f30), f30 % 1000000007, math.type(f30))  --> 33 109361473 bigint
+
+-- Floats store most fractions approximately. A decimal, written with a `d` suffix, is exact.
+print(0.1 + 0.2, 0.1d + 0.2d)  --> 0.30000000000000004 0.3
+print(0.1d + 0.2d == 0.3d)  --> true
+
+-- Decimals keep the digits they were written with, which suits money.
+local price = 19.90d
+local quantity = 3
+local subtotal = price * quantity
+local tax = subtotal * 0.20d
+print(subtotal, tax, subtotal + tax)  --> 59.70 11.9400 71.6400
+
+-- Division keeps 34 significant digits. `string.format` rounds half to even.
+local share = 100.00d / 3
+print(share)  --> 33.33333333333333333333333333333333
+print(string.format("%.2f %.2f", share, 2.675d))  --> 33.33 2.68
+
+-- Rounding to cents with `//` keeps the result a decimal.
+local function round_cents(amount)
+    return (amount * 100 + 0.5d) // 1 / 100
+end
+
+print(round_cents(71.6400d), round_cents(2.675d))  --> 71.64 2.68
+
+-- All subtypes compare by exact value. A float and a decimal of 0.1 differ.
+print(1 == 1n, 1n == 1.00d, 0.1d == 0.1)  --> true true false
+
+-- Mixing a decimal with a float is an error, so convert one side explicitly.
+local ok, err = catch 19.99d * 0.5
+print(ok, (err:gsub("^.-:%d+: ", "")))  --> false attempt to mix decimal and float in arithmetic
+print(19.99d * decimal(0.5), 19.99 * tonumber(0.5d))  --> 9.995 9.995
+print(bigint(12.00d), math.tointeger(12.00d), tonumber(3n))  --> 12 12 3.0

@@ -1,0 +1,53 @@
+-- JSON: Encode Lus values as JSON text and decode JSON text back into tables.
+-- playground: true
+global print, tojson, fromjson, math, setmetatable
+
+-- A table with keys 1 to n becomes an array. Strings, numbers, and booleans map directly.
+local colors = { "red", "green", "blue" }
+local mixed = { 1, 2.5, true }
+print(tojson(colors))  --> ["red","green","blue"]
+print(tojson(mixed))  --> [1,2.5,true]
+
+-- A table with string keys becomes an object. The order of its members is unspecified,
+-- so this example encodes objects with a single member.
+local place = { city = "Lyon" }
+local product = { tags = { "new", "sale" } }
+print(tojson(place))  --> {"city":"Lyon"}
+print(tojson(product))  --> {"tags":["new","sale"]}
+
+-- The empty table is an empty array. A hole in a list becomes null.
+local empty, holes = {}, { 1, nil, 3 }
+print(tojson(empty), tojson(holes))  --> [] [1,null,3]
+
+-- `fromjson` returns plain tables. JSON null becomes nil, so the field is absent.
+local order = fromjson('{"id": 1043, "total": 59.90, "items": ["mug", "tea"], "note": null}')
+print(order.id, order.total, #order.items, order.items[2], order.note)  --> 1043 59.9 2 tea nil
+print(math.type(order.id), math.type(order.total))  --> integer float
+
+-- With `exact`, numbers with a fraction decode as decimals and keep their digits.
+local exact = fromjson('{"total": 59.90}', { exact = true })
+print(math.type(exact.total), exact.total, tojson(exact))  --> decimal 59.90 {"total":59.90}
+
+-- A filter function sees each key and value. Returning nil leaves a field out.
+local function public(key, value)
+    if key == "password" then
+        return nil
+    end
+    return value
+end
+
+local user = { name = "ada", password = "hunter2" }
+print(tojson(user, public))  --> {"name":"ada"}
+
+-- A `__json` metamethod gives a table its own JSON form.
+local Point = {}
+Point.__json = function(p)
+    return { p.x, p.y }
+end
+
+local path = { setmetatable({ x = 3, y = 4 }, Point), setmetatable({ x = 0, y = 1 }, Point) }
+print(tojson(path))  --> [[3,4],[0,1]]
+
+-- Invalid JSON raises an error, which `catch` turns into a status and a message.
+local ok, err = catch fromjson('{"id": 1043,}')
+print(ok, err)  --> false JSON parse error at position 13: expected string key

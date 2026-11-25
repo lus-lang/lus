@@ -1,0 +1,151 @@
+{
+  "sections": [
+    {
+      "title": "Basics",
+      "examples": [
+        "hello",
+        "values",
+        "variables",
+        "constants",
+        "numbers",
+        "strings",
+        "interpolation",
+        "if-else",
+        "conditions",
+        "loops",
+        "from",
+        "doexpr",
+        "enums"
+      ]
+    },
+    {
+      "title": "Tables",
+      "examples": [
+        "lists",
+        "maps",
+        "slices",
+        "table-functions",
+        "sorting",
+        "groups",
+        "queries"
+      ]
+    },
+    {
+      "title": "Functions",
+      "examples": [
+        "functions",
+        "multiple-returns",
+        "varargs",
+        "closures",
+        "recursion",
+        "iterators"
+      ]
+    },
+    {
+      "title": "Objects",
+      "examples": [
+        "metatables",
+        "metamethods",
+        "inheritance",
+        "optchain"
+      ]
+    },
+    {
+      "title": "Errors and cleanup",
+      "examples": [
+        "catch",
+        "errors",
+        "close"
+      ]
+    },
+    {
+      "title": "Attributes",
+      "examples": [
+        "attrs",
+        "lazy",
+        "observe"
+      ]
+    },
+    {
+      "title": "Concurrency",
+      "examples": [
+        "coroutines",
+        "generators",
+        "detached",
+        "sleep",
+        "timeouts",
+        "cancellation",
+        "context",
+        "worker-pool",
+        "worker-messages"
+      ]
+    },
+    {
+      "title": "Networking",
+      "examples": [
+        "http-server",
+        "http-client",
+        "streaming",
+        "tcp-echo",
+        "udp"
+      ]
+    },
+    {
+      "title": "Text",
+      "examples": [
+        "string-functions",
+        "string-formatting",
+        "patterns",
+        "characters",
+        "json",
+        "csv-stats"
+      ]
+    },
+    {
+      "title": "Numbers and time",
+      "examples": [
+        "time",
+        "time-formatting",
+        "random",
+        "number-parsing",
+        "exact-math"
+      ]
+    },
+    {
+      "title": "Bytes and security",
+      "examples": [
+        "hashing",
+        "passwords",
+        "encryption",
+        "vectors",
+        "compression",
+        "sqlite"
+      ]
+    },
+    {
+      "title": "Files",
+      "examples": [
+        "reading-files",
+        "writing-files",
+        "line-filters",
+        "file-paths",
+        "directories",
+        "walking",
+        "globs",
+        "watching",
+        "temporary-files"
+      ]
+    },
+    {
+      "title": "Programs and permissions",
+      "examples": [
+        "arguments",
+        "environment",
+        "processes",
+        "signals",
+        "exit",
+        "pledge-sandbox"
+      ]
+    }
+  ]
+}

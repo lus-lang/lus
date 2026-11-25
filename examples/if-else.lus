@@ -1,0 +1,50 @@
+-- If and Else: `if`, `elseif`, and `else` choose a branch by testing conditions in order.
+-- playground: true
+global print, ipairs
+
+-- The first condition that holds picks its branch. `else` runs when none does.
+local function describe(temperature)
+    if temperature > 30 then
+        return "hot"
+    elseif temperature > 15 then
+        return "mild"
+    else
+        return "cold"
+    end
+end
+
+print(describe(34), describe(20), describe(3))  --> hot  mild  cold
+
+-- Only `nil` and `false` are falsy, so `0` and `""` pass a test.
+local function truthiness(value)
+    if value then
+        return "truthy"
+    end
+    return "falsy"
+end
+
+print(truthiness(0), truthiness(""), truthiness(false), truthiness(nil))
+--> truthy  truthy  falsy  falsy
+
+-- `not`, `and`, and `or` combine conditions.
+local age, member = 70, false
+
+if age >= 65 and not member then
+    print("senior rate")  --> senior rate
+end
+
+-- `and` and `or` return one of their operands, so `or` supplies a default.
+local requested
+local size = requested or 10
+print(size)  --> 10
+
+-- `cond and a or b` picks between two truthy values.
+for _, stock in ipairs({ 0, 12 }) do
+    print(stock > 0 and "in stock" or "sold out")
+end
+--> sold out
+--> in stock
+
+-- A check on the left of `and` guards the expression on its right.
+local divisor = 0
+print(divisor ~= 0 and 100 // divisor)  --> false

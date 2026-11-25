@@ -1,0 +1,48 @@
+-- Detached Coroutines: Hand tasks to the runtime, which runs them in turns.
+-- playground: true
+global coroutine, error, ipairs, print, table
+
+-- `coroutine.detach` gives a suspended coroutine to the runtime and returns
+-- it. The runtime resumes it with the extra arguments, then again whenever
+-- it is ready. Inside a detached coroutine, `coroutine.yield` gives the next
+-- turn to the other tasks.
+local log = {}
+
+local function download(name, chunks)
+    for i = 1, chunks do
+        log[#log + 1] = `$name$i`
+        coroutine.yield()
+    end
+    return `$name is done`
+end
+
+local tasks = {}
+for _, job in ipairs({ { "a", 3 }, { "b", 1 }, { "c", 2 } }) do
+    tasks[#tasks + 1] = coroutine.detach(coroutine.create(download), job[1], job[2])
+end
+
+-- `detach` returns before the task has run.
+print(#log, coroutine.status(tasks[1]))  --> 0  suspended
+
+-- `coroutine.resume` on a detached coroutine waits until it has ended and
+-- returns its results. The other tasks run during the wait.
+for _, task in ipairs(tasks) do
+    print(coroutine.resume(task))
+end
+--> true  a is done
+--> true  b is done
+--> true  c is done
+
+-- The tasks took turns in the order in which they became ready.
+print(table.concat(log, " "))  --> a1 b1 c1 a2 c2 a3
+
+-- A task that fails keeps its error until a resume collects it.
+local failing = coroutine.detach(coroutine.create(function(path)
+    coroutine.yield()
+    error(`cannot open $path`, 0)
+end), "settings.json")
+
+print(coroutine.resume(failing))  --> false  cannot open settings.json
+
+-- Results are collected once, so a second resume finds a dead coroutine.
+print(coroutine.resume(tasks[1]))  --> false  cannot resume dead coroutine

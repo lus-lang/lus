@@ -1,0 +1,54 @@
+-- Worker Messages: Exchange messages with a worker that waits for jobs.
+-- playground: false
+global fs, io, os, pledge, print, worker
+
+pledge("fs", "load")
+
+-- Inside the worker, `worker.peek` waits for the next message from the
+-- creator and `worker.message` sends one back. This worker keeps a running
+-- total of the amounts it is sent until it receives "stop".
+local script = os.tmpname()
+io.open(script, "w"):write([[
+global error, worker
+
+local total = 0
+while true do
+    local job = worker.peek()
+    if job == "stop" then
+        break
+    end
+    if job.amount < 0 then
+        error(`negative amount for $(job.account)`, 0)
+    end
+    total = total + job.amount
+    worker.message({ account = job.account, total = total })
+end
+worker.message(`final total $total`)
+]]):close()
+
+local ledger = worker.create(script)
+print(worker.status(ledger))  --> running
+
+-- `worker.send` copies a value into the inbox of the worker and returns at
+-- once. `worker.receive` waits for the next message of the worker.
+worker.send(ledger, { account = "rent", amount = 1200 })
+local reply = worker.receive(ledger)
+print(reply.account, reply.total)  --> rent  1200
+
+-- Each direction is a queue, so several jobs may be in flight at a time.
+worker.send(ledger, { account = "food", amount = 300 })
+worker.send(ledger, { account = "travel", amount = 450 })
+print(worker.receive(ledger).total, worker.receive(ledger).total)  --> 1500  1950
+
+-- After "stop" the worker sends its last message and ends. A receive on a
+-- worker that has ended with no message left returns `nil`.
+worker.send(ledger, "stop")
+print(worker.receive(ledger))  --> final total 1950
+print(worker.receive(ledger), worker.status(ledger))  --> nil  dead
+
+-- An error that ends a worker comes out of the next receive in the creator.
+local strict = worker.create(script)
+worker.send(strict, { account = "refund", amount = -5 })
+print(catch worker.receive(strict))  --> false  negative amount for refund
+
+fs.remove(script)

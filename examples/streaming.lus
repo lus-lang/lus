@@ -1,0 +1,54 @@
+-- Streaming Responses: Send server-sent events from a coroutine and read them as they arrive.
+-- playground: false
+global coroutine, fromjson, network, pledge, print, setmetatable, tojson, vector
+
+pledge("network:tcp=127.0.0.1:*", "network:server", "network:http=127.0.0.1:*")
+
+-- A handler that returns a coroutine as its body streams the response. The
+-- server sends each chunk that the coroutine yields as soon as it exists.
+-- Each server-sent event is a `data:` line followed by an empty line.
+local stream_closed = false
+
+local function progress(req)
+    local events = coroutine.create(function()
+        local cleanup <close> = setmetatable({}, {
+            __close = function()
+                stream_closed = true
+            end,
+        })
+        for percent = 25, 100, 25 do
+            coroutine.resume(coroutine.sleep(0.01))
+            coroutine.yield(`data: $(tojson({ job = req.query, percent = percent }))\n\n`)
+        end
+    end)
+    return 200, events, { ["Content-Type"] = "text/event-stream", ["Cache-Control"] = "no-cache" }
+end
+
+local server = network.tcp.bind("127.0.0.1", 0)
+local _, port = server:getsockname()
+local serving = coroutine.detach(coroutine.create(network.serve), server, progress)
+
+-- With `stream = true`, `network.fetch` returns the body as a coroutine that
+-- yields it part by part. `network.lines` reads such a coroutine line by line,
+-- so each event is handled while the server still works on the next one.
+local url = `http://127.0.0.1:$port/progress?export-7`
+local status, body, headers = network.fetch(url, "GET", nil, nil, { stream = true })
+print(status, headers["content-type"])  --> 200  text/event-stream
+
+for line in network.lines(body) do
+    if data = vector.tostring(line):match("^data: (.*)$") then
+        local event = fromjson(data)
+        print(event.job, `$(event.percent)%`)
+    end
+end
+--> export-7  25%
+--> export-7  50%
+--> export-7  75%
+--> export-7  100%
+
+-- The server closed the body coroutine when the response ended, which ran its
+-- `<close>` variable.
+print(stream_closed)  --> true
+
+coroutine.close(serving)
+server:close()

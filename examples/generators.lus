@@ -1,0 +1,86 @@
+-- Generators: Produce the values of a sequence lazily, one per request.
+-- playground: true
+global coroutine, print, table
+
+-- `coroutine.wrap` returns a function that resumes the coroutine on each
+-- call and returns what it yields. In a generic `for`, such a function
+-- produces one value per pass until the coroutine returns.
+local function range(first, last, step)
+    return coroutine.wrap(function()
+        for n = first, last, step or 1 do
+            coroutine.yield(n)
+        end
+    end)
+end
+
+local evens = {}
+for n in range(2, 10, 2) do
+    evens[#evens + 1] = n
+end
+
+print(table.concat(evens, " "))  --> 2 4 6 8 10
+
+-- A generator computes a value only when the caller asks for it, so it may
+-- describe a sequence without an end. The caller takes as many as it needs.
+local function fibonacci()
+    return coroutine.wrap(function()
+        local a, b = 0, 1
+        while true do
+            coroutine.yield(a)
+            a, b = b, a + b
+        end
+    end)
+end
+
+local function take(count, source)
+    return coroutine.wrap(function()
+        for _ = 1, count do
+            coroutine.yield(source())
+        end
+    end)
+end
+
+local first = {}
+for n in take(10, fibonacci()) do
+    first[#first + 1] = n
+end
+
+print(table.concat(first, ", "))  --> 0, 1, 1, 2, 3, 5, 8, 13, 21, 34
+
+-- Generators compose into pipelines. Each stage pulls from the one before it,
+-- which keeps one value in flight at a time.
+local function filter(predicate, source)
+    return coroutine.wrap(function()
+        for value in source do
+            if predicate(value) then
+                coroutine.yield(value)
+            end
+        end
+    end)
+end
+
+local odd = filter(function(n)
+    return n % 2 == 1
+end, take(10, fibonacci()))
+
+local picked = {}
+for n in odd do
+    picked[#picked + 1] = n
+end
+
+print(table.concat(picked, " "))  --> 1 1 3 5 13 21
+
+-- A generic `for` also loops over a coroutine itself and binds every value of
+-- each yield, so a generator may hand over pairs.
+local inventory = coroutine.create(function()
+    coroutine.yield("apples", 12)
+    coroutine.yield("pears", 0)
+    coroutine.yield("plums", 7)
+end)
+
+for name, count in inventory do
+    print(name, count)
+end
+--> apples  12
+--> pears  0
+--> plums  7

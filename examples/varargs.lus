@@ -1,0 +1,41 @@
+-- Variadic Functions: Accept any number of arguments with `...` and pass them on.
+-- playground: true
+global math, print, select, table
+
+-- Three dots as the last parameter accept the extra arguments. In the
+-- body, `...` stands for them, so they can go to another call.
+local function log(level, ...)
+    print(`[$level]`, ...)
+end
+
+log("info", "server started")  --> [info] server started
+log("warn", "disk at", 91, "%")  --> [warn] disk at 91 %
+
+-- `select("#", ...)` counts the arguments, including nils, and
+-- `select(i, ...)` returns them from position i on.
+local function describe(...)
+    return `$(select("#", ...)) arguments, the last is $(select(-1, ...))`
+end
+
+print(describe("a", nil, "c"))  --> 3 arguments, the last is c
+
+-- A name after the dots collects the arguments into a table whose field
+-- `n` is their count.
+local function average(...numbers)
+    if numbers.n == 0 then
+        return 0
+    end
+    local total = 0
+    for i = 1, numbers.n do
+        total = total + numbers[i]
+    end
+    return total / numbers.n
+end
+
+print(average(4, 8, 6))  --> 6.0
+print(average())  --> 0
+
+-- `table.unpack` turns a list back into separate arguments.
+local scores = { 90, 72, 84 }
+print(average(table.unpack(scores)))  --> 82.0
+print(math.max(table.unpack(scores)))  --> 90

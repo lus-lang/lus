@@ -1,0 +1,42 @@
+-- Compression: Compress and decompress data with gzip and Zstandard.
+-- playground: true
+global print, vector, string, table, type
+
+-- Repetitive text such as a log compresses well.
+local lines = {}
+for i = 1, 200 do
+    local second = string.format("%02d", i % 60)
+    lines[i] = `2026-11-25 12:00:$second INFO request served in $(i % 7) ms`
+end
+
+local log = table.concat(lines, "\n")
+print(#log)  --> 9599
+
+-- The compressors take a string or a vector and return a vector of bytes.
+local gzip = vector.archive.gzip
+local packed = gzip.compress(log)
+print(type(packed), #packed < #log / 10)  --> vector true
+print(#packed)  --> 741
+
+-- Decompressing returns a vector, which `vector.tostring` turns back into text.
+local restored = vector.tostring(gzip.decompress(packed))
+print(restored == log)  --> true
+
+-- A level trades speed for size. Level 0 only stores the data, so it grows.
+print(#gzip.compress(log, 0) > #log, #gzip.compress(log, 9) <= #packed)  --> true true
+
+-- Zstandard has the same two functions with levels up to 22.
+local zstd = vector.archive.zstd
+local small = zstd.compress(log, 19)
+print(#small)  --> 371
+print(vector.tostring(zstd.decompress(small)) == log)  --> true
+
+-- Damaged input raises an error, so `catch` guards data from outside the program.
+local ok = catch gzip.decompress(vector.fromstring("not gzip data"))
+print(ok)  --> false
+
+-- A size limit stops a small input from expanding without bound.
+local bomb = zstd.compress(string.rep("0", 1000000))
+print(#bomb < 100)  --> true
+local within, err = catch zstd.decompress(bomb, 4096)
+print(within, (err:gsub("^.-:%d+: ", "")))  --> false decompressed size exceeds limit (4096 bytes)

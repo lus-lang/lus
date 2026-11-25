@@ -1,62 +1,48 @@
--- From Destructuring: Extract table fields into local variables.
+-- Destructuring: `from` copies the fields of a table into variables of the same names.
 -- playground: true
--- cookbook: true
+global print, table
 
-global print
+-- Each name receives the field with that name.
+local config = { host = "example.org", port = 8080, debug = false }
+local host, port from config
+print(host, port)  --> example.org  8080
 
--- Basic destructuring: field names become variable names
-local point = {x = 10, y = 20, z = 30}
-local x, y, z from point
-print("Extracted:", x, y, z)  --> 10    20    30
+-- A missing field gives `nil`.
+local user, timeout from config
+print(user, timeout)  --> nil  nil
 
--- Works with any table
-local config = {
-    host = "localhost",
-    port = 8080,
-    debug = true
-}
-local host, port, debug from config
-print("Config:", host, port, debug)
+-- `from` takes functions out of a library or a module.
+local insert, concat from table
+local tags = {}
+insert(tags, "draft")
+insert(tags, "urgent")
+print(concat(tags, ", "))  --> draft, urgent
 
--- Missing fields become nil
-local partial = {a = 1, c = 3}
-local a, b, c from partial
-print("Partial:", a, b, c)  --> 1    nil    3
+-- Without `local`, `from` assigns to variables that already exist.
+local x, y from { x = 0, y = 0 }
+x, y from { x = 3, y = 4 }
+print(x, y)  --> 3  4
 
--- Combine with const for immutable bindings
-local settings = {version = "1.0", name = "MyApp"}
-local version <const>, name <const> from settings
-print("App:", name, "v" .. version)
--- version = "2.0"  -- Would error: attempt to assign to const
+-- In a condition, the branch runs when every field is truthy.
+local response = { ok = true, body = "accepted" }
 
--- Nested tables
-local user = {
-    name = "Alice",
-    profile = {
-        age = 30,
-        city = "NYC"
-    }
-}
-local name, profile from user
-local age, city from profile
-print("User:", name, age, city)
-
--- Practical example: function returning structured data
-local function get_result()
-    return {
-        success = true,
-        data = "Hello, World!",
-        timestamp = 1234567890
-    }
-end
-
-local success, data, timestamp from get_result()
-if success then
-    print("Got data:", data, "at", timestamp)
-end
-
--- Combine with if-assignment
-local response = {ok = true, body = "Response body"}
 if ok, body from response then
-    print("Response:", body)
+    print(`response: $body`)  --> response: accepted
 end
+
+-- `for ... from` destructures each item that an iterator produces.
+local products = { { name = "kettle", price = 30 }, { name = "mug", price = 8 } }
+
+local function each(list)
+    local i = 0
+    return function()
+        i = i + 1
+        return list[i]
+    end
+end
+
+for name, price from each(products) do
+    print(name, price)
+end
+--> kettle  30
+--> mug  8

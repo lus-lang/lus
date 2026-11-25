@@ -1,0 +1,56 @@
+-- Command-Line Arguments: Read the arguments of the script from arg and parse simple flags.
+-- playground: false
+global print, arg, fs, table, tonumber, error, ipairs, type
+
+-- arg[0] is the script and arg[-1] is the interpreter. The arguments of the
+-- script are arg[1] to arg[#arg]. The path depends on how the script was started, so the
+-- example prints its name only.
+print(fs.path.name(arg[0]))  --> arguments.lus
+print(type(arg[-1]))  --> string
+
+-- This parser takes a list of arguments. A flag starts with "--" and may carry
+-- a value after "=". "-v" stands for "--verbose". Every other word is a file.
+local function parse(args)
+    local options = { verbose = false, limit = 10, files = {} }
+    for _, word in ipairs(args) do
+        if name, value = word:match("^%-%-(%w+)=(.*)$") then
+            if name ~= "limit" or not tonumber(value) then
+                error(`bad option: $word`, 0)
+            end
+            options.limit = tonumber(value)
+        elseif word == "--verbose" or word == "-v" then
+            options.verbose = true
+        elseif word:match("^%-") then
+            error(`unknown flag: $word`, 0)
+        else
+            table.insert(options.files, word)
+        end
+    end
+    return options
+end
+
+-- The real arguments of this run, which are none when the script runs bare.
+local given = parse(arg)
+print(`$(#given.files) files, limit $(given.limit)`)
+
+-- A fixed list shows each kind of argument.
+local options = parse({
+    "-v",
+    "--limit=3",
+    "march.csv",
+    "april.csv",
+})
+print(options.verbose, options.limit)  --> true  3
+print(table.concat(options.files, " "))  --> march.csv april.csv
+
+-- With no arguments every option keeps its default.
+local defaults = parse({})
+print(defaults.verbose, defaults.limit, #defaults.files)  --> false  10  0
+
+-- A bad argument raises an error that the program reports.
+print(catch parse({  --> false  unknown flag: --colour
+    "--colour",
+}))
+print(catch parse({  --> false  bad option: --limit=many
+    "--limit=many",
+}))

@@ -1,0 +1,53 @@
+-- Maps: A table maps keys of any type to values.
+-- playground: true
+global print, pairs, table, ipairs
+
+-- A key that is a name is written bare. Any other key goes in square brackets.
+local capitals = { France = "Paris", ["New Zealand"] = "Wellington" }
+
+-- Assigning sets a key. Reading a missing key gives `nil`.
+capitals.Japan = "Tokyo"
+print(capitals.France, capitals["New Zealand"], capitals.Spain)  --> Paris  Wellington  nil
+
+-- Assigning `nil` deletes a key.
+capitals.France = nil
+print(capitals.France)  --> nil
+
+-- `pairs` visits every key in an unspecified order, so sort the keys for stable output.
+local stock = { tea = 30, mug = 0, spoon = 12 }
+local names = {}
+
+for name in pairs(stock) do
+    names[#names + 1] = name
+end
+
+table.sort(names)
+
+for _, name in ipairs(names) do
+    print(name, stock[name])
+end
+--> mug  0
+--> spoon  12
+--> tea  30
+
+-- `#` counts only list positions, so counting the keys of a map takes a loop.
+local count = 0
+
+for _ in pairs(stock) do
+    count = count + 1
+end
+
+print(#stock, count)  --> 0  3
+
+-- A map counts occurrences, with `or 0` for the first one of each word.
+local counts = {}
+
+for _, word in ipairs(("tea milk tea sugar tea"):split(" ")) do
+    counts[word] = (counts[word] or 0) + 1
+end
+
+print(counts.tea, counts.milk, counts.salt)  --> 3  1  nil
+
+-- Maps nest. `?.` reads through a part that may be missing.
+local users = { ada = { address = { city = "London" } }, grace = {} }
+print(users.ada.address?.city, users.grace.address?.city)  --> London  nil

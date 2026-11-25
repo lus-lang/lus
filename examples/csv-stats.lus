@@ -1,29 +1,63 @@
--- CSV Statistics: Parse CSV data and crunch it with the table library.
+-- CSV: Parse CSV text into rows, summarize the columns, and write a CSV report.
 -- playground: true
--- cookbook: true
-global fromcsv, table, tonumber, ipairs, pairs, print
+global print, fromcsv, tocsv, tonumber, table, pairs, ipairs, io, string, math
 
-local csv = [[city,quarter,revenue
+local sales = [[city,quarter,revenue
 Paris,Q1,1200
 Paris,Q2,1450
 London,Q1,980
 London,Q2,1330
 Berlin,Q1,1110
-Berlin,Q2,1080]]
+Berlin,Q2,1080
+]]
 
--- fromcsv returns rows of fields; row 1 is the header
-local rows = fromcsv(csv)
-local sales = {}
-for i = 2, #rows do
-    sales[#sales + 1] = {
-        city = rows[i][1],
-        revenue = tonumber(rows[i][3]),
-    }
+-- With a second argument of true, the first row names the columns and every
+-- other row becomes a table keyed by those names.
+local rows = fromcsv(sales, true)
+print(#rows, rows[1].city, rows[1].revenue)  --> 6 Paris 1200
+
+-- Every field is a string, so numbers need `tonumber` before arithmetic.
+for _, row in ipairs(rows) do
+    row.revenue = tonumber(row.revenue)
 end
 
-local by_city = table.groupby(sales, function(s) return s.city end)
+-- `table.groupby` collects the rows under the key that the function returns.
+local by_city = table.groupby(rows, function(row)
+    return row.city
+end)
 
-for city, entries in pairs(by_city) do
-    local revenues = table.map(entries, function(s) return s.revenue end)
-    print(`$city: total $(table.sum(revenues)), mean $(table.mean(revenues))`)
+-- The order of `pairs` is unspecified, so the report sorts the city names first.
+local cities = {}
+for city in pairs(by_city) do
+    cities[#cities + 1] = city
 end
+table.sort(cities)
+
+local function revenue(row)
+    return row.revenue
+end
+
+local report = { { "city", "total", "mean" } }
+for _, city in ipairs(cities) do
+    local revenues = table.map(by_city[city], revenue)
+    local total, mean = table.sum(revenues), table.mean(revenues)
+    print(string.format("%-8s total %6.0f  mean %7.1f", city, total, mean))
+    report[#report + 1] = { city, math.tointeger(total), mean }
+end
+--> Berlin   total   2190  mean  1095.0
+--> London   total   2310  mean  1155.0
+--> Paris    total   2650  mean  1325.0
+
+-- `tocsv` writes a list of rows back as CSV text and quotes fields when needed.
+io.write(tocsv(report))
+--> city,total,mean
+--> Berlin,2190,1095.0
+--> London,2310,1155.0
+--> Paris,2650,1325.0
+
+-- A quoted field may hold the delimiter. An unterminated quote raises an error.
+local quoted = fromcsv('name,note\nAda,"likes tea, not coffee"\n', true)
+print(quoted[1].note)  --> likes tea, not coffee
+local ok, err = catch fromcsv('name\n"Ada\n')
+local message = err:gsub("^.-:%d+: ", "")
+print(ok, message)  --> false CSV parse error at position 11: unterminated quoted field

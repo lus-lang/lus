@@ -1,0 +1,63 @@
+-- Recursion: Functions that call themselves, with a memo table and tail calls.
+-- playground: true
+global ipairs, print
+
+-- `local function` puts the name in scope inside the body, so the
+-- function can call itself.
+local function factorial(n)
+    if n <= 1 then
+        return 1
+    end
+    return n * factorial(n - 1)
+end
+
+print(factorial(5))  --> 120
+print(factorial(20))  --> 2432902008176640000
+
+-- Plain recursive Fibonacci recomputes the same values many times. A memo
+-- table stores each result, so each value is computed once.
+local memo = {}
+
+local function fib(n)
+    if n < 2 then
+        return n
+    end
+    if memo[n] == nil then
+        memo[n] = fib(n - 1) + fib(n - 2)
+    end
+    return memo[n]
+end
+
+print(fib(10))  --> 55
+print(fib(90))  --> 2880067194370816120
+
+-- Recursion follows nested data, such as a tree of folders.
+local function folder(name, ...children)
+    return { name = name, children = children }
+end
+
+local tree = folder("src", { name = "main.lus" }, folder("lib", { name = "json.lus" }))
+
+local function count_files(node)
+    if node.children == nil then
+        return 1
+    end
+    local total = 0
+    for _, child in ipairs(node.children) do
+        total = total + count_files(child)
+    end
+    return total
+end
+
+print(count_files(tree))  --> 2
+
+-- A call in the form `return f(...)` is a tail call. It reuses the frame
+-- of the caller, so this loop of a million calls needs no extra stack.
+local function count_down(n, steps)
+    if n == 0 then
+        return steps
+    end
+    return count_down(n - 1, steps + 1)
+end
+
+print(count_down(1000000, 0))  --> 1000000

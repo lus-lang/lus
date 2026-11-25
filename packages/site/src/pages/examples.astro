@@ -8,6 +8,7 @@ import lusGrammar from "../../../textmate/lus.tmLanguage.json"
 
 import Layout from "../components/Layout.astro"
 import { playgroundHref } from "../lib/playground-link"
+import index from "../../../../examples/index.json"
 
 const exampleFiles = import.meta.glob("../../../../examples/*.lus", {
   query: "?raw",
@@ -17,6 +18,7 @@ const exampleFiles = import.meta.glob("../../../../examples/*.lus", {
 
 interface Example {
   name: string
+  number: number
   title: string
   blurb: string
   content: string
@@ -24,14 +26,14 @@ interface Example {
   playground: boolean
 }
 
-const examples: Example[] = []
+const byName = new Map<string, Example>()
 for (const [path, content] of Object.entries(exampleFiles)) {
-  if (!content.includes("cookbook: true")) continue
   const name = path.split("/").pop()!.replace(".lus", "")
   const first = content.split("\n", 1)[0] ?? ""
   const m = first.match(/^--\s*([^:]+):\s*(.+)$/)
-  examples.push({
+  byName.set(name, {
     name,
+    number: 0,
     title: m?.[1]?.trim() ?? name,
     blurb: m?.[2]?.trim() ?? "",
     // strip the marker comment lines, and the title line the heading
@@ -41,7 +43,7 @@ for (const [path, content] of Object.entries(exampleFiles)) {
       .filter(
         (l, i) =>
           !(i === 0 && m) &&
-          !/^--\s*(playground|unstable|cookbook):\s*(true|false)\s*$/.test(l),
+          !/^--\s*(playground|unstable|posix):\s*(true|false)\s*$/.test(l),
       )
       .join("\n")
       .trim(),
@@ -50,7 +52,19 @@ for (const [path, content] of Object.entries(exampleFiles)) {
   })
 }
 
-examples.sort((a, b) => a.title.localeCompare(b.title))
+// examples/index.json orders the examples and groups them into sections.
+let number = 0
+const sections = index.sections.map((section) => ({
+  title: section.title,
+  id: section.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+  examples: section.examples.map((name) => {
+    const ex = byName.get(name)
+    if (!ex) throw new Error(`examples/index.json names ${name}, which has no file`)
+    ex.number = ++number
+    return ex
+  }),
+}))
+const examples = sections.flatMap((section) => section.examples)
 
 const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").length))
 ---
@@ -80,28 +94,36 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
       </div>
       <nav class="jump" aria-label="Examples">
         {
-          examples.map((ex, i) => (
-            <a href={`#${ex.name}`} data-bar={i}>
-              <span class="k">{String(i + 1).padStart(2, "0")}</span>
-              {ex.title}
-            </a>
+          sections.map((section) => (
+            <div class="group">
+              <a class="group-title" href={`#${section.id}`}>{section.title}</a>
+              {section.examples.map((ex) => (
+                <a href={`#${ex.name}`} data-bar={ex.number - 1}>
+                  <span class="k">{String(ex.number).padStart(2, "0")}</span>
+                  {ex.title}
+                </a>
+              ))}
+            </div>
           ))
         }
       </nav>
     </section>
 
-    <section class="part">
+    {
+      sections.map((section) => (
+    <section class="part" id={section.id}>
+      <div class="sech"><h2>{section.title}</h2></div>
       <div class="examples">
         {
-          examples.map((ex, i) => (
+          section.examples.map((ex) => (
             <article class="example" id={ex.name}>
               <div class="side">
-                <div class="no">{String(i + 1).padStart(2, "0")}</div>
+                <div class="no">{String(ex.number).padStart(2, "0")}</div>
                 <div class="head">
-                  <h2>
+                  <h3>
                     <a href={`#${ex.name}`}>{ex.title}</a>
                     {ex.unstable && <span class="tag red">unstable</span>}
-                  </h2>
+                  </h3>
                   {ex.blurb && <p>{ex.blurb}</p>}
                 </div>
               </div>
@@ -129,6 +151,8 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
         }
       </div>
     </section>
+      ))
+    }
   </main>
 </Layout>
 
@@ -153,7 +177,15 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
 
   /* contents, set like the homepage index: four columns, no rules */
   .jump {
-    @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 pt-6;
+    @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-4 pt-6;
+
+    .group {
+      @apply flex flex-col;
+    }
+
+    a.group-title {
+      @apply font-display font-bold text-ink pb-1;
+    }
 
     a {
       @apply flex gap-2.5 items-baseline py-1 text-sm no-underline font-normal text-ink hover:bg-accent-soft;
@@ -186,7 +218,7 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
       align-self: baseline;
     }
 
-    h2 {
+    h3 {
       @apply font-display font-bold text-lg tracking-[-0.02em] flex items-center gap-2 m-0;
 
       a {
@@ -214,7 +246,7 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
     color: color-mix(in oklab, var(--color-accent) 70%, transparent);
   }
 
-  .example:target h2 a {
+  .example:target h3 a {
     @apply bg-accent-soft;
   }
 

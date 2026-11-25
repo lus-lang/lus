@@ -1,0 +1,44 @@
+-- Number Parsing: Convert text to integers, floats, bigints, and decimals.
+-- playground: true
+global print, tonumber, math, bigint, decimal, ipairs
+
+-- `tonumber` reads integers, floats, and hexadecimal numerals. It ignores surrounding spaces.
+print(tonumber("42"), tonumber("3.25"), tonumber(" 0x1F "))  --> 42 3.25 31
+print(math.type(tonumber("42")), math.type(tonumber("1e3")))  --> integer float
+
+-- A second argument gives the base, from 2 to 36.
+print(tonumber("ff", 16), tonumber("101", 2), tonumber("zz", 36))  --> 255 5 1295
+
+-- Text that is not a numeral returns nil, so the result can be tested directly.
+local inputs = {
+    "12",
+    "12px",
+    "",
+    "1,000",
+}
+for _, input in ipairs(inputs) do
+    if n = tonumber(input) then
+        print(`"$input" is $n`)
+    else
+        print(`"$input" is not a number`)
+    end
+end
+--> "12" is 12
+--> "12px" is not a number
+--> "" is not a number
+--> "1,000" is not a number
+
+-- `math.tointeger` returns an integer only for a whole value that fits in 64 bits.
+print(math.tointeger("8"), math.tointeger(3.0), math.tointeger(3.5))  --> 8 3 nil
+
+-- An integer numeral too large for 64 bits reads as a float and loses digits.
+local big = "123456789012345678901234567890"
+print(math.type(tonumber(big)))  --> float
+
+-- `bigint` reads it exactly. `decimal` keeps every digit of a fraction.
+print(bigint(big) + 1)  --> 123456789012345678901234567891
+print(decimal("19.90"), decimal("19.90") * 3)  --> 19.90 59.70
+print(bigint("1.5"), decimal("abc"))  --> nil nil
+
+-- `tonumber` turns a bigint or a decimal into the nearest float.
+print(tonumber(decimal("0.25")), math.type(tonumber(bigint("7"))))  --> 0.25 float

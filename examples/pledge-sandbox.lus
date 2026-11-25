@@ -1,17 +1,64 @@
--- Pledge Sandbox: Deny-by-default permissions, enforced by the runtime.
+-- Permissions: Pledge only the access a program needs, then seal it so nothing can widen it.
 -- playground: false
--- cookbook: true
-global os, string, pledge, print
+global print, io, fs, os, coroutine, pledge, ipairs
 
--- Grant nothing but the permission system itself, permanently deny
--- command execution, and seal so nothing can be granted later.
-pledge("~exec")
-pledge("seal")
+-- A coroutine starts with a copy of the permissions of its creator. This one
+-- is made before the main program pledges anything, so it can take "fs" for
+-- itself to set up the data directory and to remove it at the end.
+local setup = coroutine.wrap(function()
+    pledge("fs")
+    fs.createdirectory("data")
+    io.open("data/prices.csv", "w"):write("apples,3\npears,4\n"):close()
+    coroutine.yield()
+    fs.remove("data", true)
+end)
+setup()
 
--- Anything the script never pledged is refused at the call site,
--- and the refusal is an ordinary error you can catch.
-local ok, err = catch os.execute("rm -rf /")
-print(ok and "uh oh" or `blocked: $(string.match(err, "[^\n]+"))`)
+-- The main program may read the data directory and its files, and nothing
+-- else. "~exec" rejects running programs for good. "seal" makes every later
+-- pledge return false.
+print(pledge("fs:read=./data", "fs:read=./data/*", "~exec", "seal"))  --> true  true  true  true
 
-local ok2, err2 = catch os.getenv("SECRET_TOKEN")
-print(ok2 and "uh oh" or `blocked: $(string.match(err2, "[^\n]+"))`)
+-- The error of a denied call names the permission, so the example keeps
+-- that part and drops the path, which differs between machines.
+local function reason(err)
+    return err:match('permission "[^"]+" denied') or err
+end
+
+for line in io.lines("data/prices.csv") do
+    print(line)
+end
+--> apples,3
+--> pears,4
+
+print(#fs.list("data"))  --> 1
+
+-- Everything outside the grants raises an error at the call, which catch
+-- captures like any other error.
+local denied = {
+    function()
+        return fs.list(".")
+    end,
+    function()
+        return io.open("data/prices.csv", "w")
+    end,
+    function()
+        return os.execute("ls")
+    end,
+    function()
+        return os.getenv("HOME")
+    end,
+}
+for _, attempt in ipairs(denied) do
+    local ok, err = catch attempt()
+    print(ok, reason(err))
+end
+--> false  permission "fs:read" denied
+--> false  permission "fs:write" denied
+--> false  permission "exec" denied
+--> false  permission "env:read" denied
+
+-- After the seal, a pledge for more access is refused.
+print(pledge("fs:write"), pledge("env"))  --> false  false
+
+setup()

@@ -1,0 +1,47 @@
+-- Strings: Strings are immutable text, measured and indexed by character.
+-- playground: true
+global print, string, utf8, ipairs
+
+-- `#` counts characters, so an accented letter counts as one.
+local city = "Zürich"
+print(#city)  --> 6
+
+-- `sub` takes the characters between two positions. A negative position counts from the end.
+print(city:sub(1, 2), city:sub(-4))  --> Zü  rich
+
+-- Methods return new strings and leave the original unchanged.
+local word = "Stressed"
+print(word:upper(), word:lower())  --> STRESSED  stressed
+print(word:lower():reverse())  --> desserts
+print(word)  --> Stressed
+
+-- `..` joins two strings. Backticks insert values into a string.
+local year = 2026
+print("report" .. ".csv", `report-$year.csv`)  --> report.csv  report-2026.csv
+
+-- `==` compares the characters. `<` compares by code point, so capitals sort first.
+print("tea" == "te" .. "a")  --> true
+print("apple" < "banana", "Zebra" < "apple")  --> true  true
+
+-- A character is one position, whatever its size in UTF-8.
+local greeting = "こんにちは"
+print(#greeting, greeting:sub(1, 2))  --> 5  こん
+
+-- `byte` and `utf8.char` convert between characters and code points.
+print(("é"):byte(), utf8.char(9731))  --> 233  ☃
+
+for position, code in utf8.codes("añb") do
+    print(position, code)
+end
+--> 1  97
+--> 2  241
+--> 3  98
+
+-- `split`, `trim`, and `string.join` cover the common text chores.
+local fields = (" red, green ,blue "):split(",")
+
+for i, field in ipairs(fields) do
+    fields[i] = field:trim()
+end
+
+print(string.join(fields, "|"))  --> red|green|blue

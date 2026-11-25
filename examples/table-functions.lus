@@ -1,0 +1,61 @@
+-- Table Functions: The `table` library joins, copies, unpacks, and transforms lists.
+-- playground: true
+global print, table, select
+
+-- `table.concat` joins strings and numbers with a separator.
+local words = { "red", "green", "blue" }
+print(table.concat(words, ", "))  --> red, green, blue
+print(table.concat(words, "-", 2, 3))  --> green-blue
+
+-- `table.clone` copies a table. With `true`, it also copies the nested tables.
+local original = { name = "report", tags = { "draft" } }
+local shallow = table.clone(original)
+local deep = table.clone(original, true)
+original.tags[1] = "final"
+print(shallow.tags[1], deep.tags[1])  --> final  draft
+
+-- `table.unpack` turns a list into separate values. `table.pack` does the reverse.
+local point = { 3, 4 }
+local x, y = table.unpack(point)
+print(x, y)  --> 3  4
+local packed = table.pack("a", nil, "c")
+print(packed.n, select("#", table.unpack(packed, 1, packed.n)))  --> 3  3
+
+-- `table.move` copies a range into another table, or within one.
+local merged = table.move({ 4, 5 }, 1, 2, 4, { 1, 2, 3 })
+print(table.concat(merged, " "))  --> 1 2 3 4 5
+
+-- `filter`, `map`, and `reduce` build new values from a list.
+local prices = { 12, 3, 40 }
+
+local cheap = table.filter(prices, function(price)
+    return price < 10
+end)
+
+local doubled = table.map(prices, function(price)
+    return price * 2
+end)
+
+local total = table.reduce(prices, function(sum, price)
+    return sum + price
+end, 0)
+
+print(table.concat(cheap, " "), table.concat(doubled, " "), total)  --> 3  24 6 80  55
+
+-- `groupby` collects the items that share a key.
+local orders = {
+    { id = 1, status = "paid" },
+    { id = 2, status = "open" },
+    { id = 3, status = "paid" },
+    { id = 4, status = "void" },
+}
+
+local by_status = table.groupby(orders, function(order)
+    return order.status
+end)
+
+print(#by_status.paid, #by_status.open, by_status.shipped)  --> 2  1  nil
+
+-- `zip` pairs the items of two lists by position.
+local priced = table.zip({ "tea", "mug" }, { 4.5, 12 })
+print(priced[2][1], priced[2][2])  --> mug  12

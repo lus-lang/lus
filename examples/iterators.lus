@@ -1,0 +1,85 @@
+-- Iterators: Loop over tables with pairs and ipairs, and write iterators of your own.
+-- playground: true
+global coroutine, ipairs, pairs, print, table
+
+-- `ipairs` visits a list in order. `pairs` visits every key of a table in
+-- an unspecified order, so this loop sums the values.
+local fruits = { "apple", "pear", "fig" }
+
+for i, fruit in ipairs(fruits) do
+    print(i, fruit)
+end
+--> 1 apple
+--> 2 pear
+--> 3 fig
+
+local stock = { apples = 30, pears = 12, figs = 4 }
+local total = 0
+
+for _, count in pairs(stock) do
+    total = total + count
+end
+
+print(total)  --> 46
+
+-- A stateless iterator receives the collection and the current position
+-- from the loop, so it keeps no state of its own.
+local function previous(list, i)
+    i = i - 1
+    if i >= 1 then
+        return i, list[i]
+    end
+end
+
+local function reversed(list)
+    return previous, list, #list + 1
+end
+
+for i, fruit in reversed(fruits) do
+    print(i, fruit)
+end
+--> 3 fig
+--> 2 pear
+--> 1 apple
+
+-- A closure iterator keeps its position in a captured variable. This one
+-- visits the keys of a table in sorted order.
+local function sorted_pairs(t)
+    local keys = {}
+    for key in pairs(t) do
+        keys[#keys + 1] = key
+    end
+    table.sort(keys)
+    local i = 0
+    return function()
+        i = i + 1
+        local key = keys[i]
+        if key ~= nil then
+            return key, t[key]
+        end
+    end
+end
+
+for name, count in sorted_pairs(stock) do
+    print(name, count)
+end
+--> apples 30
+--> figs 4
+--> pears 12
+
+-- `coroutine.wrap` turns a function that yields into an iterator, which
+-- suits a sequence whose state is easier to write as a loop.
+local function range(first, last, step)
+    return coroutine.wrap(function()
+        for n = first, last, step do
+            coroutine.yield(n)
+        end
+    end)
+end
+
+for n in range(10, 30, 10) do
+    print(n)
+end
+--> 10
+--> 20
+--> 30

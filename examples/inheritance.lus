@@ -1,0 +1,60 @@
+-- Inheritance: A subclass reads missing methods from its base class through a chain of `__index`.
+-- playground: true
+global print, setmetatable
+
+local Shape = {}
+Shape.__index = Shape
+
+function Shape.new(name)
+    return setmetatable({ name = name }, Shape)
+end
+
+function Shape:area()
+    return 0
+end
+
+function Shape:describe()
+    return `$(self.name) with area $(self:area())`
+end
+
+-- The subclass has its own `__index` and takes the base class as the
+-- `__index` of its own metatable, so a lookup continues into `Shape`.
+local Rectangle = setmetatable({}, { __index = Shape })
+Rectangle.__index = Rectangle
+
+-- The constructor builds the object with the base constructor, adds its
+-- own fields, then attaches the subclass as the metatable.
+function Rectangle.new(width, height)
+    local rect = Shape.new("rectangle")
+    rect.width = width
+    rect.height = height
+    return setmetatable(rect, Rectangle)
+end
+
+-- A method of the subclass replaces the method of the base class.
+function Rectangle:area()
+    return self.width * self.height
+end
+
+-- A third level calls the base method explicitly with `self`.
+local Square = setmetatable({}, { __index = Rectangle })
+Square.__index = Square
+
+function Square.new(side)
+    local square = Rectangle.new(side, side)
+    square.name = "square"
+    return setmetatable(square, Square)
+end
+
+function Square:describe()
+    return `$(Shape.describe(self)), side $(self.width)`
+end
+
+-- Each call finds `area` and `describe` in the nearest class that defines them.
+print(Shape.new("point"):describe())  --> point with area 0
+print(Rectangle.new(3, 4):describe())  --> rectangle with area 12
+print(Square.new(5):describe())  --> square with area 25, side 5
+
+-- A lookup goes from the object to `Square`, then `Rectangle`, then `Shape`.
+local square = Square.new(2)
+print(square.area == Rectangle.area, square.describe == Shape.describe)  --> true false

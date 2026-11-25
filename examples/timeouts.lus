@@ -1,0 +1,42 @@
+-- Timeouts: Race a task against a sleep and cancel whichever loses.
+-- playground: true
+global coroutine, error, print, time
+
+-- The task and a timer run as two detached coroutines. When the timer wins,
+-- it closes the task. When the task wins, the caller closes the timer, which
+-- also ends its sleep, so the program never waits for a timer that nothing needs.
+local function with_timeout(seconds, body, ...)
+    local timed_out = false
+    local task = coroutine.detach(coroutine.create(body), ...)
+    local timer = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(seconds))
+        timed_out = true
+        coroutine.close(task)
+    end))
+    local ok, result = coroutine.resume(task)
+    coroutine.close(timer)
+    if timed_out then
+        return false, `timed out after $seconds s`
+    end
+    return ok, result
+end
+
+-- A lookup that takes a different time for each name stands in for a slow
+-- service.
+local function lookup(name, delay)
+    coroutine.resume(coroutine.sleep(delay))
+    if name == "" then
+        error("empty name", 0)
+    end
+    return `$name.example.com`
+end
+
+print(with_timeout(0.1, lookup, "fast", 0.01))  --> true  fast.example.com
+print(with_timeout(0.05, lookup, "slow", 2))  --> false  timed out after 0.05 s
+print(with_timeout(0.1, lookup, "", 0.01))  --> false  empty name
+
+-- The slow lookup was cancelled at the timeout, so the whole program takes
+-- far less than its two seconds.
+local start = time.monotonic()
+with_timeout(0.05, lookup, "slow", 2)
+print((time.monotonic() - start):seconds() < 1)  --> true

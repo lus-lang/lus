@@ -1,0 +1,47 @@
+-- File Paths: Build paths and take them apart without touching the filesystem.
+-- playground: true
+global print, fs, table
+
+-- join puts the platform separator between components. An absolute component
+-- replaces everything before it. The output shown is that of POSIX systems.
+local report = fs.path.join("projects", "garden", "report.pdf")
+print(report)  --> projects/garden/report.pdf
+print(fs.path.join("projects", "/etc", "hosts"))  --> /etc/hosts
+print(fs.path.separator)  --> /
+
+-- name is the last component and parent is everything before it.
+print(fs.path.name(report))  --> report.pdf
+print(fs.path.parent(report))  --> projects/garden
+print(fs.path.parent("report.pdf"))  --> .
+
+-- split returns the components as an array. An absolute path starts with an
+-- empty component.
+local parts = fs.path.split("/usr/local/bin")
+print(#parts, table.concat(parts, ","))  --> 4 ,usr,local,bin
+
+-- The extension is the part of the name after its last dot. A name that
+-- starts with a dot, such as .profile, has no extension.
+local function extension(path)
+    return fs.path.name(path):match("^.+%.([^.]+)$")
+end
+
+local function stem(path)
+    local name = fs.path.name(path)
+    return name:match("^(.+)%.[^.]+$") or name
+end
+
+print(extension(report), stem(report))  --> pdf  report
+print(extension("archive.tar.gz"), stem("archive.tar.gz"))  --> gz  archive.tar
+print(extension("Makefile"), stem("Makefile"))  --> nil  Makefile
+print(extension(".profile"), stem(".profile"))  --> nil  .profile
+
+-- Replacing the extension keeps the directory of the path.
+local function with_extension(path, ext)
+    return fs.path.join(fs.path.parent(path), `$(stem(path)).$ext`)
+end
+
+print(with_extension(report, "txt"))  --> projects/garden/report.txt
+
+-- delimiter separates the entries of a list of paths such as PATH.
+local search = table.concat({ "/usr/local/bin", "/usr/bin" }, fs.path.delimiter)
+print(search)  --> /usr/local/bin:/usr/bin

@@ -1,0 +1,89 @@
+-- The programs in examples/ run as the site shows them. Each example of
+-- examples/index.json runs in a fresh temporary directory with a time
+-- limit, exits with status 0, leaves no file behind, and prints every line
+-- that a `-->` comment in its source names. Runs of whitespace compare
+-- equal, so the tabs of print match the spaces of a comment.
+pledge("exec", "fs", "env")
+
+local lus_bin = os.getenv("LUS_BIN") or `$(TEST_DIR)/../../runtime/zig-out/bin/lus`
+local dir = `$(TEST_DIR)/../../examples`
+
+local function read(path)
+    local f <close> = assert(io.open(path))
+    return f:read("a")
+end
+
+local index = fromjson(read(`$dir/index.json`))
+
+local function normalize(text)
+    return (text:gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
+end
+
+local function run(path)
+    local cwd = os.tmpname()
+    fs.remove(cwd)
+    fs.createdirectory(cwd)
+    local p <close> = os.spawn({ lus_bin, path }, { stdout = "pipe", stderr = "stdout", cwd = cwd })
+    local watchdog = coroutine.detach(coroutine.create(function()
+        coroutine.resume(coroutine.sleep(120))
+        p:kill("kill")
+    end))
+    local out = p.stdout:read("a")
+    local _, _, how, status = coroutine.resume(p.exit)
+    coroutine.close(watchdog)
+    local left = fs.list(cwd)
+    fs.remove(cwd, true)
+    return out, how, status, left
+end
+
+local listed = {}
+local example_cases = {}
+for _, section in ipairs(index.sections) do
+    for _, name in ipairs(section.examples) do
+        assert(not listed[name], `$name is listed twice`)
+        listed[name] = true
+        example_cases[name] = { name }
+    end
+end
+
+local function every_example_is_listed_once_test()
+    for _, entry in ipairs(fs.list(dir)) do
+        if name = entry:match("^(.+)%.lus$") then
+            assert(listed[name], `$entry is missing from examples/index.json`)
+        end
+    end
+    for name in pairs(listed) do
+        assert(fs.type(`$dir/$name.lus`) == "file", `$name.lus is listed but does not exist`)
+    end
+end
+
+local function every_example_has_a_header_test()
+    for name in pairs(listed) do
+        local source = read(`$dir/$name.lus`)
+        local first, second = source:match("^([^\n]*)\n([^\n]*)\n")
+        assert(first and first:match("^%-%- [^:]+: .+%.$"), `$name.lus: the first line is not "-- Title: Blurb."`)
+        assert(second:match("^%-%- playground: (%a+)$"), `$name.lus: the second line is not "-- playground: true|false"`)
+    end
+end
+
+local function example_test(name)
+    local path = `$dir/$name.lus`
+    local source = read(path)
+    if source:match("\n%-%- posix: true\n") and package.config:sub(1, 1) == "\\" then
+        skip("the example needs a POSIX system")
+    end
+    local out, how, status, left = run(path)
+    assert(how == "exit" and status == 0, `$name.lus ended with $(how) $(status):\n$out`)
+    assert(#left == 0, `$name.lus left $(table.concat(left, ", ")) behind`)
+    local lines = {}
+    for line in (out .. "\n"):gmatch("([^\n]*)\n") do
+        lines[normalize(line)] = true
+    end
+    local n = 0
+    for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+        n = n + 1
+        if want = line:match("%-%->%s?(.*)$") then
+            assert(lines[normalize(want)], `$name.lus:$n prints no line "$(normalize(want))":\n$out`)
+        end
+    end
+end

@@ -1,99 +1,58 @@
--- Optional Chaining: Safe navigation through potentially nil values.
+-- Optional Chaining: Read fields, index, and call through values that may be nil.
 -- playground: true
--- cookbook: true
+global print
 
-global print, pairs
+local database = { host = "db1.internal", port = 5432 }
+local config = { database = database, replicas = { "db2.internal", "db3.internal" } }
 
--- Deep config access without crashes
-local config = {
-    database = {
-        primary = { host = "db1.local", port = 5432 },
-        -- backup is not defined
-    },
-    cache = {
-        enabled = true,
-        ttl = 3600
-    }
-}
+-- `?.` stops at a nil or false value and produces that value, so a
+-- missing table in the middle of a path reads as nil.
+print(config?.database?.host)  --> db1.internal
+print(config?.cache?.ttl)  --> nil
 
-print("Primary host:", config?.database?.primary?.host)  --> db1.local
-print("Backup host:", config?.database?.backup?.host)    --> nil (no error)
-print("Cache TTL:", config?.cache?.ttl)                  --> 3600
-print("Missing path:", config?.logging?.level?.name)    --> nil (no error)
+-- `or` after the chain gives a default.
+local ttl = config?.cache?.ttl or 300
+print(ttl)  --> 300
 
--- Defaults with 'or'
-local timeout = config?.network?.timeout or 30
-local log_level = config?.logging?.level or "info"
-print("Timeout:", timeout)     --> 30
-print("Log level:", log_level) --> info
+-- `?[` indexes the same way.
+print(config.replicas?[2])  --> db3.internal
+print(config.backups?[1])  --> nil
 
--- Safe method calls
-local logger = {
-    log = function(self, level, msg)
-        print("[" .. level .. "]", msg)
-    end
-}
+-- `?(` calls a function only when it exists. `?:` calls a method the same way.
+local hooks = {}
 
-local _ = logger?:log("INFO", "Application started")  --> [INFO] Application started
-
-local missing_logger = nil
-_ = missing_logger?:log("ERROR", "This won't crash")  --> nothing happens
-print("After missing logger call")
-
--- Safe function calls
-local handlers = {
-    on_success = function() print("Success!") end,
-    -- on_error is not defined
-}
-
-_ = handlers.on_success?()  --> Success!
-_ = handlers.on_error?()    --> nothing happens (nil, no error)
-print("Handlers called safely")
-
--- Array access
-local users = {
-    { name = "Alice", profile = { email = "alice@example.com" } },
-    { name = "Bob" },  -- no profile
-    -- third user doesn't exist
-}
-
-print("User 1 email:", users?[1]?.profile?.email)  --> alice@example.com
-print("User 2 email:", users?[2]?.profile?.email)  --> nil
-print("User 3 email:", users?[3]?.profile?.email)  --> nil
-
--- Practical: API response handling
-local function fetch_user(id)
-    if id == 1 then
-        return {
-            data = {
-                user = { name = "Alice", settings = { theme = "dark" } }
-            }
-        }
-    end
-    return nil  -- user not found
+function hooks.on_start(name)
+    return `starting $name`
 end
 
-local response = fetch_user(1)
-local theme = response?.data?.user?.settings?.theme or "light"
-print("User 1 theme:", theme)  --> dark
+print(hooks.on_start?("web"))  --> starting web
+print(hooks.on_stop?("web"))  --> nil
 
-local response2 = fetch_user(999)
-local theme2 = response2?.data?.user?.settings?.theme or "light"
-print("User 999 theme:", theme2)  --> light (default)
+local logger = { prefix = "app" }
 
--- Chaining with method calls and indexing
-local app = {
-    services = {
-        auth = {
-            get_user = function(self)
-                return { id = 1, name = "Admin" }
-            end
-        }
-    }
-}
+function logger:format(message)
+    return `[$(self.prefix)] $message`
+end
 
-local user_name = app?.services?.auth?:get_user()?.name
-print("Auth user:", user_name)  --> Admin
+local no_logger = nil
+print(logger?:format("ready"))  --> [app] ready
+print(no_logger?:format("ready"))  --> nil
 
-local missing_service = app?.services?.payments?:process()?.result
-print("Missing service result:", missing_service)  --> nil
+-- A skipped chain evaluates none of the later arguments.
+local calls = 0
+
+local function next_id()
+    calls = calls + 1
+    return calls
+end
+
+local _ = no_logger?:format(next_id())
+print(calls)  --> 0
+
+-- A trailing `?` yields the value unchanged, which marks a chain whose
+-- last step may be nil.
+print(config.database?.user?)  --> nil
+
+-- `?` protects only the steps after it. Here `config.cache` is nil, so
+-- indexing it raises an error.
+print((catch config.cache.ttl))  --> false

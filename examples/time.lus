@@ -1,0 +1,48 @@
+-- Time: Represent moments as instants, measure spans as durations, and read calendar fields.
+-- playground: true
+global print, time, tonumber
+
+-- `time.now` reads the wall clock, so its value changes from run to run.
+local now = time.now()
+print(now > time.instant(0))  --> true
+
+-- An instant is a count of seconds since 1970-01-01 UTC. This one is a fixed launch time.
+local launch = time.instant(1782998100)
+print(launch:iso())  --> 2026-07-02T13:15:00Z
+print(launch:epoch())  --> 1782998100
+
+-- Durations come from single units or from a table of several units.
+local break_time = time.minutes(15)
+local shift = time.duration({ hours = 7, minutes = 30 })
+print(break_time:seconds(), shift:seconds())  --> 900.0 27000.0
+
+-- Durations add, subtract, and multiply by integers.
+local workday = shift + 2 * break_time
+local parts = workday:parts()
+print(parts.hours, parts.minutes)  --> 8 0
+
+-- Adding a duration to an instant moves it. Subtracting two instants gives a duration.
+local landing = launch + time.hours(9) + time.minutes(40)
+print(landing:iso())  --> 2026-07-02T22:55:00Z
+local flight = landing - launch
+print(flight:seconds() / 60)  --> 580.0
+
+-- Instants and durations compare with `==`, `<`, and `<=`.
+print(launch < landing, flight > time.hours(9))  --> true true
+print(time.days(1) == time.hours(24))  --> true
+
+-- A zoned value reads the calendar fields that a zone observes at an instant.
+local local_launch = launch:at(time.zone("Europe/Paris"))
+print(local_launch:iso())  --> 2026-07-02T15:15:00+02:00
+print(local_launch.year, local_launch.month, local_launch.day, local_launch.hour)  --> 2026 7 2 15
+
+-- `time.month` and `time.weekday` are enums. `tonumber` gives the position of a member.
+print(local_launch.weekday == time.weekday.thursday)  --> true
+print(tonumber(local_launch.weekday), tonumber(time.month.july))  --> 4 7
+print(local_launch.month == tonumber(time.month.july))  --> true
+
+-- Calendar arithmetic on a zoned value keeps the wall clock and clamps the day.
+local renewal = time.zoned({ year = 2026, month = time.month.january, day = 31 })
+local next_renewal = renewal:add({ months = 1 })
+print(next_renewal:iso())  --> 2026-02-28T00:00:00Z
+print(next_renewal:format("%A"))  --> Saturday

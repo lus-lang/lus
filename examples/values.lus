@@ -1,0 +1,38 @@
+-- Values: Every value has a type, which `type` returns as a string.
+-- playground: true
+global print, type, math, ipairs
+
+-- `nil` is the absence of a value. A variable declared without a value holds it.
+local winner
+print(winner, type(winner))  --> nil  nil
+
+-- The booleans are `true` and `false`.
+local door_locked = true
+print(door_locked, not door_locked)  --> true  false
+
+-- Integers and floats are both of type number. `math.type` tells them apart.
+print(42, 2.5, 7 / 2)  --> 42  2.5  3.5
+print(type(42), math.type(42), math.type(2.5))  --> number  integer  float
+
+-- Strings hold text and join with `..`.
+local greeting = "Hello, " .. "world"
+print(greeting, type(greeting))  --> Hello, world  string
+
+-- A table holds many values, under positions or under names.
+local primes = { 2, 3, 5 }
+local point = { x = 3, y = 4 }
+print(primes[1], point.y, type(point))  --> 2  4  table
+
+-- A function is a value too, so a variable can hold one.
+local function area(width, height)
+    return width * height
+end
+print(area(3, 4), type(area))  --> 12  function
+
+-- Only `nil` and `false` count as false in a condition. Zero and the empty string count as true.
+for _, value in ipairs({ 0, "", false }) do
+    print(`[$value] is $(value and "truthy" or "falsy")`)
+end
+--> [0] is truthy
+--> [] is truthy
+--> [false] is falsy

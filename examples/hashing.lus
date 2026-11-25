@@ -1,0 +1,39 @@
+-- Hashing: Compute digests, sign messages with HMAC, and compare secrets in constant time.
+-- playground: true
+global print, crypto, string
+
+-- A digest is a vector of raw bytes. `string.transcode` writes it as hex or base64.
+local function hex(bytes)
+    return string.transcode(bytes, "binary", "hex")
+end
+
+local digest = crypto.hash("sha256", "hello world")
+print(#digest)  --> 32
+print(hex(digest))  --> b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+local base64 = string.transcode(digest, "binary", "base64")
+print(base64)  --> uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=
+
+-- Other algorithms give digests of other sizes. SHA-1 and MD5 exist for old formats.
+print(#crypto.hash("sha512", "hello world"), #crypto.hash("sha1", "hello world"))  --> 64 20
+print(hex(crypto.hash("md5", "hello world")))  --> 5eb63bbbe01eeed093cb22bb8f5acdc3
+
+-- A hasher takes the input in pieces, such as the chunks of a large file.
+local hasher = crypto.hasher("sha256")
+hasher:update("hello "):update("world")
+print(crypto.equal(hasher:digest(), digest))  --> true
+
+-- An HMAC proves that a message comes from a holder of the key, as in a webhook.
+local secret = "whsec_5f2b9c"
+local body = '{"event":"order.paid","id":1043}'
+local signature = hex(crypto.hmac("sha256", secret, body))
+print(#signature)  --> 64
+
+-- `crypto.equal` compares in time that depends only on the lengths, which keeps
+-- the position of the first difference secret. A plain `==` gives no such guarantee.
+local function verify(received_body, received_signature)
+    local expected = hex(crypto.hmac("sha256", secret, received_body))
+    return crypto.equal(expected, received_signature)
+end
+
+print(verify(body, signature))  --> true
+print(verify('{"event":"order.paid","id":1044}', signature))  --> false

@@ -1,0 +1,44 @@
+-- Reading Files: Open a file and read it whole, by line, or as numbers.
+-- playground: false
+global print, io, fs, pledge
+
+pledge("fs")
+
+-- The example writes the file it reads, so it starts from known contents.
+io.open("inventory.txt", "w"):write("42 7.5\napples\npears\n"):close()
+
+-- The format "a" reads the rest of the file as one string.
+do
+    local file <close> = io.open("inventory.txt")
+    local text = file:read("a")
+    print(#text)  --> 20
+end
+
+-- The format "n" reads a number and "l" reads a line without its newline.
+-- The first "l" reads the empty rest of the line after the numbers.
+-- At the end of the file "l" returns nil.
+do
+    local file <close> = io.open("inventory.txt")
+    print(file:read("n", "n"))  --> 42  7.5
+    print(file:read("l") == "")  --> true
+    print(file:read("l"))  --> apples
+    print(file:read("l"))  --> pears
+    print(file:read("l"))  --> nil
+end
+
+-- io.lines opens the file, reads one line per step, and closes it at the end.
+local count = 0
+for _ in io.lines("inventory.txt") do
+    count = count + 1
+end
+print(`$count lines`)  --> 3 lines
+
+-- Opening a missing file returns nil and a message.
+local file, message = io.open("missing.txt")
+print(file, message)  --> nil  missing.txt: No such file or directory
+
+-- io.lines raises an error for a missing file, which catch captures.
+local ok, err = catch io.lines("missing.txt")
+print(ok, err:match("No such file or directory"))  --> false  No such file or directory
+
+fs.remove("inventory.txt")

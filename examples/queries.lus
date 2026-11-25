@@ -1,0 +1,60 @@
+-- Queries: An `@` query filters, sorts, and summarizes a list of records.
+-- playground: true
+global print, query
+
+local books = {
+    { title = "Dune", genre = "scifi", pages = 600 },
+    { title = "Emma", genre = "novel", pages = 450 },
+    { title = "Neuromancer", genre = "scifi", pages = 270 },
+    { title = "Persuasion", genre = "novel", pages = 250 },
+    { title = "Solaris", genre = "scifi", pages = 210 },
+}
+
+-- `where` keeps the rows whose condition holds. `query` runs the query in a `for` loop.
+for book in query(@books as b where b.genre == "scifi" and b.pages > 250) do
+    print(book.title)
+end
+--> Dune
+--> Neuromancer
+
+-- `select` builds a new record for each row. `order by` sorts the results.
+for row in query(@books as b select b.title, b.pages // 30 as days order by days desc) do
+    print(row.title, row.days)
+end
+--> Dune  20
+--> Emma  15
+--> Neuromancer  9
+--> Persuasion  8
+--> Solaris  7
+
+-- `limit` keeps the first rows of the sorted result.
+for book in query(@books as b order by b.pages limit 2) do
+    print(book.title)
+end
+--> Solaris
+--> Persuasion
+
+-- Aggregates summarize every row into a single result.
+local summary = @books as b select count(*) as total, avg(b.pages) as mean, max(b.pages) as most
+
+for row in query(summary) do
+    print(row.total, row.mean, row.most)  --> 5  356.0  600
+end
+
+-- `group by` computes the aggregates once for each genre. `for ... from` reads the fields.
+local genres = @books as b select b.genre, count(*) as titles group by b.genre order by titles desc
+
+for genre, titles from query(genres) do
+    print(genre, titles)
+end
+--> scifi  3
+--> novel  2
+
+-- A query that keeps no rows runs its loop zero times.
+local found = 0
+
+for _ in query(@books as b where b.genre == "poetry") do
+    found = found + 1
+end
+
+print(found)  --> 0

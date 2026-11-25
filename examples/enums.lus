@@ -1,0 +1,51 @@
+-- Enums: An enum is a fixed set of named members, ordered by their position.
+-- playground: true
+global print, type, tonumber
+
+-- An `enum ... end` expression lists the members. Each one is read as a field.
+local Level = enum debug, info, warning, error end
+
+local current = Level.warning
+print(type(current))  --> enum
+print(current == Level.warning, current == "warning")  --> true  false
+
+-- A name the enum does not list reads as `nil`, which catches a misspelling.
+print(Level.warnning)  --> nil
+
+-- Members compare by position, so a threshold check is one comparison.
+local threshold = Level.info
+
+local function log(level, message)
+    if level >= threshold then
+        print(message)
+    end
+end
+
+log(Level.debug, "cache warmed")
+log(Level.error, "disk full")  --> disk full
+
+-- A table keyed by member gives each one a label to print.
+local labels = {
+    [Level.debug] = "DEBUG",
+    [Level.info] = "INFO",
+    [Level.warning] = "WARN",
+    [Level.error] = "ERROR",
+}
+
+print(labels[current])  --> WARN
+
+-- `tonumber` gives the position of a member. Indexing the enum by position gives the member.
+print(tonumber(Level.error))  --> 4
+print(Level[3] == Level.warning)  --> true
+
+-- Indexing past the last position gives `nil`, which ends a loop over every member.
+local i = 1
+
+while member = Level[i] do
+    print(i, labels[member])
+    i = i + 1
+end
+--> 1  DEBUG
+--> 2  INFO
+--> 3  WARN
+--> 4  ERROR

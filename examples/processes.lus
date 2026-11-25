@@ -1,0 +1,45 @@
+-- Spawning Processes: Start a program, talk to it through pipes, and read its exit status.
+-- playground: false
+global print, os, arg, coroutine, pledge
+
+pledge(`exec=$(arg[-1])`, "exec=no-such-program")
+
+-- arg[-1] is the running interpreter, so the example starts a copy of lus
+-- on every system. The pledge allows that program and one missing program.
+local lus = arg[-1]
+
+-- The child reads its standard input, counts the words, and writes the
+-- result. The arguments reach the child as written, with no shell between.
+local program = [[
+local text = io.read("a")
+local words = 0
+for _ in text:gmatch("%S+") do
+    words = words + 1
+end
+print(words .. " words")
+]]
+
+-- "pipe" connects a stream of the child to a field of the process object.
+-- The <close> variable waits for the child when the block ends.
+do
+    local child <close> = os.spawn({ lus, "-e", program }, { stdin = "pipe", stdout = "pipe" })
+    child.stdin:write("the quick brown fox\njumps over the lazy dog\n")
+    child.stdin:close()
+    print(child.stdout:read("a"))  --> 9 words
+    -- Resuming p.exit waits for the end and returns the values of os.execute.
+    print(coroutine.resume(child.exit))  --> true  true  exit  0
+end
+
+-- A child that fails reports a nonzero status. With stderr = "stdout" its
+-- error output goes into the same pipe as its output.
+local merged = { stdout = "pipe", stderr = "stdout" }
+do
+    local failing <close> = os.spawn({ lus, "-e", "error('disk full', 0)" }, merged)
+    print(failing.stdout:read("l"))  --> lus: disk full
+    local _, ok, how, status = coroutine.resume(failing.exit)
+    print(ok, how, status)  --> nil  exit  1
+end
+
+-- A program that cannot be found gives nil and a message.
+local missing, message = os.spawn({ "no-such-program" })
+print(missing, message)  --> nil  cannot run 'no-such-program': program not found

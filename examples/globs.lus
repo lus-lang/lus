@@ -1,0 +1,50 @@
+-- Globs: Select files by name pattern with the glob argument of fs.list.
+-- playground: false
+global print, io, fs, pledge, table, ipairs
+
+pledge("fs")
+
+-- The program creates a directory of reports and notes to match against.
+fs.createdirectory("reports/archive", true)
+local names = {
+    "report-2025.csv",
+    "report-2026.csv",
+    "report-2026.pdf",
+    "notes.md",
+    "README.md",
+    "archive/report-2019.csv",
+    "archive/report-2020.csv",
+}
+for _, name in ipairs(names) do
+    io.open(fs.path.join("reports", name), "w"):close()
+end
+
+-- fs.list returns names in no particular order, so this helper sorts them.
+local function matches(glob)
+    local found = fs.list("reports", glob)
+    table.sort(found)
+    return table.concat(found, " ")
+end
+
+-- * matches any run of characters and ? matches exactly one.
+print(matches("*.csv"))  --> report-2025.csv report-2026.csv
+print(matches("report-202?.*"))  --> report-2025.csv report-2026.csv report-2026.pdf
+
+-- Brackets match one character from a set or a range. [!...] matches one
+-- character outside it.
+print(matches("report-202[0-5].csv"))  --> report-2025.csv
+print(matches("[!r]*"))  --> README.md archive notes.md
+
+-- Braces stand for each of their alternatives in turn.
+print(matches("*.{md,pdf}"))  --> README.md notes.md report-2026.pdf
+
+-- A glob with a slash or ** reaches into subdirectories and returns paths
+-- relative to the listed directory.
+print(matches("archive/*.csv"))  --> archive/report-2019.csv archive/report-2020.csv
+print(matches("**/report-202?.csv"))
+--> archive/report-2020.csv report-2025.csv report-2026.csv
+
+-- A glob that matches nothing gives an empty array.
+print(#fs.list("reports", "*.xlsx"))  --> 0
+
+fs.remove("reports", true)

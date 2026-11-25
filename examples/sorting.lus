@@ -1,0 +1,69 @@
+-- Sorting: `table.sort` orders a list in place, by `<` or by a comparison function.
+-- playground: true
+global print, table, ipairs
+
+-- Without a comparison, numbers sort by value and strings by code point.
+local scores = { 72, 95, 58 }
+table.sort(scores)
+print(table.concat(scores, " "))  --> 58 72 95
+
+local names = { "bea", "Ada", "carl" }
+table.sort(names)
+print(table.concat(names, " "))  --> Ada bea carl
+
+-- A comparison returns `true` when its first argument belongs first.
+table.sort(scores, function(a, b)
+    return a > b
+end)
+
+print(table.concat(scores, " "))  --> 95 72 58
+
+-- Comparing lowercase copies sorts without regard to case.
+table.sort(names, function(a, b)
+    return a:lower() < b:lower()
+end)
+
+print(table.concat(names, " "))  --> Ada bea carl
+
+-- Records sort by several keys: by team, then by the higher score within a team.
+local players = {
+    { name = "lin", team = "red", score = 12 },
+    { name = "ana", team = "blue", score = 9 },
+    { name = "kim", team = "red", score = 20 },
+    { name = "joe", team = "blue", score = 15 },
+}
+
+table.sort(players, function(a, b)
+    if a.team ~= b.team then
+        return a.team < b.team
+    end
+    return a.score > b.score
+end)
+
+for _, player in ipairs(players) do
+    print(player.team, player.name, player.score)
+end
+--> blue  joe  15
+--> blue  ana  9
+--> red  kim  20
+--> red  lin  12
+
+-- `table.sort` is not stable. `table.sortby` is, so items with equal keys keep their order.
+local tasks = {
+    { title = "write", priority = 2 },
+    { title = "plan", priority = 1 },
+    { title = "test", priority = 2 },
+    { title = "ship", priority = 3 },
+}
+
+table.sortby(tasks, function(task)
+    return task.priority
+end)
+
+for _, task in ipairs(tasks) do
+    print(task.priority, task.title)
+end
+--> 1  plan
+--> 2  write
+--> 2  test
+--> 3  ship
