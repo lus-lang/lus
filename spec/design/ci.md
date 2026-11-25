@@ -4,7 +4,7 @@ This note describes what CI runs for a change, what runs each night, and the too
 
 ## The path map
 
-`tools/ci/areas.json` assigns every path of the repository to one or more areas. An area names the conformance files and the checks that a change to it needs, the runners that it needs them on, the jobs of `full.yml` that it calls, the benchmarks that it affects, its labels, and whether an outside contributor may change it. `tools/ci/areas.mjs` reads the map. A path takes the union of what its areas need, and the strictest of their contributor rules.
+`tools/ci/areas.json` assigns every path of the repository to one or more areas. An area names the conformance files and the checks that a change to it needs, the runners that it needs them on, the jobs of `full.yml` that it calls, its labels, and whether an outside contributor may change it. The benchmarks of a path come from `tests/bench/perf-map.json`. `tools/ci/areas.mjs` reads the map. A path takes the union of what its areas need, and the strictest of their contributor rules.
 
 The map is complete by construction. `tools/ci/areas.test.mjs` fails when a tracked file belongs to no area, and so does the pre-commit hook when a new file does. A changed path that no area knows still runs something, the fallback of the map, which is the conformance suite on Linux with the unit tests.
 
@@ -24,7 +24,7 @@ Changes that reach the linker, a back end of the JIT, or the build call `full.ym
 
 ## Benchmarks
 
-A pull request whose paths name benchmarks in the path map builds its base and its head and runs those benchmarks on one runner, the two binaries in turn with their order alternating each round (`tools/ci/perf.mjs`). A benchmark regresses when the median of its wall time grows by more than 7%, or the median of its peak memory by more than 5%, and the growth also exceeds three times the larger median absolute deviation of the two. `tools/ci/perf.json` holds these limits. The run of a pull request from a fork cannot write to the pull request, so `perf-label.yml` reads the measurement after the run, as data, and sets the label `perf-regression` with a comment of the table.
+`tests/bench/perf-map.json` lists every benchmark, the 21 programs of `tests/bench` and the programs of `tests/bench/compare`, with its command and the source paths that reach it. A pull request whose paths reach benchmarks builds its base and its head and runs those benchmarks on one runner, the two binaries in turn with their order alternating each round (`tools/ci/perf.mjs`). Each benchmark has its own threshold in the perf map, the growth of its median time and peak memory that counts as a regression, set from the noise measured for it. The growth must also exceed three times the larger median absolute deviation of the two measurements on the runner, which `tools/ci/perf.json` sets. The run of a pull request from a fork cannot write to the pull request, so `perf-label.yml` reads the measurement after the run, as data, and sets the label `perf-regression` with a comment of the table.
 
 Each nightly run measures every benchmark and compares the result with the run before it and with the newest stable release. The branch `perf-data` holds the measurements, as `nightly/DATE.json` and `release/TAG.json`, and `perf-release.yml` measures each release as it is published. A nightly regression goes to the one open issue labelled `perf-regression`.
 

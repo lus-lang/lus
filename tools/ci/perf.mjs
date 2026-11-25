@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Measures the benchmarks of tests/bench and compares two measurements.
+// Measures the benchmarks of tests/bench/perf-map.json and compares two
+// measurements.
 //
 //   node tools/ci/perf.mjs run --lus BIN --out FILE [--runs N] [--only a.lus,b.lus]
 //   node tools/ci/perf.mjs ab --base BIN --head BIN --out FILE [--runs N] [--only ...]
@@ -10,9 +11,11 @@
 // deviation. `ab` runs two binaries in turn on the same runner, alternating
 // their order each round, so the noise of a shared runner falls on both.
 // `compare` prints a Markdown table and lists the regressions as JSON. A
-// benchmark regresses when its median grows past the threshold of
-// tools/ci/perf.json and the growth also exceeds a multiple of the larger
-// deviation, so the noise of one run never counts.
+// benchmark regresses when its median grows past its own threshold in the
+// perf map, which comes from its measured noise, and the growth also
+// exceeds a multiple of the larger deviation of the two measurements
+// (tools/ci/perf.json), so the noise of one runner never counts. --only
+// takes the ids of the perf map, such as fib or compare/json.
 
 import {spawnSync} from "node:child_process";
 import {execFileSync} from "node:child_process";
@@ -22,8 +25,8 @@ import path from "node:path";
 import {fileURLToPath} from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const BENCH = path.join(ROOT, "tests/bench");
 export const CONFIG = JSON.parse(fs.readFileSync(path.join(ROOT, "tools/ci/perf.json"), "utf8"));
+export const PERF_MAP = JSON.parse(fs.readFileSync(path.join(ROOT, "tests/bench/perf-map.json"), "utf8"));
 
 export function median(xs) {
   const s = [...xs].sort((a, b) => a - b);
@@ -37,19 +40,29 @@ export function mad(xs) {
 }
 
 export function benches(only) {
-  const all = fs.readdirSync(BENCH).filter((f) => f.endsWith(".lus") && !CONFIG.skip.includes(f)).sort();
-  return only ? all.filter((f) => only.includes(f)) : all;
+  const all = Object.keys(PERF_MAP.benchmarks).filter((id) => !CONFIG.skip.includes(id)).sort();
+  return only ? all.filter((id) => only.includes(id)) : all;
+}
+
+// The command of a benchmark. A Lus file runs on the binary, and any other
+// command finds the binary in LUS, as tests/bench/compare/run.mjs does.
+function command(lus, id) {
+  const bench = PERF_MAP.benchmarks[id];
+  if (bench.run.endsWith(".lus")) return {argv: [lus, path.join(ROOT, bench.run)], env: process.env};
+  return {argv: bench.run.split(/\s+/), env: {...process.env, LUS: lus}};
 }
 
 // Runs one benchmark once and returns {time, rss} in seconds and bytes, or
 // null when it fails or runs past the limit.
-function once(lus, bench) {
+function once(lus, id) {
   const linux = process.platform === "linux";
   const report = path.join(os.tmpdir(), `lus-perf-${process.pid}.txt`);
   const timeArgs = linux ? ["-f", "%M", "-o", report] : ["-l"];
+  const {argv, env} = command(lus, id);
   const start = process.hrtime.bigint();
-  const r = spawnSync("/usr/bin/time", [...timeArgs, lus, path.join(BENCH, bench)], {
-    cwd: BENCH,
+  const r = spawnSync("/usr/bin/time", [...timeArgs, ...argv], {
+    cwd: path.join(ROOT, PERF_MAP.benchmarks[id].cwd),
+    env,
     encoding: "utf8",
     timeout: CONFIG.timeout_seconds * 1000,
     stdio: ["ignore", "ignore", "pipe"],
@@ -89,8 +102,12 @@ function describe(lus) {
 export function measure(binaries, list, runs) {
   const samples = binaries.map(() => Object.fromEntries(list.map((b) => [b, []])));
   const failed = binaries.map(() => new Set());
-  for (let round = 0; round < runs; round++) {
+  // A benchmark that runs in a few milliseconds runs more rounds, since the
+  // start of the process weighs on each one.
+  const rounds = (bench) => (PERF_MAP.benchmarks[bench]?.short ? runs * CONFIG.short_factor : runs);
+  for (let round = 0; round < runs * CONFIG.short_factor; round++) {
     for (const bench of list) {
+      if (round >= rounds(bench)) continue;
       // The order of the binaries alternates each round.
       const order = binaries.map((_, i) => i);
       if (round % 2) order.reverse();
@@ -117,7 +134,7 @@ export function compare(current, baseline, config = CONFIG) {
     if (!base) continue;
     const row = {bench};
     for (const key of ["time", "rss"]) {
-      const t = config.thresholds[key];
+      const t = {...config.thresholds[key], ratio: PERF_MAP.benchmarks[bench]?.[key] ?? config.thresholds[key].ratio};
       const b = base[key].median;
       const c = cur[key].median;
       const noise = Math.max(base[key].mad, cur[key].mad, t.floor);

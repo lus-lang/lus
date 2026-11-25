@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {test} from "node:test";
 import {fileURLToPath} from "node:url";
-import {CHECK_ORDER, GLOBAL_CHECKS, areasOf, globToRegExp, loadMap, plan, trackedFiles} from "./areas.mjs";
+import {CHECK_ORDER, GLOBAL_CHECKS, areasOf, globToRegExp, loadMap, loadPerfMap, plan, trackedFiles} from "./areas.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const map = loadMap();
@@ -32,9 +32,6 @@ test("every tracked file belongs to an area", () => {
 test("the map names only things that exist", () => {
   for (const area of map.areas) {
     for (const check of area.checks ?? []) assert.ok(CHECK_ORDER.includes(check) || GLOBAL_CHECKS.has(check), `${area.name}: check ${check}`);
-    for (const bench of area.benches ?? []) {
-      if (bench !== "{name}") assert.ok(fs.existsSync(path.join(ROOT, "tests/bench", bench)), `${area.name}: bench ${bench}`);
-    }
     for (const t of area.tests ?? []) {
       if (t === "suite" || /[{*]/.test(t)) continue;
       assert.ok(fs.existsSync(path.join(ROOT, t)), `${area.name}: test ${t}`);
@@ -104,9 +101,25 @@ test("contributor rules", () => {
   assert.deepEqual(mixed.contributor.denied, ["package.json"]);
 });
 
-test("benchmarks follow the paths", () => {
-  assert.deepEqual(planFor("tests/bench/fib.lus").benches, ["fib.lus"]);
-  assert.ok(planFor("runtime/src/vm/gc.zig").benches.includes("gcpause.lus"));
+test("benchmarks follow the paths of the perf map", () => {
+  assert.deepEqual(planFor("tests/bench/fib.lus").benches, ["fib"]);
+  assert.deepEqual(planFor("tests/bench/compare/json/json.lus").benches, ["compare/json"]);
+  assert.ok(planFor("runtime/src/vm/gc.zig").benches.includes("gcpause"));
+  assert.ok(planFor("runtime/src/lib/json.zig").benches.includes("compare/json"));
+  assert.equal(planFor("runtime/build.zig").benches.length, Object.keys(loadPerfMap().benchmarks).length);
+  assert.deepEqual(planFor("spec/design/gc.md").benches, []);
+});
+
+test("the perf map names benchmarks that exist", () => {
+  const perf = loadPerfMap();
+  for (const [id, bench] of Object.entries(perf.benchmarks)) {
+    assert.ok(fs.existsSync(path.join(ROOT, bench.cwd)), `${id}: ${bench.cwd}`);
+    if (bench.run.endsWith(".lus")) assert.ok(fs.existsSync(path.join(ROOT, bench.run)), `${id}: ${bench.run}`);
+    assert.ok(bench.time > 0 && bench.rss >= 0, id);
+  }
+  for (const entry of perf.paths) {
+    if (Array.isArray(entry.benches)) for (const id of entry.benches) assert.ok(id in perf.benchmarks, `unknown benchmark ${id}`);
+  }
 });
 
 test("cross builds follow the back ends", () => {

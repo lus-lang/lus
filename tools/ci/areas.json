@@ -1,5 +1,5 @@
 {
-  "about": "Maps every path of the repository to an area. tools/ci/areas.mjs reads it to choose the tests and benchmarks of a change, its labels, and whether an outside contributor may touch it. A path takes the union of every area it matches, and the strictest contributor rule among them. tools/ci/areas.test.mjs fails when a tracked file matches no area.",
+  "about": "Maps every path of the repository to an area. tools/ci/areas.mjs reads it to choose the tests of a change, its labels, and whether an outside contributor may touch it. A path takes the union of every area it matches, and the strictest contributor rule among them. tools/ci/areas.test.mjs fails when a tracked file matches no area. The benchmarks of a change come from tests/bench/perf-map.json.",
   "labels": {
     "about": "The areas of the repository. A pull request gets the label of each area it touches, and the area of a commit message is one of these names.",
     "runtime": "The interpreter, compiler, front end, and embedding interface",
@@ -56,24 +56,21 @@
       "paths": ["runtime/src/vm/**"],
       "labels": ["runtime"],
       "tests": ["suite"],
-      "checks": ["unit", "diff", "oom", "doc"],
-      "benches": ["interp.lus", "loop.lus", "methods.lus", "closures.lus", "tables.lus"]
+      "checks": ["unit", "diff", "oom", "doc"]
     },
     {
       "name": "gc",
       "paths": ["runtime/src/vm/gc.zig", "runtime/src/vm/gcpar.zig", "runtime/src/vm/heap.zig", "runtime/src/vm/heapcount.zig", "runtime/src/vm/sweep.zig", "runtime/src/vm/object.zig"],
       "labels": ["gc"],
       "checks": ["stress"],
-      "platforms": ["linux", "macos", "windows"],
-      "benches": ["fullgc.lus", "gcpause.lus", "observe.lus"]
+      "platforms": ["linux", "macos", "windows"]
     },
     {
       "name": "stores",
       "about": "HACKING.md asks for a gc-stress run after a change to a store, since the verifier finds a missing barrier.",
       "paths": ["runtime/src/vm/table.zig", "runtime/src/vm/shape.zig", "runtime/src/vm/interp.zig", "runtime/src/vm/state.zig"],
       "labels": ["runtime"],
-      "checks": ["stress", "direct"],
-      "benches": ["tables.lus", "arrays.lus"]
+      "checks": ["stress", "direct"]
     },
     {
       "name": "vm-os",
@@ -86,30 +83,26 @@
     {
       "name": "strings",
       "paths": ["runtime/src/vm/wtf8.zig", "runtime/src/lib/string.zig", "runtime/src/lib/utf8.zig"],
-      "labels": ["runtime"],
-      "benches": ["strings.lus", "unicode.lus", "patterns.lus"]
+      "labels": ["runtime"]
     },
     {
       "name": "query",
       "paths": ["runtime/src/vm/query.zig", "runtime/src/compile/query_gen.zig"],
-      "labels": ["runtime"],
-      "benches": ["queries.lus"]
+      "labels": ["runtime"]
     },
     {
       "name": "compile",
       "paths": ["runtime/src/compile/**"],
       "labels": ["runtime"],
       "tests": ["suite"],
-      "checks": ["unit", "diff", "syntax", "doc"],
-      "benches": ["startup.lus", "interp.lus"]
+      "checks": ["unit", "diff", "syntax", "doc"]
     },
     {
       "name": "syntax",
       "paths": ["runtime/src/syntax/**"],
       "labels": ["runtime"],
       "tests": ["suite"],
-      "checks": ["unit", "syntax", "doc"],
-      "benches": ["startup.lus"]
+      "checks": ["unit", "syntax", "doc"]
     },
     {
       "name": "jit",
@@ -117,8 +110,7 @@
       "labels": ["jit"],
       "tests": ["suite"],
       "checks": ["unit", "diff", "direct", "stress"],
-      "platforms": ["linux", "macos", "windows"],
-      "benches": ["interp.lus", "loop.lus", "fib.lus", "methods.lus", "closures.lus", "forfrom.lus"]
+      "platforms": ["linux", "macos", "windows"]
     },
     {
       "name": "jit-x64",
@@ -228,8 +220,7 @@
       "labels": ["lib"],
       "tests": ["tests/conformance/network_test.lus", "tests/conformance/netcoro_test.lus", "tests/conformance/netcli_test.lus", "tests/conformance/serve_test.lus", "tests/conformance/tls_test.lus"],
       "checks": ["unit", "faults"],
-      "platforms": ["linux", "macos", "windows"],
-      "benches": ["http_serve.lus"]
+      "platforms": ["linux", "macos", "windows"]
     },
     {
       "name": "lib-workers",
@@ -237,8 +228,7 @@
       "labels": ["lib"],
       "tests": ["tests/conformance/worker_test.lus", "tests/conformance/workercoro_test.lus", "tests/conformance/worker_exit_cli_test.lus", "tests/conformance/events_test.lus", "tests/conformance/context_test.lus", "tests/conformance/detach_test.lus"],
       "checks": ["unit", "faults"],
-      "platforms": ["linux", "macos", "windows"],
-      "benches": ["messages.lus", "context.lus"]
+      "platforms": ["linux", "macos", "windows"]
     },
     {
       "name": "lib-parsers",
@@ -246,14 +236,12 @@
       "paths": ["runtime/src/lib/json.zig", "runtime/src/lib/csv.zig", "runtime/src/lib/pack.zig", "runtime/src/lib/transcode.zig", "runtime/src/lib/archive.zig", "runtime/src/lib/time.zig", "runtime/src/lib/crypto.zig", "runtime/src/lib/cryptokey.zig"],
       "labels": ["lib"],
       "tests": ["tests/conformance/props_test.lus", "tests/conformance/dataproc_test.lus", "tests/conformance/datetime_test.lus"],
-      "checks": ["corrupt"],
-      "benches": ["data.lus"]
+      "checks": ["corrupt"]
     },
     {
       "name": "lib-data",
       "paths": ["runtime/src/lib/data/**", "runtime/src/lib/lazy.zig", "runtime/src/lib/vector.zig", "runtime/src/lib/container.zig", "runtime/src/lib/glob.zig", "runtime/src/lib/debuglib.zig"],
-      "labels": ["lib"],
-      "benches": ["lazy.lus", "data.lus"]
+      "labels": ["lib"]
     },
     {
       "name": "embedding",
@@ -385,8 +373,7 @@
     {
       "name": "benchmarks",
       "paths": ["tests/bench/**"],
-      "labels": ["perf"],
-      "benches": ["{name}"]
+      "labels": ["perf"]
     },
     {
       "name": "language-server",

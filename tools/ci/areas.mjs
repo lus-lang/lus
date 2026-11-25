@@ -14,8 +14,9 @@
 // lists for contributors to leave alone are those the map denies, and
 // rewrites that section with --write.
 //
-// A path takes the union of the tests, checks, platforms, labels, and
-// benchmarks of every area it matches. Its contributor rule is the
+// A path takes the union of the tests, checks, platforms, and labels of
+// every area it matches, and the benchmarks that tests/bench/perf-map.json
+// maps it to. Its contributor rule is the
 // strictest among them: allowed, then denied, then egregious. A path that
 // matches no area takes the fallback of the map. The plan never runs
 // nothing for a change to the runtime, because the fallback runs the
@@ -78,6 +79,34 @@ export function loadMap(file = path.join(ROOT, "tools/ci/areas.json")) {
   return map;
 }
 
+// tests/bench/perf-map.json, which the speed work keeps: every benchmark
+// with its command and thresholds, and the source globs that reach each.
+export function loadPerfMap(file = path.join(ROOT, "tests/bench/perf-map.json")) {
+  const perf = JSON.parse(fs.readFileSync(file, "utf8"));
+  for (const entry of perf.paths) entry.match = entry.globs.map(globToRegExp);
+  return perf;
+}
+
+// The ids of the benchmarks that a change to a file reaches. A glob whose
+// benchmarks read "all" reaches every one, and one that reads "changed"
+// reaches the benchmark whose own files changed.
+export function benchesOf(perfMap, file) {
+  const ids = new Set();
+  for (const entry of perfMap.paths) {
+    if (!entry.match.some((re) => re.test(file))) continue;
+    if (entry.benches === "all") {
+      for (const id of Object.keys(perfMap.benchmarks)) ids.add(id);
+    } else if (entry.benches === "changed") {
+      for (const [id, bench] of Object.entries(perfMap.benchmarks)) {
+        if (bench.run === file || (bench.cwd !== "tests/bench" && bench.cwd !== "." && file.startsWith(bench.cwd + "/"))) ids.add(id);
+      }
+    } else {
+      for (const id of entry.benches) ids.add(id);
+    }
+  }
+  return ids;
+}
+
 export function areasOf(map, file) {
   return map.areas.filter((area) => area.match.some((re) => re.test(file)) && !area.skip.some((re) => re.test(file)));
 }
@@ -115,7 +144,7 @@ function expandTests(entry, file, tracked) {
 // Builds the plan for the changed files. `tracked` lists the files of the
 // head commit, and `testmap`, when given, maps a runtime source file to the
 // conformance files whose runs reach it (tools/ci/testmap.mjs).
-export function plan({map, changed, tracked, testmap = null}) {
+export function plan({map, changed, tracked, testmap = null, perfMap = loadPerfMap()}) {
   const existing = new Set(tracked);
   const rows = new Map();
   const labels = new Set();
@@ -142,13 +171,6 @@ export function plan({map, changed, tracked, testmap = null}) {
     for (const area of areas) {
       rule = stricter(rule, area.contributor ?? "allowed");
       for (const label of area.labels ?? []) labels.add(label);
-      for (const bench of area.benches ?? []) {
-        if (bench === "{name}") {
-          if (/^tests\/bench\/[^/]+\.lus$/.test(file) && existing.has(file)) benches.add(path.basename(file));
-        } else {
-          benches.add(bench);
-        }
-      }
       for (const target of area.cross ?? []) cross.add(target);
       for (const job of area.extra ?? []) extra.add(job);
       for (const check of area.checks ?? []) {
@@ -174,6 +196,7 @@ export function plan({map, changed, tracked, testmap = null}) {
         }
       }
     }
+    for (const id of benchesOf(perfMap, file)) benches.add(id);
     if (rule === "denied") contributor.denied.push(file);
     if (rule === "egregious") contributor.egregious.push(file);
     contributor.verdict = stricter(contributor.verdict, rule);
