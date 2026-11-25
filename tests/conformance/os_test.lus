@@ -303,6 +303,28 @@ local function rejects_wrong_argument_arity_and_type_test(fn)
 end
 
 -- ============================================================================
+-- os.pid
+-- ============================================================================
+
+-- returns the same positive integer on every call
+local function pid_is_a_stable_positive_integer_test()
+    if os.platform() == "wasi" then skip("the WebAssembly build has no processes") end
+    local id = os.pid()
+    assert(math.type(id) == "integer" and id > 0)
+    assert(os.pid() == id)
+end
+
+-- is the parent id that a child shell sees
+local function pid_is_the_parent_of_a_child_shell_test()
+    if os.platform() == "wasi" or os.platform() == "windows" then skip("uses a POSIX shell") end
+    pledge("exec")
+    local p = io.popen("echo $PPID")
+    local text = p:read("a")
+    p:close()
+    assert(tonumber(text:match("%d+")) == os.pid(), text)
+end
+
+-- ============================================================================
 -- os.platform
 -- ============================================================================
 

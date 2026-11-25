@@ -32,6 +32,7 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 - A `network.serve` handler upgrades its connection by returning 101 and a function, which receives the socket once the response is sent. A request with `Sec-WebSocket-Key` gets the WebSocket handshake headers, so a WebSocket shares the port of the HTTP routes.
 - A header value in a `network.serve` response or a `network.fetch` request may be a list, which sends one header line per element, as several `Set-Cookie` lines need.
 - Added `os.setenv(name, value)`, which sets or removes an environment variable under the new `env:write` permission. `os.getenv` checks `env:read`, and `env` grants both. Child processes see the changes, and each worker starts with a copy of the environment of its creator.
+- Added `os.pid()`, which returns the id of the process as an integer and needs no permission.
 - Added the file methods `isatty` and `setraw`. `setraw` switches a terminal to raw input for key-by-key prompts, on Windows through virtual terminal input, and the process restores the terminal when it ends.
 
 ### Tools

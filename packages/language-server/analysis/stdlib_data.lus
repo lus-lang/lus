@@ -3234,7 +3234,7 @@ The parameters control the parse:
 
 Without `headers`, the result is a sequence of rows, and each row is a sequence of strings. With `headers`, the result is a sequence of keyed rows, and a row shorter than the header has `nil` for its missing columns. Every field is a string, so numbers stay text until the program converts them. A quoted field may contain the delimiter, line breaks, and quotes written as `""`. The empty string returns an empty table.
 
-A quoted field without its closing quote raises `CSV parse error at position N: unterminated quoted field`, and a character after a closing quote other than a delimiter or a line ending raises `CSV parse error at position N: unexpected character after quoted field`. Positions count characters from 1. A delimiter that is not exactly one character raises `bad argument #3 to 'fromcsv' (delimiter must be a single character)`.
+A quoted field without its closing quote raises `CSV parse error at position N: unterminated quoted field`, and a character after a closing quote other than a delimiter or a line ending raises `CSV parse error at position N: unexpected character after quoted field`. Each message starts with the position of the call of `fromcsv`, as in the message of [`error`](/manual/api#error), and the position `N` counts characters of the text from 1. A delimiter that is not exactly one character raises `bad argument #3 to 'fromcsv' (delimiter must be a single character)`.
 
 ```lus
 local rows = fromcsv("name,age\nAlice,30\nBob,17\n", true)
@@ -3294,7 +3294,7 @@ The value maps to Lus as follows:
 
 With `exact` set, an integer that overflows 64 bits decodes as a bigint and a number with a fraction or an exponent decodes as a decimal, so [`tojson`](/manual/api#tojson) reproduces the original digits on the way back.
 
-Invalid syntax, trailing data after the value, empty input, a number out of range, and nesting deeper than 1,000 levels raise an error of the form `JSON parse error at position N: MESSAGE`, where the position counts characters from 1.
+Invalid syntax, trailing data after the value, empty input, a number out of range, and nesting deeper than 1,000 levels raise an error of the form `FILE:LINE: JSON parse error at position N: MESSAGE`. `FILE:LINE` is the position of the call of `fromjson`, as in the message of [`error`](/manual/api#error), and `N` counts characters of the text from 1.
 
 ```lus
 local data = fromjson('{"name": "Alice", "scores": [95, 87.5], "note": null}')
@@ -7116,6 +7116,7 @@ The order of traversal is unspecified, even for integer keys. During a traversal
       "os.execute",
       "os.exit",
       "os.getenv",
+      "os.pid",
       "os.platform",
       "os.setenv",
       "os.setlocale",
@@ -7369,6 +7370,37 @@ A variable that is set to the empty string returns the empty string. A variable 
     short_name = "getenv",
     since = "0.1.0",
     source = "stdlib/os/getenv.md",
+    stability = "stable",
+  },
+  ["os.pid"] = {
+    children = {},
+    description = [[
+Returns the id that the operating system gave the running process, as an integer.
+
+The function takes no arguments and requires no permission. The id stays the same for the life of the process. Every worker of the process returns the same id. A child process that [`os.spawn`](/manual/api#os.spawn) or [`io.popen`](/manual/api#io.popen) starts sees it as the id of its parent. The WebAssembly build has no processes, so there the call raises `os.pid is unavailable in the WebAssembly build`.
+
+The following example names a scratch file after the process, so two copies of a script that run at the same time write different files.
+
+```lus
+local name = `report-$(os.pid()).tmp`
+print(name:match("^report%-%d+%.tmp$") == name)   --> true
+```
+
+[`os.getenv`](/manual/api#os.getenv) reads the environment of the process. [`os.exit`](/manual/api#os.exit) ends the process.]],
+    kind = "function",
+    module = "os",
+    name = "os.pid",
+    origin = "lus",
+    params = {},
+    parent = "os",
+    returns = {
+      {
+        type = "integer",
+      },
+    },
+    short_name = "pid",
+    since = "2.0.0",
+    source = "stdlib/os/pid.md",
     stability = "stable",
   },
   ["os.platform"] = {
@@ -13678,7 +13710,7 @@ Returns the zero-based offset of the first occurrence of the bytes of `pattern` 
 - `pattern` is the byte sequence to find, a vector or a string. A string contributes its WTF-8 bytes.
 - `init` is the zero-based offset where the search starts. It defaults to 0.
 
-The search is plain, so every byte of `pattern` matches only itself, unlike the patterns of [`string.find`](/manual/api#string.find). An empty `pattern` matches at `init`. An `init` below 0 or past the size of the vector returns `nil`. A `v` that is not a vector raises `bad argument #1 to 'find' (vector expected)`. A `pattern` that is neither a string, a number, nor a vector raises `bad argument #2 to 'find' (string or vector expected, got table)` with its type.
+The search is plain, so every byte of `pattern` matches only itself, unlike the patterns of [`string.find`](/manual/api#string.find). Offsets of the `vector` functions count from 0, while a slice `v[i, j]` counts from 1 and includes `j`, as [Slices](/manual/guide#slices) describes. The bytes before a match at offset `k` are therefore the slice `v[1, k]`. An empty `pattern` matches at `init`. An `init` below 0 or past the size of the vector returns `nil`. A `v` that is not a vector raises `bad argument #1 to 'find' (vector expected)`. A `pattern` that is neither a string, a number, nor a vector raises `bad argument #2 to 'find' (string or vector expected, got table)` with its type.
 
 The following example splits a multipart body at its boundary.
 
@@ -13773,7 +13805,7 @@ Returns the byte at a zero-based offset of a vector as an integer from 0 to 255,
 - `v` is the vector to read.
 - `offset` is the zero-based position of the byte, an integer.
 
-An offset below 0, or at or after the size of the vector, returns `nil`. A `v` that is not a vector raises `bad argument #1 to 'get' (vector expected)`, and a missing or non-integer `offset` raises `bad argument #2 to 'get'`.
+An offset below 0, or at or after the size of the vector, returns `nil`. Offsets of the `vector` functions count from 0, while a slice `v[i, j]` counts from 1 and includes `j`, as [Slices](/manual/guide#slices) describes. `vector.get(v, 0)` therefore reads the byte that the slice `v[1, 1]` holds. A `v` that is not a vector raises `bad argument #1 to 'get' (vector expected)`, and a missing or non-integer `offset` raises `bad argument #2 to 'get'`.
 
 The following example reads bytes inside and outside a vector.
 
@@ -13914,6 +13946,8 @@ Stores a byte at a zero-based offset of a vector and returns no values.
 - `offset` is the zero-based position of the byte, from 0 to one less than the size of the vector.
 - `byte` is the value to store, an integer from 0 to 255.
 
+Offsets of the `vector` functions count from 0, while a slice `v[i, j]` counts from 1 and includes `j`, as [Slices](/manual/guide#slices) describes. `vector.set(v, 0, byte)` therefore writes the byte that the slice `v[1, 1]` copies.
+
 An offset outside the vector raises `bad argument #2 to 'set' (offset out of bounds)`, and a value outside 0 to 255 raises `bad argument #3 to 'set' (byte out of range)`. A missing or non-integer `offset` or `byte` raises a `bad argument` error for that argument, and a `v` that is not a vector raises `bad argument #1 to 'set' (vector expected)`.
 
 The following example writes a byte and then tries a write past the end.
@@ -14003,7 +14037,7 @@ Decodes a range of bytes of a vector as WTF-8 text and returns the string.
 - `j` is the offset just past the last byte to decode. It defaults to the size of the vector.
 - `mode` is `"strict"` or `"lossy"`. It defaults to `"strict"`.
 
-Both offsets are clamped to the vector, and a range with `j` at or before `i` gives the empty string. With `mode` set to `"strict"`, input that is not valid WTF-8 raises `invalid UTF-8 at byte N`, where `N` is the offset of the first invalid sequence. With `mode` set to `"lossy"`, each invalid sequence becomes U+FFFD. Any other `mode` raises an error that names it, such as `bad argument #4 to 'tostring' (invalid option 'raw')`, and a `v` that is not a vector raises `bad argument #1 to 'tostring' (vector expected)`.
+Both offsets are clamped to the vector, and a range with `j` at or before `i` gives the empty string. Offsets of the `vector` functions count from 0, while a slice `v[i, j]` counts from 1 and includes `j`, as [Slices](/manual/guide#slices) describes. For `j` greater than `i`, `vector.tostring(v, i, j)` therefore decodes the same bytes as `vector.tostring(v[i + 1, j])`. With `mode` set to `"strict"`, input that is not valid WTF-8 raises `invalid UTF-8 at byte N`, where `N` is the offset of the first invalid sequence. With `mode` set to `"lossy"`, each invalid sequence becomes U+FFFD. Any other `mode` raises an error that names it, such as `bad argument #4 to 'tostring' (invalid option 'raw')`, and a `v` that is not a vector raises `bad argument #1 to 'tostring' (vector expected)`.
 
 The following example decodes a whole vector, a prefix, and a prefix that cuts a character in half.
 

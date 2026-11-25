@@ -27,6 +27,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "execute", .func = execute },
     .{ .name = "exit", .func = exit },
     .{ .name = "getenv", .func = getenv },
+    .{ .name = "pid", .func = pid },
     .{ .name = "platform", .func = platform },
     .{ .name = "setenv", .func = setenv },
     .{ .name = "setlocale", .func = setlocale },
@@ -191,6 +192,18 @@ fn exit(l: *Thread) Error!u32 {
     out.flushAll(l.g);
     @import("term.zig").restore();
     std.process.exit(@truncate(@as(u64, @bitCast(status))));
+}
+
+/// os.pid(): the id of the process, an integer. The WebAssembly build
+/// has no processes, so it raises.
+fn pid(l: *Thread) Error!u32 {
+    const id: i64 = switch (builtin.os.tag) {
+        .windows => std.os.windows.GetCurrentProcessId(),
+        .wasi, .freestanding => return l.raiseFmt("os.pid is unavailable in the WebAssembly build", .{}),
+        .linux => if (builtin.link_libc) std.c.getpid() else std.os.linux.getpid(),
+        else => std.c.getpid(),
+    };
+    return aux.retInt(l, id);
 }
 
 fn platform(l: *Thread) Error!u32 {
