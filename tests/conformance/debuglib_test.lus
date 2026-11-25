@@ -15,7 +15,7 @@
   pure-Lus fixture for the getuservalue and setuservalue failure paths.
 ]]
 
-pledge("load", "fs")
+pledge("load", "fs", "debug")
 
 
 -- The main chunk describes itself as "main" only at file top level, so the

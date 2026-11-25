@@ -83,6 +83,7 @@ fn threadArg(l: *Thread) struct { *Thread, u32 } {
 /// `debug.getcontext([co,] n)` returns the name, the value as `co` sees
 /// it, and "source:line" of context variable number `n`.
 pub fn getcontext(l: *Thread) Error!u32 {
+    if (!@import("../vm/pledge.zig").allowedUntouched(l, "debug")) return l.raiseFmt("permission \"debug\" denied for debug.getcontext", .{});
     const ta = threadArg(l);
     const n = try aux.checkInt(l, ta[1]);
     const slot = ctx.nth(l.g, n) orelse return aux.retNil(l);
@@ -98,6 +99,7 @@ pub fn getcontext(l: *Thread) Error!u32 {
 /// `debug.setcontext([co,] n, value)` assigns the value for `co` and
 /// returns the name, or nil past the last variable.
 pub fn setcontext(l: *Thread) Error!u32 {
+    if (!@import("../vm/pledge.zig").allowedUntouched(l, "debug")) return l.raiseFmt("permission \"debug\" denied for debug.setcontext", .{});
     const ta = threadArg(l);
     const n = try aux.checkInt(l, ta[1]);
     _ = try aux.checkAny(l, ta[1] + 1);

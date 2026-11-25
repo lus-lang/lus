@@ -1702,13 +1702,18 @@ end
 print(step(21))
 ```
 
-A line sees the locals of the paused function only through [`debug.getlocal`](/manual/api#debug.getlocal) and [`debug.setlocal`](/manual/api#debug.setlocal). The `lus debug` command runs a whole script under a debugger that speaks the Debug Adapter Protocol.]],
+A line sees the locals of the paused function only through [`debug.getlocal`](/manual/api#debug.getlocal) and [`debug.setlocal`](/manual/api#debug.setlocal). The `lus debug` command runs a whole script under a debugger that speaks the Debug Adapter Protocol.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.debug",
     origin = "lua",
     params = {},
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {},
     short_name = "debug",
     since = "0.1.0",
@@ -1805,7 +1810,9 @@ print(select(2, debug.getcontext(n)))       --> nobody
 print(select(2, debug.getcontext(co, n)))   --> ada
 ```
 
-[`debug.setcontext`](/manual/api#debug.setcontext) assigns a value for a coroutine.]],
+[`debug.setcontext`](/manual/api#debug.setcontext) assigns a value for a coroutine.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.getcontext",
@@ -1822,6 +1829,9 @@ print(select(2, debug.getcontext(co, n)))   --> ada
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "string|nil",
@@ -1852,7 +1862,9 @@ debug.sethook()
 print(debug.gethook())           --> nil
 ```
 
-Each thread has its own hook, so `debug.gethook(co)` reports the hook of the coroutine `co` and nothing about the running thread. [`debug.sethook`](/manual/api#debug.sethook) installs and removes hooks.]],
+Each thread has its own hook, so `debug.gethook(co)` reports the hook of the coroutine `co` and nothing about the running thread. [`debug.sethook`](/manual/api#debug.sethook) installs and removes hooks.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.gethook",
@@ -1865,6 +1877,9 @@ Each thread has its own hook, so `debug.gethook(co)` reports the hook of the cor
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "function|nil",
@@ -1911,7 +1926,9 @@ print(u.nparams, u.isvararg)             --> 0  true
 print(debug.getinfo(100))                --> nil
 ```
 
-[`debug.traceback`](/manual/api#debug.traceback) formats the same information for every level of the stack, and [`debug.getlocal`](/manual/api#debug.getlocal) reads the variables of a level.]],
+[`debug.traceback`](/manual/api#debug.traceback) formats the same information for every level of the stack, and [`debug.getlocal`](/manual/api#debug.getlocal) reads the variables of a level.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.getinfo",
@@ -1928,6 +1945,9 @@ print(debug.getinfo(100))                --> nil
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "table|nil",
@@ -1967,7 +1987,9 @@ area(3, 4, "extra")
 print(debug.getlocal(area, 2))     --> h
 ```
 
-A local becomes active after the statement that declares it, so a variable whose declaration has not run yet has no index. [`debug.setlocal`](/manual/api#debug.setlocal) changes the value of a local, and [`debug.getupvalue`](/manual/api#debug.getupvalue) reads the variables that a closure captured.]],
+A local becomes active after the statement that declares it, so a variable whose declaration has not run yet has no index. [`debug.setlocal`](/manual/api#debug.setlocal) changes the value of a local, and [`debug.getupvalue`](/manual/api#debug.getupvalue) reads the variables that a closure captured.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.getlocal",
@@ -1983,6 +2005,9 @@ A local becomes active after the statement that declares it, so a variable whose
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "string|nil",
@@ -2012,7 +2037,9 @@ print(debug.getmetatable("s").__index == string)    --> true
 print(debug.getmetatable(42))                       --> nil
 ```
 
-[`debug.setmetatable`](/manual/api#debug.setmetatable) sets the metatable of a value of any type.]],
+[`debug.setmetatable`](/manual/api#debug.setmetatable) sets the metatable of a value of any type.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.getmetatable",
@@ -2024,6 +2051,9 @@ print(debug.getmetatable(42))                       --> nil
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "table|nil",
@@ -2052,13 +2082,18 @@ print(reg._LOADED == package.loaded)                            --> true
 print(debug.getmetatable(time.now()) == reg["time.instant"])    --> true
 ```
 
-Changing or removing an entry that the runtime owns changes the behavior of the library that uses it.]],
+Changing or removing an entry that the runtime owns changes the behavior of the library that uses it.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.getregistry",
     origin = "lua",
     params = {},
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "table",
@@ -2092,7 +2127,9 @@ print(debug.getupvalue(bump, 2))                    --> step  5
 print(select("#", debug.getupvalue(bump, 3)))       --> 0
 ```
 
-The number of upvalues of a function is the `nups` field of [`debug.getinfo`](/manual/api#debug.getinfo) with the `u` option. [`debug.setupvalue`](/manual/api#debug.setupvalue) changes an upvalue, and [`debug.upvalueid`](/manual/api#debug.upvalueid) tells whether two closures share one.]],
+The number of upvalues of a function is the `nups` field of [`debug.getinfo`](/manual/api#debug.getinfo) with the `u` option. [`debug.setupvalue`](/manual/api#debug.setupvalue) changes an upvalue, and [`debug.upvalueid`](/manual/api#debug.upvalueid) tells whether two closures share one.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.getupvalue",
@@ -2108,6 +2145,9 @@ The number of upvalues of a function is the `nups` field of [`debug.getinfo`](/m
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "string|nil",
@@ -2139,7 +2179,9 @@ print(debug.getuservalue(paris, 2))              --> nil
 print(debug.getuservalue({}))                    --> nil
 ```
 
-A slot that holds `nil` returns `nil` and `true`, which tells it apart from a missing slot. [`debug.setuservalue`](/manual/api#debug.setuservalue) stores a value in a slot.]],
+A slot that holds `nil` returns `nil` and `true`, which tells it apart from a missing slot. [`debug.setuservalue`](/manual/api#debug.setuservalue) stores a value in a slot.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.getuservalue",
@@ -2156,6 +2198,9 @@ A slot that holds `nil` returns `nil` and `true`, which tells it apart from a mi
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "any",
@@ -2351,7 +2396,9 @@ coroutine.resume(co)
 print(debug.setcontext(co, find("trace"), "on"))   --> trace
 print(select(2, coroutine.resume(co)))            --> on
 print(trace)                                      --> off
-```]],
+```
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.setcontext",
@@ -2372,6 +2419,9 @@ print(trace)                                      --> off
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "string|nil",
@@ -2412,7 +2462,9 @@ debug.sethook()
 print(table.concat(events, ", "))    --> line 8, call, line 3, return, line 9
 ```
 
-Each thread has one hook, and installing a new one replaces the old. [`debug.gethook`](/manual/api#debug.gethook) reads the hook back, and [`debug.getinfo`](/manual/api#debug.getinfo) with level 2 describes the function that triggered the event.]],
+Each thread has one hook, and installing a new one replaces the old. [`debug.gethook`](/manual/api#debug.gethook) reads the hook back, and [`debug.getinfo`](/manual/api#debug.getinfo) with level 2 describes the function that triggered the event.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.sethook",
@@ -2435,6 +2487,9 @@ Each thread has one hook, and installing a new one replaces the old. [`debug.get
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {},
     short_name = "sethook",
     since = "0.1.0",
@@ -2466,7 +2521,9 @@ end
 demo()
 ```
 
-Unlike `debug.getlocal`, this function takes only a level, since a function that is not running has no variables to assign. [`debug.setupvalue`](/manual/api#debug.setupvalue) assigns a captured variable of a closure.]],
+Unlike `debug.getlocal`, this function takes only a level, since a function that is not running has no variables to assign. [`debug.setupvalue`](/manual/api#debug.setupvalue) assigns a captured variable of a closure.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.setlocal",
@@ -2486,6 +2543,9 @@ Unlike `debug.getlocal`, this function takes only a level, since a function that
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "string|nil",
@@ -2515,7 +2575,9 @@ debug.setmetatable(0, nil)
 print(catch (21):double())                --> false  ...: attempt to index a number value
 ```
 
-The metatable of a type is shared by every chunk in the state, including the standard library, so a change affects all code that runs afterwards. [`debug.getmetatable`](/manual/api#debug.getmetatable) reads a metatable without the protection.]],
+The metatable of a type is shared by every chunk in the state, including the standard library, so a change affects all code that runs afterwards. [`debug.getmetatable`](/manual/api#debug.getmetatable) reads a metatable without the protection.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.setmetatable",
@@ -2531,6 +2593,9 @@ The metatable of a type is shared by every chunk in the state, including the sta
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "any",
@@ -2562,7 +2627,9 @@ print(bump(1), step)                                --> 101  100
 print(select("#", debug.setupvalue(bump, 2, 0)))    --> 0
 ```
 
-Every closure that shares the upvalue sees the new value. [`debug.upvaluejoin`](/manual/api#debug.upvaluejoin) makes two closures share one upvalue.]],
+Every closure that shares the upvalue sees the new value. [`debug.upvaluejoin`](/manual/api#debug.upvaluejoin) makes two closures share one upvalue.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.setupvalue",
@@ -2582,6 +2649,9 @@ Every closure that shares the upvalue sees the new value. [`debug.upvaluejoin`](
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "string|nil",
@@ -2613,7 +2683,9 @@ print(debug.getuservalue(paris))                      --> Paris  true
 print(paris:name())                                   --> Paris
 ```
 
-The library types read their own slots, so a store changes their behavior. A zoned value keeps its zone in its slot, and replacing it with any value other than a zone breaks every later operation on that zoned value. [`debug.getuservalue`](/manual/api#debug.getuservalue) reads a slot.]],
+The library types read their own slots, so a store changes their behavior. A zoned value keeps its zone in its slot, and replacing it with any value other than a zone breaks every later operation on that zoned value. [`debug.getuservalue`](/manual/api#debug.getuservalue) reads a slot.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.setuservalue",
@@ -2634,6 +2706,9 @@ The library types read their own slots, so a store changes their behavior. A zon
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "userdata|nil",
@@ -2723,7 +2798,9 @@ print(debug.upvalueid(inc, 1) == debug.upvalueid(other, 1))    --> false
 print(type(debug.upvalueid(inc, 1)), debug.upvalueid(inc, 9))  --> userdata  nil
 ```
 
-An identifier stays valid only while the upvalue exists, and its address carries no other meaning. [`debug.upvaluejoin`](/manual/api#debug.upvaluejoin) makes two closures share an upvalue.]],
+An identifier stays valid only while the upvalue exists, and its address carries no other meaning. [`debug.upvaluejoin`](/manual/api#debug.upvaluejoin) makes two closures share an upvalue.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.upvalueid",
@@ -2739,6 +2816,9 @@ An identifier stays valid only while the upvalue exists, and its address carries
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {
       {
         type = "userdata|nil",
@@ -2775,7 +2855,9 @@ print(b(), a())                                            --> 2  3
 print(debug.upvalueid(a, 1) == debug.upvalueid(b, 1))      --> true
 ```
 
-Native functions have upvalues of their own that cannot be joined. [`debug.upvalueid`](/manual/api#debug.upvalueid) tells whether two closures already share an upvalue.]],
+Native functions have upvalues of their own that cannot be joined. [`debug.upvalueid`](/manual/api#debug.upvalueid) tells whether two closures already share an upvalue.
+
+**Requires pledge:** `debug`]],
     kind = "function",
     module = "debug",
     name = "debug.upvaluejoin",
@@ -2799,6 +2881,9 @@ Native functions have upvalues of their own that cannot be joined. [`debug.upval
       },
     },
     parent = "debug",
+    pledges = {
+      "debug",
+    },
     returns = {},
     short_name = "upvaluejoin",
     since = "0.1.0",

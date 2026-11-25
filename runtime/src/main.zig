@@ -483,12 +483,9 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         // Without the compiler only a bundle runs, which `main` checked.
     } else if (cli.script) |path| {
         if (cli.dis) return disassemble(l, path);
-        // When the host limits file reads with -P, the entry script itself
-        // must fall within the grant.
-        if (limitsFileReads(cli.pledges.items) and !pledge.allowed(l, "fs:read", path)) {
-            std.debug.print("lus: permission \"fs:read\" denied for '{s}'\n", .{path});
-            return 1;
-        }
+        // The script that the command line names is read whatever the -P
+        // grants say, because running it is the request. The
+        // grants limit what the script itself reads.
         const src = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
             std.debug.print("lus: cannot open {s} ({s})\n", .{ path, @errorName(e) });
             return 1;

@@ -19,6 +19,14 @@ const String = object.String;
 const Closure = object.Closure;
 const gc = @import("../vm/gc.zig");
 
+/// The functions that reach the state of other functions, the registry,
+/// metatables, hooks, or user values need the `debug` permission, which a
+/// thread holds until its permission set first changes.
+fn requireDebug(l: *Thread, comptime name: []const u8) Error!void {
+    if (@import("../vm/pledge.zig").allowedUntouched(l, "debug")) return;
+    return l.raiseFmt("permission \"debug\" denied for debug." ++ name, .{});
+}
+
 pub const funcs = [_]aux.Reg{
     .{ .name = "traceback", .func = traceback },
     .{ .name = "debug", .func = debugRepl },
@@ -113,6 +121,7 @@ fn frameAt(co: *Thread, level: i64) ?usize {
 }
 
 fn getinfo(l: *Thread) Error!u32 {
+    try requireDebug(l, "getinfo");
     const ta = threadArg(l);
     const co = ta[0];
     const a = ta[1];
@@ -222,6 +231,7 @@ fn activeLocal(co: *Thread, fi: usize, n: i64) ?struct { []const u8, u32 } {
 }
 
 fn getlocal(l: *Thread) Error!u32 {
+    try requireDebug(l, "getlocal");
     const ta = threadArg(l);
     const co = ta[0];
     const a = ta[1];
@@ -250,6 +260,7 @@ fn getlocal(l: *Thread) Error!u32 {
 }
 
 fn setlocal(l: *Thread) Error!u32 {
+    try requireDebug(l, "setlocal");
     const ta = threadArg(l);
     const co = ta[0];
     const a = ta[1];
@@ -282,6 +293,7 @@ fn upvalueOf(l: *Thread, fi: u32, ni: u32) Error!?struct { []const u8, *Value } 
 }
 
 fn getupvalue(l: *Thread) Error!u32 {
+    try requireDebug(l, "getupvalue");
     const u = (try upvalueOf(l, 1, 2)) orelse return 0;
     try l.push(try l.newStringValue(u[0]));
     try l.push(u[1].*);
@@ -289,6 +301,7 @@ fn getupvalue(l: *Thread) Error!u32 {
 }
 
 fn setupvalue(l: *Thread) Error!u32 {
+    try requireDebug(l, "setupvalue");
     _ = try aux.checkAny(l, 3);
     const u = (try upvalueOf(l, 1, 2)) orelse return 0;
     u[1].* = l.arg(3);
@@ -303,6 +316,7 @@ fn setupvalue(l: *Thread) Error!u32 {
 }
 
 fn upvalueid(l: *Thread) Error!u32 {
+    try requireDebug(l, "upvalueid");
     const f = try aux.checkFunction(l, 1);
     const n = try aux.checkInt(l, 2);
     if (f.tag == .closure) {
@@ -316,6 +330,7 @@ fn upvalueid(l: *Thread) Error!u32 {
 }
 
 fn upvaluejoin(l: *Thread) Error!u32 {
+    try requireDebug(l, "upvaluejoin");
     if (l.arg(1).tag != .closure) return aux.argError(l, 1, "Lua function expected", .{});
     if (l.arg(3).tag != .closure) return aux.argError(l, 3, "Lua function expected", .{});
     const c1 = l.arg(1).as(Closure);
@@ -330,12 +345,14 @@ fn upvaluejoin(l: *Thread) Error!u32 {
 }
 
 fn getmetatable(l: *Thread) Error!u32 {
+    try requireDebug(l, "getmetatable");
     const v = try aux.checkAny(l, 1);
     const mt = l.metatable(v) orelse return aux.retNil(l);
     return aux.ret(l, Value.obj(.table, mt));
 }
 
 fn setmetatable(l: *Thread) Error!u32 {
+    try requireDebug(l, "setmetatable");
     const v = l.arg(1);
     const mtv = l.arg(2);
     if (mtv.tag != .nil and mtv.tag != .table) return aux.typeError(l, 2, "nil or table");
@@ -350,6 +367,7 @@ fn setmetatable(l: *Thread) Error!u32 {
 }
 
 fn getregistry(l: *Thread) Error!u32 {
+    try requireDebug(l, "getregistry");
     return aux.ret(l, l.g.registry);
 }
 
@@ -392,6 +410,7 @@ fn debuggerMask(l: *Thread) u8 {
 }
 
 fn gethook(l: *Thread) Error!u32 {
+    try requireDebug(l, "gethook");
     const co = threadArg(l)[0];
     const t = try hookTable(l);
     const rec = table.get(t, Value.obj(.thread, co));
@@ -406,6 +425,7 @@ fn gethook(l: *Thread) Error!u32 {
 /// debug.sethook([thread,] hook, mask [, count]). With no hook, the
 /// thread's hook is removed.
 fn sethook(l: *Thread) Error!u32 {
+    try requireDebug(l, "sethook");
     const ta = threadArg(l);
     const co = ta[0];
     const a = ta[1];
@@ -457,6 +477,7 @@ fn sethook(l: *Thread) Error!u32 {
 /// debug.getuservalue(u [, n]): the n-th user value of a full userdata and
 /// true, or fail when `u` is not a full userdata or has no such slot.
 fn getuservalue(l: *Thread) Error!u32 {
+    try requireDebug(l, "getuservalue");
     const n = try aux.optInt(l, 2, 1);
     const v = l.arg(1);
     if (v.tag != .userdata) return aux.retNil(l);
@@ -470,6 +491,7 @@ fn getuservalue(l: *Thread) Error!u32 {
 /// debug.setuservalue(u, value [, n]): stores `value` in the n-th user
 /// value of `u` and returns `u`, or fail when the slot does not exist.
 fn setuservalue(l: *Thread) Error!u32 {
+    try requireDebug(l, "setuservalue");
     const n = try aux.optInt(l, 3, 1);
     if (l.arg(1).tag != .userdata) return aux.typeError(l, 1, "userdata");
     const v = try aux.checkAny(l, 2);
@@ -591,11 +613,11 @@ fn formatSource(l: *Thread) Error!u32 {
     if (width > 64) return aux.argError(l, 3, "indent width too large", .{});
     var arena_state = std.heap.ArenaAllocator.init(l.g.gpa);
     defer arena_state.deinit();
-    const checker: astexport.Checker = .{ .ctx = l.g, .check = checkChunk };
+    // Formatting needs a parse alone, so a program that parses but fails
+    // name resolution still formats.
     const opts: format.Options = .{
         .chunkname = chunkname,
         .indent_width = if (width > 0) @intCast(width) else 4,
-        .checker = checker,
     };
     const res = format.format(l.g.gpa, arena_state.allocator(), code, opts) catch return l.raiseMem();
     switch (res) {
@@ -722,6 +744,7 @@ fn nodeTable(l: *Thread, n: *const astexport.Node) Error!*Table {
 /// printed and the loop goes on. Running the lines needs the `load`
 /// permission, like any other code loaded at run time.
 fn debugRepl(l: *Thread) Error!u32 {
+    try requireDebug(l, "debug");
     try @import("../vm/pledge.zig").require(l, "load", null);
     const out = @import("out.zig");
     const api = @import("../api.zig");

@@ -10,7 +10,7 @@
 ]]
 
 
-pledge("load")
+pledge("load", "debug")
 
 
 local debug = require("debug")

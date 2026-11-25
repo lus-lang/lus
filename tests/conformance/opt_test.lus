@@ -10,7 +10,7 @@
   through the optimizing tier on its first call.
 ]]
 
-pledge("load")
+pledge("load", "debug")
 
 local mode, opt = debug.jit()
 local minint = math.mininteger

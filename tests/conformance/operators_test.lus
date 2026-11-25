@@ -11,7 +11,7 @@
     then runs again under a hook that counts every instruction.
 ]]
 
-pledge("load")
+pledge("load", "debug")
 
 local meta = setmetatable({}, {
     __add = function() return "add" end, __sub = function() return "sub" end,

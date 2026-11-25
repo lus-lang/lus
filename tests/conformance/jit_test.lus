@@ -7,7 +7,7 @@
   and with LUS_JIT=eager, where every function compiles on its first call.
 ]]
 
-pledge("load")
+pledge("load", "debug")
 
 local mode = debug.jit()
 local minint = math.mininteger

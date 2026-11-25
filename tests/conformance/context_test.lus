@@ -1,6 +1,6 @@
 -- Context variables: locals declared with `<context>`, whose value belongs
 -- to the running coroutine (spec/design/context.md).
-pledge("load")
+pledge("load", "debug")
 
 local function the_initializer_is_the_default_test()
     local id <context> = "none"

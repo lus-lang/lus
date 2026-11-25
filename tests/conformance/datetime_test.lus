@@ -7,7 +7,7 @@
 ]]
 
 
-pledge("load")
+pledge("load", "debug")
 
 
 -- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.

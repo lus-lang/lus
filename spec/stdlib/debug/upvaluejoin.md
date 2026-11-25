@@ -3,6 +3,7 @@ name: debug.upvaluejoin
 module: debug
 kind: function
 since: 0.1.0
+pledges: ["debug"]
 stability: stable
 origin: lua
 params:

@@ -14,7 +14,7 @@
 ]]
 
 
-pledge("load", "fs:read=./baselib_*", "fs:write=./baselib_*")
+pledge("load", "fs:read=./baselib_*", "fs:write=./baselib_*", "debug")
 
 
 -- The runner rewrites calls named assert into power asserts, so the tests of

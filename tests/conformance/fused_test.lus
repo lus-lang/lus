@@ -10,7 +10,7 @@
   chunk.
 ]]
 
-pledge("load")
+pledge("load", "debug")
 
 local function addition_at_the_end_of_an_integer_loop_test()
     local s = 0

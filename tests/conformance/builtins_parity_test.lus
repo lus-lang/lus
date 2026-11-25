@@ -1,4 +1,4 @@
-pledge("load")
+pledge("load", "debug")
 
 -- Builtin parity suite, ported from h1/fastcall-parity.lus.
 -- Every builtin must behave identically whether it is called directly through

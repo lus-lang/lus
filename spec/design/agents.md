@@ -146,7 +146,7 @@ The page reads in this order: the masthead with the agent prompt and the news, t
 ### Permissions
 
 **Heading:** Every program states what it touches
-**Line:** Scripts start with no access to files, network, processes, or environment, and pledge what they need.
+**Line:** A script reaches files, the network, processes, and the environment only with the permissions it pledges, which the grants of `lus -P` bound.
 **Evidence:**
 
 ```lus nocheck

@@ -71,22 +71,18 @@ local function a_granted_entry_script_runs_test()
     fs.remove(root, true)
 end
 
-local function sealed_entry_scripts_use_their_authorized_file_object_test()
+-- The script that the command line names runs whatever the -P grants
+-- say. The grants limit what the script reads, and not the script itself.
+local function an_entry_script_outside_the_read_grant_runs_test()
     local root = fixture()
     local allowed = fs.path.join(root, "allowed-entry.lus")
     local outside = fs.path.join(root, "outside-entry.lus")
     write_file(allowed, "print('allowed-entry-ran')\n")
     write_file(outside, "print('outside-entry-ran')\n")
 
-    local denied, denied_output = run(command_for({allowed}, outside))
-    assert(not denied, "entry outside the read grant ran: " .. denied_output)
-    assert(denied_output:find('permission "fs:read" denied', 1, true),
-        denied_output)
-    assert(not denied_output:find("outside-entry-ran", 1, true), denied_output)
-
-    local accepted, accepted_output = run(command_for({allowed}, allowed))
-    assert(accepted, accepted_output)
-    assert(accepted_output:find("allowed-entry-ran", 1, true), accepted_output)
+    local ran, output = run(command_for({allowed}, outside))
+    assert(ran, output)
+    assert(output:find("outside-entry-ran", 1, true), output)
     fs.remove(root, true)
 end
 

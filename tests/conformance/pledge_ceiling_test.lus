@@ -1,0 +1,68 @@
+-- A pledge without a value under a command line grant limited to values
+-- (spec/design/pledge.md, "Host policy"). The grant of `-P` is the
+-- ceiling of script pledges, so a script that pledges the whole of a
+-- capability the command line granted for some values only gets false
+-- while its permissions stay limited to those values. Each case runs a child
+-- lus with the grant and prints what the script found.
+pledge("exec", "env", "fs")
+
+local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+
+local function run(grant, code)
+    local p = os.spawn({ lus_bin, "-P" .. grant, "-e", code }, { stdout = "pipe", stderr = "stdout" })
+    local out = p.stdout:read("a")
+    coroutine.resume(p.exit)
+    return out
+end
+
+local function a_path_grant_is_not_widened_test()
+    local out = run("fs:read=./scoped/*", [[
+        print(pledge("fs:read"), pledge("fs"), (catch io.open("/etc/hosts")))
+    ]])
+    assert(out == "false\tfalse\tfalse\n", out)
+end
+
+local function a_part_under_a_scoped_base_is_not_widened_test()
+    local out = run("fs=./scoped/*", [[
+        print(pledge("fs:read"), (catch io.open("/etc/hosts")))
+    ]])
+    assert(out == "false\tfalse\n", out)
+end
+
+local function a_host_grant_is_not_widened_test()
+    local out = run("network:http=example.invalid", [[
+        print(pledge("network:http"), pledge("network"))
+    ]])
+    assert(out == "false\tfalse\n", out)
+end
+
+local function a_pattern_grant_is_not_widened_test()
+    local out = run("env:read=LUS_SCOPED_*", [[
+        print(pledge("env:read"), (catch os.getenv("PATH")))
+    ]])
+    assert(out == "false\tfalse\n", out)
+end
+
+local function a_program_grant_is_not_widened_test()
+    local out = run("exec=lus-scoped-program", [[
+        print(pledge("exec"), (catch os.execute("true")))
+    ]])
+    assert(out == "false\tfalse\n", out)
+end
+
+local function an_unscoped_grant_still_covers_an_unscoped_pledge_test()
+    local out = run("fs:read", [[
+        print(pledge("fs:read"))
+    ]])
+    assert(out == "true\n", out)
+end
+
+local function a_scoped_pledge_within_the_grant_succeeds_test()
+    -- The directory exists, so the grant and the pledge resolve the same way.
+    fs.createdirectory("scoped")
+    local out = run("fs:read=./scoped/*", [[
+        print(pledge("fs:read=./scoped/a.txt"))
+    ]])
+    fs.remove("scoped", true)
+    assert(out == "true\n", out)
+end

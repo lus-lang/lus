@@ -1,4 +1,4 @@
-pledge("load")
+pledge("load", "debug")
 
 -- ===== events =====
 local debug = require'debug'

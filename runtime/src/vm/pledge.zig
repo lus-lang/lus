@@ -58,6 +58,7 @@ const builtin_caps = [_]Capability{
     .{ .name = "load", .kind = .none },
     .{ .name = "ffi", .kind = .none },
     .{ .name = "worker", .kind = .none },
+    .{ .name = "debug", .kind = .none },
 };
 
 pub const Entry = struct {
@@ -667,6 +668,38 @@ pub fn allowedUnrestricted(l: *Thread, perm: []const u8) bool {
     return false;
 }
 
+/// Whether the ceiling `ceil` covers a script pledge of `name` with `val`.
+/// A pledge without a value asks for every value, which a ceiling that
+/// grants some values only does not cover: a check that names no value
+/// passes such a ceiling, so `setAllows` alone would widen the grant.
+fn ceilingCovers(g: *Global, ceil: *Set, name: []const u8, val: ?[]const u8) bool {
+    if (val != null) return setAllows(g, ceil, name, val);
+    const parts = split(name);
+    const cap = findCap(g, parts[0]) orelse return false;
+    if (cap.kind == .none) return setAllows(g, ceil, name, null);
+    if (ceil.find(name)) |e| if (e.rejected) return false;
+    if (ceil.find(parts[0])) |e| if (e.rejected) return false;
+    if (ceil.find(name)) |e| if (e.unrestricted) return true;
+    // A part such as fs:read is covered by its base granted without a
+    // value, unless the part itself is limited to values.
+    if (!std.mem.eql(u8, name, parts[0])) {
+        if (ceil.find(name)) |e| if (e.values.items.len > 0) return false;
+        if (ceil.find(parts[0])) |e| if (e.unrestricted) return true;
+    }
+    if (ceil.find("all")) |e| if (e.unrestricted) return true;
+    return false;
+}
+
+/// Whether `perm`, a capability that a fresh state holds, is granted. A
+/// thread holds it while its permission set is unchanged, with no pledge,
+/// no rejection, no seal, and no grant of the host. Once the set
+/// has changed, `perm` must be granted like any other capability.
+pub fn allowedUntouched(l: *Thread, perm: []const u8) bool {
+    const s = setOf(l) orelse return true;
+    if (s.entries.items.len == 0 and !s.sealed) return true;
+    return allowed(l, perm, null);
+}
+
 /// Non-raising check.
 pub fn allowed(l: *Thread, perm: []const u8, requested: ?[]const u8) bool {
     const s = setOf(l) orelse return false;
@@ -710,6 +743,8 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
         if (val.?.len == 0) val = null;
     }
     if (name.len >= 64) return l.raiseFmt("permission name too long: '{s}'", .{spec});
+    var rel_buf: ?[]u8 = null;
+    defer if (rel_buf) |b| gpa.free(b);
     if (std.mem.eql(u8, name, "seal")) {
         const set = try writable(l);
         set.sealed = true;
@@ -727,8 +762,15 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
             };
             if (!ok) return l.raiseFmt("invalid {s} subpermission '{s}'", .{ parts[0], parts[1] });
         }
+        // A relative path without a leading `./`, such as `data/*` or
+        // `tool.lus`, names the same place as `./data/*`. A value that starts
+        // with a wildcard stays refused, since `*` spans separators.
         if (cap.kind == .path) if (val) |v| {
-            if (!isPathValue(v, host_rules)) return l.raiseFmt("filesystem permission values must be an absolute path or start with '.' (got '{s}')", .{v});
+            if (!isPathValue(v, host_rules)) {
+                if (v[0] == '*' or v[0] == '?' or v[0] == '[') return l.raiseFmt("filesystem permission values must be an absolute path or a relative path that starts with a name (got '{s}')", .{v});
+                rel_buf = std.mem.concat(gpa, u8, &.{ "./", v }) catch return l.raiseMem();
+                val = rel_buf;
+            }
         };
         if (cap.kind == .program) if (val) |v| {
             if (hasSeparator(v) and !isPathValue(v, host_rules)) return l.raiseFmt("a program path in a permission value must be absolute or start with '.' (got '{s}')", .{v});
@@ -742,7 +784,7 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
         // does not already cover.
         if (!from_host) {
             const r = registry(g);
-            const covered = if (r.ceiling) |ceil| setAllows(g, ceil, name, val) else false;
+            const covered = if (r.ceiling) |ceil| ceilingCovers(g, ceil, name, val) else false;
             if (!covered) {
                 if (r.on_request) |hook| {
                     if (!hook.func(hook.ctx, l, name, val)) return .refused;

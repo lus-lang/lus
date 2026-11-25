@@ -67,6 +67,7 @@ The standard library checks the following permissions.
 | `network:tcp` | Connecting TCP sockets and binding TCP servers. |
 | `network:udp` | Opening, binding, and sending from UDP sockets. |
 | `network:server` | Serving HTTP with `network.serve`. |
+| `debug` | The functions of the `debug` library that read or change other functions, the registry, metatables, hooks, and user values, such as `debug.getlocal` and `debug.getregistry`. |
 
 Several functions check more than one permission.
 
@@ -79,6 +80,8 @@ Several functions check more than one permission.
 
 `pledge` also accepts the names `fs:exec`, `network:tls`, `ffi`, and `worker`, which are reserved for host programs and extensions. No standard library function checks them.
 
+A script holds `debug` until its permissions first change. The first `pledge`, rejection, or `seal`, or a `-P` grant on the command line, removes `debug` unless that change names it too. A script that pledges nothing keeps the whole `debug` library, while a script that pledges `fs:read` and seals cannot read the registry or the locals of other functions. `debug.traceback`, `debug.parse`, `debug.format`, `debug.check`, and `debug.jit` need no permission.
+
 `pledge` raises an error for an unknown name, such as `unknown permission: 'bogus'`. It also raises an error for a part that the base permission lacks, such as `invalid fs subpermission 'nope'`. The name `"all"` grants every permission, but only the command line and a host program may use it, so a script that pledges `"all"` gets the error `permission "all" cannot be requested from scripts`.
 
 ## Restricting a permission to values
@@ -89,7 +92,7 @@ The limit is a _value_ written after `=`. In a value, `*` matches any sequence o
 
 ### Filesystem values
 
-A filesystem value is an absolute path or a path that starts with `.`, which Lus resolves against the working directory. Any other value raises the error `filesystem permission values must be an absolute path or start with '.'`. A value without a wildcard matches that one path. A value that ends in `/*` matches everything inside the directory but not the directory itself, so a program that also lists the directory pledges both forms.
+A filesystem value is an absolute path or a relative path, which Lus resolves against the working directory, so `data/*` and `./data/*` name the same place. A value without a wildcard matches that one path. A value that ends in `/*` matches everything inside the directory but not the directory itself, so a program that also lists the directory pledges both forms.
 
 The following script pledges read access to a data directory and to everything inside it, so listing the parent directory fails. The setup and the cleanup run in [coroutines](#permissions-in-coroutines), so the main script never holds their wider permissions.
 

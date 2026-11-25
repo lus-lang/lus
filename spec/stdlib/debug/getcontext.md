@@ -3,6 +3,7 @@ name: debug.getcontext
 module: debug
 kind: function
 since: 2.0.0
+pledges: ["debug"]
 stability: unstable
 origin: lus
 params:
