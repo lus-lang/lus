@@ -62,9 +62,9 @@ const docs = [
     <section class="part">
       <div class="sech"><h2>Skills</h2></div>
       <p class="lede">
-        <code>lus agents init</code> writes the skills of the installed runtime
-        into <code>.agents/skills/</code> of a project and adds a Lus section to
-        <code>AGENTS.md</code>. Agents that read <code>.agents/skills/</code>
+        Run <code>lus agents init</code> in a project to write the skills of the
+        installed runtime into <code>.agents/skills/</code> and add a Lus section
+        to <code>AGENTS.md</code>. Agents that read <code>.agents/skills/</code>
         load the skills from there. <code>lus help NAME</code> prints the
         reference for any function from the same runtime.
       </p>
@@ -79,8 +79,8 @@ const docs = [
         }
       </dl>
       <p class="lede">
-        In Claude Code, <code>claude plugin install lus --marketplace lus-lang/lus</code>
-        installs the same skills as a plugin. <code>lus agents init</code> also
+        In Claude Code, run <code>claude plugin install lus --marketplace lus-lang/lus</code>
+        to install the same skills as a plugin. <code>lus agents init</code> also
         links <code>.claude/skills</code> to <code>.agents/skills/</code>.
       </p>
     </section>

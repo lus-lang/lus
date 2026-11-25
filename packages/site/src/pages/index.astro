@@ -70,13 +70,13 @@ const chapters = [
     name: "fast",
     title: "Fast",
     href: "#benchmarks",
-    blurb: "A two-tier JIT compiles hot code to machine code, and a generational, parallel collector keeps pauses short and memory low.",
+    blurb: "A two-tier JIT compiles hot code to machine code. The garbage collector is generational and parallel.",
   },
   {
     name: "batteries",
     title: "All-in-one",
     href: "/manual/api",
-    blurb: "One executable of about 7 MB carries the runtime, the libraries most projects install, and the tools. It also builds a program into one file of its own.",
+    blurb: "One executable holds the runtime, the libraries most projects install, and the tools. It also builds a program into one file of its own.",
   },
   {
     name: "permissions",
@@ -100,7 +100,7 @@ const chapters = [
     name: "concurrency",
     title: "Concurrency",
     href: "/manual/concurrency",
-    blurb: "Sockets suspend only the coroutine that waits, so a server reads top to bottom and holds thousands of connections.",
+    blurb: "A socket operation suspends only the coroutine that waits on it, so server code runs top to bottom with one coroutine per connection.",
   },
 ]
 
