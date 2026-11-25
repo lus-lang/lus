@@ -23,6 +23,11 @@ name: Release
 # checkout before they build, and with `publish` false, so ship.yml
 # publishes the assets itself. The installer takes its version from the
 # tag.
+#
+# Every binary, link object, library, and archive gets a build provenance
+# attestation, which `gh attestation verify FILE --repo lus-lang/lus`
+# checks. A dry run of ship.yml passes `attest` false, since an
+# attestation is published to the transparency log of Sigstore.
 
 on:
   push:
@@ -51,9 +56,16 @@ on:
         required: false
         type: string
         default: ""
+      attest:
+        description: "Attest the provenance of the assets"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 env:
   ZIG_VERSION: "0.17.1"
@@ -149,6 +161,14 @@ jobs:
           done
           zig build wasm $VERSION_FLAG
           cp zig-out/wasm/lus.wasm ../dist/lus.wasm
+      - name: Attest the binaries, link objects, and archives
+        if: ${{ inputs.attest != false }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*
+            out/*/bin/*
+            out/*/lib/*
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-build
@@ -212,6 +232,11 @@ jobs:
           test "$(sha256sum "$publisher" | awk '{ print $1 }')" = "$expected"
           test "$(node "$publisher" --version)" = "$(node -p 'require("./package.json").devDependencies.ovsx')"
           ls -l "$out"
+      - name: Attest the VSIX and its publisher
+        if: ${{ inputs.attest != false && startsWith(env.TAG, 'v') && !contains(env.TAG, '-') }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ startsWith(env.TAG, 'v') && !contains(env.TAG, '-') }}
         with:
@@ -292,6 +317,11 @@ jobs:
             if ((Get-Date) -gt $deadline) { throw "uninstall did not complete" }
             Start-Sleep -Seconds 2
           }
+      - name: Attest the installer
+        if: ${{ inputs.attest != false }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/lus-setup.exe
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-windows-installer

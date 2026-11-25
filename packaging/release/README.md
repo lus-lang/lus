@@ -43,5 +43,9 @@ The input `dry_run` is set by default. A dry run builds and checks
 everything and publishes nothing, and its summary lists each gate that a
 real release would stop at. A real release needs the secrets
 `LUS_RELEASE_SIGNING_SEED`, `LUS_RELEASE_SIGNING_KEY_ID`, `OVSX_PAT`, and
-`NPM_TOKEN`, the file `keys.json`, and a branch that the workflow token may
-push to.
+`NPM_TOKEN`, the file `keys.json`, a branch that the workflow token may
+push to, and the environment `release`. The job that tags and publishes
+the release runs in that environment, so a real release waits for one of
+its reviewers to approve. `release.yml` attests the provenance of every
+file it builds, which `gh attestation verify FILE --repo lus-lang/lus`
+checks, and a dry run attests nothing.

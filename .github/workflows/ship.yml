@@ -6,11 +6,12 @@ name: Ship
 #   1. prepare checks that CI and the nightly tests passed on the commit,
 #      that the tag is new, and that the secrets are set. It writes the
 #      changes of the release commit (tools/release-version.mjs release).
-#   2. build runs release.yml on that commit, which tests it and builds
-#      every target, lus.wasm, the VSIX, and the Windows installer.
-#   3. github pushes the release commit and the tag vX.Y.Z and publishes
-#      the release as the latest, which install.sh and lus-setup.exe
-#      download.
+#   2. build runs release.yml on that commit, which tests it, builds
+#      every target, lus.wasm, the VSIX, and the Windows installer, and
+#      attests the provenance of each file.
+#   3. github waits for the approval of the environment release, then
+#      pushes the release commit and the tag vX.Y.Z and publishes the
+#      release as the latest, which install.sh and lus-setup.exe download.
 #   4. index, vscode, and npm add the release to the signed index of
 #      `lus version`, publish the VSIX to Open VSX, and publish lus-wasm to
 #      npm.
@@ -51,6 +52,7 @@ permissions:
   contents: write
   actions: read
   id-token: write
+  attestations: write
 
 concurrency:
   group: ship
@@ -156,11 +158,15 @@ jobs:
       tag: ${{ needs.prepare.outputs.tag }}
       patch: ship-patch
       publish: false
+      attest: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
     secrets: inherit
 
   github:
     name: Publish the GitHub release
     needs: [prepare, build]
+    # A real release waits here for a reviewer of the environment release.
+    # Every later job publishes only after this one.
+    environment: ${{ (github.event_name == 'workflow_dispatch' && !inputs.dry_run) && 'release' || '' }}
     runs-on: ubuntu-24.04
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
