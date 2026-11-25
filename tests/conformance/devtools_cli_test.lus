@@ -1,0 +1,87 @@
+--[[
+    Test suite for `lus tree` and `lus check --explain`
+    (spec/design/tooling.md). Each scenario runs the interpreter as a
+    subprocess inside the temporary directory of this file.
+]]
+
+pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
+
+local lus_cmd = os.getenv("LUS_EXE")
+
+local function quote(s)
+    return '"' .. s .. '"'
+end
+
+-- Runs a command line and returns whether it succeeded and its output
+-- with line ends normalized.
+local function run(cmdline)
+    local f = io.popen(cmdline .. " 2>&1")
+    local out = f:read("a")
+    local ok = f:close()
+    return (ok == true or ok == 0), (string.gsub(out, "\r\n", "\n"))
+end
+
+local function lus(args)
+    return run(quote(lus_cmd) .. " " .. args)
+end
+
+local function write(path, text)
+    local f = assert(io.open(path, "w"))
+    f:write(text)
+    f:close()
+end
+
+-- Runs lus inside the directory `dir`.
+local function lus_in(dir, args)
+    return run("cd " .. quote(dir) .. " && " .. quote(lus_cmd) .. " " .. args)
+end
+
+local function tree_prints_the_require_tree_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    fs.createdirectory("treeapp")
+    write("treeapp/main.lus", 'local greet = require("greet")\nlocal s = require("string")\nprint(greet, s)\n')
+    write("treeapp/greet.lus", 'return require("gone")\n')
+    local ok, out = lus_in("treeapp", "tree main.lus")
+    assert(not ok, out)
+    assert(out == "main.lus\n├── greet (./greet.lus)\n│   └── gone (not found)\n└── string (standard library)\n", out)
+
+    write("treeapp/greet.lus", "return {}\n")
+    ok, out = lus_in("treeapp", "tree main.lus")
+    assert(ok, out)
+    assert(out == "main.lus\n├── greet (./greet.lus)\n└── string (standard library)\n", out)
+
+    ok, out = lus_in("treeapp", "tree --json main.lus")
+    assert(ok, out)
+    local t = fromjson(out)
+    assert(t.name == "main.lus" and t.kind == "file", out)
+    assert(t.requires[1].name == "greet" and t.requires[1].path == "./greet.lus", out)
+
+    ok, out = lus("tree missing.lus")
+    assert(not ok and out:find("cannot open missing.lus", 1, true), out)
+end
+
+local function explain_covers_every_listed_code_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, list = lus("check --list")
+    assert(ok, list)
+    local count = 0
+    for code, severity in list:gmatch("([%w-]+)%s+(%a+)%s+[^\n]*\n") do
+        local eok, out = lus("check --explain " .. code)
+        assert(eok, code .. ": " .. out)
+        assert(out:find("^" .. code:gsub("%-", "%%-") .. " %(" .. severity .. "%)\n"), out)
+        count = count + 1
+    end
+    assert(count >= 30, list)
+
+    local _, out = lus("check --explain=unused-local")
+    assert(out:find("This code reports unused-local:", 1, true), out)
+    assert(out:find("This code reports nothing:", 1, true), out)
+end
+
+local function explain_rejects_an_unknown_code_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, out = lus("check --explain no-such-code")
+    assert(not ok and out:find("unknown code 'no-such-code'", 1, true), out)
+    ok, out = lus("check --explain")
+    assert(not ok and out:find("needs a code", 1, true), out)
+end

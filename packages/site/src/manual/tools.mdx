@@ -20,6 +20,7 @@ lus compile  compile a script to a binary chunk
 lus debug    run a script under the Debug Adapter Protocol
 lus help     print the standard library reference for a name
 lus agents   set a project up for coding agents
+lus tree     print the modules a script requires, as a tree
 ```
 
 ## Files, input, and exit status
@@ -62,7 +63,7 @@ An _error_ is a problem that makes the compiler reject the file, such as an assi
 
 ### Diagnostic codes
 
-Every diagnostic has a code that stays the same between releases, so a tool can filter on it. `lus check --list` prints each code with its severity and summary. The codes are the following.
+Every diagnostic has a code that stays the same between releases, so a tool can filter on it. `lus check --list` prints each code with its severity and summary. `lus check --explain CODE` prints why the code matters and how to resolve it, with an example that reports the code and the same example fixed. The codes are the following.
 
 | Code | Severity | Reports |
 | --- | --- | --- |

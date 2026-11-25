@@ -112,7 +112,7 @@ Gives source files one standard layout. With no option, it prints the formatted 
 ## lus check
 
 ```
-lus check [--json] [--list] [path ...]
+lus check [--json] [--list] [--explain code] [path ...]
 ```
 
 Finds errors and likely mistakes without running the code. It parses, lints, and compiles each file, then prints each problem as `file:line:column: severity: message [code]`. For a directory, it checks every `.lus` file inside it. Files named `*_test.lus` are checked with the conventions of `lus test`. The exit status is 1 when an error or a warning is reported. Hints alone leave it at 0. [Checking](/manual/tools#checking) lists the diagnostics.
@@ -121,6 +121,7 @@ Finds errors and likely mistakes without running the code. It parses, lints, and
 | --- | --- |
 | `--json` | Print the diagnostics as one JSON array, for editors and other tools. |
 | `--list` | Print every diagnostic code with its severity and summary. |
+| `--explain code` | Print why a diagnostic code matters and how to resolve it, with an example that reports the code and the same example fixed. |
 
 ## lus doc
 
@@ -219,6 +220,14 @@ lus agents init [dir]
 ```
 
 Adds instructions for writing and testing Lus to a project, where coding agents read them. The command writes the agent skills of the running version into `dir/.agents/skills` and links `.claude/skills` to them, then adds a Lus section to `AGENTS.md`. `dir` defaults to the current directory. Running the command again updates the skills. The [agents page](/agents) lists the skills and the prompts to start from.
+
+## lus tree
+
+```
+lus tree [--json] file
+```
+
+Prints the modules that `file` requires, and the modules they require, as a tree. The tree follows the calls of `require` whose argument is a string literal. It resolves each name against the templates of `LUS_PATH`, or of the default `package.path` when `LUS_PATH` is unset, relative to the current directory. Each line names a module and the file it resolved to. A module of the standard library, a remote module, and a name that resolves to no file end their branch. A module that the tree already showed is marked `(*)`. A file that also loads modules in a way the tree cannot follow, such as `require(name)` or `load`, is marked `(dynamic)`. With `--json`, the tree is one JSON object per module with the fields `name`, `kind`, `path`, `dynamic`, `repeat`, and `requires`. The exit status is 1 when a name resolves to no file or a file does not parse.
 
 ## lus version
 

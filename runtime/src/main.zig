@@ -61,6 +61,7 @@ const usage =
     \\  compile   compile a script to a binary chunk
     \\  help      print the standard library reference for a name
     \\  agents    set a project up for coding agents (agents init)
+    \\  tree      print the modules a script requires, as a tree
     \\
     \\Options:
     \\  -e stat          execute string 'stat'
@@ -299,7 +300,7 @@ fn mainWithCompiler(init: std.process.Init, args: []const []const u8) !u8 {
     // Subcommands.
     if (args.len >= 2) {
         const cmd = args[1];
-        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile", "help", "agents", "version" };
+        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile", "help", "agents", "tree", "version" };
         for (tools) |t| {
             if (std.mem.eql(u8, cmd, t)) {
                 defer reportAllocs();

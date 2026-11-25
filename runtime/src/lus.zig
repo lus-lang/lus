@@ -144,6 +144,8 @@ test {
     _ = @import("tools/dap.zig");
     _ = @import("tools/help.zig");
     _ = @import("tools/agents.zig");
+    _ = @import("tools/tree.zig");
+    _ = @import("syntax/explain.zig");
     _ = @import("tools/paths.zig");
     _ = @import("lib/init.zig");
     _ = @import("lib/shell.zig");

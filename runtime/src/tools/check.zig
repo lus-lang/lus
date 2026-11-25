@@ -1,13 +1,15 @@
 //! `lus check`: reports errors and lint warnings without running code.
 //!
-//! Usage: lus check [--json] [--list] [FILE...]
+//! Usage: lus check [--json] [--list] [--explain CODE] [FILE...]
 //!
 //! Every file is parsed, linted (`syntax/lint.zig`), and compiled. Each
 //! problem is printed as `file:line:column: severity: message [code]`.
 //! With `--json` the output is one JSON array of objects with the fields
 //! `file`, `line`, `column`, `endLine`, `endColumn`, `severity`, `code`,
 //! and `message`, so editors and the language server can read it.
-//! `--list` prints every diagnostic code with its severity and summary.
+//! `--list` prints every diagnostic code with its severity and summary,
+//! and `--explain CODE` prints the explanation of one code with an example
+//! that reports it and the same example fixed (`syntax/explain.zig`).
 //!
 //! A directory argument stands for every `.lus` file below it. A file
 //! whose name ends in `_test.lus` is checked as a test file: the helpers
@@ -32,11 +34,14 @@ const codegen = lus.compile.codegen;
 const object = lus.vm.object;
 const table = lus.vm.table;
 
+const explain = @import("../syntax/explain.zig");
+
 const usage =
-    \\usage: lus check [--json] [--list] [FILE...]
+    \\usage: lus check [--json] [--list] [--explain CODE] [FILE...]
     \\
-    \\  --json  print the diagnostics as a JSON array
-    \\  --list  print every diagnostic code and exit
+    \\  --json          print the diagnostics as a JSON array
+    \\  --list          print every diagnostic code and exit
+    \\  --explain CODE  explain a diagnostic code with an example and exit
     \\
     \\A directory stands for every .lus file below it. With no FILE, or
     \\when FILE is -, read standard input.
@@ -62,6 +67,8 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             json = true;
         } else if (std.mem.eql(u8, a, "--list")) {
             return listCodes(gpa, io);
+        } else if (std.mem.eql(u8, a, "--explain") or std.mem.startsWith(u8, a, "--explain=")) {
+            return explainCode(gpa, io, args, a);
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             std.debug.print("{s}", .{usage});
             return 0;
@@ -247,14 +254,35 @@ fn writeJson(w: *std.Io.Writer, entries: []const Entry) std.Io.Writer.Error!void
     try w.writeAll(if (entries.len == 0) "]\n" else "\n]\n");
 }
 
+/// Prints the explanation of the code that follows `--explain`, either
+/// as `--explain=CODE` or as the next argument.
+fn explainCode(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8, opt: []const u8) !u8 {
+    const code = if (std.mem.indexOfScalar(u8, opt, '=')) |eq| opt[eq + 1 ..] else for (args, 0..) |a, i| {
+        if (a.ptr == opt.ptr and i + 1 < args.len) break args[i + 1];
+    } else "";
+    if (code.len == 0) {
+        std.debug.print("lus check: --explain needs a code, such as unused-local. lus check --list prints every code.\n", .{});
+        return 2;
+    }
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    if (!(explain.write(&out.writer, code) catch return error.OutOfMemory)) {
+        std.debug.print("lus check: unknown code '{s}'. lus check --list prints every code.\n", .{code});
+        return 2;
+    }
+    std.Io.File.stdout().writeStreamingAll(io, out.written()) catch {};
+    return 0;
+}
+
 fn listCodes(gpa: std.mem.Allocator, io: std.Io) !u8 {
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     for (lint.codes) |c| {
         out.writer.print("{s: <24}{s: <9}{s}\n", .{ c.code, c.severity.label(), c.summary }) catch return error.OutOfMemory;
     }
-    out.writer.print("{s: <24}{s: <9}{s}\n", .{ "syntax", "error", "The file does not parse." }) catch return error.OutOfMemory;
-    out.writer.print("{s: <24}{s: <9}{s}\n", .{ "compile", "error", "The compiler rejects the file for another reason." }) catch return error.OutOfMemory;
+    for (explain.check_codes) |c| {
+        out.writer.print("{s: <24}{s: <9}{s}\n", .{ c.code, c.severity.label(), c.summary }) catch return error.OutOfMemory;
+    }
     std.Io.File.stdout().writeStreamingAll(io, out.written()) catch {};
     return 0;
 }
