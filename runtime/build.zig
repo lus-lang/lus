@@ -378,20 +378,38 @@ fn androidLibc(b: *std.Build, target: std.Build.ResolvedTarget) void {
     const api = t.os.version_range.linux.android;
     // The objects that start and end a program sit in the directory of
     // each API level, where Zig looks for the objects of the C compiler.
-    // The C library is found in `crt_dir`: the shared libraries in the
-    // directory of the API level, the static archives one directory above.
+    // Zig finds the C library in `crt_dir`, which for a dynamic build is
+    // the same directory, with the shared libraries of that level.
     const api_dir = b.fmt("{s}/usr/lib/{s}/{d}", .{ sysroot, triple, api });
-    const lib_dir = if (static) b.fmt("{s}/usr/lib/{s}", .{ sysroot, triple }) else api_dir;
-    const libc_file = b.addWriteFiles().add("android-libc.txt", b.fmt(
-        \\include_dir={s}/usr/include
-        \\sys_include_dir={s}/usr/include/{s}
+    const include = b.fmt("{s}/usr/include", .{sysroot});
+    const sys_include = b.fmt("{s}/usr/include/{s}", .{ sysroot, triple });
+    const libc_file = if (!static) b.addWriteFiles().add("android-libc.txt", b.fmt(
+        \\include_dir={s}
+        \\sys_include_dir={s}
         \\crt_dir={s}
         \\msvc_lib_dir=
         \\kernel32_lib_dir=
         \\gcc_dir={s}
         \\darwin_sdk_dir=
         \\
-    , .{ sysroot, sysroot, triple, lib_dir, api_dir }));
+    , .{ include, sys_include, api_dir, api_dir })) else static: {
+        // The static archives sit one directory above. The linker of Zig
+        // rejects the `libdl.a` of the NDK, and the static `libc.a`
+        // defines everything the runtime takes from it, so the directory
+        // of a static build holds the archives of the C library and of
+        // the math library and an empty `libdl.a`.
+        const script =
+            \\set -e
+            \\cp "$2/libc.a" "$2/libm.a" "$1/"
+            \\printf '!<arch>\n' > "$1/libdl.a"
+            \\printf 'include_dir=%s\nsys_include_dir=%s\ncrt_dir=%s\nmsvc_lib_dir=\nkernel32_lib_dir=\ngcc_dir=%s\ndarwin_sdk_dir=\n' "$4" "$5" "$1" "$3" > "$1/android-libc.txt"
+        ;
+        const dir = b.addSystemCommand(&.{ "sh", "-c", script, "android-libc" });
+        dir.setName("the static C library of Android");
+        const out = dir.addOutputDirectoryArg("android-libc");
+        dir.addArgs(&.{ b.fmt("{s}/usr/lib/{s}", .{ sysroot, triple }), api_dir, include, sys_include });
+        break :static out.path(b, "android-libc.txt");
+    };
     var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
     var stack: std.ArrayList(*std.Build.Step) = .empty;
     for (b.top_level_steps.values()) |top| stack.append(b.allocator, &top.step) catch @panic("OOM");
