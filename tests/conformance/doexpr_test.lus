@@ -362,3 +362,40 @@ local function do_expression_initializes_a_const_local_test()
     local _, e = load("local y <const> = do provide 1 end y = 2")
     assert(e and e:find("attempt to assign to const variable 'y'", 1, true), e)
 end
+
+-- A condition that folds to true discards the clauses after it. The
+-- provide of a discarded clause leaves the exit of the do-expression to
+-- the clause that runs.
+local function a_folded_condition_keeps_the_provide_that_runs_test()
+    local s = (do
+        if true then
+            provide "yes"
+        else
+            provide "no"
+        end
+    end)
+
+    assert(s == "yes")
+
+    local r = `r=$(do
+        if true then
+            provide "yes"
+        else
+            provide "no"
+        end
+    end)`
+
+    assert(r == "r=yes")
+
+    local t = do
+        if false then
+            provide "a"
+        elseif true then
+            provide "b"
+        else
+            provide "c"
+        end
+    end
+
+    assert(t == "b")
+end

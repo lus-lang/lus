@@ -2141,7 +2141,11 @@ fn provideStat(fs: *FuncState, vals: []*ast.Expr, line: u32) Error!void {
         }
     }
     const j = try jump(fs);
-    try concatJumps(fs, &ctx.exits, j);
+    // A discarded provide leaves the exit list alone. Appending to the
+    // list rewrites the jump at its end, which the code that stays may
+    // hold, and restoring the discarded code would leave that jump
+    // pointing past it.
+    if (fs.c.discarding == 0) try concatJumps(fs, &ctx.exits, j);
     fs.freereg = saved;
     _ = line;
 }
