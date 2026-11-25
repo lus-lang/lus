@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Questions and ideas
     url: https://github.com/lus-lang/lus/discussions
-    about: Questions, ideas, and language design conversations live in Discussions. Issues are for bugs.
+    about: Ask questions and bring ideas and language design to Discussions. Open issues only for bugs.
   - name: Security vulnerabilities
     url: https://github.com/lus-lang/lus/security/advisories/new
     about: Report a vulnerability privately so it can be fixed before it is disclosed.

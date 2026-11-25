@@ -125,7 +125,7 @@ export function decide({kind, item, user, commits, files, keys, known, now = Dat
     return {exempt: true, passed: true, action, failures, labels: [], verdict: "allowed"};
   }
   const days = (now - Date.parse(user.created_at)) / 86400000;
-  if (days < MIN_AGE_DAYS) failures.push(`Your account must be at least two years old, and @${login} is ${Math.floor(days)} days old.`);
+  if (days < MIN_AGE_DAYS) failures.push(`Your account must be at least two years old. @${login} is ${Math.floor(days)} days old.`);
 
   let verdict = "allowed";
   let fields = null;

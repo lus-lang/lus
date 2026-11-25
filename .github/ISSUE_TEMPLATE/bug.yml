@@ -36,7 +36,7 @@ body:
     id: repro
     attributes:
       label: Reproduction
-      description: The smallest program that shows the bug, and the command that runs it.
+      description: The smallest program that shows the bug and the command that runs it.
       render: lus
     validations:
       required: true

@@ -296,8 +296,8 @@ jobs:
           CATEGORY: ${{ fromJSON(needs.gate.outputs.agents).discussions[needs.triage.outputs.kind] }}
         run: |
           case "$KIND" in
-            question) text="Follow your question at DISCUSSION_URL. Ask questions in Discussions, and open issues for bug reports." ;;
-            *) text="Follow your idea at DISCUSSION_URL. Bring ideas and language design to Discussions, and open issues for bug reports." ;;
+            question) text="Follow your question at DISCUSSION_URL. Ask questions in Discussions. Open issues only for bug reports." ;;
+            *) text="Follow your idea at DISCUSSION_URL. Bring ideas and language design to Discussions. Open issues only for bug reports." ;;
           esac
           printf '%s If you meant to report a bug, open a new issue with the bug form and a program that shows it.\n\nThe triage agent read your issue this way: %s\n' "$text" "$REASON" > "$RUNNER_TEMP/moved.md"
           node tools/ci/gate.mjs discuss "${{ needs.gate.outputs.number }}" "$CATEGORY" "$RUNNER_TEMP/moved.md"

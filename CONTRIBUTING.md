@@ -5,9 +5,9 @@ Lus is open-source, allowing you to make as many copies of it as desired and do 
 If you _do_ make a PR, make sure to:
 
 - [**Read the project goals.**](https://lus.dev/manual/introduction/#goals) Changes that implement a _non-goal_ or contradict a goal are rejected.
-- **Test, test, test.** Run `mise run test` to make sure your changes break nothing, and compare `tests/bench` before and after to make sure you add no massive _performance_ regression. If you change the JIT or the heap, also run the extra checks in [`runtime/HACKING.md`](/runtime/HACKING.md). Add a test for every bug you fix.
-- **Document, document, document.** Add your change to the [CHANGELOG](/CHANGELOG.md) as a one-line summary, and put any details in the body of the PR.
-- **Format your code.** Format Zig code with `zig fmt` and Lus code with `lus fmt`, and run `mise run lint` before you push. Set your editor to format on save. No formatting, no merging.
+- **Test, test, test.** Run `mise run test` to make sure your changes break nothing. Compare `tests/bench` before and after to make sure you add no massive _performance_ regression. If you change the JIT or the heap, also run the extra checks in [`runtime/HACKING.md`](/runtime/HACKING.md). Add a test for every bug you fix.
+- **Document, document, document.** Add your change to the [CHANGELOG](/CHANGELOG.md) as a one-line summary and put any details in the body of the PR.
+- **Format your code.** Format Zig code with `zig fmt` and Lus code with `lus fmt`. Run `mise run lint` before you push. Set your editor to format on save. No formatting, no merging.
 - **Pass the checks.** See [Before you open a pull request](#before-you-open-a-pull-request) and [Commit messages](#commit-messages).
 
 If you haven't done any of the above, either submit a draft PR until you have or simply don't submit a PR at all. When all else fails, [Louka Ménard Blondin](https://louka.sh) is the BDFL of the project and has the final say on whether or not your contribution will be accepted.
@@ -29,8 +29,8 @@ To open an issue, your account must also be at least two years old and have a GP
 
 Write exactly one of these words in the Kind field of the template.
 
-- `bug`: you fix a bug, and add a regression test that fails before your fix.
-- `perf`: you make something faster or smaller, and name the benchmarks it improves.
+- `bug`: you fix a bug and add a regression test that fails before your fix.
+- `perf`: you make something faster or smaller and name the benchmarks it improves.
 - `test`: you add or improve tests.
 - `docs`: you change documentation only.
 

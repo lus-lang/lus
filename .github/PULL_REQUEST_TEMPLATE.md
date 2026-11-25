@@ -1,7 +1,7 @@
 <!--
-Read CONTRIBUTING.md before you open your pull request. Fill in the two
-required fields below, and write each answer on its own line under its
-heading. You can leave these comments in place.
+Read CONTRIBUTING.md before you open your pull request. Fill in each
+required field, with each answer on its own line under its heading. You
+may leave these comments in place.
 -->
 
 ## Kind
@@ -25,4 +25,4 @@ Harness: Claude Code
 
 ## Test evidence
 
-<!-- Optional: the tests you added or ran, and their output. -->
+<!-- Optional: the tests you added or ran and their output. -->
