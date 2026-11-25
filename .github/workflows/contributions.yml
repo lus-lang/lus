@@ -297,7 +297,7 @@ jobs:
         run: |
           case "$KIND" in
             question) text="Questions about using Lus are answered in Discussions, and this one continues at DISCUSSION_URL. Issues are for bugs." ;;
-            *) text="Lus 2 is frozen, so the issue tracker takes bug reports only. Ideas and language design conversations live in Discussions, and this one continues at DISCUSSION_URL." ;;
+            *) text="Issues are for bug reports. Ideas and language design belong in Discussions, and this one continues at DISCUSSION_URL." ;;
           esac
           printf '%s\n\nThe triage agent read it this way: %s\n' "$text" "$REASON" > "$RUNNER_TEMP/moved.md"
           node tools/ci/gate.mjs discuss "${{ needs.gate.outputs.number }}" "$CATEGORY" "$RUNNER_TEMP/moved.md"

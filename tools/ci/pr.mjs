@@ -19,7 +19,7 @@ import {fileURLToPath} from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const KINDS = ["bug", "perf", "test", "docs"];
 // A kind that asks for a change of the language or a new feature. The
-// gate closes such a pull request, since the language is frozen.
+// gate closes such a pull request, and the idea belongs in Discussions.
 export const REJECTED_KINDS = ["feature", "feat", "design", "language", "proposal", "rfc", "idea", "suggestion"];
 export const HARNESSES = JSON.parse(fs.readFileSync(path.join(ROOT, "tools/ci/harnesses.json"), "utf8")).harnesses;
 

@@ -1,6 +1,6 @@
 # Contributing
 
-Lus is open-source, allowing you to make as many copies of it as desired and do whatever you want with those copies. Lus, however, is not fully _open-contribution_. Please submit only pull requests correcting bugs, optimizing existing code, proposing new tests for currently unaccounted edge cases, or improving the documentation. The language of Lus 2 is frozen, so pull requests for features or changes of its design are closed automatically.
+Lus is open-source, allowing you to make as many copies of it as desired and do whatever you want with those copies. Lus, however, is not fully _open-contribution_. Please submit only pull requests correcting bugs, optimizing existing code, proposing new tests for currently unaccounted edge cases, or improving the documentation.
 
 If you _do_ make a PR, make sure to:
 
@@ -8,64 +8,60 @@ If you _do_ make a PR, make sure to:
 - **Test, test, test.** Run `mise run test` to make sure your changes aren't breaking anything, and compare `tests/bench` before and after to make sure you're not introducing a massive _performance_ regression as well. [`runtime/HACKING.md`](/runtime/HACKING.md) lists the extra checks that changes to the JIT or the heap need. If you are introducing a new language feature, please also add a test for it.
 - **Document, document, document.** Please document your changes in the [CHANGELOG](/CHANGELOG.md). Changes should be simple one-line summaries. Additional details can be added in the body of the PR.
 - **Format your code.** Zig code is formatted with `zig fmt`, and `mise run lint` checks it. Please pair it with an extension in your editor to automatically format your code when saving. No formatting, no merging.
-- **Sign every commit.** GitHub must show each commit of the PR as verified. See [Signed commits](#signed-commits).
-- **Fill in the template.** The PR names its [kind](#the-kind-of-a-pull-request) and [discloses its agents](#agent-disclosure), and each commit message follows [the format](#commit-messages).
+- **Pass the checks.** See [Before you open a pull request](#before-you-open-a-pull-request) and [Commit messages](#commit-messages).
 
 If you haven't done any of the above, either submit a draft PR until you have or simply don't submit a PR at all. When all else fails, [Louka Ménard Blondin](https://louka.sh) is the BDFL of the project and has the final say on whether or not your contribution will be accepted.
 
-## The gate
+## Before you open a pull request
 
-A workflow checks every pull request and every issue from an outside contributor before anyone reviews it or any test or agent runs. The maintainer, the members and collaborators of the repository, and the logins in [`.github/known-authors`](/.github/known-authors) skip it. The gate checks the following.
+Your pull request is checked before anyone reads it. If you are a maintainer, a collaborator, or listed in [`.github/known-authors`](/.github/known-authors), you skip these checks.
 
-- **The account is at least two years old.**
-- **The account is verified.** For a pull request, GitHub verifies the signature of every commit, which needs a signing key that belongs to a verified email of the account. For an issue, the account has a GPG or SSH signing key.
-- **The kind and the agent disclosure of the pull request are filled in,** and the disclosure agrees with the trailers of the commits.
-- **The pull request touches only paths that contributors may change.** Code, tests, the manual, the spec, and the design notes are open. Versions, packaging, the installers, the pages and brand of the site, the workflows and CI tools, the agent instructions, and the files of the repository root such as this one are not. [`tools/ci/areas.json`](/tools/ci/areas.json) holds the rule for every path, and [`.github/CODEOWNERS`](/.github/CODEOWNERS) lists the closed ones.
+- **Your account must be at least two years old.**
+- **Sign every commit.** GitHub must show each one as verified. See [Signed commits](#signed-commits).
+- **Fill in the template.** Name the [kind](#kind) of your pull request and [disclose any agent](#agent-disclosure) you used.
+- **Change only what contributors may change.** You may change code, tests, the manual, the spec, and the design notes. Leave versions, packaging, the installers, the site's pages and brand, the workflows and CI tools, the agent instructions, and the files at the root of the repository alone. [`tools/ci/areas.json`](/tools/ci/areas.json) has the rule for every path.
 
-A pull request that fails a check gets the label `gate-failed` and one comment that lists what to fix. Each fix, as an edit of the description or a push of new commits, runs the gate again. A pull request that changes a workflow, the CI tools, the installers, the release keys, the license, or the agent instructions is closed and locked at once.
+If a check fails, your pull request gets the `gate-failed` label and a comment listing what to fix. Fix it by editing the description or pushing new commits, and the checks run again. If you change a workflow, the CI tools, the installers, the release keys, the license, or the agent instructions, your pull request is closed and locked.
 
-## The kind of a pull request
+To open an issue, your account must also be at least two years old and have a GPG or SSH signing key.
 
-The Kind field of the pull request template holds exactly one of these words.
+## Kind
 
-- `bug`: fixes a bug, with a regression test that fails before the fix.
-- `perf`: makes something faster or smaller, with the benchmarks it improves.
-- `test`: adds or improves tests.
-- `docs`: changes documentation only.
+Write exactly one of these words in the Kind field of the template.
 
-Lus 2 is frozen, so a pull request for a feature or a change of the language design is closed. Ideas and design conversations live in [Discussions](https://github.com/lus-lang/lus/discussions). Linked issues and test evidence are optional fields of the template.
+- `bug`: you fix a bug, and add a regression test that fails before your fix.
+- `perf`: you make something faster or smaller, and name the benchmarks it improves.
+- `test`: you add or improve tests.
+- `docs`: you change documentation only.
+
+Pull requests that add a feature or change the design of the language are closed. Bring ideas to [Discussions](https://github.com/lus-lang/lus/discussions) instead.
 
 ## Commit messages
 
-The first line of a commit message is `type(area): subject`, at most 72 characters in all.
+Write the first line of each commit message as `type(area): subject`, in at most 72 characters.
 
-- `type` is one of `fix`, `perf`, `feat`, `refactor`, `test`, `docs`, `ci`, `build`, and `chore`. `feat` is for tooling only, since the language is frozen.
-- `area` is one of the labels of [`tools/ci/areas.json`](/tools/ci/areas.json): `runtime`, `jit`, `gc`, `lib`, `lsp`, `vscode`, `www`, `docs`, `spec`, `tests`, `examples`, `perf`, `wasm`, `windows`, `ci`, `packaging`, `release`, `tools`, `agents`, `marketing`, and `harness`. The site is `www`, and the workflows of `.github` are `ci`, apart from the release workflows, which are `release`.
-- `subject` is imperative, starts with a lowercase letter, and ends without a period.
+- For `type`, use one of `fix`, `perf`, `feat`, `refactor`, `test`, `docs`, `ci`, `build`, or `chore`.
+- For `area`, use one of `runtime`, `jit`, `gc`, `lib`, `lsp`, `vscode`, `harness`, `www`, `docs`, `spec`, `tests`, `examples`, `perf`, `wasm`, `windows`, `ci`, `packaging`, `release`, `tools`, `agents`, or `marketing`. Use `www` for the site.
+- Write `subject` in the imperative, starting with a lowercase letter, with no period at the end.
 
-A body is optional. It follows a blank line, is written in plain prose that follows [`spec/design/style.md`](/spec/design/style.md), and holds no em dash, en dash, or semicolon outside code. A commit made with a coding agent carries that agent's `Co-Authored-By` trailer. For example:
+If you add a body, leave a blank line after the first line and write plain prose that follows [`spec/design/style.md`](/spec/design/style.md). Keep the `Co-Authored-By` trailer of any coding agent that wrote the commit.
 
 ```
 fix(lib): hand a decoded chunk to the reader before the next line
 
-The decoder waited for the line of the next chunk before it returned the
-chunk it had already decoded, so a part reached the handler only when the
-next one arrived.
+The decoder returned a chunk only after decoding the line of the next
+one, so the handler saw each part one chunk late.
 ```
-
-The commit-msg hook that `mise run setup` installs checks each message, and CI checks every commit of a pull request.
 
 ## Signed commits
 
-Every commit of a pull request is signed, and GitHub shows each one as verified. A PR with an unsigned commit, or with a signature that GitHub cannot verify, is closed before anyone reviews it.
+Run `mise run setup` once in your clone. It installs the hooks that check formatting, lint, generated files, and your commit messages, and it turns on signing for commits and tags. If you have no signing key configured, it prints the two commands that sign with the SSH key you already use for GitHub. Add that key to your GitHub account again, this time as a signing key.
 
-Run `mise run setup` once in your clone. It points git at the hooks in `tools/git-hooks`, which run the format, lint, and generated file checks before each commit, and it turns on signing for every commit and tag. It never creates a key. If you have none configured, it prints the two commands that sign with the SSH key you already use for GitHub. Add that key to your GitHub account a second time as a signing key, so that GitHub can verify what it signs.
-
-To sign commits that you already made, rebase them with `git rebase --exec 'git commit --amend --no-edit -S' origin/main` and push again.
+To sign commits you already made, run `git rebase --exec 'git commit --amend --no-edit -S' origin/main` and push again.
 
 ## Agent disclosure
 
-The Agent disclosure field of the pull request template holds `none` when no coding agent wrote any part of the change. Otherwise it holds three lines for each agent you used:
+If no coding agent wrote any part of your change, write `none` in the Agent disclosure field. Otherwise, write three lines for each agent you used:
 
 ```
 Agent: Claude
@@ -73,7 +69,7 @@ Model: claude-opus-5-5
 Harness: Claude Code
 ```
 
-Some harnesses add a `Co-Authored-By` trailer to every commit they write, and [`tools/ci/harnesses.json`](/tools/ci/harnesses.json) lists them. When the disclosure names one of them, at least one commit carries its trailer, and when a commit carries the trailer of one of them, the disclosure names it. Keep these trailers when you squash or rebase. The disclosure of any other harness is recorded as you write it.
+If your harness adds a `Co-Authored-By` trailer to its commits, keep that trailer on at least one commit. [`tools/ci/harnesses.json`](/tools/ci/harnesses.json) lists these harnesses.
 
 ## Use of LLMs
 

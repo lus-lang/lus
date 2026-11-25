@@ -27,8 +27,8 @@
 // issue needs a GPG or SSH signing key on the account.
 //
 // A pull request that touches an egregious path is closed and locked. One
-// whose Kind asks for a feature or a design change is closed, since the
-// language is frozen. Any other failure gets the label gate-failed and one
+// whose Kind asks for a feature or a design change is closed, and the
+// idea belongs in Discussions. Any other failure gets the label gate-failed and one
 // comment that lists what to fix, which the next run updates.
 
 import fs from "node:fs";
@@ -154,7 +154,7 @@ function gateComment(decision, kind) {
   if (decision.action === "lock") {
     lines.push(`This ${what} changes paths that only the maintainer changes, so it is closed and locked.`);
   } else if (decision.action === "reject") {
-    lines.push("Lus 2 is frozen, so pull requests for new features or changes of the language design are closed. Ideas and design conversations live in Discussions.");
+    lines.push("Pull requests that add a feature or change the design of the language are closed. Bring your idea to Discussions instead.");
   } else if (decision.passed) {
     lines.push(`This ${what} passes the contribution gate.`);
     return lines.join("\n\n");

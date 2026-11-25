@@ -35,7 +35,7 @@
     "kind:docs": "Changes documentation only",
     "agent-fix": "An agent found the bug and left a fix branch for review",
     "not-reproduced": "The triage agent could not reproduce the bug",
-    "rejected": "Closed because the language is frozen or the request is out of scope"
+    "rejected": "Closed because the request belongs in Discussions or is out of scope"
   },
   "runners": {
     "linux": "ubuntu-24.04",
