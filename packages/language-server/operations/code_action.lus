@@ -9,6 +9,15 @@ local function extract_name(message, pattern)
   return string.match(message, pattern)
 end
 
+-- The title of the quick fix of each `lus check` code with a fix.
+local FIX_TITLES = {
+  ["use-from"] = "Use 'from' destructuring",
+  ["use-optional-chain"] = "Use optional chaining",
+  ["use-interpolation"] = "Use a string with interpolation",
+  ["format-to-interpolation"] = "Use a string with interpolation",
+  ["redundant-tostring"] = "Remove the redundant tostring",
+}
+
 -- Compute code actions for a range and set of diagnostics.
 -- Returns an array of CodeAction objects.
 function code_action.compute(uri, range, context)
@@ -20,6 +29,17 @@ function code_action.compute(uri, range, context)
 
   for _, diag in ipairs(context.diagnostics) do
     local msg = diag.message or ""
+
+    -- A diagnostic of `lus check` that carries a fix in its data.
+    if diag.data and diag.data.fix then
+      actions[#actions + 1] = {
+        title = FIX_TITLES[diag.code] or "Apply the suggested rewrite",
+        kind = "quickfix",
+        isPreferred = true,
+        diagnostics = {diag},
+        edit = {changes = {[uri] = diag.data.fix}},
+      }
+    end
 
     -- "Undefined global 'X'" -> Add global declaration
     local undef_name = extract_name(msg, "Undefined global '([^']+)'")

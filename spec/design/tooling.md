@@ -65,7 +65,7 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 | inlay hints | Parameter names at call sites. | closed | |
 | semantic tokens | Full-document semantic tokens. | closed | |
 | document and workspace symbols, folding, selection ranges | All four. | closed | |
-| code actions | Quick fixes that declare a global and prefix an unused name with `_`. Every hint with a mechanical rewrite could offer one. | partial | medium |
+| code actions | Quick fixes that declare a global, prefix an unused name with `_`, and apply the fix of each hint of `lus check`. Refactoring assists, such as extracting a function, are open. | partial | medium |
 | go to implementation | Lus has no traits. The nearest question is which tables share a metatable, which static analysis answers only for simple cases. | by design | |
 | expand macro | Lus has no macros. Folded flags and `<meta>` values are the nearest equivalent. Showing their values inline is open. | open | medium |
 | call hierarchy, type hierarchy | Missing. | open | medium |
@@ -114,4 +114,4 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 
 The small gaps that remain are the caret snippet and `lus test --list`.
 
-The medium gaps follow in this order: more code actions and call hierarchy. A fuzz harness for user code stays open.
+The medium gaps follow in this order: call hierarchy, then refactoring assists. A fuzz harness for user code stays open.

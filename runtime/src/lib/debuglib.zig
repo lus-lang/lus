@@ -667,6 +667,21 @@ fn checkSource(l: *Thread) Error!u32 {
         try aux.setField(l, t, "severity", try l.newStringValue(d.severity.label()));
         try aux.setField(l, t, "code", try l.newStringValue(d.code));
         try aux.setField(l, t, "message", try astString(l, d.message));
+        if (d.fix.len > 0) {
+            const edits = try l.newTable(@intCast(d.fix.len), 0);
+            try aux.setField(l, t, "fix", Value.obj(.table, edits));
+            for (d.fix, 0..) |f, j| {
+                const e = try l.newTable(0, 5);
+                try ops.rawSet(l, edits, Value.int(@intCast(j + 1)), Value.obj(.table, e));
+                const s = lint.position(code, f.span.start);
+                const x = lint.position(code, f.span.end);
+                try aux.setField(l, e, "line", Value.int(s.line));
+                try aux.setField(l, e, "column", Value.int(s.column));
+                try aux.setField(l, e, "endline", Value.int(x.line));
+                try aux.setField(l, e, "endcolumn", Value.int(x.column));
+                try aux.setField(l, e, "text", try astString(l, f.text));
+            }
+        }
     }
     return 1;
 }

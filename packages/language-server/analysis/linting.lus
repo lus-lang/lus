@@ -1,4 +1,4 @@
-global require, ipairs, string, debug
+global require, ipairs, string, debug, utf8
 
 local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
@@ -32,6 +32,35 @@ end
 -- Names that start with _ are conventionally unused (e.g., _)
 local function is_intentionally_unused(name)
   return string.sub(name, 1, 1) == "_"
+end
+
+-- The 0-based LSP character of the 1-based character column `col` on
+-- `line_text`. LSP counts UTF-16 code units, so a character above U+FFFF
+-- takes two.
+local function utf16_character(line_text, col)
+  local units = 0
+  local i = 1
+  for _, cp in utf8.codes(line_text) do
+    if i >= col then break end
+    units = units + (cp > 0xFFFF and 2 or 1)
+    i = i + 1
+  end
+  return units + (col - i)
+end
+
+-- The fix of a diagnostic of debug.check as LSP text edits.
+local function lsp_edits(lines, fix)
+  local edits = {}
+  for _, e in ipairs(fix) do
+    edits[#edits + 1] = {
+      range = {
+        start = {line = e.line - 1, character = utf16_character(lines[e.line] or "", e.column)},
+        ["end"] = {line = e.endline - 1, character = utf16_character(lines[e.endline] or "", e.endcolumn)},
+      },
+      newText = e.text,
+    }
+  end
+  return edits
 end
 
 -- Compute lint diagnostics for a document.
@@ -90,9 +119,10 @@ function linting.compute(uri)
     local name = string.match(uri, "([^/]+)$") or uri
     local ok, list = catch debug.check(doc.text, "@" .. name)
     if ok then
+      local lines
       for _, d in ipairs(list) do
         if d.severity == "hint" then
-          diagnostics[#diagnostics + 1] = {
+          local diag = {
             range = {
               start = {line = d.line - 1, character = d.column - 1},
               ["end"] = {line = d.endline - 1, character = d.endcolumn - 1},
@@ -102,6 +132,16 @@ function linting.compute(uri)
             code = d.code,
             message = d.message,
           }
+          -- The client sends `data` back with a code action request, which
+          -- offers the fix as a quick fix.
+          if d.fix then
+            if not lines then
+              lines = {}
+              for l in string.gmatch(doc.text .. "\n", "([^\n]*)\n") do lines[#lines + 1] = l end
+            end
+            diag.data = {fix = lsp_edits(lines, d.fix)}
+          end
+          diagnostics[#diagnostics + 1] = diag
         end
       end
     end
