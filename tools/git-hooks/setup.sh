@@ -10,7 +10,7 @@ cd "$root"
 git config core.hooksPath tools/git-hooks
 git config commit.gpgsign true
 git config tag.gpgsign true
-chmod +x tools/git-hooks/pre-commit tools/git-hooks/commit-msg
+chmod +x tools/git-hooks/pre-commit tools/git-hooks/commit-msg tools/git-hooks/post-checkout
 
 echo "Your clone now runs the hooks of tools/git-hooks and signs every commit and tag."
 if [ -z "$(git config user.signingkey || true)" ]; then

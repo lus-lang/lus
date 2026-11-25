@@ -1,0 +1,14 @@
+#!/bin/sh
+# In a clone that sets `lus.agentWorktrees` to true, runs
+# tools/agent-worktree.sh in each linked worktree that has no sparse
+# checkout yet. Other clones and the main working tree are left alone.
+
+[ "$(git config --bool lus.agentWorktrees 2>/dev/null)" = true ] || exit 0
+gitdir=$(git rev-parse --absolute-git-dir)
+common=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+[ "$(cd "$gitdir" && pwd -P)" != "$common" ] || exit 0
+[ "$(git config --worktree --bool core.sparseCheckout 2>/dev/null)" = true ] && exit 0
+root=$(git rev-parse --show-toplevel)
+[ -f "$root/tools/agent-worktree.sh" ] || exit 0
+sh "$root/tools/agent-worktree.sh" || echo "post-checkout: tools/agent-worktree.sh failed" >&2
+exit 0

@@ -12,7 +12,16 @@ const HEADER = "<!-- Generated from spec/design/style.md by tools/build-skills.j
 
 const expected = HEADER + fs.readFileSync(SOURCE, "utf8");
 if (process.argv.includes("--check")) {
-  const actual = fs.existsSync(TARGET) ? fs.readFileSync(TARGET, "utf8") : "";
+  // An agent worktree leaves the copy out of its working tree
+  // (tools/agent-worktree.sh), so the check then reads it from the index.
+  let actual = "";
+  if (fs.existsSync(TARGET)) {
+    actual = fs.readFileSync(TARGET, "utf8");
+  } else {
+    try {
+      actual = require("child_process").execFileSync("git", ["show", `:${path.relative(ROOT, TARGET)}`], {cwd: ROOT, encoding: "utf8"});
+    } catch {}
+  }
   if (actual !== expected) {
     console.error(`${path.relative(ROOT, TARGET)} is stale. Run node tools/build-skills.js.`);
     process.exit(1);
