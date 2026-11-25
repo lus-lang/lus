@@ -731,6 +731,7 @@ fn linkImage(io: std.Io, gpa: Allocator, path: []const u8, proof: *libproof.Proo
             .linux => .linux,
             .macos => .macos,
             .windows => .windows,
+            .freebsd => .freebsd,
             else => null,
         };
         // iOS runs the code that a training run on macOS compiled in the

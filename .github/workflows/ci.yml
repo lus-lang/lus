@@ -180,10 +180,11 @@ jobs:
   freebsd:
     name: FreeBSD (x86-64)
     # A FreeBSD virtual machine on a Linux runner runs the build that the
-    # release ships, which the runner cross-compiles
-    # (spec/design/platforms.md, "FreeBSD and Android").
+    # release ships, which the runner cross-compiles, and lus linked from
+    # the link object, which the runner links (spec/design/platforms.md,
+    # "FreeBSD and Android").
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install Zig
@@ -196,8 +197,16 @@ jobs:
         run: |
           zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
           zig build runtime -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd
+      # The virtual machine sees the files of the workspace, so the link
+      # object and the linked lus stay in it.
+      - name: Build the link object and link lus from it
+        timeout-minutes: 40
+        working-directory: runtime
+        run: |
+          zig build link-object -Doptimize=ReleaseSafe -Dtarget=x86_64-freebsd -p zig-out-lo
+          zig-out-lo/bin/lus-link zig-out-lo/lib/lus.lo zig-out-lo/lus-linked
       - name: Conformance tests and lus build --aot in a FreeBSD virtual machine
-        timeout-minutes: 75
+        timeout-minutes: 130
         uses: cross-platform-actions/action@30cde56b87a128507bebea9531205087890ee360 # v1.8.0
         with:
           operating_system: freebsd
@@ -208,9 +217,16 @@ jobs:
             # The JIT compiles a function on its first call under eager.
             LUS_JIT=eager zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
             zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+            # lus linked from the link object, whose tests of the command
+            # line start the binary that LUS_BIN names.
+            LUS_BIN="$PWD/zig-out-lo/lus-linked" zig-out-lo/lus-linked test --timeout 300 ../tests/conformance ../packages/language-server/tests
             cd ../tests/build
             ../../runtime/zig-out/bin/lus build --aot linked.lus -o "$HOME/linked"
             test "$("$HOME/linked")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+            ../../runtime/zig-out/bin/lus build --aot --link-object ../../runtime/zig-out-lo/lib/lus-runtime.lo linked.lus -o "$HOME/linked-lo"
+            test "$("$HOME/linked-lo")" = "$(printf '1:1 2:4 3:9 4:16 5:25\t6765\nLINKED\t7\tnil')"
+            LUS_AOT_REPORT=1 "$HOME/linked-lo" 2>&1 | grep -E "aot: [1-9][0-9]* functions and [1-9][0-9]* units installed"
+            ls -l "$HOME/linked" "$HOME/linked-lo"
 
   android:
     name: Android (bionic)

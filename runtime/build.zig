@@ -121,7 +121,7 @@ pub fn build(b: *std.Build) void {
         if (lo_tls) |l| lo_step.dependOn(&b.addInstallArtifact(l, .{}).step);
         if (lo_sqlite) |l| lo_step.dependOn(&b.addInstallArtifact(l, .{}).step);
         const os_tag = target.result.os.tag;
-        if (os_tag == .linux or os_tag == .macos or os_tag == .ios or os_tag == .windows) {
+        if (os_tag == .linux or os_tag == .macos or os_tag == .ios or os_tag == .windows or os_tag == .freebsd) {
             const convert = b.addExecutable(.{ .name = "lus-convert", .root_module = b.createModule(.{
                 .root_source_file = b.path("src/link/convert.zig"),
                 .target = b.graph.host,
@@ -140,6 +140,8 @@ pub fn build(b: *std.Build) void {
             // On macOS and iOS the C library is libSystem, which the
             // executable loads. On Windows the link line names the startup
             // object and the C library of MinGW and the import libraries.
+            // On FreeBSD it names the startup object and the shared
+            // libraries of the system that Zig builds from their symbols.
             const zigc = b.addObject(.{ .name = "zigc", .root_module = b.createModule(.{
                 .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ std.fs.path.dirname(b.graph.zig_exe) orelse ".", "lib", "c.zig" }) },
                 .target = target,

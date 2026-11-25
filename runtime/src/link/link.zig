@@ -14,6 +14,7 @@ const std = @import("std");
 const lobj = @import("lobj.zig");
 const macho = @import("macho.zig");
 const pe = @import("pe.zig");
+const elfdyn = @import("elfdyn.zig");
 const Allocator = std.mem.Allocator;
 const elf = std.elf;
 
@@ -84,9 +85,11 @@ pub fn link(gpa: Allocator, o: *const lobj.Object, keep: Keep, opts: Options) Er
     try l.drop(keep);
     try l.mark();
     const bytes = switch (o.os) {
-        .linux => blk: {
-            try l.layout();
-            const image = try l.write();
+        .linux, .freebsd => blk: {
+            const image = if (o.os == .freebsd) try elfdyn.write(&l) else img: {
+                try l.layout();
+                break :img try l.write();
+            };
             defer gpa.free(image);
             const all = try gpa.alloc(u8, image.len + opts.payload.len);
             @memcpy(all[0..image.len], image);
@@ -132,6 +135,8 @@ pub const Linker = struct {
     seg: [3]Seg = undefined,
     got_addr: u64 = 0,
     dso_handle: u64 = 0,
+    /// The address of the dynamic section, in an executable that has one.
+    dynamic: u64 = 0,
     tls: struct { addr: u64 = 0, filesz: u64 = 0, memsz: u64 = 0, align_: u64 = 1 } = .{},
     init_start: u64 = 0,
     init_end: u64 = 0,
@@ -368,7 +373,7 @@ pub const Linker = struct {
         for (o.linker_names, l.linker_addr) |n, *a| a.* = l.linkerSymbol(o.string(n));
     }
 
-    fn linkerSymbol(l: *const Linker, name: []const u8) u64 {
+    pub fn linkerSymbol(l: *const Linker, name: []const u8) u64 {
         const table = .{
             .{ "__init_array_start", l.init_start },         .{ "__init_array_end", l.init_end },
             .{ "__preinit_array_start", l.init_start },      .{ "__preinit_array_end", l.init_start },
@@ -385,9 +390,10 @@ pub const Linker = struct {
             // functions reach their data through. Offsets from it are
             // signed, so it sits 32 KB into the global offset table.
             .{ ".TOC.", l.got_addr + 0x8000 },
+            // Null in a static executable.
+            .{ "_DYNAMIC", l.dynamic },
         };
         inline for (table) |e| if (std.mem.eql(u8, name, e[0])) return e[1];
-        // `_DYNAMIC` is null in a static executable.
         return 0;
     }
 
@@ -411,7 +417,7 @@ pub const Linker = struct {
     /// The offset from the thread pointer of the thread-local offset
     /// `off`: below the pointer on x86-64, after a header of 16 bytes on
     /// aarch64 and of 8 bytes on 32-bit ARM.
-    fn tpOffset(l: *const Linker, off: u64) i64 {
+    pub fn tpOffset(l: *const Linker, off: u64) i64 {
         return switch (l.o.arch) {
             .x86_64 => @as(i64, @intCast(off)) - @as(i64, @intCast(l.tls.memsz)),
             .aarch64 => @intCast(off + std.mem.alignForward(u64, 16, l.tls.align_)),

@@ -139,6 +139,7 @@ test {
     _ = @import("link/link.zig");
     _ = @import("link/macho.zig");
     _ = @import("link/pe.zig");
+    _ = @import("link/elfdyn.zig");
     _ = @import("tools/debug.zig");
     _ = @import("tools/dap.zig");
     _ = @import("tools/help.zig");

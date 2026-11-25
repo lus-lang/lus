@@ -13,7 +13,10 @@
 //! tables, the debug information, and the notes, which executables
 //! compiled ahead of time leave out. On macOS and iOS, the symbols that
 //! no input defines become imports of libSystem. On Windows, the import
-//! libraries name the library of each import.
+//! libraries name the library of each import. On FreeBSD, the shared
+//! libraries on the link line name the library of each import, and the
+//! definitions of the objects that those libraries name, such as
+//! `environ`, become symbols that the executable exports.
 
 const std = @import("std");
 const lobj = @import("lobj.zig");
@@ -118,6 +121,9 @@ const Import = struct {
     thunk: ?u32 = null,
 };
 
+/// A symbol that a shared library on the link line defines.
+const Shared = struct { lib: []const u8, data: bool, size: u64 };
+
 /// A section of a loaded input that merges into a group.
 const Pending = struct { input: u32, sec: u32 };
 
@@ -139,6 +145,12 @@ pub const Converter = struct {
     /// The data that the linker of the C library of Windows provides.
     synthetic: std.StringHashMapUnmanaged(u32) = .empty,
     pending: std.ArrayList(Pending) = .empty,
+    /// The symbols of the shared libraries, each from the first library
+    /// on the link line that defines it, as the loader binds it.
+    shared: std.StringHashMapUnmanaged(Shared) = .empty,
+    /// The names that the shared libraries leave for the executable to
+    /// define.
+    wanted: std.ArrayList([]const u8) = .empty,
     arch: lobj.Arch,
     os: lobj.Os,
 
@@ -155,6 +167,8 @@ pub const Converter = struct {
         c.commons.deinit(c.gpa);
         c.synthetic.deinit(c.gpa);
         c.pending.deinit(c.gpa);
+        c.shared.deinit(c.gpa);
+        c.wanted.deinit(c.gpa);
     }
 
     fn macho(c: *const Converter) bool {
@@ -165,6 +179,7 @@ pub const Converter = struct {
     /// load as they are needed.
     pub fn addFile(c: *Converter, name: []const u8, data: []const u8) !void {
         if (std.mem.startsWith(u8, data, "!<arch>\n")) return c.addArchive(name, data);
+        if (data.len >= @sizeOf(elf.Elf64_Ehdr) and std.mem.startsWith(u8, data, elf.MAGIC) and std.mem.readInt(u16, data[16..18], .little) == @backingInt(elf.ET.DYN)) return c.addShared(name, data);
         const i = try c.parse(name, data);
         try c.load(i);
     }
@@ -205,6 +220,49 @@ pub const Converter = struct {
                 if (!s.defines()) continue;
                 const gop = try c.offers.getOrPut(c.gpa, s.name);
                 if (!gop.found_existing) gop.value_ptr.* = i;
+            }
+        }
+    }
+
+    /// Reads the dynamic symbols of a shared library of ELF64, which the
+    /// executable loads by its `DT_SONAME`. The library joins the list
+    /// of libraries in the order of the link line, the order in which the
+    /// loader searches them.
+    fn addShared(c: *Converter, name: []const u8, data: []const u8) !void {
+        if (data[elf.EI.CLASS] != elf.ELFCLASS64 or data[elf.EI.DATA] != elf.ELFDATA2LSB) {
+            std.log.err("{s}: only shared libraries of little-endian ELF64 are supported", .{name});
+            return error.Unsupported;
+        }
+        const eh = std.mem.bytesToValue(elf.Elf64_Ehdr, data[0..@sizeOf(elf.Elf64_Ehdr)]);
+        const shdrs = try c.arena.alloc(elf.Elf64_Shdr, eh.e_shnum);
+        for (shdrs, 0..) |*sh, k| sh.* = std.mem.bytesToValue(elf.Elf64_Shdr, slice(data, eh.e_shoff + k * @sizeOf(elf.Elf64_Shdr), @sizeOf(elf.Elf64_Shdr)));
+        var lib = std.fs.path.basename(name);
+        for (shdrs) |sh| {
+            if (sh.sh_type != elf.SHT_DYNAMIC) continue;
+            const strs = shdrs[sh.sh_link];
+            var k: u64 = 0;
+            while (k + @sizeOf(elf.Elf64_Dyn) <= sh.sh_size) : (k += @sizeOf(elf.Elf64_Dyn)) {
+                const d = std.mem.bytesToValue(elf.Elf64_Dyn, slice(data, sh.sh_offset + k, @sizeOf(elf.Elf64_Dyn)));
+                if (d.d_tag == elf.DT_SONAME) lib = cstr(data, strs.sh_offset + d.d_val);
+            }
+        }
+        _ = try c.w.library(lib);
+        for (shdrs) |sh| {
+            if (sh.sh_type != elf.SHT_DYNSYM) continue;
+            const strs = shdrs[sh.sh_link];
+            var k: u64 = @sizeOf(elf.Elf64_Sym);
+            while (k + @sizeOf(elf.Elf64_Sym) <= sh.sh_size) : (k += @sizeOf(elf.Elf64_Sym)) {
+                const es = std.mem.bytesToValue(elf.Elf64_Sym, slice(data, sh.sh_offset + k, @sizeOf(elf.Elf64_Sym)));
+                const sname = cstr(data, strs.sh_offset + es.st_name);
+                const bind = es.st_info >> 4;
+                if (sname.len == 0 or (bind != elf.STB_GLOBAL and bind != elf.STB_WEAK)) continue;
+                if (es.st_shndx == elf.SHN_UNDEF) {
+                    try c.wanted.append(c.gpa, sname);
+                    continue;
+                }
+                const ty = es.st_info & 0xf;
+                const gop = try c.shared.getOrPut(c.gpa, sname);
+                if (!gop.found_existing) gop.value_ptr.* = .{ .lib = lib, .data = ty == elf.STT_OBJECT or ty == elf.STT_TLS or ty == elf.STT_COMMON, .size = es.st_size };
             }
         }
     }
@@ -402,6 +460,9 @@ pub const Converter = struct {
     fn elfKind(name: []const u8, sh_type: u32, sh_flags: u64, sh_size: u64) ?lobj.Kind {
         if (sh_flags & elf.SHF_ALLOC == 0 or sh_size == 0) return null;
         if (std.mem.startsWith(u8, name, ".eh_frame") or std.mem.startsWith(u8, name, ".note") or std.mem.eql(u8, name, ".llvm_addrsig")) return null;
+        // The notes of the system, such as `.freebsd.noteG` that tells
+        // the kernel of FreeBSD which system the program is for.
+        if (sh_type == elf.SHT_NOTE) return null;
         // The unwind tables of 32-bit ARM, which only an unwinder reads.
         if (std.mem.startsWith(u8, name, ".ARM.exidx") or std.mem.startsWith(u8, name, ".ARM.extab")) return null;
         if (sh_flags & elf.SHF_TLS != 0) return if (sh_type == elf.SHT_NOBITS) .tbss else .tdata;
@@ -1227,6 +1288,8 @@ pub const Converter = struct {
         // On macOS and iOS, libSystem provides what the objects leave
         // undefined, which `dyld` binds at load.
         if (c.macho()) return .{ .target = try c.w.import(s.name, lib_system, s.bind == .weak), .addend = addend };
+        // On FreeBSD, the shared libraries of the link line.
+        if (c.shared.get(s.name)) |d| return .{ .target = try c.w.importOf(s.name, d.lib, s.bind == .weak, if (d.data) std.math.cast(u32, d.size) orelse return error.Unsupported else null), .addend = addend };
         if (s.bind == .weak) return .{ .target = .none_target, .addend = addend };
         std.log.err("{s}: undefined symbol {s}", .{ in.name, s.name });
         return error.UndefinedSymbol;
@@ -1362,6 +1425,23 @@ pub const Converter = struct {
             a.relocs = @intCast(lists[k].items.len);
         }
         try c.registrations(lists);
+        // The definitions that the shared libraries name, which the
+        // executable exports for the loader to bind them to.
+        for (c.wanted.items) |name| {
+            const wd = c.defs.get(name) orelse continue;
+            const win = &c.inputs.items[wd.input];
+            const ws = win.syms[wd.sym];
+            if (ws.shndx == undef_sec) continue;
+            const res = try c.defined(win, ws, 0);
+            if (res.target.space != .atom) continue;
+            const off = try c.w.string(name);
+            for (c.w.symbols.items) |x| {
+                if (x.name == off) break;
+            } else {
+                try c.w.symbols.append(c.gpa, .{ .name = off, .atom = res.target.index, .offset = res.sym });
+                try c.w.roots.append(c.gpa, res.target.index);
+            }
+        }
         const d = c.defs.get(entry) orelse {
             std.log.err("the entry {s} is not defined", .{entry});
             return error.UndefinedSymbol;
@@ -1460,13 +1540,26 @@ pub fn main(init: std.process.Init) !void {
             // compiler_rt in its cache.
             k += 1;
             const line = try std.Io.Dir.cwd().readFileAlloc(io, args[k], arena, .unlimited);
-            var tok = std.mem.tokenizeAny(u8, line, " \n\t");
-            while (tok.next()) |t| {
-                const base = std.fs.path.basename(t);
-                const wanted = [_][]const u8{ "crt1.o", "rcrt1.o", "libc.a", "libcompiler_rt.a", "crt2.obj" };
-                for (wanted) |w| if (std.mem.eql(u8, base, w)) try files.append(arena, t);
-                // On Windows, the C library and the import libraries.
-                if (os != null and os.? == .windows and std.mem.endsWith(u8, base, ".lib") and !std.mem.startsWith(u8, t, "-")) try files.append(arena, t);
+            var lines = std.mem.splitScalar(u8, line, '\n');
+            var seen: std.StringHashMapUnmanaged(void) = .empty;
+            while (lines.next()) |ln| {
+                // The output names the commands that build the shared
+                // libraries of FreeBSD before the one that links the
+                // program, whose order of libraries the loader follows.
+                if (os != null and os.? == .freebsd and std.mem.indexOf(u8, ln, " -shared ") != null) continue;
+                var tok = std.mem.tokenizeAny(u8, ln, " \t");
+                while (tok.next()) |t| {
+                    const base = std.fs.path.basename(t);
+                    const wanted = [_][]const u8{ "crt1.o", "rcrt1.o", "libc.a", "libcompiler_rt.a", "crt2.obj" };
+                    for (wanted) |w| if (std.mem.eql(u8, base, w)) try files.append(arena, t);
+                    // On FreeBSD, the shared libraries of the system.
+                    if (os != null and os.? == .freebsd and std.fs.path.isAbsolute(t) and std.mem.startsWith(u8, base, "lib") and std.mem.indexOf(u8, base, ".so.") != null) {
+                        if ((try seen.getOrPut(arena, t)).found_existing) continue;
+                        try files.append(arena, t);
+                    }
+                    // On Windows, the C library and the import libraries.
+                    if (os != null and os.? == .windows and std.mem.endsWith(u8, base, ".lib") and !std.mem.startsWith(u8, t, "-")) try files.append(arena, t);
+                }
             }
         } else if (std.mem.eql(u8, a, "-o")) {
             k += 1;
