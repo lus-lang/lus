@@ -122,17 +122,40 @@ jobs:
           set -euo pipefail
           problems=()
           if [ "$GITHUB_REF_TYPE" != branch ]; then problems+=("the workflow runs on $GITHUB_REF_TYPE $GITHUB_REF_NAME, and a release starts from a branch"); fi
+          # A lookup that fails is a problem of its own, so one run lists
+          # every gap.
+          lookup() { gh api "$1" --jq "$2" 2>/dev/null; }
           # The commit must be the head of its branch, so the release
           # commit and the next version follow it.
-          head="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)"
-          if [ "$head" != "$GITHUB_SHA" ]; then problems+=("$GITHUB_REF_NAME moved to $head after the run started"); fi
-          passed="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=1" --jq .total_count)"
-          if [ "$passed" = 0 ]; then problems+=("ci.yml has not passed on $GITHUB_SHA"); fi
+          if head="$(lookup "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" .sha)"; then
+            if [ "$head" != "$GITHUB_SHA" ]; then problems+=("$GITHUB_REF_NAME moved to $head after the run started"); fi
+          else
+            problems+=("the head of $GITHUB_REF_NAME could not be read")
+          fi
+          # A workflow is found by its path, since the API resolves a file
+          # name only for workflows on the default branch.
+          workflow_id() { lookup "repos/$GITHUB_REPOSITORY/actions/workflows?per_page=100" ".workflows[] | select(.path == \".github/workflows/$1\") | .id"; }
+          ci="$(workflow_id ci.yml || true)"
+          if [ -z "$ci" ]; then
+            problems+=("ci.yml has never run in the repository")
+          elif ! passed="$(lookup "repos/$GITHUB_REPOSITORY/actions/workflows/$ci/runs?head_sha=$GITHUB_SHA&status=success&per_page=1" .total_count)"; then
+            problems+=("the runs of ci.yml could not be read")
+          elif [ "$passed" = 0 ]; then
+            problems+=("ci.yml has not passed on $GITHUB_SHA")
+          fi
           # The schedule runs nightly.yml from the default branch, so its
           # runs carry the commit of that branch. The last one must pass.
-          nightly="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?status=completed&per_page=1" --jq '.workflow_runs[0].conclusion // "none"')"
-          if [ "$nightly" != success ]; then problems+=("the last run of nightly.yml ended with $nightly"); fi
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then problems+=("the tag $TAG exists"); fi
+          nightly="$(workflow_id nightly.yml || true)"
+          if [ -z "$nightly" ]; then
+            problems+=("nightly.yml has never run, since it runs only from the default branch")
+          elif ! last="$(lookup "repos/$GITHUB_REPOSITORY/actions/workflows/$nightly/runs?status=completed&per_page=1" '.workflow_runs[0].conclusion // "none"')"; then
+            problems+=("the runs of nightly.yml could not be read")
+          elif [ "$last" = none ]; then
+            problems+=("nightly.yml has no completed run")
+          elif [ "$last" != success ]; then
+            problems+=("the last run of nightly.yml ended with $last")
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then problems+=("the tag $TAG exists"); fi
           if gh release view "$TAG" >/dev/null 2>&1; then problems+=("the release $TAG exists"); fi
           for secret in LUS_APP_ID LUS_APP_PRIVATE_KEY NPM_TOKEN OVSX_PAT LUS_RELEASE_SIGNING_SEED LUS_RELEASE_SIGNING_KEY_ID; do
             if [ -z "${!secret}" ]; then problems+=("the secret $secret is not set"); fi
