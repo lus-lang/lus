@@ -23,14 +23,20 @@ Assignment is plain `=`, as in Lua. Write `total = total + i`. Models trained on
 
 ```lus
 local function divide(a, b)
-    if b == 0 then error("division by zero", 0) end
+    if b == 0 then
+        error("division by zero", 0)
+    end
+
     return a / b
 end
 
 local ok, value = catch divide(1, 0)
 assert(not ok and value == "division by zero")
 
-local ok2, err = catch[function(e) return "wrapped: " .. e end] divide(1, 0)
+local ok2, err = catch[function(e)
+    return "wrapped: " .. e
+end] divide(1, 0)
+
 assert(err == "wrapped: division by zero")
 ```
 
@@ -62,15 +68,19 @@ assert(x + y == 3)
 -- destructuring each item of an iterator that yields tables
 local function each(list)
     local i = 0
+
     return function()
         i = i + 1
         return list[i]
     end
 end
+
 local sum = 0
+
 for name, price from each({ { name = "mug", price = 8 }, { name = "pot", price = 22 } }) do
     sum = sum + price
 end
+
 assert(sum == 30)
 
 -- optional chaining
@@ -80,23 +90,33 @@ assert(config?.database?.host == nil)
 
 -- assignment in conditions
 local items = { "a", "b" }
+
 if first = items[1] then
     assert(first == "a")
 end
 
 -- continue
 local total = 0
+
 for i = 1, 10 do
-    if i % 2 == 0 then continue end
+    if i % 2 == 0 then
+        continue
+    end
+
     total = total + i
 end
+
 assert(total == 25)
 
 -- do expressions
 local size = do
-    if #items > 1 then provide "many" end
+    if #items > 1 then
+        provide "many"
+    end
+
     provide "few"
 end
+
 assert(size == "many")
 
 -- enums
@@ -126,17 +146,22 @@ A `<meta>` local runs its initializer when the file is compiled, so the program 
 ```lus
 local SQUARES <meta> = do
     local t = {}
+
     for i = 1, 10 do
         t[i] = i * i
     end
+
     provide t
 end
+
 assert(SQUARES[4] == 16)
 
 local MODE <meta> = (flags.mode or "release"):lower()
+
 if MODE == "debug" then
     print("debug checks on")
 end
+
 assert(MODE == "release")
 ```
 
@@ -148,6 +173,7 @@ A `<lazy>` local runs its initializer the first time the program reads it, and l
 
 ```lus
 local loads = 0
+
 local function load_settings()
     loads = loads + 1
     return { port = 8080 }
@@ -200,6 +226,7 @@ local co = coroutine.create(function(id)
     coroutine.yield(current())
     return current()
 end)
+
 assert(select(2, coroutine.resume(co, "r1")) == "r1")
 assert(current() == "none")
 assert(select(2, coroutine.resume(co)) == "r1")
@@ -227,9 +254,11 @@ Operations that wait for an event return a coroutine, and each resume waits for 
 ```lus
 local wake = coroutine.sleep(math.huge)
 local result
+
 local waiter = coroutine.detach(coroutine.create(function()
     result = table.pack(coroutine.resume(wake))
 end))
+
 coroutine.close(wake)
 coroutine.resume(waiter)
 assert(result[1] == false and result[2] == "closed")

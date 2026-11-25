@@ -81,9 +81,10 @@ Replace nondeterministic text before comparing, and apply the same function to b
 
 ```lus
 local function normalize(text)
-    return (text
-        :gsub("%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d[%.%d]*Z?", "<time>")
-        :gsub("/tmp/[%w%._%-]+", "<tmp>"))
+    return (text:gsub("%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d[%.%d]*Z?", "<time>"):gsub(
+        "/tmp/[%w%._%-]+",
+        "<tmp>"
+    ))
 end
 
 assert(normalize("at 2026-11-19T10:00:00Z in /tmp/x1") == "at <time> in <tmp>")
