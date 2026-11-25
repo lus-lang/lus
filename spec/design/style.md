@@ -167,7 +167,7 @@ The same holds for a README or a doc comment. "This package provides a router" b
 
 > Lus claims a handful of names that Lua leaves free.
 
-> Lus adds the globals `json`, `fs`, and `network`.
+> Lus has the globals `json`, `fs`, and `network`, which Lua does not define.
 
 > A `while` loop fits a repetition whose number of passes is unknown.
 

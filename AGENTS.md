@@ -57,7 +57,7 @@ pnpm build        # production build
 
 ### Lus Language vs Lua
 
-Lus extends Lua 5.5 with: `catch` (replaces `pcall`/`xpcall`), `enum`, optional chaining (`?.`), string interpolation (backticks), `from` destructuring, if/while-assignment, `pledge` permissions, `vector` buffers, workers, slices, `table.clone`, do-expressions (`provide`), runtime attributes, local groups, compile flags, queries, and new stdlib (JSON, CSV, filesystem, networking, compression, time, SQLite, transcoding). Lus 2.0 keeps every one of these and adds `continue`, bigint and decimal number literals, WTF-8 strings indexed by character, detached coroutines with sockets as suspension points, `network.serve`, `lus test`, `lus debug`, and `lus doc`.
+Lus began as a fork of Lua 5.5 and is one language of its own. Next to the Lua core it has `catch` (replaces `pcall`/`xpcall`), `enum`, optional chaining (`?.`), string interpolation (backticks), `from` destructuring, if/while-assignment, `pledge` permissions, `vector` buffers, workers, slices, `table.clone`, do-expressions (`provide`), runtime attributes, local groups, compile flags, queries, and new stdlib (JSON, CSV, filesystem, networking, compression, time, SQLite, transcoding). Lus 2.0 keeps every one of these and adds `continue`, bigint and decimal number literals, WTF-8 strings indexed by character, detached coroutines with sockets as suspension points, `network.serve`, `lus test`, `lus debug`, and `lus doc`.
 
 All Lus source files use `.lus` extension. Code blocks in documentation use ` ```lus ` fencing.
 
