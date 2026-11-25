@@ -73,6 +73,10 @@ The tools an agent calls after every edit decide how quickly it converges. `lus 
 6. **Documentation links.** Each diagnostic in `--json` output gains a `docs` field with the URL of its explanation.
 7. **Named cases.** A case table with string keys names each run after its key, so a parity failure reads `parity_test[empty.txt]` and the agent sees which input broke.
 
+### The language server for agents
+
+`lus lsp` runs the language server that is built into `lus`, so a coding agent with a Language Server Protocol client reads diagnostics after each edit without calling `lus check`. The `lus` plugin of Claude Code registers the server in `lspServers` of `.agents/.claude-plugin/plugin.json`, so installing the plugin installs the skills and the server together. The manual page `/manual/ide-setup` gives the configuration for opencode, Neovim, Helix, Sublime Text, and Emacs. An agent without a client, such as Codex, runs `lus check --json` on the files it changes.
+
 ### Measuring whether it works
 
 `tests/agents/` holds a small set of tasks, each a prompt plus hidden acceptance tests: write a CSV summarizer, serve a JSON API, port a 200-line Python script. A runner gives each task to a headless agent with only the Lus skill installed and records whether `lus check` is clean and the hidden tests pass, with and without the skill. It never gates a merge, like the benchmarks, and it shows which skill edits actually help.

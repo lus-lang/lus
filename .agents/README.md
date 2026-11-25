@@ -10,7 +10,7 @@ This folder holds what coding agents read to work with Lus: the skills, the cura
 
 `.agents/skills/` is the discovery path that agents across tools read. `.claude/skills` is a symbolic link to it.
 
-This folder is also the `lus` plugin of the Claude Code marketplace in `.claude-plugin/marketplace.json` at the repository root. Install it with the following command.
+This folder is also the `lus` plugin of the Claude Code marketplace in `.claude-plugin/marketplace.json` at the repository root. The plugin holds the skills and registers `lus lsp`, the language server built into `lus`, for `.lus` files. Install it with the following command.
 
 ```sh
 claude plugin install lus --marketplace lus-lang/lus

@@ -3,10 +3,10 @@ order: 7
 title: IDE Setup
 icon: code
 group: use
-shortdesc: "Editor support: the VSCode extension, the language server, and syntax highlighting in other editors."
+shortdesc: "Editor and agent support: the VSCode extension and the language server in other editors and coding agents."
 ---
 
-Editor support shows mistakes while you type, completes names, and shows the documentation of a function when the pointer rests on it. Lus provides an extension for VSCode-based editors and, for every other editor, a language server that any editor with a Language Server Protocol client can start.
+Editor support shows mistakes while you type, completes names, and shows the documentation of a function when the pointer rests on it. Lus provides an extension for VSCode-based editors. Every other editor, and every coding agent with a Language Server Protocol client, starts the language server that is built into `lus`.
 
 ## VSCode-based editors
 
@@ -54,43 +54,24 @@ Breakpoints can have conditions, hit counts, and log messages. The debugger stop
 
 ## Other editors
 
-The language server is a Lus program, so every other editor runs it with a local installation of `lus`. Its source is the directory `packages/language-server` of the [repository](https://github.com/lus-lang/lus). The files in that directory load each other with `require` under the module name `lus-language`, so the directory must have that name. Copy or link it under that name:
-
-```bash
-git clone https://github.com/lus-lang/lus.git
-ln -s "$PWD/lus/packages/language-server" /path/to/lus-language
-```
-
-The editor then starts the server with the following command. Its `--include` option compiles the modules of a directory when `lus` starts and names them after the directory, so that `require` finds them from any working directory.
-
-```bash
-lus --include /path/to/lus-language /path/to/lus-language/main.lus
-```
-
-The server reads Language Server Protocol messages from standard input and writes its replies to standard output. In the configuration of each editor, replace `/path/to/lus-language` with the path of the directory you created.
+The language server is built into `lus`, so every other editor runs it with a local installation of `lus`. The command `lus lsp` starts the server, which reads Language Server Protocol messages from standard input and writes its replies to standard output. It serves files with the `.lus` extension under the language id `lus`. The server comes with the runtime, so its version always matches the installed `lus`, which `lus lsp --version` prints.
 
 Most editors do not recognize `.lus` files, so the instructions for each editor also give those files a file type. The syntax of Lus grew from that of Lua, so each configuration highlights Lus with the Lua support of the editor, which colors most Lus code correctly. An editor that reads TextMate grammars can use the Lus grammar, [`packages/textmate/lus.tmLanguage.json`](https://github.com/lus-lang/lus/blob/main/packages/textmate/lus.tmLanguage.json) in the repository, whose scope is `source.lus`.
 
 ### Neovim
 
-Add the following to the Neovim configuration, which registers the `lus` file type for `.lus` files, highlights them with the Lua parser, and starts the server for every buffer of that file type:
+Neovim 0.11 and later start the server with the built-in client. Add the following to the Neovim configuration, which registers the `lus` file type for `.lus` files, highlights them with the Lua parser, and enables the server for that file type:
 
 ```lua
 vim.filetype.add({ extension = { lus = "lus" } })
 vim.treesitter.language.register("lua", "lus")
 
-vim.api.nvim_create_autocmd("FileType", {
-    pattern = "lus",
-    callback = function()
-        vim.lsp.start({
-            name = "lus",
-            cmd = { "lus", "--include", "/path/to/lus-language", "/path/to/lus-language/main.lus" },
-            root_dir = vim.fs.dirname(
-                vim.fs.find({ ".git" }, { upward = true })[1]
-            ),
-        })
-    end,
-})
+vim.lsp.config["lus"] = {
+    cmd = { "lus", "lsp" },
+    filetypes = { "lus" },
+    root_markers = { ".git" },
+}
+vim.lsp.enable("lus")
 ```
 
 ### Helix
@@ -103,11 +84,23 @@ name = "lus"
 scope = "source.lus"
 file-types = ["lus"]
 grammar = "lua"
-language-servers = ["lus-language"]
+language-servers = ["lus"]
 
-[language-server.lus-language]
+[language-server.lus]
 command = "lus"
-args = ["--include", "/path/to/lus-language", "/path/to/lus-language/main.lus"]
+args = ["lsp"]
+```
+
+### Zed
+
+Zed adds a language and its server only through an extension. To highlight `.lus` files with the Lua support of Zed, add the following to its `settings.json`:
+
+```json
+{
+  "file_types": {
+    "Lua": ["lus"]
+  }
+}
 ```
 
 ### Sublime Text
@@ -119,7 +112,7 @@ To highlight `.lus` files with the Lua syntax of Sublime Text, open a `.lus` fil
   "clients": {
     "lus": {
       "enabled": true,
-      "command": ["lus", "--include", "/path/to/lus-language", "/path/to/lus-language/main.lus"],
+      "command": ["lus", "lsp"],
       "selector": "source.lua"
     }
   }
@@ -138,7 +131,39 @@ Install [lsp-mode](https://github.com/emacs-lsp/lsp-mode) and [lua-mode](https:/
   (add-to-list 'lsp-language-id-configuration '(lus-mode . "lus"))
   (lsp-register-client
     (make-lsp-client
-      :new-connection (lsp-stdio-connection '("lus" "--include" "/path/to/lus-language" "/path/to/lus-language/main.lus"))
+      :new-connection (lsp-stdio-connection '("lus" "lsp"))
       :activation-fn (lsp-activate-on "lus")
-      :server-id 'lus-language)))
+      :server-id 'lus)))
 ```
+
+## Coding agents
+
+A coding agent that starts the language server reads its diagnostics after each edit, so it sees an error in the turn that caused it. Every agent that starts the server needs `lus` in a directory of the `PATH`.
+
+### Claude Code
+
+The `lus` plugin installs the Lus skills and registers `lus lsp` for every `.lus` file. Install it with the following command:
+
+```bash
+claude plugin install lus --marketplace lus-lang/lus
+```
+
+### opencode
+
+Add the following to `opencode.json` in the project or in the global configuration of opencode:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "lsp": {
+    "lus": {
+      "command": ["lus", "lsp"],
+      "extensions": [".lus"]
+    }
+  }
+}
+```
+
+### Codex and other agents
+
+An agent without a Language Server Protocol client checks its edits with `lus check`. Run [`lus agents init`](/manual/cli#lus-agents) in the project to install the Lus skills, which tell the agent to check its files with `lus check --json` and to fix every diagnostic.

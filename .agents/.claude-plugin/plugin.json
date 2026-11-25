@@ -1,6 +1,6 @@
 {
   "name": "lus",
-  "description": "Write, check, format, and test Lus code, and port projects to Lus behind a parity harness.",
+  "description": "Write, check, format, and test Lus code with the Lus language server, and port projects to Lus behind a parity harness.",
   "author": {
     "name": "Lus",
     "url": "https://lus.dev"
@@ -12,5 +12,16 @@
     "lus",
     "lua",
     "skills"
-  ]
+  ],
+  "lspServers": {
+    "lus": {
+      "command": "lus",
+      "args": [
+        "lsp"
+      ],
+      "extensionToLanguage": {
+        ".lus": "lus"
+      }
+    }
+  }
 }
