@@ -38,18 +38,18 @@ export function checkMessage(text) {
 
   const m = /^([a-z]+)\(([a-z0-9-]+)\): (.*)$/.exec(first);
   if (!m) {
-    problems.push(`the first line reads "${first}", and it must be type(area): subject`);
+    problems.push(`write the first line as type(area): subject, in place of "${first}"`);
   } else {
     const [, type, area, subject] = m;
-    if (!TYPES.includes(type)) problems.push(`the type "${type}" is not one of ${TYPES.join(", ")}`);
-    if (!AREAS.includes(area)) problems.push(`the area "${area}" is not one of ${AREAS.join(", ")}`);
-    if (subject.trim() === "") problems.push("the subject is empty");
-    else if (!/^[a-z0-9`]/.test(subject)) problems.push("the subject must start with a lowercase letter");
-    if (/\.$/.test(subject)) problems.push("the subject must end without a period");
-    if (/\s$/.test(subject)) problems.push("the subject must end without a space");
+    if (!TYPES.includes(type)) problems.push(`use one of ${TYPES.join(", ")} as the type, in place of "${type}"`);
+    if (!AREAS.includes(area)) problems.push(`use one of ${AREAS.join(", ")} as the area, in place of "${area}"`);
+    if (subject.trim() === "") problems.push("write a subject after the colon");
+    else if (!/^[a-z0-9`]/.test(subject)) problems.push("start the subject with a lowercase letter");
+    if (/\.$/.test(subject)) problems.push("end the subject without a period");
+    if (/\s$/.test(subject)) problems.push("end the subject without a space");
   }
-  if ([...first].length > 72) problems.push(`the first line holds ${[...first].length} characters, and the limit is 72`);
-  if (kept.length > 1 && kept[1].trim() !== "") problems.push("a blank line must separate the first line from the body");
+  if ([...first].length > 72) problems.push(`shorten the first line to at most 72 characters, from ${[...first].length}`);
+  if (kept.length > 1 && kept[1].trim() !== "") problems.push("leave a blank line between the first line and the body");
 
   let fence = false;
   for (const [i, line] of kept.entries()) {
@@ -59,12 +59,12 @@ export function checkMessage(text) {
       continue;
     }
     const where = `line ${i + 1}`;
-    if (/[\u2013\u2014]/.test(line)) problems.push(`${where} holds an em or en dash`);
-    if (NAME_RULE.test(line)) problems.push(`${where} names a dialect that the repository never names`);
+    if (/[\u2013\u2014]/.test(line)) problems.push(`rewrite ${where} without the em or en dash`);
+    if (NAME_RULE.test(line)) problems.push(`leave out of ${where} the name of the dialect that the repository never names`);
     // Code blocks, indented code, inline code, and trailers may hold
     // semicolons.
     if (fence || /^( {4}|\t)/.test(line) || TRAILER.test(line)) continue;
-    if (line.replace(/`[^`]*`/g, "").includes(";")) problems.push(`${where} holds a semicolon, so split it into sentences`);
+    if (line.replace(/`[^`]*`/g, "").includes(";")) problems.push(`split ${where} into sentences at its semicolon`);
   }
   return problems;
 }
@@ -78,7 +78,7 @@ function main() {
   if (command === "message" && rest.length === 1) {
     const problems = checkMessage(fs.readFileSync(rest[0], "utf8"));
     for (const p of problems) console.error(`commit-msg: ${p}`);
-    if (problems.length) console.error("commit-msg: CONTRIBUTING.md describes the format. The message is kept in .git/COMMIT_EDITMSG.");
+    if (problems.length) console.error("commit-msg: read the format in CONTRIBUTING.md. Your message is saved in .git/COMMIT_EDITMSG, so run git commit -e -F .git/COMMIT_EDITMSG to edit it.");
     process.exit(problems.length ? 1 : 0);
   }
   if (command === "range" && rest.length === 2) {

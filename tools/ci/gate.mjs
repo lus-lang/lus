@@ -125,21 +125,21 @@ export function decide({kind, item, user, commits, files, keys, known, now = Dat
     return {exempt: true, passed: true, action, failures, labels: [], verdict: "allowed"};
   }
   const days = (now - Date.parse(user.created_at)) / 86400000;
-  if (days < MIN_AGE_DAYS) failures.push(`The account @${login} is ${Math.floor(days)} days old, and the gate needs an account at least two years old.`);
+  if (days < MIN_AGE_DAYS) failures.push(`Your account must be at least two years old, and @${login} is ${Math.floor(days)} days old.`);
 
   let verdict = "allowed";
   let fields = null;
   if (kind === "issue") {
-    if (keys === 0) failures.push(`The account @${login} has no GPG or SSH signing key, which is how the gate checks that an account is verified.`);
+    if (keys === 0) failures.push(`Add a GPG or SSH signing key to your account @${login}.`);
   } else {
     const unsigned = commits.filter((c) => !c.commit.verification?.verified).map((c) => `${c.sha.slice(0, 10)} (${c.commit.verification?.reason ?? "unsigned"})`);
-    if (unsigned.length) failures.push(`GitHub does not verify the signature of these commits: ${unsigned.join(", ")}. CONTRIBUTING.md explains how to sign them.`);
+    if (unsigned.length) failures.push(`Sign these commits so that GitHub verifies them: ${unsigned.join(", ")}. CONTRIBUTING.md shows how.`);
     fields = checkPr(item.body ?? "", commits.map((c) => ({sha: c.sha, message: c.commit.message})));
-    for (const p of fields.problems) failures.push(`The pull request description: ${p}.`);
+    for (const p of fields.problems) failures.push(`In the description, ${p}.`);
     const result = plan({map: loadMap(), changed: files, tracked: trackedFiles()});
     verdict = result.contributor.verdict;
-    if (result.contributor.egregious.length) failures.push(`These paths are closed to contributors: ${result.contributor.egregious.join(", ")}.`);
-    if (result.contributor.denied.length) failures.push(`Contributors leave these paths to the maintainer: ${result.contributor.denied.join(", ")}.`);
+    if (result.contributor.egregious.length) failures.push(`Leave these paths alone, since only the maintainer changes them: ${result.contributor.egregious.join(", ")}.`);
+    if (result.contributor.denied.length) failures.push(`Take these paths out of your pull request, since the maintainer changes them: ${result.contributor.denied.join(", ")}.`);
     if (verdict === "egregious") action = "lock";
     else if (fields.rejected) action = "reject";
   }
@@ -152,17 +152,17 @@ function gateComment(decision, kind) {
   const what = kind === "pr" ? "pull request" : "issue";
   const lines = [GATE_MARKER];
   if (decision.action === "lock") {
-    lines.push(`This ${what} changes paths that only the maintainer changes, so it is closed and locked.`);
+    lines.push(`Your ${what} changes paths that only the maintainer changes, so it is closed and locked.`);
   } else if (decision.action === "reject") {
-    lines.push("Pull requests that add a feature or change the design of the language are closed. Bring your idea to Discussions instead.");
+    lines.push(`Bring your idea to [Discussions](https://github.com/${REPO}/discussions). Don't open a pull request that adds a feature or changes the design of the language.`);
   } else if (decision.passed) {
-    lines.push(`This ${what} passes the contribution gate.`);
+    lines.push(`Your ${what} passes the contribution gate.`);
     return lines.join("\n\n");
   } else {
-    lines.push(`This ${what} does not pass the contribution gate yet. No review or test runs until it does. Each fix below runs the gate again, as an edit of the description or a push of new commits does.`);
+    lines.push(`Fix the items below so that your ${what} passes the contribution gate. Then edit the description or push new commits to run the checks again.`);
   }
   lines.push(decision.failures.map((f) => `- ${f}`).join("\n"));
-  lines.push(`[CONTRIBUTING.md](https://github.com/${REPO}/blob/main/CONTRIBUTING.md) describes each rule.`);
+  lines.push(`Read [CONTRIBUTING.md](https://github.com/${REPO}/blob/main/CONTRIBUTING.md) for each rule.`);
   return lines.join("\n\n");
 }
 
@@ -288,7 +288,7 @@ async function runPerf(number, sha, file) {
     ),
   });
   const result = compare(clean(data.head), clean(data.base));
-  const body = `<!-- lus-perf -->\n\n${table(result, "Benchmarks of this change against its base")}\n\nThe benchmarks ran on one runner, the base and the head in turn. tools/ci/perf.json holds the thresholds.`;
+  const body = `<!-- lus-perf -->\n\n${table(result, "Benchmarks of this change against its base")}\n\nFind the cause of each regression above in your change, or explain it in the description. Look up each threshold in tests/bench/perf-map.json.`;
   const marker = "<!-- lus-perf -->";
   await upsertComment(number, body, marker, result.regressions.length === 0);
   await setLabels(number, result.regressions.length ? ["perf-regression"] : [], ["perf-regression"]);

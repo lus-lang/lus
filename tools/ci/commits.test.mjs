@@ -27,8 +27,8 @@ test("sound messages", () => {
 test("the first line", () => {
   bad("Fix the thing", /type\(area\): subject/);
   bad("fix: no area", /type\(area\): subject/);
-  bad("fixes(lib): wrong type", /type "fixes"/);
-  bad("fix(github): wrong area", /area "github"/);
+  bad("fixes(lib): wrong type", /in place of "fixes"/);
+  bad("fix(github): wrong area", /in place of "github"/);
   bad("fix(lib): Capital start", /lowercase/);
   bad("fix(lib): ends with a period.", /period/);
   bad("test(tests): " + "x".repeat(60), /72/);

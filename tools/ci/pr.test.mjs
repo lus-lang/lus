@@ -40,11 +40,11 @@ test("kinds", () => {
 
 test("a known harness needs its trailer", () => {
   assert.deepEqual(checkPr(fill("bug", claude), [trailer, plain]).problems, []);
-  assert.match(checkPr(fill("bug", claude), [plain]).problems[0], /no commit carries its trailer/);
+  assert.match(checkPr(fill("bug", claude), [plain]).problems[0], /keep the trailer of Claude Code/);
 });
 
 test("a trailer needs the disclosure", () => {
-  assert.match(checkPr(fill("bug", "none"), [trailer]).problems[0], /does not name it/);
+  assert.match(checkPr(fill("bug", "none"), [trailer]).problems[0], /name Claude Code in your Agent disclosure/);
 });
 
 test("another harness is recorded", () => {
@@ -56,5 +56,5 @@ test("another harness is recorded", () => {
 
 test("an incomplete disclosure", () => {
   const r = parseBody(fill("bug", "Agent: Claude\nHarness: Claude Code"));
-  assert.match(r.problems[0], /no model/);
+  assert.match(r.problems[0], /add the model of agent 1/);
 });

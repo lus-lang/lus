@@ -296,10 +296,10 @@ jobs:
           CATEGORY: ${{ fromJSON(needs.gate.outputs.agents).discussions[needs.triage.outputs.kind] }}
         run: |
           case "$KIND" in
-            question) text="Questions about using Lus are answered in Discussions, and this one continues at DISCUSSION_URL. Issues are for bugs." ;;
-            *) text="Issues are for bug reports. Ideas and language design belong in Discussions, and this one continues at DISCUSSION_URL." ;;
+            question) text="Follow your question at DISCUSSION_URL. Ask questions in Discussions, and open issues for bug reports." ;;
+            *) text="Follow your idea at DISCUSSION_URL. Bring ideas and language design to Discussions, and open issues for bug reports." ;;
           esac
-          printf '%s\n\nThe triage agent read it this way: %s\n' "$text" "$REASON" > "$RUNNER_TEMP/moved.md"
+          printf '%s If you meant to report a bug, open a new issue with the bug form and a program that shows it.\n\nThe triage agent read your issue this way: %s\n' "$text" "$REASON" > "$RUNNER_TEMP/moved.md"
           node tools/ci/gate.mjs discuss "${{ needs.gate.outputs.number }}" "$CATEGORY" "$RUNNER_TEMP/moved.md"
 
   reproduce:
@@ -556,6 +556,6 @@ jobs:
           if [ -z "$url" ]; then
             url=$(gh pr create --repo "$GITHUB_REPOSITORY" --head "$branch" --base "${{ github.event.repository.default_branch }}" --title "$subject" --body-file "$RUNNER_TEMP/pr.md" --draft)
           fi
-          printf '\nThe fix waits for the maintainer in %s.\n' "$url" >> "$hunt/report.md"
+          printf '\nFollow the fix and its review in %s.\n' "$url" >> "$hunt/report.md"
           node tools/ci/gate.mjs comment "$NUMBER" "$hunt/report.md" "<!-- lus-hunt -->"
           gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-fix || true

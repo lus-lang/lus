@@ -29,7 +29,11 @@ Check:
 
 Mention a security problem only when it is extremely obvious.
 
-Write the review in Markdown for the maintainer. Start with one line:
-"Follows the rules", "Needs changes", or "Out of scope". Then list each
-finding with its file and line and the change it needs. Keep it short, and
-leave out praise and summaries of the change.
+Write the review in Markdown to the author of the pull request, who reads
+it as a comment, and the maintainer reads it too. Address the author as
+"you" and tell them what to change, as in "Add a regression test to
+tests/conformance/json_test.lus." Start with one line: "Ready for the
+maintainer", "Make these changes", or "Out of scope". Then list each
+finding with its file and line and the change to make. Keep it short, and
+leave out praise and summaries of the change. Never describe the process
+of the repository or its plans, only what the author does next.

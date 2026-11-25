@@ -24,7 +24,7 @@ if [ -n "$zig_files" ]; then
       fail=1
     fi
   else
-    echo "pre-commit: zig is not on the PATH, so the format check is skipped (mise install provides it)" >&2
+    echo "pre-commit: run mise install to put zig on the PATH, so the hook can check the format of your Zig files" >&2
   fi
 fi
 
@@ -35,14 +35,14 @@ fi
 
 if printf '%s\n' "$staged" | grep -qE '^(spec/|tools/build-(lsp|grammar)\.js|packages/textmate/|packages/language-server/analysis/stdlib_data\.lus)'; then
   if ! node tools/build-lsp.js --check > /dev/null || ! node tools/build-grammar.js --check > /dev/null; then
-    echo "pre-commit: the generated files are stale, so run mise run gen" >&2
+    echo "pre-commit: run mise run gen to bring the generated files up to date" >&2
     fail=1
   fi
 fi
 
 if [ -n "$(git diff --cached --name-only --diff-filter=A)" ]; then
   if ! missing=$(node tools/ci/areas.mjs unmatched); then
-    echo "pre-commit: these files belong to no area of tools/ci/areas.json:" >&2
+    echo "pre-commit: add these files to an area of tools/ci/areas.json:" >&2
     printf '%s\n' "$missing" >&2
     fail=1
   fi

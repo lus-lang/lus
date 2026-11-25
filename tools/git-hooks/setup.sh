@@ -12,10 +12,10 @@ git config commit.gpgsign true
 git config tag.gpgsign true
 chmod +x tools/git-hooks/pre-commit tools/git-hooks/commit-msg
 
-echo "git now runs tools/git-hooks and signs every commit and tag."
+echo "Your clone now runs the hooks of tools/git-hooks and signs every commit and tag."
 if [ -z "$(git config user.signingkey || true)" ]; then
   cat << 'MSG'
-No signing key is configured. To sign with an SSH key you already use for
+Configure a signing key. To sign with the SSH key you already use for
 GitHub, run:
 
   git config --global gpg.format ssh

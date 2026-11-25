@@ -1,8 +1,7 @@
 <!--
-CONTRIBUTING.md describes what a pull request may change and how it is
-checked. The two fields below are required, and a workflow reads them.
-Write each answer on its own line under its heading. Comments like this
-one are ignored.
+Read CONTRIBUTING.md before you open your pull request. Fill in the two
+required fields below, and write each answer on its own line under its
+heading. You can leave these comments in place.
 -->
 
 ## Kind

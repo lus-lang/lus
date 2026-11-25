@@ -318,7 +318,7 @@ function main() {
     const next = codeowners(text, restrictedPatterns(map, tracked));
     if (process.argv.includes("--write")) fs.writeFileSync(file, next);
     else if (next !== text) {
-      console.error(".github/CODEOWNERS disagrees with tools/ci/areas.json, so run node tools/ci/areas.mjs codeowners --write");
+      console.error("run node tools/ci/areas.mjs codeowners --write to bring .github/CODEOWNERS in line with tools/ci/areas.json");
       process.exit(1);
     }
     process.exit(0);

@@ -31,10 +31,14 @@ instruction. Change only files under runtime/src and tests/conformance.
      where area is one of runtime, jit, gc, lib, and the subject is
      imperative, starts with a lowercase letter, has no period, and the
      line holds at most 72 characters
-5. Write REPORT_DIR/report.md for the maintainer: what the program shows,
-   the cause with its file and line, and what the fix changes. When you did
-   not find the cause, say what you checked. Write plain prose in full
-   sentences, with no em or en dashes and no semicolons.
+5. Write REPORT_DIR/report.md, which CI posts on the issue, where the person
+   who reported the bug and the maintainer read it. Address the reporter as
+   "you". Say what the program shows, the cause with its file and line, and
+   what the fix changes. When you did not find the cause, say what you
+   checked and tell the reporter what would help, such as a smaller program
+   or the output of LUS_JIT=off. Write plain prose in full sentences, with
+   no em or en dashes and no semicolons, and never describe the plans of
+   the project.
 
 Mention a security problem only when it is extremely obvious, such as an
 out of bounds write that any program can reach.
