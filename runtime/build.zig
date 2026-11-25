@@ -565,8 +565,64 @@ fn agentDocsModule(b: *std.Build) *std.Build.Module {
         }
         w.line(&src, b, "}};\n", .{});
     }
+    // The language server for `lus lsp`: its sources, without the tests,
+    // as one raw deflate stream of `path NUL length(u32 little) data`
+    // entries.
+    const ls = languageServerBlob(b);
+    _ = wf.add("language_server.deflate", ls.compressed);
+    w.line(&src, b, "pub const language_server_len = {d};\n", .{ls.raw_len});
+    w.line(&src, b, "pub const language_server = @embedFile(\"language_server.deflate\");\n", .{});
     const root = wf.add("agent_docs.zig", src.items);
     return b.createModule(.{ .root_source_file = root });
+}
+
+var language_server_cache: ?struct { compressed: []const u8, raw_len: usize } = null;
+
+fn languageServerBlob(b: *std.Build) @TypeOf(language_server_cache.?) {
+    if (language_server_cache) |c| return c;
+    const rel = "../packages/language-server";
+    b.dependOnDirectoryContents(b.path(rel));
+    const root = b.root.join(b.allocator, rel) catch @panic("OOM");
+    var dir = root.root_dir.handle.openDir(b.graph.io, root.sub_path, .{ .iterate = true }) catch |e| {
+        std.debug.panic("cannot open {s}: {s}", .{ rel, @errorName(e) });
+    };
+    defer dir.close(b.graph.io);
+    var names: std.ArrayList([]const u8) = .empty;
+    var walker = dir.walk(b.allocator) catch @panic("OOM");
+    defer walker.deinit();
+    while (walker.next(b.graph.io) catch null) |entry| {
+        const p = std.mem.replaceOwned(u8, b.allocator, entry.path, "\\", "/") catch @panic("OOM");
+        if (std.mem.startsWith(u8, p, "tests")) continue;
+        if (entry.kind == .directory) {
+            b.dependOnDirectoryContents(b.path(b.fmt("{s}/{s}", .{ rel, p })));
+            continue;
+        }
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".lus")) continue;
+        names.append(b.allocator, p) catch @panic("OOM");
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lt(_: void, x: []const u8, y: []const u8) bool {
+            return std.mem.order(u8, x, y) == .lt;
+        }
+    }.lt);
+    var blob: std.ArrayList(u8) = .empty;
+    for (names.items) |name| {
+        const data = dir.readFileAlloc(b.graph.io, name, b.allocator, .unlimited) catch @panic("cannot read a language server file");
+        blob.appendSlice(b.allocator, name) catch @panic("OOM");
+        blob.append(b.allocator, 0) catch @panic("OOM");
+        var len: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len, @intCast(data.len), .little);
+        blob.appendSlice(b.allocator, &len) catch @panic("OOM");
+        blob.appendSlice(b.allocator, data) catch @panic("OOM");
+    }
+    const flate = std.compress.flate;
+    var out = std.Io.Writer.Allocating.initCapacity(b.allocator, 1 << 20) catch @panic("OOM");
+    const window = b.allocator.alloc(u8, flate.max_window_len) catch @panic("OOM");
+    var c = flate.Compress.init(&out.writer, window, .raw, .best) catch @panic("deflate");
+    c.writer.writeAll(blob.items) catch @panic("deflate");
+    c.finish() catch @panic("deflate");
+    language_server_cache = .{ .compressed = out.written(), .raw_len = blob.items.len };
+    return language_server_cache.?;
 }
 
 /// The embedding library rooted at `src/capi.zig`. The vendored C sources

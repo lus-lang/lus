@@ -11,6 +11,9 @@ const usages = .{
     .{ "compile", "usage: lus compile [-o OUT] [-s] [-F NAME=VALUE]... SCRIPT\n\nCompiles SCRIPT to a binary chunk (default output: SCRIPT.lusc). -s leaves out\ndebug information.\n" },
 };
 
+/// The embedded language server of `lus lsp`, which `main.zig` runs.
+pub const lsp = @import("tools/lsp.zig");
+
 pub fn run(init: std.process.Init, cmd: []const u8, args: []const []const u8) !u8 {
     if (args.len > 0 and (std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h"))) {
         inline for (usages) |u| {

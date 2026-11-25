@@ -1,0 +1,50 @@
+--[[
+    `lus lsp` runs the language server built into the executable. It
+    speaks the Language Server Protocol on standard input and output, and
+    `lus lsp --version` prints the version of the server. Each case runs
+    the interpreter as a subprocess, feeding the messages from a file.
+]]
+
+pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
+
+local LUS = os.getenv("LUS_EXE")
+
+local function run(cmdline)
+    local f = io.popen(cmdline .. " 2>&1")
+    local out = f:read("a")
+    local ok = f:close()
+    return (ok == true or ok == 0), out
+end
+
+local function frame(message)
+    local body = tojson(message)
+    return `Content-Length: $(#body)\r\n\r\n$body`
+end
+
+local function version_test()
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    local ok, out = run(`"$LUS" lsp --version`)
+    assert(ok, out)
+    assert(out:find("^lus%-language "), out)
+end
+
+local function initialize_and_exit_test()
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    local f = assert(io.open("session.txt", "w"))
+    f:write(frame({ jsonrpc = "2.0", id = 1, method = "initialize", params = { capabilities = {} } }))
+    f:write(frame({ jsonrpc = "2.0", method = "initialized", params = {} }))
+    f:write(frame({
+        jsonrpc = "2.0",
+        method = "textDocument/didOpen",
+        params = { textDocument = { uri = "file:///tmp/a.lus", languageId = "lus", version = 1, text = "local x = 1\n" } },
+    }))
+    f:write(frame({ jsonrpc = "2.0", id = 2, method = "shutdown" }))
+    f:write(frame({ jsonrpc = "2.0", method = "exit" }))
+    f:close()
+    local ok, out = run(`"$LUS" lsp < session.txt`)
+    assert(ok, out)
+    assert(out:find("Content-Length:", 1, true), out)
+    assert(out:find('"capabilities"', 1, true), out)
+    -- The unused local of the opened document is reported.
+    assert(out:find("Unused local 'x'", 1, true), out)
+end

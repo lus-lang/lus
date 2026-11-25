@@ -62,6 +62,7 @@ const usage =
     \\  help      print the standard library reference for a name
     \\  agents    set a project up for coding agents (agents init)
     \\  tree      print the modules a script requires, as a tree
+    \\  lsp       run the language server on standard input and output
     \\
     \\Options:
     \\  -e stat          execute string 'stat'
@@ -77,6 +78,8 @@ const usage =
     \\  --include path[:alias]
     \\                   preinclude a module file or directory for require
     \\  --readonly-env   freeze the global environment after startup
+    \\  --sandbox        seal the permissions after the -P grants, before
+    \\                   any code runs, so the program can acquire no more
     \\  --offline        load remote modules only from the module cache
     \\  --reload         revalidate every remote module before the run
     \\  --no-prefetch    fetch remote modules at their require
@@ -107,6 +110,9 @@ const Cli = struct {
     stdin: bool = false,
     dis: bool = false,
     readonly_env: bool = false,
+    /// Seal the permissions after the grants of the command line, before
+    /// any code runs (`--sandbox`).
+    sandbox: bool = false,
     gc_pause: ?usize = null,
     offline: bool = false,
     reload: bool = false,
@@ -159,6 +165,9 @@ fn optDis(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
 fn optReadonlyEnv(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
     c.readonly_env = true;
 }
+fn optSandbox(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
+    c.sandbox = true;
+}
 fn optOffline(c: *Cli, _: std.mem.Allocator, _: ?[]const u8) !void {
     c.offline = true;
 }
@@ -185,6 +194,7 @@ const options = [_]OptSpec{
     .{ .short = null, .long = "gc-pause", .takes_arg = true, .apply = optGcPause },
     .{ .short = null, .long = "dis", .takes_arg = false, .apply = optDis },
     .{ .short = null, .long = "readonly-env", .takes_arg = false, .apply = optReadonlyEnv },
+    .{ .short = null, .long = "sandbox", .takes_arg = false, .apply = optSandbox },
     .{ .short = null, .long = "offline", .takes_arg = false, .apply = optOffline },
     .{ .short = null, .long = "reload", .takes_arg = false, .apply = optReload },
     .{ .short = null, .long = "no-prefetch", .takes_arg = false, .apply = optNoPrefetch },
@@ -308,6 +318,7 @@ fn mainWithCompiler(init: std.process.Init, args: []const []const u8) !u8 {
             }
         }
         if (std.mem.eql(u8, cmd, "run")) return profiled(runMain(init, args, 2, null));
+        if (std.mem.eql(u8, cmd, "lsp")) return runLsp(init, args);
     }
     return profiled(runMain(init, args, 1, null));
 }
@@ -458,6 +469,12 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
         reportError(l);
         return 1;
     };
+    // A sandboxed run keeps only the grants of the command line, so code
+    // that pledges more is refused.
+    if (cli.sandbox) api.grantPledges(l, &.{"seal"}) catch {
+        reportError(l);
+        return 1;
+    };
     // The `arg` table.
     try setArgTable(l, args, cli.script_index, cli.script != null or cli.stdin);
     if (cli.readonly_env) api.freezeEnv(l);
@@ -603,6 +620,41 @@ const Preincludes = struct {
         }
     }
 };
+
+/// `lus lsp [ARGS]`: runs the language server built into the executable
+/// (`tools/lsp.zig`), with `arg[0]` set to `lsp` and ARGS after it.
+fn runLsp(init: std.process.Init, args: []const []const u8) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+    var bundle = lus.tools.lsp.load(gpa) catch |e| {
+        std.debug.print("lus lsp: cannot read the embedded language server ({s})\n", .{@errorName(e)});
+        return 1;
+    };
+    defer bundle.deinit(gpa);
+    package.preincludes = bundle.modules;
+    defer package.preincludes = &.{};
+    var remote_process: lus.remote.Process = undefined;
+    remote_process.begin(gpa, io, init.environ_map, .{});
+    defer remote_process.end();
+    const l = try api.newState(gpa, io);
+    defer api.closeForExit(l);
+    defer out.deinit(l.g);
+    l.g.environ = init.environ_map;
+    l.g.args = args;
+    try api.setFlags(l, &.{});
+    api.openLibs(l) catch {
+        std.debug.print("lus: cannot open libraries\n", .{});
+        return 1;
+    };
+    package.installPreincludes(l) catch {
+        reportError(l);
+        return 1;
+    };
+    try setArgTable(l, args, 1, true);
+    remote_process.store.running = true;
+    if (!runChunk(l, bundle.main, "@lus-language/main.lus", args[2..])) return 1;
+    return 0;
+}
 
 fn setArgTable(l: *Thread, args: []const []const u8, script_index: usize, has_script: bool) !void {
     // The table becomes the global first, so it stays reachable while

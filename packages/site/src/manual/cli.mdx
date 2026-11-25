@@ -47,6 +47,7 @@ The options come before the script name, because `lus` passes everything after t
 | `-F name[=value]`, `--flag name[=value]` | Define a build flag, which the script reads from the readonly table `flags`. A flag with no value is `true`. A numeric value is a number. Any other value is a string. The compiler removes the branch of an `if flags.name` or `if not flags.name` that can never run with the given flags, so debugging code behind a flag costs nothing when the flag is off. |
 | `--include path[:alias]` | Compile a module file, or every module in a directory, when the interpreter starts. `require` then loads the module from memory with no `load` or `fs:read` permission, so a program that has sealed its permissions can still require it. The alias is the name of the module. |
 | `--readonly-env` | Make the global table and the standard library tables readonly once the script starts. An assignment to a global or to a library field then raises `attempt to modify a readonly table`, which protects a program from code that replaces a library function. |
+| `--sandbox` | Seal the permissions after the grants of `-P`, before any code runs. Every later `pledge` is refused, so a program run as `lus --sandbox untrusted.lus` can read no file, start no process, open no connection, and load no code. `-P` still grants what the run needs, as in `lus --sandbox -P fs:read=./data script.lus`. |
 | `--offline` | Load [remote modules](/manual/guide#modules-from-the-network) only from the module cache. A module that the cache lacks raises an error at its `require`. |
 | `--reload` | Ask the server of every remote module whether it changed before the program runs, even when the cached copy is recent. |
 | `--no-prefetch` | Download nothing before the program runs. Each remote module is downloaded at its `require`, with a warning. |
@@ -230,6 +231,14 @@ lus tree [--json] file
 ```
 
 Prints the modules that `file` requires, and the modules they require, as a tree. The tree follows the calls of `require` whose argument is a string literal. It resolves each name against the templates of `LUS_PATH`, or of the default `package.path` when `LUS_PATH` is unset, relative to the current directory. Each line names a module and the file it resolved to. A module of the standard library, a remote module, and a name that resolves to no file end their branch. A module that the tree already showed is marked `(*)`. A file that also loads modules in a way the tree cannot follow, such as `require(name)` or `load`, is marked `(dynamic)`. With `--json`, the tree is one JSON object per module with the fields `name`, `kind`, `path`, `dynamic`, `repeat`, and `requires`. The exit status is 1 when a name resolves to no file or a file does not parse.
+
+## lus lsp
+
+```
+lus lsp [--version]
+```
+
+Runs the language server that is built into `lus`, which speaks the Language Server Protocol on standard input and output for files with the `.lus` extension and the language id `lus`. An editor or a coding agent starts it as the command `lus lsp`, so the server always matches the installed version. `--version` prints the version of the server and exits.
 
 ## lus version
 
