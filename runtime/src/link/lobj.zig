@@ -45,6 +45,13 @@ pub const Arch = enum(u8) {
 /// the start of its section, which code uses for thread-local variables.
 pub const pe_addr32nb = 0x1003;
 pub const pe_secrel = 0x100b;
+/// The parts of the offset of a thread-local variable from the start of
+/// its section that arm64 code adds or loads with an immediate of 12
+/// bits: bits 0 to 11 of an `add`, bits 12 to 23 of an `add` shifted by
+/// 12, and bits 0 to 11 of a load or a store, scaled by its size.
+pub const pe_secrel_lo12a = 0x1109;
+pub const pe_secrel_hi12a = 0x110a;
+pub const pe_secrel_lo12l = 0x110b;
 pub const Os = enum(u8) {
     linux,
     macos,

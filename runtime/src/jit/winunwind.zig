@@ -1,4 +1,4 @@
-//! The unwind information of native code on Windows on x86-64
+//! The unwind information of native code on Windows on x86-64 and arm64
 //! (`spec/design/platforms.md`, "Unwind information"). The exception
 //! dispatcher of Windows, debuggers, and profilers walk the stack with
 //! the function table of each chunk of executable memory, whose entries
@@ -100,6 +100,53 @@ pub fn info(buf: *[max_info]u8, f: Frame) []const u8 {
     buf[3] = if (f.frame_pointer) r12 else 0; // frame register, offset 0
     for (codes[0..n], 0..) |c, i| std.mem.writeInt(u16, buf[4 + 2 * i ..][0..2], c, .little);
     return buf[0 .. 4 + 2 * n];
+}
+
+/// An entry of the function table on arm64: the start of the code it
+/// covers and its unwind information, each relative to the base of the
+/// table. The low two bits of `unwind` are zero, which marks a full
+/// record. The record gives the length of the code.
+pub const RuntimeFunctionArm64 = extern struct {
+    begin: u32,
+    unwind: u32,
+};
+
+/// The bytes of the record `infoArm64` writes.
+pub const arm64_info_len = 12;
+/// The most bytes of code one arm64 record covers: its length field
+/// counts instructions in 18 bits.
+pub const arm64_max_len = ((1 << 18) - 1) * 4;
+
+/// Writes the arm64 unwind information of `len` bytes of native code,
+/// which runs after the entry sequence of `a64.Assembler.prologue`: `stp
+/// x29, x30, [sp, #-64]!`, `stp x19, x20, [sp, #16]`, `stp x21, x22, [sp,
+/// #32]`, and `mov x29, sp`. The codes start with `end_c`, which makes the
+/// range a fragment without a prologue of its own, so the codes after it
+/// apply at every offset: `set_fp` restores the stack pointer from `x29`
+/// before the pairs reload, whatever depth the code runs at. The record
+/// lists no epilogues.
+pub fn infoArm64(buf: *[arm64_info_len]u8, len: u32) []const u8 {
+    std.debug.assert(len % 4 == 0 and len <= arm64_max_len);
+    const codes = [8]u8{
+        0xE5, // end_c
+        0xE1, // set_fp
+        0xC8, 0x84, // save_regp x21, x22 at [sp, #32]
+        0xC8, 0x02, // save_regp x19, x20 at [sp, #16]
+        0x87, // save_fplr_x at [sp, #-64]!
+        0xE4, // end
+    };
+    // Length in instructions, version 0, no exception data, no
+    // epilogues, two words of codes.
+    const head: u32 = len / 4 | @as(u32, codes.len / 4) << 27;
+    std.mem.writeInt(u32, buf[0..4], head, .little);
+    @memcpy(buf[4..], &codes);
+    return buf;
+}
+
+test "the arm64 unwind information of native code" {
+    var buf: [arm64_info_len]u8 = undefined;
+    const b = infoArm64(&buf, 0x1000);
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x04, 0x00, 0x10, 0xE5, 0xE1, 0xC8, 0x84, 0xC8, 0x02, 0x87, 0xE4 }, b);
 }
 
 fn code(offset: u8, op: u4, op_info: u4) u16 {

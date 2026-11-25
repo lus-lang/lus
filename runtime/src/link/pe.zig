@@ -1,7 +1,7 @@
 //! The PE writer of the linker (`spec/design/aot.md`, "The linker"). It
-//! lays the kept atoms out as a console executable for 64-bit Windows,
-//! which the loader may map at any address, and starts the startup code
-//! of the C library of MinGW.
+//! lays the kept atoms out as a console executable for Windows on x86-64
+//! or arm64, which the loader may map at any address, and starts the
+//! startup code of the C library of MinGW.
 //!
 //! An import is a slot of the import address table, which the loader
 //! fills with the address of the function or the datum in its library.
@@ -37,6 +37,19 @@ const Sect = struct {
     raw_size: u64 = 0,
     flags: u32,
 };
+
+/// The bytes of an entry of the function table: the start, the end, and
+/// the unwind information on x86-64, and the start and the unwind
+/// information, which gives the length, on arm64.
+fn entrySize(arch: lobj.Arch) u32 {
+    return if (arch == .aarch64) 8 else 12;
+}
+
+/// The relocation type that writes an absolute address of 64 bits, which
+/// gets a base relocation.
+fn abs64(arch: lobj.Arch) u32 {
+    return if (arch == .aarch64) 257 else 1;
+}
 
 /// The data directories of the optional header that the writer fills.
 const Dir = enum(u8) { import = 1, exception = 3, basereloc = 5, tls = 9, iat = 12 };
@@ -88,7 +101,7 @@ const Pe = struct {
     fn classify(p: *Pe) Error!void {
         const l = p.l;
         const o = l.o;
-        if (o.arch != .x86_64) return error.UnsupportedTarget;
+        if (o.arch != .x86_64 and o.arch != .aarch64) return error.UnsupportedTarget;
         p.place_of = try p.gpa.alloc(Place, o.atoms.len);
         for (o.atoms, 0..) |a, i| {
             if (!l.live[i]) continue;
@@ -130,7 +143,9 @@ const Pe = struct {
         var names: u64 = 0;
         for (p.imports.keys()) |im| names += std.mem.alignForward(u64, 2 + o.string(o.imports[im].name).len + 1, 2);
         for (p.libs.keys()) |lib| names += o.string(o.libs[lib]).len + 1;
-        const lookup = descriptors;
+        // The tables of slots start on a multiple of 8, which a load of a
+        // slot on arm64 scales its offset by.
+        const lookup = std.mem.alignForward(u64, descriptors, 8);
         const iat = lookup + slots;
         return .{ .lookup = lookup, .iat = iat, .names = iat + slots, .total = iat + slots + names };
     }
@@ -158,17 +173,18 @@ const Pe = struct {
         // functions are kept.
         const rdata = pos;
         p.placeAtoms(&pos, .rdata);
+        const es = entrySize(o.arch);
         for (o.atoms) |a| {
             if (a.kind != .unwind) continue;
             var off: u32 = 0;
-            while (off + 12 <= a.size) : (off += 12) {
+            while (off + es <= a.size) : (off += es) {
                 if (l.unwindKept(a, off)) p.pdata_count += 1;
             }
         }
         if (p.pdata_count > 0) {
             pos = std.mem.alignForward(u64, pos, 4);
             p.pdata_addr = pos;
-            pos += 12 * p.pdata_count;
+            pos += es * p.pdata_count;
         }
         if (pos > rdata) {
             try p.sects.append(p.gpa, .{ .name = ".rdata", .addr = rdata, .size = pos - rdata, .flags = 0x4000_0040 });
@@ -237,7 +253,7 @@ const Pe = struct {
         for (o.atoms, 0..) |a, i| {
             if (!l.live[i] or lobj.zeroed(a.kind)) continue;
             for (o.atomRelocs(a)) |r| {
-                if (r.type == 1 and r.target.space != .none and !l.isDropped(i, r.offset)) try p.fixups.append(p.gpa, l.addr[i] + r.offset);
+                if (r.type == abs64(o.arch) and r.target.space != .none and !l.isDropped(i, r.offset)) try p.fixups.append(p.gpa, l.addr[i] + r.offset);
             }
         }
         std.mem.sort(u64, p.fixups.items, {}, std.sort.asc(u64));
@@ -282,30 +298,34 @@ const Pe = struct {
     fn functionTable(p: *Pe, out: []u8) Error!void {
         const l = p.l;
         const o = l.o;
-        const table = out[p.fileOffset(p.pdata_addr)..][0..link.index(12 * p.pdata_count)];
+        const es = entrySize(o.arch);
+        const table = out[p.fileOffset(p.pdata_addr)..][0..link.index(es * p.pdata_count)];
         var k: usize = 0;
         for (o.atoms) |a| {
             if (a.kind != .unwind) continue;
             var off: u32 = 0;
-            while (off + 12 <= a.size) : (off += 12) {
+            while (off + es <= a.size) : (off += es) {
                 if (!l.unwindKept(a, off)) continue;
-                const entry = table[12 * k ..][0..12];
-                @memcpy(entry, o.bytes(a)[off..][0..12]);
+                const entry = table[es * k ..][0..es];
+                @memcpy(entry, o.bytes(a)[off..][0..es]);
                 for (o.atomRelocs(a)) |r| {
-                    if (r.offset < off or r.offset >= off + 12) continue;
-                    try l.apply(r, entry[r.offset - off ..], p.pdata_addr + 12 * k + (r.offset - off));
+                    if (r.offset < off or r.offset >= off + es) continue;
+                    try l.apply(r, entry[r.offset - off ..], p.pdata_addr + es * k + (r.offset - off));
                 }
                 k += 1;
             }
         }
-        const Entry = [3]u32;
+        if (o.arch == .aarch64) sortEntries([2]u32, table) else sortEntries([3]u32, table);
+        p.dirs[@backingInt(Dir.exception)] = .{ try rva(p.pdata_addr), @intCast(es * p.pdata_count) };
+    }
+
+    fn sortEntries(comptime Entry: type, table: []u8) void {
         const entries = std.mem.bytesAsSlice(Entry, table);
         std.mem.sort(Entry, @alignCast(entries), {}, struct {
             fn lt(_: void, a: Entry, b: Entry) bool {
                 return std.mem.littleToNative(u32, a[0]) < std.mem.littleToNative(u32, b[0]);
             }
         }.lt);
-        p.dirs[@backingInt(Dir.exception)] = .{ try rva(p.pdata_addr), @intCast(12 * p.pdata_count) };
     }
 
     /// A block of base relocations for each page of 4 KB that holds an
@@ -371,9 +391,9 @@ const Pe = struct {
         std.mem.writeInt(u32, out[0x3c..][0..4], 64, .little);
         @memcpy(out[64..68], "PE\x00\x00");
         var w: Out = .{ .buf = out, .pos = 68 };
-        // The COFF header: AMD64, an executable that handles addresses
-        // above 2 GB.
-        w.u16s(&.{ 0x8664, @intCast(p.sects.items.len) });
+        // The COFF header: AMD64 or ARM64, an executable that handles
+        // addresses above 2 GB.
+        w.u16s(&.{ if (o.arch == .aarch64) 0xaa64 else 0x8664, @intCast(p.sects.items.len) });
         w.u32s(&.{ 0, 0, 0 });
         w.u16s(&.{ 240, 0x22 });
         // The optional header of PE32+.
@@ -390,8 +410,10 @@ const Pe = struct {
         w.u32s(&.{ @intCast(code), @intCast(init), @intCast(uninit), try rva(l.addr[o.entry.atom] + o.entry.offset), try rva(p.sects.items[0].addr) });
         w.u64s(&.{image_base});
         w.u32s(&.{ section_align, file_align });
-        // Windows 6.0, as the C library requires.
-        w.u16s(&.{ 6, 0, 0, 0, 6, 0 });
+        // Windows 6.0, as the C library requires, or Windows 6.2, the first
+        // that runs on arm64.
+        const minor: u16 = if (o.arch == .aarch64) 2 else 0;
+        w.u16s(&.{ 6, minor, 0, 0, 6, minor });
         w.u32s(&.{ 0, @intCast(image_size), @intCast(p.headers_size), 0 });
         // The console subsystem. HIGH_ENTROPY_VA, DYNAMIC_BASE, NX_COMPAT,
         // and TERMINAL_SERVER_AWARE.
@@ -540,4 +562,92 @@ test "PE imports, base relocations, and the entry" {
     try std.testing.expectEqual(text.va, std.mem.readInt(u32, img[entry_at..][0..4], .little));
     try std.testing.expectEqual(text.va + 1, std.mem.readInt(u32, img[entry_at + 4 ..][0..4], .little));
     try std.testing.expectEqual(rdata.va, std.mem.readInt(u32, img[entry_at + 8 ..][0..4], .little));
+}
+
+test "PE on arm64: the jump of an import, base relocations, and thread-local offsets" {
+    const gpa = std.testing.allocator;
+    var w: lobj.Writer = .{ .gpa = gpa, .arch = .aarch64, .os = .windows };
+    defer w.deinit();
+    // main: bl ExitProcess, then add x0, x0, :secrel_hi12:v and add x0,
+    // x0, :secrel_lo12:v, as code reaches a thread-local variable.
+    const main = try w.atom(.text, 2, &[_]u8{ 0x00, 0x00, 0x00, 0x94, 0x00, 0x00, 0x40, 0x91, 0x00, 0x00, 0x00, 0x91 }, 12, "main");
+    try w.reloc(.{ .offset = 0, .type = 283, .target = .{ .index = 1, .space = .atom }, .addend = 0 });
+    try w.reloc(.{ .offset = 4, .type = lobj.pe_secrel_hi12a, .target = .{ .index = 3, .space = .atom }, .addend = 0x1000 });
+    try w.reloc(.{ .offset = 8, .type = lobj.pe_secrel_lo12a, .target = .{ .index = 3, .space = .atom }, .addend = 0x1008 });
+    const exit = try w.import("ExitProcess", "kernel32.dll", false);
+    // adrp x16, slot; ldr x16, [x16, :lo12:slot]; br x16
+    _ = try w.atom(.text, 2, &[_]u8{ 0x10, 0x00, 0x00, 0x90, 0x10, 0x02, 0x40, 0xf9, 0x00, 0x02, 0x1f, 0xd6 }, 12, "ExitProcess");
+    try w.reloc(.{ .offset = 0, .type = 275, .target = exit, .addend = 0 });
+    try w.reloc(.{ .offset = 4, .type = 286, .target = exit, .addend = 0 });
+    const ptr = try w.atom(.data, 3, &@as([8]u8, @splat(0)), 8, "ptr");
+    try w.reloc(.{ .offset = 0, .type = 257, .target = .{ .index = @intCast(main), .space = .atom }, .addend = 0 });
+    try w.roots.append(gpa, ptr);
+    const tls = try w.atom(.data, 3, &@as([0x2000]u8, @splat(0)), 0x2000, ".tls");
+    try std.testing.expectEqual(@as(u32, 3), tls);
+    // A second library makes the descriptors 60 bytes, which leaves the
+    // tables of slots aligned only by the padding after them.
+    const beep = try w.import("MessageBeep", "user32.dll", false);
+    const ptr2 = try w.atom(.data, 3, &@as([8]u8, @splat(0)), 8, "ptr2");
+    try w.reloc(.{ .offset = 0, .type = 257, .target = beep, .addend = 0 });
+    try w.roots.append(gpa, ptr2);
+    try w.roots.append(gpa, tls);
+    // An entry of the function table for main, with packed unwind data.
+    _ = try w.atom(.unwind, 2, &[_]u8{ 0, 0, 0, 0, 0x01, 0, 0, 0 }, 8, "function table");
+    try w.reloc(.{ .offset = 0, .type = lobj.pe_addr32nb, .target = .{ .index = @intCast(main), .space = .atom }, .addend = 0 });
+    w.entry = .{ .name = try w.string("main"), .atom = main, .offset = 0 };
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    defer buf.deinit();
+    try w.write(&buf.writer);
+    const bytes = try gpa.alignedAlloc(u8, .@"8", buf.written().len);
+    defer gpa.free(bytes);
+    @memcpy(bytes, buf.written());
+    const o = try lobj.read(bytes);
+    const r = try link.link(gpa, &o, .all, .{});
+    defer gpa.free(r.bytes);
+    const img = r.bytes;
+    const pe_at = std.mem.readInt(u32, img[0x3c..][0..4], .little);
+    try std.testing.expectEqual(@as(u16, 0xaa64), std.mem.readInt(u16, img[pe_at + 4 ..][0..2], .little));
+    const opt = pe_at + 24;
+    const nsects = std.mem.readInt(u16, img[pe_at + 6 ..][0..2], .little);
+    const Hdr = struct { va: u32, raw: u32 };
+    var by_name: std.StringHashMapUnmanaged(Hdr) = .empty;
+    defer by_name.deinit(gpa);
+    for (0..nsects) |k| {
+        const h = img[opt + 240 + 40 * k ..][0..40];
+        try by_name.put(gpa, std.mem.sliceTo(h[0..8], 0), .{ .va = std.mem.readInt(u32, h[12..16], .little), .raw = std.mem.readInt(u32, h[20..24], .little) });
+    }
+    const text = by_name.get(".text").?;
+    const data = by_name.get(".data").?;
+    const idata = by_name.get(".idata").?;
+    const dirs = opt + 112;
+    const desc = img[idata.raw..][0..20];
+    const iat_rva = std.mem.readInt(u32, desc[16..20], .little);
+    // bl reaches the jump right after main.
+    const insn = struct {
+        fn at(b: []const u8, off: usize) u32 {
+            return std.mem.readInt(u32, b[off..][0..4], .little);
+        }
+    }.at;
+    try std.testing.expectEqual(@as(u32, 0x94000003), insn(img, text.raw));
+    // The thread-local offset 0x1008 splits into 1 << 12 and 8.
+    try std.testing.expectEqual(@as(u32, 0x91400400), insn(img, text.raw + 4));
+    try std.testing.expectEqual(@as(u32, 0x91002000), insn(img, text.raw + 8));
+    try std.testing.expectEqual(@as(u32, 0), iat_rva % 8);
+    // The jump finds the slot of ExitProcess from its page and offset.
+    const adrp = insn(img, text.raw + 12);
+    const pages: i64 = @as(i21, @bitCast(@as(u21, @intCast(((adrp >> 29) & 3) | ((adrp >> 3) & 0x1ffffc)))));
+    const ldr = insn(img, text.raw + 16);
+    const page: i64 = @intCast((image_base + text.va + 12) & ~@as(u64, 0xfff));
+    try std.testing.expectEqual(@as(i64, @intCast(image_base + iat_rva)), page + pages * 4096 + ((ldr >> 10) & 0xfff) * 8);
+    // The pointer holds the address of main, with a base relocation.
+    try std.testing.expectEqual(image_base + text.va, std.mem.readInt(u64, img[data.raw..][0..8], .little));
+    const reloc = by_name.get(".reloc").?;
+    try std.testing.expectEqual(data.va, std.mem.readInt(u32, img[reloc.raw..][0..4], .little));
+    // One entry of eight bytes, whose packed unwind data stays as it was.
+    try std.testing.expectEqual(@as(u32, 8), std.mem.readInt(u32, img[dirs + 28 ..][0..4], .little));
+    const exc_rva = std.mem.readInt(u32, img[dirs + 24 ..][0..4], .little);
+    const rdata = by_name.get(".rdata").?;
+    const entry_at = rdata.raw + (exc_rva - rdata.va);
+    try std.testing.expectEqual(text.va, std.mem.readInt(u32, img[entry_at..][0..4], .little));
+    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, img[entry_at + 4 ..][0..4], .little));
 }

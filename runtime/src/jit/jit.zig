@@ -25,10 +25,8 @@ const Error = state.Error;
 /// backend and a way to map executable memory, or on WebAssembly a host
 /// that instantiates modules.
 pub const enabled = build_options.jit and switch (builtin.cpu.arch) {
-    // Windows on arm64 compiles with everything it needs, and its gate
-    // opens once CI has a runner for it (spec/design/platforms.md).
     .aarch64 => switch (builtin.os.tag) {
-        .macos, .ios, .linux, .freebsd => true,
+        .macos, .ios, .linux, .freebsd, .windows => true,
         else => false,
     },
     .x86_64 => switch (builtin.os.tag) {

@@ -1,6 +1,6 @@
 # Platforms
 
-Lus 2.0 compiles hot functions to machine code on aarch64 and x86-64 under macOS and Linux, and to WebAssembly modules in the WebAssembly build (`jit.md`, `opt.md`, `wasmjit.md`). Every other target runs the interpreter, which is the same code with the JIT compiled out. Windows on x86-64 and on arm64 ships in every release and runs interpreted. Lus adds both JIT tiers for every instruction set that the major JITs support: riscv64, loong64, ppc64le, 32-bit ARM, and s390x under Linux, Windows on x86-64 and arm64, and FreeBSD and Android on the instruction sets Lus already has. Each target has a gate that runs the whole conformance suite in every JIT mode on that target, natively or under emulation, before it merges.
+Lus 2.0 compiles hot functions to machine code on every target that the table below marks with a baseline tier, and to WebAssembly modules in the WebAssembly build (`jit.md`, `opt.md`, `wasmjit.md`). Every other target runs the interpreter, which is the same code with the JIT compiled out. Lus adds both JIT tiers for every instruction set that the major JITs support: riscv64, loong64, ppc64le, 32-bit ARM, and s390x under Linux, Windows on x86-64 and arm64, and FreeBSD and Android on the instruction sets Lus already has. Each target has a gate that runs the whole conformance suite in every JIT mode on that target, natively or under emulation, before it merges.
 
 ## What other JITs support
 
@@ -31,8 +31,8 @@ Four facts from the table shape our order.
 | loong64 Linux | yes | yes | yes | yes | yes, static musl |
 | ppc64le Linux | yes | yes | yes | yes | yes, static musl |
 | x86-64 Linux | yes | yes | yes | yes | yes, static musl |
-| x86-64 Windows | yes |  |  |  | yes |
-| arm64 Windows | yes |  |  |  | yes |
+| x86-64 Windows | yes | yes | yes | yes | yes |
+| arm64 Windows | yes | yes | yes | yes | yes |
 | 32-bit ARM Linux | yes | yes | yes | yes | yes, static musl |
 | s390x Linux | yes | yes | yes | yes | yes, static musl |
 | FreeBSD (aarch64, x86-64) | yes | yes | yes | yes | yes, against the C library of FreeBSD |
@@ -42,14 +42,14 @@ The column "ahead of time" marks the targets whose assembler records relocations
 
 The native tiers depend on the target in six places.
 
-- **The gate.** `jit.enabled` in `jit/jit.zig` turns the JIT on for aarch64 and x86-64 under macOS and Linux.
+- **The gate.** `jit.enabled` in `jit/jit.zig` turns the JIT on for each target that the table marks with a baseline tier.
 - **Executable memory.** `jit/mem.zig` maps chunks readable, writable, and executable with `mmap`. On Apple silicon the chunks carry `MAP_JIT` and the thread switches them to write mode while it copies code in. On aarch64 Linux the code is made visible to instruction fetch with the cache maintenance sequence in `syncCode`.
 - **The calling convention.** Native code calls about forty runtime routines, each declared `callconv(.c)`. The runtime enters native code through the entry sequence, whose type is also `callconv(.c)`. `jit/x64.zig` emits System V calls. The optimizing tier allocates `rsi`, `rdi`, `xmm6`, and `xmm7` as registers that a called routine may clobber, which holds under System V.
 - **The native stack.** `stackBounds` in `jit/jit.zig` asks the system for the stack of the thread on macOS and Linux, so that a chain of direct calls stops 128 KB above its low end (`opt.md`, "The stacks"). Elsewhere a chain gets 160 KB below its entry.
 - **The word size.** A value is 16 bytes on every target, a 64-bit payload and a tag word. The WebAssembly build already runs it on a 32-bit target. The native tiers keep a payload in one machine register. The shared assembler interface has 64-bit loads, stores, and arithmetic as its primitives.
 - **The byte order.** `Value.make` writes the tag as the low byte of the second 64-bit word, which is the `tag` field only on a little-endian target. The word of frame flags packs its bits the same way. A compile-time assertion in `vm/state.zig` stops a big-endian build there. Every target Lus builds today is little-endian.
 
-Native code carries unwind information on Windows on x86-64 ("Unwind information" below) and on no other system. Lus itself never unwinds through it, because errors are return values and the runtime uses no `setjmp` or `longjmp`. On the other systems debuggers, profilers, and crash reporters stop at the first frame of native code.
+Native code carries unwind information on Windows, on x86-64 and on arm64 ("Unwind information" below), and on no other system. Lus itself never unwinds through it, because errors are return values and the runtime uses no `setjmp` or `longjmp`. On the other systems debuggers, profilers, and crash reporters stop at the first frame of native code.
 
 ## Order
 
@@ -308,9 +308,21 @@ Locally, `zig build -Dtarget=x86_64-windows` and `zig build test -Dtarget=x86_64
 
 ## Windows on arm64
 
-The arm64 convention of Windows is the standard AAPCS64 with `x18` reserved for the thread environment block. `a64.zig` and the register pools of both tiers already leave `x18` alone, because macOS reserves it too, so the emitter needs no change. A test asserts that no pool, scratch, or pinned register is `x18`. Two pieces of work remain after Windows on x86-64. The unwind information takes its arm64 form, which packs its codes differently and describes `stp` pairs. `FlushInstructionCache` replaces `syncCode`.
+The arm64 convention of Windows is the standard AAPCS64 with `x18` reserved for the thread environment block. `a64.zig` and the register pools of both tiers leave `x18` alone, because macOS reserves it too, so the emitter is the same as on the other systems. A test asserts that no pool, scratch, or pinned register is `x18`. Executable memory takes the Windows path of x86-64, whose `FlushInstructionCache` also makes new code visible to instruction fetch on arm64.
 
-CI adds a `windows-11-arm` runner to the runtime matrix with the same steps as `windows-2022`. GitHub provides that runner free of charge for public repositories. A private repository needs a paid arm64 runner. Until one exists, the target is cross-built only and its JIT stays off.
+### Unwind information on arm64
+
+The entry sequence saves `x29` and `x30`, then `x19` to `x22`, and sets `x29` to the stack pointer last. Native code never writes `x29`, so code at any depth below the frame unwinds from it, as code on x86-64 unwinds from `r12`. The record of `jit/winunwind.zig` lists `set_fp`, the two `save_regp` pairs, and `save_fplr_x`, in the reverse order of the entry sequence, after an `end_c` code. `end_c` makes the range a fragment whose prologue is empty, so the codes apply from its first instruction. The record lists no epilogues.
+
+An arm64 record counts the length of its code in instructions with 18 bits, so one record covers at most 4 bytes less than 1 MB. A chunk of 1 MB fits in one entry after its header. A larger chunk takes one entry for each part of that size. Every entry names the first record except the last, which names a second record of its own length. The unit test of `jit/mem.zig` that walks the stack runs on both architectures.
+
+### Linking on arm64
+
+The PE writer writes arm64 executables as well. The converter maps the relocations of COFF on arm64 onto the ELF types of aarch64. COFF keeps each addend in the field that the relocation writes, which is a word or the immediate of an instruction. An `adrp` keeps a byte offset in its immediate. A load or a store counts units of its size there. Code reaches a thread-local variable through the thread environment block in `x18` and `_tls_index`, then adds the offset of the variable in `.tls` with two `add` instructions, whose relocations `SECREL_HIGH12A` and `SECREL_LOW12A` write its two halves of 12 bits. The jump of each imported function is `adrp x16`, `ldr x16`, and `br x16` through its slot.
+
+An entry of the function table is 8 bytes, the start of the function and its unwind information. The base relocations name the addresses of 64 bits that `R_AARCH64_ABS64` writes. The headers name the machine ARM64 and Windows 6.2, the first version that runs on arm64.
+
+The `windows-11-arm` runner of `ci.yml`, which GitHub provides free of charge for public repositories, runs the unit tests, the conformance suite in every JIT mode, and the linker of `lus build --aot`.
 
 ## FreeBSD and Android
 

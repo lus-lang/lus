@@ -523,10 +523,10 @@ pub const Linker = struct {
                 274 => try adr(loc, sa - pi), // ADR_PREL_LO21
                 277 => imm12(loc, @intCast(sa & 0xfff)), // ADD_ABS_LO12_NC
                 278 => imm12(loc, @intCast(sa & 0xfff)), // LDST8_ABS_LO12_NC
-                284 => imm12(loc, @intCast((sa & 0xfff) >> 1)), // LDST16_ABS_LO12_NC
-                285 => imm12(loc, @intCast((sa & 0xfff) >> 2)), // LDST32_ABS_LO12_NC
-                286 => imm12(loc, @intCast((sa & 0xfff) >> 3)), // LDST64_ABS_LO12_NC
-                299 => imm12(loc, @intCast((sa & 0xfff) >> 4)), // LDST128_ABS_LO12_NC
+                284 => try scaled(loc, sa, 1), // LDST16_ABS_LO12_NC
+                285 => try scaled(loc, sa, 2), // LDST32_ABS_LO12_NC
+                286 => try scaled(loc, sa, 3), // LDST64_ABS_LO12_NC
+                299 => try scaled(loc, sa, 4), // LDST128_ABS_LO12_NC
                 282, 283 => try branch(loc, sa - pi, 26, 0), // JUMP26, CALL26
                 280, 273 => try branch(loc, sa - pi, 19, 5), // CONDBR19, LD_PREL_LO19
                 279 => try branch(loc, sa - pi, 14, 5), // TSTBR14
@@ -534,6 +534,15 @@ pub const Linker = struct {
                 312 => imm12(loc, @intCast(((l.gotSlot(r, false) +% @as(u64, @bitCast(a))) & 0xfff) >> 3)), // LD64_GOT_LO12_NC
                 541 => try adrp(loc, @as(i64, @intCast(l.gotSlot(r, true))) + a, pi), // TLSIE_ADR_GOTTPREL_PAGE21
                 542 => imm12(loc, @intCast(((l.gotSlot(r, true) +% @as(u64, @bitCast(a))) & 0xfff) >> 3)), // TLSIE_LD64_GOTTPREL_LO12_NC
+                lobj.pe_addr32nb => put(u32, loc, std.math.cast(u32, sa - @as(i64, @intCast(l.base))) orelse return error.RelocationOverflow),
+                lobj.pe_secrel => try putI32(loc, sa - @as(i64, @intCast(l.tls.addr))),
+                lobj.pe_secrel_lo12a => imm12(loc, @intCast((sa - @as(i64, @intCast(l.tls.addr))) & 0xfff)),
+                lobj.pe_secrel_hi12a => {
+                    const v = sa - @as(i64, @intCast(l.tls.addr));
+                    if (v < 0 or v >= 1 << 24) return error.RelocationOverflow;
+                    imm12(loc, @intCast(v >> 12));
+                },
+                lobj.pe_secrel_lo12l => try scaled(loc, sa - @as(i64, @intCast(l.tls.addr)), ldstScale(insn(loc))),
                 549 => imm12(loc, @intCast(((l.tpOffset(s) + a) >> 12) & 0xfff)), // TLSLE_ADD_TPREL_HI12
                 550, 551 => imm12(loc, @intCast((l.tpOffset(s) + a) & 0xfff)), // TLSLE_ADD_TPREL_LO12(_NC)
                 else => return unsupported(l, r),
@@ -1034,6 +1043,21 @@ fn adrImm(loc: []u8, v: i64) Error!void {
     const imm: u32 = @truncate(@as(u64, @bitCast(v)));
     const i = insn(loc) & ~@as(u32, (0x3 << 29) | (0x7ffff << 5));
     put(u32, loc, i | ((imm & 3) << 29) | (((imm >> 2) & 0x7ffff) << 5));
+}
+
+/// The log2 of the size that the load or the store `w` scales its
+/// immediate of 12 bits by, 16 bytes for a vector register of 128 bits.
+fn ldstScale(w: u32) u5 {
+    if (w & 0x0480_0000 == 0x0480_0000) return 4;
+    return @intCast(w >> 30);
+}
+
+/// Writes the low 12 bits of `v` into a load or a store that scales its
+/// immediate by `1 << scale`, which they must be a multiple of.
+fn scaled(loc: []u8, v: i64, scale: u5) Error!void {
+    const lo: u32 = @intCast(v & 0xfff);
+    if (lo & ((@as(u32, 1) << scale) - 1) != 0) return error.RelocationOverflow;
+    imm12(loc, lo >> scale);
 }
 
 fn imm12(loc: []u8, v: u32) void {

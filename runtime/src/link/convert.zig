@@ -977,7 +977,11 @@ pub const Converter = struct {
     /// Maps a relocation of COFF onto the numbering of ELF, or onto the
     /// numbers of `link.zig` for those that only PE has, and reads its
     /// addend from the bytes. Returns null for one that does nothing.
-    fn coffRel(arch: lobj.Arch, ty: u16, bytes: ?[]const u8, off: u32) !?struct { type: u32, addend: i64 } {
+    /// A relocation that COFF names, in the numbering of `link.zig`.
+    const CoffRel = struct { type: u32, addend: i64 };
+
+    fn coffRel(arch: lobj.Arch, ty: u16, bytes: ?[]const u8, off: u32) !?CoffRel {
+        if (arch == .aarch64) return coffRelArm64(ty, bytes, off);
         if (arch != .x86_64) {
             std.log.err("COFF objects of {s} are not supported", .{@tagName(arch)});
             return error.Unsupported;
@@ -998,6 +1002,68 @@ pub const Converter = struct {
                 return error.Unsupported;
             },
         };
+    }
+
+    /// Maps a relocation of COFF on arm64 onto the numbering of ELF, or
+    /// onto the numbers of `link.zig` for those that only PE has. The
+    /// addend is in the field that the relocation writes: a word, or the
+    /// immediate of the instruction, which for an `adrp` is a byte offset
+    /// and for a load or a store counts units of its size.
+    fn coffRelArm64(ty: u16, bytes: ?[]const u8, off: u32) !?CoffRel {
+        if (ty == 0) return null;
+        const b = bytes orelse return error.Unsupported;
+        const i32_at: i64 = std.mem.readInt(i32, b[off..][0..4], .little);
+        const w: u32 = std.mem.readInt(u32, b[off..][0..4], .little);
+        const imm12: i64 = (w >> 10) & 0xfff;
+        return switch (ty) {
+            1 => .{ .type = 258, .addend = i32_at }, // ADDR32
+            2 => .{ .type = lobj.pe_addr32nb, .addend = i32_at }, // ADDR32NB
+            3 => .{ .type = 283, .addend = signExtend(w & 0x3ff_ffff, 26) * 4 }, // BRANCH26
+            4 => .{ .type = 275, .addend = adrAddend(w) }, // PAGEBASE_REL21
+            5 => .{ .type = 274, .addend = adrAddend(w) }, // REL21
+            6 => .{ .type = 277, .addend = imm12 }, // PAGEOFFSET_12A
+            7 => .{
+                .type = @as(u32, switch (ldstScale(w)) { // PAGEOFFSET_12L
+                    0 => 278,
+                    1 => 284,
+                    2 => 285,
+                    3 => 286,
+                    else => 299,
+                }),
+                .addend = imm12 << ldstScale(w),
+            },
+            8 => .{ .type = lobj.pe_secrel, .addend = i32_at }, // SECREL
+            9 => .{ .type = lobj.pe_secrel_lo12a, .addend = imm12 }, // SECREL_LOW12A
+            0xa => .{ .type = lobj.pe_secrel_hi12a, .addend = imm12 << 12 }, // SECREL_HIGH12A
+            0xb => .{ .type = lobj.pe_secrel_lo12l, .addend = imm12 << ldstScale(w) }, // SECREL_LOW12L
+            0xe => .{ .type = 257, .addend = std.mem.readInt(i64, b[off..][0..8], .little) }, // ADDR64
+            0xf => .{ .type = 280, .addend = signExtend((w >> 5) & 0x7ffff, 19) * 4 }, // BRANCH19
+            0x10 => .{ .type = 279, .addend = signExtend((w >> 5) & 0x3fff, 14) * 4 }, // BRANCH14
+            // REL32 is relative to the end of the field.
+            0x11 => .{ .type = 261, .addend = i32_at - 4 },
+            else => {
+                std.log.err("COFF relocation type {d} of arm64 is not supported", .{ty});
+                return error.Unsupported;
+            },
+        };
+    }
+
+    fn signExtend(v: u32, comptime bits: u7) i64 {
+        const shift: u6 = 64 - bits;
+        return @as(i64, @bitCast(@as(u64, v) << shift)) >> shift;
+    }
+
+    /// The byte offset in the immediate of an `adr` or `adrp`.
+    fn adrAddend(w: u32) i64 {
+        return signExtend(((w >> 29) & 3) | ((w >> 3) & 0x1f_fffc), 21);
+    }
+
+    /// The log2 of the size that a load or a store with an unsigned
+    /// immediate of 12 bits scales its immediate by. A 128-bit access of
+    /// a vector register scales by 16.
+    fn ldstScale(w: u32) u6 {
+        if (w & 0x0480_0000 == 0x0480_0000) return 4;
+        return @intCast(w >> 30);
     }
 
     /// Reads a short member of an import library, which defines the slot
@@ -1026,7 +1092,7 @@ pub const Converter = struct {
         const code = info & 3 == 0;
         const syms = try c.arena.alloc(Sym, if (code) 2 else 1);
         syms[0] = .{ .name = try std.fmt.allocPrint(c.arena, "__imp_{s}", .{sym}), .value = 0, .size = 8, .shndx = import_sec, .bind = .global };
-        if (code) syms[1] = .{ .name = sym, .value = 0, .size = 6, .shndx = thunk_sec, .bind = .global };
+        if (code) syms[1] = .{ .name = sym, .value = 0, .size = if (c.arch == .aarch64) 12 else 6, .shndx = thunk_sec, .bind = .global };
         return .{ .name = name, .data = data, .secs = &.{}, .syms = syms, .rels = &.{}, .imp = .{ .name = export_name, .dll = dll, .code = code } };
     }
 
@@ -1061,8 +1127,12 @@ pub const Converter = struct {
                 return error.Unsupported;
             }
             imp.target = try c.w.import(imp.name, imp.dll, false);
-            // jmp qword ptr [rip + slot]
-            if (imp.code) imp.thunk = try c.w.atom(.text, 1, &.{ 0xff, 0x25, 0, 0, 0, 0 }, 6, in.syms[1].name);
+            if (imp.code) imp.thunk = if (c.arch == .aarch64)
+                // adrp x16, slot; ldr x16, [x16, :lo12:slot]; br x16
+                try c.w.atom(.text, 2, &.{ 0x10, 0x00, 0x00, 0x90, 0x10, 0x02, 0x40, 0xf9, 0x00, 0x02, 0x1f, 0xd6 }, 12, in.syms[1].name)
+            else
+                // jmp qword ptr [rip + slot]
+                try c.w.atom(.text, 1, &.{ 0xff, 0x25, 0, 0, 0, 0 }, 6, in.syms[1].name);
         }
         // Members of a group seen before stay out.
         var skip = try c.arena.alloc(bool, in.secs.len);
@@ -1269,7 +1339,10 @@ pub const Converter = struct {
             }
             // The jump of an import reads its slot.
             if (in.imp) |imp| if (imp.thunk) |t| {
-                try lists[t].append(c.arena, .{ .offset = 2, .type = 2, .target = imp.target, .addend = -4 });
+                if (c.arch == .aarch64) {
+                    try lists[t].append(c.arena, .{ .offset = 0, .type = 275, .target = imp.target, .addend = 0 });
+                    try lists[t].append(c.arena, .{ .offset = 4, .type = 286, .target = imp.target, .addend = 0 });
+                } else try lists[t].append(c.arena, .{ .offset = 2, .type = 2, .target = imp.target, .addend = -4 });
             };
         }
         // The loader of Windows finds the directory of thread-local data

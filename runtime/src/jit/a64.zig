@@ -933,9 +933,12 @@ pub const Assembler = struct {
     /// saves the pinned registers and loads them.
     pub fn prologue(a: *Assembler) void {
         a.word(0xA9BC7BFD); // stp x29, x30, [sp, #-64]!
-        a.word(0x910003FD); // mov x29, sp
         a.word(0xA90153F3); // stp x19, x20, [sp, #16]
         a.word(0xA9025BF5); // stp x21, x22, [sp, #32]
+        // The frame pointer is set last, so the unwind codes of Windows
+        // (`winunwind.zig`) restore the stack pointer from it before they
+        // reload the pairs below it.
+        a.word(0x910003FD); // mov x29, sp
         a.mov(thread, .x0);
         a.mov(stop, .x1);
         a.mov(base, .x3);

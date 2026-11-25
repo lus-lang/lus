@@ -214,21 +214,18 @@ jobs:
 
   windows-arm64:
     name: Windows on arm64
-    # The free arm64 runner of GitHub for public repositories. The JIT of
-    # Windows on arm64 stays off until this job gates it
-    # (spec/design/platforms.md, "Windows on arm64").
+    # The free arm64 runner of GitHub for public repositories. It gates
+    # the JIT of Windows on arm64 and the PE linker for arm64
+    # (spec/design/platforms.md, "Windows on arm64"), with the steps of
+    # the windows-2022 runtime job that reach either.
     runs-on: windows-11-arm
-    timeout-minutes: 90
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: ${{ env.ZIG_VERSION }}
-      - name: The runner
-        run: |
-          echo "$env:PROCESSOR_ARCHITECTURE"
-          zig env
       - name: Unit, embedding, and tool tests
         timeout-minutes: 30
         working-directory: runtime
@@ -237,10 +234,50 @@ jobs:
         timeout-minutes: 15
         working-directory: runtime
         run: zig build -Doptimize=ReleaseSafe
+      - name: Native code runs
+        timeout-minutes: 5
+        # A silent fall back to the interpreter would pass every other
+        # step.
+        working-directory: runtime
+        env:
+          LUS_JIT: eager
+        run: zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
       - name: Conformance tests
         timeout-minutes: 30
         working-directory: runtime
         run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in native code
+        timeout-minutes: 30
+        working-directory: runtime
+        env:
+          LUS_JIT: eager
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests interpreted
+        timeout-minutes: 30
+        working-directory: runtime
+        env:
+          LUS_JIT: "off"
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: Conformance tests in optimized code
+        timeout-minutes: 30
+        working-directory: runtime
+        env:
+          LUS_JIT: opt-eager
+        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+      - name: The linker of lus build --aot on Windows on arm64
+        timeout-minutes: 45
+        working-directory: runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          zig build link-object -Doptimize=ReleaseSafe -p "$env:RUNNER_TEMP\lo"
+          & "$env:RUNNER_TEMP\lo\bin\lus-link.exe" "$env:RUNNER_TEMP\lo\lib\lus.lo" "$env:RUNNER_TEMP\lus-linked.exe"
+          & "$env:RUNNER_TEMP\lus-linked.exe" test ../tests/conformance ../packages/language-server/tests
+          Set-Location ../tests/build
+          & ../../runtime/zig-out/bin/lus.exe build --aot --link-object "$env:RUNNER_TEMP\lo\lib\lus-runtime.lo" linked.lus -o "$env:RUNNER_TEMP\linked.exe"
+          $out = (& "$env:RUNNER_TEMP\linked.exe") -join "`n"
+          if ($out -ne "1:1 2:4 3:9 4:16 5:25`t6765`nLINKED`t7`tnil") { Write-Error "linked.exe printed: $out" }
 
   runtime:
     name: Runtime (${{ matrix.os }})
