@@ -150,7 +150,26 @@ fn writeEntry(w: *std.Io.Writer, e: Entry) !void {
     try writeSignature(w, e);
     try w.writeAll("\n");
     try writeTags(w, e, "", "\n");
-    if (e.body.len > 0) try w.print("\n{s}\n", .{e.body});
+    if (e.body.len > 0) {
+        try w.writeAll("\n");
+        try writeBody(w, e.body);
+    }
+}
+
+/// Writes the Markdown of a description for a terminal. A fenced code
+/// block prints as its lines indented by four spaces, without the fence
+/// lines.
+pub fn writeBody(w: *std.Io.Writer, body: []const u8) !void {
+    var code = false;
+    var lines = std.mem.splitScalar(u8, body, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, std.mem.trimStart(u8, line, " "), "```")) {
+            code = !code;
+            continue;
+        }
+        if (code and line.len > 0) try w.writeAll("    ");
+        try w.print("{s}\n", .{line});
+    }
 }
 
 pub fn writeSignature(w: *std.Io.Writer, e: Entry) !void {
@@ -348,6 +367,44 @@ test "every embedded entry parses" {
         const e = try parse(arena.allocator(), f.data);
         try std.testing.expect(e.name.len > 0);
     }
+}
+
+test "every entry prints its code blocks without fences" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var out: std.Io.Writer.Allocating = .init(a);
+    for (try loadAll(a)) |e| {
+        out.clearRetainingCapacity();
+        try writeEntry(&out.writer, e);
+        const text = out.written();
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |line| {
+            if (std.mem.indexOf(u8, line, "```") != null) {
+                std.debug.print("lus help {s} prints a fence: {s}\n", .{ e.name, line });
+                return error.TestUnexpectedResult;
+            }
+        }
+        // Every line of code in the source prints once, indented.
+        var src = std.mem.splitScalar(u8, e.body, '\n');
+        var code = false;
+        while (src.next()) |line| {
+            if (std.mem.startsWith(u8, std.mem.trimStart(u8, line, " "), "```")) {
+                code = !code;
+                continue;
+            }
+            if (!code or line.len == 0) continue;
+            const shown = try std.fmt.allocPrint(a, "\n    {s}\n", .{line});
+            try std.testing.expect(std.mem.indexOf(u8, text, shown) != null);
+        }
+    }
+}
+
+test writeBody {
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try writeBody(&buf.writer, "Compares two tokens.\n\n```lus\nprint(1)\n\nprint(2)\n```\n\nThe end.");
+    try std.testing.expectEqualStrings("Compares two tokens.\n\n    print(1)\n\n    print(2)\n\nThe end.\n", buf.written());
 }
 
 test help {
