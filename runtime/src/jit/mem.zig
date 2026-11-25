@@ -402,8 +402,14 @@ test "installed code runs" {
 const native_cc: std.builtin.CallingConvention = if (builtin.cpu.arch == .x86_64) .{ .x86_64_sysv = .{} } else .c;
 
 /// What the walk of `unwindHelper` found: whether it passed through the
-/// block of native code, and the start of the function it reached next.
-var unwind_walk: struct { in_block: bool = false, reached: usize = 0 } = .{};
+/// block of native code, the start of the function it reached next, and
+/// the program counter, stack pointer, and function start of each frame.
+var unwind_walk: struct {
+    in_block: bool = false,
+    reached: usize = 0,
+    frames: [4][3]usize = @splat(.{ 0, 0, 0 }),
+    depth: usize = 0,
+} = .{};
 var unwind_block: [2]usize = .{ 0, 0 };
 
 /// Called by native code: unwinds its own frame, then the frame of the
@@ -413,10 +419,13 @@ fn unwindHelper() callconv(native_cc) void {
     var ctx: w.CONTEXT = undefined;
     w.ntdll.RtlCaptureContext(&ctx);
     var history = std.mem.zeroes(w.UNWIND_HISTORY_TABLE);
-    for (0..4) |_| {
+    for (&unwind_walk.frames) |*f| {
         var image: usize = 0;
         const pc = ctx.getRegs().ip;
+        f.* = .{ pc, ctx.getRegs().sp, 0 };
+        unwind_walk.depth += 1;
         const fe = w.ntdll.RtlLookupFunctionEntry(pc, &image, &history) orelse return;
+        f[2] = image + fe.BeginAddress;
         if (pc >= unwind_block[0] and pc < unwind_block[1]) {
             unwind_walk.in_block = true;
         } else if (unwind_walk.in_block) {
@@ -429,9 +438,10 @@ fn unwindHelper() callconv(native_cc) void {
     }
 }
 
-/// Enters the block as the runtime enters native code.
+/// Enters the block as the runtime enters native code. The call keeps
+/// the frame of this function on the stack, so the walk reaches it.
 noinline fn unwindEnter(f: *const fn () callconv(native_cc) void) void {
-    f();
+    @call(.never_tail, f, .{});
 }
 
 test "the stack unwinds through native code on Windows" {
@@ -456,6 +466,12 @@ test "the stack unwinds through native code on Windows" {
     unwind_block = .{ @intFromPtr(block.ptr), @intFromPtr(block.ptr) + code.len };
     unwind_walk = .{};
     unwindEnter(@ptrFromInt(@intFromPtr(block.ptr)));
+    const want = @intFromPtr(&unwindEnter);
+    if (!unwind_walk.in_block or unwind_walk.reached != want) {
+        std.debug.print("block {x}..{x}, unwindEnter {x}\n", .{ unwind_block[0], unwind_block[1], want });
+        for (unwind_walk.frames[0..unwind_walk.depth]) |f|
+            std.debug.print("pc {x} sp {x} function {x}\n", .{ f[0], f[1], f[2] });
+    }
     try std.testing.expect(unwind_walk.in_block);
-    try std.testing.expectEqual(@intFromPtr(&unwindEnter), unwind_walk.reached);
+    try std.testing.expectEqual(want, unwind_walk.reached);
 }
