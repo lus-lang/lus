@@ -446,6 +446,9 @@ test "the stack unwinds through native code on Windows" {
     as.prologue();
     as.call(@intFromPtr(&unwindHelper));
     as.epilogue();
+    // The arm64 call loads its target from the constant pool, which
+    // `finish` writes after the code and points the load at.
+    try std.testing.expect(as.finish());
     const code = as.buf.items;
     const block = a.alloc(gpa, code.len) orelse return error.SkipZigTest;
     defer a.release(gpa, block);
