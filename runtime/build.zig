@@ -434,6 +434,11 @@ fn androidLibc(b: *std.Build, target: std.Build.ResolvedTarget) void {
             // the ELF header and the ELF linker of Zig leaves undefined.
             c.use_lld = true;
             c.use_llvm = true;
+            // The start code of a static bionic program applies no
+            // relocations of its own, so a position-independent static
+            // program calls the unrelocated, zero entries of its
+            // `init_array`. A static program links at a fixed address.
+            c.pie = false;
         } else {
             // Android loads only executables that are independent of
             // their position.
