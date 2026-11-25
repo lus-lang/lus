@@ -16,7 +16,7 @@ const state = @import("../vm/state.zig");
 const table = @import("../vm/table.zig");
 const ops = @import("../vm/ops.zig");
 const gc = @import("../vm/gc.zig");
-const ext = @import("../vm/ext.zig");
+const enums = @import("../vm/enums.zig");
 const aux = @import("auxlib.zig");
 const vector = @import("vector.zig");
 const tc = @import("timecore.zig");
@@ -1064,7 +1064,7 @@ fn zonedIndex(l: *Thread) Error!u32 {
         7 => blk: {
             const first = try aux.getField(l, l.g.registry.as(Table), weekday_key);
             const root = first.as(object.EnumValue).root;
-            const member = try ext.enumMember(l, root, @intCast(tc.isoWeekday(sd.days) - 1));
+            const member = try enums.enumMember(l, root, @intCast(tc.isoWeekday(sd.days) - 1));
             break :blk aux.ret(l, Value.obj(.enum_value, member));
         },
         8 => aux.retInt(l, sd.days - tc.daysFromCivil(c.year, 1, 1) + 1),
@@ -1209,7 +1209,7 @@ fn makeEnum(l: *Thread, names: []const []const u8) Error!Value {
     };
     root.names = strs;
     root.values = vals;
-    return Value.obj(.enum_value, try ext.enumMember(l, root, 0));
+    return Value.obj(.enum_value, try enums.enumMember(l, root, 0));
 }
 
 pub fn open(l: *Thread) Error!void {

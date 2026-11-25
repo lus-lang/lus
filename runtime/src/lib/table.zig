@@ -1,6 +1,6 @@
-//! The table library: sequence manipulation from Lua 5.4 (insert, remove,
-//! move, concat, pack, unpack, sort) plus the Lus additions (clone,
-//! create, compact, and the data processing functions).
+//! The table library: sequence manipulation (insert, remove, move,
+//! concat, pack, unpack, sort), copies and constructors (clone, create,
+//! compact), and the data processing functions.
 //!
 //! Values that must survive an allocation or a call into Lus code are kept
 //! in stack slots, never only in Zig locals, so the collector always sees

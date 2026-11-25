@@ -1,8 +1,8 @@
 # Lus language grammar and semantics
 
-This document is the reference for the Lus 2.0 surface language. It covers the lexical grammar, the full syntactic grammar in EBNF, operator precedence, and the static and dynamic semantics of every construct Lus adds on top of Lua 5.5. It is written for implementers and tool authors, and `runtime/src/syntax/parser.zig` follows it.
+This document is the reference for the Lus 2.0 surface language. It covers the lexical grammar, the full syntactic grammar in EBNF, operator precedence, and the static and dynamic semantics of every construct. It is written for implementers and tool authors, and `runtime/src/syntax/parser.zig` follows it.
 
-The base language is Lua 5.5 (the fork point is Lua 5.5 RC 2). Where Lus behaves exactly like Lua 5.5, this document states the rule briefly and moves on. Where Lus adds or changes behavior, the rule is spelled out in full.
+Lus began as a fork of Lua 5.5 RC 2, so its core rules of scoping, functions, and control flow are those of Lua 5.5. Section 4 states those rules briefly, and every other rule is spelled out in full. [Lus for Lua programmers](/manual/lua) lists the differences for a reader who knows Lua.
 
 Two kinds of annotation appear throughout.
 
@@ -14,8 +14,8 @@ Two kinds of annotation appear throughout.
 1. Lexical grammar
 2. Syntactic grammar
 3. Operator precedence
-4. Base language semantics
-5. Lus extensions
+4. Scopes, functions, and control flow
+5. Expressions, statements, and declarations
 6. Compile-time error catalog
 7. Edge cases at a glance
 8. Source map
@@ -68,7 +68,7 @@ goto      if        in        local     nil       not       or
 provide   repeat    return    then      true      until     while
 ```
 
-Compared to Lua 5.5, Lus adds `catch`, `continue`, `enum`, `from`, and `provide`. The word `global` is always reserved. None of the reserved words can be used as a variable name, a label, a field name after `.` or `:`, or an enum member.
+The reserved words include `catch`, `continue`, `enum`, `from`, and `provide`, which Lua 5.5 does not reserve, and `global` is always reserved. None of the reserved words can be used as a variable name, a label, a field name after `.` or `:`, or an enum member.
 
 **Tested** (`compile_errors_test.lus`): `local from = 1`, `local provide = 1`, `local enum = 1`, `local global = 1`, and `local catch = 1` all fail with `<name> expected near 'KEYWORD'`. `local continue = 1` fails the same way.
 
@@ -98,7 +98,7 @@ Single-character tokens are every other printable non-alphanumeric byte that is 
 +  -  *  /  %  ^  #  &  ~  |  <  >  =  (  )  {  }  [  ]  ;  :  ,  .  ?  @
 ```
 
-The Lus-specific tokens are `?` (optional chaining) and `@` (query). Each is an ordinary single-character token, and `?` and the suffix after it are separate tokens. Whitespace and comments may therefore appear between them. For example `t ? .a` is valid and means `t?.a`.
+Two single-character tokens have no counterpart in Lua 5.5: `?` (optional chaining) and `@` (query). Each is an ordinary single-character token, and `?` and the suffix after it are separate tokens. Whitespace and comments may therefore appear between them. For example `t ? .a` is valid and means `t?.a`.
 
 The backtick `` ` `` starts an interpolated string (section 1.8). The `$` byte has meaning only inside an interpolated string. Elsewhere it lexes as a single-character token that no grammar rule accepts, so it produces `unexpected symbol near '$'`.
 
@@ -517,9 +517,9 @@ The Lus constructs fit into this table as follows.
 
 ---
 
-## 4. Base language semantics
+## 4. Scopes, functions, and control flow
 
-This section summarizes the Lua 5.5 rules that the Lus parser implements, with the Lus-specific details that touch them. It is not a full restatement of the Lua 5.5 manual.
+This section summarizes the rules of scopes, functions, and control flow, which match Lua 5.5, together with the details of Lus that touch them. It is not a full restatement of the Lua 5.5 manual.
 
 ### 4.1 Scoping and variables
 
@@ -596,7 +596,7 @@ Four expression kinds produce a variable number of values: function calls, `...`
 
 ---
 
-## 5. Lus extensions
+## 5. Expressions, statements, and declarations
 
 ### 5.1 Catch
 
@@ -1332,7 +1332,7 @@ A chunk that fails to compile produces a single string message. `load` returns `
 - **Chunk names**: a name beginning with `=` or `@` is shown without that prefix. Any other name is shown as `[string "..."]`, cut at the first line break or after 45 bytes and then followed by `...`.
 - Recursion in the parser is bounded at 200 nested levels of statements and expressions. Exceeding it raises `chunk has too many syntax levels (stack overflow)`. Blocks nest 200 deep, table constructors 199, and parentheses 198. A function literal takes two levels, so functions nest at most 99 deep.
 
-### 6.2 Messages specific to Lus
+### 6.2 Messages of the constructs of section 5
 
 | Message | Kind | Raised by |
 | --- | --- | --- |
@@ -1387,7 +1387,7 @@ A chunk that fails to compile produces a single string message. `load` returns `
 
 `unexpected symbol`, `syntax error`, `'X' expected`, `'X' expected (to close 'Y' at line N)`, `<name> expected`, `<name> or '...' expected`, `<eof> expected`, `function arguments expected`, `'=', 'in' or 'from' expected`, `break outside loop`, `cannot use '...' outside a vararg function`, `attempt to assign to const variable 'X'`, `variable 'X' not declared`, `_ENV is global when accessing variable 'X'`, `global variables cannot be to-be-closed`, `multiple to-be-closed variables in local list`, `label 'X' already defined on line N`, `no visible label 'X' for <goto> at line N`, `<goto X> at line N jumps into the scope of 'Y'`, `control structure too long`, `too many constants`, and the limit messages for `local variables`, `upvalues`, and `registers`.
 
-### 6.4 Runtime errors introduced by Lus syntax
+### 6.4 Runtime errors of the constructs of section 5
 
 | Message | Construct |
 | --- | --- |

@@ -1349,14 +1349,14 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         .slice => {
             const r = c.fr.base + opc.b(ins);
             c.fr.pc = pc;
-            const v = try @import("ext.zig").slice(l, l.stack[r], l.stack[r + 1], l.stack[r + 2]);
+            const v = try @import("slice.zig").slice(l, l.stack[r], l.stack[r + 1], l.stack[r + 2]);
             c.refresh(l, mode);
             c.bp[opc.a(ins)] = v;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
         },
         .newenum => {
             c.fr.pc = pc;
-            const v = try @import("ext.zig").newEnum(l, c.k(mode)[opc.bx(ins)]);
+            const v = try @import("enums.zig").newEnum(l, c.k(mode)[opc.bx(ins)]);
             c.refresh(l, mode);
             c.bp[opc.a(ins)] = v;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);
@@ -1364,7 +1364,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
         .query => {
             const a = opc.a(ins);
             c.fr.pc = pc;
-            const v = try @import("ext.zig").newQuery(l, c.k(mode)[opc.bx(ins)], c.fr.base + a + 1);
+            const v = try @import("query.zig").build(l, c.k(mode)[opc.bx(ins)], c.fr.base + a + 1);
             c.refresh(l, mode);
             c.bp[a] = v;
             continue :sw try fetch(l, &c, &pc, &ins, hooked);

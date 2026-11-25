@@ -27,8 +27,8 @@ pub fn openAll(l: *Thread) Error!void {
     if (build_options.archive) try @import("archive.zig").open(l);
     try @import("io.zig").open(l);
     try @import("json.zig").open(l);
-    try @import("../vm/ext.zig").openEnums(l);
-    try @import("../vm/ext.zig").openQueries(l);
+    try @import("../vm/enums.zig").openEnums(l);
+    try @import("../vm/query.zig").open(l);
     try @import("vector.zig").registerString(l);
     try @import("transcode.zig").register(l);
     try @import("fs.zig").open(l);

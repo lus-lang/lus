@@ -1203,7 +1203,7 @@ local function an_error_raised_inside_json_propagates_out_of_tojson_test()
 end
 
 -- ============================================================
--- Lus-specific value types
+-- Vectors, enums, and other value types
 -- ============================================================
 
 -- lus value types.

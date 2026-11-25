@@ -494,8 +494,8 @@ end
 
 -- ===== gctypes =====
 --[[
-    GC coverage for the Lus-specific collectable types, LUA_TVECTOR byte
-    buffers and LUA_TENUM/LUA_TENUMROOT first-class enums.
+    GC coverage for the collectable types that Lua 5.5 does not have:
+    vector byte buffers and first-class enums with their roots.
 
     These tests prove the collector treats vectors and enums like every other
     GC-managed object. Allocate-and-drop loops must not grow the reported heap,

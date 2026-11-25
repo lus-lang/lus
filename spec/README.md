@@ -16,13 +16,13 @@ spec/
 │   ├── debug/
 │   ├── coroutine/
 │   ├── utf8/
-│   ├── fs/           # Lus-specific filesystem library
+│   ├── fs/           # filesystem library
 │   │   └── path/
-│   ├── network/      # Lus-specific networking library
+│   ├── network/      # networking library
 │   │   ├── tcp/
 │   │   └── udp/
-│   ├── worker/       # Lus-specific concurrency library
-│   ├── vector/       # Lus-specific byte buffer library
+│   ├── worker/       # concurrency library
+│   ├── vector/       # byte buffer library
 │   ├── package/
 │   └── json/         # tojson / fromjson globals
 └── capi/             # C embedding API (lus.h)

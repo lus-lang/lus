@@ -52,7 +52,7 @@ end
 
 -- global declarations
 local function global_declarations_test()
-    -- Lus specific global tests
+    -- Global declarations
     local f = assert(load([[
         global g_var = 10
         return g_var

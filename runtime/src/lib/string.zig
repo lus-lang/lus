@@ -540,7 +540,7 @@ fn char(l: *Thread) Error!u32 {
 }
 
 // ---------------------------------------------------------------------
-// Lus additions: trim, split, join
+// trim, split, join
 
 fn isDefaultTrim(cp: u21) bool {
     return cp == ' ' or cp == '\t' or cp == '\n' or cp == '\r';

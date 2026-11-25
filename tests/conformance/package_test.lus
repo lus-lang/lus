@@ -6,7 +6,7 @@
     a namespaced temporary module directory, the structure and order of
     package.searchers, custom searcher end-to-end behavior, require error
     messages, the propagation of load-time errors, circular require, and
-    the Lus-specific pledge gating and return arity of package.loadlib.
+    the pledge gating and return arity of package.loadlib.
 
     The pledge preamble grants load plus read access to the test tree so
     require can resolve framework and fixture modules, and read and write

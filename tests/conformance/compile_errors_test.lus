@@ -1,5 +1,5 @@
 --[[
-    Compile-error rejection suite for Lus-specific syntax.
+    Compile-error rejection suite for catch, enums, interpolation, queries, and the other constructs of grammar section 5.
 
     Every Lus feature suite proves its grammar accepts valid input. This file
     proves the compiler rejects invalid input, and with which diagnostic.

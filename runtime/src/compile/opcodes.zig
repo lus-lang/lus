@@ -107,7 +107,8 @@ pub const Op = enum(u8) {
     close, // close upvalues and tbc variables >= R[A]
     tbc, // mark R[A] as to-be-closed
 
-    // Lus extensions
+    // Slices, enums, queries, global declarations, catch handlers, and the
+    // variable results of catch and do expressions
     slice, // R[A] = R[B][R[B+1], R[B+2]]
     newenum, // R[A] = enum root from constant K[Bx] (a table of names)
     query, // R[A] = query object from plan K[Bx] with sources at R[A+1..]
