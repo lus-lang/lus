@@ -5,7 +5,7 @@
   "scripts": {
     "gen": "node tools/build-lsp.js && node tools/build-grammar.js && node tools/build-skills.js",
     "gen:check": "node tools/build-lsp.js --check && node tools/build-grammar.js --check && node tools/build-skills.js --check && node tools/build-llms.js",
-    "test:tools": "node tools/build-lsp.test.js && node tools/build-grammar.test.js && node tools/build-llms.test.js",
+    "test:tools": "node tools/build-lsp.test.js && node tools/build-grammar.test.js && node tools/build-llms.test.js && node tools/post-x.test.js",
     "llms": "node tools/build-llms.js"
   }
 }
