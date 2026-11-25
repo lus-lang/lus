@@ -13,141 +13,177 @@ local SEVERITY_HINT = 4
 
 -- Standard library / built-in names that are always defined (from lus-spec)
 local STDLIB = {}
+
 for _, name in ipairs(stdlib_data.globals) do
-  STDLIB[name] = true
+    STDLIB[name] = true
 end
+
 for _, name in ipairs(stdlib_data.tables) do
-  STDLIB[name] = true
+    STDLIB[name] = true
 end
 
 -- Names that `lus test` defines in every `*_test.lus` file
 local TEST_GLOBALS = {
-  raises = true, same = true, skip = true, snapshot = true, TEST_DIR = true,
+    raises = true,
+    same = true,
+    skip = true,
+    snapshot = true,
+    TEST_DIR = true,
 }
 
 local function is_test_file(uri)
-  return string.find(uri, "_test%.lus$") ~= nil
+    return string.find(uri, "_test%.lus$") ~= nil
 end
 
 -- Names that start with _ are conventionally unused (e.g., _)
 local function is_intentionally_unused(name)
-  return string.sub(name, 1, 1) == "_"
+    return string.sub(name, 1, 1) == "_"
 end
 
 -- The 0-based LSP character of the 1-based character column `col` on
 -- `line_text`. LSP counts UTF-16 code units, so a character above U+FFFF
 -- takes two.
 local function utf16_character(line_text, col)
-  local units = 0
-  local i = 1
-  for _, cp in utf8.codes(line_text) do
-    if i >= col then break end
-    units = units + (cp > 0xFFFF and 2 or 1)
-    i = i + 1
-  end
-  return units + (col - i)
+    local units = 0
+    local i = 1
+
+    for _, cp in utf8.codes(line_text) do
+        if i >= col then
+            break
+        end
+
+        units = units + (cp > 0xFFFF and 2 or 1)
+        i = i + 1
+    end
+
+    return units + (col - i)
 end
 
 -- The fix of a diagnostic of debug.check as LSP text edits.
 local function lsp_edits(lines, fix)
-  local edits = {}
-  for _, e in ipairs(fix) do
-    edits[#edits + 1] = {
-      range = {
-        start = {line = e.line - 1, character = utf16_character(lines[e.line] or "", e.column)},
-        ["end"] = {line = e.endline - 1, character = utf16_character(lines[e.endline] or "", e.endcolumn)},
-      },
-      newText = e.text,
-    }
-  end
-  return edits
+    local edits = {}
+
+    for _, e in ipairs(fix) do
+        edits[#edits + 1] = {
+            range = {
+                start = {
+                    line = e.line - 1,
+                    character = utf16_character(lines[e.line] or "", e.column),
+                },
+                ["end"] = {
+                    line = e.endline - 1,
+                    character = utf16_character(lines[e.endline] or "", e.endcolumn),
+                },
+            },
+            newText = e.text,
+        }
+    end
+
+    return edits
 end
 
 -- Compute lint diagnostics for a document.
 -- Returns an array of LSP Diagnostic objects (warnings).
 function linting.compute(uri)
-  ast_mod.parse(uri)
-  local analysis = scope_mod.analyze(uri)
-  if not analysis then return {} end
+    ast_mod.parse(uri)
+    local analysis = scope_mod.analyze(uri)
 
-  local diagnostics = {}
-
-  -- Unused variable warnings
-  for _, decl in ipairs(analysis.declarations) do
-    if not is_intentionally_unused(decl.name) then
-      -- Check if the declaration has any references
-      if #decl.references == 0 then
-        -- Skip globals (they might be used in other files)
-        if decl.kind ~= "global" then
-          diagnostics[#diagnostics + 1] = {
-            range = {
-              start = {line = decl.line - 1, character = decl.column - 1},
-              ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
-            },
-            severity = SEVERITY_HINT,
-            source = "lus",
-            message = "Unused " .. decl.kind .. " '" .. decl.name .. "'",
-            tags = {1}, -- Unnecessary (faded)
-          }
-        end
-      end
+    if not analysis then
+        return {}
     end
-  end
 
-  -- Undefined global warnings
-  local test_file = is_test_file(uri)
-  for _, ref in ipairs(analysis.references) do
-    if not ref.declaration and not STDLIB[ref.name]
-        and not (test_file and TEST_GLOBALS[ref.name]) then
-      diagnostics[#diagnostics + 1] = {
-        range = {
-          start = {line = ref.line - 1, character = ref.column - 1},
-          ["end"] = {line = ref.line - 1, character = ref.column - 1 + #ref.name},
-        },
-        severity = SEVERITY_WARNING,
-        source = "lus",
-        message = "Undefined global '" .. ref.name .. "'",
-      }
-    end
-  end
+    local diagnostics = {}
 
-  -- Hints of `lus check`: faster or shorter forms of correct code
-  -- (spec/design/hints.md). The other checks of `lus check` overlap the
-  -- warnings above, so only its hints are added.
-  local doc = document.get(uri)
-  if doc and debug.check then
-    local name = string.match(uri, "([^/]+)$") or uri
-    local ok, list = catch debug.check(doc.text, "@" .. name)
-    if ok then
-      local lines
-      for _, d in ipairs(list) do
-        if d.severity == "hint" then
-          local diag = {
-            range = {
-              start = {line = d.line - 1, character = d.column - 1},
-              ["end"] = {line = d.endline - 1, character = d.endcolumn - 1},
-            },
-            severity = SEVERITY_HINT,
-            source = "lus",
-            code = d.code,
-            message = d.message,
-          }
-          -- The client sends `data` back with a code action request, which
-          -- offers the fix as a quick fix.
-          if d.fix then
-            if not lines then
-              lines = {}
-              for l in string.gmatch(doc.text .. "\n", "([^\n]*)\n") do lines[#lines + 1] = l end
+    -- Unused variable warnings
+    for _, decl in ipairs(analysis.declarations) do
+        if not is_intentionally_unused(decl.name) then
+            -- Check if the declaration has any references
+            if #decl.references == 0 then
+                -- Skip globals (they might be used in other files)
+                if decl.kind ~= "global" then
+                    diagnostics[#diagnostics + 1] = {
+                        range = {
+                            start = { line = decl.line - 1, character = decl.column - 1 },
+                            ["end"] = {
+                                line = decl.line - 1,
+                                character = decl.column - 1 + #decl.name,
+                            },
+                        },
+                        severity = SEVERITY_HINT,
+                        source = "lus",
+                        message = `Unused $(decl.kind) '$(decl.name)'`,
+                        tags = { 1 },  -- Unnecessary (faded)
+                    }
+                end
             end
-            diag.data = {fix = lsp_edits(lines, d.fix)}
-          end
-          diagnostics[#diagnostics + 1] = diag
         end
-      end
     end
-  end
 
-  return diagnostics
+    -- Undefined global warnings
+    local test_file = is_test_file(uri)
+
+    for _, ref in ipairs(analysis.references) do
+        if not ref.declaration
+            and not STDLIB[ref.name]
+            and not (test_file and TEST_GLOBALS[ref.name]) then
+            diagnostics[#diagnostics + 1] = {
+                range = {
+                    start = { line = ref.line - 1, character = ref.column - 1 },
+                    ["end"] = { line = ref.line - 1, character = ref.column - 1 + #ref.name },
+                },
+                severity = SEVERITY_WARNING,
+                source = "lus",
+                message = `Undefined global '$(ref.name)'`,
+            }
+        end
+    end
+
+    -- Hints of `lus check`: faster or shorter forms of correct code
+    -- (spec/design/hints.md). The other checks of `lus check` overlap the
+    -- warnings above, so only its hints are added.
+    local doc = document.get(uri)
+
+    if doc and debug.check then
+        local name = string.match(uri, "([^/]+)$") or uri
+        local ok, list = catch debug.check(doc.text, "@" .. name)
+
+        if ok then
+            local lines
+
+            for _, d in ipairs(list) do
+                if d.severity == "hint" then
+                    local diag = {
+                        range = {
+                            start = { line = d.line - 1, character = d.column - 1 },
+                            ["end"] = { line = d.endline - 1, character = d.endcolumn - 1 },
+                        },
+                        severity = SEVERITY_HINT,
+                        source = "lus",
+                        code = d.code,
+                        message = d.message,
+                    }
+
+                    -- The client sends `data` back with a code action request, which
+                    -- offers the fix as a quick fix.
+                    if d.fix then
+                        if not lines then
+                            lines = {}
+
+                            for l in string.gmatch(doc.text .. "\n", "([^\n]*)\n") do
+                                lines[#lines + 1] = l
+                            end
+                        end
+
+                        diag.data = { fix = lsp_edits(lines, d.fix) }
+                    end
+
+                    diagnostics[#diagnostics + 1] = diag
+                end
+            end
+        end
+    end
+
+    return diagnostics
 end
 
 return linting

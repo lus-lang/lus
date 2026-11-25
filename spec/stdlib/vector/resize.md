@@ -28,7 +28,7 @@ vector.set(v, 0, 255)
 vector.resize(v, 8)
 print(#v, vector.get(v, 0), vector.get(v, 7))  --> 8  255  0
 vector.resize(v, 1)
-print(#v, vector.get(v, 1))                    --> 1  nil
+print(#v, vector.get(v, 1))  --> 1  nil
 ```
 
 Every reference to the vector sees the new size, since the vector changes in place. [`vector.create`](/manual/api#vector.create) makes a new vector of a given size.

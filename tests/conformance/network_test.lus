@@ -20,22 +20,26 @@ pledge("load", "network", "fs:read=" .. FIXTURES .. "/*")
   locally.
 ]]
 
-
 -- Network reads return vectors in 2.0 (spec/design/strings.md), so the tests
 -- decode them before comparing against text.
 local function txt(v)
-    if type(v) == "vector" then return vector.tostring(v) end
+    if type(v) == "vector" then
+        return vector.tostring(v)
+    end
+
     return v
 end
 
 -- Binding a socket is not permitted in every environment, so a refused bind
 -- skips the test instead of failing it.
 local function skip_if_denied(ok, err)
-    if not ok and (string.find(tostring(err), "ermission denied", 1, true)
-        or string.find(tostring(err), "not permitted", 1, true)
-        or string.find(tostring(err), "EPERM", 1, true)
+    if not ok
+        and (string.find(tostring(err), "ermission denied", 1, true)
+            or string.find(tostring(err), "not permitted", 1, true)
+            or string.find(tostring(err), "EPERM", 1, true)
+            or string.find(tostring(err), "UDP socket: Unexpected", 1, true)) then
         -- A sandbox that forbids UDP sockets surfaces as an unmapped error.
-        or string.find(tostring(err), "UDP socket: Unexpected", 1, true)) then
+
         skip("loopback sockets unavailable")
     end
 end
@@ -43,14 +47,22 @@ end
 local function tcp_bind(...)
     local ok, server = catch network.tcp.bind(...)
     skip_if_denied(ok, server)
-    if not ok then error(server, 0) end
+
+    if not ok then
+        error(server, 0)
+    end
+
     return server
 end
 
 local function udp_open(...)
     local ok, sock = catch network.udp.open(...)
     skip_if_denied(ok, sock)
-    if not ok then error(sock, 0) end
+
+    if not ok then
+        error(sock, 0)
+    end
+
     return sock
 end
 
@@ -75,7 +87,11 @@ local wait_seconds = 10
 -- network.fetch with a timeout of `wait_seconds` unless `options` sets one.
 local function fetch(url, method, headers, body, options)
     options = options or {}
-    if options.timeout == nil then options.timeout = wait_seconds end
+
+    if options.timeout == nil then
+        options.timeout = wait_seconds
+    end
+
     return network.fetch(url, method or "GET", headers, body, options)
 end
 
@@ -84,17 +100,23 @@ end
 local function accept_from(server, w)
     server:settimeout(0.05)
     local started = os.time()
+
     while true do
         local ok, conn = catch server:accept()
+
         if ok and conn then
             conn:settimeout(wait_seconds)
             return conn
         end
+
         if worker.status(w) == "dead" then
             worker.receive(w)
             error("the worker ended before it connected", 0)
         end
-        if os.time() - started > wait_seconds then error("the worker did not connect", 0) end
+
+        if os.time() - started > wait_seconds then
+            error("the worker did not connect", 0)
+        end
     end
 end
 
@@ -128,11 +150,17 @@ local function fetch_once(method, head, headers)
     worker.send(w, { port = port, method = method, headers = headers })
     local conn = accept_from(server, w)
     local request = {}
+
     while true do
         local line = txt(conn:receive("*l"))
-        if line == nil or line == "" then break end
+
+        if line == nil or line == "" then
+            break
+        end
+
         request[#request + 1] = line
     end
+
     conn:send(head)
     conn:close()
     server:close()
@@ -144,13 +172,20 @@ end
 -- A header that the caller names replaces the default one, and a response
 -- header that repeats keeps every value.
 local function fetch_merges_caller_and_repeated_headers_test()
-    local r = fetch_once("GET", "HTTP/1.1 200 OK\r\nX-Tag: one\r\nX-Tag: two\r\nContent-Length: 0\r\n\r\n",
-        { ["User-Agent"] = "probe/2" })
+    local r = fetch_once(
+        "GET",
+        "HTTP/1.1 200 OK\r\nX-Tag: one\r\nX-Tag: two\r\nContent-Length: 0\r\n\r\n",
+        { ["User-Agent"] = "probe/2" }
+    )
     assert(r.ok, r.err)
     local agents = {}
+
     for _, line in ipairs(r.request) do
-        if line:lower():find("^user%-agent:") then agents[#agents + 1] = line end
+        if line:lower():find("^user%-agent:") then
+            agents[#agents + 1] = line
+        end
     end
+
     assert(#agents == 1 and agents[1] == "User-Agent: probe/2", table.concat(agents, " | "))
     assert(r.headers["x-tag"] == "one, two", r.headers["x-tag"])
 end
@@ -160,22 +195,30 @@ local function fetch_sends_the_version_in_its_user_agent_test()
     local r = fetch_once("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
     assert(r.ok, r.err)
     local agent
+
     for _, line in ipairs(r.request) do
         agent = agent or line:match("^User%-Agent: (.*)$")
     end
+
     assert(agent and agent:match("^Lus/%d+%.%d+%.%d+"), agent)
 end
 
 -- A list as the value of a request header sends one line for each value.
 local function fetch_sends_a_list_header_as_several_lines_test()
-    local r = fetch_once("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
-        { ["X-Multi"] = { "one", "two", 3 } })
+    local r = fetch_once("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", {
+        ["X-Multi"] = { "one", "two", 3 },
+    })
     assert(r.ok, r.err)
     local values = {}
+
     for _, line in ipairs(r.request) do
         local v = line:match("^X%-Multi: (.*)$")
-        if v then values[#values + 1] = v end
+
+        if v then
+            values[#values + 1] = v
+        end
     end
+
     assert(table.concat(values, ",") == "one,two,3", table.concat(values, ","))
 end
 
@@ -190,7 +233,7 @@ end
 local fetch_bodiless_statuses_read_no_body_cases = { { 204 }, { 304 } }
 
 local function fetch_bodiless_statuses_read_no_body_test(status)
-    local r = fetch_once("GET", `HTTP/1.1 $(status) X\r\nContent-Length: 5\r\n\r\n`)
+    local r = fetch_once("GET", `HTTP/1.1 $status X\r\nContent-Length: 5\r\n\r\n`)
     assert(r.ok, r.err)
     assert(r.status == status and r.size == 0)
 end
@@ -200,10 +243,14 @@ end
 local function fetch_reaches_a_serve_of_the_same_state_test()
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
+
     local server = coroutine.detach(coroutine.create(function()
-        network.serve(listener, function(req) return 200, "hi " .. req.path end)
+        network.serve(listener, function(req)
+            return 200, "hi " .. req.path
+        end)
     end))
-    local status, body = fetch(`http://127.0.0.1:$(port)/x`)
+
+    local status, body = fetch(`http://127.0.0.1:$port/x`)
     coroutine.close(server)
     listener:close()
     assert(status == 200 and txt(body) == "hi /x", txt(body))
@@ -215,25 +262,36 @@ local function with_server(handler, body)
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
     local server = coroutine.detach(coroutine.create(network.serve), listener, handler)
-    local ok, err = catch body(`http://127.0.0.1:$(port)`)
+    local ok, err = catch body(`http://127.0.0.1:$port`)
     coroutine.close(server)
     listener:close()
-    if not ok then error(err, 0) end
+
+    if not ok then
+        error(err, 0)
+    end
 end
 
 local function fetch_streams_a_response_body_test()
     with_server(function(req)
         local i = 0
+
         return 200, function()
             i = i + 1
-            if i <= 3 then return `data: $(i)\n\n` end
+
+            if i <= 3 then
+                return `data: $i\n\n`
+            end
         end, { ["Content-Type"] = "text/event-stream" }
     end, function(base)
         local status, body, headers = fetch(base .. "/events", "GET", nil, nil, { stream = true })
         assert(status == 200 and headers["content-type"] == "text/event-stream")
         assert(type(body) == "thread")
         local lines = {}
-        for line in network.lines(body) do lines[#lines + 1] = txt(line) end
+
+        for line in network.lines(body) do
+            lines[#lines + 1] = txt(line)
+        end
+
         assert(table.concat(lines, "|") == "data: 1||data: 2||data: 3|", table.concat(lines, "|"))
         assert(coroutine.status(body) == "dead")
     end)
@@ -245,13 +303,19 @@ local function fetch_yields_a_streamed_body_in_parts_test()
     end, function(base)
         local _, body = fetch(base .. "/", "GET", nil, nil, { stream = true })
         local total = 0
+
         while true do
             local ok, part = coroutine.resume(body)
             assert(ok, part)
-            if part == nil then break end
+
+            if part == nil then
+                break
+            end
+
             assert(type(part) == "vector" and #part <= 65536)
             total = total + #part
         end
+
         assert(total == 160000)
     end)
 end
@@ -276,10 +340,12 @@ local function fetch_sends_a_body_from_a_function_test()
     end, function(base)
         local parts = { "ab", "", vector.fromstring("cd") }
         local i = 0
+
         local status, body = fetch(base .. "/up", "POST", nil, function()
             i = i + 1
             return parts[i]
         end)
+
         assert(status == 200 and txt(body) == "chunked abcd", txt(body))
     end)
 end
@@ -293,6 +359,7 @@ local function fetch_sends_a_body_from_a_coroutine_test()
             coroutine.yield(vector.fromstring("cd"))
             return "ef"
         end))
+
         assert(status == 200 and txt(body) == "chunked abcdef", txt(body))
     end)
 end
@@ -300,6 +367,7 @@ end
 local function fetch_names_the_step_that_timed_out_test()
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
+
     local server = coroutine.detach(coroutine.create(function()
         local c = listener:accept()
         c:receive("*l")
@@ -308,22 +376,41 @@ local function fetch_names_the_step_that_timed_out_test()
         c:receive("*a")
         c:close()
     end))
-    local ok, err = catch network.fetch(`http://127.0.0.1:$(port)/`, "GET", nil, nil, { timeout = 0.1 })
-    assert(not ok and string.find(tostring(err), "fetch timeout while waiting for the response headers", 1, true), tostring(err))
+
+    local ok, err = catch network.fetch(`http://127.0.0.1:$port/`, "GET", nil, nil, {
+        timeout = 0.1,
+    })
+    assert(
+        not ok
+            and string.find(
+                tostring(err),
+                "fetch timeout while waiting for the response headers",
+                1,
+                true
+            ),
+        tostring(err)
+    )
     coroutine.close(server)
     listener:close()
 end
 
 local function fetch_sends_a_function_body_with_a_length_as_is_test()
     with_server(function(req)
-        return 200, `$(req.headers["content-length"]) $(tostring(req.headers["transfer-encoding"])) $(txt(req.body))`
+        return 200, `$(req.headers["content-length"]) $(tostring(req.headers["transfer-encoding"])) $(txt(
+            req.body
+        ))`
     end, function(base)
         local sent = false
+
         local status, body = fetch(base .. "/up", "PUT", { ["Content-Length"] = 3 }, function()
-            if sent then return nil end
+            if sent then
+                return nil
+            end
+
             sent = true
             return "xyz"
         end)
+
         assert(txt(body) == "3 nil xyz", txt(body))
     end)
 end
@@ -336,13 +423,15 @@ end
 local function fetch_reads_a_body_that_ends_with_the_connection_test()
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
+
     local server = coroutine.detach(coroutine.create(function()
         local c = listener:accept()
         c:receive("*l")
         c:send("HTTP/1.1 200 OK\r\n\r\nall of it")
         c:close()
     end))
-    local status, body = fetch(`http://127.0.0.1:$(port)/`)
+
+    local status, body = fetch(`http://127.0.0.1:$port/`)
     coroutine.close(server)
     listener:close()
     assert(status == 200 and txt(body) == "all of it")
@@ -354,14 +443,29 @@ end
 local function fetch_and_serve_in_two_detached_coroutines_test()
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
+
     local server = coroutine.detach(coroutine.create(network.serve), listener, function(req)
         return 200, "served " .. req.path
     end)
+
     local result, failure
+
     local client = coroutine.create(function()
-        local ok, status, body = catch network.fetch(`http://127.0.0.1:$(port)/pair`, "GET", nil, nil, { timeout = 5 })
-        if ok then result = `$(status) $(txt(body))` else failure = status end
+        local ok, status, body = catch network.fetch(
+            `http://127.0.0.1:$port/pair`,
+            "GET",
+            nil,
+            nil,
+            { timeout = 5 }
+        )
+
+        if ok then
+            result = `$status $(txt(body))`
+        else
+            failure = status
+        end
     end)
+
     coroutine.detach(client)
     local started = os.clock()
     coroutine.resume(client)
@@ -378,21 +482,29 @@ local function a_slow_fetch_leaves_other_coroutines_running_test()
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
     local release = false
+
     local server = coroutine.detach(coroutine.create(network.serve), listener, function(req)
         if req.path == "/slow" then
-            while not release do coroutine.yield() end
+            while not release do
+                coroutine.yield()
+            end
         end
+
         return 200, req.path
     end)
+
     local slow, fast
+
     local slow_co = coroutine.detach(coroutine.create(function()
-        local _, body = fetch(`http://127.0.0.1:$(port)/slow`)
+        local _, body = fetch(`http://127.0.0.1:$port/slow`)
         slow = txt(body)
     end))
+
     local fast_co = coroutine.detach(coroutine.create(function()
-        local _, body = fetch(`http://127.0.0.1:$(port)/fast`)
+        local _, body = fetch(`http://127.0.0.1:$port/fast`)
         fast = txt(body)
     end))
+
     -- The fast fetch ends while the slow one still waits.
     coroutine.resume(fast_co)
     assert(fast == "/fast" and slow == nil, tostring(slow))
@@ -410,13 +522,16 @@ local function fetch_in_a_detached_coroutine_suspends_test()
         return 200, "from " .. req.path
     end, function(base)
         local result
+
         local client = coroutine.detach(coroutine.create(function()
             local _, body = fetch(base .. "/inner")
             result = txt(body)
         end))
+
         while coroutine.status(client) ~= "dead" do
             coroutine.resume(coroutine.detach(coroutine.create(coroutine.yield)))
         end
+
         assert(result == "from /inner", tostring(result))
     end)
 end
@@ -427,12 +542,18 @@ local function a_socket_reader_yields_what_arrived_test()
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
     local step = 0
+
     local server = coroutine.detach(coroutine.create(function()
         local c <close> = listener:accept()
         c:send("first")
-        while step < 1 do coroutine.yield() end
+
+        while step < 1 do
+            coroutine.yield()
+        end
+
         c:send("second part")
     end))
+
     local sock <close> = network.tcp.connect("127.0.0.1", port)
     sock:settimeout(5)
     local reader = sock:reader(6)
@@ -441,13 +562,19 @@ local function a_socket_reader_yields_what_arrived_test()
     assert(ok and txt(part) == "first", tostring(part))
     step = 1
     local rest = {}
+
     while true do
         local more, piece = coroutine.resume(reader)
         assert(more, piece)
-        if piece == nil then break end
+
+        if piece == nil then
+            break
+        end
+
         assert(#piece <= 6)
         rest[#rest + 1] = txt(piece)
     end
+
     assert(table.concat(rest) == "second part")
     assert(coroutine.status(reader) == "dead")
     coroutine.close(server)
@@ -457,14 +584,20 @@ end
 local function network_lines_reads_a_socket_test()
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
+
     local server = coroutine.detach(coroutine.create(function()
         local c <close> = listener:accept()
         c:send("one\r\ntw")
         c:send("o\nthree")
     end))
+
     local sock <close> = network.tcp.connect("127.0.0.1", port)
     local lines = {}
-    for line in network.lines(sock:reader()) do lines[#lines + 1] = txt(line) end
+
+    for line in network.lines(sock:reader()) do
+        lines[#lines + 1] = txt(line)
+    end
+
     coroutine.close(server)
     listener:close()
     assert(table.concat(lines, ",") == "one,two,three")
@@ -474,17 +607,20 @@ end
 local function a_socket_reader_is_a_body_test()
     local source = tcp_bind("127.0.0.1", 0)
     local _, sport = source:getsockname()
+
     local feeder = coroutine.detach(coroutine.create(function()
         for _ = 1, 2 do
             local c <close> = source:accept()
             c:send("relayed bytes")
         end
     end))
+
     with_server(function(req)
         if req.path == "/relay" then
             local upstream = network.tcp.connect("127.0.0.1", sport)
             return 200, upstream:reader()
         end
+
         return 200, `got $(txt(req.body))`
     end, function(base)
         local _, body = network.fetch(base .. "/relay")
@@ -493,6 +629,7 @@ local function a_socket_reader_is_a_body_test()
         local _, echoed = network.fetch(base .. "/up", "POST", nil, up:reader())
         assert(txt(echoed) == "got relayed bytes", txt(echoed))
     end)
+
     coroutine.close(feeder)
     source:close()
 end
@@ -512,6 +649,7 @@ local function network_lines_works_as_a_plain_function_test()
         coroutine.yield("one\ntw")
         coroutine.yield("o\n")
     end)
+
     local nextline = network.lines(co)
     assert(txt(nextline()) == "one" and txt(nextline()) == "two" and nextline() == nil)
 end
@@ -523,13 +661,18 @@ local function settimeout_nil_clears_the_timeout_test()
     -- 0 polls: a receive with nothing to read fails at once.
     sock:settimeout(0)
     local got, err = sock:receive(1)
-    assert(got == nil and err.code == "timeout" and tostring(err) == "receive timeout", tostring(err))
+    assert(
+        got == nil and err.code == "timeout" and tostring(err) == "receive timeout",
+        tostring(err)
+    )
     -- nil waits without limit again.
     sock:settimeout(nil)
+
     local server = coroutine.detach(coroutine.create(function()
         local c <close> = listener:accept()
         c:send("z")
     end))
+
     assert(txt(sock:receive(1)) == "z")
     coroutine.close(server)
     listener:close()
@@ -539,10 +682,12 @@ local function receive_reads_more_than_a_mebibyte_test()
     local listener = tcp_bind("127.0.0.1", 0)
     local _, port = listener:getsockname()
     local size = 3 * 1024 * 1024 + 7
+
     local server = coroutine.detach(coroutine.create(function()
         local c <close> = listener:accept()
         c:send(vector.create(size))
     end))
+
     local sock <close> = network.tcp.connect("127.0.0.1", port)
     local got = sock:receive(size)
     coroutine.close(server)
@@ -573,21 +718,38 @@ local function tcp_connect_times_out_test()
     local _, port = listener:getsockname()
     local held = {}
     local timed_out
+
     for _ = 1, 256 do
         local sock, err = network.tcp.connect("127.0.0.1", port, { timeout = 0.05 })
+
         if sock == nil then
             timed_out = err
             break
         end
+
         held[#held + 1] = sock
     end
-    for _, sock in ipairs(held) do sock:close() end
+
+    for _, sock in ipairs(held) do
+        sock:close()
+    end
+
     listener:close()
-    if timed_out == nil then skip("the system accepted every connection") end
+
+    if timed_out == nil then
+        skip("the system accepted every connection")
+    end
+
     -- Some systems refuse a connection to a full queue at once, and others
     -- leave it waiting, which the timeout ends.
-    if timed_out.code ~= "timeout" then skip("the system refuses connections to a full queue") end
-    assert(string.find(tostring(timed_out), `timeout while connecting to 127.0.0.1:$(port)`, 1, true), tostring(timed_out))
+    if timed_out.code ~= "timeout" then
+        skip("the system refuses connections to a full queue")
+    end
+
+    assert(
+        string.find(tostring(timed_out), `timeout while connecting to 127.0.0.1:$port`, 1, true),
+        tostring(timed_out)
+    )
 end
 
 -- A server on 127.0.0.1 alone and a short timeout: the name localhost
@@ -619,6 +781,7 @@ local function tcp_connect_rejects_bad_options_test()
         { { timeout = "soon" }, "timeout must be a number of seconds" },
         { "fast", "table expected" },
     }
+
     for _, case in ipairs(cases) do
         local ok, err = catch network.tcp.connect("127.0.0.1", 1, case[1])
         assert(not ok and string.find(tostring(err), case[2], 1, true), tostring(err))
@@ -723,10 +886,13 @@ local function tcp_line_receive_closes_the_socket_when_its_limit_is_exceeded_tes
     client:close()
     local got, err = conn:receive("*l", 4)
     assert(got == nil and err.code == "limit")
-    assert(string.find(tostring(err),
-        "receive limit exceeded", 1, true) ~= nil)
+    assert(string.find(tostring(err), "receive limit exceeded", 1, true) ~= nil)
     assert(string.find(tostring(conn), "closed"))
-    raises(function() conn:receive("*l", 4) end, "closed")
+
+    raises(function()
+        conn:receive("*l", 4)
+    end, "closed")
+
     conn:close()
     server:close()
 end
@@ -765,8 +931,7 @@ local function tcp_all_data_receive_enforces_an_explicit_limit_test()
     client:close()
     local got, err = conn:receive("*a", 4)
     assert(got == nil)
-    assert(string.find(tostring(err),
-        "receive limit exceeded", 1, true) ~= nil)
+    assert(string.find(tostring(err), "receive limit exceeded", 1, true) ~= nil)
     assert(string.find(tostring(conn), "closed"))
     server:close()
 end
@@ -774,9 +939,19 @@ end
 -- TCP pattern receive requires a positive integer limit
 local function tcp_pattern_receive_requires_a_positive_integer_limit_test()
     local server, client, conn = make_pair()
-    raises(function() conn:receive("*l", 0) end, "positive")
-    raises(function() conn:receive("*a", -1) end, "positive")
-    raises(function() conn:receive("*l", 0.5) end, "integer")
+
+    raises(function()
+        conn:receive("*l", 0)
+    end, "positive")
+
+    raises(function()
+        conn:receive("*a", -1)
+    end, "positive")
+
+    raises(function()
+        conn:receive("*l", 0.5)
+    end, "integer")
+
     client:send("ping")
     assert(txt(conn:receive(4, -1)) == "ping")
     conn:close()
@@ -808,9 +983,11 @@ end
 local function tcp_send_on_a_closed_connection_errors_about_the_closed_socket_test()
     local server, client, conn = make_pair()
     client:close()
+
     raises(function()
         client:send("nope")
     end, "closed")
+
     conn:close()
     server:close()
 end
@@ -819,9 +996,11 @@ end
 local function tcp_receive_on_a_closed_connection_errors_about_the_closed_socket_test()
     local server, client, conn = make_pair()
     conn:close()
+
     raises(function()
         conn:receive(1)
     end, "closed")
+
     client:close()
     server:close()
 end
@@ -843,6 +1022,7 @@ end
 local function tcp_accept_after_close_errors_about_the_closed_server_test()
     local server = tcp_bind("127.0.0.1", 0)
     server:close()
+
     raises(function()
         server:accept()
     end, "closed")
@@ -852,6 +1032,7 @@ end
 local function tcp_settimeout_after_close_errors_about_the_closed_server_test()
     local server = tcp_bind("127.0.0.1", 0)
     server:close()
+
     raises(function()
         server:settimeout(1)
     end, "closed")
@@ -899,7 +1080,10 @@ end
 
 -- TCP connect rejects an out-of-range port
 local tcp_connect_rejects_an_out_of_range_port_cases = {
-    {70000}, {65536}, {0}, {-1},
+    { 70000 },
+    { 65536 },
+    { 0 },
+    { -1 },
 }
 
 local function tcp_connect_rejects_an_out_of_range_port_test(port)
@@ -935,7 +1119,9 @@ end
 
 -- TCP bind rejects an out-of-range port
 local tcp_bind_rejects_an_out_of_range_port_cases = {
-    {70000}, {65536}, {-1},
+    { 70000 },
+    { 65536 },
+    { -1 },
 }
 
 local function tcp_bind_rejects_an_out_of_range_port_test(port)
@@ -1031,7 +1217,9 @@ end
 
 -- UDP open rejects an out-of-range port
 local udp_open_rejects_an_out_of_range_port_cases = {
-    {70000}, {65536}, {-1},
+    { 70000 },
+    { 65536 },
+    { -1 },
 }
 
 local function udp_open_rejects_an_out_of_range_port_test(port)
@@ -1051,6 +1239,7 @@ end
 local function udp_sendto_on_a_closed_socket_errors_about_the_closed_socket_test()
     local sock = udp_open()
     sock:close()
+
     raises(function()
         sock:sendto("x", "127.0.0.1", 34892)
     end, "closed")
@@ -1060,6 +1249,7 @@ end
 local function udp_receive_on_a_closed_socket_errors_about_the_closed_socket_test()
     local sock = udp_open()
     sock:close()
+
     raises(function()
         sock:receive()
     end, "closed")
@@ -1076,9 +1266,11 @@ end
 -- UDP sendto rejects an out-of-range destination port
 local function udp_sendto_rejects_an_out_of_range_destination_port_test()
     local sock = udp_open()
+
     raises(function()
         sock:sendto("x", "127.0.0.1", 70000)
     end, "port out of range")
+
     sock:close()
 end
 
@@ -1095,7 +1287,11 @@ end
 
 -- fetch rejects a malformed URL
 local fetch_rejects_a_malformed_url_cases = {
-    {"notaurl"}, {"ftp://example/"}, {""}, {"http://"}, {"http://127.0.0.1:70000/"},
+    { "notaurl" },
+    { "ftp://example/" },
+    { "" },
+    { "http://" },
+    { "http://127.0.0.1:70000/" },
 }
 
 local function fetch_rejects_a_malformed_url_test(url)
@@ -1127,7 +1323,6 @@ local function fetch_to_a_closed_local_port_reports_it_cannot_connect_test()
     assert(string.find(tostring(err), "cannot connect to 127.0.0.1:" .. tostring(port)))
 end
 
-
 -- ===== network =====
 --[[
   Network Library Tests for Lus
@@ -1136,32 +1331,31 @@ end
   Note: Uses 'catch' expression for protected execution.
 ]]
 
-
 -- ============================================
 -- Library Structure Tests
 -- ============================================
 
 -- network global exists
 local function network_global_exists_test()
-  assert(type(network) == "table", "network should be a table")
+    assert(type(network) == "table", "network should be a table")
 end
 
 -- network.tcp subtable exists
 local function network_tcp_subtable_exists_test()
-  assert(type(network.tcp) == "table", "network.tcp should be a table")
-  assert(type(network.tcp.connect) == "function", "network.tcp.connect should be a function")
-  assert(type(network.tcp.bind) == "function", "network.tcp.bind should be a function")
+    assert(type(network.tcp) == "table", "network.tcp should be a table")
+    assert(type(network.tcp.connect) == "function", "network.tcp.connect should be a function")
+    assert(type(network.tcp.bind) == "function", "network.tcp.bind should be a function")
 end
 
 -- network.udp subtable exists
 local function network_udp_subtable_exists_test()
-  assert(type(network.udp) == "table", "network.udp should be a table")
-  assert(type(network.udp.open) == "function", "network.udp.open should be a function")
+    assert(type(network.udp) == "table", "network.udp should be a table")
+    assert(type(network.udp.open) == "function", "network.udp.open should be a function")
 end
 
 -- network.fetch function exists
 local function network_fetch_function_exists_test()
-  assert(type(network.fetch) == "function", "network.fetch should be a function")
+    assert(type(network.fetch) == "function", "network.fetch should be a function")
 end
 
 -- ============================================
@@ -1170,30 +1364,33 @@ end
 
 -- TCP server bind and close
 local function tcp_server_bind_and_close_test()
-  local server = tcp_bind("127.0.0.1", 0)
-  assert(server ~= nil, "server should be created")
-  assert(tostring(server):find("server"), "tostring should indicate server")
-  server:close()
-  assert(tostring(server):find("closed"), "tostring should indicate closed")
+    local server = tcp_bind("127.0.0.1", 0)
+    assert(server ~= nil, "server should be created")
+    assert(tostring(server):find("server"), "tostring should indicate server")
+    server:close()
+    assert(tostring(server):find("closed"), "tostring should indicate closed")
 end
 
 -- TCP connection refused error
 local function tcp_connection_refused_error_test()
-  local server = tcp_bind("127.0.0.1", 0)
-  local _, port = server:getsockname()
-  server:close()
-  local sock, err = network.tcp.connect("127.0.0.1", port)
-  assert(sock == nil, "should fail to connect to closed port")
-  assert(err.code == "refused" and type(err.message) == "string", "error should carry a code and a message")
+    local server = tcp_bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    server:close()
+    local sock, err = network.tcp.connect("127.0.0.1", port)
+    assert(sock == nil, "should fail to connect to closed port")
+    assert(
+        err.code == "refused" and type(err.message) == "string",
+        "error should carry a code and a message"
+    )
 end
 
 -- TCP server has expected methods
 local function tcp_server_has_expected_methods_test()
-  local server = tcp_bind("127.0.0.1", 0)
-  assert(type(server.accept) == "function", "should have accept")
-  assert(type(server.close) == "function", "should have close")
-  assert(type(server.settimeout) == "function", "should have settimeout")
-  server:close()
+    local server = tcp_bind("127.0.0.1", 0)
+    assert(type(server.accept) == "function", "should have accept")
+    assert(type(server.close) == "function", "should have close")
+    assert(type(server.settimeout) == "function", "should have settimeout")
+    server:close()
 end
 
 -- ============================================
@@ -1202,37 +1399,37 @@ end
 
 -- UDP socket create and close
 local function udp_socket_create_and_close_test()
-  local sock = udp_open()
-  assert(sock ~= nil, "UDP socket should be created")
-  assert(tostring(sock):find("udpsocket"), "tostring should indicate udpsocket")
-  sock:close()
-  assert(tostring(sock):find("closed"), "tostring should indicate closed")
+    local sock = udp_open()
+    assert(sock ~= nil, "UDP socket should be created")
+    assert(tostring(sock):find("udpsocket"), "tostring should indicate udpsocket")
+    sock:close()
+    assert(tostring(sock):find("closed"), "tostring should indicate closed")
 end
 
 -- UDP socket has expected methods
 local function udp_socket_has_expected_methods_test()
-  local sock = udp_open()
-  assert(type(sock.sendto) == "function", "should have sendto")
-  assert(type(sock.receive) == "function", "should have receive")
-  assert(type(sock.setsockname) == "function", "should have setsockname")
-  assert(type(sock.close) == "function", "should have close")
-  sock:close()
+    local sock = udp_open()
+    assert(type(sock.sendto) == "function", "should have sendto")
+    assert(type(sock.receive) == "function", "should have receive")
+    assert(type(sock.setsockname) == "function", "should have setsockname")
+    assert(type(sock.close) == "function", "should have close")
+    sock:close()
 end
 
 -- UDP socket bind to port
 local function udp_socket_bind_to_port_test()
-  local sock = udp_open(0, "127.0.0.1")
-  assert(sock ~= nil, "bound UDP socket should be created")
-  sock:close()
+    local sock = udp_open(0, "127.0.0.1")
+    assert(sock ~= nil, "bound UDP socket should be created")
+    sock:close()
 end
 
 -- using closed UDP socket raises error
 local function using_closed_udp_socket_raises_error_test()
-  local sock = udp_open()
-  sock:close()
-  local ok, err = catch sock:sendto("test", "127.0.0.1", 1234)
-  assert(not ok, "should fail on closed socket")
-  assert(err:find("closed"), "error should mention closed")
+    local sock = udp_open()
+    sock:close()
+    local ok, err = catch sock:sendto("test", "127.0.0.1", 1234)
+    assert(not ok, "should fail on closed socket")
+    assert(err:find("closed"), "error should mention closed")
 end
 
 -- ============================================
@@ -1240,66 +1437,69 @@ end
 -- ============================================
 
 local function local_fetch(status, location, body)
-  local probe = tcp_bind("127.0.0.1", 0)
-  local _, port = probe:getsockname()
-  probe:close()
+    local probe = tcp_bind("127.0.0.1", 0)
+    local _, port = probe:getsockname()
+    probe:close()
 
-  local fixture = worker.create(FIXTURES .. "/http_server.lus")
-  worker.send(fixture, {status = status, location = location, body = body, port = port})
-  assert(worker.receive(fixture) == "ready", "local HTTP fixture should bind")
-  local got_status, got_body, got_headers =
-      fetch("http://127.0.0.1:" .. tostring(port) .. "/fixture")
-  assert(worker.receive(fixture) == "done", "local HTTP fixture should finish")
-  return got_status, got_body, got_headers
+    local fixture = worker.create(FIXTURES .. "/http_server.lus")
+    worker.send(fixture, { status = status, location = location, body = body, port = port })
+    assert(worker.receive(fixture) == "ready", "local HTTP fixture should bind")
+    local got_status, got_body, got_headers = fetch(
+        "http://127.0.0.1:" .. tostring(port) .. "/fixture"
+    )
+    assert(worker.receive(fixture) == "done", "local HTTP fixture should finish")
+    return got_status, got_body, got_headers
 end
 
 -- HTTP GET returns status, body, and headers
 local function http_get_returns_status_body_and_headers_test()
-  local status, body, headers = local_fetch(200, nil, "OK")
-  assert(status == 200, "status should be 200, got: " .. tostring(status))
-  assert(txt(body) == "OK", "response body should be preserved")
-  assert(type(headers) == "table", "headers should be a table")
+    local status, body, headers = local_fetch(200, nil, "OK")
+    assert(status == 200, "status should be 200, got: " .. tostring(status))
+    assert(txt(body) == "OK", "response body should be preserved")
+    assert(type(headers) == "table", "headers should be a table")
 end
 
 -- HTTP GET exposes different success status codes
 local function http_get_exposes_different_success_status_codes_test()
-  local status201 = local_fetch(201, nil, "created")
-  assert(status201 == 201, "should get 201, got: " .. tostring(status201))
-  local status204 = local_fetch(204, nil, "")
-  assert(status204 == 204, "should get 204, got: " .. tostring(status204))
+    local status201 = local_fetch(201, nil, "created")
+    assert(status201 == 201, "should get 201, got: " .. tostring(status201))
+    local status204 = local_fetch(204, nil, "")
+    assert(status204 == 204, "should get 204, got: " .. tostring(status204))
 end
 
 -- HTTP returns redirect status to the caller
 local function http_returns_redirect_status_to_the_caller_test()
-  local status, _, headers = local_fetch(301, "/next", "")
-  assert(status == 301, "redirect must not be followed, got: " .. tostring(status))
-  assert(type(headers) == "table", "headers should be a table")
-  assert(headers.location == "/next", "location header should be exposed")
+    local status, _, headers = local_fetch(301, "/next", "")
+    assert(status == 301, "redirect must not be followed, got: " .. tostring(status))
+    assert(type(headers) == "table", "headers should be a table")
+    assert(headers.location == "/next", "location header should be exposed")
 end
 
 -- HTTP exposes client error status codes
 local function http_exposes_client_error_status_codes_test()
-  local status404 = local_fetch(404, nil, "missing")
-  assert(status404 == 404, "should get 404, got: " .. tostring(status404))
-  local status400 = local_fetch(400, nil, "bad request")
-  assert(status400 == 400, "should get 400, got: " .. tostring(status400))
+    local status404 = local_fetch(404, nil, "missing")
+    assert(status404 == 404, "should get 404, got: " .. tostring(status404))
+    local status400 = local_fetch(400, nil, "bad request")
+    assert(status400 == 400, "should get 400, got: " .. tostring(status400))
 end
 
 -- HTTP exposes server error status codes
 local function http_exposes_server_error_status_codes_test()
-  local status500 = local_fetch(500, nil, "failure")
-  assert(status500 == 500, "should get 500, got: " .. tostring(status500))
+    local status500 = local_fetch(500, nil, "failure")
+    assert(status500 == 500, "should get 500, got: " .. tostring(status500))
 end
 
 -- a closed local endpoint reports a fetch error
 local function a_closed_local_endpoint_reports_a_fetch_error_test()
-  local server = tcp_bind("127.0.0.1", 0)
-  local _, port = server:getsockname()
-  server:close()
-  local ok, err = catch network.fetch(
-      "https://127.0.0.1:" .. tostring(port) .. "/")
-  assert(not ok, "should fail for a closed local endpoint")
-  assert(err.code == "refused" and type(tostring(err)) == "string", "error should carry a code and a message")
+    local server = tcp_bind("127.0.0.1", 0)
+    local _, port = server:getsockname()
+    server:close()
+    local ok, err = catch network.fetch("https://127.0.0.1:" .. tostring(port) .. "/")
+    assert(not ok, "should fail for a closed local endpoint")
+    assert(
+        err.code == "refused" and type(tostring(err)) == "string",
+        "error should carry a code and a message"
+    )
 end
 
 -- TCP line receive enforces its default one MiB limit

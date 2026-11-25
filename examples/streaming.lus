@@ -16,11 +16,13 @@ local function progress(req)
                 stream_closed = true
             end,
         })
+
         for percent = 25, 100, 25 do
             coroutine.resume(coroutine.sleep(0.01))
             coroutine.yield(`data: $(tojson({ job = req.query, percent = percent }))\n\n`)
         end
     end)
+
     return 200, events, { ["Content-Type"] = "text/event-stream", ["Cache-Control"] = "no-cache" }
 end
 
@@ -41,6 +43,7 @@ for line in network.lines(body) do
         print(event.job, `$(event.percent)%`)
     end
 end
+
 --> export-7  25%
 --> export-7  50%
 --> export-7  75%

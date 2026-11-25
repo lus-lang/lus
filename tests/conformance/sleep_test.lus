@@ -14,15 +14,18 @@ local function a_resume_waits_for_the_time_test()
     local t = elapsed(function()
         assert(coroutine.resume(coroutine.sleep(0.1)) == true)
     end)
+
     assert(t >= 0.1 and t < 2, t)
 end
 
 local function the_time_runs_from_the_first_resume_test()
     local s = coroutine.sleep(0.1)
     coroutine.resume(coroutine.sleep(0.15))
+
     local t = elapsed(function()
         coroutine.resume(s)
     end)
+
     assert(t >= 0.1, t)
 end
 
@@ -30,6 +33,7 @@ local function a_duration_is_accepted_test()
     local t = elapsed(function()
         coroutine.resume(coroutine.sleep(time.millis(60)))
     end)
+
     assert(t >= 0.06, t)
 end
 
@@ -44,31 +48,39 @@ end
 
 local function detached_sleeps_run_side_by_side_test()
     local order = {}
+
     local slow = coroutine.detach(coroutine.create(function()
         coroutine.resume(coroutine.sleep(0.15))
         order[#order + 1] = "slow"
     end))
+
     local fast = coroutine.detach(coroutine.create(function()
         coroutine.resume(coroutine.sleep(0.05))
         order[#order + 1] = "fast"
     end))
+
     local t = elapsed(function()
         coroutine.resume(slow)
         coroutine.resume(fast)
     end)
+
     assert(table.concat(order, " ") == "fast slow")
     assert(t < 0.3, t)
 end
 
 local function closing_a_waiter_ends_the_sleep_test()
     local sleeper = coroutine.sleep(30)
+
     local task = coroutine.detach(coroutine.create(function()
         coroutine.resume(sleeper)
     end))
+
     coroutine.resume(coroutine.sleep(0.02))
+
     local t = elapsed(function()
         coroutine.close(task)
     end)
+
     assert(coroutine.status(sleeper) == "dead")
     assert(t < 1)
 end
@@ -83,16 +95,20 @@ end
 local function closing_an_endless_sleep_wakes_its_waiter_test()
     local gate = coroutine.sleep(math.huge)
     local result
+
     local parked = coroutine.detach(coroutine.create(function()
         result = table.pack(coroutine.resume(gate))
     end))
+
     local waker = coroutine.detach(coroutine.create(function()
         coroutine.resume(coroutine.sleep(0.05))
         coroutine.close(gate)
     end))
+
     local t = elapsed(function()
         coroutine.resume(parked)
     end)
+
     assert(result[1] == false and result[2] == "closed")
     assert(t < 1, t)
     coroutine.resume(waker)
@@ -101,9 +117,11 @@ end
 local function a_timed_sleep_closed_early_reports_closed_test()
     local s = coroutine.sleep(30)
     local result
+
     local waiter = coroutine.detach(coroutine.create(function()
         result = table.pack(coroutine.resume(s))
     end))
+
     coroutine.resume(coroutine.sleep(0.02))
     coroutine.close(s)
     coroutine.resume(waiter)
@@ -126,14 +144,17 @@ end
 local function closing_wakes_a_waiter_in_the_main_chunk_test()
     local gate = coroutine.sleep(math.huge)
     local closed_ok
+
     local waker = coroutine.detach(coroutine.create(function()
         coroutine.resume(coroutine.sleep(0.05))
         closed_ok = coroutine.close(gate)
     end))
+
     local t = elapsed(function()
         local ok, why = coroutine.resume(gate)
         assert(ok == false and why == "closed", tostring(why))
     end)
+
     assert(closed_ok == true)
     assert(coroutine.status(gate) == "dead")
     assert(t < 1, t)
@@ -142,28 +163,37 @@ end
 
 local function closing_wakes_a_waiter_in_a_plain_coroutine_test()
     local gate = coroutine.sleep(30)
+
     local waker = coroutine.detach(coroutine.create(function()
         coroutine.resume(coroutine.sleep(0.05))
         coroutine.close(gate)
     end))
+
     local waiter = coroutine.create(function()
         return coroutine.resume(gate)
     end)
+
     local t = elapsed(function()
         local _, ok, why = coroutine.resume(waiter)
         assert(ok == false and why == "closed", tostring(why))
     end)
+
     assert(t < 1, t)
     coroutine.resume(waker)
 end
 
 local function closing_a_signal_wait_of_the_main_chunk_test()
-    if package.config:sub(1, 1) == "\\" then skip("signals are POSIX") end
+    if package.config:sub(1, 1) == "\\" then
+        skip("signals are POSIX")
+    end
+
     local sig = os.signal("hangup")
+
     local waker = coroutine.detach(coroutine.create(function()
         coroutine.resume(coroutine.sleep(0.05))
         coroutine.close(sig)
     end))
+
     local ok, why = coroutine.resume(sig)
     assert(ok == false and why == "closed", tostring(why))
     coroutine.resume(waker)

@@ -22,9 +22,9 @@ The following example measures a vector before and after a resize.
 
 ```lus
 local v = vector.fromstring("héllo")
-print(vector.size(v), #v)        --> 6  6
+print(vector.size(v), #v)  --> 6  6
 vector.resize(v, 0)
-print(vector.size(v))            --> 0
+print(vector.size(v))  --> 0
 ```
 
 [`vector.resize`](/manual/api#vector.resize) changes the size.

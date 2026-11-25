@@ -24,7 +24,9 @@
 --
 -- Usage: lus run.lus [--lus BIN] [--only TARGET] [--batch N] [--timeout S]
 
-global arg, assert, bigint, coroutine, crypto, decimal, error, fromcsv, fromjson, fs, getmetatable, io, ipairs, load, math, network, os, pairs, pledge, print, select, string, table, time, tocsv, tojson, tonumber, tostring, type, vector
+global arg, assert, bigint, coroutine, crypto, decimal, error, fromcsv, fromjson, fs, getmetatable,
+    io, ipairs, load, math, network, os, pairs, pledge, print, select, string, table, time, tocsv,
+    tojson, tonumber, tostring, type, vector
 
 pledge("exec", "load", "fs:read", "fs:write", "env", "network")
 
@@ -34,18 +36,38 @@ local LONG = 512
 -- ===== the targets =====
 
 local function deepEqual(a, b, seen)
-    if a == b then return true end
-    if a ~= a and b ~= b then return true end
-    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    if a == b then
+        return true
+    end
+
+    if a ~= a and b ~= b then
+        return true
+    end
+
+    if type(a) ~= "table" or type(b) ~= "table" then
+        return false
+    end
+
     seen = seen or {}
-    if seen[a] == b then return true end
+
+    if seen[a] == b then
+        return true
+    end
+
     seen[a] = b
+
     for k, v in pairs(a) do
-        if not deepEqual(v, b[k], seen) then return false end
+        if not deepEqual(v, b[k], seen) then
+            return false
+        end
     end
+
     for k in pairs(b) do
-        if a[k] == nil then return false end
+        if a[k] == nil then
+            return false
+        end
     end
+
     return true
 end
 
@@ -55,7 +77,16 @@ lazy dog sleeps through it all. ]]):rep(12)
 
 local function longJson()
     local items = {}
-    for i = 1, 30 do items[i] = string.format('{"id":%d,"name":"item %d","price":%d.25,"tags":["a","b"]}', i, i, i) end
+
+    for i = 1, 30 do
+        items[i] = string.format(
+            '{"id":%d,"name":"item %d","price":%d.25,"tags":["a","b"]}',
+            i,
+            i,
+            i
+        )
+    end
+
     return "[" .. table.concat(items, ",") .. "]"
 end
 
@@ -66,12 +97,23 @@ local targets = {
     {
         name = "fromjson",
         text = true,
-        seeds = { '{"a":[1,2.5,"xé",null,true],"b":{"c":-3e10,"d":"\\u00e9\\n"}}', "[1,2,3]", longJson() },
+        seeds = {
+            '{"a":[1,2.5,"xé",null,true],"b":{"c":-3e10,"d":"\\u00e9\\n"}}',
+            "[1,2,3]",
+            longJson(),
+        },
         run = function(s)
             local ok, v = catch fromjson(s)
-            if not ok then return nil end
+
+            if not ok then
+                return nil
+            end
+
             local back = fromjson(tojson(v))
-            if not deepEqual(v, back) then return "tojson of the value does not parse to the same value" end
+
+            if not deepEqual(v, back) then
+                return "tojson of the value does not parse to the same value"
+            end
         end,
     },
     {
@@ -80,9 +122,16 @@ local targets = {
         seeds = { 'a,b,c\n1,2,3\n"x,y","q""r",z\n', "name,qty\nwidget,4\ngadget,7\n" },
         run = function(s)
             local ok, rows = catch fromcsv(s)
-            if not ok then return nil end
+
+            if not ok then
+                return nil
+            end
+
             local back = fromcsv(tocsv(rows))
-            if not deepEqual(rows, back) then return "tocsv of the rows does not parse to the same rows" end
+
+            if not deepEqual(rows, back) then
+                return "tocsv of the rows does not parse to the same rows"
+            end
         end,
     },
     {
@@ -99,8 +148,14 @@ local targets = {
         seeds = { "123.456", "-0.0001e10", "98765432109876543210.0123456789" },
         run = function(s)
             local ok, v = catch decimal(s)
-            if not ok or v == nil then return nil end
-            if decimal(tostring(v)) ~= v then return "tostring of the decimal does not parse to the same decimal" end
+
+            if not ok or v == nil then
+                return nil
+            end
+
+            if decimal(tostring(v)) ~= v then
+                return "tostring of the decimal does not parse to the same decimal"
+            end
         end,
     },
     {
@@ -109,8 +164,14 @@ local targets = {
         seeds = { "123456789012345678901234567890", "-0x1f2e3d4c5b6a79881726354", "0" },
         run = function(s)
             local ok, v = catch bigint(s)
-            if not ok or v == nil then return nil end
-            if bigint(tostring(v)) ~= v then return "tostring of the bigint does not parse to the same bigint" end
+
+            if not ok or v == nil then
+                return nil
+            end
+
+            if bigint(tostring(v)) ~= v then
+                return "tostring of the bigint does not parse to the same bigint"
+            end
         end,
     },
     {
@@ -119,11 +180,20 @@ local targets = {
         seeds = { "0x1p4", "1e308", "  42  ", "-0.000123", "123456789012345678901" },
         run = function(s)
             local ok, v = catch tonumber(s)
-            if not ok or v == nil then return nil end
+
+            if not ok or v == nil then
+                return nil
+            end
+
             -- An infinity writes as "inf", which no number parses from, as
             -- in Lua. NaN equals nothing.
-            if v ~= v or v == math.huge or v == -math.huge then return nil end
-            if tonumber(tostring(v)) ~= v then return "tostring of the number does not parse to the same number" end
+            if v ~= v or v == math.huge or v == -math.huge then
+                return nil
+            end
+
+            if tonumber(tostring(v)) ~= v then
+                return "tostring of the number does not parse to the same number"
+            end
         end,
     },
     {
@@ -138,7 +208,11 @@ local targets = {
         seeds = {
             string.dump(function(a, b)
                 local t = { a, b, x = "y" }
-                for i = 1, #t do t[i] = (t[i] or 0) * 2 end
+
+                for i = 1, #t do
+                    t[i] = (t[i] or 0) * 2
+                end
+
                 return t, `{a}:{b}`
             end),
         },
@@ -152,15 +226,23 @@ local targets = {
 -- The codecs. `checksum` marks those whose output carries a checksum of
 -- the data, which lets them notice a flipped bit.
 for _, c in ipairs({
-    { "gzip", true }, { "lz4", true }, { "zstd", true }, { "deflate", false }, { "brotli", false },
+    { "gzip", true },
+    { "lz4", true },
+    { "zstd", true },
+    { "deflate", false },
+    { "brotli", false },
 }) do
     local codec = vector.archive[c[1]]
+
     targets[#targets + 1] = {
         name = "vector.archive." .. c[1],
         seeds = { codec.compress(text) },
         run = function(v)
             local ok, out = catch codec.decompress(v)
-            if ok and c[2] and vector.tostring(out) ~= text then return "decoded other data without an error" end
+
+            if ok and c[2] and vector.tostring(out) ~= text then
+                return "decoded other data without an error"
+            end
         end,
     }
 end
@@ -175,19 +257,28 @@ local container_entries = {
     { name = "stored.txt", data = "stored", method = "store" },
     { name = string.rep("long/", 30) .. "name.txt", data = "long" },
 }
+
 for _, fmt in ipairs({ "zip", "tar" }) do
     local c = vector.archive[fmt]
+
     targets[#targets + 1] = {
         name = "vector.archive." .. fmt,
         seeds = { c.pack(container_entries) },
         run = function(v)
             local ok, list = catch c.list(v)
-            if not ok then return nil end
+
+            if not ok then
+                return nil
+            end
+
             for _, e in ipairs(list) do
                 local okr, data = catch c.read(v, e.name, 1 << 20)
+
                 if okr and data and fmt == "zip" then
                     for _, orig in ipairs(container_entries) do
-                        if orig.data and orig.name == e.name and vector.tostring(data) ~= orig.data then
+                        if orig.data
+                            and orig.name == e.name
+                            and vector.tostring(data) ~= orig.data then
                             return "read other data without an error"
                         end
                     end
@@ -217,13 +308,23 @@ local function drain(sock, wait)
     -- A receive of a count waits for all of it, so the bytes come one at
     -- a time, from the buffer of the socket.
     local bytes = {}
+
     while true do
         local ok, got = catch sock:receive(1)
-        if not ok or got == nil or vector.size(got) == 0 then break end
+
+        if not ok or got == nil or vector.size(got) == 0 then
+            break
+        end
+
         bytes[#bytes + 1] = vector.get(got, 0)
     end
+
     local v = vector.create(#bytes)
-    for i, b in ipairs(bytes) do vector.set(v, i - 1, b) end
+
+    for i, b in ipairs(bytes) do
+        vector.set(v, i - 1, b)
+    end
+
     return v
 end
 
@@ -234,7 +335,11 @@ local function recordTls()
     local p = io.popen("openssl version 2>&1")
     p:read("a")
     local ok = p:close()
-    if ok ~= true and ok ~= 0 then return nil end
+
+    if ok ~= true and ok ~= 0 then
+        return nil
+    end
+
     local dir = os.tmpname()
     fs.remove(dir)
     fs.createdirectory(dir)
@@ -243,24 +348,50 @@ local function recordTls()
     local f = assert(io.open(cnf, "w"))
     f:write("[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = localhost\n")
     f:close()
-    assert(os.execute(string.format("openssl ecparam -name prime256v1 -genkey -noout -out '%s' 2>/dev/null", key)))
-    assert(os.execute(string.format("openssl req -x509 -new -key '%s' -sha256 -days 2 -subj /CN=localhost -config '%s' -out '%s' 2>/dev/null", key, cnf, cert)))
+    assert(
+        os.execute(
+            string.format(
+                "openssl ecparam -name prime256v1 -genkey -noout -out '%s' 2>/dev/null",
+                key
+            )
+        )
+    )
+    assert(
+        os.execute(
+            string.format(
+                "openssl req -x509 -new -key '%s' -sha256 -days 2 -subj /CN=localhost -config '%s' -out '%s' 2>/dev/null",
+                key,
+                cnf,
+                cert
+            )
+        )
+    )
     local identity = { cert = readAll(cert), key = readAll(key) }
     -- The hello of a client, caught by a plain server.
     local catcher = network.tcp.bind("127.0.0.1", 0)
     local _, cport = catcher:getsockname()
     local hello
+
     local co = coroutine.detach(coroutine.create(function()
         local c <close> = catcher:accept()
         hello = drain(c, 0.3)
     end))
+
     local _ = catch network.tls.connect("127.0.0.1", cport, { verify = false, timeout = 1 })
-    while coroutine.status(co) ~= "dead" do coroutine.resume(coroutine.detach(coroutine.create(coroutine.yield))) end
+
+    while coroutine.status(co) ~= "dead" do
+        coroutine.resume(coroutine.detach(coroutine.create(coroutine.yield)))
+    end
+
     catcher:close()
     -- The flight that a TLS server answers that hello with.
     local server = network.tcp.bind("127.0.0.1", 0)
     local _, sport = server:getsockname()
-    local serving = coroutine.detach(coroutine.create(network.serve), server, function() return 200 end, { tls = identity })
+
+    local serving = coroutine.detach(coroutine.create(network.serve), server, function()
+        return 200
+    end, { tls = identity })
+
     local sock <close> = network.tcp.connect("127.0.0.1", sport)
     sock:send(hello)
     local flight = drain(sock, 0.5)
@@ -272,15 +403,23 @@ local function recordTls()
 end
 
 local tls_path = os.getenv("LUS_CORRUPT_TLS")
+
 if not tls_path and arg[1] ~= "--child" then
     tls_path = recordTls()
-    if tls_path then os.setenv("LUS_CORRUPT_TLS", tls_path) end
+
+    if tls_path then
+        os.setenv("LUS_CORRUPT_TLS", tls_path)
+    end
 end
 
 if tls_path then
     local cert, key = readAll(tls_path .. "/cert.pem"), readAll(tls_path .. "/key.pem")
-    local hello, flight = readAll(tls_path .. "/hello.bin", "rb"), readAll(tls_path .. "/flight.bin", "rb")
+    local hello, flight = readAll(tls_path .. "/hello.bin", "rb"), readAll(
+        tls_path .. "/flight.bin",
+        "rb"
+    )
     local tls_server, tls_port
+
     targets[#targets + 1] = {
         name = "tls.clienthello",
         seeds = { hello },
@@ -288,26 +427,32 @@ if tls_path then
             if not tls_server then
                 tls_server = network.tcp.bind("127.0.0.1", 0)
                 tls_port = select(2, tls_server:getsockname())
-                coroutine.detach(coroutine.create(network.serve), tls_server, function() return 200 end,
-                    { tls = { cert = cert, key = key }, idle_timeout = 1 })
+
+                coroutine.detach(coroutine.create(network.serve), tls_server, function()
+                    return 200
+                end, { tls = { cert = cert, key = key }, idle_timeout = 1 })
             end
+
             local sock <close> = network.tcp.connect("127.0.0.1", tls_port)
             sock:send(v)
             drain(sock, 0.05)
         end,
     }
+
     targets[#targets + 1] = {
         name = "tls.serverflight",
         seeds = { flight },
         run = function(v)
             local server <close> = network.tcp.bind("127.0.0.1", 0)
             local _, port = server:getsockname()
+
             local co = coroutine.detach(coroutine.create(function()
                 local c <close> = server:accept()
                 c:settimeout(1)
                 local _ = catch c:receive(1)
                 c:send(v)
             end))
+
             local _ = catch network.tls.connect("127.0.0.1", port, { verify = false, timeout = 1 })
             coroutine.close(co)
         end,
@@ -321,11 +466,16 @@ targets[#targets + 1] = {
     seeds = {
         crypto.keypair("P-256"):export("der"),
         (crypto.keypair("P-384")):public():export("der"),
-        crypto.importkey("-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\n-----END PRIVATE KEY-----\n"):export("der"),
+        crypto.importkey(
+            "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\n-----END PRIVATE KEY-----\n"
+        ):export("der"),
     },
     run = function(v)
         local ok, key = catch crypto.importkey(v)
-        if ok and not crypto.importkey(key:export("der")) then return "an imported key does not export" end
+
+        if ok and not crypto.importkey(key:export("der")) then
+            return "an imported key does not export"
+        end
     end,
 }
 
@@ -345,29 +495,49 @@ for _, enc in ipairs({ "base64", "base64url", "base32", "hex", "url" }) do
         run = function(s)
             local ok, v = catch string.transcode(s, enc, "binary")
             local pad = enc ~= "url" and enc ~= "hex" and s:find("=", 1, true)
-            if ok and pad and s:find("[^=%s]", pad) then return "decoded data after the padding" end
+
+            if ok and pad and s:find("[^=%s]", pad) then
+                return "decoded data after the padding"
+            end
+
             if ok then
                 local again = string.transcode(string.transcode(v, "binary", enc), enc, "binary")
-                if hexOf(again) ~= hexOf(v) then return "the decoded bytes do not encode and decode back to themselves" end
+
+                if hexOf(again) ~= hexOf(v) then
+                    return "the decoded bytes do not encode and decode back to themselves"
+                end
             end
+
             local lax_ok, lax = catch string.transcode(s, enc, "utf-8", true)
-            if not lax_ok then return "lax decoding raised " .. tostring(lax) end
-            if type(lax) ~= "string" then return "lax decoding returned no text" end
+
+            if not lax_ok then
+                return "lax decoding raised " .. tostring(lax)
+            end
+
+            if type(lax) ~= "string" then
+                return "lax decoding returned no text"
+            end
         end,
     }
 end
 
 local function targetNamed(name)
     for _, t in ipairs(targets) do
-        if t.name == name then return t end
+        if t.name == name then
+            return t
+        end
     end
+
     error("no target " .. name)
 end
 
 -- ===== the inputs =====
 
 local function bytesOf(seed)
-    if type(seed) == "string" then return vector.fromstring(seed) end
+    if type(seed) == "string" then
+        return vector.fromstring(seed)
+    end
+
     return seed
 end
 
@@ -381,12 +551,19 @@ end
 local function countOf(seed, kind)
     local n = sizeOf(seed)
     local all = kind == "trunc" and n or n * 8
-    if n > LONG then return math.min(all, SAMPLE), all end
+
+    if n > LONG then
+        return math.min(all, SAMPLE), all
+    end
+
     return all, all
 end
 
 local function indexOf(k, count, all)
-    if count == all then return k end
+    if count == all then
+        return k
+    end
+
     return k * all // count
 end
 
@@ -397,18 +574,33 @@ local function input(target, seed, kind, k)
     local i = indexOf(k, count, all)
     local src = bytesOf(seed)
     local v
+
     if kind == "trunc" then
         v = vector.create(i)
-        for j = 0, i - 1 do vector.set(v, j, vector.get(src, j)) end
+
+        for j = 0, i - 1 do
+            vector.set(v, j, vector.get(src, j))
+        end
     else
         v = vector.clone(src)
         local byte = i // 8
         vector.set(v, byte, vector.get(v, byte) ~ (1 << (i % 8)))
     end
-    if not target.text then return v end
-    if vector.size(v) == 0 then return "" end
+
+    if not target.text then
+        return v
+    end
+
+    if vector.size(v) == 0 then
+        return ""
+    end
+
     local ok, s = catch vector.tostring(v)
-    if ok then return s end
+
+    if ok then
+        return s
+    end
+
     return nil
 end
 
@@ -419,14 +611,29 @@ if arg[1] == "--child" then
     local seed = target.seeds[tonumber(arg[3])]
     local kind, first, count = arg[4], tonumber(arg[5]), tonumber(arg[6])
     local tried = 0
+
     for k = first, first + count - 1 do
         local x = input(target, seed, kind, k)
+
         if x ~= nil then
             tried = tried + 1
             local problem = target.run(x)
-            if problem then print(string.format("finding %s seed %s %s %d: %s", target.name, arg[3], kind, k, problem)) end
+
+            if problem then
+                print(
+                    string.format(
+                        "finding %s seed %s %s %d: %s",
+                        target.name,
+                        arg[3],
+                        kind,
+                        k,
+                        problem
+                    )
+                )
+            end
         end
     end
+
     print("done " .. tried)
     os.exit(0)
 end
@@ -434,15 +641,25 @@ end
 -- ===== the driver =====
 
 local opts = { lus = "runtime/zig-out/bin/lus", only = nil, batch = 256, timeout = 60 }
+
 do
     local i = 1
+
     while i <= #arg do
         local a, v = arg[i], arg[i + 1]
-        if a == "--lus" then opts.lus = v
-        elseif a == "--only" then opts.only = v
-        elseif a == "--batch" then opts.batch = tonumber(v)
-        elseif a == "--timeout" then opts.timeout = tonumber(v)
-        else error("unknown option " .. a) end
+
+        if a == "--lus" then
+            opts.lus = v
+        elseif a == "--only" then
+            opts.only = v
+        elseif a == "--batch" then
+            opts.batch = tonumber(v)
+        elseif a == "--timeout" then
+            opts.timeout = tonumber(v)
+        else
+            error("unknown option " .. a)
+        end
+
         i = i + 2
     end
 end
@@ -459,52 +676,97 @@ local tried_total = 0
 -- Runs inputs first to first + count - 1 in one child. Returns whether the
 -- child finished, and records the findings it printed.
 local function runBatch(target, si, kind, first, count)
-    local cmd = string.format("perl -e 'alarm %d; exec @ARGV' %s %s --child %s %d %s %d %d 2>&1",
-        opts.timeout, quote(opts.lus), quote(arg[0]), quote(target.name), si, kind, first, count)
+    local cmd = string.format(
+        "perl -e 'alarm %d; exec @ARGV' %s %s --child %s %d %s %d %d 2>&1",
+        opts.timeout,
+        quote(opts.lus),
+        quote(arg[0]),
+        quote(target.name),
+        si,
+        kind,
+        first,
+        count
+    )
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     p:close()
-    for line in out:gmatch("finding [^\n]+") do findings[#findings + 1] = line end
+
+    for line in out:gmatch("finding [^\n]+") do
+        findings[#findings + 1] = line
+    end
+
     local tried = out:match("done (%d+)\n")
-    if tried then tried_total = tried_total + tonumber(tried) end
+
+    if tried then
+        tried_total = tried_total + tonumber(tried)
+    end
+
     return tried ~= nil
 end
 
 -- Splits a batch that did not finish until each input that crashes stands
 -- alone.
 local function bisect(target, si, kind, first, count)
-    if runBatch(target, si, kind, first, count) then return end
-    if count == 1 then
-        findings[#findings + 1] = string.format("crash %s seed %d %s %d", target.name, si, kind, first)
+    if runBatch(target, si, kind, first, count) then
         return
     end
+
+    if count == 1 then
+        findings[#findings + 1] = string.format(
+            "crash %s seed %d %s %d",
+            target.name,
+            si,
+            kind,
+            first
+        )
+        return
+    end
+
     local half = count // 2
     bisect(target, si, kind, first, half)
     bisect(target, si, kind, first + half, count - half)
 end
 
 local total = 0
+
 for _, target in ipairs(targets) do
     if not opts.only or opts.only == target.name then
         local inputs = 0
+
         for si, seed in ipairs(target.seeds) do
             for _, kind in ipairs({ "trunc", "flip" }) do
                 local count = countOf(seed, kind)
                 local k = 0
+
                 while k < count do
                     local n = math.min(opts.batch, count - k)
                     bisect(target, si, kind, k, n)
                     k = k + n
                 end
+
                 inputs = inputs + count
             end
         end
+
         total = total + inputs
         print(string.format("%-24s %6d inputs", target.name, inputs))
         io.stdout:flush()
     end
 end
 
-print(string.format("\n%d inputs, %d of them valid for their target, %d findings", total, tried_total, #findings))
-for _, f in ipairs(findings) do print("  " .. f) end
-if #findings > 0 then os.exit(1) end
+print(
+    string.format(
+        "\n%d inputs, %d of them valid for their target, %d findings",
+        total,
+        tried_total,
+        #findings
+    )
+)
+
+for _, f in ipairs(findings) do
+    print("  " .. f)
+end
+
+if #findings > 0 then
+    os.exit(1)
+end

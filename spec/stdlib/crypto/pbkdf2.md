@@ -34,5 +34,5 @@ The following example derives the first key of RFC 6070.
 
 ```lus
 local key = crypto.pbkdf2("sha1", "password", "salt", 1, 20)
-print(string.transcode(key, "binary", "hex"))   --> 0c60c80f961f0e71f3a9b524af6012062fe037a6
+print(string.transcode(key, "binary", "hex"))  --> 0c60c80f961f0e71f3a9b524af6012062fe037a6
 ```

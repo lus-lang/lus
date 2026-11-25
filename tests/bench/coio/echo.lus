@@ -12,9 +12,11 @@ local create, resume, yield from coroutine
 local function method(conn)
     while true do
         local line = conn:receive("*l")
+
         if not line or #line == 0 then
             break
         end
+
         conn:send(`$(vector.tostring(line))
 `)
     end
@@ -22,11 +24,14 @@ end
 
 local function ports(conn)
     local input, output from conn
+
     while true do
         local _, line = resume(input)
+
         if not line then
             break
         end
+
         resume(output, `$(vector.tostring(line))
 `)
     end
@@ -36,32 +41,41 @@ local function naive(conn)
     local input = create(function()
         while true do
             local line = conn:receive("*l")
+
             if not line or #line == 0 then
                 return
             end
+
             yield(line)
         end
     end)
+
     local output = create(function(data)
         while true do
             data = yield(conn:send(data))
         end
     end)
+
     while true do
         local _, line = resume(input)
+
         if not line then
             break
         end
+
         resume(output, `$(vector.tostring(line))
 `)
     end
 end
 
-local handle = ({ method = method, port = ports, naive = naive })[mode] or error(`unknown mode $mode`)
+local handle = ({ method = method, port = ports, naive = naive })[mode]
+    or error(`unknown mode $mode`)
 local server <close> = network.tcp.bind("127.0.0.1", port)
 print("ready")
+
 while true do
     local conn = server:accept()
+
     coroutine.detach(create(function()
         handle(conn)
         conn:close()

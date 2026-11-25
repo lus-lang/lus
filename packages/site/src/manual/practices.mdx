@@ -24,7 +24,7 @@ local function search_path()
     return string.split(os.getenv("PATH") or "", fs.path.delimiter)
 end
 
-print(#search_path() > 0)   --> true
+print(#search_path() > 0)  --> true
 ```
 
 `pledge` is an ordinary function, so a program may also call it later. A program that needs a permission only for an optional feature, such as an upload that the user requests with a command line option, pledges it at the point where the feature starts. Pledge every other permission at the top of the file, where a reader sees it first.
@@ -61,7 +61,7 @@ global pledge, print
 pledge("fs:read=./*", "~exec")
 pledge("seal")
 
-print(pledge("network:http"))   --> false
+print(pledge("network:http"))  --> false
 ```
 
 `lus check` reports a `pledge` that follows the seal with the code `pledge-after-seal`. The person who runs a script can also limit its permissions with `-P` on the command line, as [Granting from the command line](/manual/permissions#granting-from-the-command-line) describes.
@@ -98,11 +98,15 @@ local function run_plugin(plugin)
         pledge("seal")
         return plugin()
     end)
+
     return coroutine.resume(co)
 end
 
-print(run_plugin(function() return (catch io.popen("true")) end))   --> true  false
-print((catch io.popen("true")))                                     --> true
+print(run_plugin(function()  --> true  false
+    return (catch io.popen("true"))
+end))
+
+print((catch io.popen("true")))  --> true
 ```
 
 The plugin fails to start a process, although the program holds `exec` and can still start one afterwards. [Permissions in coroutines](/manual/permissions#permissions-in-coroutines) describes the rules.
@@ -120,21 +124,26 @@ local users = { { name = "ada" } }
 
 local function find_user(name)
     for _, user in ipairs(users) do
-        if user.name == name then return user end
+        if user.name == name then
+            return user
+        end
     end
+
     return nil, `no user named $name`
 end
 
 local function parse_port(text)
     local port = tonumber(text)
+
     if not port or port < 1 or port > 65535 then
         error(`invalid port: $text`, 0)
     end
+
     return port
 end
 
-print(find_user("bob"))           --> nil  no user named bob
-print(catch parse_port("http"))   --> false  invalid port: http
+print(find_user("bob"))  --> nil  no user named bob
+print(catch parse_port("http"))  --> false  invalid port: http
 ```
 
 `error` adds the position where it was called to a string message unless the level is `0`, as in `parse_port`, in which case it raises the message alone. Use level `0` for a message meant for the user of a program.
@@ -147,6 +156,7 @@ Raise a table when the code that catches the error handles each kind of failure 
 global error, print, setmetatable, tostring
 
 local AppError = {}
+
 AppError.__tostring = function(e)
     return `$(e.kind): $(e.message)`
 end
@@ -156,8 +166,8 @@ local function fail(kind, message)
 end
 
 local ok, err = catch fail("config", "missing key 'port'")
-print(ok, err.kind)    --> false  config
-print(tostring(err))   --> config: missing key 'port'
+print(ok, err.kind)  --> false  config
+print(tostring(err))  --> config: missing key 'port'
 ```
 
 ### Release resources with `<close>`
@@ -176,10 +186,10 @@ local function save(path)
 end
 
 local path = os.tmpname()
-print(catch save(path))   --> false  disk full
+print(catch save(path))  --> false  disk full
 
 local f <close> = io.open(path)
-print(f:read("a"))        --> partial
+print(f:read("a"))  --> partial
 fs.remove(path)
 ```
 
@@ -199,7 +209,7 @@ out:close()
 
 local f <close> = io.open(path, "rb")
 local bytes = f:read("a")
-print(#bytes, vector.unpack(bytes, 0, "<c4I2I2"))   --> 8  LUSB  1  3  8
+print(#bytes, vector.unpack(bytes, 0, "<c4I2I2"))  --> 8  LUSB  1  3  8
 fs.remove(path)
 ```
 
@@ -212,7 +222,7 @@ local v = vector.fromstring("ok")
 vector.resize(v, 3)
 vector.set(v, 2, 0xFF)
 
-print(catch vector.tostring(v))           --> false  ...: invalid UTF-8 at byte 2
+print(catch vector.tostring(v))  --> false  ...: invalid UTF-8 at byte 2
 print(vector.tostring(v, 0, 3, "lossy"))  --> ok�
 ```
 
@@ -234,9 +244,9 @@ global fromjson, math, print
 
 local order = fromjson('{"id": 12345678901234567890, "total": 59.70}', { exact = true })
 
-print(math.type(order.id), order.id)         --> bigint  12345678901234567890
-print(math.type(order.total), order.total)   --> decimal  59.70
-print(order.total * 3)                       --> 179.10
+print(math.type(order.id), order.id)  --> bigint  12345678901234567890
+print(math.type(order.total), order.total)  --> decimal  59.70
+print(order.total * 3)  --> 179.10
 ```
 
 Arithmetic between a decimal and a float raises an error, because the result could not be exact. Convert one side first, with [`decimal`](/manual/api#decimal) or [`tonumber`](/manual/api#tonumber). [Values and types](/manual/guide#values-and-types) in the guide describes each kind of number.
@@ -304,7 +314,10 @@ Several features of the runner keep tests short. A plain `assert` on a compariso
 global assert, error, raises, string, type
 
 local function slug(title)
-    if type(title) ~= "string" then error("title must be a string", 0) end
+    if type(title) ~= "string" then
+        error("title must be a string", 0)
+    end
+
     return (string.lower(string.trim(title)):gsub("%s+", "-"))
 end
 
@@ -318,7 +331,9 @@ local function slug_test(title, want)
 end
 
 local function bad_input_test()
-    raises(function() slug(42) end, "must be a string")
+    raises(function()
+        slug(42)
+    end, "must be a string")
 end
 ```
 
@@ -352,15 +367,18 @@ local function point(x, y)
 end
 
 local points = {}
+
 for i = 1, 1000 do
     points[i] = point(i, 2 * i)
 end
 
 local sum = 0
+
 for i = 1, #points do
     sum = sum + points[i].x + points[i].y
 end
-print(sum)   --> 1501500
+
+print(sum)  --> 1501500
 ```
 
 ### Keep the elements of an array one kind
@@ -371,12 +389,14 @@ Fill an array with elements of one kind: all integers, all floats, all strings, 
 global math, print
 
 local weights = {}
+
 for i = 1, 8 do
     weights[i] = 0.0
 end
+
 weights[3] = 1.5
 
-print(math.type(weights[1]), weights[3])   --> float  1.5
+print(math.type(weights[1]), weights[3])  --> float  1.5
 ```
 
 If the loop stored `0`, the array would hold integers, which the store of `1.5` would then convert.
@@ -395,10 +415,12 @@ local function length(x, y)
 end
 
 local total = 0.0
+
 for i = 1, 1000 do
     total = total + length(i, i)
 end
-print(math.floor(total))   --> 707813
+
+print(math.floor(total))  --> 707813
 ```
 
 Define a function outside a hot loop when possible, because a function expression inside a loop creates a new function value on every iteration, which costs an allocation each time.
@@ -413,10 +435,12 @@ global print
 local values = { 4, 8, 15, 16, 23, 42 }
 
 local total = 0
+
 for i = 1, #values do
     total = total + values[i]
 end
-print(total)   --> 108
+
+print(total)  --> 108
 ```
 
 ### Join many strings with `table.concat`
@@ -427,10 +451,12 @@ To build a long string from many pieces, collect the pieces in a table and join 
 global print, table
 
 local parts = {}
+
 for i = 1, 5 do
     parts[#parts + 1] = `item $i`
 end
-print(table.concat(parts, ", "))   --> item 1, item 2, item 3, item 4, item 5
+
+print(table.concat(parts, ", "))  --> item 1, item 2, item 3, item 4, item 5
 ```
 
 ### Measure before tuning
@@ -442,10 +468,12 @@ global os, print
 
 local start = os.clock()
 local total = 0
+
 for i = 1, 1000000 do
     total = total + i
 end
-print(total, os.clock() - start < 5)   --> 500000500000  true
+
+print(total, os.clock() - start < 5)  --> 500000500000  true
 ```
 
 To learn whether the compilers matter for a program, compare a default run with a run under `LUS_JIT=off`, which makes Lus interpret the whole program.

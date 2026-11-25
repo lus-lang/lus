@@ -24,10 +24,10 @@ The result is a non-negative float. A list with no numeric values returns NaN, a
 An `array` that is not a table raises `bad argument #1 to 'table.stdev' (table expected, got nil)` with its type.
 
 ```lus
-local data = {2, 4, 4, 4, 5, 5, 7, 9}
-print(table.stdev(data))          --> 2.0
-print(table.stdev(data, true))    --> 2.138089935299395
-print(table.stdev({5}), table.stdev({5}, true))  --> 0.0  nan
+local data = { 2, 4, 4, 4, 5, 5, 7, 9 }
+print(table.stdev(data))  --> 2.0
+print(table.stdev(data, true))  --> 2.138089935299395
+print(table.stdev({ 5 }), table.stdev({ 5 }, true))  --> 0.0  nan
 ```
 
 The mean, and then the sum of squared deviations from it, are each computed in floating point in a fixed order. The term for index `i` is added into accumulator `(i - 1) % 8`, starting from eight zeros, and the accumulators are then combined pairwise: accumulator `j` with `j + 4` for `j` from 0 to 3, then the first of those four sums with the third and the second with the fourth, and finally those two. The result is therefore the same on every platform and for every way the table is stored. [`table.mean`](/manual/api#table.mean) returns the average.

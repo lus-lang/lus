@@ -4,6 +4,7 @@ global print, vector, string, table, type
 
 -- Repetitive text such as a log compresses well.
 local lines = {}
+
 for i = 1, 200 do
     local second = string.format("%02d", i % 60)
     lines[i] = `2026-11-25 12:00:$second INFO request served in $(i % 7) ms`

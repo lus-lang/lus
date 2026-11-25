@@ -16,7 +16,8 @@ Lus patterns match whole characters, so `.` matches one character of any length 
 for ch in ("añb"):gmatch(utf8.charpattern) do
     io.write("[", ch, "]")
 end
-print()   --> [a][ñ][b]
+
+print()  --> [a][ñ][b]
 ```
 
 [String patterns](/manual/guide#strings-and-patterns) in the guide describes the pattern language.

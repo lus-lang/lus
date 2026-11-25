@@ -29,8 +29,8 @@ The following example computes an HMAC and checks a received hex value against i
 
 ```lus
 local mac = crypto.hmac("sha256", "key", "The quick brown fox jumps over the lazy dog")
-print(#mac)   --> 32
+print(#mac)  --> 32
 
 local received = "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
-print(crypto.equal(mac, string.transcode(received, "hex", "binary")))   --> true
+print(crypto.equal(mac, string.transcode(received, "hex", "binary")))  --> true
 ```

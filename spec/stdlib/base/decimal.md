@@ -16,8 +16,8 @@ returns: number|nil
 The parameter `x` is a number or a string. Integers, bigints, and numeric strings convert exactly and keep their digits, so `decimal("2.50")` keeps two fractional digits. A string is trimmed of surrounding whitespace and parsed as a decimal numeral with an optional sign, fraction, and exponent. A float converts through the shortest decimal string that reads back as the same float, so `decimal(0.1)` is `0.1`. A decimal returns unchanged. An argument of any other type raises `bad argument #1 to 'decimal' (number expected, got TYPE)`.
 
 ```lus
-print(decimal("0.1") + decimal("0.2") == decimal("0.3"))   --> true
-print(decimal(1) / 3)       --> 0.3333333333333333333333333333333333
+print(decimal("0.1") + decimal("0.2") == decimal("0.3"))  --> true
+print(decimal(1) / 3)  --> 0.3333333333333333333333333333333333
 print(decimal("2.50") * 2)  --> 5.00
 ```
 

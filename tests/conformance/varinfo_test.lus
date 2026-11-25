@@ -40,7 +40,11 @@ end
 
 local function arithmetic_names_an_upvalue_operand_test()
     local x
-    local function f() return x + 1 end
+
+    local function f()
+        return x + 1
+    end
+
     local ok, e = catch f()
     assert(tostring(e):find("a nil value %(upvalue 'x'%)"), tostring(e))
 end
@@ -103,7 +107,13 @@ end
 -- ---- metamethods must not be re-annotated ----
 
 local function an_error_raised_inside_a_metamethod_keeps_its_own_variable_name_test()
-    local t = setmetatable({}, {__add = function() local y; return y + 1 end})
+    local t = setmetatable({}, {
+        __add = function()
+            local y
+            return y + 1
+        end,
+    })
+
     local ok, e = catch (t + 1)
     -- the inner 'y', not the outer 't'
     assert(tostring(e):find("a nil value %(local 'y'%)"), tostring(e))

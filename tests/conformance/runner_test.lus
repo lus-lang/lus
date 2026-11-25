@@ -16,11 +16,16 @@ local FIX = TEST_DIR .. "/fixtures/runner/"
 -- Runs `lus test` with the given options on fixture files and returns its
 -- report and whether it exited with status 0.
 local function run_tests(options, ...)
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local cmd = `"$LUS" test $options`
-    for _, name in ipairs({...}) do
+
+    for _, name in ipairs({ ... }) do
         cmd = cmd .. ` "$FIX$name"`
     end
+
     local f = io.popen(cmd .. " 2>&1")
     local report = f:read("a")
     local ok = f:close()
@@ -29,7 +34,9 @@ end
 
 local function file_line(report, name)
     for line in report:gmatch("[^\n]+") do
-        if line:find(name, 1, true) and (line:find("^ok") or line:find("^FAIL")) then return line end
+        if line:find(name, 1, true) and (line:find("^ok") or line:find("^FAIL")) then
+            return line
+        end
     end
 end
 
@@ -51,8 +58,14 @@ local function a_chatty_file_stops_at_the_file_timeout_test()
 end
 
 local function two_files_left_behind_in_one_pass_test()
-    if windows then skip("the fixture detaches a process with POSIX setsid") end
-    if not os.execute("command -v perl >/dev/null 2>&1") then skip("needs perl") end
+    if windows then
+        skip("the fixture detaches a process with POSIX setsid")
+    end
+
+    if not os.execute("command -v perl >/dev/null 2>&1") then
+        skip("needs perl")
+    end
+
     -- The timeout leaves waiting.lus time to start on a loaded machine,
     -- and the stuck files keep their pipes open past it and the grace
     -- period of 5 s that follows.
@@ -60,7 +73,8 @@ local function two_files_left_behind_in_one_pass_test()
     assert(not ok, report)
     assert(not report:find("panic", 1, true), report)
     assert(file_line(report, "waiting.lus"):find("^ok"), report)
-    for _, name in ipairs({"stuck.lus", "stuck2.lus"}) do
+
+    for _, name in ipairs({ "stuck.lus", "stuck2.lus" }) do
         local line = file_line(report, name)
         assert(line and line:find("^FAIL"), report)
         -- The time reported is the time the file ran before the runner
@@ -68,6 +82,7 @@ local function two_files_left_behind_in_one_pass_test()
         local ms = tonumber(line:match("(%d+) ms%)"))
         assert(ms and ms >= 3000, line)
     end
+
     assert(report:find("left it behind", 1, true), report)
     assert(report:find("3 files, 1 passed", 1, true), report)
 end
@@ -84,32 +99,64 @@ end
 -- expression, and it still returns every value that the standard assert
 -- returns, including the values of a call in the last position.
 local function power_assert_returns_every_value_test()
-    local function pack(...) return { n = select("#", ...), ... } end
-    local function three() return true, 2, 3 end
-    local co = coroutine.create(function() return "x", "y" end)
+    local function pack(...)
+        return { n = select("#", ...), ... }
+    end
+
+    local function three()
+        return true, 2, 3
+    end
+
+    local co = coroutine.create(function()
+        return "x", "y"
+    end)
+
     local r = pack(assert(coroutine.resume(co)))
     local t = pack(assert(three()))
     local a = pack(assert(1, 2, 3))
     local l = pack(assert(true, three()))
     local c = pack(assert(1 == 1, "message", "more"))
     local results = {
-        { r.n, 3 }, { r[2], "x" }, { r[3], "y" },
-        { t.n, 3 }, { t[3], 3 },
-        { a.n, 3 }, { a[3], 3 },
-        { l.n, 4 }, { l[4], 3 },
-        { c.n, 3 }, { c[1], true }, { c[3], "more" },
+        { r.n, 3 },
+        { r[2], "x" },
+        { r[3], "y" },
+        { t.n, 3 },
+        { t[3], 3 },
+        { a.n, 3 },
+        { a[3], 3 },
+        { l.n, 4 },
+        { l[4], 3 },
+        { c.n, 3 },
+        { c[1], true },
+        { c[3], "more" },
     }
+
     for i, pair in ipairs(results) do
-        if pair[1] ~= pair[2] then error(`result $(i): $(tostring(pair[1])) where $(tostring(pair[2])) was expected`, 0) end
+        if pair[1] ~= pair[2] then
+            error(`result $i: $(tostring(pair[1])) where $(tostring(pair[2])) was expected`, 0)
+        end
     end
-    assert(select(2, assert(coroutine.resume(coroutine.create(function() return "only" end)))) == "only")
+
+    assert(select(2, assert(coroutine.resume(coroutine.create(function()
+        return "only"
+    end)))) == "only")
 end
 
 -- A failing call in the last position passes its message to the report.
 local function power_assert_takes_the_message_of_a_failing_call_test()
-    local function fails() return nil, "the reason" end
+    local function fails()
+        return nil, "the reason"
+    end
+
     local ok, err = catch assert(fails())
-    if ok or not string.find(tostring(err), "the reason", 1, true) then error(tostring(err), 0) end
+
+    if ok or not string.find(tostring(err), "the reason", 1, true) then
+        error(tostring(err), 0)
+    end
+
     ok, err = catch assert(1 > 2, "bigger")
-    if ok or not string.find(tostring(err), "bigger", 1, true) then error(tostring(err), 0) end
+
+    if ok or not string.find(tostring(err), "bigger", 1, true) then
+        error(tostring(err), 0)
+    end
 end

@@ -22,10 +22,10 @@ pledge("env", "fs")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-read-example.txt")
 io.open(path, "w"):write("0x10 3.5 rest\nlast line\n"):close()
 io.input(path)
-print(io.read("n", "n"))                 --> 16  3.5
-print(io.read("l"))                      -->  rest
-print(io.read("L") == "last line\n")     --> true
-print(io.read("l"))                      --> nil
+print(io.read("n", "n"))  --> 16  3.5
+print(io.read("l"))  -->  rest
+print(io.read("L") == "last line\n")  --> true
+print(io.read("l"))  --> nil
 io.input():close()
 fs.remove(path)
 ```

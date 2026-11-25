@@ -22,7 +22,7 @@ The comparison reads every byte even after a difference, so an attacker who meas
 The following example compares a string with a vector that holds the same bytes, and two strings that differ.
 
 ```lus
-print(crypto.equal("token", vector.fromstring("token")))   --> true
-print(crypto.equal("token", "tokem"))                      --> false
-print(crypto.equal("token", "tok"))                        --> false
+print(crypto.equal("token", vector.fromstring("token")))  --> true
+print(crypto.equal("token", "tokem"))  --> false
+print(crypto.equal("token", "tok"))  --> false
 ```

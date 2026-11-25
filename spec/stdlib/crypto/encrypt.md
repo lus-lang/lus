@@ -44,7 +44,7 @@ The following example encrypts a session cookie with a fresh nonce and decrypts 
 local key = crypto.random(32)
 local nonce = crypto.random(12)
 local ct, tag = crypto.encrypt("aes-256-gcm", key, nonce, '{"user":42}', "session")
-print(#ct, #tag)   --> 11  16
+print(#ct, #tag)  --> 11  16
 local plain = crypto.decrypt("aes-256-gcm", key, nonce, ct, tag, "session")
-print(vector.tostring(plain))   --> {"user":42}
+print(vector.tostring(plain))  --> {"user":42}
 ```

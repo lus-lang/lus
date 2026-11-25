@@ -12,6 +12,7 @@ local setup = coroutine.wrap(function()
     coroutine.yield()
     fs.remove("data", true)
 end)
+
 setup()
 
 -- The main program may read the data directory and its files, and nothing
@@ -28,6 +29,7 @@ end
 for line in io.lines("data/prices.csv") do
     print(line)
 end
+
 --> apples,3
 --> pears,4
 
@@ -49,10 +51,12 @@ local denied = {
         return os.getenv("HOME")
     end,
 }
+
 for _, attempt in ipairs(denied) do
     local ok, err = catch attempt()
     print(ok, reason(err))
 end
+
 --> false  permission "fs:read" denied
 --> false  permission "fs:write" denied
 --> false  permission "exec" denied

@@ -21,19 +21,22 @@ local function run_limited(limit, source)
     if windows then
         skip("needs a POSIX shell")
     end
+
     script_number = script_number + 1
-    local path = `netcli_$(script_number).lus`
+    local path = `netcli_$script_number.lus`
     local file = assert(io.open(path, "wb"))
     assert(file:write(source))
     assert(file:close())
-    local command = `ulimit -n $(limit) && exec $(shell_quote(lus_bin)) $(shell_quote(path)) 2>&1`
+    local command = `ulimit -n $limit && exec $(shell_quote(lus_bin)) $(shell_quote(path)) 2>&1`
     local handle = assert(io.popen(command))
     local output = handle:read("a")
     handle:close()
     catch fs.remove(path)
+
     if string.find(output, "unavailable", 1, true) then
         skip("loopback sockets unavailable")
     end
+
     return output
 end
 
@@ -87,7 +90,11 @@ local function waits_work_without_a_descriptor_for_the_poller_test()
         print("byte:", resume(second))
         print("writer:", resume(writer))
     ]])
-    assert(output == "timeout:\ttrue\tnil\ttimeout\treceive timeout\nidle:\ttrue\nbyte:\ttrue\tx\nwriter:\ttrue\n", output)
+    assert(
+        output
+            == "timeout:\ttrue\tnil\ttimeout\treceive timeout\nidle:\ttrue\nbyte:\ttrue\tx\nwriter:\ttrue\n",
+        output
+    )
 end
 
 -- A server that cannot accept for lack of a descriptor waits and accepts
@@ -133,7 +140,11 @@ local function serve_goes_on_after_the_descriptors_ran_out_test()
         print("server:", coroutine.status(serving))
         coroutine.close(serving)
     ]])
-    assert(output == "connects failed:\ttrue\nserver:\tsuspended\nrequest:\ttrue\tHTTP/1.1 200 OK\tok\nserver:\tsuspended\n", output)
+    assert(
+        output
+            == "connects failed:\ttrue\nserver:\tsuspended\nrequest:\ttrue\tHTTP/1.1 200 OK\tok\nserver:\tsuspended\n",
+        output
+    )
 end
 
 -- A program that gives `network.serve` no `on_error` function reads the
@@ -157,9 +168,11 @@ local function serve_writes_handler_errors_to_standard_error_test()
         request("/broken", { on_error = function() error("the reporter broke", 0) end })
     ]])
     local lines = {}
+
     for line in string.gmatch(output, "[^\n]+") do
         lines[#lines + 1] = (string.gsub(line, "netcli_%d+%.lus:%d+", "script"))
     end
+
     assert(table.concat(lines, "\n") == table.concat({
         "lus: network.serve: script: the handler broke at /default",
         "status 500",

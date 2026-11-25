@@ -31,6 +31,7 @@ local function find_user(id)
     if id == 1 then
         return "ada"
     end
+
     return nil, `no user with id $id`
 end
 

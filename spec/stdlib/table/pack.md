@@ -19,8 +19,8 @@ The function raises no errors of its own.
 
 ```lus
 local p = table.pack(1, nil, 3)
-print(p.n, p[1], p[2], p[3])   --> 3  1  nil  3
-print(table.pack().n)          --> 0
+print(p.n, p[1], p[2], p[3])  --> 3  1  nil  3
+print(table.pack().n)  --> 0
 ```
 
 [`table.unpack`](/manual/api#table.unpack) is the inverse: `table.unpack(p, 1, p.n)` returns the original arguments, `nil` values included.

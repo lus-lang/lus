@@ -30,9 +30,9 @@ The following example reads the summer and winter offsets of New York and render
 local ny = time.zone("America/New_York")
 local summer = time.instant(1782998100)
 local winter = time.instant(1767355200)
-print(ny:name(), ny:offset(summer), ny:offset(winter))    --> America/New_York  -14400  -18000
-print(winter:at(ny):iso())                                --> 2026-01-02T07:00:00-05:00
-print(catch time.zone("europe/paris"))                    --> false  ...: unknown time zone 'europe/paris'
+print(ny:name(), ny:offset(summer), ny:offset(winter))  --> America/New_York  -14400  -18000
+print(winter:at(ny):iso())  --> 2026-01-02T07:00:00-05:00
+print(catch time.zone("europe/paris"))  --> false  ...: unknown time zone 'europe/paris'
 ```
 
 The zones under `Etc/` follow the POSIX sign convention, so `"Etc/GMT+5"` lies five hours west of UTC. Pass a zone to `instant:at(zone)` to render a civil time, or to [`time.zoned`](/manual/api#time.zoned) to read wall-clock fields in it. [`time.offset`](/manual/api#time.offset) returns a fixed offset, and [`time.localzone`](/manual/api#time.localzone) returns the zone of the system.

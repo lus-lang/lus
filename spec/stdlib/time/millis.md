@@ -21,9 +21,9 @@ The following example builds a duration, compares it with an equal one, and adds
 
 ```lus
 local d = time.millis(1500)
-print(d:seconds())                                   --> 1.5
-print(d == time.duration{ seconds = 1, millis = 500 })--> true
-print((time.instant(0) + d):iso())                   --> 1970-01-01T00:00:01Z
+print(d:seconds())  --> 1.5
+print(d == time.duration{ seconds = 1, millis = 500 })  --> true
+print((time.instant(0) + d):iso())  --> 1970-01-01T00:00:01Z
 ```
 
 [`time.duration`](/manual/api#time.duration) combines several units and lists the methods and operators of a duration. The other single-unit constructors are [`time.days`](/manual/api#time.days), [`time.hours`](/manual/api#time.hours), [`time.minutes`](/manual/api#time.minutes), and [`time.seconds`](/manual/api#time.seconds).

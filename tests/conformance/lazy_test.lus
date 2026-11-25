@@ -1,6 +1,7 @@
 pledge("load")
 
-global print, assert, type, load, string, table, tostring, setmetatable, error, coroutine, debug, select, undefined_global_function
+global print, assert, type, load, string, table, tostring, setmetatable, error, coroutine, debug,
+    select, undefined_global_function
 
 --[[
     Tests for `<lazy>` locals (spec/design/lazy.md). The initializer runs
@@ -15,7 +16,12 @@ end
 
 local function computed_once_on_first_read_test()
     local calls = 0
-    local function expensive() calls = calls + 1 return calls * 10 end
+
+    local function expensive()
+        calls = calls + 1
+        return calls * 10
+    end
+
     local x <lazy> = expensive()
     assert(calls == 0)
     assert(x == 10 and x == 10 and calls == 1)
@@ -37,25 +43,50 @@ end
 
 local function nested_functions_share_the_value_test()
     local calls = 0
-    local x <lazy> = do calls = calls + 1 provide { calls } end
-    local function a() return x end
-    local function b() return function() return x end end
+
+    local x <lazy> = do
+        calls = calls + 1
+        provide { calls }
+    end
+
+    local function a()
+        return x
+    end
+
+    local function b()
+        return function()
+            return x
+        end
+    end
+
     assert(a() == b()() and a() == x and calls == 1)
 end
 
 local function read_only_test()
     assert(compile_error("local x <lazy> = 1 x = 2"):find("const variable 'x'", 1, true))
-    assert(compile_error("local x <lazy> = 1 local function f() x = 2 end"):find("const variable 'x'", 1, true))
+    assert(
+        compile_error("local x <lazy> = 1 local function f() x = 2 end"):find(
+            "const variable 'x'",
+            1,
+            true
+        )
+    )
     assert(load("local x <const, lazy> = 1 return x")() == 1)
 end
 
 local function error_raises_and_retries_test()
     local tries = 0
+
     local z <lazy> = do
         tries = tries + 1
-        if tries < 3 then error("not yet", 0) end
+
+        if tries < 3 then
+            error("not yet", 0)
+        end
+
         provide "ok"
     end
+
     local ok, err = catch z
     assert(ok == false and err == "not yet")
     ok, err = catch z
@@ -73,41 +104,72 @@ end
 local function recursion_is_an_error_test()
     local get
     local s <lazy> = get()
-    get = function() return s end
+
+    get = function()
+        return s
+    end
+
     local ok, err = catch s
-    assert(ok == false and tostring(err):find("lazy variable 's' read during its own initialization", 1, true))
+    assert(
+        ok == false
+            and tostring(err):find("lazy variable 's' read during its own initialization", 1, true)
+    )
 end
 
 local function nil_and_false_values_test()
     local calls = 0
-    local n <lazy> = do calls = calls + 1 provide nil end
-    local f <lazy> = do calls = calls + 1 provide false end
+
+    local n <lazy> = do
+        calls = calls + 1
+        provide nil
+    end
+
+    local f <lazy> = do
+        calls = calls + 1
+        provide false
+    end
+
     assert(n == nil and n == nil and f == false and f == false and calls == 2)
 end
 
 local function close_only_when_read_test()
     local log = {}
+
     local function resource(name)
-        return setmetatable({}, { __close = function(_, err) log[#log + 1] = name end })
+        return setmetatable({}, {
+            __close = function(_, err)
+                log[#log + 1] = name
+            end,
+        })
     end
+
     do
         local used <lazy, close> = resource("used")
         local unused <lazy, close> = resource("unused")
         local _ = used
     end
+
     assert(#log == 1 and log[1] == "used")
+
     local ok, err = catch do
         local bad <lazy, close> = 5
         local _ = bad
     end
+
     assert(ok == false and tostring(err):find("non-closable", 1, true))
 end
 
 local function runtime_attributes_apply_to_the_value_test()
     local function positive(name, v)
-        if v <= 0 then error(name .. " must be positive", 0) end
+        if v <= 0 then
+            error(name .. " must be positive", 0)
+        end
     end
-    local function doubled(name, v) return v * 2 end
+
+    local function doubled(name, v)
+        return v * 2
+    end
+
     local p <lazy, positive, doubled> = 21
     assert(p == 42)
     local q <lazy, positive> = -1
@@ -118,14 +180,26 @@ end
 local function group_fields_test()
     local rows = { 5, 1, 4 }
     local calls = 0
-    local stats <group> = { count = #rows, median <lazy> = do calls = calls + 1 table.sort(rows) provide rows[2] end }
+
+    local stats <group> = { count = #rows, median <lazy> = do
+        calls = calls + 1
+        table.sort(rows)
+        provide rows[2]
+    end }
+
     assert(stats.count == 3 and calls == 0)
     assert(stats.median == 4 and stats.median == 4 and calls == 1)
     local copy <group> = stats
     assert(copy.median == 4)
     local count, median from stats
     assert(median == 4)
-    assert(compile_error("local g <group> = { a <lazy> = 1 } g.a = 2"):find("const variable 'a'", 1, true))
+    assert(
+        compile_error("local g <group> = { a <lazy> = 1 } g.a = 2"):find(
+            "const variable 'a'",
+            1,
+            true
+        )
+    )
 end
 
 local function rejected_forms_test()
@@ -133,11 +207,14 @@ local function rejected_forms_test()
     assert(compile_error("local a <lazy>"):find("one initializer", 1, true))
     assert(compile_error("global g <lazy> = 1"):find("cannot be <lazy>", 1, true))
     assert(compile_error("local a <lazy> from { a = 1 }"):find("cannot use <lazy>", 1, true))
-    assert(compile_error("local m <lazy, meta> = 1"):find("cannot combine <meta> with <lazy>", 1, true))
+    assert(
+        compile_error("local m <lazy, meta> = 1"):find("cannot combine <meta> with <lazy>", 1, true)
+    )
 end
 
 local function detached_coroutines_wait_test()
     local log = {}
+
     local v <lazy> = do
         log[#log + 1] = "start"
         coroutine.yield()
@@ -145,8 +222,15 @@ local function detached_coroutines_wait_test()
         log[#log + 1] = "end"
         provide 42
     end
-    local a = coroutine.detach(coroutine.create(function() return v end))
-    local b = coroutine.detach(coroutine.create(function() return v end))
+
+    local a = coroutine.detach(coroutine.create(function()
+        return v
+    end))
+
+    local b = coroutine.detach(coroutine.create(function()
+        return v
+    end))
+
     local oka, va = coroutine.resume(a)
     local okb, vb = coroutine.resume(b)
     assert(oka and okb and va == 42 and vb == 42)
@@ -154,10 +238,21 @@ local function detached_coroutines_wait_test()
 end
 
 local function plain_coroutines_cannot_wait_test()
-    local w <lazy> = do coroutine.yield() provide 1 end
-    local c1 = coroutine.create(function() return w end)
+    local w <lazy> = do
+        coroutine.yield()
+        provide 1
+    end
+
+    local c1 = coroutine.create(function()
+        return w
+    end)
+
     coroutine.resume(c1)
-    local ok, err = coroutine.resume(coroutine.create(function() return w end))
+
+    local ok, err = coroutine.resume(coroutine.create(function()
+        return w
+    end))
+
     assert(ok == false and tostring(err):find("read while another coroutine computes it", 1, true))
     assert(select(2, coroutine.resume(c1)) == 1)
     assert(w == 1)
@@ -166,9 +261,15 @@ end
 local function survives_string_dump_test()
     local f = load(string.dump(function()
         local c = 0
-        local x <lazy> = do c = c + 1 provide c * 5 end
+
+        local x <lazy> = do
+            c = c + 1
+            provide c * 5
+        end
+
         return x + x, c
     end))
+
     local sum, c = f()
     assert(sum == 10 and c == 1)
 end
@@ -176,6 +277,10 @@ end
 local function hot_loop_reads_test()
     local x <lazy> = 3
     local s = 0
-    for i = 1, 1000 do s = s + x end
+
+    for i = 1, 1000 do
+        s = s + x
+    end
+
     assert(s == 3000)
 end

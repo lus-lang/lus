@@ -19,10 +19,15 @@ returns: any
 The parameter `t` must be a table, and any other value raises `bad argument #1 to 'rawget' (table expected, got TYPE)`. The parameter `k` is the key and may be any value. A float key with an integral value reads the same field as the integer, so `rawget(t, 1.0)` reads `t[1]`.
 
 ```lus
-local t = setmetatable({}, { __index = function() return "default" end })
+local t = setmetatable({}, {
+    __index = function()
+        return "default"
+    end,
+})
+
 t.real = "stored"
-print(t.missing, rawget(t, "missing"))   --> default  nil
-print(rawget(t, "real"))                 --> stored
+print(t.missing, rawget(t, "missing"))  --> default  nil
+print(rawget(t, "real"))  --> stored
 ```
 
 [`rawset`](/manual/api#rawset) writes a field without `__newindex`, and [`rawequal`](/manual/api#rawequal) and [`rawlen`](/manual/api#rawlen) bypass the other metamethods.

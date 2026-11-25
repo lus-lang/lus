@@ -28,9 +28,11 @@ end)
 
 -- The order of `pairs` is unspecified, so the report sorts the city names first.
 local cities = {}
+
 for city in pairs(by_city) do
     cities[#cities + 1] = city
 end
+
 table.sort(cities)
 
 local function revenue(row)
@@ -38,12 +40,14 @@ local function revenue(row)
 end
 
 local report = { { "city", "total", "mean" } }
+
 for _, city in ipairs(cities) do
     local revenues = table.map(by_city[city], revenue)
     local total, mean = table.sum(revenues), table.mean(revenues)
     print(string.format("%-8s total %6.0f  mean %7.1f", city, total, mean))
     report[#report + 1] = { city, total, mean }
 end
+
 --> Berlin   total   2190  mean  1095.0
 --> London   total   2310  mean  1155.0
 --> Paris    total   2650  mean  1325.0

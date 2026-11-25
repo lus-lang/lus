@@ -28,5 +28,5 @@ The following example reads a file from an archive.
 
 ```lus
 local tar = vector.archive.tar.pack({ { name = "VERSION", data = "2.0.0\n" } })
-io.write(vector.tostring(vector.archive.tar.read(tar, "VERSION")))   --> 2.0.0
+io.write(vector.tostring(vector.archive.tar.read(tar, "VERSION")))  --> 2.0.0
 ```

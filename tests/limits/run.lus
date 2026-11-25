@@ -17,20 +17,31 @@
 --
 -- Usage: lus run.lus [--lus BIN] [--only NAME] [--timeout SECONDS] [--emit DIR]
 
-global arg, assert, error, fs, io, ipairs, math, os, package, pairs, pledge, print, string, table, tonumber, tostring, type
+global arg, assert, error, fs, io, ipairs, math, os, package, pairs, pledge, print, string, table,
+    tonumber, tostring, type
 
 pledge("exec", "fs", "env")
 
 local opts = { lus = "runtime/zig-out/bin/lus", timeout = 60 }
+
 do
     local i = 1
+
     while i <= #arg do
         local a, v = arg[i], arg[i + 1]
-        if a == "--lus" then opts.lus = v
-        elseif a == "--only" then opts.only = v
-        elseif a == "--timeout" then opts.timeout = tonumber(v)
-        elseif a == "--emit" then opts.emit = v
-        else error("unknown option " .. a) end
+
+        if a == "--lus" then
+            opts.lus = v
+        elseif a == "--only" then
+            opts.only = v
+        elseif a == "--timeout" then
+            opts.timeout = tonumber(v)
+        elseif a == "--emit" then
+            opts.emit = v
+        else
+            error("unknown option " .. a)
+        end
+
         i = i + 2
     end
 end
@@ -78,7 +89,11 @@ local MESSAGES = {
 
 local function list(n, f, sep)
     local parts = {}
-    for i = 1, n do parts[i] = f(i) end
+
+    for i = 1, n do
+        parts[i] = f(i)
+    end
+
     return table.concat(parts, sep or ", ")
 end
 
@@ -86,174 +101,497 @@ end
 -- the search. `step` is the factor between the sizes that the search
 -- tries before it bisects.
 local CASES = {
-    { name = "locals", doc = 200, cap = 400, gen = function(n)
-        return list(n, function(i) return "local a" .. i .. " = " .. i end, "\n")
-            .. "\nassert(a" .. n .. " == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "local declaration list", doc = 200, cap = 400, gen = function(n)
-        return "local " .. list(n, function(i) return "a" .. i end) .. " = " .. list(n, function(i) return tostring(i) end)
-            .. "\nassert(a" .. n .. " == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "parameters", doc = 200, cap = 400, gen = function(n)
-        return "local function f(" .. list(n, function(i) return "p" .. i end) .. ") return p" .. n .. " end\n"
-            .. "assert(f(" .. list(n, function(i) return tostring(i) end) .. ") == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "upvalues", doc = 255, cap = 400, gen = function(n)
-        -- Two enclosing functions hold the captured locals, since one
-        -- function holds at most 200.
-        local a = math.min(n, 150)
-        local b = n - a
-        return "local function outer()\n"
-            .. list(a, function(i) return "local x" .. i .. " = " .. i end, "\n") .. "\n"
-            .. "local function middle()\n"
-            .. list(b, function(i) return "local y" .. i .. " = " .. i end, "\n") .. "\n"
-            .. "return function() return " .. list(a, function(i) return "x" .. i end, " + ")
-            .. (b > 0 and (" + " .. list(b, function(i) return "y" .. i end, " + ")) or "") .. " end\n"
-            .. "end\nreturn middle()\nend\n"
-            .. "assert(outer()() == " .. (a * (a + 1) // 2 + b * (b + 1) // 2) .. ")\nprint('ok')"
-    end },
-    { name = "call arguments", cap = 400, gen = function(n)
-        return "local function f(...) return select('#', ...) end\n"
-            .. "assert(f(" .. list(n, function(i) return tostring(i) end) .. ") == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "return values", cap = 400, gen = function(n)
-        return "local function f() return " .. list(n, function(i) return tostring(i) end) .. " end\n"
-            .. "assert(select('#', f()) == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "concatenation operands", cap = 400, gen = function(n)
-        return "local v = 'a'\nlocal s = " .. list(n, function() return "v" end, " .. ")
-            .. "\nassert(#s == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "interpolation segments", cap = 400, gen = function(n)
-        return "local v = 'a'\nlocal s = `" .. list(n, function() return "$(v)" end, "") .. "`\nassert(#s == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "assignment targets", cap = 400, gen = function(n)
-        return "local t = {}\n" .. list(n, function(i) return "t[" .. i .. "]" end) .. " = "
-            .. list(n, function(i) return tostring(i) end) .. "\nassert(#t == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "constructor positional fields", cap = 200000, gen = function(n)
-        return "local t = {" .. list(n, function(i) return tostring(i) end) .. "}\nassert(#t == " .. n .. " and t[" .. n .. "] == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "constructor constant keys", cap = 100000, gen = function(n)
-        return "local t = {" .. list(n, function(i) return "k" .. i .. " = " .. i end) .. "}\nassert(t.k" .. n .. " == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "constructor computed values", cap = 100000, gen = function(n)
-        return "local v = 1\nlocal t = {" .. list(n, function(i) return "k" .. i .. " = v + " .. i end) .. "}\nassert(t.k" .. n .. " == " .. (n + 1) .. ")\nprint('ok')"
-    end },
-    { name = "constructor bracketed keys", cap = 100000, gen = function(n)
-        return "local t = {" .. list(n, function(i) return "[" .. (i * 7) .. "] = " .. i end) .. "}\nassert(t[" .. (n * 7) .. "] == " .. n .. ")\nprint('ok')"
-    end },
+    {
+        name = "locals",
+        doc = 200,
+        cap = 400,
+        gen = function(n)
+            return list(n, function(i)
+                return "local a" .. i .. " = " .. i
+            end, "\n") .. "\nassert(a" .. n .. " == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "local declaration list",
+        doc = 200,
+        cap = 400,
+        gen = function(n)
+            return "local " .. list(n, function(i)
+                return "a" .. i
+            end) .. " = " .. list(n, function(i)
+                return tostring(i)
+            end) .. "\nassert(a" .. n .. " == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "parameters",
+        doc = 200,
+        cap = 400,
+        gen = function(n)
+            return "local function f(" .. list(n, function(i)
+                return "p" .. i
+            end) .. ") return p" .. n .. " end\n" .. "assert(f(" .. list(n, function(i)
+                return tostring(i)
+            end) .. ") == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "upvalues",
+        doc = 255,
+        cap = 400,
+        gen = function(n)
+            -- Two enclosing functions hold the captured locals, since one
+            -- function holds at most 200.
+            local a = math.min(n, 150)
+            local b = n - a
+
+            return "local function outer()\n"
+                .. list(a, function(i)
+                    return "local x" .. i .. " = " .. i
+                end, "\n")
+                .. "\n"
+                .. "local function middle()\n"
+                .. list(b, function(i)
+                    return "local y" .. i .. " = " .. i
+                end, "\n")
+                .. "\n"
+                .. "return function() return "
+                .. list(a, function(i)
+                    return "x" .. i
+                end, " + ")
+                .. (b > 0 and (" + " .. list(b, function(i)
+                    return "y" .. i
+                end, " + ")) or "")
+                .. " end\n"
+                .. "end\nreturn middle()\nend\n"
+                .. "assert(outer()() == "
+                .. (a * (a + 1) // 2 + b * (b + 1) // 2)
+                .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "call arguments",
+        cap = 400,
+        gen = function(n)
+            return "local function f(...) return select('#', ...) end\n"
+                .. "assert(f("
+                .. list(n, function(i)
+                    return tostring(i)
+                end)
+                .. ") == "
+                .. n
+                .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "return values",
+        cap = 400,
+        gen = function(n)
+            return "local function f() return " .. list(n, function(i)
+                return tostring(i)
+            end) .. " end\n" .. "assert(select('#', f()) == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "concatenation operands",
+        cap = 400,
+        gen = function(n)
+            return "local v = 'a'\nlocal s = " .. list(n, function()
+                return "v"
+            end, " .. ") .. "\nassert(#s == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "interpolation segments",
+        cap = 400,
+        gen = function(n)
+            return "local v = 'a'\nlocal s = `" .. list(n, function()
+                return "$(v)"
+            end, "") .. "`\nassert(#s == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "assignment targets",
+        cap = 400,
+        gen = function(n)
+            return "local t = {}\n" .. list(n, function(i)
+                return "t[" .. i .. "]"
+            end) .. " = " .. list(n, function(i)
+                return tostring(i)
+            end) .. "\nassert(#t == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "constructor positional fields",
+        cap = 200000,
+        gen = function(n)
+            return "local t = {" .. list(n, function(i)
+                return tostring(i)
+            end) .. "}\nassert(#t == " .. n .. " and t[" .. n .. "] == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "constructor constant keys",
+        cap = 100000,
+        gen = function(n)
+            return "local t = {" .. list(n, function(i)
+                return "k" .. i .. " = " .. i
+            end) .. "}\nassert(t.k" .. n .. " == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "constructor computed values",
+        cap = 100000,
+        gen = function(n)
+            return "local v = 1\nlocal t = {" .. list(n, function(i)
+                return "k" .. i .. " = v + " .. i
+            end) .. "}\nassert(t.k" .. n .. " == " .. (n + 1) .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "constructor bracketed keys",
+        cap = 100000,
+        gen = function(n)
+            return "local t = {" .. list(n, function(i)
+                return "[" .. (i * 7) .. "] = " .. i
+            end) .. "}\nassert(t[" .. (n * 7) .. "] == " .. n .. ")\nprint('ok')"
+        end,
+    },
     -- A group takes one slot of the local limit besides its fields.
-    { name = "local group fields", doc = 199, cap = 400, gen = function(n)
-        return "local g <group> = { " .. list(n, function(i) return "f" .. i .. " = " .. i end) .. " }\n"
-            .. "assert(g.f" .. n .. " == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "string constants in a function", cap = 140000, gen = function(n)
-        return "local t = {}\n" .. list(n, function(i) return "t[#t + 1] = 's" .. i .. "'" end, "\n")
-            .. "\nassert(t[" .. n .. "] == 's" .. n .. "')\nprint('ok')"
-    end },
-    { name = "closures in a function", cap = 140000, gen = function(n)
-        return "local t = {}\n" .. list(n, function(i) return "t[" .. i .. "] = function() return " .. i .. " end" end, "\n")
-            .. "\nassert(t[" .. n .. "]() == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "enum members", doc = 255, cap = 400, gen = function(n)
-        return "local E = enum " .. list(n, function(i) return "m" .. i end) .. " end\nprint('ok')"
-    end },
-    { name = "parenthesis nesting", cap = 400, gen = function(n)
-        return "local x = " .. string.rep("(", n) .. "1" .. string.rep(")", n) .. "\nassert(x == 1)\nprint('ok')"
-    end },
-    { name = "table constructor nesting", cap = 400, gen = function(n)
-        return "local t = " .. string.rep("{", n) .. string.rep("}", n) .. "\nprint('ok')"
-    end },
-    { name = "block nesting", cap = 400, gen = function(n)
-        return string.rep("do ", n) .. string.rep("end ", n) .. "\nprint('ok')"
-    end },
-    { name = "function nesting", cap = 400, gen = function(n)
-        return "local f = " .. string.rep("function() return ", n) .. "1" .. string.rep(" end", n) .. "\nprint('ok')"
-    end },
-    { name = "query sources", doc = 8, cap = 40, gen = function(n)
-        local decl = list(n, function(i) return "local s" .. i .. " = { { v = " .. i .. " } }" end, "\n")
-        return decl .. "\nlocal n = 0\nfor r in query(@" .. list(n, function(i) return "s" .. i .. " as s" .. i end, ", ")
-            .. " select " .. list(n, function(i) return "s" .. i .. ".v as c" .. i end) .. ") do n = n + 1 end\nassert(n == 1)\nprint('ok')"
-    end },
-    { name = "query group keys", doc = 16, cap = 60, gen = function(n)
-        return "local rows = { { " .. list(n, function(i) return "c" .. i .. " = " .. i end) .. " } }\nlocal n = 0\n"
-            .. "for r in query(@rows as r select count(*) as k group by " .. list(n, function(i) return "r.c" .. i end) .. ") do n = n + r.k end\n"
-            .. "assert(n == 1)\nprint('ok')"
-    end },
-    { name = "query order items", doc = 16, cap = 60, gen = function(n)
-        return "local rows = { { " .. list(n, function(i) return "c" .. i .. " = " .. i end) .. " } }\nlocal n = 0\n"
-            .. "for r in query(@rows as r order by " .. list(n, function(i) return "r.c" .. i end) .. ") do n = n + 1 end\n"
-            .. "assert(n == 1)\nprint('ok')"
-    end },
-    { name = "query select items", doc = 32, cap = 400, gen = function(n)
-        return "local rows = { { v = 1 } }\nlocal n = 0\n"
-            .. "for r in query(@rows as r select " .. list(n, function(i) return "r.v + " .. i .. " as c" .. i end) .. ") do n = r.c" .. n .. " end\n"
-            .. "assert(n == " .. (n + 1) .. ")\nprint('ok')"
-    end },
-    { name = "query where conjuncts", cap = 2000, gen = function(n)
-        return "local rows = { { v = 5 }, { v = 0 } }\nlocal n = 0\n"
-            .. "for r in query(@rows as r where " .. list(n, function() return "r.v > 1" end, " and ") .. ") do n = n + 1 end\n"
-            .. "assert(n == 1)\nprint('ok')"
-    end },
+    {
+        name = "local group fields",
+        doc = 199,
+        cap = 400,
+        gen = function(n)
+            return "local g <group> = { " .. list(n, function(i)
+                return "f" .. i .. " = " .. i
+            end) .. " }\n" .. "assert(g.f" .. n .. " == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "string constants in a function",
+        cap = 140000,
+        gen = function(n)
+            return "local t = {}\n" .. list(n, function(i)
+                return "t[#t + 1] = 's" .. i .. "'"
+            end, "\n") .. "\nassert(t[" .. n .. "] == 's" .. n .. "')\nprint('ok')"
+        end,
+    },
+    {
+        name = "closures in a function",
+        cap = 140000,
+        gen = function(n)
+            return "local t = {}\n" .. list(n, function(i)
+                return "t[" .. i .. "] = function() return " .. i .. " end"
+            end, "\n") .. "\nassert(t[" .. n .. "]() == " .. n .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "enum members",
+        doc = 255,
+        cap = 400,
+        gen = function(n)
+            return "local E = enum " .. list(n, function(i)
+                return "m" .. i
+            end) .. " end\nprint('ok')"
+        end,
+    },
+    {
+        name = "parenthesis nesting",
+        cap = 400,
+        gen = function(n)
+            return "local x = "
+                .. string.rep("(", n)
+                .. "1"
+                .. string.rep(")", n)
+                .. "\nassert(x == 1)\nprint('ok')"
+        end,
+    },
+    {
+        name = "table constructor nesting",
+        cap = 400,
+        gen = function(n)
+            return "local t = " .. string.rep("{", n) .. string.rep("}", n) .. "\nprint('ok')"
+        end,
+    },
+    {
+        name = "block nesting",
+        cap = 400,
+        gen = function(n)
+            return string.rep("do ", n) .. string.rep("end ", n) .. "\nprint('ok')"
+        end,
+    },
+    {
+        name = "function nesting",
+        cap = 400,
+        gen = function(n)
+            return "local f = "
+                .. string.rep("function() return ", n)
+                .. "1"
+                .. string.rep(" end", n)
+                .. "\nprint('ok')"
+        end,
+    },
+    {
+        name = "query sources",
+        doc = 8,
+        cap = 40,
+        gen = function(n)
+            local decl = list(n, function(i)
+                return "local s" .. i .. " = { { v = " .. i .. " } }"
+            end, "\n")
+
+            return decl .. "\nlocal n = 0\nfor r in query(@" .. list(n, function(i)
+                return "s" .. i .. " as s" .. i
+            end, ", ") .. " select " .. list(n, function(i)
+                return "s" .. i .. ".v as c" .. i
+            end) .. ") do n = n + 1 end\nassert(n == 1)\nprint('ok')"
+        end,
+    },
+    {
+        name = "query group keys",
+        doc = 16,
+        cap = 60,
+        gen = function(n)
+            return "local rows = { { " .. list(n, function(i)
+                return "c" .. i .. " = " .. i
+            end) .. " } }\nlocal n = 0\n" .. "for r in query(@rows as r select count(*) as k group by " .. list(n, function(
+                i
+            )
+                return "r.c" .. i
+            end) .. ") do n = n + r.k end\n" .. "assert(n == 1)\nprint('ok')"
+        end,
+    },
+    {
+        name = "query order items",
+        doc = 16,
+        cap = 60,
+        gen = function(n)
+            return "local rows = { { " .. list(n, function(i)
+                return "c" .. i .. " = " .. i
+            end) .. " } }\nlocal n = 0\n" .. "for r in query(@rows as r order by " .. list(n, function(
+                i
+            )
+                return "r.c" .. i
+            end) .. ") do n = n + 1 end\n" .. "assert(n == 1)\nprint('ok')"
+        end,
+    },
+    {
+        name = "query select items",
+        doc = 32,
+        cap = 400,
+        gen = function(n)
+            return "local rows = { { v = 1 } }\nlocal n = 0\n"
+                .. "for r in query(@rows as r select "
+                .. list(n, function(i)
+                    return "r.v + " .. i .. " as c" .. i
+                end)
+                .. ") do n = r.c"
+                .. n
+                .. " end\n"
+                .. "assert(n == "
+                .. (n + 1)
+                .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "query where conjuncts",
+        cap = 2000,
+        gen = function(n)
+            return "local rows = { { v = 5 }, { v = 0 } }\nlocal n = 0\n"
+                .. "for r in query(@rows as r where "
+                .. list(n, function()
+                    return "r.v > 1"
+                end, " and ")
+                .. ") do n = n + 1 end\n"
+                .. "assert(n == 1)\nprint('ok')"
+        end,
+    },
     -- Runtime limits.
-    { name = "recursion depth", cap = 10000000, gen = function(n)
-        return "local function f(k) if k == 0 then return 0 end return 1 + f(k - 1) end\nassert(f(" .. n .. ") == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "nested callbacks through natives", cap = 100000, gen = function(n)
-        return "local function f(k) if k == 0 then return 0 end local r = 0 string.gsub('x', 'x', function() r = 1 + f(k - 1) end) return r end\n"
-            .. "assert(f(" .. n .. ") == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "nested coroutine resumes", cap = 100000, gen = function(n)
-        return "local function f(k) if k == 0 then return 0 end local co = coroutine.create(function() return 1 + f(k - 1) end) local ok, v = coroutine.resume(co) assert(ok, v) return v end\n"
-            .. "assert(f(" .. n .. ") == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "__index chain of tables", doc = 1999, cap = 100000, gen = function(n)
-        return "local t = { v = 1 }\nfor i = 1, " .. n .. " do t = setmetatable({}, { __index = t }) end\nassert(t.v == 1)\nprint('ok')"
-    end },
-    { name = "__newindex chain of tables", doc = 1999, cap = 100000, gen = function(n)
-        return "local base = {}\nlocal t = base\nfor i = 1, " .. n .. " do t = setmetatable({}, { __newindex = t }) end\nt.v = 1\nassert(rawget(base, 'v') == 1)\nprint('ok')"
-    end },
-    { name = "__call chain of tables", doc = 15, cap = 1000, gen = function(n)
-        return "local f = function() return 7 end\nfor i = 1, " .. n .. " do f = setmetatable({}, { __call = f }) end\nassert(f() == 7)\nprint('ok')"
-    end },
-    { name = "table.unpack results", cap = 4000000, gen = function(n)
-        return "local t = table.create(" .. n .. ", 0)\nfor i = 1, " .. n .. " do t[i] = i end\nassert(select('#', table.unpack(t)) == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "pattern captures", cap = 400, gen = function(n)
-        return "local s = string.rep('a', " .. n .. ")\nassert(select('#', s:match(string.rep('(a)', " .. n .. "))) == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "format width", doc = 99, cap = 400, gen = function(n)
-        return "assert(#string.format('%" .. n .. "d', 1) == " .. math.max(n, 1) .. ")\nprint('ok')"
-    end },
+    {
+        name = "recursion depth",
+        cap = 10000000,
+        gen = function(n)
+            return "local function f(k) if k == 0 then return 0 end return 1 + f(k - 1) end\nassert(f("
+                .. n
+                .. ") == "
+                .. n
+                .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "nested callbacks through natives",
+        cap = 100000,
+        gen = function(n)
+            return "local function f(k) if k == 0 then return 0 end local r = 0 string.gsub('x', 'x', function() r = 1 + f(k - 1) end) return r end\n"
+                .. "assert(f("
+                .. n
+                .. ") == "
+                .. n
+                .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "nested coroutine resumes",
+        cap = 100000,
+        gen = function(n)
+            return "local function f(k) if k == 0 then return 0 end local co = coroutine.create(function() return 1 + f(k - 1) end) local ok, v = coroutine.resume(co) assert(ok, v) return v end\n"
+                .. "assert(f("
+                .. n
+                .. ") == "
+                .. n
+                .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "__index chain of tables",
+        doc = 1999,
+        cap = 100000,
+        gen = function(n)
+            return "local t = { v = 1 }\nfor i = 1, "
+                .. n
+                .. " do t = setmetatable({}, { __index = t }) end\nassert(t.v == 1)\nprint('ok')"
+        end,
+    },
+    {
+        name = "__newindex chain of tables",
+        doc = 1999,
+        cap = 100000,
+        gen = function(n)
+            return "local base = {}\nlocal t = base\nfor i = 1, "
+                .. n
+                .. " do t = setmetatable({}, { __newindex = t }) end\nt.v = 1\nassert(rawget(base, 'v') == 1)\nprint('ok')"
+        end,
+    },
+    {
+        name = "__call chain of tables",
+        doc = 15,
+        cap = 1000,
+        gen = function(n)
+            return "local f = function() return 7 end\nfor i = 1, "
+                .. n
+                .. " do f = setmetatable({}, { __call = f }) end\nassert(f() == 7)\nprint('ok')"
+        end,
+    },
+    {
+        name = "table.unpack results",
+        cap = 4000000,
+        gen = function(n)
+            return "local t = table.create("
+                .. n
+                .. ", 0)\nfor i = 1, "
+                .. n
+                .. " do t[i] = i end\nassert(select('#', table.unpack(t)) == "
+                .. n
+                .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "pattern captures",
+        cap = 400,
+        gen = function(n)
+            return "local s = string.rep('a', "
+                .. n
+                .. ")\nassert(select('#', s:match(string.rep('(a)', "
+                .. n
+                .. "))) == "
+                .. n
+                .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "format width",
+        doc = 99,
+        cap = 400,
+        gen = function(n)
+            return "assert(#string.format('%"
+                .. n
+                .. "d', 1) == "
+                .. math.max(n, 1)
+                .. ")\nprint('ok')"
+        end,
+    },
     -- N wraps a table N times, which nests N + 1 tables, so the documented
     -- 199 levels are N = 198.
-    { name = "tojson depth", doc = 198, cap = 100000, gen = function(n)
-        return "local t = {}\nfor i = 1, " .. n .. " do t = { t } end\nassert(#tojson(t) > 0)\nprint('ok')"
-    end },
-    { name = "fromjson depth", doc = 1000, cap = 1000000, gen = function(n)
-        return "local s = string.rep('[', " .. n .. ") .. string.rep(']', " .. n .. ")\nassert(type(fromjson(s)) == 'table')\nprint('ok')"
-    end },
-    { name = "deep table.clone", doc = 200, cap = 1000000, gen = function(n)
-        return "local t = {}\nfor i = 1, " .. n .. " do t = { t } end\nassert(type(table.clone(t, true)) == 'table')\nprint('ok')"
-    end },
+    {
+        name = "tojson depth",
+        doc = 198,
+        cap = 100000,
+        gen = function(n)
+            return "local t = {}\nfor i = 1, "
+                .. n
+                .. " do t = { t } end\nassert(#tojson(t) > 0)\nprint('ok')"
+        end,
+    },
+    {
+        name = "fromjson depth",
+        doc = 1000,
+        cap = 1000000,
+        gen = function(n)
+            return "local s = string.rep('[', "
+                .. n
+                .. ") .. string.rep(']', "
+                .. n
+                .. ")\nassert(type(fromjson(s)) == 'table')\nprint('ok')"
+        end,
+    },
+    {
+        name = "deep table.clone",
+        doc = 200,
+        cap = 1000000,
+        gen = function(n)
+            return "local t = {}\nfor i = 1, "
+                .. n
+                .. " do t = { t } end\nassert(type(table.clone(t, true)) == 'table')\nprint('ok')"
+        end,
+    },
     -- The documented 100 levels are N = 99, for the same reason.
-    { name = "deep worker message", doc = 99, cap = 200000, gen = function(n)
-        return "pledge('load', 'fs')\nlocal path = os.tmpname()\nlocal f = assert(io.open(path, 'w')) f:write('worker.message(worker.peek())') f:close()\n"
-            .. "local t = {}\nfor i = 1, " .. n .. " do t = { t } end\nlocal w = worker.create(path)\nworker.send(w, t)\nlocal back = worker.receive(w)\nfs.remove(path)\n"
-            .. "assert(type(back) == 'table')\nprint('ok')"
-    end },
-    { name = "bigint digits", cap = 300000, gen = function(n)
-        return "local b = bigint(string.rep('9', " .. n .. "))\nassert(#tostring(b) == " .. n .. ")\nprint('ok')"
-    end },
-    { name = "decimal fraction digits", doc = 16383, cap = 100000, gen = function(n)
-        return "local d = decimal('0.' .. string.rep('1', " .. n .. "))\nassert(#tostring(d) == " .. (n + 2) .. ")\nprint('ok')"
-    end },
+    {
+        name = "deep worker message",
+        doc = 99,
+        cap = 200000,
+        gen = function(n)
+            return "pledge('load', 'fs')\nlocal path = os.tmpname()\nlocal f = assert(io.open(path, 'w')) f:write('worker.message(worker.peek())') f:close()\n"
+                .. "local t = {}\nfor i = 1, "
+                .. n
+                .. " do t = { t } end\nlocal w = worker.create(path)\nworker.send(w, t)\nlocal back = worker.receive(w)\nfs.remove(path)\n"
+                .. "assert(type(back) == 'table')\nprint('ok')"
+        end,
+    },
+    {
+        name = "bigint digits",
+        cap = 300000,
+        gen = function(n)
+            return "local b = bigint(string.rep('9', "
+                .. n
+                .. "))\nassert(#tostring(b) == "
+                .. n
+                .. ")\nprint('ok')"
+        end,
+    },
+    {
+        name = "decimal fraction digits",
+        doc = 16383,
+        cap = 100000,
+        gen = function(n)
+            return "local d = decimal('0.' .. string.rep('1', "
+                .. n
+                .. "))\nassert(#tostring(d) == "
+                .. (n + 2)
+                .. ")\nprint('ok')"
+        end,
+    },
     -- A slice of the documented span of 2^26 would allocate a gigabyte, so
     -- this case runs small spans and checks the message one past the limit.
-    { name = "slice span past the limit", cap = 1, gen = function(n)
-        return "local t = {}\nlocal ok, e = catch t[1, (1 << 26) + " .. n .. "]\nassert(not ok and tostring(e):find('slice span too large', 1, true), tostring(e))\nprint('ok')"
-    end },
+    {
+        name = "slice span past the limit",
+        cap = 1,
+        gen = function(n)
+            return "local t = {}\nlocal ok, e = catch t[1, (1 << 26) + "
+                .. n
+                .. "]\nassert(not ok and tostring(e):find('slice span too large', 1, true), tostring(e))\nprint('ok')"
+        end,
+    },
 }
 
 -- ===== the runs =====
@@ -277,19 +615,33 @@ local function attempt(case, n, mode)
     -- slots of the local limit of its function.
     f:write(case.gen(n))
     f:close()
-    local cmd = string.format("cd %s && LUS_JIT=%s perl -e 'alarm %d; exec @ARGV' %s case.lus 2>&1",
-        quote(dir), mode, opts.timeout, quote(lus))
+    local cmd = string.format(
+        "cd %s && LUS_JIT=%s perl -e 'alarm %d; exec @ARGV' %s case.lus 2>&1",
+        quote(dir),
+        mode,
+        opts.timeout,
+        quote(lus)
+    )
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     local _, kind, code = p:close()
-    if code == 0 and out:find("ok", 1, true) then return "ok" end
+
+    if code == 0 and out:find("ok", 1, true) then
+        return "ok"
+    end
+
     if kind == "signal" or code == 142 or (code and code >= 128) then
         return "bad", string.format("ended by %s %s", tostring(kind), tostring(code))
     end
+
     for _, m in ipairs(MESSAGES) do
         local found = out:match("[^\n]*" .. m .. "[^\n]*")
-        if found then return "limit", found end
+
+        if found then
+            return "limit", found
+        end
     end
+
     return "bad", (out:match("[^\n]+") or "no output")
 end
 
@@ -308,11 +660,17 @@ for _, case in ipairs(CASES) do
         local good, badn = 0, nil
         local probe = 1
         local first_failure
+
         while true do
             local r, msg = attempt(case, probe, "off")
+
             if r == "ok" then
                 good = probe
-                if probe >= case.cap then break end
+
+                if probe >= case.cap then
+                    break
+                end
+
                 probe = math.min(probe * 2, case.cap)
             else
                 badn = probe
@@ -320,42 +678,93 @@ for _, case in ipairs(CASES) do
                 break
             end
         end
+
         if badn then
             while badn - good > 1 do
                 local mid = (good + badn) // 2
                 local r, msg = attempt(case, mid, "off")
-                if r == "ok" then good = mid else badn = mid first_failure = { r, msg } end
+
+                if r == "ok" then
+                    good = mid
+                else
+                    badn = mid
+                    first_failure = { r, msg }
+                end
             end
-            if first_failure[1] == "bad" then finding(case, "N = %d fails without a limit message: %s", badn, first_failure[2]) end
+
+            if first_failure[1] == "bad" then
+                finding(case, "N = %d fails without a limit message: %s", badn, first_failure[2])
+            end
+
             -- Every mode runs the limit and fails cleanly one past it.
             for _, mode in ipairs(MODES) do
                 local r, msg = attempt(case, good, mode)
-                if good > 0 and r ~= "ok" then finding(case, "N = %d in mode %s: %s %s", good, mode, r, tostring(msg)) end
+
+                if good > 0 and r ~= "ok" then
+                    finding(case, "N = %d in mode %s: %s %s", good, mode, r, tostring(msg))
+                end
+
                 r, msg = attempt(case, good + 1, mode)
-                if r ~= "limit" then finding(case, "N = %d in mode %s: %s %s", good + 1, mode, r, tostring(msg)) end
+
+                if r ~= "limit" then
+                    finding(case, "N = %d in mode %s: %s %s", good + 1, mode, r, tostring(msg))
+                end
             end
+
             -- Far past the limit.
             local far = math.min(case.cap, math.max(good * 4, good + 10))
+
             if far > good + 1 then
                 local r, msg = attempt(case, far, "off")
-                if r ~= "limit" then finding(case, "N = %d far past the limit: %s %s", far, r, tostring(msg)) end
+
+                if r ~= "limit" then
+                    finding(case, "N = %d far past the limit: %s %s", far, r, tostring(msg))
+                end
             end
+
             if opts.emit and good > 0 then
                 local name = case.name:gsub("[^%w]+", "_") .. ".lus"
                 local out = assert(io.open(fs.path.join(opts.emit, name), "w"))
                 out:write(case.gen(good))
                 out:close()
             end
-            if case.doc and case.doc ~= good then finding(case, "the limit is %d where the reference documents %d", good, case.doc) end
-            report[#report + 1] = string.format("%-40s %10d   %s", case.name, good, first_failure[2] or "")
+
+            if case.doc and case.doc ~= good then
+                finding(case, "the limit is %d where the reference documents %d", good, case.doc)
+            end
+
+            report[#report + 1] = string.format(
+                "%-40s %10d   %s",
+                case.name,
+                good,
+                first_failure[2] or ""
+            )
         else
             for _, mode in ipairs(MODES) do
                 local r, msg = attempt(case, good, mode)
-                if r ~= "ok" then finding(case, "N = %d in mode %s: %s %s", good, mode, r, tostring(msg)) end
+
+                if r ~= "ok" then
+                    finding(case, "N = %d in mode %s: %s %s", good, mode, r, tostring(msg))
+                end
             end
-            if case.doc then finding(case, "runs at the cap %d where the reference documents a limit of %d", good, case.doc) end
-            report[#report + 1] = string.format("%-40s %10s   runs at the cap of %d", case.name, "none", good)
+
+            if case.doc then
+                finding(
+                    case,
+                    "runs at the cap %d where the reference documents a limit of %d",
+                    good,
+                    case.doc
+                )
+            end
+
+            report[#report + 1] = string.format(
+                "%-40s %10s   runs at the cap of %d",
+                case.name,
+                "none",
+                good
+            )
         end
+
         print(report[#report])
         io.stdout:flush()
     end
@@ -363,5 +772,11 @@ end
 
 fs.remove(dir, true)
 print(string.format("\n%d cases, %d findings", #report, #findings))
-for _, f in ipairs(findings) do print("  " .. f) end
-if #findings > 0 then os.exit(1) end
+
+for _, f in ipairs(findings) do
+    print("  " .. f)
+end
+
+if #findings > 0 then
+    os.exit(1)
+end

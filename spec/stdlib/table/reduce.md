@@ -25,11 +25,17 @@ The result is the value that the last call returned. With an `initial`, an empty
 An empty list with no `initial` raises `'reduce' on empty table with no initial value`. An `array` that is not a table, or a `func` that is not a function, raises a type error. An error raised by `func` propagates.
 
 ```lus
-local function add(acc, x) return acc + x end
-print(table.reduce({1, 2, 3, 4}, add))        --> 10
-print(table.reduce({1, 2, 3, 4}, add, 100))   --> 110
-print(table.reduce({}, add, 0))               --> 0
-print(table.reduce({"a", "b"}, function(acc, x, i) return acc .. x .. i end, ""))  --> a1b2
+local function add(acc, x)
+    return acc + x
+end
+
+print(table.reduce({ 1, 2, 3, 4 }, add))  --> 10
+print(table.reduce({ 1, 2, 3, 4 }, add, 100))  --> 110
+print(table.reduce({}, add, 0))  --> 0
+
+print(table.reduce({ "a", "b" }, function(acc, x, i)  --> a1b2
+    return acc .. x .. i
+end, ""))
 ```
 
 `nil` cannot serve as the initial accumulator, since it reads as an omitted `initial`. [`table.sum`](/manual/api#table.sum) adds numbers directly, and [`table.map`](/manual/api#table.map) transforms each element.

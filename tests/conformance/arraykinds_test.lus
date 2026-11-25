@@ -28,15 +28,15 @@ end
 -- ============================================================
 
 local function integers_then_a_float_keep_both_subtypes_test()
-    local t = {1, 2, 3}
+    local t = { 1, 2, 3 }
     t[2] = 2.5
-    check_seq(t, {1, 2.5, 3}, 3)
+    check_seq(t, { 1, 2.5, 3 }, 3)
     assert(math.type(t[1]) == "integer")
     assert(math.type(t[2]) == "float")
 end
 
 local function floats_then_an_integer_keep_both_subtypes_test()
-    local t = {1.5, 2.5, 3.5}
+    local t = { 1.5, 2.5, 3.5 }
     t[3] = 3
     assert(math.type(t[3]) == "integer")
     assert(math.type(t[1]) == "float")
@@ -46,26 +46,34 @@ end
 
 local function an_integral_float_stays_a_float_test()
     local t = {}
-    for i = 1, 10 do t[i] = i + 0.0 end
+
+    for i = 1, 10 do
+        t[i] = i + 0.0
+    end
+
     t[11] = 11
-    for i = 1, 10 do assert(math.type(t[i]) == "float") end
+
+    for i = 1, 10 do
+        assert(math.type(t[i]) == "float")
+    end
+
     assert(math.type(t[11]) == "integer")
 end
 
 local function strings_tables_and_booleans_join_numbers_test()
     local inner = {}
-    local t = {1, 2, 3, 4, 5}
+    local t = { 1, 2, 3, 4, 5 }
     t[2] = "two"
     t[3] = inner
     t[4] = false
     t[5] = true
-    check_seq(t, {1, "two", inner, false, true}, 5)
+    check_seq(t, { 1, "two", inner, false, true }, 5)
     t[6] = 6
     assert(#t == 6 and t[6] == 6)
 end
 
 local function a_constructor_with_mixed_values_test()
-    local t = {1, 2.0, "x", nil, 5}
+    local t = { 1, 2.0, "x", nil, 5 }
     assert(math.type(t[1]) == "integer")
     assert(math.type(t[2]) == "float")
     assert(t[3] == "x")
@@ -74,16 +82,16 @@ local function a_constructor_with_mixed_values_test()
 end
 
 local function the_hole_bit_patterns_survive_test()
-    local t = {1, 2, 3}
+    local t = { 1, 2, 3 }
     t[2] = hole_int
     assert(t[2] == hole_int and math.type(t[2]) == "integer")
     assert(t[1] == 1 and t[3] == 3)
-    local f = {0.5, 1.5}
+    local f = { 0.5, 1.5 }
     f[1] = hole_float
     assert(math.type(f[1]) == "float")
     assert(string.unpack("<i8", string.pack("<d", f[1])) == hole_int)
     assert(f[2] == 1.5)
-    local c = {hole_int, hole_float}
+    local c = { hole_int, hole_float }
     assert(c[1] == hole_int)
     assert(string.unpack("<i8", string.pack("<d", c[2])) == hole_int)
     assert(#c == 2)
@@ -91,7 +99,7 @@ end
 
 local function nan_and_signed_zero_values_are_kept_test()
     local nan = 0 / 0
-    local t = {1.0, 2.0, 3.0}
+    local t = { 1.0, 2.0, 3.0 }
     t[1] = nan
     t[2] = -0.0
     assert(t[1] ~= t[1])
@@ -100,8 +108,8 @@ local function nan_and_signed_zero_values_are_kept_test()
 end
 
 local function extreme_integers_test()
-    local t = {math.maxinteger, math.mininteger, 0, -1}
-    check_seq(t, {math.maxinteger, math.mininteger, 0, -1}, 4)
+    local t = { math.maxinteger, math.mininteger, 0, -1 }
+    check_seq(t, { math.maxinteger, math.mininteger, 0, -1 }, 4)
     t[5] = math.mininteger
     assert(t[5] == math.mininteger)
 end
@@ -111,7 +119,7 @@ end
 -- ============================================================
 
 local function nil_stores_make_holes_test()
-    local t = {1, 2, 3, 4}
+    local t = { 1, 2, 3, 4 }
     t[2] = nil
     assert(t[2] == nil)
     assert(t[1] == 1 and t[3] == 3)
@@ -122,7 +130,7 @@ local function nil_stores_make_holes_test()
 end
 
 local function float_holes_test()
-    local t = {0.5, 1.5, 2.5}
+    local t = { 0.5, 1.5, 2.5 }
     t[3] = nil
     assert(#t == 2)
     t[3] = 3.5
@@ -131,10 +139,21 @@ end
 
 local function popping_and_pushing_test()
     local t = {}
-    for i = 1, 100 do t[#t + 1] = i * 1.5 end
-    for _ = 1, 50 do t[#t] = nil end
+
+    for i = 1, 100 do
+        t[#t + 1] = i * 1.5
+    end
+
+    for _ = 1, 50 do
+        t[#t] = nil
+    end
+
     assert(#t == 50)
-    for i = 51, 100 do t[#t + 1] = i end
+
+    for i = 51, 100 do
+        t[#t + 1] = i
+    end
+
     assert(#t == 100)
     assert(math.type(t[50]) == "float" and math.type(t[51]) == "integer")
 end
@@ -150,9 +169,17 @@ end
 
 local function a_sparse_sequence_test()
     local t = {}
-    for i = 1, 64, 2 do t[i] = i end
+
+    for i = 1, 64, 2 do
+        t[i] = i
+    end
+
     for i = 1, 64 do
-        if i % 2 == 1 then assert(t[i] == i) else assert(t[i] == nil) end
+        if i % 2 == 1 then
+            assert(t[i] == i)
+        else
+            assert(t[i] == nil)
+        end
     end
 end
 
@@ -161,7 +188,7 @@ end
 -- ============================================================
 
 local function negative_and_zero_indices_test()
-    local t = {1, 2, 3}
+    local t = { 1, 2, 3 }
     t[0] = 0.5
     t[-1] = "neg"
     t[-2] = -2
@@ -171,7 +198,7 @@ local function negative_and_zero_indices_test()
 end
 
 local function huge_indices_test()
-    local t = {1, 2, 3}
+    local t = { 1, 2, 3 }
     t[math.maxinteger] = 1.5
     t[math.mininteger] = 2
     t[1 << 40] = "far"
@@ -182,8 +209,12 @@ local function huge_indices_test()
 end
 
 local function nan_keys_are_rejected_test()
-    local t = {1.5, 2.5}
-    local ok = catch do t[0 / 0] = 1 end
+    local t = { 1.5, 2.5 }
+
+    local ok = catch do
+        t[0 / 0] = 1
+    end
+
     assert(not ok)
     assert(t[0 / 0] == nil)
     assert(#t == 2)
@@ -206,11 +237,23 @@ local function growing_through_the_hash_part_test()
     -- Keys inserted in reverse land in the hash part first and move into
     -- the array part on a rehash.
     local t = {}
-    for i = 100, 1, -1 do t[i] = i * 0.5 end
+
+    for i = 100, 1, -1 do
+        t[i] = i * 0.5
+    end
+
     assert(#t == 100)
-    for i = 1, 100 do assert(t[i] == i * 0.5) end
+
+    for i = 1, 100 do
+        assert(t[i] == i * 0.5)
+    end
+
     local m = {}
-    for i = 100, 1, -1 do m[i] = (i % 2 == 0) and i or tostring(i) end
+
+    for i = 100, 1, -1 do
+        m[i] = (i % 2 == 0) and i or tostring(i)
+    end
+
     for i = 1, 100 do
         assert(m[i] == ((i % 2 == 0) and i or tostring(i)))
     end
@@ -222,39 +265,60 @@ end
 
 local function next_during_kind_changes_test()
     local t = {}
-    for i = 1, 32 do t[i] = i end
+
+    for i = 1, 32 do
+        t[i] = i
+    end
+
     t.name = "x"
     local seen = 0
+
     for k, v in pairs(t) do
         seen = seen + 1
+
         if type(k) == "number" then
             -- Assigning existing fields during traversal is allowed, and
             -- these assignments change the kind of the array part.
-            if k == 4 then t[8] = "eight" end
-            if k == 10 then t[12] = 12.5 end
-            if k == 16 then t[16] = nil end
+            if k == 4 then
+                t[8] = "eight"
+            end
+
+            if k == 10 then
+                t[12] = 12.5
+            end
+
+            if k == 16 then
+                t[16] = nil
+            end
         end
     end
+
     assert(seen == 33)
     assert(t[8] == "eight" and t[12] == 12.5 and t[16] == nil)
 end
 
 local function ipairs_stops_at_the_first_hole_test()
-    local t = {1.5, 2.5, 3.5, 4.5}
+    local t = { 1.5, 2.5, 3.5, 4.5 }
     t[3] = nil
     local n = 0
+
     for i, v in ipairs(t) do
         n = i
         assert(v == i + 0.5)
     end
+
     assert(n == 2)
 end
 
 local function pairs_visits_every_entry_test()
-    local t = {1, 2.5, "s", 4}
+    local t = { 1, 2.5, "s", 4 }
     t.k = true
     local count = 0
-    for _ in pairs(t) do count = count + 1 end
+
+    for _ in pairs(t) do
+        count = count + 1
+    end
+
     assert(count == 5)
 end
 
@@ -263,37 +327,63 @@ end
 -- ============================================================
 
 local function weak_values_with_numbers_test()
-    local t = setmetatable({}, {__mode = "v"})
-    for i = 1, 10 do t[i] = i * 2 end
+    local t = setmetatable({}, { __mode = "v" })
+
+    for i = 1, 10 do
+        t[i] = i * 2
+    end
+
     t[11] = {}
     collectgarbage()
     collectgarbage()
-    for i = 1, 10 do assert(t[i] == i * 2) end
+
+    for i = 1, 10 do
+        assert(t[i] == i * 2)
+    end
+
     assert(t[11] == nil)
 end
 
 local function weak_keys_with_float_values_test()
-    local t = setmetatable({1.5, 2.5}, {__mode = "k"})
+    local t = setmetatable({ 1.5, 2.5 }, { __mode = "k" })
     collectgarbage()
     assert(t[1] == 1.5 and t[2] == 2.5)
 end
 
 local function boxing_an_old_table_keeps_new_objects_alive_test()
-    for _, mode in ipairs({"generational", "incremental"}) do
+    for _, mode in ipairs({ "generational", "incremental" }) do
         local prev = collectgarbage(mode)
         local t = {}
-        for i = 1, 2000 do t[i] = i end
-        collectgarbage()
-        collectgarbage()
-        for i = 1, 2000, 7 do t[i] = {i} end
-        local small = {1, 2, 3}
-        collectgarbage()
-        small[2] = {"inner"}
-        for _ = 1, 3 do collectgarbage("step") end
-        collectgarbage()
+
         for i = 1, 2000 do
-            if (i - 1) % 7 == 0 then assert(t[i][1] == i) else assert(t[i] == i) end
+            t[i] = i
         end
+
+        collectgarbage()
+        collectgarbage()
+
+        for i = 1, 2000, 7 do
+            t[i] = { i }
+        end
+
+        local small = { 1, 2, 3 }
+        collectgarbage()
+        small[2] = { "inner" }
+
+        for _ = 1, 3 do
+            collectgarbage("step")
+        end
+
+        collectgarbage()
+
+        for i = 1, 2000 do
+            if (i - 1) % 7 == 0 then
+                assert(t[i][1] == i)
+            else
+                assert(t[i] == i)
+            end
+        end
+
         assert(small[2][1] == "inner")
         collectgarbage(prev)
     end
@@ -304,109 +394,123 @@ end
 -- ============================================================
 
 local function length_and_insert_test()
-    local t = {1, 2, 3}
+    local t = { 1, 2, 3 }
     table.insert(t, 4.5)
     table.insert(t, 1, "first")
-    check_seq(t, {"first", 1, 2, 3, 4.5}, 5)
+    check_seq(t, { "first", 1, 2, 3, 4.5 }, 5)
     assert(#t == 5)
 end
 
 local function remove_test()
-    local t = {1.5, 2.5, 3.5}
+    local t = { 1.5, 2.5, 3.5 }
     assert(table.remove(t) == 3.5)
     assert(table.remove(t, 1) == 1.5)
     assert(#t == 1 and t[1] == 2.5)
 end
 
 local function concat_test()
-    assert(table.concat({1, 2, 3}, ",") == "1,2,3")
-    assert(table.concat({1.5, 2.0}, " ") == "1.5 2.0")
-    assert(table.concat({1, 2.5, "x"}) == "12.5x")
+    assert(table.concat({ 1, 2, 3 }, ",") == "1,2,3")
+    assert(table.concat({ 1.5, 2.0 }, " ") == "1.5 2.0")
+    assert(table.concat({ 1, 2.5, "x" }) == "12.5x")
 end
 
 local function sort_test()
-    local t = {5, 3, 9, 1, 7}
+    local t = { 5, 3, 9, 1, 7 }
     table.sort(t)
-    check_seq(t, {1, 3, 5, 7, 9}, 5)
-    local f = {2.5, -1.5, 0.25}
-    table.sort(f, function(a, b) return a > b end)
-    check_seq(f, {2.5, 0.25, -1.5}, 3)
-    local m = {3, 1.5, 2}
+    check_seq(t, { 1, 3, 5, 7, 9 }, 5)
+    local f = { 2.5, -1.5, 0.25 }
+
+    table.sort(f, function(a, b)
+        return a > b
+    end)
+
+    check_seq(f, { 2.5, 0.25, -1.5 }, 3)
+    local m = { 3, 1.5, 2 }
     table.sort(m)
-    check_seq(m, {1.5, 2, 3}, 3)
+    check_seq(m, { 1.5, 2, 3 }, 3)
 end
 
 local function unpack_and_move_test()
-    local a, b, c = table.unpack({1, 2.5, 3})
+    local a, b, c = table.unpack({ 1, 2.5, 3 })
     assert(a == 1 and b == 2.5 and c == 3)
-    local dst = {"a", "b", "c", "d"}
-    table.move({1, 2}, 1, 2, 2, dst)
-    check_seq(dst, {"a", 1, 2, "d"}, 4)
-    local f = {0.5, 1.5, 2.5}
+    local dst = { "a", "b", "c", "d" }
+    table.move({ 1, 2 }, 1, 2, 2, dst)
+    check_seq(dst, { "a", 1, 2, "d" }, 4)
+    local f = { 0.5, 1.5, 2.5 }
     table.move(f, 1, 3, 2)
-    check_seq(f, {0.5, 0.5, 1.5, 2.5}, 4)
+    check_seq(f, { 0.5, 0.5, 1.5, 2.5 }, 4)
 end
 
 local function slices_test()
-    local t = {1.5, 2.5, 3.5, 4.5}
+    local t = { 1.5, 2.5, 3.5, 4.5 }
     local s = t[2, 3]
-    check_seq(s, {2.5, 3.5}, 2)
+    check_seq(s, { 2.5, 3.5 }, 2)
     assert(#s == 2)
-    local i = {1, 2, 3}
+    local i = { 1, 2, 3 }
     assert(#i[1, 3] == 3)
 end
 
 local function clone_keeps_the_values_test()
-    local t = {1, 2, 3}
+    local t = { 1, 2, 3 }
     local c = table.clone(t)
     c[2] = "two"
     assert(t[2] == 2 and c[2] == "two")
-    local f = {1.5, {2}, 3.5}
+    local f = { 1.5, { 2 }, 3.5 }
     local d = table.clone(f, true)
     assert(d[1] == 1.5 and d[2][1] == 2 and d[2] ~= f[2])
 end
 
 local function json_round_trip_test()
-    local t = fromjson(tojson({1, 2.5, 3}))
+    local t = fromjson(tojson({ 1, 2.5, 3 }))
     assert(#t == 3 and t[1] == 1 and t[2] == 2.5 and t[3] == 3)
-    assert(tojson({1, 2, 3}) == "[1,2,3]")
+    assert(tojson({ 1, 2, 3 }) == "[1,2,3]")
 end
 
 local function aggregates_over_every_kind_test()
-    assert(table.sum({1, 2, 3}) == 6)
-    assert(table.sum({0.5, 1.5}) == 2)
-    assert(table.sum({1, "2", 3.5, {}}) == 6.5)
-    assert(table.mean({2, 4, 6}) == 4)
-    local h = {1, 2, 3, 4}
+    assert(table.sum({ 1, 2, 3 }) == 6)
+    assert(table.sum({ 0.5, 1.5 }) == 2)
+    assert(table.sum({ 1, "2", 3.5, {} }) == 6.5)
+    assert(table.mean({ 2, 4, 6 }) == 4)
+    local h = { 1, 2, 3, 4 }
     h[2] = nil
     assert(table.sum(h) == (#h == 4 and 8 or 1))
     assert(table.mean({}) ~= table.mean({}))
-    assert(table.stdev({2, 4, 4, 4, 5, 5, 7, 9}) == 2)
+    assert(table.stdev({ 2, 4, 4, 4, 5, 5, 7, 9 }) == 2)
 end
 
 local function aggregates_match_a_lane_ordered_sum_test()
     -- The aggregates add element i into accumulator (i - 1) % 8 and then
     -- combine the accumulators pairwise, whatever the kind of the array.
     local function lanes(t, n)
-        local acc = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}
+        local acc = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }
+
         for i = 1, n do
             local v = tonumber(t[i])
+
             if v then
                 local j = (i - 1) % 8 + 1
                 acc[j] = acc[j] + v
             end
         end
+
         local a = {}
-        for j = 1, 4 do a[j] = acc[j] + acc[j + 4] end
+
+        for j = 1, 4 do
+            a[j] = acc[j] + acc[j + 4]
+        end
+
         local b1, b2 = a[1] + a[3], a[2] + a[4]
         return b1 + b2
     end
+
     local f, i, m = {}, {}, {}
+
     for k = 1, 1001 do
         f[k] = math.sin(k) * 1e3
         i[k] = k * 7919 % 1000003
         m[k] = (k % 3 == 0) and tostring(f[k]) or f[k]
     end
+
     f[500] = nil
     -- A plain left-to-right sum of these values differs in its last bits.
     assert(table.sum(f) == lanes(f, #f))
@@ -419,18 +523,27 @@ local function aggregates_agree_across_kinds_test()
     -- The same numbers give the same bits whether the array part is
     -- unboxed or boxed. The trailing string boxes the copy and is skipped.
     local f, i = {}, {}
+
     for k = 1, 999 do
         f[k] = math.cos(k) * 1e6
         i[k] = k * k * 31
     end
-    for _, src in ipairs({f, i}) do
+
+    for _, src in ipairs({ f, i }) do
         local boxed = table.clone(src)
         boxed[#boxed + 1] = "not a number"
         assert(table.sum(src) == table.sum(boxed))
         assert(table.mean(src) == table.sum(boxed) / #src)
         assert(table.stdev(src) == table.stdev(boxed))
         assert(table.stdev(src, true) == table.stdev(boxed, true))
-        local meta = setmetatable({}, {__index = src, __len = function() return #src end})
+
+        local meta = setmetatable({}, {
+            __index = src,
+            __len = function()
+                return #src
+            end,
+        })
+
         assert(table.stdev(meta) == table.stdev(src))
     end
 end
@@ -440,35 +553,53 @@ end
 -- ============================================================
 
 local function a_small_constructor_boxes_and_grows_test()
-    local t = {1, 2, 3, 4.5}
+    local t = { 1, 2, 3, 4.5 }
     t[2] = "two"
     assert(t[1] == 1 and t[2] == "two" and t[3] == 3 and t[4] == 4.5)
-    t[3] = {3}
+    t[3] = { 3 }
     collectgarbage()
-    for i = 5, 200 do t[i] = i end
+
+    for i = 5, 200 do
+        t[i] = i
+    end
+
     collectgarbage()
     assert(t[2] == "two" and t[3][1] == 3 and t[4] == 4.5 and t[200] == 200)
     assert(#t == 200)
 end
 
 local function a_small_record_grows_past_its_cell_test()
-    local r = {x = 1, y = 2}
-    for i = 1, 100 do r["k" .. i] = i end
+    local r = { x = 1, y = 2 }
+
+    for i = 1, 100 do
+        r["k" .. i] = i
+    end
+
     r.x = nil
     collectgarbage()
     assert(r.x == nil and r.y == 2 and r.k100 == 100)
     local n = 0
-    for _ in pairs(r) do n = n + 1 end
+
+    for _ in pairs(r) do
+        n = n + 1
+    end
+
     assert(n == 101)
 end
 
 local function many_small_tables_survive_collections_test()
     local keep = {}
+
     for i = 1, 5000 do
-        keep[i] = {i, i + 0.5, name = "n" .. i, {i}}
-        if i % 1000 == 0 then collectgarbage("step") end
+        keep[i] = { i, i + 0.5, name = "n" .. i, { i } }
+
+        if i % 1000 == 0 then
+            collectgarbage("step")
+        end
     end
+
     collectgarbage()
+
     for i = 1, 5000, 37 do
         local e = keep[i]
         assert(e[1] == i and e[2] == i + 0.5 and e.name == "n" .. i and e[3][1] == i)
@@ -481,30 +612,43 @@ end
 
 local function a_list_of_strings_keeps_its_strings_through_collections_test()
     local t = {}
-    for i = 1, 3000 do t[i] = "s" .. i .. string.rep("x", i % 50) end
+
+    for i = 1, 3000 do
+        t[i] = "s" .. i .. string.rep("x", i % 50)
+    end
+
     collectgarbage()
+
     for i = 1, 3000 do
         local s = "s" .. i .. string.rep("x", i % 50)
         assert(t[i] == s, `index {i}`)
     end
+
     assert(#t == 3000)
     assert(table.concat(t, ",", 1, 3):sub(1, 2) == "s1")
 end
 
 local function strings_mixed_with_other_values_keep_every_value_test()
-    local t = {"a", "b", "c"}
+    local t = { "a", "b", "c" }
     t[2] = 2
     t[4] = "d"
-    t[5] = {5}
+    t[5] = { 5 }
     collectgarbage()
-    assert(t[1] == "a" and t[2] == 2 and math.type(t[2]) == "integer" and t[3] == "c" and t[4] == "d" and t[5][1] == 5)
-    local u = {1, 2, 3}
+    assert(
+        t[1] == "a"
+            and t[2] == 2
+            and math.type(t[2]) == "integer"
+            and t[3] == "c"
+            and t[4] == "d"
+            and t[5][1] == 5
+    )
+    local u = { 1, 2, 3 }
     u[2] = "two"
     assert(u[1] == 1 and u[2] == "two" and u[3] == 3)
 end
 
 local function holes_and_nil_stores_in_a_list_of_strings_test()
-    local t = {"a", "b", "c", "d"}
+    local t = { "a", "b", "c", "d" }
     t[2] = nil
     t[4] = nil
     collectgarbage()
@@ -512,55 +656,70 @@ local function holes_and_nil_stores_in_a_list_of_strings_test()
     t[2] = "B"
     assert(t[2] == "B")
     local n = 0
+
     for k, v in pairs(t) do
         n = n + 1
         assert(math.type(k) == "integer" and type(v) == "string")
     end
+
     assert(n == 3)
 end
 
 local function strings_stored_while_the_collector_runs_survive_test()
-    local t = {"start"}
+    local t = { "start" }
+
     for round = 1, 20 do
         for i = 1, 500 do
             t[i] = "r" .. round .. ":" .. i
-            local junk = {i, tostring(i)}
+            local junk = { i, tostring(i) }
         end
+
         collectgarbage("step")
     end
+
     collectgarbage()
-    for i = 1, 500 do assert(t[i] == "r20:" .. i) end
+
+    for i = 1, 500 do
+        assert(t[i] == "r20:" .. i)
+    end
 end
 
 local function library_functions_on_lists_of_strings_test()
-    local t = {"pear", "apple", "fig", "kiwi"}
+    local t = { "pear", "apple", "fig", "kiwi" }
     table.sort(t)
-    check_seq(t, {"apple", "fig", "kiwi", "pear"}, 4)
+    check_seq(t, { "apple", "fig", "kiwi", "pear" }, 4)
     table.insert(t, 1, "date")
     table.insert(t, "plum")
     assert(table.remove(t, 2) == "apple")
-    check_seq(t, {"date", "fig", "kiwi", "pear", "plum"}, 5)
+    check_seq(t, { "date", "fig", "kiwi", "pear", "plum" }, 5)
     local m = table.move(t, 2, 4, 1, {})
-    check_seq(m, {"fig", "kiwi", "pear"}, 3)
+    check_seq(m, { "fig", "kiwi", "pear" }, 3)
     local a, b, c = table.unpack(t, 1, 3)
     assert(a == "date" and b == "fig" and c == "kiwi")
     assert(table.concat(t, " ") == "date fig kiwi pear plum")
-    local nums = {"1", "2", "3.5"}
+    local nums = { "1", "2", "3.5" }
     assert(table.sum(nums) == 6.5)
 end
 
 local function weak_tables_keep_strings_in_their_array_parts_test()
-    local w = setmetatable({}, {__mode = "v"})
-    for i = 1, 100 do w[i] = "weak" .. i end
+    local w = setmetatable({}, { __mode = "v" })
+
+    for i = 1, 100 do
+        w[i] = "weak" .. i
+    end
+
     collectgarbage()
-    for i = 1, 100 do assert(w[i] == "weak" .. i) end
+
+    for i = 1, 100 do
+        assert(w[i] == "weak" .. i)
+    end
 end
 
 local function a_parsed_list_boxes_and_keeps_its_values_test()
     local s = fromjson('["a", "b", "c"]')
     local n = fromjson("[1, 2, 3]")
     local f = fromjson("[1.5, 2.5]")
-    s[2] = {2}
+    s[2] = { 2 }
     n[3] = "three"
     f[1] = true
     collectgarbage()
@@ -573,78 +732,150 @@ end
 
 local function a_list_of_tables_keeps_its_tables_through_collections_test()
     local t = {}
-    for i = 1, 3000 do t[i] = {i, name = "n" .. i} end
+
+    for i = 1, 3000 do
+        t[i] = { i, name = "n" .. i }
+    end
+
     collectgarbage()
-    for i = 1, 3000, 7 do assert(t[i][1] == i and t[i].name == "n" .. i) end
+
+    for i = 1, 3000, 7 do
+        assert(t[i][1] == i and t[i].name == "n" .. i)
+    end
+
     t[5] = "five"
     collectgarbage()
     assert(t[5] == "five" and t[6][1] == 6 and #t == 3000)
 end
 
 local function tables_stored_while_the_collector_runs_survive_test()
-    local t = {{0}}
+    local t = { { 0 } }
+
     for round = 1, 20 do
-        for i = 1, 400 do t[i] = {round, i} end
+        for i = 1, 400 do
+            t[i] = { round, i }
+        end
+
         local junk = {}
-        for i = 1, 200 do junk[i] = {i} end
+
+        for i = 1, 200 do
+            junk[i] = { i }
+        end
+
         collectgarbage("step")
     end
+
     collectgarbage()
-    for i = 1, 400 do assert(t[i][1] == 20 and t[i][2] == i) end
+
+    for i = 1, 400 do
+        assert(t[i][1] == 20 and t[i][2] == i)
+    end
 end
 
 local function a_weak_list_of_tables_drops_unreachable_tables_test()
     local keep = {}
-    local w = setmetatable({}, {__mode = "v"})
+    local w = setmetatable({}, { __mode = "v" })
+
     for i = 1, 100 do
-        local x = {i}
+        local x = { i }
         w[i] = x
-        if i % 2 == 0 then keep[#keep + 1] = x end
+
+        if i % 2 == 0 then
+            keep[#keep + 1] = x
+        end
     end
+
     collectgarbage()
     collectgarbage()
+
     for i = 1, 100 do
-        if i % 2 == 0 then assert(w[i] ~= nil and w[i][1] == i) else assert(w[i] == nil) end
+        if i % 2 == 0 then
+            assert(w[i] ~= nil and w[i][1] == i)
+        else
+            assert(w[i] == nil)
+        end
     end
 end
 
 local function library_functions_on_lists_of_tables_test()
-    local t = {{3}, {1}, {2}}
-    table.sort(t, function(a, b) return a[1] < b[1] end)
+    local t = { { 3 }, { 1 }, { 2 } }
+
+    table.sort(t, function(a, b)
+        return a[1] < b[1]
+    end)
+
     assert(t[1][1] == 1 and t[2][1] == 2 and t[3][1] == 3)
-    table.insert(t, 1, {0})
+    table.insert(t, 1, { 0 })
     assert(table.remove(t)[1] == 3 and #t == 3 and t[1][1] == 0)
     local parsed = fromjson('[{"a": 1}, {"a": 2}]')
-    parsed[3] = {a = 3}
+    parsed[3] = { a = 3 }
     assert(parsed[1].a == 1 and parsed[3].a == 3)
 end
 
 local function a_constructor_whose_lists_change_kind_keeps_every_value_test()
-    local function make(i, x) return {x, x} end
+    local function make(i, x)
+        return { x, x }
+    end
+
     local out = {}
-    for i = 1, 400 do out[i] = make(i, "s" .. i) end
-    for i = 401, 800 do out[i] = make(i, {i}) end
-    for i = 801, 1200 do out[i] = make(i, i) end
+
+    for i = 1, 400 do
+        out[i] = make(i, "s" .. i)
+    end
+
+    for i = 401, 800 do
+        out[i] = make(i, { i })
+    end
+
+    for i = 801, 1200 do
+        out[i] = make(i, i)
+    end
+
     collectgarbage()
-    for i = 1, 400 do assert(out[i][1] == "s" .. i and out[i][2] == "s" .. i) end
-    for i = 401, 800 do assert(out[i][1][1] == i and out[i][2][1] == i) end
-    for i = 801, 1200 do assert(out[i][1] == i and out[i][2] == i) end
+
+    for i = 1, 400 do
+        assert(out[i][1] == "s" .. i and out[i][2] == "s" .. i)
+    end
+
+    for i = 401, 800 do
+        assert(out[i][1][1] == i and out[i][2][1] == i)
+    end
+
+    for i = 801, 1200 do
+        assert(out[i][1] == i and out[i][2] == i)
+    end
 end
 
 local function constructor_lists_that_box_after_construction_keep_their_values_test()
-    local function make(i) return {i, i + 1, i + 2} end
+    local function make(i)
+        return { i, i + 1, i + 2 }
+    end
+
     local out = {}
+
     for i = 1, 500 do
         local t = make(i)
-        if i % 3 == 0 then t[2] = "two" end
-        if i % 5 == 0 then t[4] = {i} end
+
+        if i % 3 == 0 then
+            t[2] = "two"
+        end
+
+        if i % 5 == 0 then
+            t[4] = { i }
+        end
+
         out[i] = t
     end
+
     collectgarbage()
+
     for i = 1, 500 do
         local t = out[i]
         assert(t[1] == i and t[3] == i + 2)
         assert(t[2] == (i % 3 == 0 and "two" or i + 1))
-        if i % 5 == 0 then assert(t[4][1] == i) end
+
+        if i % 5 == 0 then
+            assert(t[4][1] == i)
+        end
     end
 end

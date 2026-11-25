@@ -1,10 +1,8 @@
-
 pledge("load")
 
 -- The runner rewrites calls named assert into power asserts, so the tests of
 -- the real assert builtin call it through this alias.
 local raw_assert = assert
-
 
 -- ============================================================================
 -- Basic syntax and semantics
@@ -12,7 +10,11 @@ local raw_assert = assert
 
 local function catch_statement_syntax_test()
     local called = false
-    catch (function() called = true end)()
+
+    catch (function()
+        called = true
+    end)()
+
     assert(called == true)
 end
 
@@ -23,17 +25,24 @@ end
 
 local function catch_statement_works_with_function_calls_test()
     local x = 0
-    local function f() x = 1 return 1, 2 end
+
+    local function f()
+        x = 1
+        return 1, 2
+    end
+
     catch f()
     assert(x == 1)
 end
 
 local function catch_statement_ignores_return_values_test()
     local calls = 0
+
     local function f()
         calls = calls + 1
         return 1, 2, 3, 4, 5
     end
+
     local a, b = 10, 20
     catch f()
     local c = 30
@@ -63,10 +72,12 @@ end
 
 local function catch_in_loop_doesn_t_accumulate_registers_test()
     local sum = 0
+
     for i = 1, 100 do
         catch error("error " .. i)
         sum = sum + i
     end
+
     assert(sum == 5050)
 end
 
@@ -93,12 +104,15 @@ local function catch_with_string_concatenation_test()
 end
 
 local function catch_with_table_constructor_test()
-    catch ({1, 2, 3, key = "value"})
+    catch ({ 1, 2, 3, key = "value" })
     assert(true)
 end
 
 local function catch_with_function_definition_test()
-    catch (function() return 42 end)
+    catch (function()
+        return 42
+    end)
+
     assert(true)
 end
 
@@ -139,11 +153,13 @@ end
 local function catch_suppresses_explicit_error_test()
     local reached_error = false
     local after_error = false
+
     catch (function()
         reached_error = true
         error("this should be suppressed")
         after_error = true
     end)()
+
     assert(reached_error, "the body must run up to the error() call")
     assert(not after_error, "error() must abort the body immediately")
 end
@@ -166,20 +182,21 @@ end
 
 local function side_effects_happen_before_error_test()
     local effects = {}
+
     local function effect(n)
         table.insert(effects, n)
         return n
     end
-    
+
     local function failing()
         effect(1)
         effect(2)
         error("fail")
         effect(3)  -- This should not execute
     end
-    
+
     catch failing()
-    
+
     assert(#effects == 2)
     assert(effects[1] == 1)
     assert(effects[2] == 2)
@@ -187,15 +204,16 @@ end
 
 local function function_call_side_effects_execute_test()
     local counter = 0
+
     local function increment()
         counter = counter + 1
         return counter
     end
-    
+
     catch increment()
     catch increment()
     catch increment()
-    
+
     assert(counter == 3)
 end
 
@@ -206,50 +224,58 @@ end
 local function nested_catch_statements_test()
     local outer_ran = false
     local inner_ran = false
-    
+
     catch (function()
         outer_ran = true
         catch error("inner error")
         inner_ran = true
     end)()
-    
+
     assert(outer_ran)
     assert(inner_ran)
 end
 
 local function catch_in_if_statement_test()
     local x = true
+
     if x then
         catch error("in if")
     end
+
     assert(true)
 end
 
 local function catch_in_else_branch_test()
     local x = false
+
     if x then
         assert(false)
     else
         catch error("in else")
     end
+
     assert(true)
 end
 
 local function catch_in_while_loop_test()
     local count = 0
+
     while count < 3 do
         catch error("in while")
         count = count + 1
     end
+
     assert(count == 3)
 end
 
 local function catch_in_repeat_until_test()
     local count = 0
+
     repeat
         catch error("in repeat")
         count = count + 1
     until count >= 3
+
     assert(count == 3)
 end
 
@@ -258,6 +284,7 @@ local function catch_in_function_body_test()
         catch error("in function")
         return 42
     end
+
     assert(f() == 42)
 end
 
@@ -266,6 +293,7 @@ local function catch_before_return_test()
         catch error("before return")
         return "success"
     end
+
     assert(f() == "success")
 end
 
@@ -275,25 +303,34 @@ end
 
 local function catch_with_method_call_test()
     local obj = {
-        method = function(self) return self.value end,
-        value = 42
+        method = function(self)
+            return self.value
+        end,
+        value = 42,
     }
+
     catch obj:method()
     assert(true)
 end
 
 local function catch_with_failing_method_test()
     local obj = {
-        method = function(self) error("method error") end
+        method = function(self)
+            error("method error")
+        end,
     }
+
     catch obj:method()
     assert(true)
 end
 
 local function catch_with_call_metamethod_test()
     local mt = {
-        __call = function(t, ...) return "called" end
+        __call = function(t, ...)
+            return "called"
+        end,
     }
+
     local obj = setmetatable({}, mt)
     catch obj()
     assert(true)
@@ -301,8 +338,11 @@ end
 
 local function catch_with_failing_call_test()
     local mt = {
-        __call = function(t, ...) error("__call error") end
+        __call = function(t, ...)
+            error("__call error")
+        end,
     }
+
     local obj = setmetatable({}, mt)
     catch obj()
     assert(true)
@@ -310,8 +350,11 @@ end
 
 local function catch_with_index_error_test()
     local mt = {
-        __index = function(t, k) error("__index error") end
+        __index = function(t, k)
+            error("__index error")
+        end,
     }
+
     local obj = setmetatable({}, mt)
     catch (obj.foo)
     assert(true)
@@ -319,10 +362,17 @@ end
 
 local function catch_with_newindex_error_test()
     local mt = {
-        __newindex = function(t, k, v) error("__newindex error") end
+        __newindex = function(t, k, v)
+            error("__newindex error")
+        end,
     }
+
     local obj = setmetatable({}, mt)
-    catch (function() obj.foo = 1 end)()
+
+    catch (function()
+        obj.foo = 1
+    end)()
+
     assert(true)
 end
 
@@ -334,6 +384,7 @@ local function catch_with_vararg_function_test()
     local function varfunc(...)
         return select("#", ...), ...
     end
+
     catch varfunc(1, 2, 3, 4, 5)
     assert(true)
 end
@@ -342,12 +393,13 @@ local function catch_with_multiple_return_function_test()
     local function multi()
         return 1, 2, 3, 4, 5
     end
+
     catch multi()
     assert(true)
 end
 
 local function catch_with_table_unpack_test()
-    local t = {1, 2, 3, 4, 5}
+    local t = { 1, 2, 3, 4, 5 }
     catch table.unpack(t)
     assert(true)
 end
@@ -357,7 +409,9 @@ end
 -- ============================================================================
 
 local function catch_with_empty_function_call_test()
-    local function empty() end
+    local function empty()
+    end
+
     catch empty()
     assert(true)
 end
@@ -372,16 +426,28 @@ local function catch_as_only_statement_in_block_test()
     do
         catch error("only statement")
     end
+
     assert(true)
 end
 
 local function multiple_catches_on_same_line_semicolon_separated_test()
-    catch error("1"); catch error("2"); catch error("3")
+    catch error("1")
+    catch error("2")
+    catch error("3")
     assert(true)
 end
 
 local function catch_with_complex_expression_test()
-    local t = {a = {b = {c = function() return 42 end}}}
+    local t = {
+        a = {
+            b = {
+                c = function()
+                    return 42
+                end,
+            },
+        },
+    }
+
     catch t.a.b.c()
     assert(true)
 end
@@ -389,9 +455,16 @@ end
 local function catch_with_chained_method_calls_test()
     local obj = {
         value = 0,
-        add = function(self, n) self.value = self.value + n; return self end,
-        mul = function(self, n) self.value = self.value * n; return self end,
+        add = function(self, n)
+            self.value = self.value + n
+            return self
+        end,
+        mul = function(self, n)
+            self.value = self.value * n
+            return self
+        end,
     }
+
     catch obj:add(5):mul(2):add(3)
     assert(obj.value == 13)
 end
@@ -412,6 +485,7 @@ local function catch_statement_inside_catch_expression_handler_test()
         catch error("inner statement")
         error("outer error")
     end
+
     local ok = catch handler()
     assert(ok == false)
 end
@@ -435,14 +509,20 @@ local function catch_expression_returns_false_and_error_on_failure_test()
 end
 
 local function catch_expression_with_successful_function_call_test()
-    local function f() return "hello" end
+    local function f()
+        return "hello"
+    end
+
     local ok, val = catch f()
     assert(ok == true)
     assert(val == "hello")
 end
 
 local function catch_expression_with_multiple_return_values_test()
-    local function multi() return 1, 2, 3 end
+    local function multi()
+        return 1, 2, 3
+    end
+
     local ok, a, b, c = catch multi()
     assert(ok == true)
     assert(a == 1)
@@ -457,14 +537,17 @@ local function catch_expression_with_error_returns_error_message_test()
 end
 
 local function catch_expression_with_nil_return_test()
-    local function f() return nil end
+    local function f()
+        return nil
+    end
+
     local ok, val = catch f()
     assert(ok == true)
     assert(val == nil)
 end
 
 local function catch_expression_with_table_error_test()
-    local ok, err = catch error({code = 404, msg = "not found"})
+    local ok, err = catch error({ code = 404, msg = "not found" })
     assert(ok == false)
     -- catch delivers the error object exactly as raised
     assert(type(err) == "table")
@@ -477,12 +560,16 @@ local function nested_catch_expressions_test()
         assert(ok2 == false)
         return "outer"
     end)()
+
     assert(ok1 == true)
     assert(val1 == "outer")
 end
 
 local function catch_expression_error_handler_test()
-    local ok, val = catch[function(e) return "handled: " .. tostring(e) end] error("oops")
+    local ok, val = catch[function(e)
+        return "handled: " .. tostring(e)
+    end] error("oops")
+
     assert(ok == false)
     assert(string.find(val, "handled:"))
 end
@@ -492,9 +579,13 @@ end
 -- dangling tbc entry corrupts later operations (globals would read as nil).
 local function catch_of_a_large_buffer_c_error_does_not_corrupt_state_test()
     local t = {}
-    for i = 1, 100000 do t[i] = "abcdefghij" end
-    t[100001] = {} -- non-string: table.concat errors after a big buffer
-    local ok = catch(table.concat(t))
+
+    for i = 1, 100000 do
+        t[i] = "abcdefghij"
+    end
+
+    t[100001] = {}  -- non-string: table.concat errors after a big buffer
+    local ok = catch (table.concat(t))
     assert(ok == false)
     -- if the tbc box was left dangling, this print/assert path would break:
     assert(type(print) == "function")
@@ -512,8 +603,10 @@ local function catch_inside_deep_recursion_with_stack_growth_test()
             assert(ok == false)
             return 1
         end
+
         return deep(n - 1) + 1
     end
+
     assert(deep(3000) == 3001)
 end
 
@@ -526,11 +619,14 @@ local function deeply_nested_active_catch_frames_test()
                 error("deep boom")
             end
         end)()
+
         if n == 0 then
             assert(ok == false)
         end
+
         return n
     end
+
     grow(500)
 end
 
@@ -543,6 +639,7 @@ local function catch_across_coroutine_boundaries_test()
         assert(ok2 == false)
         return "done"
     end)
+
     local succ, val = coroutine.resume(co)
     assert(succ and val == "caught")
     succ, val = coroutine.resume(co)
@@ -554,10 +651,14 @@ end
 -- "C stack overflow".
 local function repeated_errors_across_c_boundaries_keep_nccalls_balanced_test()
     for i = 1, 200 do
-        local ok = catch table.sort({3, 1, 2}, function() error("cmp") end)
+        local ok = catch table.sort({ 3, 1, 2 }, function()
+            error("cmp")
+        end)
+
         assert(ok == false)
     end
-    local t = {3, 1, 2}
+
+    local t = { 3, 1, 2 }
     table.sort(t)
     assert(t[1] == 1 and t[2] == 2 and t[3] == 3)
 end
@@ -573,15 +674,17 @@ local function load_reports_errors_normally_inside_a_catch_block_test()
         assert(f == nil)
         assert(type(err) == "string")
     end)()
+
     assert(ok == true)
 end
 
 local function debug_parse_reports_errors_normally_inside_a_catch_block_test()
     local ok = catch (function()
-        local ast, err = debug.parse("local x = ((", "bad", {recover = false})
+        local ast, err = debug.parse("local x = ((", "bad", { recover = false })
         assert(ast == nil)
         assert(type(err) == "string")
     end)()
+
     assert(ok == true)
 end
 
@@ -589,14 +692,20 @@ end
 -- body errors and the error is caught.
 local function to_be_closed_variables_are_closed_on_caught_error_test()
     local closed = false
+
     local function mk()
-        return setmetatable({}, {__close = function() closed = true end})
+        return setmetatable({}, {
+            __close = function()
+                closed = true
+            end,
+        })
     end
-    local ok = catch((function()
+
+    local ok = catch ((function()
         local x <close> = mk()
         error("boom")
     end)())
+
     assert(ok == false)
     assert(closed == true)
 end
-

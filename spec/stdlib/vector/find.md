@@ -30,12 +30,18 @@ The following example splits a multipart body at its boundary.
 local body = vector.fromstring("--x\r\nfirst\r\n--x\r\nsecond\r\n--x--")
 local parts = {}
 local at = vector.find(body, "--x")
+
 while true do
     local start = at + 5
     local next_at = vector.find(body, "\r\n--x", start)
-    if not next_at then break end
+
+    if not next_at then
+        break
+    end
+
     parts[#parts + 1] = vector.tostring(body, start, next_at)
     at = next_at + 2
 end
-print(parts[1], parts[2])   --> first  second
+
+print(parts[1], parts[2])  --> first  second
 ```

@@ -42,10 +42,11 @@ local function where()
     local info = debug.getinfo(1, "nSl")
     return info.name, info.namewhat, info.what, info.currentline
 end
-print(where())                           --> where  local  Lua  2
+
+print(where())  --> where  local  Lua  2
 local u = debug.getinfo(string.rep, "u")
-print(u.nparams, u.isvararg)             --> 0  true
-print(debug.getinfo(100))                --> nil
+print(u.nparams, u.isvararg)  --> 0  true
+print(debug.getinfo(100))  --> nil
 ```
 
 [`debug.traceback`](/manual/api#debug.traceback) formats the same information for every level of the stack, and [`debug.getlocal`](/manual/api#debug.getlocal) reads the variables of a level.

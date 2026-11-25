@@ -24,8 +24,8 @@ The following example changes a copy and reads both vectors.
 local v = vector.fromstring("abc")
 local copy = vector.clone(v)
 vector.set(copy, 0, 65)
-print(vector.tostring(v), vector.tostring(copy))   --> abc  Abc
-print(copy == v, #copy)                            --> false  3
+print(vector.tostring(v), vector.tostring(copy))  --> abc  Abc
+print(copy == v, #copy)  --> false  3
 ```
 
 Two vectors are equal only when they are the same object, so a clone never compares equal to its original. [`vector.fromstring`](/manual/api#vector.fromstring) given a vector also returns a copy.

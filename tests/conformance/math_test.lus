@@ -8,47 +8,58 @@ local string = string
 local minint, maxint = math.mininteger, math.maxinteger
 local intbits = math.floor(math.log(maxint, 2) + 0.5) + 1
 local floatbits = 24
+
 do
-  local p = 2.0^floatbits
-  while p < p + 1.0 do
-    p = p * 2.0
-    floatbits = floatbits + 1
-  end
+    local p = 2.0 ^ floatbits
+
+    while p < p + 1.0 do
+        p = p * 2.0
+        floatbits = floatbits + 1
+    end
 end
 
 local maxexp = 0
+
 do
-  local p = 2.0
-  while p < math.huge do
-    maxexp = maxexp + 1
-    p = p + p
-  end
+    local p = 2.0
+
+    while p < math.huge do
+        maxexp = maxexp + 1
+        p = p + p
+    end
 end
 
-local function isNaN (x)
-  return (x ~= x)
+local function isNaN(x)
+    return (x ~= x)
 end
 
-local function checkerror (msg, f, ...)
-  -- Use catch with closure
-  local args = {...}
-  local success, err = catch (function() return f(table.unpack(args)) end)()
-  assert(not success and string.find(err, msg))
+local function checkerror(msg, f, ...)
+    -- Use catch with closure
+    local args = { ... }
+
+    local success, err = catch (function()
+        return f(table.unpack(args))
+    end)()
+
+    assert(not success and string.find(err, msg))
 end
 
 local msgf2i = "number.* has no integer representation"
 
-local function eq (a,b,limit)
-  if not limit then
-    if floatbits >= 50 then limit = 1E-11
-    else limit = 1E-5
+local function eq(a, b, limit)
+    if not limit then
+        if floatbits >= 50 then
+            limit = 1E-11
+        else
+            limit = 1E-5
+        end
     end
-  end
-  return a == b or math.abs(a-b) <= limit
+
+    return a == b or math.abs(a - b) <= limit
 end
 
-local function eqT (a,b)
-  return a == b and math.type(a) == math.type(b)
+local function eqT(a, b)
+    return a == b and math.type(a) == math.type(b)
 end
 
 -- Tests wrapped in it blocks
@@ -58,64 +69,66 @@ local function basic_limits_and_types_test()
     assert(minint == 1 << (intbits - 1))
     assert(maxint == minint - 1)
 
-    assert(isNaN(0/0))
-    assert(not isNaN(1/0))
+    assert(isNaN(0 / 0))
+    assert(not isNaN(1 / 0))
 
-    local x = 2.0^floatbits
+    local x = 2.0 ^ floatbits
     assert(x > x - 1.0 and x == x + 1.0)
 
-    assert(math.type(0) == "integer" and math.type(0.0) == "float"
-           and not math.type("10"))
+    assert(math.type(0) == "integer" and math.type(0.0) == "float" and not math.type("10"))
 end
 
 -- basic float notation and equality
 local function basic_float_notation_and_equality_test()
     assert(0e12 == 0 and .0 == 0 and 0. == 0 and .2e2 == 20 and 2.E-1 == 0.2)
-    local a,b,c = "2", " 3e0 ", " 10  "
-    assert(a+b == 5 and -b == -3 and b+"2" == 5 and "10"-c == 0)
-    assert(type(a) == 'string' and type(b) == 'string' and type(c) == 'string')
+    local a, b, c = "2", " 3e0 ", " 10  "
+    assert(a + b == 5 and -b == -3 and b + "2" == 5 and "10" - c == 0)
+    assert(type(a) == "string" and type(b) == "string" and type(c) == "string")
     assert(a == "2" and b == " 3e0 " and c == " 10  " and -c == -"  10 ")
-    assert(c%a == 0 and a^b == 08)
+    assert(c % a == 0 and a ^ b == 08)
     a = 0
     assert(a == -a and 0 == -0)
 
     local x = -1
-    local mz = 0/x   -- minus zero
+    local mz = 0 / x  -- minus zero
 end
 
 -- math.modf
 local function math_modf_test()
-  local a,b = math.modf(3.5)
-  assert(a == 3.0 and b == 0.5)
-  a,b = math.modf(-2.5)
-  assert(a == -2.0 and b == -0.5)
-  a,b = math.modf(-3e23)
-  assert(a == -3e23 and b == 0.0)
-  a,b = math.modf(3e35)
-  assert(a == 3e35 and b == 0.0)
-  a,b = math.modf(-1/0)   -- -inf
-  assert(a == -1/0 and b == 0.0)
-  a,b = math.modf(1/0)   -- inf
-  assert(a == 1/0 and b == 0.0)
-  a,b = math.modf(0/0)   -- NaN
-  assert(isNaN(a) and isNaN(b))
-  a,b = math.modf(3)  -- integer argument
-  assert(eqT(a, 3) and eqT(b, 0.0))
-  a,b = math.modf(minint)
-  assert(eqT(a, minint) and eqT(b, 0.0))
+    local a, b = math.modf(3.5)
+    assert(a == 3.0 and b == 0.5)
+    a, b = math.modf(-2.5)
+    assert(a == -2.0 and b == -0.5)
+    a, b = math.modf(-3e23)
+    assert(a == -3e23 and b == 0.0)
+    a, b = math.modf(3e35)
+    assert(a == 3e35 and b == 0.0)
+    a, b = math.modf(-1 / 0)  -- -inf
+    assert(a == -1 / 0 and b == 0.0)
+    a, b = math.modf(1 / 0)  -- inf
+    assert(a == 1 / 0 and b == 0.0)
+    a, b = math.modf(0 / 0)  -- NaN
+    assert(isNaN(a) and isNaN(b))
+    a, b = math.modf(3)  -- integer argument
+    assert(eqT(a, 3) and eqT(b, 0.0))
+    a, b = math.modf(minint)
+    assert(eqT(a, minint) and eqT(b, 0.0))
 end
 
 -- floor division and conversions
 local function floor_division_and_conversions_test()
-    assert(1//0.0 == 1/0)
-    assert(-1 // 0.0 == -1/0)
+    assert(1 // 0.0 == 1 / 0)
+    assert(-1 // 0.0 == -1 / 0)
     assert(eqT(3.5 // 1.5, 2.0))
     assert(eqT(3.5 // -1.5, -3.0))
 
     local x, y
-    x = 1; assert(x // 0.0 == 1/0)
-    x = 1.0; assert(x // 0 == 1/0)
-    x = 3.5; assert(eqT(x // 1, 3.0))
+    x = 1
+    assert(x // 0.0 == 1 / 0)
+    x = 1.0
+    assert(x // 0 == 1 / 0)
+    x = 3.5
+    assert(eqT(x // 1, 3.0))
     assert(eqT(x // -1, -4.0))
 
     assert(maxint // maxint == 1)
@@ -128,14 +141,16 @@ end
 
 -- comparison floats and integers
 local function comparison_floats_and_integers_test()
-    assert(maxint + 0.0 == 2.0^(intbits - 1) - 1.0)
+    assert(maxint + 0.0 == 2.0 ^ (intbits - 1) - 1.0)
     assert(minint + 0.0 == minint)
 
-    assert(1 < 1.1); assert(not (1 < 0.9))
-    assert(1 <= 1.1); assert(not (1 <= 0.9))
+    assert(1 < 1.1)
+    assert(not (1 < 0.9))
+    assert(1 <= 1.1)
+    assert(not (1 <= 0.9))
     assert(minint <= minint + 0.0)
 
-    local NaN = 0/0
+    local NaN = 0 / 0
     assert(not (NaN < 0))
     assert(not (NaN > minint))
     assert(not (NaN < NaN))
@@ -143,9 +158,10 @@ end
 
 -- compile time errors (load)
 local function compile_time_errors_load_test()
-    local function checkcompt (msg, code)
-      checkerror(msg, assert(load(code)))
+    local function checkcompt(msg, code)
+        checkerror(msg, assert(load(code)))
     end
+
     checkcompt("divide by zero", "return 2 // 0")
     checkcompt(msgf2i, "return 2.3 >> 0")
 end
@@ -160,13 +176,13 @@ local function tonumber_tests_test()
     assert(tonumber("0xff") == 255)
 
     assert(0x10 == 16)
-    assert(tonumber('  -10  ', 36) == -36)
+    assert(tonumber("  -10  ", 36) == -36)
 end
 
 -- math functions
 local function math_functions_test()
     assert(math.abs(-10.43) == 10.43)
-    assert(eq(math.sqrt(10)^2, 10))
+    assert(eq(math.sqrt(10) ^ 2, 10))
     assert(eq(math.log(2, 2), 1))
     assert(eq(math.exp(0), 1))
 
@@ -188,7 +204,7 @@ end
 local function tointeger_test()
     assert(eqT(math.tointeger(minint), minint))
     assert(eqT(math.tointeger(maxint), maxint))
-    assert(not math.tointeger(0.0 - minint)) -- overflow
+    assert(not math.tointeger(0.0 - minint))  -- overflow
 end
 
 -- random
@@ -224,7 +240,7 @@ end
 
 -- integer multiplication overflow
 local function integer_multiplication_overflow_test()
-    local big = maxint // 2   -- 2^62 - 1
+    local big = maxint // 2  -- 2^62 - 1
     local result = big * 3
     assert(math.type(result) == "integer")
     -- 3 * (2^62 - 1) is 3 * 2^62 - 3, which wraps modulo 2^64 to -2^62 - 3
@@ -240,17 +256,23 @@ local function division_edge_cases_test()
     assert(-1.0 / 0.0 == -math.huge)
 
     -- Integer division by zero errors
-    local ok1, err1 = catch (function() return 1 // 0 end)()
+    local ok1, err1 = catch (function()
+        return 1 // 0
+    end)()
+
     assert(not ok1, "integer division by zero should error")
 
-    local ok2, err2 = catch (function() return 1 % 0 end)()
+    local ok2, err2 = catch (function()
+        return 1 % 0
+    end)()
+
     assert(not ok2, "modulo by zero should error")
     assert(string.find(err2, "attempt to perform 'n%0'", 1, true), err2)
 end
 
 -- NaN propagation
 local function nan_propagation_test()
-    local nan = 0/0
+    local nan = 0 / 0
 
     -- NaN in arithmetic produces NaN
     assert(isNaN(nan + 1))
@@ -306,7 +328,7 @@ local function math_abs_edge_cases_test()
     assert(math.abs(minint) == minint)  -- minint has no positive equivalent
     assert(math.abs(math.huge) == math.huge)
     assert(math.abs(-math.huge) == math.huge)
-    assert(isNaN(math.abs(0/0)))
+    assert(isNaN(math.abs(0 / 0)))
 end
 
 -- math.floor and ceil with large numbers
@@ -332,7 +354,7 @@ local function math_min_and_max_edge_cases_test()
     assert(math.max(1, 2, -math.huge) == 2)
 
     -- NaN comparison
-    local nan = 0/0
+    local nan = 0 / 0
     -- min/max with NaN should return NaN
     assert(isNaN(math.min(nan, 1)))
     assert(isNaN(math.max(nan, 1)))
@@ -371,7 +393,7 @@ local function math_exp_edge_cases_test()
     assert(math.exp(0) == 1)
     assert(math.exp(math.huge) == math.huge)
     assert(math.exp(-math.huge) == 0)
-    assert(isNaN(math.exp(0/0)))
+    assert(isNaN(math.exp(0 / 0)))
 end
 
 -- math.atan with two arguments
@@ -414,7 +436,7 @@ end
 -- integer to float conversion at boundaries
 local function integer_to_float_conversion_at_boundaries_test()
     -- When integer is exactly representable as float
-    local n = 2^50  -- well within double precision range
+    local n = 2 ^ 50  -- well within double precision range
     local as_float = n + 0.0
     assert(math.type(as_float) == "float")
 
@@ -446,7 +468,6 @@ local function ult_unsigned_less_than_test()
     assert(math.ult(0, -1))  -- 0 < maxuint
 end
 
-
 -- ===== mathx =====
 -- Math module completion tests.
 --
@@ -456,7 +477,6 @@ end
 -- math.randomseed including every documented error path, the integer subtype
 -- of floor and ceil, tointeger edge cases, the integer limit matrix around
 -- mininteger, and the semantics of the numeric for loop under Lus rules.
-
 
 local math = math
 
@@ -476,14 +496,14 @@ end
 -- x equals mantissa times two raised to the exponent.
 -- frexp decomposes x into mantissa and exponent
 local frexp_decomposes_x_into_mantissa_and_exponent_cases = {
-    {8.0, 0.5, 4},
-    {1.0, 0.5, 1},
-    {2.0, 0.5, 2},
-    {0.5, 0.5, 0},
-    {0.25, 0.5, -1},
-    {-8.0, -0.5, 4},
-    {3.0, 0.75, 2},
-    {1024.0, 0.5, 11},
+    { 8.0, 0.5, 4 },
+    { 1.0, 0.5, 1 },
+    { 2.0, 0.5, 2 },
+    { 0.5, 0.5, 0 },
+    { 0.25, 0.5, -1 },
+    { -8.0, -0.5, 4 },
+    { 3.0, 0.75, 2 },
+    { 1024.0, 0.5, 11 },
 }
 
 local function frexp_decomposes_x_into_mantissa_and_exponent_test(x, m, e)
@@ -506,13 +526,13 @@ end
 -- fractional magnitudes, including a subnormal input.
 -- frexp reconstruction invariant holds
 local frexp_reconstruction_invariant_holds_cases = {
-    {123.456},
-    {-8.0},
-    {0.001},
-    {7.0},
-    {1e300},
-    {-1e-200},
-    {2.0 ^ -1074},
+    { 123.456 },
+    { -8.0 },
+    { 0.001 },
+    { 7.0 },
+    { 1e300 },
+    { -1e-200 },
+    { 2.0 ^ -1074 },
 }
 
 local function frexp_reconstruction_invariant_holds_test(x)
@@ -523,7 +543,12 @@ end
 -- Every normal nonzero input yields a mantissa whose magnitude is in [0.5, 1).
 -- frexp mantissa magnitude is in half-open unit interval
 local frexp_mantissa_magnitude_is_in_half_open_unit_interval_cases = {
-    {1.0}, {1000000.0}, {-0.001}, {7.0}, {maxint + 0.0}, {2.0 ^ -1074},
+    { 1.0 },
+    { 1000000.0 },
+    { -0.001 },
+    { 7.0 },
+    { maxint + 0.0 },
+    { 2.0 ^ -1074 },
 }
 
 local function frexp_mantissa_magnitude_is_in_half_open_unit_interval_test(x)
@@ -567,8 +592,13 @@ end
 -- A non-number argument raises an error.
 -- frexp rejects a non-number argument
 local function frexp_rejects_a_non_number_argument_test()
-    raises(function() return math.frexp({}) end)
-    raises(function() return math.frexp(nil) end)
+    raises(function()
+        return math.frexp({})
+    end)
+
+    raises(function()
+        return math.frexp(nil)
+    end)
 end
 
 -- ============================================================
@@ -580,13 +610,13 @@ end
 -- ldexp multiplies the mantissa by two raised to the exponent.
 -- ldexp scales the mantissa by a power of two
 local ldexp_scales_the_mantissa_by_a_power_of_two_cases = {
-    {1.0, 10, 1024.0},
-    {1.0, 1, 2.0},
-    {1.0, 0, 1.0},
-    {1.0, -1, 0.5},
-    {3.0, 4, 48.0},
-    {-1.0, 3, -8.0},
-    {0.5, 2, 2.0},
+    { 1.0, 10, 1024.0 },
+    { 1.0, 1, 2.0 },
+    { 1.0, 0, 1.0 },
+    { 1.0, -1, 0.5 },
+    { 3.0, 4, 48.0 },
+    { -1.0, 3, -8.0 },
+    { 0.5, 2, 2.0 },
 }
 
 local function ldexp_scales_the_mantissa_by_a_power_of_two_test(m, e, expected)
@@ -618,7 +648,9 @@ end
 -- A fractional exponent has no integer representation and raises an error.
 -- ldexp rejects a fractional exponent
 local function ldexp_rejects_a_fractional_exponent_test()
-    raises(function() return math.ldexp(1, 1.5) end, "no integer representation")
+    raises(function()
+        return math.ldexp(1, 1.5)
+    end, "no integer representation")
 end
 
 -- Infinite and not-a-number mantissas propagate through the result.
@@ -632,13 +664,20 @@ end
 -- A non-number first argument raises an error.
 -- ldexp rejects a non-number mantissa
 local function ldexp_rejects_a_non_number_mantissa_test()
-    raises(function() return math.ldexp({}, 1) end)
+    raises(function()
+        return math.ldexp({}, 1)
+    end)
 end
 
 -- The round trip through frexp and ldexp reconstructs the original value.
 -- ldexp inverts frexp
 local ldexp_inverts_frexp_cases = {
-    {123.456}, {-8.0}, {0.0}, {7.0}, {1e-200}, {maxint + 0.0},
+    { 123.456 },
+    { -8.0 },
+    { 0.0 },
+    { 7.0 },
+    { 1e-200 },
+    { maxint + 0.0 },
 }
 
 local function ldexp_inverts_frexp_test(x)
@@ -668,13 +707,21 @@ end
 -- random with one bound returns an integer in [1, m]
 local function random_with_one_bound_returns_an_integer_in_1_m_test()
     local saw_low, saw_high = false, false
+
     for i = 1, 400 do
         local r = math.random(4)
         assert(math.type(r) == "integer")
         assert(r >= 1 and r <= 4)
-        if r == 1 then saw_low = true end
-        if r == 4 then saw_high = true end
+
+        if r == 1 then
+            saw_low = true
+        end
+
+        if r == 4 then
+            saw_high = true
+        end
     end
+
     assert(saw_low)
     assert(saw_high)
 end
@@ -683,10 +730,10 @@ end
 -- for negative intervals.
 -- random with two bounds stays inside the inclusive interval
 local random_with_two_bounds_stays_inside_the_inclusive_interval_cases = {
-    {5, 10},
-    {-10, -5},
-    {-3, 3},
-    {0, 1},
+    { 5, 10 },
+    { -10, -5 },
+    { -3, 3 },
+    { 0, 1 },
 }
 
 local function random_with_two_bounds_stays_inside_the_inclusive_interval_test(lo, hi)
@@ -710,11 +757,16 @@ end
 -- random of zero draws from the full integer range
 local function random_of_zero_draws_from_the_full_integer_range_test()
     local saw_negative = false
+
     for i = 1, 400 do
         local r = math.random(0)
         assert(math.type(r) == "integer")
-        if r < 0 then saw_negative = true end
+
+        if r < 0 then
+            saw_negative = true
+        end
     end
+
     assert(saw_negative)
 end
 
@@ -731,27 +783,41 @@ end
 -- An empty interval where the low bound exceeds the high bound raises.
 -- random of an empty interval raises
 local function random_of_an_empty_interval_raises_test()
-    raises(function() return math.random(5, 2) end, "interval is empty")
-    raises(function() return math.random(1, 0) end, "interval is empty")
+    raises(function()
+        return math.random(5, 2)
+    end, "interval is empty")
+
+    raises(function()
+        return math.random(1, 0)
+    end, "interval is empty")
 end
 
 -- More than two arguments raises a wrong-number-of-arguments error.
 -- random rejects more than two arguments
 local function random_rejects_more_than_two_arguments_test()
-    raises(function() return math.random(1, 2, 3) end, "wrong number of arguments")
+    raises(function()
+        return math.random(1, 2, 3)
+    end, "wrong number of arguments")
 end
 
 -- Non-integer numeric bounds have no integer representation and raise.
 -- random rejects fractional bounds
 local function random_rejects_fractional_bounds_test()
-    raises(function() return math.random(1.5) end, "no integer representation")
-    raises(function() return math.random(1, 2.5) end, "no integer representation")
+    raises(function()
+        return math.random(1.5)
+    end, "no integer representation")
+
+    raises(function()
+        return math.random(1, 2.5)
+    end, "no integer representation")
 end
 
 -- A non-numeric bound raises a bad-argument error.
 -- random rejects a non-numeric bound
 local function random_rejects_a_non_numeric_bound_test()
-    raises(function() return math.random({}) end)
+    raises(function()
+        return math.random({})
+    end)
 end
 
 -- ============================================================
@@ -776,8 +842,13 @@ end
 local function equal_seeds_produce_equal_sequences_test()
     math.randomseed(4242)
     local first = {}
-    for i = 1, 8 do first[i] = math.random(1, 1000000000) end
+
+    for i = 1, 8 do
+        first[i] = math.random(1, 1000000000)
+    end
+
     math.randomseed(4242)
+
     for i = 1, 8 do
         assert(math.random(1, 1000000000) == first[i])
     end
@@ -789,8 +860,13 @@ end
 local function reseeding_with_the_returned_pair_reproduces_the_sequence_test()
     local a, b = math.randomseed()
     local first = {}
-    for i = 1, 8 do first[i] = math.random(1, 1000000000) end
+
+    for i = 1, 8 do
+        first[i] = math.random(1, 1000000000)
+    end
+
     math.randomseed(a, b)
+
     for i = 1, 8 do
         assert(math.random(1, 1000000000) == first[i])
     end
@@ -819,7 +895,10 @@ end
 local function randomseed_accepts_an_integer_valued_float_and_rejects_a_fractional_on_test()
     local a, b = math.randomseed(100.0)
     assert(a == 100)
-    raises(function() return math.randomseed(1.5) end, "no integer representation")
+
+    raises(function()
+        return math.randomseed(1.5)
+    end, "no integer representation")
 end
 
 -- ============================================================
@@ -831,10 +910,10 @@ end
 -- On values that fit in an integer, floor and ceil return the integer subtype.
 -- floor and ceil return the integer subtype for representable results
 local floor_and_ceil_return_the_integer_subtype_for_representable_results_cases = {
-    {3.4, 3, 4},
-    {-3.4, -4, -3},
-    {0.0, 0, 0},
-    {2.0 ^ 50, 2 ^ 50 // 1, 2 ^ 50 // 1},
+    { 3.4, 3, 4 },
+    { -3.4, -4, -3 },
+    { 0.0, 0, 0 },
+    { 2.0 ^ 50, 2 ^ 50 // 1, 2 ^ 50 // 1 },
 }
 
 local function floor_and_ceil_return_the_integer_subtype_for_representable_results_test(x, fl, ce)
@@ -858,7 +937,10 @@ end
 -- saturating.
 -- floor and ceil of a huge float return the float unchanged
 local floor_and_ceil_of_a_huge_float_return_the_float_unchanged_cases = {
-    {1e300}, {-1e300}, {math.huge}, {-math.huge},
+    { 1e300 },
+    { -1e300 },
+    { math.huge },
+    { -math.huge },
 }
 
 local function floor_and_ceil_of_a_huge_float_return_the_float_unchanged_test(x)
@@ -879,19 +961,20 @@ end
 -- non-representable inputs return nothing.
 -- tointeger converts only integral numbers
 local tointeger_converts_only_integral_numbers_cases = {
-    {3.0, 3},
-    {-7.0, -7},
-    {minint + 0.0, minint},
-    {3.5, nil},
-    {0.1, nil},
-    {math.huge, nil},
-    {-math.huge, nil},
-    {0 / 0, nil},
-    {2.0 ^ 63, nil},
+    { 3.0, 3 },
+    { -7.0, -7 },
+    { minint + 0.0, minint },
+    { 3.5, nil },
+    { 0.1, nil },
+    { math.huge, nil },
+    { -math.huge, nil },
+    { 0 / 0, nil },
+    { 2.0 ^ 63, nil },
 }
 
 local function tointeger_converts_only_integral_numbers_test(x, expected)
     local got = math.tointeger(x)
+
     if expected == nil then
         assert(got == nil)
     else
@@ -956,21 +1039,24 @@ end
 local function fmod_of_mininteger_by_negative_one_is_zero_test()
     assert(math.fmod(minint, -1) == 0)
     assert(math.type(math.fmod(minint, -1)) == "integer")
+
     -- fmod by zero on integers still raises.
-    raises(function() return math.fmod(3, 0) end, "zero")
+    raises(function()
+        return math.fmod(3, 0)
+    end, "zero")
 end
 
 -- math.ult compares operands as unsigned across all sign quadrants.
 -- ult compares operands as unsigned integers
 local ult_compares_operands_as_unsigned_integers_cases = {
-    {0, 1, true},
-    {1, 0, false},
-    {-1, 0, false},
-    {0, -1, true},
-    {minint, maxint, false},
-    {maxint, minint, true},
-    {-1, -2, false},
-    {-2, -1, true},
+    { 0, 1, true },
+    { 1, 0, false },
+    { -1, 0, false },
+    { 0, -1, true },
+    { minint, maxint, false },
+    { maxint, minint, true },
+    { -1, -2, false },
+    { -2, -1, true },
 }
 
 local function ult_compares_operands_as_unsigned_integers_test(a, b, expected)
@@ -988,9 +1074,11 @@ end
 -- an integer loop ending at maxinteger terminates
 local function an_integer_loop_ending_at_maxinteger_terminates_test()
     local count = 0
+
     for i = maxint - 2, maxint do
         count = count + 1
     end
+
     assert(count == 3)
 end
 
@@ -998,7 +1086,8 @@ end
 -- a zero step raises
 local function a_zero_step_raises_test()
     raises(function()
-        for i = 1, 10, 0 do end
+        for i = 1, 10, 0 do
+        end
     end, "'for' step is zero")
 end
 
@@ -1006,7 +1095,11 @@ end
 -- the last value of an integer loop is the limit
 local function the_last_value_of_an_integer_loop_is_the_limit_test()
     local last
-    for i = 1, 5 do last = i end
+
+    for i = 1, 5 do
+        last = i
+    end
+
     assert(last == 5)
     assert(math.type(last) == "integer")
 end
@@ -1015,7 +1108,11 @@ end
 -- a backward loop counts down to the limit
 local function a_backward_loop_counts_down_to_the_limit_test()
     local seen = {}
-    for i = 5, 1, -1 do seen[#seen + 1] = i end
+
+    for i = 5, 1, -1 do
+        seen[#seen + 1] = i
+    end
+
     assert(#seen == 5)
     assert(seen[1] == 5)
     assert(seen[5] == 1)
@@ -1025,7 +1122,11 @@ end
 -- a negative step with an ascending range runs zero times
 local function a_negative_step_with_an_ascending_range_runs_zero_times_test()
     local count = 0
-    for i = 1, 5, -1 do count = count + 1 end
+
+    for i = 1, 5, -1 do
+        count = count + 1
+    end
+
     assert(count == 0)
 end
 
@@ -1033,7 +1134,11 @@ end
 -- a positive step with a descending range runs zero times
 local function a_positive_step_with_a_descending_range_runs_zero_times_test()
     local count = 0
-    for i = 5, 1, 1 do count = count + 1 end
+
+    for i = 5, 1, 1 do
+        count = count + 1
+    end
+
     assert(count == 0)
 end
 
@@ -1041,7 +1146,11 @@ end
 -- a float loop accumulates its step
 local function a_float_loop_accumulates_its_step_test()
     local vals = {}
-    for i = 0.0, 1.0, 0.25 do vals[#vals + 1] = i end
+
+    for i = 0.0, 1.0, 0.25 do
+        vals[#vals + 1] = i
+    end
+
     assert(#vals == 5)
     assert(vals[1] == 0.0)
     assert(vals[5] == 1.0)
@@ -1052,15 +1161,24 @@ end
 -- the limit as reference Lua specifies.
 -- a float limit with an integer start converts per Lua rules
 local a_float_limit_with_an_integer_start_converts_per_lua_rules_cases = {
-    {1, 3.5, 1, 3},
-    {1, 3.9, 1, 3},
-    {5, 1.5, -1, 4},
-    {5, 1.1, -1, 4},
+    { 1, 3.5, 1, 3 },
+    { 1, 3.9, 1, 3 },
+    { 5, 1.5, -1, 4 },
+    { 5, 1.1, -1, 4 },
 }
 
-local function a_float_limit_with_an_integer_start_converts_per_lua_rules_test(start, limit, step, expected)
+local function a_float_limit_with_an_integer_start_converts_per_lua_rules_test(
+    start,
+    limit,
+    step,
+    expected
+)
     local count = 0
-    for i = start, limit, step do count = count + 1 end
+
+    for i = start, limit, step do
+        count = count + 1
+    end
+
     assert(count == expected)
 end
 
@@ -1068,7 +1186,11 @@ end
 -- a float start makes the loop run over floats
 local function a_float_start_makes_the_loop_run_over_floats_test()
     local vals = {}
-    for i = 1.5, 5 do vals[#vals + 1] = i end
+
+    for i = 1.5, 5 do
+        vals[#vals + 1] = i
+    end
+
     assert(#vals == 4)
     assert(math.type(vals[1]) == "float")
     assert(vals[1] == 1.5)
@@ -1088,10 +1210,15 @@ end
 -- a loop with an infinite float limit is bounded only by break
 local function a_loop_with_an_infinite_float_limit_is_bounded_only_by_break_test()
     local count = 0
+
     for i = 1, math.huge do
         count = count + 1
-        if count >= 3 then break end
+
+        if count >= 3 then
+            break
+        end
     end
+
     assert(count == 3)
 end
 
@@ -1101,7 +1228,11 @@ end
 local function loop_values(f)
     local out = {}
     local ok, err = catch f(out)
-    if not ok then return "error: " .. err:gsub("^.-:%d+: ", "") end
+
+    if not ok then
+        return "error: " .. err:gsub("^.-:%d+: ", "")
+    end
+
     return table.concat(out, ",")
 end
 
@@ -1110,23 +1241,159 @@ end
 -- a bigint is a float. A float limit used to be read as a bigint there,
 -- which ended the loop after its first pass.
 local numeric_loop_edges_cases = {
-    {"NaN limit", function(o) for i = 1, 0 / 0 do o[#o + 1] = i end end, ""},
-    {"limit far below", function(o) for i = 1, -1e300 do o[#o + 1] = i end end, ""},
-    {"limit far above, counting down", function(o) for i = 1, 1e300, -1 do o[#o + 1] = i end end, ""},
-    {"limit above the integers", function(o) for i = math.maxinteger - 1, 1e300 do o[#o + 1] = i end end, "9223372036854775806,9223372036854775807"},
-    {"limit below the integers", function(o) for i = math.mininteger + 1, -1e300, -1 do o[#o + 1] = i end end, "-9223372036854775807,-9223372036854775808"},
-    {"float step of zero", function(o) for i = 1.0, 2, 0 do o[#o + 1] = i end end, "error: 'for' step is zero"},
-    {"bigint step of zero", function(o) for i = 1n, 2n, 0n do o[#o + 1] = i end end, "error: 'for' step is zero"},
-    {"decimal step of zero", function(o) for i = 1d, 2d, 0d do o[#o + 1] = i end end, "error: 'for' step is zero"},
-    {"float start, bigint limit", function(o) for i = 1.5, 3n do o[#o + 1] = i end end, "1.5,2.5"},
-    {"float start, bigint limit past a whole", function(o) for i = 0.5, 3n do o[#o + 1] = i end end, "0.5,1.5,2.5"},
-    {"integer start, bigint limit, float step", function(o) for i = 1, 3n, 0.5 do o[#o + 1] = i end end, "1.0,1.5,2.0,2.5,3.0"},
-    {"bigint start, float limit", function(o) for i = 1n, 2.5 do o[#o + 1] = i end end, "1.0,2.0"},
-    {"decimal start, float step", function(o) for i = 1d, 2d, 0.5 do o[#o + 1] = i end end, "error: attempt to mix decimal and float in arithmetic"},
-    {"decimal start, float limit", function(o) for i = 1d, 2.5 do o[#o + 1] = i end end, "error: attempt to mix decimal and float in arithmetic"},
-    {"float start, decimal limit", function(o) for i = 0.5, 2d do o[#o + 1] = i end end, "error: attempt to mix decimal and float in arithmetic"},
-    {"integer start, decimal step", function(o) for i = 1, 2, 0.5d do o[#o + 1] = i end end, "1,1.5,2.0"},
-    {"bigint loop", function(o) for i = 1, 3n do o[#o + 1] = i end end, "1,2,3"},
+    {
+        "NaN limit",
+        function(o)
+            for i = 1, 0 / 0 do
+                o[#o + 1] = i
+            end
+        end,
+        "",
+    },
+    {
+        "limit far below",
+        function(o)
+            for i = 1, -1e300 do
+                o[#o + 1] = i
+            end
+        end,
+        "",
+    },
+    {
+        "limit far above, counting down",
+        function(o)
+            for i = 1, 1e300, -1 do
+                o[#o + 1] = i
+            end
+        end,
+        "",
+    },
+    {
+        "limit above the integers",
+        function(o)
+            for i = math.maxinteger - 1, 1e300 do
+                o[#o + 1] = i
+            end
+        end,
+        "9223372036854775806,9223372036854775807",
+    },
+    {
+        "limit below the integers",
+        function(o)
+            for i = math.mininteger + 1, -1e300, -1 do
+                o[#o + 1] = i
+            end
+        end,
+        "-9223372036854775807,-9223372036854775808",
+    },
+    {
+        "float step of zero",
+        function(o)
+            for i = 1.0, 2, 0 do
+                o[#o + 1] = i
+            end
+        end,
+        "error: 'for' step is zero",
+    },
+    {
+        "bigint step of zero",
+        function(o)
+            for i = 1n, 2n, 0n do
+                o[#o + 1] = i
+            end
+        end,
+        "error: 'for' step is zero",
+    },
+    {
+        "decimal step of zero",
+        function(o)
+            for i = 1d, 2d, 0d do
+                o[#o + 1] = i
+            end
+        end,
+        "error: 'for' step is zero",
+    },
+    {
+        "float start, bigint limit",
+        function(o)
+            for i = 1.5, 3n do
+                o[#o + 1] = i
+            end
+        end,
+        "1.5,2.5",
+    },
+    {
+        "float start, bigint limit past a whole",
+        function(o)
+            for i = 0.5, 3n do
+                o[#o + 1] = i
+            end
+        end,
+        "0.5,1.5,2.5",
+    },
+    {
+        "integer start, bigint limit, float step",
+        function(o)
+            for i = 1, 3n, 0.5 do
+                o[#o + 1] = i
+            end
+        end,
+        "1.0,1.5,2.0,2.5,3.0",
+    },
+    {
+        "bigint start, float limit",
+        function(o)
+            for i = 1n, 2.5 do
+                o[#o + 1] = i
+            end
+        end,
+        "1.0,2.0",
+    },
+    {
+        "decimal start, float step",
+        function(o)
+            for i = 1d, 2d, 0.5 do
+                o[#o + 1] = i
+            end
+        end,
+        "error: attempt to mix decimal and float in arithmetic",
+    },
+    {
+        "decimal start, float limit",
+        function(o)
+            for i = 1d, 2.5 do
+                o[#o + 1] = i
+            end
+        end,
+        "error: attempt to mix decimal and float in arithmetic",
+    },
+    {
+        "float start, decimal limit",
+        function(o)
+            for i = 0.5, 2d do
+                o[#o + 1] = i
+            end
+        end,
+        "error: attempt to mix decimal and float in arithmetic",
+    },
+    {
+        "integer start, decimal step",
+        function(o)
+            for i = 1, 2, 0.5d do
+                o[#o + 1] = i
+            end
+        end,
+        "1,1.5,2.0",
+    },
+    {
+        "bigint loop",
+        function(o)
+            for i = 1, 3n do
+                o[#o + 1] = i
+            end
+        end,
+        "1,2,3",
+    },
 }
 
 local function numeric_loop_edges_test(label, f, want)
@@ -1137,14 +1404,70 @@ end
 -- ==== Exact operands of the math functions ====
 
 local exact_operands_of_math_functions_cases = {
-    {"abs of a negative bigint", function() return math.abs(-5n) end, "bigint", "5"},
-    {"abs of a positive bigint", function() return math.abs(5n) end, "bigint", "5"},
-    {"abs of a negative decimal", function() return math.abs(-2.5d) end, "decimal", "2.5"},
-    {"fmod of bigints", function() return math.fmod(-7n, 2n) end, "bigint", "-1"},
-    {"floor of a decimal", function() return math.floor(2.5d) end, "integer", "2"},
-    {"ceil of a negative decimal", function() return math.ceil(-2.5d) end, "integer", "-2"},
-    {"floor of a decimal with a positive exponent", function() return math.floor(1e3d) end, "integer", "1000"},
-    {"log in base 10", function() return math.log(100, 10) end, "float", "2.0"},
+    {
+        "abs of a negative bigint",
+        function()
+            return math.abs(-5n)
+        end,
+        "bigint",
+        "5",
+    },
+    {
+        "abs of a positive bigint",
+        function()
+            return math.abs(5n)
+        end,
+        "bigint",
+        "5",
+    },
+    {
+        "abs of a negative decimal",
+        function()
+            return math.abs(-2.5d)
+        end,
+        "decimal",
+        "2.5",
+    },
+    {
+        "fmod of bigints",
+        function()
+            return math.fmod(-7n, 2n)
+        end,
+        "bigint",
+        "-1",
+    },
+    {
+        "floor of a decimal",
+        function()
+            return math.floor(2.5d)
+        end,
+        "integer",
+        "2",
+    },
+    {
+        "ceil of a negative decimal",
+        function()
+            return math.ceil(-2.5d)
+        end,
+        "integer",
+        "-2",
+    },
+    {
+        "floor of a decimal with a positive exponent",
+        function()
+            return math.floor(1e3d)
+        end,
+        "integer",
+        "1000",
+    },
+    {
+        "log in base 10",
+        function()
+            return math.log(100, 10)
+        end,
+        "float",
+        "2.0",
+    },
 }
 
 local function exact_operands_of_math_functions_test(label, f, kind, text)
@@ -1153,10 +1476,34 @@ local function exact_operands_of_math_functions_test(label, f, kind, text)
 end
 
 local function fmod_of_bigints_by_zero_raises_test()
-    raises(function() return math.fmod(5n, 0n) end, "to 'math.fmod' %(zero%)")
+    raises(function()
+        return math.fmod(5n, 0n)
+    end, "to 'math.fmod' %(zero%)")
 end
 
-local word_edges = {0, 1, -1, 2, -2, 3, -3, 7, -7, 0x7FFFFFFF, -0x7FFFFFFF, -0x80000000, 0x80000000, -0x80000001, 0xFFFFFFFF, 0x100000000, -0x100000000, 0x123456789, minint, maxint, minint + 1}
+local word_edges = {
+    0,
+    1,
+    -1,
+    2,
+    -2,
+    3,
+    -3,
+    7,
+    -7,
+    0x7FFFFFFF,
+    -0x7FFFFFFF,
+    -0x80000000,
+    0x80000000,
+    -0x80000001,
+    0xFFFFFFFF,
+    0x100000000,
+    -0x100000000,
+    0x123456789,
+    minint,
+    maxint,
+    minint + 1,
+}
 
 local function floor_division_and_modulo_at_word_edges_test()
     for _, a in ipairs(word_edges) do
@@ -1169,16 +1516,17 @@ local function floor_division_and_modulo_at_word_edges_test()
             end
         end
     end
+
     assert(-0x80000000 // -1 == 0x80000000 and -0x80000000 % -1 == 0)
     assert(-7 // 2 == -4 and -7 % 2 == 1 and 7 // -2 == -4 and 7 % -2 == -1)
     assert(0x7FFFFFFF // -0x80000000 == -1 and 0x7FFFFFFF % -0x80000000 == -1)
 end
 
 local function division_of_integers_rounds_once_test()
-    assert(((1 << 53) + 1) / 1 == 2.0^53 and ((1 << 53) + 3) / 1 == 2.0^53 + 4)
-    assert(maxint / 1 == 2.0^63 and minint / 1 == -2.0^63)
+    assert(((1 << 53) + 1) / 1 == 2.0 ^ 53 and ((1 << 53) + 3) / 1 == 2.0 ^ 53 + 4)
+    assert(maxint / 1 == 2.0 ^ 63 and minint / 1 == -(2.0 ^ 63))
     assert((0x100000000 - 1) / 1 == 4294967295.0 and -0x100000001 / 1 == -4294967297.0)
-    assert(((1 << 62) + (1 << 9) + 1) / 1 == 2.0^62 + 2.0^10)
-    assert(((1 << 62) + (1 << 9)) / 1 == 2.0^62)
-    assert(((1 << 40) + 3) == 2.0^40 + 3)
+    assert(((1 << 62) + (1 << 9) + 1) / 1 == 2.0 ^ 62 + 2.0 ^ 10)
+    assert(((1 << 62) + (1 << 9)) / 1 == 2.0 ^ 62)
+    assert(((1 << 40) + 3) == 2.0 ^ 40 + 3)
 end

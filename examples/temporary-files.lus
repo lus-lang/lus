@@ -18,6 +18,7 @@ end
 for line in io.lines(path) do
     print(line)  --> draft of the newsletter
 end
+
 fs.remove(path)
 print((catch fs.type(path)))  --> false
 

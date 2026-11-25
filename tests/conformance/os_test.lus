@@ -15,12 +15,17 @@ pledge("load")
   against itself in local time. REF matches the constant used in datetime.lus.
 ]]
 
-
 -- os.tmpname creates its file in TMPDIR, which differs between hosts, so
 -- reading it back needs fs:read wherever that is.
-pledge("fs:read", "fs:write",
-    "env:read=LC_*", "env:read=PATH", "env:read=LUS_TEST_*", "env:read=LUS_SET_*", "env:write=LUS_SET_*")
-
+pledge(
+    "fs:read",
+    "fs:write",
+    "env:read=LC_*",
+    "env:read=PATH",
+    "env:read=LUS_TEST_*",
+    "env:read=LUS_SET_*",
+    "env:write=LUS_SET_*"
+)
 
 -- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.
 local REF = 1782998100
@@ -53,13 +58,19 @@ local function measures_cpu_time_consumed_by_a_busy_loop_test()
     -- The clock of some systems ticks every 15.6 ms, so the loop runs
     -- until the clock moves, within a bound.
     local after = before
+
     for round = 1, 1000 do
         for i = 1, 1000000 do
             s = s + i * 0.5
         end
+
         after = os.clock()
-        if after > before then break end
+
+        if after > before then
+            break
+        end
     end
+
     assert(after > before)
     -- Reference the accumulator so the loop cannot be optimized away.
     assert(s > 0)
@@ -93,15 +104,13 @@ end
 
 -- table form returns an integer
 local function table_form_returns_an_integer_test()
-    local t = os.time{ year = 2026, month = 7, day = 2, hour = 13, min = 15,
-                       sec = 0 }
+    local t = os.time{ year = 2026, month = 7, day = 2, hour = 13, min = 15, sec = 0 }
     assert(math.type(t) == "integer")
 end
 
 -- table form round-trips through os.date local fields
 local function table_form_round_trips_through_os_date_local_fields_test()
-    local t = os.time{ year = 2026, month = 7, day = 2, hour = 13, min = 15,
-                       sec = 0 }
+    local t = os.time{ year = 2026, month = 7, day = 2, hour = 13, min = 15, sec = 0 }
     local d = os.date("*t", t)
     assert(d.year == 2026)
     assert(d.month == 7)
@@ -116,8 +125,7 @@ local function hour_defaults_to_noon_minute_and_second_to_zero_test()
     -- The implementation defaults hour to 12, so an all-default call equals
     -- an explicit noon call.
     local implicit = os.time{ year = 2026, month = 7, day = 2 }
-    local explicit = os.time{ year = 2026, month = 7, day = 2, hour = 12,
-                              min = 0, sec = 0 }
+    local explicit = os.time{ year = 2026, month = 7, day = 2, hour = 12, min = 0, sec = 0 }
     assert(implicit == explicit)
 end
 
@@ -129,13 +137,15 @@ local a_missing_required_field_names_that_field_cases = {
 }
 
 local function a_missing_required_field_names_that_field_test(tbl, field)
-    raises(function() os.time(tbl) end, "field '" .. field .. "' missing in date table")
+    raises(function()
+        os.time(tbl)
+    end, "field '" .. field .. "' missing in date table")
 end
 
 -- a non-integer field raises 'is not an integer'
 local function a_non_integer_field_raises_is_not_an_integer_test()
     raises(function()
-        os.time{ year = 2026, month = "x", day = 1 }
+        os.time({ year = 2026, month = "x", day = 1 })
     end, "field 'month' is not an integer")
 end
 
@@ -143,14 +153,14 @@ end
 local function a_fractional_field_raises_is_not_an_integer_test()
     -- A float with a fractional part is not accepted as an integer field.
     raises(function()
-        os.time{ year = 2026, month = 1.5, day = 1 }
+        os.time({ year = 2026, month = 1.5, day = 1 })
     end, "field 'month' is not an integer")
 end
 
 -- an out-of-bound field raises 'is out-of-bound'
 local function an_out_of_bound_field_raises_is_out_of_bound_test()
     raises(function()
-        os.time{ year = 2026, month = math.maxinteger, day = 1 }
+        os.time({ year = 2026, month = math.maxinteger, day = 1 })
     end, "field 'month' is out%-of%-bound")
 end
 
@@ -174,11 +184,15 @@ end
 
 -- a non-table argument raises 'table expected'
 local a_non_table_argument_raises_table_expected_cases = {
-    { 42 }, { "x" }, { true },
+    { 42 },
+    { "x" },
+    { true },
 }
 
 local function a_non_table_argument_raises_table_expected_test(arg)
-    raises(function() os.time(arg) end, "table expected")
+    raises(function()
+        os.time(arg)
+    end, "table expected")
 end
 
 -- ============================================================================
@@ -205,8 +219,8 @@ end
 -- every numeric field of a '*t' table is an integer
 local function every_numeric_field_of_a_t_table_is_an_integer_test()
     local t = os.date("*t", REF)
-    for _, key in ipairs({ "year", "month", "day", "hour", "min", "sec",
-                           "wday", "yday" }) do
+
+    for _, key in ipairs({ "year", "month", "day", "hour", "min", "sec", "wday", "yday" }) do
         assert(math.type(t[key]) == "integer")
     end
 end
@@ -230,11 +244,19 @@ end
 
 -- common directives render the reference instant
 local common_directives_render_the_reference_instant_cases = {
-    { "%Y", "2026" }, { "%m", "07" }, { "%d", "02" },
-    { "%H", "13" }, { "%M", "15" }, { "%S", "00" },
-    { "%j", "183" }, { "%y", "26" },
-    { "%A", "Thursday" }, { "%B", "July" },
-    { "%a", "Thu" }, { "%b", "Jul" }, { "%p", "PM" },
+    { "%Y", "2026" },
+    { "%m", "07" },
+    { "%d", "02" },
+    { "%H", "13" },
+    { "%M", "15" },
+    { "%S", "00" },
+    { "%j", "183" },
+    { "%y", "26" },
+    { "%A", "Thursday" },
+    { "%B", "July" },
+    { "%a", "Thu" },
+    { "%b", "Jul" },
+    { "%p", "PM" },
     { "%%", "%" },
 }
 
@@ -244,22 +266,30 @@ end
 
 -- an invalid conversion specifier raises
 local function an_invalid_conversion_specifier_raises_test()
-    raises(function() os.date("%Q") end, "invalid conversion specifier '%%Q'")
+    raises(function()
+        os.date("%Q")
+    end, "invalid conversion specifier '%%Q'")
 end
 
 -- a table format argument raises 'string expected'
 local function a_table_format_argument_raises_string_expected_test()
-    raises(function() os.date({}) end, "string expected")
+    raises(function()
+        os.date({})
+    end, "string expected")
 end
 
 -- a non-number time argument raises 'number expected'
 local function a_non_number_time_argument_raises_number_expected_test()
-    raises(function() os.date("!%Y", "x") end, "number expected")
+    raises(function()
+        os.date("!%Y", "x")
+    end, "number expected")
 end
 
 -- an unrepresentable time raises
 local function an_unrepresentable_time_raises_test()
-    raises(function() os.date("*t", math.maxinteger) end, "cannot be represented")
+    raises(function()
+        os.date("*t", math.maxinteger)
+    end, "cannot be represented")
 end
 
 -- round-trips a fixed instant through os.time
@@ -293,9 +323,21 @@ end
 
 -- rejects wrong argument arity and type
 local rejects_wrong_argument_arity_and_type_cases = {
-    { function() os.difftime() end },
-    { function() os.difftime(1) end },
-    { function() os.difftime("a", "b") end },
+    {
+        function()
+            os.difftime()
+        end,
+    },
+    {
+        function()
+            os.difftime(1)
+        end,
+    },
+    {
+        function()
+            os.difftime("a", "b")
+        end,
+    },
 }
 
 local function rejects_wrong_argument_arity_and_type_test(fn)
@@ -308,7 +350,10 @@ end
 
 -- returns the same positive integer on every call
 local function pid_is_a_stable_positive_integer_test()
-    if os.platform() == "wasi" then skip("the WebAssembly build has no processes") end
+    if os.platform() == "wasi" then
+        skip("the WebAssembly build has no processes")
+    end
+
     local id = os.pid()
     assert(math.type(id) == "integer" and id > 0)
     assert(os.pid() == id)
@@ -316,7 +361,10 @@ end
 
 -- is the parent id that a child shell sees
 local function pid_is_the_parent_of_a_child_shell_test()
-    if os.platform() == "wasi" or os.platform() == "windows" then skip("uses a POSIX shell") end
+    if os.platform() == "wasi" or os.platform() == "windows" then
+        skip("uses a POSIX shell")
+    end
+
     pledge("exec")
     local p = io.popen("echo $PPID")
     local text = p:read("a")
@@ -340,8 +388,15 @@ end
 -- returns one of the implemented identifiers
 local function returns_one_of_the_implemented_identifiers_test()
     local known = {
-        linux = true, darwin = true, freebsd = true, netbsd = true,
-        openbsd = true, sunos = true, windows = true, posix = true, wasi = true,
+        linux = true,
+        darwin = true,
+        freebsd = true,
+        netbsd = true,
+        openbsd = true,
+        sunos = true,
+        windows = true,
+        posix = true,
+        wasi = true,
         unknown = true,
     }
     assert(known[os.platform()])
@@ -359,8 +414,15 @@ end
 -- matches the platform name documented in the spec
 local function matches_the_platform_name_documented_in_the_spec_test()
     local documented = {
-        linux = true, darwin = true, windows = true, freebsd = true,
-        netbsd = true, openbsd = true, sunos = true, posix = true, wasi = true,
+        linux = true,
+        darwin = true,
+        windows = true,
+        freebsd = true,
+        netbsd = true,
+        openbsd = true,
+        sunos = true,
+        posix = true,
+        wasi = true,
     }
     local p = os.platform()
     assert(documented[p] or p == "unknown")
@@ -399,17 +461,23 @@ end
 -- denies a variable outside every grant
 local function denies_a_variable_outside_every_grant_test()
     -- HOME matches none of the granted globs, so the read is refused.
-    raises(function() os.getenv("HOME") end, 'permission "env:read" denied for')
+    raises(function()
+        os.getenv("HOME")
+    end, 'permission "env:read" denied for')
 end
 
 -- requires a variable name argument
 local function requires_a_variable_name_argument_test()
-    raises(function() os.getenv() end, "string expected")
+    raises(function()
+        os.getenv()
+    end, "string expected")
 end
 
 -- rejects a non-string, non-coercible argument
 local function rejects_a_non_string_non_coercible_argument_test()
-    raises(function() os.getenv({}) end, "string expected")
+    raises(function()
+        os.getenv({})
+    end, "string expected")
 end
 
 -- ============================================================================
@@ -445,7 +513,10 @@ end
 
 -- passes the changed environment to a child process
 local function passes_the_changed_environment_to_a_child_process_test()
-    if os.platform() == "wasi" then skip("child processes are unavailable") end
+    if os.platform() == "wasi" then
+        skip("child processes are unavailable")
+    end
+
     pledge("exec")
     os.setenv("LUS_SET_CHILD", "from parent")
     local cmd = os.platform() == "windows" and "echo %LUS_SET_CHILD%" or "echo $LUS_SET_CHILD"
@@ -474,17 +545,36 @@ end
 
 -- needs env:write for the variable
 local function needs_env_write_for_the_variable_test()
-    raises(function() os.setenv("PATH", "x") end, 'permission "env:write" denied for \'PATH\'')
-    raises(function() os.setenv("LUS_TEST_X", "x") end, 'permission "env:write" denied for')
+    raises(function()
+        os.setenv("PATH", "x")
+    end, 'permission "env:write" denied for \'PATH\'')
+
+    raises(function()
+        os.setenv("LUS_TEST_X", "x")
+    end, 'permission "env:write" denied for')
 end
 
 -- rejects an invalid name or value
 local function rejects_an_invalid_name_or_value_test()
-    raises(function() os.setenv("", "x") end, "invalid environment variable name")
-    raises(function() os.setenv("LUS_SET_=D", "x") end, "invalid environment variable name")
-    raises(function() os.setenv("LUS_SET_E", "a\0b") end, "zero byte")
-    raises(function() os.setenv({}, "x") end, "string expected")
-    raises(function() os.setenv("LUS_SET_E", {}) end, "string expected")
+    raises(function()
+        os.setenv("", "x")
+    end, "invalid environment variable name")
+
+    raises(function()
+        os.setenv("LUS_SET_=D", "x")
+    end, "invalid environment variable name")
+
+    raises(function()
+        os.setenv("LUS_SET_E", "a\0b")
+    end, "zero byte")
+
+    raises(function()
+        os.setenv({}, "x")
+    end, "string expected")
+
+    raises(function()
+        os.setenv("LUS_SET_E", {})
+    end, "string expected")
 end
 
 -- ============================================================================
@@ -515,11 +605,16 @@ local function creates_the_file_so_it_can_be_reopened_immediately_test()
     -- On POSIX the implementation uses mkstemp, which creates the file. The
     -- Windows tmpnam path does not, so gate the existence check.
     local name = os.tmpname()
+
     if os.platform() ~= "windows" then
         local f = io.open(name, "r")
         assert(f ~= nil)
-        if f then f:close() end
+
+        if f then
+            f:close()
+        end
     end
+
     catch fs.remove(name)
 end
 

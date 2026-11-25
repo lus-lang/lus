@@ -25,10 +25,10 @@ pledge("env", "fs")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-input-example.txt")
 io.open(path, "w"):write("first\nsecond\n"):close()
 io.input(path)
-print(io.read())                     --> first
+print(io.read())  --> first
 io.input():close()
 io.input(io.stdin)
-print(io.input() == io.stdin)        --> true
+print(io.input() == io.stdin)  --> true
 fs.remove(path)
 ```
 

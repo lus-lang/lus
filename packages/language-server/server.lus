@@ -26,370 +26,502 @@ local doc_code_action = require("lus-language.operations.code_action")
 local server = {}
 
 local function response_or_nil(msg, value)
-  if msg.id == nil then return nil end
-  return protocol.make_response(msg.id, value)
+    if msg.id == nil then
+        return nil
+    end
+
+    return protocol.make_response(msg.id, value)
 end
 
 local function params_table(msg)
-  if msg.params == nil then return {} end
-  if type(msg.params) ~= "table" then return nil end
-  return msg.params
+    if msg.params == nil then
+        return {}
+    end
+
+    if type(msg.params) ~= "table" then
+        return nil
+    end
+
+    return msg.params
 end
 
 local function roots_from_initialize(params)
-  local roots = {}
-  if type(params.workspaceFolders) == "table" then
-    for _, folder in ipairs(params.workspaceFolders) do
-      if type(folder) == "table" and type(folder.uri) == "string" then
-        roots[#roots + 1] = folder.uri
-      end
+    local roots = {}
+
+    if type(params.workspaceFolders) == "table" then
+        for _, folder in ipairs(params.workspaceFolders) do
+            if type(folder) == "table" and type(folder.uri) == "string" then
+                roots[#roots + 1] = folder.uri
+            end
+        end
     end
-  end
-  if #roots == 0 and type(params.rootUri) == "string" then
-    roots[1] = params.rootUri
-  end
-  return roots
+
+    if #roots == 0 and type(params.rootUri) == "string" then
+        roots[1] = params.rootUri
+    end
+
+    return roots
 end
 
 function server.new()
-  local instance = {
-    initialized = false,
-    shutdown_requested = false,
-    exit_requested = false,
-  }
-  local handlers = {}
+    local instance = {
+        initialized = false,
+        shutdown_requested = false,
+        exit_requested = false,
+    }
+    local handlers = {}
 
-  local function publish_invalidated(uris)
-    if not instance.initialized then return end
-    for _, uri in ipairs(uris) do
-      if document.get(uri) then
-        diagnostics.publish(uri)
-      else
-        transport.write_message(protocol.make_notification(
-          "textDocument/publishDiagnostics",
-          {uri = uri, diagnostics = {}}
-        ))
-      end
-    end
-  end
+    local function publish_invalidated(uris)
+        if not instance.initialized then
+            return
+        end
 
-  function handlers.initialize(msg)
-    local params = params_table(msg)
-    if not params then
-      return protocol.make_error(msg.id, protocol.INVALID_PARAMS,
-        "initialize params must be an object")
-    end
-    local roots = roots_from_initialize(params)
-    modules.set_roots(roots)
-    atmosphere.configure(params.initializationOptions)
-    instance.initialized = true
-    return response_or_nil(msg, protocol.initialize_result())
-  end
-
-  function handlers.initialized()
-    publish_invalidated(document.all())
-    return nil
-  end
-
-  function handlers.shutdown(msg)
-    instance.shutdown_requested = true
-    return response_or_nil(msg, nil)
-  end
-
-  function handlers.exit()
-    instance.exit_requested = true
-    return nil
-  end
-
-  handlers["lus/workspace/reset"] = function(msg)
-    local params = params_table(msg)
-    if not params or type(params.roots) ~= "table" then
-      return protocol.make_error(msg.id, protocol.INVALID_PARAMS,
-        "workspace reset requires a roots array")
-    end
-    local roots = {}
-    for _, root_uri in ipairs(params.roots) do
-      if type(root_uri) ~= "string" or root_uri == "" then
-        return protocol.make_error(msg.id, protocol.INVALID_PARAMS,
-          "workspace roots must be URI strings")
-      end
-      roots[#roots + 1] = root_uri
-    end
-    local previous = document.all()
-    document.reset_workspace(roots)
-    modules.set_roots(roots)
-    publish_invalidated(previous)
-    return response_or_nil(msg, true)
-  end
-
-  handlers["lus/workspace/upsert"] = function(msg)
-    local params = params_table(msg)
-    if not params then
-      return protocol.make_error(msg.id, protocol.INVALID_PARAMS,
-        "workspace upsert params must be an object")
-    end
-    local ok, reason = document.upsert(
-      params.rootUri, params.relativePath, params.uri,
-      params.version, params.text
-    )
-    if not ok then
-      return protocol.make_error(msg.id, protocol.INVALID_PARAMS, reason)
-    end
-    local invalidated = modules.invalidate_workspace(
-      params.rootUri, params.relativePath, params.uri
-    )
-    publish_invalidated(invalidated)
-    return response_or_nil(msg, true)
-  end
-
-  handlers["lus/workspace/delete"] = function(msg)
-    local params = params_table(msg)
-    if not params or params.text ~= nil then
-      return protocol.make_error(msg.id, protocol.INVALID_PARAMS,
-        "workspace delete requires metadata without text")
-    end
-    local ok, reason = document.delete(
-      params.rootUri, params.relativePath, params.uri, params.version
-    )
-    if not ok then
-      return protocol.make_error(msg.id, protocol.INVALID_PARAMS, reason)
-    end
-    local invalidated = modules.invalidate_workspace(
-      params.rootUri, params.relativePath, params.uri
-    )
-    publish_invalidated(invalidated)
-    return response_or_nil(msg, true)
-  end
-
-  handlers["workspace/didChangeWorkspaceFolders"] = function(msg)
-    local params = params_table(msg)
-    if not params or type(params.event) ~= "table" then return nil end
-    local removed = {}
-    for _, folder in ipairs(params.event.removed or {}) do
-      if type(folder) == "table" then removed[folder.uri] = true end
-    end
-    local roots = {}
-    for _, root_uri in ipairs(modules.get_roots()) do
-      if not removed[root_uri] then roots[#roots + 1] = root_uri end
-    end
-    for _, folder in ipairs(params.event.added or {}) do
-      if type(folder) == "table" and type(folder.uri) == "string" then
-        roots[#roots + 1] = folder.uri
-      end
-    end
-    local previous = document.all()
-    document.reset_workspace(roots)
-    modules.set_roots(roots)
-    publish_invalidated(previous)
-    return nil
-  end
-
-  handlers["workspace/didChangeConfiguration"] = function(msg)
-    local params = params_table(msg)
-    if params then atmosphere.configure(params.settings) end
-    return nil
-  end
-
-  handlers["workspace/didChangeWatchedFiles"] = function(msg)
-    local params = params_table(msg)
-    if not params or type(params.changes) ~= "table" then return nil end
-    for _, change in ipairs(params.changes) do
-      if type(change) == "table" and type(change.uri) == "string" then
-        publish_invalidated(modules.invalidate(change.uri))
-      end
-    end
-    return nil
-  end
-
-  handlers["textDocument/didOpen"] = function(msg)
-    local params = params_table(msg)
-    local td = params and params.textDocument
-    if type(td) ~= "table" or type(td.uri) ~= "string"
-       or type(td.text) ~= "string" then return nil end
-    document.open(td.uri, td.version, td.text)
-    publish_invalidated(modules.invalidate(td.uri))
-    return nil
-  end
-
-  handlers["textDocument/didChange"] = function(msg)
-    local params = params_table(msg)
-    local td = params and params.textDocument
-    if type(td) ~= "table" or type(td.uri) ~= "string"
-       or type(params.contentChanges) ~= "table" then return nil end
-    if document.change(td.uri, td.version, params.contentChanges) then
-      publish_invalidated(modules.invalidate(td.uri))
-    end
-    return nil
-  end
-
-  handlers["textDocument/didClose"] = function(msg)
-    local params = params_table(msg)
-    local td = params and params.textDocument
-    if type(td) ~= "table" or type(td.uri) ~= "string" then return nil end
-    document.close(td.uri)
-    publish_invalidated(modules.invalidate(td.uri))
-    return nil
-  end
-
-  handlers["textDocument/documentSymbol"] = function(msg)
-    local uri = msg.params.textDocument.uri
-    return response_or_nil(msg, doc_symbols.compute(uri))
-  end
-
-  handlers["textDocument/formatting"] = function(msg)
-    local uri = msg.params.textDocument.uri
-    local edits, reason = doc_format.compute(uri, msg.params.options)
-    if reason then
-      return protocol.make_error(msg.id, protocol.INTERNAL_ERROR,
-        "Format: " .. reason)
-    end
-    return response_or_nil(msg, edits)
-  end
-
-  handlers["textDocument/rangeFormatting"] = function(msg)
-    local uri = msg.params.textDocument.uri
-    local edits, reason = doc_format.compute_range(
-      uri, msg.params.range, msg.params.options
-    )
-    if reason then
-      return protocol.make_error(msg.id, protocol.INTERNAL_ERROR,
-        "Format: " .. reason)
-    end
-    return response_or_nil(msg, edits)
-  end
-
-  handlers["textDocument/semanticTokens/full"] = function(msg)
-    return response_or_nil(msg,
-      sem_tokens.compute(msg.params.textDocument.uri))
-  end
-
-  handlers["textDocument/definition"] = function(msg)
-    return response_or_nil(msg, nav_definition.compute(
-      msg.params.textDocument.uri, msg.params.position
-    ))
-  end
-
-  handlers["textDocument/references"] = function(msg)
-    local include = msg.params.context
-      and msg.params.context.includeDeclaration
-    return response_or_nil(msg, nav_references.compute(
-      msg.params.textDocument.uri, msg.params.position, include
-    ))
-  end
-
-  handlers["textDocument/hover"] = function(msg)
-    return response_or_nil(msg, nav_hover.compute(
-      msg.params.textDocument.uri, msg.params.position
-    ))
-  end
-
-  handlers["textDocument/rename"] = function(msg)
-    return response_or_nil(msg, nav_rename.compute(
-      msg.params.textDocument.uri, msg.params.position, msg.params.newName
-    ))
-  end
-
-  handlers["textDocument/completion"] = function(msg)
-    return response_or_nil(msg, doc_completion.compute(
-      msg.params.textDocument.uri, msg.params.position
-    ))
-  end
-
-  handlers["textDocument/signatureHelp"] = function(msg)
-    return response_or_nil(msg, doc_signature.compute(
-      msg.params.textDocument.uri, msg.params.position
-    ))
-  end
-
-  handlers["textDocument/foldingRange"] = function(msg)
-    return response_or_nil(msg,
-      doc_folding.compute(msg.params.textDocument.uri))
-  end
-
-  handlers["textDocument/inlayHint"] = function(msg)
-    return response_or_nil(msg, doc_inlay.compute(
-      msg.params.textDocument.uri, msg.params.range
-    ))
-  end
-
-  handlers["workspace/symbol"] = function(msg)
-    return response_or_nil(msg,
-      ws_symbols.compute(msg.params.query or ""))
-  end
-
-  handlers["textDocument/documentHighlight"] = function(msg)
-    return response_or_nil(msg, doc_highlight.compute(
-      msg.params.textDocument.uri, msg.params.position
-    ))
-  end
-
-  handlers["textDocument/prepareRename"] = function(msg)
-    return response_or_nil(msg, doc_prepare_rename.compute(
-      msg.params.textDocument.uri, msg.params.position
-    ))
-  end
-
-  handlers["textDocument/selectionRange"] = function(msg)
-    return response_or_nil(msg, doc_selection.compute(
-      msg.params.textDocument.uri, msg.params.positions
-    ))
-  end
-
-  handlers["textDocument/codeAction"] = function(msg)
-    return response_or_nil(msg, doc_code_action.compute(
-      msg.params.textDocument.uri, msg.params.range, msg.params.context
-    ))
-  end
-
-  function instance.dispatch(msg)
-    if type(msg) ~= "table" or msg.jsonrpc ~= "2.0" then
-      local invalid_id = protocol.JSON_NULL
-      if type(msg) == "table" and msg.id ~= nil then invalid_id = msg.id end
-      return protocol.make_error(
-        invalid_id,
-        protocol.INVALID_REQUEST, "Invalid JSON-RPC request"
-      )
-    end
-    if msg.method == nil then return nil end
-    if type(msg.method) ~= "string" then
-      local invalid_id = msg.id ~= nil and msg.id or protocol.JSON_NULL
-      return protocol.make_error(invalid_id,
-        protocol.INVALID_REQUEST, "JSON-RPC method must be a string")
-    end
-    local workspace_seed = msg.method == "lus/workspace/reset"
-      or msg.method == "lus/workspace/upsert"
-      or msg.method == "lus/workspace/delete"
-    if not instance.initialized and msg.method ~= "initialize"
-       and msg.method ~= "exit" and not workspace_seed then
-      if msg.id ~= nil then
-        return protocol.make_error(msg.id, protocol.SERVER_NOT_INITIALIZED,
-          "Server is not initialized")
-      end
-      return nil
+        for _, uri in ipairs(uris) do
+            if document.get(uri) then
+                diagnostics.publish(uri)
+            else
+                transport.write_message(
+                    protocol.make_notification("textDocument/publishDiagnostics", {
+                        uri = uri,
+                        diagnostics = {},
+                    })
+                )
+            end
+        end
     end
 
-    local handler = handlers[msg.method]
-    if not handler then
-      if msg.id ~= nil then
-        return protocol.make_error(msg.id, protocol.METHOD_NOT_FOUND,
-          "Method not found: " .. msg.method)
-      end
-      return nil
+    function handlers.initialize(msg)
+        local params = params_table(msg)
+
+        if not params then
+            return protocol.make_error(
+                msg.id,
+                protocol.INVALID_PARAMS,
+                "initialize params must be an object"
+            )
+        end
+
+        local roots = roots_from_initialize(params)
+        modules.set_roots(roots)
+        atmosphere.configure(params.initializationOptions)
+        instance.initialized = true
+        return response_or_nil(msg, protocol.initialize_result())
     end
 
-    local ok, response = catch handler(msg)
-    if not ok then
-      if msg.id == nil then
-        transport.log("ERROR handling", msg.method, tostring(response))
+    function handlers.initialized()
+        publish_invalidated(document.all())
         return nil
-      end
-      return protocol.make_error(msg.id, protocol.INTERNAL_ERROR,
-        "Internal error: " .. tostring(response))
     end
-    return response
-  end
 
-  return instance
+    function handlers.shutdown(msg)
+        instance.shutdown_requested = true
+        return response_or_nil(msg, nil)
+    end
+
+    function handlers.exit()
+        instance.exit_requested = true
+        return nil
+    end
+
+    handlers["lus/workspace/reset"] = function(msg)
+        local params = params_table(msg)
+
+        if not params or type(params.roots) ~= "table" then
+            return protocol.make_error(
+                msg.id,
+                protocol.INVALID_PARAMS,
+                "workspace reset requires a roots array"
+            )
+        end
+
+        local roots = {}
+
+        for _, root_uri in ipairs(params.roots) do
+            if type(root_uri) ~= "string" or root_uri == "" then
+                return protocol.make_error(
+                    msg.id,
+                    protocol.INVALID_PARAMS,
+                    "workspace roots must be URI strings"
+                )
+            end
+
+            roots[#roots + 1] = root_uri
+        end
+
+        local previous = document.all()
+        document.reset_workspace(roots)
+        modules.set_roots(roots)
+        publish_invalidated(previous)
+        return response_or_nil(msg, true)
+    end
+
+    handlers["lus/workspace/upsert"] = function(msg)
+        local params = params_table(msg)
+
+        if not params then
+            return protocol.make_error(
+                msg.id,
+                protocol.INVALID_PARAMS,
+                "workspace upsert params must be an object"
+            )
+        end
+
+        local ok, reason = document.upsert(
+            params.rootUri,
+            params.relativePath,
+            params.uri,
+            params.version,
+            params.text
+        )
+
+        if not ok then
+            return protocol.make_error(msg.id, protocol.INVALID_PARAMS, reason)
+        end
+
+        local invalidated = modules.invalidate_workspace(
+            params.rootUri,
+            params.relativePath,
+            params.uri
+        )
+        publish_invalidated(invalidated)
+        return response_or_nil(msg, true)
+    end
+
+    handlers["lus/workspace/delete"] = function(msg)
+        local params = params_table(msg)
+
+        if not params or params.text ~= nil then
+            return protocol.make_error(
+                msg.id,
+                protocol.INVALID_PARAMS,
+                "workspace delete requires metadata without text"
+            )
+        end
+
+        local ok, reason = document.delete(
+            params.rootUri,
+            params.relativePath,
+            params.uri,
+            params.version
+        )
+
+        if not ok then
+            return protocol.make_error(msg.id, protocol.INVALID_PARAMS, reason)
+        end
+
+        local invalidated = modules.invalidate_workspace(
+            params.rootUri,
+            params.relativePath,
+            params.uri
+        )
+        publish_invalidated(invalidated)
+        return response_or_nil(msg, true)
+    end
+
+    handlers["workspace/didChangeWorkspaceFolders"] = function(msg)
+        local params = params_table(msg)
+
+        if not params or type(params.event) ~= "table" then
+            return nil
+        end
+
+        local removed = {}
+
+        for _, folder in ipairs(params.event.removed or {}) do
+            if type(folder) == "table" then
+                removed[folder.uri] = true
+            end
+        end
+
+        local roots = {}
+
+        for _, root_uri in ipairs(modules.get_roots()) do
+            if not removed[root_uri] then
+                roots[#roots + 1] = root_uri
+            end
+        end
+
+        for _, folder in ipairs(params.event.added or {}) do
+            if type(folder) == "table" and type(folder.uri) == "string" then
+                roots[#roots + 1] = folder.uri
+            end
+        end
+
+        local previous = document.all()
+        document.reset_workspace(roots)
+        modules.set_roots(roots)
+        publish_invalidated(previous)
+        return nil
+    end
+
+    handlers["workspace/didChangeConfiguration"] = function(msg)
+        if params = params_table(msg) then
+            atmosphere.configure(params.settings)
+        end
+
+        return nil
+    end
+
+    handlers["workspace/didChangeWatchedFiles"] = function(msg)
+        local params = params_table(msg)
+
+        if not params or type(params.changes) ~= "table" then
+            return nil
+        end
+
+        for _, change in ipairs(params.changes) do
+            if type(change) == "table" and type(change.uri) == "string" then
+                publish_invalidated(modules.invalidate(change.uri))
+            end
+        end
+
+        return nil
+    end
+
+    handlers["textDocument/didOpen"] = function(msg)
+        local params = params_table(msg)
+        local td = params and params.textDocument
+
+        if type(td) ~= "table" or type(td.uri) ~= "string" or type(td.text) ~= "string" then
+            return nil
+        end
+
+        document.open(td.uri, td.version, td.text)
+        publish_invalidated(modules.invalidate(td.uri))
+        return nil
+    end
+
+    handlers["textDocument/didChange"] = function(msg)
+        local params = params_table(msg)
+        local td = params and params.textDocument
+
+        if type(td) ~= "table"
+            or type(td.uri) ~= "string"
+            or type(params.contentChanges) ~= "table" then
+            return nil
+        end
+
+        if document.change(td.uri, td.version, params.contentChanges) then
+            publish_invalidated(modules.invalidate(td.uri))
+        end
+
+        return nil
+    end
+
+    handlers["textDocument/didClose"] = function(msg)
+        local params = params_table(msg)
+        local td = params and params.textDocument
+
+        if type(td) ~= "table" or type(td.uri) ~= "string" then
+            return nil
+        end
+
+        document.close(td.uri)
+        publish_invalidated(modules.invalidate(td.uri))
+        return nil
+    end
+
+    handlers["textDocument/documentSymbol"] = function(msg)
+        local uri = msg.params.textDocument.uri
+        return response_or_nil(msg, doc_symbols.compute(uri))
+    end
+
+    handlers["textDocument/formatting"] = function(msg)
+        local uri = msg.params.textDocument.uri
+        local edits, reason = doc_format.compute(uri, msg.params.options)
+
+        if reason then
+            return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, "Format: " .. reason)
+        end
+
+        return response_or_nil(msg, edits)
+    end
+
+    handlers["textDocument/rangeFormatting"] = function(msg)
+        local uri = msg.params.textDocument.uri
+        local edits, reason = doc_format.compute_range(uri, msg.params.range, msg.params.options)
+
+        if reason then
+            return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, "Format: " .. reason)
+        end
+
+        return response_or_nil(msg, edits)
+    end
+
+    handlers["textDocument/semanticTokens/full"] = function(msg)
+        return response_or_nil(msg, sem_tokens.compute(msg.params.textDocument.uri))
+    end
+
+    handlers["textDocument/definition"] = function(msg)
+        return response_or_nil(
+            msg,
+            nav_definition.compute(msg.params.textDocument.uri, msg.params.position)
+        )
+    end
+
+    handlers["textDocument/references"] = function(msg)
+        local include = msg.params.context and msg.params.context.includeDeclaration
+        return response_or_nil(
+            msg,
+            nav_references.compute(msg.params.textDocument.uri, msg.params.position, include)
+        )
+    end
+
+    handlers["textDocument/hover"] = function(msg)
+        return response_or_nil(
+            msg,
+            nav_hover.compute(msg.params.textDocument.uri, msg.params.position)
+        )
+    end
+
+    handlers["textDocument/rename"] = function(msg)
+        return response_or_nil(
+            msg,
+            nav_rename.compute(msg.params.textDocument.uri, msg.params.position, msg.params.newName)
+        )
+    end
+
+    handlers["textDocument/completion"] = function(msg)
+        return response_or_nil(
+            msg,
+            doc_completion.compute(msg.params.textDocument.uri, msg.params.position)
+        )
+    end
+
+    handlers["textDocument/signatureHelp"] = function(msg)
+        return response_or_nil(
+            msg,
+            doc_signature.compute(msg.params.textDocument.uri, msg.params.position)
+        )
+    end
+
+    handlers["textDocument/foldingRange"] = function(msg)
+        return response_or_nil(msg, doc_folding.compute(msg.params.textDocument.uri))
+    end
+
+    handlers["textDocument/inlayHint"] = function(msg)
+        return response_or_nil(
+            msg,
+            doc_inlay.compute(msg.params.textDocument.uri, msg.params.range)
+        )
+    end
+
+    handlers["workspace/symbol"] = function(msg)
+        return response_or_nil(msg, ws_symbols.compute(msg.params.query or ""))
+    end
+
+    handlers["textDocument/documentHighlight"] = function(msg)
+        return response_or_nil(
+            msg,
+            doc_highlight.compute(msg.params.textDocument.uri, msg.params.position)
+        )
+    end
+
+    handlers["textDocument/prepareRename"] = function(msg)
+        return response_or_nil(
+            msg,
+            doc_prepare_rename.compute(msg.params.textDocument.uri, msg.params.position)
+        )
+    end
+
+    handlers["textDocument/selectionRange"] = function(msg)
+        return response_or_nil(
+            msg,
+            doc_selection.compute(msg.params.textDocument.uri, msg.params.positions)
+        )
+    end
+
+    handlers["textDocument/codeAction"] = function(msg)
+        return response_or_nil(
+            msg,
+            doc_code_action.compute(
+                msg.params.textDocument.uri,
+                msg.params.range,
+                msg.params.context
+            )
+        )
+    end
+
+    function instance.dispatch(msg)
+        if type(msg) ~= "table" or msg.jsonrpc ~= "2.0" then
+            local invalid_id = protocol.JSON_NULL
+
+            if type(msg) == "table" and msg.id ~= nil then
+                invalid_id = msg.id
+            end
+
+            return protocol.make_error(
+                invalid_id,
+                protocol.INVALID_REQUEST,
+                "Invalid JSON-RPC request"
+            )
+        end
+
+        if msg.method == nil then
+            return nil
+        end
+
+        if type(msg.method) ~= "string" then
+            local invalid_id = msg.id ~= nil and msg.id or protocol.JSON_NULL
+            return protocol.make_error(
+                invalid_id,
+                protocol.INVALID_REQUEST,
+                "JSON-RPC method must be a string"
+            )
+        end
+
+        local workspace_seed = msg.method == "lus/workspace/reset"
+            or msg.method == "lus/workspace/upsert"
+            or msg.method == "lus/workspace/delete"
+
+        if not instance.initialized
+            and msg.method ~= "initialize"
+            and msg.method ~= "exit"
+            and not workspace_seed then
+            if msg.id ~= nil then
+                return protocol.make_error(
+                    msg.id,
+                    protocol.SERVER_NOT_INITIALIZED,
+                    "Server is not initialized"
+                )
+            end
+
+            return nil
+        end
+
+        local handler = handlers[msg.method]
+
+        if not handler then
+            if msg.id ~= nil then
+                return protocol.make_error(
+                    msg.id,
+                    protocol.METHOD_NOT_FOUND,
+                    "Method not found: " .. msg.method
+                )
+            end
+
+            return nil
+        end
+
+        local ok, response = catch handler(msg)
+
+        if not ok then
+            if msg.id == nil then
+                transport.log("ERROR handling", msg.method, tostring(response))
+                return nil
+            end
+
+            return protocol.make_error(
+                msg.id,
+                protocol.INTERNAL_ERROR,
+                "Internal error: " .. tostring(response)
+            )
+        end
+
+        return response
+    end
+
+    return instance
 end
 
 return server

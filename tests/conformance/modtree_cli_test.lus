@@ -25,14 +25,17 @@ local function run(cmdline, env)
     for k, v in pairs(env or {}) do
         os.setenv(k, v)
     end
+
     -- io.popen runs the line as written: sh -c on POSIX systems, and
     -- cmd.exe /s /c "line" on Windows, which keeps the inner quotes.
     local f = io.popen(cmdline .. " 2>&1")
     local out = f:read("a")
     local ok = f:close()
+
     for k in pairs(env or {}) do
         os.setenv(k, nil)
     end
+
     return (ok == true or ok == 0), (string.gsub(out, "\r\n", "\n"))
 end
 
@@ -43,35 +46,53 @@ local function lus(script, env)
 end
 
 local function module_bodies_run_at_require_in_order_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = lus("main_order.lus")
     assert(ok, out)
     assert(out == "MAIN-START\nA\nB after a\nORDER-OK\n", out)
 end
 
 local function a_broken_module_raises_only_when_required_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = lus("main_unused.lus")
     assert(ok, out)
     assert(out == "UNUSED-OK\nfalse\ttrue\ttrue\n", out)
 end
 
 local function a_package_path_change_wins_over_the_index_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
-    local ok, out = lus("main_path.lus", { MODTREE_TWO = FIX .. "two/", LUS_PATH = FIX .. "one/?.lus" })
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local ok, out = lus("main_path.lus", {
+        MODTREE_TWO = FIX .. "two/",
+        LUS_PATH = FIX .. "one/?.lus",
+    })
     assert(ok, out)
     assert(out == "PATH-TWO\n", out)
 end
 
 local function require_checks_permissions_of_indexed_modules_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = lus("main_denied.lus")
     assert(ok, out)
     assert(out == "false\ttrue\n", out)
 end
 
 local function workers_load_indexed_modules_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = lus("main_worker.lus")
     assert(ok, out)
     -- Only the main thread prints, so the output has one order.
@@ -81,13 +102,25 @@ end
 local function build(script)
     local out = os.tmpname()
     local dir = FIX .. "shake/"
-    local ok, text = run(quote(lus_cmd) .. " build --include " .. quote(dir .. "lib") .. " -o " .. quote(out) .. " " .. quote(dir .. script), { LUS_PATH = dir .. "?.lus" })
+    local ok, text = run(
+        quote(lus_cmd)
+            .. " build --include "
+            .. quote(dir .. "lib")
+            .. " -o "
+            .. quote(out)
+            .. " "
+            .. quote(dir .. script),
+        { LUS_PATH = dir .. "?.lus" }
+    )
     catch fs.remove(out)
     return ok, text
 end
 
 local function build_leaves_out_unreached_directory_modules_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = build("main.lus")
     assert(ok, out)
     assert(out:find("left out lib.unused, which no literal require reaches", 1, true), out)
@@ -96,7 +129,10 @@ local function build_leaves_out_unreached_directory_modules_test()
 end
 
 local function build_keeps_every_directory_module_with_a_dynamic_require_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = build("dynamic.lus")
     assert(ok, out)
     assert(not out:find("left out", 1, true), out)

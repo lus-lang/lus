@@ -37,7 +37,7 @@ The following example writes a header into a buffer, then shifts its contents to
 local buf = vector.create(8)
 vector.copy(buf, 0, vector.fromstring("LUS2"))
 vector.copy(buf, 4, buf, 0, 4)
-print(vector.tostring(buf))   --> LUS2LUS2
+print(vector.tostring(buf))  --> LUS2LUS2
 vector.copy(buf, 0, buf, 2)
-print(vector.tostring(buf, 0, 6))   --> S2LUS2
+print(vector.tostring(buf, 0, 6))  --> S2LUS2
 ```

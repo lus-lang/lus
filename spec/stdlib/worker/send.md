@@ -26,7 +26,7 @@ local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-worker-send.lus")
 io.open(path, "w"):write("local t = worker.peek()\nworker.message(#t.items)\n"):close()
 local w = worker.create(path)
 worker.send(w, { items = { "a", "b", "c" } })
-print(worker.receive(w))   --> 3
+print(worker.receive(w))  --> 3
 fs.remove(path)
 ```
 

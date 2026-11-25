@@ -20,26 +20,37 @@
 -- BIN is a runtime built with `-Dfail-io=true`, which counts the steps,
 -- or with --alloc one built with `-Dfail-alloc=true`.
 
-global arg, assert, error, fs, io, ipairs, math, os, package, pledge, print, string, table, tonumber, tostring
+global arg, assert, error, fs, io, ipairs, math, os, package, pledge, print, string, table,
+    tonumber, tostring
 
 pledge("exec", "fs", "env")
 
 local opts = { lus = nil, timeout = 20, alloc = false }
+
 do
     local i = 1
+
     while i <= #arg do
         local a, v = arg[i], arg[i + 1]
         local step = 2
-        if a == "--lus" then opts.lus = v
-        elseif a == "--timeout" then opts.timeout = tonumber(v)
+
+        if a == "--lus" then
+            opts.lus = v
+        elseif a == "--timeout" then
+            opts.timeout = tonumber(v)
         elseif a == "--alloc" then
             opts.alloc = true
             step = 1
-        else error("unknown option " .. a) end
+        else
+            error("unknown option " .. a)
+        end
+
         i = i + step
     end
 end
-opts.lus = opts.lus or (opts.alloc and "runtime/zig-out-oom/bin/lus" or "runtime/zig-out-io/bin/lus")
+
+opts.lus = opts.lus
+    or (opts.alloc and "runtime/zig-out-oom/bin/lus" or "runtime/zig-out-io/bin/lus")
 
 if package.config:sub(1, 1) == "\\" then
     print("the scenarios use perl for their time limit, so they skip Windows")
@@ -89,11 +100,13 @@ print("status " .. worker.status(w))
 local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-worker-faults")
 local _ = catch fs.remove(dir, true)
 fs.createdirectory(dir, true)
+
 local function write(name, text)
     local f = assert(io.open(fs.path.join(dir, name), "w"))
     f:write((text:gsub("COUNT", tostring(COUNT))))
     f:close()
 end
+
 write("worker.lus", WORKER)
 write("main.lus", "local CORO = false\n" .. MAIN)
 write("main-coro.lus", "local CORO = true\n" .. MAIN)
@@ -103,9 +116,16 @@ local function quote(s)
 end
 
 local function run(spec, main)
-    local env = opts.alloc and ("LUS_FAIL_ALLOC_SCOPE=worker LUS_FAIL_ALLOC=" .. spec) or ("LUS_WORKER_FAIL=" .. spec)
-    local cmd = string.format("cd %s && %s perl -e 'alarm %d; exec @ARGV' %s %s worker.lus 2>&1",
-        quote(dir), env, opts.timeout, quote(fs.path.join(os.getenv("PWD"), opts.lus)), main)
+    local env = opts.alloc and ("LUS_FAIL_ALLOC_SCOPE=worker LUS_FAIL_ALLOC=" .. spec)
+        or ("LUS_WORKER_FAIL=" .. spec)
+    local cmd = string.format(
+        "cd %s && %s perl -e 'alarm %d; exec @ARGV' %s %s worker.lus 2>&1",
+        quote(dir),
+        env,
+        opts.timeout,
+        quote(fs.path.join(os.getenv("PWD"), opts.lus)),
+        main
+    )
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     local _, _, code = p:close()
@@ -114,38 +134,84 @@ end
 
 local problems = {}
 local summary = {}
+
 for _, main in ipairs({ "main.lus", "main-coro.lus" }) do
     local out = run("count", main)
-    local steps = tonumber(out:match(opts.alloc and "lus: (%d+) allocations" or "lus: (%d+) worker steps"))
+    local steps = tonumber(
+        out:match(opts.alloc and "lus: (%d+) allocations" or "lus: (%d+) worker steps")
+    )
     assert(steps, "the scenario did not run: " .. out)
     local points = {}
     local stride = math.max(1, steps // 400)
-    for n = 1, steps + 1, stride do points[#points + 1] = n end
+
+    for n = 1, steps + 1, stride do
+        points[#points + 1] = n
+    end
+
     for _, n in ipairs(points) do
         local o, code = run(tostring(n), main)
         local problem
+
         if code == 142 then
             problem = "the run did not end within its time limit"
         else
             local got, sent = {}, {}
-            for i in o:gmatch("got (%d+)") do got[#got + 1] = tonumber(i) end
-            for i in o:gmatch("sent (%d+)") do sent[#sent + 1] = tonumber(i) end
+
+            for i in o:gmatch("got (%d+)") do
+                got[#got + 1] = tonumber(i)
+            end
+
+            for i in o:gmatch("sent (%d+)") do
+                sent[#sent + 1] = tonumber(i)
+            end
+
             for k, v in ipairs(got) do
-                if v ~= k then problem = string.format("message %d arrived as number %d", k, v) end
+                if v ~= k then
+                    problem = string.format("message %d arrived as number %d", k, v)
+                end
             end
+
             if not problem and not o:find("creator failed", 1, true) and #got < #sent then
-                problem = string.format("the worker sent %d messages and the creator received %d", #sent, #got)
+                problem = string.format(
+                    "the worker sent %d messages and the creator received %d",
+                    #sent,
+                    #got
+                )
             end
-            if not problem and not o:find("status dead", 1, true) and not o:find("creator failed", 1, true) then
+
+            if not problem
+                and not o:find("status dead", 1, true)
+                and not o:find("creator failed", 1, true) then
                 problem = "the creator did not see the worker end"
             end
         end
-        if problem then problems[#problems + 1] = string.format("%s, step %d: %s", main, n, problem) end
+
+        if problem then
+            problems[#problems + 1] = string.format("%s, step %d: %s", main, n, problem)
+        end
     end
-    summary[#summary + 1] = string.format("%s: %d %s, %d runs", main, steps, opts.alloc and "allocations of the worker" or "steps", #points)
+
+    summary[#summary + 1] = string.format(
+        "%s: %d %s, %d runs",
+        main,
+        steps,
+        opts.alloc and "allocations of the worker" or "steps",
+        #points
+    )
 end
+
 fs.remove(dir, true)
-for _, line in ipairs(summary) do print(line) end
+
+for _, line in ipairs(summary) do
+    print(line)
+end
+
 print(string.format("%d problems", #problems))
-for _, p in ipairs(problems) do print("  " .. p) end
-if #problems > 0 then os.exit(1) end
+
+for _, p in ipairs(problems) do
+    print("  " .. p)
+end
+
+if #problems > 0 then
+    os.exit(1)
+end

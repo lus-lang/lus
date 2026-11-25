@@ -41,11 +41,14 @@ local _, port = server:getsockname()
 
 local function serve(conn)
     local closing <close> = conn
+
     while true do
         local line = conn:receive("*l", 1024)
+
         if #line == 0 then
             break
         end
+
         conn:send(vector.tostring(line):upper() .. "\n")
     end
 end
@@ -60,9 +63,9 @@ local slow <close> = network.tcp.connect("127.0.0.1", port)
 local quick <close> = network.tcp.connect("127.0.0.1", port)
 
 quick:send("second client\n")
-print(vector.tostring(quick:receive("*l")))   --> SECOND CLIENT
+print(vector.tostring(quick:receive("*l")))  --> SECOND CLIENT
 slow:send("first client\n")
-print(vector.tostring(slow:receive("*l")))    --> FIRST CLIENT
+print(vector.tostring(slow:receive("*l")))  --> FIRST CLIENT
 
 coroutine.close(acceptor)
 server:close()
@@ -83,7 +86,7 @@ local function greet(name)
 end
 
 local co = coroutine.detach(coroutine.create(greet), "world")
-print(coroutine.status(co))   --> suspended
+print(coroutine.status(co))  --> suspended
 print(coroutine.resume(co))
 --> hello, world
 --> true  5
@@ -101,6 +104,7 @@ In the following program, two coroutines take turns because each one yields afte
 
 ```lus
 local log = {}
+
 local function step(name)
     for i = 1, 2 do
         log[#log + 1] = name .. i
@@ -112,7 +116,7 @@ local a = coroutine.detach(coroutine.create(step), "a")
 local b = coroutine.detach(coroutine.create(step), "b")
 coroutine.resume(a)
 coroutine.resume(b)
-print(table.concat(log, " "))   --> a1 b1 a2 b2
+print(table.concat(log, " "))  --> a1 b1 a2 b2
 ```
 
 A plain coroutine works as usual inside a detached one, so a generator made with [`coroutine.wrap`](/manual/api#coroutine.wrap), or run with `coroutine.resume`, yields its values to the code that resumed it. The following detached coroutine collects three numbers from a generator.
@@ -124,14 +128,17 @@ local task = coroutine.detach(coroutine.create(function()
             coroutine.yield(i)
         end
     end)
+
     local seen = {}
+
     for n in numbers do
         seen[#seen + 1] = n
     end
+
     return table.concat(seen, ",")
 end))
 
-print(coroutine.resume(task))   --> true  1,2,3
+print(coroutine.resume(task))  --> true  1,2,3
 ```
 
 ### Sleeping
@@ -142,6 +149,7 @@ The following program runs two tasks that sleep for different times, so the one 
 
 ```lus
 local log = {}
+
 local function task(name, seconds)
     coroutine.resume(coroutine.sleep(seconds))
     log[#log + 1] = name
@@ -151,7 +159,7 @@ local slow = coroutine.detach(coroutine.create(task), "slow", 0.2)
 local fast = coroutine.detach(coroutine.create(task), "fast", 0.1)
 coroutine.resume(slow)
 coroutine.resume(fast)
-print(table.concat(log, " "))   --> fast slow
+print(table.concat(log, " "))  --> fast slow
 ```
 
 Closing a detached coroutine while it sleeps ends the sleep too, as [Cancelling](#cancelling) describes.
@@ -170,13 +178,14 @@ local waiter = coroutine.detach(coroutine.create(function()
     local ok, why = coroutine.resume(wakeup)
     log[#log + 1] = `woken: $(tostring(ok)) $why`
 end))
+
 local waker = coroutine.detach(coroutine.create(function()
     coroutine.resume(coroutine.sleep(0.05))
     coroutine.close(wakeup)
 end))
 
 coroutine.resume(waiter)
-print(log[1])   --> woken: false closed
+print(log[1])  --> woken: false closed
 ```
 
 A gate that wakes many waiters gives each one a sleep of its own, or keeps a list of sleeps and closes every one of them.
@@ -191,13 +200,14 @@ The following program waits for a coroutine that succeeds and for one that fails
 local ok = coroutine.detach(coroutine.create(function()
     return "a", "b"
 end))
+
 local bad = coroutine.detach(coroutine.create(function()
     error("failed", 0)
 end))
 
-print(coroutine.resume(ok))    --> true  a  b
-print(coroutine.resume(bad))   --> false  failed
-print(coroutine.resume(ok))    --> false  cannot resume dead coroutine
+print(coroutine.resume(ok))  --> true  a  b
+print(coroutine.resume(bad))  --> false  failed
+print(coroutine.resume(ok))  --> false  cannot resume dead coroutine
 ```
 
 A detached coroutine that ends before anything resumes it keeps its results, or its error, until the first `resume` collects them. Every caller that was already waiting when the coroutine ended receives them as well. A later `resume` returns `false` and `"cannot resume dead coroutine"`.
@@ -212,10 +222,14 @@ In the following program, one coroutine cancels another, whose `<close>` variabl
 
 ```lus
 local log = {}
+
 local ticker = coroutine.detach(coroutine.create(function()
-    local mark <close> = setmetatable({}, { __close = function()
-        log[#log + 1] = "cleaned up"
-    end })
+    local mark <close> = setmetatable({}, {
+        __close = function()
+            log[#log + 1] = "cleaned up"
+        end,
+    })
+
     while true do
         log[#log + 1] = "tick"
         coroutine.yield()
@@ -227,8 +241,8 @@ local stopper = coroutine.detach(coroutine.create(function()
     return coroutine.close(ticker)
 end))
 
-print(coroutine.resume(stopper))                --> true  true
-print(log[#log], coroutine.status(ticker))      --> cleaned up  dead
+print(coroutine.resume(stopper))  --> true  true
+print(log[#log], coroutine.status(ticker))  --> cleaned up  dead
 ```
 
 Closing a detached coroutine that already failed returns `false` and its error object, which counts as collecting that error.
@@ -285,6 +299,7 @@ coroutine.detach(coroutine.create(function()
         coroutine.yield()
     end
 end))
+
 print("the main chunk is done")
 --> the main chunk is done
 --> tick  1
@@ -325,15 +340,18 @@ io.open(script, "w"):write([[
 ]]):close()
 
 local workers = {}
+
 for i = 0, 3 do
     workers[#workers + 1] = worker.create(script, i * 500000 + 1, (i + 1) * 500000)
 end
 
 local total = 0
+
 for _, handle in ipairs(workers) do
     total = total + worker.receive(handle)
 end
-print(total)   --> 148933
+
+print(total)  --> 148933
 fs.remove(script)
 ```
 
@@ -374,13 +392,13 @@ io.open(script, "w"):write([[
 
 local handle = worker.create(script)
 worker.send(handle, 21)
-print(worker.receive(handle))           --> 42
+print(worker.receive(handle))  --> 42
 worker.send(handle, 4)
 worker.send(handle, 5)
-print(worker.receive(handle), worker.receive(handle))   --> 8  10
+print(worker.receive(handle), worker.receive(handle))  --> 8  10
 worker.send(handle, "stop")
-print(worker.receive(handle))           --> nil
-print(worker.status(handle))            --> dead
+print(worker.receive(handle))  --> nil
+print(worker.status(handle))  --> dead
 fs.remove(script)
 ```
 
@@ -398,17 +416,21 @@ local first = worker.create(script, "first")
 local second = worker.create(script, "second")
 
 local results = {}
+
 while #results < 2 do
     local a, b = worker.receive(first, second)
+
     if a then
         results[#results + 1] = a
     end
+
     if b then
         results[#results + 1] = b
     end
 end
+
 table.sort(results)
-print(table.concat(results, " "))   --> first second
+print(table.concat(results, " "))  --> first second
 fs.remove(script)
 ```
 
@@ -432,7 +454,7 @@ io.open(script, "w"):write([[
 local shared = {}
 local value = { a = shared, b = shared }
 value.self = value
-print(worker.receive(worker.create(script, value)))   --> true
+print(worker.receive(worker.create(script, value)))  --> true
 fs.remove(script)
 ```
 
@@ -448,8 +470,8 @@ io.open(script, "w"):write("worker.message(#(...))"):close()
 
 local bytes = vector.fromstring("abc")
 local handle = worker.create(script, bytes)
-print(worker.receive(handle))   --> 3
-print(#bytes)                   --> 0
+print(worker.receive(handle))  --> 3
+print(#bytes)  --> 0
 fs.remove(script)
 ```
 
@@ -465,8 +487,8 @@ io.open(script, "w"):write('error("worker broke", 0)'):close()
 
 local handle = worker.create(script)
 local ok, err = catch worker.receive(handle)
-print(ok, err)                  --> false  worker broke
-print(worker.status(handle))    --> dead
+print(ok, err)  --> false  worker broke
+print(worker.status(handle))  --> dead
 fs.remove(script)
 ```
 
@@ -496,11 +518,13 @@ io.open(script, "w"):write([[
 ]]):close()
 
 local log = {}
+
 local waiting = coroutine.detach(coroutine.create(function()
     local total = worker.receive(worker.create(script, 20000000))
     log[#log + 1] = "worker done"
     return total
 end))
+
 local ticking = coroutine.detach(coroutine.create(function()
     for i = 1, 3 do
         log[#log + 1] = "tick " .. i
@@ -508,8 +532,8 @@ local ticking = coroutine.detach(coroutine.create(function()
     end
 end))
 
-print(coroutine.resume(waiting))   --> true  60000003
-print(table.concat(log, ", "))     --> tick 1, tick 2, tick 3, worker done
+print(coroutine.resume(waiting))  --> true  60000003
+print(table.concat(log, ", "))  --> tick 1, tick 2, tick 3, worker done
 fs.remove(script)
 ```
 

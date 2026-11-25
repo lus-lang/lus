@@ -38,7 +38,7 @@ The following example decrypts a message, then the same message with one bit of 
 ```lus
 local key, nonce = crypto.random(32), crypto.random(12)
 local ct, tag = crypto.encrypt("aes-256-gcm", key, nonce, "attack at dawn")
-print(vector.tostring(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag)))   --> attack at dawn
+print(vector.tostring(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag)))  --> attack at dawn
 vector.set(ct, 0, vector.get(ct, 0) ~ 1)
-print(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag))   --> nil
+print(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag))  --> nil
 ```

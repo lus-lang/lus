@@ -26,11 +26,11 @@ An empty range, such as `math.random(-5)` or `math.random(5, 1)`, raises `bad ar
 ```lus
 math.randomseed(42)
 local r = math.random()
-print(r >= 0 and r < 1)              --> true
+print(r >= 0 and r < 1)  --> true
 local die = math.random(6)
-print(die >= 1 and die <= 6)         --> true
-print(math.random(3, 3))             --> 3
-print(math.type(math.random(0)))     --> integer
+print(die >= 1 and die <= 6)  --> true
+print(math.random(3, 3))  --> 3
+print(math.type(math.random(0)))  --> integer
 ```
 
 A range of any width up to the whole integer range is uniform, as in `math.random(math.mininteger, math.maxinteger)`. The generator is not suitable for cryptography.

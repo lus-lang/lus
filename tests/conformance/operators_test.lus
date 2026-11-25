@@ -14,51 +14,153 @@
 pledge("load", "debug")
 
 local meta = setmetatable({}, {
-    __add = function() return "add" end, __sub = function() return "sub" end,
-    __mul = function() return "mul" end, __div = function() return "div" end,
-    __mod = function() return "mod" end, __pow = function() return "pow" end,
-    __idiv = function() return "idiv" end, __band = function() return "band" end,
-    __bor = function() return "bor" end, __bxor = function() return "bxor" end,
-    __shl = function() return "shl" end, __shr = function() return "shr" end,
-    __concat = function() return "concat" end, __eq = function() return true end,
-    __lt = function() return true end, __le = function() return false end,
-    __unm = function() return "unm" end, __bnot = function() return "bnot" end,
-    __len = function() return 7 end,
+    __add = function()
+        return "add"
+    end,
+    __sub = function()
+        return "sub"
+    end,
+    __mul = function()
+        return "mul"
+    end,
+    __div = function()
+        return "div"
+    end,
+    __mod = function()
+        return "mod"
+    end,
+    __pow = function()
+        return "pow"
+    end,
+    __idiv = function()
+        return "idiv"
+    end,
+    __band = function()
+        return "band"
+    end,
+    __bor = function()
+        return "bor"
+    end,
+    __bxor = function()
+        return "bxor"
+    end,
+    __shl = function()
+        return "shl"
+    end,
+    __shr = function()
+        return "shr"
+    end,
+    __concat = function()
+        return "concat"
+    end,
+    __eq = function()
+        return true
+    end,
+    __lt = function()
+        return true
+    end,
+    __le = function()
+        return false
+    end,
+    __unm = function()
+        return "unm"
+    end,
+    __bnot = function()
+        return "bnot"
+    end,
+    __len = function()
+        return 7
+    end,
 })
 
 -- Each operand with the literal that writes it, when one does.
 local operands = {
-    { 0, "0" }, { 1, "1" }, { -7, "-7" }, { 3, "3" }, { 127, "127" }, { 200, "200" },
-    { math.maxinteger, "math.maxinteger" }, { math.mininteger, "math.mininteger" },
-    { 0.0, "0.0" }, { -0.0, "-0.0" }, { 2.5, "2.5" }, { -1.5, "-1.5" }, { 4.0, "4.0" },
-    { 1 / 0 }, { 0 / 0 },
-    { "10", '"10"' }, { "0x10", '"0x10"' }, { " 2.5 ", '" 2.5 "' }, { "x", '"x"' },
-    { 10n, "10n" }, { 1.5d, "1.5d" },
-    { true, "true" }, { nil, "nil" }, { meta },
+    { 0, "0" },
+    { 1, "1" },
+    { -7, "-7" },
+    { 3, "3" },
+    { 127, "127" },
+    { 200, "200" },
+    { math.maxinteger, "math.maxinteger" },
+    { math.mininteger, "math.mininteger" },
+    { 0.0, "0.0" },
+    { -0.0, "-0.0" },
+    { 2.5, "2.5" },
+    { -1.5, "-1.5" },
+    { 4.0, "4.0" },
+    { 1 / 0 },
+    { 0 / 0 },
+    { "10", '"10"' },
+    { "0x10", '"0x10"' },
+    { " 2.5 ", '" 2.5 "' },
+    { "x", '"x"' },
+    { 10n, "10n" },
+    { 1.5d, "1.5d" },
+    { true, "true" },
+    { nil, "nil" },
+    { meta },
 }
 
-local binary = { "+", "-", "*", "/", "//", "%", "^", "&", "|", "~", "<<", ">>", "..",
-    "==", "~=", "<", "<=", ">", ">=" }
+local binary = {
+    "+",
+    "-",
+    "*",
+    "/",
+    "//",
+    "%",
+    "^",
+    "&",
+    "|",
+    "~",
+    "<<",
+    ">>",
+    "..",
+    "==",
+    "~=",
+    "<",
+    "<=",
+    ">",
+    ">=",
+}
 
 local function same(x, y)
-    if type(x) ~= type(y) then return false end
+    if type(x) ~= type(y) then
+        return false
+    end
+
     if type(x) == "number" then
-        if math.type(x) ~= math.type(y) then return false end
-        if x ~= x then return y ~= y end
-        if x == 0 and y == 0 and math.type(x) == "float" then return 1 / x == 1 / y end
+        if math.type(x) ~= math.type(y) then
+            return false
+        end
+
+        if x ~= x then
+            return y ~= y
+        end
+
+        if x == 0 and y == 0 and math.type(x) == "float" then
+            return 1 / x == 1 / y
+        end
+
         return x == y
     end
-    if type(x) == "bigint" or type(x) == "decimal" then return tostring(x) == tostring(y) end
+
+    if type(x) == "bigint" or type(x) == "decimal" then
+        return tostring(x) == tostring(y)
+    end
+
     return x == y
 end
 
 local cache = {}
+
 local function compiled(src)
     local f = cache[src]
+
     if not f then
         f = assert(load(src, "=op"))()
         cache[src] = f
     end
+
     return f
 end
 
@@ -70,23 +172,49 @@ end
 local function check(op, a, b)
     local both = compiled("return function(a, b) return a " .. op .. " b end")
     local ok1, v1 = run(both, a[1], b[1])
+
     if b[2] then
         local right = compiled("return function(a) return a " .. op .. " (" .. b[2] .. ") end")
         local ok2, v2 = run(right, a[1])
-        assert(ok1 == ok2 and (not ok1 or same(v1, v2)),
-            string.format("%s %s %s: %s %s against %s %s", tostring(a[1]), op, b[2], ok1, tostring(v1), ok2, tostring(v2)))
+        assert(
+            ok1 == ok2 and (not ok1 or same(v1, v2)),
+            string.format(
+                "%s %s %s: %s %s against %s %s",
+                tostring(a[1]),
+                op,
+                b[2],
+                ok1,
+                tostring(v1),
+                ok2,
+                tostring(v2)
+            )
+        )
     end
+
     if a[2] then
         local left = compiled("return function(b) return (" .. a[2] .. ") " .. op .. " b end")
         local ok3, v3 = run(left, b[1])
-        assert(ok1 == ok3 and (not ok1 or same(v1, v3)),
-            string.format("%s %s %s: %s %s against %s %s", a[2], op, tostring(b[1]), ok1, tostring(v1), ok3, tostring(v3)))
+        assert(
+            ok1 == ok3 and (not ok1 or same(v1, v3)),
+            string.format(
+                "%s %s %s: %s %s against %s %s",
+                a[2],
+                op,
+                tostring(b[1]),
+                ok1,
+                tostring(v1),
+                ok3,
+                tostring(v3)
+            )
+        )
     end
+
     return ok1
 end
 
 local function matrix()
     local done = 0
+
     for _, op in ipairs(binary) do
         for _, a in ipairs(operands) do
             for _, b in ipairs(operands) do
@@ -95,10 +223,13 @@ local function matrix()
             end
         end
     end
+
     for _, op in ipairs{ "-", "~", "#", "not " } do
         local f = compiled("return function(a) return " .. op .. "a end")
+
         for _, a in ipairs(operands) do
             local ok, v = run(f, a[1])
+
             if a[2] and op ~= "#" then
                 local g = compiled("return function() return " .. op .. "(" .. a[2] .. ") end")
                 local ok2, v2 = run(g)
@@ -106,6 +237,7 @@ local function matrix()
             end
         end
     end
+
     return done
 end
 
@@ -115,7 +247,11 @@ end
 
 local function every_operator_agrees_under_a_count_hook_test()
     local counted = 0
-    debug.sethook(function() counted = counted + 1 end, "", 1)
+
+    debug.sethook(function()
+        counted = counted + 1
+    end, "", 1)
+
     local ok, err = catch matrix()
     debug.sethook()
     assert(ok, err)
@@ -124,7 +260,11 @@ end
 
 local function every_operator_agrees_under_a_line_and_call_hook_test()
     local events = 0
-    debug.sethook(function() events = events + 1 end, "crl")
+
+    debug.sethook(function()
+        events = events + 1
+    end, "crl")
+
     local ok, err = catch matrix()
     debug.sethook()
     assert(ok, err)

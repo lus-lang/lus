@@ -15,9 +15,11 @@ end
 
 local function count_entries(t)
     local n = 0
+
     for k in pairs(t) do
         n = n + 1
     end
+
     return n
 end
 
@@ -27,6 +29,7 @@ local function with_mode(mode, body)
     local prev = collectgarbage(mode)
     local ok, err = catch body()
     collectgarbage(prev)
+
     if not ok then
         error(err, 0)
     end
@@ -49,18 +52,21 @@ local function seed_pair(t, hold_key, hold_value)
     t[k] = v
     local hk = nil
     local hv = nil
+
     if hold_key then
         hk = k
     end
+
     if hold_value then
         hv = v
     end
+
     return hk, hv
 end
 
 -- Stores a value under a key that no caller frame ever references.
 local function seed_anonymous_key(t, v)
-    local k = {tag = "strongkey"}
+    local k = { tag = "strongkey" }
     t[k] = v
 end
 
@@ -71,36 +77,40 @@ end
 -- Group: weak mode survival matrix
 
 local entry_survival_by_mode_and_holders_cases = {
-    {"k", true, true, true},
-    {"k", true, false, true},
-    {"k", false, true, false},
-    {"k", false, false, false},
-    {"v", true, true, true},
-    {"v", true, false, false},
-    {"v", false, true, true},
-    {"v", false, false, false},
-    {"kv", true, true, true},
-    {"kv", true, false, false},
-    {"kv", false, true, false},
-    {"kv", false, false, false},
+    { "k", true, true, true },
+    { "k", true, false, true },
+    { "k", false, true, false },
+    { "k", false, false, false },
+    { "v", true, true, true },
+    { "v", true, false, false },
+    { "v", false, true, true },
+    { "v", false, false, false },
+    { "kv", true, true, true },
+    { "kv", true, false, false },
+    { "kv", false, true, false },
+    { "kv", false, false, false },
 }
 
 local function entry_survival_by_mode_and_holders_test(mode, hold_key, hold_value, present)
-    local t = setmetatable({}, {__mode = mode})
+    local t = setmetatable({}, { __mode = mode })
     local kept_k, kept_v = seed_pair(t, hold_key, hold_value)
     full_collect()
+
     if present then
         assert(count_entries(t) == 1)
+
         if kept_k ~= nil then
             assert(t[kept_k] ~= nil)
         end
     else
         assert(count_entries(t) == 0)
     end
+
     -- Touching the holders here keeps them live across the collection above.
     if hold_key then
         assert(type(kept_k) == "table")
     end
+
     if hold_value then
         assert(type(kept_v) == "table")
     end
@@ -113,18 +123,18 @@ end
 -- Group: ephemeron basics
 
 local function pair_collects_when_the_key_is_only_referenced_by_its_own_value_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local k = {}
-    t[k] = {ref = k}
+    t[k] = { ref = k }
     k = nil
     full_collect()
     assert(count_entries(t) == 0)
 end
 
 local function pair_survives_while_the_key_is_externally_held_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local k = {}
-    t[k] = {ref = k, marker = 42}
+    t[k] = { ref = k, marker = 42 }
     full_collect()
     assert(count_entries(t) == 1)
     assert(t[k].marker == 42)
@@ -132,7 +142,7 @@ local function pair_survives_while_the_key_is_externally_held_test()
 end
 
 local function entry_whose_value_is_the_key_itself_collects_when_dropped_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local k = {}
     t[k] = k
     k = nil
@@ -141,7 +151,7 @@ local function entry_whose_value_is_the_key_itself_collects_when_dropped_test()
 end
 
 local function entry_whose_value_is_the_key_itself_survives_while_held_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local k = {}
     t[k] = k
     full_collect()
@@ -149,16 +159,16 @@ local function entry_whose_value_is_the_key_itself_survives_while_held_test()
 end
 
 local function deeply_nested_value_reference_to_the_key_still_collects_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local k = {}
-    t[k] = {a = {b = {c = {d = k}}}}
+    t[k] = { a = { b = { c = { d = k } } } }
     k = nil
     full_collect()
     assert(count_entries(t) == 0)
 end
 
 local function closure_value_capturing_its_own_key_still_collects_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local k = {}
     t[k] = make_closure(k)
     k = nil
@@ -167,8 +177,8 @@ local function closure_value_capturing_its_own_key_still_collects_test()
 end
 
 local function closure_value_capturing_a_held_key_stays_callable_test()
-    local t = setmetatable({}, {__mode = "k"})
-    local k = {tag = "key"}
+    local t = setmetatable({}, { __mode = "k" })
+    local k = { tag = "key" }
     t[k] = make_closure(k)
     full_collect()
     assert(t[k]().tag == "key")
@@ -181,12 +191,12 @@ end
 -- Group: ephemeron chains
 
 local function cascade_across_two_tables_follows_the_live_head_and_dies_with_it_test()
-    local t1 = setmetatable({}, {__mode = "k"})
-    local t2 = setmetatable({}, {__mode = "k"})
+    local t1 = setmetatable({}, { __mode = "k" })
+    local t2 = setmetatable({}, { __mode = "k" })
     local k1 = {}
     local k2 = {}
-    t1[k1] = {link = k2}
-    t2[k2] = {marker = "v2"}
+    t1[k1] = { link = k2 }
+    t2[k2] = { marker = "v2" }
     k2 = nil
     full_collect()
     -- The second key stays alive because the first entry's value holds it.
@@ -199,11 +209,11 @@ local function cascade_across_two_tables_follows_the_live_head_and_dies_with_it_
 end
 
 local function mutual_ephemeron_cycle_survives_one_live_key_and_collects_with_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local k1 = {}
     local k2 = {}
-    t[k1] = {peer = k2}
-    t[k2] = {peer = k1}
+    t[k1] = { peer = k2 }
+    t[k2] = { peer = k1 }
     k2 = nil
     full_collect()
     assert(count_entries(t) == 2)
@@ -213,26 +223,31 @@ local function mutual_ephemeron_cycle_survives_one_live_key_and_collects_with_te
 end
 
 local function ten_link_chain_inserted_deepest_first_converges_both_ways_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local keys = {}
+
     for i = 1, 10 do
-        keys[i] = {id = i}
+        keys[i] = { id = i }
     end
+
     -- Inserting the deepest link first forces the marker to revisit entries,
     -- which exercises the ephemeron convergence loop.
     for i = 10, 1, -1 do
-        t[keys[i]] = {next_key = keys[i + 1]}
+        t[keys[i]] = { next_key = keys[i + 1] }
     end
+
     local head = keys[1]
     keys = nil
     full_collect()
     assert(count_entries(t) == 10)
     local node = head
     local steps = 0
+
     while node do
         steps = steps + 1
         node = t[node].next_key
     end
+
     assert(steps == 10)
     head = nil
     full_collect()
@@ -240,31 +255,37 @@ local function ten_link_chain_inserted_deepest_first_converges_both_ways_test()
 end
 
 local function ephemeron_sweep_keeps_exactly_the_held_keys_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local held = {}
+
     for i = 1, 90 do
         local k = {}
-        t[k] = {ref = k, id = i}
+        t[k] = { ref = k, id = i }
+
         if i % 3 == 0 then
             held[#held + 1] = k
         end
     end
+
     full_collect()
     assert(count_entries(t) == 30)
+
     for _, k in ipairs(held) do
         assert(t[k].ref == k)
     end
 end
 
 local function ephemeron_value_memory_is_reclaimed_when_its_key_dies_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local k = {}
+
     -- The concatenation forces a flat unique string, since plain string.rep
     -- results use a compact representation that barely counts toward memory.
     -- The helper keeps the string temporary out of this frame's registers.
     local function attach(key)
         t[key] = string.rep("x", 512 * 1024) .. "weak2-tail"
     end
+
     attach(k)
     full_collect()
     local before = collectgarbage("count")
@@ -282,39 +303,41 @@ end
 -- Group: weak value semantics
 
 local function weak_value_tables_hold_their_keys_strongly_test()
-    local t = setmetatable({}, {__mode = "v"})
-    local v = {payload = 1}
+    local t = setmetatable({}, { __mode = "v" })
+    local v = { payload = 1 }
     seed_anonymous_key(t, v)
     full_collect()
     local found = nil
+
     for k, val in pairs(t) do
         found = k
         assert(val == v)
     end
+
     assert(found ~= nil)
     assert(found.tag == "strongkey")
 end
 
 local function value_weakness_wins_even_when_the_value_references_its_live_key_test()
-    local t = setmetatable({}, {__mode = "v"})
+    local t = setmetatable({}, { __mode = "v" })
     local k = {}
-    t[k] = {ref = k}
+    t[k] = { ref = k }
     full_collect()
     assert(t[k] == nil)
     assert(type(k) == "table")
 end
 
 local function kv_weakness_does_not_act_as_an_ephemeron_test()
-    local t = setmetatable({}, {__mode = "kv"})
+    local t = setmetatable({}, { __mode = "kv" })
     local k = {}
-    t[k] = {ref = k}
+    t[k] = { ref = k }
     k = nil
     full_collect()
     assert(count_entries(t) == 0)
 end
 
 local function kv_entry_dies_with_its_value_even_when_the_key_is_held_test()
-    local t = setmetatable({}, {__mode = "kv"})
+    local t = setmetatable({}, { __mode = "kv" })
     local k = {}
     t[k] = {}
     full_collect()
@@ -323,15 +346,15 @@ local function kv_entry_dies_with_its_value_even_when_the_key_is_held_test()
 end
 
 local non_collectable_weak_values_are_never_cleared_cases = {
-    {42},
-    {2.5},
-    {true},
-    {false},
-    {"payload string"},
+    { 42 },
+    { 2.5 },
+    { true },
+    { false },
+    { "payload string" },
 }
 
 local function non_collectable_weak_values_are_never_cleared_test(v)
-    local t = setmetatable({}, {__mode = "v"})
+    local t = setmetatable({}, { __mode = "v" })
     t.slot = v
     full_collect()
     assert(t.slot == v)
@@ -344,20 +367,20 @@ end
 -- Group: value type keys
 
 local value_type_keys_survive_in_weak_keyed_tables_cases = {
-    {"k", "weak2-string-key-" .. string.rep("x", 40)},
-    {"k", 7},
-    {"k", 2.5},
-    {"k", true},
-    {"k", false},
-    {"kv", "weak2-string-key-" .. string.rep("y", 40)},
-    {"kv", 7},
-    {"kv", 2.5},
-    {"kv", true},
-    {"kv", false},
+    { "k", "weak2-string-key-" .. string.rep("x", 40) },
+    { "k", 7 },
+    { "k", 2.5 },
+    { "k", true },
+    { "k", false },
+    { "kv", "weak2-string-key-" .. string.rep("y", 40) },
+    { "kv", 7 },
+    { "kv", 2.5 },
+    { "kv", true },
+    { "kv", false },
 }
 
 local function value_type_keys_survive_in_weak_keyed_tables_test(mode, key)
-    local t = setmetatable({}, {__mode = mode})
+    local t = setmetatable({}, { __mode = mode })
     t[key] = "payload"
     full_collect()
     assert(t[key] == "payload")
@@ -373,9 +396,11 @@ end
 local function adding_mode_k_to_a_live_metatable_takes_effect_on_the_next_cycle_test()
     local mt = {}
     local t = setmetatable({}, mt)
+
     for i = 1, 4 do
         t[{}] = i
     end
+
     full_collect()
     assert(count_entries(t) == 4)
     mt.__mode = "k"
@@ -384,7 +409,7 @@ local function adding_mode_k_to_a_live_metatable_takes_effect_on_the_next_cycle_
 end
 
 local function removing_and_restoring_mode_toggles_weakness_across_cycles_test()
-    local mt = {__mode = "k"}
+    local mt = { __mode = "k" }
     local t = setmetatable({}, mt)
     local k = {}
     t[k] = "kept"
@@ -402,13 +427,13 @@ local function replacing_the_whole_metatable_changes_weakness_test()
     t[{}] = "a"
     full_collect()
     assert(count_entries(t) == 1)
-    setmetatable(t, {__mode = "k"})
+    setmetatable(t, { __mode = "k" })
     full_collect()
     assert(count_entries(t) == 0)
 end
 
 local function switching_mode_from_k_to_v_flips_which_side_is_weak_test()
-    local mt = {__mode = "k"}
+    local mt = { __mode = "k" }
     local t = setmetatable({}, mt)
     local k = {}
     t[k] = {}
@@ -427,10 +452,14 @@ end
 
 local function weak_value_entry_is_cleared_and_finalized_within_one_full_test()
     local finalized = false
-    local t = setmetatable({}, {__mode = "v"})
-    t[1] = setmetatable({}, {__gc = function()
-        finalized = true
-    end})
+    local t = setmetatable({}, { __mode = "v" })
+
+    t[1] = setmetatable({}, {
+        __gc = function()
+            finalized = true
+        end,
+    })
+
     collectgarbage("collect")
     assert(finalized)
     assert(t[1] == nil)
@@ -438,20 +467,28 @@ end
 
 local function weak_value_entry_is_already_cleared_when_its_finalizer_runs_test()
     local observed = nil
-    local t = setmetatable({}, {__mode = "v"})
-    t[1] = setmetatable({}, {__gc = function()
-        observed = (t[1] == nil)
-    end})
+    local t = setmetatable({}, { __mode = "v" })
+
+    t[1] = setmetatable({}, {
+        __gc = function()
+            observed = (t[1] == nil)
+        end,
+    })
+
     collectgarbage("collect")
     assert(observed == true)
 end
 
 local function weak_key_entry_stays_visible_until_the_collection_after_test()
     local observed = nil
-    local t = setmetatable({}, {__mode = "k"})
-    local obj = setmetatable({}, {__gc = function(self)
-        observed = (t[self] == "data")
-    end})
+    local t = setmetatable({}, { __mode = "k" })
+
+    local obj = setmetatable({}, {
+        __gc = function(self)
+            observed = (t[self] == "data")
+        end,
+    })
+
     t[obj] = "data"
     obj = nil
     collectgarbage("collect")
@@ -463,10 +500,14 @@ end
 
 local function kv_weak_entry_with_a_finalizable_key_follows_the_same_two_phase_test()
     local finalized = false
-    local t = setmetatable({}, {__mode = "kv"})
-    local obj = setmetatable({}, {__gc = function()
-        finalized = true
-    end})
+    local t = setmetatable({}, { __mode = "kv" })
+
+    local obj = setmetatable({}, {
+        __gc = function()
+            finalized = true
+        end,
+    })
+
     t[obj] = "data"
     obj = nil
     collectgarbage("collect")
@@ -479,11 +520,15 @@ end
 local function a_resurrected_key_keeps_its_weak_table_entry_alive_test()
     local resurrected = nil
     local fin_count = 0
-    local t = setmetatable({}, {__mode = "k"})
-    local obj = setmetatable({}, {__gc = function(self)
-        fin_count = fin_count + 1
-        resurrected = self
-    end})
+    local t = setmetatable({}, { __mode = "k" })
+
+    local obj = setmetatable({}, {
+        __gc = function(self)
+            fin_count = fin_count + 1
+            resurrected = self
+        end,
+    })
+
     t[obj] = "marker"
     obj = nil
     full_collect()
@@ -498,10 +543,14 @@ end
 
 local function resurrection_does_not_restore_an_already_cleared_weak_value_test()
     local resurrected = nil
-    local t = setmetatable({}, {__mode = "v"})
-    t[1] = setmetatable({marker = 9}, {__gc = function(self)
-        resurrected = self
-    end})
+    local t = setmetatable({}, { __mode = "v" })
+
+    t[1] = setmetatable({ marker = 9 }, {
+        __gc = function(self)
+            resurrected = self
+        end,
+    })
+
     collectgarbage("collect")
     assert(resurrected ~= nil)
     assert(resurrected.marker == 9)
@@ -513,9 +562,14 @@ end
 local function a_table_can_be_both_weak_and_finalizable_test()
     local cleared = nil
     local finalized = false
-    local t = setmetatable({}, {__mode = "k", __gc = function()
-        finalized = true
-    end})
+
+    local t = setmetatable({}, {
+        __mode = "k",
+        __gc = function()
+            finalized = true
+        end,
+    })
+
     t[{}] = "gone"
     full_collect()
     cleared = count_entries(t)
@@ -532,15 +586,15 @@ end
 -- Group: collector modes
 
 local ephemeron_pair_collects_under_an_explicit_gc_mode_cases = {
-    {"incremental"},
-    {"generational"},
+    { "incremental" },
+    { "generational" },
 }
 
 local function ephemeron_pair_collects_under_an_explicit_gc_mode_test(mode)
     with_mode(mode, function()
-        local t = setmetatable({}, {__mode = "k"})
+        local t = setmetatable({}, { __mode = "k" })
         local k = {}
-        t[k] = {ref = k}
+        t[k] = { ref = k }
         k = nil
         full_collect()
         assert(count_entries(t) == 0)
@@ -548,15 +602,15 @@ local function ephemeron_pair_collects_under_an_explicit_gc_mode_test(mode)
 end
 
 local ephemeron_pair_survives_a_full_cycle_under_an_explicit_gc_mode_cases = {
-    {"incremental"},
-    {"generational"},
+    { "incremental" },
+    { "generational" },
 }
 
 local function ephemeron_pair_survives_a_full_cycle_under_an_explicit_gc_mode_test(mode)
     with_mode(mode, function()
-        local t = setmetatable({}, {__mode = "k"})
+        local t = setmetatable({}, { __mode = "k" })
         local k = {}
-        t[k] = {ref = k, marker = mode}
+        t[k] = { ref = k, marker = mode }
         full_collect()
         assert(t[k].marker == mode)
         assert(t[k].ref == k)
@@ -565,9 +619,9 @@ end
 
 local function old_weak_value_table_drops_young_garbage_after_a_major_test()
     with_mode("generational", function()
-        local t = setmetatable({}, {__mode = "v"})
+        local t = setmetatable({}, { __mode = "v" })
         collectgarbage("collect")
-        t[1] = {10}
+        t[1] = { 10 }
         collectgarbage("step")
         collectgarbage("step")
         collectgarbage("collect")
@@ -577,10 +631,10 @@ end
 
 local function old_ephemeron_table_with_a_young_key_works_across_minor_test()
     with_mode("generational", function()
-        local t = setmetatable({}, {__mode = "k"})
+        local t = setmetatable({}, { __mode = "k" })
         collectgarbage("collect")
         local k = {}
-        t[k] = {ref = k}
+        t[k] = { ref = k }
         collectgarbage("step")
         collectgarbage("step")
         assert(t[k].ref == k)
@@ -592,14 +646,17 @@ end
 
 local function ephemeron_cascade_works_under_generational_mode_test()
     with_mode("generational", function()
-        local t = setmetatable({}, {__mode = "k"})
+        local t = setmetatable({}, { __mode = "k" })
         local keys = {}
+
         for i = 1, 5 do
             keys[i] = {}
         end
+
         for i = 5, 1, -1 do
-            t[keys[i]] = {next_key = keys[i + 1]}
+            t[keys[i]] = { next_key = keys[i + 1] }
         end
+
         local head = keys[1]
         keys = nil
         collectgarbage("collect")
@@ -612,9 +669,9 @@ end
 
 local function weak_table_state_survives_switching_collector_modes_mid_life_test()
     with_mode("incremental", function()
-        local t = setmetatable({}, {__mode = "k"})
-        local k = {marker = 1}
-        t[k] = {ref = k, data = "x"}
+        local t = setmetatable({}, { __mode = "k" })
+        local k = { marker = 1 }
+        t[k] = { ref = k, data = "x" }
         collectgarbage("collect")
         collectgarbage("generational")
         collectgarbage("collect")
@@ -632,7 +689,7 @@ end
 -- Group: other collectable types
 
 local function function_keys_are_weak_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local f = make_closure({})
     t[f] = "fn-data"
     assert(t[f] == "fn-data")
@@ -642,8 +699,11 @@ local function function_keys_are_weak_test()
 end
 
 local function coroutine_keys_are_weak_test()
-    local t = setmetatable({}, {__mode = "k"})
-    local co = coroutine.create(function() end)
+    local t = setmetatable({}, { __mode = "k" })
+
+    local co = coroutine.create(function()
+    end)
+
     t[co] = "thread-data"
     assert(t[co] == "thread-data")
     co = nil
@@ -652,15 +712,18 @@ local function coroutine_keys_are_weak_test()
 end
 
 local function coroutine_values_are_weak_test()
-    local t = setmetatable({}, {__mode = "v"})
-    t.co = coroutine.create(function() end)
+    local t = setmetatable({}, { __mode = "v" })
+
+    t.co = coroutine.create(function()
+    end)
+
     assert(type(t.co) == "thread")
     full_collect()
     assert(t.co == nil)
 end
 
 local function vector_values_are_weak_test()
-    local t = setmetatable({}, {__mode = "v"})
+    local t = setmetatable({}, { __mode = "v" })
     t.vec = vector.create(64)
     assert(#t.vec == 64)
     full_collect()
@@ -668,7 +731,7 @@ local function vector_values_are_weak_test()
 end
 
 local function held_vectors_survive_as_weak_values_test()
-    local t = setmetatable({}, {__mode = "v"})
+    local t = setmetatable({}, { __mode = "v" })
     local v = vector.create(32)
     t.vec = v
     full_collect()
@@ -677,7 +740,7 @@ local function held_vectors_survive_as_weak_values_test()
 end
 
 local function vector_keys_are_weak_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     local v = vector.create(16)
     t[v] = "vec-data"
     assert(t[v] == "vec-data")
@@ -693,7 +756,7 @@ end
 -- Group: housekeeping
 
 local function a_weak_table_stays_usable_after_its_entries_are_cleared_test()
-    local t = setmetatable({}, {__mode = "k"})
+    local t = setmetatable({}, { __mode = "k" })
     t[{}] = 1
     full_collect()
     assert(count_entries(t) == 0)

@@ -25,9 +25,12 @@ A function with native code, such as `print`, raises the error `unable to dump g
 ```lus
 pledge("load")
 
-local chunk = string.dump(function(a) return a * 2 end)
+local chunk = string.dump(function(a)
+    return a * 2
+end)
+
 local double = load(chunk, "double", "b")
-print(type(chunk), double(21))   --> vector  42
+print(type(chunk), double(21))  --> vector  42
 ```
 
 The loaded function has fresh upvalues. `load` sets its first upvalue to the global environment and leaves the others `nil`, so a function that captured locals reads different values after the round trip. An error raised by a function loaded from a stripped chunk carries no line number. Loading a chunk requires the `load` [permission](/manual/permissions).

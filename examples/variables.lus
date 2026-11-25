@@ -21,10 +21,12 @@ print(low, high)  --> 2  9
 -- A local exists from its declaration to the end of its block.
 -- After the block, `bonus` is an undeclared name, which is a compile error in this file.
 local total = 0
+
 do
     local bonus = 5
     total = total + bonus
 end
+
 print(total)  --> 5
 
 -- The `global` line at the top declares `visits`, so every function in the file can update it.

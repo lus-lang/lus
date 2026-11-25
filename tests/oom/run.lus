@@ -34,10 +34,13 @@ local here = arg[0]:match("^(.*)/[^/]*$") or "."
 local root = here .. "/../.."
 
 local opts, operands = {}, {}
+
 do
     local i = 1
+
     while arg[i] do
         local a = arg[i]
+
         if a == "--sticky" or a == "--io" or a == "--short" then
             opts[a:sub(3)] = true
             i = i + 1
@@ -63,34 +66,55 @@ local function shell(cmd)
 end
 
 local function absolute(p)
-    return (shell("cd " .. quote(p:match("^(.*)/[^/]*$") or ".") .. " && pwd"):gsub("\n$", "")) .. "/" .. (p:match("[^/]*$"))
+    return (shell("cd " .. quote(p:match("^(.*)/[^/]*$") or ".") .. " && pwd"):gsub("\n$", ""))
+        .. "/"
+        .. (p:match("[^/]*$"))
 end
 
 root = (shell("cd " .. quote(root) .. " && pwd"):gsub("\n$", ""))
-local lus = absolute(opts.lus or (root .. (opts.io and "/runtime/zig-out-io/bin/lus" or "/runtime/zig-out-oom/bin/lus")))
+local lus = absolute(
+    opts.lus
+        or (root .. (opts.io and "/runtime/zig-out-io/bin/lus" or "/runtime/zig-out-oom/bin/lus"))
+)
 local variable = opts.io and "LUS_FAIL_IO" or "LUS_FAIL_ALLOC"
 local counted = opts.io and "lus: (%d+) I/O operations" or "lus: (%d+) allocations"
 local suffix = opts.io and (opts.short and ":short" or "") or (opts.sticky and "+" or "")
 local samples = tonumber(opts.samples or "40")
 local jobs = tonumber(opts.jobs or "8")
 local seconds = tonumber(opts.timeout or "30")
-if #operands == 0 then operands[1] = root .. "/tests/conformance" end
+
+if #operands == 0 then
+    operands[1] = root .. "/tests/conformance"
+end
+
 -- The runs of the binary under test write their coverage to this
 -- directory, and the sweep itself writes none.
-if opts.coverage then os.setenv("LUS_COVERAGE", opts.coverage) end
+if opts.coverage then
+    os.setenv("LUS_COVERAGE", opts.coverage)
+end
 
 -- The .lus files below each operand, skipping fixtures.
 local files = {}
+
 for _, p in ipairs(operands) do
-    local list = shell("find " .. quote(p) .. " -name fixtures -prune -o -name '*.lus' -type f -print | sort")
-    for f in list:gmatch("[^\n]+") do files[#files + 1] = absolute(f) end
+    local list = shell(
+        "find " .. quote(p) .. " -name fixtures -prune -o -name '*.lus' -type f -print | sort"
+    )
+
+    for f in list:gmatch("[^\n]+") do
+        files[#files + 1] = absolute(f)
+    end
 end
 
 local tmp = (shell([[mktemp -d "${TMPDIR:-/tmp}/lus-oom.XXXXXX"]]):gsub("\n$", ""))
 
 local function readFile(path)
     local f = io.open(path, "r", { lossy = true })
-    if not f then return "" end
+
+    if not f then
+        return ""
+    end
+
     local s = f:read("a") or ""
     f:close()
     return s
@@ -101,19 +125,46 @@ end
 -- run was killed after `seconds`.
 local function runBatch(batch)
     local parts = {}
+
     for i, job in ipairs(batch) do
         local base = tmp .. "/j" .. i
-        local argv = job.file:find("_test%.lus$") and ("test --run-one " .. quote(job.file)) or quote(job.file)
-        parts[#parts + 1] = "( mkdir -p " .. quote(base .. ".d") .. " && cd " .. quote(base .. ".d") .. " && env " .. (job.extra or "") .. variable .. "=" .. job.env
-            .. " perl -e 'alarm shift; exec @ARGV' " .. math.floor(seconds) .. " " .. quote(lus) .. " " .. argv
-            .. " > /dev/null 2> " .. quote(base .. ".err") .. "; echo $? > " .. quote(base .. ".code") .. "; cd / && rm -rf " .. quote(base .. ".d") .. " ) &"
+        local argv = job.file:find("_test%.lus$") and ("test --run-one " .. quote(job.file))
+            or quote(job.file)
+        parts[#parts + 1] = "( mkdir -p "
+            .. quote(base .. ".d")
+            .. " && cd "
+            .. quote(base .. ".d")
+            .. " && env "
+            .. (job.extra or "")
+            .. variable
+            .. "="
+            .. job.env
+            .. " perl -e 'alarm shift; exec @ARGV' "
+            .. math.floor(seconds)
+            .. " "
+            .. quote(lus)
+            .. " "
+            .. argv
+            .. " > /dev/null 2> "
+            .. quote(base .. ".err")
+            .. "; echo $? > "
+            .. quote(base .. ".code")
+            .. "; cd / && rm -rf "
+            .. quote(base .. ".d")
+            .. " ) &"
     end
+
     os.execute(table.concat(parts, "\n") .. "\nwait")
     local out = {}
+
     for i = 1, #batch do
         local base = tmp .. "/j" .. i
-        out[i] = { code = tonumber(readFile(base .. ".code"):match("%d+")) or -1, stderr = readFile(base .. ".err") }
+        out[i] = {
+            code = tonumber(readFile(base .. ".code"):match("%d+")) or -1,
+            stderr = readFile(base .. ".err"),
+        }
     end
+
     return out
 end
 
@@ -123,12 +174,31 @@ end
 local function verdict(res)
     local where = ""
     local file, fn = res.stderr:match("\n%S*src/([^%s:]+:%d+):%d+: 0x%x+ in (%S+)")
-    if file then where = " at " .. fn .. " (src/" .. file .. ")" end
-    if res.code == 142 then return "hang" end
-    if panic = res.stderr:match("panic: ([^\n]*)") then return "panic: " .. panic:gsub("%d%d%d+", "N") .. where end
-    if res.code >= 128 then return "signal " .. (res.code - 128) .. where end
-    if res.stderr:find("leaked", 1, true) then return "leak" .. where end
-    if res.code ~= 0 and res.code ~= 1 and res.code ~= 2 then return "exit " .. res.code .. where end
+
+    if file then
+        where = " at " .. fn .. " (src/" .. file .. ")"
+    end
+
+    if res.code == 142 then
+        return "hang"
+    end
+
+    if panic = res.stderr:match("panic: ([^\n]*)") then
+        return "panic: " .. panic:gsub("%d%d%d+", "N") .. where
+    end
+
+    if res.code >= 128 then
+        return "signal " .. (res.code - 128) .. where
+    end
+
+    if res.stderr:find("leaked", 1, true) then
+        return "leak" .. where
+    end
+
+    if res.code ~= 0 and res.code ~= 1 and res.code ~= 2 then
+        return "exit " .. res.code .. where
+    end
+
     return nil
 end
 
@@ -136,25 +206,40 @@ end
 -- ten, which build the state, then numbers spread over the run.
 local function pick(count, seed)
     local out = {}
+
     if samples == 0 or count <= samples then
-        for i = 1, count do out[i] = i end
+        for i = 1, count do
+            out[i] = i
+        end
+
         return out
     end
+
     local set = {}
-    for i = 1, math.min(10, count) do set[i] = true end
+
+    for i = 1, math.min(10, count) do
+        set[i] = true
+    end
+
     local n = math.min(10, count)
     local s = seed * 2654435761 + count
+
     while n < samples do
         s = s ~ (s << 13)
         s = s ~ (s >> 7)
         s = s ~ (s << 17)
         local k = 1 + (s & 0x7fffffffffffffff) % count
+
         if not set[k] then
             set[k] = true
             n = n + 1
         end
     end
-    for k in pairs(set) do out[#out + 1] = k end
+
+    for k in pairs(set) do
+        out[#out + 1] = k
+    end
+
     table.sort(out)
     return out
 end
@@ -162,7 +247,11 @@ end
 local function batches(list, fn)
     for i = 1, #list, jobs do
         local batch = {}
-        for k = i, math.min(i + jobs - 1, #list) do batch[#batch + 1] = list[k] end
+
+        for k = i, math.min(i + jobs - 1, #list) do
+            batch[#batch + 1] = list[k]
+        end
+
         fn(batch, runBatch(batch))
     end
 end
@@ -170,12 +259,17 @@ end
 -- Count the allocations of each file.
 local work = {}
 local counts = {}
-for i, f in ipairs(files) do counts[i] = { file = f, env = "count", index = i } end
+
+for i, f in ipairs(files) do
+    counts[i] = { file = f, env = "count", index = i }
+end
+
 batches(counts, function(batch, results)
     for k, res in ipairs(results) do
         local job = batch[k]
         local n = tonumber(res.stderr:match(counted))
         local bad = verdict(res)
+
         if bad or not n then
             print(job.file:sub(#root + 2) .. ": the clean run " .. (bad or "printed no count"))
         elseif n > 0 then
@@ -204,29 +298,40 @@ local function stoppedPeer(job)
     -- take a few tries to hang again. When none hangs, the trace of the
     -- last one still shows where that allocation number lands.
     local trace = ""
+
     for _ = 1, 3 do
         local res = runBatch({ traced })[1]
         trace = res.stderr:match("failing allocation.*") or ""
-        if verdict(res) == "hang" then break end
+
+        if verdict(res) == "hang" then
+            break
+        end
     end
-    return trace:find("src/vm/sched.zig", 1, true) ~= nil or trace:find("src/lib/worker.zig", 1, true) ~= nil
+
+    return trace:find("src/vm/sched.zig", 1, true) ~= nil
+        or trace:find("src/lib/worker.zig", 1, true) ~= nil
 end
+
 local bugs, order = {}, {}
 local runs = 0
 local unrepeated = 0
+
 batches(work, function(batch, results)
     for k, res in ipairs(results) do
         runs = runs + 1
         local job = batch[k]
         local bad = verdict(res)
+
         if bad == "hang" then
             local again = false
+
             for _ = 1, 3 do
                 if verdict(runBatch({ job })[1]) == "hang" then
                     again = true
                     break
                 end
             end
+
             if not again then
                 unrepeated = unrepeated + 1
                 bad = nil
@@ -234,13 +339,16 @@ batches(work, function(batch, results)
                 bad = "hang, from a peer that waits for a coroutine or a worker that the failure stopped"
             end
         end
+
         if bad then
             local prev = bugs[bad]
+
             if not prev then
                 bugs[bad] = { file = job.file, n = job.n, count = 1 }
                 order[#order + 1] = bad
             else
                 prev.count = prev.count + 1
+
                 if job.n < prev.n then
                     prev.n = job.n
                     prev.file = job.file
@@ -255,9 +363,11 @@ end)
 -- failed side hangs by construction. The I/O sweep lists such hangs and
 -- does not count them as failures.
 local failures = 0
+
 for _, what in ipairs(order) do
     local b = bugs[what]
     print("")
+
     if opts.io and what == "hang" then
         print("hang, from a peer that waits for a failed operation")
     elseif what:find("^hang, from a peer") then
@@ -266,10 +376,16 @@ for _, what in ipairs(order) do
         print(what)
         failures = failures + 1
     end
+
     print(`  $(b.count) runs, first: $variable=$(b.n)$suffix $(b.file:sub(#root + 2))`)
 end
+
 os.execute("rm -rf " .. quote(tmp))
 print("")
-if unrepeated > 0 then print(`$unrepeated hangs under load did not come back in runs of their own`) end
+
+if unrepeated > 0 then
+    print(`$unrepeated hangs under load did not come back in runs of their own`)
+end
+
 print(`$(#files) files, $runs runs, $failures distinct failures`)
 os.exit(failures > 0 and 1 or 0)

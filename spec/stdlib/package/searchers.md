@@ -24,11 +24,15 @@ The six default searchers run in this order:
 ```lus
 table.insert(package.searchers, 1, function(name)
     if name:match("^virtual%.") then
-        return function(modname) return { id = modname } end, "virtual"
+        return function(modname)
+            return { id = modname }
+        end, "virtual"
     end
+
     return "no virtual module '" .. name .. "'"
 end)
-print(require("virtual.answer").id)   --> virtual.answer
+
+print(require("virtual.answer").id)  --> virtual.answer
 ```
 
 A program may insert, remove, or reorder searchers. A value of `package.searchers` that is not a table makes `require` raise `'package.searchers' must be a table`. [`require`](/manual/api#require) describes the whole loading process.

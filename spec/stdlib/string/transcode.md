@@ -30,9 +30,9 @@ An unknown name raises `invalid source encoding 'name'` or `invalid target encod
 
 ```lus
 local bytes = string.transcode("hé", "utf-8", "utf-16le")
-print(type(bytes), #bytes)                            --> vector  4
-print(string.transcode(bytes, "utf-16le", "utf-8"))   --> hé
-print(string.transcode("hi", "utf-8", "base64"))      --> aGk=
+print(type(bytes), #bytes)  --> vector  4
+print(string.transcode(bytes, "utf-16le", "utf-8"))  --> hé
+print(string.transcode("hi", "utf-8", "base64"))  --> aGk=
 print(string.transcode("hi?", "utf-8", "base64url"))  --> aGk_
 print(string.transcode("Hello 日本", "utf-8", "ascii", true))  --> Hello
 ```

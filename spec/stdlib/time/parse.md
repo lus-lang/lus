@@ -38,14 +38,14 @@ The following example parses ISO 8601 text with and without an offset, then text
 
 ```lus
 local i = time.parse("2026-07-02 13:15")
-print(i:iso())                                  --> 2026-07-02T13:15:00Z
+print(i:iso())  --> 2026-07-02T13:15:00Z
 local z = time.parse("2026-07-02T09:15:00-04:00")
-print(z.offset, z:instant() == i)               --> -14400  true
+print(z.offset, z:instant() == i)  --> -14400  true
 local p = time.parse("02/07/2026 09:15 -0400", "%d/%m/%Y %H:%M %z")
-print(p:iso())                                  --> 2026-07-02T09:15:00-04:00
+print(p:iso())  --> 2026-07-02T09:15:00-04:00
 local h = time.parse("Sun, 22 Nov 2026 10:00:00 GMT", "%a, %d %b %Y %H:%M:%S GMT")
-print(h:iso())                                  --> 2026-11-22T10:00:00Z
-print(catch time.parse("2026-13-01"))           --> false  ...: ISO 8601 date out of range in '2026-13-01'
+print(h:iso())  --> 2026-11-22T10:00:00Z
+print(catch time.parse("2026-13-01"))  --> false  ...: ISO 8601 date out of range in '2026-13-01'
 ```
 
 With a `format`, the pattern must account for the whole text, so `time.parse("2026-07-02x", "%Y-%m-%d")` raises `trailing characters in '2026-07-02x'`. A `%z` that reads `Z` returns an instant. `instant:iso()` and `zoned:iso()` write the ISO 8601 form that this function reads.

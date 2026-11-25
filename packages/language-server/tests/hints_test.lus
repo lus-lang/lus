@@ -6,13 +6,17 @@ pledge("load", "fs:read=" .. LANG_DIR .. "/*")
 
 table.insert(package.searchers, 2, function(name)
     local rest = string.match(name, "^lus%-language%.(.+)$")
+
     if rest == nil then
         return nil
     end
+
     local path = package.searchpath(rest, LANG_DIR .. "/?.lus")
+
     if path == nil then
         return nil
     end
+
     return assert(loadfile(path)), path
 end)
 
@@ -32,9 +36,13 @@ end
 local function hints_appear_with_their_code_test()
     local list = diagnostics_of('local s = ""\nfor i = 1, 3 do s = s .. i end\nprint(s)\n')
     local found
+
     for _, d in ipairs(list) do
-        if d.code == "concat-in-loop" then found = d end
+        if d.code == "concat-in-loop" then
+            found = d
+        end
     end
+
     assert(found ~= nil)
     assert(found.severity == 4)
     assert(found.range.start.line == 1)
@@ -42,6 +50,7 @@ end
 
 local function warnings_of_check_are_not_duplicated_test()
     local list = diagnostics_of("local unused = 1\n")
+
     for _, d in ipairs(list) do
         assert(d.code ~= "unused-local")
     end

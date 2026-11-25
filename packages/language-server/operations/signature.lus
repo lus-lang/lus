@@ -11,32 +11,44 @@ local stdlib_data = require("lus-language.analysis.stdlib_data")
 local signature = {}
 
 local function stdlib_signature(name)
-  local symbol = stdlib_data.resolve(name)
-  if symbol and symbol.kind == "function" then return symbol end
-  return nil
+    local symbol = stdlib_data.resolve(name)
+
+    if symbol and symbol.kind == "function" then
+        return symbol
+    end
+
+    return nil
 end
 
 local function receiver_signature(func_name, analysis, line)
-  local receiver_expr, member = string.match(
-    func_name, "^([%w_%.]+):([%w_]+)$"
-  )
-  if not receiver_expr or not analysis then return nil end
+    local receiver_expr, member = string.match(func_name, "^([%w_%.]+):([%w_]+)$")
 
-  local segments = {}
-  for segment in string.gmatch(receiver_expr, "[%w_]+") do
-    segments[#segments + 1] = segment
-  end
-  local scope_at_call = scope_mod.get_scope_at(analysis.root, line)
-  local visible = scope_at_call and scope_mod.get_visible(scope_at_call)
-  local declaration = visible and visible[segments[1]]
-  if not declaration or not declaration.type_info then return nil end
+    if not receiver_expr or not analysis then
+        return nil
+    end
 
-  local receiver_type = types_mod.resolve_field_chain(
-    declaration.type_info, segments, 2
-  )
-  local symbol = types_mod.resolve_stdlib_member(receiver_type, member)
-  if symbol and symbol.kind == "function" then return symbol end
-  return nil
+    local segments = {}
+
+    for segment in string.gmatch(receiver_expr, "[%w_]+") do
+        segments[#segments + 1] = segment
+    end
+
+    local scope_at_call = scope_mod.get_scope_at(analysis.root, line)
+    local visible = scope_at_call and scope_mod.get_visible(scope_at_call)
+    local declaration = visible and visible[segments[1]]
+
+    if not declaration or not declaration.type_info then
+        return nil
+    end
+
+    local receiver_type = types_mod.resolve_field_chain(declaration.type_info, segments, 2)
+    local symbol = types_mod.resolve_stdlib_member(receiver_type, member)
+
+    if symbol and symbol.kind == "function" then
+        return symbol
+    end
+
+    return nil
 end
 
 -- ---------------------------------------------------------------------------
@@ -46,50 +58,65 @@ end
 -- Find the function name and active parameter index at a cursor position.
 -- Returns func_name, active_param_index or nil, nil.
 local function parse_call_context(text, line, col)
-  -- Get text of the current line up to cursor
-  local line_start = 1
-  local current_line = 1
-  while current_line < line do
-    local nl = string.find(text, "\n", line_start, true)
-    if not nl then break end
-    line_start = nl + 1
-    current_line = current_line + 1
-  end
-  local line_text = string.sub(text, line_start)
-  local nl_pos = string.find(line_text, "\n", 1, true)
-  if nl_pos then
-    line_text = string.sub(line_text, 1, nl_pos - 1)
-  end
-  local before = string.sub(line_text, 1, col - 1)
+    -- Get text of the current line up to cursor
+    local line_start = 1
+    local current_line = 1
 
-  -- Walk backwards to find the matching ( and count commas
-  local depth = 0
-  local commas = 0
-  local paren_pos = nil
-  for i = #before, 1, -1 do
-    local c = string.sub(before, i, i)
-    if c == ")" then
-      depth = depth + 1
-    elseif c == "(" then
-      if depth == 0 then
-        paren_pos = i
-        break
-      end
-      depth = depth - 1
-    elseif c == "," and depth == 0 then
-      commas = commas + 1
+    while current_line < line do
+        local nl = string.find(text, "\n", line_start, true)
+
+        if not nl then
+            break
+        end
+
+        line_start = nl + 1
+        current_line = current_line + 1
     end
-  end
 
-  if not paren_pos then return nil, nil end
+    local line_text = string.sub(text, line_start)
 
-  -- Extract function name before the (
-  local before_paren = string.sub(before, 1, paren_pos - 1)
-  -- Match identifier.identifier or identifier:identifier or just identifier
-  local func_name = string.match(before_paren, "([%w_%.%:]+)%s*$")
-  if not func_name then return nil, nil end
+    if nl_pos = string.find(line_text, "\n", 1, true) then
+        line_text = string.sub(line_text, 1, nl_pos - 1)
+    end
 
-  return func_name, commas
+    local before = string.sub(line_text, 1, col - 1)
+
+    -- Walk backwards to find the matching ( and count commas
+    local depth = 0
+    local commas = 0
+    local paren_pos = nil
+
+    for i = #before, 1, -1 do
+        local c = string.sub(before, i, i)
+
+        if c == ")" then
+            depth = depth + 1
+        elseif c == "(" then
+            if depth == 0 then
+                paren_pos = i
+                break
+            end
+
+            depth = depth - 1
+        elseif c == "," and depth == 0 then
+            commas = commas + 1
+        end
+    end
+
+    if not paren_pos then
+        return nil, nil
+    end
+
+    -- Extract function name before the (
+    local before_paren = string.sub(before, 1, paren_pos - 1)
+    -- Match identifier.identifier or identifier:identifier or just identifier
+    local func_name = string.match(before_paren, "([%w_%.%:]+)%s*$")
+
+    if not func_name then
+        return nil, nil
+    end
+
+    return func_name, commas
 end
 
 -- ---------------------------------------------------------------------------
@@ -97,143 +124,179 @@ end
 -- ---------------------------------------------------------------------------
 
 function signature.compute(uri, position)
-  local doc = document.get(uri)
-  if not doc then return nil end
+    local doc = document.get(uri)
 
-  ast_mod.parse(uri)
-  local tree = ast_mod.get(uri)
-  local analysis = scope_mod.analyze(uri)
-
-  local line, col = pos_util.lsp_to_byte(
-    doc.text, doc.line_index, position.line, position.character)
-
-  local func_name, active_param = parse_call_context(doc.text, line, col)
-  if not func_name then return nil end
-
-  -- Look up the signature
-  local params = nil
-  local label = nil
-
-  -- Check stdlib signatures first
-  local stdlib_symbol = stdlib_signature(func_name)
-  if not stdlib_symbol then
-    stdlib_symbol = receiver_signature(func_name, analysis, line)
-  end
-  if stdlib_symbol then
-    -- Build typed label: name(param: type, ...)
-    params = {}
-    local label_parts = {}
-    for _, p in ipairs(stdlib_symbol.params or {}) do
-      params[#params + 1] = p.name
-      local part = p.name
-      if p.type and p.type ~= "any" then
-        part = part .. ": " .. p.type
-      end
-      if p.optional then part = part .. "?" end
-      label_parts[#label_parts + 1] = part
+    if not doc then
+        return nil
     end
-    if stdlib_symbol.vararg then
-      params[#params + 1] = "..."
-      label_parts[#label_parts + 1] = "..."
-    end
-    local returns = stdlib_data.format_returns(stdlib_symbol)
-    local ret_suffix = returns ~= "" and " -> " .. returns or ""
-    label = func_name .. "(" .. table.concat(label_parts, ", ") .. ")" .. ret_suffix
-  end
 
-  -- Check user-defined functions via scope analysis
-  if not params and analysis then
-    -- Try to resolve as a local/global function
-    local base_name = string.match(func_name, "^([%w_]+)$")
-    if base_name then
-      local s = scope_mod.get_scope_at(analysis.root, line)
-      if s then
-        local visible = scope_mod.get_visible(s)
-        local decl = visible[base_name]
-        if decl then
-          if decl.kind == "function" and decl.node and decl.node.params then
-            params = {}
-            for _, p in ipairs(decl.node.params) do
-              params[#params + 1] = p.value or p.name or "?"
+    ast_mod.parse(uri)
+    local tree = ast_mod.get(uri)
+    local analysis = scope_mod.analyze(uri)
+
+    local line, col = pos_util.lsp_to_byte(
+        doc.text,
+        doc.line_index,
+        position.line,
+        position.character
+    )
+
+    local func_name, active_param = parse_call_context(doc.text, line, col)
+
+    if not func_name then
+        return nil
+    end
+
+    -- Look up the signature
+    local params = nil
+    local label = nil
+
+    -- Check stdlib signatures first
+    local stdlib_symbol = stdlib_signature(func_name)
+
+    if not stdlib_symbol then
+        stdlib_symbol = receiver_signature(func_name, analysis, line)
+    end
+
+    if stdlib_symbol then
+        -- Build typed label: name(param: type, ...)
+        params = {}
+        local label_parts = {}
+
+        for _, p in ipairs(stdlib_symbol.params or {}) do
+            params[#params + 1] = p.name
+            local part = p.name
+
+            if p.type and p.type ~= "any" then
+                part = `$part: $(p.type)`
             end
-            if decl.node.isvararg then
-              params[#params + 1] = "..."
+
+            if p.optional then
+                part = part .. "?"
             end
-            label = "function " .. base_name .. "(" .. table.concat(params, ", ") .. ")"
-          elseif decl.type_info and decl.type_info.tag == "function"
-                 and decl.type_info.params then
-            -- Variable holding a function value (e.g., local z = some_func)
-            params = decl.type_info.params
-            label = base_name .. "(" .. table.concat(params, ", ") .. ")"
-          end
+
+            label_parts[#label_parts + 1] = part
         end
-      end
+
+        if stdlib_symbol.vararg then
+            params[#params + 1] = "..."
+            label_parts[#label_parts + 1] = "..."
+        end
+
+        local returns = stdlib_data.format_returns(stdlib_symbol)
+        local ret_suffix = returns ~= "" and " -> " .. returns or ""
+        label = `$func_name($(table.concat(label_parts, ", ")))$ret_suffix`
     end
 
-    -- Try to resolve as M.func via module exports
-    if not params then
-      local table_name, member = string.match(func_name, "^([%w_]+)%.([%w_]+)$")
-      if table_name and member and tree then
-        local s = scope_mod.get_scope_at(analysis.root, line)
-        if s then
-          local visible = scope_mod.get_visible(s)
-          local decl = visible[table_name]
-          if decl then
-            local mod_name = modules.get_require_for_decl(tree, decl)
-            if mod_name then
-              local exports = modules.get_exports(mod_name, uri)
-              for _, exp in ipairs(exports) do
-                if exp.name == member and exp.params then
-                  params = exp.params
-                  label = table_name .. "." .. member .. "(" .. table.concat(params, ", ") .. ")"
-                  break
+    -- Check user-defined functions via scope analysis
+    if not params and analysis then
+        -- Try to resolve as a local/global function
+
+        if base_name = string.match(func_name, "^([%w_]+)$") then
+            if s = scope_mod.get_scope_at(analysis.root, line) then
+                local visible = scope_mod.get_visible(s)
+
+                if decl = visible[base_name] then
+                    if decl.kind == "function" and decl.node and decl.node.params then
+                        params = {}
+
+                        for _, p in ipairs(decl.node.params) do
+                            params[#params + 1] = p.value or p.name or "?"
+                        end
+
+                        if decl.node.isvararg then
+                            params[#params + 1] = "..."
+                        end
+
+                        label = `function $base_name($(table.concat(params, ", ")))`
+                    elseif decl.type_info
+                        and decl.type_info.tag == "function"
+                        and decl.type_info.params then
+                        -- Variable holding a function value (e.g., local z = some_func)
+                        params = decl.type_info.params
+                        label = `$base_name($(table.concat(params, ", ")))`
+                    end
                 end
-              end
             end
-          end
         end
-      end
-    end
-  end
 
-  if not params then return nil end
+        -- Try to resolve as M.func via module exports
+        if not params then
+            local table_name, member = string.match(func_name, "^([%w_]+)%.([%w_]+)$")
 
-  -- Build LSP SignatureHelp
-  local param_infos = {}
-  if stdlib_symbol then
-    for _, p in ipairs(stdlib_symbol.params or {}) do
-      local param_label = p.name
-      if p.type and p.type ~= "any" then
-        param_label = param_label .. ": " .. p.type
-      end
-      if p.optional then param_label = param_label .. "?" end
-      param_infos[#param_infos + 1] = {label = param_label}
-    end
-    if stdlib_symbol.vararg then
-      param_infos[#param_infos + 1] = {label = "..."}
-    end
-  else
-    for _, p in ipairs(params) do
-      param_infos[#param_infos + 1] = {label = p}
-    end
-  end
+            if table_name and member and tree then
+                if s = scope_mod.get_scope_at(analysis.root, line) then
+                    local visible = scope_mod.get_visible(s)
 
-  return {
-    signatures = {
-      {
-        label = label,
-        parameters = param_infos,
-      },
-    },
-    activeSignature = 0,
-    activeParameter = active_param or 0,
-  }
+                    if decl = visible[table_name] then
+                        if mod_name = modules.get_require_for_decl(tree, decl) then
+                            local exports = modules.get_exports(mod_name, uri)
+
+                            for _, exp in ipairs(exports) do
+                                if exp.name == member and exp.params then
+                                    params = exp.params
+                                    label = `$table_name.$member($(table.concat(params, ", ")))`
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if not params then
+        return nil
+    end
+
+    -- Build LSP SignatureHelp
+    local param_infos = {}
+
+    if stdlib_symbol then
+        for _, p in ipairs(stdlib_symbol.params or {}) do
+            local param_label = p.name
+
+            if p.type and p.type ~= "any" then
+                param_label = `$param_label: $(p.type)`
+            end
+
+            if p.optional then
+                param_label = param_label .. "?"
+            end
+
+            param_infos[#param_infos + 1] = { label = param_label }
+        end
+
+        if stdlib_symbol.vararg then
+            param_infos[#param_infos + 1] = { label = "..." }
+        end
+    else
+        for _, p in ipairs(params) do
+            param_infos[#param_infos + 1] = { label = p }
+        end
+    end
+
+    return {
+        signatures = {
+            {
+                label = label,
+                parameters = param_infos,
+            },
+        },
+        activeSignature = 0,
+        activeParameter = active_param or 0,
+    }
 end
 
 function signature.get_stdlib_params(name)
-  local symbol = stdlib_signature(name)
-  if not symbol then return nil end
-  return symbol.params, symbol.vararg
+    local symbol = stdlib_signature(name)
+
+    if not symbol then
+        return nil
+    end
+
+    return symbol.params, symbol.vararg
 end
 
 return signature

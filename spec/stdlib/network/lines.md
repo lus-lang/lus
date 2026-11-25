@@ -26,16 +26,25 @@ The following example reads the events of a stream of server-sent events, where 
 pledge("network")
 local server = network.tcp.bind("127.0.0.1", 0)
 local _, port = server:getsockname()
+
 local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
     return 200, coroutine.create(function()
-        for n = 1, 2 do coroutine.yield(`data: tick $(n)\n\n`) end
+        for n = 1, 2 do
+            coroutine.yield(`data: tick $n\n\n`)
+        end
     end), { ["Content-Type"] = "text/event-stream" }
 end)
-local _, events = network.fetch(`http://127.0.0.1:$(port)/events`, "GET", nil, nil, { stream = true })
+
+local _, events = network.fetch(`http://127.0.0.1:$port/events`, "GET", nil, nil, { stream = true })
+
 for line in network.lines(events) do
     local data = vector.tostring(line):match("^data: (.*)")
-    if data then print(data) end
+
+    if data then
+        print(data)
+    end
 end
+
 --> tick 1
 --> tick 2
 coroutine.close(serving)

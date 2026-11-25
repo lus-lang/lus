@@ -1,19 +1,20 @@
-
 pledge("load", "debug")
 
 local debug = require "debug"
 
-local function dostring(s) return assert(load(s))() end
+local function dostring(s)
+    return assert(load(s))()
+end
 
 local function debug_gethook_basics_test()
     assert(not debug.gethook())
 end
 
 local function debug_getinfo_basics_test()
-    assert(not (catch debug.getinfo(print, "X")))   -- invalid option
-    assert(not (catch debug.getinfo(0, ">")))   -- invalid option
-    assert(not debug.getinfo(1000))   -- out of range level
-    assert(not debug.getinfo(-1))     -- out of range level
+    assert(not (catch debug.getinfo(print, "X")))  -- invalid option
+    assert(not (catch debug.getinfo(0, ">")))  -- invalid option
+    assert(not debug.getinfo(1000))  -- out of range level
+    assert(not debug.getinfo(-1))  -- out of range level
     local a = debug.getinfo(print)
     assert(a.what == "C" and a.short_src == "[C]")
     a = debug.getinfo(print, "L")
@@ -21,10 +22,12 @@ local function debug_getinfo_basics_test()
 end
 
 local function debug_getinfo_on_function_test()
-    local testline = debug.getinfo(1, "l").currentline + 1
-    local function test ()     
-      collectgarbage()   -- avoid gc during trace
+    local testline = debug.getinfo(1, "l").currentline + 2
+
+    local function test()
+        collectgarbage()  -- avoid gc during trace
     end
+
     local b = debug.getinfo(test, "SfL")
     assert(b.name == nil and b.what == "Lua" and b.linedefined == testline)
     assert(b.func == test and not string.find(b.short_src, "%["))
@@ -34,7 +37,7 @@ local function file_and_string_names_truncation_test()
     local a = "function f () end"
     assert(load(a))()
     assert(debug.getinfo(_G.f).short_src == string.format('[string "%s"]', a))
-    
+
     assert(load(a, "@xuxu"))()
     assert(debug.getinfo(_G.f).short_src == "xuxu")
     _G.f = nil
@@ -47,6 +50,7 @@ local function debug_getlocal_setlocal_in_coroutine_test()
         coroutine.yield()
         return a + b
     end)
+
     coroutine.resume(co)
 
     local n, v = debug.getlocal(co, 1, 1)
@@ -60,21 +64,23 @@ local function debug_getlocal_setlocal_in_coroutine_test()
     local ok, result = coroutine.resume(co)
     assert(ok)
     -- the resumed function itself computes with the mutated local
-    assert(result == 12, "the coroutine observes the new value, got "
-        .. tostring(result))
+    assert(result == 12, "the coroutine observes the new value, got " .. tostring(result))
 end
 
 local function parameter_names_test()
-    local function foo (a,b,...) local d, e end
+    local function foo(a, b, ...)
+        local d, e
+    end
+
     local co = coroutine.create(foo)
 
-    assert(debug.getlocal(foo, 1) == 'a')
-    assert(debug.getlocal(foo, 2) == 'b')
+    assert(debug.getlocal(foo, 1) == "a")
+    assert(debug.getlocal(foo, 2) == "b")
     assert(not debug.getlocal(foo, 3))
-    assert(debug.getlocal(co, foo, 1) == 'a')
-    assert(debug.getlocal(co, foo, 2) == 'b')
+    assert(debug.getlocal(co, foo, 1) == "a")
+    assert(debug.getlocal(co, foo, 2) == "b")
     assert(not debug.getlocal(co, foo, 3))
-    
+
     assert(not debug.getlocal(print, 1))
 end
 
@@ -84,14 +90,16 @@ local function invalid_levels_in_getlocal_setlocal_test()
 end
 
 local function varargs_in_getlocal_test()
-    local function foo (a, ...)
-      local t = table.pack(...)
-      for i = 1, t.n do
-        local n, v = debug.getlocal(1, -i)
-        assert(n == "(vararg)" and v == t[i])
-      end
-      assert(not debug.getlocal(1, -(t.n + 1)))
-      assert(not debug.setlocal(1, -(t.n + 1), 30))
+    local function foo(a, ...)
+        local t = table.pack(...)
+
+        for i = 1, t.n do
+            local n, v = debug.getlocal(1, -i)
+            assert(n == "(vararg)" and v == t[i])
+        end
+
+        assert(not debug.getlocal(1, -(t.n + 1)))
+        assert(not debug.setlocal(1, -(t.n + 1), 30))
     end
 
     foo()
@@ -101,33 +109,51 @@ end
 
 local function debug_getupvalue_setupvalue_test()
     local u = 10
-    local function f() return u end
-    
+
+    local function f()
+        return u
+    end
+
     local n, v = debug.getupvalue(f, 1)
     assert(n == "u")
     assert(v == 10)
-    
+
     debug.setupvalue(f, 1, 20)
     assert(f() == 20)
 end
 
 local function upvalue_access_comprehensive_test()
-    local function getupvalues (f)
-      local t = {}
-      local i = 1
-      while true do
-        local name, value = debug.getupvalue(f, i)
-        if not name then break end
-        assert(not t[name])
-        t[name] = value
-        i = i + 1
-      end
-      return t
+    local function getupvalues(f)
+        local t = {}
+        local i = 1
+
+        while true do
+            local name, value = debug.getupvalue(f, i)
+
+            if not name then
+                break
+            end
+
+            assert(not t[name])
+            t[name] = value
+            i = i + 1
+        end
+
+        return t
     end
 
-    local a,b,c = 1,2,3
-    local function foo1 (a) b = a; return c end
-    local function foo2 (x) a = x; return c+b end
+    local a, b, c = 1, 2, 3
+
+    local function foo1(a)
+        b = a
+        return c
+    end
+
+    local function foo2(x)
+        a = x
+        return c + b
+    end
+
     assert(not debug.getupvalue(foo1, 3))
     assert(not debug.getupvalue(foo1, 0))
     assert(not debug.setupvalue(foo1, 3, "xuxu"))
@@ -136,14 +162,14 @@ local function upvalue_access_comprehensive_test()
     t = getupvalues(foo2)
     assert(t.a == 1 and t.b == 2 and t.c == 3)
     assert(debug.setupvalue(foo1, 1, "xuxu") == "b")
-    assert(({debug.getupvalue(foo2, 3)})[2] == "xuxu")
+    assert(({ debug.getupvalue(foo2, 3) })[2] == "xuxu")
 end
 
 local function debug_traceback_test()
     local tb = debug.traceback("msg")
     assert(string.find(tb, "msg"))
     assert(string.find(tb, "stack traceback"))
-    
+
     assert(debug.traceback(print) == print)
     assert(debug.traceback(print, 4) == print)
     assert(string.find(debug.traceback("hi", 4), "^hi\n"))
@@ -153,26 +179,32 @@ end
 
 local function debug_hooks_test()
     local count = 0
+
     local function hook()
         count = count + 1
     end
-    
+
     debug.sethook(hook, "c")
-    local function f() end
+
+    local function f()
+    end
+
     f()
-    debug.sethook() -- turn off
+    debug.sethook()  -- turn off
     assert(count > 0)
 end
 
 local function hook_presence_in_debug_info_test()
     assert(not debug.gethook())
     local count = 0
-    local function f ()
-      assert(debug.getinfo(1).namewhat == "hook")
-      local sndline = string.match(debug.traceback(), "\n(.-)\n")
-      assert(string.find(sndline, "hook"))
-      count = count + 1
+
+    local function f()
+        assert(debug.getinfo(1).namewhat == "hook")
+        local sndline = string.match(debug.traceback(), "\n(.-)\n")
+        assert(string.find(sndline, "hook"))
+        count = count + 1
     end
+
     debug.sethook(f, "l")
     local a = 0
     _G.a = a
@@ -183,12 +215,30 @@ local function hook_presence_in_debug_info_test()
 end
 
 local function count_hooks_test()
-    local a=0
-    debug.sethook(function (e) a=a+1 end, "", 1)
-    a=0; for i=1,100 do end; assert(100 < a and a < 120)
-    debug.sethook(function (e) a=a+1 end, "", 4)
-    a=0; for i=1,100 do end; assert(25 < a and a < 35)
-    local f,m,c = debug.gethook()
+    local a = 0
+
+    debug.sethook(function(e)
+        a = a + 1
+    end, "", 1)
+
+    a = 0
+
+    for i = 1, 100 do
+    end
+
+    assert(100 < a and a < 120)
+
+    debug.sethook(function(e)
+        a = a + 1
+    end, "", 4)
+
+    a = 0
+
+    for i = 1, 100 do
+    end
+
+    assert(25 < a and a < 35)
+    local f, m, c = debug.gethook()
     assert(m == "" and c == 4)
     debug.sethook()
 end
@@ -197,39 +247,53 @@ local function nparams_nups_isvararg_test()
     local t = debug.getinfo(print, "u")
     assert(t.isvararg == true and t.nparams == 0 and t.nups == 0)
 
-    t = debug.getinfo(function (a,b,c) end, "u")
+    t = debug.getinfo(function(a, b, c)
+    end, "u")
+
     assert(t.isvararg == false and t.nparams == 3 and t.nups == 0)
 
-    t = debug.getinfo(function (a,b,...) return t[a] end, "u")
+    t = debug.getinfo(function(a, b, ...)
+        return t[a]
+    end, "u")
+
     assert(t.isvararg == true and t.nparams == 2 and t.nups == 1)
 
-    t = debug.getinfo(math.sin)   -- C function
+    t = debug.getinfo(math.sin)  -- C function
     assert(t.isvararg == true and t.nparams == 0 and t.nups == 0)
 
-    t = debug.getinfo(string.gmatch("abc", "a"))   -- C closure
+    t = debug.getinfo(string.gmatch("abc", "a"))  -- C closure
     assert(t.isvararg == true and t.nparams == 0 and t.nups > 0)
 end
 
 local function tail_calls_test()
-    local function f (x)
-      if x then
-        assert(debug.getinfo(1, "S").what == "Lua")
-        assert(debug.getinfo(1, "t").istailcall == true)
-      end
+    local function f(x)
+        if x then
+            assert(debug.getinfo(1, "S").what == "Lua")
+            assert(debug.getinfo(1, "t").istailcall == true)
+        end
     end
 
-    assert(debug.getinfo(print, 't').istailcall == false)
+    assert(debug.getinfo(print, "t").istailcall == false)
 
-    local function g(x) return f(x) end
-    local function h (x) local f=g; return f(x) end
+    local function g(x)
+        return f(x)
+    end
+
+    local function h(x)
+        local f = g
+        return f(x)
+    end
 
     h(true)
 end
 
 local function coroutine_traceback_test()
-    local function f (n)
-      if n > 0 then f(n-1)
-      else coroutine.yield() end
+    local function f(n)
+        if n > 0 then
+            f(n - 1)
+        else
+            coroutine.yield()
+        end
     end
 
     local co = coroutine.create(f)
@@ -237,4 +301,3 @@ local function coroutine_traceback_test()
     local tb = debug.traceback(co)
     assert(string.find(tb, "yield"))
 end
-

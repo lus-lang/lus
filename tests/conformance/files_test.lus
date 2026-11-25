@@ -1,6 +1,4 @@
-
 pledge("load", "fs", "exec", "env=LUS_EXE")
-
 
 local function io_tempfile_test()
     local f = io.tmpfile()
@@ -42,11 +40,17 @@ local function closing_a_pipe_stops_a_writer_that_never_ends_test()
     -- The writer runs until a write fails. On Windows it is the interpreter
     -- itself, since an endless loop in cmd.exe goes on after its writes fail.
     local cmd = "yes"
+
     if windows then
         local lus = os.getenv("LUS_EXE")
-        if lus == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+
+        if lus == nil then
+            skip("the interpreter is not reachable, set LUS_EXE")
+        end
+
         cmd = `"$lus" -e "while true do assert(io.write('y\\n')) end"`
     end
+
     local f = assert(io.popen(cmd, "r"))
     assert(f:read("l") == "y")
     -- Closing returns once the writer has ended on its broken pipe.
@@ -74,11 +78,10 @@ local function file_seek_test()
     f:write("1234567890")
     f:seek("set", 5)
     assert(f:read(1) == "6")
-    f:seek("end", -2) -- 9
+    f:seek("end", -2)  -- 9
     assert(f:read(1) == "9")
     f:close()
 end
-
 
 local function written_text_reads_back_from_a_file_test()
     local path = "files_roundtrip.txt"
@@ -106,12 +109,20 @@ local function file_lines_leaves_the_file_open_test()
     f:close()
     local h = assert(io.open("./lines_open.txt"))
     local n = 0
-    for _ in h:lines(65536) do n = n + 1 end
+
+    for _ in h:lines(65536) do
+        n = n + 1
+    end
+
     assert(n == 1)
     assert(io.type(h) == "file")
     assert(h:close() == true)
     local g = assert(io.open("./lines_open.txt"))
-    for _ in g:lines() do break end
+
+    for _ in g:lines() do
+        break
+    end
+
     assert(g:read("l") == "b")
     assert(g:close() == true)
 end
@@ -119,17 +130,27 @@ end
 -- proc:lines leaves the pipe open, so close returns the status of the
 -- program.
 local function popen_lines_then_close_returns_the_status_test()
-    if not os.execute() then skip("no shell") end
+    if not os.execute() then
+        skip("no shell")
+    end
+
     -- cmd.exe on Windows, /bin/sh elsewhere.
     local windows = package.config:sub(1, 1) == "\\"
-    local p = assert(io.popen(windows and "(echo x& echo y& exit 3)" or "printf 'x\\ny\\n'; exit 3"))
+    local p = assert(
+        io.popen(windows and "(echo x& echo y& exit 3)" or "printf 'x\\ny\\n'; exit 3")
+    )
     -- cmd.exe ends lines with a carriage return and may print a blank
     -- line of its own, so only lines with a letter count.
     local seen = {}
+
     for line in p:lines() do
         local word = line:match("%a+")
-        if word then seen[#seen + 1] = word end
+
+        if word then
+            seen[#seen + 1] = word
+        end
     end
+
     assert(table.concat(seen, ",") == "x,y", table.concat(seen, ","))
     local ok, how, code = p:close()
     assert(ok == nil and how == "exit" and code == 3)
@@ -138,94 +159,137 @@ end
 -- Children that a signal ends. The shell sends the signal to itself, so
 -- the child that the runtime waits for is the one the signal ends.
 local a_command_that_a_signal_ends_reports_the_signal_cases = {
-    { "KILL", 9 }, { "TERM", 15 }, { "INT", 2 },
+    { "KILL", 9 },
+    { "TERM", 15 },
+    { "INT", 2 },
 }
 
 local function a_command_that_a_signal_ends_reports_the_signal_test(name, number)
-    if windows then skip("Windows has no signals") end
+    if windows then
+        skip("Windows has no signals")
+    end
+
     local ok, kind, code = os.execute("kill -" .. name .. " $$")
-    assert(ok == nil and kind == "signal" and code == number, `$(ok) $(kind) $(code)`)
+    assert(ok == nil and kind == "signal" and code == number, `$ok $kind $code`)
 end
 
 local function closing_a_pipe_reports_a_reader_that_a_signal_ends_test()
-    if windows then skip("Windows has no signals") end
+    if windows then
+        skip("Windows has no signals")
+    end
+
     local f = assert(io.popen("echo before; kill -KILL $$; echo after", "r"))
     assert(f:read("a") == "before\n")
     local ok, kind, code = f:close()
-    assert(ok == nil and kind == "signal" and code == 9, `$(ok) $(kind) $(code)`)
+    assert(ok == nil and kind == "signal" and code == 9, `$ok $kind $code`)
 end
 
 local function writing_to_a_child_that_a_signal_ended_returns_broken_pipe_test()
-    if windows then skip("Windows has no signals") end
+    if windows then
+        skip("Windows has no signals")
+    end
+
     local f = assert(io.popen("kill -KILL $$", "w"))
     -- The writes fail once the pipe has no reader, and the program goes on.
     local ok, msg, code
+
     for _ = 1, 1000 do
         ok, msg, code = f:write(string.rep("x", 4096))
-        if not ok then break end
+
+        if not ok then
+            break
+        end
     end
-    assert(ok == nil and msg == "Broken pipe" and code == 32, `$(ok) $(msg) $(code)`)
+
+    assert(ok == nil and msg == "Broken pipe" and code == 32, `$ok $msg $code`)
     local done, kind, sig = f:close()
-    assert(done == nil and kind == "signal" and sig == 9, `$(done) $(kind) $(sig)`)
+    assert(done == nil and kind == "signal" and sig == 9, `$done $kind $sig`)
 end
 
 -- A refused write returns nil, the message, and the error number, and the
 -- handle stays usable. /dev/full refuses every write with ENOSPC.
 local function a_refused_write_returns_nil_and_a_message_test()
     local f = io.open("/dev/full", "w")
-    if f == nil then skip("this system has no /dev/full") end
+
+    if f == nil then
+        skip("this system has no /dev/full")
+    end
+
     local ok, msg, code = f:write("data")
-    assert(ok == nil and msg == "No space left on device" and code == 28, `$(ok) $(msg) $(code)`)
+    assert(ok == nil and msg == "No space left on device" and code == 28, `$ok $msg $code`)
     ok, msg = f:write("more")
     assert(ok == nil and msg == "No space left on device", tostring(msg))
     ok, msg, code = f:sync()
-    assert(ok == f or (ok == nil and type(msg) == "string" and math.type(code) == "integer"), tostring(msg))
+    assert(
+        ok == f or (ok == nil and type(msg) == "string" and math.type(code) == "integer"),
+        tostring(msg)
+    )
     f:close()
 end
 
 local function io_write_to_a_refusing_output_returns_nil_and_a_message_test()
     local f = io.open("/dev/full", "w")
-    if f == nil then skip("this system has no /dev/full") end
+
+    if f == nil then
+        skip("this system has no /dev/full")
+    end
+
     local saved = io.output()
     io.output(f)
     local ok, msg, code = io.write("data")
     io.output(saved)
     f:close()
-    assert(ok == nil and msg == "No space left on device" and code == 28, `$(ok) $(msg) $(code)`)
+    assert(ok == nil and msg == "No space left on device" and code == 28, `$ok $msg $code`)
 end
 
 -- A read that the system refuses returns nil, the message, and the error
 -- number, as in Lua, while the lines iterators raise the message. A
 -- directory opens on POSIX systems and refuses every read.
 local function a_refused_read_returns_nil_and_a_message_test()
-    if windows then skip("Windows opens no directory as a file") end
+    if windows then
+        skip("Windows opens no directory as a file")
+    end
+
     local f = io.open(".", "r")
-    if f == nil then skip("this system does not open a directory as a file") end
+
+    if f == nil then
+        skip("this system does not open a directory as a file")
+    end
+
     local ok, msg, code = f:read("a")
-    assert(ok == nil and msg == "Is a directory" and code == 21, `$(ok) $(msg) $(code)`)
+    assert(ok == nil and msg == "Is a directory" and code == 21, `$ok $msg $code`)
     ok, msg, code = f:read("l", "n", 4)
-    assert(ok == nil and msg == "Is a directory" and code == 21, `$(ok) $(msg) $(code)`)
+    assert(ok == nil and msg == "Is a directory" and code == 21, `$ok $msg $code`)
     local saved = io.input()
     io.input(f)
     ok, msg, code = io.read()
     io.input(saved)
-    assert(ok == nil and msg == "Is a directory" and code == 21, `$(ok) $(msg) $(code)`)
+    assert(ok == nil and msg == "Is a directory" and code == 21, `$ok $msg $code`)
     local raised, err = catch f:lines()()
     assert(not raised and string.find(err, "Is a directory", 1, true), tostring(err))
     f:close()
 end
 
 local function the_lines_loop_raises_a_refused_read_and_closes_the_file_test()
-    if windows then skip("Windows opens no directory as a file") end
+    if windows then
+        skip("Windows opens no directory as a file")
+    end
+
     local probe = io.open(".", "r")
-    if probe == nil then skip("this system does not open a directory as a file") end
+
+    if probe == nil then
+        skip("this system does not open a directory as a file")
+    end
+
     probe:close()
     local handle
+
     local ok, err = catch (function()
         for line in io.lines(".") do
             handle = line
         end
     end)()
+
     assert(not ok and string.find(err, "Is a directory", 1, true), tostring(err))
     assert(handle == nil)
 end

@@ -24,9 +24,9 @@ The result is a string. When every character of `s` belongs to the set, it is th
 A `s` that is neither a string nor a number raises `bad argument #1 to 'string.rtrim' (string expected, got nil)` with its type.
 
 ```lus
-print("[" .. string.rtrim("  hi \n") .. "]")   --> [  hi]
-print(string.rtrim("hi=-=", "-="))             --> hi
-print(string.rtrim("aéé", "é"))                --> a
+print("[" .. string.rtrim("  hi \n") .. "]")  --> [  hi]
+print(string.rtrim("hi=-=", "-="))  --> hi
+print(string.rtrim("aéé", "é"))  --> a
 ```
 
 `chars` holds whole characters, so it may contain characters outside ASCII. The default set keeps Unicode spaces such as U+00A0. [`string.ltrim`](/manual/api#string.ltrim) trims the start, and [`string.trim`](/manual/api#string.trim) trims both ends.

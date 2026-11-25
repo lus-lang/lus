@@ -42,8 +42,8 @@ local zip = vector.archive.zip.pack({
     { name = "site/css/main.css", data = "h1 { color: red }" },
 })
 local dir = "unpack-example-" .. os.time()
-print(vector.archive.zip.unpack(zip, dir))                         --> 2
-print(catch vector.archive.zip.unpack(zip, dir))                   --> false  ...: file exists: ...
-print(vector.archive.zip.unpack(zip, dir, { overwrite = true }))   --> 2
+print(vector.archive.zip.unpack(zip, dir))  --> 2
+print(catch vector.archive.zip.unpack(zip, dir))  --> false  ...: file exists: ...
+print(vector.archive.zip.unpack(zip, dir, { overwrite = true }))  --> 2
 fs.remove(dir, true)
 ```

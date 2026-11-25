@@ -20,10 +20,10 @@ The first result `m` is a float with the sign of `x`, and the second result `e` 
 An argument that is not a number raises `bad argument #1 to 'math.frexp' (number expected, got nil)` with its type.
 
 ```lus
-print(math.frexp(8))       --> 0.5  4
-print(math.frexp(-3))      --> -0.75  2
-print(math.frexp(0.1))     --> 0.8  -3
-print(math.frexp(2n^70))   --> 0.5  71
+print(math.frexp(8))  --> 0.5  4
+print(math.frexp(-3))  --> -0.75  2
+print(math.frexp(0.1))  --> 0.8  -3
+print(math.frexp(2n ^ 70))  --> 0.5  71
 ```
 
 [`math.ldexp`](/manual/api#math.ldexp) is the inverse.

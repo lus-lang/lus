@@ -15,5 +15,6 @@ network.serve("127.0.0.1", port, function(req)
         counter = counter + 1
         return 200, tojson({ message = "hello", n = counter }), json_headers
     end
+
     return 404, "not found\n", text_headers
 end)

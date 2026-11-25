@@ -31,11 +31,11 @@ A quoted field without its closing quote raises `CSV parse error at position N: 
 
 ```lus
 local rows = fromcsv("name,age\nAlice,30\nBob,17\n", true)
-print(#rows, rows[1].name, rows[2].age)   --> 2  Alice  17
-print(math.type(rows[1].age), type(rows[1].age))   --> nil  string
+print(#rows, rows[1].name, rows[2].age)  --> 2  Alice  17
+print(math.type(rows[1].age), type(rows[1].age))  --> nil  string
 
 local plain = fromcsv('a;"b;c"\n1;2', false, ";")
-print(plain[1][2], plain[2][1])           --> b;c  1
+print(plain[1][2], plain[2][1])  --> b;c  1
 ```
 
 [`tocsv`](/manual/api#tocsv) writes rows back to CSV text, and [Data formats](/manual/data) describes the mapping in full.

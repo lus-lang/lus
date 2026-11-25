@@ -35,6 +35,7 @@ local zip = vector.archive.zip.pack({
     { name = "notes/todo.txt", data = "buy milk" },
     { name = "notes/done.txt", data = "", method = "store" },
 })
+
 for _, e in ipairs(vector.archive.zip.list(zip)) do
     print(e.name, e.kind, e.size, e.method)
 end

@@ -19,7 +19,7 @@ On success the call returns one string. When 100 attempts find no free name, or 
 pledge("fs")
 local path = os.tmpname()
 io.open(path, "w"):write("draft"):close()
-print(io.open(path):read("a"))   --> draft
+print(io.open(path):read("a"))  --> draft
 fs.remove(path)
 ```
 

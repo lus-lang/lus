@@ -26,6 +26,6 @@ The following example checks a password against a hash from the reference implem
 
 ```lus
 local stored = "$argon2i$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$RdescudvJCsgt3ub+b+dWRWJTmaaJObG"
-print(crypto.verifypassword("password", stored))   --> true
-print(crypto.verifypassword("Password", stored))   --> false
+print(crypto.verifypassword("password", stored))  --> true
+print(crypto.verifypassword("Password", stored))  --> false
 ```

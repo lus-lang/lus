@@ -22,21 +22,36 @@ local function frame(message)
 end
 
 local function version_test()
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = run(`"$LUS" lsp --version`)
     assert(ok, out)
     assert(out:find("^lus%-language "), out)
 end
 
 local function initialize_and_exit_test()
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local f = assert(io.open("session.txt", "w"))
-    f:write(frame({ jsonrpc = "2.0", id = 1, method = "initialize", params = { capabilities = {} } }))
+    f:write(
+        frame({ jsonrpc = "2.0", id = 1, method = "initialize", params = { capabilities = {} } })
+    )
     f:write(frame({ jsonrpc = "2.0", method = "initialized", params = {} }))
     f:write(frame({
         jsonrpc = "2.0",
         method = "textDocument/didOpen",
-        params = { textDocument = { uri = "file:///tmp/a.lus", languageId = "lus", version = 1, text = "local x = 1\n" } },
+        params = {
+            textDocument = {
+                uri = "file:///tmp/a.lus",
+                languageId = "lus",
+                version = 1,
+                text = "local x = 1\n",
+            },
+        },
     }))
     f:write(frame({ jsonrpc = "2.0", id = 2, method = "shutdown" }))
     f:write(frame({ jsonrpc = "2.0", method = "exit" }))

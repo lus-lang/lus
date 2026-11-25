@@ -20,17 +20,17 @@ end
 -- ==== Correctness: rawlen() ====
 -- rawlen correctness
 local function rawlen_correctness_test()
-    assert(rawlen({1, 2, 3}) == 3)
+    assert(rawlen({ 1, 2, 3 }) == 3)
     assert(rawlen({}) == 0)
     assert(rawlen("hello") == 5)
     assert(rawlen("") == 0)
-    assert(rawlen({1, 2, 3, 4, 5}) == 5)
+    assert(rawlen({ 1, 2, 3, 4, 5 }) == 5)
 end
 
 -- ==== Correctness: rawget() ====
 -- rawget correctness
 local function rawget_correctness_test()
-    local t = {a = 1, b = 2, [3] = "three"}
+    local t = { a = 1, b = 2, [3] = "three" }
     assert(rawget(t, "a") == 1)
     assert(rawget(t, "b") == 2)
     assert(rawget(t, 3) == "three")
@@ -120,17 +120,25 @@ end
 -- ==== NaN handling for math.max/min ====
 -- math.max/min NaN
 local function math_max_min_nan_test()
-    local nan = 0/0
+    local nan = 0 / 0
     local smax = math.max
     local smin = math.min
-    local function isnan(x) return x ~= x end
+
+    local function isnan(x)
+        return x ~= x
+    end
+
     local function check(fast, slow, label)
-        assert(isnan(fast) == isnan(slow),
-            label .. ": fast path NaN-ness should match the C function")
+        assert(
+            isnan(fast) == isnan(slow),
+            label .. ": fast path NaN-ness should match the C function"
+        )
+
         if not isnan(slow) then
             assert(fast == slow, label .. ": values should match")
         end
     end
+
     -- the direct calls take the fast path, the local aliases force the
     -- C function, and both must agree for every argument order
     local f_max_a = math.max(nan, 1)
@@ -148,13 +156,15 @@ end
 local function tainted_type_fallback_test()
     local original_type = type
     local custom_called = false
+
     -- Rebind type in a new environment
     local env = setmetatable({
         type = function(x)
             custom_called = true
             return "custom"
         end,
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return type(42)", "test", "t", env)
     local result = chunk()
     assert(result == "custom", "expected custom, got " .. tostring(result))
@@ -168,6 +178,7 @@ end
 -- tainted math.max fallback
 local function tainted_math_max_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         math = {
             max = function(a, b)
@@ -175,7 +186,8 @@ local function tainted_math_max_fallback_test()
                 return a + b
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return math.max(3, 5)", "test", "t", env)
     local result = chunk()
     assert(result == 8, "expected 8, got " .. tostring(result))
@@ -193,14 +205,20 @@ end
 -- ==== Argument count: type with 0 args ====
 -- type 0 args error
 local function type_0_args_error_test()
-    local ok, err = catch(function() return type() end)()
+    local ok, err = catch (function()
+        return type()
+    end)()
+
     assert(not ok, "type() with 0 args should error")
 end
 
 -- ==== Fastcall inside catch ====
 -- fastcall in catch
 local function fastcall_in_catch_test()
-    local ok, val = catch(function() return type(42) end)()
+    local ok, val = catch (function()
+        return type(42)
+    end)()
+
     assert(ok == true)
     assert(val == "number")
 end
@@ -209,9 +227,11 @@ end
 -- fastcall in for loop
 local function fastcall_in_for_loop_test()
     local results = {}
+
     for i = 1, 5 do
         results[i] = math.abs(-i)
     end
+
     assert(results[1] == 1)
     assert(results[5] == 5)
 end
@@ -220,11 +240,13 @@ end
 local function fastcall_in_while_loop_test()
     local i = -5
     local sum = 0
+
     while i <= 5 do
         sum = sum + math.abs(i)
         i = i + 1
     end
-    assert(sum == 30) -- |(-5)|+|(-4)|+...+|5| = 2*(1+2+3+4+5) = 30
+
+    assert(sum == 30)  -- |(-5)|+|(-4)|+...+|5| = 2*(1+2+3+4+5) = 30
 end
 
 -- ==== Multi-return context ====
@@ -235,6 +257,7 @@ local function fastcall_multi_return_context_test()
     local function capture(...)
         return select("#", ...), ...
     end
+
     local n, v = capture(type(42))
     assert(n == 1)
     assert(v == "number")
@@ -246,12 +269,14 @@ local function local_env_rebinding_fallback_test()
     -- When _ENV is rebound locally, the compiler should still
     -- emit OP_CALL (not OP_FASTCALL) since upvalue 0 won't be _ENV
     local custom_type_called = false
+
     local _ENV = setmetatable({
         type = function(x)
             custom_type_called = true
             return "rebound"
         end,
-    }, {__index = _G})
+    }, { __index = _G })
+
     local result = type(42)
     assert(result == "rebound", "expected rebound, got " .. tostring(result))
     assert(custom_type_called)
@@ -262,9 +287,11 @@ end
 local function rawset_gc_barrier_test()
     -- Stress test rawset with string values to exercise GC barrier
     local t = {}
+
     for i = 1, 1000 do
         rawset(t, "key" .. i, "value" .. i)
     end
+
     -- Force a GC cycle
     collectgarbage("collect")
     -- Verify values survived
@@ -275,26 +302,40 @@ end
 -- ==== rawget/rawset bypass metamethods ====
 -- rawget bypasses __index
 local function rawget_bypasses_index_test()
-    local mt = {__index = function(t, k) return "meta" end}
+    local mt = {
+        __index = function(t, k)
+            return "meta"
+        end,
+    }
+
     local t = setmetatable({}, mt)
-    assert(t.x == "meta") -- through metamethod
-    assert(rawget(t, "x") == nil) -- bypasses metamethod
+    assert(t.x == "meta")  -- through metamethod
+    assert(rawget(t, "x") == nil)  -- bypasses metamethod
 end
 
 -- rawset bypasses __newindex
 local function rawset_bypasses_newindex_test()
     local blocked = false
-    local mt = {__newindex = function(t, k, v) blocked = true end}
+
+    local mt = {
+        __newindex = function(t, k, v)
+            blocked = true
+        end,
+    }
+
     local t = setmetatable({}, mt)
     rawset(t, "x", 42)
-    assert(not blocked) -- metamethod not called
+    assert(not blocked)  -- metamethod not called
     assert(rawget(t, "x") == 42)
 end
 
 -- ==== string.len type error fallback ====
 -- string.len type error fallback
 local function string_len_type_error_fallback_test()
-    local ok, err = catch(function() return string.len({}) end)()
+    local ok, err = catch (function()
+        return string.len({})
+    end)()
+
     assert(not ok, "string.len({}) should error")
 end
 
@@ -313,6 +354,7 @@ end
 -- tainted string.trim fallback
 local function tainted_string_trim_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         string = {
             trim = function(s)
@@ -320,7 +362,8 @@ local function tainted_string_trim_fallback_test()
                 return "custom"
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load('return string.trim("  hi  ")', "test", "t", env)
     local result = chunk()
     assert(result == "custom", "expected custom, got " .. tostring(result))
@@ -330,7 +373,10 @@ end
 -- ==== string.trim type error fallback ====
 -- string.trim type error fallback
 local function string_trim_type_error_fallback_test()
-    local ok, err = catch(function() return string.trim({}) end)()
+    local ok, err = catch (function()
+        return string.trim({})
+    end)()
+
     assert(not ok, "string.trim({}) should error")
 end
 
@@ -348,6 +394,7 @@ end
 -- tainted string.ltrim fallback
 local function tainted_string_ltrim_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         string = {
             ltrim = function(s)
@@ -355,7 +402,8 @@ local function tainted_string_ltrim_fallback_test()
                 return "custom"
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load('return string.ltrim("  hi")', "test", "t", env)
     local result = chunk()
     assert(result == "custom")
@@ -376,6 +424,7 @@ end
 -- tainted string.rtrim fallback
 local function tainted_string_rtrim_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         string = {
             rtrim = function(s)
@@ -383,7 +432,8 @@ local function tainted_string_rtrim_fallback_test()
                 return "custom"
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load('return string.rtrim("hi  ")', "test", "t", env)
     local result = chunk()
     assert(result == "custom")
@@ -416,14 +466,16 @@ end
 -- tainted string.split fallback
 local function tainted_string_split_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         string = {
             split = function(s, d)
                 custom_called = true
-                return {"custom"}
+                return { "custom" }
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load('return string.split("a,b", ",")', "test", "t", env)
     local result = chunk()
     assert(result[1] == "custom")
@@ -433,24 +485,28 @@ end
 -- ==== string.split type error fallback ====
 -- string.split type error fallback
 local function string_split_type_error_fallback_test()
-    local ok, err = catch(function() return string.split({}, ",") end)()
+    local ok, err = catch (function()
+        return string.split({}, ",")
+    end)()
+
     assert(not ok, "string.split({}, ',') should error")
 end
 
 -- ==== Correctness: string.join() ====
 -- string.join correctness
 local function string_join_correctness_test()
-    assert(string.join({"a", "b", "c"}, ",") == "a,b,c")
-    assert(string.join({"hello"}, "-") == "hello")
+    assert(string.join({ "a", "b", "c" }, ",") == "a,b,c")
+    assert(string.join({ "hello" }, "-") == "hello")
     assert(string.join({}, ",") == "")
-    assert(string.join({"a", "b"}, "") == "ab")
-    assert(string.join({"x", "y", "z"}, "::") == "x::y::z")
+    assert(string.join({ "a", "b" }, "") == "ab")
+    assert(string.join({ "x", "y", "z" }, "::") == "x::y::z")
 end
 
 -- ==== Environment tainting: string.join ====
 -- tainted string.join fallback
 local function tainted_string_join_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         string = {
             join = function(t, d)
@@ -458,7 +514,8 @@ local function tainted_string_join_fallback_test()
                 return "custom"
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load('return string.join({"a"}, ",")', "test", "t", env)
     local result = chunk()
     assert(result == "custom")
@@ -468,7 +525,10 @@ end
 -- ==== string.join type error fallback ====
 -- string.join type error fallback
 local function string_join_type_error_fallback_test()
-    local ok, err = catch(function() return string.join("notatable", ",") end)()
+    local ok, err = catch (function()
+        return string.join("notatable", ",")
+    end)()
+
     assert(not ok, "string.join('notatable', ',') should error")
 end
 
@@ -543,6 +603,7 @@ end
 -- tainted string.sub fallback
 local function tainted_string_sub_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         string = {
             sub = function(s, i, j)
@@ -550,7 +611,8 @@ local function tainted_string_sub_fallback_test()
                 return "custom"
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load('return string.sub("hello", 2, 4)', "test", "t", env)
     local result = chunk()
     assert(result == "custom", "expected custom, got " .. tostring(result))
@@ -561,6 +623,7 @@ end
 -- tainted string.lower fallback
 local function tainted_string_lower_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         string = {
             lower = function(s)
@@ -568,7 +631,8 @@ local function tainted_string_lower_fallback_test()
                 return "custom"
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load('return string.lower("HELLO")', "test", "t", env)
     local result = chunk()
     assert(result == "custom", "expected custom, got " .. tostring(result))
@@ -578,16 +642,17 @@ end
 -- ==== Correctness: table.sum() ====
 -- table.sum correctness
 local function table_sum_correctness_test()
-    assert(table.sum({1, 2, 3, 4, 5}) == 15.0)
-    assert(table.sum({1.5, 2.5}) == 4.0)
+    assert(table.sum({ 1, 2, 3, 4, 5 }) == 15.0)
+    assert(table.sum({ 1.5, 2.5 }) == 4.0)
     assert(table.sum({}) == 0.0)
-    assert(table.sum({10}) == 10.0)
+    assert(table.sum({ 10 }) == 10.0)
 end
 
 -- ==== Environment tainting: table.sum ====
 -- tainted table.sum fallback
 local function tainted_table_sum_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         table = {
             sum = function(t)
@@ -595,7 +660,8 @@ local function tainted_table_sum_fallback_test()
                 return 999
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return table.sum({1,2,3})", "test", "t", env)
     local result = chunk()
     assert(result == 999)
@@ -605,24 +671,28 @@ end
 -- ==== table.sum type error fallback ====
 -- table.sum type error fallback
 local function table_sum_type_error_fallback_test()
-    local ok, err = catch(function() return table.sum("notatable") end)()
+    local ok, err = catch (function()
+        return table.sum("notatable")
+    end)()
+
     assert(not ok, "table.sum('notatable') should error")
 end
 
 -- ==== Correctness: table.mean() ====
 -- table.mean correctness
 local function table_mean_correctness_test()
-    assert(table.mean({2, 4, 6}) == 4.0)
-    assert(table.mean({10}) == 10.0)
+    assert(table.mean({ 2, 4, 6 }) == 4.0)
+    assert(table.mean({ 10 }) == 10.0)
     -- Empty table returns NaN
     local r = table.mean({})
-    assert(r ~= r) -- NaN
+    assert(r ~= r)  -- NaN
 end
 
 -- ==== Environment tainting: table.mean ====
 -- tainted table.mean fallback
 local function tainted_table_mean_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         table = {
             mean = function(t)
@@ -630,7 +700,8 @@ local function tainted_table_mean_fallback_test()
                 return 42
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return table.mean({1,2,3})", "test", "t", env)
     local result = chunk()
     assert(result == 42)
@@ -640,9 +711,9 @@ end
 -- ==== Correctness: table.median() ====
 -- table.median correctness
 local function table_median_correctness_test()
-    assert(table.median({1, 3, 5}) == 3.0)
-    assert(table.median({1, 2, 3, 4}) == 2.5)
-    assert(table.median({42}) == 42.0)
+    assert(table.median({ 1, 3, 5 }) == 3.0)
+    assert(table.median({ 1, 2, 3, 4 }) == 2.5)
+    assert(table.median({ 42 }) == 42.0)
     -- Empty table returns NaN
     local r = table.median({})
     assert(r ~= r)
@@ -652,6 +723,7 @@ end
 -- tainted table.median fallback
 local function tainted_table_median_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         table = {
             median = function(t)
@@ -659,7 +731,8 @@ local function tainted_table_median_fallback_test()
                 return 99
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return table.median({1,2,3})", "test", "t", env)
     local result = chunk()
     assert(result == 99)
@@ -670,10 +743,10 @@ end
 -- table.stdev correctness
 local function table_stdev_correctness_test()
     -- Population stdev of {2, 4, 4, 4, 5, 5, 7, 9}
-    local r = table.stdev({2, 4, 4, 4, 5, 5, 7, 9})
+    local r = table.stdev({ 2, 4, 4, 4, 5, 5, 7, 9 })
     assert(math.abs(r - 2.0) < 0.001, "expected ~2.0, got " .. tostring(r))
     -- Single element: stdev is 0
-    assert(table.stdev({5}) == 0.0)
+    assert(table.stdev({ 5 }) == 0.0)
     -- Empty returns NaN
     local nan = table.stdev({})
     assert(nan ~= nan)
@@ -683,6 +756,7 @@ end
 -- tainted table.stdev fallback
 local function tainted_table_stdev_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         table = {
             stdev = function(t)
@@ -690,7 +764,8 @@ local function tainted_table_stdev_fallback_test()
                 return 77
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return table.stdev({1,2,3})", "test", "t", env)
     local result = chunk()
     assert(result == 77)
@@ -702,15 +777,17 @@ end
 local function table_stdev_sample_fallback_test()
     -- 2-arg variant is not fastcalled (nargs mismatch) and must compute
     -- the SAMPLE stdev, not the population stdev (2.0) of the same data
-    local r = table.stdev({2, 4, 4, 4, 5, 5, 7, 9}, true)
-    assert(math.abs(r - 2.1380899352994) < 1e-9,
-        "sample stdev should be ~2.1381, got " .. tostring(r))
+    local r = table.stdev({ 2, 4, 4, 4, 5, 5, 7, 9 }, true)
+    assert(
+        math.abs(r - 2.1380899352994) < 1e-9,
+        "sample stdev should be ~2.1381, got " .. tostring(r)
+    )
 end
 
 -- ==== Correctness: table.transpose() ====
 -- table.transpose correctness
 local function table_transpose_correctness_test()
-    local m = {{1, 2, 3}, {4, 5, 6}}
+    local m = { { 1, 2, 3 }, { 4, 5, 6 } }
     local r = table.transpose(m)
     assert(#r == 3)
     assert(r[1][1] == 1 and r[1][2] == 4)
@@ -725,14 +802,16 @@ end
 -- tainted table.transpose fallback
 local function tainted_table_transpose_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         table = {
             transpose = function(t)
                 custom_called = true
-                return {{99}}
+                return { { 99 } }
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return table.transpose({{1,2},{3,4}})", "test", "t", env)
     local result = chunk()
     assert(result[1][1] == 99)
@@ -742,19 +821,22 @@ end
 -- ==== table.transpose type error fallback ====
 -- table.transpose type error fallback
 local function table_transpose_type_error_fallback_test()
-    local ok, err = catch(function() return table.transpose("nope") end)()
+    local ok, err = catch (function()
+        return table.transpose("nope")
+    end)()
+
     assert(not ok, "table.transpose('nope') should error")
 end
 
 -- ==== Correctness: table.reshape() ====
 -- table.reshape correctness
 local function table_reshape_correctness_test()
-    local r = table.reshape({1, 2, 3, 4, 5, 6}, 2, 3)
+    local r = table.reshape({ 1, 2, 3, 4, 5, 6 }, 2, 3)
     assert(#r == 2)
     assert(r[1][1] == 1 and r[1][2] == 2 and r[1][3] == 3)
     assert(r[2][1] == 4 and r[2][2] == 5 and r[2][3] == 6)
     -- 1x4
-    r = table.reshape({10, 20, 30, 40}, 1, 4)
+    r = table.reshape({ 10, 20, 30, 40 }, 1, 4)
     assert(#r == 1 and #r[1] == 4)
     assert(r[1][4] == 40)
 end
@@ -763,14 +845,16 @@ end
 -- tainted table.reshape fallback
 local function tainted_table_reshape_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         table = {
             reshape = function(t, r, c)
                 custom_called = true
-                return {{0}}
+                return { { 0 } }
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return table.reshape({1,2,3,4}, 2, 2)", "test", "t", env)
     local result = chunk()
     assert(result[1][1] == 0)
@@ -780,7 +864,10 @@ end
 -- ==== table.reshape dimension mismatch fallback ====
 -- table.reshape dimension error
 local function table_reshape_dimension_error_test()
-    local ok, err = catch(function() return table.reshape({1, 2, 3}, 2, 2) end)()
+    local ok, err = catch (function()
+        return table.reshape({ 1, 2, 3 }, 2, 2)
+    end)()
+
     assert(not ok, "reshape with mismatched dimensions should error")
 end
 
@@ -788,6 +875,7 @@ end
 -- tainted math.abs fallback
 local function tainted_math_abs_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         math = {
             abs = function(x)
@@ -795,7 +883,8 @@ local function tainted_math_abs_fallback_test()
                 return 999
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return math.abs(-5)", "test", "t", env)
     local result = chunk()
     assert(result == 999, "expected 999, got " .. tostring(result))
@@ -806,12 +895,14 @@ end
 -- tainted assert fallback
 local function tainted_assert_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         assert = function(v)
             custom_called = true
             return "custom"
         end,
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return assert(true)", "test", "t", env)
     local result = chunk()
     assert(result == "custom", "expected custom, got " .. tostring(result))
@@ -822,12 +913,14 @@ end
 -- tainted tonumber fallback
 local function tainted_tonumber_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         tonumber = function(x)
             custom_called = true
             return 999
         end,
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load('return tonumber("42")', "test", "t", env)
     local result = chunk()
     assert(result == 999, "expected 999, got " .. tostring(result))
@@ -838,12 +931,14 @@ end
 -- tainted tostring fallback
 local function tainted_tostring_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         tostring = function(x)
             custom_called = true
             return "custom"
         end,
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return tostring(42)", "test", "t", env)
     local result = chunk()
     assert(result == "custom", "expected custom, got " .. tostring(result))
@@ -854,6 +949,7 @@ end
 -- tainted vector.create fallback
 local function tainted_vector_create_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         vector = {
             create = function(n)
@@ -861,7 +957,8 @@ local function tainted_vector_create_fallback_test()
                 return "custom"
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load("return vector.create(4)", "test", "t", env)
     local result = chunk()
     assert(result == "custom", "expected custom, got " .. tostring(result))
@@ -872,6 +969,7 @@ end
 -- tainted utf8.len fallback
 local function tainted_utf8_len_fallback_test()
     local custom_called = false
+
     local env = setmetatable({
         utf8 = {
             len = function(s)
@@ -879,7 +977,8 @@ local function tainted_utf8_len_fallback_test()
                 return 999
             end,
         },
-    }, {__index = _G})
+    }, { __index = _G })
+
     local chunk = load('return utf8.len("hello")', "test", "t", env)
     local result = chunk()
     assert(result == 999, "expected 999, got " .. tostring(result))
@@ -892,22 +991,34 @@ local function assert_correctness_test()
     assert(assert(42) == 42)
     assert(assert("hello") == "hello")
     assert(assert(true) == true)
-    local ok, err = catch(function() assert(false) end)()
+
+    local ok, err = catch (function()
+        assert(false)
+    end)()
+
     assert(not ok)
-    local ok2, err2 = catch(function() assert(nil, "msg") end)()
+
+    local ok2, err2 = catch (function()
+        assert(nil, "msg")
+    end)()
+
     assert(not ok2)
 end
 
 -- ==== Correctness: getmetatable() ====
 -- getmetatable correctness
 local function getmetatable_correctness_test()
-    local mt = {__index = function() end}
+    local mt = {
+        __index = function()
+        end,
+    }
+
     local t = setmetatable({}, mt)
     assert(getmetatable(t) == mt)
     assert(getmetatable({}) == nil)
-    assert(getmetatable("hello") ~= nil) -- strings have metatable
+    assert(getmetatable("hello") ~= nil)  -- strings have metatable
     -- __metatable field
-    local mt2 = {__metatable = "protected"}
+    local mt2 = { __metatable = "protected" }
     local t2 = setmetatable({}, mt2)
     assert(getmetatable(t2) == "protected")
 end
@@ -1059,7 +1170,7 @@ local function vector_clone_correctness_test()
     local v = vector.create(8)
     local c = vector.clone(v)
     assert(vector.size(c) == 8)
-    assert(v ~= c) -- different objects
+    assert(v ~= c)  -- different objects
 end
 
 -- ==== Correctness: utf8 operations ====
@@ -1099,7 +1210,7 @@ end
 
 -- setmetatable blocked by __metatable
 local function setmetatable_blocked_by_metatable_test()
-    local mt = {__metatable = "locked"}
+    local mt = { __metatable = "locked" }
     local t = setmetatable({}, mt)
     local ok, err = catch setmetatable(t, {})
     assert(not ok)
@@ -1119,6 +1230,7 @@ local function fastcall_in_coroutine_test()
         coroutine.yield(math.abs(-5))
         return string.len("hello")
     end)
+
     assert(co() == "number")
     assert(co() == 5)
     assert(co() == 5)
@@ -1126,12 +1238,15 @@ end
 
 -- math.abs type error
 local function math_abs_type_error_test()
-    raises(function() return math.abs("hello") end)
+    raises(function()
+        return math.abs("hello")
+    end)
 end
 
 -- table.reshape rejects overflow dimensions
 local function table_reshape_rejects_overflow_dimensions_test()
-    local t = {1, 2, 3, 4}
+    local t = { 1, 2, 3, 4 }
+
     raises(function()
         table.reshape(t, math.maxinteger, math.maxinteger)
     end)
@@ -1158,10 +1273,12 @@ end
 local function allocating_fastcalls_give_the_collector_a_step_test()
     collectgarbage("collect")
     local before = collectgarbage("count")
+
     for i = 1, 200000 do
         local d = time.seconds(i)
         local s = string.sub("hello world", 1, 5)
     end
+
     local after = collectgarbage("count")
     assert(after - before < 8192)
 end

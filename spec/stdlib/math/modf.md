@@ -27,11 +27,11 @@ The fractional part has the sign of `x`.
 An argument that is not a number raises `bad argument #1 to 'math.modf' (number expected, got nil)` with its type.
 
 ```lus
-print(math.modf(3.5))      --> 3  0.5
-print(math.modf(-3.5))     --> -3  -0.5
-print(math.modf(5))        --> 5  0.0
-print(math.modf(-3.75d))   --> -3  -0.75
-print(math.modf(1/0))      --> inf  0.0
+print(math.modf(3.5))  --> 3  0.5
+print(math.modf(-3.5))  --> -3  -0.5
+print(math.modf(5))  --> 5  0.0
+print(math.modf(-3.75d))  --> -3  -0.75
+print(math.modf(1 / 0))  --> inf  0.0
 ```
 
 The fractional part of a float carries its rounding error, so `math.modf(3.7)` returns 3 and 0.7000000000000002. [`math.floor`](/manual/api#math.floor) and [`math.ceil`](/manual/api#math.ceil) round down and up, and [`math.fmod`](/manual/api#math.fmod) returns the remainder of a division.

@@ -16,8 +16,9 @@ The first default searcher looks up `package.preload[name]`. When it holds a val
 package.preload.settings = function(name)
     return { name = name, debug = false }
 end
+
 local settings, origin = require("settings")
-print(settings.name, origin)   --> settings  :preload:
+print(settings.name, origin)  --> settings  :preload:
 ```
 
 A value of `package.preload` that is not a table makes `require` raise `'package.preload' must be a table`. [`require`](/manual/api#require) describes the whole loading process.

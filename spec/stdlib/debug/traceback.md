@@ -32,11 +32,16 @@ The following example takes a traceback inside a function and prints its first t
 local function checkpoint()
     return debug.traceback("checkpoint reached")
 end
+
 local lines = {}
-for line in checkpoint():gmatch("[^\n]+") do lines[#lines + 1] = line end
-print(lines[1])                              --> checkpoint reached
-print(lines[2])                              --> stack traceback:
-print(debug.traceback({ code = 7 }).code)    --> 7
+
+for line in checkpoint():gmatch("[^\n]+") do
+    lines[#lines + 1] = line
+end
+
+print(lines[1])  --> checkpoint reached
+print(lines[2])  --> stack traceback:
+print(debug.traceback({ code = 7 }).code)  --> 7
 ```
 
 The `lus` command prints a traceback of this form when an error ends a script. [`debug.getinfo`](/manual/api#debug.getinfo) returns the same information for one level as a table.

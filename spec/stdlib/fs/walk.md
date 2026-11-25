@@ -38,12 +38,15 @@ pledge("env", "fs")
 local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-walk-example")
 fs.createdirectory(fs.path.join(dir, "lib"), true)
 fs.createdirectory(fs.path.join(dir, "deps", "json"), true)
-for _, name in ipairs({"main.lus", "notes.md", "lib/util.lus", "deps/json/json.lus"}) do
+
+for _, name in ipairs({ "main.lus", "notes.md", "lib/util.lus", "deps/json/json.lus" }) do
     io.open(fs.path.join(dir, name), "w"):close()
 end
-for path, kind in fs.walk(dir, {glob = "*.lus", exclude = "deps"}) do
+
+for path, kind in fs.walk(dir, { glob = "*.lus", exclude = "deps" }) do
     print(fs.path.name(path), kind)
 end
+
 --> util.lus  file
 --> main.lus  file
 fs.remove(dir, true)

@@ -21,9 +21,9 @@ The result is a string with the same characters as `s`, with one exception. A lo
 An argument that is neither a string nor a number raises `bad argument #1 to 'string.reverse' (string expected, got nil)` with its type.
 
 ```lus
-print(string.reverse("héllo"))   --> olléh
-print(("abc"):reverse())         --> cba
-print(string.reverse(123))       --> 321
+print(string.reverse("héllo"))  --> olléh
+print(("abc"):reverse())  --> cba
+print(string.reverse(123))  --> 321
 ```
 
 Reversal works on characters, so a multi-byte character such as `é` stays whole. A combining mark, which is a code point of its own, moves to the other side of the character it follows. [`string.sub`](/manual/api#string.sub) takes a range of characters.

@@ -34,9 +34,9 @@ local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-open-example.txt")
 local out = io.open(path, "w")
 out:write("count: ", 2)
 out:close()
-print(io.open(path):read("a"))     --> count: 2
+print(io.open(path):read("a"))  --> count: 2
 local file, err = io.open(path .. ".missing")
-print(file, err:match("No such file or directory"))   --> nil  No such file or directory
+print(file, err:match("No such file or directory"))  --> nil  No such file or directory
 fs.remove(path)
 ```
 

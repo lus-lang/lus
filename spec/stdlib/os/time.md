@@ -21,9 +21,9 @@ Fields out of their usual range are normalized, so month 13 of 2000 is January 2
 ```lus
 local t = { year = 2000, month = 13, day = 1, hour = 0 }
 local seconds = os.time(t)
-print(math.type(seconds))    --> integer
-print(t.year, t.month)       --> 2001  1
-print(os.time(t) == seconds) --> true
+print(math.type(seconds))  --> integer
+print(t.year, t.month)  --> 2001  1
+print(os.time(t) == seconds)  --> true
 ```
 
 [`os.date`](/manual/api#os.date) breaks a time back into fields or formats it, and [`os.difftime`](/manual/api#os.difftime) subtracts two times.

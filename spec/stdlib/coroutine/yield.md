@@ -18,10 +18,11 @@ Yielding from the main thread raises `attempt to yield from outside a coroutine`
 ```lus
 local co = coroutine.create(function()
     local reply = coroutine.yield("ping")
-    print("got", reply)    --> got  pong
+    print("got", reply)  --> got  pong
 end)
-print(coroutine.resume(co))           --> true  ping
-print(coroutine.resume(co, "pong"))   --> true
+
+print(coroutine.resume(co))  --> true  ping
+print(coroutine.resume(co, "pong"))  --> true
 ```
 
 In a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach), `yield` lets the other detached coroutines run. The runtime resumes the coroutine on its next turn, the arguments are dropped, and `yield` returns no values. [`coroutine.isyieldable`](/manual/api#coroutine.isyieldable) tells whether a yield is possible.

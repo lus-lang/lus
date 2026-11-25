@@ -6,9 +6,7 @@
   formatting/ISO output, and monotonic clock behaviour.
 ]]
 
-
 pledge("load", "debug")
-
 
 -- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.
 local REF = 1782998100
@@ -72,8 +70,7 @@ local function negative_duration_parts_test()
 end
 
 local function zoned_fields_and_offset_test()
-    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
-                           minute = 15 }, -4 * 3600)
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9, minute = 15 }, -4 * 3600)
     assert(z.year == 2026 and z.month == 7 and z.day == 2)
     assert(z.hour == 9 and z.minute == 15)
     assert(z.weekday == time.weekday.thursday)
@@ -83,8 +80,7 @@ local function zoned_fields_and_offset_test()
 end
 
 local function zoned_collapses_to_the_correct_utc_instant_test()
-    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
-                           minute = 15 }, -4 * 3600)
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9, minute = 15 }, -4 * 3600)
     assert(z:instant():iso() == "2026-07-02T13:15:00Z")
 end
 
@@ -148,8 +144,7 @@ end
 
 local function wall_clock_through_a_zone_round_trips_to_utc_test()
     local ny = time.zone("America/New_York")
-    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9,
-                           minute = 15 }, ny)
+    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9, minute = 15 }, ny)
     assert(z:instant():iso() == "2026-07-02T13:15:00Z")
 end
 
@@ -186,8 +181,7 @@ local function parse_date_only_defaults_to_midnight_utc_test()
 end
 
 local function parse_compact_offset_and_fractional_seconds_test()
-    assert(time.parse("2026-07-02 09:15:00.5-0400"):iso() ==
-        "2026-07-02T09:15:00-04:00")
+    assert(time.parse("2026-07-02 09:15:00.5-0400"):iso() == "2026-07-02T09:15:00-04:00")
     assert(time.parse("2026-07-02T00:00:00.25Z"):nanos() == 250000000)
 end
 
@@ -198,8 +192,7 @@ local function parse_rejects_malformed_input_test()
 end
 
 local function parse_with_an_explicit_pattern_test()
-    assert(time.parse("02/07/2026 09:15", "%d/%m/%Y %H:%M"):iso() ==
-        "2026-07-02T09:15:00Z")
+    assert(time.parse("02/07/2026 09:15", "%d/%m/%Y %H:%M"):iso() == "2026-07-02T09:15:00Z")
     local z = time.parse("2026-07-02 09:15:00 -0400", "%Y-%m-%d %H:%M:%S %z")
     assert(z:iso() == "2026-07-02T09:15:00-04:00")
     assert(time.parse("07 26", "%m %y"):iso() == "2026-07-01T00:00:00Z")
@@ -217,7 +210,7 @@ end
 local function with_replaces_fields_immutably_test()
     local ny = time.zone("America/New_York")
     local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
-    local w = z:with{ hour = 6 }
+    local w = z:with({ hour = 6 })
     assert(w:iso() == "2026-03-07T06:00:00-05:00")
     assert(z:iso() == "2026-03-07T12:00:00-05:00")
 end
@@ -226,31 +219,31 @@ local function with_re_resolves_dst_across_a_date_change_test()
     local ny = time.zone("America/New_York")
     local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
     -- March 8 2026 is after the spring-forward: same wall time, EDT now.
-    assert(z:with{ day = 8 }:iso() == "2026-03-08T12:00:00-04:00")
+    assert(z:with({ day = 8 }):iso() == "2026-03-08T12:00:00-04:00")
 end
 
 local function add_days_keeps_wall_time_across_spring_forward_test()
     local ny = time.zone("America/New_York")
     local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
-    assert(z:add{ days = 1 }:iso() == "2026-03-08T12:00:00-04:00")
+    assert(z:add({ days = 1 }):iso() == "2026-03-08T12:00:00-04:00")
 end
 
 local function add_months_clamps_the_day_test()
     local ny = time.zone("America/New_York")
     local jan31 = time.zoned({ year = 2026, month = 1, day = 31, hour = 9 }, ny)
-    assert(jan31:add{ months = 1 }:iso() == "2026-02-28T09:00:00-05:00")
+    assert(jan31:add({ months = 1 }):iso() == "2026-02-28T09:00:00-05:00")
 end
 
 local function add_normalizes_negative_and_overflowing_months_test()
     local ny = time.zone("America/New_York")
     local z = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
-    assert(z:add{ months = -2 }:iso() == "2026-01-07T12:00:00-05:00")
-    assert(z:add{ months = 11 }:iso() == "2027-02-07T12:00:00-05:00")
+    assert(z:add({ months = -2 }):iso() == "2026-01-07T12:00:00-05:00")
+    assert(z:add({ months = 11 }):iso() == "2027-02-07T12:00:00-05:00")
 end
 
 local function add_on_a_fixed_offset_zoned_keeps_the_offset_test()
     local f = time.zoned({ year = 2026, month = 1, day = 1, hour = 0 }, -5 * 3600)
-    assert(f:add{ days = 1 }:iso() == "2026-01-02T00:00:00-05:00")
+    assert(f:add({ days = 1 }):iso() == "2026-01-02T00:00:00-05:00")
 end
 
 -- ============================================================================
@@ -304,9 +297,8 @@ local function constructors_accept_a_month_enum_test()
     local m = time.zoned{ year = 2026, month = time.month.july, day = 2 }
     assert(m:iso() == "2026-07-02T00:00:00Z")
     local z = time.zoned{ year = 2026, month = 1, day = 15 }
-    assert(z:with{ month = time.month.december }.month == 12)
+    assert(z:with({ month = time.month.december }).month == 12)
 end
-
 
 --[[
   Time module completion and DST pathologies.
@@ -324,9 +316,6 @@ end
   A guard still skips the zone-dependent cases if a build ever ships without it,
   which keeps the suite portable.
 ]]
-
-
-
 
 -- A fixed reference instant: 2026-07-02T13:15:00Z = 1782998100 epoch seconds.
 local REF = 1782998100
@@ -433,10 +422,11 @@ local function instant_argument_contract_test()
 end
 
 local function instant_normalization_rejects_values_outside_the_timeline_test()
-    assert(not (catch time.instant(math.maxinteger, 1000000000)),
-        "a carry beyond the maximum raises")
-    assert(not (catch time.instant(math.mininteger, -1)),
-        "a borrow below the minimum raises")
+    assert(
+        not (catch time.instant(math.maxinteger, 1000000000)),
+        "a carry beyond the maximum raises"
+    )
+    assert(not (catch time.instant(math.mininteger, -1)), "a borrow below the minimum raises")
     assert(time.instant(math.maxinteger - 1, 1000000000):epoch() == math.maxinteger)
 end
 
@@ -474,11 +464,31 @@ end
 -- Each helper types n as an integer. A fractional literal has no integer
 -- representation and must raise. A decimal string coerces like other stdlib.
 local scalar_helper_rejects_a_fractional_argument_cases = {
-    { function() return time.days(1.5) end },
-    { function() return time.hours(1.5) end },
-    { function() return time.minutes(1.5) end },
-    { function() return time.seconds(1.5) end },
-    { function() return time.millis(1.5) end },
+    {
+        function()
+            return time.days(1.5)
+        end,
+    },
+    {
+        function()
+            return time.hours(1.5)
+        end,
+    },
+    {
+        function()
+            return time.minutes(1.5)
+        end,
+    },
+    {
+        function()
+            return time.seconds(1.5)
+        end,
+    },
+    {
+        function()
+            return time.millis(1.5)
+        end,
+    },
 }
 
 local function scalar_helper_rejects_a_fractional_argument_test(f)
@@ -492,8 +502,10 @@ end
 local function scalar_helpers_reject_overflowing_durations_test()
     assert(not (catch time.days(math.maxinteger)), "maximum days overflow")
     assert(not (catch time.hours(math.mininteger)), "minimum hours overflow")
-    assert(time.millis(math.maxinteger):parts().days > 0,
-        "large milliseconds normalize without an intermediate overflow")
+    assert(
+        time.millis(math.maxinteger):parts().days > 0,
+        "large milliseconds normalize without an intermediate overflow"
+    )
 end
 
 -- ============================================================================
@@ -501,8 +513,15 @@ end
 -- ============================================================================
 
 local function duration_sums_every_documented_unit_test()
-    local d = time.duration{ days = 1, hours = 1, minutes = 1, seconds = 1,
-                             millis = 1, micros = 1, nanos = 1 }
+    local d = time.duration{
+        days = 1,
+        hours = 1,
+        minutes = 1,
+        seconds = 1,
+        millis = 1,
+        micros = 1,
+        nanos = 1,
+    }
     assert(d:seconds() == 90061.001001001)
 end
 
@@ -532,14 +551,22 @@ local function duration_scales_by_an_integer_and_rejects_a_fractional_facto_test
 end
 
 local function duration_arithmetic_rejects_timeline_overflow_test()
-    assert(not (catch (time.seconds(math.maxinteger) + time.seconds(1))),
-        "addition above the maximum raises")
-    assert(not (catch (time.seconds(math.mininteger) - time.seconds(1))),
-        "subtraction below the minimum raises")
-    assert(not (catch (time.seconds(math.maxinteger) * 2)),
-        "multiplication above the maximum raises")
-    assert(not (catch (-time.seconds(math.mininteger))),
-        "negating the minimum whole-second duration raises")
+    assert(
+        not (catch (time.seconds(math.maxinteger) + time.seconds(1))),
+        "addition above the maximum raises"
+    )
+    assert(
+        not (catch (time.seconds(math.mininteger) - time.seconds(1))),
+        "subtraction below the minimum raises"
+    )
+    assert(
+        not (catch (time.seconds(math.maxinteger) * 2)),
+        "multiplication above the maximum raises"
+    )
+    assert(
+        not (catch (-time.seconds(math.mininteger))),
+        "negating the minimum whole-second duration raises"
+    )
 end
 
 local function duration_arithmetic_keeps_representable_boundary_cancellatio_test()
@@ -558,12 +585,18 @@ local function parts_handles_the_minimum_duration_without_signed_negation_test()
 end
 
 local function instant_arithmetic_rejects_overflow_and_keeps_a_boundary_res_test()
-    assert(not (catch (time.instant(math.maxinteger) + time.seconds(1))),
-        "instant addition above the maximum raises")
-    assert(not (catch (time.instant(math.mininteger) - time.seconds(1))),
-        "instant subtraction below the minimum raises")
-    assert(not (catch (time.instant(math.maxinteger) - time.instant(math.mininteger))),
-        "instant difference above the maximum raises")
+    assert(
+        not (catch (time.instant(math.maxinteger) + time.seconds(1))),
+        "instant addition above the maximum raises"
+    )
+    assert(
+        not (catch (time.instant(math.mininteger) - time.seconds(1))),
+        "instant subtraction below the minimum raises"
+    )
+    assert(
+        not (catch (time.instant(math.maxinteger) - time.instant(math.mininteger))),
+        "instant difference above the maximum raises"
+    )
     local d = time.instant(math.maxinteger) - time.instant(-1, 500000000)
     assert(d:parts().negative == false)
 end
@@ -620,12 +653,12 @@ local function offset_argument_contract_test()
 end
 
 local function every_fixed_offset_entry_point_enforces_the_same_range_test()
-    assert(not (catch time.instant(0):at(math.maxinteger)),
-        "instant fixed offset rejects a huge value")
-    assert(not (catch time.zoned({}, math.maxinteger)),
-        "zoned fixed offset rejects a huge value")
-    assert(not (catch time.offset(math.maxinteger)),
-        "offset constructor rejects a huge value")
+    assert(
+        not (catch time.instant(0):at(math.maxinteger)),
+        "instant fixed offset rejects a huge value"
+    )
+    assert(not (catch time.zoned({}, math.maxinteger)), "zoned fixed offset rejects a huge value")
+    assert(not (catch time.offset(math.maxinteger)), "offset constructor rejects a huge value")
 end
 
 -- ============================================================================
@@ -646,15 +679,12 @@ end
 local function an_in_range_but_overlong_day_rolls_into_the_next_month_test()
     -- Feb 29 of a common year is within the 1..31 day range, so it normalizes
     -- forward one day rather than raising.
-    assert(time.zoned{ year = 2025, month = 2, day = 29 }:iso() ==
-        "2025-03-01T00:00:00Z")
-    assert(time.zoned{ year = 2026, month = 1, day = 1, hour = 24 }:iso() ==
-        "2026-01-02T00:00:00Z")
+    assert(time.zoned{ year = 2025, month = 2, day = 29 }:iso() == "2025-03-01T00:00:00Z")
+    assert(time.zoned{ year = 2026, month = 1, day = 1, hour = 24 }:iso() == "2026-01-02T00:00:00Z")
 end
 
 local function second_and_nanosecond_fields_are_readable_test()
-    local z = time.zoned{ year = 2026, month = 7, day = 2, second = 42,
-                          nanosecond = 250000000 }
+    local z = time.zoned{ year = 2026, month = 7, day = 2, second = 42, nanosecond = 250000000 }
     assert(z.second == 42)
     assert(z.nanosecond == 250000000)
     -- iso() renders whole seconds, so the fraction is not shown.
@@ -663,7 +693,11 @@ end
 
 local function zoned_fields_are_read_only_test()
     local z = time.zoned{ year = 2026, month = 1, day = 1 }
-    local function mutate() z.year = 2000 end
+
+    local function mutate()
+        z.year = 2000
+    end
+
     assert(not (catch mutate()), "assignment raises")
 end
 
@@ -678,8 +712,7 @@ end
 
 local function tostring_on_instant_and_zoned_yields_their_iso_form_test()
     assert(tostring(time.instant(REF)) == "2026-07-02T13:15:00Z")
-    assert(tostring(time.zoned{ year = 2026, month = 7, day = 2 }) ==
-        "2026-07-02T00:00:00Z")
+    assert(tostring(time.zoned{ year = 2026, month = 7, day = 2 }) == "2026-07-02T00:00:00Z")
 end
 
 -- ============================================================================
@@ -688,48 +721,56 @@ end
 
 local function add_advances_weeks_hours_minutes_and_seconds_on_the_wall_clo_test()
     local base = time.zoned{ year = 2026, month = 1, day = 1, hour = 0 }
-    assert(base:add{ weeks = 2 }:iso() == "2026-01-15T00:00:00Z")
-    assert(base:add{ minutes = 90 }:iso() == "2026-01-01T01:30:00Z")
-    assert(base:add{ seconds = 3600 }:iso() == "2026-01-01T01:00:00Z")
+    assert(base:add({ weeks = 2 }):iso() == "2026-01-15T00:00:00Z")
+    assert(base:add({ minutes = 90 }):iso() == "2026-01-01T01:30:00Z")
+    assert(base:add({ seconds = 3600 }):iso() == "2026-01-01T01:00:00Z")
 end
 
 local function add_days_accepts_negative_amounts_test()
-    assert(time.zoned{ year = 2026, month = 3, day = 1 }:add{ days = -1 }:iso() ==
-        "2026-02-28T00:00:00Z")
+    assert(
+        time.zoned{ year = 2026, month = 3, day = 1 }:add({ days = -1 }):iso()
+            == "2026-02-28T00:00:00Z"
+    )
 end
 
 local function add_years_clamps_a_leap_day_to_the_target_february_test()
     local leap = time.zoned{ year = 2024, month = 2, day = 29 }
-    assert(leap:add{ years = 1 }:iso() == "2025-02-28T00:00:00Z")
-    assert(leap:add{ years = -1 }:iso() == "2023-02-28T00:00:00Z")
-    assert(leap:add{ years = 4 }:iso() == "2028-02-29T00:00:00Z")
+    assert(leap:add({ years = 1 }):iso() == "2025-02-28T00:00:00Z")
+    assert(leap:add({ years = -1 }):iso() == "2023-02-28T00:00:00Z")
+    assert(leap:add({ years = 4 }):iso() == "2028-02-29T00:00:00Z")
 end
 
 local function with_normalizes_a_rolled_over_day_and_rejects_a_bad_field_test()
     -- Replacing the month with one that is too short for the current day rolls
     -- the day forward through the following month.
-    assert(time.zoned{ year = 2026, month = 1, day = 31 }:with{ month = 2 }:iso() ==
-        "2026-03-03T00:00:00Z")
-    assert(time.zoned{ year = 2026, month = 6, day = 15 }
-        :with{ month = 12, day = 25, hour = 8 }:iso() == "2026-12-25T08:00:00Z")
-    assert(not (catch time.zoned{ year = 2026, month = 1, day = 1 }:with{ month = 13 }),
-        "an out-of-range replacement raises")
+    assert(
+        time.zoned{ year = 2026, month = 1, day = 31 }:with({ month = 2 }):iso()
+            == "2026-03-03T00:00:00Z"
+    )
+    assert(
+        time.zoned{ year = 2026, month = 6, day = 15 }:with({ month = 12, day = 25, hour = 8 }):iso()
+            == "2026-12-25T08:00:00Z"
+    )
+    assert(
+        not (catch time.zoned{ year = 2026, month = 1, day = 1 }:with({ month = 13 })),
+        "an out-of-range replacement raises"
+    )
 end
 
 local function zoned_constructors_and_calendar_arithmetic_reject_overflow_test()
-    assert(not (catch time.zoned{ year = math.maxinteger }),
-        "an unrepresentable civil year raises")
+    assert(not (catch time.zoned{ year = math.maxinteger }), "an unrepresentable civil year raises")
     local base = time.zoned{ year = 2026, month = 1, day = 1 }
-    assert(not (catch base:with{ year = math.maxinteger }),
-        "with rejects an unrepresentable year")
-    assert(not (catch base:add{ years = math.maxinteger }),
-        "year arithmetic rejects overflow")
-    assert(not (catch base:add{ weeks = math.maxinteger }),
-        "week arithmetic rejects overflow")
-    assert(not (catch base:add{ hours = math.maxinteger }),
-        "hour arithmetic rejects overflow")
-    assert(base:add{ nanos = math.maxinteger }.year > 2026,
-        "large nanoseconds normalize when the result fits")
+    assert(
+        not (catch base:with({ year = math.maxinteger })),
+        "with rejects an unrepresentable year"
+    )
+    assert(not (catch base:add({ years = math.maxinteger })), "year arithmetic rejects overflow")
+    assert(not (catch base:add({ weeks = math.maxinteger })), "week arithmetic rejects overflow")
+    assert(not (catch base:add({ hours = math.maxinteger })), "hour arithmetic rejects overflow")
+    assert(
+        base:add({ nanos = math.maxinteger }).year > 2026,
+        "large nanoseconds normalize when the result fits"
+    )
 end
 
 -- ============================================================================
@@ -737,28 +778,35 @@ end
 -- ============================================================================
 
 local function spring_forward_nonexistent_wall_time_resolves_to_the_summer_test()
-    if not HAVE_ZONES then skip("no embedded tzdata") end
+    if not HAVE_ZONES then
+        skip("no embedded tzdata")
+    end
+
     local ny = time.zone("America/New_York")
     -- 2026-03-08 02:30 never occurs: the clock jumps 02:00 EST to 03:00 EDT.
     -- The constructor moves it forward by the hour of the gap, to 03:30 EDT.
-    local z = time.zoned({ year = 2026, month = 3, day = 8, hour = 2,
-                           minute = 30 }, ny)
+    local z = time.zoned({ year = 2026, month = 3, day = 8, hour = 2, minute = 30 }, ny)
     assert(z.offset == -4 * 3600)
     assert(z:instant():iso() == "2026-03-08T07:30:00Z")
 end
 
 local function fall_back_ambiguous_wall_time_resolves_to_the_earlier_offset_test()
-    if not HAVE_ZONES then skip("no embedded tzdata") end
+    if not HAVE_ZONES then
+        skip("no embedded tzdata")
+    end
+
     local ny = time.zone("America/New_York")
     -- 2026-11-01 01:30 happens twice: first as EDT (-04:00), then as EST.
     -- The constructor pins the earlier occurrence (EDT).
-    local z = time.zoned({ year = 2026, month = 11, day = 1, hour = 1,
-                           minute = 30 }, ny)
+    local z = time.zoned({ year = 2026, month = 11, day = 1, hour = 1, minute = 30 }, ny)
     assert(z.offset == -4 * 3600)
 end
 
 local function instant_arithmetic_across_fall_back_stays_linear_in_absolute_test()
-    if not HAVE_ZONES then skip("no embedded tzdata") end
+    if not HAVE_ZONES then
+        skip("no embedded tzdata")
+    end
+
     local ny = time.zone("America/New_York")
     -- 05:00Z is 01:00 EDT, one hour before the fall-back moment (06:00Z).
     local fb = time.parse("2026-11-01T05:00:00Z")
@@ -770,21 +818,25 @@ local function instant_arithmetic_across_fall_back_stays_linear_in_absolute_test
 end
 
 local function add_keeps_the_wall_clock_across_the_spring_forward_gap_test()
-    if not HAVE_ZONES then skip("no embedded tzdata") end
+    if not HAVE_ZONES then
+        skip("no embedded tzdata")
+    end
+
     local ny = time.zone("America/New_York")
     -- 01:30 EST plus one wall hour lands on 02:30, inside the gap, which
     -- moves forward to 03:30 EDT.
-    local pre = time.zoned({ year = 2026, month = 3, day = 8, hour = 1,
-                             minute = 30 }, ny)
-    assert(pre:add{ hours = 1 }:iso() == "2026-03-08T03:30:00-04:00")
+    local pre = time.zoned({ year = 2026, month = 3, day = 8, hour = 1, minute = 30 }, ny)
+    assert(pre:add({ hours = 1 }):iso() == "2026-03-08T03:30:00-04:00")
 end
 
 local function add_days_across_the_fall_back_keeps_the_wall_time_test()
-    if not HAVE_ZONES then skip("no embedded tzdata") end
+    if not HAVE_ZONES then
+        skip("no embedded tzdata")
+    end
+
     local ny = time.zone("America/New_York")
-    local z = time.zoned({ year = 2026, month = 10, day = 31, hour = 1,
-                           minute = 30 }, ny)
-    assert(z:add{ days = 1 }:iso() == "2026-11-01T01:30:00-04:00")
+    local z = time.zoned({ year = 2026, month = 10, day = 31, hour = 1, minute = 30 }, ny)
+    assert(z:add({ days = 1 }):iso() == "2026-11-01T01:30:00-04:00")
 end
 
 -- ============================================================================
@@ -792,24 +844,35 @@ end
 -- ============================================================================
 
 local function half_hour_zone_renders_and_round_trips_asia_kolkata_test()
-    if not HAVE_ZONES then skip("no embedded tzdata") end
+    if not HAVE_ZONES then
+        skip("no embedded tzdata")
+    end
+
     local kol = time.zone("Asia/Kolkata")
     assert(kol:offset(time.instant(REF)) == 5 * 3600 + 30 * 60)
     assert(time.instant(REF):at(kol):iso() == "2026-07-02T18:45:00+05:30")
     -- Interpreting that same wall time collapses back to the reference.
-    assert(time.zoned({ year = 2026, month = 7, day = 2, hour = 18,
-                        minute = 45 }, kol):instant():epoch() == REF)
+    assert(
+        time.zoned({ year = 2026, month = 7, day = 2, hour = 18, minute = 45 }, kol):instant():epoch()
+            == REF
+    )
 end
 
 local function t_45_minute_zone_renders_and_round_trips_asia_kathmandu_test()
-    if not HAVE_ZONES then skip("no embedded tzdata") end
+    if not HAVE_ZONES then
+        skip("no embedded tzdata")
+    end
+
     local ktm = time.zone("Asia/Kathmandu")
     assert(ktm:offset(time.instant(REF)) == 5 * 3600 + 45 * 60)
     assert(time.instant(REF):at(ktm):iso() == "2026-07-02T19:00:00+05:45")
 end
 
 local function named_zone_lookups_are_distinct_objects_test()
-    if not HAVE_ZONES then skip("no embedded tzdata") end
+    if not HAVE_ZONES then
+        skip("no embedded tzdata")
+    end
+
     assert(time.zone("America/New_York") ~= time.zone("America/New_York"))
 end
 
@@ -844,9 +907,10 @@ end
 local function the_exact_full_day_offset_remains_valid_test()
     local z = time.parse("2026-07-02T13:15:00+24:00")
     assert(z:iso() == "2026-07-02T13:15:00+24:00")
-    assert(time.parse("2026-07-02T13:15:00+24:00",
-        "%Y-%m-%dT%H:%M:%S%z"):iso() ==
-        "2026-07-02T13:15:00+24:00")
+    assert(
+        time.parse("2026-07-02T13:15:00+24:00", "%Y-%m-%dT%H:%M:%S%z"):iso()
+            == "2026-07-02T13:15:00+24:00"
+    )
 end
 
 local pattern_parsing_rejects_invalid_fixed_offset_components_cases = {
@@ -856,8 +920,7 @@ local pattern_parsing_rejects_invalid_fixed_offset_components_cases = {
 }
 
 local function pattern_parsing_rejects_invalid_fixed_offset_components_test(value)
-    assert(not (catch time.parse(value, "%Y-%m-%dT%H:%M:%S%z")),
-        value .. " must raise")
+    assert(not (catch time.parse(value, "%Y-%m-%dT%H:%M:%S%z")), value .. " must raise")
 end
 
 -- Parsing is portable and independent of the platform strptime, and every
@@ -876,8 +939,9 @@ end
 
 local function pattern_parsing_matches_a_literal_percent_and_a_z_of_z_test()
     assert(time.parse("% 2026", "%% %Y"):iso() == "2026-01-01T00:00:00Z")
-    assert(time.parse("2026-07-02T13:15:00Z", "%Y-%m-%dT%H:%M:%S%z"):iso() ==
-        "2026-07-02T13:15:00Z")
+    assert(
+        time.parse("2026-07-02T13:15:00Z", "%Y-%m-%dT%H:%M:%S%z"):iso() == "2026-07-02T13:15:00Z"
+    )
 end
 
 -- ============================================================================
@@ -885,10 +949,8 @@ end
 -- ============================================================================
 
 local function civil_conversion_spans_the_four_digit_year_range_test()
-    assert(time.zoned{ year = 1, month = 1, day = 1 }:iso() ==
-        "0001-01-01T00:00:00Z")
-    assert(time.zoned{ year = 9999, month = 12, day = 31 }:iso() ==
-        "9999-12-31T00:00:00Z")
+    assert(time.zoned{ year = 1, month = 1, day = 1 }:iso() == "0001-01-01T00:00:00Z")
+    assert(time.zoned{ year = 9999, month = 12, day = 31 }:iso() == "9999-12-31T00:00:00Z")
     -- A huge epoch still converts without raising, well past year 9999.
     assert(type(time.instant(math.maxinteger):iso()) == "string")
 end
@@ -911,7 +973,6 @@ local function format_z_reflects_the_value_s_own_offset_test()
     assert(z:format("%z") == "-0400")
 end
 
-
 -- ============================================================================
 -- a replaced user value reads as no zone
 -- ============================================================================
@@ -920,7 +981,10 @@ end
 -- value. Anything but a zone then reads as no zone, and the value keeps
 -- its fixed offset.
 local function a_replaced_zone_slot_reads_as_no_zone_test()
-    local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9 }, time.zone("America/New_York"))
+    local z = time.zoned(
+        { year = 2026, month = 7, day = 2, hour = 9 },
+        time.zone("America/New_York")
+    )
     debug.setuservalue(z, "not a zone")
     assert(z:iso() == "2026-07-02T09:00:00-04:00")
     assert(z:with({ hour = 10 }):iso() == "2026-07-02T10:00:00-04:00")
@@ -968,8 +1032,11 @@ local repeats_and_gaps_hold_in_every_zone_cases = {
 }
 
 local function repeats_and_gaps_hold_in_every_zone_test(name, year, month, day, hour, expected)
-    local z = time.zoned({ year = year, month = month, day = day, hour = hour, minute = 30 }, time.zone(name))
-    assert(z:iso() == expected, `$(name): $(z:iso())`)
+    local z = time.zoned(
+        { year = year, month = month, day = day, hour = hour, minute = 30 },
+        time.zone(name)
+    )
+    assert(z:iso() == expected, `$name: $(z:iso())`)
     -- The instant reads back as the same wall clock time.
     assert(z:instant():at(time.zone(name)):iso() == expected, name)
 end
@@ -982,6 +1049,7 @@ local function a_pattern_parse_reads_month_and_weekday_names_test()
     assert(time.parse("Feb 3 2026", "%h %e %Y"):iso() == "2026-02-03T00:00:00Z")
     -- Every date that format writes with these names parses back.
     local start = time.instant(1767225600)
+
     for day = 0, 400, 7 do
         local t = start + time.days(day) + time.hours(day % 24)
         local text = t:format("%a, %d %b %Y %H:%M:%S")
@@ -993,7 +1061,11 @@ end
 
 local function a_weekday_that_disagrees_with_the_date_raises_test()
     local ok, e = catch time.parse("Mon, 22 Nov 2026", "%a, %d %b %Y")
-    assert(not ok and e:find("'Mon, 22 Nov 2026' names Monday, but the date falls on a Sunday", 1, true), e)
+    assert(
+        not ok
+            and e:find("'Mon, 22 Nov 2026' names Monday, but the date falls on a Sunday", 1, true),
+        e
+    )
     ok, e = catch time.parse("22 Noe 2026", "%d %b %Y")
     assert(not ok and e:find("does not match time format", 1, true), e)
 end

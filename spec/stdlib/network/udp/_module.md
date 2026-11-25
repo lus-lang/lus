@@ -18,5 +18,5 @@ pledge("network")
 local sock <close> = network.udp.open(0, "127.0.0.1")
 sock:settimeout(0.05)
 local data, err = sock:receive()
-print(data, err.code, tostring(err))   --> nil  timeout  receive timeout
+print(data, err.code, tostring(err))  --> nil  timeout  receive timeout
 ```

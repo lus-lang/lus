@@ -27,7 +27,7 @@ The following example hashes a password and checks two attempts against it.
 
 ```lus
 local stored = crypto.hashpassword("correct horse battery staple")
-print(stored:sub(1, 30))                                           --> $argon2id$v=19$m=19456,t=2,p=1
-print(crypto.verifypassword("correct horse battery staple", stored))   --> true
-print(crypto.verifypassword("Tr0ub4dor&3", stored))                    --> false
+print(stored:sub(1, 30))  --> $argon2id$v=19$m=19456,t=2,p=1
+print(crypto.verifypassword("correct horse battery staple", stored))  --> true
+print(crypto.verifypassword("Tr0ub4dor&3", stored))  --> false
 ```

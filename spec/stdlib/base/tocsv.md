@@ -26,7 +26,7 @@ A row that is not a table raises `row N is not a table`. A delimiter that is not
 io.write(tocsv({ { "name", "quote" }, { "Ada", 'said "hi"' } }))
 --> name,quote
 --> Ada,"said ""hi"""
-io.write(tocsv({ { 1, nil, true } }, ";"))   --> 1;;true
+io.write(tocsv({ { 1, nil, true } }, ";"))  --> 1;;true
 ```
 
 [`fromcsv`](/manual/api#fromcsv) parses CSV text back into rows. A header row is written as the first row of `t`.

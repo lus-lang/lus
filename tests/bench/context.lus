@@ -11,31 +11,57 @@ end
 
 local loc = 0
 local ctxv <context> = 0
-local function upv() return loc end
+
+local function upv()
+    return loc
+end
 
 time("read a local", function()
     local x, s = 0, 0
-    for i = 1, n do s = s + x end
+
+    for i = 1, n do
+        s = s + x
+    end
 end)
+
 time("read an upvalue", function()
     local s = 0
-    for i = 1, n do s = s + loc end
+
+    for i = 1, n do
+        s = s + loc
+    end
 end)
+
 time("read a context default", function()
     local s = 0
-    for i = 1, n do s = s + ctxv end
+
+    for i = 1, n do
+        s = s + ctxv
+    end
 end)
+
 ctxv = 0
+
 time("read a context value", function()
     local s = 0
-    for i = 1, n do s = s + ctxv end
+
+    for i = 1, n do
+        s = s + ctxv
+    end
 end)
+
 time("write an upvalue", function()
-    for i = 1, n do loc = i end
+    for i = 1, n do
+        loc = i
+    end
 end)
+
 time("write a context value", function()
-    for i = 1, n do ctxv = i end
+    for i = 1, n do
+        ctxv = i
+    end
 end)
+
 time("create and run coroutines", function()
     for i = 1, n // 20 do
         coroutine.resume(coroutine.create(upv))

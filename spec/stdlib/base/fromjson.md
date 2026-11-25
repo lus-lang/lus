@@ -32,11 +32,11 @@ Invalid syntax, trailing data after the value, empty input, a number out of rang
 
 ```lus
 local data = fromjson('{"name": "Alice", "scores": [95, 87.5], "note": null}')
-print(data.name, data.scores[1], data.note)                  --> Alice  95  nil
+print(data.name, data.scores[1], data.note)  --> Alice  95  nil
 print(math.type(data.scores[1]), math.type(data.scores[2]))  --> integer  float
 
 local n = fromjson('{"price": 19.90}', { exact = true }).price
-print(math.type(n), n)                                       --> decimal  19.90
+print(math.type(n), n)  --> decimal  19.90
 ```
 
 [Data formats](/manual/data) gives the full mapping between JSON and Lus values.

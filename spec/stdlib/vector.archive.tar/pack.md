@@ -24,7 +24,7 @@ local tar = vector.archive.tar.pack({
     { name = "release/README", data = "Read me first.\n", mtime = 1700000000 },
     { name = "release/bin/tool", data = "#!/bin/sh\n", mode = 493 },
 })
-print(#tar % 512)                                                       --> 0
+print(#tar % 512)  --> 0
 local tgz = vector.archive.gzip.compress(tar)
-print(vector.archive.tar.list(vector.archive.gzip.decompress(tgz))[1].mtime)   --> 1700000000
+print(vector.archive.tar.list(vector.archive.gzip.decompress(tgz))[1].mtime)  --> 1700000000
 ```

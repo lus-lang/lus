@@ -2,7 +2,8 @@ pledge("load")
 
 -- Global declarations make every other free name an error in their scope, so
 -- the names the tests use are declared once here.
-global print, setmetatable, assert, type, os, pledge, load, string, table, ipairs, pairs, tostring, tonumber, select
+global print, setmetatable, assert, type, os, pledge, load, string, table, ipairs, pairs, tostring,
+    tonumber, select
 
 -- ===== from =====
 --[[
@@ -13,7 +14,6 @@ global print, setmetatable, assert, type, os, pledge, load, string, table, ipair
     - global a, b, c from t  -- equivalent to: global a, b, c = t.a, t.b, t.c
     - a, b, c from t         -- equivalent to: a, b, c = t.a, t.b, t.c
 ]]
-
 
 -- local from basic
 local function local_from_basic_test()
@@ -59,7 +59,12 @@ end
 
 -- local from with function value
 local function local_from_with_function_value_test()
-    local t = { fn = function() return 42 end }
+    local t = {
+        fn = function()
+            return 42
+        end,
+    }
+
     local fn from t
     assert(type(fn) == "function" and fn() == 42)
 end
@@ -69,6 +74,7 @@ local function local_from_function_call_test()
     local function getTable()
         return { a = 100, b = 200 }
     end
+
     local a, b from getTable()
     assert(a == 100 and b == 200)
 end
@@ -178,10 +184,12 @@ end
 -- table expression evaluated once
 local function table_expression_evaluated_once_test()
     local call_count = 0
+
     local function getTable()
         call_count = call_count + 1
         return { a = call_count, b = call_count }
     end
+
     local a, b from getTable()
     assert(call_count == 1 and a == 1 and b == 1)
 end
@@ -197,26 +205,31 @@ end
 local function from_inside_if_block_test()
     local t = { success = true, value = 100 }
     local result
+
     if s = t.success then
         local value from t
         result = value
     end
+
     assert(result == 100)
 end
 
 -- from inside caught function
 local function from_inside_caught_function_test()
     local t = { a = 1 }
+
     local ok, err = catch (function()
         local a from t
         return a
     end)()
+
     assert(ok == true and err == 1)
 end
 
 -- inner scope shadows outer
 local function inner_scope_shadows_outer_test()
     local a = 999
+
     do
         local t = { a = 1 }
         local a from t
@@ -227,10 +240,12 @@ end
 -- outer scope unchanged
 local function outer_scope_unchanged_test()
     local a = 999
+
     do
         local t = { a = 1 }
         local a from t
     end
+
     assert(a == 999)
 end
 
@@ -284,6 +299,7 @@ end
 -- if-from with group source
 local function if_from_with_group_source_test()
     local p <group> = { ok = true, value = 42 }
+
     if ok, value from p then
         assert(ok == true)
         assert(value == 42)
@@ -295,5 +311,5 @@ local function local_from_group_field_mutation_independent_test()
     local p <group> = { x = 10, y = 20 }
     local x from p
     p.x = 999
-    assert(x == 10) -- x was copied, not aliased
+    assert(x == 10)  -- x was copied, not aliased
 end

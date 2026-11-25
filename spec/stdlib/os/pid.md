@@ -16,7 +16,7 @@ The following example names a scratch file after the process, so two copies of a
 
 ```lus
 local name = `report-$(os.pid()).tmp`
-print(name:match("^report%-%d+%.tmp$") == name)   --> true
+print(name:match("^report%-%d+%.tmp$") == name)  --> true
 ```
 
 [`os.getenv`](/manual/api#os.getenv) reads the environment of the process. [`os.exit`](/manual/api#os.exit) ends the process.

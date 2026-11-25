@@ -20,6 +20,7 @@ local function truthiness(value)
     if value then
         return "truthy"
     end
+
     return "falsy"
 end
 
@@ -42,6 +43,7 @@ print(size)  --> 10
 for _, stock in ipairs({ 0, 12 }) do
     print(stock > 0 and "in stock" or "sold out")
 end
+
 --> sold out
 --> in stock
 

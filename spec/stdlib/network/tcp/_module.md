@@ -40,5 +40,5 @@ pledge("network")
 local server <close> = network.tcp.bind("127.0.0.1", 0)
 server:settimeout(0.05)
 local sock, err = server:accept()
-print(sock, err.code, tostring(err))   --> nil  timeout  accept timeout
+print(sock, err.code, tostring(err))  --> nil  timeout  accept timeout
 ```

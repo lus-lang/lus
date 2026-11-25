@@ -21,9 +21,9 @@ The following example converts a string with one character outside ASCII.
 
 ```lus
 local v = vector.fromstring("héllo")
-print(#("héllo"), #v)                          --> 5  6
-print(vector.get(v, 1), vector.get(v, 2))      --> 195  169
-print(#vector.fromstring(""))                  --> 0
+print(#("héllo"), #v)  --> 5  6
+print(vector.get(v, 1), vector.get(v, 2))  --> 195  169
+print(#vector.fromstring(""))  --> 0
 ```
 
 [`vector.tostring`](/manual/api#vector.tostring) decodes bytes back into a string.

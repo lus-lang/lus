@@ -24,8 +24,8 @@ local path = os.tmpname()
 local f = assert(io.open(path, "w"))
 f:write('print("running")\nreturn 1, 2\n')
 f:close()
-print(dofile(path))   --> running
-                      --> 1  2
+print(dofile(path))  --> running
+--> 1  2
 fs.remove(path)
 ```
 

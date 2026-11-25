@@ -13,10 +13,12 @@ local function download(name, chunks)
         log[#log + 1] = `$name$i`
         coroutine.yield()
     end
+
     return `$name is done`
 end
 
 local tasks = {}
+
 for _, job in ipairs({ { "a", 3 }, { "b", 1 }, { "c", 2 } }) do
     tasks[#tasks + 1] = coroutine.detach(coroutine.create(download), job[1], job[2])
 end
@@ -29,6 +31,7 @@ print(#log, coroutine.status(tasks[1]))  --> 0  suspended
 for _, task in ipairs(tasks) do
     print(coroutine.resume(task))
 end
+
 --> true  a is done
 --> true  b is done
 --> true  c is done

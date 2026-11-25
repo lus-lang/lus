@@ -27,10 +27,10 @@ The result is one integer for each character in the range, in order. A range tha
 A position with no integral value, such as `1.5`, raises the error `number has no integer representation`. A position may be any number subtype with an integral value, or a numeric string.
 
 ```lus
-print(string.byte("héllo"))                 --> 104
-print(string.byte("héllo", 2))              --> 233
-print(string.byte("héllo", 1, -1))          --> 104  233  108  108  111
-print(string.byte("abc", -10, 2))           --> 97  98
+print(string.byte("héllo"))  --> 104
+print(string.byte("héllo", 2))  --> 233
+print(string.byte("héllo", 1, -1))  --> 104  233  108  108  111
+print(string.byte("abc", -10, 2))  --> 97  98
 print(select("#", string.byte("abc", 10)))  --> 0
 ```
 

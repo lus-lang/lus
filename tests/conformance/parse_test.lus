@@ -4,8 +4,7 @@ pledge("load", "fs:read=" .. TEST_DIR, "fs:read=" .. TEST_DIR .. "/*")
 -- serializes deeply nested calls
 local function serializes_deeply_nested_calls_test()
     local depth = 64
-    local source = "return " .. string.rep("f(", depth) .. "31337"
-        .. string.rep(")", depth)
+    local source = "return " .. string.rep("f(", depth) .. "31337" .. string.rep(")", depth)
     local ast = debug.parse(source, "nested-calls.lus")
     local node = ast.children[1].values[1]
 
@@ -22,7 +21,11 @@ end
 -- Helper to read a file
 local function readfile(path)
     local f = io.open(path, "r")
-    if not f then return nil end
+
+    if not f then
+        return nil
+    end
+
     local content = f:read("a")
     f:close()
     return content
@@ -32,18 +35,22 @@ end
 -- formatter are exercised on the whole conformance suite.
 local function get_lus_files()
     local list_ok, all_files = catch fs.list(TEST_DIR, "*.lus")
+
     if not list_ok then
         return {}
     end
 
     local files = {}
+
     for idx = 1, #all_files do
         local basename = all_files[idx]
+
         -- Skip this file to avoid self-reference.
         if basename ~= "parse_test.lus" then
-            files[#files + 1] = {fs.path.join(TEST_DIR, basename), basename}
+            files[#files + 1] = { fs.path.join(TEST_DIR, basename), basename }
         end
     end
+
     return files
 end
 
@@ -76,25 +83,39 @@ local function every_conformance_file_formats_idempotently_test(path, name)
     -- Format again: the result must be identical (idempotent).
     local formatted2, err2 = debug.format(formatted, name)
     assert(formatted2, "Failed to re-format: " .. path .. ": " .. tostring(err2))
+
     if formatted2 ~= formatted then
         local exp_lines = {}
+
         for line in (formatted .. "\n"):gmatch("([^\n]*)\n") do
             exp_lines[#exp_lines + 1] = line
         end
+
         local got_lines = {}
+
         for line in (formatted2 .. "\n"):gmatch("([^\n]*)\n") do
             got_lines[#got_lines + 1] = line
         end
+
         local diff_line = 0
         local max = #exp_lines > #got_lines and #exp_lines or #got_lines
+
         for j = 1, max do
             if exp_lines[j] ~= got_lines[j] then
                 diff_line = j
                 break
             end
         end
-        error("Formatter not idempotent for " .. path .. " at line " .. diff_line
-            .. ":\n  first:  " .. tostring(exp_lines[diff_line])
-            .. "\n  second: " .. tostring(got_lines[diff_line]))
+
+        error(
+            "Formatter not idempotent for "
+                .. path
+                .. " at line "
+                .. diff_line
+                .. ":\n  first:  "
+                .. tostring(exp_lines[diff_line])
+                .. "\n  second: "
+                .. tostring(got_lines[diff_line])
+        )
     end
 end

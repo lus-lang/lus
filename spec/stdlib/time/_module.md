@@ -19,8 +19,8 @@ The following example moves an instant by exact hours and renders it in a named 
 
 ```lus
 local i = time.instant(1782998100)
-print(i:iso())                                    --> 2026-07-02T13:15:00Z
-print((i + time.hours(72)):iso())                 --> 2026-07-05T13:15:00Z
+print(i:iso())  --> 2026-07-02T13:15:00Z
+print((i + time.hours(72)):iso())  --> 2026-07-05T13:15:00Z
 print(i:at(time.zone("America/New_York")):iso())  --> 2026-07-02T09:15:00-04:00
 ```
 

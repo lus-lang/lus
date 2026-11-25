@@ -10,12 +10,18 @@ pledge("fs", "env")
 -- time, and its tests skip in setup.
 local BASE = do
     local ok, name = catch os.tmpname()
+
     if ok then
         fs.remove(name)
         provide name .. "-watch"
     end
-    provide fs.path.join(os.getenv("TMPDIR") or os.getenv("TEMP") or "/tmp", "lus-watch-test-" .. os.time())
+
+    provide fs.path.join(
+        os.getenv("TMPDIR") or os.getenv("TEMP") or "/tmp",
+        "lus-watch-test-" .. os.time()
+    )
 end
+
 local ROOT
 local count = 0
 
@@ -35,6 +41,7 @@ local function setup()
     if fs.watch == nil then
         skip("fs.watch is nil on a system without file notifications")
     end
+
     count = count + 1
     ROOT = BASE .. "-" .. count
     fs.createdirectory(fs.path.join(ROOT, "sub"), true)
@@ -42,23 +49,28 @@ end
 
 local function watching(options)
     local ok, w = catch fs.watch(ROOT, options)
+
     if not ok then
         if tostring(w):find("refused", 1, true) or tostring(w):find("unavailable", 1, true) then
             skip("file notifications unavailable")
         end
+
         error(w, 0)
     end
+
     return w
 end
 
 -- Resumes the watch `n` times and returns "kind name" for each event.
 local function collect(w, n)
     local out = {}
+
     for i = 1, n do
         local ok, ev = coroutine.resume(w)
         assert(ok, ev)
         out[i] = ev.kind .. " " .. ev.path:sub(#ROOT + 2):gsub("\\", "/")
     end
+
     return table.concat(out, ", ")
 end
 
@@ -74,6 +86,7 @@ end
 local function past_changes(w, name)
     while true do
         local event = collect(w, 1)
+
         if event ~= "modify " .. name then
             return event
         end
@@ -105,12 +118,14 @@ local function quick_changes_of_one_path_start_with_the_creation_test()
     setup()
     local w = watching()
     local a = fs.path.join(ROOT, "a.txt")
+
     local actions = in_background(function()
         write(a, "one")
         write(a, "two")
         write(a, "three")
         write(fs.path.join(ROOT, "marker"), "")
     end)
+
     assert(collect(w, 1) == "create a.txt")
     assert(past_changes(w, "a.txt") == "create marker")
     coroutine.resume(actions)
@@ -121,9 +136,11 @@ end
 local function recursive_watches_reach_subdirectories_test()
     setup()
     local w = watching({ recursive = true })
+
     local actions = in_background(function()
         write(fs.path.join(ROOT, "sub", "deep.txt"), "x")
     end)
+
     assert(collect(w, 1) == "create sub/deep.txt")
     coroutine.resume(actions)
     coroutine.close(w)
@@ -133,11 +150,13 @@ end
 local function a_plain_watch_stays_in_its_directory_test()
     setup()
     local w = watching()
+
     local actions = in_background(function()
         write(fs.path.join(ROOT, "sub", "deep.txt"), "x")
         pause(0.2)
         write(fs.path.join(ROOT, "top.txt"), "x")
     end)
+
     assert(collect(w, 1) == "create top.txt")
     coroutine.resume(actions)
     coroutine.close(w)
@@ -147,10 +166,12 @@ end
 local function the_glob_filters_events_test()
     setup()
     local w = watching({ glob = "*.lus", recursive = true })
+
     local actions = in_background(function()
         write(fs.path.join(ROOT, "skip.txt"), "x")
         write(fs.path.join(ROOT, "sub", "keep.lus"), "x")
     end)
+
     assert(collect(w, 1) == "create sub/keep.lus")
     coroutine.resume(actions)
     coroutine.close(w)
@@ -162,12 +183,17 @@ local function a_file_can_be_watched_test()
     local a = fs.path.join(ROOT, "a.txt")
     write(a, "one")
     local ok, w = catch fs.watch(a)
-    if not ok then skip("file notifications unavailable") end
+
+    if not ok then
+        skip("file notifications unavailable")
+    end
+
     local actions = in_background(function()
         write(fs.path.join(ROOT, "other.txt"), "x")
         pause(0.2)
         write(a, "two")
     end)
+
     assert(collect(w, 1) == "modify a.txt")
     coroutine.resume(actions)
     coroutine.close(w)

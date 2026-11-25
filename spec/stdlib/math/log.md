@@ -24,11 +24,11 @@ The result is a float. A base of 2 or 10 uses a dedicated routine, so the logari
 An argument that is not a number raises `bad argument #1 to 'math.log' (number expected, got nil)` with its position and type.
 
 ```lus
-print(math.log(1))           --> 0.0
-print(math.log(8, 2))        --> 3.0
-print(math.log(1000, 10))    --> 3.0
-print(math.log(2n^100, 2))   --> 100.0
-print(math.log(0))           --> -inf
+print(math.log(1))  --> 0.0
+print(math.log(8, 2))  --> 3.0
+print(math.log(1000, 10))  --> 3.0
+print(math.log(2n ^ 100, 2))  --> 100.0
+print(math.log(0))  --> -inf
 ```
 
 The conversion to a float comes first, so a bigint or decimal beyond the float range, about 1.8e308, has a logarithm of `inf`. [`math.exp`](/manual/api#math.exp) is the inverse of the natural logarithm.

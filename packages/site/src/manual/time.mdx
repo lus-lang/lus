@@ -27,11 +27,11 @@ The following program prints the date and time of one instant in UTC and in New 
 global print, time
 
 local i = time.instant(1782998100)
-print(i:iso(), i:epoch())                           --> 2026-07-02T13:15:00Z  1782998100
+print(i:iso(), i:epoch())  --> 2026-07-02T13:15:00Z  1782998100
 
 local ny = time.zone("America/New_York")
-print(i:at(ny):iso())                               --> 2026-07-02T09:15:00-04:00
-print((i + time.hours(72)):iso())                   --> 2026-07-05T13:15:00Z
+print(i:at(ny):iso())  --> 2026-07-02T09:15:00-04:00
+print((i + time.hours(72)):iso())  --> 2026-07-05T13:15:00Z
 ```
 
 ## Instants
@@ -55,9 +55,9 @@ global print, time
 local start = time.instant(1782998100)
 local later = start + time.days(3)
 local span = later - start
-print(span:seconds(), start < later)             --> 259200.0  true
-print(later == time.instant(1783257300))         --> true
-print(catch (start + 5))                         --> false  ...: bad argument #2 to 'add' (time.duration expected, got number)
+print(span:seconds(), start < later)  --> 259200.0  true
+print(later == time.instant(1783257300))  --> true
+print(catch (start + 5))  --> false  ...: bad argument #2 to 'add' (time.duration expected, got number)
 ```
 
 ## Durations
@@ -77,12 +77,12 @@ Durations support `+`, `-`, negation, and multiplication by an integer on either
 global print, time
 
 local d = time.duration{ hours = 1, minutes = 30 }
-print(d:seconds(), d:millis())                            --> 5400.0  5400000.0
-print((time.hours(2) + time.minutes(15)):seconds())       --> 8100.0
-print((3 * time.seconds(10)) == time.seconds(30))         --> true
+print(d:seconds(), d:millis())  --> 5400.0  5400000.0
+print((time.hours(2) + time.minutes(15)):seconds())  --> 8100.0
+print((3 * time.seconds(10)) == time.seconds(30))  --> true
 
 local parts = (-time.seconds(90)):parts()
-print(parts.negative, parts.minutes, parts.seconds)       --> true  1  30
+print(parts.negative, parts.minutes, parts.seconds)  --> true  1  30
 ```
 
 ## Zones
@@ -103,9 +103,9 @@ global print, time
 local ny = time.zone("America/New_York")
 local summer = time.instant(1782998100)
 local winter = time.instant(1767355200)
-print(ny:offset(summer), ny:offset(winter))       --> -14400  -18000
-print(winter:at(ny):iso())                        --> 2026-01-02T07:00:00-05:00
-print(time.offset(-5 * 3600):name())              --> -05:00
+print(ny:offset(summer), ny:offset(winter))  --> -14400  -18000
+print(winter:at(ny):iso())  --> 2026-01-02T07:00:00-05:00
+print(time.offset(-5 * 3600):name())  --> -05:00
 ```
 
 The _IANA time zone database_ is the public record of the time zone rules of every region, past and present. Because the Lus runtime contains a copy of it, `time.zone` requires no file access or [permission](/manual/permissions) and gives the same results on every platform. For an instant in the past, a zone returns the offset that was in force at that time. [`time.tzdata_version()`](/manual/api#time.tzdata_version) returns the release of the built-in database as a string, such as `"2026c"`.
@@ -127,8 +127,8 @@ global print, time
 
 local ny = time.zone("America/New_York")
 local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9, minute = 15 }, ny)
-print(z:instant():iso(), z.offset)           --> 2026-07-02T13:15:00Z  -14400
-print(z.yearday, z:iso())                    --> 183  2026-07-02T09:15:00-04:00
+print(z:instant():iso(), z.offset)  --> 2026-07-02T13:15:00Z  -14400
+print(z.yearday, z:iso())  --> 183  2026-07-02T09:15:00-04:00
 ```
 
 Zoned values also convert a time between regions. The following program defines a meeting in Paris time and prints its time in New York and in Tokyo.
@@ -136,10 +136,13 @@ Zoned values also convert a time between regions. The following program defines 
 ```lus
 global print, time
 
-local meeting = time.zoned({ year = 2026, month = 7, day = 2, hour = 15 }, time.zone("Europe/Paris"))
+local meeting = time.zoned(
+    { year = 2026, month = 7, day = 2, hour = 15 },
+    time.zone("Europe/Paris")
+)
 local moment = meeting:instant()
-print(moment:at(time.zone("America/New_York")):format("%A %H:%M"))   --> Thursday 09:00
-print(moment:at(time.zone("Asia/Tokyo")):format("%A %H:%M"))         --> Thursday 22:00
+print(moment:at(time.zone("America/New_York")):format("%A %H:%M"))  --> Thursday 09:00
+print(moment:at(time.zone("Asia/Tokyo")):format("%A %H:%M"))  --> Thursday 22:00
 ```
 
 The days of the week and the months have names, which are easier to read in code than numbers. The names of the weekdays are the members `monday` to `sunday` of the [enum](/manual/guide#enums) [`time.weekday`](/manual/api#time.weekday), where `tonumber` returns the position of a member and Monday is 1. The names of the months are the members `january` to `december` of [`time.month`](/manual/api#time.month). The `weekday` field of a zoned value is a member of `time.weekday`, while the `month` field is an integer from 1 to 12. A function that expects a month also accepts a member of `time.month`.
@@ -148,8 +151,8 @@ The days of the week and the months have names, which are easier to read in code
 global print, time, tonumber
 
 local christmas = time.zoned{ year = 2026, month = time.month.december, day = 25 }
-print(christmas.month, tonumber(christmas.weekday))       --> 12  5
-print(christmas.weekday == time.weekday.friday)           --> true
+print(christmas.month, tonumber(christmas.weekday))  --> 12  5
+print(christmas.weekday == time.weekday.friday)  --> true
 ```
 
 `==` on two zoned values is true only when both are the same value. `<` on zoned values raises an error, so a program compares two zoned values by their instants, as in `a:instant() < b:instant()`.
@@ -168,13 +171,13 @@ global print, time
 
 local ny = time.zone("America/New_York")
 local noon = time.zoned({ year = 2026, month = 3, day = 7, hour = 12 }, ny)
-local tomorrow = noon:add{ days = 1 }
-print(tomorrow:iso())                                --> 2026-03-08T12:00:00-04:00
-print((tomorrow:instant() - noon:instant()):seconds()) --> 82800.0
+local tomorrow = noon:add({ days = 1 })
+print(tomorrow:iso())  --> 2026-03-08T12:00:00-04:00
+print((tomorrow:instant() - noon:instant()):seconds())  --> 82800.0
 
 local jan31 = time.zoned({ year = 2026, month = 1, day = 31 }, ny)
-print(jan31:add{ months = 1 }:iso())               --> 2026-02-28T00:00:00-05:00
-print(noon:with{ hour = 8, minute = 5 }:iso())     --> 2026-03-07T08:05:00-05:00
+print(jan31:add({ months = 1 }):iso())  --> 2026-02-28T00:00:00-05:00
+print(noon:with({ hour = 8, minute = 5 }):iso())  --> 2026-03-07T08:05:00-05:00
 ```
 
 When the clocks move forward, one hour of the day is skipped. A time in that hour is moved forward by the length of the skip, so on the day when the clocks of New York go from 02:00 to 03:00, 02:30 becomes 03:30 with the offset `-04:00`. When the clocks move back, one hour occurs twice, so a time in that hour has two possible instants. The result is the earlier one, which has the daylight saving offset.
@@ -204,9 +207,9 @@ global print, time
 
 local i = time.instant(1782998100)
 local ny = time.zone("America/New_York")
-print(i:format("%Y-%m-%d %H:%M"))           --> 2026-07-02 13:15
-print(i:at(ny):format("%H:%M %Z %z"))       --> 09:15 EDT -0400
-print(i:format("%A %d %B"))                 --> Thursday 02 July
+print(i:format("%Y-%m-%d %H:%M"))  --> 2026-07-02 13:15
+print(i:at(ny):format("%H:%M %Z %z"))  --> 09:15 EDT -0400
+print(i:format("%A %d %B"))  --> Thursday 02 July
 ```
 
 ## Parsing
@@ -220,10 +223,10 @@ global print, time
 
 local i = time.parse("2026-07-02T13:15:00Z")
 local z = time.parse("2026-07-02T09:15:00-04:00")
-print(z:iso(), z:instant() == i)                         --> 2026-07-02T09:15:00-04:00  true
-print(time.parse("2026-07-02"):iso())                    --> 2026-07-02T00:00:00Z
-print(time.parse("2026-07-02T13:15:00.25Z"):nanos())     --> 250000000
-print(catch time.parse("tomorrow"))                      --> false  ...: invalid ISO 8601 date in 'tomorrow'
+print(z:iso(), z:instant() == i)  --> 2026-07-02T09:15:00-04:00  true
+print(time.parse("2026-07-02"):iso())  --> 2026-07-02T00:00:00Z
+print(time.parse("2026-07-02T13:15:00.25Z"):nanos())  --> 250000000
+print(catch time.parse("tomorrow"))  --> false  ...: invalid ISO 8601 date in 'tomorrow'
 ```
 
 With `format`, `parse` reads text in another form, which `format` describes with the specifiers of [Formatting](#formatting). `parse` accepts `%Y`, `%y` for a year of two digits, `%m`, `%d`, `%e` for a day without a leading zero, `%H`, `%M`, `%S`, `%z`, and `%%`. A space in `format` matches any amount of whitespace, while every other character matches itself. Text that does not match raises an error that quotes the text and the format. `parse` reads as much text as `format` describes and ignores the rest.
@@ -234,7 +237,7 @@ The following program parses a date that is written with the day first.
 global print, time
 
 local z = time.parse("02/07/2026 09:15 -0400", "%d/%m/%Y %H:%M %z")
-print(z:iso())                                           --> 2026-07-02T09:15:00-04:00
+print(z:iso())  --> 2026-07-02T09:15:00-04:00
 ```
 
 ## Measuring elapsed time
@@ -249,8 +252,8 @@ global print, string, time
 local start = time.monotonic()
 local text = string.rep("x", 100000)
 local elapsed = time.monotonic() - start
-print(elapsed:seconds() >= 0, #text)       --> true  100000
-print(catch start:iso())                   --> false  ...: monotonic instants have no calendar representation
+print(elapsed:seconds() >= 0, #text)  --> true  100000
+print(catch start:iso())  --> false  ...: monotonic instants have no calendar representation
 ```
 
 ## Integer epochs

@@ -23,9 +23,9 @@ Without `command`, the call returns `true` to report that a shell is available, 
 
 ```lus
 pledge("exec")
-print(os.execute("true"))     --> true  exit  0
-print(os.execute("exit 3"))   --> nil  exit  3
-print(os.execute())           --> true
+print(os.execute("true"))  --> true  exit  0
+print(os.execute("exit 3"))  --> nil  exit  3
+print(os.execute())  --> true
 ```
 
 [`io.popen`](/manual/api#io.popen) runs a command and connects a pipe to its output or input, and [`os.spawn`](/manual/api#os.spawn) runs a program without a shell.

@@ -33,11 +33,14 @@ The first result is the new string. The second is the number of matches replaced
 A `repl` of another type raises `bad argument #3 to 'gsub' (string/function/table expected, got boolean)` with its type. A table or function result of another type, such as a table, raises `invalid replacement value (a table)`. A replacement string with a capture index the pattern lacks raises `invalid capture index %2`, and a `%` followed by anything other than a digit or `%` raises `invalid use of '%' in replacement string`. A malformed pattern raises its error.
 
 ```lus
-print(string.gsub("hello world", "o", "0"))                   --> hell0 w0rld  2
-print(string.gsub("hello world", "o", "0", 1))                --> hell0 world  1
-print(string.gsub("hello world", "(%w+)", "<%1>"))            --> <hello> <world>  2
-print(string.gsub("$name is $x", "%$(%w+)", {name = "Ann"}))  --> Ann is $x  2
-print(string.gsub("añb", ".", function(c) return c:upper() end))  --> AñB  3
+print(string.gsub("hello world", "o", "0"))  --> hell0 w0rld  2
+print(string.gsub("hello world", "o", "0", 1))  --> hell0 world  1
+print(string.gsub("hello world", "(%w+)", "<%1>"))  --> <hello> <world>  2
+print(string.gsub("$name is $x", "%$(%w+)", { name = "Ann" }))  --> Ann is $x  2
+
+print(string.gsub("añb", ".", function(c)  --> AñB  3
+    return c:upper()
+end))
 ```
 
 Patterns match whole characters, so a replacement never splits a multi-byte character. The `ñ` in the last line stays lowercase because [`string.upper`](/manual/api#string.upper) changes ASCII letters only, and the classes such as `%a` likewise describe ASCII characters only. A pattern that matches the empty string matches at every position, so `string.gsub("abc", "", "-")` returns `-a-b-c-` and 4. [`string.find`](/manual/api#string.find) locates one match without replacing it.

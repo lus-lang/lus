@@ -6,11 +6,16 @@ pledge("fs", "env")
 -- temporary directory, such as WASI, falls back to the time.
 local dir = do
     local ok, name = catch os.tmpname()
+
     if ok then
         fs.remove(name)
         provide name .. "-stat"
     end
-    provide fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-stat-test-" .. os.time() .. "-" .. tostring({}):sub(-6))
+
+    provide fs.path.join(
+        os.getenv("TMPDIR") or "/tmp",
+        "lus-stat-test-" .. os.time() .. "-" .. tostring({}):sub(-6)
+    )
 end
 
 local function a_file_reports_its_size_and_time_test()
@@ -33,7 +38,10 @@ local function a_directory_is_a_directory_test()
 end
 
 local function links_are_followed_unless_asked_test()
-    if fs.path.separator == "\\" then return end
+    if fs.path.separator == "\\" then
+        return
+    end
+
     fs.createdirectory(dir, true)
     local target = fs.path.join(dir, "t.txt")
     io.open(target, "w"):close()

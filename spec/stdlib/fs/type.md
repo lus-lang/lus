@@ -30,9 +30,9 @@ local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-type-example")
 fs.createdirectory(dir, true)
 io.open(fs.path.join(dir, "data.txt"), "w"):close()
 fs.createlink(fs.path.join(dir, "shortcut"), "data.txt")
-print(fs.type(dir))                                --> directory  false
-print(fs.type(fs.path.join(dir, "data.txt")))      --> file  false
-print(fs.type(fs.path.join(dir, "shortcut")))      --> file  true
+print(fs.type(dir))  --> directory  false
+print(fs.type(fs.path.join(dir, "data.txt")))  --> file  false
+print(fs.type(fs.path.join(dir, "shortcut")))  --> file  true
 print((catch fs.type(fs.path.join(dir, "nope"))))  --> false
 fs.remove(dir, true)
 ```

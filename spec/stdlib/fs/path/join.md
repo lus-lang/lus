@@ -16,9 +16,9 @@ Every argument is a path component given as a string, and a number is converted 
 The following example shows a plain join, an absolute component, and a component that already ends in a separator.
 
 ```lus
-print(fs.path.join("dir", "sub", "file.txt"))   --> dir/sub/file.txt
-print(fs.path.join("relative", "/absolute"))    --> /absolute
-print(fs.path.join("a/", "", "b"))              --> a/b
+print(fs.path.join("dir", "sub", "file.txt"))  --> dir/sub/file.txt
+print(fs.path.join("relative", "/absolute"))  --> /absolute
+print(fs.path.join("a/", "", "b"))  --> a/b
 ```
 
 The example prints the output shown on POSIX systems, where the separator is `/`. [`fs.path.split`](/manual/api#fs.path.split) takes a path apart into its components.

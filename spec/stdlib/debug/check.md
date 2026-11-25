@@ -35,6 +35,7 @@ The following example finds a string that grows by concatenation in a loop.
 
 ```lus
 local code = 'local s = ""\nfor i = 1, 3 do s = s .. i end\nprint(s)'
+
 for _, d in ipairs(debug.check(code)) do
     print(d.line, d.severity, d.code)
 end

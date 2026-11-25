@@ -27,6 +27,7 @@ print(primes[1], point.y, type(point))  --> 2  4  table
 local function area(width, height)
     return width * height
 end
+
 print(area(3, 4), type(area))  --> 12  function
 
 -- Only `nil` and `false` count as false in a condition. Zero and the empty string count as true.

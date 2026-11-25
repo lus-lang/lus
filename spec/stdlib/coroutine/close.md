@@ -26,13 +26,19 @@ Closing the running coroutine runs its pending to-be-closed variables and ends i
 
 ```lus
 local co = coroutine.create(function()
-    local res <close> = setmetatable({}, { __close = function() print("released") end })
+    local res <close> = setmetatable({}, {
+        __close = function()
+            print("released")
+        end,
+    })
+
     coroutine.yield()
 end)
+
 coroutine.resume(co)
-print(coroutine.close(co))    --> released
-                              --> true
-print(coroutine.status(co))   --> dead
+print(coroutine.close(co))  --> released
+--> true
+print(coroutine.status(co))  --> dead
 ```
 
 Closing a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach) cancels it. The runtime stops resuming it, its pending to-be-closed variables are closed, and callers that wait for it in `resume` receive `false` and `"cannot resume dead coroutine"`. Closing a detached coroutine that failed returns `false` and its error object, which counts as collecting that error. [Cancelling](/manual/concurrency#cancelling) describes detached coroutines in full.
@@ -41,12 +47,20 @@ A coroutine closes the same way at the end of the scope of a `<close>` variable 
 
 ```lus
 local co = coroutine.create(function()
-    local res <close> = setmetatable({}, { __close = function() print("released") end })
+    local res <close> = setmetatable({}, {
+        __close = function()
+            print("released")
+        end,
+    })
+
     coroutine.yield()
 end)
+
 coroutine.resume(co)
+
 do
     local c <close> = co
-end                           --> released
-print(coroutine.status(co))   --> dead
+end  --> released
+
+print(coroutine.status(co))  --> dead
 ```

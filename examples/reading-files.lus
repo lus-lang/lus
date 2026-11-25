@@ -28,9 +28,11 @@ end
 
 -- io.lines opens the file, reads one line per step, and closes it at the end.
 local count = 0
+
 for _ in io.lines("inventory.txt") do
     count = count + 1
 end
+
 print(`$count lines`)  --> 3 lines
 
 -- Opening a missing file returns nil and a message.

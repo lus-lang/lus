@@ -17,8 +17,8 @@ Splits `path` at its separators and returns an array of the components.
 
 ```lus
 local parts = fs.path.split("/usr/local/bin")
-print(#parts, parts[1] == "", parts[2], parts[4])   --> 4  true  usr  bin
-print(#fs.path.split("a/b/"))                       --> 2
+print(#parts, parts[1] == "", parts[2], parts[4])  --> 4  true  usr  bin
+print(#fs.path.split("a/b/"))  --> 2
 ```
 
 [`fs.path.join`](/manual/api#fs.path.join) puts components back together.

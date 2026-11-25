@@ -33,6 +33,7 @@ print(("é"):byte(), utf8.char(9731))  --> 233  ☃
 for position, code in utf8.codes("añb") do
     print(position, code)
 end
+
 --> 1  97
 --> 2  241
 --> 3  98

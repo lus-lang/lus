@@ -27,7 +27,7 @@ io.output(path)
 io.write("to the file")
 io.close()
 io.output(io.stdout)
-print(io.open(path):read("a"))   --> to the file
+print(io.open(path):read("a"))  --> to the file
 fs.remove(path)
 ```
 

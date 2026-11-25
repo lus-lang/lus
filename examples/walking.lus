@@ -16,6 +16,7 @@ local files = {
     "project/docs/guide.md",
     "project/vendor/json/json.lus",
 }
+
 for _, path in ipairs(files) do
     io.open(path, "w"):write("-- source\n"):close()
 end
@@ -26,6 +27,7 @@ end
 for path, kind in fs.walk("project") do
     print(kind, path)
 end
+
 --> directory project/docs
 --> file project/docs/guide.md
 --> file project/main.lus
@@ -39,12 +41,15 @@ end
 
 -- A filter in the loop keeps the Lus files and skips the vendor directory.
 local count = 0
+
 for path, kind in fs.walk("project") do
     local top = fs.path.split(path)[2]
+
     if kind == "file" and path:match("%.lus$") and top ~= "vendor" then
         count = count + 1
     end
 end
+
 print(`$count Lus files`)  --> 3 Lus files
 
 -- The glob and exclude options do the same filtering inside the walk, and
@@ -52,6 +57,7 @@ print(`$count Lus files`)  --> 3 Lus files
 for path in fs.walk("project", { glob = "*.lus", exclude = "vendor" }) do
     print(path)
 end
+
 --> project/main.lus
 --> project/src/parser.lus
 --> project/src/util/strings.lus
@@ -59,6 +65,7 @@ end
 for path in fs.walk("project", { depth = 1 }) do
     print(fs.path.name(path))
 end
+
 --> docs
 --> main.lus
 --> src

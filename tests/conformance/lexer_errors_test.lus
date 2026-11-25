@@ -9,7 +9,6 @@ pledge("load")
 -- bracket delimiters, and the accuracy of the reported chunk name and line
 -- number across LF, CRLF, and CR line endings.
 
-
 -- Load a chunk and return its compile error message, or nil if it compiled.
 -- load reports a lexer failure by returning nil plus a message rather than
 -- raising, so we unwrap catch and then look at the first returned value to
@@ -17,12 +16,15 @@ pledge("load")
 -- helper honest if the runtime ever switches to raising instead.
 local function load_error(src, name)
     local ok, first, second = catch load(src, name or "=chunk")
+
     if not ok then
         return tostring(first)
     end
+
     if first == nil then
         return tostring(second)
     end
+
     return nil
 end
 
@@ -37,11 +39,15 @@ end
 local function checkfail(src, ...)
     local msg = load_error(src)
     assert(msg ~= nil, "expected a lexer error for source: " .. src)
-    local needles = {...}
+    local needles = { ... }
+
     for i = 1, #needles do
-        assert(has(msg, needles[i]),
-            "expected error to contain '" .. needles[i] .. "' but got: " .. msg)
+        assert(
+            has(msg, needles[i]),
+            "expected error to contain '" .. needles[i] .. "' but got: " .. msg
+        )
     end
+
     return msg
 end
 
@@ -65,22 +71,22 @@ end
 -- Each row is a source string and the substrings its diagnostic must contain.
 -- rejects a bad escape
 local rejects_a_bad_escape_cases = {
-    {[[return "\256"]], "decimal escape too large"},
-    {[[return "\300"]], "decimal escape too large"},
-    {[[return "\999"]], "decimal escape too large"},
-    {[[return "\x"]], "hexadecimal digit expected"},
-    {[[return "\xG"]], "hexadecimal digit expected"},
-    {[[return "\xA"]], "hexadecimal digit expected"},
-    {[[return "\x1G"]], "hexadecimal digit expected"},
-    {[[return "\m"]], "invalid escape sequence"},
-    {[[return "\q"]], "invalid escape sequence"},
-    {[[return "\u{}"]], "hexadecimal digit expected"},
-    {[[return "\u{80000000}"]], "value too large"},
-    {[[return "\u{FFFFFFFF}"]], "value too large"},
-    {[[return "\u{110000"]], "missing '}'"},
-    {[[return "\u{2G}"]], "missing '}'"},
-    {[[return "\uABCD"]], "missing '{'"},
-    {[[return "\u41"]], "missing '{'"},
+    { [[return "\256"]], "decimal escape too large" },
+    { [[return "\300"]], "decimal escape too large" },
+    { [[return "\999"]], "decimal escape too large" },
+    { [[return "\x"]], "hexadecimal digit expected" },
+    { [[return "\xG"]], "hexadecimal digit expected" },
+    { [[return "\xA"]], "hexadecimal digit expected" },
+    { [[return "\x1G"]], "hexadecimal digit expected" },
+    { [[return "\m"]], "invalid escape sequence" },
+    { [[return "\q"]], "invalid escape sequence" },
+    { [[return "\u{}"]], "hexadecimal digit expected" },
+    { [[return "\u{80000000}"]], "value too large" },
+    { [[return "\u{FFFFFFFF}"]], "value too large" },
+    { [[return "\u{110000"]], "missing '}'" },
+    { [[return "\u{2G}"]], "missing '}'" },
+    { [[return "\uABCD"]], "missing '{'" },
+    { [[return "\u41"]], "missing '{'" },
 }
 
 local function rejects_a_bad_escape_test(src, needle)
@@ -132,17 +138,17 @@ end
 
 -- rejects a malformed number
 local rejects_a_malformed_number_cases = {
-    {"return 0x"},
-    {"return 0X"},
-    {"return 1e"},
-    {"return 1e+"},
-    {"return 1e-"},
-    {"return 1.2.3"},
-    {"return 0x1p"},
-    {"return 0x1p+"},
-    {"return 0x.p2"},
-    {"return 3xyz"},
-    {"return 0b101"},
+    { "return 0x" },
+    { "return 0X" },
+    { "return 1e" },
+    { "return 1e+" },
+    { "return 1e-" },
+    { "return 1.2.3" },
+    { "return 0x1p" },
+    { "return 0x1p+" },
+    { "return 0x.p2" },
+    { "return 3xyz" },
+    { "return 0b101" },
 }
 
 local function rejects_a_malformed_number_test(src)
@@ -153,14 +159,14 @@ end
 -- not simply rejecting everything nearby.
 -- accepts a valid number
 local accepts_a_valid_number_cases = {
-    {"return 0x1p3"},
-    {"return 0x1.8p1"},
-    {"return 0x1.p3"},
-    {"return 0x.8p1"},
-    {"return 1e3"},
-    {"return 1.5e-2"},
-    {"return .5"},
-    {"return 0xABCp0"},
+    { "return 0x1p3" },
+    { "return 0x1.8p1" },
+    { "return 0x1.p3" },
+    { "return 0x.8p1" },
+    { "return 1e3" },
+    { "return 1.5e-2" },
+    { "return .5" },
+    { "return 0xABCp0" },
 }
 
 local function accepts_a_valid_number_test(src)
@@ -192,11 +198,11 @@ end
 
 -- rejects an unfinished long string or comment
 local rejects_an_unfinished_long_string_or_comment_cases = {
-    {"return [[abc", "unfinished long string", "starting at line 1"},
-    {"return [==[abc]==", "unfinished long string", "starting at line 1"},
-    {"return [=[abc]]", "unfinished long string", "starting at line 1"},
-    {"--[[ open comment", "unfinished long comment", "starting at line 1"},
-    {"--[==[ open comment ]==", "unfinished long comment", "starting at line 1"},
+    { "return [[abc", "unfinished long string", "starting at line 1" },
+    { "return [==[abc]==", "unfinished long string", "starting at line 1" },
+    { "return [=[abc]]", "unfinished long string", "starting at line 1" },
+    { "--[[ open comment", "unfinished long comment", "starting at line 1" },
+    { "--[==[ open comment ]==", "unfinished long comment", "starting at line 1" },
 }
 
 local function rejects_an_unfinished_long_string_or_comment_test(src, a, b)
@@ -208,8 +214,11 @@ end
 -- names line 2 as the start and line 4 as the error position.
 -- names the opening line of an unfinished long string
 local function names_the_opening_line_of_an_unfinished_long_string_test()
-    local msg = checkfail("local a = 1\nlocal c = [[abc\ndef\nghi",
-        "unfinished long string", "starting at line 2")
+    local msg = checkfail(
+        "local a = 1\nlocal c = [[abc\ndef\nghi",
+        "unfinished long string",
+        "starting at line 2"
+    )
     assert(has(msg, "err:4:") or has(msg, ":4:"))
 end
 
@@ -229,8 +238,8 @@ end
 -- lexer reports it as an unexpected symbol at the opening bracket.
 -- rejects an invalid opening delimiter
 local rejects_an_invalid_opening_delimiter_cases = {
-    {"return [==x", "unexpected symbol near '['"},
-    {"return [=[ok]=] .. [= ", "unexpected symbol near '['"},
+    { "return [==x", "unexpected symbol near '['" },
+    { "return [=[ok]=] .. [= ", "unexpected symbol near '['" },
 }
 
 local function rejects_an_invalid_opening_delimiter_test(src, needle)
@@ -248,9 +257,9 @@ end
 
 -- reports line 3 for an unfinished string
 local reports_line_3_for_an_unfinished_string_cases = {
-    {"\n"},
-    {"\r\n"},
-    {"\r"},
+    { "\n" },
+    { "\r\n" },
+    { "\r" },
 }
 
 local function reports_line_3_for_an_unfinished_string_test(sep)
@@ -267,9 +276,9 @@ end
 
 -- reports line 3 for a malformed number
 local reports_line_3_for_a_malformed_number_cases = {
-    {"\n"},
-    {"\r\n"},
-    {"\r"},
+    { "\n" },
+    { "\r\n" },
+    { "\r" },
 }
 
 local function reports_line_3_for_a_malformed_number_test(sep)
@@ -324,6 +333,7 @@ local function a_letter_outside_ascii_is_quoted_whole_test()
         { "local n = 12€", "unexpected symbol near '€'" },
         { 'local s = "\\é"', "invalid escape sequence near '\"\\é'" },
     }
+
     for _, c in ipairs(cases) do
         local msg = load_error(c[1])
         assert(msg ~= nil, c[1])

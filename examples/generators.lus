@@ -14,6 +14,7 @@ local function range(first, last, step)
 end
 
 local evens = {}
+
 for n in range(2, 10, 2) do
     evens[#evens + 1] = n
 end
@@ -25,6 +26,7 @@ print(table.concat(evens, " "))  --> 2 4 6 8 10
 local function fibonacci()
     return coroutine.wrap(function()
         local a, b = 0, 1
+
         while true do
             coroutine.yield(a)
             a, b = b, a + b
@@ -41,6 +43,7 @@ local function take(count, source)
 end
 
 local first = {}
+
 for n in take(10, fibonacci()) do
     first[#first + 1] = n
 end
@@ -64,6 +67,7 @@ local odd = filter(function(n)
 end, take(10, fibonacci()))
 
 local picked = {}
+
 for n in odd do
     picked[#picked + 1] = n
 end

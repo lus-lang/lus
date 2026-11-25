@@ -36,7 +36,7 @@ local final = fs.path.join(dir, "final.txt")
 io.open(draft, "w"):close()
 fs.move(draft, final)
 fs.move(final, fs.path.join(dir, "archive", "final.txt"))
-print(fs.type(fs.path.join(dir, "archive", "final.txt")))   --> file  false
+print(fs.type(fs.path.join(dir, "archive", "final.txt")))  --> file  false
 fs.remove(dir, true)
 ```
 

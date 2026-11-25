@@ -33,8 +33,8 @@ The parameters select the characters:
 Positions count characters, and a negative position counts back from the end, so `-1` is the last character. When `i` is greater than `j`, `utf8.codepoint` returns no values. An `i` below 1 raises `bad argument #2 to 'utf8.codepoint' (out of bounds)`, and a `j` past the end raises the same error for argument 3, which includes any call on the empty string with the default positions. Without `lax`, a lone surrogate raises `invalid UTF-8 code`.
 
 ```lus
-print(utf8.codepoint("héllo"))          --> 104
-print(utf8.codepoint("héllo", 2))       --> 233
+print(utf8.codepoint("héllo"))  --> 104
+print(utf8.codepoint("héllo", 2))  --> 233
 print(utf8.codepoint("héllo", -2, -1))  --> 108  111
 ```
 

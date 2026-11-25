@@ -30,11 +30,11 @@ A float `y` of zero returns NaN, and an infinite `y` returns `x` as a float.
 A zero `y` that is an integer, a bigint, or a decimal raises `bad argument #2 to 'math.fmod' (zero)`. An argument that is not a number raises a type error.
 
 ```lus
-print(math.fmod(7, 3), math.fmod(-7, 3))   --> 1  -1
-print(math.fmod(7.5, 2))                   --> 1.5
-print(math.fmod(-7n, 3))                   --> -1
-print(math.fmod(7.5d, 2d))                 --> 1.5
-print(math.fmod(7, 0.0))                   --> nan
+print(math.fmod(7, 3), math.fmod(-7, 3))  --> 1  -1
+print(math.fmod(7.5, 2))  --> 1.5
+print(math.fmod(-7n, 3))  --> -1
+print(math.fmod(7.5d, 2d))  --> 1.5
+print(math.fmod(7, 0.0))  --> nan
 ```
 
 `math.fmod(math.mininteger, -1)` is 0. The `%` operator rounds the quotient toward minus infinity, so its result has the sign of `y`: `-7 % 3` is 2. [`math.modf`](/manual/api#math.modf) splits a number into its integral and fractional parts.

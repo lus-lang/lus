@@ -19,9 +19,9 @@ The following example reads two entries of the registry.
 
 ```lus
 local reg = debug.getregistry()
-print(type(reg), reg == debug.getregistry())                    --> table  true
-print(reg._LOADED == package.loaded)                            --> true
-print(debug.getmetatable(time.now()) == reg["time.instant"])    --> true
+print(type(reg), reg == debug.getregistry())  --> table  true
+print(reg._LOADED == package.loaded)  --> true
+print(debug.getmetatable(time.now()) == reg["time.instant"])  --> true
 ```
 
 Changing or removing an entry that the runtime owns changes the behavior of the library that uses it.

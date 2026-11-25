@@ -14,51 +14,81 @@ pledge("load", "debug")
 
 local function addition_at_the_end_of_an_integer_loop_test()
     local s = 0
-    for i = 1, 1000 do s = s + i end
+
+    for i = 1, 1000 do
+        s = s + i
+    end
+
     assert(s == 500500)
     local down = 0
-    for i = 10, 1, -3 do down = down + i end
+
+    for i = 10, 1, -3 do
+        down = down + i
+    end
+
     assert(down == 10 + 7 + 4 + 1)
 end
 
 local function addition_at_the_end_of_a_float_loop_test()
     local s = 0.0
-    for x = 0.5, 4.5, 1.0 do s = s + x end
+
+    for x = 0.5, 4.5, 1.0 do
+        s = s + x
+    end
+
     assert(s == 0.5 + 1.5 + 2.5 + 3.5 + 4.5)
     local n = 0
-    for _ = 1.0, 3.0 do n = n + 1 end
+
+    for _ = 1.0, 3.0 do
+        n = n + 1
+    end
+
     assert(n == 3)
 end
 
 local function addition_at_the_end_of_an_exact_loop_test()
     local s = 0n
-    for i = 1n, 5n do s = s + i end
+
+    for i = 1n, 5n do
+        s = s + i
+    end
+
     assert(s == 15n)
 end
 
 local function addition_that_takes_a_metamethod_at_the_end_of_a_loop_test()
     local calls = 0
     local mt = {}
+
     mt.__add = function(a, b)
         calls = calls + 1
         return setmetatable({ v = a.v + b }, mt)
     end
+
     local acc = setmetatable({ v = 0 }, mt)
-    for i = 1, 50 do acc = acc + i end
+
+    for i = 1, 50 do
+        acc = acc + i
+    end
+
     assert(acc.v == 1275)
     assert(calls == 50)
 end
 
 local function addition_that_fails_at_the_end_of_a_loop_raises_test()
     local rounds = 0
+
     local function run()
         local s = "a"
+
         for i = 1, 3 do
             rounds = rounds + 1
             s = s + {}
         end
+
         return s
     end
+
     local ok = catch run()
     assert(not ok)
     assert(rounds == 1)
@@ -68,40 +98,72 @@ local function a_jump_lands_on_the_loop_instruction_test()
     -- The skipped branch jumps to the loop instruction, which follows an
     -- addition.
     local s = 0
+
     for i = 1, 100 do
-        if i % 2 == 0 then s = s + i end
+        if i % 2 == 0 then
+            s = s + i
+        end
     end
+
     assert(s == 2550)
     local t = 0
+
     for i = 1, 100 do
-        if i % 3 == 0 then continue end
+        if i % 3 == 0 then
+            continue
+        end
+
         t = t + 1
     end
+
     assert(t == 67)
 end
 
 local function store_at_the_end_of_a_loop_test()
     local a = {}
-    for i = 1, 100 do a[i] = i * 2 end
+
+    for i = 1, 100 do
+        a[i] = i * 2
+    end
+
     assert(#a == 100 and a[1] == 2 and a[100] == 200)
     local f = {}
-    for i = 1, 10 do f[i] = i + 0.5 end
+
+    for i = 1, 10 do
+        f[i] = i + 0.5
+    end
+
     assert(f[10] == 10.5)
     local mixed = {}
-    for i = 1, 6 do mixed[i] = i % 2 == 0 and "even" or i end
+
+    for i = 1, 6 do
+        mixed[i] = i % 2 == 0 and "even" or i
+    end
+
     assert(mixed[2] == "even" and mixed[5] == 5)
     local keys = { "x", "y", "z" }
     local named = {}
-    for i = 1, 3 do named[keys[i]] = i end
+
+    for i = 1, 3 do
+        named[keys[i]] = i
+    end
+
     assert(named.x == 1 and named.y == 2 and named.z == 3)
 end
 
 local function store_through_a_metamethod_at_the_end_of_a_loop_test()
     local log = {}
+
     local proxy = setmetatable({}, {
-        __newindex = function(_, k, v) log[#log + 1] = k * 100 + v end,
+        __newindex = function(_, k, v)
+            log[#log + 1] = k * 100 + v
+        end,
     })
-    for i = 1, 5 do proxy[i] = i + 1 end
+
+    for i = 1, 5 do
+        proxy[i] = i + 1
+    end
+
     assert(#log == 5)
     assert(log[1] == 102 and log[5] == 506)
 end
@@ -109,8 +171,12 @@ end
 local function store_into_a_read_only_value_at_the_end_of_a_loop_fails_test()
     local function run()
         local target = 5
-        for i = 1, 3 do target[i] = i end
+
+        for i = 1, 3 do
+            target[i] = i
+        end
     end
+
     local ok, err = catch run()
     assert(not ok)
     assert(string.find(tostring(err), "index", 1, true))
@@ -118,7 +184,11 @@ end
 
 local function upvalue_minus_a_constant_test()
     local n = 10
-    local function int() return n - 3 end
+
+    local function int()
+        return n - 3
+    end
+
     assert(int() == 7)
     n = 2.5
     assert(int() == -0.5)
@@ -130,31 +200,46 @@ local function upvalue_minus_a_constant_test()
     local ok = catch int()
     assert(not ok)
     local calls = 0
+
     n = setmetatable({}, {
         __sub = function(_, k)
             calls = calls + 1
             return k * 2
         end,
     })
+
     assert(int() == 6 and calls == 1)
 end
 
 local function recursion_through_an_upvalue_test()
     local function fib(n)
-        if n < 2 then return n end
+        if n < 2 then
+            return n
+        end
+
         return fib(n - 1) + fib(n - 2)
     end
+
     assert(fib(20) == 6765)
 end
 
 local function hooks_see_each_instruction_of_a_pair_test()
     local function work()
         local s = 0
-        for i = 1, 10 do s = s + i end
+
+        for i = 1, 10 do
+            s = s + i
+        end
+
         return s
     end
+
     local plain = 0
-    debug.sethook(function() plain = plain + 1 end, "", 1)
+
+    debug.sethook(function()
+        plain = plain + 1
+    end, "", 1)
+
     local r = work()
     debug.sethook()
     assert(r == 55)
@@ -162,7 +247,11 @@ local function hooks_see_each_instruction_of_a_pair_test()
     -- the instructions around the loop.
     assert(plain >= 20, plain)
     local lines = {}
-    debug.sethook(function(_, line) lines[#lines + 1] = line end, "l")
+
+    debug.sethook(function(_, line)
+        lines[#lines + 1] = line
+    end, "l")
+
     work()
     debug.sethook()
     assert(#lines >= 3)

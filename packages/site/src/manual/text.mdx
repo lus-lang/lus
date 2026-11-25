@@ -25,8 +25,8 @@ The following program applies these operations to a string whose non-ASCII chara
 global print, string
 
 local s = "héllo, wörld"
-print(#s, s:sub(2, 2), s[2, 5])              --> 12  é  éllo
-print(s:find("ö"), s:reverse())              --> 9  dlröw ,olléh
+print(#s, s:sub(2, 2), s[2, 5])  --> 12  é  éllo
+print(s:find("ö"), s:reverse())  --> 9  dlröw ,olléh
 print(s:byte(2), string.char(233, 0x1F600))  --> 233  é😀
 ```
 
@@ -40,9 +40,9 @@ A [pattern](/manual/guide#strings-and-patterns) describes the form of a piece of
 global print
 
 print(("añb"):gsub(".", "%0-"))  --> a-ñ-b-  3
-print(("éa"):upper())            --> éA
-print(("αβγ"):find("[α-ω]+"))    --> 1  3
-print(("é1"):match("%a"))        --> nil
+print(("éa"):upper())  --> éA
+print(("αβγ"):find("[α-ω]+"))  --> 1  3
+print(("é1"):match("%a"))  --> nil
 ```
 
 ### String literals
@@ -54,8 +54,8 @@ global print, load, pledge
 
 pledge("load")
 
-print("\xC3\xA9" == "é")         --> true
-print(load("return '\\xFF'"))    --> nil  [string "return '\xFF'"]:1: invalid UTF-8 in string literal (use a vector for raw bytes)
+print("\xC3\xA9" == "é")  --> true
+print(load("return '\\xFF'"))  --> nil  [string "return '\xFF'"]:1: invalid UTF-8 in string literal (use a vector for raw bytes)
 ```
 
 ### Surrogates
@@ -93,7 +93,7 @@ print(#v, vector.size(v), vector.get(v, 0), vector.get(v, 7))  --> 8  8  255  0
 
 local copy = vector.clone(v)
 vector.set(copy, 0, 1)
-print(vector.get(v, 0), vector.get(copy, 0))                   --> 255  1
+print(vector.get(v, 0), vector.get(copy, 0))  --> 255  1
 ```
 
 ### Single bytes
@@ -104,7 +104,7 @@ print(vector.get(v, 0), vector.get(copy, 0))                   --> 255  1
 global print, vector
 
 local v = vector.create(4)
-print(vector.get(v, 4))           --> nil
+print(vector.get(v, 4))  --> nil
 print(catch vector.set(v, 4, 1))  --> false  ...: bad argument #2 to 'set' (offset out of bounds)
 print(catch vector.set(v, 0, 256))  --> false  ...: bad argument #3 to 'set' (byte out of range)
 ```
@@ -134,12 +134,14 @@ vector.pack(v, 0, "<I4I4I4", 1, 2, 3)
 for n in vector.unpackmany(v, 0, "<I4") do
     io.write(n, " ")
 end
-print()                                    --> 1 2 3
+
+print()  --> 1 2 3
 
 for n in vector.unpackmany(v, 0, "<I4", 2) do
     io.write(n, " ")
 end
-print()                                    --> 1 2
+
+print()  --> 1 2
 ```
 
 ### Strings to bytes and back
@@ -156,9 +158,9 @@ global print, vector
 
 local v = vector.fromstring("héllo")
 print(#v, vector.get(v, 1), vector.get(v, 2))  --> 6  195  169
-print(vector.tostring(v))                      --> héllo
-print(vector.tostring(v, 0, 2, "lossy"))       --> h�
-print(catch vector.tostring(v, 0, 2))          --> false  ...: invalid UTF-8 at byte 1
+print(vector.tostring(v))  --> héllo
+print(vector.tostring(v, 0, 2, "lossy"))  --> h�
+print(catch vector.tostring(v, 0, 2))  --> false  ...: invalid UTF-8 at byte 1
 ```
 
 String interpolation produces text, so interpolating a vector raises an error whose message says to decode the vector with `vector.tostring`. That call is where the program chooses between strict and lossy decoding.
@@ -167,8 +169,8 @@ String interpolation produces text, so interpolating a vector raises an error wh
 global print, vector
 
 local v = vector.fromstring("abc")
-print(catch `$(v)`)                  --> false  ...: cannot interpolate a vector (decode it with vector.tostring)
-print(`$(vector.tostring(v))`)       --> abc
+print(catch `$v`)  --> false  ...: cannot interpolate a vector (decode it with vector.tostring)
+print(`$(vector.tostring(v))`)  --> abc
 ```
 
 ## Bytes in the standard library
@@ -189,13 +191,13 @@ The following program packs two numbers, compresses text, and converts text to U
 global print, string, vector
 
 local packed = string.pack("<i4d", 7, 0.5)
-print(#packed, string.unpack("<i4d", packed))                   --> 12  7  0.5  13
+print(#packed, string.unpack("<i4d", packed))  --> 12  7  0.5  13
 
 local zipped = vector.archive.gzip.compress("hello hello hello")
 print(vector.tostring(vector.archive.gzip.decompress(zipped)))  --> hello hello hello
 
 local utf16 = string.transcode("hé", "utf-8", "utf-16le")
-print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))     --> 4  hé
+print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))  --> 4  hé
 ```
 
 ### Files
@@ -236,9 +238,12 @@ global print, string, load, pledge
 
 pledge("load")
 
-local chunk = string.dump(function(x) return x * 2 end)
+local chunk = string.dump(function(x)
+    return x * 2
+end)
+
 local double = load(chunk, "double", "b")
-print(double(21))                  --> 42
+print(double(21))  --> 42
 print(load(chunk, "double", "t"))  --> nil  attempt to load a binary chunk (mode is 't')
 ```
 
@@ -269,12 +274,12 @@ Encoding to `"base64"`, `"base64url"`, `"base32"`, `"url"`, or `"hex"` writes th
 global print, string
 
 print(string.transcode("user:password", "utf-8", "base64"))  --> dXNlcjpwYXNzd29yZA==
-print(string.transcode("aGk", "base64", "utf-8"))            --> hi
-print(string.transcode("hi?", "utf-8", "base64url"))         --> aGk_
-print(string.transcode("hi?", "utf-8", "base32"))            --> NBUT6===
-print(string.transcode("São Paulo", "utf-8", "url"))         --> S%C3%A3o%20Paulo
-print(string.transcode("a%3D1+b", "url", "utf-8"))           --> a=1 b
-print(string.transcode("é", "utf-8", "hex"))                 --> c3a9
+print(string.transcode("aGk", "base64", "utf-8"))  --> hi
+print(string.transcode("hi?", "utf-8", "base64url"))  --> aGk_
+print(string.transcode("hi?", "utf-8", "base32"))  --> NBUT6===
+print(string.transcode("São Paulo", "utf-8", "url"))  --> S%C3%A3o%20Paulo
+print(string.transcode("a%3D1+b", "url", "utf-8"))  --> a=1 b
+print(string.transcode("é", "utf-8", "hex"))  --> c3a9
 ```
 
 When both `from` and `to` are among these encodings, the call converts directly from one to the other. Decoding to `"binary"` returns the raw bytes as a vector.
@@ -283,9 +288,9 @@ When both `from` and `to` are among these encodings, the call converts directly 
 global print, string, type
 
 print(string.transcode("SGVsbG8=", "base64", "hex"))  --> 48656c6c6f
-print(string.transcode("48656c6c6f", "hex", "url"))   --> Hello
+print(string.transcode("48656c6c6f", "hex", "url"))  --> Hello
 local raw = string.transcode("SGVsbG8=", "base64", "binary")
-print(type(raw), #raw)                                --> vector  5
+print(type(raw), #raw)  --> vector  5
 ```
 
 ### Character sets
@@ -308,7 +313,7 @@ ISO-8859-1, also called Latin-1, writes one byte per character, so it represents
 global print, string, vector
 
 local latin = string.transcode("café", "utf-8", "iso-8859-1")
-print(#latin, vector.get(latin, 3))                   --> 4  233
+print(#latin, vector.get(latin, 3))  --> 4  233
 print(string.transcode(latin, "iso-8859-1", "utf-8"))  --> café
 ```
 
@@ -318,8 +323,8 @@ Some programs, mostly on Windows, start a UTF-8 file with the character U+FEFF, 
 global print, string
 
 local marked = string.transcode("Hello", "utf-8", "utf-8bom")
-print(#marked, marked:byte(1))                           --> 6  65279
-print(string.transcode(marked, "utf-8bom", "utf-8"))     --> Hello
+print(#marked, marked:byte(1))  --> 6  65279
+print(string.transcode(marked, "utf-8bom", "utf-8"))  --> Hello
 ```
 
 ### Invalid input
@@ -330,11 +335,11 @@ Input that is not valid in the encoding `from` raises an error, as does a charac
 global print, string, vector
 
 print(catch string.transcode("!!invalid!!", "base64", "utf-8"))  --> false  ...: invalid base64 input
-print(catch string.transcode("日本語", "utf-8", "ascii"))         --> false  ...: codepoint U+65E5 cannot be encoded as ASCII
+print(catch string.transcode("日本語", "utf-8", "ascii"))  --> false  ...: codepoint U+65E5 cannot be encoded as ASCII
 
 local bytes = vector.create(2)
 vector.pack(bytes, 0, "BB", 0xFF, 0xFE)
-print(catch string.transcode(bytes, "utf-8", "utf-16le"))        --> false  ...: invalid UTF-8 sequence at position 1
+print(catch string.transcode(bytes, "utf-8", "utf-16le"))  --> false  ...: invalid UTF-8 sequence at position 1
 ```
 
 When `ignorebad` is true, the conversion replaces each invalid input sequence with U+FFFD, the replacement character, omits each character that the target cannot represent, and returns the rest. The replacement follows the URL standard, so a broken sequence of UTF-8 gives one U+FFFD for each part that could have started a valid one. A program uses `ignorebad` when a partial result is better than none, such as when it reduces text to ASCII for a file name.
@@ -342,8 +347,8 @@ When `ignorebad` is true, the conversion replaces each invalid input sequence wi
 ```lus
 global print, string, vector
 
-print(string.transcode("Hello 日本", "utf-8", "ascii", true))                --> Hello
-print(vector.tostring(string.transcode("€100", "utf-8", "latin1", true)))   --> 100
+print(string.transcode("Hello 日本", "utf-8", "ascii", true))  --> Hello
+print(vector.tostring(string.transcode("€100", "utf-8", "latin1", true)))  --> 100
 
 local bytes = vector.fromstring("valid--text")
 vector.pack(bytes, 5, "BB", 0xFF, 0xFE)
@@ -359,7 +364,7 @@ global print, string, type, vector
 
 local text = string.rep("hello world ", 100)
 local packed = vector.archive.zstd.compress(text)
-print(type(packed), #packed < #text)                                  --> vector  true
+print(type(packed), #packed < #text)  --> vector  true
 print(vector.tostring(vector.archive.zstd.decompress(packed)) == text)  --> true
 ```
 
@@ -412,8 +417,8 @@ An input that is neither a string nor a vector, a level or `lgwin` outside its r
 ```lus
 global print, vector
 
-print(catch vector.archive.gzip.compress({}))                --> false  ...: bad argument #1 to 'compress' (string or vector expected, got table)
-print(catch vector.archive.gzip.compress("data", 15))        --> false  ...: bad argument #2 to 'compress' (compression level must be 0-9)
+print(catch vector.archive.gzip.compress({}))  --> false  ...: bad argument #1 to 'compress' (string or vector expected, got table)
+print(catch vector.archive.gzip.compress("data", 15))  --> false  ...: bad argument #2 to 'compress' (compression level must be 0-9)
 print(catch vector.archive.gzip.decompress("not gzip data"))  --> false  ...: gzip decompress failed (BadZlibHeader)
 ```
 
@@ -430,9 +435,11 @@ local zip = vector.archive.zip.pack({
     { name = "report/summary.txt", data = "All tests pass." },
     { name = "report/data.csv", data = "name,score\nada,9\n" },
 })
+
 for _, e in ipairs(vector.archive.zip.list(zip)) do
     print(e.name, e.size)
 end
+
 --> report/summary.txt  15
 --> report/data.csv  17
 print(vector.tostring(vector.archive.zip.read(zip, "report/summary.txt")))  --> All tests pass.

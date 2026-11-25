@@ -22,9 +22,10 @@ The result is a new table. Each list in it holds its elements in their original 
 A `keyfunc` that returns `nil` raises `table index is nil`, and one that returns NaN raises `table index is NaN`. An `array` that is not a table, or a `keyfunc` that is not a function, raises a type error.
 
 ```lus
-local groups = table.groupby({1, 2, 3, 4, 5}, function(x)
+local groups = table.groupby({ 1, 2, 3, 4, 5 }, function(x)
     return x % 2 == 0 and "even" or "odd"
 end)
+
 print(table.concat(groups.odd, ","), table.concat(groups.even, ","))  --> 1,3,5  2,4
 ```
 

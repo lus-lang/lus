@@ -23,9 +23,10 @@ local next_id = coroutine.wrap(function()
         coroutine.yield(id)
     end
 end)
-print(next_id(), next_id())     --> 1  2
-print(select("#", next_id()))   --> 0
-print((catch next_id()))        --> false
+
+print(next_id(), next_id())  --> 1  2
+print(select("#", next_id()))  --> 0
+print((catch next_id()))  --> false
 ```
 
 A wrapper works as the iterator of a generic `for`, which stops when the coroutine yields or returns `nil`. [`coroutine.create`](/manual/api#coroutine.create) returns the coroutine itself, which suits code that needs its status or wants failures as values.

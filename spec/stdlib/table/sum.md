@@ -21,11 +21,11 @@ When every numeric value is an integer, the result is their exact sum as an inte
 An `array` that is not a table raises `bad argument #1 to 'table.sum' (table expected, got nil)` with its type.
 
 ```lus
-print(table.sum({1, 2, 3}))           --> 6
-print(table.sum({1, 2.5}))            --> 3.5
-print(table.sum({0.1, 0.2}))          --> 0.30000000000000004
-print(table.sum({"1", "a", 2, true})) --> 3
-print(table.sum({}))                  --> 0
+print(table.sum({ 1, 2, 3 }))  --> 6
+print(table.sum({ 1, 2.5 }))  --> 3.5
+print(table.sum({ 0.1, 0.2 }))  --> 0.30000000000000004
+print(table.sum({ "1", "a", 2, true }))  --> 3
+print(table.sum({}))  --> 0
 ```
 
 The float sum is computed in a fixed order. The value at index `i` is added into accumulator `(i - 1) % 8`, starting from eight zeros, and the accumulators are then combined pairwise: accumulator `j` with `j + 4` for `j` from 0 to 3, then the first of those four sums with the third and the second with the fourth, and finally those two. The result is therefore the same on every platform and for every way the table is stored. Bigints and decimals lose the digits that a float cannot hold, so an exact total of such values comes from [`table.reduce`](/manual/api#table.reduce) with the `+` operator. [`table.mean`](/manual/api#table.mean) divides the sum by the count.

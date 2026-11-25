@@ -11,32 +11,35 @@ local server = require("lus-language.server")
 local instance = server.new()
 
 local function write_parse_error(reason)
-  transport.write_message(protocol.make_error(
-    protocol.JSON_NULL, protocol.PARSE_ERROR, reason
-  ))
+    transport.write_message(protocol.make_error(protocol.JSON_NULL, protocol.PARSE_ERROR, reason))
 end
 
 local function handle_message(msg)
-  local response = instance.dispatch(msg)
-  if response then transport.write_message(response) end
+    if response = instance.dispatch(msg) then
+        transport.write_message(response)
+    end
 end
 
 -- The JavaScript host passes one UTF-8 JSON-RPC body per call.
 global function _lsp_handle(json_body)
-  local msg, reason = transport.decode_json(json_body)
-  if reason then
-    write_parse_error(reason)
-    return
-  end
-  handle_message(msg)
+    local msg, reason = transport.decode_json(json_body)
+
+    if reason then
+        write_parse_error(reason)
+        return
+    end
+
+    handle_message(msg)
 end
 
 -- Tests and native-compatible hosts may pass one complete canonical frame.
 global function _lsp_handle_frame(frame)
-  local msg, reason = transport.parse_frame(frame)
-  if reason then
-    write_parse_error(reason)
-    return
-  end
-  handle_message(msg)
+    local msg, reason = transport.parse_frame(frame)
+
+    if reason then
+        write_parse_error(reason)
+        return
+    end
+
+    handle_message(msg)
 end

@@ -28,7 +28,7 @@ pledge("env", "fs", "load")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-worker-create.lus")
 io.open(path, "w"):write("local a, b = ...\nworker.message(a + b)\n"):close()
 local w = worker.create(path, 2, 40)
-print(worker.receive(w))   --> 42
+print(worker.receive(w))  --> 42
 fs.remove(path)
 ```
 

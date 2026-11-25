@@ -28,11 +28,11 @@ If `u` has a slot at index `n`, the function stores `value` there and returns `u
 The following example stores a value in a slot that exists and in one that does not. A file handle has no slots, and a named zone has one.
 
 ```lus
-print(debug.setuservalue(io.stdout, "tag"))           --> nil
+print(debug.setuservalue(io.stdout, "tag"))  --> nil
 local paris = time.zone("Europe/Paris")
-print(debug.setuservalue(paris, "Paris") == paris)    --> true
-print(debug.getuservalue(paris))                      --> Paris  true
-print(paris:name())                                   --> Paris
+print(debug.setuservalue(paris, "Paris") == paris)  --> true
+print(debug.getuservalue(paris))  --> Paris  true
+print(paris:name())  --> Paris
 ```
 
 The library types read their own slots, so a store changes their behavior. A zoned value keeps its zone in its slot, and replacing it with any value other than a zone breaks every later operation on that zoned value. [`debug.getuservalue`](/manual/api#debug.getuservalue) reads a slot.

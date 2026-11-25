@@ -21,9 +21,10 @@ A coroutine starts with the permissions of the coroutine that creates it. From t
 local co = coroutine.create(function(a, b)
     return a + b
 end)
-print(type(co), coroutine.status(co))   --> thread  suspended
-print(coroutine.resume(co, 2, 3))       --> true  5
-print(coroutine.status(co))             --> dead
+
+print(type(co), coroutine.status(co))  --> thread  suspended
+print(coroutine.resume(co, 2, 3))  --> true  5
+print(coroutine.status(co))  --> dead
 ```
 
 [`coroutine.wrap`](/manual/api#coroutine.wrap) creates a coroutine and returns a function that resumes it, and [`coroutine.detach`](/manual/api#coroutine.detach) hands a coroutine to the runtime. [Coroutines](/manual/guide#coroutines) in the guide describes how coroutines transfer control.

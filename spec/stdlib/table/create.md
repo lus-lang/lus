@@ -24,9 +24,13 @@ A count outside the range raises `bad argument #1 to 'create' (out of range)`, n
 
 ```lus
 local squares = table.create(100)
-print(#squares)                   --> 0
-for i = 1, 100 do squares[i] = i * i end
-print(#squares, squares[100])     --> 100  10000
+print(#squares)  --> 0
+
+for i = 1, 100 do
+    squares[i] = i * i
+end
+
+print(#squares, squares[100])  --> 100  10000
 ```
 
 [`table.compact`](/manual/api#table.compact) releases storage that a table no longer uses.

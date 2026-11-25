@@ -22,7 +22,7 @@ pledge("fs:write")
 local tmp <close> = io.tmpfile()
 tmp:write("scratch data")
 tmp:seek("set")
-print(tmp:read("a"))   --> scratch data
+print(tmp:read("a"))  --> scratch data
 ```
 
 [`os.tmpname`](/manual/api#os.tmpname) creates a temporary file that has a name.

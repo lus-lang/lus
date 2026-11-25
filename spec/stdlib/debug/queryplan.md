@@ -24,7 +24,11 @@ The following example plans a query over an SQLite table. The first conjunct bec
 ```lus
 local db = io.sqlite(":memory:")
 db:exec("CREATE TABLE users (name TEXT, age INTEGER)")
-local function adult(age) return age >= 18 end
+
+local function adult(age)
+    return age >= 18
+end
+
 local q = @db.users as u where u.age >= 18 and adult(u.age) and u.age / 2 > 3 select u.name
 io.write(debug.queryplan(q))
 --> query: 1 source(s), 3 conjunct(s)

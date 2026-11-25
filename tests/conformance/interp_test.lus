@@ -112,9 +112,10 @@ local function tostring_metamethod_is_called_test()
     local mt = {
         __tostring = function(self)
             return "custom:" .. self.value
-        end
+        end,
     }
-    local obj = setmetatable({value = 42}, mt)
+
+    local obj = setmetatable({ value = 42 }, mt)
     local s = `object is $obj`
     assert(s == "object is custom:42")
 end
@@ -124,10 +125,11 @@ local function tostring_with_expression_test()
     local mt = {
         __tostring = function(self)
             return "point(" .. self.x .. "," .. self.y .. ")"
-        end
+        end,
     }
-    local p = setmetatable({x = 10, y = 20}, mt)
-    local s = `location: $(p)`
+
+    local p = setmetatable({ x = 10, y = 20 }, mt)
+    local s = `location: $p`
     assert(s == "location: point(10,20)")
 end
 
@@ -189,7 +191,7 @@ local function backticks_nest_inside_expressions_test()
     local x = 3
     assert(`a $(`b $x c`) d` == "a b 3 c d")
     assert(`$(`$(`deep`)`)` == "deep")
-    assert(`[$(`\27[1m$(x)\27[0m`)]` == "[\27[1m3\27[0m]")
+    assert(`[$(`\27[1m$x\27[0m`)]` == "[\27[1m3\27[0m]")
 end
 
 -- ============================================
@@ -218,7 +220,10 @@ end
 
 -- function call in expression
 local function function_call_in_expression_test()
-    local function double(x) return x * 2 end
+    local function double(x)
+        return x * 2
+    end
+
     local s = `result: $(double(21))`
     assert(s == "result: 42")
 end
@@ -231,7 +236,7 @@ end
 
 -- table access in expression
 local function table_access_in_expression_test()
-    local t = {value = 100}
+    local t = { value = 100 }
     local s = `value: $(t.value)`
     assert(s == "value: 100")
 end
@@ -241,8 +246,9 @@ local function method_call_in_expression_test()
     local obj = {
         getValue = function(self)
             return "test"
-        end
+        end,
     }
+
     local s = `value: $(obj:getValue())`
     assert(s == "value: test")
 end
@@ -270,7 +276,7 @@ end
 local function empty_parts_between_interpolations_test()
     local a = 1
     local b = 2
-    local s = `$(a)$(b)`
+    local s = `$a$b`
     assert(s == "12")
 end
 
@@ -307,7 +313,10 @@ end
 -- works when tostring is shadowed
 local function works_when_tostring_is_shadowed_test()
     local original_tostring = tostring
-    _G.tostring = function() return "shadowed" end
+
+    _G.tostring = function()
+        return "shadowed"
+    end
 
     local x = 100
     local result = `number: $x`

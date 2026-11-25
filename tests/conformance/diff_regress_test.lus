@@ -9,25 +9,44 @@ pledge("load")
 -- was resuming, which then wrote its result through a stale frame.
 local function error_in_close_during_nested_catch_unwind_test()
     local log = {}
+
     local function render(v)
         local t = type(v)
         return t
     end
+
     local function note(...)
         local n = select("#", ...)
-        for i = 1, n do missing_global[i] = render(0) end
+
+        for i = 1, n do
+            missing_global[i] = render(0)
+        end
     end
+
     local function f(depth)
-        if depth > 0 then note("rec", depth, catch f(depth - 1)) end
-        local c <close> = setmetatable({}, { __close = function() note("") end })
+        if depth > 0 then
+            note("rec", depth, catch f(depth - 1))
+        end
+
+        local c <close> = setmetatable({}, {
+            __close = function()
+                note("")
+            end,
+        })
+
         local r = also_missing("")
     end
-    local function unit() f(3) end
+
+    local function unit()
+        f(3)
+    end
+
     for i = 1, 3 do
         local ok, err = catch unit()
         assert(not ok)
         assert(err:find("attempt to index a nil value %(global 'missing_global'%)"))
         log[#log + 1] = i
     end
+
     assert(#log == 3)
 end

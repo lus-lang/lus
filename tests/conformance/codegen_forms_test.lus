@@ -24,7 +24,11 @@ local function nil_loads_merge_in_any_order_test()
     d = nil
     assert(a == 1 and b == nil and c == nil and d == nil)
     a, b = 1, 2
-    if a then a = 5 end
+
+    if a then
+        a = 5
+    end
+
     b = nil
     assert(a == 5 and b == nil)
     local e, f, g
@@ -42,7 +46,11 @@ local function multiple_assignment_evaluates_before_it_assigns_test()
     assert(saved.x == 1 and a == 2)
     local u = {}
     local keep = u
-    local function f() u.y, u = 3, 4 end
+
+    local function f()
+        u.y, u = 3, 4
+    end
+
     f()
     assert(keep.y == 3 and u == 4)
     local k = "key"
@@ -83,18 +91,35 @@ end
 
 local function a_goto_out_of_a_block_closes_its_captured_locals_test()
     local fs = {}
+
     for i = 1, 3 do
         local v = i * 10
-        fs[i] = function() return v end
-        if i == 2 then goto done end
+
+        fs[i] = function()
+            return v
+        end
+
+        if i == 2 then
+            goto done
+        end
     end
+
     ::done::
     assert(#fs == 2 and fs[1]() == 10 and fs[2]() == 20)
     local closed = 0
+
     do
-        local c <close> = setmetatable({}, { __close = function() closed = closed + 1 end })
-        if closed == 0 then goto out end
+        local c <close> = setmetatable({}, {
+            __close = function()
+                closed = closed + 1
+            end,
+        })
+
+        if closed == 0 then
+            goto out
+        end
     end
+
     ::out::
     assert(closed == 1)
 end
@@ -113,7 +138,10 @@ end
 -- a bitwise operand without an integer value, and a float result that
 -- is zero or not a number.
 local function folding_leaves_what_it_cannot_reproduce_test()
-    local ok, err = catch (function() return 1 | 2.5 end)()
+    local ok, err = catch (function()
+        return 1 | 2.5
+    end)()
+
     assert(not ok and err:find("number has no integer representation", 1, true), err)
     assert((1 | 2.0) == 3)
     local z = 0.0 * -5.0
@@ -125,8 +153,17 @@ end
 -- The first instruction of a function may load nil, with no earlier
 -- instruction to merge with.
 local function a_function_may_start_by_loading_nil_test()
-    local function f() local a, b return a, b end
-    local function g(x) local a local b return x, a, b end
+    local function f()
+        local a, b
+        return a, b
+    end
+
+    local function g(x)
+        local a
+        local b
+        return x, a, b
+    end
+
     assert(select("#", f()) == 2 and f() == nil)
     local x, a, b = g(1)
     assert(x == 1 and a == nil and b == nil)

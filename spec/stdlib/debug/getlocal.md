@@ -30,14 +30,15 @@ The following example reads a parameter, a local, and an extra argument of a run
 ```lus
 local function area(w, h, ...)
     local result = w * h
-    print(debug.getlocal(1, 1))    --> w  3
-    print(debug.getlocal(1, 3))    --> result  12
-    print(debug.getlocal(1, -1))   --> (vararg)  extra
-    print(debug.getlocal(1, 4))    --> nil
+    print(debug.getlocal(1, 1))  --> w  3
+    print(debug.getlocal(1, 3))  --> result  12
+    print(debug.getlocal(1, -1))  --> (vararg)  extra
+    print(debug.getlocal(1, 4))  --> nil
     return result
 end
+
 area(3, 4, "extra")
-print(debug.getlocal(area, 2))     --> h
+print(debug.getlocal(area, 2))  --> h
 ```
 
 A local becomes active after the statement that declares it, so a variable whose declaration has not run yet has no index. [`debug.setlocal`](/manual/api#debug.setlocal) changes the value of a local, and [`debug.getupvalue`](/manual/api#debug.getupvalue) reads the variables that a closure captured.

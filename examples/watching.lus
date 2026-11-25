@@ -16,6 +16,7 @@ local reader = coroutine.detach(coroutine.create(function()
     while true do
         local _, event = coroutine.resume(changes)
         print(event.kind, fs.path.name(event.path))
+
         if event.kind == "remove" then
             return
         end

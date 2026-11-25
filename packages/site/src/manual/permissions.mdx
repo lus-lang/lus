@@ -15,7 +15,7 @@ Permissions limit the damage that a faulty program can do. A script that pledges
 `pledge` takes one or more permission names and returns one boolean for each name, in order. A result is `true` when the program now holds the permission and `false` when the grant was refused.
 
 ```lus
-print(pledge("fs:read"))              --> true
+print(pledge("fs:read"))  --> true
 print(pledge("network:http", "env"))  --> true  true
 ```
 
@@ -45,7 +45,7 @@ pledge("fs")
 local base = os.tmpname()
 local dir = base .. ".d"
 fs.createdirectory(dir)
-print((fs.type(dir)))   --> directory
+print((fs.type(dir)))  --> directory
 fs.remove(dir)
 fs.remove(base)
 ```
@@ -107,9 +107,9 @@ local base, data = coroutine.wrap(function()
 end)()
 
 pledge(`fs:read=$data`, `fs:read=$data/*`)
-print((fs.type(data)))                         --> directory
-print((fs.type(data .. "/reports/q1.txt")))    --> file
-print((catch fs.list(fs.path.parent(data))))   --> false
+print((fs.type(data)))  --> directory
+print((fs.type(data .. "/reports/q1.txt")))  --> file
+print((catch fs.list(fs.path.parent(data))))  --> false
 
 coroutine.wrap(function()
     pledge("fs:write")
@@ -143,8 +143,8 @@ An `env` value matches the name of the environment variable that [`os.getenv`](/
 
 ```lus
 pledge("env:read=HOME")
-print((catch os.getenv("HOME")))   --> true
-print((catch os.getenv("PATH")))   --> false
+print((catch os.getenv("HOME")))  --> true
+print((catch os.getenv("PATH")))  --> false
 ```
 
 The following script may read every variable and set only the variables whose names start with `APP_`.
@@ -152,8 +152,8 @@ The following script may read every variable and set only the variables whose na
 ```lus
 pledge("env:read", "env:write=APP_*")
 os.setenv("APP_MODE", "test")
-print(os.getenv("APP_MODE"))                  --> test
-print((catch os.setenv("PATH", "/tmp")))      --> false
+print(os.getenv("APP_MODE"))  --> test
+print((catch os.setenv("PATH", "/tmp")))  --> false
 ```
 
 ### Program values
@@ -164,8 +164,8 @@ An `exec` value selects the programs that [`os.spawn`](/manual/api#os.spawn) may
 
 ```lus
 pledge("exec=sort")
-print((catch os.spawn({"sort"}, {stdin = "null"})))   --> true
-print((catch os.execute("sort")))                   --> false
+print((catch os.spawn({ "sort" }, { stdin = "null" })))  --> true
+print((catch os.execute("sort")))  --> false
 ```
 
 ### Several values
@@ -181,24 +181,24 @@ A program rejects a permission to make sure that no later code can acquire it. A
 ```lus
 pledge("exec")
 pledge("~exec")
-print((catch os.execute("true")))   --> false
-print((catch pledge("exec")))       --> false
+print((catch os.execute("true")))  --> false
+print((catch pledge("exec")))  --> false
 ```
 
 Rejecting a base permission rejects every one of its parts. A later `pledge` of one of those parts returns `true`, but the operation still fails because the base permission stays rejected.
 
 ```lus
 pledge("~network")
-print(pledge("network:http"))                       --> true
-print((catch network.fetch("http://127.0.0.1/")))   --> false
+print(pledge("network:http"))  --> true
+print((catch network.fetch("http://127.0.0.1/")))  --> false
 ```
 
 Rejecting a part leaves the other parts of its base permission as they were. The following program may read every file and write none.
 
 ```lus
 pledge("fs", "~fs:write")
-print((fs.type(".")))                       --> directory
-print((catch fs.createdirectory("nope")))   --> false
+print((fs.type(".")))  --> directory
+print((catch fs.createdirectory("nope")))  --> false
 ```
 
 ## Sealing permissions
@@ -208,15 +208,15 @@ A program seals its permissions once it holds everything it needs, so that no co
 ```lus
 pledge("fs:read")
 pledge("seal")
-print(pledge("exec"))    --> false
-print(pledge("~fs"))     --> false
-print((fs.type(".")))    --> directory
+print(pledge("exec"))  --> false
+print(pledge("~fs"))  --> false
+print((fs.type(".")))  --> directory
 ```
 
 `pledge` processes its arguments in order, so a program usually pledges and seals in one call.
 
 ```lus
-print(pledge("fs:read=./data/*", "~exec", "seal"))   --> true  true  true
+print(pledge("fs:read=./data/*", "~exec", "seal"))  --> true  true  true
 ```
 
 An unknown name still raises an error after a seal.
@@ -257,8 +257,8 @@ local co = coroutine.create(function()
     return (catch os.getenv("HOME"))
 end)
 
-print(coroutine.resume(co))            --> true  false
-print((catch os.getenv("HOME")))       --> true
+print(coroutine.resume(co))  --> true  false
+print((catch os.getenv("HOME")))  --> true
 ```
 
 The following function runs code that the program trusts less, such as a plugin, in a coroutine that rejects what the code must not use, seals its permissions, then calls the code. The rejections and the seal apply only to the coroutine, so the rest of the program keeps its permissions.
@@ -272,6 +272,7 @@ local function run_restricted(fn, ...)
         pledge("~fs:write", "~network", "~exec", "seal")
         return fn(...)
     end)
+
     return coroutine.resume(co, ...)
 end
 
@@ -279,8 +280,9 @@ print(run_restricted(function(path)
     local readable = catch fs.type(path)
     local writable = catch fs.remove(path)
     return readable, writable
-end, notes))                           --> true  true  false
-print((fs.type(notes)))                --> file
+end, notes))  --> true  true  false
+
+print((fs.type(notes)))  --> file
 fs.remove(notes)
 ```
 

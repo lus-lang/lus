@@ -9,51 +9,78 @@ end
 -- a built string equals a literal with the same text
 local function built_strings_equal_literals_test()
     local hits = 0
+
     for i = 1, 2000 do
         local s = make("ke", "y")
-        if s == "key" then hits = hits + 1 end
-        if s ~= "key" then error("differs") end
+
+        if s == "key" then
+            hits = hits + 1
+        end
+
+        if s ~= "key" then
+            error("differs")
+        end
+
         local t = `k$(i % 3)`
-        if t == "k1" then hits = hits + 1 end
+
+        if t == "k1" then
+            hits = hits + 1
+        end
     end
+
     assert(hits == 2000 + 667)
 end
 
 -- a built string compares false against other literals
 local function built_strings_differ_from_other_literals_test()
     local n = 0
+
     for i = 1, 2000 do
         local s = "a" .. (i % 10)
-        if s == "b1" or s == "a10" then n = n + 1 end
+
+        if s == "b1" or s == "a10" then
+            n = n + 1
+        end
     end
+
     assert(n == 0)
 end
 
 -- a built key finds a field stored under a literal, and the reverse
 local function built_keys_index_like_literals_test()
     local t = { alpha = 1 }
+
     for i = 1, 2000 do
         assert(t["al" .. "pha"] == 1)
         t[`beta$(i % 2)`] = i
     end
+
     assert(t.beta0 == 2000 and t.beta1 == 1999)
     local count = 0
-    for k in pairs(t) do count = count + 1 end
+
+    for k in pairs(t) do
+        count = count + 1
+    end
+
     assert(count == 3)
 end
 
 -- a built key replaces the value of the same key, never adds a second
 local function built_keys_do_not_duplicate_test()
     local t = {}
+
     for i = 1, 100 do
         t["x" .. "y"] = i
         t.xy = i + 1
     end
+
     local n = 0
+
     for k, v in pairs(t) do
         n = n + 1
         assert(k == "xy" and v == 101)
     end
+
     assert(n == 1)
     assert(rawget(t, "x" .. "y") == 101)
     rawset(t, "x" .. "y", 7)
@@ -70,10 +97,16 @@ end
 
 -- built strings work as keys of methods and upvalue tables
 local function built_names_reach_methods_test()
-    local obj = { greet = function() return "hi" end }
+    local obj = {
+        greet = function()
+            return "hi"
+        end,
+    }
+
     for i = 1, 500 do
         assert(obj["gr" .. "eet"]() == "hi")
     end
+
     assert(rawequal("ab" .. "c", "abc"))
     assert(("x" .. 1) < "x2" and ("x" .. 3) > "x2")
 end

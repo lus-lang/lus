@@ -8,37 +8,223 @@
 ]]
 
 local exact_edge_cases = {
-    { "decimal with a large exponent", function() return decimal("1e30") end, "1e+30" },
-    { "decimal with a small exponent", function() return decimal("1.5e-30") end, "0.0000000000000000000000000000015" },
-    { "negative decimal below one", function() return decimal("-0.000001") end, "-0.000001" },
-    { "decimal with digits and an exponent", function() return decimal("123456789e5") end, "12345678900000" },
-    { "bigint shifted far left", function() return 10n << 100 end, "12676506002282294014967032053760" },
-    { "bigint shifted far right", function() return 10n >> 100 end, "0" },
-    { "negative bigint shifted right", function() return -10n >> 1 end, "-5" },
-    { "bigint shifted by a negative amount", function() return 10n << -2 end, "2" },
-    { "bigint shifted by zero", function() return 1n << 0 end, "1" },
-    { "negative bigint shifted past its bits", function() return -1n >> 200 end, "-1" },
-    { "bigint floor division by a negative", function() return 7n // -2n end, "-4" },
-    { "negative bigint floor division", function() return -7n // 2n end, "-4" },
-    { "bigint remainder by a negative", function() return 7n % -2n end, "-1" },
-    { "zero bigint floor division", function() return 0n // 5n end, "0" },
-    { "decimal squared", function() return 1.5d ^ 2 end, "2.25" },
-    { "decimal to a negative power", function() return 2d ^ -2 end, "0.25" },
-    { "decimal remainder by a negative", function() return 7.5d % -2d end, "-0.5" },
-    { "negative decimal floor division", function() return -7.5d // 2d end, "-4" },
-    { "a third as a decimal", function() return 1d / 3d end, "0.3333333333333333333333333333333333" },
-    { "two thirds as a decimal", function() return 2d / 3d end, "0.6666666666666666666666666666666667" },
-    { "a seventh as a decimal", function() return 1d / 7d end, "0.1428571428571428571428571428571429" },
-    { "an eighth as a decimal", function() return 1d / 8d end, "0.125" },
-    { "bigint power", function() return 10n ^ 2 end, "100" },
-    { "decimal plus bigint", function() return 1.5d + 10n end, "11.5" },
-    { "bigint times decimal", function() return 10n * 0.5d end, "5.0" },
-    { "hexadecimal bigint", function() return bigint("0x1F") end, "31" },
-    { "negative hexadecimal bigint", function() return bigint("-0x1F") end, "-31" },
-    { "bigint from bad text", function() return bigint("12abc") end, "nil" },
-    { "decimal with two points", function() return decimal("1.2.3") end, "nil" },
-    { "decimal with an empty exponent", function() return decimal("1e") end, "nil" },
-    { "huge decimal literal", function() return 1e400d end, "1e+400" },
+    {
+        "decimal with a large exponent",
+        function()
+            return decimal("1e30")
+        end,
+        "1e+30",
+    },
+    {
+        "decimal with a small exponent",
+        function()
+            return decimal("1.5e-30")
+        end,
+        "0.0000000000000000000000000000015",
+    },
+    {
+        "negative decimal below one",
+        function()
+            return decimal("-0.000001")
+        end,
+        "-0.000001",
+    },
+    {
+        "decimal with digits and an exponent",
+        function()
+            return decimal("123456789e5")
+        end,
+        "12345678900000",
+    },
+    {
+        "bigint shifted far left",
+        function()
+            return 10n << 100
+        end,
+        "12676506002282294014967032053760",
+    },
+    {
+        "bigint shifted far right",
+        function()
+            return 10n >> 100
+        end,
+        "0",
+    },
+    {
+        "negative bigint shifted right",
+        function()
+            return -10n >> 1
+        end,
+        "-5",
+    },
+    {
+        "bigint shifted by a negative amount",
+        function()
+            return 10n << -2
+        end,
+        "2",
+    },
+    {
+        "bigint shifted by zero",
+        function()
+            return 1n << 0
+        end,
+        "1",
+    },
+    {
+        "negative bigint shifted past its bits",
+        function()
+            return -1n >> 200
+        end,
+        "-1",
+    },
+    {
+        "bigint floor division by a negative",
+        function()
+            return 7n // -2n
+        end,
+        "-4",
+    },
+    {
+        "negative bigint floor division",
+        function()
+            return -7n // 2n
+        end,
+        "-4",
+    },
+    {
+        "bigint remainder by a negative",
+        function()
+            return 7n % -2n
+        end,
+        "-1",
+    },
+    {
+        "zero bigint floor division",
+        function()
+            return 0n // 5n
+        end,
+        "0",
+    },
+    {
+        "decimal squared",
+        function()
+            return 1.5d ^ 2
+        end,
+        "2.25",
+    },
+    {
+        "decimal to a negative power",
+        function()
+            return 2d ^ -2
+        end,
+        "0.25",
+    },
+    {
+        "decimal remainder by a negative",
+        function()
+            return 7.5d % -2d
+        end,
+        "-0.5",
+    },
+    {
+        "negative decimal floor division",
+        function()
+            return -7.5d // 2d
+        end,
+        "-4",
+    },
+    {
+        "a third as a decimal",
+        function()
+            return 1d / 3d
+        end,
+        "0.3333333333333333333333333333333333",
+    },
+    {
+        "two thirds as a decimal",
+        function()
+            return 2d / 3d
+        end,
+        "0.6666666666666666666666666666666667",
+    },
+    {
+        "a seventh as a decimal",
+        function()
+            return 1d / 7d
+        end,
+        "0.1428571428571428571428571428571429",
+    },
+    {
+        "an eighth as a decimal",
+        function()
+            return 1d / 8d
+        end,
+        "0.125",
+    },
+    {
+        "bigint power",
+        function()
+            return 10n ^ 2
+        end,
+        "100",
+    },
+    {
+        "decimal plus bigint",
+        function()
+            return 1.5d + 10n
+        end,
+        "11.5",
+    },
+    {
+        "bigint times decimal",
+        function()
+            return 10n * 0.5d
+        end,
+        "5.0",
+    },
+    {
+        "hexadecimal bigint",
+        function()
+            return bigint("0x1F")
+        end,
+        "31",
+    },
+    {
+        "negative hexadecimal bigint",
+        function()
+            return bigint("-0x1F")
+        end,
+        "-31",
+    },
+    {
+        "bigint from bad text",
+        function()
+            return bigint("12abc")
+        end,
+        "nil",
+    },
+    {
+        "decimal with two points",
+        function()
+            return decimal("1.2.3")
+        end,
+        "nil",
+    },
+    {
+        "decimal with an empty exponent",
+        function()
+            return decimal("1e")
+        end,
+        "nil",
+    },
+    {
+        "huge decimal literal",
+        function()
+            return 1e400d
+        end,
+        "1e+400",
+    },
 }
 
 local function exact_edge_test(label, f, want)
@@ -48,9 +234,16 @@ local function exact_edge_test(label, f, want)
 end
 
 local function a_decimal_power_needs_an_integral_exponent_test()
-    local ok, err = catch (function() return 2d ^ 0.5 end)()
+    local ok, err = catch (function()
+        return 2d ^ 0.5
+    end)()
+
     assert(not ok and err:find("attempt to mix decimal and float in arithmetic", 1, true), err)
-    ok, err = catch (function() return 2d ^ 1.5d end)()
+
+    ok, err = catch (function()
+        return 2d ^ 1.5d
+    end)()
+
     assert(not ok and err:find("decimal exponent must be an integer", 1, true), err)
 end
 
@@ -66,7 +259,11 @@ local function equal_exact_numbers_are_one_key_test()
     t[k1] = 1
     t[k2] = 2
     local n = 0
-    for _ in pairs(t) do n = n + 1 end
+
+    for _ in pairs(t) do
+        n = n + 1
+    end
+
     assert(n == 3 and t[2.5d] == 2)
 end
 
@@ -74,11 +271,19 @@ end
 -- amount gives the value that every amount past the bits gives.
 local function a_bigint_shifts_left_within_its_limit_test()
     for _, n in ipairs{ math.maxinteger, (1 << 24) + 1 } do
-        local ok, err = catch (function() return 10n << n end)()
+        local ok, err = catch (function()
+            return 10n << n
+        end)()
+
         assert(not ok and err:find("shift amount too large", 1, true), err)
-        ok, err = catch (function() return 10n >> -n end)()
+
+        ok, err = catch (function()
+            return 10n >> -n
+        end)()
+
         assert(not ok and err:find("shift amount too large", 1, true), err)
     end
+
     assert(10n >> math.maxinteger == 0 and -10n >> math.maxinteger == -1)
     assert(10n << -math.maxinteger == 0)
     assert((1n << (1 << 24)) >> (1 << 24) == 1)

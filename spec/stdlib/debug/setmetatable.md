@@ -24,10 +24,15 @@ The function returns `value`. A table and a full userdata each have a metatable 
 The following example gives every number a method and then removes it again.
 
 ```lus
-debug.setmetatable(0, { __index = { double = function(n) return n * 2 end } })
-print((21):double(), (1.5):double())      --> 42  3.0
+debug.setmetatable(0, { __index = {
+    double = function(n)
+        return n * 2
+    end,
+} })
+
+print((21):double(), (1.5):double())  --> 42  3.0
 debug.setmetatable(0, nil)
-print(catch (21):double())                --> false  ...: attempt to index a number value
+print(catch (21):double())  --> false  ...: attempt to index a number value
 ```
 
 The metatable of a type is shared by every chunk in the state, including the standard library, so a change affects all code that runs afterwards. [`debug.getmetatable`](/manual/api#debug.getmetatable) reads a metatable without the protection.

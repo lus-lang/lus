@@ -31,18 +31,20 @@ The following example lists a directory with and without a glob, sorting the nam
 pledge("env", "fs")
 local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-list-example")
 fs.createdirectory(dir, true)
-for _, name in ipairs({"b.json", "a.json", "notes.md"}) do
+
+for _, name in ipairs({ "b.json", "a.json", "notes.md" }) do
     io.open(fs.path.join(dir, name), "w"):close()
 end
+
 fs.createdirectory(fs.path.join(dir, "old"))
 io.open(fs.path.join(dir, "old", "c.json"), "w"):close()
 local names = fs.list(dir, "*.json")
 table.sort(names)
-print(table.concat(names, " "))   --> a.json b.json
+print(table.concat(names, " "))  --> a.json b.json
 local all = fs.list(dir, "**/*.{json,md}")
 table.sort(all)
-print(table.concat(all, " "))     --> a.json b.json notes.md old/c.json
-print(#fs.list(dir))              --> 4
+print(table.concat(all, " "))  --> a.json b.json notes.md old/c.json
+print(#fs.list(dir))  --> 4
 fs.remove(dir, true)
 ```
 

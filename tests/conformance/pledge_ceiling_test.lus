@@ -10,9 +10,11 @@ local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin
 
 local function run(grant, code, more)
     local argv = { lus_bin, "-P" .. grant }
+
     for _, g in ipairs(more or {}) do
         argv[#argv + 1] = "-P" .. g
     end
+
     argv[#argv + 1] = "-e"
     argv[#argv + 1] = code
     local p = os.spawn(argv, { stdout = "pipe", stderr = "stdout" })
@@ -85,8 +87,10 @@ local function a_grant_covers_a_directory_created_later_test()
         f:close()
         print(io.open(dir .. "/a.txt"):read("a"))
     `, { `fs=$dir/*` })
+
     if fs.type(dir) then
         fs.remove(dir, true)
     end
+
     assert(out == "inside\n", out)
 end

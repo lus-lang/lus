@@ -32,7 +32,7 @@ local tgz = vector.archive.gzip.compress(vector.archive.tar.pack({
     { name = "data/a.csv", data = "x,y\n1,2\n" },
 }))
 local dir = "tar-example-" .. os.time()
-print(vector.archive.tar.unpack(vector.archive.gzip.decompress(tgz), dir))   --> 1
-print((fs.type(dir .. "/data/a.csv")))                                       --> file
+print(vector.archive.tar.unpack(vector.archive.gzip.decompress(tgz), dir))  --> 1
+print((fs.type(dir .. "/data/a.csv")))  --> file
 fs.remove(dir, true)
 ```

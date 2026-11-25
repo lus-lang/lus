@@ -28,7 +28,7 @@ The results are the two parts of the seed, as integers. A call with no arguments
 An argument with no integral value raises `bad argument #1 to 'randomseed' (number has no integer representation)`, and an argument that is not a number raises `bad argument #1 to 'randomseed' (number expected, got string)` with its type.
 
 ```lus
-print(math.randomseed(42))     --> 42  0
+print(math.randomseed(42))  --> 42  0
 local a = math.random(1000)
 math.randomseed(42)
 print(math.random(1000) == a)  --> true

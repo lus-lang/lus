@@ -24,7 +24,7 @@ local config = fromjson([[
     "debug": false
 }
 ]])
-print(config.server.port, config.tags[1], config.debug)   --> 8080  web  false
+print(config.server.port, config.tags[1], config.debug)  --> 8080  web  false
 
 config.server.port = 9090
 print(tojson({ config.server.host, config.server.port }))  --> ["localhost",9090]
@@ -45,8 +45,8 @@ print(tojson({ config.server.host, config.server.port }))  --> ["localhost",9090
 global fromjson, math, print
 
 print(math.type(fromjson("42")), math.type(fromjson("1e2")))  --> integer  float
-print(fromjson("null"), fromjson("true"), fromjson('"hi"'))   --> nil  true  hi
-print(fromjson('{"a": 1, "a": 2}').a)                         --> 2
+print(fromjson("null"), fromjson("true"), fromjson('"hi"'))  --> nil  true  hi
+print(fromjson('{"a": 1, "a": 2}').a)  --> 2
 ```
 
 Because a table cannot hold `nil`, a null field of an object is absent from the resulting table. A null element of an array leaves a gap. JSON that contains null values therefore changes when a program parses it and writes it back.
@@ -54,9 +54,9 @@ Because a table cannot hold `nil`, a null field of an object is absent from the 
 ```lus
 global fromjson, print, tojson
 
-local row = fromjson('[1, null, 3]')
-print(row[1], row[2], row[3])                 --> 1  nil  3
-print(tojson(fromjson('{"a": null}')))        --> []
+local row = fromjson("[1, null, 3]")
+print(row[1], row[2], row[3])  --> 1  nil  3
+print(tojson(fromjson('{"a": null}')))  --> []
 ```
 
 Prices and long identifiers must keep every digit when a program reads them, but a float stores most decimal fractions approximately and an integer holds at most 64 bits. The `exact` field of the optional `options` table makes `fromjson` keep every digit. When `exact` is `true`, an integer too large for 64 bits becomes a bigint, while a number with a fraction or an exponent becomes a decimal, which keeps its digits as written. `tojson` writes both with the same digits. [Values and types](/manual/guide#values-and-types) in the guide describes bigints and decimals.
@@ -68,7 +68,7 @@ local price = fromjson('{"price": 19.90}', { exact = true }).price
 print(math.type(price), price, tojson(price))  --> decimal  19.90  19.90
 
 local id = fromjson("123456789012345678901234567890", { exact = true })
-print(math.type(id), tojson(id))               --> bigint  123456789012345678901234567890
+print(math.type(id), tojson(id))  --> bigint  123456789012345678901234567890
 ```
 
 Without `exact`, a number outside the range of a 64-bit integer or a float raises an error. Invalid syntax, text after the end of the value, and arrays and objects nested deeper than 1,000 levels also raise errors. The error message gives the position of the problem in bytes from the start of the text, counting the first byte as position 1.
@@ -76,9 +76,9 @@ Without `exact`, a number outside the range of a 64-bit integer or a float raise
 ```lus
 global fromjson, print
 
-print(catch fromjson('{"invalid}'))             --> false  ...: JSON parse error at position 11: unterminated string
-print(catch fromjson("[1] x"))                  --> false  ...: JSON parse error at position 5: unexpected trailing characters
-print(catch fromjson("99999999999999999999"))   --> false  ...: JSON parse error at position 1: number out of range
+print(catch fromjson('{"invalid}'))  --> false  ...: JSON parse error at position 11: unterminated string
+print(catch fromjson("[1] x"))  --> false  ...: JSON parse error at position 5: unexpected trailing characters
+print(catch fromjson("99999999999999999999"))  --> false  ...: JSON parse error at position 1: number out of range
 ```
 
 ### Serializing
@@ -92,10 +92,10 @@ A `nil` at the end of a list has no key, so it leaves no `null` behind. When the
 ```lus
 global print, tojson
 
-print(tojson({10, 20, 30}))           --> [10,20,30]
-print(tojson({}))                     --> []
-print(tojson({1, 2, name = "pair"}))  --> {"name":"pair"}
-print(tojson({[1] = "a", [3] = "c"}))  --> ["a",null,"c"]
+print(tojson({ 10, 20, 30 }))  --> [10,20,30]
+print(tojson({}))  --> []
+print(tojson({ 1, 2, name = "pair" }))  --> {"name":"pair"}
+print(tojson({ [1] = "a", [3] = "c" }))  --> ["a",null,"c"]
 ```
 
 The order of the members of an object is unspecified, so a program must not compare the output of `tojson` with a fixed string when the value contains a record with several fields.
@@ -110,8 +110,8 @@ Numbers serialize as follows:
 ```lus
 global math, print, tojson
 
-print(tojson(3.0), tojson(0.1))               --> 3  0.1
-print(tojson(math.huge), tojson(0 / 0))       --> null  null
+print(tojson(3.0), tojson(0.1))  --> 3  0.1
+print(tojson(math.huge), tojson(0 / 0))  --> null  null
 ```
 
 Functions, coroutines, userdata, vectors, and enum values have no JSON form. Each becomes `null` when it is the whole value or an element of an array, but an object field that holds one is left out.
@@ -120,9 +120,9 @@ Functions, coroutines, userdata, vectors, and enum values have no JSON form. Eac
 global print, tojson
 
 local status = enum ready, done end
-print(tojson(status.ready))            --> null
-print(tojson({status.ready}))          --> [null]
-print(tojson({status = status.ready})) --> {}
+print(tojson(status.ready))  --> null
+print(tojson({ status.ready }))  --> [null]
+print(tojson({ status = status.ready }))  --> {}
 ```
 
 A table that is referenced from several places is written in full at each place. A table that contains itself, directly or indirectly, raises the error `circular reference detected in table`.
@@ -130,12 +130,12 @@ A table that is referenced from several places is written in full at each place.
 ```lus
 global print, tojson
 
-local child = {value = 1}
-print(tojson({child, child}))  --> [{"value":1},{"value":1}]
+local child = { value = 1 }
+print(tojson({ child, child }))  --> [{"value":1},{"value":1}]
 
 local cycle = {}
 cycle.self = cycle
-print(catch tojson(cycle))     --> false  ...: circular reference detected in table
+print(catch tojson(cycle))  --> false  ...: circular reference detected in table
 ```
 
 `tojson` writes tables nested up to 199 levels deep and raises the error `C stack overflow` for a deeper table.
@@ -149,16 +149,23 @@ A filter that returns `nil` for a field of an object removes the field. A filter
 ```lus
 global print, tojson
 
-local user = {name = "Alice", password = "secret"}
-print(tojson(user, function(key, value)
-    if key == "password" then return nil end
-    return value
-end))                                    --> {"name":"Alice"}
+local user = { name = "Alice", password = "secret" }
 
-print(tojson({1, 2, 3}, function(key, value)
-    if key == 2 then return nil end
+print(tojson(user, function(key, value)
+    if key == "password" then
+        return nil
+    end
+
     return value
-end))                                    --> [1,null,3]
+end))  --> {"name":"Alice"}
+
+print(tojson({ 1, 2, 3 }, function(key, value)
+    if key == 2 then
+        return nil
+    end
+
+    return value
+end))  --> [1,null,3]
 ```
 
 ### The `__json` metamethod
@@ -170,11 +177,12 @@ global fromjson, print, setmetatable, tojson
 
 local Point = {}
 Point.__index = Point
+
 Point.__json = function(self)
-    return {x = self.x, y = self.y}
+    return { x = self.x, y = self.y }
 end
 
-local point = setmetatable({x = 10, y = 20, internal = "data"}, Point)
+local point = setmetatable({ x = 10, y = 20, internal = "data" }, Point)
 local decoded = fromjson(tojson(point))
 print(decoded.x, decoded.y, decoded.internal)  --> 10  20  nil
 ```
@@ -184,8 +192,13 @@ A field that holds `nil` is absent from the output. To write `null` for a field,
 ```lus
 global print, setmetatable, tojson
 
-local null = setmetatable({}, { __json = function() return nil end })
-print(tojson({ email = null }))   --> {"email":null}
+local null = setmetatable({}, {
+    __json = function()
+        return nil
+    end,
+})
+
+print(tojson({ email = null }))  --> {"email":null}
 ```
 
 ## CSV
@@ -199,10 +212,12 @@ global decimal, fromcsv, ipairs, print, tonumber
 
 local orders = fromcsv("item,quantity,price\npen,3,1.50\nnotebook,2,4.25\n", true)
 local total = 0d
+
 for _, order in ipairs(orders) do
     total = total + tonumber(order.quantity) * decimal(order.price)
 end
-print(#orders, orders[1].item, total)   --> 2  pen  13.00
+
+print(#orders, orders[1].item, total)  --> 2  pen  13.00
 ```
 
 ### Parsing CSV
@@ -232,7 +247,7 @@ global fromcsv, print
 
 local data = fromcsv('"hello, world","she said ""hi"""\r\n"two\nlines",x')
 print(data[1][1], data[1][2])  --> hello, world  she said "hi"
-print(#data, data[2][2])       --> 2  x
+print(#data, data[2][2])  --> 2  x
 ```
 
 The optional `delimiter` is a single character, `","` by default, for files that separate fields with a tab or a semicolon. A longer delimiter raises an error.
@@ -250,7 +265,7 @@ A quoted field without a closing quote raises an error, as does a closing quote 
 global fromcsv, print
 
 print(catch fromcsv('"unterminated'))  --> false  ...: CSV parse error at position 14: unterminated quoted field
-print(catch fromcsv('"a"b,c'))         --> false  ...: CSV parse error at position 4: unexpected character after quoted field
+print(catch fromcsv('"a"b,c'))  --> false  ...: CSV parse error at position 4: unexpected character after quoted field
 ```
 
 ### Writing CSV
@@ -261,8 +276,8 @@ print(catch fromcsv('"a"b,c'))         --> false  ...: CSV parse error at positi
 global print, tocsv
 
 local csv = tocsv({
-    {"name", "age"},
-    {"Alice", 30},
+    { "name", "age" },
+    { "Alice", 30 },
 })
 print(csv == "name,age\nAlice,30\n")  --> true
 ```
@@ -272,9 +287,9 @@ print(csv == "name,age\nAlice,30\n")  --> true
 ```lus
 global print, tocsv
 
-print(tocsv({{1, true, 3.14}}) == "1,true,3.14\n")                    --> true
-print(tocsv({{"a", "", "c"}}) == "a,,c\n")                            --> true
-print(tocsv({{"hello, world", 'say "hi"'}}) == '"hello, world","say ""hi"""\n')  --> true
+print(tocsv({ { 1, true, 3.14 } }) == "1,true,3.14\n")  --> true
+print(tocsv({ { "a", "", "c" } }) == "a,,c\n")  --> true
+print(tocsv({ { "hello, world", 'say "hi"' } }) == '"hello, world","say ""hi"""\n')  --> true
 ```
 
 The optional `delimiter` is a single character and defaults to `","`.
@@ -282,7 +297,7 @@ The optional `delimiter` is a single character and defaults to `","`.
 ```lus
 global print, tocsv
 
-print(tocsv({{"a", "b"}, {"c", "d"}}, "\t") == "a\tb\nc\td\n")  --> true
+print(tocsv({ { "a", "b" }, { "c", "d" } }, "\t") == "a\tb\nc\td\n")  --> true
 ```
 
 ## Table functions
@@ -303,12 +318,12 @@ The statistics functions of the `table` library summarize the numbers in an arra
 ```lus
 global print, table
 
-print(table.sum({1, 2, 3, 4, 5}), table.sum({1, "skip", "2"}))  --> 15  3
-print(table.mean({10, 20}), table.median({5, 1, 3, 2, 4}))      --> 15.0  3
-print(table.median({1, 2, 3, 4}), table.mean({}))               --> 2.5  nan
+print(table.sum({ 1, 2, 3, 4, 5 }), table.sum({ 1, "skip", "2" }))  --> 15  3
+print(table.mean({ 10, 20 }), table.median({ 5, 1, 3, 2, 4 }))  --> 15.0  3
+print(table.median({ 1, 2, 3, 4 }), table.mean({}))  --> 2.5  nan
 
-local values = {2, 4, 4, 4, 5, 5, 7, 9}
-print(table.stdev(values), table.stdev(values, true))           --> 2.0  2.138089935299395
+local values = { 2, 4, 4, 4, 5, 5, 7, 9 }
+print(table.stdev(values), table.stdev(values, true))  --> 2.0  2.138089935299395
 ```
 
 `table.sum` of floats, `table.mean`, and `table.stdev` add their values in a fixed order, so the result is the same on every platform. The API entries give the order.
@@ -322,11 +337,17 @@ print(table.stdev(values), table.stdev(values, true))           --> 2.0  2.13808
 ```lus
 global print, table
 
-local doubled = table.map({1, 2, 3}, function(x) return x * 2 end)
+local doubled = table.map({ 1, 2, 3 }, function(x)
+    return x * 2
+end)
+
 print(doubled[1], doubled[2], doubled[3])  --> 2  4  6
 
-local evens = table.filter({1, 2, 3, 4, 5}, function(x) return x % 2 == 0 end)
-print(#evens, evens[1], evens[2])          --> 2  2  4
+local evens = table.filter({ 1, 2, 3, 4, 5 }, function(x)
+    return x % 2 == 0
+end)
+
+print(#evens, evens[1], evens[2])  --> 2  2  4
 ```
 
 [`table.reduce(array, func, initial)`](/manual/api#table.reduce) combines all elements into one value, such as a product, a longest string, or a table of counts. It keeps a running result that starts as `initial`. For each element it calls `func(result, element, index)` and makes the returned value the new running result. If `initial` is absent, the first element is the starting result and the calls begin at the second element. An empty array with no `initial` raises an error.
@@ -334,9 +355,22 @@ print(#evens, evens[1], evens[2])          --> 2  2  4
 ```lus
 global print, table
 
-print(table.reduce({1, 2, 3, 4, 5}, function(acc, x) return acc + x end, 0))  --> 15
-print(table.reduce({1, 2, 3, 4}, function(acc, x) return acc * x end))       --> 24
-print(catch table.reduce({}, function(acc, x) return acc end))              --> false  ...: 'reduce' on empty table with no initial value
+print(table.reduce({ 1, 2, 3, 4, 5 }, function(acc, x)  --> 15
+    return acc + x
+end, 0))
+
+print(table.reduce({ 1, 2, 3, 4 }, function(acc, x)  --> 24
+    return acc * x
+end))
+
+print(
+    catch table.reduce(
+        {},
+        function(acc, x)  --> false  ...: 'reduce' on empty table with no initial value
+            return acc
+        end
+    )
+)
 ```
 
 ### Grouping and sorting
@@ -347,12 +381,15 @@ print(catch table.reduce({}, function(acc, x) return acc end))              --> 
 global print, table
 
 local people = {
-    {name = "Alice", dept = "eng"},
-    {name = "Bob", dept = "sales"},
-    {name = "Charlie", dept = "eng"},
+    { name = "Alice", dept = "eng" },
+    { name = "Bob", dept = "sales" },
+    { name = "Charlie", dept = "eng" },
 }
 
-local byDept = table.groupby(people, function(p) return p.dept end)
+local byDept = table.groupby(people, function(p)
+    return p.dept
+end)
+
 print(#byDept.eng, #byDept.sales, byDept.eng[2].name)  --> 2  1  Charlie
 ```
 
@@ -362,16 +399,22 @@ print(#byDept.eng, #byDept.sales, byDept.eng[2].name)  --> 2  1  Charlie
 global print, table
 
 local people = {
-    {name = "Charlie", age = 35},
-    {name = "Alice", age = 30},
-    {name = "Bob", age = 25},
+    { name = "Charlie", age = 35 },
+    { name = "Alice", age = 30 },
+    { name = "Bob", age = 25 },
 }
 
-table.sortby(people, function(p) return p.age end)
+table.sortby(people, function(p)
+    return p.age
+end)
+
 print(people[1].name, people[3].name)  --> Bob  Charlie
 
-table.sortby(people, function(p) return p.age end, false)
-print(people[1].name)                  --> Charlie
+table.sortby(people, function(p)
+    return p.age
+end, false)
+
+print(people[1].name)  --> Charlie
 ```
 
 ### Combining arrays
@@ -383,11 +426,11 @@ Data sometimes arrives as separate columns, such as an array of names and an arr
 ```lus
 global print, table
 
-local zipped = table.zip({"Alice", "Bob", "Charlie"}, {30, 25})
+local zipped = table.zip({ "Alice", "Bob", "Charlie" }, { 30, 25 })
 print(#zipped, zipped[1][1], zipped[2][2])  --> 2  Alice  25
 
-local names, ages = table.unzip({{"Alice", 30}, {"Bob", 25}})
-print(names[2], ages[1])                    --> Bob  30
+local names, ages = table.unzip({ { "Alice", 30 }, { "Bob", 25 } })
+print(names[2], ages[1])  --> Bob  30
 ```
 
 ### Matrices
@@ -401,12 +444,12 @@ A _matrix_ is an array of rows, where every row is an array of the same length. 
 ```lus
 global print, table
 
-local t = table.transpose({{1, 2, 3}, {4, 5, 6}})
-print(#t, t[1][2], t[3][1])                  --> 3  4  3
+local t = table.transpose({ { 1, 2, 3 }, { 4, 5, 6 } })
+print(#t, t[1][2], t[3][1])  --> 3  4  3
 
-local m = table.reshape({1, 2, 3, 4, 5, 6}, 2, 3)
-print(#m, m[1][3], m[2][1])                  --> 2  3  4
-print(catch table.reshape({1, 2, 3}, 2, 2))  --> false  ...: array length 3 does not match 2 x 2
+local m = table.reshape({ 1, 2, 3, 4, 5, 6 }, 2, 3)
+print(#m, m[1][3], m[2][1])  --> 2  3  4
+print(catch table.reshape({ 1, 2, 3 }, 2, 2))  --> false  ...: array length 3 does not match 2 x 2
 ```
 
 ## String functions
@@ -419,13 +462,13 @@ The `string` library has functions that cut a line into fields, join fields into
 global print, string
 
 local parts = string.split("apple,banana,cherry", ",")
-print(#parts, parts[1], parts[3])         --> 3  apple  cherry
+print(#parts, parts[1], parts[3])  --> 3  apple  cherry
 
 local dirs = string.split("a//b", "/")
-print(#dirs, dirs[2] == "")               --> 3  true
+print(#dirs, dirs[2] == "")  --> 3  true
 
 local chars = ("héllo"):split("")
-print(#chars, chars[2])                   --> 5  é
+print(#chars, chars[2])  --> 5  é
 ```
 
 [`string.join(t, delimiter)`](/manual/api#string.join) is the reverse, joining the elements of an array into one string with the delimiter between them. It converts values that are not strings with `tostring`, so it accepts booleans and other values that [`table.concat`](/manual/api#table.concat) rejects. `table.concat` accepts strings and numbers only and is the function to use for building a long string from many pieces. An empty array produces the empty string. The delimiter is required.
@@ -433,9 +476,9 @@ print(#chars, chars[2])                   --> 5  é
 ```lus
 global print, string
 
-print(string.join({"hello", "world"}, " "))   --> hello world
-print(string.join({1, true, 2.5}, ","))       --> 1,true,2.5
-print(string.join({}, ",") == "")             --> true
+print(string.join({ "hello", "world" }, " "))  --> hello world
+print(string.join({ 1, true, 2.5 }, ","))  --> 1,true,2.5
+print(string.join({}, ",") == "")  --> true
 ```
 
 Text from a person or a file often has spaces or line breaks around the value. [`string.trim`](/manual/api#string.trim) removes characters from both ends of a string, [`string.ltrim`](/manual/api#string.ltrim) from the start, and [`string.rtrim`](/manual/api#string.rtrim) from the end. Without a second argument, the three functions remove spaces, tabs, line feeds, and carriage returns. With a string as the second argument, they remove the characters in that string.
@@ -443,7 +486,7 @@ Text from a person or a file often has spaces or line breaks around the value. [
 ```lus
 global print, string
 
-print("[" .. string.trim("  hello  ") .. "]")   --> [hello]
+print("[" .. string.trim("  hello  ") .. "]")  --> [hello]
 print("[" .. string.ltrim("  hello  ") .. "]")  --> [hello  ]
 print("[" .. string.rtrim("  hello  ") .. "]")  --> [  hello]
 print(string.trim("xyhixy", "yx"), string.trim("éhié", "é"))  --> hi  hi

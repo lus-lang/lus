@@ -15,13 +15,16 @@ vararg: true
 
 ```lus
 local function divide(a, b)
-    if b == 0 then error("division by zero", 0) end
+    if b == 0 then
+        error("division by zero", 0)
+    end
+
     return a / b
 end
 
-print(catch divide(1, 2))   --> true  0.5
-print(catch divide(1, 0))   --> false  division by zero
-print(pcall)                --> nil
+print(catch divide(1, 2))  --> true  0.5
+print(catch divide(1, 0))  --> false  division by zero
+print(pcall)  --> nil
 ```
 
 [Error handling](/manual/guide#errors) describes `catch` and its handlers.

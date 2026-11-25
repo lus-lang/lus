@@ -29,9 +29,9 @@ The following example writes three 32-bit little-endian integers and reads one b
 
 ```lus
 local v = vector.create(12)
-print(vector.pack(v, 0, "<I4I4I4", 1, 2, 3))   --> 12
-print(vector.unpack(v, 4, "<I4"))              --> 2  8
-print(catch vector.pack(v, 10, "<I4", 7))      --> false  ...: bad argument #2 to 'pack' (pack would exceed vector bounds)
+print(vector.pack(v, 0, "<I4I4I4", 1, 2, 3))  --> 12
+print(vector.unpack(v, 4, "<I4"))  --> 2  8
+print(catch vector.pack(v, 10, "<I4", 7))  --> false  ...: bad argument #2 to 'pack' (pack would exceed vector bounds)
 ```
 
 [`vector.resize`](/manual/api#vector.resize) makes room before a write past the end. [`vector.unpack`](/manual/api#vector.unpack) reads values in the same layout.

@@ -19,13 +19,19 @@ The handler receives the error object and runs after the stack has unwound to th
 
 ```lus
 local function check(n)
-    if n < 0 then error("negative input", 0) end
+    if n < 0 then
+        error("negative input", 0)
+    end
+
     return n
 end
 
-local ok, err = catch[function(e) return { message = e } end] check(-1)
-print(ok, err.message)    --> false  negative input
-print(xpcall)             --> nil
+local ok, err = catch[function(e)
+    return { message = e }
+end] check(-1)
+
+print(ok, err.message)  --> false  negative input
+print(xpcall)  --> nil
 ```
 
 [Catch handlers](/manual/guide#catch-handlers) describes how a handler runs.

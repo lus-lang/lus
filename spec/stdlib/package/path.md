@@ -15,7 +15,7 @@ In each template, `require` replaces every `?` with the module name, after turni
 When the environment variable `LUS_PATH` is set, its value becomes the initial `package.path`. The `-E` option ignores it. `require` reads `package.path` at each search, so a program may assign a new string before it requires a module, and a value that is not a string makes the search raise `'package.path' must be a string`.
 
 ```lus
-print(package.path)   --> ./?.lus;./?/init.lus;./?.lua;./?/init.lua
+print(package.path)  --> ./?.lus;./?/init.lus;./?.lua;./?/init.lua
 print(package.searchpath("util.strings", "./lib/?.lus"))
 --> nil  no file './lib/util/strings.lus'
 ```

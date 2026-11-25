@@ -17,17 +17,20 @@ A resume waits for a connection as [`accept`](/manual/api#tcp_server:accept) doe
 pledge("network")
 local server = network.tcp.bind("127.0.0.1", 0)
 local host, port = server:getsockname()
+
 coroutine.detach(coroutine.create(function()
     for conn in server.accepted do
         coroutine.resume(conn.output, "welcome\n")
         conn:close()
     end
 end))
+
 for _ = 1, 2 do
     local sock <close> = network.tcp.connect(host, port)
     local _, line = coroutine.resume(sock.input)
     print(vector.tostring(line))
 end
+
 server:close()
 --> welcome
 --> welcome

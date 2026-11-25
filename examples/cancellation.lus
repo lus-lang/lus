@@ -8,6 +8,7 @@ local log = {}
 
 local function open_connection(name)
     log[#log + 1] = `open $name`
+
     return setmetatable({ name = name }, {
         __close = function(conn)
             log[#log + 1] = `close $(conn.name)`
@@ -19,10 +20,12 @@ end
 -- waits for a database would.
 local function copy_rows(table_name)
     local conn <close> = open_connection(table_name)
+
     for batch = 1, 100 do
         log[#log + 1] = `batch $batch`
         coroutine.resume(coroutine.sleep(0.01))
     end
+
     return "copied"
 end
 

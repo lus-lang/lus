@@ -35,6 +35,7 @@ local products = { { name = "kettle", price = 30 }, { name = "mug", price = 8 } 
 
 local function each(list)
     local i = 0
+
     return function()
         i = i + 1
         return list[i]

@@ -12,7 +12,7 @@
 // runtime/zig-out/bin/lus.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -83,6 +83,9 @@ function main(argv) {
 
   // A sparse checkout leaves some tracked files out of the working tree.
   const present = (f) => existsSync(path.join(root, f));
+  // A file reached through a link to another checkout is checked but
+  // never written, so --write changes only this working tree.
+  const own = (f) => realpathSync(path.join(root, f)).startsWith(realpathSync(root) + path.sep);
   const files = tracked("*.lus").filter((f) => !isSkipped(f) && present(f));
   const fmt = spawnSync(lus, ["fmt", "--strict", write ? "--write" : "--check", ...files], { cwd: root, encoding: "utf8" });
   if (fmt.status !== 0) {
@@ -120,7 +123,17 @@ function main(argv) {
       }
     }
     out += text.slice(at);
-    if (changed && write) writeFileSync(path.join(root, file), out);
+    if (changed && write && !own(file)) {
+      console.error(`lint-lus: ${file} is outside this working tree, so it stays as it is`);
+      failed++;
+    } else if (changed && write) {
+      try {
+        writeFileSync(path.join(root, file), out);
+      } catch (e) {
+        console.error(`lint-lus: cannot write ${file} (${e.code})`);
+        failed++;
+      }
+    }
     if (changed && !write) failed++;
   }
   return failed > 0 ? 1 : 0;

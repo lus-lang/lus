@@ -13,6 +13,7 @@ local function txt(v)
     if type(v) == "vector" then
         return vector.tostring(v)
     end
+
     return v
 end
 
@@ -28,18 +29,23 @@ end
 -- bind skips the test.
 local function denied(err)
     local text = tostring(err)
-    return string.find(text, "ermission denied", 1, true) or string.find(text, "not permitted", 1, true)
-        or string.find(text, "EPERM", 1, true) or string.find(text, "UDP socket: Unexpected", 1, true)
+    return string.find(text, "ermission denied", 1, true)
+        or string.find(text, "not permitted", 1, true)
+        or string.find(text, "EPERM", 1, true)
+        or string.find(text, "UDP socket: Unexpected", 1, true)
 end
 
 local function listen()
     local server, err = network.tcp.bind("127.0.0.1", 0)
+
     if not server then
         if denied(err) then
             skip("loopback sockets unavailable")
         end
+
         error(err, 0)
     end
+
     local _, port = server:getsockname()
     return server, port
 end
@@ -53,11 +59,14 @@ end
 -- Echoes every line of a connection until the peer closes it.
 local function echo(sock)
     local conn <close> = sock
+
     while true do
         local line = conn:receive("*l")
+
         if #line == 0 then
             break
         end
+
         conn:send(txt(line) .. "\n")
     end
 end
@@ -66,12 +75,14 @@ end
 -- coroutine. Returns the port and the function that stops the server.
 local function start(serve)
     local server, port = listen()
+
     local acceptor = spawn(function()
         while true do
             local sock = server:accept()
             spawn(serve, sock)
         end
     end)
+
     return port, function()
         assert(close(acceptor))
         server:close()
@@ -83,40 +94,50 @@ end
 local function many_connections_run_at_once_test()
     local port, stop = start(echo)
     local clients = {}
+
     for i = 1, 64 do
         clients[i] = spawn(function(n)
             local sock <close> = connect(port)
             local replies = {}
+
             for round = 1, 5 do
-                sock:send(`client $(n) round $(round)\n`)
+                sock:send(`client $n round $round\n`)
                 replies[round] = txt(sock:receive("*l"))
             end
+
             return n, table.concat(replies, "|")
         end, i)
     end
+
     for i = 1, 64 do
         local ok, n, text = resume(clients[i])
         assert(ok, tostring(n))
         local expected = {}
+
         for round = 1, 5 do
-            expected[round] = `client $(i) round $(round)`
+            expected[round] = `client $i round $round`
         end
+
         assert(n == i and text == table.concat(expected, "|"), text)
     end
+
     stop()
 end
 
 local function connections_interleave_test()
     local port, stop = start(echo)
     local log = {}
+
     local function client(name)
         local sock <close> = connect(port)
+
         for round = 1, 3 do
             sock:send(name .. round .. "\n")
             local line = txt(sock:receive("*l"))
             log[#log + 1] = line
         end
     end
+
     local a = spawn(client, "a")
     local b = spawn(client, "b")
     assert(resume(a))
@@ -133,6 +154,7 @@ local function several_acceptors_share_a_server_test()
     local server, port = listen()
     local served = { 0, 0, 0 }
     local acceptors = {}
+
     for i = 1, 3 do
         acceptors[i] = spawn(function()
             while true do
@@ -142,22 +164,28 @@ local function several_acceptors_share_a_server_test()
             end
         end)
     end
+
     local clients = {}
+
     for i = 1, 9 do
         clients[i] = spawn(function()
             local sock <close> = connect(port)
-            sock:send(`hello $(i)\n`)
+            sock:send(`hello $i\n`)
             return txt(sock:receive("*l"))
         end)
     end
+
     for i = 1, 9 do
         local ok, reply = resume(clients[i])
-        assert(ok and reply == `hello $(i)`, tostring(reply))
+        assert(ok and reply == `hello $i`, tostring(reply))
     end
+
     assert(served[1] + served[2] + served[3] == 9)
+
     for i = 1, 3 do
         assert(close(acceptors[i]))
     end
+
     server:close()
 end
 
@@ -167,16 +195,19 @@ local function the_main_chunk_runs_the_scheduler_while_it_waits_test()
     local port, stop = start(echo)
     -- The server only runs when this test waits on its own socket.
     local sock <close> = connect(port)
+
     for round = 1, 5 do
-        assert(sock:send(`main $(round)\n`) == #`main $(round)\n`)
-        assert(txt(sock:receive("*l")) == `main $(round)`)
+        assert(sock:send(`main $round\n`) == #`main $round\n`)
+        assert(txt(sock:receive("*l")) == `main $round`)
     end
+
     sock:close()
     stop()
 end
 
 local function a_plain_coroutine_outside_runs_the_scheduler_test()
     local port, stop = start(echo)
+
     local plain = create(function()
         local sock <close> = connect(port)
         sock:send("one\n")
@@ -184,6 +215,7 @@ local function a_plain_coroutine_outside_runs_the_scheduler_test()
         sock:send("two\n")
         return txt(sock:receive("*l"))
     end)
+
     local r = pack(resume(plain))
     assert(r.n == 2 and r[1] == true and r[2] == "one")
     r = pack(resume(plain))
@@ -194,24 +226,29 @@ end
 local function background_coroutines_run_while_the_main_chunk_waits_test()
     local server, port = listen()
     local ticks = 0
+
     local ticker = spawn(function()
         while true do
             ticks = ticks + 1
             yield()
         end
     end)
+
     local responder = spawn(function()
         local sock <close> = server:accept()
         local line = txt(sock:receive("*l"))
+
         for _ = 1, 50 do
             yield()
         end
+
         sock:send(line .. "!\n")
     end)
+
     local sock <close> = connect(port)
     sock:send("ping\n")
     assert(txt(sock:receive("*l")) == "ping!")
-    assert(ticks >= 50, `the ticker ran $(ticks) times`)
+    assert(ticks >= 50, `the ticker ran $ticks times`)
     assert(resume(responder))
     assert(close(ticker))
     server:close()
@@ -223,39 +260,51 @@ end
 -- reader really waits for each one.
 local function slow_lines(sock)
     local conn <close> = sock
+
     for i = 1, 3 do
         for _ = 1, 5 do
             yield()
         end
-        conn:send(`line $(i)\n`)
+
+        conn:send(`line $i\n`)
     end
 end
 
 local function resume_passes_a_socket_wait_on_test()
     local port, stop = start(slow_lines)
+
     local co = spawn(function()
         local sock <close> = connect(port)
+
         local reader = create(function()
             while true do
                 local line = txt(sock:receive("*l"))
+
                 if line == "" then
                     return "end"
                 end
+
                 yield(line)
             end
         end)
+
         local seen = {}
+
         while true do
             local r = pack(resume(reader))
             assert(r.n == 2 and r[1] == true, tostring(r[2]))
             seen[#seen + 1] = r[2]
+
             if status(reader) == "dead" then
                 break
             end
+
             assert(status(reader) == "suspended")
         end
+
         return table.concat(seen, ", ")
     end)
+
     local ok, text = resume(co)
     assert(ok and text == "line 1, line 2, line 3, end", tostring(text))
     stop()
@@ -263,25 +312,33 @@ end
 
 local function a_wrapped_generator_reads_a_socket_test()
     local port, stop = start(slow_lines)
+
     local co = spawn(function()
         local sock <close> = connect(port)
+
         local function lines()
             return coroutine.wrap(function()
                 while true do
                     local line = txt(sock:receive("*l"))
+
                     if line == "" then
                         return
                     end
+
                     yield(line)
                 end
             end)
         end
+
         local seen = {}
+
         for line in lines() do
             seen[#seen + 1] = line
         end
+
         return table.concat(seen, ", ")
     end)
+
     local ok, text = resume(co)
     assert(ok and text == "line 1, line 2, line 3", tostring(text))
     stop()
@@ -289,20 +346,25 @@ end
 
 local function two_levels_of_plain_coroutines_read_a_socket_test()
     local port, stop = start(slow_lines)
+
     local co = spawn(function()
         local sock <close> = connect(port)
+
         local outer = coroutine.wrap(function()
             local inner = create(function()
                 return txt(sock:receive("*l")), txt(sock:receive("*l"))
             end)
+
             local ok, a, b = resume(inner)
             yield(ok)
             return a .. " and " .. b
         end)
+
         local first = outer()
         local second = outer()
         return first, second
     end)
+
     local ok, first, second = resume(co)
     assert(ok and first == true and second == "line 1 and line 2", tostring(second))
     stop()
@@ -310,15 +372,18 @@ end
 
 local function the_status_of_a_coroutine_that_waits_for_a_socket_test()
     local port, stop = start(slow_lines)
+
     local reader = spawn(function()
         local sock <close> = connect(port)
         return txt(sock:receive("*l"))
     end)
+
     local observer = spawn(function()
         yield()
         yield()
         return status(reader)
     end)
+
     local ok, seen = resume(observer)
     assert(ok and seen == "suspended")
     local ok2, line = resume(reader)
@@ -328,16 +393,20 @@ end
 
 local function a_socket_wait_inside_a_native_call_runs_the_scheduler_test()
     local port, stop = start(echo)
+
     local co = spawn(function()
         local sock <close> = connect(port)
+
         -- The callback of gsub cannot suspend, so each receive keeps the
         -- coroutine on the stack and runs the scheduler while it waits.
         local text = string.gsub("abc", ".", function(c)
             sock:send(c .. c .. "\n")
             return txt(sock:receive("*l"))
         end)
+
         return text
     end)
+
     local ok, text = resume(co)
     assert(ok and text == "aabbcc", tostring(text))
     stop()
@@ -351,8 +420,10 @@ local function a_coroutine_suspends_again_after_a_wait_inside_a_native_call_test
     local client <close> = connect(port)
     local peer <close> = server:accept()
     local order = {}
+
     local reader = spawn(function()
         local first = true
+
         table.sort({ 3, 1, 2 }, function(a, b)
             if first then
                 first = false
@@ -360,24 +431,30 @@ local function a_coroutine_suspends_again_after_a_wait_inside_a_native_call_test
                 local got, err = peer:receive(1)
                 assert(got == nil and err.code == "timeout")
             end
+
             return a < b
         end)
+
         order[#order + 1] = "sorted"
         peer:settimeout(10)
         local byte = txt(peer:receive(1))
         order[#order + 1] = "received " .. byte
         return byte
     end)
+
     local ticker = spawn(function()
         while #order == 0 do
             yield()
         end
+
         for i = 1, 3 do
             yield()
         end
+
         order[#order + 1] = "ticker done"
         return "ticks"
     end)
+
     -- The main chunk waits for the ticker below the reader. It continues
     -- while the reader waits for its byte, which arrives afterwards.
     local ok, ticks = resume(ticker)
@@ -386,7 +463,10 @@ local function a_coroutine_suspends_again_after_a_wait_inside_a_native_call_test
     client:send("x")
     local ok2, byte = resume(reader)
     assert(ok2 and byte == "x")
-    assert(table.concat(order, ", ") == "sorted, ticker done, received x", table.concat(order, ", "))
+    assert(
+        table.concat(order, ", ") == "sorted, ticker done, received x",
+        table.concat(order, ", ")
+    )
     server:close()
 end
 
@@ -400,12 +480,14 @@ end
 
 local function receive_timeout_in_a_detached_coroutine_test()
     local port, stop = start(silent)
+
     local co = spawn(function()
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(0.05)
         local got, err = sock:receive(10)
         return got, err
     end)
+
     local r = pack(resume(co))
     assert(r.n == 3 and r[1] == true and r[2] == nil)
     assert(r[3].code == "timeout" and tostring(r[3]) == "receive timeout", tostring(r[3]))
@@ -414,11 +496,13 @@ end
 
 local function a_coroutine_goes_on_after_a_timeout_test()
     local server, port = listen()
+
     local responder = spawn(function()
         local sock <close> = server:accept()
         local line = txt(sock:receive("*l"))
         sock:send("late " .. line .. "\n")
     end)
+
     local co = spawn(function()
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(0.03)
@@ -428,6 +512,7 @@ local function a_coroutine_goes_on_after_a_timeout_test()
         sock:send("answer\n")
         return txt(sock:receive("*l"))
     end)
+
     local ok, line = resume(co)
     assert(ok and line == "late answer", tostring(line))
     assert(resume(responder))
@@ -437,12 +522,17 @@ end
 local function accept_timeout_in_a_detached_coroutine_test()
     local server = listen()
     server:settimeout(0.05)
+
     local co = spawn(function()
         return server:accept()
     end)
+
     local r = pack(resume(co))
     assert(r.n == 3 and r[1] == true and r[2] == nil)
-    assert(r[3].code == "timeout" and string.find(tostring(r[3]), "accept timeout$"), tostring(r[3]))
+    assert(
+        r[3].code == "timeout" and string.find(tostring(r[3]), "accept timeout$"),
+        tostring(r[3])
+    )
     server:close()
 end
 
@@ -453,18 +543,22 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
     local server, port = listen()
     local order = {}
     local taken = 0
+
     -- The timeout of a server belongs to the server, so this acceptor
     -- has it too for a while. It goes on after a timeout of its own.
     local greedy = spawn(function()
         while true do
             local sock = server:accept()
+
             if sock then
                 taken = taken + 1
                 sock:close()
             end
         end
     end)
+
     local waiting = false
+
     local patient = spawn(function()
         -- The other acceptor waits first, so it takes the connections.
         yield()
@@ -475,21 +569,26 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
         order[#order + 1] = "patient"
         return sock, err
     end)
+
     local dialer = spawn(function()
         local idle = listen()
         idle:settimeout(0.02)
+
         -- The first connection arrives once both acceptors wait.
         while not waiting do
             yield()
         end
+
         -- A connection arrives every 20 ms for longer than the timeout.
         for i = 1, 30 do
             network.tcp.connect("127.0.0.1", port):close()
             idle:accept()
         end
+
         idle:close()
         order[#order + 1] = "dialer"
     end)
+
     local r = pack(resume(patient))
     local dialed = resume(dialer)
     assert(close(greedy))
@@ -497,6 +596,7 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
     -- The acceptor with the timeout ends while connections still arrive.
     assert(dialed and table.concat(order, " ") == "patient dialer", table.concat(order, " "))
     assert(r[1] == true)
+
     if r[2] then
         -- Its deadline passed in the same moment in which a connection
         -- arrived, and a connection that is there is accepted.
@@ -505,16 +605,19 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
     else
         assert(string.find(tostring(r[3]), "accept timeout$"), tostring(r[3]))
     end
+
     assert(taken == 30, tostring(taken))
 end
 
 local function a_zero_timeout_never_waits_test()
     local port, stop = start(silent)
+
     local co = spawn(function()
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(0)
         return sock:receive(1)
     end)
+
     local r = pack(resume(co))
     assert(r.n == 3 and r[1] == true and r[2] == nil and r[3].code == "timeout", tostring(r[3]))
     stop()
@@ -523,6 +626,7 @@ end
 local function timeouts_fire_in_the_order_of_their_deadlines_test()
     local port, stop = start(silent)
     local log = {}
+
     local function waiter(name, seconds)
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(seconds)
@@ -530,6 +634,7 @@ local function timeouts_fire_in_the_order_of_their_deadlines_test()
         assert(got == nil and err.code == "timeout")
         log[#log + 1] = name
     end
+
     local a = spawn(waiter, "slow", 0.23)
     local b = spawn(waiter, "fast", 0.03)
     local c = spawn(waiter, "middle", 0.13)
@@ -543,12 +648,14 @@ end
 local function receive_timeout_in_the_main_chunk_test()
     local port, stop = start(silent)
     local ticks = 0
+
     local ticker = spawn(function()
         while true do
             ticks = ticks + 1
             yield()
         end
     end)
+
     local sock <close> = network.tcp.connect("127.0.0.1", port)
     sock:settimeout(0.05)
     local got, err = sock:receive(1)
@@ -562,15 +669,19 @@ end
 
 local function a_timeout_that_does_not_fire_leaves_no_trace_test()
     local port, stop = start(echo)
+
     local co = spawn(function()
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         sock:settimeout(5)
+
         for i = 1, 20 do
-            sock:send(`n$(i)\n`)
-            assert(txt(sock:receive("*l")) == `n$(i)`)
+            sock:send(`n$i\n`)
+            assert(txt(sock:receive("*l")) == `n$i`)
         end
+
         return "done"
     end)
+
     local ok, text = resume(co)
     assert(ok and text == "done")
     stop()
@@ -581,14 +692,18 @@ end
 local function a_large_send_waits_for_its_reader_test()
     local server, port = listen()
     local pattern = {}
+
     for i = 1, 251 do
         pattern[i] = string.char(32 + i % 90)
     end
+
     local payload = string.rep(table.concat(pattern), 12000)
+
     local receiver = spawn(function()
         local sock <close> = server:accept()
         local parts = {}
         local total = 0
+
         while total < #payload do
             local chunk = sock:receive(math.min(65536, #payload - total))
             assert(#chunk > 0)
@@ -597,12 +712,15 @@ local function a_large_send_waits_for_its_reader_test()
             -- The sender fills the socket while the reader takes turns.
             yield()
         end
+
         return table.concat(parts)
     end)
+
     local sender = spawn(function()
         local sock <close> = connect(port)
         return sock:send(payload)
     end)
+
     local ok, sent = resume(sender)
     assert(ok and sent == #payload, tostring(sent))
     local ok2, received = resume(receiver)
@@ -613,22 +731,30 @@ end
 
 local function receive_collects_a_message_that_arrives_in_pieces_test()
     local server, port = listen()
+
     local sender = spawn(function()
         local sock <close> = server:accept()
+
         for i = 1, 10 do
             sock:send(string.rep(tostring(i % 10), 100))
+
             for _ = 1, 3 do
                 yield()
             end
         end
     end)
+
     local receiver = spawn(function()
         local sock <close> = connect(port)
         return txt(sock:receive(1000)), #sock:receive("*a")
     end)
+
     local ok, text, rest = resume(receiver)
     assert(ok and #text == 1000 and rest == 0)
-    assert(string.sub(text, 1, 100) == string.rep("1", 100) and string.sub(text, 901, 1000) == string.rep("0", 100))
+    assert(
+        string.sub(text, 1, 100) == string.rep("1", 100)
+            and string.sub(text, 901, 1000) == string.rep("0", 100)
+    )
     assert(resume(sender))
     server:close()
 end
@@ -638,14 +764,17 @@ end
 local function closing_a_socket_wakes_its_reader_test()
     local port, stop = start(silent)
     local sock = connect(port)
+
     local reader = spawn(function()
         return catch sock:receive(1)
     end)
+
     local closer = spawn(function()
         yield()
         yield()
         sock:close()
     end)
+
     assert(resume(closer))
     local r = pack(resume(reader))
     assert(r.n == 3 and r[1] == true and r[2] == false)
@@ -655,13 +784,16 @@ end
 
 local function closing_a_server_wakes_its_acceptor_test()
     local server = listen()
+
     local acceptor = spawn(function()
         return catch server:accept()
     end)
+
     local closer = spawn(function()
         yield()
         server:close()
     end)
+
     assert(resume(closer))
     local r = pack(resume(acceptor))
     assert(r.n == 3 and r[1] == true and r[2] == false)
@@ -672,27 +804,37 @@ local function close_cancels_a_coroutine_that_waits_for_a_socket_test()
     local server, port = listen()
     local log = {}
     local peer
+
     local accepted = spawn(function()
         peer = server:accept()
     end)
+
     local sock = connect(port)
     local reading = false
+
     local reader = spawn(function()
-        local mark <close> = setmetatable({}, { __close = function()
-            log[#log + 1] = "closed"
-        end })
+        local mark <close> = setmetatable({}, {
+            __close = function()
+                log[#log + 1] = "closed"
+            end,
+        })
+
         reading = true
         sock:receive("*l")
         log[#log + 1] = "unreachable"
     end)
+
     assert(resume(accepted))
+
     -- The reader waits in `receive` once it has set the flag.
     local warm = spawn(function()
         while not reading do
             yield()
         end
+
         yield()
     end)
+
     assert(resume(warm))
     assert(status(reader) == "suspended")
     local r = pack(close(reader))
@@ -710,21 +852,27 @@ local function close_of_a_plain_coroutine_that_waits_for_a_socket_test()
     local port, stop = start(silent)
     local plain
     local reading = false
+
     local outer = spawn(function()
         local sock <close> = connect(port)
+
         plain = create(function()
             reading = true
             return sock:receive(1)
         end)
+
         return resume(plain)
     end)
+
     local closer = spawn(function()
         while not reading do
             yield()
         end
+
         yield()
         return close(plain)
     end)
+
     local ok, closed = resume(closer)
     assert(ok and closed == true)
     local r = pack(resume(outer))
@@ -737,24 +885,32 @@ end
 local function connect_reports_a_refused_connection_test()
     local server, port = listen()
     server:close()
+
     local keep = spawn(function()
         yield()
     end)
+
     local co = spawn(function()
         return network.tcp.connect("127.0.0.1", port)
     end)
+
     local r = pack(resume(co))
     assert(r.n == 3 and r[1] == true and r[2] == nil and r[3].code == "refused")
-    assert(string.find(tostring(r[3]), "cannot connect to 127.0.0.1:" .. port, 1, true), tostring(r[3]))
+    assert(
+        string.find(tostring(r[3]), "cannot connect to 127.0.0.1:" .. port, 1, true),
+        tostring(r[3])
+    )
     assert(resume(keep))
 end
 
 local function connect_returns_a_socket_with_both_addresses_test()
     local server, port = listen()
+
     local acceptor = spawn(function()
         local sock <close> = server:accept()
         return sock:getpeername()
     end)
+
     local co = spawn(function()
         local sock <close> = network.tcp.connect("127.0.0.1", port)
         local peer_host, peer_port = sock:getpeername()
@@ -762,6 +918,7 @@ local function connect_returns_a_socket_with_both_addresses_test()
         sock:send("x\n")
         return peer_host, peer_port, host, local_port
     end)
+
     local ok, peer_host, peer_port, host, local_port = resume(co)
     assert(ok and peer_host == "127.0.0.1" and peer_port == port and host == "127.0.0.1")
     local ok2, seen_host, seen_port = resume(acceptor)
@@ -773,13 +930,17 @@ end
 
 local function udp_open()
     local sock, err = network.udp.open(0, "127.0.0.1")
+
     if not sock then
         sock = err
+
         if denied(sock) then
             skip("loopback sockets unavailable")
         end
+
         error(sock, 0)
     end
+
     local _, port = sock:getsockname()
     return sock, port
 end
@@ -787,20 +948,25 @@ end
 local function datagrams_between_two_coroutines_test()
     local a, port_a = udp_open()
     local b, port_b = udp_open()
+
     local ponger = spawn(function()
         for _ = 1, 3 do
             local data, host, port = b:receive()
             b:sendto("pong " .. txt(data), host, port)
         end
     end)
+
     local pinger = spawn(function()
         local replies = {}
+
         for i = 1, 3 do
-            a:sendto(`ping $(i)`, "127.0.0.1", port_b)
+            a:sendto(`ping $i`, "127.0.0.1", port_b)
             replies[i] = txt((a:receive()))
         end
+
         return table.concat(replies, ", ")
     end)
+
     local ok, text = resume(pinger)
     assert(ok and text == "pong ping 1, pong ping 2, pong ping 3", tostring(text))
     assert(resume(ponger))
@@ -811,9 +977,11 @@ end
 local function udp_receive_timeout_in_a_detached_coroutine_test()
     local sock = udp_open()
     sock:settimeout(0.05)
+
     local co = spawn(function()
         return sock:receive()
     end)
+
     local r = pack(resume(co))
     assert(r[1] == true and r[2] == nil and r[3].code == "timeout", tostring(r[3]))
     sock:close()
@@ -825,12 +993,15 @@ end
 local function closing_peer(server, response)
     return spawn(function()
         local sock <close> = server:accept()
+
         while true do
             local line = sock:receive("*l")
+
             if #line == 0 then
                 break
             end
         end
+
         sock:send(response)
     end)
 end
@@ -838,10 +1009,12 @@ end
 local function fetch_reads_a_body_that_ends_with_the_connection_while_coroutines_wait_test()
     local server, port = listen()
     local idle, idle_port = listen()
+
     -- A coroutine that waits keeps the scheduler running during the fetch.
     local waiting = spawn(function()
         return idle:accept()
     end)
+
     local peer = closing_peer(server, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nthe whole body")
     local status, body = network.fetch("http://127.0.0.1:" .. port .. "/")
     assert(status == 200 and txt(body) == "the whole body", txt(body))
@@ -860,18 +1033,25 @@ local function fetch_in_a_detached_coroutine_suspends_only_that_coroutine_test()
     server:settimeout(10)
     local fetcher
     local seen
+
     local peer = spawn(function()
         local sock <close> = assert(server:accept())
         sock:settimeout(10)
+
         while #sock:receive("*l") > 0 do
         end
+
         seen = status(fetcher)
         sock:send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
     end)
+
     fetcher = spawn(function()
-        local code, body = network.fetch("http://127.0.0.1:" .. port .. "/", "GET", nil, nil, { timeout = 10 })
+        local code, body = network.fetch("http://127.0.0.1:" .. port .. "/", "GET", nil, nil, {
+            timeout = 10,
+        })
         return code, txt(body)
     end)
+
     local r = pack(resume(fetcher))
     assert(r[1] == true and r[2] == 200 and r[3] == "ok", tostring(r[2]))
     assert(seen == "suspended", tostring(seen))
@@ -884,12 +1064,14 @@ local function an_https_fetch_from_a_plain_http_peer_raises_test()
     -- Every wait of the peer has an end, so a fetch that fails before it
     -- connects or sends fails the test instead of keeping it waiting.
     server:settimeout(10)
+
     local peer = spawn(function()
         local sock <close> = assert(server:accept())
         sock:settimeout(10)
         sock:receive(1)
         sock:send("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
     end)
+
     local ok, err = catch network.fetch("https://127.0.0.1:" .. port .. "/")
     assert(not ok and string.find(tostring(err), "TLS handshake failed: ", 1, true), tostring(err))
     resume(peer)
@@ -900,27 +1082,36 @@ local function a_failing_detached_coroutine_closes_its_socket_at_once_test()
     local server, port = listen()
     local held
     local seen
+
     local co = spawn(function()
         local sock <close> = connect(port)
-        local mark <close> = setmetatable({}, { __close = function(_, err)
-            seen = err
-        end })
+
+        local mark <close> = setmetatable({}, {
+            __close = function(_, err)
+                seen = err
+            end,
+        })
+
         held = sock
         yield()
         error("failed", 0)
     end)
+
     -- Another coroutine runs until the first one has failed.
     local watcher = spawn(function()
         while status(co) ~= "dead" do
             yield()
         end
     end)
+
     assert(resume(watcher))
     assert(seen == "failed", tostring(seen))
     local ok, err = catch held:send("x")
-    assert(not ok and string.find(tostring(err), "attempt to use a closed socket", 1, true), tostring(err))
+    assert(
+        not ok and string.find(tostring(err), "attempt to use a closed socket", 1, true),
+        tostring(err)
+    )
     local r = pack(resume(co))
     assert(r[1] == false and r[2] == "failed", tostring(r[2]))
     server:close()
 end
-

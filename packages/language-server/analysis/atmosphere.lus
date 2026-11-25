@@ -17,18 +17,24 @@ local cache = {}
 -- nil when atmos is missing or fails. Tests replace it.
 local function default_runner(args)
     local quoted = {}
+
     for i, a in ipairs(args) do
-        quoted[i] = "'" .. string.gsub(a, "'", "'\\''") .. "'"
+        quoted[i] = `'$(string.gsub(a, "'", "'\\''"))'`
     end
-    local ok, f = catch io.popen("atmos " .. table.concat(quoted, " ") .. " 2>/dev/null")
+
+    local ok, f = catch io.popen(`atmos $(table.concat(quoted, " ")) 2>/dev/null`)
+
     if not ok or not f then
         return nil
     end
+
     local out = f:read("a")
     local closed = f:close()
+
     if closed ~= true and closed ~= 0 then
         return nil
     end
+
     return out
 end
 
@@ -46,19 +52,27 @@ function atmosphere.configure(settings)
     if type(settings) ~= "table" then
         return
     end
+
     local section = settings.atmosphere
+
     if section == nil and type(settings.lus) == "table" then
         section = settings.lus.atmosphere
     end
+
     if type(section) ~= "table" or type(section.servers) ~= "table" then
         return
     end
+
     servers = { DEFAULT_SERVER }
+
     for _, s in ipairs(section.servers) do
-        if type(s) == "string" and string.match(s, "^https?://[%w%.%-:]+") and s ~= DEFAULT_SERVER then
+        if type(s) == "string"
+            and string.match(s, "^https?://[%w%.%-:]+")
+            and s ~= DEFAULT_SERVER then
             servers[#servers + 1] = (string.gsub(s, "/+$", ""))
         end
     end
+
     cache = {}
 end
 
@@ -73,9 +87,12 @@ function atmosphere.complete(typed)
     if string.find(typed, "[^%w%._%-/:@]") then
         return {}
     end
+
     local results = {}
+
     for _, server in ipairs(servers) do
         local query = nil
+
         if string.sub(server, 1, #typed) == typed then
             query = ""
         elseif string.sub(typed, 1, #server) == server then
@@ -83,20 +100,23 @@ function atmosphere.complete(typed)
             -- After the line, such as 2.0/, the rest is a package name.
             query = string.match(rest, "^[^/]*/(.*)$") or ""
         end
+
         if query ~= nil then
-            local key = server .. "\0" .. query
+            local key = `$server\000$query`
             local found = cache[key]
+
             if found == nil then
                 found = {}
-                local out = runner({
+
+                if out = runner({
                     "search",
                     "--json",
                     "--server",
                     server,
                     query,
-                })
-                if out then
+                }) then
                     local ok, list = catch fromjson(out)
+
                     if ok and type(list) == "table" then
                         for _, item in ipairs(list) do
                             if type(item) == "table" and type(item.url) == "string" then
@@ -110,8 +130,10 @@ function atmosphere.complete(typed)
                         end
                     end
                 end
+
                 cache[key] = found
             end
+
             for _, item in ipairs(found) do
                 if string.sub(item.url, 1, #typed) == typed then
                     results[#results + 1] = item
@@ -119,6 +141,7 @@ function atmosphere.complete(typed)
             end
         end
     end
+
     return results
 end
 

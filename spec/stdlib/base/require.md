@@ -23,12 +23,16 @@ Loading a module from a file requires `fs:read` for the file and the `load` perm
 
 ```lus
 package.preload.greeter = function(name)
-    return { hello = function() return "hello from " .. name end }
+    return {
+        hello = function()
+            return "hello from " .. name
+        end,
+    }
 end
 
 local greeter, origin = require("greeter")
-print(greeter.hello(), origin)          --> hello from greeter  :preload:
-print(require("greeter") == greeter)    --> true
+print(greeter.hello(), origin)  --> hello from greeter  :preload:
+print(require("greeter") == greeter)  --> true
 ```
 
 `require` keeps the loaded table that the package library created, so assigning a new table to `package.loaded` leaves the cache in place. The standard libraries are in the cache from the start, so `require("string")` returns the `string` table. [Modules and require](/manual/guide#modules) in the guide describes search paths and preincluded modules.

@@ -30,6 +30,7 @@ local function an_n_suffix_makes_a_bigint_test()
         { "9223372036854775808n", "9223372036854775808" },
         { "0x10000000000000000n", "18446744073709551616" },
     }
+
     for _, c in ipairs(cases) do
         local v = eval(c[1])
         assert(math.type(v) == "bigint", c[1])
@@ -64,6 +65,7 @@ local function a_d_suffix_makes_a_decimal_that_keeps_its_digits_test()
         { "1_000.000_1d", "1000.0001" },
         { "123456789012345678901234567890.123456789d", "123456789012345678901234567890.123456789" },
     }
+
     for _, c in ipairs(cases) do
         local v = eval(c[1])
         assert(math.type(v) == "decimal", c[1])
@@ -85,6 +87,7 @@ end
 local function decimal_exponents_reach_the_limits_test()
     assert(tostring(eval("1e131071d")) == "1e+131071")
     assert(tostring(eval("1e-16383d")) == "1e-16383")
+
     for _, src in ipairs({ "1e131072d", "1e-16384d", "1e2147483648d", "1e-2147483649d" }) do
         local f, err = load("return " .. src, "=lit")
         assert(f == nil, src)
@@ -104,17 +107,36 @@ end
 local function invalid_suffixed_forms_are_malformed_test()
     local forms = {
         -- `n` applies only to integer numerals.
-        "1.5n", "1e3n", ".5n", "0x1.8n", "0x1p4n",
+        "1.5n",
+        "1e3n",
+        ".5n",
+        "0x1.8n",
+        "0x1p4n",
         -- `d` applies only to decimal notation, and a hexadecimal float takes
         -- no suffix.
         "0x1p4d",
         -- One suffix, lowercase, at the very end.
-        "1nn", "1nd", "1dn", "1.5dd", "1N", "1.5D", "1d5", "1n5", "0n1",
+        "1nn",
+        "1nd",
+        "1dn",
+        "1.5dd",
+        "1N",
+        "1.5D",
+        "1d5",
+        "1n5",
+        "0n1",
         -- Separators sit between two digits.
-        "1__0n", "1_n", "1n_", "0x_1n", "1_d", "1._5d", "1_.5d",
+        "1__0n",
+        "1_n",
+        "1n_",
+        "0x_1n",
+        "1_d",
+        "1._5d",
+        "1_.5d",
         -- An exponent needs digits.
         "1ed",
     }
+
     for _, src in ipairs(forms) do
         malformed(src)
     end
@@ -135,10 +157,12 @@ end
 
 local function literals_in_a_hot_loop_keep_their_subtype_test()
     local sum, total = 0n, 0d
+
     for _ = 1, 200 do
         sum = sum + 0xffn
         total = total + 0.05d
     end
+
     assert(math.type(sum) == "bigint" and sum == 51000)
     assert(math.type(total) == "decimal" and tostring(total) == "10.00")
 end
@@ -154,16 +178,32 @@ local function a_decimal_literal_past_the_limits_is_a_compile_error_test()
         assert(f == nil, src)
         assert(string.find(err, "decimal literal out of range", 1, true), err)
     end
+
     assert(load("return 1e131071d")() == decimal("1e131071"))
     assert(load("return 1e-16383d")() == decimal("1e-16383"))
 end
 
 local function decimal_text_past_the_limits_raises_test()
-    raises(function() return decimal("1e131072") end, "more than 131072 digits before the point")
-    raises(function() return decimal(string.rep("9", 131073)) end, "more than 131072 digits before the point")
-    raises(function() return decimal("1e-16384") end, "more than 16383 digits after the point")
-    raises(function() return decimal("0." .. string.rep("0", 16383) .. "1") end, "after the point")
-    raises(function() return decimal(2n ^ 440000) end, "before the point")
+    raises(function()
+        return decimal("1e131072")
+    end, "more than 131072 digits before the point")
+
+    raises(function()
+        return decimal(string.rep("9", 131073))
+    end, "more than 131072 digits before the point")
+
+    raises(function()
+        return decimal("1e-16384")
+    end, "more than 16383 digits after the point")
+
+    raises(function()
+        return decimal("0." .. string.rep("0", 16383) .. "1")
+    end, "after the point")
+
+    raises(function()
+        return decimal(2n ^ 440000)
+    end, "before the point")
+
     -- Text that is not a numeral still gives nil.
     assert(decimal("abc") == nil)
 end
@@ -171,22 +211,73 @@ end
 local function a_result_past_the_limits_raises_test()
     local big = decimal(string.rep("9", 131072))
     local tiny = decimal("1e-16383")
+
     local cases = {
-        { function() return big + 1 end, "before" },
-        { function() return big * 10 end, "before" },
-        { function() return tiny * tiny end, "after" },
-        { function() return big / 0.1d end, "before" },
-        { function() return tiny / big end, "after" },
-        { function() return 2d ^ 435420 end, "before" },
-        { function() return 0.5d ^ 16384 end, "after" },
-        { function() return big + 2n ^ 440000 end, "before" },
+        {
+            function()
+                return big + 1
+            end,
+            "before",
+        },
+        {
+            function()
+                return big * 10
+            end,
+            "before",
+        },
+        {
+            function()
+                return tiny * tiny
+            end,
+            "after",
+        },
+        {
+            function()
+                return big / 0.1d
+            end,
+            "before",
+        },
+        {
+            function()
+                return tiny / big
+            end,
+            "after",
+        },
+        {
+            function()
+                return 2d ^ 435420
+            end,
+            "before",
+        },
+        {
+            function()
+                return 0.5d ^ 16384
+            end,
+            "after",
+        },
+        {
+            function()
+                return big + 2n ^ 440000
+            end,
+            "before",
+        },
     }
+
     for i, case in ipairs(cases) do
         local ok, err = catch case[1]()
         assert(not ok, i)
         local limit = case[2] == "before" and "131072" or "16383"
-        assert(string.find(tostring(err), `decimal out of range: more than $(limit) digits $(case[2]) the point`, 1, true), err)
+        assert(
+            string.find(
+                tostring(err),
+                `decimal out of range: more than $limit digits $(case[2]) the point`,
+                1,
+                true
+            ),
+            err
+        )
     end
+
     -- Sums at the limits stay exact.
     assert(#tostring(big + tiny) == 131072 + 1 + 16383)
     assert(2d ^ 435400 == decimal(2n ^ 435400))
@@ -197,9 +288,19 @@ end
 -- aligned ten million digits. It now raises at once.
 local function an_extreme_exponent_raises_at_once_test()
     local t = os.clock()
-    raises(function() return decimal("1e9999999") + 0d end, "out of range")
-    raises(function() return decimal("1e-9999999") + 1d end, "out of range")
-    raises(function() return 2d ^ 2000000000 end, "out of range")
+
+    raises(function()
+        return decimal("1e9999999") + 0d
+    end, "out of range")
+
+    raises(function()
+        return decimal("1e-9999999") + 1d
+    end, "out of range")
+
+    raises(function()
+        return 2d ^ 2000000000
+    end, "out of range")
+
     assert(os.clock() - t < 1)
 end
 
@@ -219,15 +320,69 @@ end
 -- the operands. Bigints and decimals used to name the operation in
 -- another form, `'n//0'` and `'n%%0'`.
 local exact_division_by_zero_cases = {
-    {"bigint floor division", function() return 10n // 0n end, "attempt to divide by zero"},
-    {"bigint modulo", function() return 10n % 0n end, "attempt to perform 'n%0'"},
-    {"decimal floor division", function() return 1d // 0d end, "attempt to divide by zero"},
-    {"decimal modulo", function() return 1d % 0d end, "attempt to perform 'n%0'"},
-    {"decimal division", function() return 1d / 0d end, "attempt to divide a decimal by zero"},
-    {"negative power of a zero decimal", function() return 0d ^ -1 end, "attempt to divide a decimal by zero"},
-    {"negative power of a zero decimal with digits", function() return 0.00d ^ -3 end, "attempt to divide a decimal by zero"},
-    {"integer floor division", function() return 10 // 0 end, "attempt to divide by zero"},
-    {"integer modulo", function() return 10 % 0 end, "attempt to perform 'n%0'"},
+    {
+        "bigint floor division",
+        function()
+            return 10n // 0n
+        end,
+        "attempt to divide by zero",
+    },
+    {
+        "bigint modulo",
+        function()
+            return 10n % 0n
+        end,
+        "attempt to perform 'n%0'",
+    },
+    {
+        "decimal floor division",
+        function()
+            return 1d // 0d
+        end,
+        "attempt to divide by zero",
+    },
+    {
+        "decimal modulo",
+        function()
+            return 1d % 0d
+        end,
+        "attempt to perform 'n%0'",
+    },
+    {
+        "decimal division",
+        function()
+            return 1d / 0d
+        end,
+        "attempt to divide a decimal by zero",
+    },
+    {
+        "negative power of a zero decimal",
+        function()
+            return 0d ^ -1
+        end,
+        "attempt to divide a decimal by zero",
+    },
+    {
+        "negative power of a zero decimal with digits",
+        function()
+            return 0.00d ^ -3
+        end,
+        "attempt to divide a decimal by zero",
+    },
+    {
+        "integer floor division",
+        function()
+            return 10 // 0
+        end,
+        "attempt to divide by zero",
+    },
+    {
+        "integer modulo",
+        function()
+            return 10 % 0
+        end,
+        "attempt to perform 'n%0'",
+    },
 }
 
 local function exact_division_by_zero_test(label, f, want)
@@ -239,11 +394,46 @@ end
 -- A negative bigint exponent gives a float, as for integers, and the
 -- other mixed operations keep the type their operands give.
 local mixed_exact_results_cases = {
-    {"negative bigint exponent", function() return 2n ^ -1n end, "float", "0.5"},
-    {"bigint floor division rounds down", function() return -7n // 2n end, "bigint", "-4"},
-    {"decimal modulo takes the sign of the divisor", function() return -7d % 2d end, "decimal", "1"},
-    {"float modulo by a bigint", function() return 7.5 % -2n end, "float", "-0.5"},
-    {"bigint division", function() return 1n / 4n end, "float", "0.25"},
+    {
+        "negative bigint exponent",
+        function()
+            return 2n ^ -1n
+        end,
+        "float",
+        "0.5",
+    },
+    {
+        "bigint floor division rounds down",
+        function()
+            return -7n // 2n
+        end,
+        "bigint",
+        "-4",
+    },
+    {
+        "decimal modulo takes the sign of the divisor",
+        function()
+            return -7d % 2d
+        end,
+        "decimal",
+        "1",
+    },
+    {
+        "float modulo by a bigint",
+        function()
+            return 7.5 % -2n
+        end,
+        "float",
+        "-0.5",
+    },
+    {
+        "bigint division",
+        function()
+            return 1n / 4n
+        end,
+        "float",
+        "0.25",
+    },
 }
 
 local function mixed_exact_results_test(label, f, kind, text)

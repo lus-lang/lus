@@ -24,16 +24,29 @@ end
 
 local function math_checks_its_arguments_test()
     assert(math.log(100, 10) == 2.0 and math.log(8, 2) == 3.0)
-    raises(function() return math.log(8, "x") end, "bad argument #2 to 'math.log' (number expected, got string)")
-    raises(function() return math.max() end, "bad argument #1 to 'math.max' (value expected)")
-    raises(function() return math.min() end, "bad argument #1 to 'math.min' (value expected)")
+
+    raises(function()
+        return math.log(8, "x")
+    end, "bad argument #2 to 'math.log' (number expected, got string)")
+
+    raises(function()
+        return math.max()
+    end, "bad argument #1 to 'math.max' (value expected)")
+
+    raises(function()
+        return math.min()
+    end, "bad argument #1 to 'math.min' (value expected)")
+
     assert(math.tointeger(10n ^ 30) == nil and math.tointeger(10n) == 10)
 end
 
 local function coroutines_refuse_to_resume_when_they_cannot_test()
     local ok, err = coroutine.resume(coroutine.running())
     assert(not ok and err == "cannot resume non-suspended coroutine", err)
-    local co = coroutine.create(function() end)
+
+    local co = coroutine.create(function()
+    end)
+
     coroutine.resume(co)
     ok, err = coroutine.resume(co)
     assert(not ok and err == "cannot resume dead coroutine", err)
@@ -41,19 +54,30 @@ end
 
 local function a_coroutine_sees_its_resumer_as_normal_test()
     local outer
+
     outer = coroutine.create(function()
-        local inner = coroutine.create(function() return coroutine.status(outer) end)
+        local inner = coroutine.create(function()
+            return coroutine.status(outer)
+        end)
+
         return coroutine.resume(inner)
     end)
+
     local ok, inner_ok, status = coroutine.resume(outer)
     assert(ok and inner_ok and status == "normal", status)
 end
 
 local function closing_a_coroutine_reports_an_error_of_its_close_test()
     local co = coroutine.create(function()
-        local x <close> = setmetatable({}, { __close = function() error("in close", 0) end })
+        local x <close> = setmetatable({}, {
+            __close = function()
+                error("in close", 0)
+            end,
+        })
+
         coroutine.yield()
     end)
+
     coroutine.resume(co)
     local ok, err = coroutine.close(co)
     assert(not ok and err == "in close", err)
@@ -61,19 +85,36 @@ end
 
 local function a_normal_coroutine_cannot_detach_test()
     local outer
+
     outer = coroutine.create(function()
-        local inner = coroutine.create(function() return coroutine.detach(outer) end)
+        local inner = coroutine.create(function()
+            return coroutine.detach(outer)
+        end)
+
         return coroutine.resume(inner)
     end)
+
     local ok, inner_ok, err = coroutine.resume(outer)
     assert(ok and not inner_ok and err:find("cannot detach a normal coroutine", 1, true), err)
 end
 
 local function utf8_checks_its_positions_test()
-    raises(function() return utf8.codepoint("abc", 1, 1 << 40) end, "bad argument #3 to 'utf8.codepoint' (out of bounds)")
-    raises(function() return utf8.offset("abc", 1, 10) end, "bad argument #3 to 'utf8.offset' (position out of bounds)")
-    raises(function() return utf8.char(-1) end, "bad argument #1 to 'utf8.char' (value out of range)")
-    raises(function() return utf8.codes(nil) end, "bad argument #1 to 'codes' (string expected, got nil)")
+    raises(function()
+        return utf8.codepoint("abc", 1, 1 << 40)
+    end, "bad argument #3 to 'utf8.codepoint' (out of bounds)")
+
+    raises(function()
+        return utf8.offset("abc", 1, 10)
+    end, "bad argument #3 to 'utf8.offset' (position out of bounds)")
+
+    raises(function()
+        return utf8.char(-1)
+    end, "bad argument #1 to 'utf8.char' (value out of range)")
+
+    raises(function()
+        return utf8.codes(nil)
+    end, "bad argument #1 to 'codes' (string expected, got nil)")
+
     assert(utf8.len("abc", 3, 1) == 0 and utf8.len("héllo", -2) == 2)
     assert(select("#", utf8.codepoint("abc", 3, 1)) == 0)
 end

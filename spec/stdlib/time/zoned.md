@@ -36,11 +36,11 @@ The following example builds a civil time in New York, reads its fields, and mov
 ```lus
 local ny = time.zone("America/New_York")
 local z = time.zoned({ year = 2026, month = 7, day = 2, hour = 9, minute = 15 }, ny)
-print(z:iso(), z.offset)                     --> 2026-07-02T09:15:00-04:00  -14400
-print(z:instant():iso(), z.yearday)          --> 2026-07-02T13:15:00Z  183
-print(tonumber(z.weekday), z:format("%A"))   --> 4  Thursday
-print(z:add{ months = 1 }:iso())             --> 2026-08-02T09:15:00-04:00
-print(z:with{ hour = 23 }:iso())             --> 2026-07-02T23:15:00-04:00
+print(z:iso(), z.offset)  --> 2026-07-02T09:15:00-04:00  -14400
+print(z:instant():iso(), z.yearday)  --> 2026-07-02T13:15:00Z  183
+print(tonumber(z.weekday), z:format("%A"))  --> 4  Thursday
+print(z:add({ months = 1 }):iso())  --> 2026-08-02T09:15:00-04:00
+print(z:with({ hour = 23 }):iso())  --> 2026-07-02T23:15:00-04:00
 ```
 
 A wall-clock time that a zone skips at the start of daylight saving moves forward by the length of the skip, so 02:30 on a day when New York jumps from 02:00 to 03:00 becomes 03:30 with the offset `-04:00`. A wall-clock time that a zone repeats at the end of daylight saving takes the earlier of its two instants, the one with the daylight saving offset. Two zoned values are equal only when they are the same object, and comparing them with `<` raises `attempt to compare two time.zoned values`, so a program compares their instants. Assigning to a field raises an error, and reading a field that does not exist returns `nil`. `instant:at(zone)` returns the zoned value that a zone observes at an instant.

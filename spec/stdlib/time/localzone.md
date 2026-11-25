@@ -18,9 +18,9 @@ The following example reads the local zone. Its name depends on the system, so t
 
 ```lus
 local here = time.localzone()
-print(type(here:name()))                          --> string
+print(type(here:name()))  --> string
 local z = time.instant(0):at(here)
-print(z.offset == here:offset(time.instant(0)))   --> true
+print(z.offset == here:offset(time.instant(0)))  --> true
 ```
 
 [`time.zone`](/manual/api#time.zone) returns a zone by name, and [`time.offset`](/manual/api#time.offset) returns a fixed offset.

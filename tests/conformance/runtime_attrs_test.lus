@@ -11,12 +11,14 @@ pledge("load")
 
 local function handler_called_on_init_test()
     local called = false
+
     local function handler(name, value)
         called = true
         assert(name == "x", "name should be 'x'")
         assert(value == 10, "value should be 10")
         return value
     end
+
     local x <handler> = 10
     assert(called, "handler should be called on initialization")
     assert(x == 10, "x should be 10")
@@ -24,10 +26,12 @@ end
 
 local function handler_called_on_assignment_test()
     local calls = 0
+
     local function handler(name, value)
         calls = calls + 1
         return value
     end
+
     local x <handler> = 1
     assert(calls == 1, "should be called once on init")
     x = 2
@@ -40,6 +44,7 @@ local function return_value_modifies_variable_test()
     local function addone(name, value)
         return value + 1
     end
+
     local x <addone> = 10
     assert(x == 11, "init: 10 + 1 = 11")
     x = 20
@@ -50,6 +55,7 @@ local function nil_return_keeps_original_value_test()
     local function validator(name, value)
         return nil  -- keep original
     end
+
     local x <validator> = 42
     assert(x == 42, "nil return should keep original value")
     x = 100
@@ -62,10 +68,12 @@ end
 
 local function nil_assignment_skips_handler_test()
     local called = false
+
     local function handler(name, value)
         called = true
         return value
     end
+
     local x <handler> = 10
     called = false  -- reset
     x = nil
@@ -74,10 +82,12 @@ end
 
 local function nil_init_skips_handler_test()
     local called = false
+
     local function handler(name, value)
         called = true
         return value
     end
+
     local x <handler> = nil
     assert(not called, "handler should NOT be called when initializing with nil")
 end
@@ -88,14 +98,17 @@ end
 
 local function multiple_attributes_called_in_order_test()
     local order = {}
+
     local function first(name, value)
         order[#order + 1] = "first"
         return value + 1
     end
+
     local function second(name, value)
         order[#order + 1] = "second"
         return value + 2
     end
+
     local x <first, second> = 10
     -- first: 10 -> 11, second: 11 -> 13
     assert(x == 13, "10 + 1 + 2 = 13")
@@ -107,9 +120,11 @@ local function multiple_attributes_value_chaining_test()
     local function double(name, value)
         return value * 2
     end
+
     local function addten(name, value)
         return value + 10
     end
+
     local x <double, addten> = 5
     -- double: 5 -> 10, addten: 10 -> 20
     assert(x == 20, "5 * 2 + 10 = 20")
@@ -119,9 +134,11 @@ local function multiple_attributes_nil_return_keeps_previous_test()
     local function first(name, value)
         return value + 1  -- returns non-nil
     end
+
     local function second(name, value)
         return nil  -- returns nil, keeps first's result
     end
+
     local x <first, second> = 10
     assert(x == 11, "second's nil should keep first's result (11)")
 end
@@ -132,18 +149,27 @@ end
 
 local function group_with_runtime_attr_init_test()
     local names = {}
+
     local function handler(name, value)
         names[#names + 1] = name
         return value
     end
+
     local z <group, handler> = { a = 1, b = 2 }
     assert(#names == 2, "handler should be called for each field")
     -- Check that dotted names were passed
     local found_a, found_b = false, false
+
     for _, n in ipairs(names) do
-        if n == "z.a" then found_a = true end
-        if n == "z.b" then found_b = true end
+        if n == "z.a" then
+            found_a = true
+        end
+
+        if n == "z.b" then
+            found_b = true
+        end
     end
+
     assert(found_a, "should have 'z.a'")
     assert(found_b, "should have 'z.b'")
 end
@@ -151,11 +177,13 @@ end
 local function group_with_runtime_attr_assignment_test()
     local last_name = nil
     local last_value = nil
+
     local function handler(name, value)
         last_name = name
         last_value = value
         return value
     end
+
     local z <group, handler> = { a = 1, b = 2 }
     z.a = 100
     assert(last_name == "z.a", "handler should receive 'z.a'")
@@ -169,6 +197,7 @@ local function group_with_runtime_attr_value_modification_test()
     local function increment(name, value)
         return value + 1
     end
+
     local z <group, increment> = { a = 10, b = 20 }
     assert(z.a == 11, "a: 10 + 1 = 11")
     assert(z.b == 21, "b: 20 + 1 = 21")
@@ -182,51 +211,63 @@ end
 
 local function handler_with_number_value_test()
     local received_type = nil
+
     local function handler(name, value)
         received_type = type(value)
         return value
     end
+
     local x <handler> = 42
     assert(received_type == "number", "should receive number")
 end
 
 local function handler_with_string_value_test()
     local received_type = nil
+
     local function handler(name, value)
         received_type = type(value)
         return value
     end
+
     local x <handler> = "hello"
     assert(received_type == "string", "should receive string")
 end
 
 local function handler_with_boolean_value_test()
     local received_type = nil
+
     local function handler(name, value)
         received_type = type(value)
         return value
     end
+
     local x <handler> = true
     assert(received_type == "boolean", "should receive boolean")
 end
 
 local function handler_with_table_value_test()
     local received_type = nil
+
     local function handler(name, value)
         received_type = type(value)
         return value
     end
+
     local x <handler> = { a = 1 }
     assert(received_type == "table", "should receive table")
 end
 
 local function handler_with_function_value_test()
     local received_type = nil
+
     local function handler(name, value)
         received_type = type(value)
         return value
     end
-    local f = function() end
+
+    local f = function()
+    end
+
     local x <handler> = f
     assert(received_type == "function", "should receive function")
 end
@@ -237,11 +278,13 @@ end
 
 local function false_value_not_nil_calls_handler_test()
     local called = false
+
     local function handler(name, value)
         called = true
         assert(value == false, "should receive false")
         return value
     end
+
     local x <handler> = false
     assert(called, "handler should be called for false value")
     assert(x == false, "x should be false")
@@ -249,22 +292,26 @@ end
 
 local function t_0_value_calls_handler_test()
     local called = false
+
     local function handler(name, value)
         called = true
         assert(value == 0, "should receive 0")
         return value
     end
+
     local x <handler> = 0
     assert(called, "handler should be called for 0")
 end
 
 local function empty_string_value_calls_handler_test()
     local called = false
+
     local function handler(name, value)
         called = true
         assert(value == "", "should receive empty string")
         return value
     end
+
     local x <handler> = ""
     assert(called, "handler should be called for empty string")
 end
@@ -276,11 +323,18 @@ end
 local function clamping_pattern_test()
     local function clamp(min, max)
         return function(name, value)
-            if value < min then return min end
-            if value > max then return max end
+            if value < min then
+                return min
+            end
+
+            if value > max then
+                return max
+            end
+
             return value
         end
     end
+
     local c = clamp(0, 100)
     local x <c> = 50
     assert(x == 50, "50 is in range")
@@ -292,10 +346,12 @@ end
 
 local function logging_pattern_test()
     local log = {}
+
     local function logger(name, value)
         log[#log + 1] = { name = name, value = value }
         return value
     end
+
     local x <logger> = 1
     x = 2
     x = 3
@@ -313,11 +369,11 @@ local function function_call_attribute_only_type_test()
     -- Factory function that creates a type validator
     local function only(expected_type)
         return function(name, value)
-            assert(type(value) == expected_type,
-                   `expected {expected_type}, got {type(value)}`)
+            assert(type(value) == expected_type, `expected {expected_type}, got {type(value)}`)
             return value
         end
     end
+
     -- Use the factory call directly as an attribute
     local x <only("number")> = 10
     assert(x == 10, "should accept number")
@@ -328,11 +384,18 @@ end
 local function function_call_attribute_clamp_min_max_test()
     local function clamp(min, max)
         return function(name, value)
-            if value < min then return min end
-            if value > max then return max end
+            if value < min then
+                return min
+            end
+
+            if value > max then
+                return max
+            end
+
             return value
         end
     end
+
     -- Use factory call directly as attribute
     local x <clamp(0, 100)> = 50
     assert(x == 50, "50 stays 50")
@@ -344,25 +407,29 @@ end
 
 local function function_call_attribute_string_argument_test()
     local called_with = nil
+
     local function tag(t)
         return function(name, value)
             called_with = t
             return value
         end
     end
+
     local x <tag "hello"> = 1
     assert(called_with == "hello", "should pass string arg")
 end
 
 local function function_call_attribute_table_argument_test()
     local config = nil
+
     local function configure(opts)
         return function(name, value)
             config = opts
             return value
         end
     end
-    local x <configure { min = 0, max = 100 }> = 50
+
+    local x <configure{ min = 0, max = 100 }> = 50
     assert(config ~= nil, "config should be set")
     assert(config.min == 0, "min should be 0")
     assert(config.max == 100, "max should be 100")
@@ -373,12 +440,19 @@ local function function_call_attribute_module_factory_pattern_test()
     local validators = {
         range = function(min, max)
             return function(name, value)
-                if value < min then return min end
-                if value > max then return max end
+                if value < min then
+                    return min
+                end
+
+                if value > max then
+                    return max
+                end
+
                 return value
             end
-        end
+        end,
     }
+
     local x <validators.range(1, 10)> = 5
     assert(x == 5, "5 stays 5")
     x = 15
@@ -393,6 +467,7 @@ local function function_call_attribute_with_value_modification_test()
             return value * factor
         end
     end
+
     local x <multiply(2)> = 5
     assert(x == 10, "5 * 2 = 10")
     x = 3
@@ -401,16 +476,19 @@ end
 
 local function function_call_attribute_chained_with_simple_attr_test()
     local calls = {}
+
     local function double()
         return function(name, value)
             calls[#calls + 1] = "double"
             return value * 2
         end
     end
+
     local function logger(name, value)
         calls[#calls + 1] = "logger"
         return value
     end
+
     local x <double(), logger> = 5
     assert(x == 10, "doubled to 10")
     assert(#calls == 2, "both called")
@@ -425,22 +503,36 @@ end
 local function arithmetic_expression_as_attribute_test()
     -- Use arithmetic to select from a table of handlers
     local handlers = {
-        [3] = function(name, value) return value * 10 end,
-        [7] = function(name, value) return value * 100 end,
+        [3] = function(name, value)
+            return value * 10
+        end,
+        [7] = function(name, value)
+            return value * 100
+        end,
     }
-    local x <handlers[1+2]> = 5
+
+    local x <handlers[1 + 2]> = 5
     assert(x == 50, "should use handlers[3]")
 end
 
 local function inline_function_as_attribute_test()
-    local x <function(name, value) return value + 100 end> = 5
+    local x <function(name, value)
+        return value + 100
+    end> = 5
     assert(x == 105, "inline function should work")
 end
 
 local function conditional_expression_as_attribute_and_or_test()
     local use_doubler = true
-    local double = function(name, value) return value * 2 end
-    local triple = function(name, value) return value * 3 end
+
+    local double = function(name, value)
+        return value * 2
+    end
+
+    local triple = function(name, value)
+        return value * 3
+    end
+
     -- and/or have lower priority than our limit, so need parens
     local x <(use_doubler and double or triple)> = 10
     assert(x == 20, "should use doubler")
@@ -448,24 +540,35 @@ end
 
 local function parenthesized_expression_test()
     local handlers = {}
-    handlers.get = function() 
-        return function(name, value) return value + 1 end 
+
+    handlers.get = function()
+        return function(name, value)
+            return value + 1
+        end
     end
+
     local x <(handlers.get())> = 10
     assert(x == 11, "parenthesized works")
 end
 
 local function string_concatenation_in_attribute_test()
     local attrs = {}
-    attrs["my" .. "handler"] = function(name, value) return value * 2 end
+
+    attrs["my" .. "handler"] = function(name, value)
+        return value * 2
+    end
+
     local x <attrs["my" .. "handler"]> = 5
     assert(x == 10, "concat works in indexing")
 end
 
 local function bitwise_operations_in_attribute_test()
     local handlers = {
-        [6] = function(name, value) return value + 100 end
+        [6] = function(name, value)
+            return value + 100
+        end,
     }
+
     local x <handlers[2 | 4]> = 1  -- 2 | 4 = 6
     assert(x == 101, "bitwise or works")
 end

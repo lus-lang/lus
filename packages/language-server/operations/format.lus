@@ -8,53 +8,58 @@ local format = {}
 -- On success: ({TextEdit}, nil) or ({}, nil) if no change needed.
 -- On failure: (nil, error_message).
 local function format_document(uri, options)
-  local doc = document.get(uri)
-  if not doc then return nil, "document not found" end
+    local doc = document.get(uri)
 
-  local indent = options and options.tabSize or 4
-  local ok, formatted = catch debug.format(doc.text, uri, indent)
+    if not doc then
+        return nil, "document not found"
+    end
 
-  if not ok then
-    return nil, formatted or "format error"
-  end
-  if not formatted then
-    return nil, "format error"
-  end
+    local indent = options and options.tabSize or 4
+    local ok, formatted = catch debug.format(doc.text, uri, indent)
 
-  -- No change needed
-  if formatted == doc.text then
-    return {}, nil
-  end
+    if not ok then
+        return nil, formatted or "format error"
+    end
 
-  -- Compute end position from the line index
-  local last_line = #doc.line_index - 2 -- 0-based, minus sentinel
-  local last_char = 0
-  if last_line >= 0 then
-    local last_line_start = doc.line_index[last_line + 1]
-    local doc_end = doc.line_index[#doc.line_index]
-    last_char = doc_end - last_line_start
-  end
+    if not formatted then
+        return nil, "format error"
+    end
 
-  return {
-    {
-      range = {
-        start = {line = 0, character = 0},
-        ["end"] = {line = last_line, character = last_char},
-      },
-      newText = formatted,
-    },
-  }, nil
+    -- No change needed
+    if formatted == doc.text then
+        return {}, nil
+    end
+
+    -- Compute end position from the line index
+    local last_line = #doc.line_index - 2  -- 0-based, minus sentinel
+    local last_char = 0
+
+    if last_line >= 0 then
+        local last_line_start = doc.line_index[last_line + 1]
+        local doc_end = doc.line_index[#doc.line_index]
+        last_char = doc_end - last_line_start
+    end
+
+    return {
+        {
+            range = {
+                start = { line = 0, character = 0 },
+                ["end"] = { line = last_line, character = last_char },
+            },
+            newText = formatted,
+        },
+    }, nil
 end
 
 -- Format a document and return (edits, err).
 function format.compute(uri, options)
-  return format_document(uri, options)
+    return format_document(uri, options)
 end
 
 -- Range-format a document and return (edits, err).
 -- Formats the full document (LSP spec permits edits beyond the requested range).
-function format.compute_range(uri, range, options)
-  return format_document(uri, options)
+function format.compute_range(uri, _range, options)
+    return format_document(uri, options)
 end
 
 return format

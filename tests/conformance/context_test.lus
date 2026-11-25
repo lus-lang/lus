@@ -5,7 +5,11 @@ pledge("load", "debug")
 local function the_initializer_is_the_default_test()
     local id <context> = "none"
     assert(id == "none")
-    local co = coroutine.create(function() return id end)
+
+    local co = coroutine.create(function()
+        return id
+    end)
+
     assert(select(2, coroutine.resume(co)) == "none")
 end
 
@@ -19,11 +23,13 @@ end
 local function an_assignment_stays_in_the_coroutine_test()
     local id <context> = "main"
     local seen = {}
+
     local co = coroutine.create(function()
         id = "child"
         coroutine.yield(id)
         seen[#seen + 1] = id
     end)
+
     assert(select(2, coroutine.resume(co)) == "child")
     assert(id == "main")
     coroutine.resume(co)
@@ -33,7 +39,11 @@ end
 local function a_new_coroutine_inherits_the_value_at_creation_test()
     local id <context> = "default"
     id = "parent"
-    local co = coroutine.create(function() return id end)
+
+    local co = coroutine.create(function()
+        return id
+    end)
+
     id = "changed after"
     assert(select(2, coroutine.resume(co)) == "parent")
 end
@@ -42,10 +52,12 @@ local function detached_coroutines_inherit_too_test()
     local id <context> = "default"
     id = "request 7"
     local got
+
     local task = coroutine.detach(coroutine.create(function()
         coroutine.yield()
         got = id
     end))
+
     id = "later"
     coroutine.resume(task)
     assert(got == "request 7")
@@ -55,42 +67,64 @@ local function assigning_nil_stores_nil_test()
     local x <context> = "default"
     x = nil
     assert(x == nil)
-    local co = coroutine.create(function() return x end)
+
+    local co = coroutine.create(function()
+        return x
+    end)
+
     assert(select(2, coroutine.resume(co)) == nil)
 end
 
 local function a_closure_reads_the_running_coroutine_test()
     local id <context> = "default"
-    local function get() return id end
+
+    local function get()
+        return id
+    end
+
     local co = coroutine.wrap(function()
         id = "inner"
         return get()
     end)
+
     assert(co() == "inner")
     assert(get() == "default")
 end
 
 local function each_run_of_a_declaration_is_a_new_variable_test()
     local getters = {}
+
     for i = 1, 3 do
         local v <context> = i
-        getters[i] = function() return v end
+
+        getters[i] = function()
+            return v
+        end
     end
+
     assert(getters[1]() == 1 and getters[2]() == 2 and getters[3]() == 3)
 end
 
 local function two_variables_of_one_name_are_distinct_test()
     local function make(v)
         local name <context> = v
-        return function() return name end
+
+        return function()
+            return name
+        end
     end
+
     local a, b = make("a"), make("b")
     assert(a() == "a" and b() == "b")
 end
 
 local function compound_values_work_in_expressions_test()
     local n <context> = 0
-    for i = 1, 10 do n = n + i end
+
+    for i = 1, 10 do
+        n = n + i
+    end
+
     assert(n == 55)
     local t <context> = {}
     t.k = 1
@@ -100,9 +134,14 @@ end
 local function debug_reads_and_writes_by_number_test()
     local function count()
         local n = 0
-        while debug.getcontext(n + 1) do n = n + 1 end
+
+        while debug.getcontext(n + 1) do
+            n = n + 1
+        end
+
         return n
     end
+
     local before = count()
     local marker <context> = "m"
     local n = count()
@@ -110,7 +149,11 @@ local function debug_reads_and_writes_by_number_test()
     local name, value, where = debug.getcontext(n)
     assert(name == "marker" and value == "m")
     assert(where:find("context_test.lus:", 1, true))
-    local co = coroutine.create(function() return marker end)
+
+    local co = coroutine.create(function()
+        return marker
+    end)
+
     assert(debug.setcontext(co, n, "set") == "marker")
     assert(select(2, debug.getcontext(co, n)) == "set")
     assert(select(2, coroutine.resume(co)) == "set")
@@ -121,15 +164,22 @@ end
 local function unreachable_variables_are_reclaimed_test()
     local function count()
         local n = 0
-        while debug.getcontext(n + 1) do n = n + 1 end
+
+        while debug.getcontext(n + 1) do
+            n = n + 1
+        end
+
         return n
     end
+
     collectgarbage()
     collectgarbage()
     local before = count()
+
     for i = 1, 50 do
         local t <context> = i
     end
+
     collectgarbage()
     collectgarbage()
     assert(count() == before)
@@ -145,6 +195,7 @@ local function invalid_declarations_are_compile_errors_test()
         { "local a, b <context> = 1, 2", "names one variable" },
         { "local x <context> = 1, 2", "takes one initializer" },
     }
+
     for _, c in ipairs(cases) do
         local f, err = load(c[1])
         assert(f == nil, c[1])
@@ -158,7 +209,11 @@ local hot <context> = 7
 
 local function sum_hot(n)
     local s = 0
-    for _ = 1, n do s = s + hot end
+
+    for _ = 1, n do
+        s = s + hot
+    end
+
     return s
 end
 
@@ -169,18 +224,28 @@ local function hot_reads_see_the_default_and_then_the_value_test()
         assert(sum_hot(5000) == 10000)
         return true
     end)())
+
     -- The value stayed with that coroutine.
-    assert(coroutine.wrap(function() return sum_hot(5000) end)() == 35000)
+    assert(coroutine.wrap(function()
+        return sum_hot(5000)
+    end)() == 35000)
 end
 
 local function one_compiled_loop_serves_coroutines_with_other_values_test()
     local a = coroutine.create(function()
         hot = 1
-        while true do coroutine.yield(sum_hot(3000)) end
+
+        while true do
+            coroutine.yield(sum_hot(3000))
+        end
     end)
+
     local b = coroutine.create(function()
-        while true do coroutine.yield(sum_hot(3000)) end
+        while true do
+            coroutine.yield(sum_hot(3000))
+        end
     end)
+
     for _ = 1, 20 do
         local _, x = coroutine.resume(a)
         local _, y = coroutine.resume(b)
@@ -191,15 +256,24 @@ end
 local function hot_writes_copy_an_array_they_share_test()
     coroutine.wrap(function()
         hot = 0
+
         local child = coroutine.create(function()
             -- The child shares the array of its creator until it writes.
-            for i = 1, 5000 do hot = i end
+            for i = 1, 5000 do
+                hot = i
+            end
+
             return hot
         end)
+
         local _, last = coroutine.resume(child)
         assert(last == 5000)
         assert(hot == 0)
-        for i = 1, 5000 do hot = hot + 1 end
+
+        for i = 1, 5000 do
+            hot = hot + 1
+        end
+
         assert(hot == 5000)
     end)()
 end

@@ -22,7 +22,7 @@ An argument that is neither a string nor a number raises a type error.
 
 ```lus
 print(string.upper("héllo world"))  --> HéLLO WORLD
-print(("abc"):upper())              --> ABC
+print(("abc"):upper())  --> ABC
 ```
 
 [`string.lower`](/manual/api#string.lower) changes the other way.

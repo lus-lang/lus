@@ -26,11 +26,11 @@ The following example reads the user value of a zone and of a zoned value.
 
 ```lus
 local paris = time.zone("Europe/Paris")
-print(debug.getuservalue(paris))                 --> Europe/Paris  true
+print(debug.getuservalue(paris))  --> Europe/Paris  true
 local z = time.zoned({ year = 2026 }, paris)
-print(debug.getuservalue(z) == paris)            --> true
-print(debug.getuservalue(paris, 2))              --> nil
-print(debug.getuservalue({}))                    --> nil
+print(debug.getuservalue(z) == paris)  --> true
+print(debug.getuservalue(paris, 2))  --> nil
+print(debug.getuservalue({}))  --> nil
 ```
 
 A slot that holds `nil` returns `nil` and `true`, which tells it apart from a missing slot. [`debug.setuservalue`](/manual/api#debug.setuservalue) stores a value in a slot.

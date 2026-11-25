@@ -10,35 +10,38 @@ local version = require("lus-language.version")
 local instance = server.new()
 
 if arg then
-  for i = 1, #arg do
-    if arg[i] == "--version" then
-      io.write(`lus-language $version\n`)
-      os.exit(0)
+    for i = 1, #arg do
+        if arg[i] == "--version" then
+            io.write(`lus-language $version\n`)
+            os.exit(0)
+        end
     end
-  end
 end
 
 transport.log(`starting lus-language $version`)
 
 while true do
-  local msg, read_error, status = transport.read_message()
-  if not msg then
-    if status == "eof" then
-      transport.log("EOF on stdin")
-      os.exit(instance.shutdown_requested and 0 or 1)
-    elseif status == "json" then
-      transport.write_message(protocol.make_error(
-        protocol.JSON_NULL, protocol.PARSE_ERROR, read_error
-      ))
+    local msg, read_error, status = transport.read_message()
+
+    if not msg then
+        if status == "eof" then
+            transport.log("EOF on stdin")
+            os.exit(instance.shutdown_requested and 0 or 1)
+        elseif status == "json" then
+            transport.write_message(
+                protocol.make_error(protocol.JSON_NULL, protocol.PARSE_ERROR, read_error)
+            )
+        else
+            transport.log("fatal transport error:", read_error)
+            os.exit(1)
+        end
     else
-      transport.log("fatal transport error:", read_error)
-      os.exit(1)
+        if response = instance.dispatch(msg) then
+            transport.write_message(response)
+        end
+
+        if instance.exit_requested then
+            os.exit(instance.shutdown_requested and 0 or 1)
+        end
     end
-  else
-    local response = instance.dispatch(msg)
-    if response then transport.write_message(response) end
-    if instance.exit_requested then
-      os.exit(instance.shutdown_requested and 0 or 1)
-    end
-  end
 end

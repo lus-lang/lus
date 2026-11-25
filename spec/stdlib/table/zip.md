@@ -18,9 +18,9 @@ The result is a new table. Its length is the length of the shortest list, and ea
 An argument that is not a table raises `bad argument #2 to 'zip' (table expected, got number)` with its position and type.
 
 ```lus
-local rows = table.zip({1, 2, 3}, {"a", "b"})
-print(#rows, rows[1][1], rows[1][2], rows[2][2])   --> 2  1  a  b
-print(#table.zip())                                        --> 0
+local rows = table.zip({ 1, 2, 3 }, { "a", "b" })
+print(#rows, rows[1][1], rows[1][2], rows[2][2])  --> 2  1  a  b
+print(#table.zip())  --> 0
 ```
 
 [`table.unzip`](/manual/api#table.unzip) is the inverse. [`table.transpose`](/manual/api#table.transpose) does the same for lists held in one table, and requires them to have equal lengths.

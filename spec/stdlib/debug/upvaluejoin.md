@@ -31,13 +31,18 @@ The following example joins the counters of two closures made by separate calls.
 ```lus
 local function counter()
     local n = 0
-    return function() n = n + 1 return n end
+
+    return function()
+        n = n + 1
+        return n
+    end
 end
+
 local a, b = counter(), counter()
 a()
 debug.upvaluejoin(b, 1, a, 1)
-print(b(), a())                                            --> 2  3
-print(debug.upvalueid(a, 1) == debug.upvalueid(b, 1))      --> true
+print(b(), a())  --> 2  3
+print(debug.upvalueid(a, 1) == debug.upvalueid(b, 1))  --> true
 ```
 
 Native functions have upvalues of their own that cannot be joined. [`debug.upvalueid`](/manual/api#debug.upvalueid) tells whether two closures already share an upvalue.

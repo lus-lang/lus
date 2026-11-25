@@ -28,10 +28,11 @@ The following example hashes the test message of FIPS 180 with each algorithm an
 local function hex(v)
     return string.transcode(v, "binary", "hex")
 end
+
 print(hex(crypto.hash("sha256", "abc")))
 --> ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
-print(hex(crypto.hash("sha1", "abc")))       --> a9993e364706816aba3e25717850c26c9cd0d89d
-print(#crypto.hash("sha512", "abc"))         --> 64
+print(hex(crypto.hash("sha1", "abc")))  --> a9993e364706816aba3e25717850c26c9cd0d89d
+print(#crypto.hash("sha512", "abc"))  --> 64
 print(string.transcode(crypto.hash("sha256", ""), "binary", "base64"))
 --> 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
 ```

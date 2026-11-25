@@ -16,9 +16,9 @@ The following example builds a date with a member and reads the month back as an
 
 ```lus
 local z = time.zoned{ year = 2026, month = time.month.july, day = 2 }
-print(z.month, tonumber(time.month.july))         --> 7  7
-print(time.month[12] == time.month.december)      --> true
-print(type(time.month.july), time.month.smarch)   --> enum  nil
+print(z.month, tonumber(time.month.july))  --> 7  7
+print(time.month[12] == time.month.december)  --> true
+print(type(time.month.july), time.month.smarch)  --> enum  nil
 ```
 
 The `month` field of a zoned value is a plain integer from 1 to 12, so that arithmetic on it works as with [`os.date`](/manual/api#os.date). Members follow the rules of every [enum](/manual/guide#enums): they compare in order with `<`, and arithmetic on them raises an error. The value `time.month` is itself the member `january`, since an enum evaluates to its first member. [`time.weekday`](/manual/api#time.weekday) is the enum of the days of the week.

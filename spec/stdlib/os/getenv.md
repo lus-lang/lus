@@ -18,7 +18,7 @@ Returns the value of the environment variable `varname` as a string, or `nil` wh
 
 ```lus
 pledge("env")
-print(type(os.getenv("PATH")))                  --> string
+print(type(os.getenv("PATH")))  --> string
 print(os.getenv("LUS_EXAMPLE_UNSET_VARIABLE"))  --> nil
 ```
 

@@ -32,6 +32,7 @@ worker.message({ first = first, count = count })
 -- are copied into the worker and become the values of `...` in its script.
 local size = 50000
 local pool = {}
+
 for i = 0, 3 do
     pool[#pool + 1] = worker.create(script, i * size + 1, (i + 1) * size)
 end
@@ -40,6 +41,7 @@ end
 -- at the same time, so collecting them in order costs no extra wait.
 local total = 0
 local parts = {}
+
 for _, handle in ipairs(pool) do
     local result = worker.receive(handle)
     total = total + result.count

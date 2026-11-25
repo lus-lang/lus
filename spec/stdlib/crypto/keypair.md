@@ -29,13 +29,17 @@ A `seed` vector of another size raises `bad argument #1 to 'keypair' (32-byte ve
 The following example derives the public key of the first test vector of RFC 8032, then makes a P-256 key pair.
 
 ```lus
-local seed = string.transcode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", "hex", "binary")
+local seed = string.transcode(
+    "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+    "hex",
+    "binary"
+)
 local secret, public = crypto.keypair(seed)
 print(string.transcode(public, "binary", "hex"))
 --> d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
 
 local ec_secret, ec_public = crypto.keypair("P-256")
-print(ec_secret.curve, ec_secret.private, ec_public.private)   --> P-256  true  false
+print(ec_secret.curve, ec_secret.private, ec_public.private)  --> P-256  true  false
 ```
 
 [`crypto.sign`](/manual/api#crypto.sign) signs with the secret key and [`crypto.verify`](/manual/api#crypto.verify) checks a signature with the public key.

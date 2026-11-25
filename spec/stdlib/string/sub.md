@@ -27,10 +27,10 @@ A missing `i` raises `bad argument #2 to 'string.sub' (number expected, got no v
 
 ```lus
 local s = "héllo"
-print(s:sub(2), s:sub(2, 3), s:sub(-3))   --> éllo  él  llo
+print(s:sub(2), s:sub(2, 3), s:sub(-3))  --> éllo  él  llo
 print(s:sub(-3, -2), s:sub(0), s:sub(2, 100))  --> ll  héllo  éllo
 print(s:sub(4, 2) == "", s:sub(10) == "")  --> true  true
-print(s[2, 3])                             --> él
+print(s[2, 3])  --> él
 ```
 
 The slice `s[i, j]` takes the same range as `s:sub(i, j)` when both positions lie between 1 and the length. A slice treats a position below 1 as 1 and runs backward when its start is greater than its end, as the [slices](/manual/guide#slices) section describes. ASCII strings reach any position in constant time, and a long non-ASCII string finds a position through an index of every 64th character. [`string.byte`](/manual/api#string.byte) returns the code points of a range, and [`string.len`](/manual/api#string.len) counts the characters.

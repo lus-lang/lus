@@ -19,7 +19,7 @@ print(string.transcode(crypto.hash("sha256", "abc"), "binary", "hex"))
 
 local secret, public = crypto.keypair()
 local sig = crypto.sign(secret, "release 2.0.0")
-print(crypto.verify(public, "release 2.0.0", sig))   --> true
+print(crypto.verify(public, "release 2.0.0", sig))  --> true
 ```
 
 The module requires no permission, so a chunk that renounced every permission with [`pledge`](/manual/api#pledge) can still use it. Every function is available in the WebAssembly build, where the secure random source is the `random_get` call of WASI. Every primitive comes from the Zig standard library. The [cryptography](/manual/crypto) page of the manual describes the module in full.

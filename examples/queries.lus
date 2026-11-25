@@ -14,6 +14,7 @@ local books = {
 for book in query(@books as b where b.genre == "scifi" and b.pages > 250) do
     print(book.title)
 end
+
 --> Dune
 --> Neuromancer
 
@@ -21,6 +22,7 @@ end
 for row in query(@books as b select b.title, b.pages // 30 as days order by days desc) do
     print(row.title, row.days)
 end
+
 --> Dune  20
 --> Emma  15
 --> Neuromancer  9
@@ -31,6 +33,7 @@ end
 for book in query(@books as b order by b.pages limit 2) do
     print(book.title)
 end
+
 --> Solaris
 --> Persuasion
 
@@ -47,6 +50,7 @@ local genres = @books as b select b.genre, count(*) as titles group by b.genre o
 for genre, titles from query(genres) do
     print(genre, titles)
 end
+
 --> scifi  3
 --> novel  2
 

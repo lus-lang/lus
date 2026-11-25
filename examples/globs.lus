@@ -15,6 +15,7 @@ local names = {
     "archive/report-2019.csv",
     "archive/report-2020.csv",
 }
+
 for _, name in ipairs(names) do
     io.open(fs.path.join("reports", name), "w"):close()
 end

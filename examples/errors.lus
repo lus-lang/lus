@@ -20,6 +20,7 @@ local function fetch(path)
         local response = nil
         return response.body
     end
+
     return "200 OK"
 end
 
@@ -28,6 +29,7 @@ end
 -- without a second position.
 local function fetch_or_default(path)
     local ok, result = catch fetch(path)
+
     if ok then
         return result
     elseif type(result) == "table" and result.code == "not_found" then
@@ -35,12 +37,14 @@ local function fetch_or_default(path)
     elseif type(result) == "table" and result.code == "timeout" then
         return `retry in $(result.retry_after)s`
     end
+
     error(result, 0)
 end
 
 for _, path in ipairs({ "/", "/missing", "/slow" }) do
     print(path, fetch_or_default(path))
 end
+
 --> / 200 OK
 --> /missing 404 Not Found
 --> /slow retry in 2s
@@ -48,6 +52,7 @@ end
 -- A runtime error is a string, which the last branch raises again.
 local ok, err = catch fetch_or_default("/broken")
 print(ok, type(err), err:match("attempt to index .*$"))
+
 --> false string attempt to index a nil value (local 'response')
 
 -- `assert` returns its first argument when it is truthy, and raises its
@@ -55,9 +60,11 @@ print(ok, type(err), err:match("attempt to index .*$"))
 local function average(values)
     assert(#values > 0, "average needs at least one value")
     local sum = 0
+
     for _, value in ipairs(values) do
         sum = sum + value
     end
+
     return sum / #values
 end
 

@@ -15,19 +15,24 @@ local function route(req)
     if req.method == "GET" and req.path == "/books" then
         return 200, tojson(books), json
     end
+
     if digits = req.path:match("^/books/(%d+)$") then
         local id = tonumber(digits)
+
         if req.method == "GET" and books[id] then
             return 200, tojson(books[id]), json
         end
+
         return 404, tojson({ error = `no book $id` }), json
     end
+
     if req.method == "POST" and req.path == "/books" then
         local book = fromjson(vector.tostring(req.body))
         book.id = #books + 1
         books[#books + 1] = book
         return 201, tojson(book), json
     end
+
     return 404, tojson({ error = `no route for $(req.method) $(req.path)` }), json
 end
 

@@ -82,11 +82,11 @@ A Lus string is text, so every string operation counts characters. A _character_
 
 ```lus
 local s = "héllo"
-print(#s, s:sub(1, 2), s:upper())       --> 5  hé  HéLLO
-print(s:byte(2), string.char(233))      --> 233  é
+print(#s, s:sub(1, 2), s:upper())  --> 5  hé  HéLLO
+print(s:byte(2), string.char(233))  --> 233  é
 
 local bytes = vector.fromstring(s)
-print(#bytes, vector.get(bytes, 1), vector.get(bytes, 2))   --> 6  195  169
+print(#bytes, vector.get(bytes, 1), vector.get(bytes, 2))  --> 6  195  169
 ```
 
 Code can measure, cut, and print any Lus string without first checking that it is valid text, while converting between bytes and text takes an explicit call such as `vector.fromstring`. Lua code that uses strings as text needs no change, although its calls to `utf8.offset` are no longer necessary. Lua code that uses strings as byte arrays must account for the following differences.
@@ -105,14 +105,14 @@ The following example writes a binary record of two integers to a file and reads
 pledge("fs")
 
 local packed = string.pack("<I2I2", 513, 7)
-print(type(packed), #packed, vector.get(packed, 0), vector.get(packed, 1))   --> vector  4  1  2
-print(string.unpack("<I2I2", packed))   --> 513  7  5
+print(type(packed), #packed, vector.get(packed, 0), vector.get(packed, 1))  --> vector  4  1  2
+print(string.unpack("<I2I2", packed))  --> 513  7  5
 
 local path = os.tmpname()
 io.open(path, "wb"):write(packed):close()
 local file <close> = io.open(path, "rb")
 local data = file:read("a")
-print(type(data), #data)                --> vector  4
+print(type(data), #data)  --> vector  4
 fs.remove(path)
 ```
 
@@ -139,7 +139,7 @@ pledge("fs")
 local path = os.tmpname()
 fs.move(path, path .. ".bak")
 fs.remove(path .. ".bak")
-print((catch fs.remove(path .. ".bak")))   --> false
+print((catch fs.remove(path .. ".bak")))  --> false
 ```
 
 ### New global names
@@ -257,13 +257,13 @@ local function describe(e)
 end
 
 local ok, port = catch config.server.port
-print(ok, port)                   --> true  8080
+print(ok, port)  --> true  8080
 
 local ok2, err = catch load_settings("app.toml")
-print(ok2, err)                   --> false  cannot read app.toml
+print(ok2, err)  --> false  cannot read app.toml
 
 local ok3, info = catch[describe] load_settings("app.toml")
-print(ok3, info.operation)        --> false  load settings
+print(ok3, info.operation)  --> false  load settings
 ```
 
 A `catch` can also be a statement that evaluates the expression and discards the results or the error, which is useful for cleanup whose failure does not matter.
@@ -271,8 +271,8 @@ A `catch` can also be a statement that evaluates the expression and discards the
 ```lus
 pledge("fs:write")
 
-catch fs.remove("cache.tmp")   -- the file may not exist
-print("done")                  --> done
+catch fs.remove("cache.tmp")  -- the file may not exist
+print("done")  --> done
 ```
 
 The protected expression is part of the enclosing function, so it can use the local variables and the `...` of that function. `error` and error objects of any type work as in Lua. Lua raises the message of `assert` unchanged, which leaves the message exactly as the program wrote it. Lus puts the position of the call in front of a string message, as `error` does, so the message of a failed check names its line. [Do expressions](#do-expressions) shows how `catch` protects several statements.
@@ -306,20 +306,22 @@ In Lus, a `?` after a value makes the next step optional. This syntax is [option
 
 ```lus
 local calls = 0
+
 local function find_user(id)
     calls = calls + 1
+
     if id == 1 then
         return { name = "Ada" }
     end
 end
 
-print(find_user(1)?.name, find_user(2)?.name, calls)   --> Ada  nil  2
+print(find_user(1)?.name, find_user(2)?.name, calls)  --> Ada  nil  2
 
 local config = { server = {} }
-print(config?.server?.host or "localhost")             --> localhost
+print(config?.server?.host or "localhost")  --> localhost
 
 local on_done = nil
-print(on_done?("finished"))                            --> nil
+print(on_done?("finished"))  --> nil
 ```
 
 The `?` suffix gives the same result as the `and` idiom in every case, including `false`, which stops the chain and is its result. An expression rewritten from one form to the other therefore keeps its value.
@@ -343,9 +345,9 @@ In a Lus [string written between backticks](/manual/guide#strings), `$name` inse
 ```lus
 local name, count, active = "ada", 3, true
 
-print(`user $name has $count items ($active)`)    --> user ada has 3 items (true)
-print(`next: $(count + 1), missing: $(nil)`)      --> next: 4, missing: nil
-print(`total: $(string.format("%.2f", 19.5))`)    --> total: 19.50
+print(`user $name has $count items ($active)`)  --> user ada has 3 items (true)
+print(`next: $(count + 1), missing: $(nil)`)  --> next: 4, missing: nil
+print(`total: $(string.format("%.2f", 19.5))`)  --> total: 19.50
 ```
 
 Each value is written at the place where it appears in the text. `string.format` is still the way to control padding and precision, as the last line shows. `..` works as in Lua.
@@ -396,14 +398,16 @@ local function lookup(name)
     elseif value = defaults[name] then
         return value, "default"
     end
+
     return nil, "unset"
 end
 
-print(lookup("PORT"))   --> 8080  env
-print(lookup("HOST"))   --> localhost  default
-print(lookup("USER"))   --> nil  unset
+print(lookup("PORT"))  --> 8080  env
+print(lookup("HOST"))  --> localhost  default
+print(lookup("USER"))  --> nil  unset
 
 local queue = { "first", "second" }
+
 while job = table.remove(queue, 1) do
     print(job)
 end
@@ -443,13 +447,13 @@ local function load_config()
 end
 
 local host, port, timeout from load_config()
-print(host, port, timeout)    --> localhost  8080  30
+print(host, port, timeout)  --> localhost  8080  30
 
 local insert, concat from table
 local parts = {}
 insert(parts, host)
 insert(parts, port)
-print(concat(parts, ":"))     --> localhost:8080
+print(concat(parts, ":"))  --> localhost:8080
 ```
 
 `from` also works in an assignment to existing variables, in a `global` declaration, and in a condition. With a call to `require` after `from`, one line imports several functions of a module, as in `local encode, decode from require("codec")`.
@@ -477,8 +481,14 @@ In Lus, the [`continue`](/manual/guide#break-and-continue) statement skips the r
 local lines = { "alpha", "", "# note", "beta" }
 
 for _, line in ipairs(lines) do
-    if line == "" then continue end
-    if line:sub(1, 1) == "#" then continue end
+    if line == "" then
+        continue
+    end
+
+    if line:sub(1, 1) == "#" then
+        continue
+    end
+
     print(line)
 end
 --> alpha
@@ -529,8 +539,8 @@ local labels = {
 }
 
 local current = Status.suspended
-print(type(current), labels[current])              --> enum  Suspended
-print(current == "suspended", current == 2)        --> false  false
+print(type(current), labels[current])  --> enum  Suspended
+print(current == "suspended", current == 2)  --> false  false
 print(current < Status.closed, tonumber(current))  --> true  2
 ```
 
@@ -556,24 +566,26 @@ A Lua program that handles money therefore stores every amount as an integer num
 Lus keeps integers and floats with the same behavior and adds two exact subtypes of [`number`](/manual/guide#numbers). A _bigint_, written with the suffix `n`, is an integer of any size. A _decimal_, written with the suffix `d`, is a number that keeps its exact fractional part. With these subtypes, the same calculations are exact.
 
 ```lus
-print(math.maxinteger + 1n)    --> 9223372036854775808
-print(0.1d + 0.2d == 0.3d)     --> true
+print(math.maxinteger + 1n)  --> 9223372036854775808
+print(0.1d + 0.2d == 0.3d)  --> true
 
 local total = 0d
+
 for _ = 1, 10 do
     total = total + 0.10d
 end
-print(total, total == 1)       --> 1.00  true
+
+print(total, total == 1)  --> 1.00  true
 ```
 
 The [arithmetic](/manual/guide#arithmetic) and comparison operators accept both subtypes. Two numbers with the same mathematical value are equal, whatever their subtypes. Arithmetic between a decimal and a float raises an error, because the float would make the result inexact. The functions `decimal` and `bigint` convert a number or a string to these subtypes.
 
 ```lus
 local price = 19.99d
-print(price * 3, math.type(price), math.type(2n ^ 100))   --> 59.97  decimal  bigint
-print(3n == 3, 0.5d == 0.5)                               --> true  true
-print((catch price * 1.5))                                --> false
-print(price * decimal("1.5"))                             --> 29.985
+print(price * 3, math.type(price), math.type(2n ^ 100))  --> 59.97  decimal  bigint
+print(3n == 3, 0.5d == 0.5)  --> true  true
+print((catch price * 1.5))  --> false
+print(price * decimal("1.5"))  --> 29.985
 ```
 
 ### Slices
@@ -596,12 +608,12 @@ In Lus, the [slice](/manual/guide#slices) `t[i, j]` copies the positions from `i
 
 ```lus
 local list = { 10, 20, 30, 40, 50 }
-print(table.concat(list[2, 4], " "))   --> 20 30 40
-print(table.concat(list[3, ], " "))    --> 30 40 50
-print(table.concat(list[, 2], " "))    --> 10 20
+print(table.concat(list[2, 4], " "))  --> 20 30 40
+print(table.concat(list[3,], " "))  --> 30 40 50
+print(table.concat(list[, 2], " "))  --> 10 20
 
 local s = "héllo"
-print(s[2, 4])                         --> éll
+print(s[2, 4])  --> éll
 ```
 
 A string slice counts characters, while a vector slice counts bytes.
@@ -654,8 +666,8 @@ local shallow = table.clone(defaults)
 local deep = table.clone(defaults, true)
 deep.ports[1] = 8080
 
-print(shallow.ports == defaults.ports, defaults.ports[1])   --> true  80
-print(deep.self == deep, deep.ports[1])                     --> true  8080
+print(shallow.ports == defaults.ports, defaults.ports[1])  --> true  80
+print(deep.self == deep, deep.ports[1])  --> true  8080
 ```
 
 Both copies have the metatable of the original.
@@ -690,9 +702,11 @@ local port = do
             provide n
         end
     end
+
     provide 8080
 end
-print(port)   --> 8081
+
+print(port)  --> 8081
 ```
 
 The declaration of `port` contains the whole computation of its value. The variables `key` and `n` are out of scope after the block.
@@ -704,16 +718,18 @@ local function parse_endpoint(text)
     return catch do
         local data = fromjson(text)
         local port = math.tointeger(data.port)
+
         if not port then
             error("port must be an integer", 0)
         end
+
         provide data.host or "localhost", port
     end
 end
 
-print(parse_endpoint('{"port": 8080}'))      --> true  localhost  8080
-print(parse_endpoint('{"port": "http"}'))    --> false  port must be an integer
-print(parse_endpoint('{"port": '))           --> false  ...: JSON parse error at position 10: unexpected end of input
+print(parse_endpoint('{"port": 8080}'))  --> true  localhost  8080
+print(parse_endpoint('{"port": "http"}'))  --> false  port must be an integer
+print(parse_endpoint('{"port": '))  --> false  ...: JSON parse error at position 10: unexpected end of input
 ```
 
 As in any block, a `return` inside a do expression returns from the enclosing function, while a `break` or `continue` applies to the enclosing loop.
@@ -769,13 +785,18 @@ local function at_least(min)
         if value < min then
             error(`$name must be at least $min, got $value`, 0)
         end
+
         return value
     end
 end
 
 local workers <at_least(1)> = 4
-print(catch do workers = 0 end)   --> false  workers must be at least 1, got 0
-print(workers)                    --> 4
+
+print(catch do  --> false  workers must be at least 1, got 0
+    workers = 0
+end)
+
+print(workers)  --> 4
 ```
 
 The declaration states the check once. Lus applies it to every assignment to the variable in that function. An assignment in a nested function stores the value without calling the attribute, so a variable whose values must always be checked must be assigned only in the function that declares it.
@@ -812,10 +833,11 @@ for _, p in ipairs(points) do
     lo = { x = math.min(lo.x, p.x), y = math.min(lo.y, p.y) }
     hi = { x = math.max(hi.x, p.x), y = math.max(hi.y, p.y) }
 end
-print(lo.x, lo.y, hi.x, hi.y)   --> -2  -1  7  8
+
+print(lo.x, lo.y, hi.x, hi.y)  --> -2  -1  7  8
 
 hi = { y = 100 }
-print(hi.x, hi.y)               --> 7  100
+print(hi.x, hi.y)  --> 7  100
 ```
 
 A group is a set of variables whose fields the declaration fixes, so it cannot be passed to a function, returned, or stored in a table. A table is still the right choice for data that is passed to another function or returned.
@@ -842,9 +864,10 @@ A [_flag_](/manual/guide#build-flags) is a field of the readonly global table `f
 local cache = { 1, 2, 3 }
 
 if flags.verbose then
-    print("cache size", #cache)   -- compiled only with -Fverbose
+    print("cache size", #cache)  -- compiled only with -Fverbose
 end
-print(flags.verbose)              --> nil
+
+print(flags.verbose)  --> nil
 ```
 
 A disabled branch therefore takes no time and no space at run time. `lus build` with `-F` stores the flags in a standalone executable, so one source tree can produce both a debug build and a release build.
@@ -917,13 +940,13 @@ The following example decodes JSON and CSV text. When the second argument of `fr
 
 ```lus
 local data = fromjson('{"name": "Ada", "langs": ["lus", "lua"]}')
-print(data.name, #data.langs)                  --> Ada  2
-print(tojson({ ok = true }))                   --> {"ok":true}
+print(data.name, #data.langs)  --> Ada  2
+print(tojson({ ok = true }))  --> {"ok":true}
 
 local rows = fromcsv('name,city\nAda,"London, UK"\nLinus,', true)
-print(rows[1].city, rows[2].city == "")        --> London, UK  true
+print(rows[1].city, rows[2].city == "")  --> London, UK  true
 
-print(#string.split("a,,b", ","), string.trim("  x  "))   --> 3  x
+print(#string.split("a,,b", ","), string.trim("  x  "))  --> 3  x
 ```
 
 The `fs` library lists, creates, copies, moves, and removes files and directories. `fs.path` contains functions for path strings, such as `fs.path.join`. The following example creates a directory with two files, lists the files, and removes the directory.
@@ -939,7 +962,7 @@ io.open(fs.path.join(dir, "b.txt"), "w"):write("second"):close()
 
 local names = fs.list(dir, "*.txt")
 table.sort(names)
-print(table.concat(names, " "), (fs.type(dir)))   --> a.txt b.txt  directory
+print(table.concat(names, " "), (fs.type(dir)))  --> a.txt b.txt  directory
 
 fs.remove(dir, true)
 fs.remove(base)
@@ -954,7 +977,7 @@ db:run("INSERT INTO users VALUES (?, ?)", "Ada", 36)
 db:run("INSERT INTO users VALUES (?, ?)", "Linus", 12)
 
 for row in db:query("SELECT name FROM users WHERE age >= ?", 18) do
-    print(row.name)   --> Ada
+    print(row.name)  --> Ada
 end
 ```
 
@@ -962,9 +985,9 @@ The `time` library has one type for a moment in time and another for a calendar 
 
 ```lus
 local launch = time.instant(1782998100)
-print(launch:iso())                                    --> 2026-07-02T13:15:00Z
+print(launch:iso())  --> 2026-07-02T13:15:00Z
 print(launch:at(time.zone("America/New_York")):iso())  --> 2026-07-02T09:15:00-04:00
-print((launch + time.hours(72)):format("%A %d %B"))    --> Sunday 05 July
+print((launch + time.hours(72)):format("%A %d %B"))  --> Sunday 05 July
 ```
 
 `vector.archive` compresses and decompresses with gzip, deflate, Zstandard, Brotli, and LZ4, while `string.transcode` converts text between character sets. Both return a vector when the result is bytes. The following example compresses a text with gzip and restores it, then converts a string to UTF-16 and back.
@@ -972,11 +995,11 @@ print((launch + time.hours(72)):format("%A %d %B"))    --> Sunday 05 July
 ```lus
 local text = string.rep("hello world ", 100)
 local packed = vector.archive.gzip.compress(text)
-print(#packed < #text)                                                 --> true
-print(vector.tostring(vector.archive.gzip.decompress(packed)) == text) --> true
+print(#packed < #text)  --> true
+print(vector.tostring(vector.archive.gzip.decompress(packed)) == text)  --> true
 
 local utf16 = string.transcode("hé", "utf-8", "utf-16le")
-print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))            --> 4  hé
+print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))  --> 4  hé
 ```
 
 `network.fetch` makes an HTTP or HTTPS request and returns the status, the body as a vector, and the headers. The following program counts the items that a remote API returns.
@@ -1011,11 +1034,14 @@ local _, port = server:getsockname()
 
 local function echo(conn)
     local closing <close> = conn
+
     while true do
         local line = vector.tostring(conn:receive("*l"))
+
         if line == "" then
             break
         end
+
         conn:send(`echo: $line\n`)
     end
 end
@@ -1030,8 +1056,8 @@ local a = network.tcp.connect("127.0.0.1", port)
 local b = network.tcp.connect("127.0.0.1", port)
 a:send("first\n")
 b:send("second\n")
-print(vector.tostring(b:receive("*l")))   --> echo: second
-print(vector.tostring(a:receive("*l")))   --> echo: first
+print(vector.tostring(b:receive("*l")))  --> echo: second
+print(vector.tostring(a:receive("*l")))  --> echo: first
 
 a:close()
 b:close()
@@ -1091,7 +1117,8 @@ local co = coroutine.create(function()
     pledge("~fs:write", "~load", "seal")
     return chunk()
 end)
-print(coroutine.resume(co))   --> false  plugin:1: permission "fs:write" denied for 'plugin.txt'
+
+print(coroutine.resume(co))  --> false  plugin:1: permission "fs:write" denied for 'plugin.txt'
 ```
 
 The code that created the coroutine keeps its own permissions. [Permissions in coroutines](/manual/permissions#permissions-in-coroutines) shows the complete program and states the rules. [Permissions](/manual/permissions) is the complete reference.

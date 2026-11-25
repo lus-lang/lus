@@ -10,28 +10,20 @@
     - Ordering comparison by index: e.name1 < e.name2
 ]]
 
-
 pledge("load")
 
-
 local function basic_enum_declaration_test()
-    local e = enum
-        apple, orange, celery
-    end
+    local e = enum apple, orange, celery end
     assert(e ~= nil)
 end
 
 local function enum_equals_first_value_test()
-    local e = enum
-        apple, orange, celery
-    end
+    local e = enum apple, orange, celery end
     assert(e == e.apple)
 end
 
 local function different_values_not_equal_test()
-    local e = enum
-        apple, orange, celery
-    end
+    local e = enum apple, orange, celery end
     assert(e.apple ~= e.orange)
     assert(e.orange ~= e.celery)
     assert(e.apple ~= e.celery)
@@ -53,9 +45,7 @@ local function same_enum_values_are_equal_test()
 end
 
 local function tonumber_returns_1_based_index_test()
-    local e = enum
-        first, second, third, fourth
-    end
+    local e = enum first, second, third, fourth end
     assert(tonumber(e.first) == 1)
     assert(tonumber(e.second) == 2)
     assert(tonumber(e.third) == 3)
@@ -139,18 +129,22 @@ end
 
 local function enum_as_function_argument_test()
     local e = enum on, off end
+
     local function check(val)
         return val == e.on
     end
+
     assert(check(e.on) == true)
     assert(check(e.off) == false)
 end
 
 local function enum_as_function_return_test()
     local e = enum success, failure end
+
     local function getStatus()
         return e.success
     end
+
     assert(getStatus() == e.success)
 end
 
@@ -222,10 +216,7 @@ local function first_and_last_member_ordering_test()
 end
 
 local function enum_with_many_values_test()
-    local e = enum
-        v1, v2, v3, v4, v5,
-        v6, v7, v8, v9, v10
-    end
+    local e = enum v1, v2, v3, v4, v5, v6, v7, v8, v9, v10 end
     assert(tonumber(e.v1) == 1)
     assert(tonumber(e.v10) == 10)
     assert(e[5] == e.v5)
@@ -277,10 +268,16 @@ end
 local function repeated_enum_access_under_gc_steps_test()
     local e = enum red, green, blue end
     local count = 0
+
     for i = 1, 10000 do
-        if e.red == e[1] and e.blue == e[3] then count = count + 1 end
-        if i % 1000 == 0 then collectgarbage("step") end
+        if e.red == e[1] and e.blue == e[3] then
+            count = count + 1
+        end
+
+        if i % 1000 == 0 then
+            collectgarbage("step")
+        end
     end
+
     assert(count == 10000)
 end
-

@@ -20,7 +20,7 @@ pledge("env", "fs")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-sync-example.txt")
 local f = assert(io.open(path, "w"))
 f:write("saved\n")
-print(f:sync() == f)   --> true
+print(f:sync() == f)  --> true
 f:close()
 fs.remove(path)
 ```

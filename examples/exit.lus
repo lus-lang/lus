@@ -39,6 +39,7 @@ end
 
 -- A parent can map the status of a child to its own decisions.
 local meanings = { [0] = "ok", [1] = "failed", [3] = "needs input" }
+
 for _, code in ipairs({ 0, 3 }) do
     local _, status = run(`os.exit($code)`)
     print(status, meanings[status])

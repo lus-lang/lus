@@ -10,6 +10,7 @@ local w = worker.create(dir .. "/workers/echo.lus")
 
 if part == nil or part == "big" then
     local big = string.rep("0123456789abcdef", 65536)
+
     for i = 1, tonumber(arg[2]) or 2000 do
         worker.send(w, big)
         assert(worker.receive(w) == #big)
@@ -18,7 +19,11 @@ end
 
 if part == nil or part == "table" then
     local t = {}
-    for i = 1, 10000 do t[i] = string.format("%099d", i) .. "x" end
+
+    for i = 1, 10000 do
+        t[i] = string.format("%099d", i) .. "x"
+    end
+
     for i = 1, tonumber(arg[2]) or 300 do
         worker.send(w, t)
         assert(worker.receive(w) == #t)
@@ -26,4 +31,6 @@ if part == nil or part == "table" then
 end
 
 worker.send(w, false)
-while worker.receive(w) ~= nil do end
+
+while worker.receive(w) ~= nil do
+end

@@ -24,8 +24,8 @@ The following example reads bytes inside and outside a vector.
 
 ```lus
 local v = vector.fromstring("AZ")
-print(vector.get(v, 0), vector.get(v, 1))      --> 65  90
-print(vector.get(v, 2), vector.get(v, -1))     --> nil  nil
+print(vector.get(v, 0), vector.get(v, 1))  --> 65  90
+print(vector.get(v, 2), vector.get(v, -1))  --> nil  nil
 ```
 
 [`vector.set`](/manual/api#vector.set) stores a byte, and [`vector.unpack`](/manual/api#vector.unpack) reads several bytes as one value.

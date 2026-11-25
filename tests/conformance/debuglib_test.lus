@@ -17,13 +17,13 @@
 
 pledge("load", "fs", "debug")
 
-
 -- The main chunk describes itself as "main" only at file top level, so the
 -- observation is captured here rather than inside a nested test closure.
 local main_chunk_what = debug.getinfo(1, "S").what
 
 -- A userdata carrying zero user values, reachable from pure Lus.
 local fixture_path = "debuglib_fixture.txt"
+
 do
     local f = io.open(fixture_path, "w")
     f:write("fixture")
@@ -43,7 +43,11 @@ end
 -- The function accepts any type without raising and reports no metatable when
 -- the value carries none.
 local getmetatable_accepts_a_bare_primitive_without_raising_cases = {
-    {true}, {false}, {nil}, {42}, {"" .. math.pi},
+    { true },
+    { false },
+    { nil },
+    { 42 },
+    { "" .. math.pi },
 }
 
 local function getmetatable_accepts_a_bare_primitive_without_raising_test(v)
@@ -53,7 +57,7 @@ local function getmetatable_accepts_a_bare_primitive_without_raising_test(v)
 end
 
 local function getmetatable_bypasses_metatable_protection_test()
-    local t = setmetatable({}, {__metatable = "locked"})
+    local t = setmetatable({}, { __metatable = "locked" })
     -- The public accessor is deflected by the __metatable field.
     assert(getmetatable(t) == "locked")
     -- The debug accessor sees the real metatable table instead.
@@ -70,7 +74,7 @@ local function all_strings_share_one_metatable_whose_index_is_the_string_li_test
 end
 
 local function getmetatable_observes_a_metatable_installed_on_a_primitive_b_test()
-    local mt = {__name = "num"}
+    local mt = { __name = "num" }
     debug.setmetatable(10, mt)
     -- Numbers share a single metatable across integers and floats.
     assert(debug.getmetatable(7) == mt)
@@ -95,17 +99,21 @@ local function setmetatable_returns_the_value_it_was_given_number_test()
 end
 
 local function setmetatable_bypasses_metatable_protection_on_a_locked_table_test()
-    local t = setmetatable({}, {__metatable = "locked"})
+    local t = setmetatable({}, { __metatable = "locked" })
+
     -- The public setmetatable refuses a protected metatable.
-    raises(function() setmetatable(t, {}) end, "protected")
+    raises(function()
+        setmetatable(t, {})
+    end, "protected")
+
     -- The debug variant replaces it and returns the table.
-    local mt2 = {tag = "replaced"}
+    local mt2 = { tag = "replaced" }
     assert(debug.setmetatable(t, mt2) == t)
     assert(debug.getmetatable(t) == mt2)
 end
 
 local function setmetatable_accepts_a_boolean_value_and_clears_it_again_test()
-    local mt = {__name = "boolmt"}
+    local mt = { __name = "boolmt" }
     debug.setmetatable(true, mt)
     -- Both boolean values share the boolean metatable.
     assert(debug.getmetatable(false) == mt)
@@ -114,7 +122,7 @@ local function setmetatable_accepts_a_boolean_value_and_clears_it_again_test()
 end
 
 local function setmetatable_accepts_nil_as_the_value_and_clears_it_again_test()
-    local mt = {__name = "nilmt"}
+    local mt = { __name = "nilmt" }
     debug.setmetatable(nil, mt)
     assert(debug.getmetatable(nil) == mt)
     debug.setmetatable(nil, nil)
@@ -129,8 +137,13 @@ local function setmetatable_with_nil_clears_a_table_metatable_test()
 end
 
 local function setmetatable_raises_when_the_second_argument_is_neither_tabl_test()
-    raises(function() debug.setmetatable({}, 42) end)
-    raises(function() debug.setmetatable({}, "x") end)
+    raises(function()
+        debug.setmetatable({}, 42)
+    end)
+
+    raises(function()
+        debug.setmetatable({}, "x")
+    end)
 end
 
 -- ---- debug.getregistry ----
@@ -147,7 +160,7 @@ local function a_write_into_the_registry_persists_to_a_fresh_getregistry_ca_test
     local key = "debuglib_probe_key"
     local reg = debug.getregistry()
     assert(reg[key] == nil)
-    reg[key] = {marker = 123}
+    reg[key] = { marker = 123 }
     local reg2 = debug.getregistry()
     assert(reg2[key].marker == 123)
     -- Clean up so the shared registry is left as it was found.
@@ -167,7 +180,10 @@ local function getuservalue_on_a_zero_slot_userdata_reports_no_value_test()
 end
 
 local getuservalue_returns_fail_for_a_non_userdata_first_argument_cases = {
-    {42}, {"hello"}, {true}, {{}},
+    { 42 },
+    { "hello" },
+    { true },
+    { {} },
 }
 
 local function getuservalue_returns_fail_for_a_non_userdata_first_argument_test(v)
@@ -178,7 +194,9 @@ local function getuservalue_returns_fail_for_a_non_userdata_first_argument_test(
 end
 
 local getuservalue_returns_fail_for_an_out_of_range_slot_index_cases = {
-    {0}, {-1}, {100},
+    { 0 },
+    { -1 },
+    { 100 },
 }
 
 local function getuservalue_returns_fail_for_an_out_of_range_slot_index_test(n)
@@ -209,8 +227,13 @@ local function setuservalue_returns_fail_when_the_slot_is_out_of_range_test()
 end
 
 local function setuservalue_raises_when_the_first_argument_is_not_full_user_test()
-    raises(function() debug.setuservalue({}, 1) end)
-    raises(function() debug.setuservalue(42, 1) end)
+    raises(function()
+        debug.setuservalue({}, 1)
+    end)
+
+    raises(function()
+        debug.setuservalue(42, 1)
+    end)
 end
 
 local function setuservalue_raises_when_the_value_argument_is_missing_test()
@@ -224,7 +247,9 @@ end
 -- ---- debug.sethook / gethook ----
 
 local function gethook_round_trips_the_installed_function_mask_and_count_test()
-    local function h() end
+    local function h()
+    end
+
     debug.sethook(h, "cr")
     local fn, mask, count = debug.gethook()
     debug.sethook()
@@ -235,7 +260,9 @@ local function gethook_round_trips_the_installed_function_mask_and_count_test()
 end
 
 local function a_bare_sethook_clears_the_hook_and_gethook_then_reports_nil_test()
-    debug.sethook(function() end, "l")
+    debug.sethook(function()
+    end, "l")
+
     assert(debug.gethook() ~= nil)
     debug.sethook()
     assert(debug.gethook() == nil)
@@ -243,8 +270,15 @@ end
 
 local function a_return_mask_hook_fires_and_reports_the_return_event_test()
     local saw = {}
-    debug.sethook(function(ev) saw[ev] = true end, "r")
-    local function inner() return 1 end
+
+    debug.sethook(function(ev)
+        saw[ev] = true
+    end, "r")
+
+    local function inner()
+        return 1
+    end
+
     inner()
     debug.sethook()
     assert(saw["return"] == true)
@@ -252,8 +286,15 @@ end
 
 local function a_call_and_return_mask_delivers_both_event_kinds_test()
     local saw = {}
-    debug.sethook(function(ev) saw[ev] = true end, "cr")
-    local function inner() return 1 end
+
+    debug.sethook(function(ev)
+        saw[ev] = true
+    end, "cr")
+
+    local function inner()
+        return 1
+    end
+
     inner()
     debug.sethook()
     assert(saw.call == true)
@@ -262,11 +303,13 @@ end
 
 local function a_line_mask_hook_receives_the_current_line_number_as_its_sec_test()
     local kind = nil
+
     debug.sethook(function(ev, ln)
         if ev == "line" and kind == nil then
             kind = type(ln)
         end
     end, "l")
+
     local a = 1
     local b = a + 1
     debug.sethook()
@@ -276,8 +319,18 @@ end
 local function a_count_hook_reports_the_count_and_the_count_event_test()
     local n = 0
     local sawcount = false
-    debug.sethook(function(ev) n = n + 1 if ev == "count" then sawcount = true end end, "", 1)
-    for i = 1, 50 do end
+
+    debug.sethook(function(ev)
+        n = n + 1
+
+        if ev == "count" then
+            sawcount = true
+        end
+    end, "", 1)
+
+    for i = 1, 50 do
+    end
+
     local _, mask, count = debug.gethook()
     debug.sethook()
     assert(count == 1)
@@ -287,8 +340,16 @@ end
 
 local function a_hook_installed_on_a_coroutine_fires_during_resume_and_leav_test()
     local events = {}
-    local co = coroutine.create(function() local y = 1 return y end)
-    debug.sethook(co, function(ev) events[#events + 1] = ev end, "c")
+
+    local co = coroutine.create(function()
+        local y = 1
+        return y
+    end)
+
+    debug.sethook(co, function(ev)
+        events[#events + 1] = ev
+    end, "c")
+
     -- The main thread still has no hook of its own.
     assert(debug.gethook() == nil)
     coroutine.resume(co)
@@ -302,14 +363,27 @@ end
 -- ---- debug.getinfo ----
 
 local function getinfo_fills_every_documented_field_for_a_lua_function_test()
-    local function subject(a, b) return a + b end
+    local function subject(a, b)
+        return a + b
+    end
+
     local info = debug.getinfo(subject)
+
     for _, field in ipairs({
-        "source", "short_src", "currentline", "what", "nups", "nparams",
-        "isvararg", "func", "linedefined", "lastlinedefined",
+        "source",
+        "short_src",
+        "currentline",
+        "what",
+        "nups",
+        "nparams",
+        "isvararg",
+        "func",
+        "linedefined",
+        "lastlinedefined",
     }) do
         assert(info[field] ~= nil)
     end
+
     assert(info.what == "Lua")
     assert(info.nparams == 2)
     assert(info.isvararg == false)
@@ -324,7 +398,10 @@ end
 
 local function getinfo_names_a_global_call_site_as_namewhat_global_test()
     -- A bare global call site is described by namewhat 'global'.
-    function myglobalfn() return debug.getinfo(1, "n").namewhat end
+    function myglobalfn()
+        return debug.getinfo(1, "n").namewhat
+    end
+
     assert(myglobalfn() == "global")
     myglobalfn = nil
 end
@@ -340,11 +417,17 @@ local function getinfo_with_l_returns_an_activelines_table_keyed_by_line_nu_test
     local function subject()
         return 1
     end
+
     local info = debug.getinfo(subject, "L")
     assert(type(info.activelines) == "table")
     -- The definition body spans real lines, so at least one is active.
     local any = false
-    for _ in pairs(info.activelines) do any = true break end
+
+    for _ in pairs(info.activelines) do
+        any = true
+        break
+    end
+
     assert(any)
 end
 
@@ -356,6 +439,7 @@ local function setlocal_returns_the_name_of_the_variable_it_wrote_test()
         local b = 2
         coroutine.yield()
     end)
+
     coroutine.resume(co)
     assert(debug.setlocal(co, 1, 1, 10) == "a")
     assert(debug.setlocal(co, 1, 2, 20) == "b")
@@ -364,7 +448,9 @@ local function setlocal_returns_the_name_of_the_variable_it_wrote_test()
 end
 
 local out_of_range_positive_local_indices_return_nil_cases = {
-    {50}, {99}, {1000},
+    { 50 },
+    { 99 },
+    { 1000 },
 }
 
 local function out_of_range_positive_local_indices_return_nil_test(idx)
@@ -372,6 +458,7 @@ local function out_of_range_positive_local_indices_return_nil_test(idx)
         local a = 1
         coroutine.yield()
     end)
+
     coroutine.resume(co)
     assert(debug.getlocal(co, 1, idx) == nil)
     assert(debug.setlocal(co, 1, idx, 0) == nil)
@@ -395,6 +482,7 @@ local function a_negative_local_index_writes_and_reads_a_vararg_slot_test()
         assert(rn == "(vararg)")
         assert(rv == 99)
     end
+
     foo(7, 8, 9)
 end
 
@@ -404,11 +492,12 @@ local function type_changing_local_writes_round_trip_through_getlocal_test()
         debug.setlocal(1, 1, nil)
         local _, after_nil = debug.getlocal(1, 1)
         assert(after_nil == nil)
-        debug.setlocal(1, 1, {tag = "t"})
+        debug.setlocal(1, 1, { tag = "t" })
         local _, after_tab = debug.getlocal(1, 1)
         assert(type(after_tab) == "table")
         assert(after_tab.tag == "t")
     end
+
     bar()
 end
 
@@ -416,7 +505,11 @@ end
 
 local function upvalueid_returns_a_userdata_identity_distinct_per_upvalue_test()
     local a, b = 1, 2
-    local function f() return a + b end
+
+    local function f()
+        return a + b
+    end
+
     local ida = debug.upvalueid(f, 1)
     local idb = debug.upvalueid(f, 2)
     assert(type(ida) == "userdata")
@@ -427,15 +520,30 @@ end
 
 local function closures_sharing_an_upvalue_report_the_same_upvalueid_test()
     local shared = 10
-    local function f() return shared end
-    local function g() shared = shared + 1 return shared end
+
+    local function f()
+        return shared
+    end
+
+    local function g()
+        shared = shared + 1
+        return shared
+    end
+
     assert(debug.upvalueid(f, 1) == debug.upvalueid(g, 1))
 end
 
 local function upvaluejoin_makes_one_closure_observe_another_closure_s_upva_test()
     local x, y = 1, 2
-    local function f1() return x end
-    local function f2() return y end
+
+    local function f1()
+        return x
+    end
+
+    local function f2()
+        return y
+    end
+
     assert(f1() == 1)
     -- After joining, f1's first upvalue aliases f2's first upvalue.
     debug.upvaluejoin(f1, 1, f2, 1)
@@ -457,9 +565,11 @@ local function traceback_with_a_deeper_level_starts_higher_up_the_stack_test()
         -- Level 2 skips this frame and reports the caller instead.
         return debug.traceback("marker", 2)
     end
+
     local function caller()
         return deepest()
     end
+
     local tb = caller()
     assert(string.find(tb, "^marker\n") ~= nil)
     -- The 'deepest' frame is skipped by the level-2 request.
@@ -471,4 +581,3 @@ local function traceback_returns_a_non_string_message_argument_unchanged_test()
     assert(debug.traceback(marker) == marker)
     assert(debug.traceback(marker, 3) == marker)
 end
-

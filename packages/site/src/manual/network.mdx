@@ -252,7 +252,7 @@ end))
 
 local sock <close> = network.tcp.connect(address, port)
 sock:send("Lus\n")
-print(vector.tostring(sock:receive("*l")))   --> hello, Lus
+print(vector.tostring(sock:receive("*l")))  --> hello, Lus
 assert(coroutine.resume(greeter))
 server:close()
 ```
@@ -287,10 +287,10 @@ local receiver = network.udp.open(0, "127.0.0.1")
 local _, port = receiver:getsockname()
 
 local sender = network.udp.open()
-print(sender:sendto("hello", "127.0.0.1", port))   --> 5
+print(sender:sendto("hello", "127.0.0.1", port))  --> 5
 
 local data, address = receiver:receive()
-print(vector.tostring(data), address)              --> hello  127.0.0.1
+print(vector.tostring(data), address)  --> hello  127.0.0.1
 
 sender:close()
 receiver:close()
@@ -310,7 +310,7 @@ pledge("network")
 local server = network.tcp.bind("127.0.0.1", 0)
 server:settimeout(0.05)
 local sock, err = server:accept()
-print(sock, err.code, tostring(err))   --> nil  timeout  accept timeout
+print(sock, err.code, tostring(err))  --> nil  timeout  accept timeout
 server:close()
 ```
 
@@ -356,8 +356,8 @@ end)
 local sock <close> = network.tcp.connect("127.0.0.1", port)
 sock:send("GET /docs HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
 local response = vector.tostring(sock:receive("*a"))
-print(response:match("^HTTP/1.1 (%d+)"))   --> 200
-print(response:match("\r\n\r\n(.*)$"))     --> hello from /docs
+print(response:match("^HTTP/1.1 (%d+)"))  --> 200
+print(response:match("\r\n\r\n(.*)$"))  --> hello from /docs
 
 coroutine.close(serving)
 server:close()
@@ -448,13 +448,17 @@ local errors = {}
 
 local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
     error("no route for " .. req.path, 0)
-end, { on_error = function(err) errors[#errors + 1] = err end })
+end, {
+    on_error = function(err)
+        errors[#errors + 1] = err
+    end,
+})
 
 local sock <close> = network.tcp.connect("127.0.0.1", port)
 sock:send("GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n")
-print(vector.tostring(sock:receive("*l")))   --> HTTP/1.1 500 Internal Server Error
+print(vector.tostring(sock:receive("*l")))  --> HTTP/1.1 500 Internal Server Error
 sock:receive("*a")
-print(errors[1])                             --> no route for /missing
+print(errors[1])  --> no route for /missing
 
 coroutine.close(serving)
 server:close()

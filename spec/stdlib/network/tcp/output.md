@@ -20,6 +20,7 @@ local client <close> = network.tcp.connect(server:getsockname())
 local conn <close> = server:accept()
 coroutine.resume(conn.output, "hello\n")
 coroutine.close(conn.output)
+
 for line in client.input do
     print(vector.tostring(line))
 end

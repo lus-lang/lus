@@ -52,7 +52,10 @@ end
 -- Runs `lus test` with the given options on the benchmark file and returns
 -- its report and whether it exited with status 0.
 local function run_tests(options)
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     write("benches.lus", BENCHES)
     local f = io.popen(`"$LUS" test $options benches.lus 2>&1`)
     local report = f:read("a")
@@ -62,7 +65,9 @@ end
 
 local function bench_line(report, name)
     for line in report:gmatch("[^\n]+") do
-        if line:find("bench " .. name .. ":", 1, true) then return line end
+        if line:find("bench " .. name .. ":", 1, true) then
+            return line
+        end
     end
 end
 
@@ -80,11 +85,13 @@ local function bench_measures_only_the_benchmarks_test()
     assert(not ok, report)
     assert(report:find("(3 benchmarks, 1 failed", 1, true), report)
     assert(report:find("1 files, 3 benchmarks, 1 failed", 1, true), report)
+
     for _, name in ipairs({ "sum_bench", "setup_bench", "alloc_bench" }) do
         local line = bench_line(report, name)
         assert(line, report)
         assert(line:find("per call, spread [%d.]+%%"), line)
     end
+
     -- A table of eight integers takes more than its header.
     local bytes = tonumber(bench_line(report, "alloc_bench"):match(", (%d+) bytes per call"))
     assert(bytes and bytes >= 64, report)
@@ -106,9 +113,13 @@ end
 local function json_records_carry_the_measurements_test()
     local report = run_tests("--bench --bench-time 0.05 --filter setup --json")
     local rec
+
     for line in report:gmatch("[^\n]+") do
-        if line:find('"status":"bench"', 1, true) then rec = fromjson(line) end
+        if line:find('"status":"bench"', 1, true) then
+            rec = fromjson(line)
+        end
     end
+
     assert(rec, report)
     assert(rec.name == "setup_bench" and rec.ns > 0 and rec.calls >= 1 and rec.samples >= 3, report)
 end

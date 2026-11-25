@@ -23,11 +23,14 @@ The coroutine has the shape of the streamed bodies of the network library, so [`
 pledge("network")
 local server <close> = network.tcp.bind("127.0.0.1", 0)
 local _, port = server:getsockname()
+
 local writer = coroutine.detach(coroutine.create(function()
     local conn <close> = server:accept()
     conn:send("+OK one\r\n+OK two\r\n")
 end))
+
 local sock <close> = network.tcp.connect("127.0.0.1", port)
+
 for line in network.lines(sock:reader()) do
     print(vector.tostring(line))
 end

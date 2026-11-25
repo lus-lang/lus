@@ -2,88 +2,166 @@
 -- (`spec/design/hints.md`). Each case is a slow form and the form a hint
 -- would suggest, which compute the same result. `run.lus` times both.
 global helper_global, table, math, select, tostring, pairs, ipairs, string, utf8
-function helper_global(x) return x + 1 end
+
+function helper_global(x)
+    return x + 1
+end
+
 local cases = {}
-local function case(name, slow, fast) cases[#cases + 1] = { name = name, slow = slow, fast = fast } end
+
+local function case(name, slow, fast)
+    cases[#cases + 1] = { name = name, slow = slow, fast = fast }
+end
+
 local sink
 
 -- 1. string concatenation in a loop
 case("concat-in-loop", function()
     local s = ""
-    for i = 1, 20000 do s = s .. "item " .. i .. "\n" end
+
+    for i = 1, 20000 do
+        s = s .. "item " .. i .. "\n"
+    end
+
     sink = #s
 end, function()
     local parts = {}
-    for i = 1, 20000 do parts[#parts + 1] = "item " .. i .. "\n" end
+
+    for i = 1, 20000 do
+        parts[#parts + 1] = "item " .. i .. "\n"
+    end
+
     sink = #table.concat(parts)
 end)
 
 -- 2. global function read in a hot loop
 case("global-in-loop", function()
     local n = 0
-    for i = 1, 3000000 do n = helper_global(n) end
+
+    for i = 1, 3000000 do
+        n = helper_global(n)
+    end
+
     sink = n
 end, function()
     local helper = helper_global
     local n = 0
-    for i = 1, 3000000 do n = helper(n) end
+
+    for i = 1, 3000000 do
+        n = helper(n)
+    end
+
     sink = n
 end)
 
 -- 2b. library field read in a hot loop
 case("libfield-in-loop", function()
     local n = 0
-    for i = 1, 3000000 do n = n + math.abs(-i) end
+
+    for i = 1, 3000000 do
+        n = n + math.abs(-i)
+    end
+
     sink = n
 end, function()
     local abs = math.abs
     local n = 0
-    for i = 1, 3000000 do n = n + abs(-i) end
+
+    for i = 1, 3000000 do
+        n = n + abs(-i)
+    end
+
     sink = n
 end)
 
 -- 3. pairs over a list
 local list = {}
-for i = 1, 100000 do list[i] = i end
+
+for i = 1, 100000 do
+    list[i] = i
+end
+
 case("pairs-over-list", function()
     local n = 0
-    for _ = 1, 20 do for _, v in pairs(list) do n = n + v end end
+
+    for _ = 1, 20 do
+        for _, v in pairs(list) do
+            n = n + v
+        end
+    end
+
     sink = n
 end, function()
     local n = 0
-    for _ = 1, 20 do for _, v in ipairs(list) do n = n + v end end
+
+    for _ = 1, 20 do
+        for _, v in ipairs(list) do
+            n = n + v
+        end
+    end
+
     sink = n
 end)
+
 case("ipairs-vs-numeric", function()
     local n = 0
-    for _ = 1, 20 do for _, v in ipairs(list) do n = n + v end end
+
+    for _ = 1, 20 do
+        for _, v in ipairs(list) do
+            n = n + v
+        end
+    end
+
     sink = n
 end, function()
     local n = 0
-    for _ = 1, 20 do for i = 1, #list do n = n + list[i] end end
+
+    for _ = 1, 20 do
+        for i = 1, #list do
+            n = n + list[i]
+        end
+    end
+
     sink = n
 end)
 
 -- 4. closure created on every pass
 local words = {}
-for i = 1, 200 do words[i] = tostring((i * 7919) % 1000) end
+
+for i = 1, 200 do
+    words[i] = tostring((i * 7919) % 1000)
+end
+
 case("closure-in-loop", function()
     local n = 0
+
     for i = 1, 200000 do
-        local f = function(x) return x * 2 end
+        local f = function(x)
+            return x * 2
+        end
+
         n = n + f(i)
     end
+
     sink = n
 end, function()
-    local f = function(x) return x * 2 end
+    local f = function(x)
+        return x * 2
+    end
+
     local n = 0
-    for i = 1, 200000 do n = n + f(i) end
+
+    for i = 1, 200000 do
+        n = n + f(i)
+    end
+
     sink = n
 end)
 
 -- 5. table built field by field
 case("fields-one-by-one", function()
     local last
+
     for i = 1, 500000 do
         local t = {}
         t.x = i
@@ -92,162 +170,376 @@ case("fields-one-by-one", function()
         t.name = "p"
         last = t
     end
+
     sink = last
 end, function()
     local last
-    for i = 1, 500000 do last = { x = i, y = i + 1, z = i + 2, name = "p" } end
+
+    for i = 1, 500000 do
+        last = { x = i, y = i + 1, z = i + 2, name = "p" }
+    end
+
     sink = last
 end)
 
 -- 6. inserting at the front
 case("insert-front", function()
     local t = {}
-    for i = 1, 20000 do table.insert(t, 1, i) end
+
+    for i = 1, 20000 do
+        table.insert(t, 1, i)
+    end
+
     sink = t
 end, function()
     local t = {}
-    for i = 1, 20000 do t[#t + 1] = i end
+
+    for i = 1, 20000 do
+        t[#t + 1] = i
+    end
+
     local n = #t
-    for i = 1, n // 2 do t[i], t[n - i + 1] = t[n - i + 1], t[i] end
+
+    for i = 1, n // 2 do
+        t[i], t[n - i + 1] = t[n - i + 1], t[i]
+    end
+
     sink = t
 end)
 
 -- 7. table.insert append vs index append
 case("insert-append", function()
     local t = {}
-    for i = 1, 2000000 do table.insert(t, i) end
+
+    for i = 1, 2000000 do
+        table.insert(t, i)
+    end
+
     sink = t
 end, function()
     local t = {}
-    for i = 1, 2000000 do t[#t + 1] = i end
+
+    for i = 1, 2000000 do
+        t[#t + 1] = i
+    end
+
     sink = t
 end)
 
 -- 8. select over varargs
 local function sum_select(...)
     local n = 0
-    for i = 1, select("#", ...) do n = n + select(i, ...) end
+
+    for i = 1, select("#", ...) do
+        n = n + select(i, ...)
+    end
+
     return n
 end
+
 local function sum_pack(...)
     local args = table.pack(...)
     local n = 0
-    for i = 1, args.n do n = n + args[i] end
+
+    for i = 1, args.n do
+        n = n + args[i]
+    end
+
     return n
 end
+
 case("select-in-loop", function()
     local n = 0
-    for _ = 1, 20000 do n = n + sum_select(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32) end
+
+    for _ = 1, 20000 do
+        n = n
+            + sum_select(
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31,
+                32
+            )
+    end
+
     sink = n
 end, function()
     local n = 0
-    for _ = 1, 20000 do n = n + sum_pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32) end
+
+    for _ = 1, 20000 do
+        n = n
+            + sum_pack(
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31,
+                32
+            )
+    end
+
     sink = n
 end)
 
 -- 9. string.format vs interpolation
 case("format-vs-interp", function()
     local s
-    for i = 1, 300000 do s = string.format("%s=%d", "k", i) end
+
+    for i = 1, 300000 do
+        s = string.format("%s=%d", "k", i)
+    end
+
     sink = s
 end, function()
     local s
-    for i = 1, 300000 do s = `k=$i` end
+
+    for i = 1, 300000 do
+        s = `k=$i`
+    end
+
     sink = s
 end)
 
 -- 10. concatenation chain vs interpolation
 case("concat-vs-interp", function()
     local s
-    for i = 1, 300000 do s = "k=" .. i .. ";v=" .. (i * 2) end
+
+    for i = 1, 300000 do
+        s = "k=" .. i .. ";v=" .. (i * 2)
+    end
+
     sink = s
 end, function()
     local s
-    for i = 1, 300000 do s = `k=$i;v=$(i * 2)` end
+
+    for i = 1, 300000 do
+        s = `k=$i;v=$(i * 2)`
+    end
+
     sink = s
 end)
 
 -- 11. repeated nested field read
 local obj = { pos = { x = 1, y = 2 } }
+
 case("nested-field-in-loop", function()
     local n = 0
-    for i = 1, 3000000 do n = n + obj.pos.x + obj.pos.y end
+
+    for i = 1, 3000000 do
+        n = n + obj.pos.x + obj.pos.y
+    end
+
     sink = n
 end, function()
     local pos = obj.pos
     local n = 0
-    for i = 1, 3000000 do n = n + pos.x + pos.y end
+
+    for i = 1, 3000000 do
+        n = n + pos.x + pos.y
+    end
+
     sink = n
 end)
 
 -- 12. small table per call vs local group
 case("table-vs-group", function()
     local n = 0
+
     for i = 1, 1000000 do
         local p = { x = i, y = i * 2 }
         n = n + p.x + p.y
     end
+
     sink = n
 end, function()
     local n = 0
+
     for i = 1, 1000000 do
         local p <group> = { x = i, y = i * 2 }
         n = n + p.x + p.y
     end
+
     sink = n
 end)
 
 -- 13. tostring of a number inside a concatenation
 case("tostring-concat-num", function()
     local s
-    for i = 1, 300000 do s = "n" .. tostring(i) end
+
+    for i = 1, 300000 do
+        s = "n" .. tostring(i)
+    end
+
     sink = s
 end, function()
     local s
-    for i = 1, 300000 do s = "n" .. i end
+
+    for i = 1, 300000 do
+        s = "n" .. i
+    end
+
     sink = s
 end)
 
 -- 14. character loops, record loops, and escaping tables
 local ascii = string.rep("abcdefghij", 2000)
 local mixed = string.rep("aé日😀bcdefg", 2000)
+
 case("sub-char-loop-ascii", function()
     local n = 0
-    for i = 1, #ascii do if ascii:sub(i, i) == "a" then n = n + 1 end end
+
+    for i = 1, #ascii do
+        if ascii:sub(i, i) == "a" then
+            n = n + 1
+        end
+    end
+
     sink = n
 end, function()
     local n = 0
-    for c in ascii:gmatch(".") do if c == "a" then n = n + 1 end end
+
+    for c in ascii:gmatch(".") do
+        if c == "a" then
+            n = n + 1
+        end
+    end
+
     sink = n
 end)
+
 case("sub-char-loop-mixed", function()
     local n = 0
-    for i = 1, #mixed do if mixed:sub(i, i) == "a" then n = n + 1 end end
+
+    for i = 1, #mixed do
+        if mixed:sub(i, i) == "a" then
+            n = n + 1
+        end
+    end
+
     sink = n
 end, function()
     local n = 0
-    for c in mixed:gmatch(".") do if c == "a" then n = n + 1 end end
+
+    for c in mixed:gmatch(".") do
+        if c == "a" then
+            n = n + 1
+        end
+    end
+
     sink = n
 end)
+
 local recs = {}
-for i = 1, 1000 do recs[i] = { name = "n" .. i, price = i, qty = i % 7 } end
-local function each(t) local i = 0 return function() i = i + 1 return t[i] end end
+
+for i = 1, 1000 do
+    recs[i] = { name = "n" .. i, price = i, qty = i % 7 }
+end
+
+local function each(t)
+    local i = 0
+
+    return function()
+        i = i + 1
+        return t[i]
+    end
+end
+
 case("for-from", function()
     local n = 0
-    for _ = 1, 300 do for r in each(recs) do local price, qty = r.price, r.qty n = n + price * qty end end
+
+    for _ = 1, 300 do
+        for r in each(recs) do
+            local price, qty = r.price, r.qty
+            n = n + price * qty
+        end
+    end
+
     sink = n
 end, function()
     local n = 0
-    for _ = 1, 300 do for price, qty from each(recs) do n = n + price * qty end end
+
+    for _ = 1, 300 do
+        for price, qty from each(recs) do
+            n = n + price * qty
+        end
+    end
+
     sink = n
 end)
+
 case("fields-vs-ctor-escape", function()
     local all = {}
-    for i = 1, 300000 do local t = {} t.x = i t.y = i t.z = i all[i] = t end
+
+    for i = 1, 300000 do
+        local t = {}
+        t.x = i
+        t.y = i
+        t.z = i
+        all[i] = t
+    end
+
     sink = all
 end, function()
     local all = {}
-    for i = 1, 300000 do all[i] = { x = i, y = i, z = i } end
+
+    for i = 1, 300000 do
+        all[i] = { x = i, y = i, z = i }
+    end
+
     sink = all
 end)
+
 return cases

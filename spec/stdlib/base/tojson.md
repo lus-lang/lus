@@ -31,14 +31,18 @@ The filter is called first with `nil, value` for the root, then with each intege
 Shared tables that form no cycle are serialized by value, once for each place they appear. A cycle raises `circular reference detected in table`. Serialization enforces a nesting limit of 1,000 levels, and a deeply nested table can raise a C stack overflow first.
 
 ```lus
-print(tojson({ 1, "two", { x = false } }))   --> [1,"two",{"x":false}]
-print(tojson({}), tojson(1.50d), tojson(0/0))   --> []  1.50  null
+print(tojson({ 1, "two", { x = false } }))  --> [1,"two",{"x":false}]
+print(tojson({}), tojson(1.50d), tojson(0 / 0))  --> []  1.50  null
 
 local hidden = tojson({ user = "ada", password = "secret" }, function(key, value)
-    if key == "password" then return nil end
+    if key == "password" then
+        return nil
+    end
+
     return value
 end)
-print(hidden)                                 --> {"user":"ada"}
+
+print(hidden)  --> {"user":"ada"}
 ```
 
 [`fromjson`](/manual/api#fromjson) parses JSON text, and [Data formats](/manual/data) gives the full mapping.

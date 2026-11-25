@@ -29,9 +29,10 @@ local co = coroutine.create(function(a, b)
     local c = coroutine.yield(a + b)
     return c * 2
 end)
-print(coroutine.resume(co, 1, 2))   --> true  3
-print(coroutine.resume(co, 10))     --> true  20
-print(coroutine.resume(co))         --> false  cannot resume dead coroutine
+
+print(coroutine.resume(co, 1, 2))  --> true  3
+print(coroutine.resume(co, 10))  --> true  20
+print(coroutine.resume(co))  --> false  cannot resume dead coroutine
 ```
 
 For a coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach), `resume` waits until the coroutine has ended and returns `true` and the results of its body, or `false` and its error object. The extra arguments are ignored. A coroutine that ended earlier keeps its results until the first `resume` collects them, and every caller that was already waiting when it ended receives them too. A later `resume` returns `false` and `"cannot resume dead coroutine"`. While it waits, a detached caller is suspended, and any other caller runs the detached coroutines of the program. When the coroutines left can only wait for each other, the waiting `resume` returns `false` and `"deadlock: every coroutine waits for another coroutine"`.

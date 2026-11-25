@@ -1,4 +1,8 @@
-pledge("load", "fs:read=" .. TEST_DIR .. "/fixtures/json", "fs:read=" .. TEST_DIR .. "/fixtures/json/*")
+pledge(
+    "load",
+    "fs:read=" .. TEST_DIR .. "/fixtures/json",
+    "fs:read=" .. TEST_DIR .. "/fixtures/json/*"
+)
 
 -- ===== json =====
 -- fromjson parses null as nil
@@ -169,6 +173,7 @@ local function fromjson_rejects_out_of_range_numbers_test()
         "1e309",
         "-1e309",
     }
+
     for _, json in ipairs(bad) do
         local ok, err = catch fromjson(json)
         assert(ok == false, "out-of-range number should error: " .. json)
@@ -228,40 +233,40 @@ end
 
 -- tojson serializes array
 local function tojson_serializes_array_test()
-    local result = tojson({1, 2, 3})
+    local result = tojson({ 1, 2, 3 })
     assert(result == "[1,2,3]", "array should serialize correctly")
 end
 
 -- tojson serializes object
 local function tojson_serializes_object_test()
-    local result = tojson({a = 1})
+    local result = tojson({ a = 1 })
     assert(result == '{"a":1}', "object should serialize correctly")
 end
 
 -- tojson serializes nested structure
 local function tojson_serializes_nested_structure_test()
-    local data = {arr = {1, 2}, obj = {x = true}}
+    local data = { arr = { 1, 2 }, obj = { x = true } }
     local result = tojson(data)
     -- Order of keys is not guaranteed, so check for presence
     assert(result:find('"arr"'), "should contain arr key")
-    assert(result:find('%[1,2%]'), "should contain array value")
+    assert(result:find("%[1,2%]"), "should contain array value")
 end
 
 -- tojson handles inf as null
 local function tojson_handles_inf_as_null_test()
-    local result = tojson(1/0)
+    local result = tojson(1 / 0)
     assert(result == "null", "inf should serialize as null")
 end
 
 -- tojson handles -inf as null
 local function tojson_handles_inf_as_null_2_test()
-    local result = tojson(-1/0)
+    local result = tojson(-1 / 0)
     assert(result == "null", "-inf should serialize as null")
 end
 
 -- tojson handles nan as null
 local function tojson_handles_nan_as_null_test()
-    local result = tojson(0/0)
+    local result = tojson(0 / 0)
     assert(result == "null", "nan should serialize as null")
 end
 
@@ -269,21 +274,27 @@ end
 local function tojson_calls_json_metamethod_test()
     local mt = {
         __json = function(self)
-            return {id = self.secret}
-        end
+            return { id = self.secret }
+        end,
     }
-    local obj = setmetatable({secret = 42, private = "hidden"}, mt)
+
+    local obj = setmetatable({ secret = 42, private = "hidden" }, mt)
     local result = tojson(obj)
     assert(result == '{"id":42}', "__json should transform value")
 end
 
 -- tojson filter can omit properties
 local function tojson_filter_can_omit_properties_test()
-    local data = {a = 1, b = 2, c = 3}
+    local data = { a = 1, b = 2, c = 3 }
+
     local result = tojson(data, function(k, v)
-        if k == "b" then return nil end
+        if k == "b" then
+            return nil
+        end
+
         return v
     end)
+
     assert(not result:find('"b"'), "b should be omitted")
     assert(result:find('"a"'), "a should be present")
     assert(result:find('"c"'), "c should be present")
@@ -291,17 +302,27 @@ end
 
 -- tojson filter can transform values
 local function tojson_filter_can_transform_values_test()
-    local data = {x = "original"}
+    local data = { x = "original" }
+
     local result = tojson(data, function(k, v)
-        if k == "x" then return "transformed" end
+        if k == "x" then
+            return "transformed"
+        end
+
         return v
     end)
+
     assert(result == '{"x":"transformed"}', "filter should transform value")
 end
 
 -- tojson skips functions
 local function tojson_skips_functions_test()
-    local data = {a = 1, fn = function() end}
+    local data = {
+        a = 1,
+        fn = function()
+        end,
+    }
+
     local result = tojson(data)
     assert(not result:find("fn"), "functions should be skipped")
 end
@@ -346,7 +367,7 @@ end
 
 -- roundtrip preserves simple object
 local function roundtrip_preserves_simple_object_test()
-    local original = {name = "test", value = 123, active = true}
+    local original = { name = "test", value = 123, active = true }
     local json = tojson(original)
     local parsed = fromjson(json)
     assert(parsed.name == "test", "name mismatch")
@@ -359,9 +380,9 @@ local function roundtrip_preserves_nested_structure_test()
     local original = {
         level1 = {
             level2 = {
-                data = "deep"
-            }
-        }
+                data = "deep",
+            },
+        },
     }
     local json = tojson(original)
     local parsed = fromjson(json)
@@ -370,7 +391,7 @@ end
 
 -- roundtrip preserves array
 local function roundtrip_preserves_array_test()
-    local original = {1, 2, 3, 4, 5}
+    local original = { 1, 2, 3, 4, 5 }
     local json = tojson(original)
     local parsed = fromjson(json)
     assert(#parsed == 5, "array length mismatch")
@@ -380,7 +401,11 @@ end
 -- RFC 8259 Test Suite (if h1/json folder exists)
 local function readfile(path)
     local f = io.open(path, "rb")
-    if not f then return nil end
+
+    if not f then
+        return nil
+    end
+
     local content = f:read("*a")
     f:close()
     return content
@@ -391,13 +416,19 @@ local function get_json_test_files()
 
     -- Check if directory exists using fs.type
     local ok = catch fs.type(json_dir)
-    if not ok then return nil end
+
+    if not ok then
+        return nil
+    end
 
     -- Use fs.list to get JSON files
     local list_ok, all_files = catch fs.list(json_dir, "*.json")
-    if not list_ok then return nil end
 
-    local files = {y = {}, n = {}, i = {}}
+    if not list_ok then
+        return nil
+    end
+
+    local files = { y = {}, n = {}, i = {} }
 
     for idx = 1, #all_files do
         local basename = all_files[idx]
@@ -405,17 +436,18 @@ local function get_json_test_files()
         local path = fs.path.join(json_dir, basename)
 
         if prefix == "y" then
-            files.y[#files.y + 1] = {path = path, name = basename}
+            files.y[#files.y + 1] = { path = path, name = basename }
         elseif prefix == "n" then
-            files.n[#files.n + 1] = {path = path, name = basename}
+            files.n[#files.n + 1] = { path = path, name = basename }
         elseif prefix == "i" then
-            files.i[#files.i + 1] = {path = path, name = basename}
+            files.i[#files.i + 1] = { path = path, name = basename }
         end
     end
 
     if #files.y == 0 and #files.n == 0 and #files.i == 0 then
         return nil
     end
+
     return files
 end
 
@@ -426,9 +458,11 @@ local json_files = get_json_test_files()
 -- of conformance tests. Fail loudly instead.
 -- RFC8259 corpus directory is present and yields fixture files
 local function rfc8259_corpus_directory_is_present_and_yields_fixture_files_test()
-    assert(json_files ~= nil,
+    assert(
+        json_files ~= nil,
         "fixtures/json is missing, unreadable, or empty: "
-        .. "the RFC 8259 conformance tests were not generated")
+            .. "the RFC 8259 conformance tests were not generated"
+    )
     assert(#json_files.y > 0, "no y_ (must-accept) fixture files found")
     assert(#json_files.n > 0, "no n_ (must-reject) fixture files found")
 end
@@ -447,10 +481,19 @@ local y_files_parse_cases = {}
 local n_files_fail_cases = {}
 -- i_* files are implementation defined, so either outcome is acceptable
 local i_files_never_crash_cases = {}
+
 if json_files then
-    for _, file in ipairs(json_files.y) do y_files_parse_cases[#y_files_parse_cases + 1] = {file.path} end
-    for _, file in ipairs(json_files.n) do n_files_fail_cases[#n_files_fail_cases + 1] = {file.path} end
-    for _, file in ipairs(json_files.i) do i_files_never_crash_cases[#i_files_never_crash_cases + 1] = {file.path} end
+    for _, file in ipairs(json_files.y) do
+        y_files_parse_cases[#y_files_parse_cases + 1] = { file.path }
+    end
+
+    for _, file in ipairs(json_files.n) do
+        n_files_fail_cases[#n_files_fail_cases + 1] = { file.path }
+    end
+
+    for _, file in ipairs(json_files.i) do
+        i_files_never_crash_cases[#i_files_never_crash_cases + 1] = { file.path }
+    end
 end
 
 local function y_files_parse_test(path)
@@ -516,41 +559,47 @@ end
 local function deeply_nested_objects_test()
     -- Create deeply nested structure
     local depth = 50
-    local json_str = string.rep('{"a":', depth) .. '1' .. string.rep('}', depth)
+    local json_str = string.rep('{"a":', depth) .. "1" .. string.rep("}", depth)
 
     local result = fromjson(json_str)
 
     -- Verify nesting
     local current = result
+
     for i = 1, depth do
         assert(type(current) == "table", "level " .. i .. " should be table")
         current = current.a
     end
+
     assert(current == 1, "innermost value should be 1")
 end
 
 -- deeply nested arrays
 local function deeply_nested_arrays_test()
     local depth = 50
-    local json_str = string.rep('[', depth) .. '42' .. string.rep(']', depth)
+    local json_str = string.rep("[", depth) .. "42" .. string.rep("]", depth)
 
     local result = fromjson(json_str)
 
     local current = result
+
     for i = 1, depth do
         assert(type(current) == "table", "level " .. i .. " should be table")
         current = current[1]
     end
+
     assert(current == 42, "innermost value should be 42")
 end
 
 -- large array
 local function large_array_test()
     local parts = {}
+
     for i = 1, 1000 do
         parts[i] = tostring(i)
     end
-    local json_str = '[' .. table.concat(parts, ',') .. ']'
+
+    local json_str = "[" .. table.concat(parts, ",") .. "]"
 
     local result = fromjson(json_str)
 
@@ -563,10 +612,12 @@ end
 -- large object
 local function large_object_test()
     local parts = {}
+
     for i = 1, 500 do
         parts[i] = string.format('"key%d":%d', i, i)
     end
-    local json_str = '{' .. table.concat(parts, ',') .. '}'
+
+    local json_str = "{" .. table.concat(parts, ",") .. "}"
 
     local result = fromjson(json_str)
 
@@ -588,6 +639,7 @@ end
 -- string with many escapes
 local function string_with_many_escapes_test()
     local str_with_escapes = ""
+
     for i = 1, 100 do
         str_with_escapes = str_with_escapes .. "\n\t\r\\\""
     end
@@ -601,12 +653,12 @@ end
 -- unicode strings
 local function unicode_strings_test()
     local tests_data = {
-        "Hello, 世界!",          -- Chinese
-        "Привет мир",            -- Russian
-        "مرحبا بالعالم",         -- Arabic
-        "🎉🎊🎁",                 -- Emoji
-        "∑∏∫∂",                  -- Math symbols
-        "\u{1F600}\u{1F601}",    -- More emoji via escape
+        "Hello, 世界!",  -- Chinese
+        "Привет мир",  -- Russian
+        "مرحبا بالعالم",  -- Arabic
+        "🎉🎊🎁",  -- Emoji
+        "∑∏∫∂",  -- Math symbols
+        "\u{1F600}\u{1F601}",  -- More emoji via escape
     }
 
     for _, str in ipairs(tests_data) do
@@ -620,16 +672,16 @@ end
 local function mixed_nested_structure_test()
     local data = {
         name = "test",
-        values = {1, 2, 3, {nested = true}},
+        values = { 1, 2, 3, { nested = true } },
         metadata = {
             created = "2024-01-01",
-            tags = {"a", "b", "c"},
+            tags = { "a", "b", "c" },
             config = {
                 enabled = true,
                 count = 42,
-                ratio = 3.14
-            }
-        }
+                ratio = 3.14,
+            },
+        },
     }
 
     local json_str = tojson(data)
@@ -647,17 +699,18 @@ local function tojson_with_many_repeated_keys_test()
     -- The same key names recur in every element of a 100-object array,
     -- so the serializer emits each shared key string 100 times over.
     local data = {}
+
     for i = 1, 100 do
         data[i] = { id = i, name = "row" .. i, even = (i % 2 == 0) }
     end
 
     local json_str = tojson(data)
     local _, id_count = string.gsub(json_str, '"id":', "")
-    assert(id_count == 100, "the repeated key appears once per object, found "
-        .. id_count)
+    assert(id_count == 100, "the repeated key appears once per object, found " .. id_count)
 
     local result = fromjson(json_str)
     assert(#result == 100)
+
     for i = 1, 100 do
         assert(result[i].id == i)
         assert(result[i].name == "row" .. i)
@@ -686,7 +739,11 @@ local function numeric_precision_test()
         -- Allow small floating point differences
         local diff = math.abs(result - n)
         local tolerance = math.abs(n) * 1e-10
-        if tolerance < 1e-15 then tolerance = 1e-15 end
+
+        if tolerance < 1e-15 then
+            tolerance = 1e-15
+        end
+
         assert(diff <= tolerance, "number " .. n .. " should roundtrip, got " .. result)
     end
 end
@@ -699,7 +756,7 @@ local function whitespace_handling_variations_test()
         '\n\t{\n\t"a"\n:\n1\n}\n',
         '{"a" : 1}',
         '{ "a" : 1 }',
-        '[  1  ,  2  ,  3  ]',
+        "[  1  ,  2  ,  3  ]",
     }
 
     for _, json_str in ipairs(test_cases) do
@@ -711,7 +768,7 @@ end
 -- boolean and null edge cases
 local function boolean_and_null_edge_cases_test()
     -- Array of booleans and nulls
-    local json_str = '[true, false, null, true, null, false]'
+    local json_str = "[true, false, null, true, null, false]"
     local result = fromjson(json_str)
 
     assert(result[1] == true)
@@ -724,9 +781,9 @@ end
 
 -- empty structures
 local function empty_structures_test()
-    assert(type(fromjson('{}')) == "table")
-    assert(type(fromjson('[]')) == "table")
-    assert(#fromjson('[]') == 0)
+    assert(type(fromjson("{}")) == "table")
+    assert(type(fromjson("[]")) == "table")
+    assert(#fromjson("[]") == 0)
 
     -- Nested empty
     local result = fromjson('{"a":{}, "b":[]}')
@@ -754,21 +811,31 @@ end
 -- error, never crash or corrupt the interpreter.
 -- deeply nested tables serialize or fail cleanly
 local function deeply_nested_tables_serialize_or_fail_cleanly_test()
-    local t = {v = 1}
-    for i = 1, 150 do t = {v = t} end
+    local t = { v = 1 }
+
+    for i = 1, 150 do
+        t = { v = t }
+    end
+
     local s = tojson(t)
     local back = fromjson(s)
-    for i = 1, 150 do back = back.v end
+
+    for i = 1, 150 do
+        back = back.v
+    end
+
     assert(back.v == 1, "deep round-trip must preserve the leaf")
 
-    for i = 1, 500 do t = {v = t} end
+    for i = 1, 500 do
+        t = { v = t }
+    end
+
     local ok, err = catch tojson(t)
     assert(ok == false, "extreme nesting must raise, not crash")
     assert(type(err) == "string")
     -- interpreter must be fully intact afterwards
-    assert(tojson({a = 1}) == '{"a":1}')
+    assert(tojson({ a = 1 }) == '{"a":1}')
 end
-
 
 -- ===== json2 =====
 --[[
@@ -787,7 +854,6 @@ end
     including embedded NUL and lone surrogates.
 ]]
 
-
 -- Build a fresh enum root through the compiler, since enums are declared
 -- statically. The expression form takes members with no name.
 local function make_enum(members)
@@ -804,17 +870,17 @@ end
 -- comparisons, so we pin math.type on the parsed result directly.
 -- fromjson keeps the integer or float subtype
 local fromjson_keeps_the_integer_or_float_subtype_cases = {
-    {"1", "integer"},
-    {"100", "integer"},
-    {"-7", "integer"},
-    {"0", "integer"},
-    {"-0", "integer"},
-    {"1.0", "float"},
-    {"3.14", "float"},
-    {"-0.0", "float"},
-    {"1e2", "float"},
-    {"1E2", "float"},
-    {"1.5e-3", "float"},
+    { "1", "integer" },
+    { "100", "integer" },
+    { "-7", "integer" },
+    { "0", "integer" },
+    { "-0", "integer" },
+    { "1.0", "float" },
+    { "3.14", "float" },
+    { "-0.0", "float" },
+    { "1e2", "float" },
+    { "1E2", "float" },
+    { "1.5e-3", "float" },
 }
 
 local function fromjson_keeps_the_integer_or_float_subtype_test(json, expected_type)
@@ -839,14 +905,14 @@ end
 -- to the same digits (its float subtype is not preserved in the text).
 -- tojson renders numbers by subtype
 local tojson_renders_numbers_by_subtype_cases = {
-    {1, "1"},
-    {-123, "-123"},
-    {0, "0"},
-    {1.5, "1.5"},
-    {-2.5, "-2.5"},
-    {1.0, "1"},
-    {2.0, "2"},
-    {100.0, "100"},
+    { 1, "1" },
+    { -123, "-123" },
+    { 0, "0" },
+    { 1.5, "1.5" },
+    { -2.5, "-2.5" },
+    { 1.0, "1" },
+    { 2.0, "2" },
+    { 100.0, "100" },
 }
 
 local function tojson_renders_numbers_by_subtype_test(value, expected)
@@ -865,12 +931,13 @@ end
 -- JSON numbers keep a dot radix under a comma locale
 local function json_numbers_keep_a_dot_radix_under_a_comma_locale_test()
     local original = os.setlocale(nil, "numeric")
-    local selected = os.setlocale("fr_FR.UTF-8", "numeric") or
-                     os.setlocale("fr_FR", "numeric") or
-                     os.setlocale("de_DE.UTF-8", "numeric") or
-                     os.setlocale("de_DE", "numeric") or
-                     os.setlocale("pt_BR.UTF-8", "numeric") or
-                     os.setlocale("pt_BR", "numeric")
+    local selected = os.setlocale("fr_FR.UTF-8", "numeric")
+        or os.setlocale("fr_FR", "numeric")
+        or os.setlocale("de_DE.UTF-8", "numeric")
+        or os.setlocale("de_DE", "numeric")
+        or os.setlocale("pt_BR.UTF-8", "numeric")
+        or os.setlocale("pt_BR", "numeric")
+
     if selected and string.format("%.1f", 1.5):find(",", 1, true) then
         local ok, err = catch (function()
             assert(tojson(1.5) == "1.5")
@@ -878,6 +945,7 @@ local function json_numbers_keep_a_dot_radix_under_a_comma_locale_test()
             assert(fromjson("1.5") == 1.5)
             assert(fromjson("1.5e2") == 150.0)
         end)()
+
         os.setlocale(original or "C", "numeric")
         assert(ok, err)
     elseif original then
@@ -949,10 +1017,10 @@ end
 
 -- out-of-range numbers raise with a range message
 local out_of_range_numbers_raise_with_a_range_message_cases = {
-    {"9223372036854775808"},   -- 2^63, one past the max integer
-    {"-9223372036854775809"},  -- one below the min integer
-    {"1e400"},                 -- overflows a double to infinity
-    {"-1e400"},
+    { "9223372036854775808" },  -- 2^63, one past the max integer
+    { "-9223372036854775809" },  -- one below the min integer
+    { "1e400" },  -- overflows a double to infinity
+    { "-1e400" },
 }
 
 local function out_of_range_numbers_raise_with_a_range_message_test(json)
@@ -973,17 +1041,17 @@ end
 -- which keeps only string keys.
 -- tojson representation for holes and mixed keys
 local tojson_representation_for_holes_and_mixed_keys_cases = {
-    {{1, nil, 3}, "[1,null,3]"},
-    {{[1] = 1, [2] = 2, [4] = 4}, "[1,2,null,4]"},
-    {{1, 2, nil}, "[1,2]"},
-    {{[2] = "a"}, "[null,\"a\"]"},
-    {{[10] = 1}, "[null,null,null,null,null,null,null,null,null,1]"},
-    {{nil, {nil, 2}}, "[null,[null,2]]"},
-    {{[0] = "z"}, "{}"},
-    {{[-1] = "n"}, "{}"},
-    {{[1.5] = "x"}, "{}"},
-    {{[true] = "x"}, "{}"},
-    {{}, "[]"},
+    { { 1, nil, 3 }, "[1,null,3]" },
+    { { [1] = 1, [2] = 2, [4] = 4 }, "[1,2,null,4]" },
+    { { 1, 2, nil }, "[1,2]" },
+    { { [2] = "a" }, "[null,\"a\"]" },
+    { { [10] = 1 }, "[null,null,null,null,null,null,null,null,null,1]" },
+    { { nil, { nil, 2 } }, "[null,[null,2]]" },
+    { { [0] = "z" }, "{}" },
+    { { [-1] = "n" }, "{}" },
+    { { [1.5] = "x" }, "{}" },
+    { { [true] = "x" }, "{}" },
+    { {}, "[]" },
 }
 
 local function tojson_representation_for_holes_and_mixed_keys_test(input, expected)
@@ -1008,15 +1076,27 @@ local function a_sparse_table_becomes_an_object_test()
     assert(tojson({ [10] = 1 }) == "[null,null,null,null,null,null,null,null,null,1]")
     -- Half full is still an array, and fewer is an object.
     local t = {}
-    for i = 2, 40, 2 do t[i] = i end
+
+    for i = 2, 40, 2 do
+        t[i] = i
+    end
+
     assert(tojson(t):sub(1, 9) == "[null,2,n")
     t[40] = nil
     t[100] = 100
     assert(tojson(t):sub(1, 7) == '{"2":2,')
     -- Values without a JSON form are left out, as in any object.
     assert(tojson({ [100] = print, [50] = 1 }) == '{"50":1}')
+
     -- The filter sees the integer key.
-    assert(tojson({ [1000] = 1 }, function(k, v) if k == 1000 then return "x" end return v end) == '{"1000":"x"}')
+    assert(tojson({ [1000] = 1 }, function(k, v)
+        if k == 1000 then
+            return "x"
+        end
+
+        return v
+    end) == '{"1000":"x"}')
+
     -- The text is stable after one round trip.
     assert(tojson(fromjson(tojson({ [1000] = 7 }))) == '{"1000":7}')
 end
@@ -1024,7 +1104,7 @@ end
 local function a_table_mixing_an_array_part_and_a_string_key_keeps_only_the_string_ke_test()
     -- The integer indices are dropped because the presence of a string key
     -- forces object form, in which non-string keys are skipped.
-    assert(tojson({1, 2, x = 3}) == '{"x":3}')
+    assert(tojson({ 1, 2, x = 3 }) == '{"x":3}')
 end
 
 -- ============================================================
@@ -1035,14 +1115,14 @@ end
 
 -- a shared child in an array serializes by value twice
 local function a_shared_child_in_an_array_serializes_by_value_twice_test()
-    local child = {x = 1}
-    assert(tojson({child, child}) == '[{"x":1},{"x":1}]')
+    local child = { x = 1 }
+    assert(tojson({ child, child }) == '[{"x":1},{"x":1}]')
 end
 
 -- a shared child under two object keys serializes twice
 local function a_shared_child_under_two_object_keys_serializes_twice_test()
-    local child = {v = 9}
-    local result = fromjson(tojson({a = child, b = child}))
+    local child = { v = 9 }
+    local result = fromjson(tojson({ a = child, b = child }))
     assert(result.a.v == 9)
     assert(result.b.v == 9)
     -- The two decoded copies are independent tables, not the same reference.
@@ -1079,13 +1159,16 @@ end
 local function the_filter_is_invoked_for_the_root_with_a_nil_key_test()
     local first_key = "unset"
     local seen = false
-    tojson({a = 1}, function(k, v)
+
+    tojson({ a = 1 }, function(k, v)
         if not seen then
             first_key = k
             seen = true
         end
+
         return v
     end)
+
     assert(seen)
     assert(first_key == nil)
 end
@@ -1093,12 +1176,15 @@ end
 -- array elements are filtered with integer keys
 local function array_elements_are_filtered_with_integer_keys_test()
     local keys = {}
-    tojson({10, 20, 30}, function(k, v)
+
+    tojson({ 10, 20, 30 }, function(k, v)
         if math.type(k) == "integer" then
             keys[#keys + 1] = k
         end
+
         return v
     end)
+
     assert(#keys == 3)
     assert(keys[1] == 1)
     assert(keys[3] == 3)
@@ -1107,52 +1193,72 @@ end
 -- object entries are filtered with their string key
 local function object_entries_are_filtered_with_their_string_key_test()
     local seen_key = nil
-    tojson({name = "x"}, function(k, v)
+
+    tojson({ name = "x" }, function(k, v)
         if type(k) == "string" then
             seen_key = k
         end
+
         return v
     end)
+
     assert(seen_key == "name")
 end
 
 -- returning nil from the filter omits the entry
 local function returning_nil_from_the_filter_omits_the_entry_test()
-    local result = tojson({a = 1, b = 2, c = 3}, function(k, v)
-        if k == "b" then return nil end
+    local result = tojson({ a = 1, b = 2, c = 3 }, function(k, v)
+        if k == "b" then
+            return nil
+        end
+
         return v
     end)
+
     assert(not result:find('"b"'))
     assert(result:find('"a"') ~= nil)
 end
 
 -- a filter that always returns nil collapses the whole value to null
 local function a_filter_that_always_returns_nil_collapses_the_whole_value_to_null_test()
-    assert(tojson({a = 1, b = 2}, function() return nil end) == "null")
+    assert(tojson({ a = 1, b = 2 }, function()
+        return nil
+    end) == "null")
 end
 
 -- the filter recurses into nested tables
 local function the_filter_recurses_into_nested_tables_test()
-    local result = tojson({a = "x", b = {c = "y"}}, function(k, v)
-        if type(v) == "string" then return string.upper(v) end
+    local result = tojson({ a = "x", b = { c = "y" } }, function(k, v)
+        if type(v) == "string" then
+            return string.upper(v)
+        end
+
         return v
     end)
+
     assert(result:find('"X"') ~= nil)
     assert(result:find('"Y"') ~= nil)
 end
 
 -- a filter may replace a scalar with a table that is then serialized
 local function a_filter_may_replace_a_scalar_with_a_table_that_is_then_serialized_test()
-    local result = tojson({x = 1}, function(k, v)
-        if v == 1 then return {wrapped = true} end
+    local result = tojson({ x = 1 }, function(k, v)
+        if v == 1 then
+            return { wrapped = true }
+        end
+
         return v
     end)
+
     assert(result == '{"x":{"wrapped":true}}')
 end
 
 -- an error raised inside the filter propagates out of tojson
 local function an_error_raised_inside_the_filter_propagates_out_of_tojson_test()
-    local ok, err = catch tojson({a = 1}, function() error("filter boom") end)
+    local ok, err = catch tojson({ a = 1 }, function()
+        error("filter boom")
+    end)
+
     assert(not ok)
     assert(string.find(tostring(err), "filter boom"))
 end
@@ -1160,11 +1266,12 @@ end
 -- yielding across the serializer from a filter raises a boundary error
 local function yielding_across_the_serializer_from_a_filter_raises_a_boundary_error_test()
     local co = coroutine.create(function()
-        return tojson({1, 2}, function(k, v)
+        return tojson({ 1, 2 }, function(k, v)
             coroutine.yield(v)
             return v
         end)
     end)
+
     local ok, err = coroutine.resume(co)
     assert(not ok)
     assert(string.find(tostring(err), "yield"))
@@ -1178,26 +1285,50 @@ end
 
 -- __json is honored on a nested value, not only the root
 local function json_is_honored_on_a_nested_value_not_only_the_root_test()
-    local mt = {__json = function(self) return {id = self.n} end}
-    local inner = setmetatable({n = 7, hidden = "x"}, mt)
-    assert(tojson({wrap = inner}) == '{"wrap":{"id":7}}')
+    local mt = {
+        __json = function(self)
+            return { id = self.n }
+        end,
+    }
+
+    local inner = setmetatable({ n = 7, hidden = "x" }, mt)
+    assert(tojson({ wrap = inner }) == '{"wrap":{"id":7}}')
 end
 
 -- __json returning a value whose metatable also has __json chains
 local function json_returning_a_value_whose_metatable_also_has_json_chains_test()
-    local leaf = {__json = function(self) return 99 end}
-    local outer = {__json = function(self) return setmetatable({}, leaf) end}
+    local leaf = {
+        __json = function(self)
+            return 99
+        end,
+    }
+
+    local outer = {
+        __json = function(self)
+            return setmetatable({}, leaf)
+        end,
+    }
+
     assert(tojson(setmetatable({}, outer)) == "99")
 end
 
 -- __json returning nil serializes as null
 local function json_returning_nil_serializes_as_null_test()
-    assert(tojson(setmetatable({}, {__json = function() return nil end})) == "null")
+    assert(tojson(setmetatable({}, {
+        __json = function()
+            return nil
+        end,
+    })) == "null")
 end
 
 -- an error raised inside __json propagates out of tojson
 local function an_error_raised_inside_json_propagates_out_of_tojson_test()
-    local ok, err = catch tojson(setmetatable({}, {__json = function() error("mjson boom") end}))
+    local ok, err = catch tojson(setmetatable({}, {
+        __json = function()
+            error("mjson boom")
+        end,
+    }))
+
     assert(not ok)
     assert(string.find(tostring(err), "mjson boom"))
 end
@@ -1215,12 +1346,12 @@ end
 
 -- a vector inside an array becomes null
 local function a_vector_inside_an_array_becomes_null_test()
-    assert(tojson({vector.create(4)}) == "[null]")
+    assert(tojson({ vector.create(4) }) == "[null]")
 end
 
 -- a vector under a string key is skipped, leaving an empty object
 local function a_vector_under_a_string_key_is_skipped_leaving_an_empty_object_test()
-    assert(tojson({buf = vector.create(4)}) == "{}")
+    assert(tojson({ buf = vector.create(4) }) == "{}")
 end
 
 -- a bare enum value serializes as null
@@ -1232,13 +1363,13 @@ end
 -- an enum value inside an array becomes null
 local function an_enum_value_inside_an_array_becomes_null_test()
     local e = make_enum("red, green")
-    assert(tojson({e.green}) == "[null]")
+    assert(tojson({ e.green }) == "[null]")
 end
 
 -- an enum value under a string key is skipped
 local function an_enum_value_under_a_string_key_is_skipped_test()
     local e = make_enum("red, green")
-    assert(tojson({color = e.red}) == "{}")
+    assert(tojson({ color = e.red }) == "{}")
 end
 
 -- ============================================================
@@ -1345,9 +1476,21 @@ end
 
 -- fromjson rejects non-stringable arguments
 local fromjson_rejects_non_stringable_arguments_cases = {
-    {function() return fromjson(nil) end},
-    {function() return fromjson(true) end},
-    {function() return fromjson({}) end},
+    {
+        function()
+            return fromjson(nil)
+        end,
+    },
+    {
+        function()
+            return fromjson(true)
+        end,
+    },
+    {
+        function()
+            return fromjson({})
+        end,
+    },
 }
 
 local function fromjson_rejects_non_stringable_arguments_test(fn)
@@ -1364,10 +1507,10 @@ end
 
 -- parse errors report a position
 local parse_errors_report_a_position_cases = {
-    {"[1,2,]"},
-    {"{bad"},
-    {'{"a":1} extra'},
-    {"[1 2]"},
+    { "[1,2,]" },
+    { "{bad" },
+    { '{"a":1} extra' },
+    { "[1 2]" },
 }
 
 local function parse_errors_report_a_position_test(json)
@@ -1384,22 +1527,24 @@ end
 
 -- a key containing a quote and backslash is escaped
 local function a_key_containing_a_quote_and_backslash_is_escaped_test()
-    assert(tojson({['a"b\\c'] = 1}) == '{"a\\"b\\\\c":1}')
+    assert(tojson({ ['a"b\\c'] = 1 }) == '{"a\\"b\\\\c":1}')
 end
 
 -- a key containing a newline is escaped
 local function a_key_containing_a_newline_is_escaped_test()
-    assert(tojson({["x\ny"] = 1}) == '{"x\\ny":1}')
+    assert(tojson({ ["x\ny"] = 1 }) == '{"x\\ny":1}')
 end
 
 -- decoding anchors only the containers still open, so a long array of
 -- containers fits in the stack left near the stack limit
 local function decoding_needs_stack_only_for_open_containers_test()
     local names, zeros = {}, {}
+
     for i = 1, 190 do
         names[i] = "v" .. i
         zeros[i] = "0"
     end
+
     local fill = load(`local fill
 fill = function(depth, text)
     local $(table.concat(names, ", ")) = $(table.concat(zeros, ", "))
@@ -1409,10 +1554,17 @@ end
 return fill`)()
     -- the deepest recursion that still decodes an empty array
     local lo, hi = 0, 20000
+
     while lo < hi do
         local mid = (lo + hi + 1) // 2
-        if catch fill(mid, "[]") then lo = mid else hi = mid - 1 end
+
+        if catch fill(mid, "[]") then
+            lo = mid
+        else
+            hi = mid - 1
+        end
     end
+
     assert(lo > 0)
     local text = "[" .. string.rep('{"a":[1,{"b":2}]}', 10000, ",") .. "]"
     local t = fill(lo, text)
@@ -1424,20 +1576,27 @@ end
 -- when the later object reads the key
 local function repeated_key_replacing_a_container_test()
     local pad = "_padding_for_the_key_cache"
+
     for round = 1, 600 do
         local filler = {}
+
         for i = 1, round % 200 do
             filler[i] = `"$(string.char(65 + i % 26, 65 + (i // 26) % 26, 97 + round % 26))"`
         end
+
         local n = round % 50 + 10
-        local doc = `[{"a":{"kq$(n)$(pad)":1},"a":2},[$(table.concat(filler, ","))],{"kq$(n)$(pad)":3}]`
+        local doc = `[{"a":{"kq$n$pad":1},"a":2},[$(table.concat(filler, ","))],{"kq$n$pad":3}]`
         filler = nil
         local t = fromjson(doc)
         collectgarbage()
         local junk = {}
-        for i = 1, 200 do junk[i] = `x$(i)$(pad)` end
+
+        for i = 1, 200 do
+            junk[i] = `x$i$pad`
+        end
+
         collectgarbage()
-        local want = `kq$(n)$(pad)`
+        local want = `kq$n$pad`
         assert(t[1].a == 2)
         assert(next(t[3]) == want and t[3][want] == 3)
     end
@@ -1448,14 +1607,21 @@ end
 local function filter_that_grows_the_object_writes_each_key_once_test()
     local t = { a = 1, b = 2, c = 3 }
     local grown = false
+
     local text = tojson(t, function(k, v)
         if not grown and k ~= nil then
             grown = true
-            for i = 1, 64 do t["extra" .. i] = i end
+
+            for i = 1, 64 do
+                t["extra" .. i] = i
+            end
         end
+
         return v
     end)
+
     local seen = {}
+
     for key in text:gmatch('"(%w+)":') do
         assert(not seen[key], key)
         seen[key] = true
@@ -1465,14 +1631,20 @@ end
 -- tables that a filter makes stay alive while they are written
 local function tables_made_by_a_filter_survive_collections_test()
     local src = {}
-    for i = 1, 50 do src[i] = i end
+
+    for i = 1, 50 do
+        src[i] = i
+    end
+
     local text = tojson(src, function(k, v)
         if math.type(k) == "integer" then
             collectgarbage("collect")
-            return { n = v, s = `item$(v)` }
+            return { n = v, s = `item$v` }
         end
+
         return v
     end)
+
     local back = fromjson(text)
     assert(#back == 50 and back[50].n == 50 and back[50].s == "item50")
 end

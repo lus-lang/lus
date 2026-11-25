@@ -28,11 +28,13 @@ A malformed pattern raises its error at the first call of the iterator.
 for key, value in string.gmatch("a=1, b=2", "(%w+)=(%w+)") do
     print(key, value)
 end
+
 --> a  1
 --> b  2
 for word in string.gmatch("one two three", "%a+", 5) do
     io.write(word, ";")
 end
+
 print()  --> two;three;
 ```
 

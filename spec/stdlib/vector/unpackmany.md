@@ -32,13 +32,18 @@ The following example reads pairs of 16-bit integers, then the first two values 
 ```lus
 local v = vector.create(8)
 vector.pack(v, 0, "<I2I2I2I2", 1, 2, 3, 4)
+
 for a, b in vector.unpackmany(v, 0, "<I2I2") do
     print(a, b)
 end
+
 --> 1  2
 --> 3  4
-for n in vector.unpackmany(v, 0, "<I2", 2) do io.write(n, " ") end
-print()                                      --> 1 2
+for n in vector.unpackmany(v, 0, "<I2", 2) do
+    io.write(n, " ")
+end
+
+print()  --> 1 2
 ```
 
 The iterator reads the vector as it is at each call, so a change to the vector during the loop affects later records. [`vector.unpack`](/manual/api#vector.unpack) reads one record and also returns the next offset.

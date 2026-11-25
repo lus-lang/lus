@@ -22,10 +22,10 @@ Formats a time as a string, or breaks it into a table of date fields, and return
 With `"*t"`, the call returns a table with the integer fields `year`, `month`, `day`, `hour`, `min`, `sec`, `wday` (1 is Sunday), and `yday` (1 is January 1), and the boolean field `isdst`. Any other format returns a string in which each conversion specifier such as `%Y` or `%H` is replaced by its value. An unknown specifier raises `bad argument #1 to 'date' (invalid conversion specifier '%Q')`, and a `time` with a fraction raises `bad argument #2 to 'date' (number has no integer representation)`. The function requires no permission.
 
 ```lus
-print(os.date("!%Y-%m-%d %H:%M:%S", 0))   --> 1970-01-01 00:00:00
-print(os.date("!%A, %B %d", 86400))       --> Friday, January 02
+print(os.date("!%Y-%m-%d %H:%M:%S", 0))  --> 1970-01-01 00:00:00
+print(os.date("!%A, %B %d", 86400))  --> Friday, January 02
 local t = os.date("!*t", 86400)
-print(t.year, t.month, t.day, t.wday)     --> 1970  1  2  6
+print(t.year, t.month, t.day, t.wday)  --> 1970  1  2  6
 ```
 
 The `time` library offers time zones, durations, and parsing beyond these formats. [`os.time`](/manual/api#os.time) turns a table of fields back into a time.

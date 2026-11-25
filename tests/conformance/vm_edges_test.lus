@@ -12,25 +12,42 @@
 
 local function false_and_nil_need_no_close_test()
     local closed = 0
+
     do
         local a <close> = false
         local b <close> = nil
-        local c <close> = setmetatable({}, { __close = function() closed = closed + 1 end })
+
+        local c <close> = setmetatable({}, {
+            __close = function()
+                closed = closed + 1
+            end,
+        })
     end
+
     assert(closed == 1)
 end
 
 local function a_finalizer_may_collect_garbage_with_finalizers_test()
     local ran = {}
+
     do
-        local outer = setmetatable({}, { __gc = function()
-            local inner = setmetatable({}, { __gc = function() ran[#ran + 1] = "inner" end })
-            inner = nil
-            collectgarbage()
-            ran[#ran + 1] = "outer"
-        end })
+        local outer = setmetatable({}, {
+            __gc = function()
+                local inner = setmetatable({}, {
+                    __gc = function()
+                        ran[#ran + 1] = "inner"
+                    end,
+                })
+
+                inner = nil
+                collectgarbage()
+                ran[#ran + 1] = "outer"
+            end,
+        })
+
         outer = nil
     end
+
     collectgarbage()
     collectgarbage()
     local seen = table.concat(ran, ",")
@@ -40,13 +57,21 @@ end
 local function a_catch_handler_must_be_a_function_test()
     local ok, err = catch (function()
         local h = 5
-        return catch [h] error("x")
+        return catch[h] error("x")
     end)()
+
     assert(not ok and err:find("attempt to use a number value as a catch handler", 1, true), err)
+
     ok, err = catch (function()
-        local h = setmetatable({}, { __call = function() return "handled" end })
-        return catch [h] error("x")
+        local h = setmetatable({}, {
+            __call = function()
+                return "handled"
+            end,
+        })
+
+        return catch[h] error("x")
     end)()
+
     assert(not ok and err:find("attempt to use a table value as a catch handler", 1, true), err)
 end
 
@@ -61,14 +86,20 @@ local function floats_compare_in_immediate_form_test()
 end
 
 local function results_spread_into_constructors_test()
-    local function three() return 1, 2, 3 end
+    local function three()
+        return 1, 2, 3
+    end
+
     assert(#{ three() } == 3)
     assert(#{ three(), three() } == 4)
     assert(#{ (three()) } == 1)
     assert(#{ three(), nil } == 1)
     local t = { x = 1, three() }
     assert(#t == 3 and t.x == 1)
-    local function none() end
+
+    local function none()
+    end
+
     assert(#{ none() } == 0 and #{ 1, none() } == 1)
 end
 
@@ -78,26 +109,61 @@ local function numeric_loops_take_the_type_of_their_numbers_test()
         f(out)
         return table.concat(out, ",")
     end
-    assert(run(function(o) for i = 1, 3, 1d do o[#o + 1] = math.type(i) end end) == "decimal,decimal,decimal")
-    assert(run(function(o) for i = 1n, 2 do o[#o + 1] = math.type(i) end end) == "bigint,bigint")
-    assert(run(function(o) for i = 0.5, 2, 1n do o[#o + 1] = tostring(i) end end) == "0.5,1.5")
-    assert(run(function(o) for i = 10n, 1n, -3n do o[#o + 1] = tostring(i) end end) == "10,7,4,1")
-    assert(run(function(o) for i = 1.5d, 3 do o[#o + 1] = tostring(i) end end) == "1.5,2.5")
+
+    assert(run(function(o)
+        for i = 1, 3, 1d do
+            o[#o + 1] = math.type(i)
+        end
+    end) == "decimal,decimal,decimal")
+
+    assert(run(function(o)
+        for i = 1n, 2 do
+            o[#o + 1] = math.type(i)
+        end
+    end) == "bigint,bigint")
+
+    assert(run(function(o)
+        for i = 0.5, 2, 1n do
+            o[#o + 1] = tostring(i)
+        end
+    end) == "0.5,1.5")
+
+    assert(run(function(o)
+        for i = 10n, 1n, -3n do
+            o[#o + 1] = tostring(i)
+        end
+    end) == "10,7,4,1")
+
+    assert(run(function(o)
+        for i = 1.5d, 3 do
+            o[#o + 1] = tostring(i)
+        end
+    end) == "1.5,2.5")
 end
 
 local function a_hook_does_not_run_inside_a_hook_test()
     local outer, nested = 0, 0
+
     debug.sethook(function()
         outer = outer + 1
         -- Code inside the hook runs without calling the hook again.
         local s = 0
-        for i = 1, 3 do s = s + i end
-        if s ~= 6 then nested = nested + 1 end
+
+        for i = 1, 3 do
+            s = s + i
+        end
+
+        if s ~= 6 then
+            nested = nested + 1
+        end
     end, "l")
+
     local x = 0
+
     for i = 1, 3 do
         x = x + i
     end
+
     debug.sethook()
     assert(outer > 0 and nested == 0 and x == 6)
 end

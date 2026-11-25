@@ -15,15 +15,23 @@
     is a real fs:read boundary rather than a missing file.
 ]]
 
-pledge("load", "fs:read=" .. TEST_DIR .. "/*", "fs:read=./tree/*", "fs:write=./*",
-    "fs:read=./pkg_*", "fs:write=./pkg_*")
+pledge(
+    "load",
+    "fs:read=" .. TEST_DIR .. "/*",
+    "fs:read=./tree/*",
+    "fs:write=./*",
+    "fs:read=./pkg_*",
+    "fs:write=./pkg_*"
+)
 
 -- The paths below name the fixture modules under tree/suite/preinclude,
 -- so the fixtures are copied into the temporary working directory under that name.
 local function copy_tree(src, dst)
     fs.createdirectory(dst)
+
     for _, name in ipairs(fs.list(src)) do
         local origin, target = src .. "/" .. name, dst .. "/" .. name
+
         if fs.type(origin) == "directory" then
             copy_tree(origin, target)
         else
@@ -31,6 +39,7 @@ local function copy_tree(src, dst)
         end
     end
 end
+
 fs.createdirectory("tree")
 fs.createdirectory("tree/suite")
 copy_tree(TEST_DIR .. "/fixtures/preinclude", "tree/suite/preinclude")
@@ -51,19 +60,28 @@ local function with_saved(body)
     -- Snapshot the searcher list by value so a test that appends to the
     -- shared table in place is fully undone, not just rebound.
     local old_searchers = {}
-    for i, v in ipairs(package.searchers) do old_searchers[i] = v end
+
+    for i, v in ipairs(package.searchers) do
+        old_searchers[i] = v
+    end
+
     local ok, err = catch body()
     package.path = old_path
     package.cpath = old_cpath
     package.searchers = old_searchers
-    if not ok then error(err) end
+
+    if not ok then
+        error(err)
+    end
 end
 
 -- Plain (non-pattern) substring assertion, for messages that carry the
 -- magic characters that string.find would otherwise interpret.
 local function assert_has(haystack, needle)
-    assert(string.find(tostring(haystack), needle, 1, true) ~= nil,
-        "expected to find '" .. needle .. "' in: " .. tostring(haystack))
+    assert(
+        string.find(tostring(haystack), needle, 1, true) ~= nil,
+        "expected to find '" .. needle .. "' in: " .. tostring(haystack)
+    )
 end
 
 -- Group: package.config
@@ -71,13 +89,17 @@ end
 local function config_is_five_newline_terminated_fields_test()
     assert(type(package.config) == "string")
     local lines = {}
+
     for line in string.gmatch(package.config, "([^\n]*)\n") do
         lines[#lines + 1] = line
     end
+
     assert(#lines == 5)
     -- Line one is the directory separator, either POSIX or Windows.
-    assert(lines[1] == "/" or lines[1] == "\\",
-        "line 1 is the directory separator, got " .. tostring(lines[1]))
+    assert(
+        lines[1] == "/" or lines[1] == "\\",
+        "line 1 is the directory separator, got " .. tostring(lines[1])
+    )
     assert(lines[2] == ";")
     assert(lines[3] == "?")
     assert(lines[4] == "!")
@@ -90,8 +112,13 @@ local function the_config_separators_are_the_ones_searchpath_honors_test()
     -- searchpath resolves the fixture through it.
     local tmpl_sep = ";"
     local sub = "?"
-    local path = "tree/none/" .. sub .. ".lus" .. tmpl_sep ..
-        "tree/suite/preinclude/" .. sub .. ".lus"
+    local path = "tree/none/"
+        .. sub
+        .. ".lus"
+        .. tmpl_sep
+        .. "tree/suite/preinclude/"
+        .. sub
+        .. ".lus"
     local found = package.searchpath("hello", path)
     assert(found == "tree/suite/preinclude/hello.lus")
 end
@@ -121,7 +148,11 @@ local function a_pre_seeded_entry_short_circuits_every_searcher_test()
     -- entry must be returned without any searcher being consulted.
     with_saved(function()
         local tripped = false
-        table.insert(package.searchers, function(name) tripped = true end)
+
+        table.insert(package.searchers, function(name)
+            tripped = true
+        end)
+
         local sentinel = { seeded = true }
         package.loaded["pkg_seed_" .. RUN] = sentinel
         local got = require("pkg_seed_" .. RUN)
@@ -133,10 +164,12 @@ end
 
 local function clearing_package_loaded_forces_the_loader_to_run_again_test()
     local calls = 0
+
     package.preload["pkg_reload_" .. RUN] = function()
         calls = calls + 1
         return { n = calls }
     end
+
     local a = require("pkg_reload_" .. RUN)
     assert(a.n == 1)
     -- Repeat without clearing: cached, loader not rerun.
@@ -149,7 +182,9 @@ local function clearing_package_loaded_forces_the_loader_to_run_again_test()
 end
 
 local function a_loader_returning_no_value_marks_loaded_true_test()
-    package.preload["pkg_novalue_" .. RUN] = function() end
+    package.preload["pkg_novalue_" .. RUN] = function()
+    end
+
     local r = require("pkg_novalue_" .. RUN)
     assert(r == true)
     assert(package.loaded["pkg_novalue_" .. RUN] == true)
@@ -158,7 +193,10 @@ local function a_loader_returning_no_value_marks_loaded_true_test()
 end
 
 local function a_false_value_in_package_loaded_is_treated_as_not_loaded_test()
-    package.preload["pkg_false_" .. RUN] = function() return { real = true } end
+    package.preload["pkg_false_" .. RUN] = function()
+        return { real = true }
+    end
+
     package.loaded["pkg_false_" .. RUN] = false
     local r = require("pkg_false_" .. RUN)
     assert(type(r) == "table")
@@ -182,9 +220,11 @@ local function preload_takes_priority_over_the_path_searcher_test()
         -- it must win.
         package.path = FIXPATH
         package.loaded["hello"] = nil
+
         package.preload["hello"] = function(name)
             return { origin = "preload", who = name }
         end
+
         local mod, where = require("hello")
         assert(mod.origin == "preload")
         assert(mod.who == "hello")
@@ -281,6 +321,7 @@ local function a_load_time_error_propagates_and_does_not_cache_the_module_test()
     package.preload["pkg_boom_" .. RUN] = function()
         error("boom during load")
     end
+
     local ok, err = catch require("pkg_boom_" .. RUN)
     assert(not ok)
     assert(string.find(tostring(err), "boom during load"))
@@ -295,9 +336,11 @@ local function a_module_required_mid_load_resolves_to_its_finished_value_test()
         local b = require("pkg_circB_" .. RUN)
         return { name = "A", dep = b.name }
     end
+
     package.preload["pkg_circB_" .. RUN] = function()
         return { name = "B" }
     end
+
     local a = require("pkg_circA_" .. RUN)
     assert(a.name == "A")
     assert(a.dep == "B")
@@ -317,6 +360,7 @@ end
 local function a_custom_searcher_runs_its_loader_with_its_own_data_test()
     with_saved(function()
         local DATA = { marker = "custom-data" }
+
         table.insert(package.searchers, function(name)
             if name == "pkg_custom_" .. RUN then
                 return function(n, extra)
@@ -324,6 +368,7 @@ local function a_custom_searcher_runs_its_loader_with_its_own_data_test()
                 end, DATA
             end
         end)
+
         local mod, where = require("pkg_custom_" .. RUN)
         assert(mod.got == "pkg_custom_" .. RUN)
         assert(rawequal(mod.extra, DATA))
@@ -403,8 +448,18 @@ local function searchpath_skips_a_file_the_pledge_does_not_cover_test()
 end
 
 local searchpath_argument_type_errors_raise_cases = {
-    { function() return package.searchpath(nil, "?") end, 1 },
-    { function() return package.searchpath("n", nil) end, 2 },
+    {
+        function()
+            return package.searchpath(nil, "?")
+        end,
+        1,
+    },
+    {
+        function()
+            return package.searchpath("n", nil)
+        end,
+        2,
+    },
 }
 
 local function searchpath_argument_type_errors_raise_test(call, argno)
@@ -435,8 +490,18 @@ local function loadlib_raises_fs_read_denial_for_an_ungranted_path_test()
 end
 
 local loadlib_rejects_non_string_arguments_cases = {
-    { function() return package.loadlib(nil, "f") end, 1 },
-    { function() return package.loadlib("./tree/x.so", nil) end, 2 },
+    {
+        function()
+            return package.loadlib(nil, "f")
+        end,
+        1,
+    },
+    {
+        function()
+            return package.loadlib("./tree/x.so", nil)
+        end,
+        2,
+    },
 }
 
 local function loadlib_rejects_non_string_arguments_test(call, argno)
@@ -450,9 +515,11 @@ end
 -- provide a remote module. Neither path needs a network permission.
 local function preload_provides_a_module_url_test()
     local url = "https://pkg.invalid/2.0/preloaded_" .. RUN .. ".lus"
+
     package.preload[url] = function(name, extra)
         return { name = name, extra = extra }
     end
+
     local m = require(url)
     assert(m.name == url)
     assert(m.extra == ":preload:")

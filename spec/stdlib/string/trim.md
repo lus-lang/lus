@@ -25,9 +25,9 @@ A `s` that is neither a string nor a number raises `bad argument #1 to 'string.t
 
 ```lus
 print("[" .. string.trim("\t a b \n") .. "]")  --> [a b]
-print(string.trim("xxhixx", "x"))              --> hi
-print(string.trim("--==hi=-", "-="))           --> hi
-print(string.trim("aaa", "a") == "")           --> true
+print(string.trim("xxhixx", "x"))  --> hi
+print(string.trim("--==hi=-", "-="))  --> hi
+print(string.trim("aaa", "a") == "")  --> true
 ```
 
 `chars` holds whole characters, so it may contain characters outside ASCII. The default set keeps Unicode spaces such as U+00A0. [`string.ltrim`](/manual/api#string.ltrim) and [`string.rtrim`](/manual/api#string.rtrim) trim one end.

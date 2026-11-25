@@ -15,9 +15,13 @@ The function takes no arguments and requires no permission. The value counts the
 ```lus
 local start = os.clock()
 local sum = 0
-for i = 1, 1000000 do sum = sum + i end
+
+for i = 1, 1000000 do
+    sum = sum + i
+end
+
 local used = os.clock() - start
-print(math.type(used), used >= 0)   --> float  true
+print(math.type(used), used >= 0)  --> float  true
 ```
 
 [`os.time`](/manual/api#os.time) reads the wall clock in whole seconds.

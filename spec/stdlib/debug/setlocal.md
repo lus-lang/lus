@@ -31,10 +31,11 @@ The following example changes a local of the running function.
 ```lus
 local function demo()
     local count = 1
-    print(debug.setlocal(1, 1, 99))    --> count
-    print(count)                       --> 99
-    print(debug.setlocal(1, 5, 0))     --> nil
+    print(debug.setlocal(1, 1, 99))  --> count
+    print(count)  --> 99
+    print(debug.setlocal(1, 5, 0))  --> nil
 end
+
 demo()
 ```
 

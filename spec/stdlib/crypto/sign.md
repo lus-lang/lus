@@ -34,9 +34,9 @@ The following example signs a release manifest with Ed25519, then signs a token 
 local secret, public = crypto.keypair()
 local manifest = tojson({ name = "app", version = "1.4.0" })
 local sig = crypto.sign(secret, manifest)
-print(#sig, crypto.verify(public, manifest, sig))   --> 64  true
+print(#sig, crypto.verify(public, manifest, sig))  --> 64  true
 
 local ec = crypto.keypair("P-256")
 local es = crypto.sign(ec, "eyJhbGciOiJFUzI1NiJ9.e30")
-print(#es, crypto.verify(ec:public(), "eyJhbGciOiJFUzI1NiJ9.e30", es))   --> 64  true
+print(#es, crypto.verify(ec:public(), "eyJhbGciOiJFUzI1NiJ9.e30", es))  --> 64  true
 ```

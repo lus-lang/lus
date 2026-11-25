@@ -3,7 +3,10 @@
 -- the standard library, so this measures how fast a state starts.
 pledge("load", "fs:read")
 local dir = arg[0]:match("^(.*)/") or "."
+
 for i = 1, tonumber(arg[1]) or 2000 do
     local w = worker.create(dir .. "/workers/empty.lus")
-    while worker.receive(w) ~= nil do end
+
+    while worker.receive(w) ~= nil do
+    end
 end

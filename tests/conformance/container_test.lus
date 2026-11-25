@@ -23,7 +23,11 @@ end
 
 local function read_text(path)
     local f = io.open(path, "r")
-    if not f then return nil end
+
+    if not f then
+        return nil
+    end
+
     local s = f:read("a")
     f:close()
     return s
@@ -37,14 +41,22 @@ end
 
 local function names(entries)
     local out = {}
-    for i, e in ipairs(entries) do out[i] = e.name end
+
+    for i, e in ipairs(entries) do
+        out[i] = e.name
+    end
+
     return table.concat(out, " ")
 end
 
 local function raw_bytes(...)
     local list = { ... }
     local v = vector.create(#list)
-    for i, b in ipairs(list) do vector.set(v, i - 1, b) end
+
+    for i, b in ipairs(list) do
+        vector.set(v, i - 1, b)
+    end
+
     return v
 end
 
@@ -77,20 +89,38 @@ local function round_trip_test(format)
     assert(type(packed) == "vector")
     local listed = a.list(packed)
     assert(#listed == #entries)
-    assert(names(listed) == "docs/ docs/readme.txt bin/run.sh link stored.bin " .. string.rep("deep/", 30) .. "file.txt café/naïve.txt empty.txt")
+    assert(
+        names(listed)
+            == "docs/ docs/readme.txt bin/run.sh link stored.bin "
+                .. string.rep("deep/", 30)
+                .. "file.txt café/naïve.txt empty.txt"
+    )
     assert(listed[1].kind == "directory" and listed[1].mode == 493)
-    assert(listed[2].kind == "file" and listed[2].size == 2800 and listed[2].mtime == 1700000000 and listed[2].mode == 420)
+    assert(
+        listed[2].kind == "file"
+            and listed[2].size == 2800
+            and listed[2].mtime == 1700000000
+            and listed[2].mode == 420
+    )
     assert(listed[3].mode == 493)
-    assert(listed[4].kind == "symlink" and listed[4].target == "docs/readme.txt" and listed[4].size == 0)
+    assert(
+        listed[4].kind == "symlink"
+            and listed[4].target == "docs/readme.txt"
+            and listed[4].size == 0
+    )
     assert(listed[8].size == 0)
+
     if format == "zip" then
         assert(listed[2].method == "deflate" and listed[2].compressed < 100)
         assert(listed[5].method == "store" and listed[5].compressed == 4)
     else
         assert(listed[2].method == nil and listed[2].compressed == nil)
     end
+
     assert(vector.tostring(a.read(packed, "docs/readme.txt")) == string.rep("hello archive ", 200))
-    assert(vector.tostring(a.read(packed, "./docs//readme.txt")) == string.rep("hello archive ", 200))
+    assert(
+        vector.tostring(a.read(packed, "./docs//readme.txt")) == string.rep("hello archive ", 200)
+    )
     assert(vector.tostring(a.read(packed, "café/naïve.txt")) == "unicode")
     assert(vector.get(a.read(packed, "stored.bin"), 3) == 255)
     assert(#a.read(packed, "empty.txt") == 0)
@@ -112,21 +142,56 @@ local pack_errors_cases = formats
 
 local function pack_errors_test(format)
     local a = vector.archive[format]
-    raises(function() a.pack({ { name = "../x", data = "" } }) end, "unsafe entry name '%.%./x'")
-    raises(function() a.pack({ { name = "/abs", data = "" } }) end, "unsafe entry name '/abs'")
-    raises(function() a.pack({ { name = "." } }) end, "unsafe entry name '%.'")
-    raises(function() a.pack({ { data = "" } }) end, "bad entry #1 to 'pack' %(field 'name' missing%)")
-    raises(function() a.pack({ "x" }) end, "bad entry #1 to 'pack' %(table expected%)")
-    raises(function() a.pack({ { name = "a", data = {} } }) end, "field 'data' must be a string or vector")
-    raises(function() a.pack({ { name = "a", kind = "fifo" } }) end, "invalid kind 'fifo'")
-    raises(function() a.pack({ { name = "a", kind = "symlink" } }) end, "field 'target' missing")
-    raises(function() a.pack({ { name = "a", mode = 65536 } }) end, "field 'mode' out of range")
-    raises(function() a.pack(5) end, "bad argument #1 to 'pack' %(table expected")
+
+    raises(function()
+        a.pack({ { name = "../x", data = "" } })
+    end, "unsafe entry name '%.%./x'")
+
+    raises(function()
+        a.pack({ { name = "/abs", data = "" } })
+    end, "unsafe entry name '/abs'")
+
+    raises(function()
+        a.pack({ { name = "." } })
+    end, "unsafe entry name '%.'")
+
+    raises(function()
+        a.pack({ { data = "" } })
+    end, "bad entry #1 to 'pack' %(field 'name' missing%)")
+
+    raises(function()
+        a.pack({ "x" })
+    end, "bad entry #1 to 'pack' %(table expected%)")
+
+    raises(function()
+        a.pack({ { name = "a", data = {} } })
+    end, "field 'data' must be a string or vector")
+
+    raises(function()
+        a.pack({ { name = "a", kind = "fifo" } })
+    end, "invalid kind 'fifo'")
+
+    raises(function()
+        a.pack({ { name = "a", kind = "symlink" } })
+    end, "field 'target' missing")
+
+    raises(function()
+        a.pack({ { name = "a", mode = 65536 } })
+    end, "field 'mode' out of range")
+
+    raises(function()
+        a.pack(5)
+    end, "bad argument #1 to 'pack' %(table expected")
 end
 
 local function zip_method_error_test()
-    raises(function() vector.archive.zip.pack({ { name = "a", method = "lzma" } }) end, "invalid method 'lzma'")
-    raises(function() vector.archive.zip.pack({}, { level = 10 }) end, "compression level must be 0%-9")
+    raises(function()
+        vector.archive.zip.pack({ { name = "a", method = "lzma" } })
+    end, "invalid method 'lzma'")
+
+    raises(function()
+        vector.archive.zip.pack({}, { level = 10 })
+    end, "compression level must be 0%-9")
 end
 
 -- Long names, long link targets, and times before 1970 or past ustar's
@@ -155,8 +220,14 @@ local python_cases = {
     { "python.zip", "dir/ dir/text.txt dir/run.sh stored.bin café.txt" },
     { "zip64.zip", "big.txt small.txt" },
     { "ustar.tar", "dir/ dir/text.txt dir/run.sh link" },
-    { "gnu.tar", "dir/ dir/text.txt dir/run.sh link long/" .. string.rep("x", 120) .. "/name.txt café.txt" },
-    { "pax.tar", "dir/ dir/text.txt dir/run.sh link long/" .. string.rep("x", 120) .. "/name.txt café.txt" },
+    {
+        "gnu.tar",
+        "dir/ dir/text.txt dir/run.sh link long/" .. string.rep("x", 120) .. "/name.txt café.txt",
+    },
+    {
+        "pax.tar",
+        "dir/ dir/text.txt dir/run.sh link long/" .. string.rep("x", 120) .. "/name.txt café.txt",
+    },
 }
 
 local quick_fox = string.rep("The quick brown fox jumps over the lazy dog.\n", 40)
@@ -169,13 +240,21 @@ local function python_test(name, want)
     assert(names(listed) == want, names(listed))
     local text = name == "zip64.zip" and "big.txt" or "dir/text.txt"
     assert(vector.tostring(a.read(data, text)) == quick_fox)
+
     if name ~= "zip64.zip" then
         assert(vector.tostring(a.read(data, "dir/run.sh")) == "#!/bin/sh\necho hi\n")
+
         for _, e in ipairs(listed) do
-            if e.name == "dir/run.sh" then assert(e.mode == 493) end
-            if e.name == "dir/text.txt" then assert(e.mtime == 1700000000) end
+            if e.name == "dir/run.sh" then
+                assert(e.mode == 493)
+            end
+
+            if e.name == "dir/text.txt" then
+                assert(e.mtime == 1700000000)
+            end
         end
     end
+
     if format == "tar" then
         assert(listed[4].kind == "symlink" and listed[4].target == "dir/text.txt")
     end
@@ -200,8 +279,14 @@ local function file_source_test(format)
     -- Positional reads leave the file position where it was.
     assert(f:seek() == 0)
     f:close()
-    raises(function() a.list(f) end, "attempt to use a closed file")
-    raises(function() a.list(true) end, "bad argument #1 to 'list' %(string, vector, or file expected, got boolean%)")
+
+    raises(function()
+        a.list(f)
+    end, "attempt to use a closed file")
+
+    raises(function()
+        a.list(true)
+    end, "bad argument #1 to 'list' %(string, vector, or file expected, got boolean%)")
 end
 
 -- ============================================================
@@ -211,7 +296,10 @@ end
 local unpack_cases = formats
 
 local function unpack_test(format)
-    if not symlinks then skip("symbolic links need a POSIX file system") end
+    if not symlinks then
+        skip("symbolic links need a POSIX file system")
+    end
+
     local a = vector.archive[format]
     local dir = fresh("unpack_" .. format)
     local packed = a.pack(entries)
@@ -222,8 +310,12 @@ local function unpack_test(format)
     assert(read_text(dir .. "/link") == string.rep("hello archive ", 200))
     assert(read_text(dir .. "/" .. string.rep("deep/", 30) .. "file.txt") == "deep")
     assert(read_text(dir .. "/empty.txt") == "")
+
     -- A second unpack meets existing files.
-    raises(function() a.unpack(packed, dir) end, "file exists: " .. dir:gsub("%p", "%%%0") .. "/docs/readme.txt")
+    raises(function()
+        a.unpack(packed, dir)
+    end, "file exists: " .. dir:gsub("%p", "%%%0") .. "/docs/readme.txt")
+
     assert(a.unpack(packed, dir, { overwrite = true }) == #entries)
     -- Directories merge with ones already there.
     local more = a.pack({ { name = "docs/more.txt", data = "more" } })
@@ -261,16 +353,27 @@ local hostile_cases = {
 local function hostile_test(name, message)
     local format = name:match("%.(%a+)$")
     local dir = fresh("hostile_" .. name)
-    raises(function() vector.archive[format].unpack(fixture(name), dir) end, message)
+
+    raises(function()
+        vector.archive[format].unpack(fixture(name), dir)
+    end, message)
+
     assert(not exists(dir), "the target directory was created")
 end
 
 -- An entry under a symlink, whether the archive made it or it was there
 -- before, is never written through the link.
 local function write_through_link_test()
-    if not symlinks then skip("symbolic links need a POSIX file system") end
+    if not symlinks then
+        skip("symbolic links need a POSIX file system")
+    end
+
     local dir = fresh("link_write")
-    raises(function() vector.archive.tar.unpack(fixture("link-write.tar"), dir) end, "cannot write '.-/l/x%.txt' %(a parent is a symlink or a file%)")
+
+    raises(function()
+        vector.archive.tar.unpack(fixture("link-write.tar"), dir)
+    end, "cannot write '.-/l/x%.txt' %(a parent is a symlink or a file%)")
+
     assert(not exists(dir .. "/sub/x.txt"))
     local outside = fresh("outside")
     fs.createdirectory(outside)
@@ -278,7 +381,11 @@ local function write_through_link_test()
     fs.createdirectory(dir2)
     fs.createlink(dir2 .. "/pre", "../outside")
     local packed = vector.archive.zip.pack({ { name = "pre/x.txt", data = "evil" } })
-    raises(function() vector.archive.zip.unpack(packed, dir2) end, "a parent is a symlink or a file")
+
+    raises(function()
+        vector.archive.zip.unpack(packed, dir2)
+    end, "a parent is a symlink or a file")
+
     assert(not exists(outside .. "/x.txt"))
     -- With overwrite, a file replaces a link in its place, never the
     -- file the link points at.
@@ -287,7 +394,11 @@ local function write_through_link_test()
     f:write("keep")
     f:close()
     local one = vector.archive.tar.pack({ { name = "f.txt", data = "new" } })
-    raises(function() vector.archive.tar.unpack(one, dir2) end, "file exists")
+
+    raises(function()
+        vector.archive.tar.unpack(one, dir2)
+    end, "file exists")
+
     vector.archive.tar.unpack(one, dir2, { overwrite = true })
     assert(read_text(dir2 .. "/f.txt") == "new")
     assert(not (catch fs.follow(dir2 .. "/f.txt")))
@@ -304,15 +415,38 @@ local function size_limit_test(format)
     local a = vector.archive[format]
     -- 64 MiB of zeros deflate to a few dozen kilobytes.
     local big = a.pack({ { name = "zeros", data = string.rep("\0", 64 * 1024 * 1024) } })
-    if format == "zip" then assert(#big < 200000) end
-    raises(function() a.read(big, "zeros", 1000) end, "archive exceeds size limit %(1000 bytes%)")
+
+    if format == "zip" then
+        assert(#big < 200000)
+    end
+
+    raises(function()
+        a.read(big, "zeros", 1000)
+    end, "archive exceeds size limit %(1000 bytes%)")
+
     local dir = fresh("limit_" .. format)
-    raises(function() a.unpack(big, dir, { max = 4096 }) end, "archive exceeds size limit %(4096 bytes%)")
+
+    raises(function()
+        a.unpack(big, dir, { max = 4096 })
+    end, "archive exceeds size limit %(4096 bytes%)")
+
     local many = {}
-    for i = 1, 20 do many[i] = { name = "f" .. i, data = "x" } end
-    raises(function() a.unpack(a.pack(many), fresh("count_" .. format), { entries = 10 }) end, "archive exceeds entry limit %(10 entries%)")
-    raises(function() a.unpack(big, dir, { max = 0 }) end, "option 'max' out of range")
-    raises(function() a.unpack(big, dir, { entries = "many" }) end, "option 'entries' must be an integer")
+
+    for i = 1, 20 do
+        many[i] = { name = "f" .. i, data = "x" }
+    end
+
+    raises(function()
+        a.unpack(a.pack(many), fresh("count_" .. format), { entries = 10 })
+    end, "archive exceeds entry limit %(10 entries%)")
+
+    raises(function()
+        a.unpack(big, dir, { max = 0 })
+    end, "option 'max' out of range")
+
+    raises(function()
+        a.unpack(big, dir, { entries = "many" })
+    end, "option 'entries' must be an integer")
 end
 
 local zip_corrupt_cases = {
@@ -322,7 +456,9 @@ local zip_corrupt_cases = {
 }
 
 local function zip_corrupt_test(name, message)
-    raises(function() vector.archive.zip.read(fixture(name), "a.txt") end, message)
+    raises(function()
+        vector.archive.zip.read(fixture(name), "a.txt")
+    end, message)
 end
 
 local truncated_cases = formats
@@ -333,6 +469,7 @@ local function truncated_test(format)
     -- The two zero blocks that end a tar archive hold no entry, so a cut
     -- inside them loses nothing and the archive still lists.
     local last = format == "tar" and #packed - 1025 or #packed - 1
+
     for _, n in ipairs({ 0, 10, #packed // 2, last }) do
         local cut = vector.clone(packed)
         vector.resize(cut, n)
@@ -342,9 +479,17 @@ local function truncated_test(format)
 end
 
 local function bad_input_test()
-    raises(function() vector.archive.zip.list("not a zip archive at all") end, "invalid ZIP archive %(no end of central directory%)")
-    raises(function() vector.archive.tar.list(string.rep("x", 1024)) end, "invalid tar archive %(bad header checksum%)")
-    raises(function() vector.archive.tar.read(vector.archive.tar.pack(entries), "docs") end, "'docs/' is not a file")
+    raises(function()
+        vector.archive.zip.list("not a zip archive at all")
+    end, "invalid ZIP archive %(no end of central directory%)")
+
+    raises(function()
+        vector.archive.tar.list(string.rep("x", 1024))
+    end, "invalid tar archive %(bad header checksum%)")
+
+    raises(function()
+        vector.archive.tar.read(vector.archive.tar.pack(entries), "docs")
+    end, "'docs/' is not a file")
 end
 
 local function cleanup_test()

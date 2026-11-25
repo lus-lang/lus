@@ -25,9 +25,11 @@ end
 
 local function apply_all(list, transform)
     local result = {}
+
     for i, value in ipairs(list) do
         result[i] = transform(value)
     end
+
     return result
 end
 
@@ -46,6 +48,7 @@ end
 print(connect{ host = "db.internal", timeout = 5 })
 --> db.internal:5432 (timeout 5s)
 print(connect{})
+
 --> localhost:5432 (timeout 30s)
 
 -- A function that reaches its end without `return` returns no values.

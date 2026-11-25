@@ -28,9 +28,9 @@ local file = fs.path.join(dir, "data.txt")
 io.open(file, "w"):close()
 fs.createlink(fs.path.join(dir, "good"), "data.txt")
 fs.createlink(fs.path.join(dir, "dangling"), "missing.txt")
-print(fs.follow(fs.path.join(dir, "good")))       --> data.txt
-print(fs.follow(fs.path.join(dir, "dangling")))   --> missing.txt
-print((catch fs.follow(file)))                    --> false
+print(fs.follow(fs.path.join(dir, "good")))  --> data.txt
+print(fs.follow(fs.path.join(dir, "dangling")))  --> missing.txt
+print((catch fs.follow(file)))  --> false
 fs.remove(dir, true)
 ```
 

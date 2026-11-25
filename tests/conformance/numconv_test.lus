@@ -18,7 +18,6 @@ pledge("load")
     - float to integer coercion errors in integer-only contexts
 ]]
 
-
 local minint, maxint = math.mininteger, math.maxinteger
 local inf = math.huge
 
@@ -28,13 +27,13 @@ local inf = math.huge
 
 -- hex float literal value and type
 local hex_float_literal_value_and_type_cases = {
-    {0x1p4, 16.0},
-    {0x.8p1, 1.0},
-    {0x1p-2, 0.25},
-    {0xA.8p0, 10.5},
-    {0x1.8, 1.5},
-    {0X1P4, 16.0},
-    {0x1.fp0, 1.9375},
+    { 0x1p4, 16.0 },
+    { 0x.8p1, 1.0 },
+    { 0x1p-2, 0.25 },
+    { 0xA.8p0, 10.5 },
+    { 0x1.8, 1.5 },
+    { 0X1P4, 16.0 },
+    { 0x1.fp0, 1.9375 },
 }
 
 local function hex_float_literal_value_and_type_test(value, expected)
@@ -63,12 +62,12 @@ end
 
 -- malformed numeral is a compile error
 local malformed_numeral_is_a_compile_error_cases = {
-    {"return 0x"},
-    {"return 1e"},
-    {"return 1e+"},
-    {"return 0xp4"},
-    {"return 0x1pz"},
-    {"return 1..2"},
+    { "return 0x" },
+    { "return 1e" },
+    { "return 1e+" },
+    { "return 0xp4" },
+    { "return 0x1pz" },
+    { "return 1..2" },
 }
 
 local function malformed_numeral_is_a_compile_error_test(src)
@@ -85,7 +84,7 @@ end
 local function decimal_integer_literal_above_maxinteger_becomes_a_float_test()
     local v = 9223372036854775808
     assert(math.type(v) == "float")
-    assert(v == 2.0^63)
+    assert(v == 2.0 ^ 63)
     assert(math.type(9223372036854775807) == "integer")
     assert(9223372036854775807 == maxint)
     assert(math.type(12345678901234567890123) == "float")
@@ -108,7 +107,7 @@ local function huge_decimal_strings_convert_to_float_through_tonumber_test()
     assert(wide == 123456789012345678901234567890)
     local just_over = tonumber("9223372036854775808")
     assert(math.type(just_over) == "float")
-    assert(just_over == 2.0^63)
+    assert(just_over == 2.0 ^ 63)
 end
 
 -- ============================================
@@ -117,18 +116,18 @@ end
 
 -- tonumber with base parses valid digits
 local tonumber_with_base_parses_valid_digits_cases = {
-    {"10", 2, 2},
-    {"1111111", 2, 127},
-    {"+10", 2, 2},
-    {"777", 8, 511},
-    {"ff", 16, 255},
-    {"FF", 16, 255},
-    {"-ff", 16, -255},
-    {"1e2", 16, 482},
-    {"z", 36, 35},
-    {"zz", 36, 1295},
-    {"10", 36, 36},
-    {" 42 ", 10, 42},
+    { "10", 2, 2 },
+    { "1111111", 2, 127 },
+    { "+10", 2, 2 },
+    { "777", 8, 511 },
+    { "ff", 16, 255 },
+    { "FF", 16, 255 },
+    { "-ff", 16, -255 },
+    { "1e2", 16, 482 },
+    { "z", 36, 35 },
+    { "zz", 36, 1295 },
+    { "10", 36, 36 },
+    { " 42 ", 10, 42 },
 }
 
 local function tonumber_with_base_parses_valid_digits_test(str, base, expected)
@@ -138,17 +137,17 @@ end
 
 -- tonumber with base returns nil for invalid input
 local tonumber_with_base_returns_nil_for_invalid_input_cases = {
-    {"2", 2},
-    {"z", 35},
-    {"g", 16},
-    {"zz", 10},
-    {"0x10", 16},
-    {"", 16},
-    {"   ", 8},
-    {"-", 10},
-    {"10.5", 10},
-    {"1e2", 10},
-    {"10\0", 10},
+    { "2", 2 },
+    { "z", 35 },
+    { "g", 16 },
+    { "zz", 10 },
+    { "0x10", 16 },
+    { "", 16 },
+    { "   ", 8 },
+    { "-", 10 },
+    { "10.5", 10 },
+    { "1e2", 10 },
+    { "10\0", 10 },
 }
 
 local function tonumber_with_base_returns_nil_for_invalid_input_test(str, base)
@@ -157,30 +156,40 @@ end
 
 -- tonumber with an out of range base raises
 local tonumber_with_an_out_of_range_base_raises_cases = {
-    {0},
-    {1},
-    {37},
-    {-16},
+    { 0 },
+    { 1 },
+    { 37 },
+    { -16 },
 }
 
 local function tonumber_with_an_out_of_range_base_raises_test(base)
-    raises(function() return tonumber("10", base) end, "base out of range")
+    raises(function()
+        return tonumber("10", base)
+    end, "base out of range")
 end
 
 -- tonumber with base requires a string subject
 local function tonumber_with_base_requires_a_string_subject_test()
-    raises(function() return tonumber(10, 16) end, "string expected, got number")
+    raises(function()
+        return tonumber(10, 16)
+    end, "string expected, got number")
 end
 
 -- tonumber with base rejects an enum subject
 local function tonumber_with_base_rejects_an_enum_subject_test()
     local e = enum red, green end
-    raises(function() return tonumber(e.red, 10) end, "string expected, got enum")
+
+    raises(function()
+        return tonumber(e.red, 10)
+    end, "string expected, got enum")
 end
 
 -- tonumber base must have an integer representation
 local function tonumber_base_must_have_an_integer_representation_test()
-    raises(function() return tonumber("10", 2.5) end, "no integer representation")
+    raises(function()
+        return tonumber("10", 2.5)
+    end, "no integer representation")
+
     assert(tonumber("10", 16.0) == 16)
 end
 
@@ -196,19 +205,23 @@ end
 
 -- tonumber accepts numerals with surrounding whitespace and prefixes
 local tonumber_accepts_numerals_with_surrounding_whitespace_and_prefixes_cases = {
-    {" 10 ", 10, "integer"},
-    {"\t10\n", 10, "integer"},
-    {"\f10\v", 10, "integer"},
-    {".5", 0.5, "float"},
-    {"5.", 5.0, "float"},
-    {"0x1p4", 16.0, "float"},
-    {"0x.8p1", 1.0, "float"},
-    {" -0x10 ", -16, "integer"},
-    {"-0", 0, "integer"},
-    {"0X10", 16, "integer"},
+    { " 10 ", 10, "integer" },
+    { "\t10\n", 10, "integer" },
+    { "\f10\v", 10, "integer" },
+    { ".5", 0.5, "float" },
+    { "5.", 5.0, "float" },
+    { "0x1p4", 16.0, "float" },
+    { "0x.8p1", 1.0, "float" },
+    { " -0x10 ", -16, "integer" },
+    { "-0", 0, "integer" },
+    { "0X10", 16, "integer" },
 }
 
-local function tonumber_accepts_numerals_with_surrounding_whitespace_and_prefixes_test(str, expected, ntype)
+local function tonumber_accepts_numerals_with_surrounding_whitespace_and_prefixes_test(
+    str,
+    expected,
+    ntype
+)
     local n = tonumber(str)
     assert(n == expected)
     assert(math.type(n) == ntype)
@@ -216,17 +229,17 @@ end
 
 -- tonumber returns nil for non-numerals
 local tonumber_returns_nil_for_non_numerals_cases = {
-    {"0x"},
-    {"10 x"},
-    {"- 10"},
-    {"1e"},
-    {"1e+"},
-    {"0b101"},
-    {"1_000"},
-    {"1,5"},
-    {"inf"},
-    {"nan"},
-    {"10\0"},
+    { "0x" },
+    { "10 x" },
+    { "- 10" },
+    { "1e" },
+    { "1e+" },
+    { "0b101" },
+    { "1_000" },
+    { "1,5" },
+    { "inf" },
+    { "nan" },
+    { "10\0" },
 }
 
 local function tonumber_returns_nil_for_non_numerals_test(str)
@@ -258,37 +271,50 @@ end
 
 -- string operands coerce in arithmetic with the numeral's own type
 local string_operands_coerce_in_arithmetic_with_the_numeral_s_own_type_cases = {
-    {"10" + 5, 15, "integer"},
-    {"0x10" + 0, 16, "integer"},
-    {"1e2" * 1, 100.0, "float"},
-    {" 0x10 " + 0, 16, "integer"},
-    {"0x1p4" + 0, 16.0, "float"},
-    {"10" + "20", 30, "integer"},
-    {"10" / "2", 5.0, "float"},
-    {"10" // "3", 3, "integer"},
-    {"3.5" % 2, 1.5, "float"},
-    {"2" ^ "3", 8.0, "float"},
+    { "10" + 5, 15, "integer" },
+    { "0x10" + 0, 16, "integer" },
+    { "1e2" * 1, 100.0, "float" },
+    { " 0x10 " + 0, 16, "integer" },
+    { "0x1p4" + 0, 16.0, "float" },
+    { "10" + "20", 30, "integer" },
+    { "10" / "2", 5.0, "float" },
+    { "10" // "3", 3, "integer" },
+    { "3.5" % 2, 1.5, "float" },
+    { "2" ^ "3", 8.0, "float" },
 }
 
-local function string_operands_coerce_in_arithmetic_with_the_numeral_s_own_type_test(value, expected, ntype)
+local function string_operands_coerce_in_arithmetic_with_the_numeral_s_own_type_test(
+    value,
+    expected,
+    ntype
+)
     assert(value == expected)
     assert(math.type(value) == ntype)
 end
 
 -- non-numeric string in arithmetic raises
 local function non_numeric_string_in_arithmetic_raises_test()
-    raises(function() return "a" + 1 end, "attempt to add a 'string' with a 'number'")
+    raises(function()
+        return "a" + 1
+    end, "attempt to add a 'string' with a 'number'")
 end
 
 -- relational comparison never coerces strings
 local function relational_comparison_never_coerces_strings_test()
-    raises(function() return "10" < 5 end, "attempt to compare string with number")
-    raises(function() return 5 < "10" end, "attempt to compare number with string")
+    raises(function()
+        return "10" < 5
+    end, "attempt to compare string with number")
+
+    raises(function()
+        return 5 < "10"
+    end, "attempt to compare number with string")
 end
 
 -- bitwise operators never coerce strings
 local function bitwise_operators_never_coerce_strings_test()
-    raises(function() return "10" & 1 end, "bitwise operation on a string value")
+    raises(function()
+        return "10" & 1
+    end, "bitwise operation on a string value")
 end
 
 -- equality never coerces between strings and numbers
@@ -358,9 +384,11 @@ local function minus_zero_as_a_table_key_aliases_the_integer_key_zero_test()
     t[-0.0] = "b"
     assert(t[0] == "b")
     local count = 0
+
     for _ in pairs(t) do
         count = count + 1
     end
+
     assert(count == 1)
     assert(math.type(next(t)) == "integer")
 end
@@ -373,7 +401,7 @@ end
 local function maxinteger_is_strictly_below_its_float_conversion_test()
     -- The float conversion of maxinteger rounds up to exactly 2^63.
     assert(maxint < maxint + 0.0)
-    assert(maxint + 0.0 == 2.0^63)
+    assert(maxint + 0.0 == 2.0 ^ 63)
     assert(not (maxint == maxint + 0.0))
 end
 
@@ -388,7 +416,7 @@ end
 local function mixed_comparison_near_2_63_is_exact_test()
     -- The largest double below 2^63 is 2^63 - 1024.
     assert(maxint > 9223372036854774784.0)
-    assert(2.0^63 > maxint)
+    assert(2.0 ^ 63 > maxint)
 end
 
 -- mixed comparison at the 2^53 float precision limit is exact
@@ -408,11 +436,11 @@ end
 
 -- math.tointeger converts exact float values
 local math_tointeger_converts_exact_float_values_cases = {
-    {3.0, 3},
-    {-3.0, -3},
-    {-0.0, 0},
-    {2.0^62, 4611686018427387904},
-    {-2.0^63, math.mininteger},
+    { 3.0, 3 },
+    { -3.0, -3 },
+    { -0.0, 0 },
+    { 2.0 ^ 62, 4611686018427387904 },
+    { -(2.0 ^ 63), math.mininteger },
 }
 
 local function math_tointeger_converts_exact_float_values_test(x, expected)
@@ -422,12 +450,12 @@ end
 
 -- math.tointeger returns nil for unconvertible values
 local math_tointeger_returns_nil_for_unconvertible_values_cases = {
-    {3.5},
-    {2.0^63},
-    {math.huge},
-    {-math.huge},
-    {0/0},
-    {true},
+    { 3.5 },
+    { 2.0 ^ 63 },
+    { math.huge },
+    { -math.huge },
+    { 0 / 0 },
+    { true },
 }
 
 local function math_tointeger_returns_nil_for_unconvertible_values_test(x)
@@ -442,6 +470,7 @@ local function math_tointeger_coerces_numeric_strings_on_the_fastcall_path_test(
     local function probe(x)
         return math.tointeger(x)
     end
+
     assert(probe("3") == 3)
     assert(probe("3.0") == 3)
 end
@@ -459,11 +488,11 @@ end
 
 -- math.type reports integer
 local math_type_reports_integer_cases = {
-    {0},
-    {maxint},
-    {minint},
-    {0xFF},
-    {1 << 62},
+    { 0 },
+    { maxint },
+    { minint },
+    { 0xFF },
+    { 1 << 62 },
 }
 
 local function math_type_reports_integer_test(v)
@@ -472,14 +501,14 @@ end
 
 -- math.type reports float
 local math_type_reports_float_cases = {
-    {0.0},
-    {-0.0},
-    {3.5},
-    {math.huge},
-    {0/0},
-    {1e999},
-    {0x1p4},
-    {maxint + 0.0},
+    { 0.0 },
+    { -0.0 },
+    { 3.5 },
+    { math.huge },
+    { 0 / 0 },
+    { 1e999 },
+    { 0x1p4 },
+    { maxint + 0.0 },
 }
 
 local function math_type_reports_float_test(v)
@@ -522,13 +551,13 @@ end
 
 -- floats round trip through tostring exactly
 local floats_round_trip_through_tostring_exactly_cases = {
-    {0.1},
-    {1/3},
-    {math.pi},
-    {5e-324},
-    {1.7976931348623157e308},
-    {0.30000000000000004},
-    {123.456},
+    { 0.1 },
+    { 1 / 3 },
+    { math.pi },
+    { 5e-324 },
+    { 1.7976931348623157e308 },
+    { 0.30000000000000004 },
+    { 123.456 },
 }
 
 local function floats_round_trip_through_tostring_exactly_test(f)
@@ -545,20 +574,20 @@ end
 
 -- float tostring formatting is pinned
 local float_tostring_formatting_is_pinned_cases = {
-    {1.0, "1.0"},
-    {100.0, "100.0"},
-    {0.5, "0.5"},
-    {0.1, "0.1"},
-    {1/3, "0.3333333333333333"},
-    {0.1 + 0.2, "0.30000000000000004"},
-    {2/3, "0.6666666666666666"},
-    {1e15, "1e+15"},
-    {2.0^53, "9007199254740992.0"},
-    {2.0^63, "9.223372036854776e+18"},
-    {math.pi, "3.141592653589793"},
-    {1e15 + 0.3, "1000000000000000.2"},
-    {math.huge, "inf"},
-    {-math.huge, "-inf"},
+    { 1.0, "1.0" },
+    { 100.0, "100.0" },
+    { 0.5, "0.5" },
+    { 0.1, "0.1" },
+    { 1 / 3, "0.3333333333333333" },
+    { 0.1 + 0.2, "0.30000000000000004" },
+    { 2 / 3, "0.6666666666666666" },
+    { 1e15, "1e+15" },
+    { 2.0 ^ 53, "9007199254740992.0" },
+    { 2.0 ^ 63, "9.223372036854776e+18" },
+    { math.pi, "3.141592653589793" },
+    { 1e15 + 0.3, "1000000000000000.2" },
+    { math.huge, "inf" },
+    { -math.huge, "-inf" },
 }
 
 local function float_tostring_formatting_is_pinned_test(f, expected)
@@ -585,24 +614,66 @@ end
 
 -- fractional float in a bitwise operator names the variable
 local fractional_float_in_a_bitwise_operator_names_the_variable_cases = {
-    {function(x) return x | 1 end},
-    {function(x) return x & 1 end},
-    {function(x) return x ~ 1 end},
-    {function(x) return x << 1 end},
-    {function(x) return x >> 1 end},
-    {function(x) return ~x end},
+    {
+        function(x)
+            return x | 1
+        end,
+    },
+    {
+        function(x)
+            return x & 1
+        end,
+    },
+    {
+        function(x)
+            return x ~ 1
+        end,
+    },
+    {
+        function(x)
+            return x << 1
+        end,
+    },
+    {
+        function(x)
+            return x >> 1
+        end,
+    },
+    {
+        function(x)
+            return ~x
+        end,
+    },
 }
 
 local function fractional_float_in_a_bitwise_operator_names_the_variable_test(op)
-    raises(function() return op(2.5) end, "number %(local 'x'%) has no integer representation")
+    raises(function()
+        return op(2.5)
+    end, "number %(local 'x'%) has no integer representation")
 end
 
 -- fractional float in stdlib integer arguments raises
 local fractional_float_in_stdlib_integer_arguments_raises_cases = {
-    {function() return string.rep("a", 2.5) end},
-    {function() return ("abc"):sub(1.5) end},
-    {function() return table.insert({}, 1.5, "v") end},
-    {function() return math.random(1.5) end},
+    {
+        function()
+            return string.rep("a", 2.5)
+        end,
+    },
+    {
+        function()
+            return ("abc"):sub(1.5)
+        end,
+    },
+    {
+        function()
+            return table.insert({}, 1.5, "v")
+        end,
+    },
+    {
+        function()
+            return math.random(1.5)
+        end,
+    },
 }
 
 local function fractional_float_in_stdlib_integer_arguments_raises_test(f)
@@ -622,11 +693,13 @@ end
 -- every float prints with the fewest digits from 14 up that read back
 local function floats_print_with_the_fewest_round_trip_digits_test()
     math.randomseed(7)
+
     for _ = 1, 2000 do
         local f = (math.random() - 0.5) * 10 ^ math.random(-30, 30)
         local s = tostring(f)
         assert(tonumber(s) == f, s)
         local digits = #(s:gsub("e.*", ""):gsub("%.0$", ""):gsub("[^%d]", ""):gsub("^0+", ""))
+
         if digits > 14 then
             assert(tonumber(string.format("%." .. (digits - 1) .. "g", f)) ~= f, s)
         end
@@ -653,6 +726,7 @@ local function decimal_zero_with_an_exponent_reads_back_test()
         assert(tostring(decimal(text)) == text, `$s printed as $text`)
         assert(decimal(text) == d)
     end
+
     assert(tostring(decimal("0e9")) == "0e+9")
     assert(tostring(decimal("1e9")) == "1000000000")
 end

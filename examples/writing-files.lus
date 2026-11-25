@@ -26,6 +26,7 @@ do
 end
 
 print(contents("journal.txt"))
+
 --> Monday: planted tomatoes
 --> Tuesday: watered 12 plants
 --> Wednesday: rain
@@ -42,6 +43,7 @@ end
 
 -- Many small values can be collected in a table and written with one call.
 local squares = {}
+
 for n = 1, 100 do
     squares[n] = n * n
 end
@@ -52,9 +54,11 @@ do
 end
 
 local lines = 0
+
 for _ in io.lines("squares.txt") do
     lines = lines + 1
 end
+
 print(`squares.txt has $lines lines`)  --> squares.txt has 100 lines
 
 fs.remove("journal.txt")

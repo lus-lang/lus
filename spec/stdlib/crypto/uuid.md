@@ -24,9 +24,9 @@ The following example checks the version digit of each kind and the order of two
 
 ```lus
 local id = crypto.uuid()
-print(#id, id:sub(15, 15))         --> 36  4
+print(#id, id:sub(15, 15))  --> 36  4
 local a, b = crypto.uuid(7), crypto.uuid(7)
-print(a:sub(15, 15), a < b)        --> 7  true
+print(a:sub(15, 15), a < b)  --> 7  true
 ```
 
 [`crypto.ulid`](/manual/api#crypto.ulid) returns a sortable identifier in a shorter text form.

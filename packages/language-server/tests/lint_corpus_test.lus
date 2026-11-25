@@ -10,13 +10,17 @@ pledge("load", "fs:read=" .. LANG_DIR .. "/*", "fs:read=" .. CORPUS, "fs:read=" 
 
 table.insert(package.searchers, 2, function(name)
     local rest = string.match(name, "^lus%-language%.(.+)$")
+
     if rest == nil then
         return nil
     end
+
     local path = package.searchpath(rest, LANG_DIR .. "/?.lus")
+
     if path == nil then
         return nil
     end
+
     return assert(loadfile(path)), path
 end)
 
@@ -26,64 +30,81 @@ local linting = require("lus-language.analysis.linting")
 
 -- The conformance files use the globals that `lus test` defines, and the linter must know them.
 local RUNNER_GLOBALS = {
-  raises = true, same = true, skip = true, snapshot = true, TEST_DIR = true,
+    raises = true,
+    same = true,
+    skip = true,
+    snapshot = true,
+    TEST_DIR = true,
 }
 
 local corpus_files = {}
+
 for _, name in ipairs(fs.list(CORPUS, "*_test.lus")) do
     corpus_files[#corpus_files + 1] = name
 end
+
 table.sort(corpus_files)
 
 -- Group: no false 'Undefined global' warnings
 
 local no_false_undefined_global_warnings_cases = {}
+
 for _, name in ipairs(corpus_files) do
-  no_false_undefined_global_warnings_cases[#no_false_undefined_global_warnings_cases + 1] = { name }
+    no_false_undefined_global_warnings_cases[#no_false_undefined_global_warnings_cases + 1] = {
+        name,
+    }
 end
 
 local function no_false_undefined_global_warnings_test(name)
-  local path = CORPUS .. "/" .. name
-  local f = assert(io.open(path, "r"))
-  local source = f:read("a")
-  f:close()
+    local path = CORPUS .. "/" .. name
+    local f = assert(io.open(path, "r"))
+    local source = f:read("a")
+    f:close()
 
-  local uri = "file:///lint-test/" .. name
-  document.open(uri, 1, source)
-  ast_mod.parse(uri)
-  local diagnostics = linting.compute(uri)
-  document.close(uri)
+    local uri = "file:///lint-test/" .. name
+    document.open(uri, 1, source)
+    ast_mod.parse(uri)
+    local diagnostics = linting.compute(uri)
+    document.close(uri)
 
-  -- Collect "Undefined global" warnings for the names the test runner defines
-  local false_positives = {}
-  for _, d in ipairs(diagnostics) do
-    local flagged = string.match(d.message, "^Undefined global '(.*)'$")
-    if flagged ~= nil and RUNNER_GLOBALS[flagged] then
-      false_positives[#false_positives + 1] = d.message
-          .. " (line " .. tostring(d.range.start.line + 1) .. ")"
+    -- Collect "Undefined global" warnings for the names the test runner defines
+    local false_positives = {}
+
+    for _, d in ipairs(diagnostics) do
+        local flagged = string.match(d.message, "^Undefined global '(.*)'$")
+
+        if flagged ~= nil and RUNNER_GLOBALS[flagged] then
+            false_positives[#false_positives + 1] = d.message
+                .. " (line "
+                .. tostring(d.range.start.line + 1)
+                .. ")"
+        end
     end
-  end
 
-  assert(#false_positives == 0)
+    assert(#false_positives == 0)
 end
 
 -- Group: the runner globals are defined only in test files
 
 local function runner_globals_are_undefined_outside_test_files_test()
-  local source = "local ok = raises(function() end)\nprint(ok, TEST_DIR)\n"
-  local counts = {}
-  for _, uri in ipairs({ "file:///lint-test/plain.lus", "file:///lint-test/plain_test.lus" }) do
-    document.open(uri, 1, source)
-    ast_mod.parse(uri)
-    local n = 0
-    for _, d in ipairs(linting.compute(uri)) do
-      if string.find(d.message, "Undefined global") then
-        n = n + 1
-      end
+    local source = "local ok = raises(function() end)\nprint(ok, TEST_DIR)\n"
+    local counts = {}
+
+    for _, uri in ipairs({ "file:///lint-test/plain.lus", "file:///lint-test/plain_test.lus" }) do
+        document.open(uri, 1, source)
+        ast_mod.parse(uri)
+        local n = 0
+
+        for _, d in ipairs(linting.compute(uri)) do
+            if string.find(d.message, "Undefined global") then
+                n = n + 1
+            end
+        end
+
+        document.close(uri)
+        counts[#counts + 1] = n
     end
-    document.close(uri)
-    counts[#counts + 1] = n
-  end
-  assert(counts[1] == 2)
-  assert(counts[2] == 0)
+
+    assert(counts[1] == 2)
+    assert(counts[2] == 0)
 end

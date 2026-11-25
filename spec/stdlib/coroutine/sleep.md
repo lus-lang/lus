@@ -25,8 +25,8 @@ The following example measures a sleep of 50 milliseconds.
 
 ```lus
 local start = time.monotonic()
-print(coroutine.resume(coroutine.sleep(0.05)))            --> true
-print((time.monotonic() - start):seconds() >= 0.05)       --> true
+print(coroutine.resume(coroutine.sleep(0.05)))  --> true
+print((time.monotonic() - start):seconds() >= 0.05)  --> true
 ```
 
 [`coroutine.detach`](/manual/api#coroutine.detach) runs tasks that sleep side by side.

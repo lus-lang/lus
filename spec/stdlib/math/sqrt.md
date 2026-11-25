@@ -21,10 +21,10 @@ The result is a non-negative float. A negative `x` returns NaN, and `math.huge` 
 An argument that is not a number raises `bad argument #1 to 'math.sqrt' (number expected, got nil)` with its type.
 
 ```lus
-print(math.sqrt(16))       --> 4.0
-print(math.sqrt(2))        --> 1.4142135623730951
-print(math.sqrt(2n^200))   --> 1.2676506002282294e+30
-print(math.sqrt(-1))       --> nan
+print(math.sqrt(16))  --> 4.0
+print(math.sqrt(2))  --> 1.4142135623730951
+print(math.sqrt(2n ^ 200))  --> 1.2676506002282294e+30
+print(math.sqrt(-1))  --> nan
 ```
 
 A bigint argument loses the digits that a float cannot hold, so the root of a large perfect square may differ from the exact root.

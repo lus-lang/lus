@@ -7,7 +7,8 @@
 --
 -- Usage: LUS_JIT=off lus stress.lus [ROUNDS]
 
-global arg, assert, collectgarbage, coroutine, fs, io, ipairs, os, pledge, print, string, table, tonumber, worker
+global arg, assert, collectgarbage, coroutine, fs, io, ipairs, os, pledge, print, string, table,
+    tonumber, worker
 
 pledge("load", "fs")
 
@@ -41,12 +42,16 @@ f:write(body)
 f:close()
 
 local workers = {}
-for w = 1, WORKERS do workers[w] = worker.create(path, ROUNDS) end
+
+for w = 1, WORKERS do
+    workers[w] = worker.create(path, ROUNDS)
+end
 
 -- The creator answers in coroutines too, so its waits go through the
 -- scheduler while it collects.
 local checked = 0
 local tasks = {}
+
 for w, handle in ipairs(workers) do
     tasks[w] = coroutine.detach(coroutine.create(function()
         for i = 1, ROUNDS do
@@ -55,18 +60,26 @@ for w, handle in ipairs(workers) do
             assert(m.n == i * 2 and #m.text == i % 64 and m.list[2] == i + 1)
             checked = checked + 1
         end
+
         assert(worker.receive(handle) == "finished")
     end))
 end
+
 local junk = {}
+
 for _, t in ipairs(tasks) do
     while coroutine.status(t) ~= "dead" do
-        for i = 1, 64 do junk[i] = { i } end
+        for i = 1, 64 do
+            junk[i] = { i }
+        end
+
         collectgarbage("step")
         coroutine.resume(coroutine.detach(coroutine.create(coroutine.yield)))
     end
+
     assert(coroutine.resume(t))
 end
+
 fs.remove(path)
 assert(checked == WORKERS * ROUNDS)
 print(string.format("%d workers, %d messages each way, all checked", WORKERS, checked))

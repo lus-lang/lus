@@ -12,7 +12,11 @@ local MARGIN = 0.2
 
 local function readFile(path)
     local f = io.open(path, "r")
-    if not f then return nil end
+
+    if not f then
+        return nil
+    end
+
     local s = f:read("a")
     f:close()
     return s
@@ -22,6 +26,7 @@ end
 local function groupsOf(report)
     local out = {}
     local inside = false
+
     for line in report:gmatch("[^\n]*") do
         if line:find("^code that every program runs:") then
             inside = true
@@ -33,6 +38,7 @@ local function groupsOf(report)
             end
         end
     end
+
     return out
 end
 
@@ -43,8 +49,16 @@ local groups = groupsOf(report)
 assert(#groups > 0, "the report has no groups")
 
 if mode == "--write" then
-    local lines = { "# The share of branches covered in each group of the code that every", "# program runs. `mise run coverage:ratchet` writes this file.", "" }
-    for _, g in ipairs(groups) do lines[#lines + 1] = string.format("%s %.1f", g.name, g.pct) end
+    local lines = {
+        "# The share of branches covered in each group of the code that every",
+        "# program runs. `mise run coverage:ratchet` writes this file.",
+        "",
+    }
+
+    for _, g in ipairs(groups) do
+        lines[#lines + 1] = string.format("%s %.1f", g.name, g.pct)
+    end
+
     local f = assert(io.open(basePath, "w"))
     f:write(table.concat(lines, "\n"), "\n")
     f:close()
@@ -53,13 +67,18 @@ if mode == "--write" then
 end
 
 local base = {}
+
 for line in (assert(readFile(basePath), "cannot read " .. basePath)):gmatch("[^\n]+") do
-    if name, pct = line:match("^([^#].-)%s+(%d+%.%d)$") then base[name] = tonumber(pct) end
+    if name, pct = line:match("^([^#].-)%s+(%d+%.%d)$") then
+        base[name] = tonumber(pct)
+    end
 end
 
 local failed = false
+
 for _, g in ipairs(groups) do
     local b = base[g.name]
+
     if not b then
         print(string.format("%-10s %5.1f%%  no baseline", g.name, g.pct))
     elseif g.pct < b - MARGIN then
@@ -69,7 +88,10 @@ for _, g in ipairs(groups) do
         print(string.format("%-10s %5.1f%%  baseline %.1f%%", g.name, g.pct, b))
     end
 end
+
 if failed then
-    print("coverage fell below the baseline: cover the new code, or explain the drop in a commit that lowers tests/coverage/baseline.txt")
+    print(
+        "coverage fell below the baseline: cover the new code, or explain the drop in a commit that lowers tests/coverage/baseline.txt"
+    )
     os.exit(1)
 end

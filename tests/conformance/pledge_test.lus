@@ -15,7 +15,10 @@
 local function isolated(body)
     local co = coroutine.create(body)
     local ok, err = coroutine.resume(co)
-    if not ok then error(err, 0) end
+
+    if not ok then
+        error(err, 0)
+    end
 end
 
 local BASE_A = { "load", "fs:read=./tree/*" }
@@ -43,9 +46,18 @@ end
 -- The files the permission tests read are created in the temporary working directory.
 isolated(function()
     pledge("fs:write=./*")
-    for _, dir in ipairs({ "tree", "tree/suite", "lib", "lib/src", "tree/tmp-pledge2", "tree/tmp-pledge2x" }) do
+
+    for _, dir in ipairs({
+        "tree",
+        "tree/suite",
+        "lib",
+        "lib/src",
+        "tree/tmp-pledge2",
+        "tree/tmp-pledge2x",
+    }) do
         fs.createdirectory(dir)
     end
+
     local files = {
         ["README.md"] = "readme\n",
         ["tree/README.md"] = "tests readme\n",
@@ -54,6 +66,7 @@ isolated(function()
         ["lib/src/api.h"] = "/* header */\n",
         ["lib/src/api.c"] = "/* source */\n",
     }
+
     for name, content in pairs(files) do
         local f = assert(io.open(name, "w"))
         f:write(content)
@@ -145,11 +158,21 @@ local function env_read_and_env_write_are_separate_test()
     with_baseline(BASE_A, function()
         pledge("env:read=PATH")
         assert(type(os.getenv("PATH")) == "string")
-        raises(function() os.setenv("PATH", "x") end, 'permission "env:write" denied')
+
+        raises(function()
+            os.setenv("PATH", "x")
+        end, 'permission "env:write" denied')
+
         pledge("env:write=LUS_PLEDGE_*")
         os.setenv("LUS_PLEDGE_A", "1")
-        raises(function() os.getenv("LUS_PLEDGE_A") end, 'permission "env:read" denied')
-        raises(function() os.setenv("LUS_PLEDGE", "1") end, 'permission "env:write" denied')
+
+        raises(function()
+            os.getenv("LUS_PLEDGE_A")
+        end, 'permission "env:read" denied')
+
+        raises(function()
+            os.setenv("LUS_PLEDGE", "1")
+        end, 'permission "env:write" denied')
     end)
 end
 
@@ -158,7 +181,10 @@ local function env_grants_reading_and_writing_test()
         pledge("env=LUS_PLEDGE_*")
         os.setenv("LUS_PLEDGE_B", "2")
         assert(os.getenv("LUS_PLEDGE_B") == "2")
-        raises(function() os.setenv("PATH", "x") end, 'permission "env:write" denied')
+
+        raises(function()
+            os.setenv("PATH", "x")
+        end, 'permission "env:write" denied')
     end)
 end
 
@@ -166,7 +192,10 @@ local function rejecting_env_write_keeps_reading_test()
     with_baseline(BASE_A, function()
         pledge("env", "~env:write")
         assert(type(os.getenv("PATH")) == "string")
-        raises(function() os.setenv("LUS_PLEDGE_C", "3") end, 'permission "env:write" denied')
+
+        raises(function()
+            os.setenv("LUS_PLEDGE_C", "3")
+        end, 'permission "env:write" denied')
     end)
 end
 
@@ -209,6 +238,7 @@ end
 local function file_access_within_permitted_path_succeeds_test()
     with_baseline(BASE_A, function()
         local f = io.open("tree/suite/enum.lus", "r")
+
         if f then
             local content = f:read(100)
             f:close()
@@ -228,7 +258,7 @@ end
 
 local function load_with_custom_environment_test()
     with_baseline(BASE_A, function()
-        local env = {x = 10}
+        local env = { x = 10 }
         local fn = load("return x * 2", "test", "t", env)
         assert(fn ~= nil, "load with env should work")
         assert(fn() == 20, "should use provided environment")
@@ -321,9 +351,11 @@ local function test_file_can_use_all_runner_features_test()
         -- denial raised from C, so a broken helper or a vanished denial
         -- both fail here
         assert(type(pledge) == "function")
+
         raises(function()
             io.open("/etc/passwd", "r")
         end, "denied")
+
         local ok, err = catch io.open("/etc/passwd", "r")
         assert(not ok)
         assert(string.find(tostring(err), "fs:read"))
@@ -372,6 +404,7 @@ local function network_host_port_pledges_match_the_checked_port_test()
     with_baseline(BASE_A, function()
         pledge("network:tcp=127.0.0.1:1")
         local ok, sock_or_err, failure = catch network.tcp.connect("127.0.0.1", 1)
+
         if ok and sock_or_err then
             sock_or_err:close()
         elseif ok then
@@ -460,6 +493,7 @@ local function file_reading_still_works_after_seal_with_granted_permission_test(
     with_baseline(BASE_A, function()
         pledge("seal")
         local f = io.open("tree/runner.lus", "r")
+
         if f then
             local content = f:read(10)
             f:close()
@@ -467,7 +501,6 @@ local function file_reading_still_works_after_seal_with_granted_permission_test(
         end
     end)
 end
-
 
 --[[
     In-process pledge semantics, second suite.
@@ -496,40 +529,47 @@ end
 -- Each malformed permission string must raise a specific, informative error
 -- rather than silently succeeding or crashing the parser.
 local malformed_permission_string_raises_cases = {
-    {"", "unknown permission"},
-    {"notapermission", "unknown permission"},
-    {"net", "unknown permission"},
-    {":read", "unknown permission"},
-    {"=value", "unknown permission"},
-    {"fs:", "fs subpermission"},
-    {"fs:bogus", "fs subpermission"},
-    {"env:bogus", "env subpermission"},
+    { "", "unknown permission" },
+    { "notapermission", "unknown permission" },
+    { "net", "unknown permission" },
+    { ":read", "unknown permission" },
+    { "=value", "unknown permission" },
+    { "fs:", "fs subpermission" },
+    { "fs:bogus", "fs subpermission" },
+    { "env:bogus", "env subpermission" },
 }
 
 local function malformed_permission_string_raises_test(perm, pattern)
     with_baseline(BASE_B, function()
-        raises(function() pledge(perm) end, pattern)
+        raises(function()
+            pledge(perm)
+        end, pattern)
     end)
 end
 
 -- The fs granter refuses an unanchored wildcard because "*" spans path
 -- separators and would otherwise match files anywhere on the disk.
 local unanchored_fs_wildcard_pattern_is_refused_cases = {
-    {"fs:read=*.pem"},
-    {"fs:read=?secret"},
-    {"fs:write=*"},
+    { "fs:read=*.pem" },
+    { "fs:read=?secret" },
+    { "fs:write=*" },
 }
 
 local function unanchored_fs_wildcard_pattern_is_refused_test(perm)
     with_baseline(BASE_B, function()
-        raises(function() pledge(perm) end, "absolute path")
+        raises(function()
+            pledge(perm)
+        end, "absolute path")
     end)
 end
 
 local function overlong_permission_name_is_refused_test()
     with_baseline(BASE_B, function()
         local huge = string.rep("a", 300)
-        raises(function() pledge(huge) end, "too long")
+
+        raises(function()
+            pledge(huge)
+        end, "too long")
     end)
 end
 
@@ -537,26 +577,32 @@ end
 -- so it surfaces as an unknown permission rather than a type error.
 local function numeric_argument_is_coerced_to_a_string_then_rejected_as_unknown_test()
     with_baseline(BASE_B, function()
-        raises(function() pledge(42) end, "unknown permission")
+        raises(function()
+            pledge(42)
+        end, "unknown permission")
     end)
 end
 
 -- A value that cannot be coerced to a string must raise a type error and must
 -- not corrupt the store or crash.
 local non_coercible_argument_raises_cases = {
-    {"table", {}},
-    {"boolean", true},
+    { "table", {} },
+    { "boolean", true },
 }
 
 local function non_coercible_argument_raises_test(_, badarg)
     with_baseline(BASE_B, function()
-        raises(function() pledge(badarg) end)
+        raises(function()
+            pledge(badarg)
+        end)
     end)
 end
 
 local function a_nil_argument_raises_test()
     with_baseline(BASE_B, function()
-        raises(function() pledge(nil) end)
+        raises(function()
+            pledge(nil)
+        end)
     end)
 end
 
@@ -568,7 +614,9 @@ end
 
 local function pledge_all_always_raises_when_called_from_a_script_test()
     with_baseline(BASE_B, function()
-        raises(function() pledge("all") end, "cannot be requested from scripts")
+        raises(function()
+            pledge("all")
+        end, "cannot be requested from scripts")
     end)
 end
 
@@ -589,7 +637,10 @@ end
 local function granting_a_rejected_permission_raises_was_rejected_test()
     with_baseline(BASE_B, function()
         pledge("~exec")
-        raises(function() pledge("exec") end, "was rejected")
+
+        raises(function()
+            pledge("exec")
+        end, "was rejected")
     end)
 end
 
@@ -608,7 +659,10 @@ end
 local function re_granting_the_rejected_network_base_raises_was_rejected_test()
     with_baseline(BASE_B, function()
         pledge("~network")
-        raises(function() pledge("network") end, "was rejected")
+
+        raises(function()
+            pledge("network")
+        end, "was rejected")
     end)
 end
 
@@ -616,7 +670,10 @@ end
 local function network_use_is_denied_after_the_base_is_rejected_test()
     with_baseline(BASE_B, function()
         pledge("~network")
-        raises(function() network.tcp.connect("127.0.0.1", 1) end, "denied")
+
+        raises(function()
+            network.tcp.connect("127.0.0.1", 1)
+        end, "denied")
     end)
 end
 
@@ -731,6 +788,7 @@ local function a_granted_symbolic_link_stays_bound_to_its_original_target_test()
         second:close()
         catch fs.remove(link)
         local linked = catch fs.createlink(link, original)
+
         if linked then
             assert(pledge("fs:read=" .. link) == true)
             local readable = io.open(link, "r")
@@ -738,9 +796,14 @@ local function a_granted_symbolic_link_stays_bound_to_its_original_target_test()
             readable:close()
             fs.remove(link)
             fs.createlink(link, outside)
-            raises(function() io.open(link, "r") end, "denied")
+
+            raises(function()
+                io.open(link, "r")
+            end, "denied")
+
             fs.remove(link)
         end
+
         fs.remove(original)
         fs.remove(outside)
     end)
@@ -763,7 +826,9 @@ end
 
 local function valueless_re_pledge_does_not_grant_an_out_of_scope_read_test()
     with_baseline(BASE_B, function()
-        raises(function() io.open("/etc/hostname", "r") end, "denied")
+        raises(function()
+            io.open("/etc/hostname", "r")
+        end, "denied")
     end)
 end
 
@@ -785,7 +850,9 @@ end
 
 local function empty_value_re_pledge_still_denies_an_out_of_scope_read_test()
     with_baseline(BASE_B, function()
-        raises(function() io.open("/etc/passwd", "r") end, "denied")
+        raises(function()
+            io.open("/etc/passwd", "r")
+        end, "denied")
     end)
 end
 
@@ -806,14 +873,16 @@ end
 
 -- Reading any other variable is denied because the pledge is name-scoped.
 local reading_an_unpledged_env_variable_is_denied_cases = {
-    {"LUS_PLEDGE2_SECRET"},
-    {"HOME"},
-    {"PATH"},
+    { "LUS_PLEDGE2_SECRET" },
+    { "HOME" },
+    { "PATH" },
 }
 
 local function reading_an_unpledged_env_variable_is_denied_test(name)
     with_baseline(BASE_B, function()
-        raises(function() os.getenv(name) end, "denied")
+        raises(function()
+            os.getenv(name)
+        end, "denied")
     end)
 end
 
@@ -894,14 +963,20 @@ end
 local function an_out_of_scope_read_stays_denied_after_seal_test()
     with_baseline(BASE_B, function()
         pledge("seal")
-        raises(function() io.open("/etc/hostname", "r") end, "denied")
+
+        raises(function()
+            io.open("/etc/hostname", "r")
+        end, "denied")
     end)
 end
 
 local function network_stays_denied_after_seal_test()
     with_baseline(BASE_B, function()
         pledge("seal")
-        raises(function() network.tcp.connect("127.0.0.1", 1) end, "denied")
+
+        raises(function()
+            network.tcp.connect("127.0.0.1", 1)
+        end, "denied")
     end)
 end
 
@@ -944,6 +1019,7 @@ local function grant_order_test(first, second)
                 assert(pledge(first))
                 assert(pledge(second))
             end
+
             local ok, err = catch os.getenv("LUS_PLEDGE_ORDER_X")
             assert(ok, err)
         end)
@@ -956,10 +1032,17 @@ local function values_add_up_across_parts_test()
         pledge("env=LUS_PLEDGE_BASE_*", "env:read=LUS_PLEDGE_PART_*")
         assert(catch os.getenv("LUS_PLEDGE_BASE_X"))
         assert(catch os.getenv("LUS_PLEDGE_PART_X"))
-        raises(function() os.getenv("LUS_PLEDGE_OTHER_X") end, 'permission "env:read" denied')
+
+        raises(function()
+            os.getenv("LUS_PLEDGE_OTHER_X")
+        end, 'permission "env:read" denied')
+
         -- The base value also covers the other part.
         assert(catch os.setenv("LUS_PLEDGE_BASE_X", "1"))
-        raises(function() os.setenv("LUS_PLEDGE_PART_X", "1") end, 'permission "env:write" denied')
+
+        raises(function()
+            os.setenv("LUS_PLEDGE_PART_X", "1")
+        end, 'permission "env:write" denied')
     end)
 end
 
@@ -977,7 +1060,11 @@ end
 local function rejection_narrows_a_bare_grant_test()
     isolated(function()
         pledge("env", "env:read=OTHER_*", "~env:read")
-        raises(function() os.getenv("LUS_PLEDGE_ORDER_X") end, 'permission "env:read" denied')
+
+        raises(function()
+            os.getenv("LUS_PLEDGE_ORDER_X")
+        end, 'permission "env:read" denied')
+
         assert(catch os.setenv("LUS_PLEDGE_ORDER_X", "1"))
     end)
 end

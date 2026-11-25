@@ -21,11 +21,11 @@ If the metatable has a `__metatable` field, `getmetatable` returns the value of 
 ```lus
 local mt = {}
 local t = setmetatable({}, mt)
-print(getmetatable(t) == mt, getmetatable({}))   --> true  nil
-print(getmetatable("").__index == string)        --> true
+print(getmetatable(t) == mt, getmetatable({}))  --> true  nil
+print(getmetatable("").__index == string)  --> true
 
 mt.__metatable = "locked"
-print(getmetatable(t))                           --> locked
+print(getmetatable(t))  --> locked
 ```
 
 A `__metatable` field also makes [`setmetatable`](/manual/api#setmetatable) refuse to change the metatable. [Metatables and metamethods](/manual/guide#metatables-and-objects) in the guide lists the metamethods.

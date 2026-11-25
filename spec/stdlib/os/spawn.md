@@ -45,14 +45,14 @@ The following example sends text through `sort` and reads the result.
 
 ```lus
 pledge("exec=sort")
-local p <close> = os.spawn({"sort"}, {stdin = "pipe", stdout = "pipe"})
+local p <close> = os.spawn({ "sort" }, { stdin = "pipe", stdout = "pipe" })
 p.stdin:write("pear\napple\nfig\n")
 p.stdin:close()
 print(p.stdout:read("a"))
 --> apple
 --> fig
 --> pear
-print(coroutine.resume(p.exit))   --> true  true  exit  0
+print(coroutine.resume(p.exit))  --> true  true  exit  0
 ```
 
 Two pipes that both fill can hold a child and the program in a deadlock when one thread reads them in turn. A detached coroutine for each pipe avoids that, as the following POSIX example shows with a child that writes to both streams.

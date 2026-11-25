@@ -21,18 +21,27 @@
 --
 -- BIN is a runtime built with `-Dfail-io=true`.
 
-global arg, assert, error, fs, io, ipairs, math, os, package, pairs, pledge, print, string, table, tonumber, tostring
+global arg, assert, error, fs, io, ipairs, math, os, package, pairs, pledge, print, string, table,
+    tonumber, tostring
 
 pledge("exec", "fs", "env")
 
 local opts = { lus = "runtime/zig-out-io/bin/lus", timeout = 30 }
+
 do
     local i = 1
+
     while i <= #arg do
         local a, v = arg[i], arg[i + 1]
-        if a == "--lus" then opts.lus = v
-        elseif a == "--timeout" then opts.timeout = tonumber(v)
-        else error("unknown option " .. a) end
+
+        if a == "--lus" then
+            opts.lus = v
+        elseif a == "--timeout" then
+            opts.timeout = tonumber(v)
+        else
+            error("unknown option " .. a)
+        end
+
         i = i + 2
     end
 end
@@ -114,6 +123,7 @@ end
 local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-clock-faults")
 local _ = catch fs.remove(dir, true)
 fs.createdirectory(dir, true)
+
 for name, text in pairs({ ["dst.lus"] = DST, ["jumps.lus"] = JUMPS, ["empty.lus"] = "" }) do
     local f = assert(io.open(fs.path.join(dir, name), "w"))
     f:write(text)
@@ -126,16 +136,29 @@ end
 
 local function run(spec, name, zone)
     zone = zone or "America/New_York"
-    local cmd = string.format("cd %s && TZ=%s LUS_CLOCK=%s perl -e 'alarm %d; exec @ARGV' %s %s %s 2>&1",
-        quote(dir), zone, spec, opts.timeout, quote(fs.path.join(os.getenv("PWD"), opts.lus)), name, zone)
+    local cmd = string.format(
+        "cd %s && TZ=%s LUS_CLOCK=%s perl -e 'alarm %d; exec @ARGV' %s %s %s 2>&1",
+        quote(dir),
+        zone,
+        spec,
+        opts.timeout,
+        quote(fs.path.join(os.getenv("PWD"), opts.lus)),
+        name,
+        zone
+    )
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     local _, _, code = p:close()
-    if code ~= 0 then error(string.format("%s exited with %s: %s", name, tostring(code), out)) end
+
+    if code ~= 0 then
+        error(string.format("%s exited with %s: %s", name, tostring(code), out))
+    end
+
     return out
 end
 
 local problems = {}
+
 local function problem(fmt, ...)
     problems[#problems + 1] = string.format(fmt, ...)
 end
@@ -147,30 +170,83 @@ local function crossing(zone, at, before, after, hour_after)
     local label = string.format("%s at %d", zone, at)
     local out = run("1:=" .. at, "dst.lus", zone)
     local seen_before, seen_after, readings = false, false, 0
-    for epoch_text, elapsed_text, iso, offset_text, same, local_time, resolved_text in out:gmatch("reading (%d+) ([%d.]+) (%S+) (%-?%d+) (%a+) (%S+) (%d+)") do
+
+    for epoch_text, elapsed_text, iso, offset_text, same, local_time, resolved_text in out:gmatch(
+        "reading (%d+) ([%d.]+) (%S+) (%-?%d+) (%a+) (%S+) (%d+)"
+    ) do
         readings = readings + 1
-        local epoch, elapsed, offset, resolved = tonumber(epoch_text), tonumber(elapsed_text), tonumber(offset_text), tonumber(resolved_text)
+        local epoch, elapsed, offset, resolved = tonumber(epoch_text), tonumber(elapsed_text), tonumber(
+            offset_text
+        ), tonumber(resolved_text)
         -- After the end of daylight saving the wall clock repeats the
         -- hour it just showed, and its fields resolve to the earlier pass.
         local expect_resolved = epoch
-        if offset == after and before > after then expect_resolved = epoch - (before - after) end
-        if resolved ~= expect_resolved then problem("%s: the fields of %s resolve to %d, expected %d", label, iso, resolved, expect_resolved) end
+
+        if offset == after and before > after then
+            expect_resolved = epoch - (before - after)
+        end
+
+        if resolved ~= expect_resolved then
+            problem(
+                "%s: the fields of %s resolve to %d, expected %d",
+                label,
+                iso,
+                resolved,
+                expect_resolved
+            )
+        end
+
         -- The scripted clock runs with the real one from its first read.
-        if math.abs(epoch - at - elapsed) > 1.5 then problem("%s: reading %d is %d seconds after the start, after %.3f seconds", label, epoch, epoch - at, elapsed) end
-        if same ~= "true" then problem("%s: %s does not turn back into its instant", label, iso) end
+        if math.abs(epoch - at - elapsed) > 1.5 then
+            problem(
+                "%s: reading %d is %d seconds after the start, after %.3f seconds",
+                label,
+                epoch,
+                epoch - at,
+                elapsed
+            )
+        end
+
+        if same ~= "true" then
+            problem("%s: %s does not turn back into its instant", label, iso)
+        end
+
         local want = epoch < at + 2 and before or after
-        if offset ~= want then problem("%s: %s has offset %d, expected %d", label, iso, offset, want) end
-        if offset == before then seen_before = true else seen_after = true end
+
+        if offset ~= want then
+            problem("%s: %s has offset %d, expected %d", label, iso, offset, want)
+        end
+
+        if offset == before then
+            seen_before = true
+        else
+            seen_after = true
+        end
+
         local hour = tonumber(iso:sub(12, 13))
-        if offset == after and hour ~= hour_after then problem("%s: %s has hour %d after the change", label, iso, hour) end
-        if local_time:sub(1, 5) ~= iso:sub(12, 16) then problem("%s: os.date shows %s at %s", label, local_time, iso) end
+
+        if offset == after and hour ~= hour_after then
+            problem("%s: %s has hour %d after the change", label, iso, hour)
+        end
+
+        if local_time:sub(1, 5) ~= iso:sub(12, 16) then
+            problem("%s: os.date shows %s at %s", label, local_time, iso)
+        end
     end
-    if readings == 0 then problem("%s: no readings: %s", label, out) end
-    if not (seen_before and seen_after) then problem("%s: the readings do not cross the change", label) end
+
+    if readings == 0 then
+        problem("%s: no readings: %s", label, out)
+    end
+
+    if not (seen_before and seen_after) then
+        problem("%s: the readings do not cross the change", label)
+    end
+
     return readings
 end
 
 local readings = 0
+
 for _, c in ipairs(CROSSINGS) do
     readings = readings + crossing(c[1], c[2], c[3], c[4], c[5])
 end
@@ -182,29 +258,67 @@ local back = startup + 2 * 2 + 1
 local forward = startup + 2 * 4 + 1
 local out = run(string.format("1:=%d,%d:-3600,%d:+86400", BASE, back, forward), "jumps.lus")
 local loops = {}
+
 for i, now, secs, mono in out:gmatch("loop (%d+) (%d+) (%d+) (%a+)") do
     loops[tonumber(i)] = { now = tonumber(now), secs = tonumber(secs), mono = mono }
 end
+
 local expect = { 0, 0, -3600, -3600, 82800, 82800 }
+
 for i = 1, 6 do
     local l = loops[i]
+
     if not l then
         problem("jumps: loop %d did not run: %s", i, out)
     else
-        if math.abs(l.now - BASE - expect[i]) > 2 then problem("jumps: time.now in loop %d is %d seconds from the base, expected %d", i, l.now - BASE, expect[i]) end
-        if math.abs(l.secs - l.now) > 1 then problem("jumps: os.time in loop %d is %d, time.now %d", i, l.secs, l.now) end
-        if l.mono ~= "true" then problem("jumps: time.monotonic decreased in loop %d", i) end
+        if math.abs(l.now - BASE - expect[i]) > 2 then
+            problem(
+                "jumps: time.now in loop %d is %d seconds from the base, expected %d",
+                i,
+                l.now - BASE,
+                expect[i]
+            )
+        end
+
+        if math.abs(l.secs - l.now) > 1 then
+            problem("jumps: os.time in loop %d is %d, time.now %d", i, l.secs, l.now)
+        end
+
+        if l.mono ~= "true" then
+            problem("jumps: time.monotonic decreased in loop %d", i)
+        end
     end
 end
+
 local what, waited = out:match("timeout (%S+) ([%d.]+)")
 waited = tonumber(waited)
+
 -- A timer on the monotonic clock lasts 0.2 seconds whatever the wall clock
 -- does. A timer on the wall clock would end at once after the jump
 -- forward or wait an hour after the jump back, which the bounds catch,
 -- while a loaded runner may run a little late.
-if what ~= "receive" or not waited or waited < 0.15 or waited > 5 then problem("jumps: the timeout of 0.2 seconds ended with %s after %s seconds", tostring(what), tostring(waited)) end
+if what ~= "receive" or not waited or waited < 0.15 or waited > 5 then
+    problem(
+        "jumps: the timeout of 0.2 seconds ended with %s after %s seconds",
+        tostring(what),
+        tostring(waited)
+    )
+end
 
 fs.remove(dir, true)
-print(string.format("%d crossings with %d readings, 6 loops with 2 jumps, %d problems", #CROSSINGS, readings, #problems))
-for _, p in ipairs(problems) do print("  " .. p) end
-if #problems > 0 then os.exit(1) end
+print(
+    string.format(
+        "%d crossings with %d readings, 6 loops with 2 jumps, %d problems",
+        #CROSSINGS,
+        readings,
+        #problems
+    )
+)
+
+for _, p in ipairs(problems) do
+    print("  " .. p)
+end
+
+if #problems > 0 then
+    os.exit(1)
+end

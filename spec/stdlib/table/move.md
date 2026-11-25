@@ -29,10 +29,10 @@ The result is `a2`. The copy handles overlapping ranges in one table correctly, 
 A missing position raises a type error such as `bad argument #4 to 'move' (number expected, got no value)`. A range of more elements than an integer can count raises `too many elements to move`, and a destination that would pass `math.maxinteger` raises `destination wrap around`.
 
 ```lus
-local a = {1, 2, 3, 4, 5}
+local a = { 1, 2, 3, 4, 5 }
 table.move(a, 1, 3, 3)
-print(table.concat(a, ","))   --> 1,2,1,2,3
-local copy = table.move({1, 2, 3}, 1, 3, 1, {})
+print(table.concat(a, ","))  --> 1,2,1,2,3
+local copy = table.move({ 1, 2, 3 }, 1, 3, 1, {})
 print(table.concat(copy, ","))  --> 1,2,3
 ```
 

@@ -43,7 +43,10 @@ end
 ]]
 
 local function run_tests(options)
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local f = assert(io.open("cases.lus", "w"))
     f:write(CASES)
     f:close()
@@ -106,14 +109,23 @@ end
 local function json_records_carry_file_line_and_duration_test()
     local report = run_tests("--json")
     local seen = 0
+
     for line in report:gmatch("[^\n]+") do
         local rec = fromjson(line)
         assert(rec.file == "cases.lus", line)
         assert(math.type(rec.line) == "integer" and rec.line > 0, line)
         assert(type(rec.duration) == "number" and rec.duration >= 0, line)
-        if rec.name == "sides_test" then assert(rec.line == 1, line) end
-        if rec.name == "reference_test" then assert(rec.line == 7, line) end
+
+        if rec.name == "sides_test" then
+            assert(rec.line == 1, line)
+        end
+
+        if rec.name == "reference_test" then
+            assert(rec.line == 7, line)
+        end
+
         seen = seen + 1
     end
+
     assert(seen == 6, report)
 end

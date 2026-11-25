@@ -18,10 +18,10 @@ The parameter `x` is a number or a string. Integers, bigints, floats with an int
 A float or decimal with a fractional part, and a float that is infinite or NaN, raise `bad argument #1 to 'bigint' (number has no integer representation)`. An argument of any other type raises `number expected`.
 
 ```lus
-print(bigint(2) ^ 100)    --> 1267650600228229401496703205376
+print(bigint(2) ^ 100)  --> 1267650600228229401496703205376
 print(bigint("123456789012345678901234567890") + 1)
 --> 123456789012345678901234567891
-print(bigint(3.0), bigint("0x10"), bigint("1.5"))   --> 3  16  nil
+print(bigint(3.0), bigint("0x10"), bigint("1.5"))  --> 3  16  nil
 ```
 
 The literal suffix `n` writes a bigint directly, as in `42n` or `0xffn`. A string with a fraction, an exponent, or the `n` suffix returns `nil`. The empty string returns `0`. [`math.type`](/manual/api#math.type) reports `"bigint"` for these values, and [`tostring`](/manual/api#tostring) prints them in decimal without a suffix. [`decimal`](/manual/api#decimal) converts to exact base 10 numbers, and [`tonumber`](/manual/api#tonumber) converts a bigint to the nearest float.

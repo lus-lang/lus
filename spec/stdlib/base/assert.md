@@ -23,10 +23,10 @@ On success, `assert` returns `v`, `message`, and every further argument, unchang
 
 ```lus
 local n = assert(tonumber("42"), "not a number")
-print(n)                     --> 42
+print(n)  --> 42
 
 local ok, err = catch assert(tonumber("x"), { code = 400 })
-print(ok, err.code)          --> false  400
+print(ok, err.code)  --> false  400
 ```
 
 A function that fails by returning `nil` and a message fits `assert` directly, so `assert(io.open(path))` raises the message of `io.open`. [`error`](/manual/api#error) raises an error unconditionally, and the `catch` expression captures one, as [Error handling](/manual/guide#errors) describes.

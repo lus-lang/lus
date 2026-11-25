@@ -1,10 +1,12 @@
-
 pledge("load")
 
 -- The compressors return vectors in Lus 2.0 (spec/design/strings.md), so these
 -- helpers turn byte data into vectors and compare vectors through hex text.
 local function bytes(x)
-    if type(x) == "string" then return vector.fromstring(x) end
+    if type(x) == "string" then
+        return vector.fromstring(x)
+    end
+
     return x
 end
 
@@ -21,27 +23,31 @@ end
 
 -- A new vector holding the bytes of every argument in order.
 local function join(...)
-    local parts = {...}
+    local parts = { ... }
     local total = 0
+
     for i, p in ipairs(parts) do
         parts[i] = bytes(p)
         total = total + #parts[i]
     end
+
     local out = vector.create(total)
     local at = 0
+
     for _, p in ipairs(parts) do
         for i = 0, #p - 1 do
             vector.set(out, at + i, vector.get(p, i))
         end
+
         at = at + #p
     end
+
     return out
 end
 
-
-local sample = "Hello, World! This is a test of the compression library. " ..
-               "We need enough data to make compression meaningful. " ..
-               string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
+local sample = "Hello, World! This is a test of the compression library. "
+    .. "We need enough data to make compression meaningful. "
+    .. string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
 
 local empty = ""
 
@@ -317,7 +323,6 @@ local function type_argument_validation_test()
     end)
 end
 
-
 -- Archive robustness suite for vector.archive.{gzip,deflate,zstd,brotli,lz4}.
 -- The existing archive.lus covers clean-input happy paths. This file attacks
 -- the codecs with hostile and boundary inputs: truncated streams, single bit
@@ -327,16 +332,13 @@ end
 -- case must resolve to a catchable error or wrong data and must never crash
 -- the process, which is what makes these tests able to fail.
 
-
-
-
 -- A compressible sample with enough redundancy that every codec shrinks it.
-local sample = "Hello, World! This is a test of the compression library. " ..
-               "We need enough data to make compression meaningful. " ..
-               string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
+local sample = "Hello, World! This is a test of the compression library. "
+    .. "We need enough data to make compression meaningful. "
+    .. string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
 
 -- The full set of codec names for table-driven matrices.
-local all_codecs = {"gzip", "deflate", "zstd", "brotli", "lz4"}
+local all_codecs = { "gzip", "deflate", "zstd", "brotli", "lz4" }
 
 -- Flip a single bit at a 1-based byte position, returning a new vector. Used to
 -- inject deterministic corruption rather than relying on randomness.
@@ -350,9 +352,11 @@ end
 -- window has cross-references to exercise. This includes embedded NUL bytes.
 local function all_bytes_vector()
     local v = vector.create(1024)
+
     for i = 0, 1023 do
         vector.set(v, i, i % 256)
     end
+
     return v
 end
 
@@ -365,7 +369,11 @@ local all_bytes = all_bytes_vector()
 -- Group: binary roundtrips.
 
 local all_256_byte_values_roundtrip_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function all_256_byte_values_roundtrip_test(codec)
@@ -376,7 +384,11 @@ local function all_256_byte_values_roundtrip_test(codec)
 end
 
 local embedded_nul_bytes_survive_the_string_path_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function embedded_nul_bytes_survive_the_string_path_test(codec)
@@ -396,7 +408,11 @@ end
 -- Group: empty input.
 
 local empty_string_compresses_to_a_valid_decompressible_stream_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function empty_string_compresses_to_a_valid_decompressible_stream_test(codec)
@@ -409,7 +425,11 @@ local function empty_string_compresses_to_a_valid_decompressible_stream_test(cod
 end
 
 local empty_vector_roundtrips_preserving_type_and_zero_length_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function empty_vector_roundtrips_preserving_type_and_zero_length_test(codec)
@@ -422,7 +442,11 @@ local function empty_vector_roundtrips_preserving_type_and_zero_length_test(code
 end
 
 local decompressing_an_empty_input_errors_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function decompressing_an_empty_input_errors_test(codec)
@@ -442,17 +466,28 @@ end
 -- rather than a crash or a silent partial result. Truncation is the most common
 -- real-world corruption.
 local truncated_stream_errors_cleanly_cases = {
-    {"gzip", 0.25}, {"gzip", 0.5}, {"gzip", 0.75},
-    {"deflate", 0.25}, {"deflate", 0.5}, {"deflate", 0.75},
-    {"zstd", 0.25}, {"zstd", 0.5}, {"zstd", 0.75},
-    {"brotli", 0.25}, {"brotli", 0.5}, {"brotli", 0.75},
-    {"lz4", 0.25}, {"lz4", 0.5}, {"lz4", 0.75},
+    { "gzip", 0.25 },
+    { "gzip", 0.5 },
+    { "gzip", 0.75 },
+    { "deflate", 0.25 },
+    { "deflate", 0.5 },
+    { "deflate", 0.75 },
+    { "zstd", 0.25 },
+    { "zstd", 0.5 },
+    { "zstd", 0.75 },
+    { "brotli", 0.25 },
+    { "brotli", 0.5 },
+    { "brotli", 0.75 },
+    { "lz4", 0.25 },
+    { "lz4", 0.5 },
+    { "lz4", 0.75 },
 }
 
 local function truncated_stream_errors_cleanly_test(codec, frac)
     local comp = vector.archive[codec].compress(sample)
     local cut = math.floor(#comp * frac)
     local trunc = head(comp, cut)
+
     raises(function()
         vector.archive[codec].decompress(trunc)
     end)
@@ -467,7 +502,10 @@ end
 -- gzip, deflate, brotli, and lz4 decode the complete stream and ignore any
 -- bytes past its end, returning the original payload.
 local trailing_garbage_is_ignored_payload_recovered_cases = {
-    {"gzip"}, {"deflate"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function trailing_garbage_is_ignored_payload_recovered_test(codec)
@@ -480,6 +518,7 @@ local function zstd_rejects_trailing_garbage_after_a_complete_frame_test()
     -- The zstd decoder consumes the whole input and treats leftover bytes as a
     -- malformed second frame.
     local comp = vector.archive.zstd.compress(sample)
+
     raises(function()
         vector.archive.zstd.decompress(join(comp, "GARBAGE!!"))
     end)
@@ -510,13 +549,19 @@ end
 -- half-succeed. gzip is deflate plus a header and trailer, so the deflate and
 -- gzip pairing is the sharpest case.
 local wrong_decoder_for_a_valid_stream_errors_cases = {
-    {"deflate", "gzip"}, {"gzip", "deflate"},
-    {"zstd", "gzip"}, {"brotli", "gzip"}, {"lz4", "gzip"},
-    {"gzip", "zstd"}, {"deflate", "brotli"}, {"brotli", "lz4"},
+    { "deflate", "gzip" },
+    { "gzip", "deflate" },
+    { "zstd", "gzip" },
+    { "brotli", "gzip" },
+    { "lz4", "gzip" },
+    { "gzip", "zstd" },
+    { "deflate", "brotli" },
+    { "brotli", "lz4" },
 }
 
 local function wrong_decoder_for_a_valid_stream_errors_test(decoder, producer)
     local data = vector.archive[producer].compress(sample)
+
     raises(function()
         vector.archive[decoder].decompress(data)
     end)
@@ -532,17 +577,28 @@ end
 -- all codecs is non-crash: decompress either raises or returns a string. A
 -- segfault would take down the whole test process and fail the suite.
 local a_single_bit_flip_never_crashes_the_decoder_cases = {
-    {"gzip", "header"}, {"gzip", "body"}, {"gzip", "tail"},
-    {"deflate", "header"}, {"deflate", "body"}, {"deflate", "tail"},
-    {"zstd", "header"}, {"zstd", "body"}, {"zstd", "tail"},
-    {"brotli", "header"}, {"brotli", "body"}, {"brotli", "tail"},
-    {"lz4", "header"}, {"lz4", "body"}, {"lz4", "tail"},
+    { "gzip", "header" },
+    { "gzip", "body" },
+    { "gzip", "tail" },
+    { "deflate", "header" },
+    { "deflate", "body" },
+    { "deflate", "tail" },
+    { "zstd", "header" },
+    { "zstd", "body" },
+    { "zstd", "tail" },
+    { "brotli", "header" },
+    { "brotli", "body" },
+    { "brotli", "tail" },
+    { "lz4", "header" },
+    { "lz4", "body" },
+    { "lz4", "tail" },
 }
 
 local function a_single_bit_flip_never_crashes_the_decoder_test(codec, region)
     local comp = vector.archive[codec].compress(sample)
     local n = #comp
     local pos
+
     if region == "header" then
         pos = 2
     elseif region == "body" then
@@ -550,9 +606,14 @@ local function a_single_bit_flip_never_crashes_the_decoder_test(codec, region)
     else
         pos = n
     end
-    if pos < 1 then pos = 1 end
+
+    if pos < 1 then
+        pos = 1
+    end
+
     local corrupt = flip_bit(comp, pos, 3)
     local ok, res = catch vector.archive[codec].decompress(corrupt)
+
     if ok then
         assert(type(res) == "vector")
     end
@@ -561,12 +622,15 @@ end
 -- Codecs that carry magic bytes must reject a corrupted magic. deflate has no
 -- header magic and brotli has no fixed magic byte, so only these three qualify.
 local corrupted_magic_byte_is_rejected_cases = {
-    {"gzip"}, {"zstd"}, {"lz4"},
+    { "gzip" },
+    { "zstd" },
+    { "lz4" },
 }
 
 local function corrupted_magic_byte_is_rejected_test(codec)
     local comp = vector.archive[codec].compress(sample)
     local corrupt = flip_bit(comp, 1, 3)
+
     raises(function()
         vector.archive[codec].decompress(corrupt)
     end)
@@ -577,6 +641,7 @@ local function gzip_crc32_rejects_a_corrupted_body_byte_test()
     -- must be caught even though the byte still decodes to some data.
     local comp = vector.archive.gzip.compress(sample)
     local corrupt = flip_bit(comp, math.floor(#comp / 2), 3)
+
     raises(function()
         vector.archive.gzip.decompress(corrupt)
     end)
@@ -589,15 +654,18 @@ local function a_flipped_bit_in_zstd_data_raises_or_changes_nothing_test()
     -- flip of that bit returns the original data.
     local comp = vector.archive.zstd.compress(sample)
     local raised = 0
+
     for i = 0, #comp * 8 - 1 do
         local corrupt = flip_bit(comp, i // 8 + 1, i % 8)
         local ok, out = catch vector.archive.zstd.decompress(corrupt)
+
         if ok then
             assert(vector.tostring(out) == sample, "a flipped bit decompressed to other data")
         else
             raised = raised + 1
         end
     end
+
     assert(raised > 0)
 end
 
@@ -610,7 +678,11 @@ end
 -- Already-compressed high-entropy bytes exercise the output-larger-than-input
 -- buffer path that the shrink-only happy path never touches.
 local incompressible_input_roundtrips_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function incompressible_input_roundtrips_test(codec)
@@ -629,7 +701,11 @@ end
 -- A few kilobytes of compressed zeros expand to four megabytes. Each codec must
 -- either succeed with the exact expanded size or fail cleanly, never crash.
 local highly_compressible_input_expands_to_the_correct_size_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function highly_compressible_input_expands_to_the_correct_size_test(codec)
@@ -637,6 +713,7 @@ local function highly_compressible_input_expands_to_the_correct_size_test(codec)
     local comp = vector.archive[codec].compress(zeros)
     assert(#comp < #zeros, codec .. " should compress a run of zeros tightly")
     local ok, dec = catch vector.archive[codec].decompress(comp)
+
     if ok then
         assert(#dec == #zeros)
         assert(vector.get(dec, 0) == 0)
@@ -652,11 +729,16 @@ end
 
 -- Documented boundary levels must compress and roundtrip.
 local boundary_levels_roundtrip_cases = {
-    {"gzip", 0}, {"gzip", 9},
-    {"deflate", 0}, {"deflate", 9},
-    {"zstd", -7}, {"zstd", 22},
-    {"brotli", 0}, {"brotli", 11},
-    {"lz4", 1}, {"lz4", 12},
+    { "gzip", 0 },
+    { "gzip", 9 },
+    { "deflate", 0 },
+    { "deflate", 9 },
+    { "zstd", -7 },
+    { "zstd", 22 },
+    { "brotli", 0 },
+    { "brotli", 11 },
+    { "lz4", 1 },
+    { "lz4", 12 },
 }
 
 local function boundary_levels_roundtrip_test(codec, level)
@@ -674,11 +756,17 @@ end
 
 -- Out-of-range levels must be rejected rather than silently clamped.
 local out_of_range_levels_error_cases = {
-    {"gzip", -1}, {"gzip", 10},
-    {"deflate", -1}, {"deflate", 10},
-    {"zstd", 23}, {"zstd", 100},
-    {"brotli", -1}, {"brotli", 12},
-    {"lz4", 0}, {"lz4", 13}, {"lz4", -1},
+    { "gzip", -1 },
+    { "gzip", 10 },
+    { "deflate", -1 },
+    { "deflate", 10 },
+    { "zstd", 23 },
+    { "zstd", 100 },
+    { "brotli", -1 },
+    { "brotli", 12 },
+    { "lz4", 0 },
+    { "lz4", 13 },
+    { "lz4", -1 },
 }
 
 local function out_of_range_levels_error_test(codec, level)
@@ -688,7 +776,8 @@ local function out_of_range_levels_error_test(codec, level)
 end
 
 local out_of_range_brotli_window_sizes_error_cases = {
-    {9}, {25},
+    { 9 },
+    { 25 },
 }
 
 local function out_of_range_brotli_window_sizes_error_test(lgwin)
@@ -710,7 +799,11 @@ end
 -- Group: argument validation.
 
 local compressing_an_uncoercible_value_errors_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function compressing_an_uncoercible_value_errors_test(codec)
@@ -718,22 +811,29 @@ local function compressing_an_uncoercible_value_errors_test(codec)
     raises(function()
         vector.archive[codec].compress(true)
     end)
+
     raises(function()
         vector.archive[codec].compress(nil)
     end)
+
     raises(function()
         vector.archive[codec].compress({})
     end)
 end
 
 local decompressing_a_non_byte_value_errors_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function decompressing_a_non_byte_value_errors_test(codec)
     raises(function()
         vector.archive[codec].decompress(true)
     end)
+
     raises(function()
         vector.archive[codec].decompress(nil)
     end)
@@ -747,7 +847,11 @@ end
 
 -- Compressing a vector must read it without mutating its bytes.
 local compress_does_not_mutate_the_input_vector_cases = {
-    {"gzip"}, {"deflate"}, {"zstd"}, {"brotli"}, {"lz4"},
+    { "gzip" },
+    { "deflate" },
+    { "zstd" },
+    { "brotli" },
+    { "lz4" },
 }
 
 local function compress_does_not_mutate_the_input_vector_test(codec)
@@ -758,4 +862,3 @@ local function compress_does_not_mutate_the_input_vector_test(codec)
     local after = vector.unpack(v, 0, "c" .. #sample)
     assert(before == after, codec .. " compress must not alter the input vector")
 end
-

@@ -29,10 +29,10 @@ An integer that does not fit in its size raises `integer overflow`. A value with
 
 ```lus
 local v = string.pack("<i4d", 7, 0.5)
-print(type(v), #v)                      --> vector  12
-print(string.unpack("<i4d", v))         --> 7  0.5  13
+print(type(v), #v)  --> vector  12
+print(string.unpack("<i4d", v))  --> 7  0.5  13
 print(vector.get(string.pack(">I2", 258), 0))  --> 1
-print(#string.pack("s1", "é"))          --> 3
+print(#string.pack("s1", "é"))  --> 3
 ```
 
 An integer option accepts an integer, a float or decimal with an integral value, and a bigint that fits in the size. A float option accepts every subtype and stores the nearest float. A string option stores the WTF-8 bytes of a string, so lengths count bytes, not characters, and it accepts a vector in place of a string. [`string.unpack`](/manual/api#string.unpack) reads the values back, [`string.packsize`](/manual/api#string.packsize) returns the size of a fixed format, [`vector.pack`](/manual/api#vector.pack) writes into an existing vector, and [`vector.tostring`](/manual/api#vector.tostring) decodes packed text.

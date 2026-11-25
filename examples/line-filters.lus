@@ -20,10 +20,12 @@ end
 -- turns it into a command that reads standard input.
 local function filter(lines, out)
     local kept = 0
+
     for line in lines do
         if line == "" then
             continue
         end
+
         if method, path, status = line:match("^(%a+) (%S+) (%d+)$") then
             if tonumber(status) >= 400 then
                 out:write(`$(method:upper()) $path $status\n`)
@@ -31,6 +33,7 @@ local function filter(lines, out)
             end
         end
     end
+
     return kept
 end
 
@@ -42,6 +45,7 @@ end
 for line in io.lines("errors.log") do
     print(line)
 end
+
 --> GET /admin 403
 --> POST /login 401
 --> GET /missing 404

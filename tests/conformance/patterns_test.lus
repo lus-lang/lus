@@ -1,4 +1,3 @@
-
 local function string_find_basics_test()
     local i, e = string.find("hello world", "world")
     assert(i == 7 and e == 11)
@@ -36,7 +35,7 @@ local function string_gsub_basic_test()
 end
 
 local function string_gsub_table_replacement_test()
-    local t = {name="Lua", version="5.4"}
+    local t = { name = "Lua", version = "5.4" }
     local res = string.gsub("$name-$version", "$(%w+)", t)
     assert(res == "Lua-5.4")
 end
@@ -45,6 +44,7 @@ local function string_gsub_function_replacement_test()
     local res = string.gsub("hello", "(%w)", function(c)
         return string.upper(c)
     end)
+
     assert(res == "HELLO")
 end
 
@@ -65,9 +65,11 @@ end
 local function gmatch_iterator_test()
     local s = "hello world from lua"
     local t = {}
+
     for w in string.gmatch(s, "%w+") do
         table.insert(t, w)
     end
+
     assert(#t == 4)
     assert(t[1] == "hello")
     assert(t[4] == "lua")
@@ -76,9 +78,11 @@ end
 local function gmatch_with_captures_test()
     local s = "a=1, b=2, c=3"
     local t = {}
+
     for k, v in string.gmatch(s, "(%w+)=(%d+)") do
         t[k] = tonumber(v)
     end
+
     assert(t.a == 1 and t.b == 2 and t.c == 3)
 end
 
@@ -101,24 +105,23 @@ end
 -- everything here exercises error paths, boundary values, and the interaction
 -- between the C matcher state and Lus level callbacks.
 
-
 -- Malformed pattern errors. Each row is a subject, the pattern that should be
 -- rejected, and a safe message fragment that contains no pattern magic so it
 -- can be handed straight to assert_throws.
 local malformed_patterns_raise_the_documented_message_cases = {
-    {"hello", "(", "unfinished capture"},
-    {"abc", "abc(", "unfinished capture"},
-    {"x", "%", "ends with "},
-    {"ab", "ab%", "ends with "},
-    {"x", "[abc", "missing ']'"},
-    {"x", "[^abc", "missing ']'"},
-    {"x", "%b", "missing arguments"},
-    {"x", "%b(", "missing arguments"},
-    {"x", "%f", "after '%%f' in pattern"},
-    {"x", "%fa", "after '%%f' in pattern"},
-    {"abc", "%9", "invalid capture index"},
-    {"abc", "%1", "invalid capture index"},
-    {"x", ")", "invalid pattern capture"},
+    { "hello", "(", "unfinished capture" },
+    { "abc", "abc(", "unfinished capture" },
+    { "x", "%", "ends with " },
+    { "ab", "ab%", "ends with " },
+    { "x", "[abc", "missing ']'" },
+    { "x", "[^abc", "missing ']'" },
+    { "x", "%b", "missing arguments" },
+    { "x", "%b(", "missing arguments" },
+    { "x", "%f", "after '%%f' in pattern" },
+    { "x", "%fa", "after '%%f' in pattern" },
+    { "abc", "%9", "invalid capture index" },
+    { "abc", "%1", "invalid capture index" },
+    { "x", ")", "invalid pattern capture" },
 }
 
 local function malformed_patterns_raise_the_documented_message_test(subject, pattern, fragment)
@@ -151,9 +154,9 @@ end
 -- cleanly instead of overflowing the C stack. The inputs are kept small so the
 -- guard trips well under a second.
 local pathological_backtracking_raises_pattern_too_complex_cases = {
-    {string.rep("a", 300), string.rep("a?", 300) .. "b"},
-    {string.rep("a", 220), string.rep("a?", 220)},
-    {string.rep("a", 250), string.rep("a-", 250) .. "x"},
+    { string.rep("a", 300), string.rep("a?", 300) .. "b" },
+    { string.rep("a", 220), string.rep("a?", 220) },
+    { string.rep("a", 250), string.rep("a-", 250) .. "x" },
 }
 
 local function pathological_backtracking_raises_pattern_too_complex_test(subject, pattern)
@@ -177,10 +180,13 @@ end
 -- text reaches the caller rather than being swallowed by gsub.
 local function gsub_replacement_error_propagates_a_non_string_error_object_test()
     local ok, err = catch string.gsub("abc", "%w", function()
-        error(setmetatable({}, {__tostring = function()
-            return "customObjectError"
-        end}))
+        error(setmetatable({}, {
+            __tostring = function()
+                return "customObjectError"
+            end,
+        }))
     end)
+
     assert(not ok)
     assert(string.find(tostring(err), "customObjectError"))
 end
@@ -188,11 +194,37 @@ end
 -- A replacement callback or table lookup must yield a string, number, false, or
 -- nil. Any other type is rejected with 'invalid replacement value'.
 local gsub_rejects_invalid_replacement_values_cases = {
-    {function() return string.gsub("abc", "%w", function() return {} end) end},
-    {function() return string.gsub("abc", "%w", function() return true end) end},
-    {function() return string.gsub("abc", "%w", function() return print end) end},
-    {function() return string.gsub("abc", "%w", {a = {}}) end},
-    {function() return string.gsub("abc", "%w", {a = true}) end},
+    {
+        function()
+            return string.gsub("abc", "%w", function()
+                return {}
+            end)
+        end,
+    },
+    {
+        function()
+            return string.gsub("abc", "%w", function()
+                return true
+            end)
+        end,
+    },
+    {
+        function()
+            return string.gsub("abc", "%w", function()
+                return print
+            end)
+        end,
+    },
+    {
+        function()
+            return string.gsub("abc", "%w", { a = {} })
+        end,
+    },
+    {
+        function()
+            return string.gsub("abc", "%w", { a = true })
+        end,
+    },
 }
 
 local function gsub_rejects_invalid_replacement_values_test(thunk)
@@ -203,8 +235,11 @@ end
 -- still counting as a visited match.
 local function gsub_callback_returning_nil_keeps_the_original_text_test()
     local res, n = string.gsub("abc", "%w", function(c)
-        if c == "b" then return "B" end
+        if c == "b" then
+            return "B"
+        end
     end)
+
     assert(res == "aBc")
     assert(n == 3)
 end
@@ -213,20 +248,24 @@ local function gsub_callback_returning_false_keeps_the_original_text_test()
     local res, n = string.gsub("abc", "%w", function()
         return false
     end)
+
     assert(res == "abc")
     assert(n == 3)
 end
 
 -- A table replacement whose lookup misses (nil) also keeps the original text.
 local function gsub_table_miss_keeps_the_original_text_test()
-    local res, n = string.gsub("abc", "%w", {b = "B"})
+    local res, n = string.gsub("abc", "%w", { b = "B" })
     assert(res == "aBc")
     assert(n == 3)
 end
 
 -- A callback may legally return a number, which is coerced to its string form.
 local function gsub_callback_returning_a_number_is_coerced_test()
-    local res = string.gsub("aaa", "a", function() return 7 end)
+    local res = string.gsub("aaa", "a", function()
+        return 7
+    end)
+
     assert(res == "777")
 end
 
@@ -234,10 +273,30 @@ end
 -- '%%' is a literal percent. Any other escape or a trailing percent is invalid,
 -- and a capture index with no matching group is rejected.
 local gsub_replacement_string_escapes_raise_on_misuse_cases = {
-    {function() return string.gsub("abc", "(%w)", "%2") end, "invalid capture index"},
-    {function() return string.gsub("abc", "%w", "%y") end, "in replacement string"},
-    {function() return string.gsub("abc", "%w", "%") end, "in replacement string"},
-    {function() return string.gsub("abc", "%w", "a%") end, "in replacement string"},
+    {
+        function()
+            return string.gsub("abc", "(%w)", "%2")
+        end,
+        "invalid capture index",
+    },
+    {
+        function()
+            return string.gsub("abc", "%w", "%y")
+        end,
+        "in replacement string",
+    },
+    {
+        function()
+            return string.gsub("abc", "%w", "%")
+        end,
+        "in replacement string",
+    },
+    {
+        function()
+            return string.gsub("abc", "%w", "a%")
+        end,
+        "in replacement string",
+    },
 }
 
 local function gsub_replacement_string_escapes_raise_on_misuse_test(thunk, fragment)
@@ -255,9 +314,11 @@ end
 -- The inner call gets a fresh matcher state so both results are correct.
 local function gsub_can_be_called_recursively_on_the_same_subject_test()
     local subject = "abcabc"
+
     local res, n = string.gsub(subject, "a(b)c", function()
         return (string.gsub(subject, "b", "B"))
     end)
+
     assert(res == "aBcaBcaBcaBc")
     assert(n == 2)
 end
@@ -266,11 +327,14 @@ end
 local function gmatch_nested_inside_a_gsub_callback_iterates_independently_test()
     local res = string.gsub("one two", "%w+", function(word)
         local count = 0
+
         for _ in string.gmatch(word, "%a") do
             count = count + 1
         end
+
         return tostring(count)
     end)
+
     assert(res == "3 3")
 end
 
@@ -281,6 +345,7 @@ local function gmatch_survives_collection_of_the_subject_reference_test()
         local s = string.rep("x", 5) .. " y z"
         return string.gmatch(s, "%a+")
     end
+
     local iter = make()
     collectgarbage()
     collectgarbage()
@@ -298,43 +363,53 @@ end
 -- an anchor would stop the iteration after the first position.
 local function gmatch_treats_a_leading_caret_as_a_literal_test()
     local count = 0
+
     for _ in string.gmatch("aaa", "^a") do
         count = count + 1
     end
+
     assert(count == 0)
     local literal = 0
+
     for _ in string.gmatch("^a^a", "^a") do
         literal = literal + 1
     end
+
     assert(literal == 2)
 end
 
 -- Empty matches advance the scan by one position so the iteration terminates.
 local function gmatch_advances_past_empty_matches_test()
     local acc = {}
+
     for x in string.gmatch("ab", "a*") do
         table.insert(acc, "[" .. x .. "]")
     end
+
     assert(table.concat(acc) == "[a][]")
 
     local n = 0
+
     for _ in string.gmatch("hello", "") do
         n = n + 1
     end
+
     assert(n == 6)
 
     local m = 0
+
     for _ in string.gmatch("", "") do
         m = m + 1
     end
+
     assert(m == 1)
 end
 
 -- The gmatch init argument skips a prefix of the subject.
 local gmatch_honors_an_init_position_cases = {
-    {"hello world", "%w+", 7, "world"},
-    {"hello world", "%w+", 1, "hello"},
-    {"abcdef", "%a", 4, "d"},
+    { "hello world", "%w+", 7, "world" },
+    { "hello world", "%w+", 1, "hello" },
+    { "abcdef", "%a", 4, "d" },
 }
 
 local function gmatch_honors_an_init_position_test(subject, pattern, init, expected)
@@ -365,15 +440,22 @@ end
 -- Anchored find only tries the init position, so the anchor is relative to init
 -- rather than to the start of the subject.
 local anchored_find_is_relative_to_the_init_position_cases = {
-    {"aaa", "^a", 2, 2, 2},
-    {"xaaa", "^a", 2, 2, 2},
-    {"hello", "^e", 2, 2, 2},
-    {"hello", "^h", 2, false, false},
-    {"hello", "^l", 3, 3, 3},
+    { "aaa", "^a", 2, 2, 2 },
+    { "xaaa", "^a", 2, 2, 2 },
+    { "hello", "^e", 2, 2, 2 },
+    { "hello", "^h", 2, false, false },
+    { "hello", "^l", 3, 3, 3 },
 }
 
-local function anchored_find_is_relative_to_the_init_position_test(subject, pattern, init, exp_start, exp_end)
+local function anchored_find_is_relative_to_the_init_position_test(
+    subject,
+    pattern,
+    init,
+    exp_start,
+    exp_end
+)
     local i, e = string.find(subject, pattern, init)
+
     if exp_start == false then
         assert(i == nil)
     else
@@ -406,13 +488,14 @@ end
 
 -- Backreferences in the pattern match the text a prior capture recorded.
 local backreferences_match_repeated_text_cases = {
-    {"abc abc", "(%a+) %1", "abc"},
-    {"abc def", "(%a+) %1", false},
-    {"55x55", "(%d+)x%1", "55"},
+    { "abc abc", "(%a+) %1", "abc" },
+    { "abc def", "(%a+) %1", false },
+    { "55x55", "(%d+)x%1", "55" },
 }
 
 local function backreferences_match_repeated_text_test(subject, pattern, expected)
     local res = string.match(subject, pattern)
+
     if expected == false then
         assert(res == nil)
     else
@@ -423,12 +506,12 @@ end
 -- Set and range syntax including negation, a literal dash at the edge, and an
 -- escaped closing bracket inside the set.
 local set_and_range_syntax_cases = {
-    {"Hello123", "[a-z]+", "ello"},
-    {"  hi  ", "[^%s]+", "hi"},
-    {"a-b", "[-ab]+", "a-b"},
-    {"a]b", "[%]]", "]"},
-    {"1af9", "[0-9a-f]+", "1af9"},
-    {"xyzABC", "[^a-z]+", "ABC"},
+    { "Hello123", "[a-z]+", "ello" },
+    { "  hi  ", "[^%s]+", "hi" },
+    { "a-b", "[-ab]+", "a-b" },
+    { "a]b", "[%]]", "]" },
+    { "1af9", "[0-9a-f]+", "1af9" },
+    { "xyzABC", "[^a-z]+", "ABC" },
 }
 
 local function set_and_range_syntax_test(subject, pattern, expected)
@@ -445,13 +528,18 @@ end
 
 -- The optional quantifier accepts zero or one occurrence of the class.
 local optional_quantifier_matches_with_and_without_the_class_cases = {
-    {"heo", "^hel?o$", "heo"},
-    {"helo", "^hel?o$", "helo"},
-    {"hello", "^hel?o$", false},
+    { "heo", "^hel?o$", "heo" },
+    { "helo", "^hel?o$", "helo" },
+    { "hello", "^hel?o$", false },
 }
 
-local function optional_quantifier_matches_with_and_without_the_class_test(subject, pattern, expected)
+local function optional_quantifier_matches_with_and_without_the_class_test(
+    subject,
+    pattern,
+    expected
+)
     local res = string.match(subject, pattern)
+
     if expected == false then
         assert(res == nil)
     else
@@ -483,14 +571,23 @@ local function many_alternating_patterns_agree_test()
     local patterns = { "(%a+)", "(%d+)", "[^,]+", "()x()", "k=(%w*)", "%s*$", "(.-)<", "<(.*)>" }
     local subjects = { "ab12,x<y>z k=v1", "  x,,k= <<a>>", "" }
     local expected = {}
+
     for i, p in ipairs(patterns) do
         expected[i] = {}
-        for j, s in ipairs(subjects) do expected[i][j] = table.concat({ tostring(s:find(p)), tostring(s:match(p)) }, "|") end
+
+        for j, s in ipairs(subjects) do
+            expected[i][j] = table.concat({ tostring(s:find(p)), tostring(s:match(p)) }, "|")
+        end
     end
+
     for _ = 1, 3 do
         for j, s in ipairs(subjects) do
             for i, p in ipairs(patterns) do
-                assert(table.concat({ tostring(s:find(p)), tostring(s:match(p)) }, "|") == expected[i][j], p)
+                assert(
+                    table.concat({ tostring(s:find(p)), tostring(s:match(p)) }, "|")
+                        == expected[i][j],
+                    p
+                )
             end
         end
     end
@@ -503,8 +600,10 @@ local function a_gsub_function_may_search_with_other_patterns_test()
         for _, p in ipairs({ "%d", "%a+", "[xyz]", "(%w)(%w)", "^.", "%s", "b+" }) do
             ("filler text 42"):match(p)
         end
+
         return digits .. letter
     end)
+
     assert(out == "1a 22b 333c", out)
 end
 
@@ -527,8 +626,16 @@ end
 -- repetitions that must give bytes back keep their results.
 local function repetitions_that_cannot_give_back_test()
     local pattern = '^(%S+) %- %- %[[^%]]*%] "(%u+) /(%S*) HTTP/1%.1" (%d+) (%d+)$'
-    local ip, method, path, status, bytes = ('10.1.2.3 - - [x] "GET /a/b HTTP/1.1" 200 512'):match(pattern)
-    assert(ip == "10.1.2.3" and method == "GET" and path == "a/b" and status == "200" and bytes == "512")
+    local ip, method, path, status, bytes = ('10.1.2.3 - - [x] "GET /a/b HTTP/1.1" 200 512'):match(
+        pattern
+    )
+    assert(
+        ip == "10.1.2.3"
+            and method == "GET"
+            and path == "a/b"
+            and status == "200"
+            and bytes == "512"
+    )
     assert(('10.1.2.3 - - [x] "GET /a/b HTTP/1.1" 200 512 extra'):match(pattern) == nil)
     assert(('10.1.2.3 - - [x] "get /a/b HTTP/1.1" 200 512'):match(pattern) == nil)
     assert(("12.5"):match("(%d+)%.(%d+)") == "12")
@@ -540,20 +647,36 @@ local function repetitions_that_cannot_give_back_test()
     local s, e = ("  42 "):match("()%d+()%s")
     assert(s == 3 and e == 5)
     local words = {}
-    for w, n in ("ab1x cd x ef2x"):gmatch("(%a+)(%d?)x") do words[#words + 1] = w .. n end
+
+    for w, n in ("ab1x cd x ef2x"):gmatch("(%a+)(%d?)x") do
+        words[#words + 1] = w .. n
+    end
+
     assert(table.concat(words, ",") == "ab1,ef2")
 end
 
 -- A replacement table whose lookups run other searches leaves the gsub
 -- that called it with its own pattern, and a plain table needs no copy.
 local function a_gsub_table_may_search_with_other_patterns_test()
-    local lookups = setmetatable({}, { __index = function(_, k)
-        local a, b = ("x=1 y=2"):match("(%a)=(%d)")
-        for w in ("p q r"):gmatch("%a") do a = a .. w end
-        return `<$k$a$b>`
-    end })
+    local lookups = setmetatable({}, {
+        __index = function(_, k)
+            local a, b = ("x=1 y=2"):match("(%a)=(%d)")
+
+            for w in ("p q r"):gmatch("%a") do
+                a = a .. w
+            end
+
+            return `<$k$a$b>`
+        end,
+    })
+
     assert(("ab-cd"):gsub("(%a+)", lookups) == "<abxpqr1>-<cdxpqr1>")
     local plain = { ab = "AB", cd = "CD" }
     assert(("ab-cd-ef"):gsub("%a+", plain) == "AB-CD-ef")
-    assert((("a<b>&'c'"):gsub("[&<>']", { ["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;", ["'"] = "&#39;" })) == "a&lt;b&gt;&amp;&#39;c&#39;")
+    assert((("a<b>&'c'"):gsub("[&<>']", {
+        ["&"] = "&amp;",
+        ["<"] = "&lt;",
+        [">"] = "&gt;",
+        ["'"] = "&#39;",
+    })) == "a&lt;b&gt;&amp;&#39;c&#39;")
 end

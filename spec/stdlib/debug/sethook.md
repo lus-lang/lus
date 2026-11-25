@@ -34,15 +34,18 @@ The following example records the calls, returns, and lines of one call to a fun
 
 ```lus
 local events = {}
+
 local function square(x)
     return x * x
 end
+
 debug.sethook(function(event, line)
-    events[#events + 1] = line and `$(event) $(line)` or event
+    events[#events + 1] = line and `$event $line` or event
 end, "crl")
+
 square(3)
 debug.sethook()
-print(table.concat(events, ", "))    --> line 8, call, line 3, return, line 9
+print(table.concat(events, ", "))  --> line 11, call, line 4, return, line 12
 ```
 
 Each thread has one hook, and installing a new one replaces the old. [`debug.gethook`](/manual/api#debug.gethook) reads the hook back, and [`debug.getinfo`](/manual/api#debug.getinfo) with level 2 describes the function that triggered the event.

@@ -22,9 +22,9 @@ The results are one new list for each position. List `k` holds element `k` of ev
 A first element that is not a table raises `bad argument #-1 to 'unzip' (table expected, got number)` with its type. An `array_of_tuples` that is not a table raises a type error.
 
 ```lus
-local ids, names = table.unzip({{1, "a"}, {2, "b"}, {3, "c"}})
-print(table.concat(ids, ","), table.concat(names, ","))   --> 1,2,3  a,b,c
-print(select("#", table.unzip({})))                        --> 0
+local ids, names = table.unzip({ { 1, "a" }, { 2, "b" }, { 3, "c" } })
+print(table.concat(ids, ","), table.concat(names, ","))  --> 1,2,3  a,b,c
+print(select("#", table.unzip({})))  --> 0
 ```
 
 `table.unzip` is the inverse of [`table.zip`](/manual/api#table.zip). For tuples of equal length, [`table.transpose`](/manual/api#table.transpose) returns the same lists as one table.

@@ -41,9 +41,11 @@ end
 local function open(cookie, context)
     local parts = string.split(cookie, ".")
     local n, ct, t = unb64(parts[1]), unb64(parts[2]), unb64(parts[3])
+
     if plaintext = crypto.decrypt("aes-256-gcm", key, n, ct, t, context) then
         return vector.tostring(plaintext)
     end
+
     return nil
 end
 

@@ -37,12 +37,14 @@ table.sort(players, function(a, b)
     if a.team ~= b.team then
         return a.team < b.team
     end
+
     return a.score > b.score
 end)
 
 for _, player in ipairs(players) do
     print(player.team, player.name, player.score)
 end
+
 --> blue  joe  15
 --> blue  ana  9
 --> red  kim  20

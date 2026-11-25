@@ -32,8 +32,8 @@ local f = io.open(path, "w")
 f:write("hello")
 f:close()
 local info = fs.stat(path)
-print(info.kind, info.size)                        --> file  5
-print((time.now() - info.modified):seconds() < 60)   --> true
+print(info.kind, info.size)  --> file  5
+print((time.now() - info.modified):seconds() < 60)  --> true
 fs.remove(path)
 ```
 

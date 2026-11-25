@@ -23,6 +23,7 @@ local function handler(req)
 end
 
 local port = tonumber(arg and arg[1])
+
 if port then
     network.serve("127.0.0.1", port, handler)
     return
@@ -39,19 +40,25 @@ local request <const> = "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: */*\r\n\r\
 
 local function client(count)
     local sock <close> = network.tcp.connect("127.0.0.1", bound)
+
     for i = 1, count do
         sock:send(request)
         local length = 0
+
         while true do
             local line = vector.tostring(sock:receive("*l"))
+
             if line == "" then
                 break
             end
+
             local n = line:match("^[Cc]ontent%-[Ll]ength: (%d+)")
+
             if n then
                 length = tonumber(n)
             end
         end
+
         if length > 0 then
             sock:receive(length)
         end
@@ -59,11 +66,14 @@ local function client(count)
 end
 
 local running = {}
+
 for i = 1, clients do
     running[i] = coroutine.detach(coroutine.create(client), requests // clients)
 end
+
 for i = 1, clients do
     assert(coroutine.resume(running[i]))
 end
+
 coroutine.close(serving)
 server:close()

@@ -29,6 +29,7 @@ The following example keeps the lines of a log in the buffer of the handle until
 ```lus
 pledge("env", "fs")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-setvbuf-example.log")
+
 local function contents()
     local f <close> = assert(io.open(path))
     return f:read("a")
@@ -36,12 +37,14 @@ end
 
 local log = assert(io.open(path, "w"))
 log:setvbuf("full")
+
 for step = 1, 3 do
     log:write("step ", step, " done\n")
 end
-print(#contents())     --> 0
+
+print(#contents())  --> 0
 log:close()
-print(#contents())     --> 36
+print(#contents())  --> 36
 fs.remove(path)
 ```
 

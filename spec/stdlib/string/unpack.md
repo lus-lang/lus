@@ -26,10 +26,10 @@ Data that ends before the format does raises `bad argument #2 to 'unpack' (data 
 
 ```lus
 local v = string.pack("<i2i2", 1, 2)
-print(string.unpack("<i2i2", v))      --> 1  2  5
-print(string.unpack("<i2", v, 3))     --> 2  5
-print(string.unpack("<i2", v, -2))    --> 2  5
-print(string.unpack("z", "hé\0rest")) --> hé  5
+print(string.unpack("<i2i2", v))  --> 1  2  5
+print(string.unpack("<i2", v, 3))  --> 2  5
+print(string.unpack("<i2", v, -2))  --> 2  5
+print(string.unpack("z", "hé\0rest"))  --> hé  5
 ```
 
 Positions count bytes, so a string argument with characters outside ASCII has more positions than characters. [`vector.unpack`](/manual/api#vector.unpack) reads the same formats with 0-based offsets, and [`string.packsize`](/manual/api#string.packsize) gives the size of a fixed format.

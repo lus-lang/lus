@@ -33,10 +33,10 @@ The following example decodes a whole vector, a prefix, and a prefix that cuts a
 
 ```lus
 local v = vector.fromstring("héllo")
-print(vector.tostring(v))                 --> héllo
-print(vector.tostring(v, 0, 1))           --> h
+print(vector.tostring(v))  --> héllo
+print(vector.tostring(v, 0, 1))  --> h
 print(vector.tostring(v, 0, 2, "lossy"))  --> h�
-print(catch vector.tostring(v, 0, 2))     --> false  ...: invalid UTF-8 at byte 1
+print(catch vector.tostring(v, 0, 2))  --> false  ...: invalid UTF-8 at byte 1
 ```
 
 Lone surrogates are valid WTF-8, so a vector made by [`vector.fromstring`](/manual/api#vector.fromstring) always decodes back to the same string. The decompression functions of `vector.archive` return vectors, and this function turns decompressed text back into a string.

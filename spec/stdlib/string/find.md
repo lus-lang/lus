@@ -28,12 +28,12 @@ On a match, the first two results are the positions of the first and the last ch
 A malformed pattern raises an error that names the problem, such as `malformed pattern (missing ']')` or `malformed pattern (ends with '%')`.
 
 ```lus
-print(string.find("héllo wörld", "ö"))     --> 8  8
-print(string.find("héllo", "l+"))          --> 3  4
-print(string.find("key=val", "(%w+)="))    --> 1  4  key
-print(string.find("a.b", ".", 1, true))    --> 2  2
-print(string.find("héllo", "l", -2))       --> 4  4
-print(string.find("héllo", "x"))           --> nil
+print(string.find("héllo wörld", "ö"))  --> 8  8
+print(string.find("héllo", "l+"))  --> 3  4
+print(string.find("key=val", "(%w+)="))  --> 1  4  key
+print(string.find("a.b", ".", 1, true))  --> 2  2
+print(string.find("héllo", "l", -2))  --> 4  4
+print(string.find("héllo", "x"))  --> nil
 ```
 
 An `init` before the first character searches from the first character. An `init` more than one position past the end returns `nil`, even for a pattern that matches the empty string. The empty pattern matches at `init` itself and returns `init` and `init - 1`. A pattern that starts with `^` matches only at `init`. Patterns match whole characters, so `.` matches one character and a set such as `[éà]` may hold any characters. The classes such as `%a` describe ASCII characters only. [`string.match`](/manual/api#string.match) returns the captures without the positions, and [`string.gmatch`](/manual/api#string.gmatch) iterates over every match.

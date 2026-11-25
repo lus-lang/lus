@@ -24,7 +24,7 @@ local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-worker-peek.lus")
 io.open(path, "w"):write("worker.message(worker.peek() * 2)\n"):close()
 local w = worker.create(path)
 worker.send(w, 21)
-print(worker.receive(w))   --> 42
+print(worker.receive(w))  --> 42
 fs.remove(path)
 ```
 

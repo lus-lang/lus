@@ -22,9 +22,9 @@ Queries or sets the locale of the program and returns the name of the locale, or
 The runtime has one locale, `"C"`, because every conversion it performs is locale independent. A call without `locale` returns `"C"`. A call with `"C"`, `"POSIX"`, or the empty string, which asks for the locale of the environment, returns `"C"`. Any other name returns `nil`. The function requires no permission.
 
 ```lus
-print(os.setlocale())                 --> C
-print(os.setlocale("", "numeric"))    --> C
-print(os.setlocale("fr_FR.UTF-8"))    --> nil
+print(os.setlocale())  --> C
+print(os.setlocale("", "numeric"))  --> C
+print(os.setlocale("fr_FR.UTF-8"))  --> nil
 ```
 
 [`os.date`](/manual/api#os.date) formats dates in the "C" locale, and `tostring` writes numbers with a `.` decimal point.

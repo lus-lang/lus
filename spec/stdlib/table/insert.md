@@ -25,10 +25,10 @@ The function returns no values. `list` is modified in place.
 A `pos` outside the range from 1 to `#list + 1` raises `bad argument #2 to 'insert' (position out of bounds)`. One argument, or more than three, raises `wrong number of arguments to 'insert'`. A `list` that is not a table, and has no `__index`, `__newindex`, and `__len` metamethods, raises a type error.
 
 ```lus
-local list = {"b", "c"}
+local list = { "b", "c" }
 table.insert(list, "d")
 table.insert(list, 1, "a")
-print(table.concat(list, ","))   --> a,b,c,d
+print(table.concat(list, ","))  --> a,b,c,d
 print(catch table.insert(list, 9, "z"))  --> false  ...: bad argument #2 to 'insert' (position out of bounds)
 ```
 

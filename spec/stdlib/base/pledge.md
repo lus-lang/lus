@@ -23,12 +23,12 @@ A result is `true` when `pledge` applied the name and `false` when it refused it
 `pledge` raises an error for a name it does not know, as in `unknown permission: 'bogus'`, and for a subcapability that the base capability lacks, as in `invalid fs subpermission 'nope'`. Granting a permission that was rejected raises `permission "NAME" was rejected`. The name `"all"` raises `permission "all" cannot be requested from scripts`, because only the command line and the embedding API may grant every permission.
 
 ```lus
-print(pledge("fs:read"))               --> true
-print(pledge("network:http", "env"))   --> true  true
+print(pledge("fs:read"))  --> true
+print(pledge("network:http", "env"))  --> true  true
 pledge("~exec")
-print((catch pledge("exec")))          --> false
+print((catch pledge("exec")))  --> false
 pledge("seal")
-print(pledge("fs:write"))              --> false
+print(pledge("fs:write"))  --> false
 ```
 
 A coroutine starts with the permissions of the coroutine that created it, and its later changes stay inside it. [Permissions](/manual/permissions) lists every permission name, the form of values, and the `-P` option of `lus`.

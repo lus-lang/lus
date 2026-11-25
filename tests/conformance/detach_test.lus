@@ -17,9 +17,11 @@ local function spawn(f, ...)
 end
 
 local function closer(log, name)
-    return setmetatable({}, { __close = function()
-        log[#log + 1] = name
-    end })
+    return setmetatable({}, {
+        __close = function()
+            log[#log + 1] = name
+        end,
+    })
 end
 
 -- ===== The return values of resume =====
@@ -31,9 +33,14 @@ local function same_results(body, ...)
     local co = spawn(body, ...)
     local detached = pack(resume(co))
     assert(plain.n == detached.n, `count $(plain.n) vs $(detached.n)`)
+
     for i = 1, plain.n do
-        assert(rawequal(plain[i], detached[i]) or plain[i] == detached[i], `value $(i): $(tostring(plain[i])) vs $(tostring(detached[i]))`)
+        assert(
+            rawequal(plain[i], detached[i]) or plain[i] == detached[i],
+            `value $i: $(tostring(plain[i])) vs $(tostring(detached[i]))`
+        )
     end
+
     return plain, co
 end
 
@@ -41,11 +48,16 @@ local function resume_returns_true_and_the_results_test()
     local r = same_results(function(a, b)
         return a + b, "x", nil, false
     end, 2, 3)
-    assert(r.n == 5 and r[1] == true and r[2] == 5 and r[3] == "x" and r[4] == nil and r[5] == false)
+
+    assert(
+        r.n == 5 and r[1] == true and r[2] == 5 and r[3] == "x" and r[4] == nil and r[5] == false
+    )
 end
 
 local function resume_returns_true_alone_for_no_results_test()
-    local r = same_results(function() end)
+    local r = same_results(function()
+    end)
+
     assert(r.n == 1 and r[1] == true)
 end
 
@@ -53,6 +65,7 @@ local function resume_keeps_trailing_nils_test()
     local r = same_results(function()
         return nil, nil
     end)
+
     assert(r.n == 3 and r[1] == true)
 end
 
@@ -60,6 +73,7 @@ local function resume_returns_false_and_the_message_test()
     local function body()
         error("broken", 0)
     end
+
     local r = same_results(body)
     assert(r.n == 2 and r[1] == false and r[2] == "broken")
 end
@@ -69,15 +83,22 @@ local function resume_returns_the_error_position_test()
         local t = nil
         return t.field
     end
+
     local r = same_results(body)
-    assert(r.n == 2 and r[1] == false and string.find(r[2], "detach_test.lus:%d+: attempt to index a nil value"))
+    assert(
+        r.n == 2
+            and r[1] == false
+            and string.find(r[2], "detach_test.lus:%d+: attempt to index a nil value")
+    )
 end
 
 local function resume_returns_the_error_object_itself_test()
     local object = { code = 7 }
+
     local r = same_results(function()
         error(object)
     end)
+
     assert(r.n == 2 and r[1] == false and rawequal(r[2], object))
 end
 
@@ -86,8 +107,10 @@ local function resume_of_a_runtime_error_inside_a_nested_call_test()
         if n == 0 then
             error("bottom", 0)
         end
+
         return deep(n - 1) + 1
     end
+
     local r = same_results(deep, 20)
     assert(r[1] == false and r[2] == "bottom")
 end
@@ -96,14 +119,19 @@ local function resume_of_a_dead_coroutine_test()
     local plain = create(function()
         return 1
     end)
+
     assert(resume(plain))
     local expected = pack(resume(plain))
+
     local co = spawn(function()
         return 1
     end)
+
     assert(resume(co))
     local got = pack(resume(co))
-    assert(expected.n == 2 and expected[1] == false and expected[2] == "cannot resume dead coroutine")
+    assert(
+        expected.n == 2 and expected[1] == false and expected[2] == "cannot resume dead coroutine"
+    )
     assert(got.n == expected.n and got[1] == expected[1] and got[2] == expected[2])
 end
 
@@ -111,12 +139,15 @@ local function a_second_collection_finds_a_dead_coroutine_test()
     local co = spawn(function()
         return "once"
     end)
+
     local first = pack(resume(co))
     assert(first.n == 2 and first[1] == true and first[2] == "once")
+
     for _ = 1, 3 do
         local again = pack(resume(co))
         assert(again.n == 2 and again[1] == false and again[2] == "cannot resume dead coroutine")
     end
+
     assert(status(co) == "dead")
 end
 
@@ -124,6 +155,7 @@ local function a_second_collection_of_an_error_finds_a_dead_coroutine_test()
     local co = spawn(function()
         error("first", 0)
     end)
+
     local first = pack(resume(co))
     assert(first.n == 2 and first[1] == false and first[2] == "first")
     local again = pack(resume(co))
@@ -136,6 +168,7 @@ local function resume_of_a_plain_coroutine_is_unchanged_test()
         local c, d = yield(b * 2, "two")
         return c, d, "end"
     end)
+
     local r = pack(resume(co, 1))
     assert(r.n == 2 and r[1] == true and r[2] == 2)
     r = pack(resume(co, 10))
@@ -148,11 +181,13 @@ end
 
 local function resume_ignores_extra_arguments_for_a_detached_coroutine_test()
     local seen
+
     local co = spawn(function(...)
         seen = pack(...)
         local back = pack(yield())
         return back.n
     end, "start")
+
     local r = pack(resume(co, "ignored", "also ignored"))
     assert(r.n == 2 and r[1] == true and r[2] == 0)
     assert(seen.n == 1 and seen[1] == "start")
@@ -162,9 +197,11 @@ local function resume_rejects_what_is_no_coroutine_test()
     raises(function()
         resume(42)
     end, "thread")
+
     raises(function()
         detach(42)
     end, "thread")
+
     raises(function()
         detach()
     end, "thread")
@@ -173,7 +210,9 @@ end
 -- ===== detach =====
 
 local function detach_returns_the_coroutine_test()
-    local co = create(function() end)
+    local co = create(function()
+    end)
+
     assert(detach(co) == co)
     assert(resume(co))
 end
@@ -182,15 +221,18 @@ local function detach_passes_the_start_arguments_test()
     local co = spawn(function(...)
         return select("#", ...), ...
     end, 1, nil, "three", nil)
+
     local r = pack(resume(co))
     assert(r.n == 6 and r[2] == 4 and r[3] == 1 and r[4] == nil and r[5] == "three" and r[6] == nil)
 end
 
 local function detach_defers_the_first_run_test()
     local ran = false
+
     local co = spawn(function()
         ran = true
     end)
+
     assert(not ran and status(co) == "suspended")
     assert(resume(co))
     assert(ran and status(co) == "dead")
@@ -201,6 +243,7 @@ local function detach_of_a_resumed_coroutine_finishes_its_yield_test()
         local b, c = yield(a * 2)
         return a, b, c
     end)
+
     local ok, doubled = resume(co, 21)
     assert(ok and doubled == 42)
     assert(detach(co, "x", "y") == co)
@@ -212,6 +255,7 @@ local function detach_of_a_resumed_coroutine_without_arguments_test()
     local co = create(function()
         return select("#", yield("first"))
     end)
+
     assert(resume(co))
     detach(co)
     local ok, n = resume(co)
@@ -219,15 +263,21 @@ local function detach_of_a_resumed_coroutine_without_arguments_test()
 end
 
 local function detach_rejects_a_dead_coroutine_test()
-    local co = create(function() end)
+    local co = create(function()
+    end)
+
     assert(resume(co))
+
     raises(function()
         detach(co)
     end, "cannot detach a dead coroutine")
+
     local failed = create(function()
         error("x")
     end)
+
     assert(not resume(failed))
+
     raises(function()
         detach(failed)
     end, "cannot detach a dead coroutine")
@@ -235,11 +285,13 @@ end
 
 local function detach_rejects_a_running_coroutine_test()
     local message
+
     local co = create(function()
         local ok, err = catch detach(coroutine.running())
         message = err
         return ok
     end)
+
     local ok, inner = resume(co)
     assert(ok and inner == false)
     assert(string.find(message, "cannot detach a running coroutine", 1, true))
@@ -248,23 +300,30 @@ end
 local function detach_rejects_a_normal_coroutine_test()
     local message
     local outer
+
     outer = create(function()
         local inner = create(function()
             local ok, err = catch detach(outer)
             message = err
         end)
+
         assert(resume(inner))
     end)
+
     assert(resume(outer))
     assert(string.find(message, "cannot detach a normal coroutine", 1, true))
 end
 
 local function detach_rejects_a_detached_coroutine_test()
-    local co = spawn(function() end)
+    local co = spawn(function()
+    end)
+
     raises(function()
         detach(co)
     end, "cannot detach a detached coroutine")
+
     assert(resume(co))
+
     raises(function()
         detach(co)
     end, "cannot detach a detached coroutine")
@@ -272,14 +331,18 @@ end
 
 local function detach_rejects_the_main_thread_test()
     local main = coroutine.running()
+
     raises(function()
         detach(main)
     end, "cannot detach the main thread")
+
     local message
+
     local co = create(function()
         local ok, err = catch detach(main)
         message = err
     end)
+
     assert(resume(co))
     assert(string.find(message, "cannot detach the main thread", 1, true))
 end
@@ -289,6 +352,7 @@ local function a_detached_coroutine_is_no_main_thread_test()
         local me, ismain = coroutine.running()
         return me, ismain, coroutine.isyieldable(), status(me)
     end)
+
     local ok, me, ismain, yieldable, st = resume(co)
     assert(ok and me == co and ismain == false and yieldable == true and st == "running")
 end
@@ -300,19 +364,23 @@ local function yield_returns_nothing_and_drops_its_values_test()
         local back = pack(yield(1, 2, 3))
         return back.n
     end)
+
     local r = pack(resume(co))
     assert(r.n == 2 and r[1] == true and r[2] == 0)
 end
 
 local function yield_takes_turns_in_arrival_order_test()
     local log = {}
+
     local function body(name, n)
         for i = 1, n do
             log[#log + 1] = name .. i
             yield()
         end
+
         return name
     end
+
     local a = spawn(body, "a", 3)
     local b = spawn(body, "b", 3)
     local c = spawn(body, "c", 2)
@@ -325,33 +393,41 @@ end
 local function a_coroutine_detached_later_joins_the_end_of_the_queue_test()
     local log = {}
     local late
+
     local first = spawn(function()
         log[#log + 1] = "first 1"
+
         late = spawn(function()
             log[#log + 1] = "late 1"
             yield()
             log[#log + 1] = "late 2"
         end)
+
         yield()
         log[#log + 1] = "first 2"
         yield()
         log[#log + 1] = "first 3"
     end)
+
     local second = spawn(function()
         log[#log + 1] = "second 1"
         yield()
         log[#log + 1] = "second 2"
     end)
+
     assert(resume(first))
     assert(resume(second))
     assert(resume(late))
-    assert(table.concat(log, ", ") == "first 1, second 1, late 1, first 2, second 2, late 2, first 3")
+    assert(
+        table.concat(log, ", ") == "first 1, second 1, late 1, first 2, second 2, late 2, first 3"
+    )
 end
 
 local function no_coroutine_starves_test()
     local turns = { 0, 0, 0, 0 }
     local stop = false
     local workers = {}
+
     for i = 1, 4 do
         workers[i] = spawn(function()
             while not stop do
@@ -360,16 +436,20 @@ local function no_coroutine_starves_test()
             end
         end)
     end
+
     local counter = spawn(function()
         for _ = 1, 500 do
             yield()
         end
+
         stop = true
     end)
+
     assert(resume(counter))
+
     for i = 1, 4 do
         assert(resume(workers[i]))
-        assert(turns[i] >= 500 and turns[i] <= 502, `worker $(i) took $(turns[i]) turns`)
+        assert(turns[i] >= 500 and turns[i] <= 502, `worker $i took $(turns[i]) turns`)
     end
 end
 
@@ -379,20 +459,27 @@ local function yield_in_a_plain_coroutine_inside_a_detached_one_test()
             for i = 1, 3 do
                 yield(i * 10)
             end
+
             return "end"
         end)
+
         local seen = {}
+
         while true do
             local ok, v = resume(gen)
             assert(ok)
             seen[#seen + 1] = v
+
             if status(gen) == "dead" then
                 break
             end
+
             yield()
         end
+
         return table.concat(seen, " ")
     end)
+
     local ok, text = resume(co)
     assert(ok and text == "10 20 30 end")
 end
@@ -404,13 +491,17 @@ local function wrap_works_inside_a_detached_coroutine_test()
                 yield(i)
             end
         end)
+
         local sum = 0
+
         for i = 1, 4 do
             sum = sum + next()
             yield()
         end
+
         return sum
     end)
+
     local ok, sum = resume(co)
     assert(ok and sum == 10)
 end
@@ -418,27 +509,38 @@ end
 local function yield_across_a_native_call_still_raises_test()
     local co = spawn(function()
         local t = { 3, 1, 2 }
+
         local ok, err = catch table.sort(t, function(a, b)
             yield()
             return a < b
         end)
+
         return ok, err
     end)
+
     local done, ok, err = resume(co)
-    assert(done and ok == false and string.find(err, "attempt to yield across a C-call boundary", 1, true))
+    assert(
+        done
+            and ok == false
+            and string.find(err, "attempt to yield across a C-call boundary", 1, true)
+    )
 end
 
 local function many_yields_in_a_hot_loop_test()
     local function body(n)
         local sum = 0
+
         for i = 1, n do
             sum = sum + i
+
             if i % 7 == 0 then
                 yield()
             end
         end
+
         return sum
     end
+
     local a = spawn(body, 20000)
     local b = spawn(body, 30000)
     local ok, sa = resume(a)
@@ -451,18 +553,22 @@ end
 
 local function status_of_a_detached_coroutine_test()
     local inner_status
+
     local target = spawn(function()
         yield()
         yield()
         return 1
     end)
+
     local waiter = spawn(function()
         return resume(target)
     end)
+
     local observer = spawn(function()
         yield()
         inner_status = status(waiter)
     end)
+
     assert(status(target) == "suspended")
     assert(resume(observer))
     -- The waiter was waiting for the target while the observer ran.
@@ -474,9 +580,11 @@ end
 
 local function the_thread_that_runs_the_scheduler_is_normal_test()
     local main = coroutine.running()
+
     local co = spawn(function()
         return status(main)
     end)
+
     local ok, st = resume(co)
     assert(ok and st == "normal")
 end
@@ -485,14 +593,17 @@ end
 
 local function results_wait_for_the_first_resume_test()
     local finished = false
+
     local early = spawn(function()
         finished = true
         return "kept", 2
     end)
+
     local other = spawn(function()
         yield()
         yield()
     end)
+
     assert(resume(other))
     assert(finished and status(early) == "dead")
     collectgarbage()
@@ -504,9 +615,11 @@ local function an_error_waits_for_the_first_resume_test()
     local early = spawn(function()
         error("kept error", 0)
     end)
+
     local other = spawn(function()
         yield()
     end)
+
     assert(resume(other))
     assert(status(early) == "dead")
     collectgarbage()
@@ -519,18 +632,26 @@ local function several_waiters_all_receive_the_results_test()
         for _ = 1, 5 do
             yield()
         end
+
         return "shared", 99
     end)
+
     local waiters = {}
+
     for i = 1, 4 do
         waiters[i] = spawn(function()
             return resume(target)
         end)
     end
+
     for i = 1, 4 do
         local r = pack(resume(waiters[i]))
-        assert(r.n == 4 and r[1] == true and r[2] == true and r[3] == "shared" and r[4] == 99, `waiter $(i)`)
+        assert(
+            r.n == 4 and r[1] == true and r[2] == true and r[3] == "shared" and r[4] == 99,
+            `waiter $i`
+        )
     end
+
     -- Every waiter collected the results, so a new resume finds it dead.
     local late = pack(resume(target))
     assert(late.n == 2 and late[1] == false and late[2] == "cannot resume dead coroutine")
@@ -538,16 +659,20 @@ end
 
 local function several_waiters_all_receive_the_error_test()
     local object = {}
+
     local target = spawn(function()
         yield()
         error(object)
     end)
+
     local waiters = {}
+
     for i = 1, 3 do
         waiters[i] = spawn(function()
             return resume(target)
         end)
     end
+
     for i = 1, 3 do
         local r = pack(resume(waiters[i]))
         assert(r.n == 3 and r[1] == true and r[2] == false and rawequal(r[3], object))
@@ -559,15 +684,19 @@ local function the_main_chunk_and_a_coroutine_wait_together_test()
         for _ = 1, 3 do
             yield()
         end
+
         return "both"
     end)
+
     local waiter = spawn(function()
         return resume(target)
     end)
+
     -- The waiter is already waiting when the main chunk resumes.
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
     local ok, v = resume(target)
     assert(ok and v == "both")
@@ -577,21 +706,25 @@ end
 
 local function a_detached_coroutine_waits_for_another_test()
     local log = {}
+
     local inner = spawn(function()
         log[#log + 1] = "inner start"
         yield()
         log[#log + 1] = "inner end"
         return 5
     end)
+
     local outer = spawn(function()
         log[#log + 1] = "outer start"
         local ok, v = resume(inner)
         log[#log + 1] = "outer end"
         return ok, v * 2
     end)
+
     local bystander = spawn(function()
         log[#log + 1] = "bystander"
     end)
+
     local ok, ok2, v = resume(outer)
     assert(ok and ok2 and v == 10)
     assert(resume(bystander))
@@ -604,11 +737,13 @@ local function a_chain_of_waiters_test()
             yield()
             return 0
         end
+
         local below = spawn(link, depth - 1)
         local ok, v = resume(below)
         assert(ok)
         return v + 1
     end
+
     local top = spawn(link, 50)
     local ok, v = resume(top)
     assert(ok and v == 50)
@@ -620,12 +755,14 @@ local function a_plain_coroutine_inside_a_detached_one_waits_test()
         yield()
         return "through"
     end)
+
     local outer = spawn(function()
         local plain = create(function(prefix)
             local ok, v = resume(target)
             local again = yield(prefix .. v)
             return again, ok
         end)
+
         local ok, v = resume(plain, "went ")
         assert(ok and v == "went through", tostring(v))
         assert(status(plain) == "suspended")
@@ -634,6 +771,7 @@ local function a_plain_coroutine_inside_a_detached_one_waits_test()
         assert(status(plain) == "dead")
         return v
     end)
+
     local ok, v = resume(outer)
     assert(ok and v == "went through")
 end
@@ -643,8 +781,10 @@ local function two_levels_of_plain_coroutines_wait_test()
         for _ = 1, 4 do
             yield()
         end
+
         return 7
     end)
+
     local outer = spawn(function()
         local middle = create(function()
             local inner = coroutine.wrap(function()
@@ -652,12 +792,15 @@ local function two_levels_of_plain_coroutines_wait_test()
                 yield(v)
                 return v + 1
             end)
+
             local first = inner()
             local second = inner()
             return first, second
         end)
+
         return resume(middle)
     end)
+
     local r = pack(resume(outer))
     assert(r.n == 4 and r[1] == true and r[2] == true and r[3] == 7 and r[4] == 8)
 end
@@ -670,21 +813,28 @@ local function a_wait_inside_a_native_call_runs_the_scheduler_test()
         for _ = 1, 3 do
             yield()
         end
+
         return "sorted"
     end)
+
     local collected
+
     local outer = spawn(function()
         local t = { 3, 1, 2 }
+
         table.sort(t, function(a, b)
             if not collected then
                 local ok, v = resume(target)
                 assert(ok)
                 collected = v
             end
+
             return a < b
         end)
+
         return table.concat(t)
     end)
+
     local ok, text = resume(outer)
     assert(ok and text == "123" and collected == "sorted")
 end
@@ -693,18 +843,27 @@ local function a_coroutine_cannot_wait_for_itself_test()
     local co = spawn(function()
         return resume(coroutine.running())
     end)
+
     local r = pack(resume(co))
-    assert(r.n == 3 and r[1] == true and r[2] == false and r[3] == "cannot resume non-suspended coroutine")
+    assert(
+        r.n == 3
+            and r[1] == true
+            and r[2] == false
+            and r[3] == "cannot resume non-suspended coroutine"
+    )
 end
 
 local function waiting_in_a_circle_is_a_deadlock_test()
     local a, b
+
     a = spawn(function()
         return resume(b)
     end)
+
     b = spawn(function()
         return resume(a)
     end)
+
     local ok, err = resume(a)
     assert(ok == false and string.find(err, "deadlock", 1, true), tostring(err))
     assert(close(a) and close(b))
@@ -712,18 +871,22 @@ end
 
 local function the_main_chunk_runs_the_scheduler_while_it_waits_test()
     local progress = 0
+
     local background = spawn(function()
         for _ = 1, 10 do
             progress = progress + 1
             yield()
         end
     end)
+
     local target = spawn(function()
         for _ = 1, 4 do
             yield()
         end
+
         return progress
     end)
+
     local ok, seen = resume(target)
     -- The background coroutine ran while the main chunk waited.
     assert(ok and seen >= 4)
@@ -737,11 +900,13 @@ local function a_plain_coroutine_outside_runs_the_scheduler_test()
         yield()
         return "driven"
     end)
+
     local plain = create(function()
         local ok, v = resume(target)
         yield(v)
         return ok
     end)
+
     local ok, v = resume(plain)
     assert(ok and v == "driven")
     local ok2, inner_ok = resume(plain)
@@ -752,9 +917,11 @@ end
 
 local function close_cancels_a_coroutine_that_never_ran_test()
     local ran = false
+
     local co = spawn(function()
         ran = true
     end)
+
     assert(close(co) == true)
     assert(status(co) == "dead" and not ran)
     local r = pack(resume(co))
@@ -770,23 +937,30 @@ local function close_keeps_the_results_for_woken_waiters_test()
         yield()
         return "first", { 1, 2 }, nil
     end)
+
     local got = {}
+
     local hasty = spawn(function()
         got.hasty = pack(resume(co))
         got.closed = pack(close(co))
     end)
+
     local late = spawn(function()
         got.late = pack(resume(co))
     end)
+
     local last = spawn(function()
         got.last = pack(resume(co))
     end)
+
     assert(resume(hasty) and resume(late) and resume(last))
     assert(got.closed.n == 1 and got.closed[1] == true)
+
     for _, name in ipairs({ "hasty", "late", "last" }) do
         local r = got[name]
         assert(r.n == 4 and r[1] == true and r[2] == "first" and r[3][2] == 2 and r[4] == nil, name)
     end
+
     assert(got.hasty[3] == got.late[3] and got.late[3] == got.last[3])
     local r = pack(resume(co))
     assert(r.n == 2 and r[1] == false and r[2] == "cannot resume dead coroutine")
@@ -797,14 +971,18 @@ local function close_keeps_the_error_for_woken_waiters_test()
         yield()
         error({ code = 7 })
     end)
+
     local got = {}
+
     local hasty = spawn(function()
         got.hasty = pack(resume(co))
         got.closed = pack(close(co))
     end)
+
     local late = spawn(function()
         got.late = pack(resume(co))
     end)
+
     assert(resume(hasty) and resume(late))
     assert(got.hasty.n == 2 and got.hasty[1] == false and got.hasty[2].code == 7)
     assert(got.closed.n == 2 and got.closed[1] == false and got.closed[2] == got.hasty[2])
@@ -816,24 +994,30 @@ end
 
 local function close_runs_the_pending_close_variables_test()
     local log = {}
+
     local target = spawn(function()
         yield()
         yield()
         yield()
     end)
+
     local co = spawn(function()
         local a <close> = closer(log, "a")
         local b <close> = closer(log, "b")
+
         local function nested()
             local c <close> = closer(log, "c")
             resume(target)
             log[#log + 1] = "unreachable"
         end
+
         nested()
     end)
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
     -- The coroutine waits for the target inside `nested`.
     assert(status(co) == "suspended" and #log == 0)
@@ -846,32 +1030,41 @@ end
 
 local function close_of_a_yielded_coroutine_test()
     local log = {}
+
     local co = spawn(function()
         local a <close> = closer(log, "closed")
+
         while true do
             yield()
         end
     end)
+
     local warm = spawn(function()
         yield()
         yield()
     end)
+
     assert(resume(warm))
     assert(close(co) == true and log[1] == "closed")
 end
 
 local function close_reports_an_error_of_a_close_variable_test()
     local co = spawn(function()
-        local a <close> = setmetatable({}, { __close = function()
-            error("close failed", 0)
-        end })
+        local a <close> = setmetatable({}, {
+            __close = function()
+                error("close failed", 0)
+            end,
+        })
+
         while true do
             yield()
         end
     end)
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
     local r = pack(close(co))
     assert(r.n == 2 and r[1] == false and r[2] == "close failed")
@@ -882,13 +1075,17 @@ local function close_collects_the_error_of_a_failed_coroutine_test()
     local co = spawn(function()
         error("failed", 0)
     end)
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
+
     local expected = create(function()
         error("failed", 0)
     end)
+
     resume(expected)
     local want = pack(close(expected))
     local got = pack(close(co))
@@ -902,9 +1099,11 @@ local function close_of_a_finished_coroutine_drops_its_results_test()
     local co = spawn(function()
         return "never collected"
     end)
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
     assert(close(co) == true)
     local r = pack(resume(co))
@@ -917,12 +1116,15 @@ local function close_wakes_the_waiters_test()
             yield()
         end
     end)
+
     local waiter = spawn(function()
         return resume(target)
     end)
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
     assert(close(target) == true)
     local r = pack(resume(waiter))
@@ -935,12 +1137,15 @@ local function close_of_a_waiter_leaves_the_target_alone_test()
         yield()
         return "still here"
     end)
+
     local waiter = spawn(function()
         return resume(target)
     end)
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
     assert(close(waiter) == true)
     local ok, v = resume(target)
@@ -949,12 +1154,14 @@ end
 
 local function a_coroutine_closes_itself_test()
     local log = {}
+
     local co = spawn(function()
         local a <close> = closer(log, "self")
         yield()
         close()
         log[#log + 1] = "unreachable"
     end)
+
     local r = pack(resume(co))
     assert(r.n == 1 and r[1] == true)
     assert(table.concat(log, " ") == "self" and status(co) == "dead")
@@ -963,37 +1170,47 @@ end
 local function close_rejects_a_coroutine_that_runs_test()
     local outer
     local message
+
     outer = spawn(function()
         local inner = create(function()
             local ok, err = catch close(outer)
             message = err
         end)
+
         assert(resume(inner))
     end)
+
     assert(resume(outer))
     assert(string.find(message, "cannot close a normal coroutine", 1, true))
 end
 
 local function close_of_a_plain_coroutine_that_waits_test()
     local log = {}
+
     local target = spawn(function()
         for _ = 1, 3 do
             yield()
         end
+
         return "late"
     end)
+
     local plain
+
     local outer = spawn(function()
         plain = create(function()
             local a <close> = closer(log, "plain")
             return resume(target)
         end)
+
         return resume(plain)
     end)
+
     local closer_co = spawn(function()
         yield()
         return close(plain)
     end)
+
     local ok, closed = resume(closer_co)
     assert(ok and closed == true and log[1] == "plain")
     -- The outer coroutine finds its plain coroutine closed.
@@ -1009,17 +1226,21 @@ local function an_error_of_the_target_reaches_a_handler_of_the_waiter_test()
         yield()
         error("inner failure", 0)
     end)
+
     local co = spawn(function()
         local ok, err = catch (function()
             local done, message = resume(target)
+
             if not done then
                 error(message, 0)
             end
         end)()
+
         -- The coroutine goes on after its handler.
         yield()
         return ok, err
     end)
+
     local r = pack(resume(co))
     assert(r.n == 3 and r[1] == true and r[2] == false and r[3] == "inner failure")
 end
@@ -1032,28 +1253,36 @@ local function a_scheduled_coroutine_is_a_root_test()
     local weak = setmetatable({}, { __mode = "v" })
     local finalized = false
     local done = false
+
     local function start()
         weak[1] = spawn(function()
-            local keep = setmetatable({}, { __gc = function()
-                finalized = true
-            end })
+            local keep = setmetatable({}, {
+                __gc = function()
+                    finalized = true
+                end,
+            })
+
             for _ = 1, 5 do
                 yield()
                 collectgarbage()
             end
+
             done = keep ~= nil
         end)
     end
+
     start()
     collectgarbage()
     collectgarbage()
     -- Nothing but the scheduler refers to the coroutine.
     assert(weak[1] ~= nil and not finalized)
+
     local stepper = spawn(function()
         for _ = 1, 8 do
             yield()
         end
     end)
+
     assert(resume(stepper))
     assert(done)
     collectgarbage()
@@ -1063,23 +1292,30 @@ end
 
 local function a_coroutine_that_waits_is_a_root_test()
     local weak = setmetatable({}, { __mode = "k" })
+
     local target = spawn(function()
         for _ = 1, 4 do
             yield()
         end
+
         return "value"
     end)
+
     local result
+
     local function start()
         weak[spawn(function()
             local ok, v = resume(target)
             result = v
         end)] = true
     end
+
     start()
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
     collectgarbage()
     collectgarbage()
@@ -1087,9 +1323,11 @@ local function a_coroutine_that_waits_is_a_root_test()
     assert(next(weak) ~= nil and result == nil)
     local ok, v = resume(target)
     assert(ok and v == "value")
+
     local stepper = spawn(function()
         yield()
     end)
+
     assert(resume(stepper))
     assert(result == "value")
     collectgarbage()
@@ -1101,13 +1339,17 @@ local function results_survive_a_collection_test()
     local co = spawn(function()
         return { "fresh" }, string.rep("x", 100)
     end)
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
+
     for _ = 1, 3 do
         collectgarbage()
     end
+
     local ok, t, s = resume(co)
     assert(ok and t[1] == "fresh" and #s == 100)
 end
@@ -1118,10 +1360,13 @@ local function a_collected_success_is_silent_test()
             return "nobody asks"
         end)
     end
+
     start()
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
     collectgarbage()
     collectgarbage()
@@ -1130,24 +1375,31 @@ end
 local function many_coroutines_come_and_go_test()
     local total = 0
     local last
+
     for round = 1, 20 do
         local batch = {}
+
         for i = 1, 50 do
             batch[i] = spawn(function(n)
                 local t = {}
+
                 for j = 1, 5 do
                     t[j] = { n, j }
                     yield()
                 end
+
                 return #t
             end, i)
         end
+
         for i = 1, 50 do
             local ok, n = resume(batch[i])
             assert(ok and n == 5)
             total = total + n
         end
+
         last = batch
     end
+
     assert(total == 20 * 50 * 5 and #last == 50)
 end

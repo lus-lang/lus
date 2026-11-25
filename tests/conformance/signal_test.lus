@@ -18,7 +18,10 @@ local function exit_of(p)
 end
 
 local function a_handled_signal_is_delivered_test()
-    if windows then skip("signals are POSIX") end
+    if windows then
+        skip("signals are POSIX")
+    end
+
     local p = child([[
         local sig = os.signal("interrupt", "terminate")
         print(coroutine.status(sig))
@@ -33,7 +36,10 @@ local function a_handled_signal_is_delivered_test()
 end
 
 local function signals_between_resumes_are_counted_test()
-    if windows then skip("signals are POSIX") end
+    if windows then
+        skip("signals are POSIX")
+    end
+
     local p = child([[
         local sig = os.signal("hangup")
         print("ready")
@@ -53,7 +59,10 @@ local function signals_between_resumes_are_counted_test()
 end
 
 local function closing_restores_the_default_action_test()
-    if windows then skip("signals are POSIX") end
+    if windows then
+        skip("signals are POSIX")
+    end
+
     local p = child([[
         local sig = os.signal("terminate")
         coroutine.close(sig)
@@ -68,7 +77,10 @@ local function closing_restores_the_default_action_test()
 end
 
 local function a_second_interrupt_during_handling_exits_test()
-    if windows then skip("signals are POSIX") end
+    if windows then
+        skip("signals are POSIX")
+    end
+
     local p = child([[
         local sig = os.signal("interrupt")
         print("ready")
@@ -87,7 +99,10 @@ local function a_second_interrupt_during_handling_exits_test()
 end
 
 local function an_interrupt_while_waiting_again_is_handled_test()
-    if windows then skip("signals are POSIX") end
+    if windows then
+        skip("signals are POSIX")
+    end
+
     local p = child([[
         local sig = os.signal("interrupt")
         print("ready")
@@ -111,7 +126,10 @@ local function an_interrupt_while_waiting_again_is_handled_test()
 end
 
 local function a_detached_coroutine_waits_for_a_signal_test()
-    if windows then skip("signals are POSIX") end
+    if windows then
+        skip("signals are POSIX")
+    end
+
     local p = child([[
         local got
         local sig = os.signal("terminate")

@@ -20,9 +20,11 @@ local level <const> = do
     if score >= 1000 then
         provide "expert"
     end
+
     if score >= 500 then
         provide "intermediate"
     end
+
     provide "beginner"
 end
 
@@ -47,10 +49,12 @@ local readings = { 3, 9, 1 }
 
 local low, high = do
     local lo, hi = math.huge, -math.huge
+
     for _, value in ipairs(readings) do
         lo = math.min(lo, value)
         hi = math.max(hi, value)
     end
+
     provide lo, hi
 end
 
@@ -67,6 +71,7 @@ local banner = {
         if hour < 12 then
             provide "Good morning"
         end
+
         provide "Good afternoon"
     end,
 }

@@ -28,6 +28,6 @@ The following example reads one file of an archive and looks for a missing one.
 
 ```lus
 local zip = vector.archive.zip.pack({ { name = "config.json", data = '{"debug":true}' } })
-print(vector.tostring(vector.archive.zip.read(zip, "config.json")))   --> {"debug":true}
-print(vector.archive.zip.read(zip, "missing.json"))                   --> nil
+print(vector.tostring(vector.archive.zip.read(zip, "config.json")))  --> {"debug":true}
+print(vector.archive.zip.read(zip, "missing.json"))  --> nil
 ```

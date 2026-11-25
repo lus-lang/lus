@@ -32,6 +32,7 @@ insert:run("The Dispossessed", "Ursula K. Le Guin", 1974, nil)
 for book in db:query("SELECT title, year, price FROM books WHERE year < ? ORDER BY year", 1975) do
     print(book.title, book.year, book.price)
 end
+
 --> Solaris 1961 12.5
 --> Dune 1965 9.99
 --> The Dispossessed 1974 nil
@@ -46,6 +47,7 @@ local ok, err = catch db:transaction(function()
     db:run("UPDATE books SET price = price * 0.5")
     error("payment service unavailable", 0)
 end)
+
 print(ok, err)  --> false payment service unavailable
 
 for row in db:query("SELECT COUNT(*) AS n, SUM(price) AS total FROM books") do

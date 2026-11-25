@@ -21,7 +21,7 @@ The method takes no arguments and needs no permission. It returns two values, th
 pledge("network")
 local sock <close> = network.udp.open(0, "127.0.0.1")
 local address, port = sock:getsockname()
-print(address, math.type(port), port > 0)   --> 127.0.0.1  integer  true
+print(address, math.type(port), port > 0)  --> 127.0.0.1  integer  true
 ```
 
 [`network.udp.open`](/manual/api#network.udp.open) creates and binds the socket.

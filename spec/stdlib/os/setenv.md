@@ -24,9 +24,9 @@ The call requires the `env:write` permission for `varname`, which `env` includes
 ```lus
 pledge("env")
 os.setenv("LUS_EXAMPLE_MODE", "fast")
-print(os.getenv("LUS_EXAMPLE_MODE"))   --> fast
+print(os.getenv("LUS_EXAMPLE_MODE"))  --> fast
 os.setenv("LUS_EXAMPLE_MODE", nil)
-print(os.getenv("LUS_EXAMPLE_MODE"))   --> nil
+print(os.getenv("LUS_EXAMPLE_MODE"))  --> nil
 ```
 
 The change applies to the state that makes it. [`os.getenv`](/manual/api#os.getenv) reads the new value, and a child process that [`os.execute`](/manual/api#os.execute) or [`io.popen`](/manual/api#io.popen) starts afterwards receives the changed environment. A worker receives a copy of the environment of its creator when it starts, so later changes on either side stay on that side.

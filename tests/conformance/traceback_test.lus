@@ -22,13 +22,18 @@ local CASES = TEST_DIR .. "/fixtures/traceback/cases.lus"
 
 -- Run one fixture case in a subprocess and capture its rendered traceback.
 local run_cache = {}
+
 local function run_case(name)
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     if run_cache[name] == nil then
         local f = io.popen(LUS .. " " .. CASES .. " " .. name .. " 2>&1")
         run_cache[name] = f:read("a")
         f:close()
     end
+
     return run_cache[name]
 end
 
@@ -68,9 +73,13 @@ end
 
 local function deep_tail_recursion_runs_in_constant_stack_test()
     local function loop(n)
-        if n <= 0 then return "done" end
+        if n <= 0 then
+            return "done"
+        end
+
         return loop(n - 1)
     end
+
     -- Would overflow if tail calls grew the stack.
     assert(loop(1000000) == "done")
 end
@@ -98,7 +107,6 @@ end
   fixed chunk name, so the assertions are immune to edits of the fixture.
   Assertions that quote literal traceback lines use plain-text find.
 ]]
-
 
 -- Plain-text containment, so quoted traceback lines need no pattern escaping.
 local function has(s, txt)
@@ -251,9 +259,17 @@ end
 local function the_elided_traceback_renders_exactly_21_frames_plus_the_marker_test()
     local e = run_case("deep")
     local cnt = 0
-    for _ in e:gmatch("\n\t") do cnt = cnt + 1 end
+
+    for _ in e:gmatch("\n\t") do
+        cnt = cnt + 1
+    end
+
     local tails = 0
-    for _ in e:gmatch("\n\t%(%.%.%.tail calls%.%.%.%)") do tails = tails + 1 end
+
+    for _ in e:gmatch("\n\t%(%.%.%.tail calls%.%.%.%)") do
+        tails = tails + 1
+    end
+
     -- Ten leading frames, the marker line, and eleven trailing frames.
     assert(cnt - tails == 22, "got " .. tostring(cnt - tails) .. " lines\n" .. e)
 end
@@ -308,7 +324,11 @@ end
 local function a_caught_error_rethrown_and_recaught_stays_traceback_free_test()
     local ok1, e1 = catch error("orig")
     assert(not ok1)
-    local function rethrow() error(e1, 0) end
+
+    local function rethrow()
+        error(e1, 0)
+    end
+
     local ok2, e2 = catch rethrow()
     assert(not ok2)
     assert(e2 == e1, tostring(e2))
@@ -321,6 +341,7 @@ local function an_error_consumed_by_an_inner_catch_never_reaches_the_outer_one_t
         assert(not ok)
         return e
     end
+
     local ok2, res = catch absorb()
     assert(ok2, tostring(res))
     assert(count_tracebacks(res) == 0, tostring(res))
@@ -334,23 +355,66 @@ end
 -- ---- variable naming for index errors ----
 
 local index_errors_carry_the_accessed_variable_s_name_cases = {
-    {"local", function() local x return x.y end,
-        "attempt to index a nil value %(local 'x'%)"},
-    {"field", function() local t = {} return t.a.b end,
-        "attempt to index a nil value %(field 'a'%)"},
-    {"global", function() return tb2_undefined.foo end,
-        "attempt to index a nil value %(global 'tb2_undefined'%)"},
-    {"upvalue", function()
-        local u
-        local function g() return u.k end
-        return g()
-    end, "attempt to index a nil value %(upvalue 'u'%)"},
-    {"method lookup on nil names the object", function() local x return x:m() end,
-        "attempt to index a nil value %(local 'x'%)"},
-    {"constant integer index", function() local t = {} return t[1][2] end,
-        "attempt to index a nil value %(field 'integer index'%)"},
-    {"typed value word", function() local b = true return b.k end,
-        "attempt to index a boolean value %(local 'b'%)"},
+    {
+        "local",
+        function()
+            local x
+            return x.y
+        end,
+        "attempt to index a nil value %(local 'x'%)",
+    },
+    {
+        "field",
+        function()
+            local t = {}
+            return t.a.b
+        end,
+        "attempt to index a nil value %(field 'a'%)",
+    },
+    {
+        "global",
+        function()
+            return tb2_undefined.foo
+        end,
+        "attempt to index a nil value %(global 'tb2_undefined'%)",
+    },
+    {
+        "upvalue",
+        function()
+            local u
+
+            local function g()
+                return u.k
+            end
+
+            return g()
+        end,
+        "attempt to index a nil value %(upvalue 'u'%)",
+    },
+    {
+        "method lookup on nil names the object",
+        function()
+            local x
+            return x:m()
+        end,
+        "attempt to index a nil value %(local 'x'%)",
+    },
+    {
+        "constant integer index",
+        function()
+            local t = {}
+            return t[1][2]
+        end,
+        "attempt to index a nil value %(field 'integer index'%)",
+    },
+    {
+        "typed value word",
+        function()
+            local b = true
+            return b.k
+        end,
+        "attempt to index a boolean value %(local 'b'%)",
+    },
 }
 
 local function index_errors_carry_the_accessed_variable_s_name_test(label, f, pat)
@@ -360,14 +424,26 @@ local function index_errors_carry_the_accessed_variable_s_name_test(label, f, pa
 end
 
 local index_errors_on_temporaries_carry_no_name_suffix_cases = {
-    {"call result", function()
-        local f = function() return nil end
-        return (f()).y
-    end},
-    {"vararg expression", function()
-        local function v(...) return (...).x end
-        return v(nil)
-    end},
+    {
+        "call result",
+        function()
+            local f = function()
+                return nil
+            end
+
+            return (f()).y
+        end,
+    },
+    {
+        "vararg expression",
+        function()
+            local function v(...)
+                return (...).x
+            end
+
+            return v(nil)
+        end,
+    },
 }
 
 local function index_errors_on_temporaries_carry_no_name_suffix_test(label, f)
@@ -380,30 +456,83 @@ end
 -- ---- variable naming for call errors ----
 
 local call_errors_carry_the_callee_variable_s_name_cases = {
-    {"local", function() local f return f() end,
-        "attempt to call a nil value %(local 'f'%)"},
-    {"global", function() return tb2_undefined() end,
-        "attempt to call a nil value %(global 'tb2_undefined'%)"},
-    {"field", function() local t = {} return t.f() end,
-        "attempt to call a nil value %(field 'f'%)"},
-    {"method", function() local t = {} return t:m() end,
-        "attempt to call a nil value %(method 'm'%)"},
-    {"upvalue", function()
-        local u
-        local function g() return u() end
-        return g()
-    end, "attempt to call a nil value %(upvalue 'u'%)"},
-    {"constant integer index", function() local t = {} return t[1]() end,
-        "attempt to call a nil value %(field 'integer index'%)"},
-    {"typed value word", function()
-        local t = {}
-        t.f = 5
-        return t.f()
-    end, "attempt to call a number value %(field 'f'%)"},
-    {"nil for iterator", function() for x in nil do end end,
-        "attempt to call a nil value %(for iterator 'for iterator'%)"},
-    {"non-callable for iterator", function() for x in 5 do end end,
-        "attempt to call a number value %(for iterator 'for iterator'%)"},
+    {
+        "local",
+        function()
+            local f
+            return f()
+        end,
+        "attempt to call a nil value %(local 'f'%)",
+    },
+    {
+        "global",
+        function()
+            return tb2_undefined()
+        end,
+        "attempt to call a nil value %(global 'tb2_undefined'%)",
+    },
+    {
+        "field",
+        function()
+            local t = {}
+            return t.f()
+        end,
+        "attempt to call a nil value %(field 'f'%)",
+    },
+    {
+        "method",
+        function()
+            local t = {}
+            return t:m()
+        end,
+        "attempt to call a nil value %(method 'm'%)",
+    },
+    {
+        "upvalue",
+        function()
+            local u
+
+            local function g()
+                return u()
+            end
+
+            return g()
+        end,
+        "attempt to call a nil value %(upvalue 'u'%)",
+    },
+    {
+        "constant integer index",
+        function()
+            local t = {}
+            return t[1]()
+        end,
+        "attempt to call a nil value %(field 'integer index'%)",
+    },
+    {
+        "typed value word",
+        function()
+            local t = {}
+            t.f = 5
+            return t.f()
+        end,
+        "attempt to call a number value %(field 'f'%)",
+    },
+    {
+        "nil for iterator",
+        function()
+            for x in nil do
+            end
+        end,
+        "attempt to call a nil value %(for iterator 'for iterator'%)",
+    },
+    {
+        "non-callable for iterator",
+        function()
+            for x in 5 do
+            end
+        end,
+        "attempt to call a number value %(for iterator 'for iterator'%)",
+    },
 }
 
 local function call_errors_carry_the_callee_variable_s_name_test(label, f, pat)
@@ -413,14 +542,26 @@ local function call_errors_carry_the_callee_variable_s_name_test(label, f, pat)
 end
 
 local call_errors_on_temporaries_carry_no_name_suffix_cases = {
-    {"call result", function()
-        local f = function() return nil end
-        return (f())()
-    end},
-    {"vararg expression", function()
-        local function v(...) return (...)() end
-        return v(nil)
-    end},
+    {
+        "call result",
+        function()
+            local f = function()
+                return nil
+            end
+
+            return (f())()
+        end,
+    },
+    {
+        "vararg expression",
+        function()
+            local function v(...)
+                return (...)()
+            end
+
+            return v(nil)
+        end,
+    },
 }
 
 local function call_errors_on_temporaries_carry_no_name_suffix_test(label, f)

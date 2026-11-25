@@ -15,18 +15,27 @@
 --
 -- BIN is a runtime built with `-Dfail-io=true`.
 
-global arg, assert, error, fs, io, ipairs, math, os, package, pledge, print, string, table, tonumber, tostring
+global arg, assert, error, fs, io, ipairs, math, os, package, pledge, print, string, table,
+    tonumber, tostring
 
 pledge("exec", "fs", "env")
 
 local opts = { lus = "runtime/zig-out-io/bin/lus", timeout = 40 }
+
 do
     local i = 1
+
     while i <= #arg do
         local a, v = arg[i], arg[i + 1]
-        if a == "--lus" then opts.lus = v
-        elseif a == "--timeout" then opts.timeout = tonumber(v)
-        else error("unknown option " .. a) end
+
+        if a == "--lus" then
+            opts.lus = v
+        elseif a == "--timeout" then
+            opts.timeout = tonumber(v)
+        else
+            error("unknown option " .. a)
+        end
+
         i = i + 2
     end
 end
@@ -280,43 +289,78 @@ local function makeCerts(where)
         local ok = p:close()
         return ok == true or ok == 0, out
     end
-    if not sh("openssl version") then return false end
-    local function q(name) return "'" .. fs.path.join(where, name) .. "'" end
+
+    if not sh("openssl version") then
+        return false
+    end
+
+    local function q(name)
+        return "'" .. fs.path.join(where, name) .. "'"
+    end
+
     local f = assert(io.open(fs.path.join(where, "req.cnf"), "w"))
     f:write("[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = test\n")
     f:close()
     f = assert(io.open(fs.path.join(where, "server.ext"), "w"))
     f:write("subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n")
     f:close()
+
     for _, cmd in ipairs({
         "openssl ecparam -name prime256v1 -genkey -noout -out " .. q("ca.key"),
-        "openssl req -x509 -new -key " .. q("ca.key") .. " -subj '/CN=Lus Fault CA' -sha256 -days 2 -config " .. q("req.cnf")
-            .. " -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' -out " .. q("ca.pem"),
+        "openssl req -x509 -new -key "
+            .. q("ca.key")
+            .. " -subj '/CN=Lus Fault CA' -sha256 -days 2 -config "
+            .. q("req.cnf")
+            .. " -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' -out "
+            .. q("ca.pem"),
         "openssl ecparam -name prime256v1 -genkey -noout -out " .. q("server.key"),
-        "openssl req -new -key " .. q("server.key") .. " -subj '/CN=localhost' -config " .. q("req.cnf") .. " -out " .. q("server.csr"),
-        "openssl x509 -req -in " .. q("server.csr") .. " -CA " .. q("ca.pem") .. " -CAkey " .. q("ca.key")
-            .. " -CAcreateserial -sha256 -days 2 -extfile " .. q("server.ext") .. " -out " .. q("server.pem"),
+        "openssl req -new -key "
+            .. q("server.key")
+            .. " -subj '/CN=localhost' -config "
+            .. q("req.cnf")
+            .. " -out "
+            .. q("server.csr"),
+        "openssl x509 -req -in "
+            .. q("server.csr")
+            .. " -CA "
+            .. q("ca.pem")
+            .. " -CAkey "
+            .. q("ca.key")
+            .. " -CAcreateserial -sha256 -days 2 -extfile "
+            .. q("server.ext")
+            .. " -out "
+            .. q("server.pem"),
     }) do
         local ok, out = sh(cmd)
         assert(ok, out)
     end
+
     return true
 end
 
 local KINDS = { "reset", "eof", "dns", "refuse", "abort", "tls" }
-local STEP_OF = { reset = "transfers", eof = "receives", dns = "lookups", refuse = "connects", abort = "accepts", tls = "tlsreceives" }
+local STEP_OF = {
+    reset = "transfers",
+    eof = "receives",
+    dns = "lookups",
+    refuse = "connects",
+    abort = "accepts",
+    tls = "tlsreceives",
+}
 
 local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-network-faults")
 local _ = catch fs.remove(dir, true)
 fs.createdirectory(dir, true)
 local names = {}
 local scenario_names = { "fetch", "trickle", "tcp", "tls" }
+
 if makeCerts(dir) then
     scenario_names[#scenario_names + 1] = "https"
     scenario_names[#scenario_names + 1] = "tlsclient"
 else
     print("openssl is not available, so the scenarios with a TLS server are left out")
 end
+
 for _, name in ipairs(scenario_names) do
     local f = assert(io.open(fs.path.join(dir, name .. ".lus"), "w"))
     f:write(PRELUDE, SCENARIOS[name])
@@ -329,8 +373,14 @@ local function quote(s)
 end
 
 local function run(spec, name)
-    local cmd = string.format("cd %s && LUS_FAIL_NET=%s perl -e 'alarm %d; exec @ARGV' %s %s.lus 2>&1",
-        quote(dir), spec, opts.timeout, quote(fs.path.join(os.getenv("PWD"), opts.lus)), name)
+    local cmd = string.format(
+        "cd %s && LUS_FAIL_NET=%s perl -e 'alarm %d; exec @ARGV' %s %s.lus 2>&1",
+        quote(dir),
+        spec,
+        opts.timeout,
+        quote(fs.path.join(os.getenv("PWD"), opts.lus)),
+        name
+    )
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     local _, _, code = p:close()
@@ -339,22 +389,43 @@ end
 
 local function listed(msg)
     for _, pat in ipairs(LISTED) do
-        if msg:find(pat) then return true end
+        if msg:find(pat) then
+            return true
+        end
     end
+
     return false
 end
 
 -- The problems of one run's output, or nil.
 local function check(out, code)
-    if code == 142 then return "the run did not end within its time limit" end
-    if code ~= 0 then return string.format("the run exited with %s: %s", tostring(code), out) end
-    for msg in out:gmatch("error [%w]+: ([^\n]+)") do
-        if not listed(msg) then return "an error the manual does not list: " .. msg end
+    if code == 142 then
+        return "the run did not end within its time limit"
     end
-    if not out:find("fresh ok", 1, true) then return "the request after the fault failed: " .. out end
-    if not out:find("status dead", 1, true) then return "the server did not stop: " .. out end
+
+    if code ~= 0 then
+        return string.format("the run exited with %s: %s", tostring(code), out)
+    end
+
+    for msg in out:gmatch("error [%w]+: ([^\n]+)") do
+        if not listed(msg) then
+            return "an error the manual does not list: " .. msg
+        end
+    end
+
+    if not out:find("fresh ok", 1, true) then
+        return "the request after the fault failed: " .. out
+    end
+
+    if not out:find("status dead", 1, true) then
+        return "the server did not stop: " .. out
+    end
+
     local open = tonumber(out:match("lus: (%d+) sockets open at exit"))
-    if open ~= 0 then return string.format("%s sockets open at exit", tostring(open)) end
+
+    if open ~= 0 then
+        return string.format("%s sockets open at exit", tostring(open))
+    end
 end
 
 -- The steps of each kind that a scenario makes, from a run that counts
@@ -364,33 +435,59 @@ local function countSteps(name)
     local line = out:match("lus: network steps: ([^\n]+)")
     assert(line, "the scenario did not run: " .. out)
     local counts = {}
-    for n, step in line:gmatch("(%d+) (%a+)") do counts[step] = tonumber(n) end
+
+    for n, step in line:gmatch("(%d+) (%a+)") do
+        counts[step] = tonumber(n)
+    end
+
     return counts, out, code
 end
 
 local problems = {}
 local summary = {}
 local runs = 0
+
 for _, name in ipairs(names) do
     local counts, out, code = countSteps(name)
     local problem = check(out, code)
-    if problem then problems[#problems + 1] = string.format("%s without faults: %s", name, problem) end
+
+    if problem then
+        problems[#problems + 1] = string.format("%s without faults: %s", name, problem)
+    end
+
     local parts = {}
+
     for _, kind in ipairs(KINDS) do
         local step = STEP_OF[kind]
         local steps = counts[step] or 0
         parts[#parts + 1] = string.format("%d %s", steps, step)
+
         for n = 1, steps do
             local o, c = run(n .. ":" .. kind, name)
             runs = runs + 1
             local p = check(o, c)
-            if p then problems[#problems + 1] = string.format("%s, %s %d: %s", name, kind, n, p) end
+
+            if p then
+                problems[#problems + 1] = string.format("%s, %s %d: %s", name, kind, n, p)
+            end
         end
     end
+
     summary[#summary + 1] = string.format("%-8s %s", name, table.concat(parts, ", "))
 end
+
 fs.remove(dir, true)
-for _, s in ipairs(summary) do print(s) end
+
+for _, s in ipairs(summary) do
+    print(s)
+end
+
 print(string.format("%d runs, %d problems", runs, #problems))
-for _, p in ipairs(problems) do print("  " .. p) end
-if #problems > 0 then os.exit(1) end
+
+for _, p in ipairs(problems) do
+    print("  " .. p)
+end
+
+if #problems > 0 then
+    os.exit(1)
+end

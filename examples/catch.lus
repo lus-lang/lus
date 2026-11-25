@@ -4,9 +4,11 @@ global error, ipairs, math, print, tonumber, tostring, type
 
 local function parse_port(text)
     local port = math.tointeger(tonumber(text))
+
     if not port or port < 1 or port > 65535 then
         error(`invalid port: $text`, 0)
     end
+
     return port
 end
 
@@ -27,6 +29,7 @@ for _, text in ipairs({ "443", "99999" }) do
         print(`skipped: $port`)
     end
 end
+
 --> listening on 443
 --> skipped: invalid port: 99999
 
@@ -39,6 +42,7 @@ local function as_table(e)
     if type(e) == "table" then
         return e
     end
+
     return { code = "internal", message = tostring(e) }
 end
 

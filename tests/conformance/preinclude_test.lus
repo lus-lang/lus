@@ -26,68 +26,108 @@ end
 
 -- run one driver in both modes; expect the given marker on success
 local function bothmodes(includes, driver, marker)
-    for _, mode in ipairs({"", " --readonly-env"}) do
+    for _, mode in ipairs({ "", " --readonly-env" }) do
         local cmd = lus_cmd .. mode .. " " .. includes .. " " .. FIX .. driver
         local ok, out = run(cmd)
         assert(ok, driver .. " failed (mode '" .. mode .. "'): " .. out)
-        assert(out:find(marker, 1, true) ~= nil,
-            driver .. " missing marker (mode '" .. mode .. "'): " .. out)
+        assert(
+            out:find(marker, 1, true) ~= nil,
+            driver .. " missing marker (mode '" .. mode .. "'): " .. out
+        )
     end
 end
 
 local function pledge_free_require_of_a_preincluded_module_both_modes_test()
-    if not lus_ok then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_ok then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     bothmodes("--include " .. FIX .. "hello.lus", "main_basic.lus", "BASIC-OK")
 end
 
 local function control_without_include_the_same_driver_fails_test()
-    if not lus_ok then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_ok then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = run(lus_cmd .. " " .. FIX .. "main_basic.lus")
     assert(not ok, "driver must fail without preinclusion: " .. out)
     assert(out:find("not found") ~= nil or out:find("permission") ~= nil, out)
 end
 
 local function call_shapes_dynamic_names_and_package_loaded_interop_test()
-    if not lus_ok then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_ok then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     bothmodes("--include " .. FIX .. "hello.lus", "main_shapes.lus", "SHAPES-OK")
 end
 
 local function cross_module_requires_directory_includes_and_aliases_test()
-    if not lus_ok then skip("the interpreter is not reachable, set LUS_EXE") end
-    local incs = "--include " .. FIX .. "depper.lus"
-        .. " --include " .. FIX .. "hello.lus"
-        .. " --include " .. FIX .. "mods"
-        .. " --include " .. FIX .. "hello.lus:greetings"
+    if not lus_ok then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local incs = "--include "
+        .. FIX
+        .. "depper.lus"
+        .. " --include "
+        .. FIX
+        .. "hello.lus"
+        .. " --include "
+        .. FIX
+        .. "mods"
+        .. " --include "
+        .. FIX
+        .. "hello.lus:greetings"
     -- NOTE: hello.lus twice (plain + alias) registers two module names
     bothmodes(incs, "main_dep.lus", "DEP-OK")
 end
 
 local function workers_see_preincluded_modules_without_pledges_test()
-    if not lus_ok then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_ok then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     bothmodes("--include " .. FIX .. "hello.lus", "main_worker.lus", "WORKER-OK")
 end
 
 local function missing_include_file_fails_startup_test()
-    if not lus_ok then skip("the interpreter is not reachable, set LUS_EXE") end
-    local ok, out = run(lus_cmd .. " --include " .. FIX .. "nope.lus " ..
-                        FIX .. "main_basic.lus")
+    if not lus_ok then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local ok, out = run(lus_cmd .. " --include " .. FIX .. "nope.lus " .. FIX .. "main_basic.lus")
     assert(not ok, "startup must fail: " .. out)
     assert(out:find("cannot read include file") ~= nil, out)
 end
 
 local function unparsable_include_file_fails_startup_naming_the_file_test()
-    if not lus_ok then skip("the interpreter is not reachable, set LUS_EXE") end
-    local ok, out = run(lus_cmd .. " --include " .. FIX .. "broken.lus " ..
-                        FIX .. "main_basic.lus")
+    if not lus_ok then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local ok, out = run(lus_cmd .. " --include " .. FIX .. "broken.lus " .. FIX .. "main_basic.lus")
     assert(not ok, "startup must fail: " .. out)
     assert(out:find("broken.lus") ~= nil, "error should name the file: " .. out)
 end
 
 local function duplicate_module_names_fail_startup_test()
-    if not lus_ok then skip("the interpreter is not reachable, set LUS_EXE") end
-    local ok, out = run(lus_cmd .. " --include " .. FIX .. "hello.lus" ..
-                        " --include " .. FIX .. "hello.lus " ..
-                        FIX .. "main_basic.lus")
+    if not lus_ok then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local ok, out = run(
+        lus_cmd
+            .. " --include "
+            .. FIX
+            .. "hello.lus"
+            .. " --include "
+            .. FIX
+            .. "hello.lus "
+            .. FIX
+            .. "main_basic.lus"
+    )
     assert(not ok, "duplicate include must fail: " .. out)
     assert(out:find("duplicate preincluded module") ~= nil, out)
 end

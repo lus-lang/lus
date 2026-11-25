@@ -14,7 +14,7 @@ end
 
 local function start(source, ...)
     script_number = script_number + 1
-    local path = `./workercoro_$(script_number).lus`
+    local path = `./workercoro_$script_number.lus`
     local file = assert(io.open(path, "wb"))
     assert(file:write(source))
     assert(file:close())
@@ -33,9 +33,11 @@ local guard_seconds = 10
 local function guard(w)
     return spawn(function()
         local ok, sock = catch network.udp.open(0, "127.0.0.1")
+
         if not ok then
             return
         end
+
         sock:settimeout(guard_seconds)
         local _ = catch sock:receive()
         sock:close()
@@ -46,11 +48,14 @@ end
 -- Collects the messages of a worker until it ends.
 local function drain(w)
     local messages = {}
+
     while true do
         local message = worker.receive(w)
+
         if message == nil then
             return messages
         end
+
         messages[#messages + 1] = message
     end
 end
@@ -69,7 +74,10 @@ local function a_worker_runs_its_coroutines_after_its_body_test()
         worker.message("body ends")
     ]])
     local messages = drain(w)
-    assert(table.concat(messages, ", ") == "start, body ends, detached 1, detached 2, detached 3", table.concat(messages, ", "))
+    assert(
+        table.concat(messages, ", ") == "start, body ends, detached 1, detached 2, detached 3",
+        table.concat(messages, ", ")
+    )
     assert(worker.status(w) == "dead")
 end
 
@@ -85,10 +93,15 @@ local function an_uncollected_error_is_the_error_of_the_worker_test()
     -- A worker that has failed raises its error from the next receive,
     -- ahead of the messages it sent before.
     local ok, err
+
     repeat
         ok, err = catch worker.receive(w)
     until not ok or err == nil
-    assert(not ok and string.find(err, "workercoro_%d+%.lus:%d+: the detached coroutine failed$"), tostring(err))
+
+    assert(
+        not ok and string.find(err, "workercoro_%d+%.lus:%d+: the detached coroutine failed$"),
+        tostring(err)
+    )
     assert(worker.status(w) == "dead")
 end
 
@@ -123,9 +136,11 @@ local function receive_suspends_a_detached_coroutine_test()
     local w = start(shout)
     local watchdog = guard(w)
     local turns = 0
+
     local receiver = spawn(function()
         return worker.receive(w)
     end)
+
     -- The worker answers only after this coroutine ran, which it does
     -- while the receiver waits.
     local sender = spawn(function()
@@ -133,9 +148,11 @@ local function receive_suspends_a_detached_coroutine_test()
             turns = turns + 1
             yield()
         end
+
         assert(coroutine.status(receiver) == "suspended")
         worker.send(w, "hello")
     end)
+
     local ok, answer = resume(receiver)
     coroutine.close(watchdog)
     assert(ok and answer == "HELLO", tostring(answer))
@@ -147,12 +164,15 @@ end
 local function receive_in_the_main_chunk_runs_the_coroutines_test()
     local w = start(shout)
     local watchdog = guard(w)
+
     local sender = spawn(function()
         for i = 1, 5 do
             yield()
         end
+
         worker.send(w, "main")
     end)
+
     -- The main chunk keeps its native on the stack and runs the scheduler.
     local answer = worker.receive(w)
     coroutine.close(watchdog)
@@ -166,18 +186,23 @@ local function several_coroutines_receive_from_their_workers_test()
     local total = 6
     local receivers = {}
     local workers = {}
+
     for i = 1, total do
         workers[i] = start(shout)
+
         receivers[i] = spawn(function()
             local answers = {}
+
             for round = 1, 3 do
-                worker.send(workers[i], `w$(i)r$(round)`)
+                worker.send(workers[i], `w$(i)r$round`)
                 answers[round] = worker.receive(workers[i])
             end
+
             worker.send(workers[i], "stop")
             return table.concat(answers, " ")
         end)
     end
+
     for i = 1, total do
         local ok, answers = resume(receivers[i])
         assert(ok and answers == `W$(i)R1 W$(i)R2 W$(i)R3`, tostring(answers))
@@ -191,13 +216,16 @@ local function receive_passes_a_worker_error_to_a_detached_coroutine_test()
         error("the worker failed")
     ]])
     local watchdog = guard(w)
+
     local receiver = spawn(function()
         return catch worker.receive(w)
     end)
+
     local sender = spawn(function()
         yield()
         worker.send(w, "go")
     end)
+
     local ok, good, err = resume(receiver)
     coroutine.close(watchdog)
     assert(ok and good == false and string.find(err, "the worker failed$"), tostring(err))
@@ -207,16 +235,22 @@ end
 local function close_cancels_a_coroutine_that_waits_for_a_worker_test()
     local w = start(shout)
     local log = {}
+
     local receiver = spawn(function()
-        local mark <close> = setmetatable({}, { __close = function()
-            log[#log + 1] = "closed"
-        end })
+        local mark <close> = setmetatable({}, {
+            __close = function()
+                log[#log + 1] = "closed"
+            end,
+        })
+
         worker.receive(w)
         log[#log + 1] = "unreachable"
     end)
+
     local warm = spawn(function()
         yield()
     end)
+
     assert(resume(warm))
     assert(coroutine.status(receiver) == "suspended")
     assert(coroutine.close(receiver))

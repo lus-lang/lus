@@ -3,7 +3,7 @@
 -- their tokens.
 pledge("fs:read", "load")
 
-local fixtures = `$(TEST_DIR)/../../packages/textmate/test/fixtures`
+local fixtures = `$TEST_DIR/../../packages/textmate/test/fixtures`
 
 local function the_syntax_fixture_compiles_test()
     local chunk, err = loadfile(`$fixtures/syntax.lus`)

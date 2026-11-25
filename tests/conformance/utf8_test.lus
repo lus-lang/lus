@@ -11,17 +11,21 @@ pledge("load")
 local function bytes(...)
     local n = select("#", ...)
     local v = vector.create(n)
+
     for i = 1, n do
         vector.set(v, i - 1, (select(i, ...)))
     end
+
     return v
 end
 
 local function octets(v)
     local t = {}
+
     for i = 0, #v - 1 do
         t[#t + 1] = vector.get(v, i)
     end
+
     return t
 end
 
@@ -74,9 +78,11 @@ end
 
 local function utf8_codes_iterator_test()
     local t = {}
+
     for p, c in utf8.codes("A€") do
         table.insert(t, { p = p, c = c })
     end
+
     assert(#t == 2)
     assert(t[1].p == 1 and t[1].c == 65)
     assert(t[2].p == 2 and t[2].c == 0x20AC)
@@ -95,9 +101,11 @@ end
 local function utf8_charpattern_test()
     assert(utf8.charpattern)
     local count = 0
+
     for _ in string.gmatch("hello", utf8.charpattern) do
         count = count + 1
     end
+
     assert(count == 5)
 end
 
@@ -109,6 +117,7 @@ end
 
 local function boundary_codepoint_round_trips_test()
     local codepoints = { 0x007F, 0x0080, 0x07FF, 0x0800, 0xFFFF, 0x10000, 0x10FFFF }
+
     for _, cp in ipairs(codepoints) do
         local s = utf8.char(cp)
         assert(utf8.codepoint(s) == cp)
@@ -135,16 +144,22 @@ end
 -- An overlong encoding cannot be written as a string, and decoding its bytes fails.
 local function rejects_overlong_encoding_test()
     local overlong = bytes(0xC0, 0xAF)
-    raises(function() return vector.tostring(overlong) end)
+
+    raises(function()
+        return vector.tostring(overlong)
+    end)
+
     assert(string.find(vector.tostring(overlong, 0, 2, "lossy"), "\u{FFFD}", 1, true))
 end
 
 local function codes_iterates_mixed_multi_byte_correctly_test()
     local s = "A" .. utf8.char(0xE9) .. utf8.char(0x20AC) .. utf8.char(0x1F600)
     local cps = {}
+
     for _, c in utf8.codes(s) do
         cps[#cps + 1] = c
     end
+
     assert(#cps == 4)
     assert(cps[1] == 65)
     assert(cps[2] == 0xE9)
@@ -169,10 +184,12 @@ local function charpattern_over_mixed_text_yields_one_match_per_character_test()
     local mixed = "A" .. utf8.char(0xE9) .. utf8.char(0x20AC) .. utf8.char(0x1F600)
     local count = 0
     local rebuilt = ""
+
     for m in string.gmatch(mixed, utf8.charpattern) do
         count = count + 1
         rebuilt = rebuilt .. m
     end
+
     assert(count == 4)
     assert(count == utf8.len(mixed))
     assert(rebuilt == mixed)
@@ -208,9 +225,16 @@ local malformed_bytes_fail_strict_decoding_and_become_replacement_characters_cas
     { { 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0xFF, 0x77, 0x6F, 0x72, 0x6C, 0x64 }, 5 },
 }
 
-local function malformed_bytes_fail_strict_decoding_and_become_replacement_characters_test(list, offset)
+local function malformed_bytes_fail_strict_decoding_and_become_replacement_characters_test(
+    list,
+    offset
+)
     local v = bytes(table.unpack(list))
-    local err = raises(function() return vector.tostring(v) end)
+
+    local err = raises(function()
+        return vector.tostring(v)
+    end)
+
     assert(string.find(tostring(err), tostring(offset), 1, true))
     local lossy = vector.tostring(v, 0, #v, "lossy")
     assert(string.find(lossy, "\u{FFFD}", 1, true))
@@ -253,9 +277,24 @@ local function utf8_len_reports_nil_and_the_surrogate_position_test(s, pos)
 end
 
 local utf8_len_out_of_bounds_argcheck_cases = {
-    { function() return utf8.len("abc", 0) end, "initial position out of bounds" },
-    { function() return utf8.len("abc", 5) end, "initial position out of bounds" },
-    { function() return utf8.len("abc", 1, 4) end, "final position out of bounds" },
+    {
+        function()
+            return utf8.len("abc", 0)
+        end,
+        "initial position out of bounds",
+    },
+    {
+        function()
+            return utf8.len("abc", 5)
+        end,
+        "initial position out of bounds",
+    },
+    {
+        function()
+            return utf8.len("abc", 1, 4)
+        end,
+        "final position out of bounds",
+    },
 }
 
 local function utf8_len_out_of_bounds_argcheck_test(fn, pat)
@@ -302,10 +341,30 @@ local function utf8_codepoint_explicit_range_spans_multi_byte_characters_test()
 end
 
 local utf8_codepoint_out_of_bounds_argcheck_cases = {
-    { function() return utf8.codepoint("abc", 0) end, "out of bounds" },
-    { function() return utf8.codepoint("abc", 5) end, "out of bounds" },
-    { function() return utf8.codepoint("abc", 1, 4) end, "out of bounds" },
-    { function() return utf8.codepoint("") end, "out of bounds" },
+    {
+        function()
+            return utf8.codepoint("abc", 0)
+        end,
+        "out of bounds",
+    },
+    {
+        function()
+            return utf8.codepoint("abc", 5)
+        end,
+        "out of bounds",
+    },
+    {
+        function()
+            return utf8.codepoint("abc", 1, 4)
+        end,
+        "out of bounds",
+    },
+    {
+        function()
+            return utf8.codepoint("")
+        end,
+        "out of bounds",
+    },
 }
 
 local function utf8_codepoint_out_of_bounds_argcheck_test(fn, pat)
@@ -320,7 +379,11 @@ end
 
 local function utf8_codepoint_rejects_surrogates_strictly_and_accepts_them_in_lax_mode_test()
     local lone = utf8.char(0xD800)
-    raises(function() return utf8.codepoint(lone) end, "invalid UTF%-8 code")
+
+    raises(function()
+        return utf8.codepoint(lone)
+    end, "invalid UTF%-8 code")
+
     assert(utf8.codepoint(lone, 1, 1, true) == 0xD800)
 end
 
@@ -328,9 +391,11 @@ end
 
 local function utf8_codes_over_an_empty_string_never_iterates_test()
     local count = 0
+
     for _ in utf8.codes("") do
         count = count + 1
     end
+
     assert(count == 0)
 end
 
@@ -338,10 +403,12 @@ local function utf8_codes_reports_character_positions_across_a_1_2_3_4_byte_mix_
     local s = "A" .. utf8.char(0xE9) .. utf8.char(0x20AC) .. utf8.char(0x1F600)
     local positions = {}
     local codes = {}
+
     for p, c in utf8.codes(s) do
         positions[#positions + 1] = p
         codes[#codes + 1] = c
     end
+
     assert(same(positions, { 1, 2, 3, 4 }))
     assert(same(codes, { 65, 0xE9, 0x20AC, 0x1F600 }))
 end
@@ -349,19 +416,23 @@ end
 local function utf8_codes_raises_on_a_lone_surrogate_mid_iteration_test()
     local s = "A" .. utf8.char(0xD800) .. "b"
     local last
+
     local err = raises(function()
         for p in utf8.codes(s) do
             last = p
         end
     end, "invalid UTF%-8 code")
+
     assert(last == 1)
 end
 
 local function utf8_codes_lax_mode_yields_a_surrogate_without_error_test()
     local seen = {}
+
     for p, c in utf8.codes(utf8.char(0xD800), true) do
         seen[#seen + 1] = { p, c }
     end
+
     assert(#seen == 1)
     assert(seen[1][1] == 1)
     assert(seen[1][2] == 0xD800)
@@ -369,9 +440,21 @@ end
 
 -- A number coerces to a string here, so only non-coercible types raise.
 local utf8_codes_rejects_non_string_argument_cases = {
-    { function() return utf8.codes(nil) end },
-    { function() return utf8.codes({}) end },
-    { function() return utf8.codes(true) end },
+    {
+        function()
+            return utf8.codes(nil)
+        end,
+    },
+    {
+        function()
+            return utf8.codes({})
+        end,
+    },
+    {
+        function()
+            return utf8.codes(true)
+        end,
+    },
 }
 
 local function utf8_codes_rejects_non_string_argument_test(fn)
@@ -391,10 +474,26 @@ end
 
 -- Code points stop at U+10FFFF in 2.0 (spec/design/strings.md), so larger values are out of range.
 local utf8_char_out_of_range_raises_value_out_of_range_cases = {
-    { function() return utf8.char(0x110000) end },
-    { function() return utf8.char(-1) end },
-    { function() return utf8.char(0x100000000) end },
-    { function() return utf8.char(0x80000000) end },
+    {
+        function()
+            return utf8.char(0x110000)
+        end,
+    },
+    {
+        function()
+            return utf8.char(-1)
+        end,
+    },
+    {
+        function()
+            return utf8.char(0x100000000)
+        end,
+    },
+    {
+        function()
+            return utf8.char(0x80000000)
+        end,
+    },
 }
 
 local function utf8_char_out_of_range_raises_value_out_of_range_test(fn)
@@ -404,13 +503,28 @@ end
 local function utf8_char_coerces_integral_values_and_rejects_fractional_ones_test()
     assert(utf8.char(65.0) == "A")
     assert(utf8.char("65") == "A")
-    raises(function() return utf8.char(65.5) end, "number has no integer representation")
+
+    raises(function()
+        return utf8.char(65.5)
+    end, "number has no integer representation")
 end
 
 local utf8_char_rejects_non_number_arguments_cases = {
-    { function() return utf8.char("A") end },
-    { function() return utf8.char({}) end },
-    { function() return utf8.char(true) end },
+    {
+        function()
+            return utf8.char("A")
+        end,
+    },
+    {
+        function()
+            return utf8.char({})
+        end,
+    },
+    {
+        function()
+            return utf8.char(true)
+        end,
+    },
 }
 
 local function utf8_char_rejects_non_number_arguments_test(fn)
@@ -472,8 +586,16 @@ local function utf8_offset_returns_nil_when_the_character_does_not_exist_test()
 end
 
 local utf8_offset_position_out_of_bounds_argcheck_cases = {
-    { function() return utf8.offset("abc", 1, 0) end },
-    { function() return utf8.offset("abc", 1, 5) end },
+    {
+        function()
+            return utf8.offset("abc", 1, 0)
+        end,
+    },
+    {
+        function()
+            return utf8.offset("abc", 1, 5)
+        end,
+    },
 }
 
 local function utf8_offset_position_out_of_bounds_argcheck_test(fn)

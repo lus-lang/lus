@@ -11,311 +11,385 @@ local stdlib_data = require("lus-language.analysis.stdlib_data")
 local hover = {}
 
 local function format_stdlib_symbol(symbol)
-  if not symbol then return nil end
-  local parts = {}
-  if symbol.kind == "function" then
-    local params = {}
-    for _, param in ipairs(symbol.params or {}) do
-      local label = param.name or "?"
-      if param.type and param.type ~= "any" then
-        label = label .. ": " .. param.type
-      end
-      if param.optional then label = label .. "?" end
-      params[#params + 1] = label
+    if not symbol then
+        return nil
     end
-    if symbol.vararg then params[#params + 1] = "..." end
-    local returns = stdlib_data.format_returns(symbol)
-    local suffix = returns ~= "" and " -> " .. returns or ""
-    parts[#parts + 1] = "```lus\nfunction " .. symbol.name
-      .. "(" .. table.concat(params, ", ") .. ")" .. suffix .. "\n```"
-  else
-    parts[#parts + 1] = "```lus\n(" .. symbol.kind .. ") "
-      .. symbol.name .. "\n```"
-    if symbol.type then
-      parts[#parts + 1] = "*Type:* `" .. symbol.type .. "`"
+
+    local parts = {}
+
+    if symbol.kind == "function" then
+        local params = {}
+
+        for _, param in ipairs(symbol.params or {}) do
+            local label = param.name or "?"
+
+            if param.type and param.type ~= "any" then
+                label = `$label: $(param.type)`
+            end
+
+            if param.optional then
+                label = label .. "?"
+            end
+
+            params[#params + 1] = label
+        end
+
+        if symbol.vararg then
+            params[#params + 1] = "..."
+        end
+
+        local returns = stdlib_data.format_returns(symbol)
+        local suffix = returns ~= "" and " -> " .. returns or ""
+        parts[#parts + 1] = `\`\`\`lus\nfunction $(symbol.name)($(table.concat(params, ", ")))$suffix\n\`\`\``
+    else
+        parts[#parts + 1] = `\`\`\`lus\n($(symbol.kind)) $(symbol.name)\n\`\`\``
+
+        if symbol.type then
+            parts[#parts + 1] = `*Type:* \`$(symbol.type)\``
+        end
     end
-  end
-  if symbol.description then
-    parts[#parts + 1] = "---"
-    parts[#parts + 1] = symbol.description
-  end
-  return table.concat(parts, "\n\n")
+
+    if symbol.description then
+        parts[#parts + 1] = "---"
+        parts[#parts + 1] = symbol.description
+    end
+
+    return table.concat(parts, "\n\n")
 end
 
 -- Walk the AST to find a hover target at the given position.
 -- Detects both field access (t.field) and tablefield keys ({ a = 1 }).
 -- Returns {kind, ...} or nil.
 local function find_hover_target(node, line, col)
-  if not node or type(node) ~= "table" then return nil end
+    if not node or type(node) ~= "table" then
+        return nil
+    end
 
-  -- Field access: t.field (no restriction on table node type)
-  if node.type == "field" and node.table
-     and node.key and node.key.line == line then
-    local key_col = node.key.column or 0
-    local key_name = node.key.value
-    if key_name and col >= key_col and col < key_col + #key_name then
-      return {kind = "field", table_node = node.table, field_name = key_name}
-    end
-  end
+    -- Field access: t.field (no restriction on table node type)
+    if node.type == "field" and node.table and node.key and node.key.line == line then
+        local key_col = node.key.column or 0
+        local key_name = node.key.value
 
-  -- Tablefield key: { a = 1 } where cursor is on a
-  if node.type == "tablefield" and node.key
-     and node.key.type == "string" and node.key.line == line then
-    local key_col = node.key.column or 0
-    local key_name = node.key.value
-    if key_name and col >= key_col and col < key_col + #key_name then
-      return {kind = "tablefield", key_name = key_name, value_node = node.value}
+        if key_name and col >= key_col and col < key_col + #key_name then
+            return { kind = "field", table_node = node.table, field_name = key_name }
+        end
     end
-  end
 
-  -- Recurse into all sub-nodes
-  if node.children then
-    for _, child in ipairs(node.children) do
-      local r = find_hover_target(child, line, col)
-      if r then return r end
+    -- Tablefield key: { a = 1 } where cursor is on a
+    if node.type == "tablefield"
+        and node.key
+        and node.key.type == "string"
+        and node.key.line == line then
+        local key_col = node.key.column or 0
+        local key_name = node.key.value
+
+        if key_name and col >= key_col and col < key_col + #key_name then
+            return { kind = "tablefield", key_name = key_name, value_node = node.value }
+        end
     end
-  end
-  for _, key in ipairs({"func", "left", "right", "operand", "expr",
-                         "cond", "nameexpr", "base", "suffix",
-                         "table", "key", "value", "handler",
-                         "init", "limit", "step", "start", "finish"}) do
-    if node[key] then
-      local r = find_hover_target(node[key], line, col)
-      if r then return r end
+
+    -- Recurse into all sub-nodes
+    if node.children then
+        for _, child in ipairs(node.children) do
+            if r = find_hover_target(child, line, col) then
+                return r
+            end
+        end
     end
-  end
-  for _, key in ipairs({"args", "values", "lhs", "rhs", "fields",
-                         "parts", "explist"}) do
-    if node[key] then
-      for _, v in ipairs(node[key]) do
-        local r = find_hover_target(v, line, col)
-        if r then return r end
-      end
+
+    for _, key in ipairs({
+        "func",
+        "left",
+        "right",
+        "operand",
+        "expr",
+        "cond",
+        "nameexpr",
+        "base",
+        "suffix",
+        "table",
+        "key",
+        "value",
+        "handler",
+        "init",
+        "limit",
+        "step",
+        "start",
+        "finish",
+    }) do
+        if node[key] then
+            if r = find_hover_target(node[key], line, col) then
+                return r
+            end
+        end
     end
-  end
-  return nil
+
+    for _, key in ipairs({ "args", "values", "lhs", "rhs", "fields", "parts", "explist" }) do
+        if node[key] then
+            for _, v in ipairs(node[key]) do
+                if r = find_hover_target(v, line, col) then
+                    return r
+                end
+            end
+        end
+    end
+
+    return nil
 end
 
 -- Build a hover description from a declaration
 local function describe(decl, uri)
-  local kind = decl.kind
-  local name = decl.name
-  local parts = {}
+    local kind = decl.kind
+    local name = decl.name
+    local parts = {}
 
-  if kind == "function" then
-    -- decl.node is the function AST node (localfunc/globalfunc) which has .params
-    local fnode = decl.node
-    local ret_suffix = ""
-    if decl.type_info and decl.type_info.return_type
-       and decl.type_info.return_type.tag ~= "unknown" then
-      ret_suffix = " -> " .. types_mod.display(decl.type_info.return_type)
-    end
-    if fnode and fnode.params then
-      local params = {}
-      for i = 1, #fnode.params do
-        local p = fnode.params[i]
-        params[#params + 1] = p.value or p.name or "?"
-      end
-      if fnode.isvararg then
-        params[#params + 1] = "..."
-      end
-      parts[#parts + 1] = "```lus\nfunction " .. name .. "(" .. table.concat(params, ", ") .. ")" .. ret_suffix .. "\n```"
-    else
-      parts[#parts + 1] = "```lus\nfunction " .. name .. "(...)" .. ret_suffix .. "\n```"
-    end
+    if kind == "function" then
+        -- decl.node is the function AST node (localfunc/globalfunc) which has .params
+        local fnode = decl.node
+        local ret_suffix = ""
 
-  elseif kind == "param" then
-    parts[#parts + 1] = "```lus\n(parameter) " .. name .. "\n```"
-
-  elseif kind == "for" then
-    parts[#parts + 1] = "```lus\n(for variable) " .. name .. "\n```"
-
-  elseif kind == "global" then
-    local attr = ""
-    if decl.node and decl.node.attr == "const" then
-      attr = " <const>"
-    end
-    parts[#parts + 1] = "```lus\nglobal " .. name .. attr .. "\n```"
-
-  else
-    -- local (or global with function type)
-    local attr = ""
-    if decl.node and (decl.node.attr == "const" or decl.node.attr == "meta") then
-      attr = " <" .. decl.node.attr .. ">"
-    elseif decl.node and decl.node.lazy then
-      attr = " <lazy>"
-    elseif decl.node and decl.node.context then
-      attr = " <context>"
-    end
-    -- If the variable holds a function type, show function-style signature
-    if decl.type_info and decl.type_info.tag == "function" then
-      local sig = types_mod.display(decl.type_info)
-      local prefix = kind == "global" and "global" or "local"
-      parts[#parts + 1] = "```lus\n" .. prefix .. " " .. name .. ": " .. sig .. "\n```"
-    elseif kind == "global" then
-      parts[#parts + 1] = "```lus\nglobal " .. name .. attr .. "\n```"
-    else
-      parts[#parts + 1] = "```lus\nlocal " .. name .. attr .. "\n```"
-    end
-  end
-
-  -- Show inferred type if available (and not already shown by function signature)
-  if decl.type_info and kind ~= "function"
-     and decl.type_info.tag ~= "function" then
-    local type_display = types_mod.display(decl.type_info)
-    if type_display ~= "unknown" then
-      parts[#parts + 1] = "*Type:* `" .. type_display .. "`"
-    end
-  end
-
-  -- Show documentation comment if present
-  if decl.doc then
-    parts[#parts + 1] = "---"
-    parts[#parts + 1] = decl.doc
-  end
-
-  -- Show stdlib description for built-in globals
-  local stdlib_symbol = kind == "global" and stdlib_data.resolve(name)
-  if stdlib_symbol and stdlib_symbol.description then
-    parts[#parts + 1] = "---"
-    parts[#parts + 1] = stdlib_symbol.description
-  end
-
-  -- Check if this is a require() variable and show module info
-  local tree = ast_mod.get(uri)
-  if tree then
-    local mod_name = modules.get_require_for_decl(tree, decl)
-    if mod_name then
-      parts[#parts + 1] = "---"
-      parts[#parts + 1] = "*Module:* `" .. mod_name .. "`"
-      local exports = modules.get_exports(mod_name, uri)
-      if #exports > 0 then
-        local export_names = {}
-        for _, exp in ipairs(exports) do
-          export_names[#export_names + 1] = exp.name
+        if decl.type_info
+            and decl.type_info.return_type
+            and decl.type_info.return_type.tag ~= "unknown" then
+            ret_suffix = " -> " .. types_mod.display(decl.type_info.return_type)
         end
-        parts[#parts + 1] = "*Exports:* " .. table.concat(export_names, ", ")
-      end
-    end
-  end
 
-  return table.concat(parts, "\n\n")
+        if fnode and fnode.params then
+            local params = {}
+
+            for i = 1, #fnode.params do
+                local p = fnode.params[i]
+                params[#params + 1] = p.value or p.name or "?"
+            end
+
+            if fnode.isvararg then
+                params[#params + 1] = "..."
+            end
+
+            parts[#parts + 1] = `\`\`\`lus\nfunction $name($(table.concat(params, ", ")))$ret_suffix\n\`\`\``
+        else
+            parts[#parts + 1] = `\`\`\`lus\nfunction $name(...)$ret_suffix\n\`\`\``
+        end
+    elseif kind == "param" then
+        parts[#parts + 1] = `\`\`\`lus\n(parameter) $name\n\`\`\``
+    elseif kind == "for" then
+        parts[#parts + 1] = `\`\`\`lus\n(for variable) $name\n\`\`\``
+    elseif kind == "global" then
+        local attr = ""
+
+        if decl.node and decl.node.attr == "const" then
+            attr = " <const>"
+        end
+
+        parts[#parts + 1] = `\`\`\`lus\nglobal $name$attr\n\`\`\``
+    else
+        -- local (or global with function type)
+        local attr = ""
+
+        if decl.node and (decl.node.attr == "const" or decl.node.attr == "meta") then
+            attr = ` <$(decl.node.attr)>`
+        elseif decl.node and decl.node.lazy then
+            attr = " <lazy>"
+        elseif decl.node and decl.node.context then
+            attr = " <context>"
+        end
+
+        -- If the variable holds a function type, show function-style signature
+        if decl.type_info and decl.type_info.tag == "function" then
+            local sig = types_mod.display(decl.type_info)
+            local prefix = kind == "global" and "global" or "local"
+            parts[#parts + 1] = `\`\`\`lus\n$prefix $name: $sig\n\`\`\``
+        elseif kind == "global" then
+            parts[#parts + 1] = `\`\`\`lus\nglobal $name$attr\n\`\`\``
+        else
+            parts[#parts + 1] = `\`\`\`lus\nlocal $name$attr\n\`\`\``
+        end
+    end
+
+    -- Show inferred type if available (and not already shown by function signature)
+    if decl.type_info and kind ~= "function" and decl.type_info.tag ~= "function" then
+        local type_display = types_mod.display(decl.type_info)
+
+        if type_display ~= "unknown" then
+            parts[#parts + 1] = `*Type:* \`$type_display\``
+        end
+    end
+
+    -- Show documentation comment if present
+    if decl.doc then
+        parts[#parts + 1] = "---"
+        parts[#parts + 1] = decl.doc
+    end
+
+    -- Show stdlib description for built-in globals
+    local stdlib_symbol = kind == "global" and stdlib_data.resolve(name)
+
+    if stdlib_symbol and stdlib_symbol.description then
+        parts[#parts + 1] = "---"
+        parts[#parts + 1] = stdlib_symbol.description
+    end
+
+    -- Check if this is a require() variable and show module info
+
+    if tree = ast_mod.get(uri) then
+        if mod_name = modules.get_require_for_decl(tree, decl) then
+            parts[#parts + 1] = "---"
+            parts[#parts + 1] = `*Module:* \`$mod_name\``
+            local exports = modules.get_exports(mod_name, uri)
+
+            if #exports > 0 then
+                local export_names = {}
+
+                for _, exp in ipairs(exports) do
+                    export_names[#export_names + 1] = exp.name
+                end
+
+                parts[#parts + 1] = "*Exports:* " .. table.concat(export_names, ", ")
+            end
+        end
+    end
+
+    return table.concat(parts, "\n\n")
 end
 
 -- Compute hover info for a position.
 -- position is 0-based (LSP). Returns an LSP Hover or nil.
 function hover.compute(uri, position)
-  ast_mod.parse(uri)
+    ast_mod.parse(uri)
 
-  local analysis = scope_mod.analyze(uri)
-  if not analysis then return nil end
+    local analysis = scope_mod.analyze(uri)
 
-  local doc = document.get(uri)
-  if not doc then return nil end
-  local line, col = pos_util.lsp_to_byte(
-    doc.text, doc.line_index, position.line, position.character)
-
-  local decl = scope_mod.get_declaration(analysis, line, col)
-  if decl then
-    return {
-      contents = {
-        kind = "markdown",
-        value = describe(decl, uri),
-      },
-    }
-  end
-
-  -- Fallback: check for field access or tablefield key
-  local tree = ast_mod.get(uri)
-  if tree then
-    local target = find_hover_target(tree, line, col)
-    if target then
-      if target.kind == "field" then
-        local table_type = scope_mod.infer_expr_type(analysis, target.table_node, line)
-        -- Try module exports (for require'd variables)
-        if table_type and table_type.tag == "module" and table_type.module_name then
-          local exports = modules.get_exports(table_type.module_name, uri)
-          for _, exp in ipairs(exports) do
-            if exp.name == target.field_name then
-              local parts = {}
-              if exp.type_info and exp.type_info.tag == "function" then
-                local sig = types_mod.display(exp.type_info)
-                parts[#parts + 1] = "```lus\nfunction " .. target.field_name .. ": " .. sig .. "\n```"
-              else
-                parts[#parts + 1] = "```lus\n(field) " .. target.field_name .. "\n```"
-              end
-              if exp.type_info then
-                local td = types_mod.display(exp.type_info)
-                if td ~= "unknown" and not (exp.type_info.tag == "function") then
-                  parts[#parts + 1] = "*Type:* `" .. td .. "`"
-                end
-              end
-              return {
-                contents = {
-                  kind = "markdown",
-                  value = table.concat(parts, "\n\n"),
-                },
-              }
-            end
-          end
-        end
-        -- Try table fields
-        local fields = types_mod.get_fields(table_type)
-        if fields and fields[target.field_name] then
-          local finfo = fields[target.field_name]
-          local parts = {}
-          local type_display = types_mod.display(finfo.type_info)
-          parts[#parts + 1] = "```lus\n(field) " .. target.field_name .. "\n```"
-          if type_display ~= "unknown" then
-            parts[#parts + 1] = "*Type:* `" .. type_display .. "`"
-          end
-          return {
-            contents = {
-              kind = "markdown",
-              value = table.concat(parts, "\n\n"),
-            },
-          }
-        end
-        local parent_name = stdlib_data.expression_name(target.table_node)
-        if table_type and table_type.tag == "nominal" then
-          parent_name = table_type.name
-        elseif table_type and (table_type.tag == "string"
-               or table_type.tag == "table"
-               or table_type.tag == "vector"
-               or table_type.tag == "worker") then
-          parent_name = table_type.tag
-        end
-        local symbol = stdlib_data.resolve_member(parent_name, target.field_name)
-        if symbol then
-          return {
-            contents = {
-              kind = "markdown",
-              value = format_stdlib_symbol(symbol),
-            },
-          }
-        end
-
-      elseif target.kind == "tablefield" then
-        local parts = {}
-        parts[#parts + 1] = "```lus\n(field) " .. target.key_name .. "\n```"
-        if target.value_node then
-          local val_type = scope_mod.infer_expr_type(analysis, target.value_node, line)
-          local type_display = types_mod.display(val_type)
-          if type_display ~= "unknown" then
-            parts[#parts + 1] = "*Type:* `" .. type_display .. "`"
-          end
-        end
-        return {
-          contents = {
-            kind = "markdown",
-            value = table.concat(parts, "\n\n"),
-          },
-        }
-      end
+    if not analysis then
+        return nil
     end
-  end
 
-  return nil
+    local doc = document.get(uri)
+
+    if not doc then
+        return nil
+    end
+
+    local line, col = pos_util.lsp_to_byte(
+        doc.text,
+        doc.line_index,
+        position.line,
+        position.character
+    )
+
+    if decl = scope_mod.get_declaration(analysis, line, col) then
+        return {
+            contents = {
+                kind = "markdown",
+                value = describe(decl, uri),
+            },
+        }
+    end
+
+    -- Fallback: check for field access or tablefield key
+
+    if tree = ast_mod.get(uri) then
+        if target = find_hover_target(tree, line, col) then
+            if target.kind == "field" then
+                local table_type = scope_mod.infer_expr_type(analysis, target.table_node, line)
+
+                -- Try module exports (for require'd variables)
+                if table_type and table_type.tag == "module" and table_type.module_name then
+                    local exports = modules.get_exports(table_type.module_name, uri)
+
+                    for _, exp in ipairs(exports) do
+                        if exp.name == target.field_name then
+                            local parts = {}
+
+                            if exp.type_info and exp.type_info.tag == "function" then
+                                local sig = types_mod.display(exp.type_info)
+                                parts[#parts + 1] = `\`\`\`lus\nfunction $(target.field_name): $sig\n\`\`\``
+                            else
+                                parts[#parts + 1] = `\`\`\`lus\n(field) $(target.field_name)\n\`\`\``
+                            end
+
+                            if exp.type_info then
+                                local td = types_mod.display(exp.type_info)
+
+                                if td ~= "unknown" and not (exp.type_info.tag == "function") then
+                                    parts[#parts + 1] = `*Type:* \`$td\``
+                                end
+                            end
+
+                            return {
+                                contents = {
+                                    kind = "markdown",
+                                    value = table.concat(parts, "\n\n"),
+                                },
+                            }
+                        end
+                    end
+                end
+
+                -- Try table fields
+                local fields = types_mod.get_fields(table_type)
+
+                if fields and fields[target.field_name] then
+                    local finfo = fields[target.field_name]
+                    local parts = {}
+                    local type_display = types_mod.display(finfo.type_info)
+                    parts[#parts + 1] = `\`\`\`lus\n(field) $(target.field_name)\n\`\`\``
+
+                    if type_display ~= "unknown" then
+                        parts[#parts + 1] = `*Type:* \`$type_display\``
+                    end
+
+                    return {
+                        contents = {
+                            kind = "markdown",
+                            value = table.concat(parts, "\n\n"),
+                        },
+                    }
+                end
+
+                local parent_name = stdlib_data.expression_name(target.table_node)
+
+                if table_type and table_type.tag == "nominal" then
+                    parent_name = table_type.name
+                elseif table_type
+                    and (table_type.tag == "string"
+                        or table_type.tag == "table"
+                        or table_type.tag == "vector"
+                        or table_type.tag == "worker") then
+                    parent_name = table_type.tag
+                end
+
+                if symbol = stdlib_data.resolve_member(parent_name, target.field_name) then
+                    return {
+                        contents = {
+                            kind = "markdown",
+                            value = format_stdlib_symbol(symbol),
+                        },
+                    }
+                end
+            elseif target.kind == "tablefield" then
+                local parts = {}
+                parts[#parts + 1] = `\`\`\`lus\n(field) $(target.key_name)\n\`\`\``
+
+                if target.value_node then
+                    local val_type = scope_mod.infer_expr_type(analysis, target.value_node, line)
+                    local type_display = types_mod.display(val_type)
+
+                    if type_display ~= "unknown" then
+                        parts[#parts + 1] = `*Type:* \`$type_display\``
+                    end
+                end
+
+                return {
+                    contents = {
+                        kind = "markdown",
+                        value = table.concat(parts, "\n\n"),
+                    },
+                }
+            end
+        end
+    end
+
+    return nil
 end
 
 return hover

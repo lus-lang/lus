@@ -11,41 +11,55 @@
 
 -- Code points of one to four bytes in a fixed cycle, so the byte offset of
 -- a character never follows from its index.
-local cycle = {0x41, 0xE9, 0x3B1, 0x901F, 0x1D11E, 0x7A, 0x4E2D, 0x10348}
+local cycle = { 0x41, 0xE9, 0x3B1, 0x901F, 0x1D11E, 0x7A, 0x4E2D, 0x10348 }
 
 local function codepoints(n)
     local cps = {}
-    for i = 1, n do cps[i] = cycle[(i * 5) % #cycle + 1] end
+
+    for i = 1, n do
+        cps[i] = cycle[(i * 5) % #cycle + 1]
+    end
+
     return cps
 end
 
 local function build(cps)
     local parts = {}
-    for i = 1, #cps do parts[i] = string.char(cps[i]) end
+
+    for i = 1, #cps do
+        parts[i] = string.char(cps[i])
+    end
+
     return table.concat(parts)
 end
 
 -- Positions around every multiple of the breadcrumb step, which is 64.
 local function edges(n)
     local ps = {}
+
     for k = 0, n // 64 + 1 do
         for d = -1, 1 do
             local p = k * 64 + d
-            if p >= 1 and p <= n then ps[#ps + 1] = p end
+
+            if p >= 1 and p <= n then
+                ps[#ps + 1] = p
+            end
         end
     end
+
     ps[#ps + 1] = n
     return ps
 end
 
 local function single_characters_match_around_each_breadcrumb_test()
-    for _, n in ipairs({63, 64, 65, 127, 128, 129, 640, 641}) do
+    for _, n in ipairs({ 63, 64, 65, 127, 128, 129, 640, 641 }) do
         local cps = codepoints(n)
         local s = build(cps)
         assert(#s == n)
+
         for _, p in ipairs(edges(n)) do
-            assert(s:sub(p, p) == string.char(cps[p]), `n=$(n) p=$(p)`)
-            assert(string.byte(s, p) == cps[p], `n=$(n) p=$(p)`)
+            assert(s:sub(p, p) == string.char(cps[p]), `n=$n p=$p`)
+            assert(string.byte(s, p) == cps[p], `n=$n p=$p`)
         end
     end
 end
@@ -53,12 +67,17 @@ end
 local function slices_that_cross_a_breadcrumb_have_the_right_characters_test()
     local cps = codepoints(300)
     local s = build(cps)
+
     for _, p in ipairs(edges(300)) do
-        for _, len in ipairs({1, 2, 63, 64, 65}) do
+        for _, len in ipairs({ 1, 2, 63, 64, 65 }) do
             local q = math.min(p + len - 1, 300)
             local want = {}
-            for i = p, q do want[#want + 1] = string.char(cps[i]) end
-            assert(s:sub(p, q) == table.concat(want), `p=$(p) q=$(q)`)
+
+            for i = p, q do
+                want[#want + 1] = string.char(cps[i])
+            end
+
+            assert(s:sub(p, q) == table.concat(want), `p=$p q=$q`)
             assert(#s:sub(p, q) == q - p + 1)
         end
     end
@@ -67,13 +86,24 @@ end
 local function a_forward_scan_then_jumps_back_and_ahead_stay_exact_test()
     local cps = codepoints(1000)
     local s = build(cps)
+
     -- Forward one character at a time, as a tokenizer reads.
-    for i = 1, 1000 do assert(s:sub(i, i) == string.char(cps[i])) end
+    for i = 1, 1000 do
+        assert(s:sub(i, i) == string.char(cps[i]))
+    end
+
     -- Backward, which starts before every remembered position.
-    for i = 1000, 1, -1 do assert(s:sub(i, i) == string.char(cps[i])) end
+    for i = 1000, 1, -1 do
+        assert(s:sub(i, i) == string.char(cps[i]))
+    end
+
     -- Jumps in both directions across breadcrumbs.
-    local order = {500, 3, 999, 64, 65, 63, 700, 128, 1, 1000, 257}
-    for _, i in ipairs(order) do assert(s:sub(i, i) == string.char(cps[i]), `i=$(i)`) end
+    local order = { 500, 3, 999, 64, 65, 63, 700, 128, 1, 1000, 257 }
+
+    for _, i in ipairs(order) do
+        assert(s:sub(i, i) == string.char(cps[i]), `i=$i`)
+    end
+
     -- A sliding window, the access of the unicode benchmark.
     for i = 1, 990 do
         local w = s:sub(i, i + 8)
@@ -86,9 +116,14 @@ end
 local function two_strings_keep_their_own_positions_test()
     local a = build(codepoints(500))
     local cb = codepoints(700)
-    for i = 1, #cb do cb[i] = cycle[(i * 3) % #cycle + 1] end
+
+    for i = 1, #cb do
+        cb[i] = cycle[(i * 3) % #cycle + 1]
+    end
+
     local b = build(cb)
     local ca = codepoints(500)
+
     for i = 1, 500 do
         assert(a:sub(i, i) == string.char(ca[i]))
         assert(b:sub(701 - i, 701 - i) == string.char(cb[701 - i]))
@@ -133,28 +168,49 @@ end
 local function substrings_are_the_interned_strings_of_their_text_test()
     local s = string.rep("ταχύτητα 速度 ", 50)
     local keys = {}
-    for i = 1, 40 do keys[s:sub(i, i + 4)] = i end
+
+    for i = 1, 40 do
+        keys[s:sub(i, i + 4)] = i
+    end
+
     collectgarbage()
+
     for i = 1, 40 do
         local k = s:sub(i, i + 4)
         assert(keys[k] ~= nil)
         assert(k == s:sub(i, i + 4))
     end
+
     assert(s:sub(1, 5) == "ταχύτ" and keys["ταχύτ"] ~= nil)
 end
 
 local function the_string_table_survives_many_dead_strings_test()
     local live = {}
+
     for i = 1, 20000 do
-        local k = `key$(i)`
-        if i % 1000 == 0 then live[#live + 1] = k end
+        local k = `key$i`
+
+        if i % 1000 == 0 then
+            live[#live + 1] = k
+        end
     end
+
     collectgarbage()
     collectgarbage()
-    for i, k in ipairs(live) do assert(k == `key$(i * 1000)`) end
+
+    for i, k in ipairs(live) do
+        assert(k == `key$(i * 1000)`)
+    end
+
     local t = {}
-    for i = 1, 100 do t[`again$(i)`] = i end
-    for i = 1, 100 do assert(t[`again$(i)`] == i) end
+
+    for i = 1, 100 do
+        t[`again$i`] = i
+    end
+
+    for i = 1, 100 do
+        assert(t[`again$i`] == i)
+    end
 end
 
 -- ============================================================
@@ -162,22 +218,22 @@ end
 -- ============================================================
 
 local function absent_keys_of_full_records_read_as_nil_test()
-    local p = {x = 1, y = 2}
+    local p = { x = 1, y = 2 }
     assert(p.z == nil and p.w == nil)
     assert(rawget(p, "z") == nil)
     assert(p[1] == nil and p[true] == nil and p[2.5] == nil)
-    local one = {a = 1}
+    local one = { a = 1 }
     assert(one.b == nil and one[1] == nil and one[false] == nil)
-    local four = {a = 1, b = 2, c = 3, d = 4}
+    local four = { a = 1, b = 2, c = 3, d = 4 }
     assert(four.e == nil and four[{}] == nil)
     assert(four.a + four.b + four.c + four.d == 10)
 end
 
 local function full_records_grow_and_reuse_dead_keys_test()
-    local p = {x = 1, y = 2}
+    local p = { x = 1, y = 2 }
     p.z = 3
     assert(p.x == 1 and p.y == 2 and p.z == 3)
-    local q = {x = 1, y = 2}
+    local q = { x = 1, y = 2 }
     q.x = nil
     assert(q.x == nil and q.y == 2)
     q.w = 4
@@ -185,18 +241,26 @@ local function full_records_grow_and_reuse_dead_keys_test()
     q.x = 5
     assert(q.x == 5)
     local n = 0
-    for _ in pairs(q) do n = n + 1 end
+
+    for _ in pairs(q) do
+        n = n + 1
+    end
+
     assert(n == 3)
-    local r = {[1.5] = "a", [true] = "b"}
+    local r = { [1.5] = "a", [true] = "b" }
     assert(r[1.5] == "a" and r[true] == "b" and r[false] == nil and r[2.5] == nil)
     r[false] = "c"
     assert(r[false] == "c")
 end
 
 local function next_visits_every_key_of_a_full_record_test()
-    local p = {x = 1, y = 2}
+    local p = { x = 1, y = 2 }
     local seen = {}
-    for k, v in pairs(p) do seen[k] = v end
+
+    for k, v in pairs(p) do
+        seen[k] = v
+    end
+
     assert(seen.x == 1 and seen.y == 2)
     local k1 = next(p)
     local k2 = next(p, k1)
@@ -205,7 +269,7 @@ local function next_visits_every_key_of_a_full_record_test()
 end
 
 local function weak_full_records_clear_and_answer_lookups_test()
-    local t = setmetatable({x = {}, y = {}}, {__mode = "v"})
+    local t = setmetatable({ x = {}, y = {} }, { __mode = "v" })
     collectgarbage()
     assert(t.x == nil and t.y == nil and t.z == nil)
     t.z = 1
@@ -215,21 +279,44 @@ end
 local function methods_found_through_full_instances_test()
     local Point = {}
     Point.__index = Point
-    function Point.new(x, y) return setmetatable({x = x, y = y}, Point) end
-    function Point:add(o) return Point.new(self.x + o.x, self.y + o.y) end
+
+    function Point.new(x, y)
+        return setmetatable({ x = x, y = y }, Point)
+    end
+
+    function Point:add(o)
+        return Point.new(self.x + o.x, self.y + o.y)
+    end
+
     local p = Point.new(0, 0)
     local d = Point.new(1, 2)
-    for _ = 1, 300 do p = p:add(d) end
+
+    for _ = 1, 300 do
+        p = p:add(d)
+    end
+
     assert(p.x == 300 and p.y == 600)
     -- An instance field shadows the class method once it exists.
     local q = Point.new(1, 1)
-    q.add = function() return "own" end
+
+    q.add = function()
+        return "own"
+    end
+
     assert(q:add(d) == "own")
+
     -- Replacing the method in the class takes effect at once.
-    Point.add = function() return "new" end
+    Point.add = function()
+        return "new"
+    end
+
     assert(p:add(d) == "new")
+
     -- So does replacing __index with a function.
-    Point.__index = function(_, k) return k end
+    Point.__index = function(_, k)
+        return k
+    end
+
     assert(p.missing == "missing")
 end
 
@@ -251,7 +338,7 @@ local function setmetatable_returns_its_table_in_every_case_test()
 end
 
 local function protected_metatables_stay_protected_test()
-    local t = setmetatable({}, {__metatable = "locked"})
+    local t = setmetatable({}, { __metatable = "locked" })
     local ok, e = catch setmetatable(t, {})
     assert(not ok and tostring(e):find("protected"))
     assert(getmetatable(t) == "locked")
@@ -259,10 +346,21 @@ end
 
 local function a_gc_metamethod_added_later_still_registers_test()
     local mt = {}
-    for _ = 1, 3 do setmetatable({}, mt) end
+
+    for _ = 1, 3 do
+        setmetatable({}, mt)
+    end
+
     local ran = 0
-    mt.__gc = function() ran = ran + 1 end
-    do setmetatable({}, mt) end
+
+    mt.__gc = function()
+        ran = ran + 1
+    end
+
+    do
+        setmetatable({}, mt)
+    end
+
     collectgarbage()
     collectgarbage()
     assert(ran == 1)
@@ -272,7 +370,11 @@ local function string_methods_follow_the_string_library_test()
     local s = "abc"
     assert(s:upper() == "ABC")
     local old = string.upper
-    string.upper = function() return "patched" end
+
+    string.upper = function()
+        return "patched"
+    end
+
     assert(s:upper() == "patched")
     string.upper = old
     assert(s:upper() == "ABC")

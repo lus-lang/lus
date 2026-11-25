@@ -32,8 +32,8 @@ The parameter names are `"pause"`, `"stepmul"`, `"stepsize"`, `"minormul"`, `"ma
 An unknown operation raises `bad argument #1 to 'collectgarbage' (invalid option 'NAME')`, and an unknown parameter name raises the same error for argument 2. Called from inside a `__gc` finalizer, `collectgarbage` does nothing and returns `nil`.
 
 ```lus
-print(collectgarbage("isrunning"))          --> true
-print(collectgarbage("param", "pause"))     --> 150
-print(math.type(collectgarbage("count")))   --> float
-print(collectgarbage())                     --> 0
+print(collectgarbage("isrunning"))  --> true
+print(collectgarbage("param", "pause"))  --> 150
+print(math.type(collectgarbage("count")))  --> float
+print(collectgarbage())  --> 0
 ```

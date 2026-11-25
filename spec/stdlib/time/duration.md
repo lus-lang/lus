@@ -29,11 +29,11 @@ The following example builds a duration from two units and breaks a negative one
 
 ```lus
 local d = time.duration{ hours = 1, minutes = 30 }
-print(d:seconds(), d:millis())                     --> 5400.0  5400000.0
-print(d == 3 * time.minutes(30))                   --> true
+print(d:seconds(), d:millis())  --> 5400.0  5400000.0
+print(d == 3 * time.minutes(30))  --> true
 local p = (-time.duration{ days = 1, seconds = 90 }):parts()
-print(p.negative, p.days, p.minutes, p.seconds)    --> true  1  1  30
-print(tostring(time.duration{ micros = 1500 }))    --> time.duration(0 s + 1500000 ns)
+print(p.negative, p.days, p.minutes, p.seconds)  --> true  1  1  30
+print(tostring(time.duration{ micros = 1500 }))  --> time.duration(0 s + 1500000 ns)
 ```
 
 A key such as `weeks` is not a unit of a duration, so it contributes nothing. The single-unit constructors [`time.days`](/manual/api#time.days), [`time.hours`](/manual/api#time.hours), [`time.minutes`](/manual/api#time.minutes), [`time.seconds`](/manual/api#time.seconds), and [`time.millis`](/manual/api#time.millis) build a duration from one integer. Adding a duration to an instant moves it by exact seconds, and `zoned:add` on a [`time.zoned`](/manual/api#time.zoned) value moves it by calendar units instead.

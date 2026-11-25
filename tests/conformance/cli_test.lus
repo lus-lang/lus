@@ -12,6 +12,7 @@ local function shell_quote(value)
     if windows then
         return '"' .. value .. '"'
     end
+
     return "'" .. value:gsub("'", "'\\''") .. "'"
 end
 
@@ -56,6 +57,7 @@ end
 
 local function clean_fixture(root, output)
     catch fs.remove(root, true)
+
     if output then
         catch fs.remove(output)
     end
@@ -68,14 +70,17 @@ end
 
 -- Runs `lus build ENTRY -o OUTPUT` with the given extra arguments.
 local function build_standalone(entry, output, includes, extra)
-    local parts = {lus_cmd, "build", entry, "-o", output}
+    local parts = { lus_cmd, "build", entry, "-o", output }
+
     for i = 1, #includes do
         parts[#parts + 1] = "--include"
         parts[#parts + 1] = includes[i]
     end
+
     for i = 1, #(extra or {}) do
         parts[#parts + 1] = extra[i]
     end
+
     return run_command(table.concat(parts, " "))
 end
 
@@ -109,6 +114,7 @@ end
 local function stdin_execution_test()
     -- echo "print(123)" | lus -
     local cmd
+
     if windows then
         cmd = "echo print(123) | " .. lus_cmd .. " -"
     else
@@ -132,7 +138,7 @@ local function ast_output_goes_to_standard_output_and_touches_no_linked_file_tes
     write_file(outside, "outside sentinel\n")
     fs.createlink(output, "outside.json")
 
-    local ok, command_out = run_command(table.concat({lus_cmd, "ast", entry}, " "))
+    local ok, command_out = run_command(table.concat({ lus_cmd, "ast", entry }, " "))
     assert(ok, command_out)
     assert(command_out:find('"type"', 1, true), command_out)
     local untouched = assert(io.open(outside, "r"))
@@ -144,7 +150,7 @@ end
 local function unpledged_ast_json_output_remains_available_test()
     local root, entry = new_fixture()
     write_file(entry, "local answer = 42\n")
-    local ok, command_out = run_command(table.concat({lus_cmd, "ast", entry}, " "))
+    local ok, command_out = run_command(table.concat({ lus_cmd, "ast", entry }, " "))
     assert(ok, command_out)
     assert(command_out:find('"type"', 1, true), command_out)
     clean_fixture(root)
@@ -173,8 +179,7 @@ print("link-object-ok")
         "inspect",
         "./" .. allowed_link,
     }, " "))
-    assert(inspected and inspect_out:find("link-object-ok", 1, true),
-        inspect_out)
+    assert(inspected and inspect_out:find("link-object-ok", 1, true), inspect_out)
     assert(not path_exists(allowed_link), "authorized link was not removed")
     assert(path_exists(target), "link deletion removed its target")
     clean_fixture(root)
@@ -216,8 +221,13 @@ print(f:read("a"))
 f:close()
 ]])
     local ok, out = run_command(table.concat({
-        lus_cmd, "build", entry, "-o", output,
-        "-Pload", "-Pfs:read=./" .. data,
+        lus_cmd,
+        "build",
+        entry,
+        "-o",
+        output,
+        "-Pload",
+        "-Pfs:read=./" .. data,
     }, " "))
     assert(ok, out)
     local ran, run_out = run_command("." .. path_separator .. output .. " ./" .. data)
@@ -261,7 +271,7 @@ print(direct .. ":" .. alpha .. ":" .. beta)
     local ok, out = build_standalone(entry, output, {
         path(root, "direct.lus"),
         modules,
-    }, {"-Pload"})
+    }, { "-Pload" })
     assert(ok, out)
     local ran, run_out = run_standalone(output)
     assert(ran, run_out)
@@ -291,14 +301,14 @@ local function standalone_accepts_256_and_257_direct_include_arguments_test()
     local root, entry, output = new_fixture()
     local includes = {}
     write_file(entry, "print('direct-count-ok')\n")
+
     for i = 1, 257 do
         local filename = path(root, string.format("m%03d.lus", i))
         write_file(filename, "return " .. tostring(i) .. "\n")
         includes[i] = filename
     end
 
-    local first_ok, first_out = build_standalone(entry, output,
-        {table.unpack(includes, 1, 256)})
+    local first_ok, first_out = build_standalone(entry, output, { table.unpack(includes, 1, 256) })
     assert(first_ok, first_out)
     catch fs.remove(output)
     local second_ok, second_out = build_standalone(entry, output, includes)
@@ -313,12 +323,12 @@ local function standalone_permits_1024_final_files_test()
     local modules = path(root, "many")
     fs.createdirectory(modules)
     write_file(entry, "print('expanded-count-ok')\n")
+
     for i = 1, 1023 do
-        write_file(path(modules, string.format("m%04d.lus", i)),
-            "return " .. tostring(i) .. "\n")
+        write_file(path(modules, string.format("m%04d.lus", i)), "return " .. tostring(i) .. "\n")
     end
 
-    local exact_ok, exact_out = build_standalone(entry, output, {modules})
+    local exact_ok, exact_out = build_standalone(entry, output, { modules })
     assert(exact_ok, exact_out)
     local ran, run_out = run_standalone(output)
     assert(ran and run_out:find("expanded-count-ok", 1, true), run_out)
@@ -331,11 +341,12 @@ local function standalone_rejects_1025_final_files_test()
     local modules = path(root, "many")
     fs.createdirectory(modules)
     write_file(entry, "print('expanded-count-ok')\n")
+
     for i = 1, 1024 do
-        write_file(path(modules, string.format("m%04d.lus", i)),
-            "return " .. tostring(i) .. "\n")
+        write_file(path(modules, string.format("m%04d.lus", i)), "return " .. tostring(i) .. "\n")
     end
-    local excess_ok, excess_out = build_standalone(entry, output, {modules})
+
+    local excess_ok, excess_out = build_standalone(entry, output, { modules })
     assert(not excess_ok, "1025 final files unexpectedly built")
     assert(excess_out:find("too many include files", 1, true), excess_out)
     assert(not path_exists(output), "over-limit build left an executable")
@@ -363,8 +374,10 @@ local function same_build_compiler_chunks_round_trip_and_reject_header_damage_te
     write_file(corrupt, damaged)
     local accepted, damage_out = run_command(lus_cmd .. " " .. corrupt)
     assert(not accepted, "damaged binary header was accepted")
-    assert(damage_out:find("bad binary format", 1, true) or
-        damage_out:find("binary", 1, true), damage_out)
+    assert(
+        damage_out:find("bad binary format", 1, true) or damage_out:find("binary", 1, true),
+        damage_out
+    )
     clean_fixture(root)
 end
 
@@ -374,7 +387,10 @@ local function a_syntax_error_at_a_letter_outside_ascii_reads_as_text_test()
     local _, out = run_command(lus_cmd .. " " .. tmp)
     assert(string.find(out, "nonascii_name.lus:1: unexpected symbol near 'é'", 1, true), out)
     local _, checked = run_command(lus_cmd .. " check " .. tmp)
-    assert(string.find(checked, "nonascii_name.lus:1:7: error: unexpected symbol near 'é'", 1, true), checked)
+    assert(
+        string.find(checked, "nonascii_name.lus:1:7: error: unexpected symbol near 'é'", 1, true),
+        checked
+    )
     fs.remove(tmp)
 end
 
@@ -390,7 +406,15 @@ local m = worker.receive(w)
 print(m.ok, m.replaced, m.err)
 ]])
     local _, frozen = run_command(lus_cmd .. " -P load -P fs:read --readonly-env readonly_main.lus")
-    assert(string.find(frozen, "false\tfalse\treadonly_worker.lus:1: attempt to modify a readonly table", 1, true), frozen)
+    assert(
+        string.find(
+            frozen,
+            "false\tfalse\treadonly_worker.lus:1: attempt to modify a readonly table",
+            1,
+            true
+        ),
+        frozen
+    )
     local _, open = run_command(lus_cmd .. " -P load -P fs:read readonly_main.lus")
     assert(string.find(open, "true\ttrue\tnil", 1, true), open)
     fs.remove("readonly_worker.lus")
@@ -413,18 +437,31 @@ print((catch setmetatable({}, {})))
 end
 
 local function temporary_files_need_a_grant_that_covers_them_test()
-    if windows then skip("POSIX temporary directory") end
-    local _, out = run_command(lus_cmd .. " -P 'fs:write=/nowhere/*' -e 'print(catch os.tmpname()) print(catch io.tmpfile())'")
+    if windows then
+        skip("POSIX temporary directory")
+    end
+
+    local _, out = run_command(
+        lus_cmd
+            .. " -P 'fs:write=/nowhere/*' -e 'print(catch os.tmpname()) print(catch io.tmpfile())'"
+    )
     local _, n = out:gsub("false\t[^\n]*permission \"fs:write\" denied for '[^']*/lu[as]_", "")
     assert(n == 2, out)
-    local _, ok = run_command("TMPDIR=. " .. lus_cmd .. " -P 'fs:write=./*' -P fs:read -e 'local p = os.tmpname() print(p:sub(1, 6)) fs.remove(p)'")
+    local _, ok = run_command(
+        "TMPDIR=. "
+            .. lus_cmd
+            .. " -P 'fs:write=./*' -P fs:read -e 'local p = os.tmpname() print(p:sub(1, 6)) fs.remove(p)'"
+    )
     assert(ok == "./lua_\n", ok)
 end
 
 -- A safe build checks at exit that every allocation was freed, and the
 -- read buffer of standard input counts too.
 local function reading_standard_input_frees_its_buffer_test()
-    if windows then skip("POSIX shell pipe") end
+    if windows then
+        skip("POSIX shell pipe")
+    end
+
     write_file("stdin_read.lus", "print(io.read())\nprint(io.stdin:read('a'))\n")
     local ok, out = run_command("printf 'one\\ntwo\\n' | " .. lus_cmd .. " stdin_read.lus")
     fs.remove("stdin_read.lus")
@@ -433,7 +470,10 @@ local function reading_standard_input_frees_its_buffer_test()
 end
 
 local function disassembly_folds_compile_time_flags_as_running_does_test()
-    write_file("dis_flags.lus", 'if flags.FAST then\n    print("fast")\nelse\n    print("slow")\nend\n')
+    write_file(
+        "dis_flags.lus",
+        'if flags.FAST then\n    print("fast")\nelse\n    print("slow")\nend\n'
+    )
     local _, ran = run_command(lus_cmd .. " -F FAST dis_flags.lus")
     assert(ran == "fast\n", ran)
     -- Folding keeps only the taken branch, so the listing calls print once,

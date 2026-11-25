@@ -13,9 +13,9 @@ type: table
 When `require(name)` finds a truthy value at `package.loaded[name]`, it returns that value without searching. After it loads a module, it stores the result of the loader there, or `true` when the loader returned `nil`. The table starts with the standard libraries, such as `string`, `table`, `math`, `io`, `fs`, and `network`, and with `_G` for the global table.
 
 ```lus
-print(package.loaded.string == string)   --> true
+print(package.loaded.string == string)  --> true
 package.loaded.config = { debug = true }
-print(require("config").debug)           --> true
+print(require("config").debug)  --> true
 package.loaded.config = nil
 ```
 

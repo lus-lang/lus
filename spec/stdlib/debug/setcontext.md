@@ -26,17 +26,23 @@ The following example gives a suspended coroutine a value before it continues.
 ```lus
 local function find(name)
     local n = 1
-    while debug.getcontext(n) ~= name do n = n + 1 end
+
+    while debug.getcontext(n) ~= name do
+        n = n + 1
+    end
+
     return n
 end
 
 local trace <context> = "off"
+
 local co = coroutine.create(function()
     coroutine.yield()
     return trace
 end)
+
 coroutine.resume(co)
-print(debug.setcontext(co, find("trace"), "on"))   --> trace
-print(select(2, coroutine.resume(co)))            --> on
-print(trace)                                      --> off
+print(debug.setcontext(co, find("trace"), "on"))  --> trace
+print(select(2, coroutine.resume(co)))  --> on
+print(trace)  --> off
 ```

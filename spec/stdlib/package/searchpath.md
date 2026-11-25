@@ -34,7 +34,7 @@ A candidate counts only when it exists, is not a directory, and the chunk may re
 print(package.searchpath("a.b", "./?.x;./lib/?.x"))
 --> nil  no file './a/b.x'
 -->      no file './lib/a/b.x'
-print(package.searchpath("a.b", "./?.x", ".", "_"))   --> nil  no file './a_b.x'
+print(package.searchpath("a.b", "./?.x", ".", "_"))  --> nil  no file './a_b.x'
 ```
 
 [`package.path`](/manual/api#package.path) holds the templates that `require` uses.

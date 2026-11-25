@@ -24,17 +24,20 @@ Detaching raises an error when `co` is the main thread, or when it is running, n
 
 ```lus
 local log = {}
+
 local function worker(name)
     for i = 1, 2 do
         log[#log + 1] = name .. i
         coroutine.yield()
     end
+
     return name .. " is done"
 end
+
 local a = coroutine.detach(coroutine.create(worker), "a")
 local b = coroutine.detach(coroutine.create(worker), "b")
-print(coroutine.resume(a))      --> true  a is done
-print(table.concat(log, " "))   --> a1 b1 a2 b2
+print(coroutine.resume(a))  --> true  a is done
+print(table.concat(log, " "))  --> a1 b1 a2 b2
 ```
 
 [Coroutines and workers](/manual/concurrency) describes detached coroutines in full, including suspension points and errors that nothing collects.

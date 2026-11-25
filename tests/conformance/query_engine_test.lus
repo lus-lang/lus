@@ -10,7 +10,11 @@
 
 local function collect(it)
     local out = {}
-    for r in it do out[#out + 1] = r end
+
+    for r in it do
+        out[#out + 1] = r
+    end
+
     return out
 end
 
@@ -36,7 +40,9 @@ local function windows_cut_rows_everywhere_test()
     assert(#r == 1)
     r = collect(query(@t as p, t as q where p.k == q.k select p.v, q.v as w limit 3))
     assert(#r == 3)
-    r = collect(query(@t as p, t as q where p.k == q.k select p.v, q.v as w order by p.v, w offset 4))
+    r = collect(
+        query(@t as p, t as q where p.k == q.k select p.v, q.v as w order by p.v, w offset 4)
+    )
     assert(#r == 2)
 end
 
@@ -54,7 +60,9 @@ end
 
 local function aggregates_sum_numbers_and_reject_other_values_test()
     local nums = { { v = 1 }, { v = 2.5 }, { v = 3 } }
-    local r = collect(query(@nums as n select sum(n.v) as s, avg(n.v) as a, min(n.v) as lo, max(n.v) as hi))
+    local r = collect(
+        query(@nums as n select sum(n.v) as s, avg(n.v) as a, min(n.v) as lo, max(n.v) as hi)
+    )
     assert(r[1].s == 6.5 and r[1].lo == 1 and r[1].hi == 3)
     local ints = { { v = 1 }, { v = 2 } }
     r = collect(query(@ints as n select sum(n.v) as s))
@@ -68,6 +76,11 @@ local function aggregates_sum_numbers_and_reject_other_values_test()
 end
 
 local function a_query_source_may_return_a_native_iterator_test()
-    local src = setmetatable({}, { __query = function() return string.gmatch("", "x") end })
+    local src = setmetatable({}, {
+        __query = function()
+            return string.gmatch("", "x")
+        end,
+    })
+
     assert(#collect(query(@src as s select s.v)) == 0)
 end

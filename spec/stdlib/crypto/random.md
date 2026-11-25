@@ -23,6 +23,6 @@ The following example makes a session token of 32 random bytes and writes it as 
 
 ```lus
 local token = string.transcode(crypto.random(32), "binary", "hex")
-print(#token)          --> 64
-print(#crypto.random(0))   --> 0
+print(#token)  --> 64
+print(#crypto.random(0))  --> 0
 ```

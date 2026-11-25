@@ -55,18 +55,27 @@ The following example streams server-sent events. Each event is a `data:` line a
 pledge("network")
 local server = network.tcp.bind("127.0.0.1", 0)
 local _, port = server:getsockname()
+
 local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
     return 200, coroutine.create(function()
         for n = 1, 3 do
-            coroutine.yield(`data: {"count": $(n)}\n\n`)
+            coroutine.yield(`data: {"count": $n}\n\n`)
         end
     end), { ["Content-Type"] = "text/event-stream", ["Cache-Control"] = "no-cache" }
 end)
-local status, events = network.fetch(`http://127.0.0.1:$(port)/events`, "GET", nil, nil, { stream = true })
+
+local status, events = network.fetch(`http://127.0.0.1:$port/events`, "GET", nil, nil, {
+    stream = true,
+})
+
 for line in network.lines(events) do
     local data = vector.tostring(line):match("^data: (.*)$")
-    if data then print(fromjson(data).count) end
+
+    if data then
+        print(fromjson(data).count)
+    end
 end
+
 --> 1
 --> 2
 --> 3
@@ -84,17 +93,21 @@ When the request carries a `Sec-WebSocket-Key` header, the server adds the heade
 pledge("network")
 local server = network.tcp.bind("127.0.0.1", 0)
 local _, port = server:getsockname()
+
 local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
     return 101, function(sock)
         sock:send("upgraded")
     end
 end)
+
 local sock <close> = network.tcp.connect("127.0.0.1", port)
-sock:send("GET /chat HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-    .. "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+sock:send(
+    "GET /chat HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        .. "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+)
 local response = vector.tostring(sock:receive("*a"))
-print(response:match("Sec%-WebSocket%-Accept: ([^\r]+)"))   --> s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
-print(response:match("\r\n\r\n(.*)$"))                     --> upgraded
+print(response:match("Sec%-WebSocket%-Accept: ([^\r]+)"))  --> s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+print(response:match("\r\n\r\n(.*)$"))  --> upgraded
 coroutine.close(serving)
 server:close()
 ```
@@ -130,13 +143,15 @@ The following example serves in a detached coroutine on a port that the system c
 pledge("network")
 local server = network.tcp.bind("127.0.0.1", 0)
 local _, port = server:getsockname()
+
 local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
     return 200, `hello from $(req.path)`, { ["Content-Type"] = "text/plain" }
 end)
+
 local sock <close> = network.tcp.connect("127.0.0.1", port)
 sock:send("GET /docs HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
 local response = vector.tostring(sock:receive("*a"))
-print(response:match("\r\n\r\n(.*)$"))   --> hello from /docs
+print(response:match("\r\n\r\n(.*)$"))  --> hello from /docs
 coroutine.close(serving)
 server:close()
 ```

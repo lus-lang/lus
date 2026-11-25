@@ -17,18 +17,27 @@
 --
 -- BIN is a runtime built with `-Dfail-io=true`.
 
-global arg, assert, error, fs, io, ipairs, math, os, package, pairs, pledge, print, string, table, tonumber, tostring
+global arg, assert, error, fs, io, ipairs, math, os, package, pairs, pledge, print, string, table,
+    tonumber, tostring
 
 pledge("exec", "fs", "env")
 
 local opts = { lus = "runtime/zig-out-io/bin/lus", timeout = 30 }
+
 do
     local i = 1
+
     while i <= #arg do
         local a, v = arg[i], arg[i + 1]
-        if a == "--lus" then opts.lus = v
-        elseif a == "--timeout" then opts.timeout = tonumber(v)
-        else error("unknown option " .. a) end
+
+        if a == "--lus" then
+            opts.lus = v
+        elseif a == "--timeout" then
+            opts.timeout = tonumber(v)
+        else
+            error("unknown option " .. a)
+        end
+
         i = i + 2
     end
 end
@@ -97,6 +106,7 @@ print("main done")
 local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-cancel-faults")
 local _ = catch fs.remove(dir, true)
 fs.createdirectory(dir, true)
+
 for name, text in pairs({ ["worker.lus"] = WORKER, ["main.lus"] = MAIN }) do
     local f = assert(io.open(fs.path.join(dir, name), "w"))
     f:write(text)
@@ -108,8 +118,13 @@ local function quote(s)
 end
 
 local function run(spec)
-    local cmd = string.format("cd %s && LUS_FAIL_NET=count LUS_CANCEL_AT=%s perl -e 'alarm %d; exec @ARGV' %s main.lus 2>&1",
-        quote(dir), spec, opts.timeout, quote(fs.path.join(os.getenv("PWD"), opts.lus)))
+    local cmd = string.format(
+        "cd %s && LUS_FAIL_NET=count LUS_CANCEL_AT=%s perl -e 'alarm %d; exec @ARGV' %s main.lus 2>&1",
+        quote(dir),
+        spec,
+        opts.timeout,
+        quote(fs.path.join(os.getenv("PWD"), opts.lus))
+    )
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     local _, _, code = p:close()
@@ -118,27 +133,51 @@ end
 
 -- The problems of one run's output, or nil.
 local function check(out, code)
-    if code == 142 then return "the run did not end within its time limit" end
-    if not out:find("main done", 1, true) then return "the main chunk did not finish: " .. out end
+    if code == 142 then
+        return "the run did not end within its time limit"
+    end
+
+    if not out:find("main done", 1, true) then
+        return "the main chunk did not finish: " .. out
+    end
+
     local stacks = {}
+
     for kind, who, n in out:gmatch("(%a+) (%a+)(%d)\n") do
         if kind == "open" or kind == "close" then
             local s = stacks[who] or {}
             stacks[who] = s
+
             if kind == "open" then
                 s[#s + 1] = n
             else
                 local top = s[#s]
-                if top ~= n then return string.format("%s closed variable %s while %s was the last open one", who, n, tostring(top)) end
+
+                if top ~= n then
+                    return string.format(
+                        "%s closed variable %s while %s was the last open one",
+                        who,
+                        n,
+                        tostring(top)
+                    )
+                end
+
                 s[#s] = nil
             end
         end
     end
+
     for who, s in pairs(stacks) do
-        if #s > 0 then return string.format("%s left %d variables open", who, #s) end
+        if #s > 0 then
+            return string.format("%s left %d variables open", who, #s)
+        end
     end
+
     local open = tonumber(out:match("lus: (%d+) sockets open at exit"))
-    if open ~= 0 then return string.format("%s sockets open at exit", tostring(open)) end
+
+    if open ~= 0 then
+        return string.format("%s sockets open at exit", tostring(open))
+    end
 end
 
 local out, code = run("count")
@@ -146,13 +185,27 @@ local problem = check(out, code)
 local steps = tonumber(out:match("lus: (%d+) suspensions"))
 assert(steps, "the scenario did not run: " .. out)
 local problems = {}
-if problem then problems[#problems + 1] = "without a cancellation: " .. problem end
+
+if problem then
+    problems[#problems + 1] = "without a cancellation: " .. problem
+end
+
 for n = 1, steps do
     local o, c = run(tostring(n))
     local p = check(o, c)
-    if p then problems[#problems + 1] = string.format("suspension %d: %s", n, p) end
+
+    if p then
+        problems[#problems + 1] = string.format("suspension %d: %s", n, p)
+    end
 end
+
 fs.remove(dir, true)
 print(string.format("%d suspensions, %d problems", steps, #problems))
-for _, p in ipairs(problems) do print("  " .. p) end
-if #problems > 0 then os.exit(1) end
+
+for _, p in ipairs(problems) do
+    print("  " .. p)
+end
+
+if #problems > 0 then
+    os.exit(1)
+end

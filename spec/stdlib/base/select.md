@@ -23,9 +23,9 @@ The parameter `index` selects the result:
 An `index` of zero, or a negative index that reaches before the first extra argument, raises `bad argument #1 to 'select' (index out of range)`. Any other string raises `number expected`.
 
 ```lus
-print(select(2, "a", "b", "c"))     --> b  c
-print(select(-1, "a", "b", "c"))    --> c
-print(select("#", "a", nil, nil))   --> 3
+print(select(2, "a", "b", "c"))  --> b  c
+print(select(-1, "a", "b", "c"))  --> c
+print(select("#", "a", nil, nil))  --> 3
 ```
 
 `select("#", ...)` is the way to count the arguments of a variadic function that may receive `nil` values, as [Collecting arguments into a list](/manual/guide#collecting-arguments-into-a-list) describes.

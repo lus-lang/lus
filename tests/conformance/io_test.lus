@@ -20,13 +20,10 @@ pledge("load")
     ionope_*     : no grant at all
 ]]
 
-
 -- The fixture file is readable but never writable.
 local READONLY_FIXTURE = TEST_DIR .. "/fixtures/io/readonly.txt"
 
-pledge("fs:read=./iorw_*", "fs:write=./iorw_*",
-    "fs:read=./ioro_*", "fs:read=" .. READONLY_FIXTURE)
-
+pledge("fs:read=./iorw_*", "fs:write=./iorw_*", "fs:read=./ioro_*", "fs:read=" .. READONLY_FIXTURE)
 
 local RUN = tostring(os.time())
 local SB = "./iorw_" .. RUN
@@ -86,7 +83,10 @@ end
 -- an invalid mode string raises a bad-argument error
 local function an_invalid_mode_string_raises_a_bad_argument_error_test()
     reset_streams()
-    raises(function() io.open(path("x.txt"), "z") end, "invalid mode")
+
+    raises(function()
+        io.open(path("x.txt"), "z")
+    end, "invalid mode")
 end
 
 -- the mode defaults to read
@@ -257,7 +257,11 @@ local function an_invalid_format_string_raises_a_bad_argument_error_test()
     reset_streams()
     writefile("badfmt.txt", "x")
     local f = io.open(path("badfmt.txt"), "r")
-    raises(function() f:read("x") end, "bad argument")
+
+    raises(function()
+        f:read("x")
+    end, "bad argument")
+
     f:close()
 end
 
@@ -307,7 +311,7 @@ local function numbers_keep_their_integer_and_float_spellings_test()
 end
 
 -- io.write rejects a non string or number argument
-local io_write_rejects_a_non_string_or_number_argument_cases = {{true}, {{}}, {nil}}
+local io_write_rejects_a_non_string_or_number_argument_cases = { { true }, { {} }, { nil } }
 
 local function io_write_rejects_a_non_string_or_number_argument_test(value)
     reset_streams()
@@ -355,14 +359,22 @@ end
 -- io.input on a missing file raises rather than returning nil
 local function io_input_on_a_missing_file_raises_rather_than_returning_nil_test()
     reset_streams()
-    raises(function() io.input(path("no_such_input.txt")) end)
+
+    raises(function()
+        io.input(path("no_such_input.txt"))
+    end)
+
     io.input(io.stdin)
 end
 
 -- io.input with a bad argument type raises
 local function io_input_with_a_bad_argument_type_raises_test()
     reset_streams()
-    raises(function() io.input(true) end, "FILE%*")
+
+    raises(function()
+        io.input(true)
+    end, "FILE%*")
+
     io.input(io.stdin)
 end
 
@@ -395,7 +407,10 @@ end
 -- io.close on a non-file argument raises a bad-argument error
 local function io_close_on_a_non_file_argument_raises_a_bad_argument_error_test()
     reset_streams()
-    raises(function() io.close(42) end, "FILE%* expected")
+
+    raises(function()
+        io.close(42)
+    end, "FILE%* expected")
 end
 
 -- closing an already-closed file raises the closed-file error
@@ -403,7 +418,10 @@ local function closing_an_already_closed_file_raises_the_closed_file_error_test(
     reset_streams()
     local f = io.open(path("dbl.txt"), "w")
     f:close()
-    raises(function() f:close() end, "closed file")
+
+    raises(function()
+        f:close()
+    end, "closed file")
 end
 
 -- a method call on a closed handle raises the closed-file error
@@ -411,7 +429,10 @@ local function a_method_call_on_a_closed_handle_raises_the_closed_file_error_tes
     reset_streams()
     local f = io.open(path("closedread.txt"), "w")
     f:close()
-    raises(function() f:read("l") end, "closed file")
+
+    raises(function()
+        f:read("l")
+    end, "closed file")
 end
 
 -- io.flush makes buffered bytes visible to a second reader
@@ -444,7 +465,13 @@ local function io_type_reports_open_and_closed_file_handles_test()
 end
 
 -- io.type returns nil for a non-file value
-local io_type_returns_nil_for_a_non_file_value_cases = {{42}, {"x"}, {{}}, {nil}, {true}}
+local io_type_returns_nil_for_a_non_file_value_cases = {
+    { 42 },
+    { "x" },
+    { {} },
+    { nil },
+    { true },
+}
 
 local function io_type_returns_nil_for_a_non_file_value_test(value)
     reset_streams()
@@ -458,7 +485,11 @@ local function io_type_returns_nil_for_a_non_file_userdata_test()
 end
 
 -- io.type reports the standard streams as files
-local io_type_reports_the_standard_streams_as_files_cases = {{io.stdin}, {io.stdout}, {io.stderr}}
+local io_type_reports_the_standard_streams_as_files_cases = {
+    { io.stdin },
+    { io.stdout },
+    { io.stderr },
+}
 
 local function io_type_reports_the_standard_streams_as_files_test(stream)
     reset_streams()
@@ -501,13 +532,22 @@ local function isatty_on_a_closed_handle_raises_test()
     writefile("ttyclosed.txt", "x")
     local f = io.open(path("ttyclosed.txt"), "r")
     f:close()
-    raises(function() f:isatty() end, "closed file")
-    raises(function() f:setraw(true) end, "closed file")
+
+    raises(function()
+        f:isatty()
+    end, "closed file")
+
+    raises(function()
+        f:setraw(true)
+    end, "closed file")
 end
 
 -- a counted read from a pipe returns a character as soon as it arrives
 local function a_counted_read_returns_without_waiting_for_more_bytes_test()
-    if os.platform() == "windows" or os.platform() == "wasi" then skip("uses a POSIX shell") end
+    if os.platform() == "windows" or os.platform() == "wasi" then
+        skip("uses a POSIX shell")
+    end
+
     pledge("exec")
     local p <close> = io.popen("printf a; sleep 3; printf b")
     local start = os.time()
@@ -549,12 +589,16 @@ local function an_invalid_whence_raises_an_invalid_option_error_test()
     reset_streams()
     writefile("seekbad.txt", "abc")
     local f = io.open(path("seekbad.txt"), "rb")
-    raises(function() f:seek("bogus") end, "invalid option")
+
+    raises(function()
+        f:seek("bogus")
+    end, "invalid option")
+
     f:close()
 end
 
 -- setvbuf accepts each buffering mode
-local setvbuf_accepts_each_buffering_mode_cases = {{"full"}, {"line"}, {"no"}}
+local setvbuf_accepts_each_buffering_mode_cases = { { "full" }, { "line" }, { "no" } }
 
 local function setvbuf_accepts_each_buffering_mode_test(mode)
     reset_streams()
@@ -639,11 +683,13 @@ end
 -- the collector flushes a dropped buffered handle
 local function the_collector_flushes_a_dropped_buffered_handle_test()
     reset_streams()
+
     do
         local f = io.open(path("vgc.txt"), "w")
         f:setvbuf("full")
         f:write("dropped")
     end
+
     collectgarbage()
     collectgarbage()
     assert(readfile("vgc.txt") == "dropped")
@@ -653,7 +699,11 @@ end
 local function setvbuf_rejects_a_size_that_is_not_positive_test()
     reset_streams()
     local f = io.open(path("vbad.txt"), "w")
-    raises(function() f:setvbuf("full", 0) end, "size must be positive")
+
+    raises(function()
+        f:setvbuf("full", 0)
+    end, "size must be positive")
+
     f:close()
 end
 
@@ -668,9 +718,11 @@ local function io_lines_yields_each_line_with_the_newline_stripped_test()
     reset_streams()
     writefile("lines.txt", "alpha\nbeta\ngamma")
     local out = {}
+
     for ln in io.lines(path("lines.txt")) do
         out[#out + 1] = ln
     end
+
     assert(#out == 3)
     assert(out[1] == "alpha")
     assert(out[2] == "beta")
@@ -683,10 +735,12 @@ local function io_lines_with_the_l_format_keeps_the_newline_test()
     reset_streams()
     writefile("linesL.txt", "one\ntwo\n")
     local first
+
     for ln in io.lines(path("linesL.txt"), "L") do
         first = ln
         break
     end
+
     assert(first == "one\n")
 end
 
@@ -695,9 +749,11 @@ local function io_lines_with_the_n_format_yields_numbers_test()
     reset_streams()
     writefile("linesN.txt", "12\n34\n")
     local out = {}
+
     for n in io.lines(path("linesN.txt"), "n") do
         out[#out + 1] = n
     end
+
     assert(#out == 2)
     assert(out[1] == 12)
     assert(out[2] == 34)
@@ -708,9 +764,11 @@ local function io_lines_with_a_byte_count_yields_fixed_size_chunks_test()
     reset_streams()
     writefile("linesC.txt", "abcdefg")
     local out = {}
+
     for c in io.lines(path("linesC.txt"), 3) do
         out[#out + 1] = c
     end
+
     assert(out[1] == "abc")
     assert(out[2] == "def")
     assert(out[3] == "g")
@@ -731,9 +789,14 @@ local function the_io_lines_iterator_closes_the_file_when_it_finishes_test()
     reset_streams()
     writefile("linesclose.txt", "x\ny\n")
     local it = io.lines(path("linesclose.txt"))
-    for _ in it do end
+
+    for _ in it do
+    end
+
     -- Draining the iterator auto-closes the handle, so a further call raises.
-    raises(function() it() end, "closed")
+    raises(function()
+        it()
+    end, "closed")
 end
 
 -- io.lines with no filename reads the default input
@@ -742,9 +805,11 @@ local function io_lines_with_no_filename_reads_the_default_input_test()
     writefile("defin.txt", "line one\nline two\n")
     io.input(path("defin.txt"))
     local out = {}
+
     for ln in io.lines() do
         out[#out + 1] = ln
     end
+
     io.input(io.stdin)
     assert(#out == 2)
     assert(out[1] == "line one")
@@ -753,8 +818,10 @@ end
 -- io.lines on a missing file raises rather than returning nil
 local function io_lines_on_a_missing_file_raises_rather_than_returning_nil_test()
     reset_streams()
+
     raises(function()
-        for _ in io.lines(path("no_such_lines.txt")) do end
+        for _ in io.lines(path("no_such_lines.txt")) do
+        end
     end)
 end
 
@@ -765,7 +832,12 @@ end
 -- pledge gating.
 
 -- every writable mode on a read-only path is denied
-local every_writable_mode_on_a_read_only_path_is_denied_cases = {{"w"}, {"a"}, {"w+"}, {"a+"}}
+local every_writable_mode_on_a_read_only_path_is_denied_cases = {
+    { "w" },
+    { "a" },
+    { "w+" },
+    { "a+" },
+}
 
 local function every_writable_mode_on_a_read_only_path_is_denied_test(mode)
     reset_streams()
@@ -789,16 +861,18 @@ local function a_read_mode_on_a_read_only_path_passes_the_pledge_sweep_test()
     -- return and never a permission denial.
     local f, msg = io.open("./ioro_" .. RUN .. "_y.txt", "r")
     assert(f == nil)
-    assert(not tostring(msg):find("permission"),
-        "the read grant alone satisfies the sweep")
+    assert(not tostring(msg):find("permission"), "the read grant alone satisfies the sweep")
 end
 
 -- io.lines on an ungranted path is denied
 local function io_lines_on_an_ungranted_path_is_denied_test()
     reset_streams()
+
     local ok, err = catch (function()
-        for _ in io.lines("./ionope_" .. RUN .. ".txt") do end
+        for _ in io.lines("./ionope_" .. RUN .. ".txt") do
+        end
     end)()
+
     assert(not ok, "no grant covers the ionope_ prefix")
     assert(string.find(tostring(err), 'permission "fs:read" denied'))
 end
@@ -813,11 +887,13 @@ end
 local function a_dropped_write_handle_is_flushed_to_disk_when_collected_test()
     reset_streams()
     local name = "gc.txt"
+
     do
         local g = io.open(path(name), "w")
         g:write("written then dropped")
         -- The handle goes out of scope without an explicit close.
     end
+
     collectgarbage("collect")
     collectgarbage("collect")
     -- Reopening proves finalization flushed and closed the underlying file.

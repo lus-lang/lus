@@ -4,10 +4,14 @@ local string = string
 local table = table
 local math = math
 
-local function checkerror (msg, f, ...)
-  local args = {...}
-  local s, err = catch (function() return f(table.unpack(args)) end)()
-  assert(not s and string.find(err, msg))
+local function checkerror(msg, f, ...)
+    local args = { ... }
+
+    local s, err = catch (function()
+        return f(table.unpack(args))
+    end)()
+
+    assert(not s and string.find(err, msg))
 end
 
 local function basic_string_length_and_concatenation_test()
@@ -17,20 +21,20 @@ local function basic_string_length_and_concatenation_test()
     assert("alo" ~= "alo1")
     assert("alo" ~= nil)
     assert("alo" ~= 1)
-    
+
     assert("alo" .. "123" == "alo123")
     assert("alo" .. 123 == "alo123")
     assert(123 .. "alo" == "123alo")
     assert(123 .. 456 == "123456")
-    
+
     assert(string.len("") == 0)
     assert(string.len("abc") == 3)
     assert(string.len("123") == 3)
-    
-    assert(string.rep('a', 5) == "aaaaa")
-    assert(string.rep('', 10) == "")
-    assert(string.rep('a', 0) == "")
-    assert(string.rep('a', -1) == "")
+
+    assert(string.rep("a", 5) == "aaaaa")
+    assert(string.rep("", 10) == "")
+    assert(string.rep("a", 0) == "")
+    assert(string.rep("a", -1) == "")
 end
 
 local function string_sub_test()
@@ -51,12 +55,12 @@ local function string_find_test()
     assert(string.find("123456789", "345") == 3)
     local a, b = string.find("123456789", "345")
     assert(a == 3 and b == 5)
-    
+
     assert(string.find("123456789", "346") == nil)
-    assert(string.find("123456789", ".45", 1, true) == nil) -- plain search
+    assert(string.find("123456789", ".45", 1, true) == nil)  -- plain search
     assert(string.find("123456789", "888", 1, true) == nil)
     assert(string.find("123456789", "1", 1, true) == 1)
-    
+
     assert(string.find("123456789", "", 1) == 1)
     assert(string.find("123456789", "", 10) == 10)
 end
@@ -70,7 +74,10 @@ end
 local function string_gsub_test()
     assert(string.gsub("hello world", "(%w+)", "%1 %1") == "hello hello world world")
     assert(string.gsub("hello world", "%w+", "%0 %0", 1) == "hello hello world")
-    assert(string.gsub("hello world from lua", "%a+", function(w) return string.sub(w, 1, 1) end) == "h w f l")
+
+    assert(string.gsub("hello world from lua", "%a+", function(w)
+        return string.sub(w, 1, 1)
+    end) == "h w f l")
 end
 
 local function string_reverse_test()
@@ -104,159 +111,159 @@ local function string_format_test()
     assert(string.format("%d", 123) == "123")
     assert(string.format("%s", "test") == "test")
     assert(string.format("%%%d", 10) == "%10")
-    
+
     -- basic float formats
     assert(string.format("%0.2f", 1.234) == "1.23")
-    
+
     checkerror("invalid conversion", string.format, "%k", 10)
     checkerror("invalid conversion", string.format, "%", 10)
 end
 
 local function table_concat_test()
-    local a = {"a", "b", "c"}
+    local a = { "a", "b", "c" }
     assert(table.concat(a) == "abc")
     assert(table.concat(a, ",") == "a,b,c")
     assert(table.concat(a, ",", 2) == "b,c")
     assert(table.concat(a, ",", 2, 2) == "b")
     assert(table.concat(a, ",", 3, 2) == "")
-    
+
     checkerror("table expected", table.concat, 3)
 end
 
 local function gmatch_across_coroutines_bug_5_3_2_test()
-  local f = string.gmatch("1 2 3 4 5", "%d+")
-  assert(f() == "1")
-  local co = coroutine.wrap(f)
-  assert(co() == "2")
+    local f = string.gmatch("1 2 3 4 5", "%d+")
+    assert(f() == "1")
+    local co = coroutine.wrap(f)
+    assert(co() == "2")
 end
 
 local function string_pack_basic_integers_test()
-  -- basic integer packing
-  local packed = string.pack("i4", 123456)
-  assert(#packed == 4)
-  local val = string.unpack("i4", packed)
-  assert(val == 123456)
-  
-  -- unsigned integers
-  packed = string.pack("I4", 0xFFFFFFFF)
-  val = string.unpack("I4", packed)
-  assert(val == 0xFFFFFFFF)
-  
-  -- negative integers
-  packed = string.pack("i4", -12345)
-  val = string.unpack("i4", packed)
-  assert(val == -12345)
-  
-  -- byte (signed and unsigned)
-  packed = string.pack("b", -1)
-  val = string.unpack("b", packed)
-  assert(val == -1)
-  
-  packed = string.pack("B", 255)
-  val = string.unpack("B", packed)
-  assert(val == 255)
+    -- basic integer packing
+    local packed = string.pack("i4", 123456)
+    assert(#packed == 4)
+    local val = string.unpack("i4", packed)
+    assert(val == 123456)
+
+    -- unsigned integers
+    packed = string.pack("I4", 0xFFFFFFFF)
+    val = string.unpack("I4", packed)
+    assert(val == 0xFFFFFFFF)
+
+    -- negative integers
+    packed = string.pack("i4", -12345)
+    val = string.unpack("i4", packed)
+    assert(val == -12345)
+
+    -- byte (signed and unsigned)
+    packed = string.pack("b", -1)
+    val = string.unpack("b", packed)
+    assert(val == -1)
+
+    packed = string.pack("B", 255)
+    val = string.unpack("B", packed)
+    assert(val == 255)
 end
 
 local function string_pack_shorts_and_longs_test()
-  -- short
-  local packed = string.pack("h", 12345)
-  assert(#packed == 2)
-  local val = string.unpack("h", packed)
-  assert(val == 12345)
-  
-  -- unsigned short
-  packed = string.pack("H", 65535)
-  val = string.unpack("H", packed)
-  assert(val == 65535)
-  
-  -- lua_Integer (j/J)
-  packed = string.pack("j", 123456789)
-  val = string.unpack("j", packed)
-  assert(val == 123456789)
+    -- short
+    local packed = string.pack("h", 12345)
+    assert(#packed == 2)
+    local val = string.unpack("h", packed)
+    assert(val == 12345)
+
+    -- unsigned short
+    packed = string.pack("H", 65535)
+    val = string.unpack("H", packed)
+    assert(val == 65535)
+
+    -- lua_Integer (j/J)
+    packed = string.pack("j", 123456789)
+    val = string.unpack("j", packed)
+    assert(val == 123456789)
 end
 
 local function string_pack_floats_test()
-  -- float
-  local packed = string.pack("f", 3.14)
-  assert(#packed == 4)
-  local val = string.unpack("f", packed)
-  assert(math.abs(val - 3.14) < 0.001)
-  
-  -- double
-  packed = string.pack("d", 3.14159265358979)
-  assert(#packed == 8)
-  val = string.unpack("d", packed)
-  assert(math.abs(val - 3.14159265358979) < 0.0000001)
-  
-  -- lua_Number (n)
-  packed = string.pack("n", 2.718281828)
-  val = string.unpack("n", packed)
-  assert(math.abs(val - 2.718281828) < 0.0000001)
+    -- float
+    local packed = string.pack("f", 3.14)
+    assert(#packed == 4)
+    local val = string.unpack("f", packed)
+    assert(math.abs(val - 3.14) < 0.001)
+
+    -- double
+    packed = string.pack("d", 3.14159265358979)
+    assert(#packed == 8)
+    val = string.unpack("d", packed)
+    assert(math.abs(val - 3.14159265358979) < 0.0000001)
+
+    -- lua_Number (n)
+    packed = string.pack("n", 2.718281828)
+    val = string.unpack("n", packed)
+    assert(math.abs(val - 2.718281828) < 0.0000001)
 end
 
 local function string_pack_endianness_test()
-  -- little endian
-  local packed = string.pack("<i4", 0x01020304)
-  -- string.pack returns a vector (spec/design/strings.md), so bytes are read with vector.get.
-  assert(vector.get(packed, 0) == 0x04) -- least significant first
-  
-  -- big endian
-  packed = string.pack(">i4", 0x01020304)
-  assert(vector.get(packed, 0) == 0x01) -- most significant first
-  
-  -- verify unpack handles endianness
-  local le = string.pack("<i4", 1000)
-  local be = string.pack(">i4", 1000)
-  assert(string.unpack("<i4", le) == 1000)
-  assert(string.unpack(">i4", be) == 1000)
+    -- little endian
+    local packed = string.pack("<i4", 0x01020304)
+    -- string.pack returns a vector (spec/design/strings.md), so bytes are read with vector.get.
+    assert(vector.get(packed, 0) == 0x04)  -- least significant first
+
+    -- big endian
+    packed = string.pack(">i4", 0x01020304)
+    assert(vector.get(packed, 0) == 0x01)  -- most significant first
+
+    -- verify unpack handles endianness
+    local le = string.pack("<i4", 1000)
+    local be = string.pack(">i4", 1000)
+    assert(string.unpack("<i4", le) == 1000)
+    assert(string.unpack(">i4", be) == 1000)
 end
 
 local function string_pack_fixed_strings_test()
-  -- fixed-size string
-  local packed = string.pack("c5", "hello")
-  assert(vector.tostring(packed) == "hello")
-  local val = string.unpack("c5", packed)
-  assert(val == "hello")
-  
-  -- padding on short string
-  packed = string.pack("c5", "hi")
-  assert(#packed == 5)
-  
-  -- zero-terminated string
-  packed = string.pack("z", "hello")
-  assert(#packed == 6) -- includes null terminator
-  val = string.unpack("z", packed)
-  assert(val == "hello")
+    -- fixed-size string
+    local packed = string.pack("c5", "hello")
+    assert(vector.tostring(packed) == "hello")
+    local val = string.unpack("c5", packed)
+    assert(val == "hello")
+
+    -- padding on short string
+    packed = string.pack("c5", "hi")
+    assert(#packed == 5)
+
+    -- zero-terminated string
+    packed = string.pack("z", "hello")
+    assert(#packed == 6)  -- includes null terminator
+    val = string.unpack("z", packed)
+    assert(val == "hello")
 end
 
 local function string_pack_multiple_values_test()
-  local packed = string.pack("i4i4i4", 10, 20, 30)
-  assert(#packed == 12)
-  
-  local a, b, c, nextpos = string.unpack("i4i4i4", packed)
-  assert(a == 10)
-  assert(b == 20)
-  assert(c == 30)
-  assert(nextpos == 13) -- next position after data
+    local packed = string.pack("i4i4i4", 10, 20, 30)
+    assert(#packed == 12)
+
+    local a, b, c, nextpos = string.unpack("i4i4i4", packed)
+    assert(a == 10)
+    assert(b == 20)
+    assert(c == 30)
+    assert(nextpos == 13)  -- next position after data
 end
 
 local function string_pack_offset_unpack_test()
-  local packed = string.pack("xxxi4", 42) -- 3 padding bytes + integer
-  assert(#packed == 7)
-  
-  -- unpack at offset
-  local val, nextpos = string.unpack("i4", packed, 4)
-  assert(val == 42)
-  assert(nextpos == 8)
+    local packed = string.pack("xxxi4", 42)  -- 3 padding bytes + integer
+    assert(#packed == 7)
+
+    -- unpack at offset
+    local val, nextpos = string.unpack("i4", packed, 4)
+    assert(val == 42)
+    assert(nextpos == 8)
 end
 
 local function string_packsize_test()
-  assert(string.packsize("i4") == 4)
-  assert(string.packsize("i4i4") == 8)
-  assert(string.packsize("bBhHlLjJ") > 0)
-  assert(string.packsize("fd") == 12)
-  assert(string.packsize("c10") == 10)
-  assert(string.packsize("xxx") == 3)
+    assert(string.packsize("i4") == 4)
+    assert(string.packsize("i4i4") == 8)
+    assert(string.packsize("bBhHlLjJ") > 0)
+    assert(string.packsize("fd") == 12)
+    assert(string.packsize("c10") == 10)
+    assert(string.packsize("xxx") == 3)
 end
 
 -- ============================================
@@ -309,7 +316,7 @@ local function string_find_with_special_pattern_chars_test()
     assert(string.find(s, ".", 1, true) == 6)
     -- Find pattern dot (matches any char)
     assert(string.find(s, ".") == 1)
-    
+
     -- Special pattern characters
     local special = "a+b*c?d"
     assert(string.find(special, "+", 1, true) == 2)
@@ -357,12 +364,12 @@ local function string_format_edge_cases_test()
     assert(string.format("%s", 123) == "123")
     assert(string.format("%s", true) == "true")
     assert(string.format("%s", nil) == "nil")
-    
+
     -- Width and precision
     assert(string.format("%10s", "hi") == "        hi")
     assert(string.format("%-10s", "hi") == "hi        ")
     assert(string.format("%.3s", "hello") == "hel")
-    
+
     -- Integer formats
     assert(string.format("%05d", 42) == "00042")
     assert(string.format("%+d", 42) == "+42")
@@ -377,7 +384,7 @@ end
 local function string_pack_error_cases_test()
     -- Invalid format
     checkerror("invalid format", string.pack, "%")
-    
+
     -- Value out of range for format
     checkerror("overflow", string.pack, "b", 200)  -- signed byte max is 127
 end
@@ -385,7 +392,7 @@ end
 local function string_unpack_error_cases_test()
     -- Not enough data
     checkerror("data string too short", string.unpack, "i4", "ab")
-    
+
     -- Invalid format
     checkerror("invalid format", string.unpack, "%", "test")
 end
@@ -402,10 +409,10 @@ local function string_match_captures_test()
     -- Multiple captures
     local a, b, c = string.match("hello world test", "(%w+) (%w+) (%w+)")
     assert(a == "hello" and b == "world" and c == "test")
-    
+
     -- No captures returns whole match
     assert(string.match("hello", "l+") == "ll")
-    
+
     -- Position capture
     local pos = string.match("hello", "()l")
     assert(pos == 3)
@@ -414,27 +421,33 @@ end
 local function string_gmatch_iteration_test()
     local count = 0
     local words = {}
+
     for w in string.gmatch("hello world test", "%w+") do
         count = count + 1
         words[count] = w
     end
+
     assert(count == 3)
     assert(words[1] == "hello" and words[2] == "world" and words[3] == "test")
 end
 
 local function string_gmatch_with_captures_test()
     local pairs_t = {}
+
     for k, v in string.gmatch("a=1,b=2,c=3", "(%w+)=(%w+)") do
         pairs_t[k] = v
     end
+
     assert(pairs_t.a == "1" and pairs_t.b == "2" and pairs_t.c == "3")
 end
 
 local function very_long_string_concatenation_test()
     local parts = {}
+
     for i = 1, 1000 do
         parts[i] = tostring(i)
     end
+
     local s = table.concat(parts)
     assert(#s > 0)
     assert(string.sub(s, 1, 1) == "1")
@@ -456,20 +469,19 @@ end
 -- writer owns it.
 -- =====================================================================
 
-
 -- =====================================================================
 -- string.rep with a separator and count boundaries.
 -- =====================================================================
 
 local string_rep_with_separator_cases = {
-    {"ab", 3, "-", "ab-ab-ab"},
-    {"ab", 1, "-", "ab"},
-    {"ab", 2, "", "abab"},
-    {"x", 4, ", ", "x, x, x, x"},
-    {"ab", 0, "-", ""},
-    {"ab", -3, "-", ""},
-    {"", 3, "-", "--"},
-    {"a", 1, "sep-ignored-when-single", "a"},
+    { "ab", 3, "-", "ab-ab-ab" },
+    { "ab", 1, "-", "ab" },
+    { "ab", 2, "", "abab" },
+    { "x", 4, ", ", "x, x, x, x" },
+    { "ab", 0, "-", "" },
+    { "ab", -3, "-", "" },
+    { "", 3, "-", "--" },
+    { "a", 1, "sep-ignored-when-single", "a" },
 }
 
 local function string_rep_with_separator_test(s, n, sep, expected)
@@ -503,9 +515,11 @@ local function string_rep_one_byte_past_the_limit_raises_test()
     raises(function()
         return string.rep("x", 1 << 32)
     end, "resulting string too large")
+
     raises(function()
         return string.rep("ab", 1 << 31)
     end, "resulting string too large")
+
     raises(function()
         return string.rep("x", 1 << 31, "yy")
     end, "resulting string too large")
@@ -516,20 +530,20 @@ end
 -- =====================================================================
 
 local string_sub_index_matrix_on_abcde_cases = {
-    {2, 4, "bcd"},
-    {-2, -1, "de"},
-    {-3, -1, "cde"},
-    {1, -1, "abcde"},
-    {-100, 100, "abcde"},
-    {-100, -50, ""},
-    {3, 100, "cde"},
-    {6, 10, ""},
-    {4, 2, ""},
-    {0, 0, ""},
-    {0, 3, "abc"},
-    {-1, -1, "e"},
-    {-5, -5, "a"},
-    {5, 5, "e"},
+    { 2, 4, "bcd" },
+    { -2, -1, "de" },
+    { -3, -1, "cde" },
+    { 1, -1, "abcde" },
+    { -100, 100, "abcde" },
+    { -100, -50, "" },
+    { 3, 100, "cde" },
+    { 6, 10, "" },
+    { 4, 2, "" },
+    { 0, 0, "" },
+    { 0, 3, "abc" },
+    { -1, -1, "e" },
+    { -5, -5, "a" },
+    { 5, 5, "e" },
 }
 
 local function string_sub_index_matrix_on_abcde_test(i, j, expected)
@@ -547,12 +561,12 @@ end
 -- =====================================================================
 
 local string_byte_single_index_matrix_on_abc_cases = {
-    {1, 97},
-    {2, 98},
-    {3, 99},
-    {-1, 99},
-    {-2, 98},
-    {-3, 97},
+    { 1, 97 },
+    { 2, 98 },
+    { 3, 99 },
+    { -1, 99 },
+    { -2, 98 },
+    { -3, 97 },
 }
 
 local function string_byte_single_index_matrix_on_abc_test(i, expected)
@@ -560,11 +574,11 @@ local function string_byte_single_index_matrix_on_abc_test(i, expected)
 end
 
 local string_byte_out_of_range_single_index_returns_nil_cases = {
-    {0},
-    {4},
-    {-4},
-    {100},
-    {-100},
+    { 0 },
+    { 4 },
+    { -4 },
+    { 100 },
+    { -100 },
 }
 
 local function string_byte_out_of_range_single_index_returns_nil_test(i)
@@ -608,9 +622,9 @@ end
 
 -- string.char builds code points (spec/design/strings.md), so 256 and 1000 are valid.
 local string_char_rejects_out_of_range_codes_cases = {
-    {-1},
-    {0x110000},
-    {0x7FFFFFFF},
+    { -1 },
+    { 0x110000 },
+    { 0x7FFFFFFF },
 }
 
 local function string_char_rejects_out_of_range_codes_test(code)
@@ -643,10 +657,10 @@ end
 -- =====================================================================
 
 local string_upper_only_maps_ascii_lowercase_letters_cases = {
-    {"aZ9!", "AZ9!"},
-    {"hello", "HELLO"},
-    {"already UP", "ALREADY UP"},
-    {"", ""},
+    { "aZ9!", "AZ9!" },
+    { "hello", "HELLO" },
+    { "already UP", "ALREADY UP" },
+    { "", "" },
 }
 
 local function string_upper_only_maps_ascii_lowercase_letters_test(s, expected)
@@ -654,10 +668,10 @@ local function string_upper_only_maps_ascii_lowercase_letters_test(s, expected)
 end
 
 local string_lower_only_maps_ascii_uppercase_letters_cases = {
-    {"Az9!", "az9!"},
-    {"WORLD", "world"},
-    {"already low", "already low"},
-    {"", ""},
+    { "Az9!", "az9!" },
+    { "WORLD", "world" },
+    { "already low", "already low" },
+    { "", "" },
 }
 
 local function string_lower_only_maps_ascii_uppercase_letters_test(s, expected)
@@ -729,10 +743,10 @@ end
 -- =====================================================================
 
 local string_comparison_respects_embedded_nul_bytes_cases = {
-    {"a\0b", "a\0c", true},
-    {"a\0", "a\0b", true},
-    {"a\0b", "a\0b", false},
-    {"a\0b", "ab", true},
+    { "a\0b", "a\0c", true },
+    { "a\0", "a\0b", true },
+    { "a\0b", "a\0b", false },
+    { "a\0b", "ab", true },
 }
 
 local function string_comparison_respects_embedded_nul_bytes_test(left, right, expected)
@@ -785,9 +799,9 @@ local function string_find_with_an_empty_pattern_honors_init_at_the_boundary_tes
 end
 
 local string_find_raises_on_a_malformed_pattern_cases = {
-    {"(", "unfinished capture"},
-    {"%", "malformed pattern"},
-    {"[a", "malformed pattern"},
+    { "(", "unfinished capture" },
+    { "%", "malformed pattern" },
+    { "[a", "malformed pattern" },
 }
 
 local function string_find_raises_on_a_malformed_pattern_test(pattern, needle)
@@ -829,10 +843,10 @@ end
 -- =====================================================================
 
 local string_trim_with_a_character_set_removes_any_listed_byte_cases = {
-    {"xyabcyx", "xy", "abc"},
-    {"yxyxabcxyxy", "xy", "abc"},
-    {"aaabaaa", "a", "b"},
-    {"...mid.point...", ".", "mid.point"},
+    { "xyabcyx", "xy", "abc" },
+    { "yxyxabcxyxy", "xy", "abc" },
+    { "aaabaaa", "a", "b" },
+    { "...mid.point...", ".", "mid.point" },
 }
 
 local function string_trim_with_a_character_set_removes_any_listed_byte_test(s, chars, expected)
@@ -857,21 +871,28 @@ end
 -- which avoids a nil hole in the case table that table.unpack would treat
 -- as a truncation point.
 local string_ltrim_and_string_rtrim_strip_only_their_own_side_cases = {
-    {"ltrim", "xyabc", "yx", "abc"},
-    {"rtrim", "abcxy", "yx", "abc"},
-    {"ltrim", "  abc  ", false, "abc  "},
-    {"rtrim", "  abc  ", false, "  abc"},
-    {"ltrim", "abcxy", "yx", "abcxy"},
-    {"rtrim", "xyabc", "yx", "xyabc"},
+    { "ltrim", "xyabc", "yx", "abc" },
+    { "rtrim", "abcxy", "yx", "abc" },
+    { "ltrim", "  abc  ", false, "abc  " },
+    { "rtrim", "  abc  ", false, "  abc" },
+    { "ltrim", "abcxy", "yx", "abcxy" },
+    { "rtrim", "xyabc", "yx", "xyabc" },
 }
 
-local function string_ltrim_and_string_rtrim_strip_only_their_own_side_test(which, s, chars, expected)
+local function string_ltrim_and_string_rtrim_strip_only_their_own_side_test(
+    which,
+    s,
+    chars,
+    expected
+)
     local out
+
     if which == "ltrim" then
         out = chars and string.ltrim(s, chars) or string.ltrim(s)
     else
         out = chars and string.rtrim(s, chars) or string.rtrim(s)
     end
+
     assert(out == expected)
 end
 
@@ -921,12 +942,12 @@ local function string_split_of_only_delimiters_yields_all_empty_fields_test()
 end
 
 local function string_join_converts_numbers_and_booleans_via_tostring_test()
-    assert(string.join({1, true, "x"}, "|") == "1|true|x")
-    assert(string.join({1.5, 2}, ",") == "1.5,2")
+    assert(string.join({ 1, true, "x" }, "|") == "1|true|x")
+    assert(string.join({ 1.5, 2 }, ",") == "1.5,2")
 end
 
 local function string_join_with_an_empty_delimiter_concatenates_elements_test()
-    assert(string.join({"a", "b", "c"}, "") == "abc")
+    assert(string.join({ "a", "b", "c" }, "") == "abc")
 end
 
 local function string_join_round_trips_a_plain_split_test()
@@ -946,30 +967,55 @@ local function string_sub_windows_on_long_non_ascii_strings_test()
     local base = "héllo wörld, ünïcödé ταχύτητα 速度 𝄞 "
     local s = string.rep(base, 40)
     local chars = {}
-    for _, c in utf8.codes(s) do chars[#chars + 1] = utf8.char(c) end
+
+    for _, c in utf8.codes(s) do
+        chars[#chars + 1] = utf8.char(c)
+    end
+
     local n = #chars
     assert(#s == n)
+
     local function expect(i, j)
         local lo = math.max(i, 1)
         local hi = math.min(j, n)
-        if lo > hi then return "" end
+
+        if lo > hi then
+            return ""
+        end
+
         return table.concat(chars, "", lo, hi)
     end
+
     local function check(i, j)
         local got = s:sub(i, j)
         assert(got == expect(i, j), string.format("sub(%d, %d)", i, j))
         assert(#got == math.max(0, math.min(j, n) - math.max(i, 1) + 1))
     end
-    for i = 1, n do check(i, i + 8) end
-    for i = n, 1, -1 do check(i, i + 3) end
-    for i = 1, n, 61 do check(i, i + 70) end
-    for i = 1, n, 7 do check(n - i + 1, n) end
+
+    for i = 1, n do
+        check(i, i + 8)
+    end
+
+    for i = n, 1, -1 do
+        check(i, i + 3)
+    end
+
+    for i = 1, n, 61 do
+        check(i, i + 70)
+    end
+
+    for i = 1, n, 7 do
+        check(n - i + 1, n)
+    end
+
     local x = 1
+
     for _ = 1, 500 do
         x = (x * 37 + 11) % n + 1
         check(x, x + (x % 13))
         check(x, x)
     end
+
     -- Multiple results and adjustments to the call.
     local a, b = s:sub(2, 3)
     assert(a == "él" and b == nil)
@@ -992,14 +1038,25 @@ end
 -- ===== library functions at their edges =====
 
 local function string_char_rejects_a_code_point_past_the_last_test()
-    raises(function() string.char(65, 0x110000) end, "bad argument #2 to 'string.char' %(value out of range%)")
-    raises(function() string.char(-1) end, "value out of range")
+    raises(function()
+        string.char(65, 0x110000)
+    end, "bad argument #2 to 'string.char' %(value out of range%)")
+
+    raises(function()
+        string.char(-1)
+    end, "value out of range")
+
     assert(string.char(0x10FFFF) == "\u{10FFFF}")
 end
 
 local function string_dump_needs_a_function_written_in_lus_test()
-    raises(function() string.dump(print) end, "unable to dump given function")
-    raises(function() string.dump(1) end, "bad argument #1 to 'dump' %(function expected")
+    raises(function()
+        string.dump(print)
+    end, "unable to dump given function")
+
+    raises(function()
+        string.dump(1)
+    end, "bad argument #1 to 'dump' %(function expected")
 end
 
 local function rep_joins_a_lead_and_a_trail_surrogate_across_copies_test()
@@ -1022,12 +1079,29 @@ local function split_with_an_empty_delimiter_gives_characters_test()
 end
 
 local function join_follows_the_length_metamethod_test()
-    local t = setmetatable({}, { __len = function() return 3.0 end, __index = function(_, i) return "v" .. i end })
+    local t = setmetatable({}, {
+        __len = function()
+            return 3.0
+        end,
+        __index = function(_, i)
+            return "v" .. i
+        end,
+    })
+
     assert(string.join(t, ",") == "v1,v2,v3")
-    local bad = setmetatable({}, { __len = function() return 2.5 end })
-    raises(function() string.join(bad, ",") end, "object length is not an integer")
-    assert(string.join({"a", 2, "c"}, "-") == "a-2-c")
-    assert(string.join({"a", nil, "c"}, "-") == "a")
+
+    local bad = setmetatable({}, {
+        __len = function()
+            return 2.5
+        end,
+    })
+
+    raises(function()
+        string.join(bad, ",")
+    end, "object length is not an integer")
+
+    assert(string.join({ "a", 2, "c" }, "-") == "a-2-c")
+    assert(string.join({ "a", nil, "c" }, "-") == "a")
 end
 
 -- A split gathers its pieces in batches of 256, so results of every
@@ -1036,13 +1110,22 @@ end
 local function string_split_keeps_every_piece_across_batches_test()
     for _, n in ipairs({ 1, 2, 255, 256, 257, 511, 512, 513, 1000 }) do
         local pieces = {}
-        for i = 1, n do pieces[i] = tostring(i) end
+
+        for i = 1, n do
+            pieces[i] = tostring(i)
+        end
+
         local back = string.split(table.concat(pieces, ","), ",")
         assert(#back == n)
-        for i = 1, n do assert(back[i] == pieces[i]) end
+
+        for i = 1, n do
+            assert(back[i] == pieces[i])
+        end
+
         local chars = string.split(string.rep("é", n), "")
         assert(#chars == n and chars[1] == "é" and chars[n] == "é")
     end
+
     local t = string.split("a,b,c", ",")
     t[2] = 7
     t[4] = { "x" }

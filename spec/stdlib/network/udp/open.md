@@ -29,9 +29,9 @@ pledge("network")
 local receiver <close> = network.udp.open(0, "127.0.0.1")
 local _, port = receiver:getsockname()
 local sender <close> = network.udp.open()
-print(sender:sendto("hello", "127.0.0.1", port))   --> 5
+print(sender:sendto("hello", "127.0.0.1", port))  --> 5
 local data, address = receiver:receive()
-print(vector.tostring(data), address)              --> hello  127.0.0.1
+print(vector.tostring(data), address)  --> hello  127.0.0.1
 ```
 
 `sendto` accepts a host name as its destination. [`udp_socket:receive`](/manual/api#udp_socket:receive) waits for a datagram, and [`udp_socket:getsockname`](/manual/api#udp_socket:getsockname) reports the local port.

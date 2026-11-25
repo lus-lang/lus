@@ -16,6 +16,7 @@ local inputs = {
     "",
     "1,000",
 }
+
 for _, input in ipairs(inputs) do
     if n = tonumber(input) then
         print(`"$input" is $n`)
@@ -23,6 +24,7 @@ for _, input in ipairs(inputs) do
         print(`"$input" is not a number`)
     end
 end
+
 --> "12" is 12
 --> "12px" is not a number
 --> "" is not a number

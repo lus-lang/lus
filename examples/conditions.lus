@@ -10,6 +10,7 @@ for _, input in ipairs({ "42", "forty" }) do
         print(`$input is not a number`)
     end
 end
+
 --> 42 doubled is 84
 --> forty is not a number
 

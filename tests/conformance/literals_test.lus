@@ -3,7 +3,7 @@ pledge("load")
 -- ===== literals =====
 -- escape sequences
 local function escape_sequences_test()
-    assert('\n\"\'\\'  == [[
+    assert("\n\"'\\" == [[
 
 "'\]])
     assert(string.find("\a\b\f\n\r\t\v", "^%c%c%c%c%c%c%c$"))
@@ -17,11 +17,12 @@ end
 -- Escapes that would produce invalid UTF-8 are compile errors, because raw
 -- bytes live in vectors (spec/design/strings.md).
 local function high_byte_escapes_are_compile_errors_test()
-    for _, src in ipairs { [[return "\xff"]], [[return "\255"]], [[return "\xC3"]] } do
+    for _, src in ipairs{ [[return "\xff"]], [[return "\255"]], [[return "\xC3"]] } do
         local f, err = load(src)
         assert(f == nil)
         assert(string.find(err, "UTF%-8"))
     end
+
     -- A valid multi-byte sequence spelled with escapes is accepted.
     assert(load([[return "\xC3\xA9"]])() == "\u{E9}")
 end
@@ -39,8 +40,8 @@ local function long_strings_test()
     assert(string.len(b) == 960)
 
     -- nested brackets
-    assert([=[one [[two]] one]=] == 'one [[two]] one')
-    assert([===[one [==[two]==] one]===] == 'one [==[two]==] one')
+    assert([=[one [[two]] one]=] == "one [[two]] one")
+    assert([===[one [==[two]==] one]===] == "one [==[two]==] one")
 end
 
 -- number literals
@@ -66,28 +67,37 @@ end
 
 -- string coercion to number
 local function string_coercion_to_number_test()
-    local a,b,c = "2", " 3e0 ", " 10  "
-    assert(a+b == 5 and -b == -3 and b+"2" == 5 and "10"-c == 0)
-    assert(type(a) == 'string' and type(b) == 'string' and type(c) == 'string')
+    local a, b, c = "2", " 3e0 ", " 10  "
+    assert(a + b == 5 and -b == -3 and b + "2" == 5 and "10" - c == 0)
+    assert(type(a) == "string" and type(b) == "string" and type(c) == "string")
 end
 
 -- syntax errors in literals
 local function syntax_errors_in_literals_test()
-    local function lexerror (s, err)
-      local ok, st, msg = catch load('return ' .. s, '')
-      if not ok then
-          -- load threw error - that's expected for syntax errors
-          if err then
-             assert(string.find(st, err), "Expected error '"..err.."' in '"..tostring(st).."'")
-          end
-          return
-      end
-      if not st then
-          -- load returned nil, msg
-          if err then
-             assert(string.find(msg, err), "Expected error '"..err.."' in '"..tostring(msg).."'")
-          end
-      end
+    local function lexerror(s, err)
+        local ok, st, msg = catch load("return " .. s, "")
+
+        if not ok then
+            -- load threw error - that's expected for syntax errors
+            if err then
+                assert(
+                    string.find(st, err),
+                    "Expected error '" .. err .. "' in '" .. tostring(st) .. "'"
+                )
+            end
+
+            return
+        end
+
+        if not st then
+            -- load returned nil, msg
+            if err then
+                assert(
+                    string.find(msg, err),
+                    "Expected error '" .. err .. "' in '" .. tostring(msg) .. "'"
+                )
+            end
+        end
     end
 
     lexerror("`", "unfinished interpolated string")  -- backtick starts interpolated strings in Lus
@@ -98,14 +108,17 @@ end
 local function decimal_point_locale_test()
     -- Skip on systems without pt_BR locale (e.g., musl Linux)
     local original = os.setlocale(nil, "numeric")
+
     if os.setlocale("pt_BR") or os.setlocale("pt_BR.UTF-8") then
-      -- Only test if locale change succeeded and changes decimal separator
-      local n = tonumber("3,4")
-      if n then
-        assert(n == 3.4)
-      end
-      assert(tonumber"3.4" == 3.4)
-      os.setlocale(original or "C")
+        -- Only test if locale change succeeded and changes decimal separator
+        local n = tonumber("3,4")
+
+        if n then
+            assert(n == 3.4)
+        end
+
+        assert(tonumber "3.4" == 3.4)
+        os.setlocale(original or "C")
     end
 end
 

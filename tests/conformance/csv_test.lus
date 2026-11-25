@@ -1,6 +1,4 @@
-
 pledge("load")
-
 
 -- ============================================================
 -- fromcsv tests
@@ -175,15 +173,15 @@ end
 -- ============================================================
 
 local function tocsv_serializes_single_row_test()
-    local csv = tocsv({{"a", "b", "c"}})
+    local csv = tocsv({ { "a", "b", "c" } })
     assert(csv == "a,b,c\n")
 end
 
 local function tocsv_serializes_multiple_rows_test()
     local csv = tocsv({
-        {"name", "age", "city"},
-        {"Alice", "30", "Paris"},
-        {"Bob", "25", "London"},
+        { "name", "age", "city" },
+        { "Alice", "30", "Paris" },
+        { "Bob", "25", "London" },
     })
     assert(csv == "name,age,city\nAlice,30,Paris\nBob,25,London\n")
 end
@@ -194,7 +192,7 @@ local function tocsv_serializes_empty_table_test()
 end
 
 local function tocsv_serializes_empty_row_test()
-    local csv = tocsv({{}})
+    local csv = tocsv({ {} })
     assert(csv == "\n")
 end
 
@@ -203,22 +201,22 @@ end
 -- ============================================================
 
 local function tocsv_quotes_field_with_comma_test()
-    local csv = tocsv({{"hello, world"}})
+    local csv = tocsv({ { "hello, world" } })
     assert(csv == '"hello, world"\n')
 end
 
 local function tocsv_quotes_field_with_newline_test()
-    local csv = tocsv({{"line1\nline2"}})
+    local csv = tocsv({ { "line1\nline2" } })
     assert(csv == '"line1\nline2"\n')
 end
 
 local function tocsv_escapes_double_quotes_test()
-    local csv = tocsv({{'say "hi"'}})
+    local csv = tocsv({ { 'say "hi"' } })
     assert(csv == '"say ""hi"""\n')
 end
 
 local function tocsv_quotes_field_with_carriage_return_test()
-    local csv = tocsv({{"a\rb"}})
+    local csv = tocsv({ { "a\rb" } })
     assert(csv == '"a\rb"\n')
 end
 
@@ -227,17 +225,17 @@ end
 -- ============================================================
 
 local function tocsv_converts_numbers_test()
-    local csv = tocsv({{1, 2, 3}})
+    local csv = tocsv({ { 1, 2, 3 } })
     assert(csv == "1,2,3\n")
 end
 
 local function tocsv_converts_booleans_test()
-    local csv = tocsv({{true, false}})
+    local csv = tocsv({ { true, false } })
     assert(csv == "true,false\n")
 end
 
 local function tocsv_converts_floats_test()
-    local csv = tocsv({{3.14}})
+    local csv = tocsv({ { 3.14 } })
     assert(csv == "3.14\n")
 end
 
@@ -246,17 +244,17 @@ end
 -- ============================================================
 
 local function tocsv_with_tab_delimiter_test()
-    local csv = tocsv({{"a", "b"}, {"c", "d"}}, "\t")
+    local csv = tocsv({ { "a", "b" }, { "c", "d" } }, "\t")
     assert(csv == "a\tb\nc\td\n")
 end
 
 local function tocsv_with_semicolon_delimiter_test()
-    local csv = tocsv({{"a", "b", "c"}}, ";")
+    local csv = tocsv({ { "a", "b", "c" } }, ";")
     assert(csv == "a;b;c\n")
 end
 
 local function tocsv_delimiter_must_be_single_char_test()
-    local ok = catch tocsv({{"a"}}, ",,")
+    local ok = catch tocsv({ { "a" } }, ",,")
     assert(not ok, "multi-char delimiter should error")
 end
 
@@ -270,7 +268,7 @@ local function tocsv_errors_on_non_table_test()
 end
 
 local function tocsv_errors_on_non_table_row_test()
-    local ok = catch tocsv({"not a table"})
+    local ok = catch tocsv({ "not a table" })
     assert(not ok, "string row should error")
 end
 
@@ -279,7 +277,7 @@ end
 -- ============================================================
 
 local function roundtrip_preserves_simple_data_test()
-    local original = {{"name", "age"}, {"Alice", "30"}, {"Bob", "25"}}
+    local original = { { "name", "age" }, { "Alice", "30" }, { "Bob", "25" } }
     local csv = tocsv(original)
     local parsed = fromcsv(csv)
     assert(#parsed == 3)
@@ -289,7 +287,7 @@ local function roundtrip_preserves_simple_data_test()
 end
 
 local function roundtrip_preserves_quoted_fields_test()
-    local original = {{"hello, world", 'say "hi"'}}
+    local original = { { "hello, world", 'say "hi"' } }
     local csv = tocsv(original)
     local parsed = fromcsv(csv)
     assert(parsed[1][1] == "hello, world")
@@ -297,7 +295,7 @@ local function roundtrip_preserves_quoted_fields_test()
 end
 
 local function roundtrip_preserves_fields_with_newlines_test()
-    local original = {{"line1\nline2", "normal"}}
+    local original = { { "line1\nline2", "normal" } }
     local csv = tocsv(original)
     local parsed = fromcsv(csv)
     assert(parsed[1][1] == "line1\nline2")
@@ -305,7 +303,7 @@ local function roundtrip_preserves_fields_with_newlines_test()
 end
 
 local function roundtrip_with_custom_delimiter_test()
-    local original = {{"a", "b"}, {"c", "d"}}
+    local original = { { "a", "b" }, { "c", "d" } }
     local csv = tocsv(original, "\t")
     local parsed = fromcsv(csv, false, "\t")
     assert(parsed[1][1] == "a")
@@ -318,9 +316,11 @@ end
 
 local function large_number_of_rows_test()
     local rows = {}
+
     for i = 1, 1000 do
-        rows[i] = {tostring(i), "value" .. tostring(i)}
+        rows[i] = { tostring(i), "value" .. tostring(i) }
     end
+
     local csv = tocsv(rows)
     local parsed = fromcsv(csv)
     assert(#parsed == 1000)
@@ -331,10 +331,12 @@ end
 
 local function large_number_of_columns_test()
     local row = {}
+
     for i = 1, 200 do
         row[i] = "col" .. tostring(i)
     end
-    local csv = tocsv({row})
+
+    local csv = tocsv({ row })
     local parsed = fromcsv(csv)
     assert(#parsed == 1)
     assert(#parsed[1] == 200)
@@ -344,12 +346,11 @@ end
 
 local function long_field_value_test()
     local long = string.rep("x", 10000)
-    local csv = tocsv({{long}})
+    local csv = tocsv({ { long } })
     local parsed = fromcsv(csv)
     assert(parsed[1][1] == long)
     assert(#parsed[1][1] == 10000)
 end
-
 
 -- csv2.lus
 -- Hostile CSV suite covering RFC 4180 pathologies and byte-level edge cases.
@@ -358,9 +359,6 @@ end
 -- policy round-trips, headers-mode corner cases, and byte fidelity through
 -- fromcsv and tocsv. Behaviors are pinned against the C implementation in
 -- lus/src/lcsvlib.c and the contracts in lus-spec/stdlib/base.
-
-
-
 
 -- ============================================================
 -- BOM handling: no stripping, becomes part of the first field
@@ -530,9 +528,9 @@ end
 -- ============================================================
 
 local unterminated_or_malformed_quotes_raise_a_parse_error_cases = {
-    { '"unterminated' },        -- no closing quote before EOF
-    { 'a,"b' },                 -- second field opens a quote that never closes
-    { '"a\nb' },                -- quote spanning a newline with no close
+    { '"unterminated' },  -- no closing quote before EOF
+    { 'a,"b' },  -- second field opens a quote that never closes
+    { '"a\nb' },  -- quote spanning a newline with no close
 }
 
 local function unterminated_or_malformed_quotes_raise_a_parse_error_test(input)
@@ -548,16 +546,18 @@ local function unterminated_quote_reports_the_unterminated_message_test()
 end
 
 local junk_after_a_closing_quote_raises_regardless_of_position_cases = {
-    { 'a,"b"x' },       -- junk mid record
-    { '"a"b,c' },       -- junk at start of record
-    { '"a"b' },         -- junk at end of input
+    { 'a,"b"x' },  -- junk mid record
+    { '"a"b,c' },  -- junk at start of record
+    { '"a"b' },  -- junk at end of input
 }
 
 local function junk_after_a_closing_quote_raises_regardless_of_position_test(input)
     local ok, err = catch fromcsv(input)
     assert(not ok, "a closing quote must be followed by a delimiter or line ending")
-    assert(string.find(tostring(err), "unexpected character after quoted field"),
-        "message names the unexpected trailing character")
+    assert(
+        string.find(tostring(err), "unexpected character after quoted field"),
+        "message names the unexpected trailing character"
+    )
 end
 
 local function a_quoted_field_directly_at_end_of_input_is_accepted_test()
@@ -634,9 +634,9 @@ local function assorted_single_character_delimiters_parse_correctly_test(input, 
 end
 
 local delimiters_that_are_not_exactly_one_byte_are_rejected_cases = {
-    { "" },      -- empty string has length zero
-    { ",," },    -- two bytes
-    { "ab" },    -- two bytes
+    { "" },  -- empty string has length zero
+    { ",," },  -- two bytes
+    { "ab" },  -- two bytes
 }
 
 local function delimiters_that_are_not_exactly_one_byte_are_rejected_test(delim)
@@ -678,17 +678,17 @@ end
 
 local function tocsv_quotes_a_field_containing_the_custom_delimiter_test()
     -- The needs-quoting check tracks the active delimiter, not a hardcoded comma.
-    local csv = tocsv({{"a;b"}}, ";")
+    local csv = tocsv({ { "a;b" } }, ";")
     assert(csv == '"a;b"\n')
 end
 
 local function tocsv_leaves_a_comma_unquoted_when_the_delimiter_is_a_semico_test()
-    local csv = tocsv({{"a,b"}}, ";")
+    local csv = tocsv({ { "a,b" } }, ";")
     assert(csv == "a,b\n")
 end
 
 local function tocsv_still_quotes_newlines_and_quotes_under_a_custom_delimi_test()
-    local csv = tocsv({{'x"y', "p\nq"}}, ";")
+    local csv = tocsv({ { 'x"y', "p\nq" } }, ";")
     assert(csv == '"x""y";"p\nq"\n')
 end
 
@@ -698,28 +698,43 @@ end
 
 local function tocsv_renders_a_float_distinctly_from_the_same_valued_intege_test()
     -- luaL_tolstring preserves the float subtype, so 1.0 keeps its decimal form.
-    assert(tocsv({{1.0}}) == "1.0\n")
-    assert(tocsv({{1}}) == "1\n")
+    assert(tocsv({ { 1.0 } }) == "1.0\n")
+    assert(tocsv({ { 1 } }) == "1\n")
 end
 
 local function tocsv_honors_a_tostring_metamethod_test()
-    local v = setmetatable({}, { __tostring = function() return "CUSTOM" end })
-    assert(tocsv({{v}}) == "CUSTOM\n")
+    local v = setmetatable({}, {
+        __tostring = function()
+            return "CUSTOM"
+        end,
+    })
+
+    assert(tocsv({ { v } }) == "CUSTOM\n")
 end
 
 local function tocsv_quotes_a_tostring_result_that_contains_a_comma_test()
-    local v = setmetatable({}, { __tostring = function() return "a,b" end })
-    assert(tocsv({{v}}) == '"a,b"\n')
+    local v = setmetatable({}, {
+        __tostring = function()
+            return "a,b"
+        end,
+    })
+
+    assert(tocsv({ { v } }) == '"a,b"\n')
 end
 
 local function tocsv_writes_a_nil_field_as_empty_when_the_row_length_spans_test()
     -- Forcing __len exposes the interior nil, which the spec says is an empty field.
-    local row = setmetatable({"a", nil, "c"}, { __len = function() return 3 end })
-    assert(tocsv({row}) == "a,,c\n")
+    local row = setmetatable({ "a", nil, "c" }, {
+        __len = function()
+            return 3
+        end,
+    })
+
+    assert(tocsv({ row }) == "a,,c\n")
 end
 
 local function tocsv_errors_when_a_row_is_not_a_table_test()
-    local ok, err = catch tocsv({ "a", {"b"} })
+    local ok, err = catch tocsv({ "a", { "b" } })
     assert(not ok, "a string row is rejected")
     assert(string.find(tostring(err), "row 1 is not a table"), "message names the offending row")
 end
@@ -742,25 +757,25 @@ local hostile_field_values_round_trip_through_tocsv_and_fromcsv_cases = {
 }
 
 local function hostile_field_values_round_trip_through_tocsv_and_fromcsv_test(value)
-    local csv = tocsv({{ value }})
+    local csv = tocsv({ { value } })
     local back = fromcsv(csv)
     assert(back[1][1] == value)
 end
 
 local function a_nul_byte_round_trips_through_tocsv_and_fromcsv_test()
     local value = "x\0y"
-    local back = fromcsv(tocsv({{ value }}))
+    local back = fromcsv(tocsv({ { value } }))
     assert(back[1][1] == value)
     assert(#back[1][1] == 3)
 end
 
 local function a_field_of_only_whitespace_round_trips_exactly_test()
-    local back = fromcsv(tocsv({{ "\t \t" }}))
+    local back = fromcsv(tocsv({ { "\t \t" } }))
     assert(back[1][1] == "\t \t")
 end
 
 local function a_custom_delimiter_round_trip_preserves_embedded_delimiters_test()
-    local original = {{"a;b", "c;d"}, {"e", "f"}}
+    local original = { { "a;b", "c;d" }, { "e", "f" } }
     local csv = tocsv(original, ";")
     local back = fromcsv(csv, false, ";")
     assert(back[1][1] == "a;b" and back[1][2] == "c;d")
@@ -768,7 +783,7 @@ local function a_custom_delimiter_round_trip_preserves_embedded_delimiters_test(
 end
 
 local function headers_mode_round_trips_a_header_carrying_a_comma_test()
-    local original = {{"first,name", "age"}, {"Bob", "30"}}
+    local original = { { "first,name", "age" }, { "Bob", "30" } }
     local csv = tocsv(original)
     local back = fromcsv(csv, true)
     assert(back[1]["first,name"] == "Bob")
@@ -782,22 +797,23 @@ end
 local function a_very_large_quoted_field_round_trips_intact_test()
     -- Build a field that mixes commas and quotes to force escaping across growth.
     local chunk = string.rep('a,b"c', 5000)
-    local back = fromcsv(tocsv({{ chunk }}))
+    local back = fromcsv(tocsv({ { chunk } }))
     assert(back[1][1] == chunk)
     assert(#back[1][1] == #chunk)
 end
 
 local function many_single_column_rows_survive_a_round_trip_test()
     local rows = {}
+
     for i = 1, 500 do
         rows[i] = { "v" .. tostring(i) }
     end
+
     local back = fromcsv(tocsv(rows))
     assert(#back == 500)
     assert(back[1][1] == "v1")
     assert(back[500][1] == "v500")
 end
-
 
 -- A row keeps its string fields in one word each, and it takes values of
 -- every other kind as any table does.

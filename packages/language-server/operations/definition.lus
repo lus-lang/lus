@@ -12,177 +12,225 @@ local definition = {}
 -- Walk the AST to find a field access node (M.foo) where the key
 -- is at the given position. Returns {table_name, field_name} or nil.
 local function find_field_at(node, line, col)
-  if not node or type(node) ~= "table" then return nil end
+    if not node or type(node) ~= "table" then
+        return nil
+    end
 
-  if node.type == "field" and node.table and node.table.type == "name"
-     and node.key and node.key.line == line then
-    local key_col = node.key.column or 0
-    local key_name = node.key.value
-    if key_name and col >= key_col and col < key_col + #key_name then
-      return {table_name = node.table.value, field_name = key_name}
-    end
-  end
+    if node.type == "field"
+        and node.table
+        and node.table.type == "name"
+        and node.key
+        and node.key.line == line then
+        local key_col = node.key.column or 0
+        local key_name = node.key.value
 
-  -- Recurse into all sub-nodes
-  if node.children then
-    for _, child in ipairs(node.children) do
-      local r = find_field_at(child, line, col)
-      if r then return r end
+        if key_name and col >= key_col and col < key_col + #key_name then
+            return { table_name = node.table.value, field_name = key_name }
+        end
     end
-  end
-  for _, key in ipairs({"func", "left", "right", "operand", "expr",
-                         "cond", "nameexpr", "base", "suffix",
-                         "table", "key", "value", "handler",
-                         "init", "limit", "step", "start", "finish"}) do
-    if node[key] then
-      local r = find_field_at(node[key], line, col)
-      if r then return r end
+
+    -- Recurse into all sub-nodes
+    if node.children then
+        for _, child in ipairs(node.children) do
+            if r = find_field_at(child, line, col) then
+                return r
+            end
+        end
     end
-  end
-  for _, key in ipairs({"args", "values", "lhs", "rhs", "fields",
-                         "parts", "explist"}) do
-    if node[key] then
-      for _, v in ipairs(node[key]) do
-        local r = find_field_at(v, line, col)
-        if r then return r end
-      end
+
+    for _, key in ipairs({
+        "func",
+        "left",
+        "right",
+        "operand",
+        "expr",
+        "cond",
+        "nameexpr",
+        "base",
+        "suffix",
+        "table",
+        "key",
+        "value",
+        "handler",
+        "init",
+        "limit",
+        "step",
+        "start",
+        "finish",
+    }) do
+        if node[key] then
+            if r = find_field_at(node[key], line, col) then
+                return r
+            end
+        end
     end
-  end
-  return nil
+
+    for _, key in ipairs({ "args", "values", "lhs", "rhs", "fields", "parts", "explist" }) do
+        if node[key] then
+            for _, v in ipairs(node[key]) do
+                if r = find_field_at(v, line, col) then
+                    return r
+                end
+            end
+        end
+    end
+
+    return nil
 end
 
 -- Compute go-to-definition for a position.
 -- position is 0-based (LSP). Returns an LSP Location or nil.
 function definition.compute(uri, position)
-  -- Ensure document is parsed
-  ast_mod.parse(uri)
+    -- Ensure document is parsed
+    ast_mod.parse(uri)
 
-  local tree = ast_mod.get(uri)
-  local analysis = scope_mod.analyze(uri)
-  if not analysis then return nil end
+    local tree = ast_mod.get(uri)
+    local analysis = scope_mod.analyze(uri)
 
-  -- Convert 0-based LSP position (UTF-16) to 1-based AST position (bytes)
-  local doc = document.get(uri)
-  if not doc then return nil end
-  local line, col = pos_util.lsp_to_byte(
-    doc.text, doc.line_index, position.line, position.character)
-
-  -- Check if cursor is on a require() string argument -> jump to module file
-  if tree then
-    local mod_uri = modules.get_require_at(tree, line, col, uri)
-    if mod_uri then
-      return {
-        uri = mod_uri,
-        range = {
-          start = {line = 0, character = 0},
-          ["end"] = {line = 0, character = 0},
-        },
-      }
+    if not analysis then
+        return nil
     end
-  end
 
-  -- Check for field access on a require() result (e.g., M.foo)
-  -- Find the reference at position
-  local ref = scope_mod.find_at(analysis, line, col)
+    -- Convert 0-based LSP position (UTF-16) to 1-based AST position (bytes)
+    local doc = document.get(uri)
 
-  -- If the reference resolves to a local declaration, check if we're on
-  -- a field access of a require() result variable
-  if not ref then
-    -- Check if cursor is on a field key (M.foo where cursor is on foo)
+    if not doc then
+        return nil
+    end
+
+    local line, col = pos_util.lsp_to_byte(
+        doc.text,
+        doc.line_index,
+        position.line,
+        position.character
+    )
+
+    -- Check if cursor is on a require() string argument -> jump to module file
     if tree then
-      local field_info = find_field_at(tree, line, col)
-      if field_info then
-        local s = scope_mod.get_scope_at(analysis.root, line)
-        if s then
-          local visible = scope_mod.get_visible(s)
-          local table_decl = visible[field_info.table_name]
-          if table_decl then
-            -- Check if it's a require() result
-            local mod_name = modules.get_require_for_decl(tree, table_decl)
-            if mod_name then
-              local exports = modules.get_exports(mod_name, uri)
-              for _, exp in ipairs(exports) do
-                if exp.name == field_info.field_name then
-                  local target_uri = exp.uri or modules.resolve(mod_name, uri)
-                  if target_uri then
-                    return {
-                      uri = target_uri,
-                      range = {
-                        start = {line = (exp.line or 1) - 1, character = (exp.column or 1) - 1},
-                        ["end"] = {line = (exp.line or 1) - 1, character = (exp.column or 1) - 1 + #exp.name},
-                      },
-                    }
-                  end
+        if mod_uri = modules.get_require_at(tree, line, col, uri) then
+            return {
+                uri = mod_uri,
+                range = {
+                    start = { line = 0, character = 0 },
+                    ["end"] = { line = 0, character = 0 },
+                },
+            }
+        end
+    end
+
+    -- Check for field access on a require() result (e.g., M.foo)
+    -- Find the reference at position
+    local ref = scope_mod.find_at(analysis, line, col)
+
+    -- If the reference resolves to a local declaration, check if we're on
+    -- a field access of a require() result variable
+    if not ref then
+        -- Check if cursor is on a field key (M.foo where cursor is on foo)
+        if tree then
+            if field_info = find_field_at(tree, line, col) then
+                if s = scope_mod.get_scope_at(analysis.root, line) then
+                    local visible = scope_mod.get_visible(s)
+
+                    if table_decl = visible[field_info.table_name] then
+                        -- Check if it's a require() result
+
+                        if mod_name = modules.get_require_for_decl(tree, table_decl) then
+                            local exports = modules.get_exports(mod_name, uri)
+
+                            for _, exp in ipairs(exports) do
+                                if exp.name == field_info.field_name then
+                                    if target_uri = exp.uri or modules.resolve(mod_name, uri) then
+                                        return {
+                                            uri = target_uri,
+                                            range = {
+                                                start = {
+                                                    line = (exp.line or 1) - 1,
+                                                    character = (exp.column or 1) - 1,
+                                                },
+                                                ["end"] = {
+                                                    line = (exp.line or 1) - 1,
+                                                    character = (exp.column or 1) - 1 + #exp.name,
+                                                },
+                                            },
+                                        }
+                                    end
+                                end
+                            end
+                        end
+
+                        -- Check in-file table field definitions
+                        if table_decl.type_info then
+                            local fields = types_mod.get_fields(table_decl.type_info)
+
+                            if fields and fields[field_info.field_name] then
+                                local f = fields[field_info.field_name]
+                                return {
+                                    uri = uri,
+                                    range = {
+                                        start = {
+                                            line = (f.line or 1) - 1,
+                                            character = (f.column or 1) - 1,
+                                        },
+                                        ["end"] = {
+                                            line = (f.line or 1) - 1,
+                                            character = (f.column or 1) - 1
+                                                + #field_info.field_name,
+                                        },
+                                    },
+                                }
+                            end
+                        end
+                    end
                 end
-              end
             end
-            -- Check in-file table field definitions
-            if table_decl.type_info then
-              local fields = types_mod.get_fields(table_decl.type_info)
-              if fields and fields[field_info.field_name] then
-                local f = fields[field_info.field_name]
-                return {
-                  uri = uri,
-                  range = {
-                    start = {line = (f.line or 1) - 1, character = (f.column or 1) - 1},
-                    ["end"] = {line = (f.line or 1) - 1, character = (f.column or 1) - 1 + #field_info.field_name},
-                  },
-                }
-              end
-            end
-          end
         end
-      end
+
+        -- Check if we're on a declaration itself
+
+        if decl = scope_mod.get_declaration(analysis, line, col) then
+            return {
+                uri = uri,
+                range = {
+                    start = { line = decl.line - 1, character = decl.column - 1 },
+                    ["end"] = { line = decl.line - 1, character = decl.column - 1 + #decl.name },
+                },
+            }
+        end
+
+        return nil
     end
 
-    -- Check if we're on a declaration itself
-    local decl = scope_mod.get_declaration(analysis, line, col)
-    if decl then
-      return {
-        uri = uri,
-        range = {
-          start = {line = decl.line - 1, character = decl.column - 1},
-          ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
-        },
-      }
-    end
-    return nil
-  end
+    if decl = ref.declaration then
+        -- Check if the declaration is a require() variable and we're accessing a field
+        -- Look at the AST node at the cursor to see if it's part of a field access
+        if tree then
+            if mod_name = modules.get_require_for_decl(tree, decl) then
+                -- The variable is a require() result. If this is the variable itself,
+                -- jump to the module file
 
-  local decl = ref.declaration
+                if mod_uri = modules.resolve(mod_name, uri) then
+                    return {
+                        uri = mod_uri,
+                        range = {
+                            start = { line = 0, character = 0 },
+                            ["end"] = { line = 0, character = 0 },
+                        },
+                    }
+                end
+            end
+        end
 
-  if decl then
-    -- Check if the declaration is a require() variable and we're accessing a field
-    -- Look at the AST node at the cursor to see if it's part of a field access
-    if tree then
-      local mod_name = modules.get_require_for_decl(tree, decl)
-      if mod_name then
-        -- The variable is a require() result. If this is the variable itself,
-        -- jump to the module file
-        local mod_uri = modules.resolve(mod_name, uri)
-        if mod_uri then
-          return {
-            uri = mod_uri,
+        -- Normal in-file definition
+        return {
+            uri = uri,
             range = {
-              start = {line = 0, character = 0},
-              ["end"] = {line = 0, character = 0},
+                start = { line = decl.line - 1, character = decl.column - 1 },
+                ["end"] = { line = decl.line - 1, character = decl.column - 1 + #decl.name },
             },
-          }
-        end
-      end
+        }
     end
 
-    -- Normal in-file definition
-    return {
-      uri = uri,
-      range = {
-        start = {line = decl.line - 1, character = decl.column - 1},
-        ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
-      },
-    }
-  end
-
-  return nil
+    return nil
 end
 
 return definition

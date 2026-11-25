@@ -12,6 +12,7 @@ end
 
 local width <positive> = 80
 width = 120
+
 local ok, message = catch do
     width = -5
 end
@@ -31,6 +32,7 @@ end
 
 local retries <only "number"> = 0
 retries = retries + 1
+
 ok, message = catch do
     retries = "three"
 end

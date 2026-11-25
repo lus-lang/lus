@@ -16,6 +16,7 @@ local function scan(dir)
     for _, entry in ipairs(fs.list(dir)) do
         local path = dir .. "/" .. entry
         local kind = fs.type(path)
+
         if kind == "directory" then
             scan(path)
         elseif kind == "file" and path:find("%.md$") then
@@ -23,8 +24,12 @@ local function scan(dir)
             local text = f:read("a")
             f:close()
             local name = text:match("\nname: ([^\n]+)")
+
             if name then
-                if text:match("\nreceiver: ") then on_objects[name] = true end
+                if text:match("\nreceiver: ") then
+                    on_objects[name] = true
+                end
+
                 if text:match("\nstability: removed") then
                     removed[name] = true
                 else
@@ -34,69 +39,105 @@ local function scan(dir)
         end
     end
 end
+
 scan(SPEC)
 
 local function resolve(name)
     local v = _G
+
     for part in name:gmatch("[^.:]+") do
-        if type(v) ~= "table" then return nil end
+        if type(v) ~= "table" then
+            return nil
+        end
+
         v = v[part]
     end
+
     return v
 end
 
 local function sorted(set)
     local list = {}
-    for k in pairs(set) do list[#list + 1] = k end
+
+    for k in pairs(set) do
+        list[#list + 1] = k
+    end
+
     table.sort(list)
     return list
 end
 
 local function every_spec_entry_exists_at_run_time_test()
     local missing = {}
+
     for _, name in ipairs(sorted(live)) do
         -- Methods (a:b) and the fields of objects are documented on their
         -- objects, not as globals.
-        if not name:find(":") and not on_objects[name] and not worker_only[name] and resolve(name) == nil then
+        if not name:find(":")
+            and not on_objects[name]
+            and not worker_only[name]
+            and resolve(name) == nil then
             missing[#missing + 1] = name
         end
     end
+
     assert(#missing == 0, "spec entries absent at run time: " .. table.concat(missing, ", "))
 end
 
 local function removed_entries_are_absent_test()
     local present = {}
+
     for _, name in ipairs(sorted(removed)) do
-        if resolve(name) ~= nil then present[#present + 1] = name end
+        if resolve(name) ~= nil then
+            present[#present + 1] = name
+        end
     end
+
     assert(#present == 0, "removed entries still present: " .. table.concat(present, ", "))
 end
 
 local function every_library_function_has_a_spec_entry_test()
     local undocumented = {}
+
     local function walk(prefix, t, depth)
         for k, v in pairs(t) do
             if type(k) == "string" then
                 local full = prefix == "" and k or prefix .. "." .. k
+
                 if type(v) == "function" and not live[full] then
                     undocumented[#undocumented + 1] = full
-                elseif type(v) == "table" and depth < 2 and v ~= _G
-                    and k ~= "loaded" and k ~= "preload" then
+                elseif type(v) == "table"
+                    and depth < 2
+                    and v ~= _G
+                    and k ~= "loaded"
+                    and k ~= "preload" then
                     walk(full, v, depth + 1)
                 end
             end
         end
     end
+
     walk("", _G, 0)
     -- Functions the test runner itself provides are not part of the
     -- standard library.
-    local runner = { raises = true, same = true, skip = true, snapshot = true,
-        __lus_assert = true, __lus_assert_cmp = true,
-        __lus_bench_once = true, __lus_bench_driver = true }
+    local runner = {
+        raises = true,
+        same = true,
+        skip = true,
+        snapshot = true,
+        __lus_assert = true,
+        __lus_assert_cmp = true,
+        __lus_bench_once = true,
+        __lus_bench_driver = true,
+    }
     local real = {}
+
     for _, name in ipairs(undocumented) do
-        if not runner[name] then real[#real + 1] = name end
+        if not runner[name] then
+            real[#real + 1] = name
+        end
     end
+
     table.sort(real)
     assert(#real == 0, "library functions without a spec entry: " .. table.concat(real, ", "))
 end

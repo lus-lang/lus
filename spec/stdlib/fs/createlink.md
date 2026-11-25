@@ -29,8 +29,8 @@ fs.createdirectory(dir, true)
 io.open(fs.path.join(dir, "real.txt"), "w"):close()
 local alias = fs.path.join(dir, "alias")
 fs.createlink(alias, "real.txt")
-print(fs.follow(alias))   --> real.txt
-print(fs.type(alias))     --> file  true
+print(fs.follow(alias))  --> real.txt
+print(fs.type(alias))  --> file  true
 fs.remove(dir, true)
 ```
 

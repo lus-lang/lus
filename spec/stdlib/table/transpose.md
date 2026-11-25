@@ -21,9 +21,9 @@ The result is a new table of `#matrix[1]` rows, each with `#matrix` elements. An
 Rows of different lengths raise `non-rectangular matrix in 'transpose'`. A row that is not a table raises `bad argument #-1 to 'transpose' (table expected, got number)` with its type.
 
 ```lus
-local t = table.transpose({{1, 2, 3}, {4, 5, 6}})
+local t = table.transpose({ { 1, 2, 3 }, { 4, 5, 6 } })
 print(#t, table.concat(t[1], ","), table.concat(t[3], ","))  --> 3  1,4  3,6
-print(catch table.transpose({{1, 2}, {3}}))  --> false  ...: non-rectangular matrix in 'transpose'
+print(catch table.transpose({ { 1, 2 }, { 3 } }))  --> false  ...: non-rectangular matrix in 'transpose'
 ```
 
 Transposing twice returns a matrix equal to the original. [`table.reshape`](/manual/api#table.reshape) builds a matrix from a flat list, and [`table.zip`](/manual/api#table.zip) combines separate lists into rows.

@@ -19,22 +19,37 @@ local function run(args, script)
 end
 
 local function a_sandboxed_pledge_is_refused_test()
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
-    local ok, out = run("--sandbox", 'print(pledge("fs:read"))\nprint(catch io.open("script.lus"))\n')
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local ok, out = run(
+        "--sandbox",
+        'print(pledge("fs:read"))\nprint(catch io.open("script.lus"))\n'
+    )
     assert(ok, out)
     assert(out:find("^false\n"), out)
     assert(out:find("denied", 1, true), out)
 end
 
 local function the_program_runs_without_the_flag_test()
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = run("", 'pledge("fs:read")\nprint(io.open("script.lus") ~= nil)\n')
     assert(ok and out == "true\n", out)
 end
 
 local function command_line_grants_survive_the_seal_test()
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
-    local ok, out = run("--sandbox -P fs:read", 'print(io.open("script.lus") ~= nil)\nprint(pledge("exec"))\n')
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local ok, out = run(
+        "--sandbox -P fs:read",
+        'print(io.open("script.lus") ~= nil)\nprint(pledge("exec"))\n'
+    )
     assert(ok, out)
     assert(out == "true\nfalse\n", out)
 end

@@ -38,6 +38,6 @@ local zip = vector.archive.zip.pack({
     { name = "app/main.lus", data = 'print("hi")' },
     { name = "app/run.sh", data = "#!/bin/sh\nlus main.lus\n", mode = 493 },
 }, { level = 9 })
-print(#vector.archive.zip.list(zip))                                  --> 3
+print(#vector.archive.zip.list(zip))  --> 3
 print(vector.tostring(vector.archive.zip.read(zip, "app/main.lus")))  --> print("hi")
 ```

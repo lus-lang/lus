@@ -29,18 +29,31 @@ M.CONFIGS = {
     { name = "fmt", env = { LUS_JIT = "off" }, fmt = true },
     { name = "nofold", env = { LUS_JIT = "off" }, nofold = true },
     { name = "stress-eager", env = { LUS_JIT = "eager" }, binary = "stress" },
-    { name = "stress-opt", env = { LUS_JIT_THRESHOLD = "2", LUS_JIT_OPT_THRESHOLD = "3" }, binary = "stress" },
+    {
+        name = "stress-opt",
+        env = { LUS_JIT_THRESHOLD = "2", LUS_JIT_OPT_THRESHOLD = "3" },
+        binary = "stress",
+    },
     { name = "x64-off", env = { LUS_JIT = "off" }, binary = "x64" },
     { name = "x64-eager", env = { LUS_JIT = "eager" }, binary = "x64" },
     { name = "x64-opt-eager", env = { LUS_JIT = "opt-eager" }, binary = "x64" },
-    { name = "x64-opt-hot", env = { LUS_JIT_THRESHOLD = "2", LUS_JIT_OPT_THRESHOLD = "3" }, binary = "x64" },
+    {
+        name = "x64-opt-hot",
+        env = { LUS_JIT_THRESHOLD = "2", LUS_JIT_OPT_THRESHOLD = "3" },
+        binary = "x64",
+    },
     { name = "wasm-off", env = { LUS_JIT = "off" }, binary = "wasm" },
     { name = "wasm-on", env = { LUS_JIT = "on" }, binary = "wasm" },
     { name = "wasm-eager", env = { LUS_JIT = "eager" }, binary = "wasm" },
 }
 
 function M.config(name)
-    for _, c in ipairs(M.CONFIGS) do if c.name == name then return c end end
+    for _, c in ipairs(M.CONFIGS) do
+        if c.name == name then
+            return c
+        end
+    end
+
     error("unknown configuration " .. tostring(name), 0)
 end
 
@@ -48,13 +61,21 @@ end
 -- whose binary was given.
 function M.select(names, binaries)
     local out = {}
+
     if names then
-        for name in names:gmatch("[^,]+") do out[#out + 1] = M.config(name) end
+        for name in names:gmatch("[^,]+") do
+            out[#out + 1] = M.config(name)
+        end
+
         return out
     end
+
     for _, c in ipairs(M.CONFIGS) do
-        if not c.binary or binaries[c.binary] then out[#out + 1] = c end
+        if not c.binary or binaries[c.binary] then
+            out[#out + 1] = c
+        end
     end
+
     return out
 end
 
@@ -65,9 +86,14 @@ M.windows = os.platform() == "windows"
 -- for /bin/sh elsewhere.
 local function quote(s)
     s = tostring(s)
-    if M.windows then return '"' .. s .. '"' end
+
+    if M.windows then
+        return '"' .. s .. '"'
+    end
+
     return "'" .. s:gsub("'", [['\'']]) .. "'"
 end
+
 M.quote = quote
 
 -- The directory part of a path, with either separator.
@@ -77,7 +103,11 @@ end
 
 function M.readFile(path)
     local f = io.open(path, "r", { lossy = true })
-    if not f then return "" end
+
+    if not f then
+        return ""
+    end
+
     local s = f:read("a") or ""
     f:close()
     return s
@@ -113,12 +143,18 @@ local JIT_VARS = { "LUS_JIT", "LUS_JIT_THRESHOLD", "LUS_JIT_OPT_THRESHOLD", "LUS
 -- child sees its configuration on every system.
 function M.spawn(cmd, env)
     local saved = {}
+
     for _, v in ipairs(JIT_VARS) do
         saved[v] = os.getenv(v)
         os.setenv(v, env[v])
     end
+
     local p = assert(io.popen(cmd))
-    for _, v in ipairs(JIT_VARS) do os.setenv(v, saved[v]) end
+
+    for _, v in ipairs(JIT_VARS) do
+        os.setenv(v, saved[v])
+    end
+
     return p
 end
 
@@ -137,7 +173,15 @@ local SIGALRM = 14
 local function prepare(file, config, binaries, base)
     if config.fmt then
         local target = base .. ".fmt.lus"
-        os.execute(quote(binaries.lus) .. " fmt " .. quote(file) .. " > " .. quote(target) .. " 2> " .. quote(base .. ".err"))
+        os.execute(
+            quote(binaries.lus)
+                .. " fmt "
+                .. quote(file)
+                .. " > "
+                .. quote(target)
+                .. " 2> "
+                .. quote(base .. ".err")
+        )
         return target
     elseif config.nofold then
         local target = base .. ".nofold.lus"
@@ -145,6 +189,7 @@ local function prepare(file, config, binaries, base)
         M.writeFile(target, (text:gsub(" <meta>", "")))
         return target
     end
+
     return file
 end
 
@@ -152,14 +197,30 @@ end
 -- in `base`.out and `base`.err.
 local function command(target, config, binaries, seconds, base)
     local run
+
     if config.binary == "wasm" then
         seconds = seconds * 2
-        run = quote(binaries.node or "node") .. " " .. quote(binaries.wasmRunner) .. " " .. config.env.LUS_JIT .. " " .. quote(target) .. " " .. quote(binaries.wasm)
+        run = quote(binaries.node or "node")
+            .. " "
+            .. quote(binaries.wasmRunner)
+            .. " "
+            .. config.env.LUS_JIT
+            .. " "
+            .. quote(target)
+            .. " "
+            .. quote(binaries.wasm)
     else
-        if config.binary == "stress" then seconds = seconds * 4 end
+        if config.binary == "stress" then
+            seconds = seconds * 4
+        end
+
         run = quote(binaries[config.binary or "lus"]) .. " " .. M.FLAGS .. " " .. quote(target)
     end
-    if not M.windows then run = "exec perl -e 'alarm shift; exec @ARGV' " .. math.floor(seconds) .. " " .. run end
+
+    if not M.windows then
+        run = "exec perl -e 'alarm shift; exec @ARGV' " .. math.floor(seconds) .. " " .. run
+    end
+
     return run .. " > " .. quote(base .. ".out") .. " 2>> " .. quote(base .. ".err")
 end
 
@@ -168,6 +229,7 @@ end
 -- of 128 plus N means signal N.
 function M.runAll(file, configs, binaries, seconds, dir)
     local procs = {}
+
     for i, c in ipairs(configs) do
         local base = dir .. "/c" .. i
         removeFile(base .. ".err")
@@ -175,7 +237,9 @@ function M.runAll(file, configs, binaries, seconds, dir)
         local target = prepare(file, c, binaries, base)
         procs[i] = M.spawn(command(target, c, binaries, seconds, base), c.env)
     end
+
     local results = {}
+
     for i, c in ipairs(configs) do
         local base = dir .. "/c" .. i
         local _, how, status = procs[i]:close()
@@ -190,26 +254,52 @@ function M.runAll(file, configs, binaries, seconds, dir)
             stdout = M.readFile(base .. ".out"),
             stderr = M.readFile(base .. ".err"),
         }
+
         -- Node in a sandbox may warn about the system certificates, which
         -- says nothing about the program.
-        if c.binary == "wasm" then results[i].stderr = results[i].stderr:gsub("ERROR: failed to copy trust settings[^\n]*\n", "") end
+        if c.binary == "wasm" then
+            results[i].stderr = results[i].stderr:gsub(
+                "ERROR: failed to copy trust settings[^\n]*\n",
+                ""
+            )
+        end
     end
+
     return results
 end
 
 -- A crash is a signal, an abort, or a panic message, whatever the output.
 function M.crashOf(res)
-    if res.timeout then return "timeout" end
-    if panic = res.stderr:match("panic: ([^\n]*)") then return "panic: " .. panic:gsub("0x%x+", "0x?") end
-    if res.code >= 128 and res.code < 256 then return "signal " .. (res.code - 128) end
-    if res.code ~= 0 and res.code ~= 1 then return "exit " .. res.code end
-    if res.stderr:find("leaked", 1, true) then return "leak" end
+    if res.timeout then
+        return "timeout"
+    end
+
+    if panic = res.stderr:match("panic: ([^\n]*)") then
+        return "panic: " .. panic:gsub("0x%x+", "0x?")
+    end
+
+    if res.code >= 128 and res.code < 256 then
+        return "signal " .. (res.code - 128)
+    end
+
+    if res.code ~= 0 and res.code ~= 1 then
+        return "exit " .. res.code
+    end
+
+    if res.stderr:find("leaked", 1, true) then
+        return "leak"
+    end
+
     return nil
 end
 
 local function lines(s)
     local out = {}
-    for line in (s .. "\n"):gmatch("([^\n]*)\n") do out[#out + 1] = line end
+
+    for line in (s .. "\n"):gmatch("([^\n]*)\n") do
+        out[#out + 1] = line
+    end
+
     return out
 end
 
@@ -227,24 +317,38 @@ end
 function M.firstDifference(a, b)
     local function whole(r)
         local s = r.stdout .. "\n--stderr--\n" .. r.stderr .. "\n--exit " .. r.code
+
         if a.fmt or b.fmt then
             s = maskPositions(s)
         elseif a.renamed or b.renamed then
             s = maskPaths(s)
         end
+
         return s
     end
+
     local x, y = whole(a), whole(b)
-    if x == y then return nil end
-    local xs, ys = lines(x), lines(y)
-    for i = 1, math.max(#xs, #ys) do
-        if xs[i] ~= ys[i] then return { line = i, want = xs[i] or "", got = ys[i] or "" } end
+
+    if x == y then
+        return nil
     end
+
+    local xs, ys = lines(x), lines(y)
+
+    for i = 1, math.max(#xs, #ys) do
+        if xs[i] ~= ys[i] then
+            return { line = i, want = xs[i] or "", got = ys[i] or "" }
+        end
+    end
+
     return { line = #xs, want = "", got = "" }
 end
 
 local function arch(r)
-    if r.binary == "x64" or r.binary == "wasm" then return r.binary end
+    if r.binary == "x64" or r.binary == "wasm" then
+        return r.binary
+    end
+
     return "native"
 end
 
@@ -256,20 +360,48 @@ end
 -- compared with each other.
 function M.judge(results)
     local all = true
-    for _, r in ipairs(results) do if not r.timeout then all = false end end
-    if all then return { { kind = "slow", config = "all", what = "timeout" } } end
-    local findings = {}
+
     for _, r in ipairs(results) do
-        if c = M.crashOf(r) then findings[#findings + 1] = { kind = "crash", config = r.config, what = c } end
-    end
-    local refs = {}
-    for _, r in ipairs(results) do if not refs[arch(r)] then refs[arch(r)] = r end end
-    for _, r in ipairs(results) do
-        local ref = refs[arch(r)]
-        if r ~= ref and not M.crashOf(ref) and not M.crashOf(r) then
-            if d = M.firstDifference(ref, r) then findings[#findings + 1] = { kind = "mismatch", config = r.config, ref = ref.config, what = d } end
+        if not r.timeout then
+            all = false
         end
     end
+
+    if all then
+        return { { kind = "slow", config = "all", what = "timeout" } }
+    end
+
+    local findings = {}
+
+    for _, r in ipairs(results) do
+        if c = M.crashOf(r) then
+            findings[#findings + 1] = { kind = "crash", config = r.config, what = c }
+        end
+    end
+
+    local refs = {}
+
+    for _, r in ipairs(results) do
+        if not refs[arch(r)] then
+            refs[arch(r)] = r
+        end
+    end
+
+    for _, r in ipairs(results) do
+        local ref = refs[arch(r)]
+
+        if r ~= ref and not M.crashOf(ref) and not M.crashOf(r) then
+            if d = M.firstDifference(ref, r) then
+                findings[#findings + 1] = {
+                    kind = "mismatch",
+                    config = r.config,
+                    ref = ref.config,
+                    what = d,
+                }
+            end
+        end
+    end
+
     return findings
 end
 

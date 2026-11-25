@@ -26,12 +26,19 @@ The following example compares the upvalues of closures made by two calls of the
 ```lus
 local function counter()
     local n = 0
-    return function() n = n + 1 return n end, function() return n end
+
+    return function()
+        n = n + 1
+        return n
+    end, function()
+        return n
+    end
 end
+
 local inc, get = counter()
 local other = counter()
-print(debug.upvalueid(inc, 1) == debug.upvalueid(get, 1))      --> true
-print(debug.upvalueid(inc, 1) == debug.upvalueid(other, 1))    --> false
+print(debug.upvalueid(inc, 1) == debug.upvalueid(get, 1))  --> true
+print(debug.upvalueid(inc, 1) == debug.upvalueid(other, 1))  --> false
 print(type(debug.upvalueid(inc, 1)), debug.upvalueid(inc, 9))  --> userdata  nil
 ```
 

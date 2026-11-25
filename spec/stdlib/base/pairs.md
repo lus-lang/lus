@@ -17,8 +17,9 @@ The parameter `t` is the value to traverse. If `t` has a `__pairs` metamethod, `
 
 ```lus
 local stock = { apples = 3 }
+
 for name, count in pairs(stock) do
-    print(name, count)   --> apples  3
+    print(name, count)  --> apples  3
 end
 ```
 

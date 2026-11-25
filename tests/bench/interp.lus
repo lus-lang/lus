@@ -1,8 +1,10 @@
 local out = {}
+
 for i = 1, 2000000 do
     local name = `user$i`
     local s = `$name:$(i * 2):$(i % 7 == 0)`
     out[#out + 1] = s .. "|" .. name:upper() .. string.format("%5d", i % 1000)
 end
+
 local r = table.concat(out)
 print(#r)

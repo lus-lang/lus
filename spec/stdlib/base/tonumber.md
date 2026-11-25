@@ -30,9 +30,9 @@ The optional `base` is an integer from 2 through 36. With `base`, `e` must be a 
 A `base` outside 2 through 36 raises `bad argument #2 to 'tonumber' (base out of range)`, and a non-string `e` with a `base` raises `bad argument #1 to 'tonumber' (string expected, got TYPE)`. A call with no arguments raises `bad argument #1 to 'tonumber' (value expected)`.
 
 ```lus
-print(tonumber("42"), tonumber(" 0x1F "), tonumber("1e2"))   --> 42  31  100.0
-print(tonumber("ff", 16), tonumber("-101", 2), tonumber("z", 10))   --> 255  -5  nil
-print(tonumber(1.50d), math.type(tonumber(5n)))              --> 1.5  float
+print(tonumber("42"), tonumber(" 0x1F "), tonumber("1e2"))  --> 42  31  100.0
+print(tonumber("ff", 16), tonumber("-101", 2), tonumber("z", 10))  --> 255  -5  nil
+print(tonumber(1.50d), math.type(tonumber(5n)))  --> 1.5  float
 ```
 
 [`bigint`](/manual/api#bigint) and [`decimal`](/manual/api#decimal) convert strings to exact numbers, and [`math.tointeger`](/manual/api#math.tointeger) converts a float with an integral value to an integer.

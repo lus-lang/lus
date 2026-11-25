@@ -6,10 +6,12 @@ global coroutine, error, print
 -- continue later from the same place. Creating it runs nothing yet.
 local counter = coroutine.create(function(start)
     local n = start
+
     while n < start + 3 do
         local step = coroutine.yield(n)
         n = n + step
     end
+
     return `done at $n`
 end)
 
@@ -29,6 +31,7 @@ print(coroutine.resume(counter))  --> false  cannot resume dead coroutine
 -- Inside a coroutine, `coroutine.status` reports "running" for itself and
 -- "normal" for the coroutine that resumed it.
 local outer
+
 local inner = coroutine.create(function()
     print(coroutine.status(outer))  --> normal
 end)

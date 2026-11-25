@@ -25,13 +25,15 @@ The following example lists the upvalues of a closure.
 
 ```lus
 local count, step = 0, 5
+
 local function bump()
     count = count + step
     return count
 end
-print(debug.getupvalue(bump, 1))                    --> count  0
-print(debug.getupvalue(bump, 2))                    --> step  5
-print(select("#", debug.getupvalue(bump, 3)))       --> 0
+
+print(debug.getupvalue(bump, 1))  --> count  0
+print(debug.getupvalue(bump, 2))  --> step  5
+print(select("#", debug.getupvalue(bump, 3)))  --> 0
 ```
 
 The number of upvalues of a function is the `nups` field of [`debug.getinfo`](/manual/api#debug.getinfo) with the `u` option. [`debug.setupvalue`](/manual/api#debug.setupvalue) changes an upvalue, and [`debug.upvalueid`](/manual/api#debug.upvalueid) tells whether two closures share one.

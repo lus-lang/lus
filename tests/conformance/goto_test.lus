@@ -4,13 +4,19 @@ pledge("load")
 -- simple goto
 local function simple_goto_test()
     local x = 0
+
     local function f()
         local y = 12
         goto l1
-        ::l2:: x = x + 1; goto l3
-        ::l1:: x = y; goto l2
+        ::l2::
+        x = x + 1
+        goto l3
+        ::l1::
+        x = y
+        goto l2
         ::l3::
     end
+
     f()
     assert(x == 13)
 end
@@ -22,25 +28,29 @@ local function goto_error_handling_scoping_test()
         -- If load throws: status=false, result=thrown_error
         -- If load returns normally: status=true, result=load_result, error_if_any=load_error
         local ok, f, err = catch load(code)
+
         if not ok then
-             -- load raised error directly (status=false means throw)
-             assert(string.find(f, msg), "Load raise '"..f.."' missing '"..msg.."'")
-             return
+            -- load raised error directly (status=false means throw)
+            assert(string.find(f, msg), "Load raise '" .. f .. "' missing '" .. msg .. "'")
+            return
         end
 
         -- load didn't throw, check if it returned nil + error
         if f == nil then
-             -- load returned (nil, error_message), which catch wraps as (true, nil, error_message)
-             -- So 'err' contains the actual error message
-             assert(err ~= nil, "Expected error message from load")
-             assert(string.find(err, msg), "Load error '"..tostring(err).."' missing '"..msg.."'")
-             return
+            -- load returned (nil, error_message), which catch wraps as (true, nil, error_message)
+            -- So 'err' contains the actual error message
+            assert(err ~= nil, "Expected error message from load")
+            assert(
+                string.find(err, msg),
+                "Load error '" .. tostring(err) .. "' missing '" .. msg .. "'"
+            )
+            return
         end
 
         -- load succeeded with a function, run it and expect runtime error
         local run_ok, run_err = catch f()
-        assert(not run_ok, "Expected runtime error for: "..code)
-        assert(string.find(run_err, msg), "Error '"..run_err.."' missing '"..msg.."'")
+        assert(not run_ok, "Expected runtime error for: " .. code)
+        assert(string.find(run_err, msg), "Error '" .. run_err .. "' missing '" .. msg .. "'")
     end
 
     -- cannot see label inside block

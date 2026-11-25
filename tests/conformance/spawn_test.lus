@@ -9,9 +9,11 @@ local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin
 
 local function lus(code, options, grants)
     local argv = { lus_bin }
+
     for _, g in ipairs(grants or {}) do
         argv[#argv + 1] = "-P" .. g
     end
+
     argv[#argv + 1] = "-e"
     argv[#argv + 1] = code
     return os.spawn(argv, options)
@@ -58,9 +60,11 @@ end
 
 local function closing_a_waiter_closes_the_exit_coroutine_test()
     local p = lus('io.read("a")', { stdin = "pipe" })
+
     local waiter = coroutine.detach(coroutine.create(function()
         coroutine.resume(p.exit)
     end))
+
     coroutine.resume(coroutine.sleep(0.05))
     coroutine.close(waiter)
     assert(coroutine.status(p.exit) == "dead")
@@ -78,7 +82,10 @@ local function poll_reports_a_running_child_test()
 end
 
 local function stderr_can_join_stdout_test()
-    local p = lus('io.write("out") io.stdout:flush() io.stderr:write("err")', { stdout = "pipe", stderr = "stdout" })
+    local p = lus('io.write("out") io.stdout:flush() io.stderr:write("err")', {
+        stdout = "pipe",
+        stderr = "stdout",
+    })
     local all = p.stdout:read("a")
     assert(all == "outerr", all)
     exit_of(p)
@@ -103,18 +110,28 @@ local function a_file_can_be_a_stream_test()
 end
 
 local function env_replaces_the_environment_test()
-    local p = lus('io.write(tostring(os.getenv("SPAWN_TEST_A")), " ", tostring(os.getenv("HOME")))', {
-        stdout = "pipe",
-        env = { SPAWN_TEST_A = "one" },
-    }, { "env" })
+    local p = lus(
+        'io.write(tostring(os.getenv("SPAWN_TEST_A")), " ", tostring(os.getenv("HOME")))',
+        {
+            stdout = "pipe",
+            env = { SPAWN_TEST_A = "one" },
+        },
+        { "env" }
+    )
     assert(p.stdout:read("a") == "one nil")
     exit_of(p)
 end
 
 local function cwd_sets_the_working_directory_test()
     local marker = os.tmpname()
-    local code = string.format('io.write(io.open(%q) and "found" or "missing")', fs.path.name(marker))
-    local p = os.spawn({ lus_bin, "-Pfs", "-e", code }, { stdout = "pipe", cwd = fs.path.parent(marker) })
+    local code = string.format(
+        'io.write(io.open(%q) and "found" or "missing")',
+        fs.path.name(marker)
+    )
+    local p = os.spawn({ lus_bin, "-Pfs", "-e", code }, {
+        stdout = "pipe",
+        cwd = fs.path.parent(marker),
+    })
     assert(p.stdout:read("a") == "found")
     assert(exit_of(p) == true)
     fs.remove(marker)
@@ -130,36 +147,44 @@ local function kill_ends_a_child_test()
     assert(p:kill() == true)
     local success, how = exit_of(p)
     assert(success == nil)
+
     if not windows then
         assert(how == "signal")
     end
+
     assert(p:kill() == false)
 end
 
 local function closing_closes_the_pipes_and_waits_test()
     local p
+
     do
         local child <close> = lus('io.write(#io.read("a"))', { stdin = "pipe", stdout = "null" })
         p = child
         child.stdin:write("12345")
     end
+
     local success, how, code = p:poll()
     assert(success == true and code == 0)
 end
 
 local function reads_wait_inside_detached_coroutines_test()
     local order = {}
+
     local slow = coroutine.detach(coroutine.create(function()
         local p = lus('io.read("l") io.write("slow")', { stdin = "pipe", stdout = "pipe" })
+
         local fast = coroutine.detach(coroutine.create(function()
             order[#order + 1] = "fast"
             p.stdin:write("go\n")
         end))
+
         local got = p.stdout:read("a")
         order[#order + 1] = got
         coroutine.resume(fast)
         exit_of(p)
     end))
+
     assert(coroutine.resume(slow))
     assert(table.concat(order, " ") == "fast slow")
 end
@@ -167,25 +192,38 @@ end
 local function large_transfers_through_both_pipes_test()
     local p = lus('io.write(io.read("a"))', { stdin = "pipe", stdout = "pipe" })
     local data = string.rep("0123456789", 100000)
+
     local writer = coroutine.detach(coroutine.create(function()
         p.stdin:write(data)
         p.stdin:close()
     end))
+
     assert(p.stdout:read("a") == data)
     assert(coroutine.resume(writer))
     exit_of(p)
 end
 
 local function arguments_reach_the_child_unchanged_test()
-    local args = { "plain", "with space", "", 'quote " inside', "back\\slash\\", "tab\there", "ünïcödé", "a\\\"b" }
+    local args = {
+        "plain",
+        "with space",
+        "",
+        'quote " inside',
+        "back\\slash\\",
+        "tab\there",
+        "ünïcödé",
+        "a\\\"b",
+    }
     local script = os.tmpname()
     local f = io.open(script, "w")
     f:write('local t = {} for i = 1, #arg do t[i] = arg[i] end io.write(table.concat(t, "\\0"))')
     f:close()
     local list = { lus_bin, script }
+
     for _, a in ipairs(args) do
         list[#list + 1] = a
     end
+
     local p = os.spawn(list, { stdout = "pipe" })
     assert(p.stdout:read("a") == table.concat(args, "\0"))
     assert(exit_of(p) == true)
@@ -196,9 +234,11 @@ end
 -- found.
 local function under(grants, code)
     local argv = { lus_bin }
+
     for _, g in ipairs(grants) do
         argv[#argv + 1] = "-P" .. g
     end
+
     argv[#argv + 1] = "-e"
     argv[#argv + 1] = string.format("local bin = %q ", lus_bin) .. code
     local p = os.spawn(argv, { stdout = "pipe", stderr = "stdout" })

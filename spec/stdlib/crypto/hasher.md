@@ -28,7 +28,7 @@ The following example hashes a message in two pieces, then adds a third piece an
 local h = crypto.hasher("sha256")
 h:update("a"):update(vector.fromstring("b"))
 local whole = crypto.hash("sha256", "ab")
-print(crypto.equal(h:digest(), whole))   --> true
+print(crypto.equal(h:digest(), whole))  --> true
 
 h:update("c")
 print(string.transcode(h:digest(), "binary", "hex"))

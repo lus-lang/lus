@@ -16,13 +16,21 @@ pledge("load", "fs:read=" .. TEST_DIR .. "/*", "network")
 -- Loopback sockets may be unavailable, so the socket tests skip when binding fails.
 local function bind_or_skip()
     local ok, server = catch network.tcp.bind("127.0.0.1", 0)
-    if not ok then skip("loopback sockets unavailable") end
+
+    if not ok then
+        skip("loopback sockets unavailable")
+    end
+
     return server
 end
 
 local function udp_or_skip()
     local ok, sock = catch network.udp.open()
-    if not ok then skip("loopback sockets unavailable") end
+
+    if not ok then
+        skip("loopback sockets unavailable")
+    end
+
     return sock
 end
 

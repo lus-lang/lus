@@ -11,20 +11,21 @@
   interpolation segments.
 ]]
 
-
 pledge("load")
-
 
 -- Build a fresh call log per test. mark records an event and joined
 -- renders the log for exact order assertions.
 local function recorder()
     local log = {}
+
     local function mark(name)
         table.insert(log, name)
     end
+
     local function joined()
         return table.concat(log, ",")
     end
+
     return mark, joined
 end
 
@@ -34,15 +35,26 @@ end
 
 local function callee_expression_evaluated_before_arguments_test()
     local mark, joined = recorder()
+
     local function getf()
         mark("callee")
+
         return function(a, b)
             mark("body")
             return a + b
         end
     end
-    local function a1() mark("arg1") return 1 end
-    local function a2() mark("arg2") return 2 end
+
+    local function a1()
+        mark("arg1")
+        return 1
+    end
+
+    local function a2()
+        mark("arg2")
+        return 2
+    end
+
     local r = getf()(a1(), a2())
     assert(joined() == "callee,arg1,arg2,body")
     assert(r == 3)
@@ -50,14 +62,24 @@ end
 
 local function callee_index_expression_evaluated_before_arguments_test()
     local mark, joined = recorder()
+
     local tbl = {
         fn = function(x)
             mark("body")
             return x
         end,
     }
-    local function kf() mark("key") return "fn" end
-    local function af() mark("arg") return 7 end
+
+    local function kf()
+        mark("key")
+        return "fn"
+    end
+
+    local function af()
+        mark("arg")
+        return 7
+    end
+
     local r = tbl[kf()](af())
     assert(joined() == "key,arg,body")
     assert(r == 7)
@@ -65,29 +87,74 @@ end
 
 local function arguments_evaluated_left_to_right_test()
     local mark, joined = recorder()
-    local function a1() mark("a1") return 1 end
-    local function a2() mark("a2") return 2 end
-    local function a3() mark("a3") return 3 end
-    local function f(x, y, z) return x * 100 + y * 10 + z end
+
+    local function a1()
+        mark("a1")
+        return 1
+    end
+
+    local function a2()
+        mark("a2")
+        return 2
+    end
+
+    local function a3()
+        mark("a3")
+        return 3
+    end
+
+    local function f(x, y, z)
+        return x * 100 + y * 10 + z
+    end
+
     assert(f(a1(), a2(), a3()) == 123)
     assert(joined() == "a1,a2,a3")
 end
 
 local function nested_call_arguments_evaluated_within_their_slot_in_order_test()
     local mark, joined = recorder()
-    local function g() mark("g") return 1 end
-    local function i() mark("i") return 2 end
-    local function h(x) mark("h") return x + 1 end
-    local function f(x, y) mark("f") return x + y end
+
+    local function g()
+        mark("g")
+        return 1
+    end
+
+    local function i()
+        mark("i")
+        return 2
+    end
+
+    local function h(x)
+        mark("h")
+        return x + 1
+    end
+
+    local function f(x, y)
+        mark("f")
+        return x + y
+    end
+
     assert(f(g(), h(i())) == 4)
     assert(joined() == "g,i,h,f")
 end
 
 local function each_argument_evaluated_exactly_once_test()
     local n1, n2 = 0, 0
-    local function a1() n1 = n1 + 1 return 1 end
-    local function a2() n2 = n2 + 1 return 2 end
-    local function f(x, y) return x + y end
+
+    local function a1()
+        n1 = n1 + 1
+        return 1
+    end
+
+    local function a2()
+        n2 = n2 + 1
+        return 2
+    end
+
+    local function f(x, y)
+        return x + y
+    end
+
     assert(f(a1(), a2()) == 3)
     assert(n1 == 1)
     assert(n2 == 1)
@@ -95,59 +162,85 @@ end
 
 local function method_self_expression_evaluated_exactly_once_test()
     local n = 0
+
     local obj = {
         m = function(self, x)
             return x * 2
         end,
     }
+
     local function getobj()
         n = n + 1
         return obj
     end
+
     assert(getobj():m(21) == 42)
     assert(n == 1)
 end
 
 local function method_self_evaluated_before_arguments_test()
     local mark, joined = recorder()
+
     local obj = {
         m = function(self, x)
             mark("method")
             return x
         end,
     }
-    local function getobj() mark("self") return obj end
-    local function af() mark("arg") return 5 end
+
+    local function getobj()
+        mark("self")
+        return obj
+    end
+
+    local function af()
+        mark("arg")
+        return 5
+    end
+
     assert(getobj():m(af()) == 5)
     assert(joined() == "self,arg,method")
 end
 
 local function method_name_looked_up_exactly_once_through_index_test()
     local lookups = 0
+
     local target = {
         m = function(self, x)
             return x * 2
         end,
     }
+
     local prox = setmetatable({}, {
         __index = function(t, k)
             lookups = lookups + 1
             return target[k]
         end,
     })
+
     assert(prox:m(21) == 42)
     assert(lookups == 1)
 end
 
 local function method_arguments_evaluated_left_to_right_test()
     local mark, joined = recorder()
+
     local obj = {
         m = function(self, x, y)
             return x * 10 + y
         end,
     }
-    local function a1() mark("a1") return 1 end
-    local function a2() mark("a2") return 2 end
+
+    local function a1()
+        mark("a1")
+        return 1
+    end
+
+    local function a2()
+        mark("a2")
+        return 2
+    end
+
     assert(obj:m(a1(), a2()) == 12)
     assert(joined() == "a1,a2")
 end
@@ -155,8 +248,16 @@ end
 local function arguments_evaluated_before_a_non_callable_callee_raises_test()
     local mark, joined = recorder()
     local notf = nil
-    local function g() mark("g") return 1 end
-    local ok, err = catch (function() return notf(g()) end)()
+
+    local function g()
+        mark("g")
+        return 1
+    end
+
+    local ok, err = catch (function()
+        return notf(g())
+    end)()
+
     assert(not ok)
     assert(tostring(err):find("attempt to call a nil value"))
     assert(joined() == "g")
@@ -165,8 +266,16 @@ end
 local function method_self_indexing_error_raised_before_arguments_run_test()
     local mark, joined = recorder()
     local nils = nil
-    local function af() mark("arg") return 1 end
-    local ok, err = catch (function() return nils:m(af()) end)()
+
+    local function af()
+        mark("arg")
+        return 1
+    end
+
+    local ok, err = catch (function()
+        return nils:m(af())
+    end)()
+
     assert(not ok)
     assert(tostring(err):find("attempt to index a nil value"))
     assert(joined() == "")
@@ -179,8 +288,17 @@ end
 local function index_assignment_evaluates_key_before_value_test()
     local mark, joined = recorder()
     local a = {}
-    local function keyf() mark("key") return 3 end
-    local function valf() mark("val") return "v" end
+
+    local function keyf()
+        mark("key")
+        return 3
+    end
+
+    local function valf()
+        mark("val")
+        return "v"
+    end
+
     a[keyf()] = valf()
     assert(joined() == "key,val")
     assert(a[3] == "v")
@@ -189,9 +307,22 @@ end
 local function index_assignment_evaluates_table_then_key_then_value_test()
     local mark, joined = recorder()
     local a = {}
-    local function tabf() mark("tab") return a end
-    local function keyf() mark("key") return 1 end
-    local function valf() mark("val") return "w" end
+
+    local function tabf()
+        mark("tab")
+        return a
+    end
+
+    local function keyf()
+        mark("key")
+        return 1
+    end
+
+    local function valf()
+        mark("val")
+        return "w"
+    end
+
     tabf()[keyf()] = valf()
     assert(joined() == "tab,key,val")
     assert(a[1] == "w")
@@ -206,6 +337,7 @@ end
 
 local function proxy_swap_reads_left_to_right_then_stores_with_the_old_valu_test()
     local mark, joined = recorder()
+
     local proxy = setmetatable({}, {
         __index = function(t, k)
             mark("get:" .. tostring(k))
@@ -215,17 +347,20 @@ local function proxy_swap_reads_left_to_right_then_stores_with_the_old_valu_test
             mark("set:" .. tostring(k) .. "=" .. tostring(v))
         end,
     })
+
     proxy.p, proxy.q = proxy.q, proxy.p
     assert(joined() == "get:q,get:p,set:q=pV,set:p=qV")
 end
 
 local function multiple_assignment_stores_happen_right_to_left_test()
     local mark, joined = recorder()
+
     local t = setmetatable({}, {
         __newindex = function(tb, k, v)
             mark("store:" .. tostring(k))
         end,
     })
+
     t.a, t.b = 1, 2
     assert(joined() == "store:b,store:a")
 end
@@ -233,10 +368,27 @@ end
 local function lhs_index_expressions_evaluated_before_rhs_values_test()
     local mark, joined = recorder()
     local a, b = {}, {}
-    local function k1() mark("k1") return 1 end
-    local function k2() mark("k2") return 2 end
-    local function v1() mark("v1") return "x" end
-    local function v2() mark("v2") return "y" end
+
+    local function k1()
+        mark("k1")
+        return 1
+    end
+
+    local function k2()
+        mark("k2")
+        return 2
+    end
+
+    local function v1()
+        mark("v1")
+        return "x"
+    end
+
+    local function v2()
+        mark("v2")
+        return "y"
+    end
+
     a[k1()], b[k2()] = v1(), v2()
     assert(joined() == "k1,k2,v1,v2")
     assert(a[1] == "x")
@@ -245,11 +397,13 @@ end
 
 local function newindex_fires_exactly_once_per_store_test()
     local n = 0
+
     local t = setmetatable({}, {
         __newindex = function(tb, k, v)
             n = n + 1
         end,
     })
+
     t.solo = 1
     assert(n == 1)
 end
@@ -257,9 +411,21 @@ end
 local function key_and_value_evaluated_before_a_nil_target_store_raises_test()
     local mark, joined = recorder()
     local nilt = nil
-    local function kf() mark("k") return 1 end
-    local function vf() mark("v") return 2 end
-    local ok, err = catch (function() nilt[kf()] = vf() end)()
+
+    local function kf()
+        mark("k")
+        return 1
+    end
+
+    local function vf()
+        mark("v")
+        return 2
+    end
+
+    local ok, err = catch (function()
+        nilt[kf()] = vf()
+    end)()
+
     assert(not ok)
     assert(tostring(err):find("attempt to index a nil value"))
     assert(joined() == "k,v")
@@ -267,10 +433,12 @@ end
 
 local function multi_value_rhs_call_evaluated_exactly_once_test()
     local n = 0
+
     local function f()
         n = n + 1
         return 10, 20
     end
+
     local x, y = f()
     assert(n == 1)
     assert(x == 10)
@@ -282,16 +450,23 @@ end
 -- ============================================
 
 local short_circuit_suppresses_the_right_operand_cases = {
-    {"false-and"}, {"nil-and"}, {"true-or"}, {"zero-or"}, {"empty-string-or"},
+    { "false-and" },
+    { "nil-and" },
+    { "true-or" },
+    { "zero-or" },
+    { "empty-string-or" },
 }
 
 local function short_circuit_suppresses_the_right_operand_test(which)
     local n = 0
+
     local function eff()
         n = n + 1
         return "E"
     end
+
     local r
+
     if which == "false-and" then
         r = false and eff()
         assert(r == false)
@@ -308,33 +483,47 @@ local function short_circuit_suppresses_the_right_operand_test(which)
         r = "" or eff()
         assert(r == "")
     end
+
     assert(n == 0)
 end
 
 local function taken_right_operand_of_and_evaluated_exactly_once_test()
     local n = 0
+
     local function eff()
         n = n + 1
         return "yes"
     end
+
     assert((true and eff()) == "yes")
     assert(n == 1)
 end
 
 local function taken_right_operand_of_or_evaluated_exactly_once_test()
     local n = 0
+
     local function eff()
         n = n + 1
         return "also"
     end
+
     assert((false or eff()) == "also")
     assert(n == 1)
 end
 
 local function a_and_b_or_c_evaluates_only_b_when_a_is_true_test()
     local nb, nc = 0, 0
-    local function bv() nb = nb + 1 return "B" end
-    local function cv() nc = nc + 1 return "C" end
+
+    local function bv()
+        nb = nb + 1
+        return "B"
+    end
+
+    local function cv()
+        nc = nc + 1
+        return "C"
+    end
+
     assert((true and bv() or cv()) == "B")
     assert(nb == 1)
     assert(nc == 0)
@@ -342,8 +531,17 @@ end
 
 local function a_and_b_or_c_evaluates_only_c_when_a_is_false_test()
     local nb, nc = 0, 0
-    local function bv() nb = nb + 1 return "B" end
-    local function cv() nc = nc + 1 return "C" end
+
+    local function bv()
+        nb = nb + 1
+        return "B"
+    end
+
+    local function cv()
+        nc = nc + 1
+        return "C"
+    end
+
     assert((false and bv() or cv()) == "C")
     assert(nb == 0)
     assert(nc == 1)
@@ -358,6 +556,7 @@ end
 -- observable in the same chain.
 local function concat_kit(mark)
     local mt
+
     mt = {
         __concat = function(l, r)
             local ln = type(l) == "table" and l.name or tostring(l)
@@ -366,6 +565,7 @@ local function concat_kit(mark)
             return setmetatable({ name = "(" .. ln .. rn .. ")" }, mt)
         end,
     }
+
     return function(name)
         return setmetatable({ name = name }, mt)
     end
@@ -373,11 +573,27 @@ end
 
 local function concat_operands_evaluated_left_to_right_test()
     local mark, joined = recorder()
-    local co = concat_kit(function() end)
+
+    local co = concat_kit(function()
+    end)
+
     local ca, cb, cc = co("A"), co("B"), co("C")
-    local function fA() mark("fA") return ca end
-    local function fB() mark("fB") return cb end
-    local function fC() mark("fC") return cc end
+
+    local function fA()
+        mark("fA")
+        return ca
+    end
+
+    local function fB()
+        mark("fB")
+        return cb
+    end
+
+    local function fC()
+        mark("fC")
+        return cc
+    end
+
     local r = fA() .. fB() .. fC()
     assert(joined() == "fA,fB,fC")
     assert(r.name == "(A(BC))")
@@ -393,8 +609,17 @@ end
 
 local function each_concat_operand_evaluated_exactly_once_test()
     local n1, n2 = 0, 0
-    local function f1() n1 = n1 + 1 return "a" end
-    local function f2() n2 = n2 + 1 return "b" end
+
+    local function f1()
+        n1 = n1 + 1
+        return "a"
+    end
+
+    local function f2()
+        n2 = n2 + 1
+        return "b"
+    end
+
     assert(f1() .. f2() == "ab")
     assert(n1 == 1)
     assert(n2 == 1)
@@ -405,14 +630,26 @@ end
 -- ============================================
 
 local comparison_operands_evaluated_left_to_right_cases = {
-    {"lt"}, {"le"}, {"eq"},
+    { "lt" },
+    { "le" },
+    { "eq" },
 }
 
 local function comparison_operands_evaluated_left_to_right_test(op)
     local mark, joined = recorder()
-    local function lhs() mark("lhs") return 1 end
-    local function rhs() mark("rhs") return 2 end
+
+    local function lhs()
+        mark("lhs")
+        return 1
+    end
+
+    local function rhs()
+        mark("rhs")
+        return 2
+    end
+
     local r
+
     if op == "lt" then
         r = lhs() < rhs()
         assert(r == true)
@@ -423,11 +660,13 @@ local function comparison_operands_evaluated_left_to_right_test(op)
         r = lhs() == rhs()
         assert(r == false)
     end
+
     assert(joined() == "lhs,rhs")
 end
 
 local function greater_than_calls_lt_with_swapped_operands_test()
     local rec = {}
+
     local mt = {
         __lt = function(a, b)
             rec.first = a.tag
@@ -436,6 +675,7 @@ local function greater_than_calls_lt_with_swapped_operands_test()
             return true
         end,
     }
+
     local ga = setmetatable({ tag = "ga" }, mt)
     local gb = setmetatable({ tag = "gb" }, mt)
     assert((ga > gb) == true)
@@ -446,6 +686,7 @@ end
 
 local function greater_equal_calls_le_with_swapped_operands_test()
     local rec = {}
+
     local mt = {
         __le = function(a, b)
             rec.first = a.tag
@@ -454,6 +695,7 @@ local function greater_equal_calls_le_with_swapped_operands_test()
             return true
         end,
     }
+
     local ga = setmetatable({ tag = "ga" }, mt)
     local gb = setmetatable({ tag = "gb" }, mt)
     assert((ga >= gb) == true)
@@ -464,12 +706,14 @@ end
 
 local function inequality_invokes_eq_once_and_negates_the_result_test()
     local n = 0
+
     local mt = {
         __eq = function(a, b)
             n = n + 1
             return true
         end,
     }
+
     local ea = setmetatable({}, mt)
     local eb = setmetatable({}, mt)
     assert((ea ~= eb) == false)
@@ -478,9 +722,21 @@ end
 
 local function comparison_rhs_not_evaluated_when_lhs_raises_test()
     local mark, joined = recorder()
-    local function boom() mark("boom") error("x") end
-    local function rhs() mark("rhs") return 1 end
-    local ok = catch (function() return boom() < rhs() end)()
+
+    local function boom()
+        mark("boom")
+        error("x")
+    end
+
+    local function rhs()
+        mark("rhs")
+        return 1
+    end
+
+    local ok = catch (function()
+        return boom() < rhs()
+    end)()
+
     assert(not ok)
     assert(joined() == "boom")
 end
@@ -490,17 +746,23 @@ end
 -- ============================================
 
 local nil_base_suppresses_key_and_argument_expressions_cases = {
-    {"field-call"}, {"index"}, {"method"}, {"call"},
+    { "field-call" },
+    { "index" },
+    { "method" },
+    { "call" },
 }
 
 local function nil_base_suppresses_key_and_argument_expressions_test(form)
     local n = 0
+
     local function sf()
         n = n + 1
         return 1
     end
+
     local base = nil
     local r
+
     if form == "field-call" then
         r = base?.b(sf())
     elseif form == "index" then
@@ -510,16 +772,19 @@ local function nil_base_suppresses_key_and_argument_expressions_test(form)
     else
         r = base?(sf())
     end
+
     assert(r == nil)
     assert(n == 0)
 end
 
 local function false_base_suppresses_evaluation_in_every_form_and_yields_fa_test()
     local n = 0
+
     local function sf()
         n = n + 1
         return 1
     end
+
     local fb = false
     assert(fb?[sf()] == false)
     assert(fb?:m(sf()) == false)
@@ -529,10 +794,12 @@ end
 
 local function mid_chain_nil_suppresses_later_index_expressions_test()
     local n = 0
+
     local function key()
         n = n + 1
         return "k"
     end
+
     local mc = { a = nil }
     assert(mc?.a?[key()] == nil)
     assert(n == 0)
@@ -540,10 +807,12 @@ end
 
 local function mid_chain_nil_suppresses_later_method_arguments_test()
     local n = 0
+
     local function af()
         n = n + 1
         return 1
     end
+
     local mc = { a = nil }
     assert(mc?.a?:m(af()) == nil)
     assert(n == 0)
@@ -551,15 +820,18 @@ end
 
 local function live_chain_base_evaluated_exactly_once_test()
     local n = 0
+
     local obj = {
         b = function(x)
             return x
         end,
     }
+
     local function getbase()
         n = n + 1
         return obj
     end
+
     assert(getbase()?.b(9) == 9)
     assert(n == 1)
 end
@@ -567,14 +839,17 @@ end
 local function nil_chain_base_evaluated_exactly_once_with_a_long_chain_test()
     local n = 0
     local sfn = 0
+
     local function getnil()
         n = n + 1
         return nil
     end
+
     local function sf()
         sfn = sfn + 1
         return 1
     end
+
     local r = getnil()?.a?.b?[sf()]?:m(sf())
     assert(r == nil)
     assert(n == 1)
@@ -584,10 +859,12 @@ end
 local function live_optional_index_evaluates_the_key_exactly_once_test()
     local n = 0
     local t = { arr = { 10, 20 } }
+
     local function key()
         n = n + 1
         return "arr"
     end
+
     local r = t?[key()]
     assert(r == t.arr)
     assert(n == 1)
@@ -595,16 +872,19 @@ end
 
 local function live_optional_field_call_evaluates_the_argument_once_and_cal_test()
     local an, cn = 0, 0
+
     local t = {
         b = function(x)
             cn = cn + 1
             return x
         end,
     }
+
     local function af()
         an = an + 1
         return 5
     end
+
     assert(t?.b(af()) == 5)
     assert(an == 1)
     assert(cn == 1)
@@ -612,28 +892,34 @@ end
 
 local function live_optional_method_call_evaluates_the_argument_once_test()
     local n = 0
+
     local o = {
         m = function(self, x)
             return x
         end,
     }
+
     local function af()
         n = n + 1
         return 5
     end
+
     assert(o?:m(af()) == 5)
     assert(n == 1)
 end
 
 local function live_optional_call_form_evaluates_the_argument_once_test()
     local n = 0
+
     local f = function(x)
         return x
     end
+
     local function af()
         n = n + 1
         return 5
     end
+
     assert(f?(af()) == 5)
     assert(n == 1)
 end
@@ -644,12 +930,14 @@ end
 
 local function from_reads_fields_in_declaration_order_test()
     local mark, joined = recorder()
+
     local proxy = setmetatable({}, {
         __index = function(t, k)
             mark("get:" .. tostring(k))
             return k
         end,
     })
+
     local aa, bb, cc from proxy
     assert(joined() == "get:aa,get:bb,get:cc")
     assert(aa == "aa")
@@ -659,12 +947,14 @@ end
 
 local function from_reads_each_field_exactly_once_test()
     local counts = {}
+
     local proxy = setmetatable({}, {
         __index = function(t, k)
             counts[k] = (counts[k] or 0) + 1
             return 1
         end,
     })
+
     local fa, fb from proxy
     assert(counts.fa == 1)
     assert(counts.fb == 1)
@@ -709,8 +999,21 @@ end
 local function slice_bounds_each_evaluated_exactly_once_test()
     local nlo, nhi = 0, 0
     local t = { 10, 20, 30, 40, 50 }
-    local blo = setmetatable({}, { __add = function(a, b) nlo = nlo + 1 return 2 + b end })
-    local bhi = setmetatable({}, { __add = function(a, b) nhi = nhi + 1 return 4 + b end })
+
+    local blo = setmetatable({}, {
+        __add = function(a, b)
+            nlo = nlo + 1
+            return 2 + b
+        end,
+    })
+
+    local bhi = setmetatable({}, {
+        __add = function(a, b)
+            nhi = nhi + 1
+            return 4 + b
+        end,
+    })
+
     local s = t[blo + 0, bhi + 0]
     assert(nlo == 1)
     assert(nhi == 1)
@@ -719,9 +1022,11 @@ end
 
 local function vararg_expression_as_a_slice_bound_test()
     local t = { 10, 20, 30, 40, 50 }
+
     local function vf(...)
         return t[..., 4]
     end
+
     local s = vf(2)
     assert(#s == 3)
     assert(s[1] == 20)
@@ -730,7 +1035,11 @@ end
 
 local function call_expression_as_the_slice_start_bound_test()
     local t = { 10, 20, 30, 40, 50 }
-    local function lo() return 2 end
+
+    local function lo()
+        return 2
+    end
+
     local s = t[lo(), 4]
     assert(type(s) == "table")
     assert(#s == 3)
@@ -741,8 +1050,15 @@ end
 
 local function call_expressions_as_both_slice_bounds_test()
     local t = { 10, 20, 30, 40, 50 }
-    local function lo() return 2 end
-    local function hi() return 4 end
+
+    local function lo()
+        return 2
+    end
+
+    local function hi()
+        return 4
+    end
+
     local s = t[lo(), hi()]
     assert(type(s) == "table")
     assert(#s == 3)
@@ -751,20 +1067,33 @@ local function call_expressions_as_both_slice_bounds_test()
 end
 
 local function string_slice_with_call_expression_bounds_test()
-    local function lo() return 2 end
-    local function hi() return 4 end
+    local function lo()
+        return 2
+    end
+
+    local function hi()
+        return 4
+    end
+
     local s = ("hello")[lo(), hi()]
     assert(s == "ell")
 end
 
 local function slice_metamethod_receives_call_bound_values_test()
-    local function lo() return 2 end
-    local function hi() return 4 end
+    local function lo()
+        return 2
+    end
+
+    local function hi()
+        return 4
+    end
+
     local x = setmetatable({}, {
         __slice = function(self, a, b)
             return { a = a, b = b }
         end,
     })
+
     local r = x[lo(), hi()]
     assert(r.a == 2)
     assert(r.b == 4)
@@ -776,40 +1105,59 @@ end
 
 local function if_assignment_right_side_evaluated_exactly_once_when_truthy_test()
     local n = 0
+
     local function cond()
         n = n + 1
         return 42
     end
+
     local seen = nil
+
     if v = cond() then
         seen = v
     end
+
     assert(n == 1)
     assert(seen == 42)
 end
 
 local function if_assignment_right_side_evaluated_exactly_once_when_falsy_test()
     local n = 0
+
     local function cond()
         n = n + 1
         return nil
     end
+
     local entered = false
+
     if v = cond() then
         entered = true
     end
+
     assert(n == 1)
     assert(not entered)
 end
 
 local function if_assignment_multi_expressions_each_evaluated_once_test()
     local na, nb = 0, 0
-    local function ea() na = na + 1 return 1 end
-    local function eb() nb = nb + 1 return 2 end
+
+    local function ea()
+        na = na + 1
+        return 1
+    end
+
+    local function eb()
+        nb = nb + 1
+        return 2
+    end
+
     local sum = 0
+
     if p, q = ea(), eb() then
         sum = p + q
     end
+
     assert(na == 1)
     assert(nb == 1)
     assert(sum == 3)
@@ -817,38 +1165,60 @@ end
 
 local function while_assignment_evaluated_once_per_check_including_the_fina_test()
     local n = 0
+
     local function cond()
         n = n + 1
         return n <= 3 and n or nil
     end
+
     local iters = 0
+
     while v = cond() do
         iters = iters + 1
     end
+
     assert(iters == 3)
     assert(n == 4)
 end
 
 local function while_assignment_with_an_immediately_false_condition_evaluat_test()
     local n = 0
+
     local function cond()
         n = n + 1
         return false
     end
+
     local entered = false
+
     while v = cond() do
         entered = true
     end
+
     assert(n == 1)
     assert(not entered)
 end
 
 local function elseif_conditions_skipped_after_the_first_branch_matches_test()
     local n1, n2, n3 = 0, 0, 0
-    local function c1() n1 = n1 + 1 return true end
-    local function c2() n2 = n2 + 1 return true end
-    local function c3() n3 = n3 + 1 return true end
+
+    local function c1()
+        n1 = n1 + 1
+        return true
+    end
+
+    local function c2()
+        n2 = n2 + 1
+        return true
+    end
+
+    local function c3()
+        n3 = n3 + 1
+        return true
+    end
+
     local taken = nil
+
     if c1() then
         taken = 1
     elseif c2() then
@@ -856,6 +1226,7 @@ local function elseif_conditions_skipped_after_the_first_branch_matches_test()
     elseif c3() then
         taken = 3
     end
+
     assert(taken == 1)
     assert(n1 == 1)
     assert(n2 == 0)
@@ -864,10 +1235,24 @@ end
 
 local function later_elseif_conditions_skipped_after_a_middle_branch_matche_test()
     local n1, n2, n3 = 0, 0, 0
-    local function c1() n1 = n1 + 1 return false end
-    local function c2() n2 = n2 + 1 return true end
-    local function c3() n3 = n3 + 1 return true end
+
+    local function c1()
+        n1 = n1 + 1
+        return false
+    end
+
+    local function c2()
+        n2 = n2 + 1
+        return true
+    end
+
+    local function c3()
+        n3 = n3 + 1
+        return true
+    end
+
     local taken = nil
+
     if c1() then
         taken = 1
     elseif c2() then
@@ -875,6 +1260,7 @@ local function later_elseif_conditions_skipped_after_a_middle_branch_matche_test
     elseif c3() then
         taken = 3
     end
+
     assert(taken == 2)
     assert(n1 == 1)
     assert(n2 == 1)
@@ -883,10 +1269,24 @@ end
 
 local function every_condition_evaluated_once_each_when_all_fail_and_else_r_test()
     local n1, n2, n3 = 0, 0, 0
-    local function c1() n1 = n1 + 1 return nil end
-    local function c2() n2 = n2 + 1 return false end
-    local function c3() n3 = n3 + 1 return nil end
+
+    local function c1()
+        n1 = n1 + 1
+        return nil
+    end
+
+    local function c2()
+        n2 = n2 + 1
+        return false
+    end
+
+    local function c3()
+        n3 = n3 + 1
+        return nil
+    end
+
     local taken = nil
+
     if c1() then
         taken = 1
     elseif c2() then
@@ -896,6 +1296,7 @@ local function every_condition_evaluated_once_each_when_all_fail_and_else_r_test
     else
         taken = 4
     end
+
     assert(taken == 4)
     assert(n1 == 1)
     assert(n2 == 1)
@@ -904,10 +1305,24 @@ end
 
 local function elseif_with_assignment_conditions_short_circuits_after_a_mat_test()
     local n1, n2, n3 = 0, 0, 0
-    local function c1() n1 = n1 + 1 return nil end
-    local function c2() n2 = n2 + 1 return 7 end
-    local function c3() n3 = n3 + 1 return 8 end
+
+    local function c1()
+        n1 = n1 + 1
+        return nil
+    end
+
+    local function c2()
+        n2 = n2 + 1
+        return 7
+    end
+
+    local function c3()
+        n3 = n3 + 1
+        return 8
+    end
+
     local seen = nil
+
     if x = c1() then
         seen = x
     elseif y = c2() then
@@ -915,6 +1330,7 @@ local function elseif_with_assignment_conditions_short_circuits_after_a_mat_test
     elseif z = c3() then
         seen = z
     end
+
     assert(seen == 7)
     assert(n1 == 1)
     assert(n2 == 1)
@@ -927,9 +1343,22 @@ end
 
 local function interpolation_segments_evaluated_left_to_right_test()
     local mark, joined = recorder()
-    local function i1() mark("i1") return "a" end
-    local function i2() mark("i2") return "b" end
-    local function i3() mark("i3") return "c" end
+
+    local function i1()
+        mark("i1")
+        return "a"
+    end
+
+    local function i2()
+        mark("i2")
+        return "b"
+    end
+
+    local function i3()
+        mark("i3")
+        return "c"
+    end
+
     local s = `x$(i1())y$(i2())z$(i3())`
     assert(s == "xaybzc")
     assert(joined() == "i1,i2,i3")
@@ -937,8 +1366,17 @@ end
 
 local function interpolation_segments_each_evaluated_exactly_once_test()
     local na, nb = 0, 0
-    local function ia() na = na + 1 return "A" end
-    local function ib() nb = nb + 1 return "B" end
+
+    local function ia()
+        na = na + 1
+        return "A"
+    end
+
+    local function ib()
+        nb = nb + 1
+        return "B"
+    end
+
     local s = `$(ia())$(ib())$(ia())`
     assert(s == "ABA")
     assert(na == 2)
@@ -947,6 +1385,7 @@ end
 
 local function dollar_name_segments_converted_in_order_through_tostring_test()
     local mark, joined = recorder()
+
     local function obj(name)
         return setmetatable({}, {
             __tostring = function()
@@ -955,6 +1394,7 @@ local function dollar_name_segments_converted_in_order_through_tostring_test()
             end,
         })
     end
+
     local x1 = obj("one")
     local x2 = obj("two")
     local s = `$x1-$x2`
@@ -964,15 +1404,21 @@ end
 
 local function error_in_an_interpolation_segment_suppresses_later_segments_test()
     local na, nb = 0, 0
+
     local function bad()
         na = na + 1
         error("boom")
     end
+
     local function fine()
         nb = nb + 1
         return "ok"
     end
-    local ok, err = catch (function() return `$(bad())$(fine())` end)()
+
+    local ok, err = catch (function()
+        return `$(bad())$(fine())`
+    end)()
+
     assert(not ok)
     assert(tostring(err):find("boom"))
     assert(na == 1)
@@ -985,13 +1431,28 @@ end
 
 local function numeric_for_bounds_evaluated_exactly_once_each_test()
     local nlo, nhi, nst = 0, 0, 0
-    local function flo() nlo = nlo + 1 return 1 end
-    local function fhi() nhi = nhi + 1 return 3 end
-    local function fst() nst = nst + 1 return 1 end
+
+    local function flo()
+        nlo = nlo + 1
+        return 1
+    end
+
+    local function fhi()
+        nhi = nhi + 1
+        return 3
+    end
+
+    local function fst()
+        nst = nst + 1
+        return 1
+    end
+
     local iters = 0
+
     for i = flo(), fhi(), fst() do
         iters = iters + 1
     end
+
     assert(iters == 3)
     assert(nlo == 1)
     assert(nhi == 1)
@@ -1000,20 +1461,26 @@ end
 
 local function generic_for_expression_list_evaluated_once_test()
     local n = 0
+
     local function gen()
         n = n + 1
         local i = 0
+
         return function()
             i = i + 1
+
             if i <= 3 then
                 return i
             end
         end
     end
+
     local sum = 0
+
     for v in gen() do
         sum = sum + v
     end
+
     assert(n == 1)
     assert(sum == 6)
 end
@@ -1021,19 +1488,26 @@ end
 local function repeat_until_condition_evaluated_once_per_iteration_test()
     local checks = 0
     local iters = 0
+
     repeat
         iters = iters + 1
-    until (function() checks = checks + 1 return iters >= 3 end)()
+    until (function()
+        checks = checks + 1
+        return iters >= 3
+    end)()
+
     assert(iters == 3)
     assert(checks == 3)
 end
 
 local function table_constructor_items_evaluated_in_written_order_test()
     local mark, joined = recorder()
+
     local function item(name, v)
         mark(name)
         return v
     end
+
     local built = {
         item("first", 1),
         k = item("second", 2),
@@ -1049,6 +1523,7 @@ end
 
 local function unary_metamethods_invoked_exactly_once_test()
     local nu, nl = 0, 0
+
     local u = setmetatable({}, {
         __unm = function()
             nu = nu + 1
@@ -1059,9 +1534,9 @@ local function unary_metamethods_invoked_exactly_once_test()
             return 9
         end,
     })
+
     assert(-u == 7)
     assert(#u == 9)
     assert(nu == 1)
     assert(nl == 1)
 end
-

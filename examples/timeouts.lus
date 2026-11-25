@@ -8,16 +8,20 @@ global coroutine, error, print, time
 local function with_timeout(seconds, body, ...)
     local timed_out = false
     local task = coroutine.detach(coroutine.create(body), ...)
+
     local timer = coroutine.detach(coroutine.create(function()
         coroutine.resume(coroutine.sleep(seconds))
         timed_out = true
         coroutine.close(task)
     end))
+
     local ok, result = coroutine.resume(task)
     coroutine.close(timer)
+
     if timed_out then
         return false, `timed out after $seconds s`
     end
+
     return ok, result
 end
 
@@ -25,9 +29,11 @@ end
 -- service.
 local function lookup(name, delay)
     coroutine.resume(coroutine.sleep(delay))
+
     if name == "" then
         error("empty name", 0)
     end
+
     return `$name.example.com`
 end
 

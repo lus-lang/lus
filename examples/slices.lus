@@ -27,6 +27,7 @@ for first = 1, #readings, 3 do
     local last = math.min(first + 2, #readings)
     print(table.concat(readings[first, last], ","))
 end
+
 --> 10,20,30
 --> 40,50,60
 --> 70
@@ -36,9 +37,11 @@ local Squares = {}
 
 function Squares.__slice(_, first, last)
     local result = {}
+
     for n = first or 1, last or 5 do
         result[#result + 1] = n * n
     end
+
     return result
 end
 

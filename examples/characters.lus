@@ -20,6 +20,7 @@ print(string.char(99, 97, 102, 233))  --> café
 for pos, cp in utf8.codes("€ 5") do
     print(pos, string.format("U+%04X", cp))
 end
+
 --> 1 U+20AC
 --> 2 U+0020
 --> 3 U+0035
@@ -28,6 +29,7 @@ end
 for ch in ("añ😀"):gmatch(".") do
     io.write("[", ch, "]")
 end
+
 print()  --> [a][ñ][😀]
 
 -- A set with a range of code points finds any character outside ASCII.

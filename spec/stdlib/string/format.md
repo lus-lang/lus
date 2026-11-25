@@ -31,12 +31,12 @@ A missing argument raises `bad argument #n to 'format' (no value)`, where `n` is
 
 ```lus
 print(string.format("%d items at %.2f", 3, 9.5))  --> 3 items at 9.50
-print(string.format("[%5s][%-5s]", "é", "ab"))     --> [    é][ab   ]
+print(string.format("[%5s][%-5s]", "é", "ab"))  --> [    é][ab   ]
 print(string.format("%x %X %o %c", 255, 255, 8, 233))  --> ff FF 10 é
-print(string.format("%d", 2n^70))                  --> 1180591620717411303424
-print(string.format("%q", 'say "hi"\t'))          --> "say \"hi\"\9"
+print(string.format("%d", 2n ^ 70))  --> 1180591620717411303424
+print(string.format("%q", 'say "hi"\t'))  --> "say \"hi\"\9"
 print(string.format("%q %q", 0.5, math.mininteger))  --> 0x1p-1 0x8000000000000000
-print(catch string.format("%d", 1.5))              --> false  ...: bad argument #2 to 'format' (number has no integer representation)
+print(catch string.format("%d", 1.5))  --> false  ...: bad argument #2 to 'format' (number has no integer representation)
 ```
 
 `%q` writes a bigint and a decimal as their digits with no suffix, so the literal reads back as an integer or a float. [`string.rep`](/manual/api#string.rep) repeats a string, and [`tostring`](/manual/api#tostring) converts one value without a format.

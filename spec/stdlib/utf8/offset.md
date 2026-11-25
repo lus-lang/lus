@@ -28,10 +28,10 @@ The parameters select the character:
 Each character occupies exactly one position, so both results are the same position, matching the start and end positions that Lua returns. A count that reaches exactly one past the last character returns `#s + 1`. An `i` below 1 or more than one past the end raises `bad argument #3 to 'utf8.offset' (position out of bounds)`.
 
 ```lus
-print(utf8.offset("héllo", 3))      --> 3  3
-print(utf8.offset("héllo", -1))     --> 5  5
-print(utf8.offset("héllo", 2, 3))   --> 4  4
-print(utf8.offset("héllo", 7))      --> nil
+print(utf8.offset("héllo", 3))  --> 3  3
+print(utf8.offset("héllo", -1))  --> 5  5
+print(utf8.offset("héllo", 2, 3))  --> 4  4
+print(utf8.offset("héllo", 7))  --> nil
 ```
 
 Character positions are plain integers in Lus, so [`string.sub`](/manual/api#string.sub) accepts the result directly.

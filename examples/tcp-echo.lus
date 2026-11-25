@@ -9,6 +9,7 @@ pledge("network:tcp=127.0.0.1:*")
 -- end. The `<close>` variable closes the connection on every path.
 local function echo(conn)
     local closing <close> = conn
+
     for line in conn.input do
         conn:send(`echo: $(vector.tostring(line))\n`)
     end
@@ -18,6 +19,7 @@ end
 -- the server closes. Port 0 lets the system choose a free port.
 local server = network.tcp.bind("127.0.0.1", 0)
 local host, port = server:getsockname()
+
 coroutine.detach(coroutine.create(function()
     for conn in server.accepted do
         coroutine.detach(coroutine.create(echo), conn)

@@ -68,20 +68,37 @@ The following example sends a request body from a coroutine and streams the resp
 pledge("network")
 local server = network.tcp.bind("127.0.0.1", 0)
 local _, port = server:getsockname()
+
 local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
     local got = vector.tostring(req.body)
     local n = 0
+
     return 200, function()
         n = n + 1
-        if n <= 2 then return `line $(n) of $(got)\n` end
+
+        if n <= 2 then
+            return `line $n of $got\n`
+        end
     end
 end)
+
 local upload = coroutine.create(function()
     coroutine.yield("up")
     coroutine.yield("load")
 end)
-local status, body = network.fetch(`http://127.0.0.1:$(port)/`, "POST", nil, upload, { stream = true })
-for line in network.lines(body) do print(vector.tostring(line)) end
+
+local status, body = network.fetch(
+    `http://127.0.0.1:$port/`,
+    "POST",
+    nil,
+    upload,
+    { stream = true }
+)
+
+for line in network.lines(body) do
+    print(vector.tostring(line))
+end
+
 --> line 1 of upload
 --> line 2 of upload
 coroutine.close(serving)

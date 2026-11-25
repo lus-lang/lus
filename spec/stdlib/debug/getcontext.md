@@ -27,22 +27,29 @@ The following example reads a variable as the main coroutine and as another coro
 ```lus
 local function find(name)
     local n = 1
+
     while true do
         local found = debug.getcontext(n)
-        if found == nil or found == name then return n end
+
+        if found == nil or found == name then
+            return n
+        end
+
         n = n + 1
     end
 end
 
 local user <context> = "nobody"
+
 local co = coroutine.create(function()
     user = "ada"
     coroutine.yield()
 end)
+
 coroutine.resume(co)
 local n = find("user")
-print((select(2, debug.getcontext(n))))       --> nobody
-print((select(2, debug.getcontext(co, n))))   --> ada
+print((select(2, debug.getcontext(n))))  --> nobody
+print((select(2, debug.getcontext(co, n))))  --> ada
 ```
 
 [`debug.setcontext`](/manual/api#debug.setcontext) assigns a value for a coroutine.

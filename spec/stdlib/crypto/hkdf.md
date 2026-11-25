@@ -39,5 +39,5 @@ The following example derives two keys for different purposes from one master ke
 local master = crypto.random(32)
 local enc = crypto.hkdf("sha256", master, nil, "cookie encryption", 32)
 local mac = crypto.hkdf("sha256", master, nil, "cookie signing", 32)
-print(#enc, #mac, crypto.equal(enc, mac))   --> 32  32  false
+print(#enc, #mac, crypto.equal(enc, mac))  --> 32  32  false
 ```

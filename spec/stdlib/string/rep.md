@@ -25,11 +25,11 @@ The result is a string of `n` copies of `s` and `n - 1` copies of `sep`. When `n
 A result too large to allocate raises `resulting string too large`. An `n` with no integral value raises `bad argument #2 to 'rep' (number has no integer representation)`.
 
 ```lus
-print(string.rep("ab", 3))        --> ababab
+print(string.rep("ab", 3))  --> ababab
 print(string.rep("ab", 3, ", "))  --> ab, ab, ab
-print(string.rep("x", 1, ","))    --> x
-print(string.rep("x", 0) == "")   --> true
-print(#string.rep("é", 4))        --> 4
+print(string.rep("x", 1, ","))  --> x
+print(string.rep("x", 0) == "")  --> true
+print(#string.rep("é", 4))  --> 4
 ```
 
 [`string.format`](/manual/api#string.format) pads with spaces through a width, and [`string.join`](/manual/api#string.join) joins different strings with a separator.

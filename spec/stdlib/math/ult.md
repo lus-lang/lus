@@ -23,9 +23,9 @@ The result is a boolean.
 An argument with no integral value, or a bigint outside 64 bits, raises `bad argument #1 to 'math.ult' (number has no integer representation)` with its position. An argument that is not a number raises a type error.
 
 ```lus
-print(math.ult(1, 2))     --> true
-print(math.ult(-1, 2))    --> false
-print(math.ult(2, -1))    --> true
+print(math.ult(1, 2))  --> true
+print(math.ult(-1, 2))  --> false
+print(math.ult(2, -1))  --> true
 print(math.ult(1.0, 2n))  --> true
 ```
 

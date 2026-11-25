@@ -5,10 +5,12 @@ global print, ipairs
 -- Each field of a group is a local variable, read and written with the dot.
 local function centroid(points)
     local sum <group> = { x = 0, y = 0 }
+
     for _, point in ipairs(points) do
         sum.x = sum.x + point.x
         sum.y = sum.y + point.y
     end
+
     return sum.x / #points, sum.y / #points
 end
 

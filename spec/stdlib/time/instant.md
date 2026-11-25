@@ -34,10 +34,10 @@ The following example builds an instant with a fraction, renders it, and moves i
 
 ```lus
 local i = time.instant(1782998100, 250000000)
-print(i:iso(), i:epoch(), i:nanos())               --> 2026-07-02T13:15:00Z  1782998100  250000000
-print(i:at(time.zone("America/New_York")):iso())   --> 2026-07-02T09:15:00-04:00
-print((i + time.days(1)):iso())                    --> 2026-07-03T13:15:00Z
-print(time.instant(1, -1):nanos())                 --> 999999999
+print(i:iso(), i:epoch(), i:nanos())  --> 2026-07-02T13:15:00Z  1782998100  250000000
+print(i:at(time.zone("America/New_York")):iso())  --> 2026-07-02T09:15:00-04:00
+print((i + time.days(1)):iso())  --> 2026-07-03T13:15:00Z
+print(time.instant(1, -1):nanos())  --> 999999999
 ```
 
 `time.instant(os.time())` turns an epoch from [`os.time`](/manual/api#os.time) into an instant. A year after 9999 prints with more than four digits, and a year before 1 prints as `0000` or a negative number. [`time.now`](/manual/api#time.now) returns the current instant, and [`time.parse`](/manual/api#time.parse) reads one from text.

@@ -22,91 +22,102 @@ protocol.JSON_NULL = 0 / 0
 -- Build a JSON-RPC success response
 -- When result is nil, uses JSON_NULL so tojson emits "result": null
 function protocol.make_response(id, result)
-  return {
-    jsonrpc = "2.0",
-    id = id,
-    result = result ~= nil and result or protocol.JSON_NULL,
-  }
+    return {
+        jsonrpc = "2.0",
+        id = id,
+        result = result ~= nil and result or protocol.JSON_NULL,
+    }
 end
 
 -- Build a JSON-RPC error response
 function protocol.make_error(id, code, message)
-  return {
-    jsonrpc = "2.0",
-    id = id,
-    error = {
-      code = code,
-      message = message,
-    },
-  }
+    return {
+        jsonrpc = "2.0",
+        id = id,
+        error = {
+            code = code,
+            message = message,
+        },
+    }
 end
 
 -- Build a JSON-RPC notification (no id, no response expected)
 function protocol.make_notification(method, params)
-  return {
-    jsonrpc = "2.0",
-    method = method,
-    params = params,
-  }
+    return {
+        jsonrpc = "2.0",
+        method = method,
+        params = params,
+    }
 end
 
 -- Server capabilities returned during initialize
 function protocol.server_capabilities()
-  return {
-    textDocumentSync = {
-      openClose = true,
-      change = protocol.SYNC_INCREMENTAL,
-    },
-    documentSymbolProvider = true,
-    documentFormattingProvider = true,
-    documentRangeFormattingProvider = true,
-    semanticTokensProvider = {
-      legend = {
-        tokenTypes = {
-          "variable", "parameter", "function", "method",
-          "keyword", "string", "number", "comment",
-          "operator", "property", "enum", "enumMember",
+    return {
+        textDocumentSync = {
+            openClose = true,
+            change = protocol.SYNC_INCREMENTAL,
         },
-        tokenModifiers = {
-          "declaration", "readonly", "defaultLibrary",
+        documentSymbolProvider = true,
+        documentFormattingProvider = true,
+        documentRangeFormattingProvider = true,
+        semanticTokensProvider = {
+            legend = {
+                tokenTypes = {
+                    "variable",
+                    "parameter",
+                    "function",
+                    "method",
+                    "keyword",
+                    "string",
+                    "number",
+                    "comment",
+                    "operator",
+                    "property",
+                    "enum",
+                    "enumMember",
+                },
+                tokenModifiers = {
+                    "declaration",
+                    "readonly",
+                    "defaultLibrary",
+                },
+            },
+            full = true,
         },
-      },
-      full = true,
-    },
-    definitionProvider = true,
-    referencesProvider = true,
-    hoverProvider = true,
-    renameProvider = {prepareProvider = true},
-    documentHighlightProvider = true,
-    selectionRangeProvider = true,
-    codeActionProvider = {codeActionKinds = {"quickfix"}},
-    completionProvider = {
-      triggerCharacters = {".", ":"},
-    },
-    signatureHelpProvider = {
-      triggerCharacters = {"(", ","},
-    },
-    foldingRangeProvider = true,
-    inlayHintProvider = true,
-    workspaceSymbolProvider = true,
-    workspace = {
-      workspaceFolders = {
-        supported = true,
-        changeNotifications = true,
-      },
-    },
-  }
+        definitionProvider = true,
+        referencesProvider = true,
+        hoverProvider = true,
+        renameProvider = { prepareProvider = true },
+        documentHighlightProvider = true,
+        selectionRangeProvider = true,
+        codeActionProvider = { codeActionKinds = { "quickfix" } },
+        completionProvider = {
+            triggerCharacters = { ".", ":" },
+        },
+        signatureHelpProvider = {
+            triggerCharacters = { "(", "," },
+        },
+        foldingRangeProvider = true,
+        inlayHintProvider = true,
+        workspaceSymbolProvider = true,
+        workspace = {
+            workspaceFolders = {
+                supported = true,
+                changeNotifications = true,
+            },
+        },
+    }
 end
 
 -- Build the full initialize result
 function protocol.initialize_result()
-  return {
-    capabilities = protocol.server_capabilities(),
-    serverInfo = {
-      name = "lus-language",
-      version = require("lus-language.version"),
-    },
-  }
+    return {
+        capabilities = protocol.server_capabilities(),
+        serverInfo = {
+            name = "lus-language",
+            version = require("lus-language.version"),
+        },
+    }
 end
 
 return protocol

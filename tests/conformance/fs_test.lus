@@ -1,6 +1,4 @@
-
 pledge("load", "fs", "exec")
-
 
 -- ============================================================================
 -- Test Helpers
@@ -29,6 +27,7 @@ local function write_file(path, content)
         f:close()
         return true
     end
+
     return false
 end
 
@@ -38,6 +37,7 @@ local function read_file(path)
         f:close()
         return content
     end
+
     return nil
 end
 
@@ -49,6 +49,7 @@ local function read_bytes(path)
         f:close()
         return content
     end
+
     return nil
 end
 
@@ -56,6 +57,7 @@ local function hex(bytes)
     if type(bytes) == "string" then
         bytes = vector.fromstring(bytes)
     end
+
     return string.transcode(bytes, "binary", "hex")
 end
 
@@ -95,7 +97,7 @@ local function handles_trailing_separator_in_first_component_test()
     local result = fs.path.join("a" .. SEP, "b")
     -- Should not double the separator
     local expected1 = "a" .. SEP .. "b"
-    local expected2 = "a" .. SEP .. SEP .. "b" -- Current buggy behavior
+    local expected2 = "a" .. SEP .. SEP .. "b"  -- Current buggy behavior
     assert(result == expected1 or result == expected2, "Got: " .. result)
 end
 
@@ -339,8 +341,10 @@ local function recursive_create_fails_if_file_blocks_path_test()
     local ok, err = catch fs.createdirectory(nested, true)
     assert(ok == false)
     -- Error message varies by platform: "is a file", "Not a directory", etc.
-    assert(err:find("file") or err:find("directory") or err:find("blocker"),
-           "Error should be descriptive: " .. tostring(err))
+    assert(
+        err:find("file") or err:find("directory") or err:find("blocker"),
+        "Error should be descriptive: " .. tostring(err)
+    )
     cleanup_sandbox()
 end
 
@@ -397,7 +401,7 @@ local function identifies_symlinks_test()
     local target = sandbox_path("link_target.txt")
     local link = sandbox_path("link.txt")
     write_file(target, "target content")
-    
+
     local ok, err = catch fs.createlink(link, target)
     assert(ok, "Could not create symlink: " .. tostring(err))
     local t, is_link = fs.type(link)
@@ -428,7 +432,7 @@ local function lists_directory_contents_test()
     write_file(fs.path.join(dir, "a.txt"), "a")
     write_file(fs.path.join(dir, "b.txt"), "b")
     write_file(fs.path.join(dir, "c.lua"), "c")
-    
+
     local entries = fs.list(dir)
     assert(#entries == 3, "Expected 3 entries, got " .. #entries)
     cleanup_sandbox()
@@ -437,10 +441,12 @@ end
 local function excludes_and_test()
     setup_sandbox()
     local entries = fs.list(SANDBOX)
+
     for i = 1, #entries do
         assert(entries[i] ~= ".")
         assert(entries[i] ~= "..")
     end
+
     cleanup_sandbox()
 end
 
@@ -476,13 +482,13 @@ local function supports_glob_pattern_test()
     write_file(fs.path.join(dir, "file2.txt"), "2")
     write_file(fs.path.join(dir, "file3.lua"), "3")
     write_file(fs.path.join(dir, "other.md"), "4")
-    
+
     local txt_files = fs.list(dir, "*.txt")
     assert(#txt_files == 2, "Expected 2 .txt files, got " .. #txt_files)
-    
+
     local lua_files = fs.list(dir, "*.lua")
     assert(#lua_files == 1)
-    
+
     local no_match = fs.list(dir, "*.rs")
     assert(#no_match == 0)
     cleanup_sandbox()
@@ -496,7 +502,7 @@ local function supports_glob_pattern_2_test()
     write_file(fs.path.join(dir, "a2.txt"), "")
     write_file(fs.path.join(dir, "ab.txt"), "")
     write_file(fs.path.join(dir, "a12.txt"), "")
-    
+
     local matches = fs.list(dir, "a?.txt")
     assert(#matches == 3, "Expected 3 matches for a?.txt, got " .. #matches)
     cleanup_sandbox()
@@ -508,7 +514,7 @@ local function glob_matches_all_with_test()
     fs.createdirectory(dir)
     write_file(fs.path.join(dir, "file1.txt"), "")
     write_file(fs.path.join(dir, "file2.txt"), "")
-    
+
     local all = fs.list(dir, "*")
     assert(#all == 2)
     cleanup_sandbox()
@@ -518,9 +524,11 @@ local function handles_directory_with_many_files_test()
     setup_sandbox()
     local dir = sandbox_path("manyfiles")
     fs.createdirectory(dir)
+
     for i = 1, 100 do
         write_file(fs.path.join(dir, "file" .. i .. ".txt"), tostring(i))
     end
+
     local entries = fs.list(dir)
     assert(#entries == 100, "Expected 100 entries, got " .. #entries)
     cleanup_sandbox()
@@ -532,12 +540,16 @@ local function lists_hidden_files_dotfiles_test()
     fs.createdirectory(dir)
     write_file(fs.path.join(dir, ".hidden"), "secret")
     write_file(fs.path.join(dir, "visible.txt"), "public")
-    
+
     local entries = fs.list(dir)
     local found_hidden = false
+
     for i = 1, #entries do
-        if entries[i] == ".hidden" then found_hidden = true end
+        if entries[i] == ".hidden" then
+            found_hidden = true
+        end
     end
+
     assert(found_hidden, "Should list dotfiles")
     cleanup_sandbox()
 end
@@ -553,10 +565,10 @@ local function copies_file_content_correctly_test()
     local src = sandbox_path("copy_src.txt")
     local dst = sandbox_path("copy_dst.txt")
     local content = "Hello, this is test content!\nLine 2\n"
-    
+
     write_file(src, content)
     assert(fs.copy(src, dst) == nil)
-    
+
     local copied = read_file(dst)
     assert(copied == content)
     cleanup_sandbox()
@@ -568,7 +580,8 @@ local function copies_binary_file_correctly_test()
     local dst = sandbox_path("binary_dst.bin")
     -- Binary content with null bytes and high bytes
     local content = vector.create(8)
-    for i, byte in ipairs({0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD, 0x00, 0x00}) do
+
+    for i, byte in ipairs({ 0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD, 0x00, 0x00 }) do
         vector.set(content, i - 1, byte)
     end
 
@@ -593,7 +606,7 @@ local function fails_when_destination_already_exists_test()
     local dst = sandbox_path("dst.txt")
     write_file(src, "source")
     write_file(dst, "destination")
-    
+
     local ok, err = catch fs.copy(src, dst)
     assert(ok == false)
     cleanup_sandbox()
@@ -604,10 +617,10 @@ local function preserves_source_file_after_copy_test()
     local src = sandbox_path("preserve_src.txt")
     local dst = sandbox_path("preserve_dst.txt")
     local content = "original content"
-    
+
     write_file(src, content)
     fs.copy(src, dst)
-    
+
     local original = read_file(src)
     assert(original == content)
     cleanup_sandbox()
@@ -617,10 +630,10 @@ local function handles_empty_file_test()
     setup_sandbox()
     local src = sandbox_path("empty_src.txt")
     local dst = sandbox_path("empty_dst.txt")
-    
+
     write_file(src, "")
     fs.copy(src, dst)
-    
+
     local copied = read_file(dst)
     assert(copied == "")
     cleanup_sandbox()
@@ -630,18 +643,20 @@ local function handles_large_file_test()
     setup_sandbox()
     local src = sandbox_path("large_src.bin")
     local dst = sandbox_path("large_dst.bin")
-    
+
     -- Create ~100KB file
     local chunk = string.rep("X", 1024)
+
     if f = io.open(src, "wb") then
         for i = 1, 100 do
             f:write(chunk)
         end
+
         f:close()
     end
-    
+
     fs.copy(src, dst)
-    
+
     local src_type = fs.type(src)
     local dst_type = fs.type(dst)
     assert(src_type == "file" and dst_type == "file")
@@ -653,7 +668,7 @@ local function fails_when_destination_parent_does_not_exist_test()
     local src = sandbox_path("src_noparent.txt")
     local dst = sandbox_path("nonexistent_dir", "dst.txt")
     write_file(src, "content")
-    
+
     local ok, err = catch fs.copy(src, dst)
     assert(ok == false)
     cleanup_sandbox()
@@ -663,12 +678,14 @@ local function handles_file_with_unicode_name_test()
     setup_sandbox()
     local src = sandbox_path("源文件.txt")
     local dst = sandbox_path("目标文件.txt")
-    
+
     write_file(src, "unicode content")
     local ok = catch fs.copy(src, dst)
+
     if ok ~= false then
         assert(read_file(dst) == "unicode content")
     end
+
     cleanup_sandbox()
 end
 
@@ -683,10 +700,10 @@ local function moves_file_to_new_location_test()
     local src = sandbox_path("move_src.txt")
     local dst = sandbox_path("move_dst.txt")
     local content = "content to move"
-    
+
     write_file(src, content)
     assert(fs.move(src, dst) == nil)
-    
+
     assert(file_exists(dst), "Destination should exist")
     assert(not file_exists(src), "Source should not exist")
     assert(read_file(dst) == content)
@@ -706,10 +723,10 @@ local function fails_when_destination_already_exists_2_test()
     local dst = sandbox_path("move_dst2.txt")
     write_file(src, "source")
     write_file(dst, "dest")
-    
+
     local ok, err = catch fs.move(src, dst)
     assert(ok == false)
-    
+
     -- Source should still exist
     assert(file_exists(src), "Source should remain on failed move")
     cleanup_sandbox()
@@ -719,12 +736,12 @@ local function moves_directory_test()
     setup_sandbox()
     local src = sandbox_path("move_dir_src")
     local dst = sandbox_path("move_dir_dst")
-    
+
     fs.createdirectory(src)
     write_file(fs.path.join(src, "file.txt"), "inside")
-    
+
     fs.move(src, dst)
-    
+
     assert(fs.type(dst) == "directory")
     assert(not file_exists(src))
     assert(read_file(fs.path.join(dst, "file.txt")) == "inside")
@@ -736,9 +753,9 @@ local function handles_rename_in_same_directory_test()
     local src = sandbox_path("old_name.txt")
     local dst = sandbox_path("new_name.txt")
     write_file(src, "content")
-    
+
     fs.move(src, dst)
-    
+
     assert(file_exists(dst))
     assert(not file_exists(src))
     cleanup_sandbox()
@@ -754,7 +771,7 @@ local function removes_regular_file_test()
     setup_sandbox()
     local file = sandbox_path("to_remove.txt")
     write_file(file, "content")
-    
+
     assert(fs.remove(file) == nil)
     assert(not file_exists(file))
     cleanup_sandbox()
@@ -764,7 +781,7 @@ local function removes_empty_directory_test()
     setup_sandbox()
     local dir = sandbox_path("empty_to_remove")
     fs.createdirectory(dir)
-    
+
     assert(fs.remove(dir) == nil)
     assert(not file_exists(dir))
     cleanup_sandbox()
@@ -775,7 +792,7 @@ local function fails_to_remove_non_empty_directory_without_recursive_flag_test()
     local dir = sandbox_path("nonempty")
     fs.createdirectory(dir)
     write_file(fs.path.join(dir, "file.txt"), "content")
-    
+
     local ok, err = catch fs.remove(dir)
     assert(ok == false)
     assert(file_exists(dir), "Directory should still exist")
@@ -792,7 +809,7 @@ local function removes_directory_recursively_test()
     write_file(fs.path.join(dir, "file1.txt"), "1")
     write_file(fs.path.join(dir, "sub1", "file2.txt"), "2")
     write_file(fs.path.join(dir, "sub1", "subsub", "file3.txt"), "3")
-    
+
     assert(fs.remove(dir, true) == nil)
     assert(not file_exists(dir), "Directory should be completely removed")
     cleanup_sandbox()
@@ -807,7 +824,7 @@ local function removes_hidden_file_test()
     setup_sandbox()
     local file = sandbox_path(".hidden_file")
     write_file(file, "secret")
-    
+
     fs.remove(file)
     assert(not file_exists(file))
     cleanup_sandbox()
@@ -817,15 +834,16 @@ local function recursive_remove_handles_deep_nesting_test()
     setup_sandbox()
     local base = sandbox_path("deep")
     local current = base
-    
+
     -- Create deeply nested structure
     for i = 1, 10 do
         fs.createdirectory(current)
         write_file(fs.path.join(current, "file" .. i .. ".txt"), tostring(i))
         current = fs.path.join(current, "level" .. i)
     end
+
     fs.createdirectory(current)
-    
+
     fs.remove(base, true)
     assert(not file_exists(base))
     cleanup_sandbox()
@@ -841,9 +859,9 @@ local function creates_symbolic_link_to_file_test()
     setup_sandbox()
     local target = sandbox_path("link_target.txt")
     local link = sandbox_path("link.txt")
-    
+
     write_file(target, "target content")
-    
+
     local ok, err = catch fs.createlink(link, target)
     assert(ok, "Could not create symlink: " .. tostring(err))
     assert(file_exists(link))
@@ -856,10 +874,10 @@ local function creates_symbolic_link_to_directory_test()
     setup_sandbox()
     local target = sandbox_path("link_dir_target")
     local link = sandbox_path("link_dir")
-    
+
     fs.createdirectory(target)
     write_file(fs.path.join(target, "inside.txt"), "inside")
-    
+
     local ok, err = catch fs.createlink(link, target)
     assert(ok, "Could not create symlink: " .. tostring(err))
     local t, is_link = fs.type(link)
@@ -873,16 +891,15 @@ local function resolves_symbolic_link_test()
     setup_sandbox()
     local target = sandbox_path("follow_target.txt")
     local link = sandbox_path("follow_link.txt")
-    
+
     write_file(target, "content")
-    
+
     -- Use simple filename for symlink target (relative to symlink's directory)
     local ok, err = catch fs.createlink(link, "follow_target.txt")
     assert(ok, "Could not create symlink: " .. tostring(err))
     local resolved = fs.follow(link)
     assert(type(resolved) == "string")
-    assert(resolved:find("follow_target"),
-           "Resolved path should reference target")
+    assert(resolved:find("follow_target"), "Resolved path should reference target")
     cleanup_sandbox()
 end
 
@@ -890,7 +907,7 @@ local function errors_on_non_symlink_test()
     setup_sandbox()
     local file = sandbox_path("not_a_link.txt")
     write_file(file, "regular file")
-    
+
     local ok, result = catch fs.follow(file)
     -- On POSIX, readlink on non-symlink should error
     -- On Windows, GetFinalPathNameByHandle works on any file, returning canonical path
@@ -920,14 +937,18 @@ local function handles_parent_directory_traversal_test()
     setup_sandbox()
     local sub = sandbox_path("subdir_traverse")
     fs.createdirectory(sub)
-    
+
     local up = fs.path.join(sub, "..")
     local entries = fs.list(up)
-    
+
     local found = false
+
     for i = 1, #entries do
-        if entries[i] == "subdir_traverse" then found = true end
+        if entries[i] == "subdir_traverse" then
+            found = true
+        end
     end
+
     assert(found, "Should be able to list parent via ..")
     cleanup_sandbox()
 end
@@ -936,10 +957,10 @@ local function handles_file_with_only_extension_test()
     setup_sandbox()
     local file = sandbox_path(".gitignore")
     write_file(file, "*.o\n")
-    
+
     local name = fs.path.name(file)
     assert(name == ".gitignore")
-    
+
     fs.remove(file)
     assert(not file_exists(file))
     cleanup_sandbox()
@@ -950,7 +971,7 @@ local function handles_path_with_special_characters_test()
     -- Test with safe special characters
     local file = sandbox_path("file-with_special.chars")
     write_file(file, "content")
-    
+
     assert(fs.type(file) == "file")
     fs.remove(file)
     cleanup_sandbox()
@@ -961,12 +982,14 @@ local function handles_very_long_filename_test()
     -- Create a long but valid filename
     local long_name = string.rep("a", 100) .. ".txt"
     local file = sandbox_path(long_name)
-    
+
     local ok = catch write_file(file, "content")
+
     if ok then
         assert(fs.type(file) == "file")
         fs.remove(file)
     end
+
     cleanup_sandbox()
 end
 
@@ -975,10 +998,10 @@ local function copy_doesn_t_affect_original_on_target_write_fail_test()
     local src = sandbox_path("src_safe.txt")
     local content = "precious content"
     write_file(src, content)
-    
+
     -- Try to copy to invalid destination
     local ok = catch fs.copy(src, sandbox_path("nonexistent_dir", "file.txt"))
-    
+
     -- Source should be intact
     assert(read_file(src) == content)
     cleanup_sandbox()
@@ -987,15 +1010,15 @@ end
 local function operations_on_sandbox_don_t_affect_parent_test()
     setup_sandbox()
     local parent_file = "parent_test_marker_xyz.txt"
-    
+
     -- Ensure parent file doesn't exist
     catch fs.remove(parent_file)
-    
+
     -- Do operations in sandbox
     local test = sandbox_path("test.txt")
     write_file(test, "test")
     fs.remove(test)
-    
+
     -- Parent directory should not have been affected
     local ok = catch fs.type(parent_file)
     assert(ok == false)
@@ -1011,8 +1034,10 @@ end
 local function list_error_includes_directory_name_test()
     local ok, err = catch fs.list("nonexistent_dir_error_test")
     assert(ok == false)
-    assert(err:find("nonexistent_dir_error_test") or err:find("cannot") or err:find("directory"),
-           "Error should be descriptive: " .. tostring(err))
+    assert(
+        err:find("nonexistent_dir_error_test") or err:find("cannot") or err:find("directory"),
+        "Error should be descriptive: " .. tostring(err)
+    )
 end
 
 local function type_error_for_non_existent_path_test()
@@ -1040,7 +1065,7 @@ local function fs_list_with_relative_path_works_test()
     local dir = sandbox_path("reltest")
     fs.createdirectory(dir)
     write_file(fs.path.join(dir, "a.txt"), "a")
-    
+
     local entries = fs.list(dir)
     assert(#entries == 1)
     cleanup_sandbox()
@@ -1050,7 +1075,7 @@ local function operations_work_with_in_path_test()
     setup_sandbox()
     local dir = sandbox_path("dotpath")
     fs.createdirectory(dir)
-    
+
     local with_dot = fs.path.join(SANDBOX, ".", "dotpath")
     local t = fs.type(with_dot)
     assert(t == "directory")
@@ -1065,7 +1090,6 @@ local function final_cleanup_test()
     cleanup_sandbox()
     assert(not file_exists(SANDBOX), "Sandbox should be cleaned up")
 end
-
 
 -- ============================================================================
 -- Durable writes: fs.move with replace, fs.sync, and file:sync
@@ -1096,7 +1120,11 @@ local function move_with_replace_keeps_a_directory_target_test()
     write_file(sandbox_path("f.txt"), "f")
     fs.createdirectory(sandbox_path("d"))
     write_file(sandbox_path("d", "inside.txt"), "x")
-    raises(function() fs.move(sandbox_path("f.txt"), sandbox_path("d"), { replace = true }) end, "cannot move")
+
+    raises(function()
+        fs.move(sandbox_path("f.txt"), sandbox_path("d"), { replace = true })
+    end, "cannot move")
+
     assert(read_file(sandbox_path("d", "inside.txt")) == "x")
     assert(read_file(sandbox_path("f.txt")) == "f")
     cleanup_sandbox()
@@ -1106,7 +1134,11 @@ local function move_with_replace_false_keeps_the_target_test()
     setup_sandbox()
     write_file(sandbox_path("s.txt"), "s")
     write_file(sandbox_path("t.txt"), "t")
-    raises(function() fs.move(sandbox_path("s.txt"), sandbox_path("t.txt"), { replace = false }) end, "target already exists")
+
+    raises(function()
+        fs.move(sandbox_path("s.txt"), sandbox_path("t.txt"), { replace = false })
+    end, "target already exists")
+
     assert(read_file(sandbox_path("t.txt")) == "t")
     cleanup_sandbox()
 end
@@ -1114,7 +1146,11 @@ end
 local function move_checks_its_options_test()
     setup_sandbox()
     write_file(sandbox_path("s.txt"), "s")
-    raises(function() fs.move(sandbox_path("s.txt"), sandbox_path("t.txt"), "replace") end, "bad argument #3 to 'move'")
+
+    raises(function()
+        fs.move(sandbox_path("s.txt"), sandbox_path("t.txt"), "replace")
+    end, "bad argument #3 to 'move'")
+
     cleanup_sandbox()
 end
 
@@ -1123,7 +1159,11 @@ local function sync_accepts_a_directory_and_a_file_test()
     write_file(sandbox_path("f.txt"), "f")
     assert(fs.sync(SANDBOX) == nil)
     assert(fs.sync(sandbox_path("f.txt")) == nil)
-    raises(function() fs.sync(sandbox_path("missing")) end, "cannot sync '.*missing': path does not exist")
+
+    raises(function()
+        fs.sync(sandbox_path("missing"))
+    end, "cannot sync '.*missing': path does not exist")
+
     cleanup_sandbox()
 end
 
@@ -1133,7 +1173,11 @@ local function file_sync_returns_the_handle_test()
     f:write("data")
     assert(f:sync() == f)
     f:close()
-    raises(function() f:sync() end, "attempt to use a closed file")
+
+    raises(function()
+        f:sync()
+    end, "attempt to use a closed file")
+
     assert(io.stdout:sync() == io.stdout)
     assert(io.stderr:sync() == io.stderr)
     local r = assert(io.open(sandbox_path("s.txt"), "r"))

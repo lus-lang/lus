@@ -37,13 +37,23 @@ local function lus_in(dir, args)
 end
 
 local function tree_prints_the_require_tree_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     fs.createdirectory("treeapp")
-    write("treeapp/main.lus", 'local greet = require("greet")\nlocal s = require("string")\nprint(greet, s)\n')
+    write(
+        "treeapp/main.lus",
+        'local greet = require("greet")\nlocal s = require("string")\nprint(greet, s)\n'
+    )
     write("treeapp/greet.lus", 'return require("gone")\n')
     local ok, out = lus_in("treeapp", "tree main.lus")
     assert(not ok, out)
-    assert(out == "main.lus\n├── greet (./greet.lus)\n│   └── gone (not found)\n└── string (standard library)\n", out)
+    assert(
+        out
+            == "main.lus\n├── greet (./greet.lus)\n│   └── gone (not found)\n└── string (standard library)\n",
+        out
+    )
 
     write("treeapp/greet.lus", "return {}\n")
     ok, out = lus_in("treeapp", "tree main.lus")
@@ -61,16 +71,21 @@ local function tree_prints_the_require_tree_test()
 end
 
 local function explain_covers_every_listed_code_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, list = lus("check --list")
     assert(ok, list)
     local count = 0
+
     for code, severity in list:gmatch("([%w-]+)%s+(%a+)%s+[^\n]*\n") do
         local eok, out = lus("check --explain " .. code)
         assert(eok, code .. ": " .. out)
         assert(out:find("^" .. code:gsub("%-", "%%-") .. " %(" .. severity .. "%)\n"), out)
         count = count + 1
     end
+
     assert(count >= 30, list)
 
     local _, out = lus("check --explain=unused-local")
@@ -79,7 +94,10 @@ local function explain_covers_every_listed_code_test()
 end
 
 local function explain_rejects_an_unknown_code_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local ok, out = lus("check --explain no-such-code")
     assert(not ok and out:find("unknown code 'no-such-code'", 1, true), out)
     ok, out = lus("check --explain")
@@ -87,15 +105,28 @@ local function explain_rejects_an_unknown_code_test()
 end
 
 local function test_list_prints_names_without_running_test()
-    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
-    write("listed_test.lus", "local function one_test() error('ran') end\nfunction two_test() end\nlocal function fast_bench() end\n")
+    if not lus_cmd then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    write(
+        "listed_test.lus",
+        "local function one_test() error('ran') end\nfunction two_test() end\nlocal function fast_bench() end\n"
+    )
     local ok, out = lus("test --list listed_test.lus")
     assert(ok, out)
-    assert(out == "listed_test.lus: one_test\nlisted_test.lus: two_test\nlisted_test.lus: fast_bench\n", out)
+    assert(
+        out
+            == "listed_test.lus: one_test\nlisted_test.lus: two_test\nlisted_test.lus: fast_bench\n",
+        out
+    )
     ok, out = lus("test --list --filter two listed_test.lus")
     assert(ok and out == "listed_test.lus: two_test\n", out)
     ok, out = lus("test --list --json listed_test.lus")
     assert(ok, out)
     local first = fromjson(out:match("^[^\n]+"))
-    assert(first.file == "listed_test.lus" and first.name == "one_test" and first.kind == "test", out)
+    assert(
+        first.file == "listed_test.lus" and first.name == "one_test" and first.kind == "test",
+        out
+    )
 end

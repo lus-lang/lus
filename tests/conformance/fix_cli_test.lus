@@ -80,7 +80,10 @@ local function read(path)
 end
 
 local function run(args)
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local p = io.popen(`"$LUS" $args 2>&1`)
     local out = p:read("a")
     local ok = p:close()

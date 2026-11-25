@@ -24,9 +24,13 @@ local function appends_skip_integer_keys_in_the_hash_part_test()
     t[10] = "ten"
     t[5] = "five"
     t[5] = nil
+
     for i = 4, 12 do
-        if t[i] == nil then t[i] = i end
+        if t[i] == nil then
+            t[i] = i
+        end
     end
+
     assert(t[10] == "ten" and t[5] == 5 and #t == 12)
     local u = { 1, 2 }
     u[100] = "far"
@@ -37,7 +41,11 @@ end
 local function long_string_keys_compare_by_content_test()
     local t = {}
     local parts = {}
-    for i = 1, 40 do parts[i] = string.char(96 + (i % 26) + 1) end
+
+    for i = 1, 40 do
+        parts[i] = string.char(96 + (i % 26) + 1)
+    end
+
     local k1 = table.concat(parts)
     local k2 = table.concat(parts)
     t[k1] = "value"
@@ -50,13 +58,24 @@ end
 local function large_lists_grow_by_half_with_holes_test()
     local n = (1 << 16) + 10
     local t = {}
-    for i = 1, n do t[i] = i end
+
+    for i = 1, n do
+        t[i] = i
+    end
+
     t[n + 5] = "gap"
     assert(#t == n or #t == n + 5)
     assert(t[n + 5] == "gap" and t[n] == n)
     local u = {}
-    for i = 1, n, 2 do u[i] = i end
-    for i = 2, n, 2 do u[i] = i end
+
+    for i = 1, n, 2 do
+        u[i] = i
+    end
+
+    for i = 2, n, 2 do
+        u[i] = i
+    end
+
     assert(u[n] == n and u[1] == 1)
 end
 
@@ -68,41 +87,85 @@ local function lists_past_a_million_slots_append_test()
     local n = (1 << 20) + 300000
     local words = {}
     local record = { name = "list" }
+
     for i = 1, n do
         words[i] = "w"
         record[i] = i
     end
+
     assert(#words == n and words[n] == "w" and words[n + 1] == nil)
     assert(#record == n and record[n] == n and record.name == "list")
     local waiting = {}
-    for i = 1, n do waiting[i] = i end
+
+    for i = 1, n do
+        waiting[i] = i
+    end
+
     local m = #waiting
     waiting[m + 3] = "waits"
     waiting[m + 1] = "next"
     waiting[m + 2] = "between"
     assert(waiting[m + 3] == "waits" and #waiting == m + 3)
-    for i = m + 4, m + 200000 do waiting[i] = i end
+
+    for i = m + 4, m + 200000 do
+        waiting[i] = i
+    end
+
     assert(#waiting == m + 200000 and waiting[m + 3] == "waits")
     local before = #words
     words[before + 1] = nil
     assert(#words == before and next({}, nil) == nil)
     local sum = 0
-    for i = 1, #record do sum = sum + record[i] end
+
+    for i = 1, #record do
+        sum = sum + record[i]
+    end
+
     assert(sum == n * (n + 1) // 2)
 end
 
 local function sizes_around_the_inline_limit_keep_their_values_test()
-    for _, sizes in ipairs{ { 0, 0 }, { 10, 0 }, { 60, 0 }, { 63, 0 }, { 64, 0 }, { 600, 0 },
-            { 0, 10 }, { 0, 31 }, { 0, 32 }, { 0, 600 }, { 20, 20 }, { 40, 40 }, { 600, 600 } } do
+    for _, sizes in ipairs{
+        { 0, 0 },
+        { 10, 0 },
+        { 60, 0 },
+        { 63, 0 },
+        { 64, 0 },
+        { 600, 0 },
+        { 0, 10 },
+        { 0, 31 },
+        { 0, 32 },
+        { 0, 600 },
+        { 20, 20 },
+        { 40, 40 },
+        { 600, 600 },
+    } do
         local narr, nhash = sizes[1], sizes[2]
         local t = table.create(narr, nhash)
-        for i = 1, narr do t[i] = i * 1.5 end
-        for i = 1, nhash do t["k" .. i] = i end
-        for i = 1, narr do assert(t[i] == i * 1.5) end
-        for i = 1, nhash do assert(t["k" .. i] == i) end
+
+        for i = 1, narr do
+            t[i] = i * 1.5
+        end
+
+        for i = 1, nhash do
+            t["k" .. i] = i
+        end
+
+        for i = 1, narr do
+            assert(t[i] == i * 1.5)
+        end
+
+        for i = 1, nhash do
+            assert(t["k" .. i] == i)
+        end
+
         assert(#t == narr)
         local s = table.create(narr, nhash)
-        for i = 1, narr do s[i] = "s" .. i end
+
+        for i = 1, narr do
+            s[i] = "s" .. i
+        end
+
         t[narr + 1] = {}
         assert(#s == narr and type(t[narr + 1]) == "table")
     end
@@ -110,8 +173,15 @@ end
 
 local function borders_follow_their_hint_test()
     local t = {}
-    for i = 1, 100 do t[i] = i end
-    for i = 100, 51, -1 do t[i] = nil end
+
+    for i = 1, 100 do
+        t[i] = i
+    end
+
+    for i = 100, 51, -1 do
+        t[i] = nil
+    end
+
     assert(#t == 50)
     t[51] = 51
     assert(#t == 51)
@@ -127,18 +197,34 @@ end
 -- part. Keys from 2^32 to 2^40 count toward an array part on 64-bit
 -- targets and lie beyond every index of a 32-bit one, such as lus.wasm.
 local function integer_keys_beyond_32_bits_stay_in_the_hash_part_test()
-    local keys = { 1 << 32, (1 << 32) + 1, 10737418240, 1 << 40, (1 << 40) + 1, 1 << 62, math.maxinteger }
+    local keys = {
+        1 << 32,
+        (1 << 32) + 1,
+        10737418240,
+        1 << 40,
+        (1 << 40) + 1,
+        1 << 62,
+        math.maxinteger,
+    }
     local t = {}
+
     for i, k in ipairs(keys) do
         t[k] = i
     end
+
     t[2.0 ^ 33] = "float"
+
     for i, k in ipairs(keys) do
         assert(t[k] == i, k)
     end
+
     assert(t[1 << 33] == "float" and math.type(next({ [2.0 ^ 33] = true })) == "integer")
     local n = 0
-    for _ in pairs(t) do n = n + 1 end
+
+    for _ in pairs(t) do
+        n = n + 1
+    end
+
     assert(n == #keys + 1 and #t == 0)
     local list = { 1, 2, 3, [1 << 35] = "far" }
     list[4] = 4

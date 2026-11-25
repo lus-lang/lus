@@ -21,9 +21,9 @@ The following example renders an instant at a fixed offset of five hours west of
 
 ```lus
 local est = time.offset(-5 * 3600)
-print(est:name(), est:offset(time.instant(0)))    --> -05:00  -18000
-print(time.instant(1782998100):at(est):iso())     --> 2026-07-02T08:15:00-05:00
-print(time.offset(19800):name())                  --> +05:30
+print(est:name(), est:offset(time.instant(0)))  --> -05:00  -18000
+print(time.instant(1782998100):at(est):iso())  --> 2026-07-02T08:15:00-05:00
+print(time.offset(19800):name())  --> +05:30
 ```
 
 An integer offset passed to `instant:at` or to [`time.zoned`](/manual/api#time.zoned) has the same effect as a zone from this function. [`time.zone`](/manual/api#time.zone) returns a named zone whose offset follows daylight saving.

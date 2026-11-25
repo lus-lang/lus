@@ -27,11 +27,19 @@ pledge("env", "fs")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-lines-example.txt")
 io.open(path, "w"):write("10 apples\n20 pears\n"):close()
 local lines = {}
-for line in io.lines(path) do lines[#lines + 1] = line end
-print(table.concat(lines, ", "))   --> 10 apples, 20 pears
+
+for line in io.lines(path) do
+    lines[#lines + 1] = line
+end
+
+print(table.concat(lines, ", "))  --> 10 apples, 20 pears
 local total = 0
-for count in io.lines(path, "n", "l") do total = total + count end
-print(total)                       --> 30
+
+for count in io.lines(path, "n", "l") do
+    total = total + count
+end
+
+print(total)  --> 30
 fs.remove(path)
 ```
 

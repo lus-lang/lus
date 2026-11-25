@@ -10,9 +10,11 @@ print(2n ^ 100)  --> 1267650600228229401496703205376
 -- Arithmetic between bigints and integers stays exact, so a factorial keeps every digit.
 local function factorial(n)
     local result = 1n
+
     for i = 2, n do
         result = result * i
     end
+
     return result
 end
 

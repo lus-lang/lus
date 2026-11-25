@@ -10,197 +10,245 @@ pledge("load", "fs:read=" .. TEST_DIR .. "/*", "fs:read=./*", "fs:write=./*", "s
 -- Group: worker.create
 
 local function creates_a_worker_and_returns_a_handle_test()
-  local w = worker.create(WDIR1 .. "counter.lus")
-  assert(w ~= nil)
-  assert(type(w) == "userdata")
+    local w = worker.create(WDIR1 .. "counter.lus")
+    assert(w ~= nil)
+    assert(type(w) == "userdata")
 end
 
 -- Group: worker.status
 
 local function returns_running_for_active_worker_test()
-  -- The processor worker blocks in peek until it receives STOP, so it
-  -- cannot have finished when this status call observes it
-  local w = worker.create(WDIR1 .. "processor.lus")
-  assert(worker.status(w) == "running")
-  -- Shut the worker down cleanly so it is not parked at interpreter exit
-  worker.send(w, "STOP")
-  while worker.receive(w) ~= nil do end
-  assert(worker.status(w) == "dead")
+    -- The processor worker blocks in peek until it receives STOP, so it
+    -- cannot have finished when this status call observes it
+    local w = worker.create(WDIR1 .. "processor.lus")
+    assert(worker.status(w) == "running")
+    -- Shut the worker down cleanly so it is not parked at interpreter exit
+    worker.send(w, "STOP")
+
+    while worker.receive(w) ~= nil do
+    end
+
+    assert(worker.status(w) == "dead")
 end
 
 -- Group: worker.message and worker.receive
 
 local function receives_messages_from_worker_test()
-  local w = worker.create(WDIR1 .. "counter.lus")
-  
-  -- Collect all messages
-  local messages = {}
-  while true do
-    local msg = worker.receive(w)
-    if msg == nil then break end
-    table.insert(messages, msg)
-  end
-  
-  assert(#messages == 5)
-  assert(messages[1] == 1)
-  assert(messages[5] == 5)
+    local w = worker.create(WDIR1 .. "counter.lus")
+
+    -- Collect all messages
+    local messages = {}
+
+    while true do
+        local msg = worker.receive(w)
+
+        if msg == nil then
+            break
+        end
+
+        table.insert(messages, msg)
+    end
+
+    assert(#messages == 5)
+    assert(messages[1] == 1)
+    assert(messages[5] == 5)
 end
 
 -- Group: worker.send and worker.peek
 
 local function sends_messages_to_worker_and_receives_responses_test()
-  local w = worker.create(WDIR1 .. "processor.lus")
-  
-  -- Send messages
-  worker.send(w, "hello")
-  worker.send(w, "world")
-  worker.send(w, "STOP")
-  
-  -- Receive responses
-  local messages = {}
-  while true do
-    local msg = worker.receive(w)
-    if msg == nil then break end
-    table.insert(messages, msg)
-  end
-  
-  assert(#messages == 3)
-  assert(messages[1] == "GOT: hello")
-  assert(messages[2] == "GOT: world")
-  assert(messages[3] == "STOPPED")
+    local w = worker.create(WDIR1 .. "processor.lus")
+
+    -- Send messages
+    worker.send(w, "hello")
+    worker.send(w, "world")
+    worker.send(w, "STOP")
+
+    -- Receive responses
+    local messages = {}
+
+    while true do
+        local msg = worker.receive(w)
+
+        if msg == nil then
+            break
+        end
+
+        table.insert(messages, msg)
+    end
+
+    assert(#messages == 3)
+    assert(messages[1] == "GOT: hello")
+    assert(messages[2] == "GOT: world")
+    assert(messages[3] == "STOPPED")
 end
 
 -- Group: serialization of types
 
 local function serializes_integer_messages_test()
-  local w = worker.create(WDIR1 .. "counter.lus")
-  local messages = {}
-  while true do
-    local msg = worker.receive(w)
-    if msg == nil then break end
-    table.insert(messages, msg)
-  end
-  for i = 1, 5 do
-    assert(type(messages[i]) == "number")
-    assert(messages[i] == i)
-  end
+    local w = worker.create(WDIR1 .. "counter.lus")
+    local messages = {}
+
+    while true do
+        local msg = worker.receive(w)
+
+        if msg == nil then
+            break
+        end
+
+        table.insert(messages, msg)
+    end
+
+    for i = 1, 5 do
+        assert(type(messages[i]) == "number")
+        assert(messages[i] == i)
+    end
 end
 
 local function serializes_table_messages_test()
-  local w = worker.create(WDIR1 .. "table.lus")
-  local messages = {}
-  while true do
-    local msg = worker.receive(w)
-    if msg == nil then break end
-    table.insert(messages, msg)
-  end
+    local w = worker.create(WDIR1 .. "table.lus")
+    local messages = {}
 
-  assert(#messages == 3)
+    while true do
+        local msg = worker.receive(w)
 
-  -- Array table
-  assert(type(messages[1]) == "table")
-  assert(messages[1][1] == 1)
-  assert(messages[1][2] == 2)
-  assert(messages[1][3] == 3)
+        if msg == nil then
+            break
+        end
 
-  -- Key-value table
-  assert(messages[2].key == "value")
-  assert(messages[2].num == 42)
+        table.insert(messages, msg)
+    end
 
-  -- Nested table
-  assert(type(messages[3].nested) == "table")
-  assert(messages[3].nested.a == 1)
-  assert(messages[3].nested.b[1] == 2)
-  assert(messages[3].nested.b[2] == 3)
+    assert(#messages == 3)
+
+    -- Array table
+    assert(type(messages[1]) == "table")
+    assert(messages[1][1] == 1)
+    assert(messages[1][2] == 2)
+    assert(messages[1][3] == 3)
+
+    -- Key-value table
+    assert(messages[2].key == "value")
+    assert(messages[2].num == 42)
+
+    -- Nested table
+    assert(type(messages[3].nested) == "table")
+    assert(messages[3].nested.a == 1)
+    assert(messages[3].nested.b[1] == 2)
+    assert(messages[3].nested.b[2] == 3)
 end
 
 -- Group: message ordering
 
 local function delivers_messages_in_fifo_order_test()
-  local w = worker.create(WDIR1 .. "ordering.lus")
-  local messages = {}
-  while true do
-    local msg = worker.receive(w)
-    if msg == nil then break end
-    table.insert(messages, msg)
-  end
-  assert(#messages == 10)
-  for i = 1, 10 do
-    assert(messages[i] == i)
-  end
+    local w = worker.create(WDIR1 .. "ordering.lus")
+    local messages = {}
+
+    while true do
+        local msg = worker.receive(w)
+
+        if msg == nil then
+            break
+        end
+
+        table.insert(messages, msg)
+    end
+
+    assert(#messages == 10)
+
+    for i = 1, 10 do
+        assert(messages[i] == i)
+    end
 end
 
 -- Group: multiple workers
 
 local function runs_multiple_workers_concurrently_test()
-  local w1 = worker.create(WDIR1 .. "counter.lus")
-  local w2 = worker.create(WDIR1 .. "counter.lus")
+    local w1 = worker.create(WDIR1 .. "counter.lus")
+    local w2 = worker.create(WDIR1 .. "counter.lus")
 
-  local msgs1 = {}
-  local msgs2 = {}
+    local msgs1 = {}
+    local msgs2 = {}
 
-  while true do
-    local msg = worker.receive(w1)
-    if msg == nil then break end
-    table.insert(msgs1, msg)
-  end
-  while true do
-    local msg = worker.receive(w2)
-    if msg == nil then break end
-    table.insert(msgs2, msg)
-  end
+    while true do
+        local msg = worker.receive(w1)
 
-  assert(#msgs1 == 5)
-  assert(#msgs2 == 5)
+        if msg == nil then
+            break
+        end
+
+        table.insert(msgs1, msg)
+    end
+
+    while true do
+        local msg = worker.receive(w2)
+
+        if msg == nil then
+            break
+        end
+
+        table.insert(msgs2, msg)
+    end
+
+    assert(#msgs1 == 5)
+    assert(#msgs2 == 5)
 end
 
 -- Group: worker lifecycle
 
 local function worker_becomes_dead_after_completion_test()
-  local w = worker.create(WDIR1 .. "counter.lus")
-  -- Drain all messages
-  while worker.receive(w) ~= nil do end
-  local status = worker.status(w)
-  assert(status == "dead")
+    local w = worker.create(WDIR1 .. "counter.lus")
+
+    -- Drain all messages
+    while worker.receive(w) ~= nil do
+    end
+
+    local status = worker.status(w)
+    assert(status == "dead")
 end
 
 -- Group: error handling
 
 local function propagates_worker_errors_via_receive_test()
-  local w = worker.create(WDIR1 .. "error.lus")
+    local w = worker.create(WDIR1 .. "error.lus")
 
-  -- receive on an errored worker must raise, carrying the worker's own
-  -- error message so callers can identify what failed
-  local ok, err = catch worker.receive(w)
-  assert(not ok)
-  assert(string.find(tostring(err), "intentional worker error"))
+    -- receive on an errored worker must raise, carrying the worker's own
+    -- error message so callers can identify what failed
+    local ok, err = catch worker.receive(w)
+    assert(not ok)
+    assert(string.find(tostring(err), "intentional worker error"))
 end
 
 local function error_worker_becomes_dead_test()
-  local w = worker.create(WDIR1 .. "error.lus")
-  -- Give worker time to error, then drain
-  catch worker.receive(w)
-  local status = worker.status(w)
-  assert(status == "dead")
+    local w = worker.create(WDIR1 .. "error.lus")
+    -- Give worker time to error, then drain
+    catch worker.receive(w)
+    local status = worker.status(w)
+    assert(status == "dead")
 end
 
 local function handles_string_messages_with_special_characters_test()
-  local w = worker.create(WDIR1 .. "processor.lus")
+    local w = worker.create(WDIR1 .. "processor.lus")
 
-  worker.send(w, "hello\0world")
-  worker.send(w, "line1\nline2")
-  worker.send(w, "\t\r\n")
-  worker.send(w, "STOP")
+    worker.send(w, "hello\0world")
+    worker.send(w, "line1\nline2")
+    worker.send(w, "\t\r\n")
+    worker.send(w, "STOP")
 
-  local messages = {}
-  while true do
-    local msg = worker.receive(w)
-    if msg == nil then break end
-    table.insert(messages, msg)
-  end
+    local messages = {}
 
-  assert(#messages == 4)
-  assert(messages[4] == "STOPPED")
+    while true do
+        local msg = worker.receive(w)
+
+        if msg == nil then
+            break
+        end
+
+        table.insert(messages, msg)
+    end
+
+    assert(#messages == 4)
+    assert(messages[4] == "STOPPED")
 end
 
 -- Group: edge cases
@@ -208,11 +256,17 @@ end
 local function serializes_boolean_messages_test()
     local w = worker.create(WDIR1 .. "types.lus")
     local messages = {}
+
     while true do
         local msg = worker.receive(w)
-        if msg == nil then break end
+
+        if msg == nil then
+            break
+        end
+
         table.insert(messages, msg)
     end
+
     -- types.lus sends: 42, 3.14, "hello", true, false, nil
     -- nil terminates receive loop, so we get 5 messages
     assert(#messages == 5)
@@ -233,37 +287,56 @@ end
 
 local function send_rejects_non_serializable_values_with_an_error_test()
     local w = worker.create(WDIR1 .. "processor.lus")
-    local ok, err = catch worker.send(w, function() end)
+
+    local ok, err = catch worker.send(w, function()
+    end)
+
     assert(not ok)
     assert(tostring(err):find("cannot serialize") ~= nil)
     -- the worker must still be usable after a failed send
     worker.send(w, "still alive")
     worker.send(w, "STOP")
     local messages = {}
+
     while true do
         local msg = worker.receive(w)
-        if msg == nil then break end
+
+        if msg == nil then
+            break
+        end
+
         table.insert(messages, msg)
     end
+
     assert(messages[#messages] == "STOPPED")
 end
 
 local function many_workers_with_message_churn_test()
     local pool = {}
+
     for i = 1, 8 do
         pool[i] = worker.create(WDIR1 .. "processor.lus")
+
         for j = 1, 20 do
             worker.send(pool[i], "w" .. i .. "-" .. j)
         end
+
         worker.send(pool[i], "STOP")
     end
+
     for i = 1, 8 do
         local messages = {}
+
         while true do
             local msg = worker.receive(pool[i])
-            if msg == nil then break end
+
+            if msg == nil then
+                break
+            end
+
             table.insert(messages, msg)
         end
+
         assert(#messages == 21)
         assert(messages[1] == "GOT: w" .. i .. "-1")
         assert(messages[21] == "STOPPED")
@@ -295,6 +368,7 @@ local function catch_load_reader_peek_loop_does_not_hang_interpreter_exit_test()
     local w = worker.create(WDIR1 .. "catchloadpeek.lus")
     assert(w ~= nil)
 end
+
 --[[
     Worker serialization deep-dive and the worker/pledge security boundary.
 
@@ -549,6 +623,7 @@ error("worker broke", 0)
 
 -- Write every generated helper script to disk.
 local script_names = {}
+
 for name, src in pairs(scripts) do
     local path = TMP .. "/" .. name .. ".lus"
     local f = io.open(path, "w")
@@ -566,11 +641,17 @@ end
 -- Collects every message a worker produces until it is drained.
 local function drain(w)
     local out = {}
+
     while true do
         local m = worker.receive(w)
-        if m == nil then break end
+
+        if m == nil then
+            break
+        end
+
         table.insert(out, m)
     end
+
     return out
 end
 
@@ -578,8 +659,10 @@ end
 -- so the bound only guards against a genuine hang rather than normal timing.
 local function wait_dead(w)
     local i = 0
+
     while worker.status(w) ~= "dead" do
         i = i + 1
+
         if i > 50000000 then
             error("worker did not reach dead status")
         end
@@ -600,19 +683,19 @@ end
 -- worker-to-parent round trip with its value and numeric subtype intact. The
 -- serializer stores the exact double bits, so even 3.14 compares equal.
 local scalar_cases = {
-    {true, false},
-    {false, false},
-    {0, "integer"},
-    {-42, "integer"},
-    {math.maxinteger, "integer"},
-    {math.mininteger, "integer"},
-    {3.14, "float"},
-    {42.0, "float"},
-    {math.huge, "float"},
-    {-math.huge, "float"},
-    {"", false},
-    {"hello", false},
-    {"with" .. string.char(0) .. "nul", false},
+    { true, false },
+    { false, false },
+    { 0, "integer" },
+    { -42, "integer" },
+    { math.maxinteger, "integer" },
+    { math.mininteger, "integer" },
+    { 3.14, "float" },
+    { 42.0, "float" },
+    { math.huge, "float" },
+    { -math.huge, "float" },
+    { "", false },
+    { "hello", false },
+    { "with" .. string.char(0) .. "nul", false },
 }
 
 local scalar_survives_a_full_round_trip_cases = scalar_cases
@@ -622,9 +705,11 @@ local function scalar_survives_a_full_round_trip_test(value, mtype)
     worker.send(w, value)
     local r = worker.receive(w)
     assert(r == value)
+
     if mtype then
         assert(math.type(r) == mtype)
     end
+
     assert(type(r) == type(value))
     stop_processor(w)
 end
@@ -656,7 +741,7 @@ end
 
 local function sends_a_nested_table_parent_to_worker_and_reads_its_fields_test()
     local w = worker.create(gen("fieldecho"))
-    worker.send(w, {a = 1, b = {10, 20}, nested = {c = true}})
+    worker.send(w, { a = 1, b = { 10, 20 }, nested = { c = true } })
     local msgs = drain(w)
     assert(msgs[1] == 1)
     assert(msgs[2] == 20)
@@ -668,8 +753,8 @@ end
 -- subtable in the parent alias one table in the worker as well.
 local function preserves_aliasing_of_shared_subtables_test()
     local w = worker.create(gen("alias"))
-    local sub = {v = 99}
-    worker.send(w, {x = sub, y = sub})
+    local sub = { v = 99 }
+    worker.send(w, { x = sub, y = sub })
     local msgs = drain(w)
     assert(msgs[1] == true)
     assert(msgs[2] == 99)
@@ -680,7 +765,7 @@ end
 -- after send cannot reach the snapshot the worker deserializes.
 local function deep_copies_on_send_so_later_mutation_is_not_observed_test()
     local w = worker.create(gen("fieldecho"))
-    local t = {a = "orig", b = {10, 20}, nested = {c = true}}
+    local t = { a = "orig", b = { 10, 20 }, nested = { c = true } }
     worker.send(w, t)
     t.a = "MUTATED"
     t.b[2] = 777
@@ -694,10 +779,12 @@ end
 -- Moderate nesting round trips through the worker thread untouched.
 local function moderately_nested_tables_survive_serialization_test()
     local w = worker.create(gen("deepwalk"))
-    local deep = {leaf = "LEAF"}
+    local deep = { leaf = "LEAF" }
+
     for _ = 1, 10 do
-        deep = {child = deep}
+        deep = { child = deep }
     end
+
     worker.send(w, deep)
     local msgs = drain(w)
     assert(msgs[1] == 10)
@@ -709,10 +796,12 @@ end
 -- The pool thread has room to deserialize the full documented depth.
 local function round_trips_a_deeply_nested_table_through_a_worker_test()
     local w = worker.create(gen("deepwalk"))
-    local deep = {leaf = "LEAF"}
+    local deep = { leaf = "LEAF" }
+
     for _ = 1, 40 do
-        deep = {child = deep}
+        deep = { child = deep }
     end
+
     worker.send(w, deep)
     local msgs = drain(w)
     assert(msgs[1] == 40)
@@ -723,7 +812,7 @@ end
 -- table that contains itself.
 local function transfers_a_cyclic_table_with_its_cycle_intact_test()
     local w = worker.create(gen("cyclewalk"))
-    local c = {tag = "loop"}
+    local c = { tag = "loop" }
     c.self = c
     worker.send(w, c)
     local msgs = drain(w)
@@ -735,11 +824,16 @@ end
 -- on the parent, before anything reaches a worker thread.
 local function rejects_a_table_nested_past_the_depth_cap_test()
     local w = worker.create(WDIR .. "processor.lus")
-    local deep = {leaf = "LEAF"}
+    local deep = { leaf = "LEAF" }
+
     for _ = 1, 200 do
-        deep = {child = deep}
+        deep = { child = deep }
     end
-    raises(function() worker.send(w, deep) end, "table nesting too deep")
+
+    raises(function()
+        worker.send(w, deep)
+    end, "table nesting too deep")
+
     stop_processor(w)
 end
 
@@ -770,13 +864,26 @@ end
 
 local function send_rejects_a_top_level_function_test()
     local w = worker.create(WDIR .. "processor.lus")
-    raises(function() worker.send(w, function() end) end, "cannot serialize")
+
+    raises(function()
+        worker.send(w, function()
+        end)
+    end, "cannot serialize")
+
     stop_processor(w)
 end
 
 local function send_rejects_a_function_nested_inside_a_table_test()
     local w = worker.create(WDIR .. "processor.lus")
-    raises(function() worker.send(w, {ok = 1, bad = function() end}) end, "cannot serialize")
+
+    raises(function()
+        worker.send(w, {
+            ok = 1,
+            bad = function()
+            end,
+        })
+    end, "cannot serialize")
+
     stop_processor(w)
 end
 
@@ -795,7 +902,11 @@ end
 local function send_rejects_an_enum_value_test()
     local w = worker.create(WDIR .. "processor.lus")
     local e = enum red, green, blue end
-    raises(function() worker.send(w, e.green) end, "cannot serialize")
+
+    raises(function()
+        worker.send(w, e.green)
+    end, "cannot serialize")
+
     stop_processor(w)
 end
 
@@ -852,14 +963,18 @@ local function preserves_embedded_nul_bytes_in_string_content_test()
     stop_processor(w)
 end
 
-local send_rejects_a_non_worker_first_argument_cases = {{42}, {"x"}, {{}}}
+local send_rejects_a_non_worker_first_argument_cases = { { 42 }, { "x" }, { {} } }
 
 local function send_rejects_a_non_worker_first_argument_test(bad)
-        raises(function() worker.send(bad, 1) end, nil)
+    raises(function()
+        worker.send(bad, 1)
+    end, nil)
 end
 
 local function send_rejects_a_nil_first_argument_test()
-    raises(function() worker.send(nil, 1) end, nil)
+    raises(function()
+        worker.send(nil, 1)
+    end, nil)
 end
 
 ------------------------------------------------------------------------------
@@ -914,18 +1029,26 @@ local function returns_nils_for_every_worker_when_all_are_drained_and_dead_test(
 end
 
 local function receive_with_no_arguments_errors_test()
-    raises(function() worker.receive() end, "at least one worker")
+    raises(function()
+        worker.receive()
+    end, "at least one worker")
 end
 
-local receive_rejects_a_non_worker_argument_cases = {{42}, {"x"}, {{}}}
+local receive_rejects_a_non_worker_argument_cases = { { 42 }, { "x" }, { {} } }
 
 local function receive_rejects_a_non_worker_argument_test(bad)
-        raises(function() worker.receive(bad) end, nil)
+    raises(function()
+        worker.receive(bad)
+    end, nil)
 end
 
 local function receive_validates_every_argument_including_a_trailing_bad_one_test()
     local w = worker.create(WDIR .. "counter.lus")
-    raises(function() worker.receive(w, "x") end, nil)
+
+    raises(function()
+        worker.receive(w, "x")
+    end, nil)
+
     drain(w)
 end
 
@@ -966,6 +1089,7 @@ local function messages_buffered_before_an_error_arrive_first_test()
     wait_dead(w)
     assert(worker.receive(w) == 1)
     assert(worker.receive(w) == 2)
+
     for _ = 1, 2 do
         local ok, err = catch worker.receive(w)
         assert(not ok)
@@ -1000,14 +1124,18 @@ local function reports_running_for_a_worker_blocked_in_peek_test()
     stop_processor(w)
 end
 
-local status_rejects_a_non_worker_argument_cases = {{42}, {"x"}}
+local status_rejects_a_non_worker_argument_cases = { { 42 }, { "x" } }
 
 local function status_rejects_a_non_worker_argument_test(bad)
-        raises(function() worker.status(bad) end, nil)
+    raises(function()
+        worker.status(bad)
+    end, nil)
 end
 
 local function status_rejects_a_nil_argument_test()
-    raises(function() worker.status(nil) end, nil)
+    raises(function()
+        worker.status(nil)
+    end, nil)
 end
 
 local function a_dead_worker_keeps_its_messages_receivable_test()
@@ -1035,7 +1163,7 @@ local function passes_scalar_varargs_to_the_worker_chunk_test()
 end
 
 local function passes_a_table_vararg_to_the_worker_chunk_test()
-    local w = worker.create(gen("myecho"), "tag", {x = 1, y = {2, 3}})
+    local w = worker.create(gen("myecho"), "tag", { x = 1, y = { 2, 3 } })
     local msgs = drain(w)
     assert(msgs[1] == "tag")
     assert(type(msgs[2]) == "table")
@@ -1044,17 +1172,24 @@ local function passes_a_table_vararg_to_the_worker_chunk_test()
 end
 
 local function rejects_a_non_serializable_vararg_at_create_time_test()
-    raises(function() worker.create(WDIR .. "echo.lus", function() end) end, "cannot serialize")
+    raises(function()
+        worker.create(WDIR .. "echo.lus", function()
+        end)
+    end, "cannot serialize")
 end
 
-local create_rejects_a_non_string_path_cases = {{nil}, {{}}, {true}}
+local create_rejects_a_non_string_path_cases = { { nil }, { {} }, { true } }
 
 local function create_rejects_a_non_string_path_test(bad)
-        raises(function() worker.create(bad) end, nil)
+    raises(function()
+        worker.create(bad)
+    end, nil)
 end
 
 local function create_with_no_arguments_errors_test()
-    raises(function() worker.create() end, nil)
+    raises(function()
+        worker.create()
+    end, nil)
 end
 
 -- A number path is coerced to a string by luaL_checkstring, so create itself
@@ -1075,12 +1210,18 @@ end
 -- them in the main program yields nil and calling that nil raises.
 local function worker_message_is_not_exposed_to_the_parent_test()
     assert(worker.message == nil)
-    raises(function() worker.message(1) end, nil)
+
+    raises(function()
+        worker.message(1)
+    end, nil)
 end
 
 local function worker_peek_is_not_exposed_to_the_parent_test()
     assert(worker.peek == nil)
-    raises(function() worker.peek() end, nil)
+
+    raises(function()
+        worker.peek()
+    end, nil)
 end
 
 ------------------------------------------------------------------------------
@@ -1137,13 +1278,19 @@ end
 -- collection at all.
 local function a_backlog_of_uncollected_finished_handles_does_not_disturb_a_test()
     local all_ok = true
+
     for _ = 1, 300 do
         local p = worker.create(WDIR .. "processor.lus")
         worker.send(p, "x")
-        if worker.receive(p) ~= "GOT: x" then all_ok = false end
+
+        if worker.receive(p) ~= "GOT: x" then
+            all_ok = false
+        end
+
         worker.send(p, "STOP")
         drain(p)
     end
+
     assert(all_ok)
     local w = worker.create(WDIR .. "processor.lus")
     worker.send(w, "hi")
@@ -1178,6 +1325,7 @@ end
 local function shares_long_strings_with_a_worker_test()
     local w = worker.create(gen("sharedops"))
     local s = string.rep("abcdé", 40) .. "needle" .. string.rep("xyzŵ", 30) .. "tail!"
+
     for _ = 1, 3 do
         worker.send(w, s)
         local info = worker.receive(w)
@@ -1189,9 +1337,10 @@ local function shares_long_strings_with_a_worker_test()
         local back = worker.receive(w)
         assert(back == s)
         assert(#back == #s)
-        local t = {[s] = 1}
+        local t = { [s] = 1 }
         assert(t[back] == 1)
     end
+
     worker.send(w, false)
     drain(w)
 end
@@ -1201,7 +1350,8 @@ end
 local function shared_strings_work_as_table_keys_test()
     local w = worker.create(gen("sharedops"))
     local k = string.rep("k", 100)
-    local msg = {k, k, {[k] = "inner"}}
+    local msg = { k, k, { [k] = "inner" } }
+
     for _ = 1, 3 do
         worker.send(w, msg)
         local info = worker.receive(w)
@@ -1214,6 +1364,7 @@ local function shared_strings_work_as_table_keys_test()
         assert(back[1] == k and back[2] == k)
         assert(back[3][k] == "inner")
     end
+
     worker.send(w, false)
     drain(w)
 end
@@ -1224,20 +1375,28 @@ end
 local function shared_strings_survive_collections_test()
     local w = worker.create(gen("sharedops"))
     local keep = {}
+
     for i = 1, 200 do
         local s = string.format("%080d", i) .. string.rep("é", i % 7)
+
         -- The second send of a string reuses the blob of the first.
         for _ = 1, 2 do
             worker.send(w, s)
             worker.receive(w)
             keep[i] = worker.receive(w)
         end
-        if i % 50 == 0 then collectgarbage() end
+
+        if i % 50 == 0 then
+            collectgarbage()
+        end
     end
+
     collectgarbage()
+
     for i = 1, 200 do
         assert(keep[i] == string.format("%080d", i) .. string.rep("é", i % 7))
     end
+
     worker.send(w, false)
     drain(w)
 end
@@ -1275,21 +1434,21 @@ end
 
 ------------------------------------------------------------------------------
 
-
 -- An error value that is not a string reaches the creator as a copy, on
 -- every receive, and one that cannot cross arrives as its string form.
 local function a_table_error_arrives_as_a_table_test()
     local w = worker.create(gen("tableerror"))
+
     for _ = 1, 2 do
         local ok, e = catch worker.receive(w)
         assert(not ok and type(e) == "table" and e.code == 42 and e.msg == "bad")
     end
+
     local ok, e = catch worker.receive(worker.create(gen("numbererror")))
     assert(not ok and e == 17)
     ok, e = catch worker.receive(worker.create(gen("funcerror")))
     assert(not ok and type(e) == "string" and e:find("table: ", 1, true), tostring(e))
 end
-
 
 -- A message sent before an error arrives before the error, however the
 -- threads interleave.

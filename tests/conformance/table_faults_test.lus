@@ -16,93 +16,356 @@ local fault_at, calls = 0, 0
 
 local function tick()
     calls = calls + 1
-    if calls == fault_at then error("fault", 0) end
+
+    if calls == fault_at then
+        error("fault", 0)
+    end
 end
 
 -- A proxy for `data`. Every read, write, and length goes through a
 -- metamethod that ticks, and nested tables become proxies too.
 local function proxy(data)
     local store = {}
+
     for k, v in pairs(data) do
         store[k] = type(v) == "table" and proxy(v) or v
     end
+
     return setmetatable({}, {
-        __index = function(_, k) tick() return store[k] end,
-        __newindex = function(_, k, v) tick() store[k] = v end,
-        __len = function() tick() return #store end,
+        __index = function(_, k)
+            tick()
+            return store[k]
+        end,
+        __newindex = function(_, k, v)
+            tick()
+            store[k] = v
+        end,
+        __len = function()
+            tick()
+            return #store
+        end,
     })
 end
 
-local function less(a, b) tick() return a < b end
-local function key(v) tick() return v % 2 end
-local function double(v) tick() return v * 2 end
-local function odd(v) tick() return v % 2 == 1 end
-local function add(a, b) tick() return a + b end
+local function less(a, b)
+    tick()
+    return a < b
+end
+
+local function key(v)
+    tick()
+    return v % 2
+end
+
+local function double(v)
+    tick()
+    return v * 2
+end
+
+local function odd(v)
+    tick()
+    return v % 2 == 1
+end
+
+local function add(a, b)
+    tick()
+    return a + b
+end
 
 -- Runs `make` to build fresh arguments and `call` on them, once for every
 -- metamethod call that `call` makes, with that call raising.
 local function sweep(make, call)
     local k = 1
+
     while true do
         local args = make()
         fault_at, calls = k, 0
         local ok, err = catch call(table.unpack(args))
         local fired = calls >= k
         fault_at = 0
+
         if not fired then
             assert(ok, err)
             return k - 1
         end
+
         assert(not ok and err == "fault", "call " .. k .. ": " .. tostring(err))
         k = k + 1
     end
 end
 
-local function list() return { proxy({ 3, 1, 2, 5, 4 }) } end
-local function two() return { proxy({ 3, 1, 2, 5, 4 }), proxy({ 9, 8, 7 }) } end
-local function matrix() return { proxy({ { 1, 2, 3 }, { 4, 5, 6 } }) } end
+local function list()
+    return { proxy({ 3, 1, 2, 5, 4 }) }
+end
+
+local function two()
+    return { proxy({ 3, 1, 2, 5, 4 }), proxy({ 9, 8, 7 }) }
+end
+
+local function matrix()
+    return { proxy({ { 1, 2, 3 }, { 4, 5, 6 } }) }
+end
 
 local each_table_function_cases = {
-    { "insert at the end", list, function(p) table.insert(p, 9) end },
-    { "insert in the middle", list, function(p) table.insert(p, 2, 9) end },
-    { "remove the last", list, function(p) table.remove(p) end },
-    { "remove in the middle", list, function(p) table.remove(p, 2) end },
-    { "move inside a table", list, function(p) table.move(p, 1, 3, 2) end },
-    { "move backward inside a table", list, function(p) table.move(p, 2, 4, 1) end },
-    { "move to another table", two, function(p, q) table.move(p, 1, 3, 2, q) end },
-    { "concat", list, function(p) return table.concat(p, ",") end },
-    { "concat a range", list, function(p) return table.concat(p, ",", 2, 4) end },
-    { "unpack", list, function(p) return table.unpack(p) end },
-    { "unpack a range", list, function(p) return table.unpack(p, 2, 4) end },
-    { "sort", list, function(p) table.sort(p) end },
-    { "sort with a comparison", list, function(p) table.sort(p, less) end },
-    { "filter", list, function(p) return table.filter(p, odd) end },
-    { "groupby", list, function(p) return table.groupby(p, key) end },
-    { "map", list, function(p) return table.map(p, double) end },
-    { "reduce", list, function(p) return table.reduce(p, add) end },
-    { "reduce from a value", list, function(p) return table.reduce(p, add, 10) end },
-    { "sum", list, function(p) return table.sum(p) end },
-    { "mean", list, function(p) return table.mean(p) end },
-    { "median", list, function(p) return table.median(p) end },
-    { "stdev", list, function(p) return table.stdev(p) end },
-    { "sample stdev", list, function(p) return table.stdev(p, true) end },
-    { "sortby", list, function(p) table.sortby(p, key) end },
-    { "sortby descending", list, function(p) table.sortby(p, key, false) end },
-    { "reshape", function() return { proxy({ 1, 2, 3, 4, 5, 6 }) } end, function(p) return table.reshape(p, 2, 3) end },
-    { "transpose", matrix, function(m) return table.transpose(m) end },
-    { "unzip", matrix, function(m) return table.unzip(m) end },
-    { "zip", two, function(p, q) return table.zip(p, q) end },
-    { "sort a long list", function() return { proxy({ 9, 3, 7, 1, 8, 2, 6, 4, 5, 0, 11, 13, 12, 10, 15, 14 }) } end,
-        function(p) table.sort(p) end },
-    { "groupby into shared groups", function() return { proxy({ 1, 2, 3, 4, 5, 6 }) } end,
-        function(p) return table.groupby(p, key) end },
-    { "sortby a long list", function() return { proxy({ 9, 3, 7, 1, 8, 2, 6, 4, 5, 0, 11, 13, 12, 10, 15, 14 }) } end,
-        function(p) table.sortby(p, key) end },
-    { "move between tables that compare with __eq", function()
-        local mt = { __eq = function() tick() return false end, __index = function() tick() return 1 end,
-            __newindex = function() tick() end, __len = function() tick() return 3 end }
-        return { setmetatable({}, mt), setmetatable({}, mt) }
-    end, function(p, q) table.move(p, 1, 3, 1, q) end },
+    {
+        "insert at the end",
+        list,
+        function(p)
+            table.insert(p, 9)
+        end,
+    },
+    {
+        "insert in the middle",
+        list,
+        function(p)
+            table.insert(p, 2, 9)
+        end,
+    },
+    {
+        "remove the last",
+        list,
+        function(p)
+            table.remove(p)
+        end,
+    },
+    {
+        "remove in the middle",
+        list,
+        function(p)
+            table.remove(p, 2)
+        end,
+    },
+    {
+        "move inside a table",
+        list,
+        function(p)
+            table.move(p, 1, 3, 2)
+        end,
+    },
+    {
+        "move backward inside a table",
+        list,
+        function(p)
+            table.move(p, 2, 4, 1)
+        end,
+    },
+    {
+        "move to another table",
+        two,
+        function(p, q)
+            table.move(p, 1, 3, 2, q)
+        end,
+    },
+    {
+        "concat",
+        list,
+        function(p)
+            return table.concat(p, ",")
+        end,
+    },
+    {
+        "concat a range",
+        list,
+        function(p)
+            return table.concat(p, ",", 2, 4)
+        end,
+    },
+    {
+        "unpack",
+        list,
+        function(p)
+            return table.unpack(p)
+        end,
+    },
+    {
+        "unpack a range",
+        list,
+        function(p)
+            return table.unpack(p, 2, 4)
+        end,
+    },
+    {
+        "sort",
+        list,
+        function(p)
+            table.sort(p)
+        end,
+    },
+    {
+        "sort with a comparison",
+        list,
+        function(p)
+            table.sort(p, less)
+        end,
+    },
+    {
+        "filter",
+        list,
+        function(p)
+            return table.filter(p, odd)
+        end,
+    },
+    {
+        "groupby",
+        list,
+        function(p)
+            return table.groupby(p, key)
+        end,
+    },
+    {
+        "map",
+        list,
+        function(p)
+            return table.map(p, double)
+        end,
+    },
+    {
+        "reduce",
+        list,
+        function(p)
+            return table.reduce(p, add)
+        end,
+    },
+    {
+        "reduce from a value",
+        list,
+        function(p)
+            return table.reduce(p, add, 10)
+        end,
+    },
+    {
+        "sum",
+        list,
+        function(p)
+            return table.sum(p)
+        end,
+    },
+    {
+        "mean",
+        list,
+        function(p)
+            return table.mean(p)
+        end,
+    },
+    {
+        "median",
+        list,
+        function(p)
+            return table.median(p)
+        end,
+    },
+    {
+        "stdev",
+        list,
+        function(p)
+            return table.stdev(p)
+        end,
+    },
+    {
+        "sample stdev",
+        list,
+        function(p)
+            return table.stdev(p, true)
+        end,
+    },
+    {
+        "sortby",
+        list,
+        function(p)
+            table.sortby(p, key)
+        end,
+    },
+    {
+        "sortby descending",
+        list,
+        function(p)
+            table.sortby(p, key, false)
+        end,
+    },
+    {
+        "reshape",
+        function()
+            return { proxy({ 1, 2, 3, 4, 5, 6 }) }
+        end,
+        function(p)
+            return table.reshape(p, 2, 3)
+        end,
+    },
+    {
+        "transpose",
+        matrix,
+        function(m)
+            return table.transpose(m)
+        end,
+    },
+    {
+        "unzip",
+        matrix,
+        function(m)
+            return table.unzip(m)
+        end,
+    },
+    {
+        "zip",
+        two,
+        function(p, q)
+            return table.zip(p, q)
+        end,
+    },
+    {
+        "sort a long list",
+        function()
+            return { proxy({ 9, 3, 7, 1, 8, 2, 6, 4, 5, 0, 11, 13, 12, 10, 15, 14 }) }
+        end,
+        function(p)
+            table.sort(p)
+        end,
+    },
+    {
+        "groupby into shared groups",
+        function()
+            return { proxy({ 1, 2, 3, 4, 5, 6 }) }
+        end,
+        function(p)
+            return table.groupby(p, key)
+        end,
+    },
+    {
+        "sortby a long list",
+        function()
+            return { proxy({ 9, 3, 7, 1, 8, 2, 6, 4, 5, 0, 11, 13, 12, 10, 15, 14 }) }
+        end,
+        function(p)
+            table.sortby(p, key)
+        end,
+    },
+    {
+        "move between tables that compare with __eq",
+        function()
+            local mt = {
+                __eq = function()
+                    tick()
+                    return false
+                end,
+                __index = function()
+                    tick()
+                    return 1
+                end,
+                __newindex = function()
+                    tick()
+                end,
+                __len = function()
+                    tick()
+                    return 3
+                end,
+            }
+
+            return { setmetatable({}, mt), setmetatable({}, mt) }
+        end,
+        function(p, q)
+            table.move(p, 1, 3, 1, q)
+        end,
+    },
 }
 
 local function each_table_function_test(name, make, call)
@@ -110,31 +373,150 @@ local function each_table_function_test(name, make, call)
 end
 
 -- Arguments that the table library rejects, and the error each raises.
-local huge = setmetatable({}, { __len = function() return 1 << 31 end, __index = function() return 1 end })
+local huge = setmetatable({}, {
+    __len = function()
+        return 1 << 31
+    end,
+    __index = function()
+        return 1
+    end,
+})
 
 local table_function_errors_cases = {
-    { function() table.insert({}, "x", 1) end, "bad argument #2 to 'insert' (number expected, got string)" },
-    { function() table.insert({}, 1, 2, 3) end, "wrong number of arguments to 'insert'" },
-    { function() table.remove({}, "x") end, "bad argument #2 to 'remove' (number expected, got string)" },
-    { function() table.move({}, "a", 1, 1) end, "bad argument #2 to 'move' (number expected, got string)" },
-    { function() table.move({}, 1, "b", 1) end, "bad argument #3 to 'move' (number expected, got string)" },
-    { function() table.move({}, 1, 1, 1, 5) end, "bad argument #5 to 'move' (table expected, got number)" },
-    { function() table.move(5, 1, 1, 1) end, "bad argument #1 to 'move' (table expected, got number)" },
-    { function() table.move({ 1 }, 1, 1, 1, "abc") end, "bad argument #5 to 'move' (table expected, got string)" },
-    { function() table.concat({}, ",", "x") end, "bad argument #3 to 'concat' (number expected, got string)" },
-    { function() table.concat({}, ",", 1, "y") end, "bad argument #4 to 'concat' (number expected, got string)" },
-    { function() table.concat({ {} }) end, "invalid value (table) at index 1 in table for 'concat'" },
-    { function() table.unpack({}, "x") end, "bad argument #2 to 'unpack' (number expected, got string)" },
-    { function() table.unpack({}, 1, "y") end, "bad argument #3 to 'unpack' (number expected, got string)" },
-    { function() table.unpack({}, 1, 1 << 40) end, "too many results to unpack" },
-    { function() table.create("x") end, "bad argument #1 to 'create' (number expected, got string)" },
-    { function() table.create(1, "y") end, "bad argument #2 to 'create' (number expected, got string)" },
-    { function() table.sort(huge) end, "bad argument #1 to 'sort' (array too big)" },
-    { function() table.sortby(huge, function(v) return v end) end, "bad argument #1 to 'sortby' (array too big)" },
-    { function() table.unzip({ 5 }) end, "bad argument #-1 to 'unzip' (table expected, got number)" },
-    { function() table.transpose({ 5 }) end, "bad argument #-1 to 'transpose' (table expected, got number)" },
-    { function() table.transpose({ { 1 }, 5 }) end, "bad argument #-1 to 'transpose' (table expected, got number)" },
-    { function() table.clone(5) end, "bad argument #1 to 'clone' (table expected, got number)" },
+    {
+        function()
+            table.insert({}, "x", 1)
+        end,
+        "bad argument #2 to 'insert' (number expected, got string)",
+    },
+    {
+        function()
+            table.insert({}, 1, 2, 3)
+        end,
+        "wrong number of arguments to 'insert'",
+    },
+    {
+        function()
+            table.remove({}, "x")
+        end,
+        "bad argument #2 to 'remove' (number expected, got string)",
+    },
+    {
+        function()
+            table.move({}, "a", 1, 1)
+        end,
+        "bad argument #2 to 'move' (number expected, got string)",
+    },
+    {
+        function()
+            table.move({}, 1, "b", 1)
+        end,
+        "bad argument #3 to 'move' (number expected, got string)",
+    },
+    {
+        function()
+            table.move({}, 1, 1, 1, 5)
+        end,
+        "bad argument #5 to 'move' (table expected, got number)",
+    },
+    {
+        function()
+            table.move(5, 1, 1, 1)
+        end,
+        "bad argument #1 to 'move' (table expected, got number)",
+    },
+    {
+        function()
+            table.move({ 1 }, 1, 1, 1, "abc")
+        end,
+        "bad argument #5 to 'move' (table expected, got string)",
+    },
+    {
+        function()
+            table.concat({}, ",", "x")
+        end,
+        "bad argument #3 to 'concat' (number expected, got string)",
+    },
+    {
+        function()
+            table.concat({}, ",", 1, "y")
+        end,
+        "bad argument #4 to 'concat' (number expected, got string)",
+    },
+    {
+        function()
+            table.concat({ {} })
+        end,
+        "invalid value (table) at index 1 in table for 'concat'",
+    },
+    {
+        function()
+            table.unpack({}, "x")
+        end,
+        "bad argument #2 to 'unpack' (number expected, got string)",
+    },
+    {
+        function()
+            table.unpack({}, 1, "y")
+        end,
+        "bad argument #3 to 'unpack' (number expected, got string)",
+    },
+    {
+        function()
+            table.unpack({}, 1, 1 << 40)
+        end,
+        "too many results to unpack",
+    },
+    {
+        function()
+            table.create("x")
+        end,
+        "bad argument #1 to 'create' (number expected, got string)",
+    },
+    {
+        function()
+            table.create(1, "y")
+        end,
+        "bad argument #2 to 'create' (number expected, got string)",
+    },
+    {
+        function()
+            table.sort(huge)
+        end,
+        "bad argument #1 to 'sort' (array too big)",
+    },
+    {
+        function()
+            table.sortby(huge, function(v)
+                return v
+            end)
+        end,
+        "bad argument #1 to 'sortby' (array too big)",
+    },
+    {
+        function()
+            table.unzip({ 5 })
+        end,
+        "bad argument #-1 to 'unzip' (table expected, got number)",
+    },
+    {
+        function()
+            table.transpose({ 5 })
+        end,
+        "bad argument #-1 to 'transpose' (table expected, got number)",
+    },
+    {
+        function()
+            table.transpose({ { 1 }, 5 })
+        end,
+        "bad argument #-1 to 'transpose' (table expected, got number)",
+    },
+    {
+        function()
+            table.clone(5)
+        end,
+        "bad argument #1 to 'clone' (table expected, got number)",
+    },
 }
 
 local function table_function_errors_test(call, message)
@@ -156,7 +538,12 @@ local function an_empty_tuple_unzips_to_nothing_test()
 end
 
 local function a_shallow_clone_keeps_the_metatable_test()
-    local mt = { __index = function() return "dflt" end }
+    local mt = {
+        __index = function()
+            return "dflt"
+        end,
+    }
+
     local t = setmetatable({ 1, x = 2 }, mt)
     local c = table.clone(t)
     assert(getmetatable(c) == mt and c[1] == 1 and c.x == 2 and c.y == "dflt")

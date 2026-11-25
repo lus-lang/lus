@@ -8,164 +8,224 @@ local selection_range = {}
 -- A node that records no end data is treated as unbounded past its start,
 -- which covers the root chunk and any node lacking end coordinates.
 local function node_contains(node, line, col)
-  if not node then return false end
-  local sl = node.line or 0
-  local sc = node.column or 0
-  if line < sl then return false end
-  if line == sl and col < sc then return false end
-  local el = node.endline
-  if el then
-    if line > el then return false end
-    if line == el and node.endcolumn and col > node.endcolumn then
-      return false
+    if not node then
+        return false
     end
-  end
-  return true
+
+    local sl = node.line or 0
+    local sc = node.column or 0
+
+    if line < sl then
+        return false
+    end
+
+    if line == sl and col < sc then
+        return false
+    end
+
+    if el = node.endline then
+        if line > el then
+            return false
+        end
+
+        if line == el and node.endcolumn and col > node.endcolumn then
+            return false
+        end
+    end
+
+    return true
 end
 
 -- Convert an AST node to an LSP range (0-based)
 local function node_range(node)
-  local start_line = (node.line or 1) - 1
-  local start_col = (node.column or 1) - 1
-  local end_line = (node.endline or node.line or 1) - 1
-  local end_col = (node.endcolumn or node.column or 1) - 1
-  -- If end_col is 0, extend to end of line as approximation
-  if end_col <= start_col and end_line == start_line then
-    end_col = start_col + 1
-  end
-  return {
-    start = {line = start_line, character = start_col},
-    ["end"] = {line = end_line, character = end_col},
-  }
+    local start_line = (node.line or 1) - 1
+    local start_col = (node.column or 1) - 1
+    local end_line = (node.endline or node.line or 1) - 1
+    local end_col = (node.endcolumn or node.column or 1) - 1
+
+    -- If end_col is 0, extend to end of line as approximation
+    if end_col <= start_col and end_line == start_line then
+        end_col = start_col + 1
+    end
+
+    return {
+        start = { line = start_line, character = start_col },
+        ["end"] = { line = end_line, character = end_col },
+    }
 end
 
 -- Return the earlier of two 0-based positions.
 local function pos_min(a, b)
-  if b.line < a.line or (b.line == a.line and b.character < a.character) then
-    return b
-  end
-  return a
+    if b.line < a.line or (b.line == a.line and b.character < a.character) then
+        return b
+    end
+
+    return a
 end
 
 -- Return the later of two 0-based positions.
 local function pos_max(a, b)
-  if b.line > a.line or (b.line == a.line and b.character > a.character) then
-    return b
-  end
-  return a
+    if b.line > a.line or (b.line == a.line and b.character > a.character) then
+        return b
+    end
+
+    return a
 end
 
 -- Collect all nodes that contain the given position, in pre-order (each
 -- ancestor before its descendants), giving an outermost-to-innermost list.
 local function collect_enclosing(node, line, col, result)
-  if not node or type(node) ~= "table" then return end
-  if not node.type then
-    -- Not an AST node, might be a list
-    if node[1] then
-      for _, child in ipairs(node) do
-        collect_enclosing(child, line, col, result)
-      end
+    if not node or type(node) ~= "table" then
+        return
     end
-    return
-  end
 
-  if not node_contains(node, line, col) then return end
+    if not node.type then
+        -- Not an AST node, might be a list
+        if node[1] then
+            for _, child in ipairs(node) do
+                collect_enclosing(child, line, col, result)
+            end
+        end
 
-  result[#result + 1] = node
+        return
+    end
 
-  -- Recurse into children
-  if node.children then
-    for _, child in ipairs(node.children) do
-      collect_enclosing(child, line, col, result)
+    if not node_contains(node, line, col) then
+        return
     end
-  end
-  if node.cond then collect_enclosing(node.cond, line, col, result) end
-  if node.func then collect_enclosing(node.func, line, col, result) end
-  if node.args then
-    for _, a in ipairs(node.args) do
-      collect_enclosing(a, line, col, result)
+
+    result[#result + 1] = node
+
+    -- Recurse into children
+    if node.children then
+        for _, child in ipairs(node.children) do
+            collect_enclosing(child, line, col, result)
+        end
     end
-  end
-  if node.left then collect_enclosing(node.left, line, col, result) end
-  if node.right then collect_enclosing(node.right, line, col, result) end
-  if node.operand then collect_enclosing(node.operand, line, col, result) end
-  if node.expr then collect_enclosing(node.expr, line, col, result) end
-  if node.values then
-    for _, v in ipairs(node.values) do
-      collect_enclosing(v, line, col, result)
+
+    if node.cond then
+        collect_enclosing(node.cond, line, col, result)
     end
-  end
-  if node.lhs then
-    for _, l in ipairs(node.lhs) do
-      collect_enclosing(l, line, col, result)
+
+    if node.func then
+        collect_enclosing(node.func, line, col, result)
     end
-  end
-  if node.rhs then
-    for _, r in ipairs(node.rhs) do
-      collect_enclosing(r, line, col, result)
+
+    if node.args then
+        for _, a in ipairs(node.args) do
+            collect_enclosing(a, line, col, result)
+        end
     end
-  end
-  if node.base then collect_enclosing(node.base, line, col, result) end
-  if node.suffix then collect_enclosing(node.suffix, line, col, result) end
-  if node.nameexpr then collect_enclosing(node.nameexpr, line, col, result) end
-  if node.names then
-    if type(node.names) == "table" and node.names[1] then
-      for _, n in ipairs(node.names) do
-        collect_enclosing(n, line, col, result)
-      end
+
+    if node.left then
+        collect_enclosing(node.left, line, col, result)
     end
-  end
+
+    if node.right then
+        collect_enclosing(node.right, line, col, result)
+    end
+
+    if node.operand then
+        collect_enclosing(node.operand, line, col, result)
+    end
+
+    if node.expr then
+        collect_enclosing(node.expr, line, col, result)
+    end
+
+    if node.values then
+        for _, v in ipairs(node.values) do
+            collect_enclosing(v, line, col, result)
+        end
+    end
+
+    if node.lhs then
+        for _, l in ipairs(node.lhs) do
+            collect_enclosing(l, line, col, result)
+        end
+    end
+
+    if node.rhs then
+        for _, r in ipairs(node.rhs) do
+            collect_enclosing(r, line, col, result)
+        end
+    end
+
+    if node.base then
+        collect_enclosing(node.base, line, col, result)
+    end
+
+    if node.suffix then
+        collect_enclosing(node.suffix, line, col, result)
+    end
+
+    if node.nameexpr then
+        collect_enclosing(node.nameexpr, line, col, result)
+    end
+
+    if node.names then
+        if type(node.names) == "table" and node.names[1] then
+            for _, n in ipairs(node.names) do
+                collect_enclosing(n, line, col, result)
+            end
+        end
+    end
 end
 
 -- Compute selection ranges for an array of positions.
 -- positions are 0-based (LSP). Returns an array of SelectionRange.
 function selection_range.compute(uri, positions)
-  ast_mod.parse(uri)
-  local tree = ast_mod.get(uri)
-  if not tree then return {} end
+    ast_mod.parse(uri)
+    local tree = ast_mod.get(uri)
 
-  local result = {}
-
-  for _, pos in ipairs(positions) do
-    local line = pos.line + 1
-    local col = pos.character + 1
-
-    local nodes = {}
-    collect_enclosing(tree, line, col, nodes)
-
-    -- collect_enclosing appends in pre-order, so nodes[1] is the outermost
-    -- node and nodes[#nodes] is the innermost along a single containment path.
-    local ranges = {}
-    for i = 1, #nodes do
-      ranges[i] = node_range(nodes[i])
+    if not tree then
+        return {}
     end
 
-    -- Expand each ancestor to cover its descendant so every parent fully
-    -- contains its child even when a node records no end coordinates.
-    for i = #nodes - 1, 1, -1 do
-      ranges[i].start = pos_min(ranges[i].start, ranges[i + 1].start)
-      ranges[i]["end"] = pos_max(ranges[i]["end"], ranges[i + 1]["end"])
+    local result = {}
+
+    for _, pos in ipairs(positions) do
+        local line = pos.line + 1
+        local col = pos.character + 1
+
+        local nodes = {}
+        collect_enclosing(tree, line, col, nodes)
+
+        -- collect_enclosing appends in pre-order, so nodes[1] is the outermost
+        -- node and nodes[#nodes] is the innermost along a single containment path.
+        local ranges = {}
+
+        for i = 1, #nodes do
+            ranges[i] = node_range(nodes[i])
+        end
+
+        -- Expand each ancestor to cover its descendant so every parent fully
+        -- contains its child even when a node records no end coordinates.
+        for i = #nodes - 1, 1, -1 do
+            ranges[i].start = pos_min(ranges[i].start, ranges[i + 1].start)
+            ranges[i]["end"] = pos_max(ranges[i]["end"], ranges[i + 1]["end"])
+        end
+
+        -- Build the parent chain from outermost to innermost so the final
+        -- node is the innermost range whose .parent links up to the chunk.
+        local current = nil
+
+        for i = 1, #nodes do
+            current = {
+                range = ranges[i],
+                parent = current,
+            }
+        end
+
+        result[#result + 1] = current or {
+            range = {
+                start = { line = pos.line, character = pos.character },
+                ["end"] = { line = pos.line, character = pos.character + 1 },
+            },
+        }
     end
 
-    -- Build the parent chain from outermost to innermost so the final
-    -- node is the innermost range whose .parent links up to the chunk.
-    local current = nil
-    for i = 1, #nodes do
-      current = {
-        range = ranges[i],
-        parent = current,
-      }
-    end
-
-    result[#result + 1] = current or {
-      range = {
-        start = {line = pos.line, character = pos.character},
-        ["end"] = {line = pos.line, character = pos.character + 1},
-      },
-    }
-  end
-
-  return result
+    return result
 end
 
 return selection_range

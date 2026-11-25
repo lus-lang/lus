@@ -15,7 +15,8 @@
 -- batches of N until stopped, or for M minutes with --minutes. The exit
 -- status is 1 when anything was found.
 
-global arg, assert, fs, io, ipairs, math, os, package, pairs, pledge, print, require, string, table, tonumber, tostring
+global arg, assert, fs, io, ipairs, math, os, package, pairs, pledge, print, require, string, table,
+    tonumber, tostring
 
 pledge("exec", "fs", "env", "load")
 
@@ -25,10 +26,13 @@ local gen = require("gen")
 local lib = require("lib")
 
 local opts = {}
+
 do
     local i = 1
+
     while arg[i] do
         local a = arg[i]
+
         if a == "--reduce" or a == "--forever" then
             opts[a:sub(3)] = true
             i = i + 1
@@ -43,7 +47,8 @@ end
 
 local root = here .. "/../.."
 local binaries = {
-    lus = opts.lus or (root .. "/runtime/zig-out/bin/lus" .. (os.platform() == "windows" and ".exe" or "")),
+    lus = opts.lus
+        or (root .. "/runtime/zig-out/bin/lus" .. (os.platform() == "windows" and ".exe" or "")),
     stress = opts.stress,
     x64 = opts.x64,
     wasm = opts.wasm,
@@ -60,7 +65,11 @@ local deadline = opts.minutes and (os.time() + tonumber(opts.minutes) * 60) or m
 
 local function names(list)
     local out = {}
-    for i, c in ipairs(list) do out[i] = c.name end
+
+    for i, c in ipairs(list) do
+        out[i] = c.name
+    end
+
     return table.concat(out, " ")
 end
 
@@ -68,20 +77,29 @@ end
 -- they report on their last line.
 if jobs > 1 and not opts.shard then
     local pipes = {}
+
     for j = 1, jobs do
         local cmd = {}
+
         for k, v in pairs(opts) do
             if k ~= "jobs" then
                 cmd[#cmd + 1] = v == true and ("--" .. k) or ("--" .. k .. " " .. lib.quote(v))
             end
         end
+
         cmd[#cmd + 1] = "--start " .. start .. " --shard " .. j .. "/" .. jobs
-        pipes[j] = lib.spawn(lib.quote(binaries.lus) .. " " .. lib.quote(arg[0]) .. " " .. table.concat(cmd, " "), { LUS_JIT = "off" })
+        pipes[j] = lib.spawn(
+            lib.quote(binaries.lus) .. " " .. lib.quote(arg[0]) .. " " .. table.concat(cmd, " "),
+            { LUS_JIT = "off" }
+        )
     end
+
     local ran, found, slow = 0, 0, 0
+
     for _, p in ipairs(pipes) do
         for line in p:lines() do
             local a, b, c = line:match("^SHARD (%d+) (%d+) (%d+)$")
+
             if a then
                 ran, found, slow = ran + tonumber(a), found + tonumber(b), slow + tonumber(c)
             else
@@ -89,12 +107,17 @@ if jobs > 1 and not opts.shard then
             end
         end
     end
+
     print(`$ran programs, $found with findings, $slow slow, configurations: $(names(configs))`)
     os.exit(found > 0 and 1 or 0)
 end
 
 local shard, shards = 1, 1
-if opts.shard then shard, shards = opts.shard:match("(%d+)/(%d+)") shard, shards = tonumber(shard), tonumber(shards) end
+
+if opts.shard then
+    shard, shards = opts.shard:match("(%d+)/(%d+)")
+    shard, shards = tonumber(shard), tonumber(shards)
+end
 
 local tmp = lib.tempDir()
 local ran, found, slow = 0, 0, 0
@@ -103,10 +126,14 @@ local seen = {}
 local function report(seed, src, results, findings)
     -- A plain call accepts a path through `..`, which a recursive one
     -- denies.
-    if not fs.type(outDir) and not catch fs.createdirectory(outDir) then fs.createdirectory(outDir, true) end
+    if not fs.type(outDir) and not catch fs.createdirectory(outDir) then
+        fs.createdirectory(outDir, true)
+    end
+
     local base = outDir .. "/seed" .. seed
     lib.writeFile(base .. ".lus", src)
     local out = { "seed " .. seed }
+
     for _, f in ipairs(findings) do
         if f.kind == "crash" then
             out[#out + 1] = `crash in $(f.config): $(f.what)`
@@ -116,10 +143,12 @@ local function report(seed, src, results, findings)
             out[#out + 1] = "  " .. f.what.got
         end
     end
+
     for _, r in ipairs(results) do
         out[#out + 1] = `--- $(r.config): status $(r.code)`
         out[#out + 1] = r.stderr:sub(1, 4000)
     end
+
     lib.writeFile(base .. ".txt", table.concat(out, "\n") .. "\n")
     return base
 end
@@ -132,35 +161,56 @@ local function one(seed)
     -- A timeout under load is often the machine and not the program, so a
     -- configuration that timed out runs once more on its own.
     local any, every = false, true
+
     for _, r in ipairs(results) do
-        if r.timeout then any = true else every = false end
-    end
-    if any and not every then
-        for i, r in ipairs(results) do
-            if r.timeout then results[i] = lib.runAll(file, { configs[i] }, binaries, seconds * 2, tmp)[1] end
+        if r.timeout then
+            any = true
+        else
+            every = false
         end
     end
+
+    if any and not every then
+        for i, r in ipairs(results) do
+            if r.timeout then
+                results[i] = lib.runAll(file, { configs[i] }, binaries, seconds * 2, tmp)[1]
+            end
+        end
+    end
+
     ran = ran + 1
     local findings = lib.judge(results)
-    if #findings == 0 then return end
+
+    if #findings == 0 then
+        return
+    end
+
     local f = findings[1]
+
     if f.kind == "slow" then
         slow = slow + 1
         print(`seed $seed: slow in every configuration`)
         return
     end
+
     found = found + 1
     local sig = f.kind == "crash" and (f.kind .. ":" .. f.what) or (f.kind .. ":" .. f.config)
     local fresh = not seen[sig]
     seen[sig] = true
     local summary
+
     if f.kind == "crash" then
         summary = `$(f.config): $(f.what)`
     else
-        summary = `$(f.ref) vs $(f.config) at line $(f.what.line): $(f.what.want:sub(1, 120)) / $(f.what.got:sub(1, 120))`
+        summary = `$(f.ref) vs $(f.config) at line $(f.what.line): $(f.what.want:sub(1, 120)) / $(f.what.got:sub(
+            1,
+            120
+        ))`
     end
+
     print(`seed $seed: $(f.kind) $summary$(fresh and "" or " (seen)")`)
     local base = report(seed, src, results, findings)
+
     if opts.reduce and fresh then
         local reduce = require("reduce")
         local test = reduce.predicate({
@@ -174,7 +224,11 @@ local function one(seed)
         local small = reduce.reduce(src, test)
         lib.writeFile(base .. ".min.lus", small)
         local n = 0
-        for _ in small:gmatch("\n") do n = n + 1 end
+
+        for _ in small:gmatch("\n") do
+            n = n + 1
+        end
+
         print(`seed $seed: reduced to $n lines in $base.min.lus`)
     end
 end
@@ -182,13 +236,21 @@ end
 repeat
     for i = 0, count - 1 do
         local seed = start + i
-        if (seed - start) % shards == shard - 1 then one(seed) end
-        if os.time() >= deadline then break end
+
+        if (seed - start) % shards == shard - 1 then
+            one(seed)
+        end
+
+        if os.time() >= deadline then
+            break
+        end
     end
+
     start = start + count
 until not opts.forever or os.time() >= deadline
 
 lib.removeDir(tmp)
+
 if opts.shard then
     print(`SHARD $ran $found $slow`)
 else

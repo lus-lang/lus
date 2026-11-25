@@ -15,7 +15,7 @@ The function takes no arguments and requires no permission. The names are `uname
 ```lus
 local name = os.platform()
 local separator = name == "windows" and "\\" or "/"
-print(separator == fs.path.separator)   --> true
+print(separator == fs.path.separator)  --> true
 ```
 
 [`fs.path.separator`](/manual/api#fs.path.separator) and [`fs.path.delimiter`](/manual/api#fs.path.delimiter) hold the path characters of the platform.

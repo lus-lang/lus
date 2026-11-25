@@ -15,7 +15,7 @@ The standard streams are terminals when the program runs in an interactive termi
 
 ```lus
 local color = io.stdout:isatty()
-print(type(color))   --> boolean
+print(type(color))  --> boolean
 ```
 
 [`file:setraw`](/manual/api#file:setraw) switches a terminal to raw input.

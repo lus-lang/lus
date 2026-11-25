@@ -29,9 +29,9 @@ The following example writes a byte and then tries a write past the end.
 ```lus
 local v = vector.create(4)
 vector.set(v, 0, 255)
-print(vector.get(v, 0))              --> 255
-print(catch vector.set(v, 4, 1))     --> false  ...: bad argument #2 to 'set' (offset out of bounds)
-print(catch vector.set(v, 0, 256))   --> false  ...: bad argument #3 to 'set' (byte out of range)
+print(vector.get(v, 0))  --> 255
+print(catch vector.set(v, 4, 1))  --> false  ...: bad argument #2 to 'set' (offset out of bounds)
+print(catch vector.set(v, 0, 256))  --> false  ...: bad argument #3 to 'set' (byte out of range)
 ```
 
 [`vector.resize`](/manual/api#vector.resize) grows a vector before a write past its end, and [`vector.get`](/manual/api#vector.get) reads a byte.

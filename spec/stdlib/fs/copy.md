@@ -30,8 +30,8 @@ local original = fs.path.join(dir, "original.txt")
 local backup = fs.path.join(dir, "backup.txt")
 io.open(original, "w"):write("contents"):close()
 fs.copy(original, backup)
-print(io.open(backup):read("a"))           --> contents
-print((catch fs.copy(original, backup)))   --> false
+print(io.open(backup):read("a"))  --> contents
+print((catch fs.copy(original, backup)))  --> false
 fs.remove(dir, true)
 ```
 

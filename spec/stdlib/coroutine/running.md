@@ -14,12 +14,14 @@ The main thread is the coroutine that runs the main chunk. It is a value of type
 
 ```lus
 local main, ismain = coroutine.running()
-print(type(main), ismain)                 --> thread  true
+print(type(main), ismain)  --> thread  true
+
 local co = coroutine.create(function()
     local self, inmain = coroutine.running()
     return coroutine.status(self), inmain
 end)
-print(coroutine.resume(co))               --> true  running  false
+
+print(coroutine.resume(co))  --> true  running  false
 ```
 
 [`coroutine.isyieldable`](/manual/api#coroutine.isyieldable) tells whether the running coroutine can yield.

@@ -11,7 +11,6 @@ pledge("load")
   Syntax: expr?.field, expr?[key], expr?:method(), expr?()
 ]]
 
-
 -- simple field access on table
 local function simple_field_access_on_table_test()
     local t = { a = 42 }
@@ -102,8 +101,11 @@ end
 local function method_call_after_test()
     local obj = {
         value = 42,
-        getValue = function(self) return self.value end
+        getValue = function(self)
+            return self.value
+        end,
     }
+
     assert(obj?:getValue() == 42, "should call method")
 end
 
@@ -118,18 +120,24 @@ local function chained_method_calls_test()
     local obj = {
         getInner = function(self)
             return {
-                getValue = function(self2) return 100 end
+                getValue = function(self2)
+                    return 100
+                end,
             }
-        end
+        end,
     }
+
     assert(obj?:getInner()?:getValue() == 100, "should chain methods")
 end
 
 -- method returning nil
 local function method_returning_nil_test()
     local obj = {
-        getNothing = function(self) return nil end
+        getNothing = function(self)
+            return nil
+        end,
     }
+
     assert(obj?:getNothing()?.field == nil, "should handle nil return")
 end
 
@@ -138,6 +146,7 @@ local function function_call_result_with_test()
     local function getTable()
         return { value = 42 }
     end
+
     assert(getTable()?.value == 42, "should access field on result")
 end
 
@@ -146,14 +155,18 @@ local function function_returning_nil_with_test()
     local function getNil()
         return nil
     end
+
     assert(getNil()?.field == nil, "should handle nil result")
 end
 
 -- callable table with ?
 local function callable_table_with_test()
     local callable = setmetatable({}, {
-        __call = function(self) return { x = 10 } end
+        __call = function(self)
+            return { x = 10 }
+        end,
     })
+
     assert(callable()?.x == 10, "should work with callable tables")
 end
 
@@ -253,6 +266,7 @@ local function deep_nesting_with_nil_at_various_levels_test()
     local function check(t, expected)
         return t?.a?.b?.c?.d?.e == expected
     end
+
     assert(check(nil, nil), "nil at root")
     assert(check({}, nil), "nil at a")
     assert(check({ a = {} }, nil), "nil at b")
@@ -263,10 +277,12 @@ end
 -- ? with function that modifies state
 local function with_function_that_modifies_state_test()
     local count = 0
+
     local function getTable()
         count = count + 1
         return { value = count }
     end
+
     local x = getTable()?.value
     assert(x == 1, "first call")
     assert(count == 1, "function called once")
@@ -291,6 +307,7 @@ local function in_function_arguments_test()
     local function add(a, b)
         return (a or 0) + (b or 0)
     end
+
     local t = { x = 5 }
     local n = nil
     assert(add(t?.x, n?.y) == 5, "should pass nil for n?.y")
@@ -323,9 +340,11 @@ end
 local function in_if_assignment_test()
     local t = { a = { b = 99 } }
     local result = nil
+
     if x = t?.a?.b then
         result = x
     end
+
     assert(result == 99, "should get value in if-assignment")
 end
 
@@ -333,11 +352,13 @@ end
 local function in_if_assignment_with_nil_chain_test()
     local t = { a = nil }
     local result = "not entered"
+
     if x = t?.a?.b then
         result = "entered"
     else
         result = "else"
     end
+
     assert(result == "else", "should go to else when chain is nil")
 end
 

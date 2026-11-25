@@ -17,10 +17,7 @@ pledge("load")
     and are skipped where the platform forbids them.
 ]]
 
-
-pledge("fs:read=./fs2_x*", "fs:write=./fs2_x*",
-    "fs:read=./fs2_ro_*")
-
+pledge("fs:read=./fs2_x*", "fs:write=./fs2_x*", "fs:read=./fs2_ro_*")
 
 local SEP = fs.path.separator
 local RUN = tostring(os.time())
@@ -43,6 +40,7 @@ end
 -- The dual fs:write pledge gate checks the target string relative to the
 -- working directory, so every link target below is a sandbox-relative path.
 local SYMLINKS_OK
+
 do
     local probe_target = spath("symprobe_target")
     local probe_link = spath("symprobe_link")
@@ -112,7 +110,11 @@ local function lists_exactly_the_entries_of_a_populated_directory_test()
     local entries = fs.list(dir)
     assert(#entries == 3)
     local seen = {}
-    for _, name in ipairs(entries) do seen[name] = true end
+
+    for _, name in ipairs(entries) do
+        seen[name] = true
+    end
+
     assert(seen["a.txt"] and seen["b.txt"] and seen["child"])
     fs.remove(dir, true)
 end
@@ -122,9 +124,11 @@ local function never_includes_the_and_pseudo_entries_test()
     local dir = spath("noselfparent")
     fs.createdirectory(dir)
     write_file(fs.path.join(dir, "only.txt"), "x")
+
     for _, name in ipairs(fs.list(dir)) do
         assert(name ~= "." and name ~= "..")
     end
+
     fs.remove(dir, true)
 end
 
@@ -138,9 +142,11 @@ local function only_the_top_level_of_a_nested_tree_is_returned_test()
     local entries = fs.list(dir)
     -- Only "sub" and "top.txt" are direct children, not "deep.txt".
     assert(#entries == 2)
+
     for _, name in ipairs(entries) do
         assert(name ~= "deep.txt")
     end
+
     fs.remove(dir, true)
 end
 
@@ -258,7 +264,10 @@ end
 
 -- a link reports its target's type with the link flag set
 local function a_link_reports_its_target_s_type_with_the_link_flag_set_test()
-    if not SYMLINKS_OK then skip("runner lacks symbolic link creation privilege") end
+    if not SYMLINKS_OK then
+        skip("runner lacks symbolic link creation privilege")
+    end
+
     local target = spath("link_target.txt")
     local link = spath("the_link.txt")
     write_file(target, "content")
@@ -272,7 +281,10 @@ end
 
 -- follow returns the raw stored target string
 local function follow_returns_the_raw_stored_target_string_test()
-    if not SYMLINKS_OK then skip("runner lacks symbolic link creation privilege") end
+    if not SYMLINKS_OK then
+        skip("runner lacks symbolic link creation privilege")
+    end
+
     local target = spath("raw_target.txt")
     local link = spath("raw_link.txt")
     write_file(target, "content")
@@ -284,7 +296,10 @@ end
 
 -- a dangling link is created and its target is preserved
 local function a_dangling_link_is_created_and_its_target_is_preserved_test()
-    if not SYMLINKS_OK then skip("runner lacks symbolic link creation privilege") end
+    if not SYMLINKS_OK then
+        skip("runner lacks symbolic link creation privilege")
+    end
+
     -- The target does not exist, which POSIX permits.
     local missing = spath("no_such_target.txt")
     local link = spath("dead_link.txt")
@@ -297,7 +312,10 @@ end
 
 -- the two arguments are link first, then target
 local function the_two_arguments_are_link_first_then_target_test()
-    if not SYMLINKS_OK then skip("runner lacks symbolic link creation privilege") end
+    if not SYMLINKS_OK then
+        skip("runner lacks symbolic link creation privilege")
+    end
+
     -- fs.createlink(link, target): follow of the link yields the target,
     -- which pins the argument order against the reversed spec text.
     local target = spath("realfile.txt")
@@ -311,7 +329,10 @@ end
 
 -- follow on a regular file raises with a clear message
 local function follow_on_a_regular_file_raises_with_a_clear_message_test()
-    if not SYMLINKS_OK then skip("runner lacks symbolic link creation privilege") end
+    if not SYMLINKS_OK then
+        skip("runner lacks symbolic link creation privilege")
+    end
+
     local path = spath("plainfollow.txt")
     write_file(path, "not a link")
     local ok, err = catch fs.follow(path)
@@ -355,8 +376,10 @@ local function a_read_only_grant_reads_but_refuses_to_create_test()
     local ok_read, err_read = catch fs.type(ro)
     assert(not ok_read)
     assert(string.find(tostring(err_read), "does not exist"))
-    assert(not string.find(tostring(err_read), "permission", 1, true),
-        "the read grant carried the fs.type call past the pledge")
+    assert(
+        not string.find(tostring(err_read), "permission", 1, true),
+        "the read grant carried the fs.type call past the pledge"
+    )
     local ok_write, err_write = catch fs.createdirectory(ro)
     assert(not ok_write)
     assert(string.find(tostring(err_write), 'permission "fs:write" denied'))

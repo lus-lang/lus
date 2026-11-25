@@ -32,7 +32,7 @@ local address, port = server:getsockname()
 local client <close> = network.tcp.connect(address, port)
 local conn <close> = server:accept()
 client:send("ping\n")
-print(vector.tostring(conn:receive()))   --> ping
+print(vector.tostring(conn:receive()))  --> ping
 ```
 
 [`tcp_server:getsockname`](/manual/api#tcp_server:getsockname) reports the chosen port, and [`network.serve`](/manual/api#network.serve) serves HTTP on a bound server.

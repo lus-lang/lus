@@ -21,7 +21,7 @@ The method takes no arguments and needs no permission. It returns two values, th
 pledge("network")
 local server <close> = network.tcp.bind("127.0.0.1", 0)
 local address, port = server:getsockname()
-print(address, math.type(port), port > 0)   --> 127.0.0.1  integer  true
+print(address, math.type(port), port > 0)  --> 127.0.0.1  integer  true
 ```
 
 A connected socket has `getsockname` for its own end and `getpeername` for the other end. [`network.tcp.bind`](/manual/api#network.tcp.bind) binds a server.

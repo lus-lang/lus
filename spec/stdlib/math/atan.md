@@ -24,11 +24,11 @@ The result is a float from -pi to pi. An `x` of zero is valid and gives pi / 2 o
 An argument that is not a number raises `bad argument #1 to 'math.atan' (number expected, got nil)` with its position and type.
 
 ```lus
-print(math.atan(1))          --> 0.7853981633974483
-print(math.atan(1, -1))      --> 2.356194490192345
-print(math.atan(-1, -1))     --> -2.356194490192345
-print(math.atan(1, 0))       --> 1.5707963267948966
-print(math.atan(-0.0, -1))   --> -3.141592653589793
+print(math.atan(1))  --> 0.7853981633974483
+print(math.atan(1, -1))  --> 2.356194490192345
+print(math.atan(-1, -1))  --> -2.356194490192345
+print(math.atan(1, 0))  --> 1.5707963267948966
+print(math.atan(-0.0, -1))  --> -3.141592653589793
 ```
 
 [`math.tan`](/manual/api#math.tan) is the inverse of the one-argument form, and [`math.deg`](/manual/api#math.deg) converts the result to degrees.

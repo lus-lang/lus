@@ -24,10 +24,13 @@ A lookup follows a chain of `__index` tables, or of `__newindex` tables for an a
 ```lus
 local Point = {}
 Point.__index = Point
-function Point:norm() return math.sqrt(self.x ^ 2 + self.y ^ 2) end
+
+function Point:norm()
+    return math.sqrt(self.x ^ 2 + self.y ^ 2)
+end
 
 local p = setmetatable({ x = 3, y = 4 }, Point)
-print(p:norm(), getmetatable(p) == Point)   --> 5.0  true
+print(p:norm(), getmetatable(p) == Point)  --> 5.0  true
 ```
 
 [`getmetatable`](/manual/api#getmetatable) reads a metatable. The metatables of other types, such as the shared metatable of strings, are set through [`debug.setmetatable`](/manual/api#debug.setmetatable). [Metatables and metamethods](/manual/guide#metatables-and-objects) in the guide lists the metamethods.

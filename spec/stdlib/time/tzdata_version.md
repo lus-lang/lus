@@ -16,8 +16,8 @@ The following example checks the shape of the release name.
 
 ```lus
 local v = time.tzdata_version()
-print(type(v), #v)                          --> string  5
-print(v:match("^%d%d%d%d%l$") ~= nil)       --> true
+print(type(v), #v)  --> string  5
+print(v:match("^%d%d%d%d%l$") ~= nil)  --> true
 ```
 
 Every named zone from [`time.zone`](/manual/api#time.zone) and [`time.localzone`](/manual/api#time.localzone) comes from this database. The script `scripts/update-tzdata.sh` in the repository regenerates the embedded copy.

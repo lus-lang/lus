@@ -37,9 +37,9 @@ On success, `load` returns one function, which runs the chunk when called and pa
 ```lus
 pledge("load")
 local add = load("local a, b = ... return a + b")
-print(add(2, 3))                                  --> 5
-print(load("return x * 2", "=calc", "t", { x = 21 })())   --> 42
-print(load("return +", "=bad"))   --> nil  bad:1: unexpected symbol near '+'
+print(add(2, 3))  --> 5
+print(load("return x * 2", "=calc", "t", { x = 21 })())  --> 42
+print(load("return +", "=bad"))  --> nil  bad:1: unexpected symbol near '+'
 ```
 
 Binary chunks are version-dependent artifacts for trusted build and storage paths. Treat every binary chunk as trusted input, and use `mode = "t"` when the chunk source crosses an untrusted boundary. [`loadfile`](/manual/api#loadfile) compiles a file, and [`dofile`](/manual/api#dofile) compiles and runs one.

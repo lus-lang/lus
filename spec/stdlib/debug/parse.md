@@ -34,9 +34,9 @@ The following example reads the first statement of a chunk, then parses a source
 ```lus
 local tree = debug.parse("local x = 1 + 2")
 local stat = tree.children[1]
-print(tree.type, stat.type, stat.values[1].op)     --> chunk  local  +
+print(tree.type, stat.type, stat.values[1].op)  --> chunk  local  +
 local partial = debug.parse("local a = 1\n) 2\n")
-print(#partial.errors, partial.errors[1].line)     --> 1  2
+print(#partial.errors, partial.errors[1].line)  --> 1  2
 print(debug.parse("local = 1", "input.lus", { recover = false }))
 --> nil  [string "input.lus"]:1: <name> expected near '='
 ```

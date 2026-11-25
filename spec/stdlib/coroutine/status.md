@@ -22,15 +22,20 @@ The parameter `co` must be a coroutine, and any other value raises `bad argument
 
 ```lus
 local co
+
 co = coroutine.create(function()
-    local inner = coroutine.create(function() return coroutine.status(co) end)
-    print(coroutine.status(co), coroutine.resume(inner))   --> running  true  normal
+    local inner = coroutine.create(function()
+        return coroutine.status(co)
+    end)
+
+    print(coroutine.status(co), coroutine.resume(inner))  --> running  true  normal
     coroutine.yield()
 end)
-print(coroutine.status(co))   --> suspended
+
+print(coroutine.status(co))  --> suspended
 coroutine.resume(co)
 coroutine.resume(co)
-print(coroutine.status(co))   --> dead
+print(coroutine.status(co))  --> dead
 ```
 
 A coroutine given to [`coroutine.detach`](/manual/api#coroutine.detach) reports `"suspended"` while it waits for its turn, for a socket, or for another coroutine, and `"dead"` once it has ended.

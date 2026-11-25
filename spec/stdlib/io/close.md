@@ -24,9 +24,9 @@ The following example closes a file and then inspects the closed handle.
 pledge("env", "fs")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-close-example.txt")
 local file = io.open(path, "w")
-print(io.close(file))          --> true
-print(io.type(file))           --> closed file
-print(io.close(io.stdout))     --> nil  cannot close standard file
+print(io.close(file))  --> true
+print(io.type(file))  --> closed file
+print(io.close(io.stdout))  --> nil  cannot close standard file
 fs.remove(path)
 ```
 

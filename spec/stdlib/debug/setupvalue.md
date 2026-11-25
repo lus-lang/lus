@@ -28,10 +28,14 @@ The following example changes a variable that a closure captured. The local in t
 
 ```lus
 local step = 5
-local function bump(n) return n + step end
-print(debug.setupvalue(bump, 1, 100))               --> step
-print(bump(1), step)                                --> 101  100
-print(select("#", debug.setupvalue(bump, 2, 0)))    --> 0
+
+local function bump(n)
+    return n + step
+end
+
+print(debug.setupvalue(bump, 1, 100))  --> step
+print(bump(1), step)  --> 101  100
+print(select("#", debug.setupvalue(bump, 2, 0)))  --> 0
 ```
 
 Every closure that shares the upvalue sees the new value. [`debug.upvaluejoin`](/manual/api#debug.upvaluejoin) makes two closures share one upvalue.

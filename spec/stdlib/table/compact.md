@@ -22,9 +22,16 @@ A `t` that is not a table raises `bad argument #1 to 'compact' (table expected, 
 
 ```lus
 local cache = {}
-for i = 1, 1000 do cache["k" .. i] = i end
-for i = 1, 990 do cache["k" .. i] = nil end
-print(table.compact(cache) == cache, cache.k995)   --> true  995
+
+for i = 1, 1000 do
+    cache["k" .. i] = i
+end
+
+for i = 1, 990 do
+    cache["k" .. i] = nil
+end
+
+print(table.compact(cache) == cache, cache.k995)  --> true  995
 ```
 
 A table grows its storage again as keys are added, so compacting pays off for a table that stays small after it shrank. [`table.create`](/manual/api#table.create) sizes a new table in advance.

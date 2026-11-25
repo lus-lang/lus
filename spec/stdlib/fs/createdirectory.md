@@ -29,8 +29,8 @@ local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-mkdir-example")
 local nested = fs.path.join(dir, "a", "b", "c")
 fs.createdirectory(nested, true)
 fs.createdirectory(nested, true)
-print(fs.type(nested))                      --> directory  false
-print((catch fs.createdirectory(nested)))   --> false
+print(fs.type(nested))  --> directory  false
+print((catch fs.createdirectory(nested)))  --> false
 fs.remove(dir, true)
 ```
 

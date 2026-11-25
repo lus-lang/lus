@@ -24,10 +24,10 @@ A missing `delimiter` raises `bad argument #2 to 'string.split' (string expected
 
 ```lus
 local parts = string.split("a,b,,c", ",")
-print(#parts, parts[1], parts[3] == "", parts[4])   --> 4  a  true  c
-print(#string.split("a.b", "."))                    --> 2
+print(#parts, parts[1], parts[3] == "", parts[4])  --> 4  a  true  c
+print(#string.split("a.b", "."))  --> 2
 local chars = string.split("héllo", "")
-print(#chars, chars[2])                             --> 5  é
+print(#chars, chars[2])  --> 5  é
 ```
 
 [`string.join`](/manual/api#string.join) is the inverse. [`string.gmatch`](/manual/api#string.gmatch) splits on a pattern, such as runs of whitespace.

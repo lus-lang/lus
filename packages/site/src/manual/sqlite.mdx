@@ -41,8 +41,9 @@ pledge("fs:read=./library.db*", "fs:write=./library.db*")
 
 do
     local db <close> = io.sqlite("library.db")
-    print((fs.type("library.db")))   --> file
+    print((fs.type("library.db")))  --> file
 end
+
 fs.remove("library.db")
 ```
 
@@ -83,13 +84,17 @@ Each `?` in the SQL is a _parameter_, which is a place for a value. `run` fills 
 
 ```lus
 local db <close> = io.sqlite(":memory:")
-db:exec("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author TEXT, year INTEGER)")
+db:exec(
+    "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author TEXT, year INTEGER)"
+)
 
 local changed, id = db:run(
     "INSERT INTO books (title, author, year) VALUES (?, ?, ?)",
-    "Emma", "Jane Austen", 1815
+    "Emma",
+    "Jane Austen",
+    1815
 )
-print(changed, id)   --> 1  1
+print(changed, id)  --> 1  1
 ```
 
 A program must pass every value to a statement as a parameter. A program that builds the SQL text from a value, as in `"... VALUES ('" .. title .. "')"`, is open to an attack. A quote in the title ends the string inside the SQL, so SQLite runs the rest of the title as SQL. A person who types such a title into a form could delete or read the whole database, an attack called _SQL injection_. A parameter prevents it, because the database receives the value separately from the statement and never reads the value as SQL.
@@ -104,7 +109,7 @@ local title = "Robert'); DROP TABLE books; --"
 db:run("INSERT INTO books (title) VALUES (?)", title)
 
 for row in db:query("SELECT title FROM books") do
-    print(row.title)   --> Robert'); DROP TABLE books; --
+    print(row.title)  --> Robert'); DROP TABLE books; --
 end
 ```
 
@@ -112,7 +117,9 @@ A statement with many values is easier to read with named parameters, each writt
 
 ```lus
 local db <close> = io.sqlite(":memory:")
-db:exec("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author TEXT, year INTEGER)")
+db:exec(
+    "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author TEXT, year INTEGER)"
+)
 
 db:run("INSERT INTO books (title, author, year) VALUES (:title, :author, :year)", {
     title = "Dune",
@@ -135,7 +142,9 @@ The following optional parts of a `SELECT` choose and arrange the rows.
 
 ```lus
 local db <close> = io.sqlite(":memory:")
-db:exec("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author TEXT, year INTEGER)")
+db:exec(
+    "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author TEXT, year INTEGER)"
+)
 db:run("INSERT INTO books (title, author, year) VALUES (?, ?, ?)", "Emma", "Jane Austen", 1815)
 db:run("INSERT INTO books (title, author, year) VALUES (?, ?, ?)", "Dune", "Frank Herbert", 1965)
 db:run("INSERT INTO books (title, year) VALUES (?, ?)", "Beowulf", 1000)
@@ -143,11 +152,12 @@ db:run("INSERT INTO books (title, year) VALUES (?, ?)", "Beowulf", 1000)
 for row in db:query("SELECT title, year FROM books WHERE year < ? ORDER BY year", 1900) do
     print(row.title, row.year)
 end
+
 --> Beowulf  1000
 --> Emma  1815
 
 for row in db:query("SELECT title FROM books ORDER BY year DESC LIMIT 1") do
-    print(row.title)   --> Dune
+    print(row.title)  --> Dune
 end
 ```
 
@@ -159,7 +169,7 @@ db:exec("CREATE TABLE books (title TEXT NOT NULL, author TEXT)")
 db:run("INSERT INTO books (title) VALUES (?)", "Beowulf")
 
 for row in db:query("SELECT title, author FROM books WHERE author IS NULL") do
-    print(row.title, row.author)   --> Beowulf  nil
+    print(row.title, row.author)  --> Beowulf  nil
 end
 ```
 
@@ -172,7 +182,7 @@ db:run("INSERT INTO books VALUES (?, ?)", "Emma", 1815)
 db:run("INSERT INTO books VALUES (?, ?)", "Dune", 1965)
 
 for row in db:query("SELECT count(*) AS total, min(year) AS oldest FROM books") do
-    print(row.total, row.oldest)   --> 2  1815
+    print(row.total, row.oldest)  --> 2  1815
 end
 ```
 
@@ -185,10 +195,12 @@ db:run("INSERT INTO books VALUES (?)", "Emma")
 db:run("INSERT INTO books VALUES (?)", "Dune")
 
 local titles = {}
+
 for row in db:query("SELECT title FROM books ORDER BY title") do
     titles[#titles + 1] = row.title
 end
-print(table.concat(titles, ", "))   --> Dune, Emma
+
+print(table.concat(titles, ", "))  --> Dune, Emma
 ```
 
 ## Updating and deleting rows
@@ -201,9 +213,9 @@ db:exec("CREATE TABLE books (title TEXT NOT NULL, year INTEGER)")
 db:run("INSERT INTO books VALUES (?, ?)", "Emma", 1815)
 db:run("INSERT INTO books VALUES (?, ?)", "Dune", 1965)
 
-print((db:run("UPDATE books SET year = ? WHERE title = ?", 1816, "Emma")))   --> 1
-print((db:run("DELETE FROM books WHERE year > ?", 1900)))                    --> 1
-print((db:run("DELETE FROM books WHERE year > ?", 3000)))                    --> 0
+print((db:run("UPDATE books SET year = ? WHERE title = ?", 1816, "Emma")))  --> 1
+print((db:run("DELETE FROM books WHERE year > ?", 1900)))  --> 1
+print((db:run("DELETE FROM books WHERE year > ?", 3000)))  --> 0
 ```
 
 ## Transactions
@@ -223,17 +235,19 @@ db:run("INSERT INTO accounts VALUES (?, ?)", "ben", 20)
 local function transfer(from_name, to_name, amount)
     db:transaction(function()
         db:run("UPDATE accounts SET balance = balance - ? WHERE name = ?", amount, from_name)
+
         for row in db:query("SELECT balance FROM accounts WHERE name = ?", from_name) do
             if row.balance < 0 then
                 error("insufficient funds", 0)
             end
         end
+
         db:run("UPDATE accounts SET balance = balance + ? WHERE name = ?", amount, to_name)
     end)
 end
 
 transfer("ada", "ben", 30)
-print(catch transfer("ada", "ben", 500))   --> false  insufficient funds
+print(catch transfer("ada", "ben", 500))  --> false  insufficient funds
 
 for row in db:query("SELECT name, balance FROM accounts ORDER BY name") do
     print(row.name, row.balance)
@@ -256,8 +270,8 @@ A statement that SQLite rejects raises an error whose error object is the messag
 local db <close> = io.sqlite(":memory:")
 db:exec("CREATE TABLE books (title TEXT NOT NULL)")
 
-print(catch db:run("SELECT missing FROM books"))               --> false  no such column: missing
-print(catch db:run("INSERT INTO books (title) VALUES (?)", nil))   --> false  NOT NULL constraint failed: books.title
+print(catch db:run("SELECT missing FROM books"))  --> false  no such column: missing
+print(catch db:run("INSERT INTO books (title) VALUES (?)", nil))  --> false  NOT NULL constraint failed: books.title
 ```
 
 Opening a database that SQLite cannot open, such as a file in a directory that does not exist, raises an error of the form `cannot open database 'PATH' (REASON)`.
@@ -293,7 +307,7 @@ db:run("INSERT INTO users VALUES (?, ?)", "Alice", 30)
 db:run("INSERT INTO users VALUES (:name, :age)", { name = "Bob", age = 25 })
 
 for row in db:query("SELECT name FROM users WHERE age < $limit", { limit = 28 }) do
-    print(row.name)   --> Bob
+    print(row.name)  --> Bob
 end
 
 print(catch db:run("INSERT INTO users VALUES (?, ?)", "Carol"))
@@ -327,7 +341,13 @@ The following program stores a string, a vector, a boolean, and a NaN, then read
 ```lus
 local db <close> = io.sqlite(":memory:")
 db:exec("CREATE TABLE files (name TEXT, data BLOB, ok, size REAL)")
-db:run("INSERT INTO files VALUES (?, ?, ?, ?)", "a.bin", vector.fromstring("\u{0}\u{1}"), true, 0 / 0)
+db:run(
+    "INSERT INTO files VALUES (?, ?, ?, ?)",
+    "a.bin",
+    vector.fromstring("\u{0}\u{1}"),
+    true,
+    0 / 0
+)
 
 for row in db:query("SELECT * FROM files") do
     print(row.name, type(row.data), #row.data, row.ok, row.size)  --> a.bin  vector  2  1  nil
@@ -343,18 +363,21 @@ local db <close> = io.sqlite(":memory:")
 db:exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER)")
 
 local insert = db:prepare("INSERT INTO users (name, age) VALUES (?, ?)")
+
 db:transaction(function()
-    for _, person in ipairs({ {"Alice", 30}, {"Bob", 17}, {"Carol", 41} }) do
+    for _, person in ipairs({ { "Alice", 30 }, { "Bob", 17 }, { "Carol", 41 } }) do
         insert:run(person[1], person[2])
     end
 end)
 
 local adults = db:prepare("SELECT name FROM users WHERE age >= ? ORDER BY name")
 local names = {}
+
 for row in adults:query(18) do
     names[#names + 1] = row.name
 end
-print(table.concat(names, " "))   --> Alice Carol
+
+print(table.concat(names, " "))  --> Alice Carol
 ```
 
 `stmt:close()` releases a statement before its database closes. A statement declared with `<close>` is released when its block ends. Using a closed statement raises the error `attempt to use a closed statement`. Closing a database closes its statements first.
@@ -370,6 +393,7 @@ db:run("INSERT INTO users VALUES (?, ?)", "Alice", 30)
 db:run("INSERT INTO users VALUES (?, ?)", "Bob", 12)
 
 local min = 18
+
 for row in query(@db.users as u where u.age >= min select u.name) do
     print(row.name)  --> Alice
 end

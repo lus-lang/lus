@@ -33,10 +33,10 @@ The parameters select the range:
 A negative position counts back from the end. With the defaults, `utf8.len(s)` equals `#s` for a string without lone surrogates. When `i` is greater than `j`, the result is `0`, and `i` may be one past the end. An `i` below 1 or more than one past the end raises `bad argument #2 to 'utf8.len' (initial position out of bounds)`, and a `j` past the end raises `bad argument #3 to 'utf8.len' (final position out of bounds)`.
 
 ```lus
-print(utf8.len("hé😀"), utf8.len("héllo", 2, 3))   --> 3  2
+print(utf8.len("hé😀"), utf8.len("héllo", 2, 3))  --> 3  2
 local s = "ab" .. utf8.char(0xDC00) .. "c"
-print(utf8.len(s))                               --> nil  3
-print(utf8.len(s, 1, -1, true))                  --> 4
+print(utf8.len(s))  --> nil  3
+print(utf8.len(s, 1, -1, true))  --> 4
 ```
 
 Lus strings are always well formed apart from lone surrogates, so a lone surrogate is the only character that strict mode rejects. [`utf8.offset`](/manual/api#utf8.offset) finds the position of a character.

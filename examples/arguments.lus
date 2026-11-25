@@ -12,11 +12,13 @@ print(type(arg[-1]))  --> string
 -- a value after "=". "-v" stands for "--verbose". Every other word is a file.
 local function parse(args)
     local options = { verbose = false, limit = 10, files = {} }
+
     for _, word in ipairs(args) do
         if name, value = word:match("^%-%-(%w+)=(.*)$") then
             if name ~= "limit" or not tonumber(value) then
                 error(`bad option: $word`, 0)
             end
+
             options.limit = tonumber(value)
         elseif word == "--verbose" or word == "-v" then
             options.verbose = true
@@ -26,6 +28,7 @@ local function parse(args)
             table.insert(options.files, word)
         end
     end
+
     return options
 end
 

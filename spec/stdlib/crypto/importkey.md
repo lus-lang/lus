@@ -42,12 +42,12 @@ local key = crypto.importkey([[
 MC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC
 -----END PRIVATE KEY-----
 ]])
-print(key.type, key.private)    --> ed25519  true
+print(key.type, key.private)  --> ed25519  true
 io.write(key:public():export())
 --> -----BEGIN PUBLIC KEY-----
 --> MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
 --> -----END PUBLIC KEY-----
-print(key:public():export("jwk").x)   --> Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE
+print(key:public():export("jwk").x)  --> Gb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE
 ```
 
 [`crypto.sign`](/manual/api#crypto.sign) and [`crypto.verify`](/manual/api#crypto.verify) take key objects.

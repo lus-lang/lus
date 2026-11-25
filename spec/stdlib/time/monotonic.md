@@ -20,8 +20,8 @@ The following example measures the time that a piece of work takes.
 local start = time.monotonic()
 local text = string.rep("x", 100000)
 local elapsed = time.monotonic() - start
-print(elapsed:seconds() >= 0, #text)       --> true  100000
-print(catch start:iso())                   --> false  ...: monotonic instants have no calendar representation
+print(elapsed:seconds() >= 0, #text)  --> true  100000
+print(catch start:iso())  --> false  ...: monotonic instants have no calendar representation
 ```
 
 The comparison operators accept a monotonic reading and a wall-clock instant together without an error, and the result carries no meaning. `tostring` of a reading gives a form such as `time.instant(monotonic 330538 s + 741193500 ns)`. [`time.now`](/manual/api#time.now) reads the wall clock.

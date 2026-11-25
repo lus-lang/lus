@@ -80,9 +80,11 @@ lus check --strict src
 
 ```lus
 local unused = 1
+
 local function area(w, h)
     return w * h
 end
+
 total = area(4, 5)
 ```
 
@@ -164,9 +166,11 @@ Some hints name a form of the same code that runs faster. Each one comes from a 
 ```lus
 local lines = { "a", "b", "c" }
 local text = ""
+
 for _, line in ipairs(lines) do
     text = text .. line .. "\n"  -- 'text' grows by concatenation in a loop: ... [concat-in-loop]
 end
+
 io.write(text)
 --> a
 --> b
@@ -178,9 +182,11 @@ Collecting the parts in a list and joining them once copies each part once.
 ```lus
 local lines = { "a", "b", "c" }
 local parts = {}
+
 for _, line in ipairs(lines) do
     parts[#parts + 1] = line
 end
+
 print(table.concat(parts, "\n"))
 --> a
 --> b
@@ -200,7 +206,10 @@ local ok, err = pcall(risky)  -- 'pcall' no longer exists, use a 'catch' express
 The following code makes the same call with `catch`.
 
 ```lus
-local function risky() error("failed", 0) end
+local function risky()
+    error("failed", 0)
+end
+
 local ok, err = catch risky()
 print(ok, err)  --> false  failed
 ```
@@ -208,8 +217,12 @@ print(ok, err)  --> false  failed
 A local that is used only by the `if` statement after it can be declared in the condition of that `if`. [Control flow](/manual/guide#control-flow) describes this form.
 
 ```lus
-local function lookup() return 42 end
+local function lookup()
+    return 42
+end
+
 local value = lookup()
+
 if value then  -- local declaration can be moved to the if condition (use if-assignment) [use-if-assign]
     print(value)
 end
@@ -218,7 +231,10 @@ end
 The following form declares the local in the condition, so the variable is visible only in the body of the `if`, where it is used.
 
 ```lus
-local function lookup() return 42 end
+local function lookup()
+    return 42
+end
+
 if value = lookup() then
     print(value)  --> 42
 end
@@ -229,6 +245,7 @@ end
 ```lus
 local cfg = { server = { port = 8080 } }
 local port = cfg and cfg.server and cfg.server.port  -- and-chain can use optional chaining: x?.y?.z [use-optional-chain]
+
 if cfg ~= nil then  -- nested nil checks can use optional chaining: x?.y?.z [use-optional-chain]
     if cfg.server ~= nil then
         print(cfg.server.port)
@@ -266,6 +283,7 @@ for i = 1, 4 do
     if i % 2 == 0 then
         goto next
     end
+
     print(i)
     ::next::  -- the gotos to 'next' at the end of the loop body can be continue [use-continue]
 end
@@ -278,6 +296,7 @@ for i = 1, 4 do
     if i % 2 == 0 then
         continue
     end
+
     print(i)
 end
 ```
@@ -351,9 +370,11 @@ end
 --- @since 2.0
 local function join(sep, ...parts)
     local out = {}
+
     for i, part in ipairs(parts) do
         out[i] = tostring(part)
     end
+
     return table.concat(out, sep)
 end
 
@@ -385,9 +406,11 @@ function M.open(path)
     return path
 end
 
-function M.close() end
+function M.close()
+end
 
-local function helper() end
+local function helper()
+end
 
 return M
 ```
@@ -458,9 +481,11 @@ The `options` table has the boolean fields `comments` and `recover`, both true b
 
 ```lus
 local tree = debug.parse("local a = 1\n) 2\nlocal b = 3\n")
+
 for _, node in ipairs(tree.children) do
     print(node.type, node.line)
 end
+
 --> local  1
 --> error_stat  2
 --> local  3
@@ -508,6 +533,7 @@ print(x)
 
 local function walk(node, depth)
     print(string.rep("  ", depth) .. node.type .. " (line " .. node.line .. ")")
+
     for _, child in ipairs(node.children or {}) do
         walk(child, depth + 1)
     end
@@ -527,7 +553,7 @@ local function check_globals(tree, filename)
         if stat.type == "assign" then
             for _, target in ipairs(stat.lhs or {}) do
                 if target.type == "name" then
-                    print(`$(filename):$(stat.line): assignment to '$(target.value)'`)
+                    print(`$filename:$(stat.line): assignment to '$(target.value)'`)
                 end
             end
         end
@@ -681,7 +707,10 @@ lus report.lusc data.csv
 ```lus
 pledge("load")
 
-local chunk = string.dump(function(n) return n * 2 end)
+local chunk = string.dump(function(n)
+    return n * 2
+end)
+
 local double = load(chunk, "double", "b")
 print(double(21))  --> 42
 ```

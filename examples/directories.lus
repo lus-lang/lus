@@ -8,6 +8,7 @@ pledge("fs")
 -- directory along the path.
 fs.createdirectory("site/posts/2026", true)
 fs.createdirectory("site/drafts")
+
 for _, name in ipairs({ "site/index.html", "site/posts/2026/spring.md" }) do
     io.open(name, "w"):write("# Garden notes\n"):close()
 end
@@ -25,6 +26,7 @@ print(table.concat(names, " "))  --> drafts index.html posts
 for _, name in ipairs(names) do
     print(name, (fs.type(fs.path.join("site", name))))
 end
+
 --> drafts directory
 --> index.html file
 --> posts directory

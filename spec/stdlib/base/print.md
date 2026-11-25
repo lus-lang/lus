@@ -13,8 +13,13 @@ vararg: true
 Each argument may be of any type. A string is written as it is, and any other value is converted as [`tostring`](/manual/api#tostring) converts it, so a `__tostring` metamethod decides how a table prints. A call with no arguments writes an empty line. A `__tostring` metamethod that returns a value other than a string or a number raises `'__tostring' must return a string`.
 
 ```lus
-print("total", 3, 1.0, nil, true)   --> total  3  1.0  nil  true
-print(setmetatable({}, { __tostring = function() return "point(1, 2)" end }))
+print("total", 3, 1.0, nil, true)  --> total  3  1.0  nil  true
+
+print(setmetatable({}, {
+    __tostring = function()
+        return "point(1, 2)"
+    end,
+}))
 --> point(1, 2)
 ```
 

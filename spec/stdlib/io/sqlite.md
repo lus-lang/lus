@@ -55,13 +55,16 @@ The following example pledges the database file and its sidecars in a temporary 
 pledge("env")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-sqlite-example.db")
 pledge("fs:read=" .. path .. "*", "fs:write=" .. path .. "*", "seal")
+
 do
     local db <close> = io.sqlite(path)
     db:exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
     db:run("INSERT INTO users (name) VALUES (?)", "Alice")
+
     for row in db:query("SELECT id, name FROM users WHERE name = :name", { name = "Alice" }) do
-        print(row.id, row.name)   --> 1  Alice
+        print(row.id, row.name)  --> 1  Alice
     end
 end
+
 fs.remove(path)
 ```

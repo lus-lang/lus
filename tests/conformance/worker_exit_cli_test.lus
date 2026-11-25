@@ -12,6 +12,7 @@ local function shell_quote(value)
     if windows then
         return '"' .. value .. '"'
     end
+
     return "'" .. value:gsub("'", "'\\''") .. "'"
 end
 
@@ -24,11 +25,13 @@ end
 -- Runs `main` with a busy worker script as its first argument.
 local function run_with_busy_worker(main)
     script_number = script_number + 1
-    local busy = `worker_exit_busy_$(script_number).lus`
-    local path = `worker_exit_main_$(script_number).lus`
+    local busy = `worker_exit_busy_$script_number.lus`
+    local path = `worker_exit_main_$script_number.lus`
     write(busy, "while true do end\n")
     write(path, main)
-    local handle = assert(io.popen(`$(shell_quote(lus_bin)) -P all $(shell_quote(path)) $(shell_quote(busy)) 2>&1`))
+    local handle = assert(
+        io.popen(`$(shell_quote(lus_bin)) -P all $(shell_quote(path)) $(shell_quote(busy)) 2>&1`)
+    )
     local output = handle:read("a")
     local done = handle:close()
     catch fs.remove(path)

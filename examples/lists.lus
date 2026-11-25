@@ -22,6 +22,7 @@ print(table.concat(queue, " "))  --> b c
 for index, day in ipairs(days) do
     print(index, day)
 end
+
 --> 1  Mon
 --> 2  Tue
 --> 3  Wed

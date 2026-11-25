@@ -44,7 +44,9 @@ local function short_concats_keep_their_text_test()
     local tags = { "a&b", "it's", "x" }
     local s = table.concat(tags, ", ")
     assert(s == "a&b, it's, x" and #s == 12)
-    assert(table.concat({ "é", "ü" }, "-") == "é-ü" and utf8.len(table.concat({ "é", "ü" }, "-")) == 3)
+    assert(
+        table.concat({ "é", "ü" }, "-") == "é-ü" and utf8.len(table.concat({ "é", "ü" }, "-")) == 3
+    )
     assert(table.concat({}, ", ") == "" and table.concat({ "", "" }) == "")
     assert(table.concat({ "one" }) == "one" and table.concat({ "a", "b", "c" }, "", 2, 3) == "bc")
     local seen = {}
@@ -56,9 +58,18 @@ end
 local function sort_handles_long_ordered_ranges_test()
     for _, n in ipairs{ 1000, 3000 } do
         local desc, asc = {}, {}
-        for i = 1, n do desc[i] = n + 1 - i; asc[i] = i end
+
+        for i = 1, n do
+            desc[i] = n + 1 - i
+            asc[i] = i
+        end
+
         table.sort(desc)
-        table.sort(asc, function(x, y) return x > y end)
+
+        table.sort(asc, function(x, y)
+            return x > y
+        end)
+
         assert(desc[1] == 1 and desc[n] == n and asc[1] == n and asc[n] == 1)
     end
 end

@@ -17,9 +17,9 @@ Each argument is an integer from 0 to 0x10FFFF. A float, bigint, or decimal with
 A code point outside the range raises the error `value out of range`, and a number with no integral value raises `number has no integer representation`. The message names the position of the argument.
 
 ```lus
-print(string.char(72, 105))         --> Hi
-print(string.char(233, 0x1F600))    --> é😀
-print(#string.char(0xD800))         --> 1
+print(string.char(72, 105))  --> Hi
+print(string.char(233, 0x1F600))  --> é😀
+print(#string.char(0xD800))  --> 1
 print(catch string.char(0x110000))  --> false  ...: bad argument #1 to 'string.char' (value out of range)
 ```
 

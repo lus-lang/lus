@@ -643,19 +643,27 @@ A catch statement evaluates the operand, discards all results, and suppresses an
 Catches nest and compose with coroutines: a yield inside a protected operand is allowed, and an error raised after resumption is caught by the catch that was active when the operand started.
 
 ```lus
-local function values() return "a", "b", "c" end
-local ok, a, b, c = catch values()          -- true, "a", "b", "c"
+local function values()
+    return "a", "b", "c"
+end
 
-local function none() end
-print(select('#', catch none()))            -- 1 (just true)
+local ok, a, b, c = catch values()  -- true, "a", "b", "c"
 
-local ok2, err = catch[function(e) return "H", "I" end] error("x")
+local function none()
+end
+
+print(select("#", catch none()))  -- 1 (just true)
+
+local ok2, err = catch[function(e)
+    return "H", "I"
+end] error("x")
+
 -- ok2 == false, err == "H" (extra handler results are dropped)
 
-print((catch error("e")))                   -- false
-local ok3 = catch f()                       -- only the status
+print((catch error("e")))  -- false
+local ok3 = catch f()  -- only the status
 
-catch cleanup()                             -- statement form
+catch cleanup()  -- statement form
 ```
 
 **Tested** (`compile_errors_test.lus`): `catch noop()` for a zero-result `noop` yields `true` and a `nil` second value, with no spurious extra result. **Tested** (`catchstat_test.lus`): side effects before the error persist, registers do not leak across many catch statements or loop iterations, and to-be-closed variables inside the operand are closed on a caught error.
@@ -692,12 +700,12 @@ The chain is evaluated left to right. The part before the first `?` evaluates no
 
 ```lus
 local cfg = { db = { host = "localhost" } }
-local host = cfg?.db?.host                  -- "localhost"
-local port = cfg?.server?.port or 8080      -- 8080
+local host = cfg?.db?.host  -- "localhost"
+local port = cfg?.server?.port or 8080  -- 8080
 local flag = false
 assert(flag?.field == false)
 local s = nil
-assert(s?.list[2,] == nil)                  -- the slice is skipped too
+assert(s?.list[2,] == nil)  -- the slice is skipped too
 ```
 
 **Tested** (`syntax_interactions_test.lus`): a nil base suppresses a side-effecting do-expression argument in `x?:m(do ... end)`. `t?.list[2,]` slices when `t.list` exists and raises `attempt to slice a nil value` when `t` exists but `t.list` is nil.
@@ -739,12 +747,12 @@ Bound conversion for the built-in slices: `nil` takes the default, an integer is
 **Other types.** If the value has a `__slice` metamethod it is called as above. Otherwise the runtime raises `attempt to slice a TYPE value`.
 
 ```lus
-local t = {1, 2, 3, 4, 5}
-local a = t[2,4]      -- {2, 3, 4}
-local b = t[,3]       -- {1, 2, 3}
-local c = t[2,]       -- {2, 3, 4, 5}
-local d = t[4,2]      -- {4, 3, 2}
-local e = t[,]        -- shallow copy of the sequence
+local t = { 1, 2, 3, 4, 5 }
+local a = t[2, 4]  -- {2, 3, 4}
+local b = t[, 3]  -- {1, 2, 3}
+local c = t[2,]  -- {2, 3, 4, 5}
+local d = t[4, 2]  -- {4, 3, 2}
+local e = t[,]  -- shallow copy of the sequence
 ```
 
 **Tested** (`slices_test.lus`): reversed slices produce reversed results, slicing an inline constructor `({...})[a,b]` works, and the result is an independent copy.
@@ -776,10 +784,10 @@ The result is the concatenation of all parts in order. An empty interpolated str
 
 ```lus
 local name, age = "Alice", 30
-print(`Hello, $name!`)                -- Hello, Alice!
-print(`Next year: $(age + 1).`)       -- Next year: 31.
-print(`$$5 and \`ticks\``)            -- $5 and `ticks`
-print(`$(nil) $(1.0)`)                -- nil 1.0
+print(`Hello, $name!`)  -- Hello, Alice!
+print(`Next year: $(age + 1).`)  -- Next year: 31.
+print(`$$5 and \`ticks\``)  -- $5 and `ticks`
+print(`$(nil) $(1.0)`)  -- nil 1.0
 ```
 
 **Tested** (`interp_test.lus`): interpolation works when the global `tostring` is `nil` or shadowed. **Tested** (`syntax_interactions_test.lus`): a yield inside an interpolated expression resumes correctly, a do-expression inside `$(...)` providing two values renders the first, and one without `provide` renders `nil`.
@@ -865,10 +873,15 @@ if a, b from src then ... end   -- assignment condition (also elseif, while)
 4. With a group source, step 2 copies the current field values of the group.
 
 ```lus
-local t = setmetatable({}, { __index = function(_, k) return k .. "!" end })
-local p, q from t                  -- p == "p!", q == "q!"
+local t = setmetatable({}, {
+    __index = function(_, k)
+        return k .. "!"
+    end,
+})
+
+local p, q from t  -- p == "p!", q == "q!"
 local cfg = { host = "h", port = 1 }
-local port, host from cfg          -- order of names is free
+local port, host from cfg  -- order of names is free
 local x, y
 x, y from { x = 1, y = 2 }
 ```
@@ -976,17 +989,29 @@ providestat = 'provide' [ explist ] ;       (* must be the last statement of its
 local x = do
     local y = 10
     provide y * 2
-end                                   -- 20
+end  -- 20
 
-local a, b = do provide 1, 2 end      -- 1, 2
-local n = 1 + do provide 2 end * 3    -- 7
-local ok, v = catch do provide risky() end
+local a, b = do  -- 1, 2
+    provide 1, 2
+end
+
+local n = 1 + do  -- 7
+    provide 2
+end * 3
+
+local ok, v = catch do
+    provide risky()
+end
+
 local w = do
     for i = 1, 10 do
-        if i * i > 20 then provide i end
+        if i * i > 20 then
+            provide i
+        end
     end
+
     provide -1
-end                                   -- 5
+end  -- 5
 ```
 
 **Tested** (`doexpr_test.lus`): nested do-expressions to three levels, provide in either branch of an `if`, early provide from a loop, fewer or more provided values than targets, and access to and mutation of outer locals and upvalues. **Tested** (`syntax_limits_test.lus`): very deep nesting fails gracefully with `chunk has too many syntax levels (stack overflow)`.
@@ -1054,17 +1079,27 @@ Ordering with `<close>` and `<const>`: with `<close, h>`, the handler runs on in
 ```lus
 local function only(kind)
     return function(name, value)
-        if type(value) ~= kind then error(`$name: expected $kind`) end
+        if type(value) ~= kind then
+            error(`$name: expected $kind`)
+        end
+
         return value
     end
 end
-local n <only "number"> = 10
-n = 20                       -- checked
-n = nil                      -- handler skipped
 
-local function first(name, v) return v + 1 end
-local function second(name, v) return v * 2 end
-local x <first, second> = 10 -- 22
+local n <only "number"> = 10
+n = 20  -- checked
+n = nil  -- handler skipped
+
+local function first(name, v)
+    return v + 1
+end
+
+local function second(name, v)
+    return v * 2
+end
+
+local x <first, second> = 10  -- 22
 ```
 
 **Tested** (`attrs2_test.lus`): the attribute expression runs exactly once and before the initializer, a declaration without initializer skips the handler, shadowed attributed locals dispatch to their own handlers, an upvalue write from a closure does not re-invoke the handler, and a handler returning `false` sets the variable to `false`.
@@ -1077,11 +1112,11 @@ local x <first, second> = 10 -- 22
 
 ```lus
 local z <group> = { a = 1, b <const> = 2, c <group> = { d = 3 } }
-local y <group> = z                 -- copy
-z = { a = 10 }                      -- overwrite of listed fields
-z.a = 5                             -- field assignment
-print(z.c.d)                        -- subgroup field
-local a, b from z                   -- group source
+local y <group> = z  -- copy
+z = { a = 10 }  -- overwrite of listed fields
+z.a = 5  -- field assignment
+print(z.c.d)  -- subgroup field
+local a, b from z  -- group source
 ```
 
 #### Static semantics
@@ -1163,12 +1198,7 @@ end
 The grammar is in section 2. A query begins with `@`, lists one or more comma-separated sources, and continues with clauses in any order.
 
 ```lus
-local adults =
-  @people as p
-   where p.age > 18
-   select p.name, p.age
-   order by p.age desc
-   limit 100
+local adults = @people as p where p.age > 18 select p.name, p.age order by p.age desc limit 100
 ```
 
 #### Static semantics: sources
@@ -1249,10 +1279,14 @@ stat = 'continue' ;
 
 ```lus
 local odd = 0
+
 for i = 1, 10 do
-    if i % 2 == 0 then continue end
+    if i % 2 == 0 then
+        continue
+    end
+
     odd = odd + i
-end                                   -- odd == 25
+end  -- odd == 25
 ```
 
 ---

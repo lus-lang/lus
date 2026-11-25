@@ -21,9 +21,9 @@ The result is one of the four names when `x` is a number, and `nil` when it is n
 A call with no argument raises `bad argument #1 to 'math.type' (value expected)`.
 
 ```lus
-print(math.type(1), math.type(1.0))     --> integer  float
-print(math.type(1n), math.type(1d))     --> bigint  decimal
-print(math.type("1"), math.type(nil))   --> nil  nil
+print(math.type(1), math.type(1.0))  --> integer  float
+print(math.type(1n), math.type(1d))  --> bigint  decimal
+print(math.type("1"), math.type(nil))  --> nil  nil
 ```
 
 The four subtypes are values of the one type `number`, so `type(x)` returns `"number"` for each of them. The [`number`](/manual/guide#numbers) section of the guide describes how arithmetic picks the subtype of a result.

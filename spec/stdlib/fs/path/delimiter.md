@@ -15,7 +15,8 @@ The value is a one-character string fixed when the runtime is built, and reading
 The following example splits a path list into its entries.
 
 ```lus
-local list = table.concat({"/usr/bin", "/bin"}, fs.path.delimiter)
+local list = table.concat({ "/usr/bin", "/bin" }, fs.path.delimiter)
+
 for entry in list:gmatch("[^" .. fs.path.delimiter .. "]+") do
     print(entry)
 end

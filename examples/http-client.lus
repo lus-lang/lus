@@ -8,10 +8,12 @@ pledge("network:tcp=127.0.0.1:*", "network:server", "network:http=127.0.0.1:*")
 -- request with a JSON description of what it received.
 local server = network.tcp.bind("127.0.0.1", 0)
 local _, port = server:getsockname()
+
 local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
     if req.path == "/missing" then
         return 404, "not found", { ["Content-Type"] = "text/plain" }
     end
+
     local echo = {
         method = req.method,
         path = req.path,

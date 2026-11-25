@@ -37,7 +37,7 @@ local f = assert(io.open(path, "w"))
 f:write("return greeting .. ', ' .. ...")
 f:close()
 local chunk = loadfile(path, "t", { greeting = "hello" })
-print(chunk("world"))   --> hello, world
+print(chunk("world"))  --> hello, world
 fs.remove(path)
 ```
 

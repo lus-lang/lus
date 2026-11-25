@@ -12,58 +12,69 @@ pledge("load")
   If any assigned value is nil/false, the condition is false.
 ]]
 
-
 -- if with truthy assignment
 local function if_with_truthy_assignment_test()
     local result = nil
+
     if x = 42 then
         result = x
     end
+
     assert(result == 42, "x should be 42")
 end
 
 -- if with falsy assignment (nil)
 local function if_with_falsy_assignment_nil_test()
     local result = "not entered"
+
     if x = nil then
         result = "entered"
     end
+
     assert(result == "not entered", "should not enter block when nil")
 end
 
 -- if with falsy assignment (false)
 local function if_with_falsy_assignment_false_test()
     local result = "not entered"
+
     if x = false then
         result = "entered"
     end
+
     assert(result == "not entered", "should not enter block when false")
 end
 
 -- if with string value
 local function if_with_string_value_test()
     local result = nil
+
     if s = "hello" then
         result = s
     end
+
     assert(result == "hello", "s should be 'hello'")
 end
 
 -- if with zero (truthy in Lua)
 local function if_with_zero_truthy_in_lua_test()
     local result = nil
+
     if x = 0 then
         result = x
     end
+
     assert(result == 0, "0 is truthy, x should be 0")
 end
 
 -- if with empty string (truthy in Lua)
 local function if_with_empty_string_truthy_in_lua_test()
     local result = nil
+
     if s = "" then
         result = s
     end
+
     assert(result == "", "empty string is truthy")
 end
 
@@ -72,10 +83,13 @@ local function if_with_function_call_returning_truthy_value_test()
     local function getValue()
         return 100
     end
+
     local result = nil
+
     if v = getValue() then
         result = v
     end
+
     assert(result == 100, "v should be 100")
 end
 
@@ -84,10 +98,13 @@ local function if_with_function_call_returning_nil_test()
     local function getNil()
         return nil
     end
+
     local result = "not entered"
+
     if v = getNil() then
         result = "entered"
     end
+
     assert(result == "not entered", "should not enter block")
 end
 
@@ -99,60 +116,74 @@ local function keepifsumoverten_example_from_docs_test()
     end
 
     local result1 = nil
+
     if s = keepIfSumOverTen(9, 2) then
         result1 = s
     end
+
     assert(result1 == 11, "9 + 2 = 11 which is over 10")
 
     local result2 = "not entered"
+
     if s = keepIfSumOverTen(3, 4) then
         result2 = s
     end
+
     assert(result2 == "not entered", "3 + 4 = 7 which is not over 10")
 end
 
 -- multiple variables all truthy
 local function multiple_variables_all_truthy_test()
     local result = nil
+
     if a, b, c = 1, 5, 9 then
         result = a + b + c
     end
+
     assert(result == 15, "a+b+c should be 15")
 end
 
 -- multiple variables with one nil (first)
 local function multiple_variables_with_one_nil_first_test()
     local result = "not entered"
+
     if a, b, c = nil, 2, 3 then
         result = "entered"
     end
+
     assert(result == "not entered", "first value nil, should not enter")
 end
 
 -- multiple variables with one nil (middle)
 local function multiple_variables_with_one_nil_middle_test()
     local result = "not entered"
+
     if a, b, c = 1, nil, 3 then
         result = "entered"
     end
+
     assert(result == "not entered", "middle value nil, should not enter")
 end
 
 -- multiple variables with one nil (last)
 local function multiple_variables_with_one_nil_last_test()
     local result = "not entered"
+
     if a, b, c = 1, 2, nil then
         result = "entered"
     end
+
     assert(result == "not entered", "last value nil, should not enter")
 end
 
 -- multiple variables with one false
 local function multiple_variables_with_one_false_test()
     local result = "not entered"
+
     if a, b, c = 3, 6, false then
         result = "entered"
     end
+
     assert(result == "not entered", "one value false, should not enter")
 end
 
@@ -160,26 +191,31 @@ end
 local function multiple_variables_all_same_value_test()
     local v = 7
     local result = nil
+
     if a, b, c = v, v, v then
         result = a + b + c
     end
+
     assert(result == 21, "all should be 7, sum is 21")
 end
 
 -- elseif with assignment when if fails
 local function elseif_with_assignment_when_if_fails_test()
     local result = nil
+
     if x = nil then
         result = "if"
     elseif y = 99 then
         result = y
     end
+
     assert(result == 99, "elseif should execute with y=99")
 end
 
 -- elseif chain
 local function elseif_chain_test()
     local result = nil
+
     if a = nil then
         result = "first"
     elseif b = false then
@@ -187,12 +223,14 @@ local function elseif_chain_test()
     elseif c = "winner" then
         result = c
     end
+
     assert(result == "winner", "third elseif should win")
 end
 
 -- variables from if visible in elseif (from docs example)
 local function variables_from_if_visible_in_elseif_from_docs_example_test()
     local a_val, b_val, c_val, d_val = nil, nil, nil, nil
+
     if a, b, c = 3, 6, nil then
         a_val = "unexpected"
     elseif d = 9 then
@@ -201,6 +239,7 @@ local function variables_from_if_visible_in_elseif_from_docs_example_test()
         c_val = c
         d_val = d
     end
+
     assert(a_val == 3, "a should be 3 from previous condition")
     assert(b_val == 6, "b should be 6 from previous condition")
     assert(c_val == nil, "c should be nil from previous condition")
@@ -212,17 +251,20 @@ local function variables_from_if_visible_in_else_test()
     -- A false condition value proves both that the assignment happened
     -- and that the variable is readable in the else block
     local captured = "sentinel"
+
     if a = false then
         captured = "if-branch"
     else
         captured = a
     end
+
     assert(captured == false, "a should be false and visible in the else block")
 end
 
 -- variables accumulate across conditions
 local function variables_accumulate_across_conditions_test()
     local sum = 0
+
     if a = nil then
         -- fail
     elseif b = nil then
@@ -230,18 +272,22 @@ local function variables_accumulate_across_conditions_test()
     elseif c = 10 then
         sum = (a or 0) + (b or 0) + c
     end
+
     assert(sum == 10, "sum should be 10 (a and b are nil)")
 end
 
 -- nested if statements with assignments
 local function nested_if_statements_with_assignments_test()
     local outer_result, inner_result = nil, nil
+
     if outer = 5 then
         outer_result = outer
+
         if inner = 10 then
             inner_result = inner
         end
     end
+
     assert(outer_result == 5, "outer should be 5")
     assert(inner_result == 10, "inner should be 10")
 end
@@ -250,12 +296,15 @@ end
 local function inner_assignment_variables_don_t_leak_out_test()
     local inner = "outer"
     local result = "not set"
+
     if outer = 1 then
         if inner = 2 then
             result = inner
         end
+
         assert(inner == "outer", "condition variable is scoped to its own if")
     end
+
     assert(result == 2, "inner was 2 inside its own block")
     assert(inner == "outer", "outer local unchanged after the statement")
 end
@@ -263,17 +312,20 @@ end
 -- if-assignment with else
 local function if_assignment_with_else_test()
     local result = nil
+
     if x = nil then
         result = "if"
     else
         result = "else"
     end
+
     assert(result == "else", "should enter else when nil")
 end
 
 -- if-assignment elseif-assignment else chain
 local function if_assignment_elseif_assignment_else_chain_test()
     local result = nil
+
     if a = false then
         result = "if"
     elseif b = nil then
@@ -281,12 +333,14 @@ local function if_assignment_elseif_assignment_else_chain_test()
     else
         result = "else"
     end
+
     assert(result == "else", "should enter else")
 end
 
 -- variables from failed conditions visible in else
 local function variables_from_failed_conditions_visible_in_else_test()
     local all_nil = true
+
     if a = nil then
         all_nil = false
     elseif b = nil then
@@ -294,15 +348,18 @@ local function variables_from_failed_conditions_visible_in_else_test()
     else
         all_nil = (a == nil) and (b == nil)
     end
+
     assert(all_nil, "both a and b should be nil in else")
 end
 
 -- single variable with table value
 local function single_variable_with_table_value_test()
     local result = nil
-    if t = {1, 2, 3} then
+
+    if t = { 1, 2, 3 } then
         result = t[2]
     end
+
     assert(result == 2, "t[2] should be 2")
 end
 
@@ -310,21 +367,28 @@ end
 local function assignment_from_method_call_test()
     local obj = {
         value = 42,
-        get = function(self) return self.value end
+        get = function(self)
+            return self.value
+        end,
     }
+
     local result = nil
+
     if v = obj:get() then
         result = v
     end
+
     assert(result == 42, "method should return 42")
 end
 
 -- assignment with arithmetic expression
 local function assignment_with_arithmetic_expression_test()
     local result = nil
+
     if x = 10 + 20 then
         result = x
     end
+
     assert(result == 30, "x should be 30")
 end
 
@@ -333,10 +397,13 @@ local function multiple_values_from_function_with_multiple_returns_test()
     local function multi()
         return 1, 2, 3
     end
+
     local result = nil
+
     if a, b, c = multi() then
         result = a + b + c
     end
+
     assert(result == 6, "sum should be 6")
 end
 
@@ -345,10 +412,13 @@ local function more_variables_than_values_extras_become_nil_test()
     local function one()
         return 100
     end
+
     local result = "not entered"
+
     if a, b = one() then
         result = "entered"
     end
+
     assert(result == "not entered", "b is nil, should not enter")
 end
 
@@ -356,10 +426,12 @@ end
 local function catch_expression_in_if_assignment_test()
     local result = nil
     local status = nil
+
     if ok, val = catch (1 + 2) then
         status = ok
         result = val
     end
+
     assert(status == true, "catch should succeed")
     assert(result == 3, "val should be 3")
 end
@@ -369,16 +441,19 @@ local function condition_variable_not_visible_outside_if_test()
     if cond_var = 123 then
         assert(cond_var == 123)
     end
+
     assert(_G.cond_var == nil, "cond_var should not leak to globals")
 end
 
 -- condition variables are local, not global
 local function condition_variables_are_local_not_global_test()
     local v = "outer"
+
     if v = 1 then
         v = v + 1
         assert(v == 2, "reassignment writes the block-local binding")
     end
+
     assert(v == "outer", "outer local untouched by the block-local write")
     assert(_G.v == nil, "no global was created by declaration or write")
 end

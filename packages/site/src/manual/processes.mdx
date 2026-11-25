@@ -19,9 +19,10 @@ The following program sorts a list of names with the system command `sort` and r
 ```lus
 pledge("exec=sort")
 
-local p <close> = os.spawn({"sort"}, {stdin = "pipe", stdout = "pipe"})
+local p <close> = os.spawn({ "sort" }, { stdin = "pipe", stdout = "pipe" })
 p.stdin:write("Grace\nAda\nLinus\n")
 p.stdin:close()
+
 for name in p.stdout:lines() do
     print(name)
 end

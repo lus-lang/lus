@@ -22,10 +22,10 @@ The following example reads a protected metatable and the metatable that all str
 
 ```lus
 local t = setmetatable({}, { __metatable = "locked" })
-print(getmetatable(t))                              --> locked
-print(type(debug.getmetatable(t)))                  --> table
-print(debug.getmetatable("s").__index == string)    --> true
-print(debug.getmetatable(42))                       --> nil
+print(getmetatable(t))  --> locked
+print(type(debug.getmetatable(t)))  --> table
+print(debug.getmetatable("s").__index == string)  --> true
+print(debug.getmetatable(42))  --> nil
 ```
 
 [`debug.setmetatable`](/manual/api#debug.setmetatable) sets the metatable of a value of any type.

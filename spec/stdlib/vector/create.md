@@ -26,8 +26,8 @@ The following example creates a vector and reads its size and first byte.
 
 ```lus
 local v = vector.create(1024)
-print(#v, vector.get(v, 0))      --> 1024  0
-print(#vector.create(0))         --> 0
+print(#v, vector.get(v, 0))  --> 1024  0
+print(#vector.create(0))  --> 0
 ```
 
 A vector created with size 0 is valid, and [`vector.resize`](/manual/api#vector.resize) grows it later. [`vector.fromstring`](/manual/api#vector.fromstring) creates a vector that holds the bytes of a string.

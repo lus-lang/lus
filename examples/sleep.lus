@@ -23,9 +23,11 @@ local function ticker(interval, count)
 end
 
 start = time.monotonic()
+
 for tick in ticker(time.millis(20), 3) do
     print("tick", tick)
 end
+
 --> tick  1
 --> tick  2
 --> tick  3
@@ -43,6 +45,7 @@ end
 
 local reminders = { { "stretch", 0.06 }, { "drink water", 0.02 }, { "check mail", 0.04 } }
 local tasks = {}
+
 for _, reminder in ipairs(reminders) do
     tasks[#tasks + 1] = coroutine.detach(coroutine.create(remind), reminder[1], reminder[2])
 end

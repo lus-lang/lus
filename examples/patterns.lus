@@ -25,9 +25,11 @@ print(html:match("<(.*)>"))  --> b>bold</b> and <i>italic</i
 
 -- `gmatch` iterates over every match.
 local query = "page=2&sort=price&order=desc"
+
 for key, value in query:gmatch("(%w+)=(%w+)") do
     print(key, value)
 end
+
 --> page 2
 --> sort price
 --> order desc
@@ -42,9 +44,11 @@ print(text)  --> Hello Ada, welcome to Lus. Your id is $id.
 
 -- A function replacement receives the captures and returns the new text.
 local prices = "apple 1.20, pear 0.80, plum 2.50"
+
 local doubled = prices:gsub("%d+%.%d+", function(p)
     return string.format("%.2f", tonumber(p) * 2)
 end)
+
 print(doubled)  --> apple 2.40, pear 1.60, plum 5.00
 
 -- `%` escapes a magic character. A set such as `[éè]` matches whole characters.

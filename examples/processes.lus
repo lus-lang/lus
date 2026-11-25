@@ -33,6 +33,7 @@ end
 -- A child that fails reports a nonzero status. With stderr = "stdout" its
 -- error output goes into the same pipe as its output.
 local merged = { stdout = "pipe", stderr = "stdout" }
+
 do
     local failing <close> = os.spawn({ lus, "-e", "error('disk full', 0)" }, merged)
     print(failing.stdout:read("l"))  --> lus: disk full

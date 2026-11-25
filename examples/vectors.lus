@@ -30,9 +30,11 @@ print(magic, version, count, reading, next_offset)  --> SNSR 2 1500 21.5 18
 -- `unpackmany` reads the same record again and again until the end of the vector.
 local samples = vector.create(12)
 vector.pack(samples, 0, ">i2i2i2i2i2i2", 210, 215, -40, 0, 1023, 7)
+
 for value in vector.unpackmany(samples, 0, ">i2") do
     io.write(value, " ")
 end
+
 print()  --> 210 215 -40 0 1023 7
 
 -- A string converts to its UTF-8 bytes and back.

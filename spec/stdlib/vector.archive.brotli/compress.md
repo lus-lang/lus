@@ -30,9 +30,9 @@ The following example compresses repeated text, decompresses it, and passes an i
 ```lus
 local text = string.rep("hello world ", 100)
 local packed = vector.archive.brotli.compress(text)
-print(type(packed), #packed < #text)                         --> vector  true
+print(type(packed), #packed < #text)  --> vector  true
 local back = vector.archive.brotli.decompress(packed)
-print(vector.tostring(back) == text)                         --> true
+print(vector.tostring(back) == text)  --> true
 print(#vector.archive.brotli.compress(text, 3, 16) < #text)  --> true
 print(catch vector.archive.brotli.compress(text, 99))
 --> false  ...: bad argument #2 to 'compress' (quality must be 0-11)

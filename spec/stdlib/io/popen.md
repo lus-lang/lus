@@ -28,8 +28,8 @@ The following example reads the output of a command and the status it exits with
 ```lus
 pledge("exec")
 local proc = io.popen("echo hello")
-print(proc:read("l"))   --> hello
-print(proc:close())     --> true  exit  0
+print(proc:read("l"))  --> hello
+print(proc:close())  --> true  exit  0
 local failing = io.popen("exit 3")
 print(failing:close())  --> nil  exit  3
 ```

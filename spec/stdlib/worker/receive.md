@@ -29,9 +29,9 @@ pledge("env", "fs", "load")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-worker-receive.lus")
 io.open(path, "w"):write("worker.message('working')\nerror('worker broke', 0)\n"):close()
 local w = worker.create(path)
-print(worker.receive(w))           --> working
-print(catch worker.receive(w))     --> false  worker broke
-print(worker.status(w))            --> dead
+print(worker.receive(w))  --> working
+print(catch worker.receive(w))  --> false  worker broke
+print(worker.status(w))  --> dead
 fs.remove(path)
 ```
 

@@ -25,7 +25,7 @@ local download = "lus 2.0.0 release archive"
 local published = "a6d34f8764f9db35a49e329d7052a00a51fb42ff27dd1c666d30f462932e6278"
 
 local digest = string.transcode(crypto.hash("sha256", download), "binary", "hex")
-print(digest == published)   --> true
+print(digest == published)  --> true
 ```
 
 `"sha1"` gives a digest of 20 bytes. SHA-1 is broken: researchers have built two different files with the same SHA-1 digest. It exists for formats that require it, such as the object names of git, and never for new designs. `"md5"` gives a digest of 16 bytes. MD5 is broken for every security purpose, since two inputs with the same MD5 digest take seconds to find. It exists only to speak formats that still name it, such as the `md5` password authentication of PostgreSQL.
@@ -42,10 +42,12 @@ global crypto, ipairs, print
 local pieces = { "lus 2.0.0 ", "release ", "archive" }
 
 local h = crypto.hasher("sha256")
+
 for _, piece in ipairs(pieces) do
     h:update(piece)
 end
-print(crypto.equal(h:digest(), crypto.hash("sha256", "lus 2.0.0 release archive")))   --> true
+
+print(crypto.equal(h:digest(), crypto.hash("sha256", "lus 2.0.0 release archive")))  --> true
 ```
 
 A program that reads a file opens it in binary mode and passes each block that `file:read(65536)` returns to `update`.
@@ -68,8 +70,8 @@ local body = [[{"event":"payment","amount":1200}]]
 local header = "bf54605d14f8e5a35b354fcf9967eeab3ddef7ce885f1f934ac880d54ab1af51"
 
 local received = string.transcode(header, "hex", "binary")
-print(crypto.equal(received, crypto.hmac("sha256", secret, body)))          --> true
-print(crypto.equal(received, crypto.hmac("sha256", secret, body .. " ")))   --> false
+print(crypto.equal(received, crypto.hmac("sha256", secret, body)))  --> true
+print(crypto.equal(received, crypto.hmac("sha256", secret, body .. " ")))  --> false
 ```
 
 JSON Web Tokens write their HMAC in base64url, the variant of base64 that is safe in a URL. `string.transcode(mac, "binary", "base64url")` produces it.
@@ -90,10 +92,10 @@ local secret, public = crypto.keypair()
 local manifest = tojson({ name = "app", version = "1.4.0" })
 local signature = crypto.sign(secret, manifest)
 
-print(crypto.verify(public, manifest, signature))     --> true
+print(crypto.verify(public, manifest, signature))  --> true
 
 local altered = tojson({ name = "app", version = "1.4.1" })
-print(crypto.verify(public, altered, signature))      --> false
+print(crypto.verify(public, altered, signature))  --> false
 ```
 
 A key or signature is often stored or sent as text. [`string.transcode`](/manual/api#string.transcode) converts a vector to hex or base64 and back. `crypto.keypair(secret)` returns the public key of a stored secret key.
@@ -105,11 +107,11 @@ global crypto, print, string
 
 local secret, public = crypto.keypair()
 local text = string.transcode(public, "binary", "hex")
-print(#text)                                            --> 64
+print(#text)  --> 64
 
 local restored = string.transcode(text, "hex", "binary")
 local signature = crypto.sign(secret, "hello")
-print(crypto.verify(restored, "hello", signature))      --> true
+print(crypto.verify(restored, "hello", signature))  --> true
 ```
 
 ### Keys from other systems
@@ -121,16 +123,23 @@ The following program checks a token signature against a key that a provider pub
 ```lus
 global crypto, print, string
 
-local published = crypto.importkey({ kty = "EC", crv = "P-256",
+local published = crypto.importkey({
+    kty = "EC",
+    crv = "P-256",
     x = "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
-    y = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0" })
+    y = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+})
 local input = "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ"
-local sig = string.transcode("DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q", "base64url", "binary")
-print(crypto.verify(published, input, sig, "ES256"))   --> true
+local sig = string.transcode(
+    "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q",
+    "base64url",
+    "binary"
+)
+print(crypto.verify(published, input, sig, "ES256"))  --> true
 
 local mine = crypto.keypair("P-256")
 local token_sig = crypto.sign(mine, "eyJhbGciOiJFUzI1NiJ9.e30")
-print(#token_sig)                                       --> 64
+print(#token_sig)  --> 64
 ```
 
 `key:export()` writes a key back as PEM and `key:export("jwk")` as a JWK table. `key:public()` gives the half to publish. The library reads RSA keys of 2048, 3072, and 4096 bits but makes none. `openssl genpkey` makes them. A new key is better as Ed25519 or P-256 in any case.
@@ -147,7 +156,7 @@ global crypto, print
 local master = crypto.random(32)
 local enc_key = crypto.hkdf("sha256", master, nil, "cookie encryption", 32)
 local mac_key = crypto.hkdf("sha256", master, nil, "cookie signing", 32)
-print(crypto.equal(enc_key, mac_key))   --> false
+print(crypto.equal(enc_key, mac_key))  --> false
 ```
 
 ## Encryption
@@ -164,10 +173,10 @@ global crypto, print, vector
 local key = crypto.random(32)
 local nonce = crypto.random(12)
 local ct, tag = crypto.encrypt("aes-256-gcm", key, nonce, '{"user":42}')
-print(vector.tostring(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag)))   --> {"user":42}
+print(vector.tostring(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag)))  --> {"user":42}
 
 vector.set(ct, 0, vector.get(ct, 0) ~ 1)
-print(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag))   --> nil
+print(crypto.decrypt("aes-256-gcm", key, nonce, ct, tag))  --> nil
 ```
 
 An optional last argument names data that the tag covers without encrypting it, such as the name of the cookie, so a ciphertext moved to another cookie fails too.
@@ -184,9 +193,9 @@ The following program stores a password at sign-up and checks two login attempts
 global crypto, print
 
 local stored = crypto.hashpassword("correct horse battery staple")
-print(stored:sub(1, 9))                                                --> $argon2id
+print(stored:sub(1, 9))  --> $argon2id
 
-print(crypto.verifypassword("correct horse battery staple", stored))   --> true
+print(crypto.verifypassword("correct horse battery staple", stored))  --> true
 print(crypto.verifypassword("correct horse battery stapler", stored))  --> false
 ```
 
@@ -202,7 +211,7 @@ The following program makes a session token of 32 random bytes in base64.
 global crypto, print, string
 
 local token = string.transcode(crypto.random(32), "binary", "base64")
-print(#token)   --> 44
+print(#token)  --> 44
 ```
 
 ## Identifiers
@@ -216,10 +225,10 @@ The following program makes one identifier of each kind and checks that two vers
 ```lus
 global crypto, print
 
-print(#crypto.uuid(), #crypto.ulid())          --> 36  26
+print(#crypto.uuid(), #crypto.ulid())  --> 36  26
 
 local first, second = crypto.uuid(7), crypto.uuid(7)
-print(first < second)                          --> true
+print(first < second)  --> true
 ```
 
 ## Related pages

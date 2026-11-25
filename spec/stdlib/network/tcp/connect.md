@@ -31,8 +31,8 @@ local server <close> = network.tcp.bind("127.0.0.1", 0)
 local _, port = server:getsockname()
 local sock <close> = network.tcp.connect("127.0.0.1", port)
 local peer_address, peer_port = sock:getpeername()
-print(peer_address, peer_port == port)   --> 127.0.0.1  true
-print(sock:send("hello"))                --> 5
+print(peer_address, peer_port == port)  --> 127.0.0.1  true
+print(sock:send("hello"))  --> 5
 ```
 
 A failure of an open connection during `send` or `receive`, such as a reset by the other end, returns `nil` and an error object with the code `"reset"` and a message such as `"receive: Connection reset by peer"`. [`tcp_socket:receive`](/manual/api#tcp_socket:receive) reads from the socket.

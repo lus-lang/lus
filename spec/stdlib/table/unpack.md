@@ -26,10 +26,10 @@ The results are `j - i + 1` values in order, with `nil` for each missing element
 A range of more values than the stack can hold raises `too many results to unpack`. The stack of a thread holds 1,000,000 slots, so a call from a fresh state unpacks at most about 999,990 values. A `list` that is not a table raises a type error.
 
 ```lus
-print(table.unpack({1, 2, 3}))         --> 1  2  3
-print(table.unpack({1, 2, 3}, 2))      --> 2  3
-print(table.unpack({1, 2, 3}, 2, 5))   --> 2  3  nil  nil
-print(select("#", table.unpack({1, 2}, 3)))  --> 0
+print(table.unpack({ 1, 2, 3 }))  --> 1  2  3
+print(table.unpack({ 1, 2, 3 }, 2))  --> 2  3
+print(table.unpack({ 1, 2, 3 }, 2, 5))  --> 2  3  nil  nil
+print(select("#", table.unpack({ 1, 2 }, 3)))  --> 0
 ```
 
 The elements are read through `__index` and the length through `__len`. [`table.pack`](/manual/api#table.pack) is the inverse, and its field `n` gives the `j` that restores trailing `nil` values.

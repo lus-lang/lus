@@ -28,9 +28,9 @@ local function parse(s)
     return tonumber(s) or error("not a number: " .. s, 0)
 end
 
-print(catch parse("12"))          --> true  12
-print(catch parse("x"))           --> false  not a number: x
-print(select(2, catch error({ code = 7 })).code)   --> 7
+print(catch parse("12"))  --> true  12
+print(catch parse("x"))  --> false  not a number: x
+print(select(2, catch error({ code = 7 })).code)  --> 7
 ```
 
 The `catch` expression captures the error object, as [Error handling](/manual/guide#errors) describes. [`assert`](/manual/api#assert) raises an error when a value is falsy.

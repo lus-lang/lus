@@ -21,9 +21,9 @@ The result is a positive float. A result too large for a float is `inf`, and `-m
 An argument that is not a number raises `bad argument #1 to 'math.exp' (number expected, got nil)` with its type.
 
 ```lus
-print(math.exp(0))     --> 1.0
-print(math.exp(1))     --> 2.7182818284590455
-print(math.exp(710))   --> inf
+print(math.exp(0))  --> 1.0
+print(math.exp(1))  --> 2.7182818284590455
+print(math.exp(710))  --> inf
 ```
 
 [`math.log`](/manual/api#math.log) is the inverse. The `^` operator raises any base to a power.

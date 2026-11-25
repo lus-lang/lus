@@ -23,7 +23,6 @@ pledge("load")
     Local variables shadow globals.
 ]]
 
-
 -- =========================================================================
 -- Declaration and initialization
 -- =========================================================================
@@ -229,7 +228,10 @@ end
 
 -- local shadows global
 local function local_shadows_global_test()
-    local tostring = function() return "shadowed" end
+    local tostring = function()
+        return "shadowed"
+    end
+
     local r = tostring(42)
     assert(r == "shadowed", "the local must win over the global tostring")
 end
@@ -237,9 +239,13 @@ end
 -- local unshadows after block
 local function local_unshadows_after_block_test()
     do
-        local tostring = function() return "shadow" end
+        local tostring = function()
+            return "shadow"
+        end
+
         assert(tostring(99) == "shadow")
     end
+
     assert(tostring(99) == "99", "the global tostring is visible again")
 end
 

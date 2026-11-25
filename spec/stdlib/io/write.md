@@ -16,8 +16,8 @@ Each argument is a string, a number, or a vector. A number is written in the for
 On success the call returns the default output handle, so that calls can chain. A write that the operating system refuses returns `nil`, a message such as `"Broken pipe"` for a pipe whose reader has ended or `"No space left on device"`, and the number of the error, as in Lua, so a program that must notice the failure wraps the call in `assert`. `io.write` requires no permission, since the default output is already open.
 
 ```lus
-io.write("pi is about ", 3.14, "\n")         --> pi is about 3.14
-print(io.write("") == io.stdout)             --> true
+io.write("pi is about ", 3.14, "\n")  --> pi is about 3.14
+print(io.write("") == io.stdout)  --> true
 ```
 
 The default output starts as `io.stdout`, and [`io.output`](/manual/api#io.output) changes it. `file:write` writes to one handle, and `print` writes its arguments with tabs and a newline.

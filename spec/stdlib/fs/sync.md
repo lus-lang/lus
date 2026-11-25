@@ -29,7 +29,7 @@ f:write("hello\n")
 f:sync()
 f:close()
 fs.sync(dir)
-print(fs.type(fs.path.join(dir, "new.txt")))   --> file  false
+print(fs.type(fs.path.join(dir, "new.txt")))  --> file  false
 fs.remove(dir, true)
 ```
 

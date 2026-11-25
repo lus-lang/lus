@@ -24,6 +24,7 @@ do
     local lock <close> = acquire("lock")
     print("work")
 end
+
 --> acquire lock
 --> work
 --> release lock
@@ -34,6 +35,7 @@ do
     local db <close> = acquire("database")
     local tx <close> = acquire("transaction")
 end
+
 --> acquire database
 --> acquire transaction
 --> release transaction
@@ -42,9 +44,11 @@ end
 -- Cleanup also runs when an error or a `return` ends the block.
 local function import(rows)
     local file <close> = acquire("import.csv")
+
     if rows == 0 then
         error("nothing to import", 0)
     end
+
     return `imported $rows rows`
 end
 
@@ -53,6 +57,7 @@ print(import(3))
 --> release import.csv
 --> imported 3 rows
 print(catch import(0))
+
 --> acquire import.csv
 --> release import.csv after error
 --> false nothing to import
@@ -68,6 +73,7 @@ local function handle_request(path)
     local _ <close> = defer(function()
         print(`done $path`)
     end)
+
     print(`serving $path`)
 end
 

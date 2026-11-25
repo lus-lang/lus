@@ -16,7 +16,9 @@ The following file tests a function `add` with positive and with negative argume
 
 ```lus
 -- math_test.lus
-local function add(a, b) return a + b end
+local function add(a, b)
+    return a + b
+end
 
 local function add_test()
     assert(add(2, 2) == 4)
@@ -82,7 +84,9 @@ A timeout stops a test that hangs, so the rest of the run can finish. The runner
 A failed assertion is useful only when its message contains the values that were tested. In a test file, a failed `assert` reports the expression together with the values of its operands, so a test needs no separate function for each kind of comparison. The report shows both sides of a comparison or the value of any other expression, together with a message passed as the second argument.
 
 ```lus
-local function area(w, h) return w * h end
+local function area(w, h)
+    return w * h
+end
 
 local function area_test()
     local w, h = 3, 4
@@ -115,7 +119,9 @@ A power assert that passes returns what the standard `assert` returns, all of it
 A _case table_ runs one test with many inputs. The runner reports each input as a test of its own, so one failing input does not hide the others. A case table is a table named `NAME_cases` whose entries the runner passes to the test `NAME_test`, one call per entry. When an entry is a table, its array items are the arguments of the call. Any other entry is the single argument. The case table may be a local, a declared global, or a global assigned at the top level of the file. The following file tests `add` with three pairs of numbers and their expected sums.
 
 ```lus
-local function add(a, b) return a + b end
+local function add(a, b)
+    return a + b
+end
 
 local add_cases = {
     { 1, 2, 3 },
@@ -143,7 +149,10 @@ The first of the following tests checks that invalid JSON raises a parse error a
 
 ```lus
 local function parse_test()
-    local err = raises(function() fromjson("{") end, "parse error")
+    local err = raises(function()
+        fromjson("{")
+    end, "parse error")
+
     assert(type(err) == "string")
     assert(same(fromjson("[1, [2, 3]]"), { 1, { 2, 3 } }))
 end
@@ -233,7 +242,11 @@ A _benchmark_ is a top-level function of a test file whose name ends in `_bench`
 ```lus
 local function sort_bench()
     local data = {}
-    for i = 1, 1000 do data[i] = (i * 7919) % 1000 end
+
+    for i = 1, 1000 do
+        data[i] = (i * 7919) % 1000
+    end
+
     return function()
         local copy = table.clone(data)
         table.sort(copy)
@@ -260,9 +273,10 @@ The text after `-->` on a line of a block is a line that the block must print, t
 for _, name in ipairs({ "ada", "grace" }) do
     print(name:upper(), #name)
 end
+
 --> ADA  3
 --> GRACE  5
-print(catch error("disk full"))   --> false  ...: disk full
+print(catch error("disk full"))  --> false  ...: disk full
 ```
 
 The examples in the [doc comments](/manual/tools#documentation) of a `.lus` file run the same way, so the example of a function stays correct with the function. With `--doc`, the runner also reads every `.lus` file it finds and runs each ` ```lus ` block inside a `---` comment or a `--[[- ... ]]` comment. The directory of the file comes first on `package.path`, so an example requires its own module by name. A source file whose doc comments hold no example stays out of the report.

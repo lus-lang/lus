@@ -26,6 +26,7 @@ table.sort(names)
 for _, name in ipairs(names) do
     print(name, stock[name])
 end
+
 --> mug  0
 --> spoon  12
 --> tea  30

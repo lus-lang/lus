@@ -25,10 +25,16 @@ The parameter `v` may be a value of any type. If `v` has a `__tostring` metameth
 A call with no arguments raises `bad argument #1 to 'tostring' (value expected)`.
 
 ```lus
-print(tostring(12), tostring(1.0), tostring(1.50d))   --> 12  1.0  1.50
-local point = setmetatable({}, { __tostring = function() return "point(1, 2)" end })
-print(tostring(point))                                --> point(1, 2)
-print(tostring({}):match("^table: ") ~= nil)          --> true
+print(tostring(12), tostring(1.0), tostring(1.50d))  --> 12  1.0  1.50
+
+local point = setmetatable({}, {
+    __tostring = function()
+        return "point(1, 2)"
+    end,
+})
+
+print(tostring(point))  --> point(1, 2)
+print(tostring({}):match("^table: ") ~= nil)  --> true
 ```
 
 [`print`](/manual/api#print) converts its arguments with the same rules, and [`string.format`](/manual/api#string.format) controls the number of digits.

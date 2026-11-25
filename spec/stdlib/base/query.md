@@ -34,15 +34,22 @@ The following example filters an in-memory table and projects one field, then ru
 ```lus
 local people = {
     { name = "Alice", age = 30 },
-    { name = "Bob",   age = 17 },
+    { name = "Bob", age = 17 },
 }
 local adults = @people as p where p.age >= 18 select p.name
-for row in query(adults) do print(row.name) end   --> Alice
+
+for row in query(adults) do  --> Alice
+    print(row.name)
+end
 
 people[3] = { name = "Carol", age = 45 }
 local names = {}
-for row in query(adults) do names[#names + 1] = row.name end
-print(table.concat(names, " "))                   --> Alice Carol
+
+for row in query(adults) do
+    names[#names + 1] = row.name
+end
+
+print(table.concat(names, " "))  --> Alice Carol
 ```
 
 [Queries](/manual/guide#queries) in the guide describes the query language and its clauses.

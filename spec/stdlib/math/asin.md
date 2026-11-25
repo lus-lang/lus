@@ -21,10 +21,10 @@ The result is a float from -pi / 2 to pi / 2. An `x` outside the range from -1 t
 An argument that is not a number raises `bad argument #1 to 'math.asin' (number expected, got nil)` with its type.
 
 ```lus
-print(math.asin(0))      --> 0.0
-print(math.asin(1))      --> 1.5707963267948966
-print(math.asin(0.5d))   --> 0.5235987755982989
-print(math.asin(2))      --> nan
+print(math.asin(0))  --> 0.0
+print(math.asin(1))  --> 1.5707963267948966
+print(math.asin(0.5d))  --> 0.5235987755982989
+print(math.asin(2))  --> nan
 ```
 
 [`math.sin`](/manual/api#math.sin) is the inverse, and [`math.deg`](/manual/api#math.deg) converts the result to degrees.

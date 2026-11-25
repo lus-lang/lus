@@ -31,11 +31,11 @@ local client = network.tcp.connect(server:getsockname())
 local conn <close> = server:accept()
 client:send("first\r\nsecond\nrest")
 client:close()
-print(vector.tostring(conn:receive()))       --> first
-print(vector.tostring(conn:receive(3)))      --> sec
-print(vector.tostring(conn:receive()))       --> ond
-print(vector.tostring(conn:receive("*a")))   --> rest
-print(#conn:receive("*l"))                   --> 0
+print(vector.tostring(conn:receive()))  --> first
+print(vector.tostring(conn:receive(3)))  --> sec
+print(vector.tostring(conn:receive()))  --> ond
+print(vector.tostring(conn:receive("*a")))  --> rest
+print(#conn:receive("*l"))  --> 0
 ```
 
 `receive` waits for data, as described in [`network.tcp`](/manual/api#network.tcp). [`vector.tostring`](/manual/api#vector.tostring) turns the received bytes into a string.

@@ -22,11 +22,13 @@ local client = network.tcp.connect(server:getsockname())
 local conn <close> = server:accept()
 client:send("first\n\nthird\n")
 client:close()
+
 for line in conn.input do
     print(#line, vector.tostring(line))
 end
+
 --> 5  first
 --> 0
 --> 5  third
-print(coroutine.status(conn.input))   --> dead
+print(coroutine.status(conn.input))  --> dead
 ```

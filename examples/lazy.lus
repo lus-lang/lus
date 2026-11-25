@@ -16,6 +16,7 @@ local function run(command)
     if command == "version" then
         return "2.0"
     end
+
     return `serving on $(settings.host):$(settings.port)`
 end
 
@@ -39,9 +40,11 @@ local attempts = 0
 
 local function connect()
     attempts = attempts + 1
+
     if attempts < 2 then
         error("connection refused", 0)
     end
+
     return `connection $attempts`
 end
 

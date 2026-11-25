@@ -21,31 +21,58 @@
 -- program runs, the groups of the coverage report. With --minutes, the
 -- harness starts no new mutant once that much time has passed.
 
-global arg, assert, crypto, error, fs, io, ipairs, math, os, pairs, pledge, print, string, table, tonumber, tostring
+global arg, assert, crypto, error, fs, io, ipairs, math, os, pairs, pledge, print, string, table,
+    tonumber, tostring
 
 pledge("exec", "fs", "env")
 
-local opts = { count = 40, seed = 1, covered = nil, work = nil, timeout = 120, minutes = nil, diff = 200, files = {} }
+local opts = {
+    count = 40,
+    seed = 1,
+    covered = nil,
+    work = nil,
+    timeout = 120,
+    minutes = nil,
+    diff = 200,
+    files = {},
+}
+
 do
     local i = 1
+
     while i <= #arg do
         local a, v = arg[i], arg[i + 1]
-        if a == "--count" then opts.count = tonumber(v)
-        elseif a == "--seed" then opts.seed = tonumber(v)
-        elseif a == "--covered" then opts.covered = v
-        elseif a == "--work" then opts.work = v
-        elseif a == "--timeout" then opts.timeout = tonumber(v)
-        elseif a == "--minutes" then opts.minutes = tonumber(v)
-        elseif a == "--diff" then opts.diff = tonumber(v)
-        elseif a == "--file" then opts.files[#opts.files + 1] = v
-        else error("unknown option " .. a) end
+
+        if a == "--count" then
+            opts.count = tonumber(v)
+        elseif a == "--seed" then
+            opts.seed = tonumber(v)
+        elseif a == "--covered" then
+            opts.covered = v
+        elseif a == "--work" then
+            opts.work = v
+        elseif a == "--timeout" then
+            opts.timeout = tonumber(v)
+        elseif a == "--minutes" then
+            opts.minutes = tonumber(v)
+        elseif a == "--diff" then
+            opts.diff = tonumber(v)
+        elseif a == "--file" then
+            opts.files[#opts.files + 1] = v
+        else
+            error("unknown option " .. a)
+        end
+
         i = i + 2
     end
 end
 
 -- The harness runs from the root of the repository.
 local root = assert(os.getenv("PWD"), "PWD is not set")
-assert(fs.type(fs.path.join(root, "tests", "mutate", "mutate.zig")), "run the harness from the root of the repository")
+assert(
+    fs.type(fs.path.join(root, "tests", "mutate", "mutate.zig")),
+    "run the harness from the root of the repository"
+)
 opts.work = opts.work or fs.path.join(root, "runtime", "zig-out-mutate")
 
 local function sh(cmd)
@@ -61,7 +88,11 @@ end
 
 local function readText(path)
     local f = io.open(path, "r", { lossy = true })
-    if not f then return nil end
+
+    if not f then
+        return nil
+    end
+
     local s = f:read("a")
     f:close()
     return s
@@ -76,34 +107,58 @@ end
 
 -- The code that every program runs (`coverage.zig`).
 local DEFAULT_DIRS = { "vm", "compile" }
-local DEFAULT_FILES = { "lib/base.zig", "lib/string.zig", "lib/table.zig", "lib/math.zig", "lib/coroutine.zig", "lib/utf8.zig" }
+local DEFAULT_FILES = {
+    "lib/base.zig",
+    "lib/string.zig",
+    "lib/table.zig",
+    "lib/math.zig",
+    "lib/coroutine.zig",
+    "lib/utf8.zig",
+}
 local EXCLUDED = { ["vm/faultio.zig"] = true, ["vm/faultcrash.zig"] = true }
 
 local function targetFiles()
-    if #opts.files > 0 then return opts.files end
+    if #opts.files > 0 then
+        return opts.files
+    end
+
     local files = {}
+
     for _, d in ipairs(DEFAULT_DIRS) do
         for _, name in ipairs(fs.list(fs.path.join(root, "runtime", "src", d), "*.zig")) do
             local rel = d .. "/" .. name
-            if not EXCLUDED[rel] then files[#files + 1] = rel end
+
+            if not EXCLUDED[rel] then
+                files[#files + 1] = rel
+            end
         end
     end
-    for _, f in ipairs(DEFAULT_FILES) do files[#files + 1] = f end
+
+    for _, f in ipairs(DEFAULT_FILES) do
+        files[#files + 1] = f
+    end
+
     table.sort(files)
     return files
 end
 
 -- The covered lines of each file, from an export of positions.
 local function coveredLines()
-    if not opts.covered then return nil end
+    if not opts.covered then
+        return nil
+    end
+
     local lines = {}
+
     for entry in assert(readText(opts.covered), "cannot read " .. opts.covered):gmatch("[^\n]+") do
         local file, line = entry:match("^(.-):(%d+):%d+$")
+
         if file then
             lines[file] = lines[file] or {}
             lines[file][tonumber(line)] = true
         end
     end
+
     return lines
 end
 
@@ -119,19 +174,30 @@ end
 -- The conformance files, cheapest first, from the times of a run of the
 -- unchanged copy.
 local function orderedTests()
-    local dirs = fs.path.join(root, "tests", "conformance") .. " " .. fs.path.join(root, "packages", "language-server", "tests")
+    local dirs = fs.path.join(root, "tests", "conformance")
+        .. " "
+        .. fs.path.join(root, "packages", "language-server", "tests")
     os.setenv("LUS_BIN", bin)
     os.setenv("LUS_JIT", "off")
     local _, out = sh(quote(bin) .. " test --timeout " .. opts.timeout .. " " .. dirs)
     local files = {}
+
     for path, ms in out:gmatch("ok%s+(%S+) %([^)]-, (%d+) ms%)") do
         files[#files + 1] = { path = path, ms = tonumber(ms) }
     end
+
     assert(#files > 0, "the unchanged copy passed no test file:\n" .. out)
+
     for line in out:gmatch("[^\n]+") do
-        if line:find("^FAIL") then error("the unchanged copy fails a test: " .. line) end
+        if line:find("^FAIL") then
+            error("the unchanged copy fails a test: " .. line)
+        end
     end
-    table.sort(files, function(a, b) return a.ms < b.ms end)
+
+    table.sort(files, function(a, b)
+        return a.ms < b.ms
+    end)
+
     return files
 end
 
@@ -148,22 +214,44 @@ local judge = fs.path.join(root, "runtime", "zig-out", "bin", "lus")
 local function firstFailure(tests)
     for _, mode in ipairs({ "off", "opt-eager" }) do
         os.setenv("LUS_JIT", mode)
+
         for _, t in ipairs(tests) do
             local ok = sh(quote(bin) .. " test --timeout " .. opts.timeout .. " " .. quote(t.path))
+
             if not ok then
                 os.setenv("LUS_JIT", "off")
                 return fs.path.name(t.path) .. (mode == "off" and "" or ", " .. mode)
             end
         end
     end
+
     os.setenv("LUS_JIT", "off")
     local diff_out = fs.path.join(opts.work, "diff-findings")
-    local ok = sh(quote(judge) .. " " .. quote(fs.path.join(root, "tests", "diff", "run.lus")) ..
-        " --count " .. opts.diff .. " --jobs 4 --timeout " .. opts.timeout .. " --lus " .. quote(bin) .. " --out " .. quote(diff_out))
-    if not ok then return string.format("the differential programs, see %s", diff_out) end
+    local ok = sh(
+        quote(judge)
+            .. " "
+            .. quote(fs.path.join(root, "tests", "diff", "run.lus"))
+            .. " --count "
+            .. opts.diff
+            .. " --jobs 4 --timeout "
+            .. opts.timeout
+            .. " --lus "
+            .. quote(bin)
+            .. " --out "
+            .. quote(diff_out)
+    )
+
+    if not ok then
+        return string.format("the differential programs, see %s", diff_out)
+    end
+
     sh("sh " .. quote(fs.path.join(root, "tools", "wait-for-memory.sh")))
     ok = sh("cd " .. quote(work_rt) .. " && zig build test -j2")
-    if not ok then return "the unit tests" end
+
+    if not ok then
+        return "the unit tests"
+    end
+
     return nil
 end
 
@@ -172,9 +260,13 @@ end
 local function equivalents()
     local set = {}
     local text = readText(fs.path.join(root, "tests", "mutate", "equivalent.txt")) or ""
+
     for line in text:gmatch("[^\n]+") do
-        if not line:find("^#") then set[line] = true end
+        if not line:find("^#") then
+            set[line] = true
+        end
     end
+
     return set
 end
 
@@ -192,8 +284,14 @@ end
 
 local _ = catch fs.remove(opts.work, true)
 fs.createdirectory(opts.work, true)
-local ok, out = sh("rsync -a --exclude .zig-cache --exclude 'zig-out*' " .. quote(fs.path.join(root, "runtime") .. "/") .. " " .. quote(work_rt .. "/"))
+local ok, out = sh(
+    "rsync -a --exclude .zig-cache --exclude 'zig-out*' "
+        .. quote(fs.path.join(root, "runtime") .. "/")
+        .. " "
+        .. quote(work_rt .. "/")
+)
 assert(ok, out)
+
 -- The build reads the specification and the skills beside the runtime.
 for _, d in ipairs({ "spec", ".agents", "tests", "packages" }) do
     sh("ln -s " .. quote(fs.path.join(root, d)) .. " " .. quote(fs.path.join(opts.work, d)))
@@ -205,6 +303,7 @@ assert(ok, "the unchanged copy does not build:\n" .. out)
 local original_digest = digest(bin)
 local tests = orderedTests()
 print(string.format("%d test files, cheapest first", #tests))
+
 -- The unchanged copy passes everything that kills a mutant.
 do
     local failed = firstFailure({})
@@ -214,25 +313,45 @@ end
 -- Every site of every target file, on covered lines when the export says.
 local covered = coveredLines()
 local pool = {}
+
 for _, rel in ipairs(targetFiles()) do
     local src = fs.path.join(work_rt, "src", rel)
     local lines_arg = ""
+
     if covered then
         local list = {}
-        for line in pairs(covered[rel] or {}) do list[#list + 1] = tostring(line) end
+
+        for line in pairs(covered[rel] or {}) do
+            list[#list + 1] = tostring(line)
+        end
+
         local lf = fs.path.join(opts.work, "lines.txt")
         local f = assert(io.open(lf, "w"))
         f:write(table.concat(list, "\n"), "\n")
         f:close()
         lines_arg = " " .. quote(lf)
     end
-    local sok, sites = sh("zig run " .. quote(mutate_tool) .. " -- sites " .. quote(src) .. lines_arg)
+
+    local sok, sites = sh(
+        "zig run " .. quote(mutate_tool) .. " -- sites " .. quote(src) .. lines_arg
+    )
     assert(sok, sites)
+
     for line in sites:gmatch("[^\n]+") do
         local index, kind, ln, what = line:match("^(%d+) (%S+) (%d+) (.*)$")
-        if index then pool[#pool + 1] = { file = rel, index = tonumber(index), kind = kind, line = tonumber(ln), what = what } end
+
+        if index then
+            pool[#pool + 1] = {
+                file = rel,
+                index = tonumber(index),
+                kind = kind,
+                line = tonumber(ln),
+                what = what,
+            }
+        end
     end
 end
+
 print(string.format("%d mutation sites in %d files", #pool, #targetFiles()))
 
 local skip = equivalents()
@@ -243,21 +362,30 @@ local survivors = {}
 local by_dir = {}
 local tried = 0
 local seen = {}
+
 while results.killed + results.survived < opts.count and tried < #pool do
     if opts.minutes and os.time() - started > opts.minutes * 60 then
         print(string.format("stopping after %d minutes", opts.minutes))
         break
     end
+
     local pick = pool[math.random(#pool)]
     local key = pick.file .. "#" .. pick.index
-    if skip[string.format("%s:%d %s %s", pick.file, pick.line, pick.kind, pick.what)] then seen[key] = true end
+
+    if skip[string.format("%s:%d %s %s", pick.file, pick.line, pick.kind, pick.what)] then
+        seen[key] = true
+    end
+
     if not seen[key] then
         seen[key] = true
         tried = tried + 1
         local src = fs.path.join(work_rt, "src", pick.file)
         local saved = assert(readText(src))
         local verdict
-        local aok = sh("zig run " .. quote(mutate_tool) .. " -- apply " .. quote(src) .. " " .. pick.index)
+        local aok = sh(
+            "zig run " .. quote(mutate_tool) .. " -- apply " .. quote(src) .. " " .. pick.index
+        )
+
         if not aok then
             verdict = "broken"
         elseif not build() then
@@ -269,19 +397,36 @@ while results.killed + results.survived < opts.count and tried < #pool do
             verdict = failed and "killed" or "survived"
             pick.by = failed
         end
+
         local f = assert(io.open(src, "w"))
         f:write(saved)
         f:close()
         results[verdict] = results[verdict] + 1
         local dir = pick.file:match("^([^/]+)/") or "."
         by_dir[dir] = by_dir[dir] or { killed = 0, n = 0 }
+
         if verdict == "killed" or verdict == "survived" then
             by_dir[dir].n = by_dir[dir].n + 1
-            if verdict == "killed" then by_dir[dir].killed = by_dir[dir].killed + 1 end
+
+            if verdict == "killed" then
+                by_dir[dir].killed = by_dir[dir].killed + 1
+            end
         end
+
         local label = string.format("%s:%d %s %s", pick.file, pick.line, pick.kind, pick.what)
-        if verdict == "survived" then survivors[#survivors + 1] = label end
-        print(string.format("%-9s %s%s", verdict, label, pick.by and ("  (by " .. pick.by .. ")") or ""))
+
+        if verdict == "survived" then
+            survivors[#survivors + 1] = label
+        end
+
+        print(
+            string.format(
+                "%-9s %s%s",
+                verdict,
+                label,
+                pick.by and ("  (by " .. pick.by .. ")") or ""
+            )
+        )
         io.stdout:flush()
     end
 end
@@ -289,22 +434,50 @@ end
 -- Restore the copy, so a later run starts from the original sources.
 build()
 local scored = results.killed + results.survived
-print(string.format("\n%d killed, %d survived, %d did not compile, %d compiled to the same binary", results.killed, results.survived, results.broken, results.same))
+print(
+    string.format(
+        "\n%d killed, %d survived, %d did not compile, %d compiled to the same binary",
+        results.killed,
+        results.survived,
+        results.broken,
+        results.same
+    )
+)
+
 if scored > 0 then
     local p, lo, hi = score(results.killed, scored)
     print(string.format("mutation score %.1f%%, 95%% interval %.0f%% to %.0f%%", p, lo, hi))
     local dirs = {}
-    for d in pairs(by_dir) do dirs[#dirs + 1] = d end
+
+    for d in pairs(by_dir) do
+        dirs[#dirs + 1] = d
+    end
+
     table.sort(dirs)
+
     for _, d in ipairs(dirs) do
         local t = by_dir[d]
+
         if t.n > 0 then
             local dp, dlo, dhi = score(t.killed, t.n)
-            print(string.format("  %-10s %5.1f%% of %d, 95%% interval %.0f%% to %.0f%%", d, dp, t.n, dlo, dhi))
+            print(
+                string.format(
+                    "  %-10s %5.1f%% of %d, 95%% interval %.0f%% to %.0f%%",
+                    d,
+                    dp,
+                    t.n,
+                    dlo,
+                    dhi
+                )
+            )
         end
     end
 end
+
 if #survivors > 0 then
     print("\nsurvivors, each a change that no test notices:")
-    for _, s in ipairs(survivors) do print("  " .. s) end
+
+    for _, s in ipairs(survivors) do
+        print("  " .. s)
+    end
 end

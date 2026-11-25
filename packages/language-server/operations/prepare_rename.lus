@@ -10,39 +10,57 @@ local prepare_rename = {}
 
 -- Standard library names that cannot be renamed (from lus-spec)
 local STDLIB = {}
+
 for _, name in ipairs(stdlib_data.globals) do
-  STDLIB[name] = true
+    STDLIB[name] = true
 end
+
 for _, name in ipairs(stdlib_data.tables) do
-  STDLIB[name] = true
+    STDLIB[name] = true
 end
 
 -- Validate rename is possible before starting.
 -- position is 0-based (LSP). Returns {range, placeholder} or nil.
 function prepare_rename.compute(uri, position)
-  ast_mod.parse(uri)
+    ast_mod.parse(uri)
 
-  local analysis = scope_mod.analyze(uri)
-  if not analysis then return nil end
+    local analysis = scope_mod.analyze(uri)
 
-  local doc = document.get(uri)
-  if not doc then return nil end
-  local line, col = pos_util.lsp_to_byte(
-    doc.text, doc.line_index, position.line, position.character)
+    if not analysis then
+        return nil
+    end
 
-  local decl = scope_mod.get_declaration(analysis, line, col)
-  if not decl then return nil end
+    local doc = document.get(uri)
 
-  -- Don't allow renaming stdlib names
-  if STDLIB[decl.name] then return nil end
+    if not doc then
+        return nil
+    end
 
-  return {
-    range = {
-      start = {line = decl.line - 1, character = decl.column - 1},
-      ["end"] = {line = decl.line - 1, character = decl.column - 1 + #decl.name},
-    },
-    placeholder = decl.name,
-  }
+    local line, col = pos_util.lsp_to_byte(
+        doc.text,
+        doc.line_index,
+        position.line,
+        position.character
+    )
+
+    local decl = scope_mod.get_declaration(analysis, line, col)
+
+    if not decl then
+        return nil
+    end
+
+    -- Don't allow renaming stdlib names
+    if STDLIB[decl.name] then
+        return nil
+    end
+
+    return {
+        range = {
+            start = { line = decl.line - 1, character = decl.column - 1 },
+            ["end"] = { line = decl.line - 1, character = decl.column - 1 + #decl.name },
+        },
+        placeholder = decl.name,
+    }
 end
 
 return prepare_rename

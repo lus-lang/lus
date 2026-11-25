@@ -20,11 +20,11 @@ pledge("env", "fs", "load")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-worker-status.lus")
 io.open(path, "w"):write("worker.message(worker.peek())\n"):close()
 local w = worker.create(path)
-print(worker.status(w))    --> running
+print(worker.status(w))  --> running
 worker.send(w, "go")
-print(worker.receive(w))   --> go
-print(worker.receive(w))   --> nil
-print(worker.status(w))    --> dead
+print(worker.receive(w))  --> go
+print(worker.receive(w))  --> nil
+print(worker.status(w))  --> dead
 fs.remove(path)
 ```
 

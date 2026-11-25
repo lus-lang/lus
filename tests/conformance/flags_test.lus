@@ -1,4 +1,10 @@
-pledge("load", "exec", "env=LUS_EXE", "fs:read=" .. TEST_DIR .. "/fixtures/flags", "fs:read=" .. TEST_DIR .. "/fixtures/flags/*")
+pledge(
+    "load",
+    "exec",
+    "env=LUS_EXE",
+    "fs:read=" .. TEST_DIR .. "/fixtures/flags",
+    "fs:read=" .. TEST_DIR .. "/fixtures/flags/*"
+)
 
 --[[
     Test suite for the flags feature.
@@ -20,7 +26,11 @@ local LUS = os.getenv("LUS_EXE") or "lus"
 
 local function run(args)
     local h = io.popen(LUS .. " " .. args .. " 2>&1", "r")
-    if not h then return nil, "cannot start the interpreter" end
+
+    if not h then
+        return nil, "cannot start the interpreter"
+    end
+
     local out = h:read("a")
     local ok = h:close()
     return out, ok
@@ -28,24 +38,42 @@ end
 
 local results = {}
 local setup_error
+
 do
-    local out = run("-Pload -Pworker -Pfs:read -Fdebug -Fversion=1.5 -Fcount=3 -Fname=alpha --flag empty= " .. TEST_DIR .. "/fixtures/flags/cases.lus")
+    local out = run(
+        "-Pload -Pworker -Pfs:read -Fdebug -Fversion=1.5 -Fcount=3 -Fname=alpha --flag empty= "
+            .. TEST_DIR
+            .. "/fixtures/flags/cases.lus"
+    )
+
     if out == nil then
         setup_error = "the interpreter is unavailable"
     else
         for line in out:gmatch("[^\n]+") do
             local name, status, msg = line:match("^RESULT\t([^\t]+)\t(%a+)\t?(.*)$")
-            if name then results[name] = {status = status, msg = msg} end
+
+            if name then
+                results[name] = { status = status, msg = msg }
+            end
         end
-        if next(results) == nil then setup_error = "the child run produced no results: " .. out end
+
+        if next(results) == nil then
+            setup_error = "the child run produced no results: " .. out
+        end
     end
 end
 
 local function check(name)
-    if setup_error then skip("2.0 gap: " .. setup_error .. " (set LUS_EXE to the interpreter path)") end
+    if setup_error then
+        skip("2.0 gap: " .. setup_error .. " (set LUS_EXE to the interpreter path)")
+    end
+
     local r = results[name]
     assert(r ~= nil)
-    if r.status ~= "ok" then error(r.msg, 0) end
+
+    if r.status ~= "ok" then
+        error(r.msg, 0)
+    end
 end
 
 local function boolean_flag_defaults_to_true_test()
@@ -182,7 +210,10 @@ end
 
 -- interpreter without -F still has an empty flags table
 local function interpreter_without_f_still_has_an_empty_flags_table_test()
-    if setup_error then skip("2.0 gap: " .. setup_error .. " (set LUS_EXE to the interpreter path)") end
+    if setup_error then
+        skip("2.0 gap: " .. setup_error .. " (set LUS_EXE to the interpreter path)")
+    end
+
     local script = "if type(flags) == 'table' and next(flags) == nil and not flags.debug then os.exit(0) end os.exit(1)"
     local out, ok = run("-Pload -e \"" .. script .. "\"")
     assert(ok == true or ok == 0)

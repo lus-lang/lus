@@ -34,8 +34,8 @@ local sender <close> = network.udp.open()
 local _, port = receiver:getsockname()
 sender:sendto("hello world", "127.0.0.1", port)
 local data, address, from_port = receiver:receive(5)
-print(vector.tostring(data), address)   --> hello  127.0.0.1
-print(from_port == select(2, sender:getsockname()))   --> true
+print(vector.tostring(data), address)  --> hello  127.0.0.1
+print(from_port == select(2, sender:getsockname()))  --> true
 ```
 
 `receive` waits as described in [`network.udp`](/manual/api#network.udp). [`vector.tostring`](/manual/api#vector.tostring) turns the received bytes into a string.

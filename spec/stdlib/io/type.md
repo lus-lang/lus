@@ -18,9 +18,9 @@ Tells whether `obj` is a file handle and returns `"file"` for an open handle, `"
 ```lus
 pledge("fs:write")
 local tmp = io.tmpfile()
-print(io.type(tmp))     --> file
+print(io.type(tmp))  --> file
 tmp:close()
-print(io.type(tmp))     --> closed file
+print(io.type(tmp))  --> closed file
 print(io.type("file"))  --> nil
 ```
 

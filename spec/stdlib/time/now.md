@@ -16,8 +16,8 @@ The following example reads the current time. The exact value differs on every r
 
 ```lus
 local n = time.now()
-print(math.type(n:epoch()), n:nanos() < 1000000000)   --> integer  true
-print(time.instant(0) < n)                            --> true
+print(math.type(n:epoch()), n:nanos() < 1000000000)  --> integer  true
+print(time.instant(0) < n)  --> true
 print(n:iso():match("^%d%d%d%d%-%d%d%-%d%dT") ~= nil)  --> true
 ```
 

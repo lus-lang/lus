@@ -25,9 +25,9 @@ The result is a new table of `rows` tables, each holding `cols` elements. Elemen
 A length that does not match raises `array length 3 does not match 2 x 2` with the actual numbers. A `rows` or `cols` of zero or less raises `bad argument #2 to 'table.reshape' (rows must be positive)` or `bad argument #3 to 'table.reshape' (cols must be positive)`.
 
 ```lus
-local m = table.reshape({1, 2, 3, 4, 5, 6}, 2, 3)
+local m = table.reshape({ 1, 2, 3, 4, 5, 6 }, 2, 3)
 print(#m, table.concat(m[1], ","), table.concat(m[2], ","))  --> 2  1,2,3  4,5,6
-print(catch table.reshape({1, 2, 3}, 2, 2))  --> false  ...: array length 3 does not match 2 x 2
+print(catch table.reshape({ 1, 2, 3 }, 2, 2))  --> false  ...: array length 3 does not match 2 x 2
 ```
 
 An empty list has no valid shape, since both dimensions must be positive. [`table.transpose`](/manual/api#table.transpose) swaps the rows and columns of the result.

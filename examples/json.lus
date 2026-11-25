@@ -33,6 +33,7 @@ local function public(key, value)
     if key == "password" then
         return nil
     end
+
     return value
 end
 
@@ -41,6 +42,7 @@ print(tojson(user, public))  --> {"name":"ada"}
 
 -- A `__json` metamethod gives a table its own JSON form.
 local Point = {}
+
 Point.__json = function(p)
     return { p.x, p.y }
 end

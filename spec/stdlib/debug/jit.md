@@ -32,11 +32,15 @@ The following example reads the report of the state and of two functions. The va
 ```lus
 local base, opt, units, exits = debug.jit()
 print(type(base), type(opt), math.type(units), math.type(exits))
+
 --> string  string  integer  integer
-local function add(a, b) return a + b end
+local function add(a, b)
+    return a + b
+end
+
 local native, optimized = debug.jit(add)
-print(type(native), type(optimized))    --> boolean  boolean
-print(debug.jit(print))                 --> false  false
+print(type(native), type(optimized))  --> boolean  boolean
+print(debug.jit(print))  --> false  false
 ```
 
 The JIT changes how fast a program runs and nothing else, so this function serves tests and measurements. A function compiles once it is hot, so `debug.jit(f)` may return `false` before a loop and `true` after it under the default setting.

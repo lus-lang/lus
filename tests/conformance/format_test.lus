@@ -9,7 +9,6 @@ pledge("load")
 -- missing arguments, invalid conversions, wrong argument types, and oversized
 -- conversion specifications).
 
-
 local string = string
 local math = math
 
@@ -25,20 +24,20 @@ end
 
 -- integer conversions render as expected
 local integer_conversions_render_as_expected_cases = {
-    {"%d", 123, "123"},
-    {"%d", -123, "-123"},
-    {"%d", 0, "0"},
-    {"%i", 123, "123"},
-    {"%i", -7, "-7"},
-    {"%u", 10, "10"},
-    {"%u", 0, "0"},
-    {"%x", 255, "ff"},
-    {"%X", 255, "FF"},
-    {"%x", 0, "0"},
-    {"%o", 8, "10"},
-    {"%o", 64, "100"},
-    {"%c", 65, "A"},
-    {"%c", 97, "a"},
+    { "%d", 123, "123" },
+    { "%d", -123, "-123" },
+    { "%d", 0, "0" },
+    { "%i", 123, "123" },
+    { "%i", -7, "-7" },
+    { "%u", 10, "10" },
+    { "%u", 0, "0" },
+    { "%x", 255, "ff" },
+    { "%X", 255, "FF" },
+    { "%x", 0, "0" },
+    { "%o", 8, "10" },
+    { "%o", 64, "100" },
+    { "%c", 65, "A" },
+    { "%c", 97, "a" },
 }
 
 local function integer_conversions_render_as_expected_test(fmt, arg, expected)
@@ -54,17 +53,17 @@ end
 
 -- float conversions render as expected
 local float_conversions_render_as_expected_cases = {
-    {"%f", 1.5, "1.500000"},
-    {"%f", 0.0, "0.000000"},
-    {"%e", 1.5, "1.500000e+00"},
-    {"%E", 1.5, "1.500000E+00"},
-    {"%g", 0.0001, "0.0001"},
-    {"%g", 1.0, "1"},
-    {"%g", 100.0, "100"},
-    {"%G", 0.00001, "1E-05"},
-    {"%a", 1.0, "0x1p+0"},
-    {"%A", 1.0, "0X1P+0"},
-    {"%a", 0.15625, "0x1.4p-3"},
+    { "%f", 1.5, "1.500000" },
+    { "%f", 0.0, "0.000000" },
+    { "%e", 1.5, "1.500000e+00" },
+    { "%E", 1.5, "1.500000E+00" },
+    { "%g", 0.0001, "0.0001" },
+    { "%g", 1.0, "1" },
+    { "%g", 100.0, "100" },
+    { "%G", 0.00001, "1E-05" },
+    { "%a", 1.0, "0x1p+0" },
+    { "%A", 1.0, "0X1P+0" },
+    { "%a", 0.15625, "0x1.4p-3" },
 }
 
 local function float_conversions_render_as_expected_test(fmt, arg, expected)
@@ -73,9 +72,9 @@ end
 
 -- string conversions
 local string_conversions_cases = {
-    {"%s", "test", "test"},
-    {"%s", "", ""},
-    {"%s%%", "x", "x%"},
+    { "%s", "test", "test" },
+    { "%s", "", "" },
+    { "%s%%", "x", "x%" },
 }
 
 local function string_conversions_test(fmt, arg, expected)
@@ -104,21 +103,21 @@ end
 
 -- width and precision and flag combinations
 local width_and_precision_and_flag_combinations_cases = {
-    {"%5.2f", 3.14159, " 3.14"},
-    {"%-5d", 42, "42   "},
-    {"%05d", 42, "00042"},
-    {"%+d", 42, "+42"},
-    {"% d", 42, " 42"},
-    {"%+d", -42, "-42"},
-    {"%10s", "hi", "        hi"},
-    {"%-10s", "hi", "hi        "},
-    {"%.3s", "hello", "hel"},
-    {"%.0f", 2.5, "2"},
-    {"%#x", 255, "0xff"},
-    {"%#o", 8, "010"},
-    {"%+.3e", 1234.5, "+1.234e+03"},
-    {"%08.2f", 3.5, "00003.50"},
-    {"%-8.2f", 3.5, "3.50    "},
+    { "%5.2f", 3.14159, " 3.14" },
+    { "%-5d", 42, "42   " },
+    { "%05d", 42, "00042" },
+    { "%+d", 42, "+42" },
+    { "% d", 42, " 42" },
+    { "%+d", -42, "-42" },
+    { "%10s", "hi", "        hi" },
+    { "%-10s", "hi", "hi        " },
+    { "%.3s", "hello", "hel" },
+    { "%.0f", 2.5, "2" },
+    { "%#x", 255, "0xff" },
+    { "%#o", 8, "010" },
+    { "%+.3e", 1234.5, "+1.234e+03" },
+    { "%08.2f", 3.5, "00003.50" },
+    { "%-8.2f", 3.5, "3.50    " },
 }
 
 local function width_and_precision_and_flag_combinations_test(fmt, arg, expected)
@@ -161,8 +160,14 @@ local function c_builds_one_character_from_a_code_point_test()
     assert(string.format("%c", 1000000) == "\u{F4240}")
     assert(#string.format("%c", 256) == 1)
     assert(#string.format("%c", 0) == 1)
-    raises(function() return string.format("%c", -1) end, "out of range")
-    raises(function() return string.format("%c", 0x110000) end, "out of range")
+
+    raises(function()
+        return string.format("%c", -1)
+    end, "out of range")
+
+    raises(function()
+        return string.format("%c", 0x110000)
+    end, "out of range")
 end
 
 -- ============================================================
@@ -171,7 +176,12 @@ end
 
 -- %s invokes __tostring on a table
 local function s_invokes_tostring_on_a_table_test()
-    local t = setmetatable({}, {__tostring = function() return "CUSTOM" end})
+    local t = setmetatable({}, {
+        __tostring = function()
+            return "CUSTOM"
+        end,
+    })
+
     assert(string.format("%s", t) == "CUSTOM")
     assert(string.format("[%10s]", t) == "[    CUSTOM]")
     assert(string.format("[%.3s]", t) == "[CUS]")
@@ -179,14 +189,26 @@ end
 
 -- %s accepts a numeric __tostring result by coercing it
 local function s_accepts_a_numeric_tostring_result_by_coercing_it_test()
-    local t = setmetatable({}, {__tostring = function() return 42 end})
+    local t = setmetatable({}, {
+        __tostring = function()
+            return 42
+        end,
+    })
+
     assert(string.format("%s", t) == "42")
 end
 
 -- %s errors when __tostring returns a non-coercible value
 local function s_errors_when_tostring_returns_a_non_coercible_value_test()
-    local t = setmetatable({}, {__tostring = function() return true end})
-    raises(function() return string.format("%s", t) end, "must return a string")
+    local t = setmetatable({}, {
+        __tostring = function()
+            return true
+        end,
+    })
+
+    raises(function()
+        return string.format("%s", t)
+    end, "must return a string")
 end
 
 -- ============================================================
@@ -212,12 +234,12 @@ end
 -- %q reloads strings across control characters and the full code point range
 -- (strings are WTF-8 text, so the old high byte 255 is a multi-byte character).
 local q_reloads_binary_strings_across_the_full_byte_range_cases = {
-    {"\0\1\2\127\u{FF}\u{20AC}\u{1F600}\u{D800}"},
-    {"line1\nline2"},
-    {"tab\there"},
-    {"quote\"inside"},
-    {"back\\slash"},
-    {"\13carriage"},
+    { "\0\1\2\127\u{FF}\u{20AC}\u{1F600}\u{D800}" },
+    { "line1\nline2" },
+    { "tab\there" },
+    { "quote\"inside" },
+    { "back\\slash" },
+    { "\13carriage" },
 }
 
 local function q_reloads_binary_strings_across_the_full_byte_range_test(s)
@@ -249,12 +271,12 @@ end
 
 -- %q of floats reloads exactly through hex-float output
 local q_of_floats_reloads_exactly_through_hex_float_output_cases = {
-    {0.1},
-    {3.14159},
-    {0.15625},
-    {-2.5},
-    {1e300},
-    {0.0},
+    { 0.1 },
+    { 3.14159 },
+    { 0.15625 },
+    { -2.5 },
+    { 1e300 },
+    { 0.0 },
 }
 
 local function q_of_floats_reloads_exactly_through_hex_float_output_test(f)
@@ -265,13 +287,13 @@ end
 
 -- %q of infinities reloads to the same infinities
 local function q_of_infinities_reloads_to_the_same_infinities_test()
-    assert(reload(string.format("%q", 1/0)) == 1/0)
-    assert(reload(string.format("%q", -1/0)) == -1/0)
+    assert(reload(string.format("%q", 1 / 0)) == 1 / 0)
+    assert(reload(string.format("%q", -1 / 0)) == -1 / 0)
 end
 
 -- %q of NaN reloads to a value that is not equal to itself
 local function q_of_nan_reloads_to_a_value_that_is_not_equal_to_itself_test()
-    local back = reload(string.format("%q", 0/0))
+    local back = reload(string.format("%q", 0 / 0))
     assert(back ~= back)
 end
 
@@ -284,8 +306,8 @@ end
 
 -- %q of the boolean literals reload identically
 local q_of_the_boolean_literals_reload_identically_cases = {
-    {true, "true"},
-    {false, "false"},
+    { true, "true" },
+    { false, "false" },
 }
 
 local function q_of_the_boolean_literals_reload_identically_test(v, shown)
@@ -296,7 +318,9 @@ end
 
 -- %q rejects values with no literal form
 local function q_rejects_values_with_no_literal_form_test()
-    raises(function() return string.format("%q", {}) end, "no literal form")
+    raises(function()
+        return string.format("%q", {})
+    end, "no literal form")
 end
 
 -- ============================================================
@@ -311,16 +335,18 @@ end
 
 -- integer conversions reject fractional floats
 local integer_conversions_reject_fractional_floats_cases = {
-    {"%d", 1.5},
-    {"%i", 2.7},
-    {"%u", 3.5},
-    {"%x", 1.5},
-    {"%o", 9.9},
-    {"%c", 1.5},
+    { "%d", 1.5 },
+    { "%i", 2.7 },
+    { "%u", 3.5 },
+    { "%x", 1.5 },
+    { "%o", 9.9 },
+    { "%c", 1.5 },
 }
 
 local function integer_conversions_reject_fractional_floats_test(fmt, arg)
-    raises(function() return string.format(fmt, arg) end, "no integer representation")
+    raises(function()
+        return string.format(fmt, arg)
+    end, "no integer representation")
 end
 
 -- %d coerces numeric strings including hex
@@ -332,7 +358,9 @@ end
 
 -- %d rejects a non-numeric string
 local function d_rejects_a_non_numeric_string_test()
-    raises(function() return string.format("%d", "foo") end, "number expected")
+    raises(function()
+        return string.format("%d", "foo")
+    end, "number expected")
 end
 
 -- ============================================================
@@ -341,18 +369,20 @@ end
 
 -- conversions reject the wrong argument type
 local conversions_reject_the_wrong_argument_type_cases = {
-    {"%d", {}, "number expected"},
-    {"%f", "notnum", "number expected"},
-    {"%x", {}, "number expected"},
-    {"%e", true, "number expected"},
-    {"%g", {}, "number expected"},
-    {"%c", {}, "number expected"},
-    {"%d", nil, "number expected"},
-    {"%f", nil, "number expected"},
+    { "%d", {}, "number expected" },
+    { "%f", "notnum", "number expected" },
+    { "%x", {}, "number expected" },
+    { "%e", true, "number expected" },
+    { "%g", {}, "number expected" },
+    { "%c", {}, "number expected" },
+    { "%d", nil, "number expected" },
+    { "%f", nil, "number expected" },
 }
 
 local function conversions_reject_the_wrong_argument_type_test(fmt, arg, pattern)
-    raises(function() return string.format(fmt, arg) end, pattern)
+    raises(function()
+        return string.format(fmt, arg)
+    end, pattern)
 end
 
 -- ============================================================
@@ -361,34 +391,43 @@ end
 
 -- too few arguments raise a no-value error
 local too_few_arguments_raise_a_no_value_error_cases = {
-    {"%d"},
-    {"%s"},
-    {"%d %d"},
-    {"%f%f%f"},
-    {"%q"},
+    { "%d" },
+    { "%s" },
+    { "%d %d" },
+    { "%f%f%f" },
+    { "%q" },
 }
 
 local function too_few_arguments_raise_a_no_value_error_test(fmt)
-    raises(function() return string.format(fmt) end, "no value")
+    raises(function()
+        return string.format(fmt)
+    end, "no value")
 end
 
 -- invalid conversion characters raise an error
 local invalid_conversion_characters_raise_an_error_cases = {
-    {"%k"},
-    {"%y"},
-    {"%w"},
-    {"%"},
-    {"%1.2z"},
+    { "%k" },
+    { "%y" },
+    { "%w" },
+    { "%" },
+    { "%1.2z" },
 }
 
 local function invalid_conversion_characters_raise_an_error_test(fmt)
-    raises(function() return string.format(fmt, 1) end, "invalid conversion")
+    raises(function()
+        return string.format(fmt, 1)
+    end, "invalid conversion")
 end
 
 -- an extremely large width raises rather than crashing
 local function an_extremely_large_width_raises_rather_than_crashing_test()
-    raises(function() return string.format("%1000000d", 1) end, "invalid conversion specification")
-    raises(function() return string.format("%.1000000f", 1.0) end, "invalid conversion specification")
+    raises(function()
+        return string.format("%1000000d", 1)
+    end, "invalid conversion specification")
+
+    raises(function()
+        return string.format("%.1000000f", 1.0)
+    end, "invalid conversion specification")
 end
 
 -- a moderately large but legal width still formats
@@ -419,35 +458,47 @@ end
 local function nan_prints_without_a_sign_on_every_platform_test()
     local z = 0
     local nans = { 0 / z, -(0 / z), math.huge - math.huge, math.sqrt(-1), -(math.huge - math.huge) }
+
     for i, n in ipairs(nans) do
         assert(n ~= n, `value $i is not a NaN`)
         assert(tostring(n) == "nan", `tostring of NaN $i`)
         assert("x" .. n == "xnan", `concatenation of NaN $i`)
-        assert(string.format("%f|%g|%e|%a|%s", n, n, n, n, n) == "nan|nan|nan|nan|nan", `string.format of NaN $i`)
-        assert(string.format("%F|%G|%E|%A", n, n, n, n) == "NAN|NAN|NAN|NAN", `uppercase conversions of NaN $i`)
+        assert(
+            string.format("%f|%g|%e|%a|%s", n, n, n, n, n) == "nan|nan|nan|nan|nan",
+            `string.format of NaN $i`
+        )
+        assert(
+            string.format("%F|%G|%E|%A", n, n, n, n) == "NAN|NAN|NAN|NAN",
+            `uppercase conversions of NaN $i`
+        )
         assert(string.format("%5.1f|%-5g|%+f", n, n, n) == "  nan|nan  |+nan", `flags with NaN $i`)
         assert(string.format("%q", n) == "(0/0)")
         assert(tojson(n) == "null")
     end
+
     assert(tostring(-math.huge) == "-inf" and string.format("%f", -math.huge) == "-inf")
 end
 
 -- ===== conversions at their edges =====
 
 local conversions_at_their_edges_cases = {
-    {"[%3c][%-3c]", table.pack(66, 0xE9), "[  B][é  ]"},
-    {"[%p][%8p]", table.pack(nil, 1), "[(null)][  (null)]"},
-    {"%.1a", table.pack(1.96875), "0x2.0p+0"},
-    {"%.3A", table.pack(0.1), "0X1.99AP-4"},
-    {"%A %a %a", table.pack(0/0, -1/0, 0.0), "NAN -inf 0x0p+0"},
-    {"%#.0a", table.pack(1.0), "0x1.p+0"},
-    {"%a", table.pack(5e-324), "0x1p-1074"},
-    {"[%5.2s][%-6s][%.1s]", table.pack("héllo", "ab", "é"), "[   hé][ab    ][é]"},
-    {"[%08.3f][%+.2e]", table.pack(3.14159, 12345.678), "[0003.142][+1.23e+04]"},
-    {"[%#x][%#o][% d][%05d][%.3d]", table.pack(255, 8, 7, -42, 5), "[0xff][010][ 7][-0042][005]"},
-    {"%d|%5d", table.pack(123456789012345678901234567890n, -12n), "123456789012345678901234567890|  -12"},
-    {"%.2f|%10.3e", table.pack(1.25d, 2.5d), "1.25| 2.500e+00"},
-    {"%q|%q", table.pack(12345678901234567890123n, 1.5d), "12345678901234567890123|1.5"},
+    { "[%3c][%-3c]", table.pack(66, 0xE9), "[  B][é  ]" },
+    { "[%p][%8p]", table.pack(nil, 1), "[(null)][  (null)]" },
+    { "%.1a", table.pack(1.96875), "0x2.0p+0" },
+    { "%.3A", table.pack(0.1), "0X1.99AP-4" },
+    { "%A %a %a", table.pack(0 / 0, -1 / 0, 0.0), "NAN -inf 0x0p+0" },
+    { "%#.0a", table.pack(1.0), "0x1.p+0" },
+    { "%a", table.pack(5e-324), "0x1p-1074" },
+    { "[%5.2s][%-6s][%.1s]", table.pack("héllo", "ab", "é"), "[   hé][ab    ][é]" },
+    { "[%08.3f][%+.2e]", table.pack(3.14159, 12345.678), "[0003.142][+1.23e+04]" },
+    { "[%#x][%#o][% d][%05d][%.3d]", table.pack(255, 8, 7, -42, 5), "[0xff][010][ 7][-0042][005]" },
+    {
+        "%d|%5d",
+        table.pack(123456789012345678901234567890n, -12n),
+        "123456789012345678901234567890|  -12",
+    },
+    { "%.2f|%10.3e", table.pack(1.25d, 2.5d), "1.25| 2.500e+00" },
+    { "%q|%q", table.pack(12345678901234567890123n, 1.5d), "12345678901234567890123|1.5" },
 }
 
 local function conversions_at_their_edges_test(fmt, args, want)
@@ -457,23 +508,27 @@ end
 
 local function conversions_in_a_hot_loop_take_the_same_path_test()
     local out = {}
+
     for i = 1, 300 do
         out[i] = string.format("%c%3c%p%.1a%5.2s", 65 + i % 26, 66, nil, 1.5, "héllo")
     end
+
     assert(out[1] == "B  B(null)0x1.8p+0   hé")
     assert(out[300] == string.format("%c", 65 + 300 % 26) .. "  B(null)0x1.8p+0   hé")
 end
 
 local conversion_errors_at_their_edges_cases = {
-    {"%c", -1, "value out of range"},
-    {"%c", 0x110000, "value out of range"},
-    {"%10q", "x", "specifier '%%q' cannot have modifiers"},
-    {"%", 1, "invalid conversion '%%' to 'format'"},
-    {"%0123456789012345678901d", 1, "invalid format %(too long%)"},
+    { "%c", -1, "value out of range" },
+    { "%c", 0x110000, "value out of range" },
+    { "%10q", "x", "specifier '%%q' cannot have modifiers" },
+    { "%", 1, "invalid conversion '%%' to 'format'" },
+    { "%0123456789012345678901d", 1, "invalid format %(too long%)" },
 }
 
 local function conversion_errors_at_their_edges_test(fmt, arg, pattern)
-    raises(function() string.format(fmt, arg) end, pattern)
+    raises(function()
+        string.format(fmt, arg)
+    end, pattern)
 end
 
 -- Plain and zero-padded integers write their digits on one path below
@@ -486,16 +541,21 @@ local function zero_padded_integers_across_digit_counts_test()
         local fill = width - #sign - #digits
         return sign .. string.rep("0", fill > 0 and fill or 0) .. digits
     end
+
     local p = 1
+
     for _ = 0, 10 do
         for _, n in ipairs({ p - 1, p, p + 7, -(p - 1), -p }) do
             assert(string.format("%d", n) == tostring(n))
+
             for width = 1, 9 do
                 assert(string.format(`%0$(width)d`, n) == padded(n, width))
             end
         end
+
         p = p * 10
     end
+
     assert(string.format("%02d:%02d", 4, 30) == "04:30")
     assert(string.format("%05d", math.mininteger) == tostring(math.mininteger))
 end

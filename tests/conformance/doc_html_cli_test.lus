@@ -49,7 +49,10 @@ local function read(path)
 end
 
 local function run(args)
-    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    if LUS == nil then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
     local p = io.popen(`"$LUS" doc $args 2>&1`)
     local out = p:read("a")
     local ok = p:close()
@@ -63,7 +66,10 @@ local function html_pages_link_across_modules_test()
     assert(ok, out)
     local strings = read("site/strings.html")
     assert(strings:find('<section id="strings.trim">', 1, true), strings)
-    assert(strings:find("<li><code>s</code> (<code>string</code>): The text.</li>", 1, true), strings)
+    assert(
+        strings:find("<li><code>s</code> (<code>string</code>): The text.</li>", 1, true),
+        strings
+    )
     local words = read("site/words.html")
     assert(words:find('<a href="strings.html#strings.trim"><code>trim</code></a>', 1, true), words)
     assert(words:find('<a href="strings.html#strings.trim">strings.trim</a>', 1, true), words)

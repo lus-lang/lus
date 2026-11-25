@@ -6,6 +6,7 @@ global print
 -- function can reach.
 local function counter()
     local count = 0
+
     return function()
         count = count + 1
         return count
@@ -32,9 +33,11 @@ local function account(balance)
     local function deposit(amount)
         balance = balance + amount
     end
+
     local function report()
         return `balance: $balance`
     end
+
     return deposit, report
 end
 

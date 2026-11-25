@@ -16,8 +16,8 @@ The following example makes two ULIDs and checks their length and order.
 
 ```lus
 local a, b = crypto.ulid(), crypto.ulid()
-print(#a, a < b)                     --> 26  true
-print(a:find("^[0-9A-HJKMNP-TV-Z]+$") ~= nil)   --> true
+print(#a, a < b)  --> 26  true
+print(a:find("^[0-9A-HJKMNP-TV-Z]+$") ~= nil)  --> true
 ```
 
 [`crypto.uuid`](/manual/api#crypto.uuid) returns UUIDs, the identifier format that most databases store natively.

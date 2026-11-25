@@ -44,7 +44,7 @@ Create a file named `hello.lus` with the following program.
 
 ```lus
 local name = "Lus"
-print(`Hello, $name!`)   --> Hello, Lus!
+print(`Hello, $name!`)  --> Hello, Lus!
 ```
 
 Run the program with `lus`.
@@ -71,10 +71,12 @@ local order = fromjson([[
 ]])
 
 local total = 0
+
 for _, item in ipairs(order.items) do
     print(`$(item.count) x $(item.name)`)
     total = total + item.price * item.count
 end
+
 print(`$(order.customer) owes $(string.format("%.2f", total))`)
 --> 2 x tea
 --> 1 x scone
@@ -92,7 +94,7 @@ Invalid input raises an error, which stops the program. `catch` runs an expressi
 
 ```lus
 local ok, err = catch fromjson("{oops")
-print(ok, err)   --> false  ...: JSON parse error at position 2: expected string key in object
+print(ok, err)  --> false  ...: JSON parse error at position 2: expected string key in object
 ```
 
 ## Asking for permission

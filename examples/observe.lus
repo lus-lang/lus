@@ -37,6 +37,7 @@ local updates = 0
 local width <observe> = 4
 local area <observe> = width * width
 local perimeter <observe> = 4 * width
+
 local summary <observe> = do
     updates = updates + 1
     provide `area $area, perimeter $perimeter`

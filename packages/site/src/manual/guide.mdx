@@ -19,7 +19,7 @@ This program computes what each of three friends owes when they share a dinner b
 local bill = 97.29
 local people = 3
 
-print(`Each of us pays $(bill / people)`)   --> Each of us pays 32.43
+print(`Each of us pays $(bill / people)`)  --> Each of us pays 32.43
 ```
 
 `local bill = 97.29` creates a variable named `bill` that holds 97.29. The next line creates `people` in the same way. The text between backticks is a string, into which `$( )` inserts the result of a calculation. `print` writes the text to the terminal.
@@ -36,8 +36,7 @@ A comment is a note for people who read the code. Lus ignores everything from `-
 
 ```lus
 -- Prices include tax.
-local price = 4.50   -- per cup
-
+local price = 4.50  -- per cup
 --[[
     The shop closes early on Sundays,
     so the Sunday totals cover fewer hours.
@@ -47,8 +46,8 @@ local price = 4.50   -- per cup
 In the examples, a comment after `-->` shows what the line prints. `print` separates several values with a tab, which the comments show as two spaces.
 
 ```lus
-print(2 + 2)            --> 4
-print("tea", 4.50)      --> tea  4.5
+print(2 + 2)  --> 4
+print("tea", 4.50)  --> tea  4.5
 ```
 
 ## Values and types
@@ -62,7 +61,7 @@ The type belongs to the value, so a variable can hold a number at one point and 
 `nil` means "no value". A variable that is declared without a value holds `nil`, which is useful for a result that is not known yet.
 
 ```lus
-local winner   -- decided when the race ends
+local winner  -- decided when the race ends
 print(winner)  --> nil
 ```
 
@@ -72,7 +71,7 @@ The booleans are `true` and `false`. A boolean records whether something is the 
 
 ```lus
 local door_locked = true
-print(door_locked)   --> true
+print(door_locked)  --> true
 ```
 
 When Lus tests a value, as an `if` statement does, `false` and `nil` count as false and are called _falsy_. Every other value, including `0` and the empty string `""`, counts as true and is called _truthy_.
@@ -84,16 +83,16 @@ Lus has several kinds of numbers, called the _subtypes_ of the type `number`. Mo
 A float stores most fractions approximately, which is acceptable for measurements but wrong for money. A _decimal_ keeps its digits exactly and is written with a `d` after it.
 
 ```lus
-print(0.1 + 0.2)      --> 0.30000000000000004
-print(0.1d + 0.2d)    --> 0.3
-print(19.90d)         --> 19.90
+print(0.1 + 0.2)  --> 0.30000000000000004
+print(0.1d + 0.2d)  --> 0.3
+print(19.90d)  --> 19.90
 ```
 
 An integer has a limit of about nine quintillion, past which a calculation wraps around to a wrong answer. A _bigint_ has no limit and is written with an `n` after it.
 
 ```lus
-print(9223372036854775807 + 1)    --> -9223372036854775808
-print(9223372036854775807n + 1)   --> 9223372036854775808
+print(9223372036854775807 + 1)  --> -9223372036854775808
+print(9223372036854775807n + 1)  --> 9223372036854775808
 ```
 
 Underscores make long numbers easier to read, so `1_000_000` is one million. A float always prints with a decimal point, as in `3.0`. [Arithmetic](#arithmetic) shows how the subtypes combine.
@@ -103,8 +102,8 @@ Underscores make long numbers easier to read, so `1_000_000` is one million. A f
 A _string_ is text, written between single quotes, double quotes, or backticks. Single and double quotes are equivalent.
 
 ```lus
-print("It's ready")          --> It's ready
-print('She said "now"')      --> She said "now"
+print("It's ready")  --> It's ready
+print('She said "now"')  --> She said "now"
 ```
 
 A string in backticks can also contain values, inserted with `$name` for a variable or `$( )` for the result of an expression.
@@ -131,8 +130,8 @@ Strings in backticks take the same escape sequences, together with `` \` `` for 
 
 ```lus
 local word = "done"
-print(`status: \27[32m$word\27[0m`)   -- shows status: done, with done in green
-print(`$(`nested $word`) twice`)      --> nested done twice
+print(`status: \27[32m$word\27[0m`)  -- shows status: done, with done in green
+print(`$(`nested $word`) twice`)  --> nested done twice
 ```
 
 A long string is written between `[[` and `]]`, can span several lines, and keeps its text exactly as written. The help text of a command line tool is a typical long string.
@@ -162,20 +161,20 @@ The `local` statement declares a variable and gives it a first value. An assignm
 
 ```lus
 local visitors = 1
-print(visitors)          --> 1
+print(visitors)  --> 1
 
 visitors = visitors + 1
-print(visitors)          --> 2
+print(visitors)  --> 2
 ```
 
 One statement can declare or assign several variables, with commas between the names and between the values. A name without a matching value gets `nil`.
 
 ```lus
 local width, height = 80, 24
-print(width, height)      --> 80  24
+print(width, height)  --> 80  24
 
 local first, second = "a"
-print(first, second)      --> a  nil
+print(first, second)  --> a  nil
 ```
 
 An assignment computes all the values on its right side before it changes any variable, so two variables can exchange their values in one statement.
@@ -183,7 +182,7 @@ An assignment computes all the values on its right side before it changes any va
 ```lus
 local low, high = 9, 2
 low, high = high, low
-print(low, high)          --> 2  9
+print(low, high)  --> 2  9
 ```
 
 A name consists of letters, digits, and underscores but cannot start with a digit. Names are case sensitive, so `total` and `Total` are different names. Reserved words such as `local`, `if`, and `end` cannot be names.
@@ -196,11 +195,13 @@ The _scope_ of a local variable starts at the statement after its declaration an
 
 ```lus
 local total = 0
+
 do
-    local bonus = 5          -- bonus exists only inside this block
-    total = total + bonus    -- total is still in scope here
+    local bonus = 5  -- bonus exists only inside this block
+    total = total + bonus  -- total is still in scope here
 end
-print(total)                 --> 5
+
+print(total)  --> 5
 ```
 
 A `do ... end` block is useful for a temporary variable that only a few statements need.
@@ -211,11 +212,13 @@ A declaration can reuse the name of a variable that is already in scope. The new
 
 ```lus
 local price = 20
+
 do
-    local price = price * 1.2   -- the price with tax, for this block only
-    print(price)                --> 24.0
+    local price = price * 1.2  -- the price with tax, for this block only
+    print(price)  --> 24.0
 end
-print(price)                    --> 20
+
+print(price)  --> 20
 ```
 
 The new variable enters scope after its own declaration, so the `price` on the right side of the inner declaration is still the outer one.
@@ -225,9 +228,9 @@ The new variable enters scope after its own declaration, so the `price` on the r
 A _global variable_ is visible in every file of a program, which is why `print` works in every file. Assigning to a name that has no `local` declaration creates a global variable. A global that was never assigned is `nil`.
 
 ```lus
-attempts = 1          -- no local declaration, so attempts is a global
-print(attempts)       --> 1
-print(retries)        --> nil
+attempts = 1  -- no local declaration, so attempts is a global
+print(attempts)  --> 1
+print(retries)  --> nil
 ```
 
 Local variables are the better default. A local is only visible in its block, which makes it easy to find every place that changes it. Lus also reads and writes locals faster than globals. Globals are for the few values that the whole program shares.
@@ -239,7 +242,7 @@ global print
 global attempts = 0
 
 attempts = attempts + 1
-print(attempts)       --> 1
+print(attempts)  --> 1
 ```
 
 The declaration includes `print` because `print` is a global. `global attempts = 0` also gives the global a first value. If another part of the program has already defined `attempts`, this declaration stops the program with the error `global 'attempts' already defined`.
@@ -260,7 +263,7 @@ An _attribute_ is a word in angle brackets after a variable name that changes ho
 ```lus
 local MAX_RETRIES <const> = 3
 local TIMEOUT <const> = MAX_RETRIES * 10
-print(TIMEOUT)            --> 30
+print(TIMEOUT)  --> 30
 ```
 
 ```lus nocheck
@@ -279,7 +282,7 @@ A _built-in function_ is a function that Lus provides, such as `print`. A progra
 ```lus
 local typed = "42"
 local count = tonumber(typed)
-print(count + 1)   --> 43
+print(count + 1)  --> 43
 ```
 
 These built-in functions are the most common:
@@ -289,17 +292,17 @@ These built-in functions are the most common:
 - `type(value)` returns the name of the type of a value. A program uses it to check data that it did not create.
 
 ```lus
-print(tonumber("twelve"))                               --> nil
-print(type(tonumber("12")), type(tonumber("twelve")))   --> number  nil
+print(tonumber("twelve"))  --> nil
+print(type(tonumber("12")), type(tonumber("twelve")))  --> number  nil
 ```
 
 Most built-in functions belong to a _library_, which is a group of functions about one subject, such as `math` or `string`. The name of a library function has a dot: `math.floor`, which rounds a number down, is the function `floor` in the `math` library. `string.upper` converts text to upper case. A library can also contain constants, such as `math.pi`.
 
 ```lus
 local minutes = 135
-print(math.floor(minutes / 60), "hours")   --> 2  hours
-print(math.max(72, 95, 58))                --> 95
-print(string.upper("receipt"))             --> RECEIPT
+print(math.floor(minutes / 60), "hours")  --> 2  hours
+print(math.max(72, 95, 58))  --> 95
+print(string.upper("receipt"))  --> RECEIPT
 ```
 
 The [API reference](/manual/api) lists every built-in function. In a terminal, `lus help NAME` prints the entry for one function, as in `lus help math.floor`.
@@ -328,21 +331,21 @@ Lus has the usual arithmetic operators.
 If both operands of `+`, `-`, `*`, `//`, or `%` are integers, the result is an integer. If one operand is a float, the result is a float. With integers and floats, `/` and `^` always produce a float, so `6 / 2` is `3.0`.
 
 ```lus
-print(7 + 2)        --> 9
-print(7 + 2.0)      --> 9.0
-print(6 / 2)        --> 3.0
-print(2 ^ 10)       --> 1024.0
+print(7 + 2)  --> 9
+print(7 + 2.0)  --> 9.0
+print(6 / 2)  --> 3.0
+print(2 ^ 10)  --> 1024.0
 ```
 
 Floor division rounds its result down, toward negative infinity. The remainder is what floor division leaves over and has the sign of the right operand. Together, the two operators split a quantity into units, such as seconds into minutes and seconds. A remainder of `0` means that a division is exact.
 
 ```lus
 local seconds = 200
-print(seconds // 60)    --> 3
-print(seconds % 60)     --> 20
-print(-7 // 2)          --> -4
-print(-7 % 2)           --> 1
-print(seconds % 2)      --> 0
+print(seconds // 60)  --> 3
+print(seconds % 60)  --> 20
+print(-7 // 2)  --> -4
+print(-7 % 2)  --> 1
+print(seconds % 2)  --> 0
 ```
 
 The largest integer is `math.maxinteger`. [Numbers](#numbers) shows what happens to a result past it.
@@ -354,9 +357,9 @@ Dividing an integer by zero with `//` or `%` raises an error. Float division by 
 A bigint behaves like an integer without limits. An operation between a bigint and an integer produces a bigint.
 
 ```lus
-print(2n ^ 100)             --> 1267650600228229401496703205376
-print(2n ^ 64 + 1)          --> 18446744073709551617
-print(7n // 2)              --> 3
+print(2n ^ 100)  --> 1267650600228229401496703205376
+print(2n ^ 64 + 1)  --> 18446744073709551617
+print(7n // 2)  --> 3
 ```
 
 #### Decimals
@@ -365,9 +368,9 @@ Decimal arithmetic is in base 10. Sums, differences, and products of decimals ar
 
 ```lus
 local price = 19.99d
-print(price * 3)        --> 59.97
-print(10d / 4)          --> 2.5
-print(1d / 3)           --> 0.3333333333333333333333333333333333
+print(price * 3)  --> 59.97
+print(10d / 4)  --> 2.5
+print(1d / 3)  --> 0.3333333333333333333333333333333333
 ```
 
 #### Mixed subtypes
@@ -389,8 +392,8 @@ An operation between a decimal and a float is an error, so the program converts 
 local price = 19.99d
 local rate = 0.5
 
-print(price * decimal(rate))     --> 9.995
-print(tonumber(price) * rate)    --> 9.995
+print(price * decimal(rate))  --> 9.995
+print(tonumber(price) * rate)  --> 9.995
 ```
 
 ```lus nocheck
@@ -415,10 +418,10 @@ A comparison produces `true` or `false`.
 Numbers compare by value, whatever their subtypes.
 
 ```lus
-print(1 == 1.0)         --> true
-print(1 == 1n)          --> true
-print(2 < 2.5d)         --> true
-print(0.1d == 0.1)      --> false
+print(1 == 1.0)  --> true
+print(1 == 1n)  --> true
+print(2 < 2.5d)  --> true
+print(0.1d == 0.1)  --> false
 ```
 
 The last line is `false` because the float `0.1` is only close to one tenth.
@@ -426,15 +429,15 @@ The last line is `false` because the float `0.1` is only close to one tenth.
 Two strings are equal if they have the same characters. `<` and the other ordering operators compare strings character by character, by Unicode number, so every upper case English letter comes before every lower case one.
 
 ```lus
-print("apple" < "banana")    --> true
-print("Zebra" < "apple")     --> true
+print("apple" < "banana")  --> true
+print("Zebra" < "apple")  --> true
 ```
 
 Values of different types are never equal, so `"10" == 10` is `false`. Ordering a number against a string is an error, which the program avoids by converting one side first.
 
 ```lus
-print("10" == 10)              --> false
-print(tonumber("10") == 10)    --> true
+print("10" == 10)  --> false
+print(tonumber("10") == 10)  --> true
 ```
 
 Two tables are equal only when they are the same table, as [Tables](#variables-refer-to-tables) explains. The same holds for functions.
@@ -449,19 +452,19 @@ The logical operators `and`, `or`, and `not` combine conditions. They treat each
 
 ```lus
 local age = 30
-print(age >= 18 and age < 65)    --> true
-print(not (age >= 18))           --> false
+print(age >= 18 and age < 65)  --> true
+print(not (age >= 18))  --> false
 
-print(nil or "default")          --> default
-print(false and "unused")        --> false
-print(1 and 2)                   --> 2
+print(nil or "default")  --> default
+print(false and "unused")  --> false
+print(1 and 2)  --> 2
 ```
 
 `and` evaluates its right operand only when the left operand is truthy. `or` evaluates its right operand only when the left operand is falsy. A program puts a check on the left so that the expression on the right runs only when it is valid.
 
 ```lus
 local divisor = 0
-print(divisor ~= 0 and 10 // divisor > 2)    --> false
+print(divisor ~= 0 and 10 // divisor > 2)  --> false
 ```
 
 The division never runs, because `divisor ~= 0` is `false`.
@@ -471,7 +474,7 @@ The division never runs, because `divisor ~= 0` is `false`.
 ```lus
 local requested
 local size = requested or 10
-print(size)                      --> 10
+print(size)  --> 10
 ```
 
 The default also replaces `false`, so a setting where `false` is a valid choice needs an explicit comparison with `nil`.
@@ -480,7 +483,7 @@ The expression `condition and a or b` is `a` when the condition is truthy. Other
 
 ```lus
 local stock = 0
-print(stock > 0 and "in stock" or "sold out")   --> sold out
+print(stock > 0 and "in stock" or "sold out")  --> sold out
 ```
 
 ### Concatenation
@@ -489,8 +492,8 @@ print(stock > 0 and "in stock" or "sold out")   --> sold out
 
 ```lus
 local name = "Ada"
-print("Hello, " .. name)       --> Hello, Ada
-print("Total: " .. 42)         --> Total: 42
+print("Hello, " .. name)  --> Hello, Ada
+print("Total: " .. 42)  --> Total: 42
 ```
 
 Any other operand, such as `nil` or a boolean, is an error. A string in backticks accepts values of every type and is usually easier to read when text and values alternate.
@@ -500,9 +503,9 @@ Any other operand, such as `nil` or a boolean, is an error. A string in backtick
 `#` before a string produces its length in characters.
 
 ```lus
-print(#"hello")    --> 5
-print(#"héllo")    --> 5
-print(#"")         --> 0
+print(#"hello")  --> 5
+print(#"héllo")  --> 5
+print(#"")  --> 0
 ```
 
 Before a list, `#` produces the number of items, as [Lists](#lists) shows.
@@ -528,12 +531,12 @@ local WRITE <const> = 1 << 1
 local EXECUTE <const> = 1 << 2
 
 local mode = READ | WRITE
-print(mode)                    --> 3
-print(mode & WRITE ~= 0)       --> true
-print(mode & EXECUTE ~= 0)     --> false
+print(mode)  --> 3
+print(mode & WRITE ~= 0)  --> true
+print(mode & EXECUTE ~= 0)  --> false
 
-mode = mode & ~WRITE           -- clear the WRITE bit
-print(mode)                    --> 1
+mode = mode & ~WRITE  -- clear the WRITE bit
+print(mode)  --> 1
 ```
 
 A float operand must be a whole number, which Lus converts to an integer. If either operand is a bigint, the result is a bigint without the 64-bit limit, so `1n << 64` is `18446744073709551616`. A bigint shifts left by at most 16,777,216 bits. A larger amount raises `shift amount too large`.
@@ -559,19 +562,19 @@ Among the bitwise operators, the shifts apply first, then `&`, then `~`, then `|
 Operators of the same precedence apply from left to right, except `^` and `..`, which apply from right to left. Parentheses override precedence and also make an unclear order explicit.
 
 ```lus
-print(1 + 2 * 3)        --> 7
-print((1 + 2) * 3)      --> 9
-print(2 ^ 3 ^ 2)        --> 512.0
-print(-2 ^ 2)           --> -4.0
+print(1 + 2 * 3)  --> 7
+print((1 + 2) * 3)  --> 9
+print(2 ^ 3 ^ 2)  --> 512.0
+print(-(2 ^ 2))  --> -4.0
 ```
 
 Two rules cause frequent mistakes. Exponentiation applies before negation, so `-2 ^ 2` is `-(2 ^ 2)`. `not` applies before a comparison, so `not a == b` compares `not a` with `b`. To negate a comparison, write `not (a == b)` or use `~=`.
 
 ```lus
 local a, b = 1, 2
-print(not a == b)       --> false
-print(not (a == b))     --> true
-print(a ~= b)           --> true
+print(not a == b)  --> false
+print(not (a == b))  --> true
+print(a ~= b)  --> true
 ```
 
 ## Control flow
@@ -586,7 +589,7 @@ The `if` statement runs a block when its condition is [truthy](#booleans). An `i
 local temperature = 31
 
 if temperature > 30 then
-    print("hot")            --> hot
+    print("hot")  --> hot
 elseif temperature > 15 then
     print("mild")
 else
@@ -604,7 +607,7 @@ Programs often compute a value, test it, and use it only if the test passes. A c
 local input = "42"
 
 if n = tonumber(input) then
-    print(n + 1)                      --> 43
+    print(n + 1)  --> 43
 else
     print(`$input is not a number`)
 end
@@ -618,7 +621,7 @@ A condition can declare several variables when its expression produces several v
 local line = "level=warn"
 
 if first, last = string.find(line, "warn") then
-    print(`found from $first to $last`)    --> found from 7 to 10
+    print(`found from $first to $last`)  --> found from 7 to 10
 else
     print("not found")
 end
@@ -640,7 +643,8 @@ while width > 1000 do
     width = width // 2
     halvings = halvings + 1
 end
-print(width, halvings)   --> 1000  2
+
+print(width, halvings)  --> 1000  2
 ```
 
 A `while` condition can also [declare variables](#conditions-that-declare-variables). Lus evaluates the expression before every pass and ends the loop when a declared variable is falsy. This loop counts the fields of a line of comma-separated values by finding each comma. The third argument of `string.find` is the position where the search starts.
@@ -654,7 +658,8 @@ while found = string.find(line, ",", start) do
     fields = fields + 1
     start = found + 1
 end
-print(fields)   --> 4
+
+print(fields)  --> 4
 ```
 
 Without the declaration in the condition, the call to `string.find` would appear twice: once before the loop and once at the end of its body.
@@ -666,11 +671,13 @@ The `repeat` loop runs its body first and tests its condition afterwards, ending
 ```lus
 local n = 4096
 local digits = 0
+
 repeat
     n = n // 10
     digits = digits + 1
 until n == 0
-print(digits)   --> 4
+
+print(digits)  --> 4
 ```
 
 With `n = 0`, the body runs once and the count is 1.
@@ -688,7 +695,8 @@ repeat
     estimate = better
     passes = passes + 1
 until change < 0.000001
-print(estimate, passes)   --> 1.414213562373095  5
+
+print(estimate, passes)  --> 1.414213562373095  5
 ```
 
 ### Numeric `for` loops
@@ -710,7 +718,9 @@ An optional third number is the step, which defaults to 1. A negative step count
 for seconds = 3, 1, -1 do
     print(seconds)
 end
+
 print("liftoff")
+
 --> 3
 --> 2
 --> 1
@@ -738,13 +748,16 @@ This loop sells 15 tickets in a theatre that numbers its seats from 1 and has no
 
 ```lus
 local sold = 0
+
 for seat = 1, 20 do
     if seat == 13 then
-        continue                           -- no seat 13
+        continue  -- no seat 13
     end
+
     sold = sold + 1
+
     if sold == 15 then
-        print(`last seat sold: $seat`)     --> last seat sold: 16
+        print(`last seat sold: $seat`)  --> last seat sold: 16
         break
     end
 end
@@ -762,11 +775,12 @@ local target = 12
 for i = 1, 9 do
     for j = 1, 9 do
         if i * j == target then
-            print(`$i x $j`)      --> 2 x 6
+            print(`$i x $j`)  --> 2 x 6
             goto found
         end
     end
 end
+
 print("no pair found")
 ::found::
 ```
@@ -786,7 +800,7 @@ local function area(width, height)
     return width * height
 end
 
-print(area(3, 4))   --> 12
+print(area(3, 4))  --> 12
 print(area(10, 2))  --> 20
 ```
 
@@ -803,7 +817,7 @@ local function show(a, b)
     print(a, b)
 end
 
-show(1)        --> 1  nil
+show(1)  --> 1  nil
 show(1, 2, 3)  --> 1  2
 ```
 
@@ -812,14 +826,15 @@ Because a missing argument is `nil`, `or` gives a parameter a default value. In 
 ```lus
 local function greet(name, times)
     times = times or 1
+
     for i = 1, times do
         print(`Hello, $name!`)
     end
 end
 
-greet("Ada")      --> Hello, Ada!
-greet("Lin", 2)   --> Hello, Lin!
-                  --> Hello, Lin!
+greet("Ada")  --> Hello, Ada!
+greet("Lin", 2)  --> Hello, Lin!
+--> Hello, Lin!
 ```
 
 A parameter for which `false` is a valid value needs the test `if times == nil then`, as [Logical operators](#logical-operators) explains.
@@ -836,9 +851,9 @@ end
 local hours, minutes, secs = clock(7384)
 print(hours, minutes, secs)  --> 2  3  4
 
-print(clock(7384))           --> 2  3  4
-print(clock(7384), "end")    --> 2  end
-print((clock(7384)))         --> 2
+print(clock(7384))  --> 2  3  4
+print(clock(7384), "end")  --> 2  end
+print((clock(7384)))  --> 2
 ```
 
 An assignment takes as many results as it has variables, ignoring extra results and setting extra variables to `nil`. A call keeps all of its results only when it is the last expression in a list, as in the first `print`. Elsewhere in a list, as before `"end"`, a call produces only its first result, as does a call in parentheses.
@@ -852,8 +867,8 @@ local function log(level, ...)
     print(`[$level]`, ...)
 end
 
-log("info", "started")              --> [info]  started
-log("warn", "disk at", 91, "%")     --> [warn]  disk at  91  %
+log("info", "started")  --> [info]  started
+log("warn", "disk at", 91, "%")  --> [warn]  disk at  91  %
 ```
 
 ### Functions as values
@@ -864,16 +879,19 @@ A function is a value, like a number or a string. It can be stored in a variable
 local function retry(attempts, action)
     for attempt = 1, attempts do
         local result = action(attempt)
+
         if result then
             return result, attempt
         end
     end
+
     return nil, attempts
 end
 
 local value, tries = retry(5, function(attempt)
     return attempt >= 3 and "connected"
 end)
+
 print(value, tries)  --> connected  3
 ```
 
@@ -888,6 +906,7 @@ A function can use the local variables that are in scope where it is written, ev
 ```lus
 local function counter()
     local count = 0
+
     return function()
         count = count + 1
         return count
@@ -897,7 +916,7 @@ end
 local next_ticket = counter()
 local next_order = counter()
 print(next_ticket(), next_ticket(), next_ticket())  --> 1  2  3
-print(next_order())                               --> 1
+print(next_order())  --> 1
 ```
 
 This is also how a program prepares a _callback_, which is a function that other code calls later. `logger` returns a function that keeps its `prefix`, so each part of a program gets its own logging function and writes the prefix only once.
@@ -911,8 +930,8 @@ end
 
 local db_log = logger("db")
 local http_log = logger("http")
-db_log("connected")       --> [db] connected
-http_log("listening")     --> [http] listening
+db_log("connected")  --> [db] connected
+http_log("listening")  --> [http] listening
 ```
 
 Two functions written in the same block share the variables of that block. When one function assigns a variable, the other sees the new value.
@@ -922,9 +941,11 @@ local function account(balance)
     local function deposit(amount)
         balance = balance + amount
     end
+
     local function report()
         return `balance: $balance`
     end
+
     return deposit, report
 end
 
@@ -942,10 +963,11 @@ local function factorial(n)
     if n <= 1 then
         return 1
     end
+
     return n * factorial(n - 1)
 end
 
-print(factorial(5))   --> 120
+print(factorial(5))  --> 120
 print(factorial(20))  --> 2432902008176640000
 ```
 
@@ -969,7 +991,7 @@ local primes = { 2, 3, 5, 7 }
 local point = { x = 10, y = 20 }
 
 print(primes[1], primes[4])  --> 2  7
-print(point.x, point.y)      --> 10  20
+print(point.x, point.y)  --> 10  20
 ```
 
 An assignment to `stock["apples"]` stores a value under the key `"apples"`. A key that is not in the table has the value `nil`. Assigning `nil` to a key removes the key from the table.
@@ -981,7 +1003,7 @@ stock["pears"] = 12
 print(stock["apples"], stock["plums"])  --> 30  nil
 
 stock["pears"] = nil
-print(stock["pears"])                   --> nil
+print(stock["pears"])  --> nil
 ```
 
 ### Lists
@@ -993,19 +1015,19 @@ local days = { "Mon", "Tue", "Wed" }
 print(#days, days[1], days[#days])  --> 3  Mon  Wed
 
 days[#days + 1] = "Thu"
-print(#days, days[4])               --> 4  Thu
+print(#days, days[4])  --> 4  Thu
 ```
 
 The functions of the [`table`](/manual/api#table-library) library change a list in place. [`table.insert`](/manual/api#table.insert) adds an item at the end of a list or, with a position as its second argument, inserts the item there and moves the later items up by one. [`table.remove`](/manual/api#table.remove) removes and returns the last item or, with a position, the item at that position, moving the later items down by one.
 
 ```lus
 local queue = { "b", "c" }
-table.insert(queue, "d")        -- b c d
-table.insert(queue, 1, "a")     -- a b c d
+table.insert(queue, "d")  -- b c d
+table.insert(queue, 1, "a")  -- a b c d
 
-print(table.remove(queue))      --> d
-print(table.remove(queue, 1))   --> a
-print(#queue, queue[1])         --> 2  b
+print(table.remove(queue))  --> d
+print(table.remove(queue, 1))  --> a
+print(#queue, queue[1])  --> 2  b
 ```
 
 `#` is reliable only for a list without gaps. Assigning `nil` to an index in the middle of a list leaves a gap, after which `#` can produce the index of the item before the gap or the index of the last item. To delete an item from the middle of a list, call `table.remove`, which moves the later items down.
@@ -1015,11 +1037,12 @@ print(#queue, queue[1])         --> 2  b
 ```lus
 local scores = { 72, 95, 58, 81 }
 table.sort(scores)
-print(table.concat(scores, " "))   --> 58 72 81 95
+print(table.concat(scores, " "))  --> 58 72 81 95
 
 table.sort(scores, function(a, b)
     return a > b
 end)
+
 print(table.concat(scores, ", "))  --> 95, 81, 72, 58
 ```
 
@@ -1035,7 +1058,7 @@ user.email = "ada@example.org"
 user.age = user.age + 1
 
 print(user.name, user.age, user.email)  --> Ada  37  ada@example.org
-print(user.phone)                       --> nil
+print(user.phone)  --> nil
 ```
 
 A record is a readable way to pass many optional settings to a function. The function has one parameter that receives a table, in which the call names each setting that it passes. A call whose only argument is a table in curly braces can omit the parentheses.
@@ -1047,7 +1070,7 @@ local function connect(options)
 end
 
 print(connect({ host = "example.org", port = 8080 }))  --> example.org:8080
-print(connect{ host = "example.org" })                 --> example.org:80
+print(connect{ host = "example.org" })  --> example.org:80
 ```
 
 ### Collecting arguments into a list
@@ -1059,15 +1082,18 @@ local function average(...numbers)
     if numbers.n == 0 then
         return 0
     end
+
     local total = 0
+
     for i = 1, numbers.n do
         total = total + numbers[i]
     end
+
     return total / numbers.n
 end
 
 print(average(4, 8, 6))  --> 6.0
-print(average())         --> 0
+print(average())  --> 0
 ```
 
 `n` also counts arguments that are `nil`, so with the arguments `1, nil, 3` the field `n` is 3. The list then has a [gap](#lists), which makes `#` unreliable for it. In a function that names its extra arguments, three dots still stand for those arguments, so the function can pass them to another function.
@@ -1086,8 +1112,8 @@ local capitals = {
 }
 
 local country = "South Korea"
-print(capitals[country])    --> Seoul
-print(capitals.France)      --> Paris
+print(capitals[country])  --> Seoul
+print(capitals.France)  --> Paris
 print(capitals["Germany"])  --> nil
 ```
 
@@ -1098,6 +1124,7 @@ Dictionaries are often used for counting. The following loop counts how often ea
 ```lus
 local words = { "tea", "milk", "tea", "sugar", "tea" }
 local counts = {}
+
 for i = 1, #words do
     local word = words[i]
     counts[word] = (counts[word] or 0) + 1
@@ -1122,9 +1149,9 @@ local order = {
     },
 }
 
-print(order.customer.city)   --> London
-print(order.items[2].name)   --> mug
-print(#order.items)          --> 2
+print(order.customer.city)  --> London
+print(order.items[2].name)  --> mug
+print(#order.items)  --> 2
 ```
 
 JSON data has the same structure, so [`fromjson`](/manual/api#fromjson) converts JSON text to nested tables and [`tojson`](/manual/api#tojson) converts nested tables back to JSON text.
@@ -1144,8 +1171,9 @@ local function clear(list)
         list[i] = nil
     end
 end
+
 clear(a)
-print(#b)    --> 0
+print(#b)  --> 0
 ```
 
 `==` compares references. Two tables are equal only if they are the same table, so `{} == {}` is `false`. [`table.clone`](/manual/guide#copying-tables) makes an independent copy of a table.
@@ -1219,11 +1247,13 @@ local route = { { x = 0, y = 0 }, { x = 3, y = 4 }, { x = 3, y = 10 } }
 
 local x, y from route[1]
 local distance = 0
+
 for i = 2, #route do
     local previous_x, previous_y = x, y
     x, y from route[i]
     distance = distance + math.sqrt((x - previous_x) ^ 2 + (y - previous_y) ^ 2)
 end
+
 print(distance)  --> 11.0
 ```
 
@@ -1240,8 +1270,8 @@ local reply = {
     user = { name = "Ada", address = { city = "London" } },
 }
 
-print(reply.user.address?.city)           --> London
-print(reply.user.employer?.name)          --> nil
+print(reply.user.address?.city)  --> London
+print(reply.user.employer?.name)  --> nil
 print(reply.user.employer?.name or "none")  --> none
 ```
 
@@ -1257,10 +1287,10 @@ local handlers = {
 }
 
 print(handlers.resize?(80, 24))  --> 1920
-print(handlers.close?())         --> nil
+print(handlers.close?())  --> nil
 
 local tags = nil
-print(tags?[1])                  --> nil
+print(tags?[1])  --> nil
 ```
 
 An expression with a `?` must be used as a value, for example in an assignment, in a condition, or as an argument. It cannot be a statement of its own or the target of an assignment.
@@ -1273,9 +1303,9 @@ A _slice_ is a copy of part of a list, a string, or a vector, written with two p
 local letters = { "a", "b", "c", "d", "e" }
 
 print(table.concat(letters[2, 4], " "))  --> b c d
-print(table.concat(letters[, 2], " "))   --> a b
-print(table.concat(letters[4, ], " "))   --> d e
-print(("hello world")[1, 5])             --> hello
+print(table.concat(letters[, 2], " "))  --> a b
+print(table.concat(letters[4,], " "))  --> d e
+print(("hello world")[1, 5])  --> hello
 ```
 
 A slice of a list is a new list, so changing it leaves the original list unchanged.
@@ -1287,7 +1317,7 @@ local letters = { "a", "b", "c", "d", "e" }
 
 print(table.concat(letters[5, 4], " "))  --> e d
 print(table.concat(letters[3, 3], " "))  --> c
-print(("hello")[5, 2])                   --> olle
+print(("hello")[5, 2])  --> olle
 ```
 
 ### Copying tables
@@ -1344,10 +1374,12 @@ Each pass creates new loop variables, which are local to the body. Assigning to 
 local prices = { tea = 4.50, mug = 12.00, spoon = 2.25 }
 
 local total, count = 0, 0
+
 for name, price in pairs(prices) do
     total = total + price
     count = count + 1
 end
+
 print(count, total)  --> 3  18.75
 ```
 
@@ -1366,15 +1398,19 @@ The following `sorted_pairs` function produces the keys of a dictionary in sorte
 ```lus
 local function sorted_pairs(t)
     local keys = {}
+
     for key in pairs(t) do
         keys[#keys + 1] = key
     end
+
     table.sort(keys)
 
     local i = 0
+
     return function()
         i = i + 1
         local key = keys[i]
+
         if key ~= nil then
             return key, t[key]
         end
@@ -1382,6 +1418,7 @@ local function sorted_pairs(t)
 end
 
 local stock = { pears = 12, apples = 30, figs = 4 }
+
 for name, count in sorted_pairs(stock) do
     print(name, count)
 end
@@ -1397,6 +1434,7 @@ The loop can also store the position for the iterator. The expression after `in`
 ```lus
 local function previous(list, i)
     i = i - 1
+
     if i >= 1 then
         return i, list[i]
     end
@@ -1407,6 +1445,7 @@ local function reversed(list)
 end
 
 local queue = { "ada", "lin", "grace" }
+
 for position, name in reversed(queue) do
     print(position, name)
 end
@@ -1428,8 +1467,13 @@ The following iterator produces the products of a list from the cheapest to the 
 ```lus
 local function cheapest_first(products)
     local sorted = table.clone(products)
-    table.sort(sorted, function(a, b) return a.price < b.price end)
+
+    table.sort(sorted, function(a, b)
+        return a.price < b.price
+    end)
+
     local i = 0
+
     return function()
         i = i + 1
         return sorted[i]
@@ -1441,6 +1485,7 @@ local products = {
     { name = "mug", price = 8 },
     { name = "teapot", price = 22 },
 }
+
 for name, price from cheapest_first(products) do
     print(name, price)
 end
@@ -1466,11 +1511,11 @@ Every function whose first argument is a string can be called as a [method](#met
 ```lus
 local s = "héllo wörld"
 
-print(#s)             --> 11
-print(s:sub(1, 5))    --> héllo
-print(s:sub(7))       --> wörld
-print(s:sub(-3))      --> rld
-print(s:sub(2, -2))   --> éllo wörl
+print(#s)  --> 11
+print(s:sub(1, 5))  --> héllo
+print(s:sub(7))  --> wörld
+print(s:sub(-3))  --> rld
+print(s:sub(2, -2))  --> éllo wörl
 ```
 
 A [slice](/manual/guide#slices) produces the same part: `s[1, 5]` is `s:sub(1, 5)` and `s[7, ]` is `s:sub(7)`. Only `s:sub` counts a negative position from the end.
@@ -1481,9 +1526,9 @@ A [slice](/manual/guide#slices) produces the same part: `s[1, 5]` is `s:sub(1, 5
 
 ```lus
 print(("Hello"):upper(), ("Hello"):lower())  --> HELLO  hello
-print(("-"):rep(20))                         --> --------------------
-print(("?"):rep(3, ", "))                    --> ?, ?, ?
-print(("stressed"):reverse())                --> desserts
+print(("-"):rep(20))  --> --------------------
+print(("?"):rep(3, ", "))  --> ?, ?, ?
+print(("stressed"):reverse())  --> desserts
 ```
 
 To compare two strings without regard to case, convert both to lower case first: `a:lower() == b:lower()`.
@@ -1496,7 +1541,7 @@ To compare two strings without regard to case, convert both to lower case first:
 local fields = ("ada,36,london"):split(",")
 print(#fields, fields[1], fields[3])  --> 3  ada  london
 
-print(string.join(fields, " | "))     --> ada | 36 | london
+print(string.join(fields, " | "))  --> ada | 36 | london
 print(string.join({ 1, true, "x" }, "-"))  --> 1-true-x
 ```
 
@@ -1506,14 +1551,16 @@ print(string.join({ 1, true, "x" }, "-"))  --> 1-true-x
 
 ```lus
 local input = "   ada@example.org \n"
-print("[" .. input:trim() .. "]")       --> [ada@example.org]
-print(("--title--"):trim("-"))          --> title
+print("[" .. input:trim() .. "]")  --> [ada@example.org]
+print(("--title--"):trim("-"))  --> title
 
 local parts = ("red, green , blue"):split(",")
+
 for i, part in ipairs(parts) do
     parts[i] = part:trim()
 end
-print(string.join(parts, "|"))          --> red|green|blue
+
+print(string.join(parts, "|"))  --> red|green|blue
 ```
 
 The delimiter of `string.split` is literal text. To split at a delimiter that varies, such as any amount of whitespace, use a pattern with [`string.gmatch`](#every-match-with-stringgmatch).
@@ -1534,11 +1581,11 @@ A [string in backticks](/manual/guide#strings) is enough for most messages. [`st
 A number between the `%` and the letter is a minimum width, to which a shorter value is padded with spaces on the left. A `-` before the width puts the spaces on the right. A `0` before the width pads a number with zeros.
 
 ```lus
-print(string.format("%.2f", 3.14159))            --> 3.14
+print(string.format("%.2f", 3.14159))  --> 3.14
 print(string.format("[%5d|%-5d|%05d]", 42, 42, 42))  --> [   42|42   |00042]
-print(string.format("#%02x%02x%02x", 255, 128, 0)) --> #ff8000
-print(string.format("%-8s%8.2f", "tea", 4.5))    --> tea         4.50
-print(string.format("%d%% of %s", 80, "disk"))   --> 80% of disk
+print(string.format("#%02x%02x%02x", 255, 128, 0))  --> #ff8000
+print(string.format("%-8s%8.2f", "tea", 4.5))  --> tea         4.50
+print(string.format("%d%% of %s", 80, "disk"))  --> 80% of disk
 ```
 
 The result of `string.format` is a string, so a string in backticks can contain the call: `` `total: $(string.format("%.2f", total))` ``.
@@ -1548,9 +1595,9 @@ The result of `string.format` is a string, so a string in backticks can contain 
 Every character has a Unicode number, called its _code point_. [`string.byte`](/manual/api#string.byte) returns the code point of the character at a position, of each character in a range when given two positions, or of the first character when given no position. [`string.char`](/manual/api#string.char) returns the string made of the characters with the given code points. A program uses the two functions to calculate with characters, for example to find the letter three places after `a`.
 
 ```lus
-print(("A"):byte())              --> 65
-print(("héllo"):byte(1, 3))      --> 104  233  108
-print(string.char(72, 105))      --> Hi
+print(("A"):byte())  --> 65
+print(("héllo"):byte(1, 3))  --> 104  233  108
+print(string.char(72, 105))  --> Hi
 print(string.char(("a"):byte() + 3))  --> d
 ```
 
@@ -1581,7 +1628,7 @@ A letter, a digit, or a space in a pattern matches itself, so a pattern that con
 
 ```lus
 print(("status: ready"):match("ready"))  --> ready
-print(("status: ready"):match("done"))   --> nil
+print(("status: ready"):match("done"))  --> nil
 ```
 
 Matching is case sensitive, so the pattern `Ready` does not match the text `ready`. To match without regard to case, [convert the text to lower case](#case-repetition-and-reversal) first.
@@ -1611,8 +1658,8 @@ A pattern can combine classes and literal characters. The first pattern in the f
 
 ```lus
 print(("opens at 09:30 daily"):match("%d%d:%d%d"))  --> 09:30
-print(("room B7"):match("%u%d"))                    --> B7
-print(("a-b"):match("%a.%a"))                       --> a-b
+print(("room B7"):match("%u%d"))  --> B7
+print(("a-b"):match("%a.%a"))  --> a-b
 ```
 
 The classes that are written with a letter contain ASCII characters only, so `%a` matches `e` but not `é`. The dot matches every character, including `é`. A [set](#sets) can contain characters outside ASCII.
@@ -1623,8 +1670,8 @@ A _set_ is a list of characters in square brackets that matches one character in
 
 ```lus
 print(("grey"):match("gr[ae]y"), ("gray"):match("gr[ae]y"))  --> grey  gray
-print(("id: x9"):match("[a-z][0-9]"))                        --> x9
-print(("file_name.txt"):match("[%w_]+"))                     --> file_name
+print(("id: x9"):match("[a-z][0-9]"))  --> x9
+print(("file_name.txt"):match("[%w_]+"))  --> file_name
 ```
 
 In the last line, the `+` after the set [repeats](#repetition) it. `[%w_]+` matches one or more characters that are letters, digits, or underscores.
@@ -1633,7 +1680,7 @@ A set that starts with `^` matches one character that is not in the list. Follow
 
 ```lus
 print(("name=Ada;age=36"):match("[^;]+"))  --> name=Ada
-print(("path/to/file"):match("[^/]+"))     --> path
+print(("path/to/file"):match("[^/]+"))  --> path
 ```
 
 ### Repetition
@@ -1650,11 +1697,11 @@ A _repetition character_ after an item allows the item to match several times in
 `+` matches a sequence of one or more characters, so `%d+` matches a whole number, `%a+` a word, and `%s+` any amount of whitespace. `*` also matches when the item does not occur at all, which is useful for optional whitespace. `?` makes one item optional.
 
 ```lus
-print(("order 1042 shipped"):match("%d+"))      --> 1042
-print(("x =   5"):match("x%s*=%s*%d"))          --> x =   5
-print(("x=5"):match("x%s*=%s*%d"))              --> x=5
-print(("https://lus.dev"):match("https?://"))   --> https://
-print(("-12 degrees"):match("-?%d+"))           --> -12
+print(("order 1042 shipped"):match("%d+"))  --> 1042
+print(("x =   5"):match("x%s*=%s*%d"))  --> x =   5
+print(("x=5"):match("x%s*=%s*%d"))  --> x=5
+print(("https://lus.dev"):match("https?://"))  --> https://
+print(("-12 degrees"):match("-?%d+"))  --> -12
 ```
 
 `+` and `*` are _greedy_, which means they match as many characters as possible while the rest of the pattern still matches. `-` is _lazy_ and matches as few characters as possible. The two differ when the text contains the closing delimiter more than once, as in the following example, where `.*` matches up to the last `>` and `.-` up to the first.
@@ -1673,11 +1720,11 @@ Use `.-` followed by a delimiter to match up to the nearest occurrence of that d
 A pattern can match anywhere in the string unless it has _anchors_. A `^` at the start of the pattern requires the match to begin at the start of the string. A `$` at the end requires the match to end at the end of the string. With both anchors, the whole string must match the pattern, which is how programs validate input.
 
 ```lus
-print(("item 42"):match("%d+"))        --> 42
-print(("item 42"):match("^%d+"))       --> nil
-print(("42 items"):match("^%d+"))      --> 42
-print(("42 items"):match("^%d+$"))     --> nil
-print(("42"):match("^%d+$"))           --> 42
+print(("item 42"):match("%d+"))  --> 42
+print(("item 42"):match("^%d+"))  --> nil
+print(("42 items"):match("^%d+"))  --> 42
+print(("42 items"):match("^%d+$"))  --> nil
+print(("42"):match("^%d+$"))  --> 42
 ```
 
 The following function checks that a string is a valid identifier: a letter or an underscore, followed by any number of letters, digits, and underscores. Without the anchors, the pattern would also match a string that only contains an identifier, such as `first name`.
@@ -1687,9 +1734,9 @@ local function is_identifier(s)
     return s:match("^[%a_][%w_]*$") ~= nil
 end
 
-print(is_identifier("user_name"))   --> true
-print(is_identifier("_tmp2"))       --> true
-print(is_identifier("2fast"))       --> false
+print(is_identifier("user_name"))  --> true
+print(is_identifier("_tmp2"))  --> true
+print(is_identifier("2fast"))  --> false
 print(is_identifier("first name"))  --> false
 ```
 
@@ -1708,8 +1755,8 @@ The following pattern captures the three parts of a date, with the `-` between t
 
 ```lus
 local year, month, day = ("2026-03-04"):match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
-print(year, month, day)                  --> 2026  03  04
-print(tonumber(month) + 1)               --> 4
+print(year, month, day)  --> 2026  03  04
+print(tonumber(month) + 1)  --> 4
 
 print(("2026-3-4"):match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$"))  --> nil
 ```
@@ -1718,6 +1765,7 @@ When the pattern does not match, every variable of the assignment is `nil`. A [c
 
 ```lus
 local line = "Content-Length: 348"
+
 if name, value = line:match("^([%w%-]+):%s*(.*)$") then
     print(name, value)  --> Content-Length  348
 end
@@ -1728,8 +1776,8 @@ An empty pair of parentheses is a _position capture_, whose value is the positio
 ```lus
 local text = "key:value"
 local stop = text:match(":()")
-print(stop)             --> 5
-print(text:sub(stop))   --> value
+print(stop)  --> 5
+print(text:sub(stop))  --> value
 
 print(("hello world"):match("()wor()"))  --> 7  10
 ```
@@ -1737,8 +1785,8 @@ print(("hello world"):match("()wor()"))  --> 7  10
 In a pattern, `%1` matches the same text that the first capture matched. `%2` to `%9` do the same for the later captures. The following patterns find a repeated word and a quoted text whose closing quote is the same character as its opening quote.
 
 ```lus
-print(("it was the the best"):match("(%a+) %1"))        --> the
-print(([[say "it's fine" now]]):match("([\"'])(.-)%1")) --> "  it's fine
+print(("it was the the best"):match("(%a+) %1"))  --> the
+print(([[say "it's fine" now]]):match("([\"'])(.-)%1"))  --> "  it's fine
 ```
 
 ### Finding with `string.find`
@@ -1747,12 +1795,12 @@ A program calls [`string.find`](/manual/api#string.find) to test whether a strin
 
 ```lus
 local s = "error at line 42"
-print(s:find("line"))    --> 10  13
-print(s:find("%d+"))     --> 15  16
-print(s:find("warning")) --> nil
+print(s:find("line"))  --> 10  13
+print(s:find("%d+"))  --> 15  16
+print(s:find("warning"))  --> nil
 
 if s:find("^error") then
-    print("failed")      --> failed
+    print("failed")  --> failed
 end
 ```
 
@@ -1762,8 +1810,8 @@ To search for literal text that contains special characters, pass `true` as the 
 local price = "total (USD): 3.50"
 
 print(price:find("(USD)", 1, true))  --> 7  11
-print(price:find(".", 1, true))      --> 15  15
-print(price:find("."))               --> 1  1
+print(price:find(".", 1, true))  --> 15  15
+print(price:find("."))  --> 1  1
 ```
 
 In the last line, the dot is a pattern, so it matches the first character of the string. Use the plain search whenever the text to find comes from a user or from a file.
@@ -1788,9 +1836,11 @@ The following loop uses the pattern `%S+` to split a string into words, whatever
 
 ```lus
 local words = {}
+
 for word in ("  the quick   brown fox "):gmatch("%S+") do
     words[#words + 1] = word
 end
+
 print(#words, string.join(words, ","))  --> 4  the,quick,brown,fox
 ```
 
@@ -1799,9 +1849,11 @@ With a different pattern, the same loop extracts numbers from text. The followin
 ```lus
 local timings = "GET /a 12ms, GET /b 250ms, GET /c 31ms"
 local total = 0
+
 for duration in timings:gmatch("(%d+)ms") do
     total = total + tonumber(duration)
 end
+
 print(total)  --> 293
 ```
 
@@ -1817,8 +1869,10 @@ debug=true
 ]]
 
 local config = {}
+
 for line in text:gmatch("[^\n]+") do
     local key, value = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+
     if key then
         config[key] = value
     end
@@ -1846,10 +1900,10 @@ In `string.gmatch`, a `^` at the start of the pattern matches a literal `^`. An 
 In a replacement string, `%1` to `%9` stand for the captures and `%0` for the whole match, so the replacement can repeat or reorder parts of the match. A percent sign in the replacement is written `%%`.
 
 ```lus
-print(("hello world"):gsub("o", "0"))            --> hell0 w0rld  2
-print(("a  b    c"):gsub("%s+", " "))            --> a b c  2
+print(("hello world"):gsub("o", "0"))  --> hell0 w0rld  2
+print(("a  b    c"):gsub("%s+", " "))  --> a b c  2
 print(("2026-03-04"):gsub("(%d+)%-(%d+)%-(%d+)", "%3/%2/%1"))  --> 04/03/2026  1
-print(("ada lin"):gsub("%a+", "<%0>"))           --> <ada> <lin>  2
+print(("ada lin"):gsub("%a+", "<%0>"))  --> <ada> <lin>  2
 ```
 
 With a replacement table, `string.gsub` uses each match as a key of the table, or the first capture if the pattern has captures. The value under that key replaces the match. If the table has no value for a match, the match stays in the result unchanged. The following call fills a template that has placeholders of the form `$name`. Its pattern contains `%$` because `$` is a special character.
@@ -1870,6 +1924,7 @@ local values = { name = "Ada" }
 local letter = ("Hi $name, see you $day."):gsub("%$(%w+)", function(key)
     return values[key] or `<missing $key>`
 end)
+
 print(letter)  --> Hi Ada, see you <missing day>.
 ```
 
@@ -1877,9 +1932,11 @@ The following example decodes the escapes of a web address, such as `%20` for a 
 
 ```lus
 local encoded = "tea%20%26%20milk%3F"
+
 local decoded = encoded:gsub("%%(%x%x)", function(hex)
     return string.char(tonumber(hex, 16))
 end)
+
 print(decoded)  --> tea & milk?
 ```
 
@@ -1896,8 +1953,8 @@ The items `%b` and `%f` match text that classes and repetition cannot describe: 
 ```lus
 local code = "total = max(a, min(b, c)) + 1"
 
-print(code:match("%(.-%)"))        --> (a, min(b, c)
-print(code:match("%b()"))          --> (a, min(b, c))
+print(code:match("%(.-%)"))  --> (a, min(b, c)
+print(code:match("%b()"))  --> (a, min(b, c))
 
 local name, arguments = code:match("(%a+)(%b())")
 print(name, arguments:sub(2, -2))  --> max  a, min(b, c)
@@ -1908,9 +1965,9 @@ print(name, arguments:sub(2, -2))  --> max  a, min(b, c)
 `%f` followed by a set matches a _boundary_, which is a position where the previous character is outside the set and the next character is in the set. `%f` matches the position only, without any character. `%f[%w]` matches at the start of a word and `%f[%W]` at the end of one, so a pattern between the two matches whole words only.
 
 ```lus
-print(("cat concat cat"):gsub("cat", "dog"))                  --> dog condog dog  3
-print(("cat concat cat"):gsub("%f[%w]cat%f[%W]", "dog"))      --> dog concat dog  2
-print(("the quick fox"):gsub("%f[%w]%l", string.upper))       --> The Quick Fox  3
+print(("cat concat cat"):gsub("cat", "dog"))  --> dog condog dog  3
+print(("cat concat cat"):gsub("%f[%w]cat%f[%W]", "dog"))  --> dog concat dog  2
+print(("the quick fox"):gsub("%f[%w]%l", string.upper))  --> The Quick Fox  3
 ```
 
 The last line capitalizes each word by passing `string.upper` as the replacement function for each lower case letter at the start of a word.
@@ -1920,9 +1977,9 @@ The last line capitalizes each word by passing `string.upper` as the replacement
 A `%` before a [special character](#literal-text) _escapes_ it. A `%` is also allowed before a punctuation character that has no special meaning, so a safe rule is to escape every punctuation character that must match itself.
 
 ```lus
-print(("version 2.10.3"):match("%d+%.%d+%.%d+"))   --> 2.10.3
-print(("50% off (today)"):match("%d+%%"))          --> 50%
-print(("50% off (today)"):match("%((%a+)%)"))      --> today
+print(("version 2.10.3"):match("%d+%.%d+%.%d+"))  --> 2.10.3
+print(("50% off (today)"):match("%d+%%"))  --> 50%
+print(("50% off (today)"):match("%((%a+)%)"))  --> today
 ```
 
 A program that builds a pattern from text it receives when it runs, such as a file name, must escape that text first. The following function puts a `%` before every punctuation character of a text.
@@ -1933,7 +1990,7 @@ local function escape(text)
 end
 
 local name = "report (v1.2).txt"
-print(escape(name))                                  --> report %(v1%.2%)%.txt
+print(escape(name))  --> report %(v1%.2%)%.txt
 print(("open report (v1.2).txt now"):match(escape(name)))  --> report (v1.2).txt
 ```
 
@@ -1948,9 +2005,11 @@ The following loop collects every number in a text. A number is an optional minu
 ```lus
 local note = "Order 1042: 3 items, 2.5 kg, total 59.90 EUR"
 local numbers = {}
+
 for number in note:gmatch("-?%d+%.?%d*") do
     numbers[#numbers + 1] = tonumber(number)
 end
+
 print(string.join(numbers, " "))  --> 1042 3 2.5 59.9
 ```
 
@@ -1960,9 +2019,11 @@ print(string.join(numbers, " "))  --> 1042 3 2.5 59.9
 
 ```lus
 local tags = {}
+
 for tag in ("lus, lua;zig  wasm"):gmatch("[^,;%s]+") do
     tags[#tags + 1] = tag
 end
+
 print(#tags, string.join(tags, "|"))  --> 4  lus|lua|zig|wasm
 ```
 
@@ -1982,19 +2043,23 @@ The following function converts a time such as `09:30` to two numbers. The ancho
 ```lus
 local function parse_time(s)
     local hours, minutes = s:match("^(%d%d):(%d%d)$")
+
     if not hours then
         return nil
     end
+
     hours, minutes = tonumber(hours), tonumber(minutes)
+
     if hours > 23 or minutes > 59 then
         return nil
     end
+
     return hours, minutes
 end
 
-print(parse_time("09:30"))   --> 9  30
-print(parse_time("9:30"))    --> nil
-print(parse_time("25:00"))   --> nil
+print(parse_time("09:30"))  --> 9  30
+print(parse_time("9:30"))  --> nil
+print(parse_time("25:00"))  --> nil
 ```
 
 #### A query string
@@ -2004,9 +2069,11 @@ A query string is the part of a web address that holds parameters in the form `k
 ```lus
 local query = "page=2&sort=name&desc"
 local params = {}
+
 for key, value in query:gmatch("([^&=]+)=([^&=]*)") do
     params[key] = value
 end
+
 print(params.page, params.sort, params.desc)  --> 2  name  nil
 ```
 
@@ -2024,18 +2091,21 @@ The following function accepts a date in two notations. It tries one pattern for
 ```lus
 local function parse_date(s)
     local year, month, day = s:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+
     if not year then
         day, month, year = s:match("^(%d%d)/(%d%d)/(%d%d%d%d)$")
     end
+
     if not year then
         return nil
     end
+
     return tonumber(year), tonumber(month), tonumber(day)
 end
 
 print(parse_date("2026-03-04"))  --> 2026  3  4
 print(parse_date("04/03/2026"))  --> 2026  3  4
-print(parse_date("March 4"))     --> nil
+print(parse_date("March 4"))  --> nil
 ```
 
 The standard library has parsers for the common data formats, which handle quoting, escapes, and nesting correctly. [`fromjson`](/manual/api#fromjson) reads JSON and [`fromcsv`](/manual/api#fromcsv) reads CSV. [Data formats](/manual/data) describes both.
@@ -2084,13 +2154,15 @@ When the error object is a string, `error` puts the file name and the line numbe
 local function average(values)
     assert(#values > 0, "average needs at least one value")
     local sum = 0
+
     for _, value in ipairs(values) do
         sum = sum + value
     end
+
     return sum / #values
 end
 
-print(average({ 4, 6, 8 }))   --> 6.0
+print(average({ 4, 6, 8 }))  --> 6.0
 ```
 
 When the message is a string, `assert` puts the position of its call in front of it, as `error` does. A call of `average({})` in a file named `stats.lus` raises `stats.lus:2: average needs at least one value`. A check whose message is for the user of the program calls `error(message, 0)`, because `assert` has no level argument that omits the position.
@@ -2103,11 +2175,11 @@ The first value of a `catch` expression is a status. If the expression succeeds,
 
 ```lus
 local ok, settings = catch fromjson('{"port": 8080}')
-print(ok, settings.port)   --> true  8080
+print(ok, settings.port)  --> true  8080
 
 local ok, message = catch fromjson('{"port": ')
-print(ok)        --> false
-print(message)   --> ...: JSON parse error at position 10: unexpected end of input
+print(ok)  --> false
+print(message)  --> ...: JSON parse error at position 10: unexpected end of input
 ```
 
 The message starts with the file name and the line number of the call, as the message of `error` does. The comment after `print` writes them as `...`.
@@ -2119,7 +2191,7 @@ The expression after `catch` can be any expression, such as a call or an operati
 ```lus
 local total, count = 120, 0
 local ok, share = catch total // count
-print(ok)   --> false
+print(ok)  --> false
 ```
 
 A [condition that declares variables](/manual/guide#conditions-that-declare-variables) can contain a `catch`, which tests the status and declares the result in one line. The branch runs when every declared variable is truthy, which is the case when the expression succeeded and its result is truthy. The following program converts text to a port number and reports invalid text.
@@ -2127,20 +2199,22 @@ A [condition that declares variables](/manual/guide#conditions-that-declare-vari
 ```lus
 local function parse_port(text)
     local port = math.tointeger(tonumber(text))
+
     if not port or port < 1 or port > 65535 then
         error(`invalid port: $text`, 0)
     end
+
     return port
 end
 
 if ok, port = catch parse_port("8080") then
-    print(`listening on port $port`)   --> listening on port 8080
+    print(`listening on port $port`)  --> listening on port 8080
 end
 
 if ok, port = catch parse_port("http") then
     print(`listening on port $port`)
 else
-    print(port)   --> invalid port: http
+    print(port)  --> invalid port: http
 end
 ```
 
@@ -2155,12 +2229,15 @@ local function fetch_page(attempt)
     if attempt < 3 then
         error({ code = "timeout", retry_after = 2 })
     end
+
     return "<html>...</html>"
 end
 
 local page
+
 for attempt = 1, 5 do
     local ok, result = catch fetch_page(attempt)
+
     if ok then
         page = result
         break
@@ -2170,6 +2247,7 @@ for attempt = 1, 5 do
         error(result)
     end
 end
+
 print(page)
 --> attempt 1 timed out, waiting 2 seconds
 --> attempt 2 timed out, waiting 2 seconds
@@ -2187,15 +2265,16 @@ local function as_table(err)
     if type(err) == "table" then
         return err
     end
+
     return { code = "internal", message = tostring(err) }
 end
 
 local ok, err = catch[as_table] fromjson("[1, 2")
-print(ok, err.code)   --> false  internal
-print(err.message)    --> ...: JSON parse error at position 6: expected ']' after array element
+print(ok, err.code)  --> false  internal
+print(err.message)  --> ...: JSON parse error at position 6: expected ']' after array element
 
 local ok, err = catch[as_table] error({ code = "timeout" })
-print(ok, err.code)   --> false  timeout
+print(ok, err.code)  --> false  timeout
 ```
 
 Every `catch[as_table]` produces an error object with a `code` field, whatever raised the error.
@@ -2206,9 +2285,15 @@ The failure of some operations has no consequence for the program, such as remov
 
 ```lus
 local listeners = {
-    function(event) print("saved", event) end,
-    function(event) error("listener failed") end,
-    function(event) print("logged", event) end,
+    function(event)
+        print("saved", event)
+    end,
+    function(event)
+        error("listener failed")
+    end,
+    function(event)
+        print("logged", event)
+    end,
 }
 
 for _, listener in ipairs(listeners) do
@@ -2249,6 +2334,7 @@ local mode = "quiet"
 local is_terminal = true
 
 local show_progress
+
 if mode == "quiet" then
     show_progress = false
 elseif mode == "verbose" then
@@ -2256,7 +2342,8 @@ elseif mode == "verbose" then
 else
     show_progress = is_terminal
 end
-print(show_progress)   --> false
+
+print(show_progress)  --> false
 ```
 
 The [`and` and `or` choice](#logical-operators) gives a wrong result here, because one of the values is `false`. A do expression computes the value inside the declaration, so the variable can be `<const>`. Each `provide` ends the block, so the branches need no `else`.
@@ -2269,12 +2356,15 @@ local show_progress <const> = do
     if mode == "quiet" then
         provide false
     end
+
     if mode == "verbose" then
         provide true
     end
+
     provide is_terminal
 end
-print(show_progress)   --> false
+
+print(show_progress)  --> false
 ```
 
 A do expression can also compute a constant with a loop, such as the following map from each column name of a CSV header to its position. The scope of the variable `index` ends with the block, so the rest of the program can only use `column`.
@@ -2284,12 +2374,15 @@ local header = { "name", "email", "city" }
 
 local column <const> = do
     local index = {}
+
     for position, name in ipairs(header) do
         index[name] = position
     end
+
     provide index
 end
-print(column.email, column.city)   --> 2  3
+
+print(column.email, column.city)  --> 2  3
 ```
 
 ### The first match in a loop
@@ -2310,7 +2403,8 @@ local admin = do
         end
     end
 end
-print(admin.name)   --> grace
+
+print(admin.name)  --> grace
 
 local guest = do
     for _, user in ipairs(users) do
@@ -2319,7 +2413,8 @@ local guest = do
         end
     end
 end
-print(guest)   --> nil
+
+print(guest)  --> nil
 ```
 
 The same search with a plain loop needs a variable declared before the loop, an assignment inside the loop, and a `break`. The do expression needs one declaration.
@@ -2334,16 +2429,19 @@ The same search with a plain loop needs a variable declared before the loop, an 
 local function load_settings(text)
     local ok, port, host_count = catch do
         local settings = fromjson(text)
+
         if math.type(settings.port) ~= "integer" then
             error("port must be an integer", 0)
         end
+
         provide settings.port, #settings.hosts
     end
+
     print(ok, port, host_count)
 end
 
-load_settings('{"port": 8080, "hosts": ["a", "b"]}')   --> true  8080  2
-load_settings('{"port": "eighty", "hosts": []}')       --> false  port must be an integer  nil
+load_settings('{"port": 8080, "hosts": ["a", "b"]}')  --> true  8080  2
+load_settings('{"port": "eighty", "hosts": []}')  --> false  port must be an integer  nil
 load_settings('{"port": ')
 --> false  ...: JSON parse error at position 10: unexpected end of input  nil
 ```
@@ -2362,6 +2460,7 @@ local orders = {
 }
 
 local invoices = {}
+
 for _, order in ipairs(orders) do
     table.insert(invoices, {
         id = order.id,
@@ -2401,8 +2500,8 @@ A read of a missing field produces `nil` unless the metatable has an `__index` m
 local defaults = { color = "black", width = 1 }
 
 local pen = setmetatable({ width = 3 }, { __index = defaults })
-print(pen.width)   --> 3
-print(pen.color)   --> black
+print(pen.width)  --> 3
+print(pen.color)  --> black
 ```
 
 `pen` has its own `width` but no `color`, so Lus reads `color` from `defaults`. The assignment `pen.color = "red"` stores the field in `pen` and leaves `defaults` unchanged.
@@ -2419,7 +2518,8 @@ local counts = setmetatable({}, {
 for _, word in ipairs({ "pear", "fig", "pear" }) do
     counts[word] = counts[word] + 1
 end
-print(counts.pear, counts.fig, counts.plum)   --> 2  1  0
+
+print(counts.pear, counts.fig, counts.plum)  --> 2  1  0
 ```
 
 `__index` also lets many tables share their functions. A [method call](/manual/guide#methods) such as `stack:push(1)` reads the field `push` from `stack`. With `__index`, every stack reads `push` from one common table and stores only its own data. A table that combines its own data with shared methods is called an _object_.
@@ -2443,7 +2543,7 @@ end
 local stack = Stack.new()
 stack:push("a")
 stack:push("b")
-print(stack:pop(), #stack.items)   --> b  1
+print(stack:pop(), #stack.items)  --> b  1
 ```
 
 `Stack` is the metatable of every stack. Its `__index` field holds `Stack` itself, so Lus reads missing fields from `Stack`. The `__newindex` metamethod is the equivalent for writes: when a program assigns to a field that the table does not have, Lus calls `__newindex` with the table, the key, and the value.
@@ -2468,6 +2568,7 @@ function Point.__mul(a, b)
     if type(a) == "number" then
         return point(a * b.x, a * b.y)
     end
+
     return point(a.x * b, a.y * b)
 end
 
@@ -2476,13 +2577,13 @@ function Point.__unm(a)
 end
 
 local sum = point(1, 2) + point(3, 4)
-print(sum.x, sum.y)   --> 4  6
+print(sum.x, sum.y)  --> 4  6
 
 local scaled = 2 * point(1, 2)
-print(scaled.x, scaled.y)   --> 2  4
+print(scaled.x, scaled.y)  --> 2  4
 
 local opposite = -point(1, 2)
-print(opposite.x, opposite.y)   --> -1  -2
+print(opposite.x, opposite.y)  --> -1  -2
 ```
 
 Lus calls the metamethod when either operand has it. `2 * p` and `p * 2` both call `Point.__mul`, so the function checks which operand is the number.
@@ -2507,6 +2608,7 @@ function Version.__lt(a, b)
     if a.major ~= b.major then
         return a.major < b.major
     end
+
     return a.minor < b.minor
 end
 
@@ -2514,13 +2616,13 @@ function Version.__le(a, b)
     return a == b or a < b
 end
 
-print(version(2, 0) == version(2, 0))   --> true
-print(version(1, 9) < version(2, 0))    --> true
-print(version(2, 1) >= version(2, 0))   --> true
+print(version(2, 0) == version(2, 0))  --> true
+print(version(1, 9) < version(2, 0))  --> true
+print(version(2, 1) >= version(2, 0))  --> true
 
 local releases = { version(2, 0), version(1, 4), version(1, 10) }
 table.sort(releases)
-print(releases[1].minor, releases[2].minor, releases[3].minor)   --> 4  10  0
+print(releases[1].minor, releases[2].minor, releases[3].minor)  --> 4  10  0
 ```
 
 [`table.sort`](/manual/api#table.sort) compares elements with `<`, so it sorts a list of tables that have `__lt` without a comparison function. Lus calls `__eq` only when both operands are tables, so a version is never equal to a number or a string.
@@ -2538,8 +2640,8 @@ function Point.__tostring(point)
 end
 
 local origin = setmetatable({ x = 0, y = 0 }, Point)
-print(origin)                  --> (0, 0)
-print(`starting at $origin`)   --> starting at (0, 0)
+print(origin)  --> (0, 0)
+print(`starting at $origin`)  --> starting at (0, 0)
 ```
 
 ### Callable tables
@@ -2562,21 +2664,23 @@ end
 
 local function count_valid(list, is_valid)
     local count = 0
+
     for _, item in ipairs(list) do
         if is_valid(item) then
             count = count + 1
         end
     end
+
     return count
 end
 
 local valid_name = rule(5)
 local names = { "ada", "grace", "lin", "barbara" }
-print(valid_name("grace"), valid_name("ada"))   --> true  false
-print(count_valid(names, valid_name))           --> 2
+print(valid_name("grace"), valid_name("ada"))  --> true  false
+print(count_valid(names, valid_name))  --> 2
 
 valid_name.min_length = 3
-print(count_valid(names, valid_name))           --> 4
+print(count_valid(names, valid_name))  --> 4
 ```
 
 Standard library functions that take a function, such as `table.filter`, raise an error for a callable table. Functions that the program defines, such as `count_valid`, accept one.
@@ -2594,6 +2698,7 @@ local log = {}
 
 local function transaction()
     table.insert(log, "begin")
+
     return setmetatable({}, {
         __close = function(self, err)
             table.insert(log, err and "rollback" or "commit")
@@ -2611,7 +2716,7 @@ catch do
     error("constraint failed")
 end
 
-print(table.concat(log, ", "))   --> begin, insert row, commit, begin, rollback
+print(table.concat(log, ", "))  --> begin, insert row, commit, begin, rollback
 ```
 
 A `<close>` variable is also constant. When one block declares several `<close>` variables, Lus closes them in reverse order of declaration, so a resource is released before the resources that it depends on. The value of a `<close>` variable must have a `__close` metamethod, be a coroutine, or be `nil` or `false`. A coroutine closes as [`coroutine.close`](/manual/api#coroutine.close) closes it, which releases what its own `<close>` variables hold. Lus skips a `nil` or `false` value, so a function that returns `nil` on failure can initialize a `<close>` variable directly.
@@ -2639,7 +2744,7 @@ end
 
 local account = Account.new("Ada", 100)
 account:deposit(50)
-print(account:describe())   --> Ada has 150
+print(account:describe())  --> Ada has 150
 ```
 
 Each call of `Account.new` returns a new table with its own `owner` and `balance`, while the methods exist once, in `Account`. `getmetatable(account) == Account` is true for every account, so a program can use this comparison to test whether a value is an account.
@@ -2689,7 +2794,7 @@ cache.kept = report
 cache.dropped = { "temporary" }
 
 collectgarbage()
-print(cache.kept == report, cache.dropped)   --> true  nil
+print(cache.kept == report, cache.dropped)  --> true  nil
 ```
 
 The variable `report` still refers to the first table, so its cache entry stays. Only the cache refers to the second table, so Lus frees it and removes its entry.
@@ -2713,13 +2818,14 @@ end
 
 local width <positive> = 80
 width = 120
-print(width)   --> 120
+print(width)  --> 120
 
 local ok, message = catch do
     width = -5
 end
-print(message)   --> width must be positive, got -5
-print(width)     --> 120
+
+print(message)  --> width must be positive, got -5
+print(width)  --> 120
 ```
 
 When an attribute raises an error, the variable keeps its previous value, so `width` is still `120` at the end.
@@ -2732,10 +2838,10 @@ local function trimmed(name, value)
 end
 
 local title <trimmed> = "   Annual report  "
-print(`[$title]`)   --> [Annual report]
+print(`[$title]`)  --> [Annual report]
 
 title = "\tDraft\n"
-print(`[$title]`)   --> [Draft]
+print(`[$title]`)  --> [Draft]
 ```
 
 An attribute can also record every assignment. Because it receives the name of the variable, one function can report the changes of any variable. The following attribute prints each new value of a counter.
@@ -2745,9 +2851,9 @@ local function traced(name, value)
     print(`$name = $value`)
 end
 
-local retries <traced> = 0   --> retries = 0
-retries = retries + 1        --> retries = 1
-retries = retries + 1        --> retries = 2
+local retries <traced> = 0  --> retries = 0
+retries = retries + 1  --> retries = 1
+retries = retries + 1  --> retries = 2
 ```
 
 ### Function decorators
@@ -2776,21 +2882,24 @@ A decorator can add caching, timing, or a permission check to a function without
 ```lus
 local function memoized(name, fn)
     local results = {}
+
     return function(n)
         if results[n] == nil then
             results[n] = fn(n)
         end
+
         return results[n]
     end
 end
 
 local computed = 0
+
 local square <memoized> = function(n)
     computed = computed + 1
     return n * n
 end
 
-print(square(12), square(12), computed)   --> 144  144  1
+print(square(12), square(12), computed)  --> 144  144  1
 ```
 
 ### Parameterized attributes
@@ -2810,11 +2919,13 @@ local count <only "number"> = 0
 local label <only "string"> = "total"
 
 count = count + 1
+
 local ok, message = catch do
     count = "three"
 end
-print(message)   --> count must be a number, got a string
-print(count)     --> 1
+
+print(message)  --> count must be a number, got a string
+print(count)  --> 1
 ```
 
 `only "number"` is a call of `only` with one string argument, so it [omits the parentheses](#declaring-and-calling). Lus evaluates the expression once, when the variable is declared.
@@ -2858,14 +2969,16 @@ Separate local variables such as `sum_x` and `sum_y` also avoid the table, but t
 ```lus
 local function centroid(points)
     local sum <group> = { x = 0, y = 0 }
+
     for _, point in ipairs(points) do
         sum.x = sum.x + point.x
         sum.y = sum.y + point.y
     end
+
     return sum.x / #points, sum.y / #points
 end
 
-print(centroid({ { x = 0, y = 0 }, { x = 4, y = 2 }, { x = 2, y = 4 } }))   --> 2.0  2.0
+print(centroid({ { x = 0, y = 0 }, { x = 4, y = 2 }, { x = 2, y = 4 } }))  --> 2.0  2.0
 ```
 
 The value of a field can be any expression. The following group computes the longest word of a list with a [do expression](#do-expressions).
@@ -2873,19 +2986,19 @@ The value of a field can be any expression. The following group computes the lon
 ```lus
 local words = { "pear", "fig", "banana" }
 
-local summary <group> = {
-    count = #words,
-    longest = do
-        local best = ""
-        for _, word in ipairs(words) do
-            if #word > #best then
-                best = word
-            end
+local summary <group> = { count = #words, longest = do
+    local best = ""
+
+    for _, word in ipairs(words) do
+        if #word > #best then
+            best = word
         end
-        provide best
-    end,
-}
-print(summary.count, summary.longest)   --> 3  banana
+    end
+
+    provide best
+end }
+
+print(summary.count, summary.longest)  --> 3  banana
 ```
 
 An assignment of a table constructor to a group sets the fields that the constructor lists and leaves the other fields unchanged. The following assignment resets two of three statistics.
@@ -2894,7 +3007,7 @@ An assignment of a table constructor to a group sets the fields that the constru
 local stats <group> = { count = 4, sum = 22, max = 9 }
 
 stats = { count = 0, sum = 0 }
-print(stats.count, stats.sum, stats.max)   --> 0  0  9
+print(stats.count, stats.sum, stats.max)  --> 0  0  9
 ```
 
 An assignment of one group to another copies each field to the field of the same name and leaves the other fields of the target unchanged. Every field of the source group must also be a field of the target group. The following assignment moves a position back to its start.
@@ -2904,7 +3017,7 @@ local start <group> = { x = 0, y = 0 }
 local pos <group> = { x = 5, y = 7 }
 
 pos = start
-print(pos.x, pos.y)   --> 0  0
+print(pos.x, pos.y)  --> 0  0
 ```
 
 A group can also initialize a new group. `local backup <group> = stats` declares `backup` with the same fields and the current values of `stats`.
@@ -2912,17 +3025,14 @@ A group can also initialize a new group. `local backup <group> = stats` declares
 A field with the `<const>` attribute cannot be reassigned. A field with the `<group>` attribute is a nested group with its own fields. The following group describes a moving body, whose values would need five names such as `body_position_x` as separate local variables.
 
 ```lus
-local body <group> = {
-    mass <const> = 2,
-    position <group> = { x = 0, y = 0 },
-    velocity <group> = { x = 1, y = 3 },
-}
+local body <group> = { mass <const> = 2, position <group> = { x = 0, y = 0 }, velocity <group> = { x = 1, y = 3 } }
 
 for step = 1, 3 do
     body.position.x = body.position.x + body.velocity.x
     body.position.y = body.position.y + body.velocity.y
 end
-print(body.position.x, body.position.y)   --> 3  9
+
+print(body.position.x, body.position.y)  --> 3  9
 ```
 
 A group differs from a table in the following ways.
@@ -2949,6 +3059,7 @@ local function run(command)
     if command == "version" then
         return "2.0"
     end
+
     return `serving on $(settings.host):$(settings.port)`
 end
 
@@ -2983,9 +3094,9 @@ end
 
 add_one()
 add_one()
-print(label)   --> total: 36
+print(label)  --> total: 36
 price = 10
-print(label)   --> total: 30
+print(label)  --> total: 30
 ```
 
 An observed variable depends on the observed variables that its initializer names. Other variables that the initializer reads are inputs, read again at each recomputation, and a change to one of them recomputes nothing. A change updates each dependent once, in the order of the declarations, so `label` always sees the new `total`. An assignment from any function updates the dependents, as `add_one` shows.
@@ -3013,9 +3124,9 @@ local a = coroutine.create(handle)
 local b = coroutine.create(handle)
 coroutine.resume(a, "r1")
 coroutine.resume(b, "r2")
-coroutine.resume(a)   --> [r1] done
-coroutine.resume(b)   --> [r2] done
-log("idle")           --> [none] idle
+coroutine.resume(a)  --> [r1] done
+coroutine.resume(b)  --> [r2] done
+log("idle")  --> [none] idle
 ```
 
 A new coroutine starts with the values of the coroutine that creates it, so the connections that `network.serve` accepts start with the values of the coroutine that runs `serve`, and a task detached while answering a request keeps its request. A change after the creation stays in the coroutine that made it. A function reads the value of the coroutine that runs it, wherever the function was defined. Each run of a declaration creates a new variable, so two calls of a function that declares one have two variables. [`debug.getcontext`](/manual/api#debug.getcontext) reads the values that another coroutine sees.
@@ -3032,10 +3143,10 @@ An `enum ... end` expression creates an enum from the names of its _members_, se
 local Level = enum debug, info, warning, error end
 
 local current = Level.warning
-print(type(current))             --> enum
+print(type(current))  --> enum
 print(current == Level.warning)  --> true
-print(current == "warning")      --> false
-print(current == 3)              --> false
+print(current == "warning")  --> false
+print(current == 3)  --> false
 ```
 
 A member is equal only to itself. A name that the enum does not list, such as `Level.fatal`, reads as `nil`.
@@ -3166,8 +3277,8 @@ A filesystem value is an absolute path or a path that starts with `.`, which is 
 ```lus
 pledge("env=EDITOR")
 
-print((catch os.getenv("EDITOR")))                  --> true
-print((catch os.getenv("AWS_SECRET_ACCESS_KEY")))   --> false
+print((catch os.getenv("EDITOR")))  --> true
+print((catch os.getenv("AWS_SECRET_ACCESS_KEY")))  --> false
 ```
 
 Several pledges of the same permission with different values add up, so an operation is allowed when any of the values matches.
@@ -3185,7 +3296,7 @@ print(ran and "listed the files" or "running programs is forbidden")
 --> running programs is forbidden
 
 local granted = catch pledge("exec")
-print(granted and "granted" or "refused for good")   --> refused for good
+print(granted and "granted" or "refused for good")  --> refused for good
 ```
 
 After `pledge("seal")`, the set of permissions cannot change. Every later `pledge` returns `false`, so the program keeps exactly the permissions it held when it sealed. A server typically pledges the permissions it needs and seals before it accepts its first connection.
@@ -3193,8 +3304,8 @@ After `pledge("seal")`, the set of permissions cannot change. Every later `pledg
 ```lus
 pledge("fs:read", "network:tcp", "seal")
 
-print(pledge("exec"))       --> false
-print(pledge("fs:write"))   --> false
+print(pledge("exec"))  --> false
+print(pledge("fs:write"))  --> false
 ```
 
 ### Granting from the command line
@@ -3251,8 +3362,8 @@ local task = coroutine.create(function()
     error("out of paper", 0)
 end)
 
-print(coroutine.resume(task))   --> false  out of paper
-print(coroutine.resume(task))   --> false  cannot resume dead coroutine
+print(coroutine.resume(task))  --> false  out of paper
+print(coroutine.resume(task))  --> false  cannot resume dead coroutine
 ```
 
 ### Generators
@@ -3268,15 +3379,19 @@ local tree = {
     name = "project",
     children = {
         { name = "README.md" },
-        { name = "src", children = {
-            { name = "main.lus" },
-            { name = "util.lus" },
-        } },
+        {
+            name = "src",
+            children = {
+                { name = "main.lus" },
+                { name = "util.lus" },
+            },
+        },
     },
 }
 
 local function walk(node, prefix)
     local path = prefix .. node.name
+
     if node.children then
         for _, child in ipairs(node.children) do
             walk(child, path .. "/")
@@ -3317,6 +3432,7 @@ local tree = {
 
 local function walk(node, prefix)
     local path = prefix .. node.name
+
     if node.children then
         for _, child in ipairs(node.children) do
             walk(child, path .. "/")
@@ -3326,7 +3442,9 @@ local function walk(node, prefix)
     end
 end
 
-for path, length in coroutine.create(function() walk(tree, "") end) do
+for path, length in coroutine.create(function()
+    walk(tree, "")
+end) do
     print(path, length)
 end
 --> project/README.md  9
@@ -3337,17 +3455,30 @@ The coroutine is the closing value of the loop. When the loop ends before the co
 
 ```lus
 local released = false
+
 local numbers = coroutine.create(function()
-    local guard <close> = setmetatable({}, { __close = function() released = true end })
-    for i = 1, 1000 do coroutine.yield(i) end
+    local guard <close> = setmetatable({}, {
+        __close = function()
+            released = true
+        end,
+    })
+
+    for i = 1, 1000 do
+        coroutine.yield(i)
+    end
 end)
 
 local sum = 0
+
 for i in numbers do
-    if i > 3 then break end
+    if i > 3 then
+        break
+    end
+
     sum = sum + i
 end
-print(sum, released, coroutine.status(numbers))   --> 6  true  dead
+
+print(sum, released, coroutine.status(numbers))  --> 6  true  dead
 ```
 
 The reads of a network connection work the same way. [`conn.input`](/manual/api#network.tcp) is a coroutine whose every resume returns the next line, so `for line in conn.input do` handles each line of a connection until the other end closes it.
@@ -3361,16 +3492,17 @@ The reads of a network connection work the same way. [`conn.input`](/manual/api#
 ```lus
 local counter = coroutine.create(function()
     local n = 0
+
     while true do
         n = n + 1
         coroutine.yield(n)
     end
 end)
 
-print(coroutine.resume(counter))   --> true  1
-print(coroutine.status(counter))   --> suspended
-print(coroutine.close(counter))    --> true
-print(coroutine.status(counter))   --> dead
+print(coroutine.resume(counter))  --> true  1
+print(coroutine.status(counter))  --> suspended
+print(coroutine.close(counter))  --> true
+print(coroutine.status(counter))  --> dead
 ```
 
 ### Detached coroutines
@@ -3469,6 +3601,7 @@ coroutine.detach(coroutine.create(function()
         coroutine.yield()
     end
 end))
+
 print("the script has reached its last line")
 --> the script has reached its last line
 --> tick  1
@@ -3876,10 +4009,13 @@ db:run("INSERT INTO books VALUES (?, ?)", "Dune", 600)
 db:run("INSERT INTO books VALUES (?, ?)", "Solaris", 210)
 
 for row in query(short_books(db.books)) do
-    print(row.title)   --> Solaris
+    print(row.title)  --> Solaris
 end
-for row in query(short_books({ { title = "Emma", pages = 450 }, { title = "Candide", pages = 130 } })) do
-    print(row.title)   --> Candide
+
+for row in query(
+    short_books({ { title = "Emma", pages = 450 }, { title = "Candide", pages = 130 } })
+) do
+    print(row.title)  --> Candide
 end
 ```
 
@@ -3944,7 +4080,7 @@ print(rectangle(2, 5))   --> 10
 `require` reads [`package.path`](/manual/api#package.path) to find a module file. `package.path` is a string of file name templates separated by semicolons. `require` tries each template in turn with the `?` replaced by the module name, until it finds a file that exists.
 
 ```lus
-print(package.path)   --> ./?.lus;./?/init.lus;./?.lua;./?/init.lua
+print(package.path)  --> ./?.lus;./?/init.lus;./?.lua;./?/init.lua
 ```
 
 With this default, `require("shapes")` tries `./shapes.lus`, then `./shapes/init.lus`, then the same two names with the `.lua` extension. The paths are relative to the working directory, which is the directory the program was started from. A dot in a module name is a directory separator, so `require("geometry.units")` tries `./geometry/units.lus` first. When no template matches a file, `require` raises an error that lists every file it tried.
@@ -4016,11 +4152,11 @@ Every global variable is a field of one table, which the global `_G` holds, so r
 
 ```lus
 score = 10
-print(_G.score)        --> 10
+print(_G.score)  --> 10
 
 local name = "score"
-print(_G[name])        --> 10
-print(_G.print == print)   --> true
+print(_G[name])  --> 10
+print(_G.print == print)  --> true
 ```
 
 The compiler reads and writes globals as fields of a variable named `_ENV`. Any name that is not a local variable is a field of `_ENV`, so `score` means `_ENV.score`. At the start of a program, `_ENV` and `_G` are the same table. A block that declares its own local `_ENV` gives the code inside it another set of globals.
@@ -4030,12 +4166,12 @@ score = 10
 
 local function isolated()
     local _ENV = { print = print }
-    print(score)       --> nil
+    print(score)  --> nil
     answer = 42
     return _ENV.answer
 end
 
-print(isolated(), answer)   --> 42  nil
+print(isolated(), answer)  --> 42  nil
 ```
 
 Inside `isolated`, the global `score` is `nil`. The assignment to `answer` writes to the small table, which leaves the globals of the program unchanged.
@@ -4047,9 +4183,9 @@ Some programs run code that they receive as text: a formula from a configuration
 ```lus
 pledge("load")
 
-local formula = "return price * quantity * 0.9"   -- text from a user or a file
+local formula = "return price * quantity * 0.9"  -- text from a user or a file
 local compute = load(formula, "formula", "t", { price = 20, quantity = 3 })
-print(compute())   --> 54.0
+print(compute())  --> 54.0
 ```
 
 The second argument names the code in error messages. The third argument, `"t"`, makes `load` accept source text only, which is the right setting for text from an untrusted party. If the text does not compile, `load` returns `nil` and the error message.
@@ -4061,13 +4197,16 @@ pledge("load", "fs:read")
 
 local function run_untrusted(source, env)
     local chunk, message = load(source, "untrusted", "t", env)
+
     if not chunk then
         return false, message
     end
+
     local co = coroutine.create(function()
         pledge("~fs", "~network", "~exec", "~env", "~load", "seal")
         return chunk()
     end)
+
     return coroutine.resume(co)
 end
 
@@ -4118,7 +4257,8 @@ A flag given without a value is `true`. A given value becomes a number when it r
 if flags.debug then
     print("debug build")
 end
-print("level", flags.level or 1)   --> level  1
+
+print("level", flags.level or 1)  --> level  1
 ```
 
 The compiler resolves an `if` condition that the flags decide alone, then omits the branch that the flags rule out. Such a condition tests a flag, compares a flag with a string, number, boolean, or `nil` literal, or combines these tests with `and`, `or`, and `not`. Debugging code in such an `if` costs nothing in a run without the flag.
@@ -4153,8 +4293,10 @@ Some tables depend only on constants, such as a table of precomputed checksums o
 ```lus
 local CRC32 <meta> = do
     local t = {}
+
     for i = 0, 255 do
         local c = i
+
         for _ = 1, 8 do
             if c & 1 == 1 then
                 c = 0xEDB88320 ~ (c >> 1)
@@ -4162,20 +4304,25 @@ local CRC32 <meta> = do
                 c = c >> 1
             end
         end
+
         t[i] = c
     end
+
     provide t
 end
 
 local function crc32(text)
     local crc = 0xFFFFFFFF
+
     for i = 1, #text do
         local byte = text:byte(i)
         crc = CRC32[(crc ~ byte) & 0xFF] ~ (crc >> 8)
     end
+
     return crc ~ 0xFFFFFFFF
 end
-print(string.format("%08x", crc32("hello")))   --> 3610a686
+
+print(string.format("%08x", crc32("hello")))  --> 3610a686
 ```
 
 The initializer runs before the program, so it sees none of the program's variables. It can use literals, flags, the standard library, and other `<meta>` variables or [constants](#constants) declared before it. A `<meta>` variable is constant, so an assignment to it is a compile error. Its value must be data: `nil`, a boolean, a number, a string, a vector, or a table of these. A table becomes read-only, so every part of the program sees the value the compilation produced.
@@ -4188,7 +4335,8 @@ local MODE <meta> = (flags.mode or "release"):lower()
 if MODE == "debug" then
     print("debug checks on")
 end
-print(MODE)   --> release
+
+print(MODE)  --> release
 ```
 
 An initializer may read a file when the command line grants the permission with `-P`. Without a grant, every `pledge` in an initializer returns `false`. The following file embeds a list of country codes. `lus build -Pfs:read=./countries.json app.lus` stores the parsed list in the executable, which then runs without the file.
@@ -4230,6 +4378,7 @@ table.sort(people, function(a, b)
     if a.age ~= b.age then
         return a.age < b.age
     end
+
     return a.name < b.name
 end)
 
@@ -4245,7 +4394,11 @@ When the order depends on one value per element, [`table.sortby`](/manual/api#ta
 
 ```lus
 local words = { "pear", "fig", "banana", "kiwi" }
-table.sortby(words, function(word) return #word end)
+
+table.sortby(words, function(word)
+    return #word
+end)
+
 print(table.concat(words, " "))  --> fig pear kiwi banana
 ```
 
@@ -4270,17 +4423,24 @@ The following planner holds the length of each task in minutes. It adds a buffer
 ```lus
 local tasks = { 30, 45, 15, 90 }
 
-local buffered = table.map(tasks, function(minutes) return minutes + 10 end)
-print(table.concat(buffered, " "))               --> 40 55 25 100
-print(table.sum(tasks), table.mean(tasks))       --> 180  45.0
+local buffered = table.map(tasks, function(minutes)
+    return minutes + 10
+end)
 
-local quick = table.filter(tasks, function(minutes) return minutes <= 30 end)
-print(table.concat(quick, " "))                  --> 30 15
+print(table.concat(buffered, " "))  --> 40 55 25 100
+print(table.sum(tasks), table.mean(tasks))  --> 180  45.0
+
+local quick = table.filter(tasks, function(minutes)
+    return minutes <= 30
+end)
+
+print(table.concat(quick, " "))  --> 30 15
 
 local longest = table.reduce(tasks, function(best, minutes)
     return minutes > best and minutes or best
 end)
-print(longest)                                   --> 90
+
+print(longest)  --> 90
 ```
 
 These functions are for a single step on a plain list. A [query](/manual/guide#queries) groups and summarizes records, such as the total sales of each region, in one expression. [Data formats](/manual/data#table-functions) describes the remaining table functions, such as `table.zip` and `table.transpose`. The [table library reference](/manual/api#table-library) lists every function.
@@ -4293,8 +4453,8 @@ The `math` library contains numeric functions for rounding, minimum and maximum,
 
 ```lus
 print(math.floor(3.7), math.ceil(3.2), math.floor(-3.7))  --> 3  4  -4
-print(math.max(4, 9, 2), math.min(4, 9, 2))               --> 9  2
-print(math.abs(-5), math.sqrt(16))                        --> 5  4.0
+print(math.max(4, 9, 2), math.min(4, 9, 2))  --> 9  2
+print(math.abs(-5), math.sqrt(16))  --> 5  4.0
 ```
 
 [`math.pi`](/manual/api#math.pi) is the constant π, which the following example uses to compute the area of a circle. [`math.huge`](/manual/api#math.huge) is positive infinity, a float that is larger than every other number. It is the usual starting value for a loop that searches for a minimum, such as the loop in the example that finds the cheapest item and its price.
@@ -4303,13 +4463,19 @@ print(math.abs(-5), math.sqrt(16))                        --> 5  4.0
 local radius = 2
 print(string.format("%.2f", math.pi * radius ^ 2))  --> 12.57
 
-local items = { { name = "tea", price = 8 }, { name = "mug", price = 3 }, { name = "jam", price = 5 } }
+local items = {
+    { name = "tea", price = 8 },
+    { name = "mug", price = 3 },
+    { name = "jam", price = 5 },
+}
 local lowest, cheapest = math.huge, nil
+
 for _, item in ipairs(items) do
     if item.price < lowest then
         lowest, cheapest = item.price, item.name
     end
 end
+
 print(cheapest, lowest)  --> mug  3
 ```
 
@@ -4387,7 +4553,7 @@ When a file cannot be opened, `io.open` returns `nil` and a message, so a progra
 ```lus
 pledge("fs")
 local file, problem = io.open("/no/such/directory/notes.txt")
-print(file)     --> nil
+print(file)  --> nil
 print(problem)  --> /no/such/directory/notes.txt: No such file or directory
 ```
 
@@ -4423,8 +4589,8 @@ The `os` library reads the time and the environment from the operating system, c
 
 ```lus
 local release = os.time({ year = 2031, month = 4, day = 12, hour = 9 })
-print(os.date("%Y-%m-%d %H:%M", release))          --> 2031-04-12 09:00
-print(os.date("!%Y-%m-%d %H:%M:%S", 1700000000))   --> 2023-11-14 22:13:20
+print(os.date("%Y-%m-%d %H:%M", release))  --> 2031-04-12 09:00
+print(os.date("!%Y-%m-%d %H:%M:%S", 1700000000))  --> 2023-11-14 22:13:20
 ```
 
 These functions are enough for timestamps and simple formatting. The [`time` library](#time) provides time zones, durations, and parsing.
@@ -4476,10 +4642,10 @@ The `utf8` library converts between characters and their [code points](#characte
 [`utf8.char`](/manual/api#utf8.char) builds a string from code points. [`utf8.codepoint`](/manual/api#utf8.codepoint) returns the code points of the characters in a range of a string. [`utf8.codes`](/manual/api#utf8.codes) is an iterator that visits each character with its position and its code point.
 
 ```lus
-print(utf8.char(233, 9749))        --> é☕
+print(utf8.char(233, 9749))  --> é☕
 print(utf8.codepoint("héllo", 2))  --> 233
-print(utf8.len("héllo"))           --> 5
-print(utf8.len("a\u{D800}b"))      --> nil  2
+print(utf8.len("héllo"))  --> 5
+print(utf8.len("a\u{D800}b"))  --> nil  2
 
 for position, code in utf8.codes("añb") do
     print(position, code)
@@ -4502,11 +4668,11 @@ A _vector_ is a buffer of bytes that a program can read and change in place. It 
 local header = vector.create(8)
 vector.pack(header, 0, ">I4I4", 640, 480)
 
-print(#header)                                  --> 8
+print(#header)  --> 8
 print(vector.get(header, 2), vector.get(header, 3))  --> 2  128
 
 local width, height = vector.unpack(header, 0, ">I4I4")
-print(width, height)                            --> 640  480
+print(width, height)  --> 640  480
 ```
 
 Two conventions number the bytes of a vector. A [slice](#slices) `v[i, j]` counts from 1 and includes `j`, as every slice does. The functions of the `vector` library take offsets, which count from 0 and stop before the end of a range, as the offsets of a binary file format do. [`vector.find`](/manual/api#vector.find) returns the offset where a sequence of bytes starts. `vector.tostring(v, i, j)` decodes the bytes from offset `i` up to offset `j`, without the byte at `j`. The following example reads the method of an HTTP request line both ways. The space is at offset 3, which is the fourth byte, so the three bytes before it are the slice `line[1, 3]`.
@@ -4514,17 +4680,17 @@ Two conventions number the bytes of a vector. A [slice](#slices) `v[i, j]` count
 ```lus
 local line = vector.fromstring("GET /index.html")
 local space = vector.find(line, " ")
-print(space)                              --> 3
-print(vector.tostring(line, 0, space))    --> GET
-print(vector.tostring(line[1, space]))    --> GET
+print(space)  --> 3
+print(vector.tostring(line, 0, space))  --> GET
+print(vector.tostring(line[1, space]))  --> GET
 ```
 
 [`vector.fromstring`](/manual/api#vector.fromstring) returns the bytes that encode a string, which [`vector.tostring`](/manual/api#vector.tostring) decodes back into text. The byte count of a string differs from its character count when the text has characters outside ASCII.
 
 ```lus
 local bytes = vector.fromstring("héllo")
-print(#"héllo", #bytes)         --> 5  6
-print(vector.tostring(bytes))   --> héllo
+print(#"héllo", #bytes)  --> 5  6
+print(vector.tostring(bytes))  --> héllo
 ```
 
 The `vector.archive` modules compress and decompress vectors with gzip, deflate, Zstandard, Brotli, and LZ4. [Text and bytes](/manual/text#vectors) describes vectors, transcoding, and compression in full. The [vector library reference](/manual/api#vector-library) lists every function.
@@ -4549,7 +4715,7 @@ end
 
 function stats.report()
     local count = stats.old_total({ "a", "b" })
-    print(`$(count) items`)
+    print(`$count items`)
 end
 
 stats.report()
@@ -4586,8 +4752,8 @@ local order = fromjson('{"id": 17, "items": ["tea", "cup"], "paid": true}')
 print(order.id, order.items[2], order.paid)  --> 17  cup  true
 
 order.items[#order.items + 1] = "spoon"
-print(tojson(order.items))                   --> ["tea","cup","spoon"]
-print(tojson({ total = 12.5 }))              --> {"total":12.5}
+print(tojson(order.items))  --> ["tea","cup","spoon"]
+print(tojson({ total = 12.5 }))  --> {"total":12.5}
 ```
 
 The error that `fromjson` raises for invalid JSON gives the position of the problem. [Catching errors](#catching-errors) shows how a program handles it.
@@ -4705,13 +4871,13 @@ local paris = time.zone("Europe/Paris")
 local tokyo = time.zone("Asia/Tokyo")
 
 local call = time.zoned({ year = 2030, month = 3, day = 29, hour = 9, minute = 30 }, paris)
-print(call:iso())                              --> 2030-03-29T09:30:00+01:00
+print(call:iso())  --> 2030-03-29T09:30:00+01:00
 
 local moment = call:instant()
-print(moment:at(tokyo):format("%A %H:%M"))     --> Friday 17:30
+print(moment:at(tokyo):format("%A %H:%M"))  --> Friday 17:30
 
 local reminder = moment - time.minutes(45)
-print(reminder:at(paris):format("%H:%M"))      --> 08:45
+print(reminder:at(paris):format("%H:%M"))  --> 08:45
 ```
 
 Arithmetic on instants counts elapsed time, while the `add` method of a zoned time follows the calendar. The two differ when the clocks change. Daylight saving time starts in Paris two days after the call, so the same clock time one week later is 167 hours away.
@@ -4816,6 +4982,7 @@ local function transfer(source, target, amount)
     db:transaction(function()
         db:run("UPDATE accounts SET balance = balance - ? WHERE name = ?", amount, source)
         db:run("UPDATE accounts SET balance = balance + ? WHERE name = ?", amount, target)
+
         for account in db:query("SELECT balance FROM accounts WHERE name = ?", source) do
             if account.balance < 0 then
                 error("insufficient funds", 0)
@@ -4940,6 +5107,7 @@ The code generator produces one _prototype_ for every function in the source. A 
 local function area(width, height)
     return width * height
 end
+
 print(area(3, 4))  --> 12
 ```
 

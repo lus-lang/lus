@@ -33,6 +33,7 @@ local tgz = vector.archive.gzip.compress(vector.archive.tar.pack({
     { name = "pkg/init.lus", data = "return {}" },
     { name = "pkg/latest", kind = "symlink", target = "init.lus" },
 }))
+
 for _, e in ipairs(vector.archive.tar.list(vector.archive.gzip.decompress(tgz))) do
     print(e.name, e.kind, e.target)
 end

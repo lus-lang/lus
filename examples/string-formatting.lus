@@ -33,9 +33,11 @@ local rows = {
     { name = "Ana", qty = 1, price = 19.99 },
     { name = "Søren", qty = 140, price = 0.1 },
 }
+
 for _, row in ipairs(rows) do
     print(string.format("%-8s %3d x %6.2f", row.name, row.qty, row.price))
 end
+
 --> Zoë        3 x   4.50
 --> Mateus    12 x   0.75
 --> Ana        1 x  19.99

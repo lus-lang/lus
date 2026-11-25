@@ -21,9 +21,9 @@ The following example builds a duration, compares it with an equal one, and adds
 
 ```lus
 local d = time.days(2)
-print(d:seconds())                                   --> 172800.0
-print(d == time.duration{ hours = 48 })              --> true
-print((time.instant(0) + d):iso())                   --> 1970-01-03T00:00:00Z
+print(d:seconds())  --> 172800.0
+print(d == time.duration{ hours = 48 })  --> true
+print((time.instant(0) + d):iso())  --> 1970-01-03T00:00:00Z
 ```
 
 A day is always 86,400 seconds, so adding days to an instant ignores daylight saving, while `z:add{ days = n }` on a [`time.zoned`](/manual/api#time.zoned) value keeps the wall-clock time. [`time.duration`](/manual/api#time.duration) combines several units and lists the methods and operators of a duration. The other single-unit constructors are [`time.hours`](/manual/api#time.hours), [`time.minutes`](/manual/api#time.minutes), [`time.seconds`](/manual/api#time.seconds), and [`time.millis`](/manual/api#time.millis).

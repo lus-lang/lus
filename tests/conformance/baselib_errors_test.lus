@@ -52,15 +52,34 @@ local function raises(f, message)
 end
 
 local function second_and_third_arguments_are_checked_test()
-    raises(function() return rawequal(1) end, "bad argument #2 to 'rawequal' (value expected)")
-    raises(function() return rawget({}) end, "bad argument #2 to 'rawget' (value expected)")
-    raises(function() return rawset({}, 1) end, "bad argument #3 to 'rawset' (value expected)")
-    raises(function() return setmetatable({}, 1) end, "bad argument #2 to 'setmetatable' (nil or table expected")
-    raises(function() return setmetatable(setmetatable({}, { __metatable = 1 }), {}) end, "cannot change a protected metatable")
+    raises(function()
+        return rawequal(1)
+    end, "bad argument #2 to 'rawequal' (value expected)")
+
+    raises(function()
+        return rawget({})
+    end, "bad argument #2 to 'rawget' (value expected)")
+
+    raises(function()
+        return rawset({}, 1)
+    end, "bad argument #3 to 'rawset' (value expected)")
+
+    raises(function()
+        return setmetatable({}, 1)
+    end, "bad argument #2 to 'setmetatable' (nil or table expected")
+
+    raises(function()
+        return setmetatable(setmetatable({}, { __metatable = 1 }), {})
+    end, "cannot change a protected metatable")
 end
 
 local function a_raising_pairs_metamethod_propagates_test()
-    local t = setmetatable({}, { __pairs = function() error("from pairs", 0) end })
+    local t = setmetatable({}, {
+        __pairs = function()
+            error("from pairs", 0)
+        end,
+    })
+
     local ok, err = catch pairs(t)
     assert(not ok and err == "from pairs")
 end
@@ -71,8 +90,14 @@ local function tonumber_reads_every_base_test()
     assert(tonumber("0x1p4") == 16.0)
     assert(tonumber("8", 8) == nil)
     assert(tonumber(1.5d) == 1.5 and tonumber(10n) == 10)
-    raises(function() return tonumber("1", 99) end, "bad argument #2 to 'tonumber' (base out of range)")
-    raises(function() return tonumber(1, 10) end, "bad argument #1 to 'tonumber' (string expected, got number)")
+
+    raises(function()
+        return tonumber("1", 99)
+    end, "bad argument #2 to 'tonumber' (base out of range)")
+
+    raises(function()
+        return tonumber(1, 10)
+    end, "bad argument #1 to 'tonumber' (string expected, got number)")
 end
 
 local function load_checks_its_mode_and_reader_test()
@@ -80,14 +105,29 @@ local function load_checks_its_mode_and_reader_test()
     assert(f == nil and err:find("attempt to load a text chunk (mode is 'b')", 1, true), err)
     local parts = { "return ", "4", "2" }
     local i = 0
-    local g = assert(load(function() i = i + 1 return parts[i] end))
+
+    local g = assert(load(function()
+        i = i + 1
+        return parts[i]
+    end))
+
     assert(g() == 42)
-    local h, msg = load(function() return {} end)
+
+    local h, msg = load(function()
+        return {}
+    end)
+
     assert(h == nil and msg == "reader function must return a string", msg)
 end
 
 local function collectgarbage_checks_its_options_test()
-    raises(function() return collectgarbage("bogus") end, "bad argument #1 to 'collectgarbage' (invalid option 'bogus')")
-    raises(function() return collectgarbage("step", "x") end, "bad argument #2 to 'collectgarbage' (number expected, got string)")
+    raises(function()
+        return collectgarbage("bogus")
+    end, "bad argument #1 to 'collectgarbage' (invalid option 'bogus')")
+
+    raises(function()
+        return collectgarbage("step", "x")
+    end, "bad argument #2 to 'collectgarbage' (number expected, got string)")
+
     assert(collectgarbage("step", 0) ~= nil)
 end

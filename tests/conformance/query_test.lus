@@ -8,21 +8,22 @@
 
 pledge("load")
 
-
 local function collect(q)
     local out = {}
+
     for row in query(q) do
         out[#out + 1] = row
     end
+
     return out
 end
 
 local function people()
     return {
         { name = "Alice", age = 30, region = "east" },
-        { name = "Bob",   age = 17, region = "west" },
+        { name = "Bob", age = 17, region = "west" },
         { name = "Carol", age = 42, region = "east" },
-        { name = "Dave",  age = 30, region = "west" },
+        { name = "Dave", age = 30, region = "west" },
     }
 end
 
@@ -67,39 +68,42 @@ local function a_missing_column_projects_to_an_absent_field_test()
     local rows = collect(@t as p select p.missing as m limit 1)
     assert(rows[1].m == nil)
     local keys = 0
+
     for _ in pairs(rows[1]) do
         keys = keys + 1
     end
+
     assert(keys == 0)
 end
 
 -- Group: where
 
 local every_comparison_operator_filters_cases = {
-    { "==", 2 }, { "~=", 2 }, { "<", 1 }, { "<=", 3 }, { ">", 1 },
+    { "==", 2 },
+    { "~=", 2 },
+    { "<", 1 },
+    { "<=", 3 },
+    { ">", 1 },
     { ">=", 3 },
 }
 
 local function every_comparison_operator_filters_test(op, expected)
     local t = people()
-    local q = load("local t = ... return @t as p where p.age " .. op ..
-        " 30 select p.name")(t)
+    local q = load("local t = ... return @t as p where p.age " .. op .. " 30 select p.name")(t)
     assert(#collect(q) == expected)
 end
 
 local function boolean_logic_and_parentheses_test()
     local t = people()
-    local rows = collect(@t as p
-        where (p.region == "east" or p.age < 20) and not (p.name == "Bob")
-        select p.name)
+    local rows = collect(
+        @t as p where (p.region == "east" or p.age < 20) and not (p.name == "Bob") select p.name
+    )
     assert(#rows == 2)
 end
 
 local function arithmetic_and_concatenation_in_predicates_test()
     local t = people()
-    local rows = collect(@t as p
-        where p.age + 10 > 40 and p.name .. "!" == "Carol!"
-        select p.name)
+    local rows = collect(@t as p where p.age + 10 > 40 and p.name .. "!" == "Carol!" select p.name)
     assert(#rows == 1)
     assert(rows[1].name == "Carol")
 end
@@ -122,11 +126,13 @@ end
 local function host_closures_run_once_per_row_with_the_row_test()
     local t = people()
     local calls = 0
+
     local function probe(row)
         calls = calls + 1
         assert(type(row) == "table" and row.name ~= nil)
         return row.age > 18
     end
+
     local rows = collect(@t as p where probe(p) select p.name)
     assert(calls == 4)
     assert(#rows == 3)
@@ -135,9 +141,11 @@ end
 local function host_closures_capture_upvalues_live_test()
     local t = people()
     local cutoff = 18
+
     local function pass(row)
         return row.age >= cutoff
     end
+
     local q = @t as p where pass(p) select p.name
     assert(#collect(q) == 3)
     cutoff = 40
@@ -167,10 +175,12 @@ end
 local function a_raising_host_closure_propagates_catchably_test()
     local t = people()
     local q = @t as p where error("boom") select p.name
+
     local ok, err = catch (function()
         for _ in query(q) do
         end
     end)()
+
     assert(not ok)
     assert(string.find(tostring(err), "boom"))
 end
@@ -187,8 +197,7 @@ end
 
 local function multiple_keys_with_mixed_directions_test()
     local t = people()
-    local rows = collect(@t as p select p.age, p.name
-        order by p.age desc, p.name)
+    local rows = collect(@t as p select p.age, p.name order by p.age desc, p.name)
     assert(rows[1].age == 42)
     assert(rows[2].name == "Alice")
     assert(rows[3].name == "Dave")
@@ -196,8 +205,7 @@ end
 
 local function order_by_a_projection_alias_test()
     local t = people()
-    local rows = collect(@t as p select p.name, p.age * 2 as double
-        order by double desc)
+    local rows = collect(@t as p select p.name, p.age * 2 as double order by double desc)
     assert(rows[1].name == "Carol")
 end
 
@@ -213,19 +221,24 @@ local function nan_orders_with_nil_test()
     -- before every number ascending, in unpinned order between them.
     local t = { { a = 2 }, {}, { a = 0 / 0 }, { a = 1 } }
     local rows = collect(@t as r select r order by r.a)
+
     local function unordered(v)
         return v == nil or v ~= v
     end
+
     assert(unordered(rows[1].a), "a non-value row comes first")
     assert(unordered(rows[2].a), "the other non-value row comes second")
-    assert((rows[1].a == nil) ~= (rows[2].a == nil),
-        "the leading band holds exactly the nil row and the NaN row")
+    assert(
+        (rows[1].a == nil) ~= (rows[2].a == nil),
+        "the leading band holds exactly the nil row and the NaN row"
+    )
     assert(rows[3].a == 1)
     assert(rows[4].a == 2)
 end
 
 local function ordering_across_types_raises_test()
     local t = { { a = 1 }, { a = "x" } }
+
     raises(function()
         collect(@t as r select r order by r.a)
     end, "cannot order rows on a")
@@ -245,32 +258,30 @@ end
 
 local function limit_and_offset_clamp_before_integer_arithmetic_test()
     local t = people()
-    local remaining = collect(@t as p select p.name
-        limit math.maxinteger offset 1)
+    local remaining = collect(@t as p select p.name limit math.maxinteger offset 1)
     assert(#remaining == 3)
-    assert(#collect(@t as p select p.name
-        offset math.maxinteger) == 0)
-    assert(#collect(@t as p select p.name
-        limit 0 offset math.maxinteger) == 0)
+    assert(#collect(@t as p select p.name offset math.maxinteger) == 0)
+    assert(#collect(@t as p select p.name limit 0 offset math.maxinteger) == 0)
 end
 
 local function limit_and_offset_expressions_are_row_independent_test()
-    local limitfn, limiterr =
-        load("local t = ... return @t as r limit r.n")
+    local limitfn, limiterr = load("local t = ... return @t as r limit r.n")
     assert(limitfn == nil)
     assert(string.find(tostring(limiterr), "query limit must be row%-independent"))
-    local offsetfn, offseterr =
-        load("local t = ... return @t as r offset r.n")
+    local offsetfn, offseterr = load("local t = ... return @t as r offset r.n")
     assert(offsetfn == nil)
     assert(string.find(tostring(offseterr), "query offset must be row%-independent"))
 end
 
 local function negative_and_non_numeric_limits_raise_test()
     local t = people()
+
     raises(function()
         collect(@t as p select p.name limit -1)
     end, "nonnegative")
+
     local bad = "x"
+
     raises(function()
         collect(@t as p select p.name limit bad)
     end, "query limit must be a number")
@@ -284,11 +295,12 @@ local function every_aggregate_over_groups_test()
         { region = "west", amount = 50 },
         { region = "east", amount = 26 },
     }
-    local rows = collect(@sales as s
-        select s.region, sum(s.amount) as total, count(*) as n,
-            avg(s.amount) as mean, min(s.amount) as lo, max(s.amount) as hi
-        group by s.region
-        order by total desc)
+    local rows = collect(
+        @sales as s
+            select s.region, sum(s.amount) as total, count(*) as n, avg(s.amount) as mean, min(s.amount) as lo, max(s.amount) as hi
+            group by s.region
+            order by total desc
+    )
     assert(#rows == 2)
     assert(rows[1].region == "east")
     assert(rows[1].total == 126)
@@ -316,23 +328,25 @@ local function min_and_max_validate_every_non_nil_value_test()
     for _, name in ipairs({ "min", "max" }) do
         local one_boolean = { { v = true } }
         local one_table = { { v = {} } }
+
         raises(function()
-            local make = load("local t = ... return @t as r select " ..
-                name .. "(r.v) as value")
+            local make = load("local t = ... return @t as r select " .. name .. "(r.v) as value")
             collect(make(one_boolean))
         end, "cannot aggregate a boolean value")
+
         raises(function()
-            local make = load("local t = ... return @t as r select " ..
-                name .. "(r.v) as value")
+            local make = load("local t = ... return @t as r select " .. name .. "(r.v) as value")
             collect(make(one_table))
         end, "cannot aggregate a table value")
+
         for _, values in ipairs({
             { { v = 1 }, { v = "1" } },
             { { v = "1" }, { v = 1 } },
         }) do
             raises(function()
-                local make = load("local t = ... return @t as r select " ..
-                    name .. "(r.v) as value")
+                local make = load(
+                    "local t = ... return @t as r select " .. name .. "(r.v) as value"
+                )
                 collect(make(values))
             end, "cannot aggregate")
         end
@@ -341,15 +355,15 @@ end
 
 local function grouping_by_two_keys_test()
     local t = people()
-    local rows = collect(@t as p select p.region, p.age, count(*) as n
-        group by p.region, p.age)
+    local rows = collect(@t as p select p.region, p.age, count(*) as n group by p.region, p.age)
     assert(#rows == 4)
 end
 
 local function having_filters_groups_with_aggregates_not_in_select_test()
     local t = people()
-    local rows = collect(@t as p select p.region
-        group by p.region having count(*) > 1 and max(p.age) > 40)
+    local rows = collect(
+        @t as p select p.region group by p.region having count(*) > 1 and max(p.age) > 40
+    )
     assert(#rows == 1)
     assert(rows[1].region == "east")
 end
@@ -364,8 +378,7 @@ end
 
 local function aggregates_over_an_empty_source_test()
     local empty = {}
-    local rows = collect(@empty as t
-        select count(*) as n, sum(t.x) as s, min(t.x) as lo)
+    local rows = collect(@empty as t select count(*) as n, sum(t.x) as s, min(t.x) as lo)
     assert(#rows == 1)
     assert(rows[1].n == 0)
     assert(rows[1].s == nil)
@@ -374,9 +387,11 @@ end
 
 local function integer_sums_overflow_loudly_and_floats_mix_in_test()
     local big = { { v = math.maxinteger }, { v = 1 } }
+
     raises(function()
         collect(@big as b select sum(b.v) as s)
     end, "integer overflow in sum")
+
     local mixed = { { v = 1 }, { v = 0.5 } }
     local rows = collect(@mixed as m select sum(m.v) as s)
     assert(rows[1].s == 1.5)
@@ -384,6 +399,7 @@ end
 
 local function a_non_key_non_aggregate_projection_raises_test()
     local t = people()
+
     raises(function()
         collect(@t as p select p.region, p.age group by p.region)
     end, "must be an aggregate or a group key")
@@ -391,6 +407,7 @@ end
 
 local function group_keys_must_be_primitives_test()
     local t = { { k = {} } }
+
     raises(function()
         collect(@t as r select count(*) as n group by r.k)
     end, "primitive")
@@ -404,8 +421,7 @@ end
 
 local function nil_and_nan_group_together_test()
     local t = { {}, { k = 0 / 0 }, { k = 1 } }
-    local rows = collect(@t as r select count(*) as n group by r.k
-        order by n desc)
+    local rows = collect(@t as r select count(*) as n group by r.k order by n desc)
     assert(#rows == 2)
     assert(rows[1].n == 2)
 end
@@ -415,8 +431,7 @@ local function enums_group_and_compare_test()
     local t = { { c = color.red }, { c = color.red }, { c = color.green } }
     local reds = collect(@t as r where r.c == color.red select r)
     assert(#reds == 2)
-    local grouped = collect(@t as r select count(*) as n group by r.c
-        order by n desc)
+    local grouped = collect(@t as r select count(*) as n group by r.c order by n desc)
     assert(#grouped == 2)
     assert(grouped[1].n == 2)
 end
@@ -444,8 +459,9 @@ local function equality_joins_filter_test()
         { who = "Carol", total = 9 },
         { who = "Nobody", total = 1 },
     }
-    local rows = collect(@t as p, orders as o
-        where p.name == o.who select p.name, o.total order by o.total)
+    local rows = collect(
+        @t as p, orders as o where p.name == o.who select p.name, o.total order by o.total
+    )
     assert(#rows == 2)
     assert(rows[1].total == 5)
 end
@@ -460,8 +476,7 @@ end
 
 local function three_way_and_self_joins_test()
     local t = { { n = 1 }, { n = 2 } }
-    local rows = collect(@t as a, t as b, t as c
-        where a.n == b.n and b.n == c.n select a.n)
+    local rows = collect(@t as a, t as b, t as c where a.n == b.n and b.n == c.n select a.n)
     assert(#rows == 2)
     local pairs_ = collect(@t as a, t as b where a.n < b.n select a.n, b.n as m)
     assert(#pairs_ == 1)
@@ -473,23 +488,40 @@ end
 -- pairs: through the index, and through the full product, which a host
 -- call before the join keeps.
 local function joined(a, b)
-    local function yes() return true end
+    local function yes()
+        return true
+    end
+
     local fast, slow = {}, {}
+
     for row in query(@a as x, b as y where x.k == y.k select x.id, y.id as yid) do
         fast[#fast + 1] = `$(row.id):$(row.yid)`
     end
+
     for row in query(@a as x, b as y where yes() and x.k == y.k select x.id, y.id as yid) do
         slow[#slow + 1] = `$(row.id):$(row.yid)`
     end
+
     assert(#fast == #slow, `$(#fast) ~= $(#slow)`)
-    for i = 1, #fast do assert(fast[i] == slow[i], `row $i: $(fast[i]) ~= $(slow[i])`) end
+
+    for i = 1, #fast do
+        assert(fast[i] == slow[i], `row $i: $(fast[i]) ~= $(slow[i])`)
+    end
+
     return fast
 end
 
 local function an_indexed_join_keeps_the_order_of_the_full_product_test()
     local a, b = {}, {}
-    for i = 1, 40 do a[i] = { id = i, k = i % 7 } end
-    for i = 1, 30 do b[i] = { id = i, k = (i * 3) % 7 } end
+
+    for i = 1, 40 do
+        a[i] = { id = i, k = i % 7 }
+    end
+
+    for i = 1, 30 do
+        b[i] = { id = i, k = (i * 3) % 7 }
+    end
+
     local rows = joined(a, b)
     assert(#rows > 0)
     -- Duplicate keys on the inner side come in ascending order.
@@ -498,16 +530,29 @@ end
 
 local function an_indexed_join_matches_numbers_strings_and_booleans_as_equality_does_test()
     local a = {
-        { id = 1, k = 1 }, { id = 2, k = 1.0 }, { id = 3, k = "1" }, { id = 4, k = true },
-        { id = 5, k = 2^53 }, { id = 6, k = -0.0 }, { id = 7, k = "long key " .. string.rep("x", 60) },
+        { id = 1, k = 1 },
+        { id = 2, k = 1.0 },
+        { id = 3, k = "1" },
+        { id = 4, k = true },
+        { id = 5, k = 2 ^ 53 },
+        { id = 6, k = -0.0 },
+        { id = 7, k = "long key " .. string.rep("x", 60) },
     }
     local b = {
-        { id = 1, k = 1.0 }, { id = 2, k = "1" }, { id = 3, k = true }, { id = 4, k = 1 },
-        { id = 5, k = math.tointeger(2^53) }, { id = 6, k = 0 }, { id = 7, k = "long key " .. string.rep("x", 60) },
+        { id = 1, k = 1.0 },
+        { id = 2, k = "1" },
+        { id = 3, k = true },
+        { id = 4, k = 1 },
+        { id = 5, k = math.tointeger(2 ^ 53) },
+        { id = 6, k = 0 },
+        { id = 7, k = "long key " .. string.rep("x", 60) },
         { id = 8, k = false },
     }
     local rows = joined(a, b)
-    assert(table.concat(rows, " ") == "1:1 1:4 2:1 2:4 3:2 4:3 5:5 6:6 7:7", table.concat(rows, " "))
+    assert(
+        table.concat(rows, " ") == "1:1 1:4 2:1 2:4 3:2 4:3 5:5 6:6 7:7",
+        table.concat(rows, " ")
+    )
 end
 
 local function nil_and_nan_keys_match_nothing_in_an_indexed_join_test()
@@ -519,7 +564,14 @@ end
 
 local function rows_with_metatables_see_every_field_read_test()
     local reads = 0
-    local mt = { __index = function(_, key) reads = reads + 1 return key == "k" and 1 or nil end }
+
+    local mt = {
+        __index = function(_, key)
+            reads = reads + 1
+            return key == "k" and 1 or nil
+        end,
+    }
+
     local a = { { id = 1, k = 1 }, { id = 2, k = 2 } }
     local b = { setmetatable({ id = 1 }, mt), { id = 2, k = 1 }, { id = 3, k = 2 } }
     local rows = collect(@a as x, b as y where x.k == y.k select x.id, y.id as yid)
@@ -528,14 +580,25 @@ local function rows_with_metatables_see_every_field_read_test()
     -- The full product reads the field as often.
     local fast = reads
     reads = 0
-    local function yes() return true end
+
+    local function yes()
+        return true
+    end
+
     assert(#collect(@a as x, b as y where yes() and x.k == y.k select x.id) == 3)
     assert(fast == reads and fast > 0, `$fast ~= $reads`)
 end
 
 local function keys_with_an_eq_metamethod_are_compared_on_every_tuple_test()
     local calls = 0
-    local mt = { __eq = function() calls = calls + 1 return true end }
+
+    local mt = {
+        __eq = function()
+            calls = calls + 1
+            return true
+        end,
+    }
+
     local a = { { id = 1, k = setmetatable({}, mt) }, { id = 2, k = 5 } }
     local b = { { id = 1, k = setmetatable({}, mt) }, { id = 2, k = 5 }, { id = 3, k = 6 } }
     local rows = collect(@a as x, b as y where x.k == y.k select x.id, y.id as yid)
@@ -545,10 +608,17 @@ end
 
 local function a_join_after_another_condition_runs_on_every_tuple_test()
     local seen = 0
-    local function tally(v) seen = seen + 1 return v end
+
+    local function tally(v)
+        seen = seen + 1
+        return v
+    end
+
     local a = { { id = 1, k = 1 }, { id = 2, k = 2 } }
     local b = { { id = 1, k = 1 }, { id = 2, k = 3 }, { id = 3, k = 1 } }
-    local rows = collect(@a as x, b as y where tally(x.id) > 0 and x.k == y.k select x.id, y.id as yid)
+    local rows = collect(
+        @a as x, b as y where tally(x.id) > 0 and x.k == y.k select x.id, y.id as yid
+    )
     assert(#rows == 2)
     assert(seen == 6, seen)
     -- A condition after the join sees only the tuples that it lets through.
@@ -560,42 +630,107 @@ end
 
 local function chains_of_indexed_joins_and_swapped_sides_test()
     local a, b, c = {}, {}, {}
-    for i = 1, 20 do a[i] = { id = i, k = i % 5 } end
-    for i = 1, 20 do b[i] = { id = i, k = i % 4, j = i % 3 } end
-    for i = 1, 20 do c[i] = { id = i, j = i % 6 } end
-    local function yes() return true end
+
+    for i = 1, 20 do
+        a[i] = { id = i, k = i % 5 }
+    end
+
+    for i = 1, 20 do
+        b[i] = { id = i, k = i % 4, j = i % 3 }
+    end
+
+    for i = 1, 20 do
+        c[i] = { id = i, j = i % 6 }
+    end
+
+    local function yes()
+        return true
+    end
+
     local fast, slow = {}, {}
-    for r in query(@a as x, b as y, c as z where y.k == x.k and z.j == y.j select x.id, y.id as yid, z.id as zid) do
+
+    for r in query(
+        @a as x, b as y, c as z
+            where y.k == x.k and z.j == y.j
+            select x.id, y.id as yid, z.id as zid
+    ) do
         fast[#fast + 1] = `$(r.id):$(r.yid):$(r.zid)`
     end
-    for r in query(@a as x, b as y, c as z where yes() and y.k == x.k and z.j == y.j select x.id, y.id as yid, z.id as zid) do
+
+    for r in query(
+        @a as x, b as y, c as z
+            where yes() and y.k == x.k and z.j == y.j
+            select x.id, y.id as yid, z.id as zid
+    ) do
         slow[#slow + 1] = `$(r.id):$(r.yid):$(r.zid)`
     end
+
     assert(#fast > 0 and #fast == #slow)
-    for i = 1, #fast do assert(fast[i] == slow[i]) end
+
+    for i = 1, #fast do
+        assert(fast[i] == slow[i])
+    end
+
     -- A join of the first source with the third skips over the second.
     local n = 0
-    for _ in query(@a as x, b as y, c as z where x.k == z.j select x.id) do n = n + 1 end
+
+    for _ in query(@a as x, b as y, c as z where x.k == z.j select x.id) do
+        n = n + 1
+    end
+
     local m = 0
-    for _ in query(@a as x, b as y, c as z where yes() and x.k == z.j select x.id) do m = m + 1 end
+
+    for _ in query(@a as x, b as y, c as z where yes() and x.k == z.j select x.id) do
+        m = m + 1
+    end
+
     assert(n == m and n > 0)
 end
 
 local function indexed_joins_group_order_limit_and_query_sources_test()
     local a, b = {}, {}
-    for i = 1, 50 do a[i] = { id = i, k = i % 10 } end
-    for i = 1, 50 do b[i] = { id = i, k = i % 10, v = i } end
-    local rows = collect(@a as x, b as y where x.k == y.k
-        select x.k, count(*) as n, sum(y.v) as s group by x.k order by x.k desc)
+
+    for i = 1, 50 do
+        a[i] = { id = i, k = i % 10 }
+    end
+
+    for i = 1, 50 do
+        b[i] = { id = i, k = i % 10, v = i }
+    end
+
+    local rows = collect(
+        @a as x, b as y
+            where x.k == y.k
+            select x.k, count(*) as n, sum(y.v) as s
+            group by x.k
+            order by x.k desc
+    )
     assert(#rows == 10 and rows[1].k == 9 and rows[1].n == 25)
-    rows = collect(@a as x, b as y where x.k == y.k select x.id, y.id as yid order by y.id desc limit 3)
+    rows = collect(
+        @a as x, b as y where x.k == y.k select x.id, y.id as yid order by y.id desc limit 3
+    )
     assert(#rows == 3 and rows[1].yid == 50 and rows[1].id == 10)
-    local src = setmetatable({}, { __query = function()
-        local i = 0
-        return function() i = i + 1 if i <= 50 then return { id = i, k = i % 10 } end end
-    end })
+
+    local src = setmetatable({}, {
+        __query = function()
+            local i = 0
+
+            return function()
+                i = i + 1
+
+                if i <= 50 then
+                    return { id = i, k = i % 10 }
+                end
+            end
+        end,
+    })
+
     local n = 0
-    for _ in query(@a as x, src as y where x.k == y.k select x.id) do n = n + 1 end
+
+    for _ in query(@a as x, src as y where x.k == y.k select x.id) do
+        n = n + 1
+    end
+
     assert(n == 250)
 end
 
@@ -612,11 +747,19 @@ end
 local function records_for_windows(n)
     local seed = 7
     local rows = {}
+
     for i = 1, n do
         seed = seed * 16807 % 2147483647
         local k = seed % 50
-        rows[i] = { id = i, k = k, g = seed % 3, s = `s$(seed % 20)`, f = k == 7 and 0 / 0 or (k == 9 and nil or k / 2) }
+        rows[i] = {
+            id = i,
+            k = k,
+            g = seed % 3,
+            s = `s$(seed % 20)`,
+            f = k == 7 and 0 / 0 or (k == 9 and nil or k / 2),
+        }
     end
+
     return rows
 end
 
@@ -624,13 +767,21 @@ end
 -- `limit` of them.
 local function slice(all, offset, limit)
     local out = {}
-    for i = offset + 1, math.min(#all, offset + limit) do out[#out + 1] = all[i].id end
+
+    for i = offset + 1, math.min(#all, offset + limit) do
+        out[#out + 1] = all[i].id
+    end
+
     return table.concat(out, " ")
 end
 
 local function ids(rows)
     local out = {}
-    for i, r in ipairs(rows) do out[i] = r.id end
+
+    for i, r in ipairs(rows) do
+        out[i] = r.id
+    end
+
     return table.concat(out, " ")
 end
 
@@ -640,7 +791,10 @@ local function a_small_window_of_an_ordering_matches_the_full_ordering_test()
     assert(ids(collect(@t as r select r.id order by r.k limit 10)) == slice(full, 0, 10))
     assert(ids(collect(@t as r select r.id order by r.k limit 10 offset 25)) == slice(full, 25, 10))
     local desc = collect(@t as r select r.id order by r.k desc, r.s)
-    assert(ids(collect(@t as r select r.id order by r.k desc, r.s limit 7 offset 3)) == slice(desc, 3, 7))
+    assert(
+        ids(collect(@t as r select r.id order by r.k desc, r.s limit 7 offset 3))
+            == slice(desc, 3, 7)
+    )
     local strs = collect(@t as r select r.id order by r.s desc)
     assert(ids(collect(@t as r select r.id order by r.s desc limit 30)) == slice(strs, 0, 30))
     -- NaN orders as nil, first in ascending order.
@@ -657,9 +811,14 @@ local function edges_of_an_ordered_window_test()
     assert(#collect(@t as r select r.id order by r.k limit 5 offset 500) == 0)
     assert(ids(collect(@t as r select r.id order by r.k limit 199 offset 1)) == slice(full, 1, 199))
     assert(ids(collect(@t as r select r.id order by r.k limit 1)) == slice(full, 0, 1))
-    local grouped = collect(@t as r select r.k, count(*) as n group by r.k order by n desc, r.k limit 4)
+    local grouped = collect(
+        @t as r select r.k, count(*) as n group by r.k order by n desc, r.k limit 4
+    )
     local all = collect(@t as r select r.k, count(*) as n group by r.k order by n desc, r.k)
-    for i = 1, 4 do assert(grouped[i].k == all[i].k and grouped[i].n == all[i].n) end
+
+    for i = 1, 4 do
+        assert(grouped[i].k == all[i].k and grouped[i].n == all[i].n)
+    end
 end
 
 local function mixed_order_keys_raise_with_or_without_a_window_test()
@@ -677,7 +836,12 @@ end
 local function a_host_call_in_an_order_key_runs_once_per_row_test()
     local t = records_for_windows(100)
     local calls = 0
-    local function key(r) calls = calls + 1 return r.k end
+
+    local function key(r)
+        calls = calls + 1
+        return r.k
+    end
+
     local rows = collect(@t as r select r.id order by key(r) limit 2)
     assert(#rows == 2)
     assert(calls == 100, calls)
@@ -700,7 +864,11 @@ end
 
 local function one_unorderable_key_among_nils_orders_first_test()
     local t = {}
-    for i = 1, 100 do t[i] = { id = i } end
+
+    for i = 1, 100 do
+        t[i] = { id = i }
+    end
+
     t[60].k = {}
     local rows = collect(@t as r select r.id order by r.k desc limit 2)
     local all = collect(@t as r select r.id order by r.k desc)
@@ -710,10 +878,12 @@ end
 
 local function string_keys_of_a_window_survive_collections_test()
     local t = records_for_windows(3000)
+
     local function key(r)
         collectgarbage("step")
         return `key $(r.k) $(r.id % 13)`
     end
+
     local rows = collect(@t as r select r.id order by key(r) limit 20)
     local all = collect(@t as r select r.id order by key(r))
     assert(ids(rows) == slice(all, 0, 20))
@@ -750,9 +920,11 @@ end
 local function an_empty_source_yields_zero_iterations_test()
     local empty = {}
     local ran = false
+
     for _ in query(@empty as e select e.x) do
         ran = true
     end
+
     assert(ran == false)
 end
 
@@ -761,58 +933,89 @@ end
 local function a_non_record_row_raises_at_execution_test()
     local bad = { "notatable" }
     local q = @bad as x select x.a
-    raises(function() return query(q) end, "not a record")
+
+    raises(function()
+        return query(q)
+    end, "not a record")
 end
 
 local function a_non_queryable_source_raises_at_execution_not_build_test()
     local n = 42
     local q = @(n) as x select x.a
     assert(type(q) == "query")
-    raises(function() return query(q) end, "not queryable")
+
+    raises(function()
+        return query(q)
+    end, "not queryable")
 end
 
 local function query_supplies_rows_and_residual_work_stays_in_memory_test()
     local seen
+
     local custom = setmetatable({}, {
         __query = function(self, q, idx)
             seen = { qtype = type(q), idx = idx }
             local i = 0
+
             return function()
                 i = i + 1
+
                 if i <= 4 then
                     return { v = i * 10 }
                 end
             end
         end,
     })
+
     local total = 0
+
     for r in query(@custom as c where c.v > 10 select c.v) do
         total = total + r.v
     end
+
     assert(total == 90)
     assert(seen.qtype == "query")
     assert(seen.idx == 1)
 end
 
 local function query_returning_a_non_function_raises_test()
-    local bad = setmetatable({}, { __query = function() return 42 end })
+    local bad = setmetatable({}, {
+        __query = function()
+            return 42
+        end,
+    })
+
     local q = @bad as b select b.a
-    raises(function() return query(q) end, "'__query' must return a function")
+
+    raises(function()
+        return query(q)
+    end, "'__query' must return a function")
 end
 
 local function query_rejects_non_queries_test()
-    raises(function() return query(42) end, "query expected")
-    raises(function() return query() end)
-    raises(function() return query({}) end, "query expected")
+    raises(function()
+        return query(42)
+    end, "query expected")
+
+    raises(function()
+        return query()
+    end)
+
+    raises(function()
+        return query({})
+    end, "query expected")
 end
 
 -- Group: debug.queryplan
 
 local function the_plan_names_providers_and_conjunct_shapes_test()
     local t = people()
-    local function opaque(p) return true end
-    local plan = debug.queryplan(@t as p
-        where p.age > 1 and opaque(p) select p.name)
+
+    local function opaque(p)
+        return true
+    end
+
+    local plan = debug.queryplan(@t as p where p.age > 1 and opaque(p) select p.name)
     assert(string.find(plan, "memory"))
     assert(string.find(plan, "host closure"))
     assert(string.find(plan, "translatable"))
@@ -825,7 +1028,9 @@ local function the_plan_is_stable_across_calls_test()
 end
 
 local function queryplan_rejects_non_queries_test()
-    raises(function() return debug.queryplan(1) end, "query expected")
+    raises(function()
+        return debug.queryplan(1)
+    end, "query expected")
 end
 
 -- Group: GC under execution
@@ -841,10 +1046,12 @@ end
 
 local function a_query_keeps_an_otherwise_dead_source_alive_test()
     local q
+
     do
         local hidden = { { n = 7 } }
         q = @hidden as h select h.n
     end
+
     collectgarbage("collect")
     collectgarbage("collect")
     local rows = collect(q)
@@ -866,12 +1073,13 @@ end
   semantics in the last section, and the push-down split in the sqlite section.
 ]]
 
-
 local function collect(q)
     local out = {}
+
     for row in query(q) do
         out[#out + 1] = row
     end
+
     return out
 end
 
@@ -886,10 +1094,12 @@ end
 -- nil in a memory table and a NULL in a SQLite column compare identically.
 local function serialize_col(src, tail, col)
     local out = {}
+
     for r in query(build(src, tail)) do
         local v = r[col]
         out[#out + 1] = (v == nil) and "NULL" or tostring(v)
     end
+
     return table.concat(out, ",")
 end
 
@@ -898,10 +1108,12 @@ end
 local function a_query_iterator_built_in_a_coroutine_drives_from_the_outside_test()
     local t = { { a = 1 }, { a = 2 }, { a = 3 } }
     local iter
+
     local co = coroutine.create(function()
         iter = query(@t as r select r.a order by r.a)
         coroutine.yield(iter().a)
     end)
+
     local ok, first = coroutine.resume(co)
     assert(ok == true)
     assert(first == 1)
@@ -916,9 +1128,11 @@ end
 local function a_query_iterator_survives_its_creating_coroutine_dying_test()
     local t = { { a = 10 }, { a = 20 } }
     local iter
+
     local co = coroutine.create(function()
         iter = query(@t as r select r.a order by r.a)
     end)
+
     assert(coroutine.resume(co))
     assert(coroutine.status(co) == "dead")
     collectgarbage("collect")
@@ -929,15 +1143,23 @@ end
 local function a_query_iterator_built_outside_drives_inside_a_coroutine_test()
     local t = { { a = 1 }, { a = 2 }, { a = 3 } }
     local iter = query(@t as r select r.a order by r.a)
+
     local co = coroutine.create(function()
         local acc = {}
+
         while true do
             local r = iter()
-            if r == nil then break end
+
+            if r == nil then
+                break
+            end
+
             acc[#acc + 1] = r.a
         end
+
         return table.concat(acc, ",")
     end)
+
     local ok, joined = coroutine.resume(co)
     assert(ok == true)
     assert(joined == "1,2,3")
@@ -947,10 +1169,12 @@ local function a_db_query_iterator_built_in_a_coroutine_drives_from_outside_test
     local db <close> = io.sqlite(":memory:")
     db:exec("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1),(2),(3)")
     local iter
+
     local co = coroutine.create(function()
         iter = db:query("SELECT n FROM t ORDER BY n")
         coroutine.yield(iter().n)
     end)
+
     local ok, first = coroutine.resume(co)
     assert(ok == true)
     assert(first == 1)
@@ -963,14 +1187,17 @@ end
 
 local function yield_inside_a_where_host_closure_hits_the_c_call_boundary_test()
     local t = { { a = 1 }, { a = 2 } }
+
     local function pred(r)
         coroutine.yield("mid-where")
         return r.a > 1
     end
+
     local co = coroutine.create(function()
         for _ in query(@t as r where pred(r) select r.a) do
         end
     end)
+
     local ok, err = coroutine.resume(co)
     assert(ok == false)
     assert(string.find(tostring(err), "yield across a C%-call boundary"))
@@ -979,25 +1206,32 @@ end
 
 local function coroutine_wrap_surfaces_the_boundary_error_as_a_raise_test()
     local t = { { a = 1 } }
+
     local function pred(r)
         coroutine.yield("mid-where")
         return true
     end
+
     local w = coroutine.wrap(function()
         for _ in query(@t as r where pred(r) select r.a) do
         end
     end)
-    raises(function() return w() end, "yield across a C%-call boundary")
+
+    raises(function()
+        return w()
+    end, "yield across a C%-call boundary")
 end
 
 local function yield_inside_a_db_transaction_body_hits_the_c_call_boundary_test()
     local db <close> = io.sqlite(":memory:")
     db:exec("CREATE TABLE t (n INTEGER)")
+
     local co = coroutine.create(function()
         db:transaction(function()
             coroutine.yield("mid-txn")
         end)
     end)
+
     local ok, err = coroutine.resume(co)
     assert(ok == false)
     assert(string.find(tostring(err), "yield across a C%-call boundary"))
@@ -1007,6 +1241,7 @@ end
 
 local function coroutine_close_closes_a_to_be_closed_database_handle_test()
     local captured
+
     local co = coroutine.create(function()
         local db <close> = io.sqlite(":memory:")
         db:exec("CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1)")
@@ -1014,18 +1249,27 @@ local function coroutine_close_closes_a_to_be_closed_database_handle_test()
         coroutine.yield("open")
         error("this line is never reached")
     end)
+
     assert(coroutine.resume(co))
     -- While suspended the handle is still live.
     local seen
-    for r in captured:query("SELECT n FROM t") do seen = r.n end
+
+    for r in captured:query("SELECT n FROM t") do
+        seen = r.n
+    end
+
     assert(seen == 1)
     assert(coroutine.close(co) == true)
     assert(coroutine.status(co) == "dead")
-    raises(function() captured:exec("SELECT 1") end, "attempt to use a closed database")
+
+    raises(function()
+        captured:exec("SELECT 1")
+    end, "attempt to use a closed database")
 end
 
 local function coroutine_close_unwinds_several_handles_at_once_test()
     local a, b
+
     local co = coroutine.create(function()
         local first <close> = io.sqlite(":memory:")
         local second <close> = io.sqlite(":memory:")
@@ -1034,10 +1278,17 @@ local function coroutine_close_unwinds_several_handles_at_once_test()
         a, b = first, second
         coroutine.yield()
     end)
+
     assert(coroutine.resume(co))
     assert(coroutine.close(co) == true)
-    raises(function() a:exec("SELECT 1") end, "attempt to use a closed database")
-    raises(function() b:exec("SELECT 1") end, "attempt to use a closed database")
+
+    raises(function()
+        a:exec("SELECT 1")
+    end, "attempt to use a closed database")
+
+    raises(function()
+        b:exec("SELECT 1")
+    end, "attempt to use a closed database")
 end
 
 -- Group: line-anchored syntax diagnostics
@@ -1047,9 +1298,11 @@ end
 -- tracks the offending position rather than emitting a constant.
 local function at_line(atline, q)
     local src = "local t = {}"
+
     for _ = 2, atline - 1 do
         src = src .. "\n"
     end
+
     return src .. "\n" .. q
 end
 
@@ -1070,23 +1323,21 @@ local every_documented_syntax_error_reports_a_fragment_and_a_line_cases = {
     { 5, "return @(t) select x.a", "query source needs an 'as' name" },
     { 6, "return @t as x order x.a", "'by' expected after 'order'" },
     { 7, "return @t as x group x.a", "'by' expected after 'group'" },
-    { 8, "return @t as x select count(*)",
-        "'as' name expected for this projection" },
+    { 8, "return @t as x select count(*)", "'as' name expected for this projection" },
     { 9, "return @t as x, t as y", "a join requires a 'select' clause" },
-    { 10, "return @t as x where sum(x.a) > 1",
-        "only allowed in 'select' or 'having'" },
+    { 10, "return @t as x where sum(x.a) > 1", "only allowed in 'select' or 'having'" },
     { 11, "return @t as x select sum(*) as s", "'%*' is only allowed in count" },
-    { 12, "return @t as x select sum(count(x.a)) as s",
-        "aggregates cannot nest" },
-    { 13, "return @t as x where (@t as y select y.a) == 1",
-        "nested queries are not supported" },
-    { 14, "return @t as x where x.a & 1 == 1",
-        "operator not supported in a query clause" },
+    { 12, "return @t as x select sum(count(x.a)) as s", "aggregates cannot nest" },
+    { 13, "return @t as x where (@t as y select y.a) == 1", "nested queries are not supported" },
+    { 14, "return @t as x where x.a & 1 == 1", "operator not supported in a query clause" },
     { 15, "return @t as x where (x.a)[1] == 1", "parenthesized expression" },
-    { 16, "local k = 1 return @t[k] as x select x.a",
-        "query source index must be a literal" },
-    { 17, "return @t as a, t as b, t as c, t as d, t as e, t as f, t as g, "
-        .. "t as h, t as i select a.x", "too many sources" },
+    { 16, "local k = 1 return @t[k] as x select x.a", "query source index must be a literal" },
+    {
+        17,
+        "return @t as a, t as b, t as c, t as d, t as e, t as f, t as g, "
+            .. "t as h, t as i select a.x",
+        "too many sources",
+    },
 }
 
 local function every_documented_syntax_error_reports_a_fragment_and_a_line_test(atline, q, fragment)
@@ -1160,9 +1411,11 @@ local function sqlite_folds_a_bound_nan_to_null_and_it_leads_ascending_test()
     db:run("INSERT INTO t VALUES (?)", 1.0)
     -- Ascending order must place the folded NULL first, then 1.0, 2.0.
     local out = {}
+
     for r in query(@db.t as x select x.a order by x.a) do
         out[#out + 1] = (r.a == nil) and "NULL" or tostring(r.a)
     end
+
     assert(out[1] == "NULL")
     assert(out[2] == "1.0")
     assert(out[3] == "2.0")
@@ -1174,23 +1427,30 @@ end
 -- that both providers use by default.
 local function strings_pair()
     local rows = {
-        { c = "Foo" }, { c = "foo" }, { c = "FOO" },
-        { c = "café" }, { c = "cafe" }, { c = "café" },
+        { c = "Foo" },
+        { c = "foo" },
+        { c = "FOO" },
+        { c = "café" },
+        { c = "cafe" },
+        { c = "café" },
     }
     local db = io.sqlite(":memory:")
     db:exec("CREATE TABLE t (c TEXT)")
+
     for _, r in ipairs(rows) do
         db:run("INSERT INTO t VALUES (?)", r.c)
     end
+
     return rows, db
 end
 
 local function serialize_groups(src)
     local out = {}
-    for r in query(@(src) as x select x.c, count(*) as n
-        group by x.c order by x.c, n) do
+
+    for r in query(@(src) as x select x.c, count(*) as n group by x.c order by x.c, n) do
         out[#out + 1] = r.c .. "=" .. r.n
     end
+
     return table.concat(out, ",")
 end
 
@@ -1204,13 +1464,17 @@ end
 
 local function distinct_over_mixed_case_and_non_ascii_agrees_across_providers_test()
     local mem, db = strings_pair()
+
     local function ser(src)
         local out = {}
+
         for r in query(@(src) as x select distinct x.c order by x.c) do
             out[#out + 1] = r.c
         end
+
         return table.concat(out, ",")
     end
+
     local expected = "FOO,Foo,cafe,café,foo"
     assert(ser(mem) == expected)
     assert(ser(db.t) == expected)
@@ -1268,8 +1532,7 @@ local function a_boundary_integer_groups_against_its_own_float_parity_test()
     db:run("INSERT INTO t VALUES (?)", math.maxinteger)
     db:run("INSERT INTO t VALUES (?)", math.maxinteger)
     db:run("INSERT INTO t VALUES (?)", math.mininteger)
-    local rows = collect(@db.t as x select x.v, count(*) as n
-        group by x.v order by x.v)
+    local rows = collect(@db.t as x select x.v, count(*) as n group by x.v order by x.v)
     assert(#rows == 2)
     assert(rows[1].v == math.mininteger)
     assert(rows[1].n == 1)
@@ -1284,7 +1547,6 @@ end
   runs on ":memory:" databases under the standard sealed pledge.
 ]]
 
-
 local function freshdb()
     local db = io.sqlite(":memory:")
     db:exec([[
@@ -1297,9 +1559,11 @@ end
 
 local function collect(q)
     local out = {}
+
     for row in query(q) do
         out[#out + 1] = row
     end
+
     return out
 end
 
@@ -1316,15 +1580,17 @@ end
 local function a_table_reference_on_a_closed_db_raises_test()
     local db = io.sqlite(":memory:")
     db:close()
-    raises(function() return db.users end, "attempt to use a closed database")
+
+    raises(function()
+        return db.users
+    end, "attempt to use a closed database")
 end
 
 -- Group: push-down
 
 local function a_pushed_comparison_filters_in_sql_test()
     local db <close> = freshdb()
-    local rows = collect(@db.users as u where u.age >= 18
-        select u.name order by u.name)
+    local rows = collect(@db.users as u where u.age >= 18 select u.name order by u.name)
     assert(#rows == 3)
     assert(rows[1].name == "Alice")
 end
@@ -1332,8 +1598,7 @@ end
 local function the_plan_shows_the_native_provider_and_the_pushed_conjunct_test()
     local db <close> = freshdb()
     local minage = 18
-    local plan = debug.queryplan(@db.users as u where u.age >= minage
-        select u.name)
+    local plan = debug.queryplan(@db.users as u where u.age >= minage select u.name)
     assert(string.find(plan, "native"))
     assert(string.find(plan, "pushed down"))
 end
@@ -1341,12 +1606,13 @@ end
 local function probe_counting_proves_the_split_test()
     local db <close> = freshdb()
     local calls = 0
+
     local function probe(u)
         calls = calls + 1
         return true
     end
-    local rows = collect(@db.users as u
-        where u.age >= 18 and probe(u) select u.name)
+
+    local rows = collect(@db.users as u where u.age >= 18 and probe(u) select u.name)
     assert(#rows == 3)
     assert(calls == 3)
 end
@@ -1354,19 +1620,21 @@ end
 local function a_fully_opaque_where_fetches_every_row_test()
     local db <close> = freshdb()
     local calls = 0
+
     local function probe(u)
         calls = calls + 1
         return false
     end
+
     collect(@db.users as u where probe(u) select u.name)
     assert(calls == 4)
 end
 
 local function arithmetic_and_concatenation_push_down_test()
     local db <close> = freshdb()
-    local rows = collect(@db.users as u
-        where u.age * 2 >= 60 and u.name .. "!" == "Alice!"
-        select u.name)
+    local rows = collect(
+        @db.users as u where u.age * 2 >= 60 and u.name .. "!" == "Alice!" select u.name
+    )
     assert(#rows == 1)
     assert(rows[1].name == "Alice")
 end
@@ -1374,19 +1642,16 @@ end
 local function division_stays_residual_for_parity_test()
     local db <close> = freshdb()
     -- 17 / 2 is 8.5 in Lus and 8 in SQL, so the engine keeps it
-    local rows = collect(@db.users as u where u.age / 2 > 8.4
-        select u.name order by u.name)
+    local rows = collect(@db.users as u where u.age / 2 > 8.4 select u.name order by u.name)
     assert(#rows == 4)
-    local plan = debug.queryplan(@db.users as u where u.age / 2 > 8.4
-        select u.name)
+    local plan = debug.queryplan(@db.users as u where u.age / 2 > 8.4 select u.name)
     assert(string.find(plan, "0 pushed"))
 end
 
 local function an_enum_parameter_stays_residual_instead_of_failing_to_bind_test()
     local db <close> = freshdb()
     local color = enum red, green end
-    local rows = collect(@db.users as u
-        where u.age > 18 and u.name ~= color.red select u.name)
+    local rows = collect(@db.users as u where u.age > 18 and u.name ~= color.red select u.name)
     assert(#rows == 3)
 end
 
@@ -1395,19 +1660,27 @@ end
 local function identical_data_gives_identical_results_through_both_providers_test()
     local db <close> = freshdb()
     local mem = {
-        { name = "Alice", age = 30 }, { name = "Bob", age = 17 },
-        { name = "Carol", age = 42 }, { name = "Dave", age = 30 },
+        { name = "Alice", age = 30 },
+        { name = "Bob", age = 17 },
+        { name = "Carol", age = 42 },
+        { name = "Dave", age = 30 },
     }
+
     local function run(src)
         local out = {}
-        for r in query(@(src) as u
-            where u.age >= 17 and u.age * 2 < 80
-            select u.name, u.age
-            order by u.age desc, u.name) do
+
+        for r in query(
+            @(src) as u
+                where u.age >= 17 and u.age * 2 < 80
+                select u.name, u.age
+                order by u.age desc, u.name
+        ) do
             out[#out + 1] = r.name .. "=" .. r.age
         end
+
         return table.concat(out, ",")
     end
+
     assert(run(mem) == run(db.users))
 end
 
@@ -1418,13 +1691,17 @@ local function nil_and_null_predicates_agree_test()
         INSERT INTO t (a) VALUES (1), (NULL), (3);
     ]])
     local mem = { { a = 1 }, {}, { a = 3 } }
+
     local function run(src)
         local out = {}
+
         for r in query(@(src) as s where s.a > 0 select s.a order by s.a) do
             out[#out + 1] = r.a
         end
+
         return table.concat(out, ",")
     end
+
     assert(run(mem) == run(db.t))
     assert(run(db.t) == "1,3")
 end
@@ -1433,11 +1710,13 @@ local function empty_input_aggregates_agree_test()
     local db <close> = io.sqlite(":memory:")
     db:exec("CREATE TABLE t (a INTEGER)")
     local mem = {}
+
     local function run(src)
         for r in query(@(src) as s select count(*) as n, sum(s.a) as total) do
             return r.n, r.total
         end
     end
+
     local n1, t1 = run(mem)
     local n2, t2 = run(db.t)
     assert(n1 == n2)
@@ -1451,10 +1730,10 @@ local function a_hostile_bound_value_stays_data_test()
     local db <close> = freshdb()
     local hostile = "'; DROP TABLE users; --"
     db:run("INSERT INTO users (name, age) VALUES (?, ?)", hostile, 1)
-    local found = collect(@db.users as u where u.name == hostile
-        select u.name)
+    local found = collect(@db.users as u where u.name == hostile select u.name)
     assert(#found == 1)
     assert(found[1].name == hostile)
+
     for r in db:query("SELECT count(*) AS n FROM users") do
         assert(r.n == 5)
     end
@@ -1464,8 +1743,7 @@ local function wildcard_characters_in_parameters_stay_literal_test()
     local db <close> = freshdb()
     local tricky = [[100% _certain_ "quoted" \slashed]]
     db:run("INSERT INTO users (name, age) VALUES (?, ?)", tricky, 1)
-    local found = collect(@db.users as u where u.name == tricky
-        select u.name)
+    local found = collect(@db.users as u where u.name == tricky select u.name)
     assert(#found == 1)
 end
 
@@ -1514,8 +1792,9 @@ local function a_sqlite_table_joins_an_in_memory_table_test()
         { who = "Alice", note = "vip" },
         { who = "Carol", note = "new" },
     }
-    local rows = collect(@db.users as u, notes as n
-        where u.name == n.who select u.name, n.note order by u.name)
+    local rows = collect(
+        @db.users as u, notes as n where u.name == n.who select u.name, n.note order by u.name
+    )
     assert(#rows == 2)
     assert(rows[1].name == "Alice")
     assert(rows[1].note == "vip")
@@ -1527,8 +1806,9 @@ local function two_tables_of_one_database_join_in_memory_test()
         CREATE TABLE pets (owner TEXT, pet TEXT);
         INSERT INTO pets VALUES ('Alice', 'cat'), ('Bob', 'dog');
     ]])
-    local rows = collect(@db.users as u, db.pets as p
-        where u.name == p.owner select u.name, p.pet order by u.name)
+    local rows = collect(
+        @db.users as u, db.pets as p where u.name == p.owner select u.name, p.pet order by u.name
+    )
     assert(#rows == 2)
     assert(rows[2].pet == "dog")
 end
@@ -1537,13 +1817,17 @@ local function per_source_conjuncts_push_while_the_join_runs_in_memory_test()
     local db <close> = freshdb()
     local calls = 0
     local notes = { { who = "Alice" }, { who = "Bob" } }
+
     local function probe(u, n)
         calls = calls + 1
         return true
     end
-    local rows = collect(@db.users as u, notes as n
-        where u.age >= 18 and u.name == n.who and probe(u, n)
-        select u.name)
+
+    local rows = collect(
+        @db.users as u, notes as n
+            where u.age >= 18 and u.name == n.who and probe(u, n)
+            select u.name
+    )
     assert(#rows == 1)
     assert(calls == 1)
 end
@@ -1552,12 +1836,14 @@ end
 
 local function a_table_reference_keeps_its_database_alive_test()
     local ref
+
     do
         local db = io.sqlite(":memory:")
         db:exec("CREATE TABLE t (n INTEGER)")
         db:run("INSERT INTO t VALUES (5)")
         ref = db.t
     end
+
     collectgarbage("collect")
     collectgarbage("collect")
     local rows = collect(@(ref) as t select t.n)
@@ -1569,6 +1855,7 @@ local function querying_through_a_closed_database_raises_test()
     db:exec("CREATE TABLE t (n INTEGER)")
     local ref = db.t
     db:close()
+
     raises(function()
         return query(@(ref) as t select t.n)
     end, "attempt to use a closed database")
@@ -1578,7 +1865,10 @@ local function an_unknown_table_errors_at_execution_not_at_build_test()
     local db <close> = freshdb()
     local q = @db.nosuch as t select t.v
     assert(type(q) == "query")
-    raises(function() return query(q) end, "no such table")
+
+    raises(function()
+        return query(q)
+    end, "no such table")
 end
 
 local function an_abandoned_result_set_does_not_block_later_queries_test()
@@ -1605,7 +1895,7 @@ end
 
 local people = {
     { name = "Alice", age = 30 },
-    { name = "Bob",   age = 17 },
+    { name = "Bob", age = 17 },
 }
 
 -- Group: contextual keywords stay ordinary names
@@ -1621,18 +1911,31 @@ local function clause_words_work_as_locals_and_functions_test()
     local distinct = 8
     local by = 9
     local as = 10
-    assert(select + where + order + group + having + limit
-        + offset + distinct + by + as == 55)
-    local count = function(x) return x end
-    local sum = function(x) return x + 1 end
+    assert(select + where + order + group + having + limit + offset + distinct + by + as == 55)
+
+    local count = function(x)
+        return x
+    end
+
+    local sum = function(x)
+        return x + 1
+    end
+
     assert(count(1) == 1)
     assert(sum(1) == 2)
 end
 
 local function clause_words_work_as_table_fields_and_methods_test()
     local t = { select = 1, where = 2 }
-    function t.order(x) return x end
-    function t:group() return self.select end
+
+    function t.order(x)
+        return x
+    end
+
+    function t:group()
+        return self.select
+    end
+
     assert(t.select == 1)
     assert(t.where == 2)
     assert(t.order(3) == 3)
@@ -1642,8 +1945,10 @@ end
 local function inside_comments_and_strings_is_inert_test()
     -- Compile fresh chunks so this test itself observes the parse
     -- succeeding, rather than relying on the enclosing file loading.
-    local f = load("-- a comment with a query shape: @people as p select p.name\n"
-        .. "return 'an @ inside a string'")
+    local f = load(
+        "-- a comment with a query shape: @people as p select p.name\n"
+            .. "return 'an @ inside a string'"
+    )
     assert(f ~= nil, "'@' in a comment and a string must compile")
     local v = f()
     assert(type(v) == "string")
@@ -1657,13 +1962,19 @@ end
 
 local function queries_appear_in_every_expression_position_test()
     local q = @people as p select p.name
-    local function takes(x) return x end
+
+    local function takes(x)
+        return x
+    end
+
     assert(type(takes(@people as p select p.name)) == "query")
     local t = { @people as p select p.name }
     assert(type(t[1]) == "query")
+
     local function gives()
         return @people as p select p.name
     end
+
     assert(type(gives()) == "query")
     assert(type(q) == "query")
 end
@@ -1715,73 +2026,79 @@ local function bare_and_truncated_queries_fail_test()
 end
 
 local function a_source_without_a_name_needs_as_test()
-    checkload("local t = {} return @(t) select x.a",
-        "query source needs an 'as' name")
+    checkload("local t = {} return @(t) select x.a", "query source needs an 'as' name")
 end
 
 local function duplicate_clauses_and_aliases_fail_test()
-    checkload("local t = {} return @t as x where 1 where 2",
-        "duplicate 'where' clause")
-    checkload("local t = {} return @t as x select x.a select x.a",
-        "duplicate 'select' clause")
-    checkload("local t = {} return @t as x, t as x select x.a",
-        "duplicate row variable 'x'")
+    checkload("local t = {} return @t as x where 1 where 2", "duplicate 'where' clause")
+    checkload("local t = {} return @t as x select x.a select x.a", "duplicate 'select' clause")
+    checkload("local t = {} return @t as x, t as x select x.a", "duplicate row variable 'x'")
 end
 
 local function order_and_group_require_by_test()
-    checkload("local t = {} return @t as x order x.a",
-        "'by' expected after 'order'")
-    checkload("local t = {} return @t as x group x.a",
-        "'by' expected after 'group'")
+    checkload("local t = {} return @t as x order x.a", "'by' expected after 'order'")
+    checkload("local t = {} return @t as x group x.a", "'by' expected after 'group'")
 end
 
 local function projections_that_need_a_name_fail_without_as_test()
-    checkload("local t = {} return @t as x select count(*)",
-        "'as' name expected for this projection")
-    checkload("local t = {} return @t as x select x.a + 1",
-        "'as' name expected for this projection")
+    checkload(
+        "local t = {} return @t as x select count(*)",
+        "'as' name expected for this projection"
+    )
+    checkload(
+        "local t = {} return @t as x select x.a + 1",
+        "'as' name expected for this projection"
+    )
 end
 
 local function a_join_requires_a_select_clause_test()
-    checkload("local t = {} return @t as x, t as y",
-        "a join requires a 'select' clause")
+    checkload("local t = {} return @t as x, t as y", "a join requires a 'select' clause")
 end
 
 local function aggregate_placement_rules_test()
-    checkload("local t = {} return @t as x where sum(x.a) > 1",
-        "only allowed in 'select' or 'having'")
-    checkload("local t = {} return @t as x select sum(*) as s",
-        "'%*' is only allowed in count")
-    checkload("local t = {} return @t as x select sum(count(x.a)) as s",
-        "aggregates cannot nest")
+    checkload(
+        "local t = {} return @t as x where sum(x.a) > 1",
+        "only allowed in 'select' or 'having'"
+    )
+    checkload("local t = {} return @t as x select sum(*) as s", "'%*' is only allowed in count")
+    checkload("local t = {} return @t as x select sum(count(x.a)) as s", "aggregates cannot nest")
 end
 
 local function nested_queries_are_rejected_test()
-    checkload("local t = {} return @t as x where (@t as y select y.a) == 1",
-        "nested queries are not supported")
+    checkload(
+        "local t = {} return @t as x where (@t as y select y.a) == 1",
+        "nested queries are not supported"
+    )
 end
 
 local function unsupported_operators_in_clauses_fail_test()
-    checkload("local t = {} return @t as x where x.a & 1 == 1",
-        "operator not supported in a query clause")
-    checkload("local t = {} return @t as x where #x.a > 0",
-        "operator not supported in a query clause")
+    checkload(
+        "local t = {} return @t as x where x.a & 1 == 1",
+        "operator not supported in a query clause"
+    )
+    checkload(
+        "local t = {} return @t as x where #x.a > 0",
+        "operator not supported in a query clause"
+    )
 end
 
 local function a_suffixed_parenthesized_clause_expression_fails_test()
-    checkload("local t = {} return @t as x where (x.a)[1] == 1",
-        "parenthesized expression")
+    checkload("local t = {} return @t as x where (x.a)[1] == 1", "parenthesized expression")
 end
 
 local function a_non_literal_source_index_fails_test()
-    checkload("local t = {} local k = 1 return @t[k] as x select x.a",
-        "query source index must be a literal")
+    checkload(
+        "local t = {} local k = 1 return @t[k] as x select x.a",
+        "query source index must be a literal"
+    )
 end
 
 local function too_many_sources_fail_test()
-    checkload("local t = {} return @t as a, t as b, t as c, t as d, "
-        .. "t as e, t as f, t as g, t as h, t as i select a.x",
-        "too many sources")
+    checkload(
+        "local t = {} return @t as a, t as b, t as c, t as d, "
+            .. "t as e, t as f, t as g, t as h, t as i select a.x",
+        "too many sources"
+    )
 end
 
 -- Group: query values
@@ -1808,9 +2125,18 @@ end
 local function comparison_length_and_arithmetic_raise_test()
     local q = @people as p select p.name
     local r = @people as p select p.name
-    raises(function() return q < r end, "attempt to compare")
-    raises(function() return #q end, "attempt to get length")
-    raises(function() return q + 1 end, "attempt to perform arithmetic")
+
+    raises(function()
+        return q < r
+    end, "attempt to compare")
+
+    raises(function()
+        return #q
+    end, "attempt to get length")
+
+    raises(function()
+        return q + 1
+    end, "attempt to perform arithmetic")
 end
 
 local function tojson_serializes_a_query_as_null_test()
@@ -1843,6 +2169,7 @@ local function string_dump_preserves_query_building_functions_test()
     local function maker(src, minimum)
         return @src as r where r.age >= minimum select r.name
     end
+
     assert(type(maker(people, 18)) == "query")
     local dumped = string.dump(maker)
     local loaded = load(dumped, "maker", "b")
@@ -1857,6 +2184,7 @@ local function queries_survive_collection_and_keep_sources_alive_test()
         local hidden = { { n = 7 } }
         return @hidden as h select h.n
     end
+
     local q = build()
     -- the only reference to the source table is now inside the query
     collectgarbage("collect")
@@ -1864,46 +2192,55 @@ local function queries_survive_collection_and_keep_sources_alive_test()
     assert(type(q) == "query")
     -- executing the query proves the source was kept alive
     local rows = 0
+
     for row in query(q) do
         rows = rows + 1
         assert(row.n == 7)
     end
+
     assert(rows == 1)
 end
 
 local function discarded_queries_do_not_leak_test()
     collectgarbage("collect")
     local before = collectgarbage("count")
+
     for i = 1, 10000 do
         local _ = @people as p where p.age > i select p.name
     end
+
     collectgarbage("collect")
     collectgarbage("collect")
     local after = collectgarbage("count")
-    assert(after < before + 256,
-        "10000 discarded queries must not retain memory, grew from "
-        .. before .. " to " .. after)
+    assert(
+        after < before + 256,
+        "10000 discarded queries must not retain memory, grew from " .. before .. " to " .. after
+    )
 end
 
 -- Group: tooling round trip
 
 local function debug_parse_exposes_a_structured_query_node_test()
-    local tree = debug.parse("local t = {} return @t as x "
-        .. "where x.a > 1 select x.a")
+    local tree = debug.parse("local t = {} return @t as x " .. "where x.a > 1 select x.a")
+
     local function find(node, ty)
         if type(node) ~= "table" then
             return nil
         end
+
         if node.type == ty then
             return node
         end
+
         for _, v in pairs(node) do
             local r = find(v, ty)
+
             if r then
                 return r
             end
         end
     end
+
     local qn = find(tree, "query")
     assert(qn ~= nil, "query node present")
     assert(qn.sources[1].alias == "x")
@@ -1922,8 +2259,7 @@ local function debug_format_is_idempotent_on_query_chunks_test()
 end
 
 local function debug_parse_recovers_on_a_broken_query_test()
-    local tree = debug.parse("local t = {} return @t as x where ",
-        "broken", { recover = true })
+    local tree = debug.parse("local t = {} return @t as x where ", "broken", { recover = true })
     assert(tree ~= nil, "recovery returns a tree")
 end
 
@@ -1933,20 +2269,29 @@ end
 -- conjuncts and returns the values of r.n it selects.
 local function wide_where(src, count)
     local parts = {}
+
     for i = 1, count do
         parts[i] = "r.n ~= " .. (i + 1)
     end
-    local f = assert(load("local src = ... local out = {} "
-        .. "for row in query(@src as r where " .. table.concat(parts, " and ")
-        .. " select r.n order by r.n) do out[#out + 1] = row.n end return out"))
+
+    local f = assert(
+        load(
+            "local src = ... local out = {} "
+                .. "for row in query(@src as r where "
+                .. table.concat(parts, " and ")
+                .. " select r.n order by r.n) do out[#out + 1] = row.n end return out"
+        )
+    )
     return f(src)
 end
 
 local function where_clauses_with_hundreds_of_conjuncts_compile_and_filter_test()
     local t = {}
+
     for n = 1, 1100 do
         t[#t + 1] = { n = n }
     end
+
     for _, count in ipairs({ 63, 64, 100, 256, 257, 1000 }) do
         local got = wide_where(t, count)
         assert(got[1] == 1, count)
@@ -1959,14 +2304,17 @@ local function a_wide_where_over_sqlite_matches_the_plain_table_test()
     local db <close> = io.sqlite(":memory:")
     db:exec("CREATE TABLE t (n INTEGER)")
     local t = {}
+
     for n = 1, 120 do
         db:exec("INSERT INTO t VALUES (" .. n .. ")")
         t[#t + 1] = { n = n }
     end
+
     for _, count in ipairs({ 62, 63, 64, 100 }) do
         local from_db = wide_where(db.t, count)
         local from_table = wide_where(t, count)
         assert(#from_db == #from_table and #from_db == 120 - count, count)
+
         for i, n in ipairs(from_table) do
             assert(from_db[i] == n, count)
         end
@@ -1976,9 +2324,13 @@ end
 -- a bare name in 'having' stands for the projection it names
 local function having_reads_a_projection_alias_test()
     local books = {
-        { author = "a", pages = 500 }, { author = "a", pages = 400 }, { author = "b", pages = 100 },
+        { author = "a", pages = 500 },
+        { author = "a", pages = 400 },
+        { author = "b", pages = 100 },
     }
-    local rows = collect(@books as b select b.author, sum(b.pages) as pages group by b.author having pages > 800)
+    local rows = collect(
+        @books as b select b.author, sum(b.pages) as pages group by b.author having pages > 800
+    )
     assert(#rows == 1 and rows[1].author == "a" and rows[1].pages == 900)
 end
 
@@ -1987,7 +2339,9 @@ local function having_reads_a_projection_alias_through_sqlite_test()
     local db <close> = io.sqlite(":memory:")
     db:exec("CREATE TABLE t (author TEXT, pages INTEGER)")
     db:exec("INSERT INTO t VALUES ('a', 500), ('a', 400), ('b', 100)")
-    local rows = collect(@db.t as b select b.author, sum(b.pages) as pages group by b.author having pages > 800)
+    local rows = collect(
+        @db.t as b select b.author, sum(b.pages) as pages group by b.author having pages > 800
+    )
     assert(#rows == 1 and rows[1].author == "a" and rows[1].pages == 900)
 end
 
@@ -1996,12 +2350,18 @@ end
 -- The rows of a query as one sorted line, so a case compares one string.
 local function canonical(rows)
     local parts = {}
+
     for _, r in ipairs(rows) do
         local f = {}
-        for k, v in pairs(r) do f[#f + 1] = tostring(k) .. "=" .. tostring(v) end
+
+        for k, v in pairs(r) do
+            f[#f + 1] = tostring(k) .. "=" .. tostring(v)
+        end
+
         table.sort(f)
         parts[#parts + 1] = "{" .. table.concat(f, ",") .. "}"
     end
+
     table.sort(parts)
     return table.concat(parts, " ")
 end
@@ -2009,18 +2369,50 @@ end
 -- A projection matches a group key by the structure of its expression,
 -- so each kind of expression can be a key and appear in the projection.
 local grouping_by_an_expression_cases = {
-    {"sum", "select r.a + r.b as k, count(*) as n group by r.a + r.b", "{k=3,n=2} {k=6,n=1}"},
-    {"concatenation", "select r.s .. '!' as k, count(*) as n group by r.s .. '!'", "{k=x!,n=2} {k=y!,n=1}"},
-    {"comparison", "select r.a > 1 as k, count(*) as n group by r.a > 1", "{k=false,n=1} {k=true,n=2}"},
-    {"disjunction", "select (r.a > 2 or r.b > 1) as k, count(*) as n group by r.a > 2 or r.b > 1", "{k=false,n=1} {k=true,n=2}"},
-    {"negation", "select not (r.a > 1) as k, count(*) as n group by not (r.a > 1)", "{k=false,n=2} {k=true,n=1}"},
-    {"minus", "select -r.a as k group by -r.a", "{k=-1} {k=-2} {k=-3}"},
-    {"literal", "select 1 as one, count(*) as n group by 1", "{n=3,one=1}"},
-    {"expression of a key", "select r.a + 1 as k group by r.a", "{k=2} {k=3} {k=4}"},
-    {"having with or", "select r.s, count(*) as n group by r.s having count(*) > 1 or sum(r.a) > 2", "{n=1,s=y} {n=2,s=x}"},
-    {"arithmetic of aggregates", "select r.s, sum(r.a) - min(r.b) as d group by r.s", "{d=0,s=y} {d=2,s=x}"},
-    {"having that compares aggregates", "select r.s, max(r.a) as m group by r.s having max(r.a) == max(r.a)", "{m=2,s=x} {m=3,s=y}"},
-    {"having with a concatenated aggregate", "select r.s, count(*) as n group by r.s having (count(*) .. '') == '2'", "{n=2,s=x}"},
+    { "sum", "select r.a + r.b as k, count(*) as n group by r.a + r.b", "{k=3,n=2} {k=6,n=1}" },
+    {
+        "concatenation",
+        "select r.s .. '!' as k, count(*) as n group by r.s .. '!'",
+        "{k=x!,n=2} {k=y!,n=1}",
+    },
+    {
+        "comparison",
+        "select r.a > 1 as k, count(*) as n group by r.a > 1",
+        "{k=false,n=1} {k=true,n=2}",
+    },
+    {
+        "disjunction",
+        "select (r.a > 2 or r.b > 1) as k, count(*) as n group by r.a > 2 or r.b > 1",
+        "{k=false,n=1} {k=true,n=2}",
+    },
+    {
+        "negation",
+        "select not (r.a > 1) as k, count(*) as n group by not (r.a > 1)",
+        "{k=false,n=2} {k=true,n=1}",
+    },
+    { "minus", "select -r.a as k group by -r.a", "{k=-1} {k=-2} {k=-3}" },
+    { "literal", "select 1 as one, count(*) as n group by 1", "{n=3,one=1}" },
+    { "expression of a key", "select r.a + 1 as k group by r.a", "{k=2} {k=3} {k=4}" },
+    {
+        "having with or",
+        "select r.s, count(*) as n group by r.s having count(*) > 1 or sum(r.a) > 2",
+        "{n=1,s=y} {n=2,s=x}",
+    },
+    {
+        "arithmetic of aggregates",
+        "select r.s, sum(r.a) - min(r.b) as d group by r.s",
+        "{d=0,s=y} {d=2,s=x}",
+    },
+    {
+        "having that compares aggregates",
+        "select r.s, max(r.a) as m group by r.s having max(r.a) == max(r.a)",
+        "{m=2,s=x} {m=3,s=y}",
+    },
+    {
+        "having with a concatenated aggregate",
+        "select r.s, count(*) as n group by r.s having (count(*) .. '') == '2'",
+        "{n=2,s=x}",
+    },
 }
 
 local function grouping_by_an_expression_test(label, q, want)
@@ -2035,26 +2427,36 @@ end
 -- and to exact arithmetic at the first bigint or decimal, and `avg`
 -- divides as `/` does.
 local aggregates_over_mixed_numbers_cases = {
-    {"integer and float", { 1, 2.5 }, "sum", "3.5"},
-    {"integer and bigint", { 1, 2n }, "sum", "3"},
-    {"float and bigint", { 1.5, 2n }, "sum", "3.5"},
-    {"bigints", { 1n, 2n, 4n }, "avg", tostring(7 / 3)},
-    {"decimals", { 1d, 2d }, "avg", "1.5"},
+    { "integer and float", { 1, 2.5 }, "sum", "3.5" },
+    { "integer and bigint", { 1, 2n }, "sum", "3" },
+    { "float and bigint", { 1.5, 2n }, "sum", "3.5" },
+    { "bigints", { 1n, 2n, 4n }, "avg", tostring(7 / 3) },
+    { "decimals", { 1d, 2d }, "avg", "1.5" },
 }
 
 local function aggregates_over_mixed_numbers_test(label, values, func, want)
     local t = {}
-    for i, v in ipairs(values) do t[i] = { v = v } end
+
+    for i, v in ipairs(values) do
+        t[i] = { v = v }
+    end
+
     local q = func == "sum" and @t as r select sum(r.v) as x or @t as r select avg(r.v) as x
     assert(tostring(collect(q)[1].x) == want, label)
 end
 
 local function a_string_cannot_be_summed_test()
     local t = { { v = 1 }, { v = "x" } }
-    raises(function() collect(@t as r select sum(r.v) as s) end, "cannot aggregate a string value")
+
+    raises(function()
+        collect(@t as r select sum(r.v) as s)
+    end, "cannot aggregate a string value")
 end
 
 local function every_source_row_must_be_a_record_test()
     local t = { { v = 1 }, 5 }
-    raises(function() collect(@t as r select r.v) end, "query source row 2 is not a record")
+
+    raises(function()
+        collect(@t as r select r.v)
+    end, "query source row 2 is not a record")
 end

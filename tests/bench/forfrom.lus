@@ -6,10 +6,14 @@
 -- closure per round and no table per step.
 local N, ROUNDS = 1000, 4000
 local items = {}
-for i = 1, N do items[i] = { name = "item" .. i, price = i % 97, qty = i % 7 } end
+
+for i = 1, N do
+    items[i] = { name = "item" .. i, price = i % 97, qty = i % 7 }
+end
 
 local function each(t)
     local i = 0
+
     return function()
         i = i + 1
         return t[i]
@@ -18,18 +22,22 @@ end
 
 local function with_from()
     local total = 0
+
     for name, price, qty from each(items) do
         total = total + price * qty + #name
     end
+
     return total
 end
 
 local function by_hand()
     local total = 0
+
     for item in each(items) do
         local name, price, qty = item.name, item.price, item.qty
         total = total + price * qty + #name
     end
+
     return total
 end
 
@@ -38,7 +46,11 @@ local function measure(f)
     local before = collectgarbage("count")
     local t0 = os.clock()
     local sum = 0
-    for _ = 1, ROUNDS do sum = sum + f() end
+
+    for _ = 1, ROUNDS do
+        sum = sum + f()
+    end
+
     local dt = os.clock() - t0
     local kb = collectgarbage("count") - before
     collectgarbage("restart")

@@ -19,8 +19,8 @@ The string has five lines, each followed by a newline:
 
 ```lus
 local sep = package.config:sub(1, 1)
-print(sep == "/" or sep == "\\")         --> true
-print(select(2, package.config:gsub("\n", "")))   --> 5
+print(sep == "/" or sep == "\\")  --> true
+print(select(2, package.config:gsub("\n", "")))  --> 5
 ```
 
 The searchers use these characters as fixed values, so assigning a new string to `package.config` changes nothing. [`package.path`](/manual/api#package.path) holds the templates that the separators describe.

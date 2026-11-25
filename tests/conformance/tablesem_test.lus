@@ -14,9 +14,11 @@ local function is_border(t, n)
     if type(n) ~= "number" or math.type(n) ~= "integer" or n < 0 then
         return false
     end
+
     if t[n + 1] ~= nil then
         return false
     end
+
     return n == 0 or t[n] ~= nil
 end
 
@@ -29,7 +31,7 @@ local function length_of_an_empty_table_is_zero_test()
 end
 
 local function length_of_1_nil_3_is_one_of_its_valid_borders_test()
-    local t = {1, nil, 3}
+    local t = { 1, nil, 3 }
     assert(is_border(t, #t))
     assert(#t == 1 or #t == 3)
 end
@@ -37,13 +39,13 @@ end
 local function length_of_a_constructor_with_a_trailing_nil_is_the_unique_border_test()
     -- The only border of {1, 2, nil} is 2, because a border position other
     -- than zero must itself hold a non-nil value.
-    local t = {1, 2, nil}
+    local t = { 1, 2, nil }
     assert(#t == 2)
     assert(is_border(t, #t))
 end
 
 local function clearing_the_last_element_moves_the_border_down_test()
-    local t = {1, 2, 3}
+    local t = { 1, 2, 3 }
     t[3] = nil
     assert(#t == 2)
     assert(is_border(t, #t))
@@ -60,15 +62,17 @@ end
 
 local function appending_at_the_length_grows_it_by_exactly_one_each_time_test()
     local t = {}
+
     for i = 1, 50 do
         t[#t + 1] = i * 3
         assert(#t == i)
     end
+
     assert(t[50] == 150)
 end
 
 local function a_hash_only_table_has_length_zero_test()
-    local t = {alpha = 1, beta = 2, gamma = 3}
+    local t = { alpha = 1, beta = 2, gamma = 3 }
     assert(#t == 0)
     assert(is_border(t, 0))
 end
@@ -78,12 +82,12 @@ end
 -- ============================================================
 
 local a_float_key_with_an_integral_value_aliases_the_integer_key_cases = {
-    {2.0, 2},
-    {0.0, 0},
-    {-0.0, 0},
-    {7.0, 7},
-    {-3.0, -3},
-    {2.0 ^ 53, 9007199254740992},
+    { 2.0, 2 },
+    { 0.0, 0 },
+    { -0.0, 0 },
+    { 7.0, 7 },
+    { -3.0, -3 },
+    { 2.0 ^ 53, 9007199254740992 },
 }
 
 local function a_float_key_with_an_integral_value_aliases_the_integer_key_test(fkey, ikey)
@@ -132,7 +136,11 @@ local function the_string_key_2_is_distinct_from_the_number_key_2_test()
     assert(t["2"] == "str")
     assert(t[2] == "num")
     local count = 0
-    for _ in pairs(t) do count = count + 1 end
+
+    for _ in pairs(t) do
+        count = count + 1
+    end
+
     assert(count == 2)
 end
 
@@ -153,7 +161,11 @@ local function the_float_form_of_maxinteger_is_a_distinct_key_test()
     t[math.maxinteger + 0.0] = "fmax"
     assert(t[math.maxinteger] == "imax")
     local count = 0
-    for _ in pairs(t) do count = count + 1 end
+
+    for _ in pairs(t) do
+        count = count + 1
+    end
+
     assert(count == 2)
 end
 
@@ -166,6 +178,7 @@ local function assigning_through_a_nan_key_raises_with_position_info_test()
         local t = {}
         t[0 / 0] = 1
     end)()
+
     assert(not ok)
     assert(string.find(tostring(err), ":%d+: table index is NaN"))
 end
@@ -175,6 +188,7 @@ local function assigning_through_a_nil_key_raises_with_position_info_test()
         local t = {}
         t[nil] = 1
     end)()
+
     assert(not ok)
     assert(string.find(tostring(err), ":%d+: table index is nil"))
 end
@@ -203,22 +217,31 @@ local function rawset_with_a_nil_key_raises_without_position_info_test()
 end
 
 local function rawset_validates_keys_even_when_a_newindex_metamethod_exists_test()
-    local t = setmetatable({}, {__newindex = function() end})
-    raises(function() rawset(t, nil, 1) end, "table index is nil")
-    raises(function() rawset(t, 0 / 0, 1) end, "table index is NaN")
+    local t = setmetatable({}, {
+        __newindex = function()
+        end,
+    })
+
+    raises(function()
+        rawset(t, nil, 1)
+    end, "table index is nil")
+
+    raises(function()
+        rawset(t, 0 / 0, 1)
+    end, "table index is NaN")
 end
 
 local function reading_through_a_nan_key_returns_nil_test()
-    local t = {1, 2}
+    local t = { 1, 2 }
     assert(t[0 / 0] == nil)
 end
 
 local function rawget_with_a_nan_key_returns_nil_test()
-    assert(rawget({1, 2}, 0 / 0) == nil)
+    assert(rawget({ 1, 2 }, 0 / 0) == nil)
 end
 
 local function reading_through_a_nil_key_returns_nil_test()
-    local t = {a = 1}
+    local t = { a = 1 }
     local k = nil
     assert(t[k] == nil)
 end
@@ -233,27 +256,38 @@ local function a_newindex_function_receives_nil_keys_instead_of_erroring_test()
     -- Key validation applies to the raw store only. When a metamethod
     -- handles the assignment, the invalid key reaches it untouched.
     local got = "unset"
-    local t = setmetatable({}, {__newindex = function(_, k, v)
-        got = tostring(k) .. "=" .. tostring(v)
-    end})
+
+    local t = setmetatable({}, {
+        __newindex = function(_, k, v)
+            got = tostring(k) .. "=" .. tostring(v)
+        end,
+    })
+
     t[nil] = 5
     assert(got == "nil=5")
 end
 
 local function a_newindex_function_receives_nan_keys_instead_of_erroring_test()
     local got_key = nil
-    local t = setmetatable({}, {__newindex = function(_, k, _)
-        got_key = k
-    end})
+
+    local t = setmetatable({}, {
+        __newindex = function(_, k, _)
+            got_key = k
+        end,
+    })
+
     t[0 / 0] = 1
     assert(type(got_key) == "number")
     assert(got_key ~= got_key)
 end
 
 local function an_index_function_receives_nil_keys_on_reads_test()
-    local t = setmetatable({}, {__index = function(_, k)
-        return "via:" .. tostring(k)
-    end})
+    local t = setmetatable({}, {
+        __index = function(_, k)
+            return "via:" .. tostring(k)
+        end,
+    })
+
     local k = nil
     assert(t[k] == "via:nil")
 end
@@ -271,16 +305,18 @@ local function maxinteger_and_mininteger_keys_store_and_retrieve_test()
 end
 
 local function limit_keys_traverse_exactly_once_alongside_the_array_part_test()
-    local t = {10, 20, 30}
+    local t = { 10, 20, 30 }
     t[math.maxinteger] = "max"
     t[math.mininteger] = "min"
     local seen = {}
     local count = 0
+
     for k, v in pairs(t) do
         count = count + 1
         assert(seen[k] == nil)
         seen[k] = v
     end
+
     assert(count == 5)
     assert(seen[math.maxinteger] == "max")
     assert(seen[math.mininteger] == "min")
@@ -307,7 +343,7 @@ local function next_on_an_empty_table_returns_nil_test()
 end
 
 local function next_with_a_nil_key_returns_the_first_pair_test()
-    local t = {only = 42}
+    local t = { only = 42 }
     local k, v = next(t, nil)
     assert(k == "only")
     assert(v == 42)
@@ -315,13 +351,13 @@ end
 
 local function next_with_an_absent_string_key_raises_invalid_key_test()
     raises(function()
-        next({a = 1, b = 2}, "zz")
+        next({ a = 1, b = 2 }, "zz")
     end, "invalid key to 'next'")
 end
 
 local function next_with_an_absent_float_key_raises_invalid_key_test()
     raises(function()
-        next({a = 1}, 2.5)
+        next({ a = 1 }, 2.5)
     end, "invalid key to 'next'")
 end
 
@@ -335,51 +371,71 @@ local function manual_traversal_may_delete_the_current_key_and_continue_test()
     -- Clearing the field the cursor sits on is explicitly legal, and every
     -- other key must still be visited exactly once.
     local t = {}
-    for i = 1, 30 do t["k" .. i] = i end
+
+    for i = 1, 30 do
+        t["k" .. i] = i
+    end
+
     local count = 0
     local k = next(t)
+
     while k ~= nil do
         local dead = k
         t[dead] = nil
         count = count + 1
         k = next(t, dead)
     end
+
     assert(count == 30)
     assert(next(t) == nil)
 end
 
 local function a_pairs_loop_may_delete_the_current_key_test()
     local t = {}
-    for i = 1, 25 do t["field" .. i] = i end
+
+    for i = 1, 25 do
+        t["field" .. i] = i
+    end
+
     local visited = 0
+
     for k in pairs(t) do
         visited = visited + 1
         t[k] = nil
     end
+
     assert(visited == 25)
     assert(next(t) == nil)
 end
 
 local function delete_as_you_go_works_across_array_and_hash_parts_test()
-    local t = {1, 2, 3, 4, 5}
-    for i = 1, 10 do t["h" .. i] = i end
+    local t = { 1, 2, 3, 4, 5 }
+
+    for i = 1, 10 do
+        t["h" .. i] = i
+    end
+
     local visited = 0
+
     for k in pairs(t) do
         visited = visited + 1
         t[k] = nil
     end
+
     assert(visited == 15)
     assert(next(t) == nil)
     assert(#t == 0)
 end
 
 local function changing_values_during_traversal_is_fully_legal_test()
-    local t = {a = 1, b = 2, c = 3, d = 4}
+    local t = { a = 1, b = 2, c = 3, d = 4 }
     local count = 0
+
     for k, v in pairs(t) do
         count = count + 1
         t[k] = v * 10
     end
+
     assert(count == 4)
     assert(t.a == 10)
     assert(t.d == 40)
@@ -391,7 +447,10 @@ end
 
 local function pairs_visits_every_key_type_exactly_once_test()
     local tab_key = {}
-    local fn_key = function() end
+
+    local fn_key = function()
+    end
+
     local t = {
         [true] = "T",
         [false] = "F",
@@ -403,12 +462,15 @@ local function pairs_visits_every_key_type_exactly_once_test()
     }
     local counts = {}
     local total = 0
+
     for k in pairs(t) do
         total = total + 1
         counts[k] = (counts[k] or 0) + 1
     end
+
     assert(total == 7)
-    for _, k in ipairs({true, false, tab_key, fn_key, 42, 2.5, "s"}) do
+
+    for _, k in ipairs({ true, false, tab_key, fn_key, 42, 2.5, "s" }) do
         assert(counts[k] == 1)
     end
 end
@@ -416,19 +478,24 @@ end
 local function mixed_array_and_hash_traversal_collects_the_complete_pair_set_test()
     local t = {}
     local expected = {}
+
     for i = 1, 8 do
         t[i] = i * 100
         expected[i] = i * 100
     end
-    for _, name in ipairs({"a", "b", "c", "d", "e"}) do
+
+    for _, name in ipairs({ "a", "b", "c", "d", "e" }) do
         t[name] = name .. "!"
         expected[name] = name .. "!"
     end
+
     local collected = {}
+
     for k, v in pairs(t) do
         assert(collected[k] == nil)
         collected[k] = v
     end
+
     assert(same(collected, expected))
 end
 
@@ -447,7 +514,11 @@ end
 
 local function a_preallocated_array_accepts_full_population_test()
     local t = table.create(1000)
-    for i = 1, 1000 do t[i] = i * 2 end
+
+    for i = 1, 1000 do
+        t[i] = i * 2
+    end
+
     assert(#t == 1000)
     assert(t[1] == 2)
     assert(t[500] == 1000)
@@ -457,7 +528,11 @@ end
 local function table_create_accepts_the_single_argument_form_test()
     local t = table.create(8)
     assert(next(t) == nil)
-    for i = 1, 8 do t[i] = i end
+
+    for i = 1, 8 do
+        t[i] = i
+    end
+
     assert(#t == 8)
 end
 
@@ -472,18 +547,26 @@ end
 
 local function hash_preallocation_accepts_hash_population_test()
     local t = table.create(0, 32)
-    for i = 1, 32 do t["key" .. i] = i end
+
+    for i = 1, 32 do
+        t["key" .. i] = i
+    end
+
     local count = 0
-    for _ in pairs(t) do count = count + 1 end
+
+    for _ in pairs(t) do
+        count = count + 1
+    end
+
     assert(count == 32)
     assert(t.key17 == 17)
 end
 
 local table_create_rejects_invalid_narray_values_cases = {
-    {-1, "out of range"},
-    {1.5, "no integer representation"},
-    {"x", "number expected"},
-    {math.maxinteger, "out of range"},
+    { -1, "out of range" },
+    { 1.5, "no integer representation" },
+    { "x", "number expected" },
+    { math.maxinteger, "out of range" },
 }
 
 local function table_create_rejects_invalid_narray_values_test(narray, pattern)
@@ -511,31 +594,69 @@ end
 
 local function mass_deletion_leaves_no_stale_entries_behind_test()
     local t = {}
-    for i = 1, 1000 do t[i] = i end
-    for i = 1, 1000 do t[i] = nil end
+
+    for i = 1, 1000 do
+        t[i] = i
+    end
+
+    for i = 1, 1000 do
+        t[i] = nil
+    end
+
     assert(#t == 0)
     assert(next(t) == nil)
 end
 
 local function hash_keys_added_after_an_array_clear_are_counted_exactly_test()
     local t = {}
-    for i = 1, 1000 do t[i] = i end
-    for i = 1, 1000 do t[i] = nil end
-    for i = 1, 5 do t["s" .. i] = i * 10 end
+
+    for i = 1, 1000 do
+        t[i] = i
+    end
+
+    for i = 1, 1000 do
+        t[i] = nil
+    end
+
+    for i = 1, 5 do
+        t["s" .. i] = i * 10
+    end
+
     local count = 0
-    for _ in pairs(t) do count = count + 1 end
+
+    for _ in pairs(t) do
+        count = count + 1
+    end
+
     assert(count == 5)
     assert(t.s3 == 30)
 end
 
 local function reinsertion_after_a_clear_restores_exact_contents_test()
     local t = {}
-    for i = 1, 1000 do t[i] = i end
-    for i = 1, 1000 do t[i] = nil end
-    for i = 1, 5 do t["s" .. i] = i end
-    for i = 1, 100 do t[i] = i * 2 end
+
+    for i = 1, 1000 do
+        t[i] = i
+    end
+
+    for i = 1, 1000 do
+        t[i] = nil
+    end
+
+    for i = 1, 5 do
+        t["s" .. i] = i
+    end
+
+    for i = 1, 100 do
+        t[i] = i * 2
+    end
+
     local count = 0
-    for _ in pairs(t) do count = count + 1 end
+
+    for _ in pairs(t) do
+        count = count + 1
+    end
+
     assert(count == 105)
     assert(t[50] == 100)
     assert(t[100] == 200)
@@ -545,27 +666,51 @@ end
 
 local function repeated_fill_and_clear_cycles_stay_consistent_test()
     local t = {}
+
     for cycle = 1, 3 do
-        for i = 1, 200 do t[i] = i + cycle end
-        for i = 1, 200 do t[i] = nil end
+        for i = 1, 200 do
+            t[i] = i + cycle
+        end
+
+        for i = 1, 200 do
+            t[i] = nil
+        end
+
         assert(next(t) == nil)
     end
-    for i = 1, 200 do t[i] = i end
+
+    for i = 1, 200 do
+        t[i] = i
+    end
+
     assert(#t == 200)
     assert(t[123] == 123)
 end
 
 local function hash_part_mass_insert_delete_and_reinsert_is_exact_test()
     local t = {}
-    for i = 1, 500 do t["k" .. i] = i end
-    for i = 1, 500 do t["k" .. i] = nil end
+
+    for i = 1, 500 do
+        t["k" .. i] = i
+    end
+
+    for i = 1, 500 do
+        t["k" .. i] = nil
+    end
+
     assert(next(t) == nil)
-    for i = 1, 50 do t["r" .. i] = i end
+
+    for i = 1, 50 do
+        t["r" .. i] = i
+    end
+
     local count = 0
+
     for k, v in pairs(t) do
         count = count + 1
         assert(v == tonumber(string.sub(k, 2)))
     end
+
     assert(count == 50)
 end
 
@@ -576,31 +721,56 @@ end
 local function the_length_operator_returns_the_len_result_unchecked_test()
     -- The raw operator hands back whatever the metamethod produced. Only
     -- library functions that need an integer length reject other values.
-    local t = setmetatable({}, {__len = function() return 2.5 end})
+    local t = setmetatable({}, {
+        __len = function()
+            return 2.5
+        end,
+    })
+
     assert(#t == 2.5)
 end
 
 local function the_length_operator_passes_through_non_number_len_results_test()
-    local t = setmetatable({}, {__len = function() return "surprise" end})
+    local t = setmetatable({}, {
+        __len = function()
+            return "surprise"
+        end,
+    })
+
     assert(#t == "surprise")
 end
 
 local function table_insert_requires_an_integer_length_from_len_test()
-    local t = setmetatable({}, {__len = function() return 2.5 end})
+    local t = setmetatable({}, {
+        __len = function()
+            return 2.5
+        end,
+    })
+
     raises(function()
         table.insert(t, "v")
     end, "object length is not an integer")
 end
 
 local function table_remove_requires_an_integer_length_from_len_test()
-    local t = setmetatable({}, {__len = function() return 2.5 end})
+    local t = setmetatable({}, {
+        __len = function()
+            return 2.5
+        end,
+    })
+
     raises(function()
         table.remove(t)
     end, "object length is not an integer")
 end
 
 local function errors_raised_inside_len_propagate_to_the_caller_test()
-    local t = setmetatable({}, {__len = function() error("boom") end})
+    local t = setmetatable({}, {
+        __len = function()
+            error("boom")
+        end,
+    })
+
     raises(function()
         return #t
     end, "boom")
@@ -651,9 +821,14 @@ end
 -- The table functions read a proxy through its __index and __len.
 local function table_functions_read_a_proxy_through_its_metamethods_test()
     local proxy = setmetatable({}, {
-        __index = function(_, i) return i * 10 end,
-        __len = function() return 3 end,
+        __index = function(_, i)
+            return i * 10
+        end,
+        __len = function()
+            return 3
+        end,
     })
+
     local a, b, c = table.unpack(proxy)
     assert(a == 10 and b == 20 and c == 30)
     assert(table.concat(setmetatable({}, getmetatable(proxy)), ",") == "10,20,30")
@@ -668,13 +843,17 @@ end
 local function proxy(store)
     return setmetatable({}, {
         __index = store,
-        __newindex = function(_, k, v) store[k] = v end,
-        __len = function() return #store end,
+        __newindex = function(_, k, v)
+            store[k] = v
+        end,
+        __len = function()
+            return #store
+        end,
     })
 end
 
 local function the_library_reaches_a_proxy_through_its_metamethods_test()
-    local store = {"a", "b", "c"}
+    local store = { "a", "b", "c" }
     local p = proxy(store)
     table.insert(p, "d")
     table.insert(p, 1, "z")
@@ -691,20 +870,47 @@ local function the_library_reaches_a_proxy_through_its_metamethods_test()
 end
 
 local function a_length_metamethod_with_an_integral_float_counts_test()
-    local t = setmetatable({}, { __len = function() return 2.0 end, __index = function(_, i) return i * 10 end })
+    local t = setmetatable({}, {
+        __len = function()
+            return 2.0
+        end,
+        __index = function(_, i)
+            return i * 10
+        end,
+    })
+
     assert(table.concat(t, " ") == "10 20")
 end
 
 local function a_length_metamethod_with_a_fraction_raises_test()
-    local t = setmetatable({}, { __len = function() return 1.5 end })
-    raises(function() table.concat(t) end, "object length is not an integer")
-    raises(function() table.insert(t, 1) end, "object length is not an integer")
+    local t = setmetatable({}, {
+        __len = function()
+            return 1.5
+        end,
+    })
+
+    raises(function()
+        table.concat(t)
+    end, "object length is not an integer")
+
+    raises(function()
+        table.insert(t, 1)
+    end, "object length is not an integer")
 end
 
 local function a_value_whose_metatable_lacks_the_metamethods_is_not_a_table_test()
-    local only_len = setmetatable({}, { __len = function() return 0 end })
+    local only_len = setmetatable({}, {
+        __len = function()
+            return 0
+        end,
+    })
+
     local u = setmetatable({}, {})
-    raises(function() table.insert(io.stdout, 1) end, "table expected")
+
+    raises(function()
+        table.insert(io.stdout, 1)
+    end, "table expected")
+
     assert(table.concat(only_len) == "")
     assert(#u == 0)
 end
@@ -717,22 +923,39 @@ local table_create_out_of_range_cases = {
 }
 
 local function table_create_out_of_range_test(seq, rest, arg)
-    raises(function() table.create(seq, rest) end, "bad argument " .. arg .. " to 'create' %(out of range%)")
+    raises(function()
+        table.create(seq, rest)
+    end, "bad argument " .. arg .. " to 'create' %(out of range%)")
 end
 
 local function insert_checks_its_arguments_test()
-    raises(function() table.insert({}, 1, 2, 3) end, "wrong number of arguments to 'insert'")
-    raises(function() table.insert({1}, 3, "x") end, "position out of bounds")
-    raises(function() table.insert({1}, 0, "x") end, "position out of bounds")
-    local t = {1}
+    raises(function()
+        table.insert({}, 1, 2, 3)
+    end, "wrong number of arguments to 'insert'")
+
+    raises(function()
+        table.insert({ 1 }, 3, "x")
+    end, "position out of bounds")
+
+    raises(function()
+        table.insert({ 1 }, 0, "x")
+    end, "position out of bounds")
+
+    local t = { 1 }
     table.insert(t, 2, "x")
     assert(t[2] == "x")
 end
 
 local function remove_checks_its_position_test()
-    raises(function() table.remove({1, 2}, 4) end, "position out of bounds")
-    raises(function() table.remove({1, 2}, -1) end, "position out of bounds")
-    local t = {1, 2}
+    raises(function()
+        table.remove({ 1, 2 }, 4)
+    end, "position out of bounds")
+
+    raises(function()
+        table.remove({ 1, 2 }, -1)
+    end, "position out of bounds")
+
+    local t = { 1, 2 }
     assert(table.remove(t, 3) == nil)
     assert(#t == 2)
     local empty = {}
@@ -740,53 +963,79 @@ local function remove_checks_its_position_test()
 end
 
 local function move_copies_an_overlap_to_the_right_from_the_end_test()
-    local t = {1, 2, 3, 4, 5}
+    local t = { 1, 2, 3, 4, 5 }
     table.move(t, 1, 3, 2)
     assert(table.concat(t, ",") == "1,1,2,3,5")
-    local u = {1, 2, 3, 4, 5}
+    local u = { 1, 2, 3, 4, 5 }
     table.move(u, 1, 3, 2, u)
     assert(table.concat(u, ",") == "1,1,2,3,5")
-    local v = {1, 2, 3, 4, 5}
+    local v = { 1, 2, 3, 4, 5 }
     table.move(v, 2, 4, 1)
     assert(table.concat(v, ",") == "2,3,4,4,5")
 end
 
 local function move_rejects_ranges_that_wrap_test()
-    raises(function() table.move({}, -1, math.maxinteger, 1) end, "too many elements to move")
-    raises(function() table.move({1, 2}, 1, 2, math.maxinteger) end, "destination wrap around")
-    local t = {1}
+    raises(function()
+        table.move({}, -1, math.maxinteger, 1)
+    end, "too many elements to move")
+
+    raises(function()
+        table.move({ 1, 2 }, 1, 2, math.maxinteger)
+    end, "destination wrap around")
+
+    local t = { 1 }
     assert(table.move(t, 2, 1, 5) == t)
 end
 
 local function concat_names_the_first_value_that_is_not_a_string_test()
-    raises(function() table.concat({1, {}, 3}) end, "invalid value %(table%) at index 2 in table for 'concat'")
-    raises(function() table.concat({"a", "b"}, {}) end, "bad argument #2 to 'concat'")
-    assert(table.concat({1, 2.5, "x"}, "", 2, 3) == "2.5x")
-    assert(table.concat({"a", "b"}, ",", 3, 2) == "")
+    raises(function()
+        table.concat({ 1, {}, 3 })
+    end, "invalid value %(table%) at index 2 in table for 'concat'")
+
+    raises(function()
+        table.concat({ "a", "b" }, {})
+    end, "bad argument #2 to 'concat'")
+
+    assert(table.concat({ 1, 2.5, "x" }, "", 2, 3) == "2.5x")
+    assert(table.concat({ "a", "b" }, ",", 3, 2) == "")
 end
 
 local function concat_of_long_strings_with_a_separator_test()
     local part = ("é"):rep(40)
-    local s = table.concat({part, part, part}, "·")
+    local s = table.concat({ part, part, part }, "·")
     assert(utf8.len(s) == 122)
     assert(s:sub(41, 41) == "·")
 end
 
 local function unpack_limits_the_number_of_results_test()
-    raises(function() table.unpack({}, 1, 1e7) end, "too many results to unpack")
-    raises(function() table.unpack({}, math.mininteger, math.maxinteger) end, "too many results to unpack")
+    raises(function()
+        table.unpack({}, 1, 1e7)
+    end, "too many results to unpack")
+
+    raises(function()
+        table.unpack({}, math.mininteger, math.maxinteger)
+    end, "too many results to unpack")
+
     assert(select("#", table.unpack({}, 3, 2)) == 0)
-    assert(select("#", table.unpack({1, 2, 3}, 2)) == 2)
+    assert(select("#", table.unpack({ 1, 2, 3 }, 2)) == 2)
 end
 
 local function sort_detects_an_inconsistent_order_function_test()
     local t = {}
-    for i = 1, 100 do t[i] = i % 7 end
-    raises(function() table.sort(t, function() return true end) end, "invalid order function for sorting")
+
+    for i = 1, 100 do
+        t[i] = i % 7
+    end
+
+    raises(function()
+        table.sort(t, function()
+            return true
+        end)
+    end, "invalid order function for sorting")
 end
 
 local function deep_clone_keeps_shared_and_cyclic_structure_test()
-    local shared = {1}
+    local shared = { 1 }
     local src = setmetatable({ a = shared, b = shared }, { tag = "m" })
     src.self = src
     src[shared] = "key"
@@ -795,50 +1044,71 @@ local function deep_clone_keeps_shared_and_cyclic_structure_test()
     assert(c.self == c)
     assert(getmetatable(c).tag == "m")
     local found = false
+
     for k, v in pairs(c) do
-        if v == "key" then found = (k == c.a) end
+        if v == "key" then
+            found = (k == c.a)
+        end
     end
+
     assert(found)
 end
 
 local function deep_clone_limits_its_nesting_test()
     local t = {}
     local cur = t
+
     for _ = 1, 250 do
         cur.next = {}
         cur = cur.next
     end
-    raises(function() table.clone(t, true) end, "nesting too deep %(max 200%)")
+
+    raises(function()
+        table.clone(t, true)
+    end, "nesting too deep %(max 200%)")
+
     assert(table.clone(t).next == t.next)
 end
 
 local function statistics_of_no_numbers_are_nan_test()
-    local function isnan(x) return x ~= x end
+    local function isnan(x)
+        return x ~= x
+    end
+
     assert(isnan(table.mean({})))
-    assert(isnan(table.median({"a", "b"})))
+    assert(isnan(table.median({ "a", "b" })))
     assert(isnan(table.stdev({})))
-    assert(isnan(table.stdev({4}, true)))
-    assert(table.stdev({4}) == 0)
-    assert(table.median({4, 1, 3, 2}) == 2.5)
-    assert(table.median({3, 1, 2}) == 2)
+    assert(isnan(table.stdev({ 4 }, true)))
+    assert(table.stdev({ 4 }) == 0)
+    assert(table.median({ 4, 1, 3, 2 }) == 2.5)
+    assert(table.median({ 3, 1, 2 }) == 2)
 end
 
 -- table.sum follows the rules of `+`: integers give an integer, and any
 -- float gives a float. A sum that overflows the integers is a float.
 local function sum_of_integers_is_an_integer_test()
-    assert(math.type(table.sum({1, 2, 3})) == "integer" and table.sum({1, 2, 3}) == 6)
-    assert(math.type(table.sum({1, "2", 3, true})) == "integer")
+    assert(math.type(table.sum({ 1, 2, 3 })) == "integer" and table.sum({ 1, 2, 3 }) == 6)
+    assert(math.type(table.sum({ 1, "2", 3, true })) == "integer")
     assert(math.type(table.sum({})) == "integer" and table.sum({}) == 0)
-    assert(math.type(table.sum({1, 2.0})) == "float")
-    assert(math.type(table.sum({1, "2.5"})) == "float")
-    local big = table.sum({math.maxinteger, 1})
+    assert(math.type(table.sum({ 1, 2.0 })) == "float")
+    assert(math.type(table.sum({ 1, "2.5" })) == "float")
+    local big = table.sum({ math.maxinteger, 1 })
     assert(math.type(big) == "float" and big == 2.0 ^ 63)
-    assert(table.sum({math.maxinteger, 1, -1}) == 2.0 ^ 63)
-    local boxed = {1, 2, "x", 4}
+    assert(table.sum({ math.maxinteger, 1, -1 }) == 2.0 ^ 63)
+    local boxed = { 1, 2, "x", 4 }
     assert(math.type(table.sum(boxed)) == "integer" and table.sum(boxed) == 7)
-    local meta = setmetatable({}, {__index = function(_, i) return i end, __len = function() return 4 end})
+
+    local meta = setmetatable({}, {
+        __index = function(_, i)
+            return i
+        end,
+        __len = function()
+            return 4
+        end,
+    })
+
     assert(math.type(table.sum(meta)) == "integer" and table.sum(meta) == 10)
-    local holes = {1, 2, 3, 4}
+    local holes = { 1, 2, 3, 4 }
     holes[2] = nil
     assert(math.type(table.sum(holes)) == "integer")
 end
@@ -847,30 +1117,48 @@ end
 -- odd count is the middle value itself, and the median of an even count is
 -- the mean of the two middle values.
 local function mean_median_and_stdev_follow_the_arithmetic_rules_test()
-    assert(math.type(table.mean({1, 2, 3})) == "float" and table.mean({1, 2, 3}) == 2.0)
-    assert(math.type(table.stdev({1, 2, 3})) == "float")
-    assert(math.type(table.median({3, 1, 2})) == "integer")
-    assert(math.type(table.median({3, 2.0, 1})) == "float")
-    assert(math.type(table.median({1, 2, 3, 4})) == "float")
-    assert(table.median({math.maxinteger, math.maxinteger - 1, 0}) == math.maxinteger - 1)
+    assert(math.type(table.mean({ 1, 2, 3 })) == "float" and table.mean({ 1, 2, 3 }) == 2.0)
+    assert(math.type(table.stdev({ 1, 2, 3 })) == "float")
+    assert(math.type(table.median({ 3, 1, 2 })) == "integer")
+    assert(math.type(table.median({ 3, 2.0, 1 })) == "float")
+    assert(math.type(table.median({ 1, 2, 3, 4 })) == "float")
+    assert(table.median({ math.maxinteger, math.maxinteger - 1, 0 }) == math.maxinteger - 1)
 end
 
 local function reduce_of_an_empty_table_needs_an_initial_value_test()
-    raises(function() table.reduce({}, function(a, b) return a + b end) end, "'reduce' on empty table with no initial value")
-    assert(table.reduce({}, function(a, b) return a + b end, 7) == 7)
+    raises(function()
+        table.reduce({}, function(a, b)
+            return a + b
+        end)
+    end, "'reduce' on empty table with no initial value")
+
+    assert(table.reduce({}, function(a, b)
+        return a + b
+    end, 7) == 7)
 end
 
 local function groupby_appends_to_an_existing_group_test()
-    local g = table.groupby({1, 2, 3, 4, 5}, function(x) return x % 2 end)
+    local g = table.groupby({ 1, 2, 3, 4, 5 }, function(x)
+        return x % 2
+    end)
+
     assert(#g[1] == 3 and #g[0] == 2 and g[1][3] == 5)
 end
 
 local function sortby_orders_descending_and_leaves_short_tables_test()
-    local t = {"bb", "a", "ccc"}
-    table.sortby(t, function(s) return #s end, false)
+    local t = { "bb", "a", "ccc" }
+
+    table.sortby(t, function(s)
+        return #s
+    end, false)
+
     assert(table.concat(t, ",") == "ccc,bb,a")
-    local one = {"x"}
-    table.sortby(one, function(s) return s end)
+    local one = { "x" }
+
+    table.sortby(one, function(s)
+        return s
+    end)
+
     assert(one[1] == "x")
 end
 
@@ -879,11 +1167,17 @@ end
 -- in the range the array would take over. The hash part has room from the
 -- start, so the key goes there without a rehash.
 local inserting_keeps_a_key_just_past_the_list_cases = {
-    { 4, 6 }, { 4, 8 }, { 8, 10 }, { 8, 12 }, { 16, 20 },
+    { 4, 6 },
+    { 4, 8 },
+    { 8, 10 },
+    { 8, 12 },
+    { 16, 20 },
 }
 
 local function insert_all(t, first, last)
-    for i = first, last do table.insert(t, i) end
+    for i = first, last do
+        table.insert(t, i)
+    end
 end
 
 local function inserting_keeps_a_key_just_past_the_list_test(n, far)
@@ -893,9 +1187,14 @@ local function inserting_keeps_a_key_just_past_the_list_test(n, far)
         local w = table.create(2)
         insert_all(w, 1, 9)
     end
+
     for _ = 1, 3 do
         local t = table.create(n, 4)
-        for i = 1, n do t[i] = i end
+
+        for i = 1, n do
+            t[i] = i
+        end
+
         t[far] = "far"
         -- The length may be either border, so the values land after n or
         -- after far, and the key far keeps its value either way.
@@ -904,7 +1203,11 @@ local function inserting_keeps_a_key_just_past_the_list_test(n, far)
         insert_all(t, n + 2, far - 1)
         assert(t[far] == "far")
         local count = 0
-        for _ in pairs(t) do count = count + 1 end
+
+        for _ in pairs(t) do
+            count = count + 1
+        end
+
         assert(count == far)
     end
 end

@@ -28,9 +28,9 @@ pledge("env", "fs")
 local dir = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-remove-example")
 fs.createdirectory(fs.path.join(dir, "deep"), true)
 io.open(fs.path.join(dir, "deep", "file.txt"), "w"):close()
-print((catch fs.remove(dir)))         --> false
+print((catch fs.remove(dir)))  --> false
 fs.remove(dir, true)
-print((catch fs.type(dir)))           --> false
+print((catch fs.type(dir)))  --> false
 ```
 
 `fs.remove` never follows a symbolic link. Removing a link removes the link and leaves its target, and a recursive removal removes the links it meets inside the tree without entering them. The permission check follows the same rule, so a grant that covers a link permits removing the link even when its target lies outside the grant. A recursive removal keeps the directory it validated open while it deletes, so authorization stays bound to that directory until the removal ends. [`fs.createdirectory`](/manual/api#fs.createdirectory) creates directories.

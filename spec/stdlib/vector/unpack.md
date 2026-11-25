@@ -29,9 +29,9 @@ The following example reads a length-prefixed string and then the integer after 
 local v = vector.create(16)
 vector.pack(v, 0, "<s1I4", "hey", 513)
 local text, next = vector.unpack(v, 0, "<s1")
-print(text, next)                      --> hey  4
-print(vector.unpack(v, next, "<I4"))   --> 513  8
-print(catch vector.unpack(v, 14, "<I4"))   --> false  ...: bad argument #2 to 'unpack' (data too short)
+print(text, next)  --> hey  4
+print(vector.unpack(v, next, "<I4"))  --> 513  8
+print(catch vector.unpack(v, 14, "<I4"))  --> false  ...: bad argument #2 to 'unpack' (data too short)
 ```
 
 [`vector.pack`](/manual/api#vector.pack) writes values in the same layout, and [`vector.unpackmany`](/manual/api#vector.unpackmany) reads the same format repeatedly.
