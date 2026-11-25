@@ -69,12 +69,6 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     }
     if (files.items.len == 0) try files.append(gpa, "-");
 
-    // A runtime state backs the compiler pass that reports the errors
-    // found after parsing.
-    const l = try api.newState(gpa, io);
-    defer api.close(l);
-    const checker: astexport.Checker = .{ .ctx = l.g, .check = checkChunk };
-
     var names_arena = std.heap.ArenaAllocator.init(gpa);
     defer names_arena.deinit();
     var expanded: std.ArrayList([]const u8) = .empty;
@@ -94,7 +88,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
         const chunkname = if (from_stdin) "=stdin" else try std.fmt.allocPrint(arena, "@{s}", .{file});
-        const res = try format.format(gpa, arena, src, .{ .chunkname = chunkname, .indent_width = indent, .checker = checker });
+        const res = try format.format(gpa, arena, src, .{ .chunkname = chunkname, .indent_width = indent });
         const text = switch (res) {
             .fail => |msg| {
                 std.debug.print("lus fmt: {s}\n", .{msg});
@@ -131,16 +125,4 @@ fn readSource(gpa: std.mem.Allocator, io: std.Io, file: []const u8, from_stdin: 
     var r = std.Io.File.stdin().readerStreaming(io, &rbuf);
     try r.interface.appendRemainingUnlimited(gpa, &buf);
     return buf.toOwnedSlice(gpa);
-}
-
-fn checkChunk(ctx: *anyopaque, arena: std.mem.Allocator, chunk: ast.Chunk, chunkname: []const u8) std.mem.Allocator.Error!?[]const u8 {
-    const g: *lus.vm.state.Global = @ptrCast(@alignCast(ctx));
-    const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = chunkname, .meta_eval = false });
-    switch (r) {
-        .ok => return null,
-        .err => |m| {
-            defer g.gpa.free(m);
-            return try arena.dupe(u8, m);
-        },
-    }
 }

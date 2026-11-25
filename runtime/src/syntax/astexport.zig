@@ -120,6 +120,8 @@ pub fn run(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options, che
     var stats: []*ast.Stat = &.{};
     var recovered: []*ast.Stat = &.{};
     var comment_cut: u32 = std.math.maxInt(u32);
+    // Where the fatal error was raised, when the token is known.
+    var fatal_off: ?u32 = null;
 
     if (parser.parseLexed(arena, src, lexed, .{ .chunkname = opts.chunkname }, opts.recover, &partial)) |chunk| {
         stats = partial.stats;
@@ -148,7 +150,10 @@ pub fn run(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options, che
                 const d = partial.diag.?;
                 fatal = d.message;
                 source = .parser;
-                if (d.tok < lexed.tokens.len) comment_cut = lexed.tokens[d.tok].span.start;
+                if (d.tok < lexed.tokens.len) {
+                    comment_cut = lexed.tokens[d.tok].span.start;
+                    fatal_off = comment_cut;
+                }
             }
         },
     }
@@ -158,6 +163,9 @@ pub fn run(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options, che
     if (fatal) |msg| {
         if (!opts.recover) return .{ .fail = msg };
         const errline = errorLine(msg);
+        if (source == .lexer and bad_tok < lexed.tokens.len) fatal_off = lexed.tokens[bad_tok].span.start;
+        // A compiler error carries a line only, so its column is 1.
+        const errcol: u32 = if (fatal_off) |off| (if (x.lineOf(off) == errline) x.colOf(off) else 1) else 1;
         // Keep what the reference parser would have finished before the
         // error, which it raises while reading the bad token.
         var kept: std.ArrayList(*ast.Stat) = .empty;
@@ -190,13 +198,13 @@ pub fn run(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options, che
         }
         const root = try x.chunk(kept.items);
         if (opts.comments) try x.attachComments(root, comment_cut);
-        try x.attachErrors(root, kept_rec.items, msg, errline);
+        try x.attachErrors(root, kept_rec.items, msg, errline, errcol);
         return .{ .tree = root };
     }
 
     const root = try x.chunk(stats);
     if (opts.comments) try x.attachComments(root, comment_cut);
-    try x.attachErrors(root, recovered, null, 0);
+    try x.attachErrors(root, recovered, null, 0, 0);
     return .{ .tree = root };
 }
 
@@ -527,7 +535,7 @@ const Exporter = struct {
         if (list.items.len > 0) try x.set(root, "comments", .{ .list = list.items });
     }
 
-    fn attachErrors(x: *Exporter, root: *Node, recovered: []*ast.Stat, fatal: ?[]const u8, fatal_line: u32) Error!void {
+    fn attachErrors(x: *Exporter, root: *Node, recovered: []*ast.Stat, fatal: ?[]const u8, fatal_line: u32, fatal_col: u32) Error!void {
         var list: std.ArrayList(*Node) = .empty;
         for (recovered) |s| {
             const p = x.pos(x.tokAt(s.span.start));
@@ -538,7 +546,7 @@ const Exporter = struct {
         }
         if (fatal) |msg| {
             const n = try x.arena.create(Node);
-            n.* = .{ .type = null, .line = fatal_line, .column = 1 };
+            n.* = .{ .type = null, .line = fatal_line, .column = fatal_col };
             try x.set(n, "message", .{ .str = msg });
             try list.append(x.arena, n);
         }

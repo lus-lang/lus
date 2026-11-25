@@ -35,3 +35,17 @@ local function a_plain_string_key_becomes_a_name_test()
     local formatted = debug.format([[local t = {["ok"]=1}]] .. "\n", "=keys")
     assert(formatted == "local t = { ok = 1 }\n", formatted)
 end
+
+-- Formatting needs a parse alone, so a program whose names would fail to
+-- resolve still formats.
+local function a_program_with_undeclared_names_formats_test()
+    local formatted, err = debug.format("global worker\nprint(ipairs)\n", "=names")
+    assert(formatted == "global worker\nprint(ipairs)\n", tostring(err))
+end
+
+-- Comments keep their place inside tables and at the end of blocks.
+local function comments_keep_their_place_test()
+    local src = "local t = {\n    a = 1,  -- first\n}\nfor i = 1, 2 do\n    f(i)\n    -- after\nend\n"
+    local formatted, err = debug.format(src, "=comments")
+    assert(formatted == src, tostring(err) .. "\n" .. tostring(formatted))
+end

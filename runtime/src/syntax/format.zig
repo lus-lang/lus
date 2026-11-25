@@ -327,9 +327,12 @@ const Formatter = struct {
         _ = try f.commentsBefore(null);
     }
 
-    fn block(f: *Formatter, stats: []*ast.Stat) Error!void {
+    /// The statements of `b`, one level in, then the comments that come
+    /// after the last statement and before the token that closes the block.
+    fn block(f: *Formatter, b: anytype) Error!void {
         f.indent += 1;
-        for (stats) |s| try f.stat(s);
+        for (b.stats) |s| try f.stat(s);
+        _ = try f.commentsBefore(b.end_line);
         f.indent -= 1;
     }
 
@@ -434,7 +437,7 @@ const Formatter = struct {
                 try f.put("do");
                 try f.trailingComment(line);
                 try f.nl();
-                try f.block(b.stats);
+                try f.block(b);
                 try f.emitIndent();
                 try f.put("end");
             },
@@ -444,7 +447,7 @@ const Formatter = struct {
                 try f.put(" do");
                 try f.trailingComment(line);
                 try f.nl();
-                try f.block(w.body.stats);
+                try f.block(w.body);
                 try f.emitIndent();
                 try f.put("end");
             },
@@ -452,7 +455,7 @@ const Formatter = struct {
                 try f.put("repeat");
                 try f.trailingComment(line);
                 try f.nl();
-                try f.block(r.body.stats);
+                try f.block(r.body);
                 try f.emitIndent();
                 try f.put("until ");
                 try f.expr(r.cond);
@@ -472,7 +475,7 @@ const Formatter = struct {
                     try f.put(" then");
                     try f.trailingComment(cl_line);
                     try f.nl();
-                    try f.block(cl.body.stats);
+                    try f.block(cl.body);
                 }
                 if (ifs.else_) |b| {
                     const kw = f.tokAt(b.span.start) - 1;
@@ -480,7 +483,7 @@ const Formatter = struct {
                     try f.put("else");
                     try f.trailingComment(f.tokLine(kw));
                     try f.nl();
-                    try f.block(b.stats);
+                    try f.block(b);
                 }
                 try f.emitIndent();
                 try f.put("end");
@@ -499,7 +502,7 @@ const Formatter = struct {
                 try f.put(" do");
                 try f.trailingComment(line);
                 try f.nl();
-                try f.block(nf.body.stats);
+                try f.block(nf.body);
                 try f.emitIndent();
                 try f.put("end");
             },
@@ -514,7 +517,7 @@ const Formatter = struct {
                 try f.put(" do");
                 try f.trailingComment(line);
                 try f.nl();
-                try f.block(gf.body.stats);
+                try f.block(gf.body);
                 try f.emitIndent();
                 try f.put("end");
             },
@@ -695,7 +698,7 @@ const Formatter = struct {
         try f.putc(')');
         try f.trailingComment(line);
         try f.nl();
-        try f.block(func.body.stats);
+        try f.block(func.body);
         try f.emitIndent();
         try f.put("end");
     }
@@ -761,7 +764,7 @@ const Formatter = struct {
                 try f.put("function");
                 try f.funcBody(func, f.startLine(e.span.start));
             },
-            .table => |fields| try f.table(fields),
+            .table => |fields| try f.table(fields, e.span),
             .binop => |b| try f.binop(b.op, b.lhs, b.rhs),
             .unop => |u| try f.unop(u.op, u.operand),
             .name => |n| try f.put(n.text),
@@ -810,7 +813,7 @@ const Formatter = struct {
                 try f.put("do");
                 try f.trailingComment(f.startLine(e.span.start));
                 try f.nl();
-                try f.block(b.stats);
+                try f.block(b);
                 try f.emitIndent();
                 try f.put("end");
             },
@@ -1032,11 +1035,33 @@ const Formatter = struct {
         try f.putc('`');
     }
 
-    fn table(f: *Formatter, fields: []ast.Field) Error!void {
+    fn fieldStart(fld: ast.Field) u32 {
+        return switch (fld.kind) {
+            .positional => |v| v.span.start,
+            .named => |nv| nv.name.span.start,
+            .keyed => |kv| kv.key.span.start,
+        };
+    }
+
+    fn fieldEnd(fld: ast.Field) u32 {
+        return switch (fld.kind) {
+            .positional => |v| v.span.end,
+            .named => |nv| nv.value.span.end,
+            .keyed => |kv| kv.value.span.end,
+        };
+    }
+
+    /// A table constructor. Tables with more than three fields, and tables
+    /// that hold a comment, go one field per line with a trailing comma.
+    /// Each comment stays next to the field it was written by.
+    fn table(f: *Formatter, fields: []ast.Field, span: ast.Span) Error!void {
         if (fields.len == 0) return f.put("{}");
-        const multiline = fields.len > 3;
+        const close_line = f.endLine(span.end);
+        const has_comment = f.next_comment < f.comments.len and f.commentLine(f.comments[f.next_comment]) <= close_line;
+        const multiline = fields.len > 3 or has_comment;
         if (multiline) {
             try f.putc('{');
+            try f.trailingComment(f.startLine(span.start));
             try f.nl();
             f.indent += 1;
         } else {
@@ -1044,6 +1069,7 @@ const Formatter = struct {
         }
         for (fields, 0..) |fld, i| {
             if (multiline) {
+                _ = try f.commentsBefore(f.startLine(fieldStart(fld)));
                 try f.emitIndent();
             } else if (i > 0) {
                 try f.put(", ");
@@ -1063,10 +1089,12 @@ const Formatter = struct {
             }
             if (multiline) {
                 try f.putc(',');
+                try f.trailingComment(f.endLine(fieldEnd(fld)));
                 try f.nl();
             }
         }
         if (multiline) {
+            _ = try f.commentsBefore(close_line);
             f.indent -= 1;
             try f.emitIndent();
             try f.putc('}');
@@ -1367,6 +1395,16 @@ test "format keeps the escapes of interpolated strings as written" {
 test "format keeps the escapes of interpolated strings" {
     try expectFormat("x = `\\27[$(code)m \\u{e9}\\x07 $$`", "x = `\\27[$(code)m \\u{e9}\\x07 $$`\n");
     try expectFormat("x = `a $(`b $(c)`) d`", "x = `a $(`b $c`) d`\n");
+}
+
+test "format keeps comments inside table constructors" {
+    try expectFormat("local t = {\n    a = 1, -- first\n    b = 2, -- second\n}\n", "local t = {\n    a = 1,  -- first\n    b = 2,  -- second\n}\n");
+    try expectFormat("local t = { -- head\n    1,\n    -- before two\n    2,\n    -- last\n}\n", "local t = {  -- head\n    1,\n    -- before two\n    2,\n    -- last\n}\n");
+}
+
+test "format keeps a comment after the last statement inside its block" {
+    try expectFormat("for i = 1, 3 do\n    x()\n    -- note\nend\n", "for i = 1, 3 do\n    x()\n    -- note\nend\n");
+    try expectFormat("if a then\n    b()\n    -- one\nelse\n    c()\n    -- two\nend\n", "if a then\n    b()\n    -- one\nelse\n    c()\n    -- two\nend\n");
 }
 
 test "format keeps comment markers and long comments as written" {
