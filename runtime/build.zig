@@ -112,8 +112,8 @@ pub fn build(b: *std.Build) void {
         const lo_obj = linkObjectInput(b, rt, target, optimize, "lus-runtime");
         const lo_full = linkObjectInput(b, requested, target, optimize, "lus");
         const lo_step = b.step("link-object", "Build the runtime as a relocatable object and its C libraries for the link object");
-        lo_step.dependOn(&b.addInstallFile(lo_obj.getEmittedBin(), "lib/lus-runtime.o").step);
-        lo_step.dependOn(&b.addInstallFile(lo_full.getEmittedBin(), "lib/lus.o").step);
+        lo_step.dependOn(&b.addInstallFile(lo_obj, "lib/lus-runtime.o").step);
+        lo_step.dependOn(&b.addInstallFile(lo_full, "lib/lus.o").step);
         const lo_compress = if (features.archive) compressionLibrary(b, target) else null;
         const lo_sqlite = if (features.sqlite) sqliteLibrary(b, target) else null;
         const lo_tls = if (features.net) tlsLibrary(b, target) else null;
@@ -158,7 +158,7 @@ pub fn build(b: *std.Build) void {
             line.addFileArg(stub);
             _ = line.addPrefixedOutputFileArg("-femit-bin=", "stub");
             const link_line = line.captureStdErr(.{});
-            for ([_]struct { []const u8, *std.Build.Step.Compile }{ .{ "lus-runtime.lo", lo_obj }, .{ "lus.lo", lo_full } }) |e| {
+            for ([_]struct { []const u8, std.Build.LazyPath }{ .{ "lus-runtime.lo", lo_obj }, .{ "lus.lo", lo_full } }) |e| {
                 const conv = b.addRunArtifact(convert);
                 conv.addArgs(&.{ "--arch", @tagName(target.result.cpu.arch), "--os", if (os_tag == .ios and target.result.abi == .simulator) "ios_simulator" else @tagName(os_tag) });
                 if (macho) {
@@ -170,7 +170,7 @@ pub fn build(b: *std.Build) void {
                 }
                 conv.addArg("-o");
                 const out = conv.addOutputFileArg(e[0]);
-                conv.addFileArg(e[1].getEmittedBin());
+                conv.addFileArg(e[1]);
                 if (os_tag == .linux) conv.addFileArg(zigc.getEmittedBin());
                 if (lo_compress) |l| conv.addArtifactArg(l);
                 if (lo_sqlite) |l| conv.addArtifactArg(l);
@@ -593,7 +593,7 @@ fn embedLibrary(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
 /// C hosts included, link it as well.
 /// The runtime with the features `f` as one relocatable object for the
 /// converter of the link object.
-fn linkObjectInput(b: *std.Build, f: Features, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, name: []const u8) *std.Build.Step.Compile {
+fn linkObjectInput(b: *std.Build, f: Features, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, name: []const u8) std.Build.LazyPath {
     var lo = f;
     lo.link_object = true;
     const mod = b.createModule(.{
@@ -617,7 +617,14 @@ fn linkObjectInput(b: *std.Build, f: Features, target: std.Build.ResolvedTarget,
     obj.link_function_sections = true;
     obj.link_data_sections = true;
     obj.bundle_compiler_rt = true;
-    return obj;
+    if (target.result.cpu.arch != .powerpc64le) return obj.getEmittedBin();
+    // LLVM merges globals on PowerPC into blocks that code reaches as a
+    // base and an offset, so the linker keeps a block whole and every
+    // pointer in it. Zig passes no options to LLVM, so the object comes
+    // from its bitcode through `zig cc`, which turns the merging off.
+    const cc = b.addSystemCommand(&.{ b.graph.zig_exe, "cc", "-target", target.result.zigTriple(b.allocator) catch @panic("OOM"), "-O2", "-fno-pic", "-ffunction-sections", "-fdata-sections", "-mllvm", "-ppc-global-merge=false", "-c" });
+    cc.addFileArg(obj.getEmittedLlvmBc());
+    return cc.addPrefixedOutputFileArg("-o", b.fmt("{s}.o", .{name}));
 }
 
 fn linkSystemLibraries(mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
@@ -797,8 +804,18 @@ fn tlsLibrary(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.C
     return lib;
 }
 
+/// The flags `base` of vendored C sources for the target of `mod`. On
+/// PowerPC they turn off the merging of globals, which keeps the linker of
+/// `lus build --aot` from collecting the data of each source one section
+/// at a time (see `linkObjectInput`).
+fn vendorFlags(b: *std.Build, mod: *std.Build.Module, base: []const []const u8) []const []const u8 {
+    const t = mod.resolved_target orelse return base;
+    if (t.result.cpu.arch != .powerpc64le) return base;
+    return std.mem.concat(b.allocator, []const u8, &.{ base, &.{ "-mllvm", "-ppc-global-merge=false" } }) catch @panic("OOM");
+}
+
 fn addTlsSources(b: *std.Build, mod: *std.Build.Module) void {
-    const flags: []const []const u8 = if (vendor_sanitize) &.{} else &.{"-fno-sanitize=undefined"};
+    const flags = vendorFlags(b, mod, if (vendor_sanitize) &.{} else &.{"-fno-sanitize=undefined"});
     const mbedtls = b.dependency("mbedtls", .{});
     mod.addCMacro("MBEDTLS_USER_CONFIG_FILE", "\"lus_mbedtls_config.h\"");
     // Mbed TLS defines _POSIX_C_SOURCE, which hides `explicit_bzero` in the
@@ -924,7 +941,7 @@ const mbedtls_sources = [_][]const u8{
 };
 
 fn addCompressionSources(b: *std.Build, mod: *std.Build.Module) void {
-    const flags: []const []const u8 = if (vendor_sanitize) &.{} else &.{"-fno-sanitize=undefined"};
+    const flags = vendorFlags(b, mod, if (vendor_sanitize) &.{} else &.{"-fno-sanitize=undefined"});
 
     const brotli = b.dependency("brotli", .{});
     mod.addIncludePath(brotli.path("c/include"));
@@ -1050,7 +1067,7 @@ fn addSqliteSource(b: *std.Build, mod: *std.Build.Module, target: std.Build.Reso
         mod.linkSystemLibrary("wasi-emulated-getpid", .{});
         mod.linkSystemLibrary("wasi-emulated-signal", .{});
     } else {
-        mod.addCSourceFile(.{ .file = b.path("vendor/sqlite/sqlite3.c"), .flags = &sqlite_flags });
+        mod.addCSourceFile(.{ .file = b.path("vendor/sqlite/sqlite3.c"), .flags = vendorFlags(b, mod, &sqlite_flags) });
     }
 }
 
