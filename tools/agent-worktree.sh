@@ -1,10 +1,10 @@
 #!/bin/sh
 # Prepares a linked worktree for an agent session. The sandbox of an agent
-# session cannot write under .agents/skills, so a checkout or reset that
-# had to update a file there stopped halfway. Here git leaves .agents/skills
-# out of the working tree, so it never writes there, and a symbolic link
-# puts the skills of the main clone in its place, so the session still
-# reads them. The skill files stay in the index, and
+# session cannot write under .agents/skills or create .claude/skills, so a
+# checkout or reset that had to update either stopped halfway. Here git
+# leaves both out of the working tree, so it never writes there, and
+# symbolic links put the skills of the main clone in their place, so the
+# session still reads them. The skill files stay in the index, and
 # `node tools/build-skills.js --check` reads the generated copy from there.
 # The post-checkout hook runs this script in each new worktree when the
 # main clone sets `lus.agentWorktrees` to true.
@@ -17,11 +17,13 @@ main=$(dirname "$common")
 
 git config extensions.worktreeConfig true
 git config --worktree sparse.expectFilesOutsideOfPatterns true
-git sparse-checkout set --no-cone '/*' '!/.agents/skills/'
+git sparse-checkout set --no-cone '/*' '!/.agents/skills/' '!/.claude/skills'
 [ -e .agents/skills ] || ln -s "$main/.agents/skills" .agents/skills
+mkdir -p .claude
+[ -e .claude/skills ] || [ -L .claude/skills ] || ln -s "$main/.agents/skills" .claude/skills
 
-# The link is untracked, so a per-worktree ignore file keeps it out of
+# The links are untracked, so a per-worktree ignore file keeps them out of
 # `git status` and `git add -A`.
 ignore="$(git rev-parse --absolute-git-dir)/agent-ignore"
-printf '/.agents/skills\n' > "$ignore"
+printf '/.agents/skills\n/.claude/skills\n' > "$ignore"
 git config --worktree core.excludesFile "$ignore"
