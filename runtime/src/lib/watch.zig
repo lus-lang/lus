@@ -4,11 +4,12 @@
 //! "modify", "remove", or "rescan" (the system dropped events, so the
 //! program should look at the tree again).
 //!
-//! The backends are inotify on Linux, FSEvents on macOS, and
-//! ReadDirectoryChangesW on Windows. Every backend feeds one queue, which
-//! merges the events of a path that follow each other within 50 ms, so
-//! the steps of an editor saving a file arrive as one change. inotify is
-//! read in the thread of the state through the poller of the scheduler.
+//! The backends are inotify on Linux, FSEvents on macOS, kqueue on
+//! FreeBSD, and ReadDirectoryChangesW on Windows. Every backend feeds one
+//! queue, which merges the events of a path that follow each other within
+//! 50 ms, so the steps of an editor saving a file arrive as one change.
+//! inotify and kqueue are read in the thread of the state through the
+//! poller of the scheduler.
 //! FSEvents calls back on a dispatch queue thread and ReadDirectoryChangesW
 //! runs on a thread of its own, and both wake the scheduler with
 //! `sched.notify`. FSEvents is loaded with dlopen when the first watch
@@ -40,7 +41,8 @@ const os_tag = builtin.os.tag;
 const windows = os_tag == .windows;
 const linux = os_tag == .linux;
 const macos = os_tag == .macos;
-pub const supported = linux or macos or windows;
+const freebsd = os_tag == .freebsd;
+pub const supported = linux or macos or windows or freebsd;
 const sep: u8 = if (windows) '\\' else '/';
 
 /// Events of one path that follow each other this closely merge.
@@ -340,7 +342,7 @@ fn wait(l: *Thread) Error!u32 {
 // ---------------------------------------------------------------------
 // Backends
 
-const Backend = if (linux) Inotify else if (macos) FsEvents else if (windows) WinWatch else struct {
+const Backend = if (linux) Inotify else if (macos) FsEvents else if (windows) WinWatch else if (freebsd) Kqueue else struct {
     fn start(_: *@This(), _: *Thread, _: *Shared) StartError!void {
         return error.Unavailable;
     }
@@ -494,6 +496,229 @@ const Inotify = struct {
 
     fn wait(b: *Inotify, l: *Thread, ms: i32) Error!void {
         _ = try sched.waitIo(l, b.fd, .read, ms);
+    }
+};
+
+// --- kqueue -----------------------------------------------------------
+
+/// The backend on FreeBSD. kqueue watches one open descriptor per vnode,
+/// so the backend holds one for the root, one for each directory it
+/// watches, and one for each file in them. A write to a directory means
+/// that its entries changed, so the backend reads the directory again and
+/// compares its entries with the ones it saw before: a new name is a
+/// create, a missing name a remove, and a name that now stands for
+/// another file (an editor that saves through a rename) a modify.
+const Kqueue = struct {
+    kq: i32 = -1,
+    nodes: std.AutoHashMapUnmanaged(i32, Node) = .empty,
+    /// The descriptor that watches each path.
+    by_path: std.StringHashMapUnmanaged(i32) = .empty,
+
+    const Node = struct {
+        /// The owned path, which is also the key of `by_path` for this node.
+        path: []u8,
+        is_dir: bool,
+        /// The entries of a directory and the file each stands for.
+        names: std.StringHashMapUnmanaged(Seen) = .empty,
+    };
+
+    const Seen = struct { is_dir: bool, inode: std.Io.File.INode };
+
+    const N = std.c.NOTE;
+    const vnode_flags = N.DELETE | N.WRITE | N.EXTEND | N.ATTRIB | N.RENAME;
+
+    fn start(b: *Kqueue, l: *Thread, s: *Shared) StartError!void {
+        const kq = std.c.kqueue();
+        if (kq < 0) return error.Unavailable;
+        _ = std.c.fcntl(kq, std.c.F.SETFD, @as(c_int, std.c.FD_CLOEXEC));
+        b.kq = kq;
+        if (s.is_file) {
+            if (!try b.add(s.root, false)) return error.Failed;
+            return;
+        }
+        if (!try b.addDir(l, s, s.root, false)) return error.Failed;
+    }
+
+    /// Watches `path`. Returns false when it cannot be opened or watched.
+    fn add(b: *Kqueue, path: []const u8, is_dir: bool) error{OutOfMemory}!bool {
+        if (b.by_path.contains(path)) return true;
+        const z = try gpa.dupeSentinel(u8, path, 0);
+        defer gpa.free(z);
+        const fd = std.c.open(z, .{ .ACCMODE = .RDONLY, .CLOEXEC = true, .NONBLOCK = true });
+        if (fd < 0) return false;
+        var ch = std.mem.zeroes(std.c.Kevent);
+        ch.ident = @intCast(fd);
+        ch.filter = std.c.EVFILT.VNODE;
+        ch.flags = std.c.EV.ADD | std.c.EV.CLEAR;
+        ch.fflags = vnode_flags;
+        var none: [0]std.c.Kevent = undefined;
+        if (std.c.kevent(b.kq, @ptrCast(&ch), 1, &none, 0, null) < 0) {
+            _ = std.c.close(fd);
+            return false;
+        }
+        const p = gpa.dupe(u8, path) catch |e| {
+            _ = std.c.close(fd);
+            return e;
+        };
+        b.nodes.put(gpa, fd, .{ .path = p, .is_dir = is_dir }) catch |e| {
+            gpa.free(p);
+            _ = std.c.close(fd);
+            return e;
+        };
+        b.by_path.put(gpa, p, fd) catch |e| {
+            b.drop(fd);
+            return e;
+        };
+        return true;
+    }
+
+    /// Watches the directory `dir` and the entries in it, descending into
+    /// the directories below it when the watch is recursive. With
+    /// `report`, also reports every entry found, for a directory that
+    /// appeared during the watch and may have filled before its watch
+    /// started.
+    fn addDir(b: *Kqueue, l: *Thread, s: *Shared, dir: []const u8, report: bool) error{OutOfMemory}!bool {
+        if (!try b.add(dir, true)) return false;
+        try b.rescan(l, s, b.by_path.get(dir).?, report);
+        return true;
+    }
+
+    /// Reads the directory watched by `fd` and compares its entries with
+    /// the ones seen before, reporting the differences when `report` is
+    /// set.
+    fn rescan(b: *Kqueue, l: *Thread, s: *Shared, fd: i32, report: bool) error{OutOfMemory}!void {
+        const io = l.g.io;
+        const dir = b.nodes.getPtr(fd).?.path;
+        var now: std.StringHashMapUnmanaged(Seen) = .empty;
+        errdefer freeNames(&now);
+        if (Dir.cwd().openDir(io, dir, .{ .iterate = true })) |d_| {
+            var d = d_;
+            defer d.close(io);
+            var it = d.iterate();
+            while (it.next(io) catch null) |ent| {
+                const name = try gpa.dupe(u8, ent.name);
+                now.put(gpa, name, .{ .is_dir = ent.kind == .directory, .inode = ent.inode }) catch |e| {
+                    gpa.free(name);
+                    return e;
+                };
+            }
+        } else |_| {}
+        // The directory may have moved in the map while entries were added.
+        const node = b.nodes.getPtr(fd) orelse {
+            freeNames(&now);
+            return;
+        };
+        var old = node.names;
+        node.names = now;
+        defer freeNames(&old);
+        const base = try gpa.dupe(u8, node.path);
+        defer gpa.free(base);
+        var it = now.iterator();
+        while (it.next()) |kv| {
+            const p = try std.mem.concat(gpa, u8, &.{ base, "/", kv.key_ptr.* });
+            defer gpa.free(p);
+            const before = old.get(kv.key_ptr.*);
+            if (before) |was| {
+                if (was.inode == kv.value_ptr.inode and was.is_dir == kv.value_ptr.is_dir) continue;
+                // Another file under the same name.
+                b.dropTree(p);
+                if (report) s.push(.modify, p);
+            } else if (report) s.push(.create, p);
+            if (kv.value_ptr.is_dir) {
+                if (s.recursive) _ = try b.addDir(l, s, p, report);
+            } else _ = try b.add(p, false);
+        }
+        var gone = old.iterator();
+        while (gone.next()) |kv| {
+            if (now.contains(kv.key_ptr.*)) continue;
+            const p = try std.mem.concat(gpa, u8, &.{ base, "/", kv.key_ptr.* });
+            defer gpa.free(p);
+            if (report) s.push(.remove, p);
+            b.dropTree(p);
+        }
+    }
+
+    fn freeNames(m: *std.StringHashMapUnmanaged(Seen)) void {
+        var it = m.keyIterator();
+        while (it.next()) |k| gpa.free(k.*);
+        m.deinit(gpa);
+    }
+
+    /// Stops watching `fd`. Closing the descriptor removes its event.
+    fn drop(b: *Kqueue, fd: i32) void {
+        const kv = b.nodes.fetchRemove(fd) orelse return;
+        _ = std.c.close(fd);
+        if (b.by_path.get(kv.value.path)) |cur| if (cur == fd) {
+            _ = b.by_path.remove(kv.value.path);
+        };
+        var names = kv.value.names;
+        freeNames(&names);
+        gpa.free(kv.value.path);
+    }
+
+    /// Stops watching `path` and every path below it.
+    fn dropTree(b: *Kqueue, path: []const u8) void {
+        if (b.by_path.get(path)) |fd| b.drop(fd);
+        while (true) {
+            var found: ?i32 = null;
+            var it = b.by_path.iterator();
+            while (it.next()) |kv| {
+                const k = kv.key_ptr.*;
+                if (k.len > path.len and k[path.len] == '/' and std.mem.startsWith(u8, k, path)) {
+                    found = kv.value_ptr.*;
+                    break;
+                }
+            }
+            b.drop(found orelse return);
+        }
+    }
+
+    fn stop(b: *Kqueue, s: *Shared) void {
+        if (b.kq >= 0) {
+            sched.forget(s.g, b.kq);
+            _ = std.c.close(b.kq);
+        }
+        b.kq = -1;
+        while (true) {
+            var it = b.nodes.keyIterator();
+            const fd = (it.next() orelse break).*;
+            b.drop(fd);
+        }
+        b.nodes.deinit(gpa);
+        b.by_path.deinit(gpa);
+    }
+
+    /// Reads the events that are ready without waiting.
+    fn poll(b: *Kqueue, l: *Thread, s: *Shared) void {
+        var evs: [64]std.c.Kevent = undefined;
+        const zero: std.c.timespec = .{ .sec = 0, .nsec = 0 };
+        var none: [0]std.c.Kevent = undefined;
+        while (true) {
+            const n = std.c.kevent(b.kq, &none, 0, &evs, evs.len, &zero);
+            if (n <= 0) return;
+            sched.opDone(l);
+            for (evs[0..@intCast(n)]) |ev| b.handle(l, s, @intCast(ev.ident), ev.fflags) catch return;
+            if (n < evs.len) return;
+        }
+    }
+
+    fn handle(b: *Kqueue, l: *Thread, s: *Shared, fd: i32, fflags: u32) error{OutOfMemory}!void {
+        const node = b.nodes.get(fd) orelse return;
+        const is_root = std.mem.eql(u8, node.path, s.root);
+        if (fflags & (N.DELETE | N.RENAME) != 0) {
+            // The directory that holds a path reports its removal, so
+            // only the root reports its own.
+            if (is_root) s.push(.remove, node.path);
+            b.drop(fd);
+            return;
+        }
+        if (node.is_dir) {
+            if (fflags & N.WRITE != 0) try b.rescan(l, s, fd, true);
+        } else if (fflags & (N.WRITE | N.EXTEND | N.ATTRIB) != 0) s.push(.modify, node.path);
+    }
+
+    fn wait(b: *Kqueue, l: *Thread, ms: i32) Error!void {
+        _ = try sched.waitIo(l, b.kq, .read, ms);
     }
 };
 

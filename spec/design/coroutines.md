@@ -73,7 +73,7 @@ The coroutine is a plain one whose body calls a native that waits and yields its
 
 Signals and child exits reach the states through one watcher per process (`runtime/src/vm/sigwatch.zig`). On POSIX systems the signal handler counts the signal and writes its number to a pipe. A thread reads the pipe and calls `sched.notify` for every state that subscribed, which runs the natives that wait with `sched.waitNotify` again. Each native compares the counts with what it delivered, so no signal is lost between two resumes. The handler of SIGCHLD stays installed once a process was spawned. The watcher thread reaps the children whose process objects were collected while they ran. On Windows the console control handler and the wait callbacks of process handles already run on threads of their own and notify the states directly.
 
-The pipes of `os.spawn` are in non-blocking mode on POSIX systems and wait in the poller like sockets. Windows anonymous pipes cannot join the poller, so a pipe that is empty or full lets the other coroutines run and looks again after 5 ms. inotify descriptors wait in the poller as well. FSEvents and `ReadDirectoryChangesW` deliver their events on threads of their own, which put them in a queue and notify the state.
+The pipes of `os.spawn` are in non-blocking mode on POSIX systems and wait in the poller like sockets. Windows anonymous pipes cannot join the poller, so a pipe that is empty or full lets the other coroutines run and looks again after 5 ms. inotify and kqueue descriptors wait in the poller as well. FSEvents and `ReadDirectoryChangesW` deliver their events on threads of their own, which put them in a queue and notify the state.
 
 ## Measurements
 

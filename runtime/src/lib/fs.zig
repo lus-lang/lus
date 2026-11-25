@@ -217,6 +217,11 @@ fn exists(l: *Thread, path: []const u8) bool {
     return true;
 }
 
+fn isDir(l: *Thread, path: []const u8) bool {
+    const st = Dir.cwd().statFile(l.g.io, path, .{ .follow_symlinks = false }) catch return false;
+    return st.kind == .directory;
+}
+
 fn move(l: *Thread) Error!u32 {
     const src = try aux.checkBytes(l, 1);
     const dst = try aux.checkBytes(l, 2);
@@ -247,7 +252,11 @@ fn move(l: *Thread) Error!u32 {
     Dir.renamePreserve(cwd, src, cwd, dst, io) catch |e| switch (e) {
         error.PathAlreadyExists => return l.raiseFmt("cannot move to '{s}': target already exists", .{dst}),
         error.CrossDevice => return l.raiseFmt("cannot move '{s}' to '{s}': cross-device move", .{ src, dst }),
-        error.OperationUnsupported => {
+        // A system without an exclusive rename links the source to the
+        // target and then removes the source. A hard link to a directory
+        // fails with EPERM, so the move checks the target and renames.
+        error.OperationUnsupported, error.PermissionDenied => {
+            if (e == error.PermissionDenied and !isDir(l, src)) return l.raiseFmt("cannot move '{s}' to '{s}': {s}", .{ src, dst, errMsg(e) });
             if (exists(l, dst)) return l.raiseFmt("cannot move to '{s}': target already exists", .{dst});
             Dir.rename(cwd, src, cwd, dst, io) catch |e2| switch (e2) {
                 error.CrossDevice => return l.raiseFmt("cannot move '{s}' to '{s}': cross-device move", .{ src, dst }),

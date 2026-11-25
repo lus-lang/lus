@@ -104,6 +104,23 @@ fn ensureInit(l: *Thread) Error!void {
     if (!initProcess()) return l.raiseFmt("TLS is unavailable: the cryptography library failed to start", .{});
 }
 
+/// The certificates of the system on FreeBSD. The bundle of the
+/// ca_root_nss package is at /etc/ssl/cert.pem or under /usr/local. The
+/// base system keeps its trusted certificates in /etc/ssl/certs, which
+/// certctl fills. The first bundle found is read, or else the directory.
+fn rescanFreebsd(cb: *std.crypto.Certificate.Bundle, gpa: std.mem.Allocator, io: std.Io, now: std.Io.Timestamp) !void {
+    const files = [_][]const u8{ "/etc/ssl/cert.pem", "/usr/local/etc/ssl/cert.pem", "/usr/local/share/certs/ca-root-nss.crt" };
+    cb.bytes.clearRetainingCapacity();
+    cb.map.clearRetainingCapacity();
+    for (files) |path| {
+        if (cb.addCertsFromFilePathAbsolute(gpa, io, now, path)) |_| return else |err| switch (err) {
+            error.FileNotFound => continue,
+            else => |e| return e,
+        }
+    }
+    try cb.addCertsFromDirPathAbsolute(gpa, io, now, "/etc/ssl/certs");
+}
+
 /// The certificates of the system, loaded on first use and kept for the
 /// life of the process.
 fn systemChain(l: *Thread) Error!*Chain {
@@ -114,7 +131,8 @@ fn systemChain(l: *Thread) Error!*Chain {
     var bundle: std.crypto.Certificate.Bundle = .empty;
     defer bundle.deinit(gpa);
     const io = l.g.io;
-    bundle.rescan(gpa, io, std.Io.Clock.real.now(io)) catch |e|
+    const scan = if (builtin.os.tag == .freebsd) rescanFreebsd else std.crypto.Certificate.Bundle.rescan;
+    scan(&bundle, gpa, io, std.Io.Clock.real.now(io)) catch |e|
         return l.raiseFmt("cannot load the certificates of the system: {s}", .{@errorName(e)});
     const chain = lus_tls_chain_new() orelse return l.raiseMem();
     const bytes = bundle.bytes.items;

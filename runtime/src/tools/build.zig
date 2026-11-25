@@ -40,6 +40,7 @@ const linker = @import("../link/link.zig");
 const macho = @import("../link/macho.zig");
 const reloc = @import("../jit/reloc.zig");
 const aot = @import("../jit/aot.zig");
+const jit = @import("../jit/jit.zig");
 const package = lus.lib.package;
 const modtree = lus.modtree;
 const remote = lus.remote;
@@ -635,6 +636,10 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         // A bundle on the running lus runs once under the training
         // setting and writes the code section of what it compiled
         // (`spec/design/aot.md`).
+        if (!jit.enabled) {
+            std.debug.print("lus build: --aot compiles from a training run of the JIT, and this lus has no JIT for {s}-{s}\n", .{ @tagName(builtin.cpu.arch), @tagName(builtin.os.tag) });
+            return 1;
+        }
         const section = (try train(init, gpa, preserved.items, c.modules.items, out_path, opts.train, opts.static)) orelse return 1;
         defer gpa.free(section);
         const base: ?[]const u8 = if (opts.keep_jit) null else opts.runtime orelse blk: {
