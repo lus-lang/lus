@@ -6,6 +6,13 @@ name: Contributions
 # out or runs the code of a pull request. The review job reads its files
 # as data.
 #
+# Every write goes through the Lus app (the secrets LUS_APP_ID and
+# LUS_APP_PRIVATE_KEY). Each job that writes mints its own token with only
+# the permissions of that job, and the jobs that give untrusted text to an
+# agent hold no write token at all. A branch that the app pushes runs the
+# workflows of its pull request, which a push with the workflow token
+# would not.
+#
 # 1. The gate (tools/ci/gate.mjs) checks the author, the commits, the
 #    fields of the description, and the paths, and refuses, closes, or
 #    locks what fails. Nothing below runs for a contribution that fails it.
@@ -13,11 +20,12 @@ name: Contributions
 # 3. A pull request that passes gets one review against the rules of the
 #    repository. The targeted tests of ci.yml run on its own event.
 # 4. An issue that passes is sorted. A suggestion, a design proposal, or a
-#    question is closed with a pointer to Discussions. A bug report runs
+#    question moves to Discussions, and the issue is closed and locked. A bug report runs
 #    its program without secrets, an agent looks for the cause and writes
 #    a fix and a regression test without running anything, CI checks that
 #    the test fails before the fix and passes after it, and the fix lands
-#    on the branch agent/issue-N for the maintainer to review.
+#    on the branch agent/issue-N, with a pull request for the maintainer
+#    to review.
 #
 # The models, the budgets in dollars, and the time limits of the agents
 # are in tools/ci/agents.json. A manual run checks one number as a dry run,
@@ -52,8 +60,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
     outputs:
       kind: ${{ steps.gate.outputs.kind }}
       number: ${{ steps.gate.outputs.number }}
@@ -71,17 +77,26 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Get a token of the Lus app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: write
       - name: Gate
         id: gate
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
           NUMBER: ${{ inputs.number }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: node tools/ci/gate.mjs gate
       - name: Labels of the areas and the Kind
         if: ${{ steps.gate.outputs.kind == 'pr' && steps.gate.outputs.action != 'lock' && steps.gate.outputs.action != 'reject' }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
           NUMBER: ${{ inputs.number }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: node tools/ci/gate.mjs labels
@@ -170,7 +185,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -183,9 +197,17 @@ jobs:
         with:
           name: review
           path: ${{ runner.temp }}/review
+      - name: Get a token of the Lus app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: write
       - name: Comment
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
         run: node tools/ci/gate.mjs comment "${{ needs.gate.outputs.number }}" "$RUNNER_TEMP/review/review.md" "<!-- lus-review -->"
 
   triage:
@@ -196,11 +218,13 @@ jobs:
       (contains(fromJSON('["opened", "reopened"]'), github.event.action) || needs.gate.outputs.newly_passed == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ fromJSON(needs.gate.outputs.agents).triage.timeout_minutes }}
+    # The agent reads the text of the issue, so this job writes nothing.
+    # The route job acts on its answer.
     permissions:
       contents: read
-      issues: write
     outputs:
       kind: ${{ steps.sort.outputs.kind }}
+      reason: ${{ steps.sort.outputs.reason }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -235,21 +259,48 @@ jobs:
           reason=$(jq -r '(.structured_output // (.result | fromjson? // {})).reason // ""' "$RUNNER_TEMP/sorted.json")
           case "$kind" in bug|suggestion|design|question|other) ;; *) kind=other ;; esac
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$reason" > "$RUNNER_TEMP/reason.txt"
+          # One line of plain text, which the route job quotes.
+          reason=$(printf '%s' "$reason" | tr -d '\r' | tr '\n' ' ' | cut -c1-300)
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
           echo "$kind: $reason"
-      - name: Close what is not a bug
-        if: ${{ contains(fromJSON('["suggestion", "design", "question"]'), steps.sort.outputs.kind) }}
+
+  route:
+    name: Move the issue to Discussions
+    needs: [gate, triage]
+    if: ${{ contains(fromJSON('["suggestion", "design", "question"]'), needs.triage.outputs.kind) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Get a token of the Lus app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-discussions: write
+      - name: Move, close, and lock
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          KIND: ${{ steps.sort.outputs.kind }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          KIND: ${{ needs.triage.outputs.kind }}
+          REASON: ${{ needs.triage.outputs.reason }}
+          CATEGORY: ${{ fromJSON(needs.gate.outputs.agents).discussions[needs.triage.outputs.kind] }}
         run: |
-          url="https://github.com/$GITHUB_REPOSITORY/discussions"
           case "$KIND" in
-            question) text="Questions about using Lus are answered in [Discussions]($url), so this issue is closed. Issues are for bugs." ;;
-            *) text="Lus 2 is frozen, so the issue tracker takes bug reports only. Ideas and language design conversations live in [Discussions]($url), so this issue is closed." ;;
+            question) text="Questions about using Lus are answered in Discussions, and this one continues at DISCUSSION_URL. Issues are for bugs." ;;
+            *) text="Lus 2 is frozen, so the issue tracker takes bug reports only. Ideas and language design conversations live in Discussions, and this one continues at DISCUSSION_URL." ;;
           esac
-          printf '%s\n\nThe triage agent read it this way: %s\n' "$text" "$(cat "$RUNNER_TEMP/reason.txt")" > "$RUNNER_TEMP/close.md"
-          node tools/ci/gate.mjs close "${{ needs.gate.outputs.number }}" "$RUNNER_TEMP/close.md" rejected
+          printf '%s\n\nThe triage agent read it this way: %s\n' "$text" "$REASON" > "$RUNNER_TEMP/moved.md"
+          node tools/ci/gate.mjs discuss "${{ needs.gate.outputs.number }}" "$CATEGORY" "$RUNNER_TEMP/moved.md"
 
   reproduce:
     name: Run the program of the report
@@ -433,18 +484,28 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Leave the fix for review
+    name: Open the pull request of the fix
     needs: [gate, verify]
     if: ${{ !cancelled() && needs.verify.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write
-      issues: write
+      contents: read
     steps:
+      - name: Get a token of the Lus app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      # The app token pushes the branch, so the pull request runs ci.yml.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app.outputs.token }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -452,35 +513,49 @@ jobs:
         with:
           name: verified
           path: ${{ runner.temp }}/hunt
-      - name: Push the branch and report
+      - name: Push the branch, open the pull request, and report
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
           NUMBER: ${{ needs.gate.outputs.number }}
           VERIFIED: ${{ needs.verify.outputs.verified }}
           FOUND: ${{ needs.verify.outputs.found }}
+          MODEL: ${{ fromJSON(needs.gate.outputs.agents).hunt.model }}
         run: |
           hunt="$RUNNER_TEMP/hunt"
-          if [ "$VERIFIED" = true ]; then
-            subject=$(jq -r '.subject // ""' "$hunt/verdict.json")
-            printf '%s\n' "$subject" > "$RUNNER_TEMP/subject.txt"
-            if ! node tools/ci/commits.mjs message "$RUNNER_TEMP/subject.txt"; then subject="fix(runtime): fix the bug of issue $NUMBER"; fi
-            branch="agent/issue-$NUMBER"
-            git switch -c "$branch"
-            git apply "$hunt/fix.patch"
-            git add -A runtime/src tests/conformance
-            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -q -F - << EOF
+          if [ "$VERIFIED" != true ]; then
+            node tools/ci/gate.mjs comment "$NUMBER" "$hunt/report.md" "<!-- lus-hunt -->"
+            if [ "$FOUND" != true ]; then gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label not-reproduced || true; fi
+            exit 0
+          fi
+          subject=$(jq -r '.subject // ""' "$hunt/verdict.json")
+          printf '%s\n' "$subject" > "$RUNNER_TEMP/subject.txt"
+          if ! node tools/ci/commits.mjs message "$RUNNER_TEMP/subject.txt"; then subject="fix(runtime): fix the bug of issue $NUMBER"; fi
+          user_id=$(gh api "users/$APP_SLUG[bot]" --jq .id)
+          branch="agent/issue-$NUMBER"
+          git switch -c "$branch"
+          git apply "$hunt/fix.patch"
+          git add -A runtime/src tests/conformance
+          git -c user.name="$APP_SLUG[bot]" -c user.email="$user_id+$APP_SLUG[bot]@users.noreply.github.com" \
+            commit -q -F - << EOF
           $subject
 
           An agent found this fix for issue #$NUMBER, and CI checked its regression test.
 
           Co-Authored-By: Claude <noreply@anthropic.com>
           EOF
-            git push --force origin "$branch"
-            printf '\nThe fix is on the branch [%s](https://github.com/%s/compare/%s), which waits for the maintainer.\n' "$branch" "$GITHUB_REPOSITORY" "$branch" >> "$hunt/report.md"
-            node tools/ci/gate.mjs comment "$NUMBER" "$hunt/report.md" "<!-- lus-hunt -->"
-            gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-fix || true
-          else
-            node tools/ci/gate.mjs comment "$NUMBER" "$hunt/report.md" "<!-- lus-hunt -->"
-            if [ "$FOUND" != true ]; then gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label not-reproduced || true; fi
+          git push --force origin "$branch"
+          # The description follows .github/PULL_REQUEST_TEMPLATE.md.
+          {
+            printf '## Kind\n\nbug\n\n## Agent disclosure\n\nAgent: Claude\nModel: %s\nHarness: Claude Code\n\n' "$MODEL"
+            printf '## Linked issues\n\nFixes #%s\n\n## Test evidence\n\n' "$NUMBER"
+            cat "$hunt/report.md"
+          } > "$RUNNER_TEMP/pr.md"
+          url=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json url --jq '.[0].url // empty')
+          if [ -z "$url" ]; then
+            url=$(gh pr create --repo "$GITHUB_REPOSITORY" --head "$branch" --base "${{ github.event.repository.default_branch }}" --title "$subject" --body-file "$RUNNER_TEMP/pr.md" --draft)
           fi
+          printf '\nThe fix waits for the maintainer in %s.\n' "$url" >> "$hunt/report.md"
+          node tools/ci/gate.mjs comment "$NUMBER" "$hunt/report.md" "<!-- lus-hunt -->"
+          gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-fix || true

@@ -1,5 +1,5 @@
 {
-  "about": "The coding agents that .github/workflows/contributions.yml runs, and the limits of each run. Every run costs money, so each has a dollar budget that the CLI enforces and a job timeout in minutes. The CLI version is pinned, and the API key is the repository secret ANTHROPIC_API_KEY.",
+  "about": "The coding agents that .github/workflows/contributions.yml runs, and the limits of each run. Every run costs money, so each has a dollar budget that the CLI enforces and a job timeout in minutes. The CLI version is pinned, and the API key is the repository secret ANTHROPIC_API_KEY. `discussions` names the category of Discussions that each kind of issue moves to. A missing category falls back to the first one.",
   "cli": "@anthropic-ai/claude-code@2.1.325",
   "triage": {
     "model": "claude-sonnet-5-5",
@@ -15,5 +15,10 @@
     "model": "claude-fable-5-2",
     "budget_usd": 4,
     "timeout_minutes": 30
+  },
+  "discussions": {
+    "suggestion": "Ideas",
+    "design": "Ideas",
+    "question": "Q&A"
   }
 }

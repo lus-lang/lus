@@ -5,7 +5,8 @@ name: Perf label
 # comments the table. A run of ci.yml for a pull request from a fork
 # cannot write to the pull request, so this workflow reads its artifact
 # after it completes. It runs from the default branch and checks out no
-# code of the pull request. tools/ci/gate.mjs reads the artifact as data.
+# code of the pull request. tools/ci/gate.mjs reads the artifact as data,
+# and the Lus app writes the label and the comment.
 
 on:
   workflow_run:
@@ -24,9 +25,15 @@ jobs:
     permissions:
       contents: read
       actions: read
-      issues: write
-      pull-requests: write
     steps:
+      - name: Get a token of the Lus app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: write
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.repository.default_branch }}
@@ -48,7 +55,7 @@ jobs:
       - name: Label
         if: ${{ steps.download.outputs.found == 'true' }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
           SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           number=$(jq -r '.number | tostring | select(test("^[0-9]+$"))' "$RUNNER_TEMP/perf/pr.json")

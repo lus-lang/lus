@@ -10,14 +10,16 @@
 //   node tools/ci/gate.mjs comment N FILE MARKER   create or update one comment
 //   node tools/ci/gate.mjs close N FILE LABEL      comment, label, and close an issue
 //   node tools/ci/gate.mjs perf N SHA FILE         label a pull request from a measurement of ci.yml
+//   node tools/ci/gate.mjs discuss N CATEGORY FILE move an issue to Discussions, then close and lock it
 //
 // GITHUB_TOKEN, GITHUB_REPOSITORY, and GITHUB_EVENT_PATH come from the
 // workflow. NUMBER names the pull request or issue when the event has
 // none, as a manual run does. With DRY_RUN set to 1 the script prints each
 // write instead of making it.
 //
-// The owner, members, and collaborators of the repository, and the logins
-// of .github/known-authors, skip the gate. Everyone else needs an account
+// The owner, members, and collaborators of the repository, the logins of
+// .github/known-authors, and the Lus app itself (APP_SLUG), whose pull
+// requests carry the fixes of the agent, skip the gate. Everyone else needs an account
 // at least two years old. A pull request needs every commit verified by
 // GitHub, which also shows that the account has a verified email bound to
 // its signing key, a valid Kind and agent disclosure (tools/ci/pr.mjs),
@@ -118,7 +120,8 @@ export function decide({kind, item, user, commits, files, keys, known, now = Dat
   const login = item.user.login;
   const failures = [];
   let action = "pass";
-  if (EXEMPT_ASSOCIATIONS.includes(item.author_association) || known.has(login.toLowerCase())) {
+  const app = process.env.APP_SLUG ? `${process.env.APP_SLUG}[bot]`.toLowerCase() : null;
+  if (EXEMPT_ASSOCIATIONS.includes(item.author_association) || known.has(login.toLowerCase()) || login.toLowerCase() === app) {
     return {exempt: true, passed: true, action, failures, labels: [], verdict: "allowed"};
   }
   const days = (now - Date.parse(user.created_at)) / 86400000;
@@ -291,6 +294,45 @@ async function runPerf(number, sha, file) {
   await setLabels(number, result.regressions.length ? ["perf-regression"] : [], ["perf-regression"]);
 }
 
+async function graphql(query, variables) {
+  const data = await api("POST", "/graphql", {query, variables});
+  if (data?.errors?.length) throw new Error(`graphql: ${data.errors.map((e) => e.message).join("; ")}`);
+  return data.data;
+}
+
+// Moves an issue to Discussions. The API offers no transfer, so the script
+// opens a discussion in the category that holds the title, the text, and
+// the author of the issue, comments the link on the issue with the text of
+// FILE, then closes and locks the issue.
+async function runDiscuss(number, category, file) {
+  const issue = await api("GET", `/repos/${REPO}/issues/${number}`);
+  const [owner, name] = REPO.split("/");
+  const repo = await graphql(
+    "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { id discussionCategories(first: 25) { nodes { id name } } } }",
+    {owner, name},
+  );
+  const categories = repo.repository.discussionCategories.nodes;
+  const chosen = categories.find((c) => c.name.toLowerCase() === category.toLowerCase()) ?? categories[0];
+  if (!chosen) throw new Error("the repository has no discussion category");
+  const body = `@${issue.user.login} opened this as issue #${number}.\n\n${issue.body ?? ""}`.slice(0, 60000);
+  let url = "(dry run)";
+  if (DRY) {
+    console.log(`dry run: create a discussion in ${chosen.name}: ${issue.title}`);
+  } else {
+    const made = await graphql(
+      "mutation($repo: ID!, $cat: ID!, $title: String!, $body: String!) { createDiscussion(input: {repositoryId: $repo, categoryId: $cat, title: $title, body: $body}) { discussion { url } } }",
+      {repo: repo.repository.id, cat: chosen.id, title: issue.title, body},
+    );
+    url = made.createDiscussion.discussion.url;
+  }
+  const text = fs.readFileSync(file, "utf8").replaceAll("DISCUSSION_URL", url);
+  await write("POST", `/repos/${REPO}/issues/${number}/comments`, {body: text.slice(0, 60000)});
+  await setLabels(number, ["rejected"], []);
+  await write("PATCH", `/repos/${REPO}/issues/${number}`, {state: "closed", state_reason: "not_planned"});
+  await write("PUT", `/repos/${REPO}/issues/${number}/lock`, {lock_reason: "resolved"});
+  output({discussion: url});
+}
+
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   if (command === "gate") return runGate();
@@ -309,7 +351,8 @@ async function main() {
     return;
   }
   if (command === "perf" && rest.length === 3) return runPerf(...rest);
-  console.error("usage: gate.mjs gate | labels | comment NUMBER FILE MARKER | close NUMBER FILE LABEL | perf NUMBER SHA FILE");
+  if (command === "discuss" && rest.length === 3) return runDiscuss(...rest);
+  console.error("usage: gate.mjs gate | labels | comment NUMBER FILE MARKER | close NUMBER FILE LABEL | perf NUMBER SHA FILE | discuss NUMBER CATEGORY FILE");
   process.exit(2);
 }
 

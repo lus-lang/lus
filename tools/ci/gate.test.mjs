@@ -45,3 +45,12 @@ test("an issue needs a signing key", () => {
   assert.equal(decide(issue).action, "fail");
   assert.equal(decide({...issue, keys: 1}).action, "pass");
 });
+
+test("the Lus app skips the gate", () => {
+  process.env.APP_SLUG = "lus-bot";
+  try {
+    assert.ok(decide({...pr({user: {login: "lus-bot[bot]"}, author_association: "NONE"}), user: young}).exempt);
+  } finally {
+    delete process.env.APP_SLUG;
+  }
+});

@@ -24,13 +24,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
-      contents: write
+      contents: read
     env:
       TAG: ${{ inputs.tag || github.event.release.tag_name }}
     steps:
+      - name: Get a token of the Lus app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-contents: write
+      # The token of the app pushes the measurement to perf-data.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.TAG }}
+          token: ${{ steps.app.outputs.token }}
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: "0.17.1"
