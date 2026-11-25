@@ -37,14 +37,16 @@ const parser = lus.syntax.parser;
 const Allocator = std.mem.Allocator;
 
 const usage =
-    \\usage: lus doc [-o DIR] [--format md|json] FILE...
+    \\usage: lus doc [-o DIR] [--format md|json|html] FILE...
     \\
-    \\  -o DIR             write one file per module into DIR
-    \\  --format md|json   output format (default md)
+    \\  -o DIR                  write one file per module into DIR
+    \\  --format md|json|html   output format (default md). html needs -o and
+    \\                          adds index.html and a search index
     \\
 ;
 
-const Format = enum { md, json };
+const Format = enum { md, json, html };
+const html = @import("doc_html.zig");
 
 pub const Param = struct {
     name: []const u8,
@@ -101,7 +103,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             i += 1;
             const f = if (i < args.len) args[i] else "";
             format = std.meta.stringToEnum(Format, f) orelse {
-                std.debug.print("lus doc: '--format' takes md or json\n{s}", .{usage});
+                std.debug.print("lus doc: '--format' takes md, json, or html\n{s}", .{usage});
                 return 2;
             };
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
@@ -119,9 +121,15 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         return 2;
     }
 
+    if (format == .html and out_dir == null) {
+        std.debug.print("lus doc: '--format html' needs '-o DIR' for its pages\n{s}", .{usage});
+        return 2;
+    }
+
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    var modules: std.ArrayList(Module) = .empty;
     if (out_dir) |d| std.Io.Dir.cwd().createDirPath(io, d) catch |e| {
         std.debug.print("lus doc: cannot create {s} ({s})\n", .{ d, @errorName(e) });
         return 2;
@@ -147,11 +155,16 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             else => return e,
         };
         const module = try extract(arena, chunk, moduleName(file));
+        if (format == .html) {
+            try modules.append(arena, module);
+            continue;
+        }
         var buf: std.Io.Writer.Allocating = .init(gpa);
         defer buf.deinit();
         (switch (format) {
             .md => writeMarkdown(&buf.writer, module),
             .json => writeJson(&buf.writer, module),
+            .html => unreachable,
         }) catch return error.OutOfMemory;
         if (out_dir) |d| {
             const path = try std.fmt.allocPrint(arena, "{s}/{s}.{s}", .{ d, module.name, @tagName(format) });
@@ -164,8 +177,33 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             stdout.writer.writeAll(buf.written()) catch return error.OutOfMemory;
         }
     }
+    if (format == .html) {
+        const links = try html.Links.init(arena, modules.items);
+        const pages = [_][]const u8{ "index.html", "search.js" };
+        for (modules.items) |m| {
+            const path = try std.fmt.allocPrint(arena, "{s}/{s}.html", .{ out_dir.?, m.name });
+            var buf: std.Io.Writer.Allocating = .init(gpa);
+            defer buf.deinit();
+            html.writeModule(&buf.writer, arena, &links, m) catch return error.OutOfMemory;
+            writeOut(io, path, buf.written(), &status);
+        }
+        for (pages) |name| {
+            const path = try std.fmt.allocPrint(arena, "{s}/{s}", .{ out_dir.?, name });
+            var buf: std.Io.Writer.Allocating = .init(gpa);
+            defer buf.deinit();
+            (if (std.mem.eql(u8, name, "index.html")) html.writeIndex(&buf.writer, &links, modules.items) else html.writeSearch(&buf.writer, modules.items)) catch return error.OutOfMemory;
+            writeOut(io, path, buf.written(), &status);
+        }
+    }
     std.Io.File.stdout().writeStreamingAll(io, stdout.written()) catch {};
     return status;
+}
+
+fn writeOut(io: std.Io, path: []const u8, data: []const u8, status: *u8) void {
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = data }) catch |e| {
+        std.debug.print("lus doc: cannot write {s} ({s})\n", .{ path, @errorName(e) });
+        status.* = 2;
+    };
 }
 
 fn moduleName(path: []const u8) []const u8 {

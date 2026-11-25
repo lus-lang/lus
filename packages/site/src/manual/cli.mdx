@@ -132,7 +132,7 @@ Finds errors and likely mistakes without running the code. It parses, lints, and
 ## lus doc
 
 ```
-lus doc [-o DIR] [--format md|json] file ...
+lus doc [-o DIR] [--format md|json|html] file ...
 ```
 
 Generates reference documentation from the `---` doc comments of each file. Each file is one module. [Documentation](/manual/tools#documentation) describes the comments.
@@ -140,7 +140,7 @@ Generates reference documentation from the `---` doc comments of each file. Each
 | Option | Effect |
 | --- | --- |
 | `-o DIR` | Write one file per module into `DIR`. Without it, the output goes to standard output. |
-| `--format md\|json` | Choose Markdown, the default, or JSON. |
+| `--format md\|json\|html` | Choose Markdown, the default, JSON, or HTML. HTML needs `-o` and adds an index and a search box, with links between entries. |
 
 ## lus ast
 

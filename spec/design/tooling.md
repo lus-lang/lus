@@ -76,10 +76,10 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 
 | rustdoc | Lus | State | Cost |
 |---|---|---|---|
-| doc comments to HTML | `lus doc` writes Markdown and JSON, which the website renders. HTML output from the command itself is missing. | partial | medium |
+| doc comments to HTML | `lus doc --format html -o DIR` writes a static site with a page per module and an index. | closed | |
 | doctests in doc comments | `lus test --doc` runs the `lus` code blocks of Markdown files and of the doc comments of `.lus` files, with the directory of each file on `package.path`. | closed | |
-| intra-doc links | Missing. | open | medium |
-| search | The website searches the manual. Generated package documentation has no search of its own. | open | large |
+| intra-doc links | `` [`name`] `` and `[module.name]` in a description link to the entry, across the modules of one run. | closed | |
+| search | The pages of `lus doc --format html` share a search index of every entry, which works from disk. | closed | |
 
 ## Diagnostics
 
@@ -114,4 +114,4 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 
 The small gaps that remain are the caret snippet and `lus test --list`.
 
-The medium gaps follow in this order: more code actions, call hierarchy, and HTML documentation with intra-doc links and search. A fuzz harness for user code stays open.
+The medium gaps follow in this order: more code actions and call hierarchy. A fuzz harness for user code stays open.

@@ -150,6 +150,7 @@ test {
     _ = @import("syntax/fix.zig");
     _ = @import("tools/test.zig");
     _ = @import("tools/lsp.zig");
+    _ = @import("tools/doc_html.zig");
     _ = @import("tools/paths.zig");
     _ = @import("lib/init.zig");
     _ = @import("lib/shell.zig");

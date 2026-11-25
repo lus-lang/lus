@@ -365,7 +365,12 @@ By default, `lus doc` writes Markdown to standard output, starting with the fron
 ```sh
 lus doc -o docs src/*.lus
 lus doc --format json strings.lus
+lus doc --format html -o site src/*.lus
 ```
+
+`--format html` needs `-o DIR` and writes a small static site there: one page per module with a section per entry, `index.html` with the modules and the first sentence of each description, and `search.js`, whose search box on every page finds entries by name. The pages render the Markdown of the descriptions and need no server, so they open from disk.
+
+An _intra-doc link_ is a name in brackets inside a description, which links to the section of the entry with that name in whichever module defines it. `` [`trim`] `` and `[strings.trim]` both link to `strings.trim`, `[strings]` links to the page of the module, and `[the trimming function](strings.trim)` links with a label of its own. A name that no module defines stays plain text. The links resolve across all the files of one run, so the pages of a project link to each other when one run generates them.
 
 Other tools read doc comments too. The language server shows the doc comment of a name when the pointer is over that name in an editor. `lus check` reports a `@param` that names no parameter as `doc-unknown-param`.
 

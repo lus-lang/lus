@@ -1,0 +1,82 @@
+--[[
+    `lus doc --format html -o DIR` writes one page per module, an index,
+    and a search index. An intra-doc link such as [`trim`] or [strings.trim]
+    links to the section of that entry, in whichever module defines it.
+]]
+
+pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
+
+local LUS = os.getenv("LUS_EXE")
+
+local STRINGS = [[
+--- Helpers for text.
+local strings = {}
+
+--- Removes the spaces around `s`.
+--- @param s string The text.
+--- @return string The trimmed text.
+function strings.trim(s)
+    return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+return strings
+]]
+
+local WORDS = [[
+--- Splits text into words, after [`trim`].
+local words = {}
+
+--- Returns the words of `s`. See [strings.trim] and [the strings module](strings).
+--- Unknown names such as [nothing] stay text.
+function words.split(s)
+    local out = {}
+    for w in s:gmatch("%S+") do out[#out + 1] = w end
+    return out
+end
+
+return words
+]]
+
+local function write(path, text)
+    local f = assert(io.open(path, "w"))
+    f:write(text)
+    f:close()
+end
+
+local function read(path)
+    local f <close> = assert(io.open(path))
+    return f:read("a")
+end
+
+local function run(args)
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    local p = io.popen(`"$LUS" doc $args 2>&1`)
+    local out = p:read("a")
+    local ok = p:close()
+    return (ok == true or ok == 0), out
+end
+
+local function html_pages_link_across_modules_test()
+    write("strings.lus", STRINGS)
+    write("words.lus", WORDS)
+    local ok, out = run("--format html -o site strings.lus words.lus")
+    assert(ok, out)
+    local strings = read("site/strings.html")
+    assert(strings:find('<section id="strings.trim">', 1, true), strings)
+    assert(strings:find("<li><code>s</code> (<code>string</code>): The text.</li>", 1, true), strings)
+    local words = read("site/words.html")
+    assert(words:find('<a href="strings.html#strings.trim"><code>trim</code></a>', 1, true), words)
+    assert(words:find('<a href="strings.html#strings.trim">strings.trim</a>', 1, true), words)
+    assert(words:find('<a href="strings.html">the strings module</a>', 1, true), words)
+    assert(words:find("[nothing]", 1, true), words)
+    local index = read("site/index.html")
+    assert(index:find('<a href="words.html">words</a>', 1, true), index)
+    local search = read("site/search.js")
+    assert(search:find('"u": "strings.html#strings.trim"', 1, true), search)
+end
+
+local function html_needs_an_output_directory_test()
+    write("strings.lus", STRINGS)
+    local ok, out = run("--format html strings.lus")
+    assert(not ok and out:find("needs '-o DIR'", 1, true), out)
+end
