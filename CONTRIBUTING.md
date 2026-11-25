@@ -58,7 +58,6 @@ Write the first line of each commit message as `type(area): subject`. Write `sub
 | `release` | the release workflows and the tools that version and publish a release |
 | `tools` | the generators, the repository lint, and the other tools in `tools/` |
 | `agents` | the agent skills, prompts, and instructions |
-| `marketing` | plans for the launch and promotion of Lus |
 
 If you add a body, leave a blank line after the first line and write plain prose that follows [`spec/design/style.md`](/spec/design/style.md). Keep the `Co-Authored-By` trailer of any coding agent that wrote the commit.
 

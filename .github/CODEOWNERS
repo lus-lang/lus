@@ -51,6 +51,5 @@
 /runtime/build.zig.zon                @loukamb
 /runtime/src/release_keys.zig         @loukamb
 /runtime/vendor/                      @loukamb
-/spec/marketing/                      @loukamb
 /tools/                               @loukamb
 # END paths that contributors leave alone

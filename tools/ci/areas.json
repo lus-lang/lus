@@ -21,7 +21,6 @@
     "release": "The release workflows and the tools that version and publish a release",
     "tools": "The generators, the repository lint, and the other tools of tools/",
     "agents": "The agent skills, prompts, and instructions",
-    "marketing": "Plans for the launch and the promotion of Lus",
     "harness": "The harness package of packages/harness"
   },
   "status_labels": {
@@ -435,13 +434,6 @@
       "labels": ["spec", "docs"],
       "tests": ["packages/language-server/tests"],
       "checks": ["doc", "web"]
-    },
-    {
-      "name": "marketing",
-      "about": "Plans for the launch, which the maintainer writes.",
-      "paths": ["spec/marketing/**"],
-      "labels": ["marketing"],
-      "contributor": "denied"
     },
     {
       "name": "spec",
