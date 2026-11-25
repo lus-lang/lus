@@ -208,6 +208,13 @@
       "platforms": ["linux", "macos", "windows"]
     },
     {
+      "name": "lib-syscalls",
+      "about": "Libraries that call the operating system directly, which Windows on arm64 runs as well.",
+      "paths": ["runtime/src/lib/os.zig", "runtime/src/lib/io.zig", "runtime/src/lib/fs.zig", "runtime/src/lib/process.zig", "runtime/src/lib/shell.zig", "runtime/src/lib/watch.zig", "runtime/src/lib/network.zig", "runtime/src/lib/tls.zig"],
+      "labels": ["lib"],
+      "extra": ["windows-arm64"]
+    },
+    {
       "name": "lib-files",
       "paths": ["runtime/src/lib/fs.zig", "runtime/src/lib/io.zig", "runtime/src/lib/sqlite.zig", "runtime/src/lib/walk.zig", "runtime/src/lib/watch.zig"],
       "labels": ["lib"],
