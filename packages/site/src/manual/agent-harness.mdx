@@ -42,14 +42,16 @@ The installer accepts the following options.
 When the agent edits or writes a `.lus` file, the harness checks the file and adds the findings to the result of the edit, so the agent reads an error in the same turn that caused it. `lus check` reports syntax errors at their exact column with a hint, such as `not equal is written '~='`. The [language server](/manual/ide-setup#other-editors) adds what it finds on the other lines of the file. The edit appears with its diff and the findings under it:
 
 ```
-• Edited main.lus +4 -1
+• Edited main.lus +5 -1
    7 -local units = "metric"
    7 +local units = arg[1] or "metric"
-   8 +if units != "metric" and units != "imperial" then
-   9 +    error(`unknown units $units`)
-  10 +end
+   8
+   9 +if units != "metric" and units != "imperial" then
+  10 +    error(`unknown units $units`)
+  11 +end
+  12 +
   └ lsp 1 error
-    8:10 unexpected symbol near '!' (not equal is written '~=') syntax
+    9:10 unexpected symbol near '!' (not equal is written '~=') syntax
 ```
 
 Hints, such as an unused local, count in the summary without being shown. The language server starts on the first edit of a Lus file and stops when the session ends. The `lus_lsp` tool sends it hover, definition, references, and symbols requests, so the agent can find where a name is defined without searching the text of every file.
