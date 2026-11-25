@@ -1,0 +1,119 @@
+--[[
+    The report of a failed assert in a test file, and the fields of the
+    JSON records of `lus test`. A failed comparison shows both sides and
+    the values of the variables and fields inside each side. Two tables
+    that print the same get a note that == compares them by reference.
+    Every record carries `file`, `line`, and `duration`.
+]]
+
+pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
+
+local LUS = os.getenv("LUS_EXE")
+
+local CASES = [[
+local function sides_test()
+    local user = { name = "Ada", age = 41 }
+    local limit = 40
+    assert(user.age + 1 == limit)
+end
+
+local function reference_test()
+    assert({ 1, 2 } == { 1, 2 })
+end
+
+local function guarded_test()
+    local cfg = {}
+    assert(cfg.db == "main")
+end
+
+local function calls_test()
+    local items = { 1, 2, 3 }
+    assert(string.format("%d", #items) == "4")
+end
+
+local function group_test()
+    local g <group> = { a = 1 }
+    assert(g.a + 1 == 3)
+end
+
+local function returns_test()
+    local ok, msg = assert(1 < 2, "kept")
+    assert(ok == true and msg == "kept")
+end
+]]
+
+local function run_tests(options)
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    local f = assert(io.open("cases.lus", "w"))
+    f:write(CASES)
+    f:close()
+    local p = io.popen(`"$LUS" test $options cases.lus 2>&1`)
+    local report = p:read("a")
+    p:close()
+    return report
+end
+
+-- The report lines of one failed test, up to the next test.
+local function failure(report, name)
+    local start = report:find("FAIL " .. name, 1, true)
+    assert(start, report)
+    local stop = report:find("\n  FAIL ", start + 1, true) or #report
+    return report:sub(start, stop)
+end
+
+local function a_comparison_shows_the_values_inside_each_side_test()
+    local text = failure(run_tests(""), "sides_test")
+    assert(text:find("left:  42", 1, true), text)
+    assert(text:find("user.age = 41", 1, true), text)
+    assert(text:find("right: 40", 1, true), text)
+    -- A side that is itself a path shows only its value.
+    assert(not text:find("limit = 40", 1, true), text)
+    assert(text:find("user = ", 1, true), text)
+    -- Each path appears under its own side.
+    assert(text:find("user.age = 41", 1, true) < text:find("right:", 1, true), text)
+end
+
+local function equal_text_tables_get_a_note_test()
+    local text = failure(run_tests(""), "reference_test")
+    assert(text:find("compares tables by reference", 1, true), text)
+    assert(not failure(run_tests(""), "sides_test"):find("by reference", 1, true))
+end
+
+local function the_table_of_a_missing_field_is_shown_test()
+    local text = failure(run_tests(""), "guarded_test")
+    assert(text:find("left:  nil", 1, true), text)
+    assert(text:find("cfg = {}", 1, true), text)
+end
+
+local function the_function_of_a_call_is_left_out_test()
+    local text = failure(run_tests(""), "calls_test")
+    assert(text:find("items = {1, 2, 3}", 1, true), text)
+    assert(not text:find("string = ", 1, true), text)
+    assert(not text:find("string.format = ", 1, true), text)
+end
+
+local function a_local_group_stays_out_of_the_report_test()
+    local text = failure(run_tests(""), "group_test")
+    assert(text:find("left:  2", 1, true), text)
+    assert(not text:find("g = ", 1, true), text)
+end
+
+local function a_passing_assert_returns_its_arguments_test()
+    local report = run_tests("")
+    assert(not report:find("FAIL returns_test", 1, true), report)
+end
+
+local function json_records_carry_file_line_and_duration_test()
+    local report = run_tests("--json")
+    local seen = 0
+    for line in report:gmatch("[^\n]+") do
+        local rec = fromjson(line)
+        assert(rec.file == "cases.lus", line)
+        assert(math.type(rec.line) == "integer" and rec.line > 0, line)
+        assert(type(rec.duration) == "number" and rec.duration >= 0, line)
+        if rec.name == "sides_test" then assert(rec.line == 1, line) end
+        if rec.name == "reference_test" then assert(rec.line == 7, line) end
+        seen = seen + 1
+    end
+    assert(seen == 6, report)
+end

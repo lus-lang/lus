@@ -11,6 +11,13 @@
 //! file, for fixtures, and the environment variable `LUS_EXE` names the
 //! interpreter running the tests.
 //!
+//! A top-level function whose name ends in `_bench` is a benchmark. A plain
+//! run calls each benchmark once, as a test, so a broken one fails early.
+//! `--bench` runs only the benchmarks and measures them (`runBench`). When
+//! a benchmark returns a function, the runner measures that function, so
+//! the code before the return is setup. The results are compared with the
+//! baseline in `__benchmarks__/FILE.json`, which `-u` writes.
+//!
 //! Each file runs in its own child process inside a fresh temporary
 //! directory, and files run in parallel. The result of a file is printed
 //! as soon as it ends. A file that writes no output for the timeout, or
@@ -46,6 +53,10 @@ const Options = struct {
     verbose: bool = false,
     /// Run the `lus` code blocks of Markdown files instead of test files.
     doc: bool = false,
+    /// Measure only the benchmarks.
+    bench: bool = false,
+    /// How long each benchmark is measured, in milliseconds.
+    bench_ms: u32 = 1000,
     tmp_root: []const u8 = "/tmp",
 
     fn fileTimeout(o: *const Options) i64 {
@@ -59,6 +70,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     if (args.len >= 2 and std.mem.eql(u8, args[0], "--run-one")) {
         var filter: ?[]const u8 = null;
         var update = false;
+        var bench: ?u32 = null;
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             if (std.mem.eql(u8, args[i], "-u")) update = true;
@@ -66,9 +78,18 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
                 filter = args[i + 1];
                 i += 1;
             }
+            if (std.mem.eql(u8, args[i], "--display") and i + 1 < args.len) {
+                record_file = args[i + 1];
+                i += 1;
+            }
+            if (std.mem.eql(u8, args[i], "--bench-ms") and i + 1 < args.len) {
+                bench = std.fmt.parseInt(u32, args[i + 1], 10) catch 1000;
+                i += 1;
+            }
         }
+        if (record_file.len == 0) record_file = args[1];
         if (isDoc(args[1])) return runDocFile(init, args[1], filter);
-        return runOne(init, args[1], filter, update);
+        return runOne(init, args[1], filter, update, bench);
     }
     var o: Options = .{};
     defer o.paths.deinit(gpa);
@@ -83,6 +104,13 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             o.verbose = true;
         } else if (std.mem.eql(u8, a, "--doc")) {
             o.doc = true;
+        } else if (std.mem.eql(u8, a, "--bench")) {
+            o.bench = true;
+        } else if (std.mem.eql(u8, a, "--bench-time") and i + 1 < args.len) {
+            i += 1;
+            const secs = try std.fmt.parseFloat(f64, args[i]);
+            if (!(secs > 0 and secs <= 3600)) return error.InvalidBenchTime;
+            o.bench_ms = @intFromFloat(@max(1, secs * 1000));
         } else if (std.mem.eql(u8, a, "--filter") and i + 1 < args.len) {
             i += 1;
             o.filter = args[i];
@@ -112,6 +140,7 @@ const FileResult = struct {
     passed: usize = 0,
     failed: usize = 0,
     skipped: usize = 0,
+    benches: usize = 0,
     crashed: bool = false,
     timed_out: bool = false,
     report: std.ArrayList(u8) = .empty,
@@ -169,7 +198,9 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
     defer gpa.free(exe);
     const results = try gpa.alloc(FileResult, files.items.len);
     for (results, files.items) |*r, f| r.* = .{ .path = f };
-    const jobs = if (o.jobs > 0) o.jobs else @max(std.Thread.getCpuCount() catch 4, 1);
+    // Benchmarks run one file at a time unless --jobs says otherwise, so
+    // that files do not compete for the processor while they measure.
+    const jobs = if (o.jobs > 0) o.jobs else if (o.bench) 1 else @max(std.Thread.getCpuCount() catch 4, 1);
     var pool: Pool = .{ .gpa = gpa, .io = io, .exe = exe, .o = o, .results = results, .jobs = @min(jobs, results.len) };
     pool.lock();
     while (pool.live < pool.jobs) try pool.startWorker();
@@ -179,12 +210,14 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
     var passed: usize = 0;
     var failed: usize = 0;
     var skipped: usize = 0;
+    var benches: usize = 0;
     var bad_files: usize = 0;
     var broken: usize = 0;
     for (results) |*r| {
         passed += r.passed;
         failed += r.failed;
         skipped += r.skipped;
+        benches += r.benches;
         if (r.failed > 0 or r.crashed or r.timed_out) bad_files += 1;
         // A file that crashed, timed out, or failed to load runs no test,
         // so the summary counts it apart from failed tests.
@@ -193,7 +226,9 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
     var report: std.ArrayList(u8) = .empty;
     defer report.deinit(gpa);
     if (!o.json) {
-        try report.print(gpa, "\n{d} files, {d} passed, {d} failed, {d} skipped", .{ results.len, passed, failed, skipped });
+        if (o.bench) {
+            try report.print(gpa, "\n{d} files, {d} {s}, {d} failed", .{ results.len, benches, if (benches == 1) "benchmark" else "benchmarks", failed });
+        } else try report.print(gpa, "\n{d} files, {d} passed, {d} failed, {d} skipped", .{ results.len, passed, failed, skipped });
         if (broken > 0) try report.print(gpa, ", {d} {s} with errors", .{ broken, if (broken == 1) "file" else "files" });
         try report.append(gpa, '\n');
     }
@@ -522,11 +557,13 @@ fn formatResult(gpa: std.mem.Allocator, o: *const Options, r: *const FileResult,
     if (o.json) return text.appendSlice(gpa, r.records.items);
     const ok = r.failed == 0 and !r.crashed and !r.timed_out;
     const mark = if (ok) "ok  " else "FAIL";
-    try text.print(gpa, "{s} {s} ({d} passed", .{ mark, r.path, r.passed });
+    if (o.bench) {
+        try text.print(gpa, "{s} {s} ({d} {s}", .{ mark, r.path, r.benches, if (r.benches == 1) "benchmark" else "benchmarks" });
+    } else try text.print(gpa, "{s} {s} ({d} passed", .{ mark, r.path, r.passed });
     if (r.failed > 0) try text.print(gpa, ", {d} failed", .{r.failed});
     if (r.skipped > 0) try text.print(gpa, ", {d} skipped", .{r.skipped});
     try text.print(gpa, ", {d} ms)\n", .{r.millis});
-    if (!ok or o.verbose) try text.appendSlice(gpa, r.report.items);
+    if (!ok or o.verbose or o.bench) try text.appendSlice(gpa, r.report.items);
 }
 
 fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
@@ -544,9 +581,11 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
-    try argv.appendSlice(gpa, &.{ pool.exe, "test", "--run-one", abs });
+    try argv.appendSlice(gpa, &.{ pool.exe, "test", "--run-one", abs, "--display", r.path });
     if (pool.o.update) try argv.append(gpa, "-u");
     if (pool.o.filter) |f| try argv.appendSlice(gpa, &.{ "--filter", f });
+    var ms_buf: [16]u8 = undefined;
+    if (pool.o.bench) try argv.appendSlice(gpa, &.{ "--bench-ms", try std.fmt.bufPrint(&ms_buf, "{d}", .{pool.o.bench_ms}) });
     const start = std.Io.Clock.Timestamp.now(io, .awake);
     var child = try std.process.spawn(io, .{
         .argv = argv.items,
@@ -627,6 +666,9 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
             const name = recordField(rec, "name");
             if (std.mem.eql(u8, st, "pass")) {
                 r.passed += 1;
+            } else if (std.mem.eql(u8, st, "bench")) {
+                r.benches += 1;
+                try formatBench(gpa, rec, name, &r.report);
             } else if (std.mem.eql(u8, st, "skip")) {
                 r.skipped += 1;
                 const why = try unescape(gpa, recordField(rec, "message"));
@@ -655,7 +697,7 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
             .exited => |code| code == 0 or code == 1,
             .signal => false,
         };
-        if (!clean or (r.passed + r.failed + r.skipped == 0 and stderr.len > 0)) {
+        if (!clean or (r.passed + r.failed + r.skipped + r.benches == 0 and stderr.len > 0)) {
             r.crashed = !clean or r.failed == 0;
             try r.report.print(gpa, "  file error:\n", .{});
         }
@@ -672,6 +714,53 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
         var ol = std.mem.splitScalar(u8, std.mem.trimEnd(u8, output.items, "\n"), '\n');
         while (ol.next()) |m| try r.report.print(gpa, "       {s}\n", .{m});
     }
+}
+
+/// Extracts a numeric field from a one-line JSON record, or null when the
+/// record has no such field.
+fn recordNumber(rec: []const u8, key: []const u8) ?f64 {
+    var buf: [64]u8 = undefined;
+    const pat = std.fmt.bufPrint(&buf, "\"{s}\":", .{key}) catch return null;
+    const at = std.mem.indexOf(u8, rec, pat) orelse return null;
+    const start = at + pat.len;
+    var i = start;
+    while (i < rec.len and rec[i] != ',' and rec[i] != '}') : (i += 1) {}
+    return std.fmt.parseFloat(f64, rec[start..i]) catch null;
+}
+
+/// Writes a duration in nanoseconds with a unit that keeps three or four
+/// significant digits.
+fn writeDuration(gpa: std.mem.Allocator, text: *std.ArrayList(u8), ns: f64) !void {
+    if (ns < 1e3) return text.print(gpa, "{d:.1} ns", .{ns});
+    if (ns < 1e6) return text.print(gpa, "{d:.2} us", .{ns / 1e3});
+    if (ns < 1e9) return text.print(gpa, "{d:.2} ms", .{ns / 1e6});
+    return text.print(gpa, "{d:.3} s", .{ns / 1e9});
+}
+
+/// The relative change from `base` to `now` counts only when it exceeds
+/// 2 percent and three times the larger relative spread of the two runs.
+pub fn benchVerdict(now: f64, now_mad: f64, base: f64, base_mad: f64) []const u8 {
+    if (!(base > 0) or !(now > 0)) return "no change";
+    const change = (now - base) / base;
+    const noise = @max(now_mad / now, base_mad / base);
+    if (@abs(change) <= @max(0.02, 3 * noise)) return "no change";
+    return if (change > 0) "slower" else "faster";
+}
+
+/// Formats the record of one measured benchmark.
+fn formatBench(gpa: std.mem.Allocator, rec: []const u8, name: []const u8, text: *std.ArrayList(u8)) !void {
+    const ns = recordNumber(rec, "ns") orelse 0;
+    const mad = recordNumber(rec, "mad") orelse 0;
+    try text.print(gpa, "  bench {s}: ", .{name});
+    try writeDuration(gpa, text, ns);
+    try text.print(gpa, " per call, spread {d:.1}%", .{if (ns > 0) 100 * mad / ns else 0});
+    if (recordNumber(rec, "bytes")) |b| try text.print(gpa, ", {d:.0} bytes per call", .{b});
+    if (recordNumber(rec, "base_ns")) |base| {
+        const base_mad = recordNumber(rec, "base_mad") orelse 0;
+        const change = if (base > 0) 100 * (ns - base) / base else 0;
+        try text.print(gpa, ", {s}{d:.1}% against the baseline ({s})", .{ if (change >= 0) "+" else "", change, benchVerdict(ns, mad, base, base_mad) });
+    }
+    try text.append(gpa, '\n');
 }
 
 /// Extracts a string field from a one-line JSON record.
@@ -712,7 +801,7 @@ fn unescape(gpa: std.mem.Allocator, s: []const u8) ![]const u8 {
 
 const TestEntry = struct { name: []const u8 };
 
-fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update: bool) !u8 {
+fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update: bool, bench_ms: ?u32) !u8 {
     const gpa = init.gpa;
     const io = init.io;
     const src = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
@@ -752,7 +841,8 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
     };
     var tests: std.ArrayList([]const u8) = .empty;
     var cases: std.ArrayList([]const u8) = .empty;
-    try transform(arena, &chunk, src, &tests, &cases);
+    var benches: std.ArrayList([]const u8) = .empty;
+    try transform(arena, &chunk, src, &tests, &cases, &benches);
     const r = try lus.compile.codegen.compileAst(l.g, arena, chunk, .{ .chunkname = chunkname, .meta_grants = .{ .thread = l } });
     const p = switch (r) {
         .err => |m| {
@@ -782,6 +872,20 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
     const registry = l.stack[base];
     l.top = base + 1;
     var failed = false;
+    if (bench_ms) |ms| {
+        var baselines: Baselines = .{ .gpa = gpa, .io = io, .path = path };
+        defer baselines.deinit();
+        baselines.load() catch {};
+        const driver = try benchDriver(l);
+        for (benches.items, 0..) |name, bi| {
+            if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
+            const fv = lus.vm.table.getInt(registry.as(Table), @intCast(tests.items.len * 2 + cases.items.len + bi + 1));
+            if (!runBench(l, driver, name, fv, ms, &baselines)) failed = true;
+        }
+        if (update) baselines.save() catch |e| std.debug.print("cannot write the benchmark baseline ({s})\n", .{@errorName(e)});
+        out.flushAll(l.g);
+        return if (failed) 1 else 0;
+    }
     for (tests.items, 0..) |name, ti| {
         if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
         const fv = lus.vm.table.getInt(registry.as(Table), @intCast(ti * 2 + 2));
@@ -799,7 +903,7 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
                 const entry = lus.vm.table.getInt(ct, k);
                 if (entry.isNil()) break;
                 const label = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, k });
-                if (!runTest(l, &snap, label, fv, entry)) failed = true;
+                if (!runTest(l, &snap, label, fv, entry, lineOf(fv))) failed = true;
             }
             const positional = k - 1;
             var key: Value = .nil;
@@ -809,10 +913,19 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
                     try std.fmt.allocPrint(arena, "{s}[{s}]", .{ name, e.key.as(String).bytes() })
                 else
                     try std.fmt.allocPrint(arena, "{s}[?]", .{name});
-                if (!runTest(l, &snap, label, fv, e.val)) failed = true;
+                if (!runTest(l, &snap, label, fv, e.val, lineOf(fv))) failed = true;
             }
         } else {
-            if (!runTest(l, &snap, name, fv, null)) failed = true;
+            if (!runTest(l, &snap, name, fv, null, lineOf(fv))) failed = true;
+        }
+    }
+    // A plain run calls each benchmark once, as a test.
+    if (benches.items.len > 0) {
+        const once = try aux.getField(l, l.g.globals.as(Table), "__lus_bench_once");
+        for (benches.items, 0..) |name, bi| {
+            if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
+            const fv = lus.vm.table.getInt(registry.as(Table), @intCast(tests.items.len * 2 + cases.items.len + bi + 1));
+            if (!runTest(l, &snap, name, once, fv, lineOf(fv))) failed = true;
         }
     }
     snap.save() catch |e| std.debug.print("cannot write snapshots ({s})\n", .{@errorName(e)});
@@ -873,7 +986,7 @@ fn runDocFile(init: std.process.Init, path: []const u8, filter: ?[]const u8) !u8
             defer gpa.free(name);
             if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
             if (skip_block) {
-                writeRecord(gpa, io, "skip", name, "nocheck");
+                writeRecord(gpa, io, "skip", name, "nocheck", start_line, 0);
                 continue;
             }
             if (!try runDocBlock(init, path, start_line, code.items, name)) failed = true;
@@ -904,31 +1017,58 @@ fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []co
     api.load(l, code, chunkname) catch {
         ok = false;
     };
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
     if (ok) ok = api.pcall(l, 0, 0);
     if (!ok) msg = try gpa.dupe(u8, api.errorMessage(l, l.stack[l.top - 1]));
     if (ok and !api.runPending(l, true)) {
         ok = false;
         msg = try gpa.dupe(u8, api.errorMessage(l, l.err));
     }
+    const duration = msSince(io, start);
     api.close(l);
-    writeRecord(gpa, io, if (ok) "pass" else "fail", name, msg);
+    writeRecord(gpa, io, if (ok) "pass" else "fail", name, msg, line, duration);
     return ok;
 }
 
-fn writeRecord(gpa: std.mem.Allocator, io: std.Io, status: []const u8, name: []const u8, msg: []const u8) void {
+/// The path of the file a child runs, as the user named it, which every
+/// record carries in its `file` field. A child runs one file, so this is
+/// set once in child mode.
+var record_file: []const u8 = "";
+
+/// Writes the opening of a result record: `status`, `name`, `file`,
+/// `line`, and `duration` in milliseconds. The caller adds any further
+/// fields and closes the record.
+fn recordHead(gpa: std.mem.Allocator, rec: *std.ArrayList(u8), status: []const u8, name: []const u8, line: usize, duration_ms: f64) !void {
+    try rec.appendSlice(gpa, "\x1e{\"status\":\"");
+    try rec.appendSlice(gpa, status);
+    try rec.appendSlice(gpa, "\",\"name\":\"");
+    try jsonEscape(gpa, rec, name);
+    try rec.appendSlice(gpa, "\",\"file\":\"");
+    try jsonEscape(gpa, rec, record_file);
+    try rec.print(gpa, "\",\"line\":{d},\"duration\":{d:.3}", .{ line, duration_ms });
+}
+
+fn writeRecord(gpa: std.mem.Allocator, io: std.Io, status: []const u8, name: []const u8, msg: []const u8, line: usize, duration_ms: f64) void {
     var rec: std.ArrayList(u8) = .empty;
     defer rec.deinit(gpa);
-    rec.appendSlice(gpa, "\x1e{\"status\":\"") catch return;
-    rec.appendSlice(gpa, status) catch return;
-    rec.appendSlice(gpa, "\",\"name\":\"") catch return;
-    jsonEscape(gpa, &rec, name) catch return;
-    rec.appendSlice(gpa, "\",\"message\":\"") catch return;
+    recordHead(gpa, &rec, status, name, line, duration_ms) catch return;
+    rec.appendSlice(gpa, ",\"message\":\"") catch return;
     jsonEscape(gpa, &rec, msg) catch return;
     rec.appendSlice(gpa, "\"}\n") catch return;
     std.Io.File.stdout().writeStreamingAll(io, rec.items) catch {};
 }
 
-fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Value) bool {
+fn msSince(io: std.Io, start: std.Io.Clock.Timestamp) f64 {
+    const ns = start.durationTo(std.Io.Clock.Timestamp.now(io, .awake)).raw.nanoseconds;
+    return @as(f64, @floatFromInt(ns)) / std.time.ns_per_ms;
+}
+
+/// The line where the function `f` is defined, or 0 for a native.
+fn lineOf(f: Value) usize {
+    return if (f.tag == .closure) f.as(lus.vm.object.Closure).proto.line_defined else 0;
+}
+
+fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Value, line: usize) bool {
     const gpa = l.g.gpa;
     snap.begin(name);
     const base = l.top;
@@ -953,6 +1093,7 @@ fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Valu
     l.err_traceback = null;
     const pledge = lus.vm.pledge;
     const saved = pledge.save(l);
+    const start = std.Io.Clock.Timestamp.now(l.g.io, .awake);
     var ok = api.pcall(l, nargs, 0);
     var err: Value = if (ok) .nil else l.stack[l.top - 1];
     // A test ends when the coroutines it detached have ended. One that
@@ -967,6 +1108,7 @@ fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Valu
         l.push(err) catch {};
     }
     pledge.restore(l, saved);
+    const duration = msSince(l.g.io, start);
     var status: []const u8 = "pass";
     var msg: []const u8 = "";
     if (!ok) {
@@ -980,17 +1122,238 @@ fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Valu
     }
     l.top = base;
     out.flushAll(l.g);
+    writeRecord(gpa, l.g.io, status, name, msg, line, duration);
+    return ok or std.mem.eql(u8, status, "skip");
+}
+
+// ---------------------------------------------------------------------
+// Benchmarks
+
+/// Calls `body` the given number of times in a Lus loop, so each call
+/// costs what it costs in a program.
+const bench_driver_src =
+    \\local body, n = ...
+    \\for _ = 1, n do body() end
+;
+
+fn benchDriver(l: *Thread) !Value {
+    api.load(l, bench_driver_src, "=(lus test --bench)") catch return error.LusError;
+    const v = l.stack[l.top - 1];
+    // The driver stays in the globals of the state, which keep it alive.
+    try aux.setGlobal(l, "__lus_bench_driver", v);
+    l.top -= 1;
+    return v;
+}
+
+/// One entry of a baseline: the median time per call and its spread.
+const BaseEntry = struct { ns: f64, mad: f64 };
+
+/// The baseline of a test file, `__benchmarks__/FILE.json` next to it: a
+/// JSON object that maps each benchmark name to `{"ns": N, "mad": M}`.
+const Baselines = struct {
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+    entries: std.StringArrayHashMapUnmanaged(BaseEntry) = .empty,
+    /// The results of this run, which `save` merges into the entries.
+    fresh: std.StringArrayHashMapUnmanaged(BaseEntry) = .empty,
+
+    fn filePath(b: *Baselines) ![]u8 {
+        const dir = std.fs.path.dirname(b.path) orelse ".";
+        return std.fmt.allocPrint(b.gpa, "{s}/__benchmarks__/{s}.json", .{ dir, std.fs.path.basename(b.path) });
+    }
+
+    fn load(b: *Baselines) !void {
+        const p = try b.filePath();
+        defer b.gpa.free(p);
+        const data = try std.Io.Dir.cwd().readFileAlloc(b.io, p, b.gpa, .unlimited);
+        defer b.gpa.free(data);
+        const parsed = try std.json.parseFromSlice(std.json.Value, b.gpa, data, .{});
+        defer parsed.deinit();
+        if (parsed.value != .object) return;
+        var it = parsed.value.object.iterator();
+        while (it.next()) |e| {
+            if (e.value_ptr.* != .object) continue;
+            const o = e.value_ptr.object;
+            const ns = numberOf(o.get("ns")) orelse continue;
+            const mad = numberOf(o.get("mad")) orelse 0;
+            try b.entries.put(b.gpa, try b.gpa.dupe(u8, e.key_ptr.*), .{ .ns = ns, .mad = mad });
+        }
+    }
+
+    fn numberOf(v: ?std.json.Value) ?f64 {
+        return switch (v orelse return null) {
+            .float => |f| f,
+            .integer => |i| @floatFromInt(i),
+            else => null,
+        };
+    }
+
+    fn record(b: *Baselines, name: []const u8, e: BaseEntry) !void {
+        try b.fresh.put(b.gpa, name, e);
+    }
+
+    fn save(b: *Baselines) !void {
+        if (b.fresh.count() == 0) return;
+        var it = b.fresh.iterator();
+        while (it.next()) |e| {
+            const gop = try b.entries.getOrPut(b.gpa, e.key_ptr.*);
+            if (!gop.found_existing) gop.key_ptr.* = try b.gpa.dupe(u8, e.key_ptr.*);
+            gop.value_ptr.* = e.value_ptr.*;
+        }
+        const p = try b.filePath();
+        defer b.gpa.free(p);
+        if (std.fs.path.dirname(p)) |d| try std.Io.Dir.cwd().createDirPath(b.io, d);
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(b.gpa);
+        try buf.appendSlice(b.gpa, "{\n");
+        var eit = b.entries.iterator();
+        var first = true;
+        while (eit.next()) |e| {
+            if (!first) try buf.appendSlice(b.gpa, ",\n");
+            first = false;
+            try buf.appendSlice(b.gpa, "  \"");
+            try jsonEscape(b.gpa, &buf, e.key_ptr.*);
+            try buf.print(b.gpa, "\": {{\"ns\": {d:.3}, \"mad\": {d:.3}}}", .{ e.value_ptr.ns, e.value_ptr.mad });
+        }
+        try buf.appendSlice(b.gpa, "\n}\n");
+        try std.Io.Dir.cwd().writeFile(b.io, .{ .sub_path = p, .data = buf.items });
+    }
+
+    fn deinit(b: *Baselines) void {
+        for (b.entries.keys()) |k| b.gpa.free(k);
+        b.entries.deinit(b.gpa);
+        b.fresh.deinit(b.gpa);
+    }
+};
+
+/// How many timed samples a benchmark takes at most.
+const bench_samples = 20;
+
+/// Runs the driver, which calls `body` `n` times, and returns the elapsed
+/// nanoseconds, or null when a call raised, with the error object on the
+/// stack.
+fn timeCalls(l: *Thread, driver: Value, body: Value, n: i64) ?i96 {
+    const io = l.g.io;
+    l.push(driver) catch return null;
+    l.push(body) catch return null;
+    l.push(Value.int(n)) catch return null;
+    const start = std.Io.Clock.Timestamp.now(io, .awake);
+    if (!api.pcall(l, 2, 0)) return null;
+    const end = std.Io.Clock.Timestamp.now(io, .awake);
+    return start.durationTo(end).raw.nanoseconds;
+}
+
+fn median(xs: []f64) f64 {
+    std.mem.sort(f64, xs, {}, std.sort.asc(f64));
+    const m = xs.len / 2;
+    return if (xs.len % 2 == 1) xs[m] else (xs[m - 1] + xs[m]) / 2;
+}
+
+/// The median and the median absolute deviation of `xs`, which it
+/// reorders.
+pub fn medianAndMad(xs: []f64, scratch: []f64) struct { median: f64, mad: f64 } {
+    const med = median(xs);
+    for (xs, scratch[0..xs.len]) |x, *d| d.* = @abs(x - med);
+    return .{ .median = med, .mad = median(scratch[0..xs.len]) };
+}
+
+/// Measures one benchmark and writes its record. The benchmark runs once
+/// as setup. When it returns a function, that function is the code
+/// measured. Otherwise the benchmark itself is. Calibration doubles the
+/// number of calls per sample until a sample takes a twentieth of the
+/// budget, then up to 20 samples run within the budget. The time per call
+/// is the median over the samples, with the median absolute deviation as
+/// its spread. The bytes per call come from a separate run of at most 16
+/// calls with the collector stopped.
+fn runBench(l: *Thread, driver: Value, name: []const u8, f: Value, budget_ms: u32, baselines: *Baselines) bool {
+    const g = l.g;
+    const gpa = g.gpa;
+    const io = g.io;
+    const base = l.top;
+    defer l.top = base;
+    const pledge = lus.vm.pledge;
+    const saved = pledge.save(l);
+    defer pledge.restore(l, saved);
+    l.err_traceback = null;
+
+    const bench_start = std.Io.Clock.Timestamp.now(io, .awake);
+    l.push(f) catch return false;
+    if (!api.pcall(l, 0, 1)) return benchFailed(l, name, l.stack[l.top - 1], lineOf(f));
+    // The body stays on the stack, which keeps it alive while it runs.
+    const ret = l.stack[l.top - 1];
+    const body = if (ret.tag == .closure or ret.tag == .native) ret else f;
+    l.stack[l.top - 1] = body;
+
+    const budget: i96 = @as(i96, budget_ms) * std.time.ns_per_ms;
+    const target = @max(@divTrunc(budget, bench_samples), std.time.ns_per_ms);
+    var n: i64 = 1;
+    var spent: i96 = 0;
+    while (true) {
+        const t = timeCalls(l, driver, body, n) orelse return benchFailed(l, name, l.stack[l.top - 1], lineOf(f));
+        spent += t;
+        if (t >= target or n >= 1 << 40 or spent >= budget) break;
+        // Grow toward the target, by at most ten times per step.
+        const scale: i64 = if (t <= 0) 10 else @intCast(@min(10, @max(2, @divTrunc(target, t) + 1)));
+        n *= scale;
+    }
+
+    var per_call: [bench_samples]f64 = undefined;
+    var scratch: [bench_samples]f64 = undefined;
+    var count: usize = 0;
+    var elapsed: i96 = 0;
+    while (count < bench_samples and (count < 3 or elapsed < budget)) : (count += 1) {
+        const t = timeCalls(l, driver, body, n) orelse return benchFailed(l, name, l.stack[l.top - 1], lineOf(f));
+        elapsed += t;
+        per_call[count] = @as(f64, @floatFromInt(t)) / @as(f64, @floatFromInt(n));
+    }
+    const stats = medianAndMad(per_call[0..count], &scratch);
+
+    const k: i64 = @min(n, 16);
+    const was_stopped = g.gc_stopped;
+    g.gc_stopped = true;
+    const before = g.counter.bytes;
+    const alloc_ok = timeCalls(l, driver, body, k) != null;
+    const after = g.counter.bytes;
+    g.gc_stopped = was_stopped;
+    if (!alloc_ok) return benchFailed(l, name, l.stack[l.top - 1], lineOf(f));
+    const bytes = @as(f64, @floatFromInt(after -| before)) / @as(f64, @floatFromInt(k));
+
+    baselines.record(name, .{ .ns = stats.median, .mad = stats.mad }) catch {};
+    out.flushAll(g);
     var rec: std.ArrayList(u8) = .empty;
     defer rec.deinit(gpa);
-    rec.appendSlice(gpa, "\x1e{\"status\":\"") catch return false;
-    rec.appendSlice(gpa, status) catch return false;
-    rec.appendSlice(gpa, "\",\"name\":\"") catch return false;
-    jsonEscape(gpa, &rec, name) catch return false;
-    rec.appendSlice(gpa, "\",\"message\":\"") catch return false;
-    jsonEscape(gpa, &rec, msg) catch return false;
-    rec.appendSlice(gpa, "\"}\n") catch return false;
-    std.Io.File.stdout().writeStreamingAll(l.g.io, rec.items) catch {};
-    return ok or std.mem.eql(u8, status, "skip");
+    recordHead(gpa, &rec, "bench", name, lineOf(f), msSince(io, bench_start)) catch return false;
+    rec.print(gpa, ",\"message\":\"\",\"ns\":{d:.3},\"mad\":{d:.3},\"calls\":{d},\"samples\":{d},\"bytes\":{d:.1}", .{ stats.median, stats.mad, n, count, bytes }) catch return false;
+    if (baselines.entries.get(name)) |old| {
+        rec.print(gpa, ",\"base_ns\":{d:.3},\"base_mad\":{d:.3}", .{ old.ns, old.mad }) catch return false;
+    }
+    rec.appendSlice(gpa, "}\n") catch return false;
+    std.Io.File.stdout().writeStreamingAll(io, rec.items) catch {};
+    return true;
+}
+
+fn benchFailed(l: *Thread, name: []const u8, err: Value, line: usize) bool {
+    const msg = api.errorMessage(l, err);
+    out.flushAll(l.g);
+    writeRecord(l.g.gpa, l.g.io, "fail", name, msg, line, 0);
+    return false;
+}
+
+test medianAndMad {
+    var xs = [_]f64{ 5, 1, 3, 2, 4 };
+    var scratch: [5]f64 = undefined;
+    const r = medianAndMad(&xs, &scratch);
+    try std.testing.expectEqual(@as(f64, 3), r.median);
+    try std.testing.expectEqual(@as(f64, 1), r.mad);
+}
+
+test benchVerdict {
+    try std.testing.expectEqualStrings("no change", benchVerdict(101, 1, 100, 1));
+    try std.testing.expectEqualStrings("slower", benchVerdict(150, 1, 100, 1));
+    try std.testing.expectEqualStrings("faster", benchVerdict(50, 1, 100, 1));
+    // A spread of 10 percent hides a change of 20 percent.
+    try std.testing.expectEqualStrings("no change", benchVerdict(120, 12, 100, 10));
 }
 
 fn jsonEscape(gpa: std.mem.Allocator, o: *std.ArrayList(u8), s: []const u8) !void {
@@ -1014,19 +1377,22 @@ fn appendOnce(arena: std.mem.Allocator, list: *std.ArrayList([]const u8), name: 
 
 /// Collects tests and case tables, rewrites `assert` into power asserts,
 /// and makes the chunk return its tests as {name1, fn1, ..., cases...}.
-fn transform(arena: std.mem.Allocator, chunk: *ast.Chunk, src: []const u8, tests: *std.ArrayList([]const u8), cases: *std.ArrayList([]const u8)) !void {
+fn transform(arena: std.mem.Allocator, chunk: *ast.Chunk, src: []const u8, tests: *std.ArrayList([]const u8), cases: *std.ArrayList([]const u8), benches: *std.ArrayList([]const u8)) !void {
     const stats = chunk.block.stats;
     for (stats) |s| {
         switch (s.kind) {
             .local_function => |lf| {
                 if (std.mem.endsWith(u8, lf.name.text, "_test")) try tests.append(arena, lf.name.text);
+                if (std.mem.endsWith(u8, lf.name.text, "_bench")) try appendOnce(arena, benches, lf.name.text);
             },
             .function => |f| {
                 if (f.path.len == 1 and f.method == null and std.mem.endsWith(u8, f.path[0].text, "_test")) try tests.append(arena, f.path[0].text);
+                if (f.path.len == 1 and f.method == null and std.mem.endsWith(u8, f.path[0].text, "_bench")) try appendOnce(arena, benches, f.path[0].text);
             },
             .local => |l| {
                 for (l.names) |n| {
                     if (std.mem.endsWith(u8, n.name.text, "_test")) try tests.append(arena, n.name.text);
+                    if (std.mem.endsWith(u8, n.name.text, "_bench")) try appendOnce(arena, benches, n.name.text);
                     if (std.mem.endsWith(u8, n.name.text, "_cases")) try cases.append(arena, n.name.text);
                 }
             },
@@ -1046,7 +1412,7 @@ fn transform(arena: std.mem.Allocator, chunk: *ast.Chunk, src: []const u8, tests
     }
     // Power asserts.
     const V = walk.Visitor(*const Rewrite);
-    const rw: Rewrite = .{ .arena = arena, .src = src };
+    const rw: Rewrite = .{ .arena = arena, .src = src, .res = try lus.syntax.resolve.resolve(arena, chunk.*) };
     const v: V = .{ .ctx = &rw, .func = Rewrite.visit };
     try v.block(chunk.block);
     // return { name1, fn1, ..., case1, ... }
@@ -1057,6 +1423,9 @@ fn transform(arena: std.mem.Allocator, chunk: *ast.Chunk, src: []const u8, tests
         try fields.append(arena, .{ .kind = .{ .positional = try mk(arena, span, .{ .name = .{ .text = name, .span = span } }) } });
     }
     for (cases.items) |name| {
+        try fields.append(arena, .{ .kind = .{ .positional = try mk(arena, span, .{ .name = .{ .text = name, .span = span } }) } });
+    }
+    for (benches.items) |name| {
         try fields.append(arena, .{ .kind = .{ .positional = try mk(arena, span, .{ .name = .{ .text = name, .span = span } }) } });
     }
     const tbl = try mk(arena, span, .{ .table = try fields.toOwnedSlice(arena) });
@@ -1080,6 +1449,8 @@ fn mk(arena: std.mem.Allocator, span: ast.Span, kind: ast.Expr.Kind) !*ast.Expr 
 const Rewrite = struct {
     arena: std.mem.Allocator,
     src: []const u8,
+    /// The bindings of the chunk, which tell a local group from a value.
+    res: lus.syntax.resolve.Result,
 
     fn visit(rw: *const Rewrite, slot: **ast.Expr) anyerror!void {
         const e = slot.*;
@@ -1107,6 +1478,27 @@ const Rewrite = struct {
             try args.append(rw.arena, b.rhs);
             try args.append(rw.arena, try mkLine(rw.arena, subject, .{ .string = b.op.symbol() }));
             try args.append(rw.arena, src_lit);
+            // The paths inside each side, as their source text and as a
+            // function that reads them, which runs only when the
+            // comparison fails.
+            var paths: std.ArrayList(Probe) = .empty;
+            try rw.collect(b.lhs, true, '<', &paths);
+            try rw.collect(b.rhs, true, '>', &paths);
+            if (paths.items.len == 0) {
+                try args.append(rw.arena, try mkLine(rw.arena, subject, .nil));
+                try args.append(rw.arena, try mkLine(rw.arena, subject, .nil));
+            } else {
+                var names: std.ArrayList(u8) = .empty;
+                const values = try rw.arena.alloc(*ast.Expr, paths.items.len);
+                for (paths.items, values, 0..) |pr, *v, i| {
+                    if (i > 0) try names.append(rw.arena, '\n');
+                    try names.append(rw.arena, pr.side);
+                    try names.appendSlice(rw.arena, pr.text);
+                    v.* = try clonePath(rw.arena, pr.expr);
+                }
+                try args.append(rw.arena, try mkLine(rw.arena, subject, .{ .string = names.items }));
+                try args.append(rw.arena, try probeFunction(rw.arena, subject, values));
+            }
         } else {
             try args.append(rw.arena, src_lit);
             try args.append(rw.arena, subject);
@@ -1115,7 +1507,103 @@ const Rewrite = struct {
         const callee = try mkLine(rw.arena, c.callee, .{ .name = .{ .text = callee_name, .span = c.callee.span } });
         e.kind = .{ .call = .{ .callee = callee, .args = try args.toOwnedSlice(rw.arena), .args_kind = .parens } };
     }
+
+    /// Collects the paths inside `e` in source order, each once per side.
+    /// The side itself is left out, because the report shows its value.
+    /// The function of a call is left out, which keeps `string` out of
+    /// `string.format(...)`.
+    fn collect(rw: *const Rewrite, e: *ast.Expr, root: bool, side: u8, list: *std.ArrayList(Probe)) !void {
+        if (isPath(e)) {
+            if (!root) try rw.add(e, side, list);
+            if (e.kind == .index) {
+                try rw.collect(e.kind.index.obj, false, side, list);
+                if (isPath(e.kind.index.key)) try rw.collect(e.kind.index.key, false, side, list);
+            }
+            return;
+        }
+        switch (e.kind) {
+            .binop => |b| {
+                try rw.collect(b.lhs, false, side, list);
+                try rw.collect(b.rhs, false, side, list);
+            },
+            .unop => |u| try rw.collect(u.operand, false, side, list),
+            .paren => |p| try rw.collect(p, false, side, list),
+            .index => |ix| {
+                try rw.collect(ix.obj, false, side, list);
+                try rw.collect(ix.key, false, side, list);
+            },
+            .call => |c| for (c.args) |a| try rw.collect(a, false, side, list),
+            .method => |m| {
+                try rw.collect(m.obj, false, side, list);
+                for (m.args) |a| try rw.collect(a, false, side, list);
+            },
+            .interp => |parts| for (parts) |part| switch (part) {
+                .expr => |x| try rw.collect(x, false, side, list),
+                .text => {},
+            },
+            else => {},
+        }
+    }
+
+    /// The name at the start of a path.
+    fn rootName(e: *const ast.Expr) *const ast.Expr {
+        return if (e.kind == .index) rootName(e.kind.index.obj) else e;
+    }
+
+    fn add(rw: *const Rewrite, e: *ast.Expr, side: u8, list: *std.ArrayList(Probe)) !void {
+        // A local group is no value, so a function cannot capture it. Its
+        // paths stay out.
+        const root = rootName(e);
+        if (rw.res.refAt(@intCast(root.span.start))) |ref| if (ref.binding) |b| if (b.kind == .group) return;
+        const text = rw.src[@min(e.span.start, rw.src.len)..@min(e.span.end, rw.src.len)];
+        var on_side: usize = 0;
+        for (list.items) |p| if (p.side == side) {
+            if (std.mem.eql(u8, p.text, text)) return;
+            on_side += 1;
+        };
+        if (on_side >= max_probes_per_side) return;
+        try list.append(rw.arena, .{ .side = side, .text = text, .expr = e });
+    }
 };
+
+/// A variable or field path inside one side of an asserted comparison.
+const Probe = struct { side: u8, text: []const u8, expr: *ast.Expr };
+
+/// The most paths shown for one side.
+const max_probes_per_side = 8;
+
+/// Whether `e` reads a variable or a chain of fields with constant or
+/// path keys, which reading again cannot change.
+fn isPath(e: *const ast.Expr) bool {
+    return switch (e.kind) {
+        .name => true,
+        .index => |ix| isPath(ix.obj) and (isPath(ix.key) or ix.key.kind == .string or ix.key.kind == .integer),
+        else => false,
+    };
+}
+
+fn clonePath(arena: std.mem.Allocator, e: *const ast.Expr) !*ast.Expr {
+    const c = try arena.create(ast.Expr);
+    c.* = e.*;
+    if (e.kind == .index) {
+        const ix = e.kind.index;
+        c.kind = .{ .index = .{ .obj = try clonePath(arena, ix.obj), .key = if (isPath(ix.key)) try clonePath(arena, ix.key) else ix.key, .dot = ix.dot } };
+    }
+    return c;
+}
+
+/// `function() return v1, v2, ... end` at the line of `like`.
+fn probeFunction(arena: std.mem.Allocator, like: *ast.Expr, values: []*ast.Expr) !*ast.Expr {
+    const ret = try arena.create(ast.Stat);
+    ret.* = .{ .span = like.span, .line = like.line, .kind = .{ .return_ = values } };
+    const stats = try arena.alloc(*ast.Stat, 1);
+    stats[0] = ret;
+    const block = try arena.create(ast.Block);
+    block.* = .{ .stats = stats, .span = like.span, .end_line = like.line };
+    const func = try arena.create(ast.Function);
+    func.* = .{ .params = &.{}, .is_vararg = false, .body = block, .line = like.line, .end_line = like.line, .span = like.span, .name = "assert" };
+    return mkLine(arena, like, .{ .function = func });
+}
 
 fn mkLine(arena: std.mem.Allocator, like: *ast.Expr, kind: ast.Expr.Kind) !*ast.Expr {
     const e = try arena.create(ast.Expr);
@@ -1167,6 +1655,10 @@ const helpers_src =
     \\    return true
     \\end
     \\_G.raises = raises
+    \\_G.__lus_bench_once = function(f)
+    \\    local body = f()
+    \\    if type(body) == "function" then body() end
+    \\end
     \\_G.same = same
 ;
 
@@ -1255,9 +1747,12 @@ fn powerAssert(l: *Thread) Error!u32 {
     return l.raiseFmt("{s}", .{buf.items});
 }
 
-/// `__lus_assert_cmp(lhs, rhs, op, source, ...)`: on success returns true
-/// and the arguments after `source`, as the standard assert returns the
-/// result of the comparison and its other arguments.
+/// `__lus_assert_cmp(lhs, rhs, op, source, names, probe, ...)`: on success
+/// returns true and the arguments after `probe`, as the standard assert
+/// returns the result of the comparison and its other arguments. `names`
+/// lists the paths inside the two sides, one per line, each prefixed by
+/// `<` for the left side or `>` for the right, and `probe` returns their
+/// values. Both are nil when the sides hold no path.
 fn powerAssertCmp(l: *Thread) Error!u32 {
     const a = l.arg(1);
     const b = l.arg(2);
@@ -1268,22 +1763,59 @@ fn powerAssertCmp(l: *Thread) Error!u32 {
         // The slot of the source becomes the result, followed by the
         // arguments after it.
         l.top = l.base() + n;
-        l.stack[l.base() + 3] = .true;
-        return n - 3;
+        l.stack[l.base() + 5] = .true;
+        return n - 5;
     }
     const gpa = l.g.gpa;
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
     buf.print(gpa, "assertion failed: {s}", .{(try aux.checkString(l, 4)).bytes()}) catch return l.raiseMem();
-    if (!l.arg(5).isNil()) {
+    if (!l.arg(7).isNil()) {
         buf.appendSlice(gpa, "\n  message: ") catch return l.raiseMem();
-        try repr(l, &buf, l.arg(5), 0);
+        try repr(l, &buf, l.arg(7), 0);
     }
-    buf.appendSlice(gpa, "\n  left:  ") catch return l.raiseMem();
-    try repr(l, &buf, a, 0);
-    buf.appendSlice(gpa, "\n  right: ") catch return l.raiseMem();
-    try repr(l, &buf, b, 0);
+    // The values of the paths inside each side. A probe that raises, as
+    // `a.b.c` does when `a.b` is nil, shows the sides alone.
+    var probe_base: ?u32 = null;
+    var names: []const u8 = "";
+    if (l.arg(5).tag == .string and l.arg(6).tag == .closure) {
+        names = l.arg(5).as(String).bytes();
+        const at = l.top;
+        try l.push(l.arg(6));
+        if (api.pcall(l, 0, -1)) probe_base = at else l.top = at;
+    }
+    var left_text: std.ArrayList(u8) = .empty;
+    defer left_text.deinit(gpa);
+    var right_text: std.ArrayList(u8) = .empty;
+    defer right_text.deinit(gpa);
+    try repr(l, &left_text, a, 0);
+    try repr(l, &right_text, b, 0);
+    buf.print(gpa, "\n  left:  {s}", .{left_text.items}) catch return l.raiseMem();
+    try writeProbes(l, &buf, names, probe_base, '<');
+    buf.print(gpa, "\n  right: {s}", .{right_text.items}) catch return l.raiseMem();
+    try writeProbes(l, &buf, names, probe_base, '>');
+    // Tables compare by reference, so two that print the same can still
+    // differ.
+    if (a.tag == .table and b.tag == .table and std.mem.eql(u8, op, "==") and std.mem.eql(u8, left_text.items, right_text.items)) {
+        buf.appendSlice(gpa, "\n  note: both sides print the same, but == compares tables by reference, so these are two different tables. same(a, b) compares them by content.") catch return l.raiseMem();
+    }
     return l.raiseFmt("{s}", .{buf.items});
+}
+
+/// Writes `path = value` for each path of `side`, skipping functions,
+/// whose text says nothing about the failure.
+fn writeProbes(l: *Thread, buf: *std.ArrayList(u8), names: []const u8, base: ?u32, side: u8) Error!void {
+    const at = base orelse return;
+    const gpa = l.g.gpa;
+    var it = std.mem.splitScalar(u8, names, '\n');
+    var i: u32 = 0;
+    while (it.next()) |line| : (i += 1) {
+        if (line.len < 2 or line[0] != side) continue;
+        const v: Value = if (at + i < l.top) l.stack[at + i] else .nil;
+        if (v.tag == .closure or v.tag == .native) continue;
+        buf.print(gpa, "\n    {s} = ", .{line[1..]}) catch return l.raiseMem();
+        try repr(l, buf, v, 0);
+    }
 }
 
 const skip_marker = "\x00lus-skip:";

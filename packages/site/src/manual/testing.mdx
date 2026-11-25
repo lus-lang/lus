@@ -214,6 +214,30 @@ end
 
 A test may start [detached coroutines](/manual/concurrency), for example to run a server and a client in one test. The runner waits for them as the `lus` command does at the end of a script, so a test ends when every coroutine it detached has ended. The coroutines that the top-level code detaches end before the first test runs. If a detached coroutine fails and nothing collects its error, the test that detached it fails with that error. If the test itself fails, the runner closes the coroutines it detached that have not ended, as the end of a script closes them, so a coroutine that waits for a message the failed test never sent cannot stop the run.
 
+## Benchmarks
+
+A _benchmark_ is a top-level function of a test file whose name ends in `_bench`. A plain `lus test` calls each benchmark once, as a test, so a benchmark that breaks fails with the tests. `lus test --bench` runs only the benchmarks and measures how long one call takes. When a benchmark returns a function, the runner measures that function, so the work done before the return, such as building the input, stays out of the measurement. Any other benchmark is measured itself.
+
+```lus
+local function sort_bench()
+    local data = {}
+    for i = 1, 1000 do data[i] = (i * 7919) % 1000 end
+    return function()
+        local copy = table.clone(data)
+        table.sort(copy)
+    end
+end
+```
+
+The runner first doubles the number of calls in a sample until a sample takes a twentieth of the time each benchmark has, which is 1 second unless `--bench-time` sets it. It then takes up to 20 samples within that time and reports the median time per call with its spread, the median absolute deviation as a percentage of the median. A separate run of at most 16 calls with the collector stopped counts the bytes that one call allocates. The count covers the code as it runs, so an allocation that the JIT removes counts nothing. Files run one at a time with `--bench` unless `--jobs` says otherwise, so that they do not compete for the processor.
+
+```
+ok   sort_test.lus (1 benchmark, 1130 ms)
+  bench sort_bench: 145.63 us per call, spread 0.6%, 8240 bytes per call
+```
+
+`lus test --bench -u` saves the results in `__benchmarks__/FILE.json` next to the test file, as the _baseline_. A later `lus test --bench` compares each result with its baseline and reports the change in percent. The change counts as faster or slower when it exceeds both 2 percent and three times the larger spread of the two runs. Otherwise it counts as no change. A slower benchmark does not change the exit status, because timings vary from one machine to the next. `--json` prints one record per benchmark with the fields `ns`, `mad`, `calls`, `samples`, and `bytes`. A record also carries `base_ns` and `base_mad` when a baseline exists.
+
 ## Doc tests
 
 An example in documentation becomes wrong when the code it describes changes. `lus test --doc` detects this by running the code blocks of Markdown files as tests. The arguments are Markdown files or directories, in which the runner finds the files whose names end in `.md` or `.mdx`. Every block fenced as ` ```lus ` is a test named after the line where its code starts, as in `line 12`. A block passes when it runs to the end without raising an error.

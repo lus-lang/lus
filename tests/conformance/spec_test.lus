@@ -91,7 +91,8 @@ local function every_library_function_has_a_spec_entry_test()
     -- Functions the test runner itself provides are not part of the
     -- standard library.
     local runner = { raises = true, same = true, skip = true, snapshot = true,
-        __lus_assert = true, __lus_assert_cmp = true }
+        __lus_assert = true, __lus_assert_cmp = true,
+        __lus_bench_once = true, __lus_bench_driver = true }
     local real = {}
     for _, name in ipairs(undocumented) do
         if not runner[name] then real[#real + 1] = name end

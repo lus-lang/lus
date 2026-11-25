@@ -1,0 +1,114 @@
+--[[
+    Benchmarks in test files. A top-level function whose name ends in
+    _bench is a benchmark. A plain `lus test` calls it once as a test, and
+    `lus test --bench` measures it and compares it with the baseline that
+    `--bench -u` saves in __benchmarks__/FILE.json. Each case writes the
+    benchmark file into the temporary directory of this test, so the
+    baseline lands there too.
+]]
+
+pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
+
+local LUS = os.getenv("LUS_EXE")
+
+local BENCHES = [[
+local function sum_bench()
+    local t = 0
+    for i = 1, 100 do t = t + i end
+end
+
+local function setup_bench()
+    local data = {}
+    for i = 1, 1000 do data[i] = i end
+    return function()
+        local s = 0
+        for i = 1, #data do s = s + data[i] end
+    end
+end
+
+local function alloc_bench()
+    -- The table escapes into keep, so no tier can remove the allocation.
+    local keep = {}
+    return function()
+        keep[1] = { 1, 2, 3, 4, 5, 6, 7, 8 }
+    end
+end
+
+local function broken_bench()
+    error("broken on purpose")
+end
+
+local function plain_test()
+    assert(1 + 1 == 2)
+end
+]]
+
+local function write(path, text)
+    local f = assert(io.open(path, "w"))
+    f:write(text)
+    f:close()
+end
+
+-- Runs `lus test` with the given options on the benchmark file and returns
+-- its report and whether it exited with status 0.
+local function run_tests(options)
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    write("benches.lus", BENCHES)
+    local f = io.popen(`"$LUS" test $options benches.lus 2>&1`)
+    local report = f:read("a")
+    local ok = f:close()
+    return report, ok == true
+end
+
+local function bench_line(report, name)
+    for line in report:gmatch("[^\n]+") do
+        if line:find("bench " .. name .. ":", 1, true) then return line end
+    end
+end
+
+local function a_plain_run_calls_each_benchmark_once_test()
+    local report, ok = run_tests("")
+    assert(not ok, report)
+    assert(report:find("4 passed, 1 failed", 1, true), report)
+    assert(report:find("FAIL broken_bench", 1, true), report)
+    assert(report:find("broken on purpose", 1, true), report)
+    assert(not bench_line(report, "sum_bench"), report)
+end
+
+local function bench_measures_only_the_benchmarks_test()
+    local report, ok = run_tests("--bench --bench-time 0.05")
+    assert(not ok, report)
+    assert(report:find("(3 benchmarks, 1 failed", 1, true), report)
+    assert(report:find("1 files, 3 benchmarks, 1 failed", 1, true), report)
+    for _, name in ipairs({ "sum_bench", "setup_bench", "alloc_bench" }) do
+        local line = bench_line(report, name)
+        assert(line, report)
+        assert(line:find("per call, spread [%d.]+%%"), line)
+    end
+    -- A table of eight integers takes more than its header.
+    local bytes = tonumber(bench_line(report, "alloc_bench"):match(", (%d+) bytes per call"))
+    assert(bytes and bytes >= 64, report)
+    assert(not report:find("plain_test", 1, true), report)
+end
+
+local function the_baseline_is_saved_and_compared_test()
+    local report = run_tests("--bench --bench-time 0.05 --filter sum -u")
+    assert(not bench_line(report, "sum_bench"):find("baseline", 1, true), report)
+    local saved = fromjson(io.open("__benchmarks__/benches.lus.json"):read("a"))
+    assert(saved.sum_bench.ns > 0 and saved.sum_bench.mad >= 0, report)
+    assert(saved.setup_bench == nil, report)
+
+    report = run_tests("--bench --bench-time 0.05 --filter sum")
+    local line = bench_line(report, "sum_bench")
+    assert(line:find("%% against the baseline %((%a[%a ]*)%)$"), line)
+end
+
+local function json_records_carry_the_measurements_test()
+    local report = run_tests("--bench --bench-time 0.05 --filter setup --json")
+    local rec
+    for line in report:gmatch("[^\n]+") do
+        if line:find('"status":"bench"', 1, true) then rec = fromjson(line) end
+    end
+    assert(rec, report)
+    assert(rec.name == "setup_bench" and rec.ns > 0 and rec.calls >= 1 and rec.samples >= 3, report)
+end

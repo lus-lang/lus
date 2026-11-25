@@ -80,16 +80,18 @@ The options come before the script name, because `lus` passes everything after t
 lus test [options] [path ...]
 ```
 
-Runs the tests in the named files, or in every `*_test.lus` file inside the named directories. With no path, it searches the current directory. Files run in parallel, each in its own process and temporary directory. [Testing](/manual/testing) describes how to write tests.
+Runs the tests in the named files, or in every `*_test.lus` file inside the named directories. A plain run also calls each benchmark once. With no path, it searches the current directory. Files run in parallel, each in its own process and temporary directory. [Testing](/manual/testing) describes how to write tests.
 
 | Option | Effect |
 | --- | --- |
 | `--filter TEXT` | Run only the tests whose names contain `TEXT`. |
-| `-u`, `--update` | Rewrite the snapshots that no longer match. |
+| `-u`, `--update` | Rewrite the snapshots that no longer match. With `--bench`, save the results as the baseline. |
+| `--bench` | Measure the functions whose names end in `_bench` and compare them with the saved baseline, in place of running the tests. [Benchmarks](/manual/testing#benchmarks) describes the measurement. |
+| `--bench-time S` | Measure each benchmark for S seconds. The default is 1. |
 | `--doc` | Run the ` ```lus ` code blocks of Markdown files in place of test files, which keeps the examples of documentation correct. |
 | `-v` | List the skipped tests of passing files too. |
 | `--json` | Print one JSON record per test, for other tools to read. |
-| `--jobs N` | Run at most N files at once. The default is the number of processors. |
+| `--jobs N` | Run at most N files at once. The default is the number of processors, or 1 with `--bench`. |
 | `--timeout S` | Stop a file that writes no output for S seconds. The default is 60. |
 | `--file-timeout S` | Stop a file that runs longer than S seconds in all. The default is ten times the timeout. |
 
