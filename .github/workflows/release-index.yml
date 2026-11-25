@@ -2,9 +2,10 @@ name: Release index
 
 # Adds a published release to the signed release index that `lus version`
 # reads at https://lus.dev/releases/index.json (spec/tools/version.md).
-# The site redirects that address to the assets of the release named
-# release-index, a prerelease that only this workflow changes, so
-# releases/latest never points at it.
+# The site redirects that address and keys.json to the branch
+# release-index, which holds only those two files and which only this
+# workflow changes. Published releases are immutable, so the index lives
+# on a branch where each update is a new commit.
 #
 # A maintainer publishing a draft stable release starts this workflow.
 # nightly.yml and ship.yml call it, because a release that the workflow
@@ -85,7 +86,14 @@ jobs:
             echo "::warning::packaging/release/keys.json is missing, so a real release would stop here"
           fi
           mkdir -p out
-          gh release download release-index --pattern index.json --dir prev 2>/dev/null || mkdir -p prev
+          mkdir -p prev
+          if git fetch -q --depth 1 "https://github.com/$GITHUB_REPOSITORY.git" release-index 2>/dev/null; then
+            git show FETCH_HEAD:index.json > prev/index.json
+          else
+            # Before the branch, the index was an asset of the release
+            # named release-index.
+            gh release download release-index --pattern index.json --dir prev 2>/dev/null || true
+          fi
           if [ "$DRY_RUN" = true ]; then
             cp run-assets/SHA256SUMS out/SHA256SUMS
             (cd run-assets && for f in *; do printf '%s\t%s\n' "$f" "$(stat -c %s "$f")"; done) |
@@ -118,8 +126,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view release-index >/dev/null 2>&1; then
-            gh release create release-index --prerelease --title "Release index" \
-              --notes "The signed index of Lus releases that lus version reads. Only release-index.yml changes it."
-          fi
-          gh release upload release-index out/index.json out/keys.json --clobber
+          remote="https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
+          git init -q pub
+          cd pub
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch -q --depth 1 "$remote" release-index 2>/dev/null; then git checkout -q FETCH_HEAD; fi
+          cp ../out/index.json ../out/keys.json .
+          git add index.json keys.json
+          git commit -q -m "Add $TAG to the release index"
+          git push -q "$remote" HEAD:refs/heads/release-index

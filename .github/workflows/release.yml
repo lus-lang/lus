@@ -396,7 +396,10 @@ jobs:
         shell: bash
         run: |
           if [[ "$TAG" == *-unstable.* ]]; then
-            gh release create "$TAG" dist/* --prerelease --verify-tag --title "Lus ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+            # A published release is immutable, so every asset goes up
+            # while it is a draft.
+            gh release create "$TAG" dist/* --draft --prerelease --verify-tag --title "Lus ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release edit "$TAG" --draft=false
           else
             gh release create "$TAG" dist/* --draft --verify-tag --title "Lus ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
           fi

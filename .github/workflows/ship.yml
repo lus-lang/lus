@@ -3,30 +3,43 @@ name: Ship
 # Releases the version that runtime/build.zig.zon holds, X.Y.Z-dev, from
 # one start of this workflow:
 #
-#   1. prepare checks that CI and the nightly tests passed on the commit,
-#      that the tag is new, and that the secrets are set. It writes the
-#      changes of the release commit (tools/release-version.mjs release).
-#   2. build runs release.yml on that commit, which tests it, builds
-#      every target, lus.wasm, the VSIX, and the Windows installer, and
-#      attests the provenance of each file.
+#   1. prepare checks that CI passed on the commit, that the last nightly
+#      run passed, that the tag is new, and that the secrets are set. It
+#      writes the changes of the release commit (tools/release-version.mjs
+#      release).
+#   2. full runs every job of full.yml on the commit, as the nightly run
+#      does. build runs release.yml on it, which tests it, builds every
+#      target, lus.wasm, the VSIX, and the Windows installer, and attests
+#      the provenance of each file.
 #   3. github waits for the approval of the environment release, then
-#      pushes the release commit and the tag vX.Y.Z and publishes the
-#      release as the latest, which install.sh and lus-setup.exe download.
+#      pushes the tag vX.Y.Z and publishes the release as the latest,
+#      which install.sh and lus-setup.exe download. The tag points to the
+#      release commit, whose parent is the commit of the run, and no branch
+#      holds it.
 #   4. index, vscode, and npm add the release to the signed index of
 #      `lus version`, publish the VSIX to Open VSX, and publish lus-wasm to
 #      npm.
-#   5. next pushes a commit that starts X.(Y+1).0-dev.
+#   5. next opens a pull request that brings the dated changelog and the
+#      news page of the release to the branch and starts X.(Y+1).0-dev.
+#      The site deploys from the branch, so merging it publishes the news
+#      and rebuilds the playground with the lus.wasm of the release.
 #
-# The release commit carries the news page of the release, and the site
-# deploys from the branch, so the push of step 5 also rebuilds the site
-# with the lus.wasm of the release.
+# The rulesets let only repository administrators and the Lus app
+# create v* tags, and the branch takes changes only through reviewed pull
+# requests. The Lus app is the GitHub App of the project, which the
+# ruleset of the tags lists as a bypass actor. Each job asks for a token
+# with only the permissions it needs. One with write access to contents
+# pushes the tag, and one that can also write pull requests opens the
+# pull request, so that CI runs on it. Releases are immutable once published, so each one
+# is created as a draft with all its assets and then published.
 #
 # A start from the Actions tab is a dry run unless `dry_run` is cleared. A
 # dry run does every step up to the point of publishing and then prints
 # what it would publish. A push to rewrite that changes the release
 # workflows or tools runs a dry run as well.
 #
-# The secrets are LUS_RELEASE_SIGNING_SEED and LUS_RELEASE_SIGNING_KEY_ID
+# The secrets are LUS_APP_ID and LUS_APP_PRIVATE_KEY (the Lus app),
+# LUS_RELEASE_SIGNING_SEED and LUS_RELEASE_SIGNING_KEY_ID
 # (release-index.yml), OVSX_PAT (publish-vscode.yml), and NPM_TOKEN, an
 # npm automation token that can publish lus-wasm.
 
@@ -98,6 +111,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          LUS_APP_ID: ${{ secrets.LUS_APP_ID }}
+          LUS_APP_PRIVATE_KEY: ${{ secrets.LUS_APP_PRIVATE_KEY }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
           LUS_RELEASE_SIGNING_SEED: ${{ secrets.LUS_RELEASE_SIGNING_SEED }}
@@ -111,13 +126,15 @@ jobs:
           # commit and the next version follow it.
           head="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)"
           if [ "$head" != "$GITHUB_SHA" ]; then problems+=("$GITHUB_REF_NAME moved to $head after the run started"); fi
-          for workflow in ci.yml nightly.yml; do
-            passed="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$GITHUB_SHA&status=success&per_page=1" --jq .total_count)"
-            if [ "$passed" = 0 ]; then problems+=("$workflow has not passed on $GITHUB_SHA"); fi
-          done
+          passed="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=1" --jq .total_count)"
+          if [ "$passed" = 0 ]; then problems+=("ci.yml has not passed on $GITHUB_SHA"); fi
+          # The schedule runs nightly.yml from the default branch, so its
+          # runs carry the commit of that branch. The last one must pass.
+          nightly="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?status=completed&per_page=1" --jq '.workflow_runs[0].conclusion // "none"')"
+          if [ "$nightly" != success ]; then problems+=("the last run of nightly.yml ended with $nightly"); fi
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then problems+=("the tag $TAG exists"); fi
           if gh release view "$TAG" >/dev/null 2>&1; then problems+=("the release $TAG exists"); fi
-          for secret in NPM_TOKEN OVSX_PAT LUS_RELEASE_SIGNING_SEED LUS_RELEASE_SIGNING_KEY_ID; do
+          for secret in LUS_APP_ID LUS_APP_PRIVATE_KEY NPM_TOKEN OVSX_PAT LUS_RELEASE_SIGNING_SEED LUS_RELEASE_SIGNING_KEY_ID; do
             if [ -z "${!secret}" ]; then problems+=("the secret $secret is not set"); fi
           done
           if [ ! -f packaging/release/keys.json ]; then problems+=("packaging/release/keys.json is missing"); fi
@@ -156,14 +173,25 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.prepare.outputs.tag }}
+      # The tag does not exist until the release is approved.
+      ref: ${{ github.sha }}
       patch: ship-patch
       publish: false
       attest: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
     secrets: inherit
 
+  # Every job of full.yml, on every runner, as the nightly run has it.
+  full:
+    name: Full
+    needs: prepare
+    uses: ./.github/workflows/full.yml
+    with:
+      ref: ${{ github.sha }}
+    secrets: inherit
+
   github:
     name: Publish the GitHub release
-    needs: [prepare, build]
+    needs: [prepare, build, full]
     # A real release waits here for a reviewer of the environment release.
     # Every later job publishes only after this one.
     environment: ${{ (github.event_name == 'workflow_dispatch' && !inputs.dry_run) && 'release' || '' }}
@@ -172,7 +200,11 @@ jobs:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
+      # The tag goes up with the token of the Lus app, which a stored
+      # workflow token would override.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -219,10 +251,20 @@ jobs:
           name: ship-commits
           path: ${{ runner.temp }}/ship.bundle
           if-no-files-found: error
-      - name: Push the release commit and the tag
+      - name: Get a token of the Lus app
         if: env.DRY_RUN != 'true'
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Push the tag
+        if: env.DRY_RUN != 'true'
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
         shell: bash
-        run: git push --atomic origin "HEAD~1:refs/heads/$GITHUB_REF_NAME" "refs/tags/$TAG"
+        run: git push "https://x-access-token:$APP_TOKEN@github.com/$GITHUB_REPOSITORY.git" "refs/tags/$TAG"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -235,7 +277,10 @@ jobs:
             cat "$RUNNER_TEMP/notes.md"
             exit 0
           fi
-          gh release create "$TAG" dist/* --verify-tag --latest --title "Lus $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          # A published release is immutable, so every asset goes up while
+          # it is a draft.
+          gh release create "$TAG" dist/* --draft --verify-tag --title "Lus $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          gh release edit "$TAG" --draft=false --latest
 
   index:
     name: Release index
@@ -313,23 +358,52 @@ jobs:
           fi
 
   next:
-    name: Start the next version
+    name: Open the pull request of the next version
     needs: [prepare, github, index, vscode, npm]
     runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ship-commits
           path: ${{ runner.temp }}/commits
-      - name: Push the next version
+      - name: Write the commit of the next version
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch -q "$RUNNER_TEMP/commits/ship.bundle" HEAD
-          git log --oneline -3 FETCH_HEAD
-          if [ "$DRY_RUN" = true ]; then
-            git show --stat FETCH_HEAD
-            exit 0
-          fi
-          git push origin "FETCH_HEAD:refs/heads/$GITHUB_REF_NAME"
+          # One commit from the commit of the run to the next version: the
+          # dated changelog, the news page, and X.(Y+1).0-dev.
+          git checkout -q -b "release/$TAG" FETCH_HEAD
+          git reset -q --soft "$GITHUB_SHA"
+          next="$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)"
+          git commit -q -m "Start $next after the release of $VERSION"
+          git show --stat HEAD
+          echo "NEXT=$next" >> "$GITHUB_ENV"
+      - name: Get a token of the Lus app
+        if: env.DRY_RUN != 'true'
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Open the pull request
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git" "HEAD:refs/heads/release/$TAG"
+          gh pr create --base "$GITHUB_REF_NAME" --head "release/$TAG" \
+            --title "Start $NEXT after the release of $VERSION" \
+            --body "Lus $VERSION is released as $TAG. This dates its section of CHANGELOG.md, adds its news page to the site, and starts $NEXT. The site deploys the news when this merges."

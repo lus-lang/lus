@@ -32,20 +32,35 @@ the root key signs, so every installed `lus` keeps accepting the index.
 `.github/workflows/ship.yml` releases the version that
 `runtime/build.zig.zon` holds, `X.Y.Z-dev`, from one start in the Actions
 tab. It checks that CI and the nightly tests passed on the commit, then
-builds and tests every target through `release.yml`, pushes the release
-commit and the tag `vX.Y.Z`, publishes the GitHub release as the latest,
-signs the release index, publishes the VSIX to Open VSX and `lus-wasm` to
-npm, and pushes a commit that starts `X.(Y+1).0-dev`. The release commit
-dates the section of `CHANGELOG.md` and adds it to the news of the site
-(`tools/release-version.mjs`).
+builds, tests, and attests every target through `release.yml`. After a
+reviewer of the environment `release` approves, it pushes the tag `vX.Y.Z`,
+publishes the GitHub release as the latest, signs the release index,
+and publishes the VSIX to Open VSX and `lus-wasm` to npm. Last, it opens a
+pull request that dates the section of `CHANGELOG.md`, adds it to the news
+of the site, and starts `X.(Y+1).0-dev` (`tools/release-version.mjs`).
+
+The tag points to the release commit, whose parent is the commit of the
+run. That commit sets the version to `X.Y.Z` and no branch holds it, so
+the branch changes only through the pull request. A published release is
+immutable, so the workflow creates each release as a draft with all its
+assets and publishes it last. The release index lives on the branch
+`release-index`, which `https://lus.dev/releases/` redirects to.
 
 The input `dry_run` is set by default. A dry run builds and checks
-everything and publishes nothing, and its summary lists each gate that a
-real release would stop at. A real release needs the secrets
-`LUS_RELEASE_SIGNING_SEED`, `LUS_RELEASE_SIGNING_KEY_ID`, `OVSX_PAT`, and
-`NPM_TOKEN`, the file `keys.json`, a branch that the workflow token may
-push to, and the environment `release`. The job that tags and publishes
-the release runs in that environment, so a real release waits for one of
-its reviewers to approve. `release.yml` attests the provenance of every
-file it builds, which `gh attestation verify FILE --repo lus-lang/lus`
-checks, and a dry run attests nothing.
+everything, attests and publishes nothing, and lists in its summary each
+gate that a real release would stop at.
+
+A real release needs these settings of the repository.
+
+- The Lus app, the GitHub App of the project, with read and write access
+  to contents and to pull requests among its permissions. The ruleset of
+  `v*` tags lists it as a bypass actor, which lets it create the tag of a
+  release and of each unstable build. Each job asks for a token with only
+  the permissions it needs. Its identifier and a private key are the
+  secrets `LUS_APP_ID` and `LUS_APP_PRIVATE_KEY`.
+- The environment `release`, whose reviewers approve each release.
+- The secrets `LUS_RELEASE_SIGNING_SEED` and `LUS_RELEASE_SIGNING_KEY_ID`
+  with the file `keys.json`, `OVSX_PAT`, and `NPM_TOKEN`.
+
+`release.yml` attests the provenance of every file it builds, which
+`gh attestation verify FILE --repo lus-lang/lus` checks.

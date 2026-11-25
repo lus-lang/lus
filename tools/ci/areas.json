@@ -428,6 +428,13 @@
       "contributor": "egregious"
     },
     {
+      "name": "release",
+      "paths": [".github/workflows/ship.yml", ".github/workflows/release.yml", ".github/workflows/release-index.yml", ".github/workflows/publish-vscode.yml", "tools/release-version.mjs", "tools/release-version.test.mjs", "packaging/release/**"],
+      "labels": ["packaging", "ci"],
+      "checks": ["ci"],
+      "contributor": "egregious"
+    },
+    {
       "name": "packaging",
       "paths": ["packaging/**"],
       "labels": ["packaging"],
