@@ -13,6 +13,11 @@
 //! relocation fills and which the executable exports, so the library uses
 //! the same copy. The executable also exports the definitions that the
 //! libraries name, such as `environ`, which the startup object defines.
+//!
+//! Each import names the version of its symbol that the library defines
+//! by default. The loader of FreeBSD binds a reference without a version
+//! to the oldest version of the symbol, which for `stat` or `getdents` is
+//! the layout of FreeBSD 11.
 
 const std = @import("std");
 const lobj = @import("lobj.zig");
@@ -67,6 +72,11 @@ const Place = enum { rodata, text, init, fini, data, tdata, tbss, bss };
 
 const Rela = struct { offset: u64, type: u32, sym: u32, addend: i64 };
 
+/// A version that the executable needs from a library: the offsets in
+/// the dynamic strings of the library and of the version, and the index
+/// that the symbols of the version carry.
+const Ver = struct { file: u32, name: u32, str: u32, hash: u32, index: u16 };
+
 /// Writes the executable of `l`, without the payload.
 pub fn write(l: *Linker) Error![]u8 {
     var d: Dyn = .{ .l = l, .gpa = l.gpa };
@@ -97,6 +107,15 @@ const Dyn = struct {
     sym_names: std.ArrayList(u32) = .empty,
     /// The offsets in `dynstr` of the libraries the executable needs.
     needed: std.ArrayList(u32) = .empty,
+    /// The version index of each dynamic symbol.
+    sym_vers: std.ArrayList(u16) = .empty,
+    /// The versions the imports need, grouped by library in the order of
+    /// `needed`.
+    vers: std.ArrayList(Ver) = .empty,
+    /// The number of libraries that `vers` names.
+    verneed_num: u32 = 0,
+    versym_addr: u64 = 0,
+    verneed_addr: u64 = 0,
     phnum: u16 = 0,
     dyn_count: u64 = 0,
     interp_addr: u64 = 0,
@@ -120,6 +139,8 @@ const Dyn = struct {
         d.dynstr.deinit(d.gpa);
         d.sym_names.deinit(d.gpa);
         d.needed.deinit(d.gpa);
+        d.sym_vers.deinit(d.gpa);
+        d.vers.deinit(d.gpa);
     }
 
     fn x86(d: *const Dyn) bool {
@@ -255,10 +276,42 @@ const Dyn = struct {
         defer d.gpa.free(used);
         @memset(used, false);
         for (d.imports.keys()) |im| used[o.imports[im].lib] = true;
-        for (o.libs, used) |lib, u| if (u) try d.needed.append(d.gpa, try d.string(o.string(lib)));
+        const lib_off = try d.gpa.alloc(u32, o.libs.len);
+        defer d.gpa.free(lib_off);
+        for (o.libs, used, lib_off) |lib, u, *off| if (u) {
+            off.* = try d.string(o.string(lib));
+            try d.needed.append(d.gpa, off.*);
+        };
         try d.sym_names.append(d.gpa, 0);
-        for (d.imports.keys()) |im| try d.sym_names.append(d.gpa, try d.string(o.string(o.imports[im].name)));
-        for (o.symbols) |s| try d.sym_names.append(d.gpa, try d.string(o.string(s.name)));
+        try d.sym_vers.append(d.gpa, 0);
+        for (d.imports.keys()) |im| {
+            try d.sym_names.append(d.gpa, try d.string(o.string(o.imports[im].name)));
+            try d.sym_vers.append(d.gpa, 1);
+        }
+        for (o.symbols) |s| {
+            try d.sym_names.append(d.gpa, try d.string(o.string(s.name)));
+            try d.sym_vers.append(d.gpa, 1);
+        }
+        // The versions, one entry for each library and version, numbered
+        // from 2 after the local and the global index.
+        for (o.libs, used, lib_off) |_, u, off| {
+            if (!u) continue;
+            const first = d.vers.items.len;
+            for (d.imports.keys(), 1..) |im, k| {
+                const imp = o.imports[im];
+                if (imp.version == 0 or lib_off[imp.lib] != off) continue;
+                const index = for (d.vers.items[first..]) |v| {
+                    if (v.str == imp.version) break v.index;
+                } else blk: {
+                    const name = o.string(imp.version);
+                    const index: u16 = @intCast(2 + d.vers.items.len);
+                    try d.vers.append(d.gpa, .{ .file = off, .name = try d.string(name), .str = imp.version, .hash = sysvHash(name), .index = index });
+                    break :blk index;
+                };
+                d.sym_vers.items[k] = index;
+            }
+            if (d.vers.items.len > first) d.verneed_num += 1;
+        }
 
         var got_imports: u64 = 0;
         for (l.got.keys()) |k| {
@@ -274,6 +327,7 @@ const Dyn = struct {
         if (nrela > 0) d.dyn_count += 3;
         if (d.any(.init)) d.dyn_count += 2;
         if (d.any(.fini)) d.dyn_count += 2;
+        if (d.vers.items.len > 0) d.dyn_count += 3;
         const nsyms = d.symCount();
         d.nbucket = @intCast(@max(1, nsyms / 2));
 
@@ -293,6 +347,12 @@ const Dyn = struct {
         pos += @sizeOf(elf.Elf64_Sym) * nsyms;
         d.dynstr_addr = pos;
         pos += d.dynstr.items.len;
+        pos = std.mem.alignForward(u64, pos, 2);
+        d.versym_addr = pos;
+        pos += 2 * nsyms;
+        pos = std.mem.alignForward(u64, pos, 4);
+        d.verneed_addr = pos;
+        pos += @sizeOf(elf.Verneed) * @as(u64, d.verneed_num) + @sizeOf(elf.Vernaux) * d.vers.items.len;
         pos = std.mem.alignForward(u64, pos, 8);
         d.rela_addr = pos;
         pos += @sizeOf(elf.Elf64_Rela) * nrela;
@@ -451,6 +511,7 @@ const Dyn = struct {
         @memcpy(at(out, base, d.dynstr_addr)[0..d.dynstr.items.len], d.dynstr.items);
         d.writeSymbols(out);
         d.writeHash(out);
+        d.writeVersions(out);
         for (d.rela.items, 0..) |r, k| {
             const e: elf.Elf64_Rela = .{ .r_offset = r.offset, .r_info = @as(u64, r.sym) << 32 | r.type, .r_addend = r.addend };
             @memcpy(at(out, base, d.rela_addr + @sizeOf(elf.Elf64_Rela) * k)[0..@sizeOf(elf.Elf64_Rela)], std.mem.asBytes(&e));
@@ -507,6 +568,32 @@ const Dyn = struct {
         }
     }
 
+    /// The version of each dynamic symbol, and the versions needed from
+    /// each library, each entry followed by its versions.
+    fn writeVersions(d: *const Dyn, out: []u8) void {
+        if (d.vers.items.len == 0) return;
+        const b = d.l.base;
+        for (d.sym_vers.items, 0..) |v, k| std.mem.writeInt(u16, out[link.index(d.versym_addr - b + 2 * k)..][0..2], v, .little);
+        var pos = d.verneed_addr;
+        var i: usize = 0;
+        var group: u32 = 0;
+        while (i < d.vers.items.len) {
+            var j = i;
+            while (j < d.vers.items.len and d.vers.items[j].file == d.vers.items[i].file) j += 1;
+            const cnt = j - i;
+            group += 1;
+            const size = @sizeOf(elf.Verneed) + @sizeOf(elf.Vernaux) * cnt;
+            const vn: elf.Verneed = .{ .version = 1, .cnt = @intCast(cnt), .file = d.vers.items[i].file, .aux = @sizeOf(elf.Verneed), .next = if (group < d.verneed_num) @intCast(size) else 0 };
+            @memcpy(out[link.index(pos - b)..][0..@sizeOf(elf.Verneed)], std.mem.asBytes(&vn));
+            for (d.vers.items[i..j], 0..) |v, k| {
+                const aux: elf.Vernaux = .{ .hash = v.hash, .flags = 0, .other = v.index, .name = v.name, .next = if (k + 1 < cnt) @sizeOf(elf.Vernaux) else 0 };
+                @memcpy(out[link.index(pos - b + @sizeOf(elf.Verneed) + @sizeOf(elf.Vernaux) * k)..][0..@sizeOf(elf.Vernaux)], std.mem.asBytes(&aux));
+            }
+            pos += size;
+            i = j;
+        }
+    }
+
     fn writeDynamic(d: *const Dyn, out: []u8) void {
         const l = d.l;
         var k: usize = 0;
@@ -535,6 +622,11 @@ const Dyn = struct {
         if (d.any(.fini)) {
             put(d, out, &k, elf.DT_FINI_ARRAY, l.fini_start);
             put(d, out, &k, elf.DT_FINI_ARRAYSZ, l.fini_end - l.fini_start);
+        }
+        if (d.vers.items.len > 0) {
+            put(d, out, &k, elf.DT_VERSYM, d.versym_addr);
+            put(d, out, &k, elf.DT_VERNEED, d.verneed_addr);
+            put(d, out, &k, elf.DT_VERNEEDNUM, d.verneed_num);
         }
         put(d, out, &k, elf.DT_FLAGS, elf.DF_BIND_NOW);
         put(d, out, &k, elf.DT_FLAGS_1, elf.DF_1_NOW);
@@ -626,9 +718,9 @@ test "a FreeBSD executable imports, stubs, copies, and exports" {
     // _start: call exit@stub; mov stderrp(%rip), %rax; mov p, ...
     const code = [_]u8{ 0xe8, 0, 0, 0, 0, 0x48, 0x8b, 0x05, 0, 0, 0, 0, 0xc3 };
     const start = try w.atom(.text, 4, &code, code.len, "_start");
-    const exit = try w.importOf("exit", "libc.so.7", false, null);
-    const stderrp = try w.importOf("__stderrp", "libc.so.7", false, 8);
-    const lock = try w.importOf("pthread_mutex_lock", "libthr.so.3", false, null);
+    const exit = try w.importOf("exit", "libc.so.7", false, null, "FBSD_1.0");
+    const stderrp = try w.importOf("__stderrp", "libc.so.7", false, 8, "FBSD_1.0");
+    const lock = try w.importOf("pthread_mutex_lock", "libthr.so.3", false, null, "FBSD_1.0");
     try w.reloc(.{ .offset = 1, .type = 4, .target = exit, .addend = -4 });
     try w.reloc(.{ .offset = 8, .type = 2, .target = stderrp, .addend = -4 });
     const ptrs = try w.atom(.rodata, 3, &@as([8]u8, @splat(0)), 8, "ptrs");
@@ -662,6 +754,9 @@ test "a FreeBSD executable imports, stubs, copies, and exports" {
     var symtab: u64 = 0;
     var rela: u64 = 0;
     var relasz: u64 = 0;
+    var versym: u64 = 0;
+    var verneed: u64 = 0;
+    var verneednum: u64 = 0;
     var needed: [2][]const u8 = undefined;
     var nneeded: usize = 0;
     var needed_off: [2]u64 = undefined;
@@ -678,6 +773,9 @@ test "a FreeBSD executable imports, stubs, copies, and exports" {
             elf.DT_SYMTAB => symtab = e.d_val,
             elf.DT_RELA => rela = e.d_val,
             elf.DT_RELASZ => relasz = e.d_val,
+            elf.DT_VERSYM => versym = e.d_val,
+            elf.DT_VERNEED => verneed = e.d_val,
+            elf.DT_VERNEEDNUM => verneednum = e.d_val,
             else => {},
         }
     }
@@ -714,6 +812,31 @@ test "a FreeBSD executable imports, stubs, copies, and exports" {
         }
     }
     try std.testing.expect(seen[0] and seen[1] and seen[2]);
+    // Each library needs FBSD_1.0, which every import carries, and the
+    // export has the global index.
+    try std.testing.expectEqual(@as(u64, 2), verneednum);
+    var vpos = verneed - base;
+    var libs_seen: [2][]const u8 = undefined;
+    for (0..2) |g| {
+        const vn = std.mem.bytesToValue(elf.Verneed, img[vpos..][0..@sizeOf(elf.Verneed)]);
+        libs_seen[g] = std.mem.sliceTo(img[strtab - base + vn.file ..], 0);
+        try std.testing.expectEqual(@as(u16, 1), vn.cnt);
+        const aux = std.mem.bytesToValue(elf.Vernaux, img[vpos + vn.aux ..][0..@sizeOf(elf.Vernaux)]);
+        try std.testing.expectEqualStrings("FBSD_1.0", std.mem.sliceTo(img[strtab - base + aux.name ..], 0));
+        try std.testing.expectEqual(sysvHash("FBSD_1.0"), aux.hash);
+        try std.testing.expect(aux.other >= 2);
+        vpos += vn.next;
+    }
+    try std.testing.expectEqualStrings("libc.so.7", libs_seen[0]);
+    try std.testing.expectEqualStrings("libthr.so.3", libs_seen[1]);
+    const v = struct {
+        fn at(b: []const u8, off: u64, n: u64) u16 {
+            return std.mem.readInt(u16, b[off + 2 * n ..][0..2], .little);
+        }
+    }.at;
+    try std.testing.expectEqual(@as(u16, 0), v(img, versym - base, 0));
+    for (1..4) |s| try std.testing.expect(v(img, versym - base, s) >= 2);
+    try std.testing.expectEqual(@as(u16, 1), v(img, versym - base, 4));
     // The call reaches a stub that jumps through the slot of exit.
     const call = std.mem.readInt(i32, img[eh.e_entry - base + 1 ..][0..4], .little);
     const stub = @as(u64, @intCast(@as(i64, @intCast(eh.e_entry + 5)) + call));

@@ -17,7 +17,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const magic = "LUSLINK\x03";
+pub const magic = "LUSLINK\x04";
 
 pub const Arch = enum(u8) {
     x86_64,
@@ -146,13 +146,16 @@ pub const Guard = extern struct {
 /// bound when the system loader maps the executable. A weak import may be
 /// missing, and its address is then zero. An import of data has its size
 /// from the library, so an executable that addresses it directly holds
-/// a copy of it.
+/// a copy of it. On FreeBSD an import names the version of the symbol
+/// that the library defines by default, which the loader binds it to.
+/// The version 0 is the empty string, for a symbol without a version.
 pub const Import = extern struct {
     name: u32,
     lib: u16,
     weak: u8,
     data: u8 = 0,
     size: u32 = 0,
+    version: u32 = 0,
 };
 
 /// A global symbol that the linker may name: the entry point, and on
@@ -260,7 +263,7 @@ pub fn read(buf: []align(8) u8) Error!Object {
         .import => if (rel.target.index >= imports.len) return error.BadLinkObject,
         .none => {},
     };
-    for (imports) |im| if (im.name >= strings.len or im.lib >= libs.len) return error.BadLinkObject;
+    for (imports) |im| if (im.name >= strings.len or im.lib >= libs.len or im.version >= strings.len) return error.BadLinkObject;
     for (libs) |n| if (n >= strings.len) return error.BadLinkObject;
     for (linker_names) |n| if (n >= strings.len) return error.BadLinkObject;
     for (roots) |a| if (a >= atoms.len) return error.BadLinkObject;
@@ -373,7 +376,7 @@ pub const Writer = struct {
     /// The target for the function `name` of the shared library `lib`,
     /// added once.
     pub fn import(w: *Writer, name: []const u8, lib: []const u8, weak: bool) Allocator.Error!Target {
-        return w.importOf(name, lib, weak, null);
+        return w.importOf(name, lib, weak, null, null);
     }
 
     /// The index of the shared library `lib`, added once. The loader
@@ -386,8 +389,9 @@ pub const Writer = struct {
     }
 
     /// The target for the symbol `name` of the shared library `lib`, added
-    /// once: a function, or data of `data_size` bytes.
-    pub fn importOf(w: *Writer, name: []const u8, lib: []const u8, weak: bool, data_size: ?u32) Allocator.Error!Target {
+    /// once: a function, or data of `data_size` bytes, of the symbol
+    /// version `version`.
+    pub fn importOf(w: *Writer, name: []const u8, lib: []const u8, weak: bool, data_size: ?u32, version: ?[]const u8) Allocator.Error!Target {
         const li = try w.library(lib);
         const off = try w.string(name);
         for (w.imports.items, 0..) |im, i| if (im.name == off) {
@@ -395,7 +399,7 @@ pub const Writer = struct {
             if (!weak) w.imports.items[i].weak = 0;
             return .{ .index = @intCast(i), .space = .import };
         };
-        try w.imports.append(w.gpa, .{ .name = off, .lib = li, .weak = @intFromBool(weak), .data = @intFromBool(data_size != null), .size = data_size orelse 0 });
+        try w.imports.append(w.gpa, .{ .name = off, .lib = li, .weak = @intFromBool(weak), .data = @intFromBool(data_size != null), .size = data_size orelse 0, .version = if (version) |v| try w.string(v) else 0 });
         return .{ .index = @intCast(w.imports.items.len - 1), .space = .import };
     }
 

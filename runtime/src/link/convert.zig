@@ -121,8 +121,9 @@ const Import = struct {
     thunk: ?u32 = null,
 };
 
-/// A symbol that a shared library on the link line defines.
-const Shared = struct { lib: []const u8, data: bool, size: u64 };
+/// A symbol that a shared library on the link line defines, with the
+/// version it has by default.
+const Shared = struct { lib: []const u8, data: bool, size: u64, version: ?[]const u8 };
 
 /// A section of a loaded input that merges into a group.
 const Pending = struct { input: u32, sec: u32 };
@@ -247,6 +248,25 @@ pub const Converter = struct {
             }
         }
         _ = try c.w.library(lib);
+        // The versions the library defines, by their index. A symbol of a
+        // hidden version is an older interface that only executables
+        // built against it reach, so the executable binds the default.
+        var versym: ?elf.Elf64_Shdr = null;
+        var names: std.AutoHashMapUnmanaged(u16, []const u8) = .empty;
+        defer names.deinit(c.gpa);
+        for (shdrs) |sh| {
+            if (sh.sh_type == elf.SHT_GNU_VERSYM) versym = sh;
+            if (sh.sh_type != elf.SHT_GNU_VERDEF) continue;
+            const strs = shdrs[sh.sh_link];
+            var off: u64 = sh.sh_offset;
+            for (0..sh.sh_info) |_| {
+                const vd = std.mem.bytesToValue(elf.Verdef, slice(data, off, @sizeOf(elf.Verdef)));
+                const aux = std.mem.bytesToValue(elf.Verdaux, slice(data, off + vd.aux, @sizeOf(elf.Verdaux)));
+                if (vd.flags & elf.VER_FLG_BASE == 0) try names.put(c.gpa, @backingInt(vd.ndx), cstr(data, strs.sh_offset + aux.name));
+                if (vd.next == 0) break;
+                off += vd.next;
+            }
+        }
         for (shdrs) |sh| {
             if (sh.sh_type != elf.SHT_DYNSYM) continue;
             const strs = shdrs[sh.sh_link];
@@ -260,9 +280,11 @@ pub const Converter = struct {
                     try c.wanted.append(c.gpa, sname);
                     continue;
                 }
+                const vs: u16 = if (versym) |v| std.mem.readInt(u16, slice(data, v.sh_offset + 2 * (k / @sizeOf(elf.Elf64_Sym)), 2)[0..2], .little) else 1;
+                if (vs & 0x8000 != 0) continue;
                 const ty = es.st_info & 0xf;
                 const gop = try c.shared.getOrPut(c.gpa, sname);
-                if (!gop.found_existing) gop.value_ptr.* = .{ .lib = lib, .data = ty == elf.STT_OBJECT or ty == elf.STT_TLS or ty == elf.STT_COMMON, .size = es.st_size };
+                if (!gop.found_existing) gop.value_ptr.* = .{ .lib = lib, .data = ty == elf.STT_OBJECT or ty == elf.STT_TLS or ty == elf.STT_COMMON, .size = es.st_size, .version = names.get(vs) };
             }
         }
     }
@@ -1289,7 +1311,7 @@ pub const Converter = struct {
         // undefined, which `dyld` binds at load.
         if (c.macho()) return .{ .target = try c.w.import(s.name, lib_system, s.bind == .weak), .addend = addend };
         // On FreeBSD, the shared libraries of the link line.
-        if (c.shared.get(s.name)) |d| return .{ .target = try c.w.importOf(s.name, d.lib, s.bind == .weak, if (d.data) std.math.cast(u32, d.size) orelse return error.Unsupported else null), .addend = addend };
+        if (c.shared.get(s.name)) |d| return .{ .target = try c.w.importOf(s.name, d.lib, s.bind == .weak, if (d.data) std.math.cast(u32, d.size) orelse return error.Unsupported else null, d.version), .addend = addend };
         if (s.bind == .weak) return .{ .target = .none_target, .addend = addend };
         std.log.err("{s}: undefined symbol {s}", .{ in.name, s.name });
         return error.UndefinedSymbol;
