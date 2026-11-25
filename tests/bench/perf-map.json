@@ -1,0 +1,607 @@
+{
+  "about": [
+    "Benchmarks for performance tracking, the source paths that reach each one, and the change of the median that counts as a regression.",
+    "time and rss are relative thresholds. They are three times the largest relative median absolute deviation of one run, measured over 11 interleaved rounds of four ReleaseFast and ReleaseSafe builds on an Apple M-series Mac, with a floor of 3 percent for time and 2 percent for memory and a ceiling of 25 percent.",
+    "A comparison of medians over N runs on the CI runner also requires the move to exceed 3 MAD of that runner, so these numbers are a floor on the effect size. Benchmarks marked short run under 40 ms, where process start dominates, and need more runs.",
+    "noise null means the benchmark has no measurement yet, and the thresholds are the defaults of the tracking plan.",
+    "paths map globs to benchmark ids. all selects every benchmark. changed selects the benchmarks whose own files changed."
+  ],
+  "measured": {
+    "commit": "0e7a4ae7",
+    "rounds": 11,
+    "builds": [
+      "ReleaseFast",
+      "ReleaseSafe"
+    ]
+  },
+  "benchmarks": {
+    "arrays": {
+      "run": "tests/bench/arrays.lus",
+      "cwd": "tests/bench",
+      "time": 0.1,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.031,
+        "rss": 0.001
+      },
+      "release_s": 0.0335,
+      "rss_mb": 24.2,
+      "short": true
+    },
+    "closures": {
+      "run": "tests/bench/closures.lus",
+      "cwd": "tests/bench",
+      "time": 0.08,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.024,
+        "rss": 0
+      },
+      "release_s": 0.0584,
+      "rss_mb": 5.8
+    },
+    "context": {
+      "run": "tests/bench/context.lus",
+      "cwd": "tests/bench",
+      "time": 0.08,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.026,
+        "rss": 0
+      },
+      "release_s": 0.2082,
+      "rss_mb": 1413.8
+    },
+    "data": {
+      "run": "tests/bench/data.lus",
+      "cwd": "tests/bench",
+      "time": 0.1,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.033,
+        "rss": 0
+      },
+      "release_s": 0.0253,
+      "rss_mb": 24.3,
+      "short": true
+    },
+    "fib": {
+      "run": "tests/bench/fib.lus",
+      "cwd": "tests/bench",
+      "time": 0.12,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.039,
+        "rss": 0
+      },
+      "release_s": 0.0106,
+      "rss_mb": 4.4,
+      "short": true
+    },
+    "forfrom": {
+      "run": "tests/bench/forfrom.lus",
+      "cwd": "tests/bench",
+      "time": 0.06,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.019,
+        "rss": 0
+      },
+      "release_s": 0.1849,
+      "rss_mb": 6
+    },
+    "fullgc": {
+      "run": "tests/bench/fullgc.lus",
+      "cwd": "tests/bench",
+      "time": 0.08,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.027,
+        "rss": 0
+      },
+      "release_s": 0.0644,
+      "rss_mb": 96.7
+    },
+    "gcpause": {
+      "run": "tests/bench/gcpause.lus",
+      "cwd": "tests/bench",
+      "time": 0.14,
+      "rss": 0.19,
+      "noise": {
+        "time": 0.045,
+        "rss": 0.063
+      },
+      "release_s": 0.4178,
+      "rss_mb": 47.9
+    },
+    "interp": {
+      "run": "tests/bench/interp.lus",
+      "cwd": "tests/bench",
+      "time": 0.09,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.03,
+        "rss": 0.002
+      },
+      "release_s": 0.5134,
+      "rss_mb": 248.4
+    },
+    "lazy": {
+      "run": "tests/bench/lazy.lus",
+      "cwd": "tests/bench",
+      "time": 0.08,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.025,
+        "rss": 0.002
+      },
+      "release_s": 0.271,
+      "rss_mb": 6.4
+    },
+    "loop": {
+      "run": "tests/bench/loop.lus",
+      "cwd": "tests/bench",
+      "time": 0.15,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.047,
+        "rss": 0.004
+      },
+      "release_s": 0.0576,
+      "rss_mb": 4.5
+    },
+    "messages": {
+      "run": "tests/bench/messages.lus",
+      "cwd": "tests/bench",
+      "time": 0.18,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.06,
+        "rss": 0.003
+      },
+      "release_s": 0.1772,
+      "rss_mb": 169.3
+    },
+    "methods": {
+      "run": "tests/bench/methods.lus",
+      "cwd": "tests/bench",
+      "time": 0.25,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.106,
+        "rss": 0.003
+      },
+      "release_s": 0.0075,
+      "rss_mb": 5,
+      "short": true
+    },
+    "observe": {
+      "run": "tests/bench/observe.lus",
+      "cwd": "tests/bench",
+      "time": 0.04,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.011,
+        "rss": 0.002
+      },
+      "release_s": 0.6193,
+      "rss_mb": 6.7
+    },
+    "patterns": {
+      "run": "tests/bench/patterns.lus",
+      "cwd": "tests/bench",
+      "time": 0.09,
+      "rss": 0.15,
+      "noise": {
+        "time": 0.029,
+        "rss": 0.048
+      },
+      "release_s": 0.0938,
+      "rss_mb": 15.2
+    },
+    "queries": {
+      "run": "tests/bench/queries.lus",
+      "cwd": "tests/bench",
+      "time": 0.05,
+      "rss": 0.11,
+      "noise": {
+        "time": 0.013,
+        "rss": 0.036
+      },
+      "release_s": 0.1579,
+      "rss_mb": 59.5
+    },
+    "startup": {
+      "run": "tests/bench/startup.lus",
+      "cwd": "tests/bench",
+      "time": 0.22,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.071,
+        "rss": 0
+      },
+      "release_s": 0.1509,
+      "rss_mb": 7.8
+    },
+    "strings": {
+      "run": "tests/bench/strings.lus",
+      "cwd": "tests/bench",
+      "time": 0.24,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.078,
+        "rss": 0
+      },
+      "release_s": 0.1324,
+      "rss_mb": 73.2
+    },
+    "tables": {
+      "run": "tests/bench/tables.lus",
+      "cwd": "tests/bench",
+      "time": 0.1,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.03,
+        "rss": 0
+      },
+      "release_s": 0.1115,
+      "rss_mb": 245.4
+    },
+    "unicode": {
+      "run": "tests/bench/unicode.lus",
+      "cwd": "tests/bench",
+      "time": 0.2,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.066,
+        "rss": 0
+      },
+      "release_s": 0.0093,
+      "rss_mb": 5.1,
+      "short": true
+    },
+    "compare/csv": {
+      "run": "tests/bench/compare/csv/csv.lus",
+      "cwd": "tests/bench/compare/csv",
+      "time": 0.16,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.052,
+        "rss": 0
+      },
+      "release_s": 0.6953,
+      "rss_mb": 381.2
+    },
+    "compare/json": {
+      "run": "tests/bench/compare/json/json.lus",
+      "cwd": "tests/bench/compare/json",
+      "time": 0.09,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.027,
+        "rss": 0
+      },
+      "release_s": 0.5735,
+      "rss_mb": 485.8
+    },
+    "compare/logs": {
+      "run": "tests/bench/compare/logs/logs.lus",
+      "cwd": "tests/bench/compare/logs",
+      "time": 0.12,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.038,
+        "rss": 0
+      },
+      "release_s": 0.5751,
+      "rss_mb": 288.5
+    },
+    "compare/lru": {
+      "run": "tests/bench/compare/lru/lru.lus",
+      "cwd": "tests/bench/compare/lru",
+      "time": 0.16,
+      "rss": 0.05,
+      "noise": {
+        "time": 0.052,
+        "rss": 0.014
+      },
+      "release_s": 0.8817,
+      "rss_mb": 34.7
+    },
+    "compare/template": {
+      "run": "tests/bench/compare/template/template.lus",
+      "cwd": "tests/bench/compare/template",
+      "time": 0.08,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.026,
+        "rss": 0.001
+      },
+      "release_s": 0.5607,
+      "rss_mb": 475.8
+    },
+    "compare/wordfreq": {
+      "run": "tests/bench/compare/wordfreq/wordfreq.lus",
+      "cwd": "tests/bench/compare/wordfreq",
+      "time": 0.05,
+      "rss": 0.02,
+      "noise": {
+        "time": 0.014,
+        "rss": 0
+      },
+      "release_s": 1.0303,
+      "rss_mb": 237.8
+    },
+    "http_serve": {
+      "run": "tests/bench/http_serve.lus",
+      "cwd": "tests/bench",
+      "time": 0.07,
+      "rss": 0.05,
+      "noise": null
+    },
+    "compare/http": {
+      "run": "node tests/bench/compare/run.mjs --only http --runtimes lus",
+      "cwd": ".",
+      "metric": "requests per second",
+      "time": 0.07,
+      "rss": 0.05,
+      "noise": null
+    }
+  },
+  "paths": [
+    {
+      "globs": [
+        "runtime/src/vm/interp.zig",
+        "runtime/src/vm/ops.zig",
+        "runtime/src/compile/**",
+        "runtime/src/syntax/**"
+      ],
+      "benches": [
+        "fib",
+        "loop",
+        "closures",
+        "methods",
+        "tables",
+        "arrays",
+        "forfrom",
+        "interp",
+        "lazy",
+        "context",
+        "compare/lru",
+        "compare/template"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/vm/table.zig",
+        "runtime/src/vm/shape.zig"
+      ],
+      "benches": [
+        "tables",
+        "methods",
+        "arrays",
+        "data",
+        "forfrom",
+        "fullgc",
+        "compare/lru",
+        "compare/json",
+        "compare/csv",
+        "compare/wordfreq"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/vm/gc.zig",
+        "runtime/src/vm/gcpar.zig",
+        "runtime/src/vm/heap.zig",
+        "runtime/src/vm/sweep.zig"
+      ],
+      "benches": [
+        "fullgc",
+        "gcpause",
+        "tables",
+        "closures",
+        "compare/lru",
+        "compare/json",
+        "compare/csv",
+        "compare/wordfreq",
+        "compare/logs"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/vm/state.zig",
+        "runtime/src/vm/object.zig",
+        "runtime/src/vm/value.zig"
+      ],
+      "benches": [
+        "fib",
+        "tables",
+        "strings",
+        "interp",
+        "compare/logs",
+        "compare/wordfreq",
+        "compare/template",
+        "compare/json"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/vm/wtf8.zig",
+        "runtime/src/lib/utf8.zig"
+      ],
+      "benches": [
+        "unicode",
+        "strings",
+        "compare/wordfreq"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/vm/numeric.zig",
+        "runtime/src/vm/fdigits.zig",
+        "runtime/src/lib/math.zig"
+      ],
+      "benches": [
+        "loop",
+        "data",
+        "compare/json"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/vm/query.zig",
+        "runtime/src/compile/query_gen.zig"
+      ],
+      "benches": [
+        "queries"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/vm/context.zig",
+        "runtime/src/lib/context.zig"
+      ],
+      "benches": [
+        "context"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/lib/lazy.zig"
+      ],
+      "benches": [
+        "lazy",
+        "observe"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/vm/sched.zig",
+        "runtime/src/lib/coroutine.zig",
+        "runtime/src/lib/events.zig",
+        "runtime/src/lib/network.zig",
+        "runtime/src/lib/serve.zig",
+        "runtime/src/lib/http.zig"
+      ],
+      "benches": [
+        "http_serve",
+        "compare/http"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/lib/worker.zig",
+        "runtime/src/vm/blob.zig"
+      ],
+      "benches": [
+        "messages",
+        "startup"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/lib/init.zig",
+        "runtime/src/lib/base.zig",
+        "runtime/src/lib/package.zig",
+        "runtime/src/vm/pledge.zig"
+      ],
+      "benches": [
+        "startup"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/lib/string.zig",
+        "runtime/src/lib/auxlib.zig"
+      ],
+      "benches": [
+        "strings",
+        "patterns",
+        "interp",
+        "unicode",
+        "compare/logs",
+        "compare/template",
+        "compare/wordfreq",
+        "compare/csv"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/lib/table.zig"
+      ],
+      "benches": [
+        "data",
+        "arrays",
+        "strings",
+        "interp",
+        "compare/wordfreq",
+        "compare/template"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/lib/json.zig"
+      ],
+      "benches": [
+        "compare/json",
+        "compare/http"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/lib/csv.zig"
+      ],
+      "benches": [
+        "compare/csv"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/jit/*.zig"
+      ],
+      "benches": [
+        "fib",
+        "loop",
+        "closures",
+        "methods",
+        "tables",
+        "arrays",
+        "data",
+        "forfrom",
+        "compare/lru",
+        "compare/json"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/src/jit/opt/**"
+      ],
+      "benches": [
+        "fib",
+        "loop",
+        "closures",
+        "arrays",
+        "data",
+        "methods",
+        "compare/lru"
+      ]
+    },
+    {
+      "globs": [
+        "runtime/build.zig",
+        "runtime/build.zig.zon",
+        "runtime/src/vm/inv.zig",
+        "mise.toml"
+      ],
+      "benches": "all"
+    },
+    {
+      "globs": [
+        "tests/bench/*.lus",
+        "tests/bench/compare/**"
+      ],
+      "benches": "changed"
+    }
+  ]
+}
