@@ -376,20 +376,22 @@ fn androidLibc(b: *std.Build, target: std.Build.ResolvedTarget) void {
     };
     const sysroot = b.pathJoin(&.{ ndk, "toolchains", "llvm", "prebuilt", host, "sysroot" });
     const api = t.os.version_range.linux.android;
+    // The objects that start and end a program sit in the directory of
+    // each API level, where Zig looks for the objects of the C compiler.
+    // The C library is found in `crt_dir`: the shared libraries in the
+    // directory of the API level, the static archives one directory above.
+    const api_dir = b.fmt("{s}/usr/lib/{s}/{d}", .{ sysroot, triple, api });
+    const lib_dir = if (static) b.fmt("{s}/usr/lib/{s}", .{ sysroot, triple }) else api_dir;
     const libc_file = b.addWriteFiles().add("android-libc.txt", b.fmt(
         \\include_dir={s}/usr/include
         \\sys_include_dir={s}/usr/include/{s}
-        \\crt_dir={s}/usr/lib/{s}/{d}
+        \\crt_dir={s}
         \\msvc_lib_dir=
         \\kernel32_lib_dir=
-        \\gcc_dir={s}/usr/lib/{s}/{d}
+        \\gcc_dir={s}
         \\darwin_sdk_dir=
         \\
-    , .{ sysroot, sysroot, triple, sysroot, triple, api, sysroot, triple, api }));
-    // The objects that start and end a program sit in the directory of
-    // each API level, which is the directory of the C compiler for Zig as
-    // well. The static archives of the C library sit one directory above.
-    const static_dir = b.pathJoin(&.{ sysroot, "usr", "lib", triple });
+    , .{ sysroot, sysroot, triple, lib_dir, api_dir }));
     var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
     var stack: std.ArrayList(*std.Build.Step) = .empty;
     for (b.top_level_steps.values()) |top| stack.append(b.allocator, &top.step) catch @panic("OOM");
@@ -409,7 +411,6 @@ fn androidLibc(b: *std.Build, target: std.Build.ResolvedTarget) void {
         if (c.kind == .lib or c.kind == .obj) continue;
         if (static) {
             c.linkage = .static;
-            c.root_module.addLibraryPath(.{ .cwd_relative = static_dir });
         } else {
             // Android loads only executables that are independent of
             // their position.
