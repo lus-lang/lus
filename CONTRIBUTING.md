@@ -4,7 +4,7 @@ Lus is open-source, allowing you to make as many copies of it as desired and do 
 
 If you _do_ make a PR, make sure to:
 
-- [**Read the project goals.**](https://lus.dev/manual/introduction/#goals) Make sure your change serves them. A change that pursues a _non-goal_, or works _against_ a goal, will be rejected.
+- [**Read the project goals.**](https://lus.dev/manual/introduction/#goals) Changes that implement a _non-goal_ or contradict a goal are rejected.
 - **Test, test, test.** Run `mise run test` to make sure your changes break nothing, and compare `tests/bench` before and after to make sure you add no massive _performance_ regression. If you change the JIT or the heap, also run the extra checks in [`runtime/HACKING.md`](/runtime/HACKING.md). Add a test for every bug you fix.
 - **Document, document, document.** Add your change to the [CHANGELOG](/CHANGELOG.md) as a one-line summary, and put any details in the body of the PR.
 - **Format your code.** Format Zig code with `zig fmt` and Lus code with `lus fmt`, and run `mise run lint` before you push. Set your editor to format on save. No formatting, no merging.
