@@ -27,6 +27,7 @@
 //! with no pledge at all.
 
 const std = @import("std");
+const inv = @import("../vm/inv.zig");
 const builtin = @import("builtin");
 const value = @import("../vm/value.zig");
 const object = @import("../vm/object.zig");
@@ -1376,7 +1377,7 @@ fn dbTransaction(l: *Thread) Error!u32 {
         _ = c.sqlite3_exec(d.db.?, "ROLLBACK", null, null, null);
         return raiseSqlite(l, d, msg);
     }
-    std.debug.assert(l.top == base + n);
+    inv.assert(l.top == base + n);
     return n;
 }
 

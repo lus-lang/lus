@@ -275,11 +275,12 @@ inline fn markWord(w: *u64, bit: usize) MarkBit {
 /// Returns an uninitialized cell for an object of `size` bytes, which is
 /// at most `max_small`.
 pub inline fn allocSmall(g: *Global, comptime kind: Kind, size: usize) Allocator.Error![*]u8 {
+    inv.assert(size <= max_small);
     const class = classFor(@max(size, @sizeOf(FreeCell)));
     const a = &g.heap.classes[@backingInt(kind)][class];
     const cell = classBytes(class);
     g.counter.bytes += cell;
-    if (inv.enabled) g.heap.small_bytes += cell;
+    if (inv.deep) g.heap.small_bytes += cell;
     if (a.free) |c| {
         a.free = c.next;
         return @ptrCast(c);
@@ -291,7 +292,7 @@ pub inline fn allocSmall(g: *Global, comptime kind: Kind, size: usize) Allocator
     }
     return refill(g, kind, class) catch |e| {
         g.counter.bytes -= cell;
-        if (inv.enabled) g.heap.small_bytes -= cell;
+        if (inv.deep) g.heap.small_bytes -= cell;
         return e;
     };
 }
@@ -299,6 +300,9 @@ pub inline fn allocSmall(g: *Global, comptime kind: Kind, size: usize) Allocator
 /// Hands the remaining free cells of the allocation page back to it.
 fn retire(a: *ClassAlloc) void {
     const p = a.page orelse return;
+    // The allocation page is the current page of its class, and the bump
+    // range lies inside its usable bytes.
+    inv.assert(p.current and a.bump <= a.end and a.end == p.base() + p.usable);
     p.free = a.free;
     p.top = @intCast(a.bump - p.base());
     p.current = false;
@@ -309,6 +313,7 @@ fn retire(a: *ClassAlloc) void {
 }
 
 fn install(a: *ClassAlloc, p: *Page) void {
+    inv.assert(a.page == null and p.in_use and !p.current and !p.needs_sweep and p.top <= p.usable);
     a.page = p;
     a.free = p.free;
     p.free = null;
@@ -335,6 +340,8 @@ fn refill(g: *Global, comptime kind: Kind, class: u8) Allocator.Error![*]u8 {
     // is spent, so one allocation never sweeps a large part of the heap.
     var swept: u32 = 0;
     while (a.cursor) |p| {
+        // Every page on the list of a class holds cells of that class.
+        inv.assert(p.class == class and p.kind == kind and p.cell == cell);
         if (p.needs_sweep) {
             if (swept == max_refill_sweeps) break;
             swept += 1;
@@ -366,6 +373,7 @@ fn freshPage(g: *Global, kind: Kind, class: u8) Allocator.Error!*Page {
     const h = &g.heap;
     if (h.free_pages == null) try newSegment(g);
     const p = h.free_pages.?;
+    inv.assert(!p.in_use and !p.current);
     h.free_pages = p.next;
     const cell = classBytes(class);
     const index = p.index;
@@ -413,6 +421,7 @@ fn newSegment(g: *Global) Allocator.Error!void {
 fn releasePage(g: *Global, p: *Page) void {
     const h = &g.heap;
     const a = &h.classes[@backingInt(p.kind)][p.class];
+    inv.assert(p.in_use and !p.current and a.page != p and segmentOf(p).used > 0);
     if (a.cursor == p) a.cursor = p.next;
     if (p.prev) |q| q.next = p.next else a.head = p.next;
     if (p.next) |n| n.prev = p.prev;
@@ -465,7 +474,7 @@ pub fn retireAll(g: *Global) void {
 /// address order. A page left without live objects goes back to the
 /// pool of free pages.
 pub fn sweepPage(g: *Global, p: *Page) void {
-    std.debug.assert(p.needs_sweep and !p.current);
+    inv.assert(p.needs_sweep and !p.current);
     p.needs_sweep = false;
     g.heap.pending_pages -= 1;
     const before = g.counter.bytes;
@@ -516,12 +525,12 @@ pub fn sweepPage(g: *Global, p: *Page) void {
     }
     tail.* = null;
     g.counter.bytes -|= @as(usize, freed) * p.cell;
-    if (inv.enabled) g.heap.small_bytes -= @as(usize, freed) * p.cell;
+    if (inv.deep) g.heap.small_bytes -= @as(usize, freed) * p.cell;
     if (live == 0) {
         releasePage(g, p);
     } else {
         p.free = head;
-        if (inv.enabled) inv.assert(pageOk(p, p.free, p.top) != null);
+        if (inv.deep) inv.assert(pageOk(p, p.free, p.top) != null);
     }
 }
 
@@ -617,7 +626,7 @@ pub fn sweepSome(g: *Global, budget: usize) bool {
         done += page_size;
         if (done >= budget) return h.pending_pages == 0;
     }
-    std.debug.assert(h.pending_pages == 0);
+    inv.assert(h.pending_pages == 0);
     return true;
 }
 

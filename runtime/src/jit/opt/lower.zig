@@ -13,6 +13,7 @@
 //! optimized code recorded.
 
 const std = @import("std");
+const inv = @import("../../vm/inv.zig");
 const ir = @import("ir.zig");
 const flow_mod = @import("flow.zig");
 const opt = @import("opt.zig");
@@ -811,7 +812,7 @@ pub const Lower = struct {
     fn typed(b: *Lower, r: u32, ty: Ty) Error!Ref {
         const reg = &b.fr.regs[r];
         if (reg.val != ir.none) {
-            std.debug.assert(b.tyOf(reg.val) == ty);
+            inv.assert(b.tyOf(reg.val) == ty);
             // A use that needs the table itself allocates it.
             if (b.virtIndex(reg.val) != null) return b.materialize(reg.val);
             return reg.val;
@@ -1412,7 +1413,7 @@ pub const Lower = struct {
         b.snap_cache = ir.no_snap;
         if (!last) {
             // The node goes on in a new block.
-            std.debug.assert(succ.len == 1);
+            inv.assert(succ.len == 1);
             const cont = try b.f.newBlock();
             const blk = &b.f.blocks.items[cont];
             blk.node = b.root_node;
@@ -2680,7 +2681,7 @@ pub const Lower = struct {
     /// jump after it when the comparison differs from `k`.
     fn branch(b: *Lower, i: Inst, k: bool) Error!bool {
         const nd = b.fr.cfg.nodes.items[b.node];
-        std.debug.assert(nd.nsuccs == 2);
+        inv.assert(nd.nsuccs == 2);
         // Successor zero is the jump, which runs when the comparison
         // equals k.
         const jump = try b.edgeTo(nd.succs[0]);

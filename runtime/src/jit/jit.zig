@@ -11,6 +11,7 @@
 //! (`spec/design/wasmjit.md`).
 
 const std = @import("std");
+const inv = @import("../vm/inv.zig");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const state = @import("../vm/state.zig");
@@ -320,6 +321,7 @@ pub noinline fn expire(l: *Thread, p: *Proto) bool {
     if (!g.jit.ready) setup(g);
     switch (p.jit_state) {
         .compiled => {
+            inv.assert(p.jit_code != null);
             p.hot = 1;
             return true;
         },
@@ -343,6 +345,7 @@ pub noinline fn expire(l: *Thread, p: *Proto) bool {
     }
     switch (compile(l, p)) {
         .done => {
+            inv.assert(p.jit_code != null);
             p.jit_state = .compiled;
             p.hot = 1;
             return true;
@@ -474,6 +477,9 @@ pub fn dispatch(l: *Thread) callconv(cc) Target {
         if (addr != 0) return .{ .addr = addr, .base = fr.base };
     }
     const code: *Code = @ptrCast(@alignCast(p.jit_code.?));
+    // Native code resumes at an instruction of the function, inside its
+    // block.
+    inv.assert(fr.pc < code.count and code.offs[fr.pc] < code.size);
     return .{ .addr = code.base + code.offs[fr.pc], .base = fr.base };
 }
 
@@ -666,6 +672,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
         wasm.release(p);
         p.jit_code = null;
         p.call.plain = !p.is_vararg;
+        inv.assert(g.jit.live > 0);
         g.jit.live -= 1;
         return;
     }
@@ -679,6 +686,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
     p.jit_entry = 0;
     p.jit_tail = 0;
     p.call.plain = !p.is_vararg;
+    inv.assert(g.jit.live > 0);
     g.jit.live -= 1;
 }
 

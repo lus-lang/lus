@@ -18,6 +18,7 @@
 //! imports each one it uses under the name of its table index.
 
 const std = @import("std");
+const inv = @import("../vm/inv.zig");
 const state = @import("../vm/state.zig");
 const object = @import("../vm/object.zig");
 const value = @import("../vm/value.zig");
@@ -621,7 +622,7 @@ const Emitter = struct {
     /// Branch depth of the block that ends right before the code of
     /// instruction `t`, which must follow the current one.
     fn depthOf(e: *Emitter, t: u32) u32 {
-        std.debug.assert(t > e.cur);
+        inv.assert(t > e.cur);
         return e.inner + (t - e.cur - 1);
     }
 
@@ -1482,7 +1483,7 @@ const Emitter = struct {
         while (pc < n) : (pc += 1) {
             e.cur = pc;
             e.instruction(pc, e.p.code[pc]);
-            std.debug.assert(e.inner == 0);
+            inv.assert(e.inner == 0);
             e.op(W.end);
         }
         // Execution never runs off the end of a function.
@@ -1692,7 +1693,7 @@ const Emitter = struct {
                 // false and true differ only in their tags.
                 const f: *const [2]u64 = @ptrCast(&Value.false);
                 const t: *const [2]u64 = @ptrCast(&Value.true);
-                std.debug.assert(f[0] == t[0]);
+                inv.assert(f[0] == t[0]);
                 e.get(L.bp);
                 e.i64c(@bitCast(f[0]));
                 e.store64(slotOff(ra));

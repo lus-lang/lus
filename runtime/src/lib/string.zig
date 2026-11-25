@@ -14,6 +14,7 @@
 //! concatenation does.
 
 const std = @import("std");
+const inv = @import("../vm/inv.zig");
 const builtin = @import("builtin");
 const Decimal = @import("../vm/fdigits.zig").Decimal;
 const value = @import("../vm/value.zig");
@@ -218,7 +219,7 @@ const Builder = struct {
     /// vectorized scans.
     fn finish(b: *Builder) Error!Value {
         const items = b.buf.items;
-        if (builtin.mode == .debug) std.debug.assert(wtf8.analyze(items).valid);
+        if (inv.deep) inv.assert(wtf8.analyze(items).valid);
         const ascii = wtf8.asciiPrefix(items) == items.len;
         const chars = if (ascii) items.len else wtf8.countChars(items);
         const r = state.newStringKnown(b.l.g, items, ascii, chars) catch return b.l.raiseMem();

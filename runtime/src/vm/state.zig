@@ -896,7 +896,7 @@ pub fn newStringIn(g: *Global, b: []const u8) (Allocator.Error || error{InvalidU
 /// then passes to `finishLong`. A result whose length is known up front
 /// is written in place this way, without a buffer to copy from.
 pub fn newLongUninit(g: *Global, len: usize) Allocator.Error!*String {
-    std.debug.assert(len > String.short_max);
+    inv.assert(len > String.short_max);
     try checkStringLen(g, len);
     gc.maybeCollect(g);
     // The contents are not known yet, so the cell keeps a breadcrumb
@@ -915,7 +915,7 @@ pub fn newLongUninit(g: *Global, len: usize) Allocator.Error!*String {
 /// Completes a string from `newLongUninit` once its bytes, valid WTF-8,
 /// are written.
 pub fn finishLong(g: *Global, s: *String, ascii: bool, chars: usize) void {
-    if (inv.enabled) inv.assert(textMatches(s.bytesMut(), ascii, chars));
+    if (inv.deep) inv.assert(textMatches(s.bytesMut(), ascii, chars));
     s.setChars(@intCast(chars));
     s.flags().ascii = ascii;
     s.hash = object.hashBytes(g.seed, s.bytesMut());
@@ -983,14 +983,14 @@ pub const fresh_min = 16;
 /// interned: the one the string table holds, or `s` itself, which joins
 /// the table.
 pub noinline fn intern(g: *Global, s: *String) Allocator.Error!*String {
-    std.debug.assert(!s.flags().interned and s.len <= String.short_max);
+    inv.assert(!s.flags().interned and s.len <= String.short_max);
     if (g.strings.find(s.bytes(), s.hash)) |twin| {
         gc.touchInterned(g, twin);
         return twin;
     }
     try g.strings.insert(g.gpa, s);
     s.flags().interned = true;
-    if (inv.enabled) inv.assert(internedOk(g, s));
+    if (inv.deep) inv.assert(internedOk(g, s));
     return s;
 }
 
@@ -1016,11 +1016,11 @@ inline fn createStringAs(g: *Global, b: []const u8, ascii: bool, chars: usize, h
     s.flags().* = .{ .ascii = ascii, .interned = short, .crumb_slot = slot };
     s.initCrumbs();
     @memcpy(s.bytesMut(), b);
-    if (inv.enabled) inv.assert(textMatches(b, ascii, chars));
+    if (inv.deep) inv.assert(textMatches(b, ascii, chars));
     const base: [*]u8 = @ptrCast(s);
     base[@sizeOf(String) + b.len] = 0;
     if (short) try g.strings.insert(g.gpa, s);
-    if (inv.enabled) inv.assert(internedOk(g, s));
+    if (inv.deep) inv.assert(internedOk(g, s));
     return s;
 }
 

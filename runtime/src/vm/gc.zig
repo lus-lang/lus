@@ -520,7 +520,7 @@ fn step(g: *Global, budget: usize, force: bool) bool {
 /// object turns white.
 fn startCycle(g: *Global) void {
     const s = &g.gcs;
-    std.debug.assert(s.phase == .pause);
+    inv.assert(s.phase == .pause);
     heap.clearMarks(g);
     s.gray.clearRetainingCapacity();
     s.gray_repeats = false;
@@ -592,7 +592,7 @@ fn finishMarking(g: *Global) void {
 fn minorCollect(g: *Global) void {
     const s = &g.gcs;
     completeSweep(g);
-    std.debug.assert(s.phase == .pause);
+    inv.assert(s.phase == .pause);
     s.gray.clearRetainingCapacity();
     s.weak.clearRetainingCapacity();
     s.ephemerons.clearRetainingCapacity();
@@ -642,8 +642,8 @@ fn finishMark(g: *Global, m: *Marker, major: bool) void {
     // The invariants of a checking build include the end of the mark
     // phase: a marked object references only marked objects.
     if (verify or @import("build_options").invariants) verifyHeap(g);
-    if (inv.enabled) inv.assert(heap.bytesOk(g));
-    std.debug.assert(s.gray.items.len == 0 and s.grayagain.items.len == 0);
+    if (inv.deep) inv.assert(heap.bytesOk(g));
+    inv.assert(s.gray.items.len == 0 and s.grayagain.items.len == 0);
     // The gray stack holds an entry per reference while it drains, so a
     // heap with many references grows it far past what a later cycle
     // needs, and a large one is freed.
@@ -1503,7 +1503,7 @@ inline fn isMarkedAtomic(h: *const Header) bool {
 fn verifyHeap(g: *Global) void {
     var m = Marker.init(g);
     m.verifying = true;
-    std.debug.assert(g.gcs.gray.items.len == 0 and g.gcs.grayagain.items.len == 0);
+    inv.assert(g.gcs.gray.items.len == 0 and g.gcs.grayagain.items.len == 0);
     heap.forEachObject(g, &m, struct {
         fn f(mm: *Marker, h: *Header) void {
             if (!isMarked(h) or isLeaf(h.tag)) return;

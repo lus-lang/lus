@@ -236,7 +236,7 @@ pub const Shapes = struct {
             return null;
         };
         sh.all.appendAssumeCapacity(s);
-        if (inv.enabled) inv.assert(wellFormed(s));
+        if (inv.deep) inv.assert(wellFormed(s));
         return s;
     }
 

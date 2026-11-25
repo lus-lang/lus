@@ -98,6 +98,7 @@ fn longStringEqual(x: *object.String, y: *object.String) bool {
 
 /// The value in the zero-based array slot `idx`, which is below `asize`.
 pub inline fn arrayGet(t: *const Table, idx: usize) Value {
+    inv.assert(idx < t.asize);
     if (t.kind == .boxed) return t.values()[idx];
     return unboxWord(t.kind, t.array_ptr[idx]);
 }
@@ -107,6 +108,7 @@ pub inline fn arrayGet(t: *const Table, idx: usize) Value {
 /// holds nil. The value goes from the array part to `out` directly,
 /// which keeps it in registers where `arrayGet` builds it in memory.
 pub inline fn arrayLoad(t: *const Table, idx: usize, out: *Value) bool {
+    inv.assert(idx < t.asize);
     if (t.kind == .boxed) {
         const p = &t.values()[idx];
         if (p.tag == .nil) return false;
@@ -127,6 +129,7 @@ inline fn unboxWord(kind: ArrayKind, w: u64) Value {
 
 /// True when the zero-based array slot `idx` holds nil.
 pub inline fn arrayIsNil(t: *const Table, idx: usize) bool {
+    inv.assert(idx < t.asize);
     if (t.kind == .boxed) return t.values()[idx].isNil();
     return t.array_ptr[idx] == hole;
 }
@@ -157,6 +160,7 @@ pub inline fn arrayStoreFast(t: *Table, idx: usize, v: Value) bool {
 /// `arrayStoreFast` for a value read in place, which copies it to a
 /// boxed part without a temporary.
 pub inline fn arrayStoreAt(t: *Table, idx: usize, v: *const Value) bool {
+    inv.assert(idx < t.asize);
     if (t.kind == .boxed) {
         t.values()[idx] = v.*;
         return true;
@@ -448,6 +452,7 @@ pub fn appendArray(gpa: Allocator, t: *Table, v: Value) Error!bool {
 pub fn storeList(gpa: Allocator, t: *Table, start: usize, vals: []const Value) Error!void {
     const last = start + vals.len;
     if (last > t.asize) try resize(gpa, t, last, hashCount(t));
+    inv.assert(last <= t.asize);
     var kind = t.kind;
     for (vals) |v| kind = joinKind(kind, v);
     if (kind == .boxed) {
@@ -536,6 +541,7 @@ pub const full_max = 4;
 /// metamethod cache and runs the write barrier.
 pub inline fn storeStr(t: *Table, key: *const Value, val: *const Value) ?usize {
     if (t.hash_len == 0) return null;
+    inv.assert(key.tag == .string);
     const s = key.as(object.String);
     // A full part has no empty node to end the probe. Such a part is
     // small (`full_max`), so a key that it holds is found by visiting
@@ -613,6 +619,8 @@ noinline fn findSlotFull(t: *Table, k: Value) ?usize {
 /// keys and run any metamethods.
 pub fn set(gpa: Allocator, t: *Table, key: Value, val: Value) Error!void {
     const k = normalizeKey(key);
+    // The callers raise the errors of a nil or NaN key.
+    inv.assert(k.tag != .nil and (k.tag != .float or !std.math.isNan(k.asFloat())));
     t.tm_absent = 0;
     if (k.tag == .integer) {
         const i = k.asInt();
@@ -666,6 +674,9 @@ pub fn setStr(gpa: Allocator, t: *Table, s: *object.String, val: Value) Error!vo
 }
 
 fn insertNew(t: *Table, k: Value, val: Value) void {
+    // A free node ends the probe. A value may be nil, since a shaped
+    // table that becomes a dictionary keeps the keys of its empty slots.
+    inv.assert(t.hash_used < t.hash_len and !k.isNil());
     const mask = t.hash_len - 1;
     var i: usize = @intCast(hashValue(k) & mask);
     while (t.keyTag(i) != .nil) : (i = (i + 1) & mask) {}
@@ -918,7 +929,7 @@ pub fn resize(gpa: Allocator, t: *Table, asize: usize, hcount: usize) Error!void
 /// receives a value no unboxed kind holds is made boxed directly.
 fn resizeWith(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Value, val: Value) Error!void {
     try resizeParts(gpa, t, asize, hcount, key, val);
-    if (inv.enabled) inv.assert(layoutOk(t) and arrayOk(t));
+    if (inv.deep) inv.assert(layoutOk(t) and arrayOk(t));
 }
 
 /// Whether the array part of `t` holds what its kind says: holes alone
@@ -1041,7 +1052,7 @@ fn resizeParts(gpa: Allocator, t: *Table, asize: usize, hcount: usize, key: Valu
 /// `resizeWith` for a shaped table whose array part grows: its slots stay
 /// as they are.
 fn resizeArray(gpa: Allocator, t: *Table, asize: usize, key: Value, val: Value) Error!void {
-    std.debug.assert(asize >= t.asize);
+    inv.assert(asize >= t.asize);
     const old_kind = t.kind;
     const old_ptr = t.array_ptr;
     const old_n = t.asize;
@@ -1100,7 +1111,7 @@ fn reinsert(t: *Table, k: Value, v: Value) void {
         const i = k.asInt();
         if (i >= 1 and i <= t.asize) {
             const ok = arrayStoreFast(t, @intCast(i - 1), v);
-            std.debug.assert(ok);
+            inv.assert(ok);
             return;
         }
     }

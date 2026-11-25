@@ -15,6 +15,7 @@
 //! lives in the frame only where another path joins the code.
 
 const std = @import("std");
+const inv = @import("../vm/inv.zig");
 const builtin = @import("builtin");
 const reloc = @import("reloc.zig");
 
@@ -593,7 +594,7 @@ pub const Assembler = struct {
     /// A load or a store of a word or a byte at an offset below 4096.
     fn ldst(a: *Assembler, load: bool, byte: bool, rt_: P, b: P, d: i32) void {
         const mag: u32 = @abs(d);
-        std.debug.assert(mag < 4096);
+        inv.assert(mag < 4096);
         a.word(0xE5000000 | @as(u32, @intFromBool(d >= 0)) << 23 | @as(u32, @intFromBool(byte)) << 22 | @as(u32, @intFromBool(load)) << 20 | @as(u32, b) << 16 | @as(u32, rt_) << 12 | mag);
     }
     fn ldr(a: *Assembler, dst: P, b: P, d: i32) void {
@@ -605,13 +606,13 @@ pub const Assembler = struct {
     /// A load or a store of 16 bits at an offset below 256.
     fn ldsth(a: *Assembler, load: bool, rt_: P, b: P, d: i32) void {
         const mag: u32 = @abs(d);
-        std.debug.assert(mag < 256);
+        inv.assert(mag < 256);
         a.word(0xE14000B0 | @as(u32, @intFromBool(d >= 0)) << 23 | @as(u32, @intFromBool(load)) << 20 | @as(u32, b) << 16 | @as(u32, rt_) << 12 | (mag >> 4) << 8 | (mag & 15));
     }
     /// A load or a store of a double at a multiple of four below 1024.
     fn ldstf(a: *Assembler, load: bool, d_: FReg, b: P, d: i32) void {
         const mag: u32 = @abs(d);
-        std.debug.assert(mag < 1024 and mag % 4 == 0);
+        inv.assert(mag < 1024 and mag % 4 == 0);
         a.word(0xED000B00 | @as(u32, @intFromBool(d >= 0)) << 23 | @as(u32, @intFromBool(load)) << 20 | @as(u32, b) << 16 | d_.n() << 12 | mag / 4);
     }
     fn push(a: *Assembler, mask: u32) void {

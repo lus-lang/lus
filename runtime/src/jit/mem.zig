@@ -6,6 +6,7 @@
 //! nothing but code.
 
 const std = @import("std");
+const inv = @import("../vm/inv.zig");
 const builtin = @import("builtin");
 
 const posix = std.posix;
@@ -126,6 +127,7 @@ pub const Arena = struct {
             if (start >= c.span.start and start < c.span.start + c.span.len) break true;
         } else false;
         if (!owned) return;
+        inv.assert(a.used >= block.len);
         a.used -= block.len;
         // The list has room unless growing it failed. A block that cannot
         // be recorded stays unused until the state closes.
@@ -253,6 +255,7 @@ fn unmap(s: Span) void {
 
 /// Copies finished code into a block and makes it runnable.
 pub fn install(block: []u8, code: []const u8) void {
+    inv.assert(code.len <= block.len and @intFromPtr(block.ptr) % block_align == 0);
     if (windows) return installWindows(block, code);
     if (toggles) pthread_jit_write_protect_np(0);
     @memcpy(block[0..code.len], code);

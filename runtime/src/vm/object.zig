@@ -2,6 +2,7 @@
 //! collector dispatches on the header tag to trace and free them.
 
 const std = @import("std");
+const inv = @import("inv.zig");
 const value = @import("value.zig");
 const gc = @import("gc.zig");
 const wtf8 = @import("wtf8.zig");
@@ -102,7 +103,7 @@ pub const String = struct {
         return (base + @sizeOf(String))[0..s.len];
     }
     pub inline fn bytesMut(s: *String) []u8 {
-        std.debug.assert(!s.flags().shared);
+        inv.assert(!s.flags().shared);
         const base: [*]u8 = @ptrCast(s);
         return (base + @sizeOf(String))[0..s.len];
     }
