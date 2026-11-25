@@ -17,7 +17,7 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 | `cargo build` | `lus build` writes a standalone executable, which `--aot` compiles ahead of time from a training run. `lus compile` writes a binary chunk. | closed | |
 | `cargo build --target` | `lus build --runtime FILE` starts the executable from a `lus-runtime` of another platform. | partial | medium |
 | `cargo test` | `lus test` with filters, parallel files, timeouts, JSON output, snapshots, and table-driven cases. | closed | |
-| `cargo test -- --list` | Missing. `lus test --filter TEXT` narrows a run to matching tests. | open | small |
+| `cargo test -- --list` | `lus test --list` prints each test and benchmark that a run would start, and honors `--filter`. | closed | |
 | `cargo bench`, criterion | Functions named `NAME_bench` in test files. `lus test --bench` measures the median time and the bytes allocated per call, and compares them with a baseline that `--bench -u` saves. A plain `lus test` calls each benchmark once. | closed | |
 | `cargo doc` | `lus doc` writes Markdown or JSON per module. | partial | |
 | `cargo add`, `cargo remove` | `atmos add` prints the `require` line of a package. A program removes a dependency by deleting its `require`. | closed | |
@@ -86,7 +86,7 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 | Rust | Lus | State | Cost |
 |---|---|---|---|
 | stable error codes | Every `lus check` diagnostic carries a stable code. Runtime errors carry a message and a traceback, without a code. | partial | |
-| source snippets with a caret | `lus check` prints `file:line:column: severity: message [code]`, with the end position in the JSON form. A snippet with a caret under the span is missing. | open | small |
+| source snippets with a caret | On a terminal, `lus check` prints the line of each diagnostic with a caret under its span. A pipe gets one line per diagnostic. | closed | |
 | suggestions inside the diagnostic | Hints name the better form in their message. | partial | |
 | `--explain` | `lus check --explain CODE`. | closed | |
 
@@ -111,7 +111,5 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 - **A language server in the language.** The server runs natively and as WebAssembly inside the editor, so the extension needs no native download.
 
 ## Order of work
-
-The small gaps that remain are the caret snippet and `lus test --list`.
 
 The medium gaps follow in this order: call hierarchy, then refactoring assists. A fuzz harness for user code stays open.

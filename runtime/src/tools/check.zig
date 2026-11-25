@@ -163,8 +163,12 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     if (json) {
         writeJson(w, entries.items) catch return error.OutOfMemory;
     } else {
+        // A terminal also gets the line of each diagnostic with a caret
+        // under its span. Pipes keep one line per diagnostic, for tools.
+        const tty = @import("../lib/term.zig").isatty(io, std.Io.File.stdout());
         for (entries.items) |e| {
             w.print("{s}:{d}:{d}: {s}: {s} [{s}]\n", .{ e.file, e.d.line, e.d.column, e.d.severity.label(), e.d.message, e.d.code }) catch return error.OutOfMemory;
+            if (tty) writeSnippet(w, e) catch return error.OutOfMemory;
         }
     }
     std.Io.File.stdout().writeStreamingAll(io, out.written()) catch {};
@@ -174,6 +178,48 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         status = 1;
     };
     return status;
+}
+
+/// Writes the source line of a diagnostic and a caret under its span,
+/// which ends at the end of the line when the span goes on.
+pub fn writeSnippet(w: *std.Io.Writer, e: Entry) std.Io.Writer.Error!void {
+    if (e.src.len == 0 or e.d.line == 0) return;
+    var it = std.mem.splitScalar(u8, e.src, '\n');
+    var n: u32 = 1;
+    const line = while (it.next()) |l| : (n += 1) {
+        if (n == e.d.line) break std.mem.trimEnd(u8, l, "\r");
+    } else return;
+    var gutter_buf: [16]u8 = undefined;
+    const gutter = std.fmt.bufPrint(&gutter_buf, "{d}", .{e.d.line}) catch return;
+    try w.print(" {s} | {s}\n ", .{ gutter, line });
+    try w.splatByteAll(' ', gutter.len);
+    try w.writeAll(" | ");
+    // The pad repeats each tab of the line, so the caret lines up.
+    var col: u32 = 1;
+    var view = std.unicode.Utf8View.initUnchecked(line);
+    var cps = view.iterator();
+    while (col < e.d.column) : (col += 1) {
+        const cp = cps.nextCodepointSlice() orelse break;
+        try w.writeByte(if (cp.len == 1 and cp[0] == '\t') '\t' else ' ');
+    }
+    var width: u32 = 1;
+    if (e.d.end_line == e.d.line and e.d.end_column > e.d.column) {
+        width = e.d.end_column - e.d.column;
+    } else if (e.d.end_line > e.d.line) {
+        var rest: u32 = 0;
+        while (cps.nextCodepointSlice()) |_| rest += 1;
+        width = @max(rest, 1);
+    }
+    try w.splatByteAll('^', width);
+    try w.writeByte('\n');
+}
+
+test writeSnippet {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    const d: lint.Diagnostic = .{ .span = .{ .start = 0, .end = 0 }, .line = 2, .column = 8, .end_line = 2, .end_column = 11, .severity = .warning, .code = "unused-local", .message = "" };
+    try writeSnippet(&out.writer, .{ .file = "f.lus", .d = d, .src = "x = 1\n\tlocal abc = 2\n" });
+    try std.testing.expectEqualStrings(" 2 | \tlocal abc = 2\n   | \t      ^^^\n", out.written());
 }
 
 fn errorCount(diags: []const lint.Diagnostic) usize {

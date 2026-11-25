@@ -59,6 +59,8 @@ const Options = struct {
     bench_ms: u32 = 1000,
     /// Record which lines of the code under test run.
     coverage: bool = false,
+    /// Print the tests and benchmarks instead of running them.
+    list: bool = false,
     /// Where to write the coverage as an lcov tracefile.
     coverage_out: ?[]const u8 = null,
     tmp_root: []const u8 = "/tmp",
@@ -114,6 +116,8 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             o.bench = true;
         } else if (std.mem.eql(u8, a, "--coverage")) {
             o.coverage = true;
+        } else if (std.mem.eql(u8, a, "--list")) {
+            o.list = true;
         } else if (std.mem.eql(u8, a, "--coverage-out") and i + 1 < args.len) {
             i += 1;
             o.coverage = true;
@@ -141,6 +145,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     }
     if (o.paths.items.len == 0) try o.paths.append(gpa, ".");
     if (init.environ_map.get("TMPDIR")) |t| o.tmp_root = t;
+    if (o.list) return listTests(init, &o);
     return runAll(init, &o);
 }
 
@@ -192,6 +197,57 @@ fn discover(gpa: std.mem.Allocator, io: std.Io, path: []const u8, files: *std.Ar
         if (skip) continue;
         try files.append(gpa, try std.fs.path.join(gpa, &.{ path, entry.path }));
     }
+}
+
+/// `--list`: prints `FILE: NAME` for every test and benchmark that a run
+/// with the same paths and filter would start, or one JSON record per name
+/// with `--json`, without running anything. A case table runs its test once
+/// per entry, which only running its file can count, so a test is listed
+/// once.
+fn listTests(init: std.process.Init, o: *Options) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var files: std.ArrayList([]const u8) = .empty;
+    for (o.paths.items) |p| discover(arena, io, p, &files, false) catch return 2;
+    std.mem.sort([]const u8, files.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
+    var listing: std.ArrayList(u8) = .empty;
+    var status: u8 = 0;
+    for (files.items) |file| {
+        const src = std.Io.Dir.cwd().readFileAlloc(io, file, arena, .unlimited) catch {
+            std.debug.print("lus test: cannot read {s}\n", .{file});
+            status = 2;
+            continue;
+        };
+        var diag: ?[]const u8 = null;
+        const chunk = parser.parse(gpa, arena, src, .{ .chunkname = file }, &diag) catch {
+            std.debug.print("{s}\n", .{diag orelse "syntax error"});
+            status = 1;
+            continue;
+        };
+        var tests: std.ArrayList([]const u8) = .empty;
+        var cases: std.ArrayList([]const u8) = .empty;
+        var benches: std.ArrayList([]const u8) = .empty;
+        try collectNames(arena, chunk, &tests, &cases, &benches);
+        for ([_][]const []const u8{ tests.items, benches.items }, 0..) |names, k| for (names) |name| {
+            if (o.filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
+            if (o.json) {
+                try listing.appendSlice(arena, "{\"file\":\"");
+                try jsonEscape(arena, &listing, file);
+                try listing.appendSlice(arena, "\",\"name\":\"");
+                try jsonEscape(arena, &listing, name);
+                try listing.print(arena, "\",\"kind\":\"{s}\"}}\n", .{if (k == 0) "test" else "bench"});
+            } else try listing.print(arena, "{s}: {s}\n", .{ file, name });
+        };
+    }
+    std.Io.File.stdout().writeStreamingAll(io, listing.items) catch {};
+    return status;
 }
 
 fn runAll(init: std.process.Init, o: *Options) !u8 {
@@ -1708,9 +1764,9 @@ fn appendOnce(arena: std.mem.Allocator, list: *std.ArrayList([]const u8), name: 
     try list.append(arena, name);
 }
 
-/// Collects tests and case tables, rewrites `assert` into power asserts,
-/// and makes the chunk return its tests as {name1, fn1, ..., cases...}.
-fn transform(arena: std.mem.Allocator, chunk: *ast.Chunk, src: []const u8, tests: *std.ArrayList([]const u8), cases: *std.ArrayList([]const u8), benches: *std.ArrayList([]const u8)) !void {
+/// Collects the names of the tests, case tables, and benchmarks that the
+/// top level of a test file defines, in source order.
+fn collectNames(arena: std.mem.Allocator, chunk: ast.Chunk, tests: *std.ArrayList([]const u8), cases: *std.ArrayList([]const u8), benches: *std.ArrayList([]const u8)) !void {
     const stats = chunk.block.stats;
     for (stats) |s| {
         switch (s.kind) {
@@ -1743,6 +1799,13 @@ fn transform(arena: std.mem.Allocator, chunk: *ast.Chunk, src: []const u8, tests
             else => {},
         }
     }
+}
+
+/// Collects tests and case tables, rewrites `assert` into power asserts,
+/// and makes the chunk return its tests as {name1, fn1, ..., cases...}.
+fn transform(arena: std.mem.Allocator, chunk: *ast.Chunk, src: []const u8, tests: *std.ArrayList([]const u8), cases: *std.ArrayList([]const u8), benches: *std.ArrayList([]const u8)) !void {
+    const stats = chunk.block.stats;
+    try collectNames(arena, chunk.*, tests, cases, benches);
     // Power asserts.
     const V = walk.Visitor(*const Rewrite);
     const rw: Rewrite = .{ .arena = arena, .src = src, .res = try lus.syntax.resolve.resolve(arena, chunk.*) };

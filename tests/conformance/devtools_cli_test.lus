@@ -1,5 +1,5 @@
 --[[
-    Test suite for `lus tree` and `lus check --explain`
+    Test suite for `lus tree`, `lus check --explain`, and `lus test --list`
     (spec/design/tooling.md). Each scenario runs the interpreter as a
     subprocess inside the temporary directory of this file.
 ]]
@@ -84,4 +84,18 @@ local function explain_rejects_an_unknown_code_test()
     assert(not ok and out:find("unknown code 'no-such-code'", 1, true), out)
     ok, out = lus("check --explain")
     assert(not ok and out:find("needs a code", 1, true), out)
+end
+
+local function test_list_prints_names_without_running_test()
+    if not lus_cmd then skip("the interpreter is not reachable, set LUS_EXE") end
+    write("listed_test.lus", "local function one_test() error('ran') end\nfunction two_test() end\nlocal function fast_bench() end\n")
+    local ok, out = lus("test --list listed_test.lus")
+    assert(ok, out)
+    assert(out == "listed_test.lus: one_test\nlisted_test.lus: two_test\nlisted_test.lus: fast_bench\n", out)
+    ok, out = lus("test --list --filter two listed_test.lus")
+    assert(ok and out == "listed_test.lus: two_test\n", out)
+    ok, out = lus("test --list --json listed_test.lus")
+    assert(ok, out)
+    local first = fromjson(out:match("^[^\n]+"))
+    assert(first.file == "listed_test.lus" and first.name == "one_test" and first.kind == "test", out)
 end

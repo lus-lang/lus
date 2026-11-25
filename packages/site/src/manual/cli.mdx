@@ -86,6 +86,7 @@ Runs the tests in the named files, or in every `*_test.lus` file inside the name
 | Option | Effect |
 | --- | --- |
 | `--filter TEXT` | Run only the tests whose names contain `TEXT`. |
+| `--list` | Print `FILE: NAME` for each test and benchmark that the run would start, without running them. With `--json`, print one record per name with the fields `file`, `name`, and `kind`. |
 | `-u`, `--update` | Rewrite the snapshots that no longer match. With `--bench`, save the results as the baseline. |
 | `--bench` | Measure the functions whose names end in `_bench` and compare them with the saved baseline, in place of running the tests. [Benchmarks](/manual/testing#benchmarks) describes the measurement. |
 | `--bench-time S` | Measure each benchmark for S seconds. The default is 1. |
