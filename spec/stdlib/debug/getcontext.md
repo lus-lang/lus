@@ -41,8 +41,8 @@ local co = coroutine.create(function()
 end)
 coroutine.resume(co)
 local n = find("user")
-print(select(2, debug.getcontext(n)))       --> nobody
-print(select(2, debug.getcontext(co, n)))   --> ada
+print((select(2, debug.getcontext(n))))       --> nobody
+print((select(2, debug.getcontext(co, n))))   --> ada
 ```
 
 [`debug.setcontext`](/manual/api#debug.setcontext) assigns a value for a coroutine.

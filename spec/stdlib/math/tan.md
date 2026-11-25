@@ -23,7 +23,7 @@ An argument that is not a number raises `bad argument #1 to 'math.tan' (number e
 ```lus
 print(math.tan(0))             --> 0.0
 print(math.tan(math.pi / 4))   --> 0.9999999999999999
-print(math.tan(1))             --> 1.557407724654902
+print(math.tan(1))             --> 1.5574077246549023
 ```
 
 [`math.sin`](/manual/api#math.sin) and [`math.cos`](/manual/api#math.cos) compute the other ratios, and [`math.atan`](/manual/api#math.atan) is the inverse.

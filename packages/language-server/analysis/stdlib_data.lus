@@ -162,13 +162,13 @@ The parameter `opt` is the name of the operation and defaults to `"collect"`. Th
 - `"incremental"` and `"generational"` switch the collector to that mode and return the name of the previous mode. The collector starts in generational mode. Entering generational mode runs a full collection.
 - `"param"` reads or sets a tuning parameter. `collectgarbage("param", name, value)` sets the parameter `name` to the non-negative integer `value` and returns its previous value. Without `value`, or with a negative one, it returns the current value unchanged.
 
-The parameter names are `"pause"`, `"stepmul"`, `"stepsize"`, `"minormul"`, `"majorminor"`, and `"minormajor"`. The `pause` parameter sets the heap goal as a percentage of the live data, `stepmul` the marking work per allocated byte, and `stepsize` the allocation in bytes between steps. The `minormul` parameter sets the allocation between minor collections as a percentage of the heap after the last major collection, `minormajor` the growth of the old generation that calls for a major collection, and `majorminor` the percentage of the heap a major collection must free to return to minor collections. The defaults are 200, 200, 9600, 20, 50, and 70.
+The parameter names are `"pause"`, `"stepmul"`, `"stepsize"`, `"minormul"`, `"majorminor"`, and `"minormajor"`. The `pause` parameter sets the heap goal as a percentage of the live data, `stepmul` the marking work per allocated byte, and `stepsize` the allocation in bytes between steps. The `minormul` parameter sets the allocation between minor collections as a percentage of the heap after the last major collection, `minormajor` the growth of the old generation that calls for a major collection, and `majorminor` the percentage of the heap a major collection must free to return to minor collections. The defaults are 150, 200, 9600, 20, 50, and 70.
 
 An unknown operation raises `bad argument #1 to 'collectgarbage' (invalid option 'NAME')`, and an unknown parameter name raises the same error for argument 2. Called from inside a `__gc` finalizer, `collectgarbage` does nothing and returns `nil`.
 
 ```lus
 print(collectgarbage("isrunning"))          --> true
-print(collectgarbage("param", "pause"))     --> 200
+print(collectgarbage("param", "pause"))     --> 150
 print(math.type(collectgarbage("count")))   --> float
 print(collectgarbage())                     --> 0
 ```]],
@@ -1807,8 +1807,8 @@ local co = coroutine.create(function()
 end)
 coroutine.resume(co)
 local n = find("user")
-print(select(2, debug.getcontext(n)))       --> nobody
-print(select(2, debug.getcontext(co, n)))   --> ada
+print((select(2, debug.getcontext(n))))       --> nobody
+print((select(2, debug.getcontext(co, n))))   --> ada
 ```
 
 [`debug.setcontext`](/manual/api#debug.setcontext) assigns a value for a coroutine.
@@ -5484,7 +5484,7 @@ An argument that is not a number raises `bad argument #1 to 'math.exp' (number e
 
 ```lus
 print(math.exp(0))     --> 1.0
-print(math.exp(1))     --> 2.718281828459045
+print(math.exp(1))     --> 2.7182818284590455
 print(math.exp(710))   --> inf
 ```
 
@@ -6212,7 +6212,7 @@ An argument that is not a number raises `bad argument #1 to 'math.tan' (number e
 ```lus
 print(math.tan(0))             --> 0.0
 print(math.tan(math.pi / 4))   --> 0.9999999999999999
-print(math.tan(1))             --> 1.557407724654902
+print(math.tan(1))             --> 1.5574077246549023
 ```
 
 [`math.sin`](/manual/api#math.sin) and [`math.cos`](/manual/api#math.cos) compute the other ratios, and [`math.atan`](/manual/api#math.atan) is the inverse.]],
@@ -13169,7 +13169,7 @@ local tgz = vector.archive.gzip.compress(vector.archive.tar.pack({
 }))
 local dir = "tar-example-" .. os.time()
 print(vector.archive.tar.unpack(vector.archive.gzip.decompress(tgz), dir))   --> 1
-print(fs.type(dir .. "/data/a.csv"))                                         --> file
+print((fs.type(dir .. "/data/a.csv")))                                       --> file
 fs.remove(dir, true)
 ```
 

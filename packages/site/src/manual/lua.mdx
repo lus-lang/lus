@@ -405,8 +405,10 @@ print(lookup("USER"))   --> nil  unset
 
 local queue = { "first", "second" }
 while job = table.remove(queue, 1) do
-    print(job)          --> first, then second
+    print(job)
 end
+--> first
+--> second
 ```
 
 ### Destructuring with `from`
@@ -477,8 +479,10 @@ local lines = { "alpha", "", "# note", "beta" }
 for _, line in ipairs(lines) do
     if line == "" then continue end
     if line:sub(1, 1) == "#" then continue end
-    print(line)   --> alpha, then beta
+    print(line)
 end
+--> alpha
+--> beta
 ```
 
 In a `repeat` loop, a `continue` that would skip such a declaration is a compile error. Lus rejects the following loop for that reason.
@@ -750,7 +754,9 @@ local area <logged> = function(w, h)
     return w * h
 end
 
-print(area(3, 4))   --> call area, then 12
+print(area(3, 4))
+--> call area
+--> 12
 ```
 
 The declaration names the wrapper before the body of the function. Lus passes the name `area` to the wrapper, so the program writes the name once.
@@ -881,8 +887,10 @@ local orders = {
 local big = @orders as o where o.total >= 100 select o.customer, o.total order by o.total desc
 
 for row in query(big) do
-    print(row.customer, row.total)   --> Grace  300, then Ada  120
+    print(row.customer, row.total)
 end
+--> Grace  300
+--> Ada  120
 ```
 
 The same query syntax works on a table of a [SQLite](/manual/sqlite) database, where SQLite evaluates the filter.

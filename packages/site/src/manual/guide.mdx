@@ -131,7 +131,7 @@ Strings in backticks take the same escape sequences, together with `` \` `` for 
 
 ```lus
 local word = "done"
-print(`status: \27[32m$word\27[0m`)   --> status: done
+print(`status: \27[32m$word\27[0m`)   -- shows status: done, with done in green
 print(`$(`nested $word`) twice`)      --> nested done twice
 ```
 
