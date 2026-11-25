@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 216 246" width="216" height="246">
+  <title>Lus</title>
+  <defs>
+    <radialGradient id="ball" cx="91.5" cy="44" r="68" gradientUnits="userSpaceOnUse">
+      <stop offset=".3" stop-color="#d9f99d"/>
+      <stop offset="1" stop-color="#3f6212"/>
+    </radialGradient>
+    <linearGradient id="left" x1="36" y1="156" x2="77" y2="2" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#bef264"/>
+      <stop offset="1" stop-color="#bef264" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="right" x1="188.5" y1="165" x2="145.5" y2="3.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#65a30d"/>
+      <stop offset="1" stop-color="#65a30d" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <path fill="#050802" d="M108 89 216 137 108 185 0 137Z"/>
+  <circle fill="url(#ball)" cx="108" cy="70" r="68"/>
+  <path fill="url(#left)" d="M0 63 108 111V245.5L0 197.5Z"/>
+  <path fill="url(#right)" d="M108 111 216 63V197.5L108 245.5Z"/>
+</svg>

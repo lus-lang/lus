@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 216 246" width="216" height="246" fill="currentColor">
+  <title>Lus</title>
+  <defs>
+    <mask id="rim" maskUnits="userSpaceOnUse" x="0" y="0" width="216" height="246">
+      <rect width="216" height="246" fill="#fff"/>
+      <path fill="#000" d="M0 55 108 103 216 55V246H0Z"/>
+    </mask>
+  </defs>
+  <circle cx="108" cy="70" r="68" mask="url(#rim)"/>
+  <path d="M0 63 104.5 109.4V243.9L0 197.5Z"/>
+  <path d="M111.5 109.4 216 63V197.5L111.5 243.9Z"/>
+</svg>

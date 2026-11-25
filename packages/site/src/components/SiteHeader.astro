@@ -5,6 +5,7 @@
 */
 import { Image } from "astro:assets"
 import logo from "../assets/logo.svg"
+import logoDark from "../assets/logo-dark.svg"
 import logoUnstable from "../assets/logo-unstable.svg"
 
 interface Props {
@@ -15,6 +16,8 @@ interface Props {
 
 const { unstable, wide } = Astro.props
 const currentLogo = unstable ? logoUnstable : logo
+// the dark scheme gets lighter walls so the mark holds on dark paper
+const nightLogo = unstable ? logoUnstable : logoDark
 const path = Astro.url.pathname.replace(/\/$/, "") || "/"
 
 const navLinks = [
@@ -36,7 +39,14 @@ function isActive(href: string) {
       <Image
         src={currentLogo}
         alt=""
-        class="lus-logo"
+        class="lus-logo day-logo"
+        width={18}
+        height={20}
+      />
+      <Image
+        src={nightLogo}
+        alt=""
+        class="lus-logo night-logo"
         width={18}
         height={20}
       />
@@ -72,6 +82,30 @@ function isActive(href: string) {
 
 <style>
   @reference "../styles/global.css";
+
+  /* one of the two marks shows: the dark one in the dark scheme and inside
+     .night, which the playground sets on html */
+  .night-logo {
+    display: none;
+  }
+
+  :global(.night) .day-logo {
+    display: none;
+  }
+
+  :global(.night) .night-logo {
+    display: block;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .day-logo {
+      display: none;
+    }
+
+    .night-logo {
+      display: block;
+    }
+  }
 
   .site-header {
     @apply bg-paper border-b-2 border-rule shrink-0;
