@@ -17,6 +17,12 @@ name: Release
 # then report that version, and the release is published at once as a
 # prerelease. A release tag also runs every job of full.yml before the
 # release is created.
+#
+# ship.yml calls it with `patch`, the name of an artifact that holds the
+# changes of the release commit, which the jobs on Linux apply to their
+# checkout before they build, and with `publish` false, so ship.yml
+# publishes the assets itself. The installer takes its version from the
+# tag.
 
 on:
   push:
@@ -40,6 +46,11 @@ on:
         description: "Commit or branch to build, or empty for the tag"
         type: string
         default: ""
+      patch:
+        description: "Artifact with the changes of the release commit, release.patch"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -58,6 +69,16 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref || inputs.tag || github.ref }}
+      - name: Download the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.patch }}
+          path: ${{ runner.temp }}/patch
+      - name: Apply the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        shell: bash
+        run: git apply "$RUNNER_TEMP/patch/release.patch"
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
@@ -143,6 +164,16 @@ jobs:
         with:
           ref: ${{ inputs.ref || inputs.tag || github.ref }}
           persist-credentials: false
+      - name: Download the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.patch }}
+          path: ${{ runner.temp }}/patch
+      - name: Apply the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        shell: bash
+        run: git apply "$RUNNER_TEMP/patch/release.patch"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -296,17 +327,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=(lus.wasm lus-setup.exe)
-          for target in x86_64-linux-musl aarch64-linux-musl arm-linux-musleabihf riscv64-linux-musl loongarch64-linux-musl powerpc64le-linux-musl s390x-linux-musl x86_64-freebsd aarch64-freebsd x86_64-macos aarch64-macos; do
-            expected+=("lus-$TAG-$target.tar.gz")
-          done
-          for target in x86_64-windows aarch64-windows; do
-            expected+=("lus-$TAG-$target.zip")
-          done
-          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            expected+=("lus-${TAG#v}.vsix" "lus-${TAG#v}-open-vsx-publisher.cjs")
-          fi
-          diff <(printf '%s\n' "${expected[@]}" | sort) <(ls -1 | sort)
+          diff <(sh ../packaging/release/assets.sh "$TAG" | sort) <(ls -1 | sort)
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
       - name: Extract the release notes

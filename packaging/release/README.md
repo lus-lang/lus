@@ -26,3 +26,22 @@ The public key of `root.json` goes into `runtime/src/release_keys.zig`, and
 the seed of `signing.json` and its identifier `lus-release-1` go into the
 repository secrets. A new signing key needs only a new `keys.json`, which
 the root key signs, so every installed `lus` keeps accepting the index.
+
+## Shipping a release
+
+`.github/workflows/ship.yml` releases the version that
+`runtime/build.zig.zon` holds, `X.Y.Z-dev`, from one start in the Actions
+tab. It checks that CI and the nightly tests passed on the commit, then
+builds and tests every target through `release.yml`, pushes the release
+commit and the tag `vX.Y.Z`, publishes the GitHub release as the latest,
+signs the release index, publishes the VSIX to Open VSX and `lus-wasm` to
+npm, and pushes a commit that starts `X.(Y+1).0-dev`. The release commit
+dates the section of `CHANGELOG.md` and adds it to the news of the site
+(`tools/release-version.mjs`).
+
+The input `dry_run` is set by default. A dry run builds and checks
+everything and publishes nothing, and its summary lists each gate that a
+real release would stop at. A real release needs the secrets
+`LUS_RELEASE_SIGNING_SEED`, `LUS_RELEASE_SIGNING_KEY_ID`, `OVSX_PAT`, and
+`NPM_TOKEN`, the file `keys.json`, and a branch that the workflow token may
+push to.

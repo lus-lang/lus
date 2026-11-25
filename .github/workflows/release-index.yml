@@ -7,8 +7,10 @@ name: Release index
 # releases/latest never points at it.
 #
 # A maintainer publishing a draft stable release starts this workflow.
-# nightly.yml calls it for each unstable build, because a release that
-# the workflow token creates starts no other workflow.
+# nightly.yml and ship.yml call it, because a release that the workflow
+# token creates starts no other workflow. A dry run of ship.yml calls it
+# with `dry_run`, which builds and signs the index from the assets of the
+# run instead of a published release and uploads nothing.
 #
 # The signing key is the repository secret LUS_RELEASE_SIGNING_SEED with
 # the identifier LUS_RELEASE_SIGNING_KEY_ID. The root key signed the key
@@ -23,6 +25,10 @@ on:
       tag:
         required: true
         type: string
+      dry_run:
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       tag:
@@ -39,6 +45,7 @@ concurrency:
 env:
   NODE_VERSION: "24.7.0"
   TAG: ${{ inputs.tag || github.event.release.tag_name }}
+  DRY_RUN: ${{ inputs.dry_run == true }}
 
 jobs:
   index:
@@ -52,6 +59,19 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Download the assets of the run
+        if: ${{ inputs.dry_run == true }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: run-assets
+          merge-multiple: true
+      - name: Download the checksums of the run
+        if: ${{ inputs.dry_run == true }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ship-sums
+          path: run-assets
       - name: Build the index
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,11 +80,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f packaging/release/keys.json || { echo "packaging/release/keys.json is missing" >&2; exit 1; }
+          if [ ! -f packaging/release/keys.json ]; then
+            if [ "$DRY_RUN" != true ]; then echo "packaging/release/keys.json is missing" >&2; exit 1; fi
+            echo "::warning::packaging/release/keys.json is missing, so a real release would stop here"
+          fi
           mkdir -p out
           gh release download release-index --pattern index.json --dir prev 2>/dev/null || mkdir -p prev
-          gh release download "$TAG" --pattern SHA256SUMS --dir out
-          gh release view "$TAG" --json assets > out/assets.json
+          if [ "$DRY_RUN" = true ]; then
+            cp run-assets/SHA256SUMS out/SHA256SUMS
+            (cd run-assets && for f in *; do printf '%s\t%s\n' "$f" "$(stat -c %s "$f")"; done) |
+              node -e 'const lines = require("fs").readFileSync(0, "utf8").trim().split("\n"); console.log(JSON.stringify({ assets: lines.map((l) => { const [name, size] = l.split("\t"); return { name, size: Number(size) }; }) }))' > out/assets.json
+            # A dry run without the signing secret signs with a key of its own.
+            if [ -z "$LUS_RELEASE_SIGNING_SEED" ]; then
+              echo "::warning::LUS_RELEASE_SIGNING_SEED is not set, so the dry run signs with a throwaway key"
+              key="$(node tools/release-index.mjs keygen)"
+              LUS_RELEASE_SIGNING_SEED="$(node -p 'JSON.parse(process.argv[1]).seed' "$key")"
+              LUS_RELEASE_SIGNING_KEY_ID=dry-run
+              export LUS_RELEASE_SIGNING_SEED LUS_RELEASE_SIGNING_KEY_ID
+            fi
+          else
+            gh release download "$TAG" --pattern SHA256SUMS --dir out
+            gh release view "$TAG" --json assets > out/assets.json
+          fi
           node tools/release-index.mjs index \
             --tag "$TAG" \
             --sums out/SHA256SUMS \
@@ -72,8 +109,10 @@ jobs:
             --base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
             --previous prev/index.json \
             --out out/index.json
-          cp packaging/release/keys.json out/keys.json
+          if [ -f packaging/release/keys.json ]; then cp packaging/release/keys.json out/keys.json; fi
+          node -e 'const i = JSON.parse(require("fs").readFileSync("out/index.json", "utf8")); console.log(JSON.stringify(i, null, 2).slice(0, 4000))'
       - name: Publish
+        if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

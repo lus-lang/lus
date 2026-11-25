@@ -1,0 +1,329 @@
+name: Ship
+
+# Releases the version that runtime/build.zig.zon holds, X.Y.Z-dev, from
+# one start of this workflow:
+#
+#   1. prepare checks that CI and the nightly tests passed on the commit,
+#      that the tag is new, and that the secrets are set. It writes the
+#      changes of the release commit (tools/release-version.mjs release).
+#   2. build runs release.yml on that commit, which tests it and builds
+#      every target, lus.wasm, the VSIX, and the Windows installer.
+#   3. github pushes the release commit and the tag vX.Y.Z and publishes
+#      the release as the latest, which install.sh and lus-setup.exe
+#      download.
+#   4. index, vscode, and npm add the release to the signed index of
+#      `lus version`, publish the VSIX to Open VSX, and publish lus-wasm to
+#      npm.
+#   5. next pushes a commit that starts X.(Y+1).0-dev.
+#
+# The release commit carries the news page of the release, and the site
+# deploys from the branch, so the push of step 5 also rebuilds the site
+# with the lus.wasm of the release.
+#
+# A start from the Actions tab is a dry run unless `dry_run` is cleared. A
+# dry run does every step up to the point of publishing and then prints
+# what it would publish. A push to rewrite that changes the release
+# workflows or tools runs a dry run as well.
+#
+# The secrets are LUS_RELEASE_SIGNING_SEED and LUS_RELEASE_SIGNING_KEY_ID
+# (release-index.yml), OVSX_PAT (publish-vscode.yml), and NPM_TOKEN, an
+# npm automation token that can publish lus-wasm.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and check everything, then publish nothing"
+        type: boolean
+        default: true
+  push:
+    branches: [rewrite]
+    paths:
+      - .github/workflows/ship.yml
+      - .github/workflows/release.yml
+      - .github/workflows/release-index.yml
+      - .github/workflows/publish-vscode.yml
+      - packaging/release/**
+      - tools/release-version.mjs
+      - tools/release-index.mjs
+
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: ship
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.7.0"
+  DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
+
+jobs:
+  prepare:
+    name: Check the gates and write the release commit
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      date: ${{ steps.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Read the version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)"
+          if [[ ! "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev$ ]]; then
+            echo "build.zig.zon holds $current, and a release starts from X.Y.Z-dev" >&2
+            exit 1
+          fi
+          version="${current%-dev}"
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "date=$(date -u +%Y-%m-%d)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $version from $GITHUB_SHA on $GITHUB_REF_NAME (dry run: $DRY_RUN)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check the gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          LUS_RELEASE_SIGNING_SEED: ${{ secrets.LUS_RELEASE_SIGNING_SEED }}
+          LUS_RELEASE_SIGNING_KEY_ID: ${{ secrets.LUS_RELEASE_SIGNING_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          problems=()
+          if [ "$GITHUB_REF_TYPE" != branch ]; then problems+=("the workflow runs on $GITHUB_REF_TYPE $GITHUB_REF_NAME, and a release starts from a branch"); fi
+          # The commit must be the head of its branch, so the release
+          # commit and the next version follow it.
+          head="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)"
+          if [ "$head" != "$GITHUB_SHA" ]; then problems+=("$GITHUB_REF_NAME moved to $head after the run started"); fi
+          for workflow in ci.yml nightly.yml; do
+            passed="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$GITHUB_SHA&status=success&per_page=1" --jq .total_count)"
+            if [ "$passed" = 0 ]; then problems+=("$workflow has not passed on $GITHUB_SHA"); fi
+          done
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then problems+=("the tag $TAG exists"); fi
+          if gh release view "$TAG" >/dev/null 2>&1; then problems+=("the release $TAG exists"); fi
+          for secret in NPM_TOKEN OVSX_PAT LUS_RELEASE_SIGNING_SEED LUS_RELEASE_SIGNING_KEY_ID; do
+            if [ -z "${!secret}" ]; then problems+=("the secret $secret is not set"); fi
+          done
+          if [ ! -f packaging/release/keys.json ]; then problems+=("packaging/release/keys.json is missing"); fi
+          if [ "${#problems[@]}" -eq 0 ]; then
+            echo "Every gate passed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          for p in "${problems[@]}"; do
+            if [ "$DRY_RUN" = true ]; then echo "::warning::$p"; else echo "::error::$p"; fi
+            echo "- $p" >> "$GITHUB_STEP_SUMMARY"
+          done
+          if [ "$DRY_RUN" != true ]; then exit 1; fi
+      - name: Write the release commit
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DATE: ${{ steps.version.outputs.date }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test tools/release-version.test.mjs
+          node tools/release-version.mjs release --version "$VERSION" --date "$DATE"
+          node tools/lint-repo.js
+          git add -A
+          git diff --cached --binary > "$RUNNER_TEMP/release.patch"
+          git diff --cached --stat
+          node tools/release-version.mjs notes --version "$VERSION" > /dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ship-patch
+          path: ${{ runner.temp }}/release.patch
+          if-no-files-found: error
+
+  build:
+    name: Build
+    needs: prepare
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      patch: ship-patch
+      publish: false
+    secrets: inherit
+
+  github:
+    name: Publish the GitHub release
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ship-patch
+          path: ${{ runner.temp }}/patch
+      - name: Check the assets and write SHA256SUMS
+        working-directory: dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          diff <(sh ../packaging/release/assets.sh "$TAG" | sort) <(ls -1 | sort)
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ship-sums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+      - name: Commit the release and the next version
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git apply --index "$RUNNER_TEMP/patch/release.patch"
+          git commit -q -m "Release $VERSION"
+          git tag -a "$TAG" -m "Lus $VERSION"
+          node tools/release-version.mjs notes --version "$VERSION" > "$RUNNER_TEMP/notes.md"
+          next="$(node tools/release-version.mjs next --version "$VERSION")"
+          git add -A
+          git commit -q -m "Start $next"
+          git log --stat -2
+          git bundle create "$RUNNER_TEMP/ship.bundle" "$GITHUB_SHA..HEAD" "$TAG"
+          echo "NEXT=$next" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ship-commits
+          path: ${{ runner.temp }}/ship.bundle
+          if-no-files-found: error
+      - name: Push the release commit and the tag
+        if: env.DRY_RUN != 'true'
+        shell: bash
+        run: git push --atomic origin "HEAD~1:refs/heads/$GITHUB_REF_NAME" "refs/tags/$TAG"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            echo "A release would publish $TAG with these assets and notes:"
+            ls -l dist
+            cat "$RUNNER_TEMP/notes.md"
+            exit 0
+          fi
+          gh release create "$TAG" dist/* --verify-tag --latest --title "Lus $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+
+  index:
+    name: Release index
+    needs: [prepare, github]
+    uses: ./.github/workflows/release-index.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      dry_run: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
+    secrets: inherit
+
+  vscode:
+    name: Open VSX
+    needs: [prepare, github]
+    uses: ./.github/workflows/publish-vscode.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      dry_run: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
+    secrets: inherit
+
+  npm:
+    name: Publish lus-wasm to npm
+    needs: [prepare, github]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ship-patch
+          path: ${{ runner.temp }}/patch
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-build
+          path: ${{ runner.temp }}/build
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ship-sums
+          path: ${{ runner.temp }}/sums
+      - name: Stage the package
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply "$RUNNER_TEMP/patch/release.patch"
+          test "$(node -p 'require("./packages/wasm/package.json").version')" = "$VERSION"
+          # The package carries the lus.wasm of the release, byte for byte.
+          (cd "$RUNNER_TEMP/build" && grep ' lus.wasm$' "$RUNNER_TEMP/sums/SHA256SUMS" | sha256sum --check --strict)
+          mkdir -p packages/wasm/dist packages/wasm/licenses
+          cp "$RUNNER_TEMP/build/lus.wasm" packages/wasm/dist/lus.wasm
+          cp LICENSE.md packages/wasm/LICENSE.md
+          cp packaging/notices/THIRD_PARTY_NOTICES.WASM.md packages/wasm/THIRD_PARTY_NOTICES.md
+          for license in BROTLI LUA LUALS SQLITE TZDATA UNICODE WASI-LIBC ZIG ZSTD; do
+            cp "packaging/licenses/LICENSE.$license.txt" packages/wasm/licenses/
+          done
+      - name: Test the package
+        working-directory: packages/wasm
+        run: node --test
+      - name: Publish
+        working-directory: packages/wasm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            npm publish --dry-run --access public
+          else
+            npm publish --provenance --access public
+          fi
+
+  next:
+    name: Start the next version
+    needs: [prepare, github, index, vscode, npm]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ship-commits
+          path: ${{ runner.temp }}/commits
+      - name: Push the next version
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch -q "$RUNNER_TEMP/commits/ship.bundle" HEAD
+          git log --oneline -3 FETCH_HEAD
+          if [ "$DRY_RUN" = true ]; then
+            git show --stat FETCH_HEAD
+            exit 0
+          fi
+          git push origin "FETCH_HEAD:refs/heads/$GITHUB_REF_NAME"

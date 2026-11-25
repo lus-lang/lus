@@ -73,6 +73,8 @@ jobs:
         run: node tools/lint-repo.js
       - name: Generator tests
         run: node tools/build-lsp.test.js && node tools/build-grammar.test.js
+      - name: Release tool tests
+        run: node --test tools/release-version.test.mjs
       - name: Generated files are current
         run: node tools/build-lsp.js --check && node tools/build-grammar.js --check
       - name: Install Zig

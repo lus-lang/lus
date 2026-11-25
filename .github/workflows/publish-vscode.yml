@@ -1,8 +1,22 @@
 name: Publish VSCode Extension
 
+# Publishes the VSIX of a stable release to Open VSX, byte for byte as the
+# release holds it. ship.yml calls it, since a release that the workflow
+# token creates starts no other workflow. A dry run of ship.yml calls it
+# with `dry_run`, which checks the VSIX of the run and publishes nothing.
+
 on:
   release:
     types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      dry_run:
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       tag:
@@ -25,10 +39,23 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Download the VSIX of the run
+        if: ${{ inputs.dry_run == true }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-vscode
+          path: run-assets
+      - name: Download the checksums of the run
+        if: ${{ inputs.dry_run == true }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ship-sums
+          path: run-assets
       - name: Download and verify release publication inputs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
         run: |
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "invalid stable release tag: $TAG" >&2
@@ -38,9 +65,13 @@ jobs:
           vsix="lus-$version.vsix"
           publisher="lus-$version-open-vsx-publisher.cjs"
           mkdir anchor candidate
+          # A dry run has no tag yet, and the release commit leaves the
+          # manifest as the commit of the run holds it.
+          ref="$TAG"
+          if [ "$DRY_RUN" = true ]; then ref="$GITHUB_SHA"; fi
           gh api \
             -H "Accept: application/vnd.github+json" \
-            "repos/${{ github.repository }}/contents/packaging/release/manifest.json?ref=$TAG" \
+            "repos/${{ github.repository }}/contents/packaging/release/manifest.json?ref=$ref" \
             --jq .content | base64 --decode > anchor/release-manifest.json
           test -s anchor/release-manifest.json
           expected_publisher_sha=$(node -e '
@@ -54,12 +85,16 @@ jobs:
             ) throw new Error("tagged publisher anchor is invalid");
             process.stdout.write(publisher.sha256);
           ' anchor/release-manifest.json)
-          gh release download "$TAG" \
-            --repo "${{ github.repository }}" \
-            --pattern "$vsix" \
-            --pattern "$publisher" \
-            --pattern SHA256SUMS \
-            --dir candidate
+          if [ "$DRY_RUN" = true ]; then
+            cp "run-assets/$vsix" "run-assets/$publisher" run-assets/SHA256SUMS candidate/
+          else
+            gh release download "$TAG" \
+              --repo "${{ github.repository }}" \
+              --pattern "$vsix" \
+              --pattern "$publisher" \
+              --pattern SHA256SUMS \
+              --dir candidate
+          fi
           cd candidate
           test "$(find . -maxdepth 1 -type f | wc -l)" -eq 3
           test -s SHA256SUMS
@@ -90,10 +125,12 @@ jobs:
           echo "VSIX_SHA256=$(sha256sum "$vsix" | awk '{ print $1 }')" >> "$GITHUB_ENV"
           echo "PUBLISHER_SHA256=$(sha256sum "$publisher" | awk '{ print $1 }')" >> "$GITHUB_ENV"
       - name: Publish the verified bytes to Open VSX
+        if: ${{ inputs.dry_run != true }}
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: node "$PUBLISHER_PATH" "$VSIX_PATH"
       - name: Record published digest
+        if: ${{ inputs.dry_run != true }}
         run: |
           cd "$PUBLISH_INPUTS_DIR"
           sha256sum --check --strict PUBLISH-SUMS
