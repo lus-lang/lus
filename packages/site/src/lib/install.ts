@@ -4,6 +4,7 @@
 */
 // @ts-expect-error vite ?raw import
 import runtimeManifest from "../../../../runtime/build.zig.zon?raw"
+import project from "../../../../packaging/project.json"
 
 /*
 ** The one-line installer for Linux and macOS. Serves
@@ -11,7 +12,7 @@ import runtimeManifest from "../../../../runtime/build.zig.zon?raw"
 ** On platforms without prebuilt archives it prints build-from-source
 ** guidance instead of installing.
 */
-export const INSTALL_SH = `curl -fsSL https://lus.dev/install.sh | sh`
+export const INSTALL_SH = `curl -fsSL ${project.site}/install.sh | sh`
 
 /*
 ** The Windows installer. It installs per user by default, with no admin
@@ -19,7 +20,7 @@ export const INSTALL_SH = `curl -fsSL https://lus.dev/install.sh | sh`
 ** installs machine-wide.
 */
 export const WINDOWS_INSTALLER_URL =
-  "https://github.com/lus-lang/lus/releases/latest/download/lus-setup.exe"
+  `${project.repository}/releases/latest/download/lus-setup.exe`
 
 /*
 ** The release the manual download commands name. The site documents the
@@ -34,7 +35,7 @@ if (version === undefined) {
 }
 export const RELEASE_TAG = `v${version}`
 
-const DOWNLOAD = "https://github.com/lus-lang/lus/releases/download"
+const DOWNLOAD = `${project.repository}/releases/download`
 
 /*
 ** Manual downloads: the release archive for one target, unpacked into

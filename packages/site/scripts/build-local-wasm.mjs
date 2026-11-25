@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process"
+import project from "../../../packaging/project.json" with { type: "json" }
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -35,8 +36,8 @@ const astroBinary = join(
   "node_modules/.bin",
   process.platform === "win32" ? "astro.cmd" : "astro",
 )
-const releaseUrl = `https://github.com/lus-lang/lus/releases/tag/${version}`
-const sourceUrl = `https://github.com/lus-lang/lus/archive/refs/tags/${version}`
+const releaseUrl = `${project.repository}/releases/tag/${version}`
+const sourceUrl = `${project.repository}/archive/refs/tags/${version}`
 const localReleases = [
   {
     tag_name: version,

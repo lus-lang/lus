@@ -4,6 +4,7 @@
 ** page shell's width, and the playground spans it across the viewport.
 */
 import { Image } from "astro:assets"
+import project from "../../../../packaging/project.json"
 import logo from "../assets/logo.svg"
 import logoDark from "../assets/logo-dark.svg"
 import logoUnstable from "../assets/logo-unstable.svg"
@@ -72,7 +73,7 @@ function isActive(href: string) {
         ))
       }
       <a
-        href="https://github.com/lus-lang/lus"
+        href={project.repository}
         target="_blank"
         rel="noopener">github</a
       >

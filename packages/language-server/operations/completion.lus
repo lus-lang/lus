@@ -47,12 +47,8 @@ local KIND = {
 -- Lus keywords
 -- ---------------------------------------------------------------------------
 
-local KEYWORDS = {
-  "local", "global", "function", "if", "then", "else", "elseif", "end",
-  "for", "do", "while", "repeat", "until", "return", "break", "goto",
-  "in", "and", "or", "not", "true", "false", "nil",
-  "catch", "provide", "enum", "from",
-}
+-- Generated from the lexer by tools/build-facts.js.
+local KEYWORDS = require("lus-language.analysis.keywords")
 
 -- ---------------------------------------------------------------------------
 -- Standard library data (from lus-spec via build-lsp.js)

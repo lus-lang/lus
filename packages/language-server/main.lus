@@ -5,19 +5,20 @@ pledge("load", "fs:read", "exec")
 local transport = require("lus-language.transport")
 local protocol = require("lus-language.protocol")
 local server = require("lus-language.server")
+local version = require("lus-language.version")
 
 local instance = server.new()
 
 if arg then
   for i = 1, #arg do
     if arg[i] == "--version" then
-      io.write("lus-language 2.0.0-dev\n")
+      io.write(`lus-language $version\n`)
       os.exit(0)
     end
   end
 end
 
-transport.log("starting lus-language 2.0.0-dev")
+transport.log(`starting lus-language $version`)
 
 while true do
   local msg, read_error, status = transport.read_message()

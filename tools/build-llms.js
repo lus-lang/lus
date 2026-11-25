@@ -19,7 +19,7 @@ const path = require("path");
 const {parseFrontmatter, validateEntry} = require("./build-lsp.js");
 
 const ROOT = path.join(__dirname, "..");
-const SITE = "https://lus.dev";
+const SITE = require("../packaging/project.json").site;
 const SMALL_TOKEN_BUDGET = 25000;
 
 // The API sections of the site, in the order of packages/site/src/lib/api.ts.
