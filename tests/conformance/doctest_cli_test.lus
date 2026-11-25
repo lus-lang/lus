@@ -1,0 +1,76 @@
+--[[
+    `lus test --doc` runs the ```lus code blocks inside the doc comments of
+    .lus files, like those of Markdown files. The directory of the file
+    comes first on package.path, so an example can require its own module.
+    A source file with no example stays out of the report.
+]]
+
+pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
+
+local LUS = os.getenv("LUS_EXE")
+
+local MODULE = [=[
+--- Arithmetic helpers.
+local mathx = {}
+
+--- Doubles a number.
+---
+--- ```lus
+--- local mathx = require("mathx")
+--- assert(mathx.double(21) == 42)
+--- ```
+---
+--- ```lus
+--- local mathx = require("mathx")
+--- assert(mathx.double(1) == 3, "wrong on purpose")
+--- ```
+function mathx.double(x)
+    return 2 * x
+end
+
+--[[- Halves a number.
+
+```lus nocheck
+mathx.half(oops
+```
+]]
+function mathx.half(x)
+    return x / 2
+end
+
+return mathx
+]=]
+
+local function write(path, text)
+    local f = assert(io.open(path, "w"))
+    f:write(text)
+    f:close()
+end
+
+local function run(args)
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    local p = io.popen(`"$LUS" test $args 2>&1`)
+    local out = p:read("a")
+    local ok = p:close()
+    return (ok == true or ok == 0), out
+end
+
+local function doc_comment_examples_run_test()
+    write("mathx.lus", MODULE)
+    local ok, out = run("--doc mathx.lus")
+    assert(not ok, out)
+    assert(out:find("mathx.lus (1 passed, 1 failed, 1 skipped", 1, true), out)
+    -- Each example is named after the line where its code starts.
+    assert(out:find("FAIL line 12", 1, true), out)
+    assert(out:find("wrong on purpose", 1, true), out)
+end
+
+local function a_source_file_without_examples_stays_quiet_test()
+    fs.createdirectory("lib")
+    write("lib/plain.lus", "--- A module.\nreturn {}\n")
+    write("lib/guide.md", "Text.\n\n```lus\nassert(true)\n```\n")
+    local ok, out = run("--doc lib")
+    assert(ok, out)
+    assert(not out:find("plain.lus", 1, true), out)
+    assert(out:find("guide.md (1 passed", 1, true), out)
+end

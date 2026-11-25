@@ -89,7 +89,9 @@ Runs the tests in the named files, or in every `*_test.lus` file inside the name
 | `-u`, `--update` | Rewrite the snapshots that no longer match. With `--bench`, save the results as the baseline. |
 | `--bench` | Measure the functions whose names end in `_bench` and compare them with the saved baseline, in place of running the tests. [Benchmarks](/manual/testing#benchmarks) describes the measurement. |
 | `--bench-time S` | Measure each benchmark for S seconds. The default is 1. |
-| `--doc` | Run the ` ```lus ` code blocks of Markdown files in place of test files, which keeps the examples of documentation correct. |
+| `--coverage` | Report which lines of the code under test ran. [Coverage](/manual/testing#coverage) describes the report. |
+| `--coverage-out FILE` | Also write the coverage to FILE as an lcov tracefile, which editors and coverage services read. |
+| `--doc` | Run the ` ```lus ` code blocks of Markdown files and of the doc comments of `.lus` files in place of test files, which keeps the examples of documentation correct. |
 | `-v` | List the skipped tests of passing files too. |
 | `--json` | Print one JSON record per test, for other tools to read. |
 | `--jobs N` | Run at most N files at once. The default is the number of processors, or 1 with `--bench`. |

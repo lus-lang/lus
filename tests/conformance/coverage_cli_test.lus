@@ -1,0 +1,81 @@
+--[[
+    `lus test --coverage` reports which lines of the code under test ran,
+    leaving out the test files, and `--coverage-out` writes an lcov
+    tracefile. Each case writes a module and its test file into the
+    temporary directory of this test.
+]]
+
+pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
+
+local LUS = os.getenv("LUS_EXE")
+
+local MODULE = [[
+local m = {}
+
+function m.sign(x)
+    if x < 0 then
+        return -1
+    end
+    return 1
+end
+
+function m.unused()
+    return "never"
+end
+
+return m
+]]
+
+local TEST = [[
+package.path = TEST_DIR .. "/?.lus;" .. package.path
+pledge("load", "fs:read")
+
+local m = require("covered")
+
+local function sign_test()
+    assert(m.sign(5) == 1)
+end
+]]
+
+local function write(path, text)
+    local f = assert(io.open(path, "w"))
+    f:write(text)
+    f:close()
+end
+
+local function run(options)
+    if LUS == nil then skip("the interpreter is not reachable, set LUS_EXE") end
+    write("covered.lus", MODULE)
+    write("covered_test.lus", TEST)
+    local p = io.popen(`"$LUS" test $options covered_test.lus 2>&1`)
+    local out = p:read("a")
+    local ok = p:close()
+    return (ok == true or ok == 0), out
+end
+
+local function the_report_lists_the_lines_that_ran_test()
+    local ok, out = run("--coverage")
+    assert(ok, out)
+    local line = out:match("\n  ([^\n]*covered%.lus:[^\n]*)")
+    assert(line, out)
+    -- The negative branch and m.unused never run.
+    assert(line:find("missed 5, 11", 1, true), line)
+    assert(not out:find("covered_test.lus:", 1, true), out)
+    assert(out:find("\n  total: ", 1, true), out)
+end
+
+local function lcov_marks_each_line_test()
+    local ok, out = run("--coverage-out cov.info")
+    assert(ok, out)
+    local text = io.open("cov.info"):read("a")
+    assert(text:find("SF:[^\n]*covered%.lus\n"), text)
+    assert(text:find("DA:4,1\n", 1, true), text)
+    assert(text:find("DA:5,0\n", 1, true), text)
+    assert(text:find("end_of_record\n", 1, true), text)
+end
+
+local function a_plain_run_reports_no_coverage_test()
+    local ok, out = run("")
+    assert(ok, out)
+    assert(not out:find("coverage:", 1, true), out)
+end

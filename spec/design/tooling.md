@@ -77,7 +77,7 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 | rustdoc | Lus | State | Cost |
 |---|---|---|---|
 | doc comments to HTML | `lus doc` writes Markdown and JSON, which the website renders. HTML output from the command itself is missing. | partial | medium |
-| doctests in doc comments | `lus test --doc` runs the `lus` code blocks of Markdown files. The code blocks inside doc comments of `.lus` files do not run. | partial | medium |
+| doctests in doc comments | `lus test --doc` runs the `lus` code blocks of Markdown files and of the doc comments of `.lus` files, with the directory of each file on `package.path`. | closed | |
 | intra-doc links | Missing. | open | medium |
 | search | The website searches the manual. Generated package documentation has no search of its own. | open | large |
 
@@ -96,7 +96,7 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 |---|---|---|---|
 | miri | Lus code cannot corrupt memory, so undefined behavior can only come from the runtime, which runs under invariant checks, a verifying collector, sanitizers, allocation failure sweeps, and crash injection (`runtime/HACKING.md`). | by design | |
 | cargo-fuzz | The runtime fuzzes its parser and its TLS layer. User code has no fuzz harness. | open | large |
-| coverage (`cargo llvm-cov`) | The runtime measures its own coverage. `lus test` reports none for user code. | open | medium |
+| coverage (`cargo llvm-cov`) | `lus test --coverage` reports the lines of the code under test that ran, per file. `--coverage-out` writes them as an lcov tracefile. | closed | |
 | playground | The website playground runs `lus.wasm` in the browser. | closed | |
 
 ## What Lus has that Rust lacks
@@ -114,4 +114,4 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 
 The small gaps that remain are the caret snippet and `lus test --list`.
 
-The medium gaps follow in this order: coverage of user code, doctests in doc comments, `lus check --fix` with inline suppression, test lenses and a test explorer in the editor, more code actions, call hierarchy, and HTML documentation with intra-doc links and search. A fuzz harness for user code stays open.
+The medium gaps follow in this order: `lus check --fix` with inline suppression, test lenses and a test explorer in the editor, more code actions, call hierarchy, and HTML documentation with intra-doc links and search. A fuzz harness for user code stays open.

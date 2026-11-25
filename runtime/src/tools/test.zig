@@ -57,6 +57,10 @@ const Options = struct {
     bench: bool = false,
     /// How long each benchmark is measured, in milliseconds.
     bench_ms: u32 = 1000,
+    /// Record which lines of the code under test run.
+    coverage: bool = false,
+    /// Where to write the coverage as an lcov tracefile.
+    coverage_out: ?[]const u8 = null,
     tmp_root: []const u8 = "/tmp",
 
     fn fileTimeout(o: *const Options) i64 {
@@ -82,13 +86,15 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
                 record_file = args[i + 1];
                 i += 1;
             }
+            if (std.mem.eql(u8, args[i], "--coverage")) coverage_on = true;
+            if (std.mem.eql(u8, args[i], "--doc")) doc_mode = true;
             if (std.mem.eql(u8, args[i], "--bench-ms") and i + 1 < args.len) {
                 bench = std.fmt.parseInt(u32, args[i + 1], 10) catch 1000;
                 i += 1;
             }
         }
         if (record_file.len == 0) record_file = args[1];
-        if (isDoc(args[1])) return runDocFile(init, args[1], filter);
+        if (isDoc(args[1]) or doc_mode) return runDocFile(init, args[1], filter);
         return runOne(init, args[1], filter, update, bench);
     }
     var o: Options = .{};
@@ -106,6 +112,12 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             o.doc = true;
         } else if (std.mem.eql(u8, a, "--bench")) {
             o.bench = true;
+        } else if (std.mem.eql(u8, a, "--coverage")) {
+            o.coverage = true;
+        } else if (std.mem.eql(u8, a, "--coverage-out") and i + 1 < args.len) {
+            i += 1;
+            o.coverage = true;
+            o.coverage_out = args[i];
         } else if (std.mem.eql(u8, a, "--bench-time") and i + 1 < args.len) {
             i += 1;
             const secs = try std.fmt.parseFloat(f64, args[i]);
@@ -145,6 +157,8 @@ const FileResult = struct {
     timed_out: bool = false,
     report: std.ArrayList(u8) = .empty,
     records: std.ArrayList(u8) = .empty,
+    /// The coverage records of the file, one per line.
+    coverage: std.ArrayList(u8) = .empty,
     millis: i64 = 0,
 };
 
@@ -168,7 +182,7 @@ fn discover(gpa: std.mem.Allocator, io: std.Io, path: []const u8, files: *std.Ar
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (doc) {
-            if (!isDoc(entry.basename)) continue;
+            if (!isDoc(entry.basename) and !std.mem.endsWith(u8, entry.basename, ".lus")) continue;
         } else if (!std.mem.endsWith(u8, entry.basename, "_test.lus")) continue;
         const skip_dirs = [_][]const u8{ "node_modules", ".git", "zig-out", ".zig-cache" };
         var skip = false;
@@ -232,6 +246,9 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
         if (broken > 0) try report.print(gpa, ", {d} {s} with errors", .{ broken, if (broken == 1) "file" else "files" });
         try report.append(gpa, '\n');
     }
+    if (o.coverage) writeCoverage(gpa, io, o, results, &report) catch |e| {
+        std.debug.print("lus test: cannot write the coverage ({s})\n", .{@errorName(e)});
+    };
     std.Io.File.stdout().writeStreamingAll(io, report.items) catch {};
     const code: u8 = if (bad_files == 0) 0 else 1;
     // A worker left behind may still hold its file, so the process ends
@@ -244,6 +261,7 @@ fn runAll(init: std.process.Init, o: *Options) !u8 {
     for (results) |*r| {
         r.report.deinit(gpa);
         r.records.deinit(gpa);
+        r.coverage.deinit(gpa);
     }
     gpa.free(results);
     return code;
@@ -556,6 +574,9 @@ const win = if (windows) struct {
 fn formatResult(gpa: std.mem.Allocator, o: *const Options, r: *const FileResult, text: *std.ArrayList(u8)) !void {
     if (o.json) return text.appendSlice(gpa, r.records.items);
     const ok = r.failed == 0 and !r.crashed and !r.timed_out;
+    // A source file whose doc comments hold no example stays out of the
+    // report of a doc run.
+    if (o.doc and ok and std.mem.endsWith(u8, r.path, ".lus") and r.passed + r.skipped == 0 and !o.verbose) return;
     const mark = if (ok) "ok  " else "FAIL";
     if (o.bench) {
         try text.print(gpa, "{s} {s} ({d} {s}", .{ mark, r.path, r.benches, if (r.benches == 1) "benchmark" else "benchmarks" });
@@ -586,6 +607,8 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
     if (pool.o.filter) |f| try argv.appendSlice(gpa, &.{ "--filter", f });
     var ms_buf: [16]u8 = undefined;
     if (pool.o.bench) try argv.appendSlice(gpa, &.{ "--bench-ms", try std.fmt.bufPrint(&ms_buf, "{d}", .{pool.o.bench_ms}) });
+    if (pool.o.coverage) try argv.append(gpa, "--coverage");
+    if (pool.o.doc) try argv.append(gpa, "--doc");
     const start = std.Io.Clock.Timestamp.now(io, .awake);
     var child = try std.process.spawn(io, .{
         .argv = argv.items,
@@ -666,6 +689,9 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
             const name = recordField(rec, "name");
             if (std.mem.eql(u8, st, "pass")) {
                 r.passed += 1;
+            } else if (std.mem.eql(u8, st, "coverage")) {
+                try r.coverage.appendSlice(gpa, rec);
+                try r.coverage.append(gpa, '\n');
             } else if (std.mem.eql(u8, st, "bench")) {
                 r.benches += 1;
                 try formatBench(gpa, rec, name, &r.report);
@@ -821,6 +847,9 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
     }
     l.g.environ = init.environ_map;
     try api.setFlags(l, &.{});
+    var cov: Coverage = .{ .gpa = gpa };
+    defer cov.deinit();
+    if (coverage_on) cov.attach(l);
     api.openLibs(l) catch return 2;
     var snap = Snapshots{ .gpa = gpa, .io = io, .path = path, .update = update };
     defer snap.deinit();
@@ -928,6 +957,10 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
             if (!runTest(l, &snap, name, once, fv, lineOf(fv))) failed = true;
         }
     }
+    if (coverage_on) {
+        l.g.debugger = null;
+        cov.emit(l) catch |e| std.debug.print("cannot report the coverage ({s})\n", .{@errorName(e)});
+    }
     snap.save() catch |e| std.debug.print("cannot write snapshots ({s})\n", .{@errorName(e)});
     out.flushAll(l.g);
     return if (failed) 1 else 0;
@@ -956,6 +989,57 @@ fn runDocFile(init: std.process.Init, path: []const u8, filter: ?[]const u8) !u8
         return 2;
     };
     defer gpa.free(src);
+    // The examples in the doc comments of a source file run like the code
+    // blocks of a Markdown file, with the directory of the file on
+    // `package.path` so that an example can require its own module.
+    if (std.mem.endsWith(u8, path, ".lus")) {
+        const text = try docText(gpa, src);
+        defer gpa.free(text);
+        return runDocText(init, path, text, filter, std.fs.path.dirname(path) orelse ".");
+    }
+    return runDocText(init, path, src, filter, null);
+}
+
+/// The text of the doc comments of a source file, as Markdown with one
+/// line per source line, so the line of a code block is its line in the
+/// source. A `---` line keeps what follows the dashes and one space, the
+/// lines of a `--[[- ... ]]` comment keep their text, and every other line
+/// becomes empty.
+pub fn docText(gpa: std.mem.Allocator, src: []const u8) ![]u8 {
+    var text: std.ArrayList(u8) = .empty;
+    errdefer text.deinit(gpa);
+    var in_long = false;
+    var it = std.mem.splitScalar(u8, src, '\n');
+    var first = true;
+    while (it.next()) |raw| {
+        if (!first) try text.append(gpa, '\n');
+        first = false;
+        const line = std.mem.trimStart(u8, raw, " \t");
+        if (in_long) {
+            if (std.mem.indexOf(u8, line, "]]")) |end| {
+                in_long = false;
+                try text.appendSlice(gpa, line[0..end]);
+            } else try text.appendSlice(gpa, raw);
+        } else if (std.mem.startsWith(u8, line, "--[[-")) {
+            const rest = line["--[[-".len..];
+            if (std.mem.indexOf(u8, rest, "]]")) |end| {
+                try text.appendSlice(gpa, rest[0..end]);
+            } else {
+                in_long = true;
+                try text.appendSlice(gpa, rest);
+            }
+        } else if (std.mem.startsWith(u8, line, "---") and !std.mem.startsWith(u8, line, "----")) {
+            var rest = line[3..];
+            if (rest.len > 0 and rest[0] == ' ') rest = rest[1..];
+            try text.appendSlice(gpa, rest);
+        }
+    }
+    return text.toOwnedSlice(gpa);
+}
+
+fn runDocText(init: std.process.Init, path: []const u8, src: []const u8, filter: ?[]const u8, module_dir: ?[]const u8) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
     var failed = false;
     var lines = std.mem.splitScalar(u8, src, '\n');
     var lineno: usize = 0;
@@ -989,7 +1073,7 @@ fn runDocFile(init: std.process.Init, path: []const u8, filter: ?[]const u8) !u8
                 writeRecord(gpa, io, "skip", name, "nocheck", start_line, 0);
                 continue;
             }
-            if (!try runDocBlock(init, path, start_line, code.items, name)) failed = true;
+            if (!try runDocBlock(init, path, start_line, code.items, name, module_dir)) failed = true;
             continue;
         }
         try code.appendSlice(gpa, raw);
@@ -998,7 +1082,7 @@ fn runDocFile(init: std.process.Init, path: []const u8, filter: ?[]const u8) !u8
     return if (failed) 1 else 0;
 }
 
-fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []const u8, name: []const u8) !bool {
+fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []const u8, name: []const u8, module_dir: ?[]const u8) !bool {
     const gpa = init.gpa;
     const io = init.io;
     const l = try api.newState(gpa, io);
@@ -1009,6 +1093,7 @@ fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []co
         return false;
     };
     api.grantPledges(l, &.{"all"}) catch {};
+    if (module_dir) |dir| prependPath(l, dir) catch {};
     const chunkname = try std.fmt.allocPrint(gpa, "={s}:{d}", .{ std.fs.path.basename(path), line });
     defer gpa.free(chunkname);
     var ok = true;
@@ -1046,6 +1131,17 @@ fn recordHead(gpa: std.mem.Allocator, rec: *std.ArrayList(u8), status: []const u
     try rec.appendSlice(gpa, "\",\"file\":\"");
     try jsonEscape(gpa, rec, record_file);
     try rec.print(gpa, "\",\"line\":{d},\"duration\":{d:.3}", .{ line, duration_ms });
+}
+
+/// Puts the modules of `dir` first on `package.path`.
+fn prependPath(l: *Thread, dir: []const u8) !void {
+    const pkg = try aux.getField(l, l.g.globals.as(Table), "package");
+    if (pkg.tag != .table) return;
+    const old = try aux.getField(l, pkg.as(Table), "path");
+    const rest = if (old.tag == .string) old.as(String).bytes() else "";
+    const path = try std.fmt.allocPrint(l.g.gpa, "{s}/?.lus;{s}/?/init.lus;{s}", .{ dir, dir, rest });
+    defer l.g.gpa.free(path);
+    try aux.setField(l, pkg.as(Table), "path", try l.newStringValue(path));
 }
 
 fn writeRecord(gpa: std.mem.Allocator, io: std.Io, status: []const u8, name: []const u8, msg: []const u8, line: usize, duration_ms: f64) void {
@@ -1124,6 +1220,223 @@ fn runTest(l: *Thread, snap: *Snapshots, name: []const u8, f: Value, case: ?Valu
     out.flushAll(l.g);
     writeRecord(gpa, l.g.io, status, name, msg, line, duration);
     return ok or std.mem.eql(u8, status, "skip");
+}
+
+// ---------------------------------------------------------------------
+// Coverage
+
+/// Set in a child run with `--coverage`.
+var coverage_on = false;
+
+/// Set in a child run with `--doc`, where a `.lus` file runs the examples
+/// of its doc comments.
+var doc_mode = false;
+
+const LineSet = std.AutoArrayHashMapUnmanaged(u32, void);
+
+/// Records the lines that run, per source file, with the native line
+/// hook that `lus debug` also uses. Every thread of the state runs the
+/// hooked interpreter, so the JIT stays off while coverage runs.
+const Coverage = struct {
+    gpa: std.mem.Allocator,
+    files: std.StringArrayHashMapUnmanaged(LineSet) = .empty,
+    /// The file of the last line event, which most events repeat.
+    last: ?usize = null,
+    dbg: lus.vm.state.Debugger = undefined,
+
+    fn attach(c: *Coverage, l: *Thread) void {
+        c.dbg = .{ .ctx = c, .event = event, .raised = raised, .mask = Thread.hook_line };
+        l.g.debugger = &c.dbg;
+        l.hook_mask = c.dbg.mask;
+        l.hook_oldfi = std.math.maxInt(usize);
+    }
+
+    fn event(ctx: *anyopaque, l: *Thread, ev: []const u8, line: ?u32) Error!void {
+        _ = ev;
+        const c: *Coverage = @ptrCast(@alignCast(ctx));
+        const n = line orelse return;
+        const cl = l.frame().closure orelse return;
+        const src = (cl.proto.source orelse return).bytes();
+        // Only chunks loaded from files, named `@PATH`, are covered.
+        if (src.len < 2 or src[0] != '@') return;
+        const path = src[1..];
+        const idx = if (c.last) |i| (if (std.mem.eql(u8, c.files.keys()[i], path)) i else null) else null;
+        const at = idx orelse blk: {
+            const gop = c.files.getOrPut(c.gpa, path) catch return;
+            if (!gop.found_existing) {
+                gop.key_ptr.* = c.gpa.dupe(u8, path) catch {
+                    c.files.swapRemoveAt(gop.index);
+                    return;
+                };
+                gop.value_ptr.* = .empty;
+            }
+            break :blk gop.index;
+        };
+        c.last = at;
+        c.files.values()[at].put(c.gpa, n, {}) catch {};
+    }
+
+    fn raised(_: *anyopaque, _: *Thread) void {}
+
+    /// Writes one record per covered file that is no test file: the lines
+    /// that ran and the lines that hold code, which come from compiling the
+    /// file again.
+    fn emit(c: *Coverage, l: *Thread) !void {
+        const gpa = c.gpa;
+        const io = l.g.io;
+        for (c.files.keys(), c.files.values()) |path, hits| {
+            if (std.mem.endsWith(u8, path, "_test.lus") or std.mem.indexOf(u8, path, "://") != null) continue;
+            const src = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch continue;
+            defer gpa.free(src);
+            const chunkname = try std.fmt.allocPrint(gpa, "@{s}", .{path});
+            defer gpa.free(chunkname);
+            var lines: LineSet = .empty;
+            defer lines.deinit(gpa);
+            switch (try lus.compile.codegen.compile(l.g, src, .{ .chunkname = chunkname, .meta_eval = false })) {
+                .err => |m| {
+                    gpa.free(m);
+                    continue;
+                },
+                .ok => |p| try codeLines(gpa, p, &lines),
+            }
+            var rec: std.ArrayList(u8) = .empty;
+            defer rec.deinit(gpa);
+            try recordHead(gpa, &rec, "coverage", path, 0, 0);
+            try rec.appendSlice(gpa, ",\"message\":\"\",\"hit\":");
+            try writeLineList(gpa, &rec, hits.keys());
+            try rec.appendSlice(gpa, ",\"lines\":");
+            try writeLineList(gpa, &rec, lines.keys());
+            try rec.appendSlice(gpa, "}\n");
+            std.Io.File.stdout().writeStreamingAll(io, rec.items) catch {};
+        }
+    }
+
+    fn deinit(c: *Coverage) void {
+        for (c.files.keys(), c.files.values()) |k, *v| {
+            c.gpa.free(k);
+            v.deinit(c.gpa);
+        }
+        c.files.deinit(c.gpa);
+    }
+};
+
+/// Adds every line that an instruction of `p` or of its nested functions
+/// comes from. The last instruction of a function is the return that the
+/// compiler adds at its `end`, which never runs after an explicit
+/// `return`, so its line counts only when it runs.
+fn codeLines(gpa: std.mem.Allocator, p: *const lus.vm.object.Proto, set: *LineSet) !void {
+    const n_code = if (p.lines.len > 0) p.lines.len - 1 else 0;
+    for (p.lines[0..n_code]) |n| if (n > 0) try set.put(gpa, n, {});
+    for (p.protos) |q| try codeLines(gpa, q, set);
+}
+
+fn writeLineList(gpa: std.mem.Allocator, rec: *std.ArrayList(u8), lines: []const u32) !void {
+    const sorted = try gpa.dupe(u32, lines);
+    defer gpa.free(sorted);
+    std.mem.sort(u32, sorted, {}, std.sort.asc(u32));
+    try rec.append(gpa, '[');
+    for (sorted, 0..) |n, i| {
+        if (i > 0) try rec.append(gpa, ',');
+        try rec.print(gpa, "{d}", .{n});
+    }
+    try rec.append(gpa, ']');
+}
+
+/// Parses the array of integers under `key` in a one-line record.
+fn recordLines(gpa: std.mem.Allocator, rec: []const u8, key: []const u8, set: *LineSet) !void {
+    var buf: [64]u8 = undefined;
+    const pat = std.fmt.bufPrint(&buf, "\"{s}\":[", .{key}) catch return;
+    const at = std.mem.indexOf(u8, rec, pat) orelse return;
+    const start = at + pat.len;
+    const end = std.mem.indexOfScalarPos(u8, rec, start, ']') orelse return;
+    var it = std.mem.tokenizeScalar(u8, rec[start..end], ',');
+    while (it.next()) |t| try set.put(gpa, std.fmt.parseInt(u32, t, 10) catch continue, {});
+}
+
+const FileCoverage = struct { hit: LineSet = .empty, lines: LineSet = .empty };
+
+/// Merges the coverage records of every file, then writes a summary to
+/// `report` and, with `--coverage-out`, an lcov tracefile. A line counts
+/// as covered when any test file ran it.
+fn writeCoverage(gpa: std.mem.Allocator, io: std.Io, o: *const Options, results: []const FileResult, report: *std.ArrayList(u8)) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var files: std.StringArrayHashMapUnmanaged(FileCoverage) = .empty;
+    for (results) |*r| {
+        var it = std.mem.splitScalar(u8, r.coverage.items, '\n');
+        while (it.next()) |rec| {
+            if (rec.len == 0) continue;
+            const name = try unescape(arena, recordField(rec, "name"));
+            const gop = try files.getOrPut(arena, name);
+            if (!gop.found_existing) gop.value_ptr.* = .{};
+            try recordLines(arena, rec, "hit", &gop.value_ptr.hit);
+            try recordLines(arena, rec, "lines", &gop.value_ptr.lines);
+        }
+    }
+    files.sort(struct {
+        keys: [][]const u8,
+        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+            return std.mem.lessThan(u8, ctx.keys[a], ctx.keys[b]);
+        }
+    }{ .keys = files.keys() });
+    const cwd = std.Io.Dir.cwd().realPathFileAlloc(io, ".", arena) catch "";
+
+    var total: usize = 0;
+    var covered: usize = 0;
+    var lcov: std.ArrayList(u8) = .empty;
+    if (!o.json) try report.print(gpa, "\ncoverage:\n", .{});
+    for (files.keys(), files.values()) |path, *fc| {
+        // A line can run without holding an instruction of its own, as
+        // the line of a multi-line expression does.
+        for (fc.hit.keys()) |n| try fc.lines.put(arena, n, {});
+        const sorted = try arena.dupe(u32, fc.lines.keys());
+        std.mem.sort(u32, sorted, {}, std.sort.asc(u32));
+        var hit_count: usize = 0;
+        for (sorted) |n| {
+            if (fc.hit.contains(n)) hit_count += 1;
+        }
+        total += sorted.len;
+        covered += hit_count;
+        try lcov.print(arena, "SF:{s}\n", .{path});
+        for (sorted) |n| try lcov.print(arena, "DA:{d},{d}\n", .{ n, @intFromBool(fc.hit.contains(n)) });
+        try lcov.print(arena, "LF:{d}\nLH:{d}\nend_of_record\n", .{ sorted.len, hit_count });
+        if (o.json) continue;
+        // An absolute path shows relative to the working directory, as the
+        // paths of the test files do.
+        const rel = if (cwd.len > 0 and std.fs.path.isAbsolute(path)) try std.fs.path.relativeAlloc(arena, cwd, null, cwd, path) else path;
+        const shown = if (rel.len > 0 and rel.len < path.len) rel else path;
+        try report.print(gpa, "  {s}: {d} of {d} lines, {d:.1}%", .{ shown, hit_count, sorted.len, percent(hit_count, sorted.len) });
+        try writeMissed(gpa, report, sorted, &fc.hit);
+        try report.append(gpa, '\n');
+    }
+    if (!o.json) try report.print(gpa, "  total: {d} of {d} lines, {d:.1}%\n", .{ covered, total, percent(covered, total) });
+    if (o.coverage_out) |out_path| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = lcov.items });
+}
+
+fn percent(part: usize, whole: usize) f64 {
+    if (whole == 0) return 100;
+    return 100 * @as(f64, @floatFromInt(part)) / @as(f64, @floatFromInt(whole));
+}
+
+/// Writes the lines that did not run as ranges, such as `missed 4, 9-12`,
+/// with at most eight ranges.
+fn writeMissed(gpa: std.mem.Allocator, report: *std.ArrayList(u8), sorted: []const u32, hit: *const LineSet) !void {
+    var ranges: usize = 0;
+    var i: usize = 0;
+    while (i < sorted.len) : (i += 1) {
+        if (hit.contains(sorted[i])) continue;
+        var j = i;
+        while (j + 1 < sorted.len and !hit.contains(sorted[j + 1])) j += 1;
+        if (ranges == 8) {
+            try report.appendSlice(gpa, ", ...");
+            return;
+        }
+        try report.appendSlice(gpa, if (ranges == 0) ", missed " else ", ");
+        if (j > i) try report.print(gpa, "{d}-{d}", .{ sorted[i], sorted[j] }) else try report.print(gpa, "{d}", .{sorted[i]});
+        ranges += 1;
+        i = j;
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -1338,6 +1651,26 @@ fn benchFailed(l: *Thread, name: []const u8, err: Value, line: usize) bool {
     out.flushAll(l.g);
     writeRecord(l.g.gpa, l.g.io, "fail", name, msg, line, 0);
     return false;
+}
+
+test docText {
+    const src =
+        \\--- Doubles a number.
+        \\---
+        \\--- ```lus
+        \\--- assert(double(2) == 4)
+        \\--- ```
+        \\local function double(x) return 2 * x end
+        \\--[[-
+        \\```lus
+        \\print(1)
+        \\```
+        \\]]
+        \\---- a rule, not a doc comment
+    ;
+    const text = try docText(std.testing.allocator, src);
+    defer std.testing.allocator.free(text);
+    try std.testing.expectEqualStrings("Doubles a number.\n\n```lus\nassert(double(2) == 4)\n```\n\n\n```lus\nprint(1)\n```\n\n", text);
 }
 
 test medianAndMad {
