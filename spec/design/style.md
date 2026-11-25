@@ -339,3 +339,7 @@ A reader then checks each point.
 The `lus-writing` agent skill carries this guide to other repositories. `lus agents init` installs it with the other Lus skills, and lus.dev serves it at `/agents/skills/lus-writing/`. Its reference file is generated from this note by `tools/build-skills.js`, and `mise run gen:check` fails when the copy is stale, so this note stays the only text anyone edits.
 
 The atmosphere registry, the atmos packages, and the package template each say in their `AGENTS.md` that prose follows the `lus-writing` skill. Projects created with `atmos init` inherit that line.
+
+## 14. Code
+
+Lus code in the repository, the code blocks of the manual and the spec included, is in the strict style that `lus fmt --strict` writes and `lus check --strict` checks, which [Developer tools](https://lus.dev/manual/tools#the-strict-style) describes rule by rule. Run `lus fmt --strict --write` on the files you change and fix what `lus check --strict` reports before you commit. `mise run lint` runs both checks over the repository. A comment in code is prose, so it follows the rest of this guide.
