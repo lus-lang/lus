@@ -4061,7 +4061,7 @@ A watch of a file reports the changes of that file only.
 
 The call requires `fs:read` for `path`. An event of a path that `fs:read` does not cover is never delivered. A `path` that does not exist raises `"cannot watch 'PATH': No such file or directory"`. A system that refuses the watch, such as a sandbox without access to the notification service, raises an error that starts with `"cannot watch 'PATH'"`. An option of the wrong type raises a bad argument error.
 
-The notifications come from inotify on Linux, FSEvents on macOS, and `ReadDirectoryChangesW` on Windows. inotify keeps one watch for each directory of a recursive watch, which counts against the number of watches that the system allows each user (`/proc/sys/fs/inotify/max_user_watches`).
+The notifications come from inotify on Linux, FSEvents on macOS, kqueue on FreeBSD, and `ReadDirectoryChangesW` on Windows. inotify keeps one watch for each directory of a recursive watch, which counts against the number of watches that the system allows each user (`/proc/sys/fs/inotify/max_user_watches`). kqueue keeps one open descriptor for each directory and each file it watches, which counts against the open file limit of the process (`ulimit -n`).
 
 The following example reloads a configuration file whenever it changes.
 
