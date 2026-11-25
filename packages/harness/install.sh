@@ -154,7 +154,12 @@ if [ -z "$LUS_BIN" ]; then
 fi
 
 # The harness files: a checkout, or a download.
-script_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)
+# Piped to sh, $0 names the shell and not a file, so only a script run from
+# a file can be part of a checkout.
+script_dir=
+if [ -f "$0" ]; then
+  script_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)
+fi
 if [ -n "$script_dir" ] && [ -f "$script_dir/src/index.ts" ] \
   && [ -f "$script_dir/../language-server/main.lus" ] && [ -d "$script_dir/../../.agents/skills" ]; then
   HARNESS_DIR=$script_dir
@@ -183,7 +188,7 @@ else
   mkdir "$work/src"
   tar -xzf "$work/src.tar.gz" -C "$work/src" --strip-components=1 || die "cannot unpack the archive"
   for part in packages/harness packages/language-server .agents; do
-    [ -e "$work/src/$part" ] || die "the archive of $REF has no $part, so it predates the harness"
+    [ -e "$work/src/$part" ] || die "the archive of $REF has no $part, so it predates the harness. Name a newer ref with --ref or LUS_HARNESS_REF."
   done
   dest=$HARNESS_HOME/$REF
   rm -rf "$dest.tmp"
