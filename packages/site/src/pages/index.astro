@@ -184,17 +184,17 @@ const stdlibMap = [
             <button type="button" data-via="agent" aria-pressed="true">agent</button>
             <button type="button" data-via="shell" aria-pressed="false">shell</button>
           </div>
-          <div class="install crop" id="install-unix" hidden>
+          <div class="install" id="install-unix" hidden>
             <span class="plat" id="install-platform">linux, x64</span>
             <code id="install-shell">{INSTALL_SH}</code>
             <button type="button" data-copy="install-shell">copy</button>
           </div>
-          <div class="install crop" id="install-windows" hidden>
+          <div class="install" id="install-windows" hidden>
             <span class="plat">windows, x64</span>
             <a href={WINDOWS_INSTALLER_URL}>lus-setup.exe</a>
           </div>
           <div class="agent" id="install-agent">
-            <div class="prompt-box crop">
+            <div class="prompt-box">
               <pre><code>{AGENT_PROMPT}</code></pre>
             </div>
             <div class="prompt-links">
@@ -268,7 +268,7 @@ const stdlibMap = [
               <h3><a href={c.href}>{c.title}</a></h3>
               <p>{c.blurb}</p>
               {c.name === "fast" && (
-                <figure class="figure crop">
+                <figure class="figure">
                   <figcaption>
                     <a href="#benchmarks">all results ↑</a>
                   </figcaption>
@@ -284,7 +284,7 @@ const stdlibMap = [
                 </figure>
               )}
               {c.name === "batteries" && (
-                <figure class="figure crop">
+                <figure class="figure">
                   <figcaption><a href="/manual/api">reference →</a></figcaption>
                   <ul class="kit">
                     {batteries.map((b) => (
@@ -299,22 +299,22 @@ const stdlibMap = [
                 </figure>
               )}
               {c.name === "permissions" && (
-                <figure class="figure crop">
+                <figure class="figure">
                   <Code lang={lusGrammar as any} themes={codeThemes as any} code={permissionsCode} />
                 </figure>
               )}
               {c.name === "concurrency" && (
-                <figure class="figure crop">
+                <figure class="figure">
                   <Code lang={lusGrammar as any} themes={codeThemes as any} code={concurrencyCode} />
                 </figure>
               )}
               {c.name === "queries" && (
-                <figure class="figure crop">
+                <figure class="figure">
                   <Code lang={lusGrammar as any} themes={codeThemes as any} code={queryCode} />
                 </figure>
               )}
               {c.name === "agents" && (
-                <figure class="figure crop">
+                <figure class="figure">
                   <figcaption><a href="/agents">what this does →</a></figcaption>
                   <p class="prompt">{AGENT_PROMPT}</p>
                 </figure>

@@ -29,10 +29,8 @@
 **    user events. No box shadows.
 **  - Rules are few. Each section title stands on the ruled utility, one
 **    2px rule ticked at the twelve columns of the measure. Code figures
-**    and the install box sit between crop marks (.crop). The marks are
-**    the frame, so whatever stands between them is a square fill with no
-**    border of its own. The header closes with a 2px rule and the
-**    footer opens on a ticked 1px rule. Rows, ledgers, indexes, and
+**    and the install box are square fills with no border. The footer
+**    opens on a ticked 1px rule. Rows, ledgers, indexes, and
 **    tables separate by spacing, never by lines. Data bars are segmented
 **    meters of square cells, and they are data, not rules.
 **  - Print texture: a still paper grain sits behind every page
@@ -51,9 +49,7 @@
 **        figures and their captions. Code renders with a pair of themes
 **        (lib/code-themes.mjs), paper in light and night in dark.
 **      rule: the color of the section rules.
-**  - Radius: 3px on chips and tags, 4px on nav pills and toggles, 6px on
-**    buttons. The install box is square and borderless, held by its crop
-**    marks.
+**  - Radius: none. Every element has square corners.
 **  - Lime budget: fills only small meaningful surfaces (the version chip,
 **    the stable tag, the best value in a data row, selection). Large
 **    surfaces never turn lime.
@@ -371,34 +367,7 @@ details[open] > summary::before {
   scroll-margin-top: 1rem;
 }
 
-/* crop marks: an L of hairlines at each corner, open to the element, like
-   a plate on a proof sheet */
-.crop {
-  position: relative;
-  /* the marks frame the element, which carries no border or radius */
-  border: 0;
-  border-radius: 0;
-
-  &::after {
-    content: "";
-    position: absolute;
-    inset: -6px;
-    pointer-events: none;
-    --mark: linear-gradient(var(--color-ink-3), var(--color-ink-3));
-    background:
-      var(--mark) top left / 9px 1px no-repeat,
-      var(--mark) top left / 1px 9px no-repeat,
-      var(--mark) top right / 9px 1px no-repeat,
-      var(--mark) top right / 1px 9px no-repeat,
-      var(--mark) bottom left / 9px 1px no-repeat,
-      var(--mark) bottom left / 1px 9px no-repeat,
-      var(--mark) bottom right / 9px 1px no-repeat,
-      var(--mark) bottom right / 1px 9px no-repeat;
-  }
-}
-
-/* code figure: a square tint block, its links in a mono caption on top, set
-   between crop marks */
+/* code figure: a square tint block, its links in a mono caption on top */
 .figure {
   @apply relative bg-figure text-figure-ink m-0;
 
