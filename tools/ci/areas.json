@@ -497,7 +497,7 @@
     },
     {
       "name": "generators",
-      "paths": ["tools/build-*.js", "tools/lint-repo.js", "tools/gen-*.js", "tools/op-ngrams.js", "tools/tsan.sh", "tools/test-linux.sh", "tools/post-x.js", "tools/post-x.test.js"],
+      "paths": ["tools/build-*.js", "tools/lint-repo.js", "tools/lint-lus.mjs", "tools/gen-*.js", "tools/op-ngrams.js", "tools/tsan.sh", "tools/test-linux.sh", "tools/post-x.js", "tools/post-x.test.js"],
       "labels": ["tools"],
       "checks": ["web"],
       "contributor": "denied"

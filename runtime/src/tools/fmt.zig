@@ -1,12 +1,13 @@
 //! `lus fmt`: formats Lus source files.
 //!
-//! Usage: lus fmt [--check] [--write] [--indent N] [FILE...]
+//! Usage: lus fmt [--check] [--write] [--strict] [--indent N] [FILE...]
 //!
 //! By default the formatted text of every file is printed to standard
 //! output. `--write` rewrites the files that change in place. `--check`
 //! writes nothing and lists the files that would change. A directory
 //! argument stands for every `.lus` file below it. With no file, or with
-//! the file `-`, the source is read from standard input.
+//! the file `-`, the source is read from standard input. `--strict`
+//! writes the style that `lus check --strict` checks (`syntax/strict.zig`).
 //!
 //! The exit status is 0 when every file was formatted (or, with
 //! `--check`, is already formatted), 1 when a file would change or cannot
@@ -22,10 +23,11 @@ const api = lus.api;
 const codegen = lus.compile.codegen;
 
 const usage =
-    \\usage: lus fmt [--check] [--write] [--indent N] [FILE...]
+    \\usage: lus fmt [--check] [--write] [--strict] [--indent N] [FILE...]
     \\
     \\  --check     report the files that are not formatted, change nothing
     \\  --write     rewrite the files in place
+    \\  --strict    write the strict style that lus check --strict checks
     \\  --indent N  spaces per indentation level (default 4)
     \\
     \\A directory stands for every .lus file below it. With no FILE, or
@@ -39,6 +41,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     var check = false;
     var write = false;
     var indent: u32 = 4;
+    var strict = false;
     var files: std.ArrayList([]const u8) = .empty;
     defer files.deinit(gpa);
 
@@ -47,6 +50,8 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         const a = args[i];
         if (std.mem.eql(u8, a, "--check")) {
             check = true;
+        } else if (std.mem.eql(u8, a, "--strict")) {
+            strict = true;
         } else if (std.mem.eql(u8, a, "--write")) {
             write = true;
         } else if (std.mem.eql(u8, a, "--indent")) {
@@ -88,7 +93,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
         const chunkname = if (from_stdin) "=stdin" else try std.fmt.allocPrint(arena, "@{s}", .{file});
-        const res = try format.format(gpa, arena, src, .{ .chunkname = chunkname, .indent_width = indent });
+        const res = try format.format(gpa, arena, src, .{ .chunkname = chunkname, .indent_width = indent, .strict = strict });
         const text = switch (res) {
             .fail => |msg| {
                 std.debug.print("lus fmt: {s}\n", .{msg});

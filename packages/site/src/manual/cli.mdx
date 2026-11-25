@@ -104,7 +104,7 @@ The exit status is 0 when every file passes, 1 when a test fails or a file canno
 ## lus fmt
 
 ```
-lus fmt [--check] [--write] [--indent N] [path ...]
+lus fmt [--check] [--write] [--strict] [--indent N] [path ...]
 ```
 
 Gives source files one standard layout. With no option, it prints the formatted text of each file to standard output. For a directory, it formats every `.lus` file inside it. With no file, or with the file `-`, it reads standard input.
@@ -113,12 +113,13 @@ Gives source files one standard layout. With no option, it prints the formatted 
 | --- | --- |
 | `--write` | Rewrite the files in place. |
 | `--check` | List the files that are not formatted and change nothing. The exit status is 1 if the list has a file. Use this option in continuous integration. |
+| `--strict` | Write the [strict style](/manual/tools#the-strict-style), which `lus check --strict` checks. |
 | `--indent N` | Use N spaces per indentation level. The default is 4. |
 
 ## lus check
 
 ```
-lus check [--json] [--fix] [--list] [--explain code] [path ...]
+lus check [--json] [--fix] [--strict] [--list] [--explain code] [path ...]
 ```
 
 Finds errors and likely mistakes without running the code. It parses, lints, and compiles each file, then prints each problem as `file:line:column: severity: message [code]`. For a directory, it checks every `.lus` file inside it. Files named `*_test.lus` are checked with the conventions of `lus test`. The exit status is 1 when an error or a warning is reported. Hints alone leave it at 0. [Checking](/manual/tools#checking) lists the diagnostics.
@@ -126,6 +127,7 @@ Finds errors and likely mistakes without running the code. It parses, lints, and
 | Option | Effect |
 | --- | --- |
 | `--json` | Print the diagnostics as one JSON array, for editors and other tools. |
+| `--strict` | Also report where a file departs from the [strict style](/manual/tools#the-strict-style) and report as warnings the hints that name a Lus form of a Lua pattern. |
 | `--list` | Print every diagnostic code with its severity and summary. |
 | `--fix` | Apply the rewrites that keep what the program does, write the changed files, then report what remains. [Fixes](/manual/tools#fixes) lists the rewrites. |
 | `--explain code` | Print why a diagnostic code matters and how to resolve it, with an example that reports the code and the same example fixed. |

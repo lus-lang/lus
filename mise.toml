@@ -283,5 +283,5 @@ depends = ["install"]
 run = "pnpm --filter ./packages/vscode build"
 
 [tasks.lint]
-description = "Repository prose and naming checks"
-run = ["node tools/lint-repo.js", "cd runtime && zig fmt --check src build.zig"]
+description = "Repository prose and naming checks, zig fmt, and the strict style of the Lus code (needs a built lus)"
+run = ["node tools/lint-repo.js", "cd runtime && zig fmt --check src build.zig", "node tools/lint-lus.mjs"]

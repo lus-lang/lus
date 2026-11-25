@@ -13,6 +13,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const resolve = @import("resolve.zig");
 const doccomment = @import("doccomment.zig");
+const strict = @import("strict.zig");
 const Allocator = std.mem.Allocator;
 const Span = ast.Span;
 
@@ -59,11 +60,14 @@ pub const Options = struct {
     /// `NAME_test` and `NAME_cases` are read by the test runner, so they
     /// count as used.
     test_file: bool = false,
+    /// Also report the layout rules of `syntax/strict.zig`, and report the
+    /// hints of `strict.promoted` as warnings.
+    strict: bool = false,
 };
 
 /// Every code `lint` can report, with its severity and a summary. The
 /// list is the reference for `lus check --list`.
-pub const codes = [_]struct { code: []const u8, severity: Severity, summary: []const u8 }{
+pub const codes = [_]struct { code: []const u8, severity: Severity, summary: []const u8, strict: bool = false }{
     .{ .code = "unused-local", .severity = .warning, .summary = "A local variable is never read." },
     .{ .code = "unused-function", .severity = .warning, .summary = "A local function is never used." },
     .{ .code = "unused-param", .severity = .warning, .summary = "A function parameter is never read." },
@@ -82,6 +86,7 @@ pub const codes = [_]struct { code: []const u8, severity: Severity, summary: []c
     .{ .code = "use-if-assign", .severity = .hint, .summary = "A local exists only for the truth test of the next if." },
     .{ .code = "use-interpolation", .severity = .hint, .summary = "A chain of three or more concatenations mixes literals and values." },
     .{ .code = "use-for-from", .severity = .hint, .summary = "A generic for copies fields of its only loop variable into same-named locals." },
+    .{ .code = "use-continue", .severity = .hint, .summary = "A goto jumps to a label at the end of its loop body, which continue expresses." },
     .{ .code = "concat-in-loop", .severity = .hint, .summary = "A string grows by concatenation in a loop, which copies it on every pass." },
     .{ .code = "insert-front-in-loop", .severity = .hint, .summary = "table.insert(t, 1, v) in a loop moves the whole list on every pass." },
     .{ .code = "closure-in-loop", .severity = .hint, .summary = "A function created in a loop captures nothing the loop declares." },
@@ -100,6 +105,12 @@ pub const codes = [_]struct { code: []const u8, severity: Severity, summary: []c
     .{ .code = "duplicate-label", .severity = .@"error", .summary = "A label repeats a visible label of the same function." },
     .{ .code = "continue-outside-loop", .severity = .@"error", .summary = "A continue appears outside every loop." },
     .{ .code = "continue-into-scope", .severity = .@"error", .summary = "A continue in a repeat loop skips a local the condition can see." },
+    .{ .code = "one-statement-per-line", .severity = .warning, .strict = true, .summary = "A statement starts on the line of the statement before it." },
+    .{ .code = "single-line-block", .severity = .warning, .strict = true, .summary = "The body of a block shares a line with its opening or its end." },
+    .{ .code = "blank-line-around-block", .severity = .warning, .strict = true, .summary = "A block that spans several lines touches the statement before or after it." },
+    .{ .code = "prefer-double-quotes", .severity = .warning, .strict = true, .summary = "A single-quoted string holds no double quote." },
+    .{ .code = "trailing-comma", .severity = .warning, .strict = true, .summary = "The last field of a multi-line table has no comma." },
+    .{ .code = "line-too-long", .severity = .warning, .strict = true, .summary = "A line is longer than 100 columns." },
 };
 
 const Linter = struct {
@@ -120,6 +131,10 @@ const Linter = struct {
     inner_ands: std.AutoHashMapUnmanaged(*ast.Expr, void) = .empty,
     /// Calls of the global `pledge`.
     calls: std.ArrayList(*ast.Expr) = .empty,
+    /// Calls of `pcall` and `xpcall`, by the offset of the callee.
+    pcalls: std.AutoHashMapUnmanaged(u32, *ast.Expr) = .empty,
+    /// Expressions that are operands of an operator.
+    operands: std.AutoHashMapUnmanaged(*ast.Expr, void) = .empty,
 
     const Nested = struct { block: *ast.Block, in_loop: LoopCtx };
 
@@ -294,7 +309,10 @@ const Linter = struct {
             .local => |loc| try l.manualFrom(s, loc.names, loc.values),
             .assign => |a| try l.selfAssign(a.targets, a.values),
             .do_ => |b| try l.block(b, loop),
-            .while_ => |w| try l.block(w.body, .loop),
+            .while_ => |w| {
+                try l.useContinue(w.body);
+                try l.block(w.body, .loop);
+            },
             .repeat_ => |r| {
                 try l.continueIntoScope(r.body);
                 try l.block(r.body, .loop);
@@ -304,13 +322,78 @@ const Linter = struct {
                 for (i.clauses) |cl| try l.block(cl.body, loop);
                 if (i.else_) |b| try l.block(b, loop);
             },
-            .numeric_for => |f| try l.block(f.body, .loop),
-            .generic_for => |f| try l.block(f.body, .loop),
+            .numeric_for => |f| {
+                try l.useContinue(f.body);
+                try l.block(f.body, .loop);
+            },
+            .generic_for => |f| {
+                try l.useContinue(f.body);
+                try l.block(f.body, .loop);
+            },
             .local_function => |f| try l.nested.append(l.arena, .{ .block = f.func.body, .in_loop = .none }),
             .global_function => |f| try l.nested.append(l.arena, .{ .block = f.func.body, .in_loop = .none }),
             .function => |f| try l.nested.append(l.arena, .{ .block = f.func.body, .in_loop = .none }),
             else => {},
         }
+    }
+
+    /// A label at the end of a loop body that only gotos in the same body
+    /// reach, which `continue` expresses. A goto inside a nested loop
+    /// keeps the label.
+    fn useContinue(l: *Linter, body: *ast.Block) Allocator.Error!void {
+        var last: ?*ast.Stat = null;
+        for (body.stats) |s| if (s.kind != .empty) {
+            last = s;
+        };
+        const label = last orelse return;
+        const name = switch (label.kind) {
+            .label => |n| n.text,
+            else => return,
+        };
+        var gotos: std.ArrayList(*ast.Stat) = .empty;
+        var nested = false;
+        try collectGotos(l.arena, body.stats, name, false, &gotos, &nested);
+        if (nested or gotos.items.len == 0) return;
+        var edits: std.ArrayList(Edit) = .empty;
+        for (gotos.items) |g| try edits.append(l.arena, .{ .span = g.span, .text = "continue" });
+        try edits.append(l.arena, .{ .span = l.wholeLines(label.span), .text = "" });
+        try l.reportFix(label.span, .hint, "use-continue", edits.items, "the gotos to '{s}' at the end of the loop body can be continue", .{name});
+    }
+
+    fn collectGotos(arena: Allocator, stats: []*ast.Stat, name: []const u8, in_loop: bool, out: *std.ArrayList(*ast.Stat), nested: *bool) Allocator.Error!void {
+        for (stats) |s| switch (s.kind) {
+            .goto_ => |n| if (std.mem.eql(u8, n.text, name)) {
+                if (in_loop) nested.* = true else try out.append(arena, s);
+            },
+            .do_ => |b| try collectGotos(arena, b.stats, name, in_loop, out, nested),
+            .if_ => |i| {
+                for (i.clauses) |cl| try collectGotos(arena, cl.body.stats, name, in_loop, out, nested);
+                if (i.else_) |b| try collectGotos(arena, b.stats, name, in_loop, out, nested);
+            },
+            .while_ => |w| try collectGotos(arena, w.body.stats, name, true, out, nested),
+            .repeat_ => |r| try collectGotos(arena, r.body.stats, name, true, out, nested),
+            .numeric_for => |f| try collectGotos(arena, f.body.stats, name, true, out, nested),
+            .generic_for => |f| try collectGotos(arena, f.body.stats, name, true, out, nested),
+            else => {},
+        };
+    }
+
+    /// The span of the lines that `span` covers, with their line break,
+    /// when only space surrounds it on those lines. Otherwise `span`.
+    fn wholeLines(l: *Linter, span: Span) Span {
+        const src = l.chunk.source;
+        var start = span.start;
+        while (start > 0 and (src[start - 1] == ' ' or src[start - 1] == '\t')) start -= 1;
+        if (start > 0 and src[start - 1] != '\n' and src[start - 1] != '\r') return span;
+        var end = span.end;
+        while (end < src.len and (src[end] == ' ' or src[end] == '\t')) end += 1;
+        if (end < src.len and src[end] == '\r') end += 1;
+        if (end < src.len and src[end] == '\n') {
+            end += 1;
+        } else if (end < src.len) {
+            return span;
+        }
+        return .{ .start = start, .end = end };
     }
 
     /// `local a, b = t.a, t.b`, which `local a, b from t` expresses.
@@ -409,7 +492,22 @@ const Linter = struct {
             const b = l.bindingAt(n.name.span) orelse return;
             if (b.last_use > next.span.end) return;
         }
-        try l.report(s.span, .hint, "use-if-assign", "local declaration can be moved to the if condition (use if-assignment)", .{});
+        // The fix deletes the declaration and writes it into the condition,
+        // whose test of every name is the test of an if-assignment.
+        var cond_text: std.ArrayList(u8) = .empty;
+        for (loc.names, 0..) |n, k| {
+            if (k > 0) try cond_text.appendSlice(l.arena, ", ");
+            try cond_text.appendSlice(l.arena, n.name.text);
+        }
+        try cond_text.appendSlice(l.arena, " = ");
+        for (loc.values, 0..) |v, k| {
+            if (k > 0) try cond_text.appendSlice(l.arena, ", ");
+            try cond_text.appendSlice(l.arena, l.text(v.span));
+        }
+        const edits = try l.arena.alloc(Edit, 2);
+        edits[0] = .{ .span = l.wholeLines(s.span), .text = "" };
+        edits[1] = .{ .span = cond.span, .text = cond_text.items };
+        try l.reportFix(s.span, .hint, "use-if-assign", edits, "local declaration can be moved to the if condition (use if-assignment)", .{});
     }
 
     /// Collects the names of `a and b and c`. False for any other shape.
@@ -496,12 +594,59 @@ const Linter = struct {
     fn visit(l: *Linter, slot: **ast.Expr) anyerror!void {
         const e = slot.*;
         switch (e.kind) {
+            .call => |c| if (c.callee.kind == .name) {
+                const n = c.callee.kind.name.text;
+                if (std.mem.eql(u8, n, "pcall") or std.mem.eql(u8, n, "xpcall")) try l.pcalls.put(l.arena, c.callee.span.start, e);
+            },
+            .binop => |b| {
+                l.operands.put(l.arena, b.lhs, {}) catch return error.OutOfMemory;
+                l.operands.put(l.arena, b.rhs, {}) catch return error.OutOfMemory;
+            },
+            .unop => |u| l.operands.put(l.arena, u.operand, {}) catch return error.OutOfMemory,
+            else => {},
+        }
+        switch (e.kind) {
             .table => |fields| try l.duplicateKeys(fields),
             .binop => |b| if (b.op == .@"and") try l.andChain(e),
             .function => |f| try l.nested.append(l.arena, .{ .block = f.body, .in_loop = .none }),
             .do_ => |b| try l.nested.append(l.arena, .{ .block = b, .in_loop = .unknown }),
             else => {},
         }
+    }
+
+    /// The rewrite of a call `pcall(f, ...)` to `catch f(...)`, and of
+    /// `xpcall(f, h, ...)` to `catch[h] f(...)`. A catch extends as far as
+    /// an expression does, so a call that is an operand of an operator has
+    /// no rewrite, and neither has a call of a function literal or of any
+    /// expression that cannot be called without parentheses.
+    fn pcallFix(l: *Linter, d: *Diagnostic) Allocator.Error!void {
+        const call = l.pcalls.get(d.span.start) orelse return;
+        if (l.operands.contains(call)) return;
+        const c = call.kind.call;
+        const x = std.mem.eql(u8, c.callee.kind.name.text, "xpcall");
+        const first: usize = if (x) 2 else 1;
+        if (c.args.len < first) return;
+        const f = c.args[0];
+        switch (f.kind) {
+            .name, .index => {},
+            else => return,
+        }
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(l.arena, "catch");
+        if (x) {
+            try out.append(l.arena, '[');
+            try out.appendSlice(l.arena, l.text(c.args[1].span));
+            try out.append(l.arena, ']');
+        }
+        try out.append(l.arena, ' ');
+        try out.appendSlice(l.arena, l.text(f.span));
+        try out.append(l.arena, '(');
+        for (c.args[first..], 0..) |a, k| {
+            if (k > 0) try out.appendSlice(l.arena, ", ");
+            try out.appendSlice(l.arena, l.text(a.span));
+        }
+        try out.append(l.arena, ')');
+        d.fix = try l.edit(call.span, out.items);
     }
 
     fn duplicateKeys(l: *Linter, fields: []ast.Field) Allocator.Error!void {
@@ -1446,6 +1591,17 @@ pub fn lint(arena: Allocator, chunk: ast.Chunk, opts: Options) Allocator.Error![
     }
     var hw: Hints = .{ .l = &l };
     try hw.run();
+
+    for (l.out.items) |*d| {
+        if (std.mem.eql(u8, d.code, "deprecated-pcall")) try l.pcallFix(d);
+    }
+    if (opts.strict) {
+        for (l.out.items) |*d| {
+            if (d.severity == .hint and strict.isPromoted(d.code)) d.severity = .warning;
+        }
+        const layout = try strict.check(arena, chunk);
+        try l.out.appendSlice(arena, layout);
+    }
 
     locate(chunk.source, l.out.items);
     std.mem.sort(Diagnostic, l.out.items, {}, struct {

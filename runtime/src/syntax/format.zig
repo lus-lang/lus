@@ -46,6 +46,8 @@ const ast = @import("ast.zig");
 const astexport = @import("astexport.zig");
 const ops = @import("../vm/ops.zig");
 const wtf8 = @import("../vm/wtf8.zig");
+const strict_rules = @import("strict.zig");
+const walk = @import("walk.zig");
 const Allocator = std.mem.Allocator;
 const Token = token.Token;
 const Tag = token.Tag;
@@ -59,6 +61,11 @@ pub const Options = struct {
     /// (an undeclared global under a `global` declaration, assignment to a
     /// constant), which the reference formatter also refuses.
     checker: ?astexport.Checker = null,
+    /// Write the strict style of `syntax/strict.zig`: a blank line around
+    /// every block that spans several lines, double quotes, tables on one
+    /// line only when they fit, and calls, tables, and chains of operators
+    /// wrapped at 100 columns.
+    strict: bool = false,
 };
 
 pub const Outcome = union(enum) {
@@ -73,6 +80,25 @@ const Error = Allocator.Error;
 /// Formats `src`. Everything is allocated in `arena`, and `gpa` backs the
 /// lexer's scratch lists only.
 pub fn format(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options) Error!Outcome {
+    if (!opts.strict) return formatOnce(gpa, arena, src, opts);
+    // A table or a call that one pass breaks over several lines can let
+    // the next pass keep an enclosing construct on the line it opens on,
+    // so the strict style is written until a pass changes nothing.
+    var text = src;
+    var round: usize = 0;
+    while (true) : (round += 1) {
+        const r = try formatOnce(gpa, arena, text, opts);
+        switch (r) {
+            .fail => return if (round == 0) r else .{ .ok = text },
+            .ok => |out| {
+                if (std.mem.eql(u8, out, text) or round == 3) return r;
+                text = out;
+            },
+        }
+    }
+}
+
+fn formatOnce(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options) Error!Outcome {
     if (src.len > 0 and src[0] == 0x1b) return .{ .fail = "cannot format binary chunk" };
 
     var lx = lexer.Lexer.init(gpa, arena, src);
@@ -103,6 +129,7 @@ pub fn format(gpa: Allocator, arena: Allocator, src: []const u8, opts: Options) 
     }
 
     var f = try Formatter.init(arena, src, lexed, if (opts.indent_width > 0) opts.indent_width else 4);
+    f.strict = opts.strict;
     // A shebang line is not part of the token stream. Keep it verbatim.
     if (src.len > 0 and src[0] == '#') {
         const end = std.mem.indexOfScalar(u8, src, '\n') orelse src.len;
@@ -139,6 +166,14 @@ const Formatter = struct {
     width: u32,
     /// Index of the next comment to emit.
     next_comment: usize = 0,
+    /// Writes the strict style (`Options.strict`).
+    strict: bool = false,
+    /// Above zero while an enclosing construct tries one line, during
+    /// which the constructs inside it stay on one line too.
+    flat: u32 = 0,
+    /// The columns that follow on the current line once the construct
+    /// being written ends, such as ` then` after a condition.
+    reserve: u32 = 0,
 
     fn init(arena: Allocator, src: []const u8, lexed: lexer.Result, width: u32) Error!Formatter {
         var starts: std.ArrayList(u32) = .empty;
@@ -242,6 +277,102 @@ const Formatter = struct {
         try f.out.appendNTimes(f.arena, ' ', f.indent * f.width);
     }
 
+    /// A point of the output to come back to when a layout does not fit.
+    const Mark = struct { len: usize, comment: usize };
+
+    fn mark(f: *const Formatter) Mark {
+        return .{ .len = f.out.items.len, .comment = f.next_comment };
+    }
+
+    fn reset(f: *Formatter, m: Mark) void {
+        f.out.items.len = m.len;
+        f.next_comment = m.comment;
+    }
+
+    /// The columns of `text`, one per character.
+    fn columns(text: []const u8) usize {
+        var n: usize = 0;
+        for (text) |c| {
+            if (c & 0xc0 != 0x80) n += 1;
+        }
+        return n;
+    }
+
+    /// The columns of the last line of the output.
+    fn column(f: *const Formatter) usize {
+        const items = f.out.items;
+        const start = if (std.mem.lastIndexOfScalar(u8, items, '\n')) |i| i + 1 else 0;
+        return columns(items[start..]);
+    }
+
+    /// Whether the line of the output that holds `pos` fits from its start
+    /// to its end, or to the end of the output.
+    fn lineFits(f: *const Formatter, pos: usize) bool {
+        const items = f.out.items;
+        const start = if (std.mem.lastIndexOfScalar(u8, items[0..pos], '\n')) |i| i + 1 else 0;
+        const end = std.mem.indexOfScalarPos(u8, items, pos, '\n') orelse items.len;
+        return columns(items[start..end]) <= strict_rules.max_width;
+    }
+
+    /// Whether the text written since `m` keeps its first and its last
+    /// line within the limit.
+    fn fitsSince(f: *const Formatter, m: Mark) bool {
+        if (!f.lineFits(m.len)) return false;
+        const items = f.out.items;
+        const start = if (std.mem.lastIndexOfScalar(u8, items, '\n')) |i| i + 1 else 0;
+        return columns(items[start..]) + f.reserve <= strict_rules.max_width;
+    }
+
+    /// Whether the text written since `m` is one line.
+    fn flatSince(f: *const Formatter, m: Mark) bool {
+        return std.mem.indexOfScalar(u8, f.out.items[m.len..], '\n') == null;
+    }
+
+    /// Arguments in parentheses. In the strict style, arguments that do
+    /// not fit on the line of the call go one per line.
+    fn args(f: *Formatter, es: []*ast.Expr) Error!void {
+        const m = f.mark();
+        const trying = f.strict and f.flat == 0 and es.len > 0;
+        if (trying) f.flat += 1;
+        try f.putc('(');
+        try f.exprList(es);
+        try f.putc(')');
+        if (trying) f.flat -= 1;
+        if (!trying or f.fitsSince(m)) return;
+        f.reset(m);
+        // A last argument that is a table or a function opens on the line
+        // of the call and takes the lines it needs, when the line fits.
+        const last = strip(es[es.len - 1]).e;
+        if (last.kind == .table or last.kind == .function) {
+            f.flat += 1;
+            try f.putc('(');
+            for (es[0 .. es.len - 1]) |e| {
+                try f.expr(e);
+                try f.put(", ");
+            }
+            f.flat -= 1;
+            try f.expr(es[es.len - 1]);
+            try f.putc(')');
+            if (f.fitsSince(m)) return;
+            f.reset(m);
+        }
+        try f.putc('(');
+        try f.nl();
+        f.indent += 1;
+        const reserve = f.reserve;
+        defer f.reserve = reserve;
+        for (es, 0..) |e, i| {
+            try f.emitIndent();
+            f.reserve = if (i + 1 < es.len) 1 else 0;
+            try f.expr(e);
+            if (i + 1 < es.len) try f.putc(',');
+            try f.nl();
+        }
+        f.indent -= 1;
+        try f.emitIndent();
+        try f.putc(')');
+    }
+
     // -----------------------------------------------------------------
     // Comments
 
@@ -319,6 +450,8 @@ const Formatter = struct {
     /// source has at least one.
     fn statements(f: *Formatter, stats: []*ast.Stat) Error!void {
         var prev_end: u32 = 0;
+        var prev_block = false;
+        var first = true;
         for (stats) |s| {
             if (s.kind == .empty) continue;
             const line = f.startLine(s.span.start);
@@ -328,15 +461,60 @@ const Formatter = struct {
                 const cl = f.commentLine(f.comments[f.next_comment]);
                 if (cl < line) effective = cl;
             }
-            if (prev_end > 0 and effective > prev_end + 1) try f.nl();
+            const blank = prev_end > 0 and effective > prev_end + 1;
+            if (blank) try f.nl();
             prev_end = f.endLine(s.span.end);
+            const at = f.out.items.len;
             try f.stat(s);
+            if (f.strict) {
+                // A blank line separates a block that spans several lines
+                // from the statements around it in its scope.
+                const is_block = try holdsBlock(f.arena, s);
+                if (!first and !blank and (is_block or prev_block)) try f.out.insert(f.arena, at, '\n');
+                prev_block = is_block;
+            }
+            first = false;
         }
+    }
+
+    /// Whether `s` is a control structure or a function, or holds a
+    /// function or a do-expression, which the formatter always writes on
+    /// several lines.
+    fn holdsBlock(arena: Allocator, s: *ast.Stat) Error!bool {
+        switch (s.kind) {
+            .do_, .while_, .repeat_, .if_, .numeric_for, .generic_for, .local_function, .global_function, .function => return true,
+            .empty, .break_, .continue_, .goto_, .label, .recovered => return false,
+            else => {},
+        }
+        const Finder = struct {
+            found: bool = false,
+            fn visit(fd: *@This(), slot: **ast.Expr) anyerror!void {
+                switch (slot.*.kind) {
+                    .function, .do_ => fd.found = true,
+                    else => {},
+                }
+            }
+        };
+        var fd: Finder = .{};
+        const v: walk.Visitor(*Finder) = .{ .ctx = &fd, .func = Finder.visit };
+        v.stat(s) catch return error.OutOfMemory;
+        _ = arena;
+        return fd.found;
     }
 
     /// The statements of `b`, one level in, then the comments that come
     /// after the last statement and before the token that closes the block.
     fn block(f: *Formatter, b: anytype) Error!void {
+        // The statements of a block lay out on lines of their own, whatever
+        // the line of the construct that holds the block tries.
+        const flat = f.flat;
+        const reserve = f.reserve;
+        f.flat = 0;
+        f.reserve = 0;
+        defer {
+            f.flat = flat;
+            f.reserve = reserve;
+        }
         f.indent += 1;
         try f.statements(b.stats);
         _ = try f.commentsBefore(b.end_line);
@@ -361,9 +539,7 @@ const Formatter = struct {
                 // A call statement always takes parenthesized arguments.
                 .call => |c| {
                     try f.expr(c.callee);
-                    try f.putc('(');
-                    try f.exprList(c.args);
-                    try f.putc(')');
+                    try f.args(c.args);
                 },
                 .method => |m| try f.methodCall(m.obj, m.name, m.args),
                 else => try f.expr(e),
@@ -450,7 +626,9 @@ const Formatter = struct {
             },
             .while_ => |w| {
                 try f.put("while ");
+                f.reserve = 3;
                 try f.cond(w.cond);
+                f.reserve = 0;
                 try f.put(" do");
                 try f.trailingComment(line);
                 try f.nl();
@@ -478,7 +656,9 @@ const Formatter = struct {
                         try f.emitIndent();
                         try f.put("elseif ");
                     }
+                    f.reserve = 5;
                     try f.cond(cl.cond);
+                    f.reserve = 0;
                     try f.put(" then");
                     try f.trailingComment(cl_line);
                     try f.nl();
@@ -499,6 +679,7 @@ const Formatter = struct {
                 try f.put("for ");
                 try f.put(nf.name.text);
                 try f.put(" = ");
+                f.reserve = 3;
                 try f.expr(nf.start);
                 try f.put(", ");
                 try f.expr(nf.limit);
@@ -506,6 +687,7 @@ const Formatter = struct {
                     try f.put(", ");
                     try f.expr(st);
                 }
+                f.reserve = 0;
                 try f.put(" do");
                 try f.trailingComment(line);
                 try f.nl();
@@ -520,7 +702,9 @@ const Formatter = struct {
                     try f.put(nm.text);
                 }
                 try f.put(if (gf.from) " from " else " in ");
+                f.reserve = 3;
                 try f.exprList(gf.exprs);
+                f.reserve = 0;
                 try f.put(" do");
                 try f.trailingComment(line);
                 try f.nl();
@@ -594,8 +778,24 @@ const Formatter = struct {
     /// the attributes the language names first, in source order, then the
     /// runtime ones.
     fn attNames(f: *Formatter, names: []ast.AttName) Error!void {
+        var wrapped = false;
+        defer if (wrapped) {
+            f.indent -= 1;
+        };
         for (names, 0..) |an, i| {
-            if (i > 0) try f.put(", ");
+            if (i > 0) {
+                // In the strict style a list of names fills its lines and
+                // goes on one level in.
+                if (f.strict and f.column() + 2 + an.name.text.len + 1 > strict_rules.max_width) {
+                    try f.putc(',');
+                    try f.nl();
+                    if (!wrapped) f.indent += 1;
+                    wrapped = true;
+                    try f.emitIndent();
+                } else {
+                    try f.put(", ");
+                }
+            }
             try f.put(an.name.text);
             try f.attribList(an.attribs, true);
         }
@@ -692,22 +892,51 @@ const Formatter = struct {
     /// caller has written everything up to the parameter list. `line` is
     /// the line of the node that owns the function.
     fn funcBody(f: *Formatter, func: *ast.Function, line: u32) Error!void {
-        try f.putc('(');
-        for (func.params, 0..) |p, i| {
-            if (i > 0) try f.put(", ");
-            try f.put(p.text);
+        const m = f.mark();
+        try f.params(func, false);
+        if (f.strict and !f.fitsSince(m)) {
+            f.reset(m);
+            try f.params(func, true);
         }
-        if (func.vararg_name != null or func.is_vararg) {
-            if (func.params.len > 0) try f.put(", ");
-            try f.put("...");
-            if (func.vararg_name) |vn| try f.put(vn.text);
-        }
-        try f.putc(')');
         try f.trailingComment(line);
         try f.nl();
         try f.block(func.body);
         try f.emitIndent();
         try f.put("end");
+    }
+
+    /// The parameter list of a function, one parameter per line when
+    /// `broken`.
+    fn params(f: *Formatter, func: *ast.Function, broken: bool) Error!void {
+        try f.putc('(');
+        if (broken) {
+            try f.nl();
+            f.indent += 1;
+        }
+        const count = func.params.len + @intFromBool(func.vararg_name != null or func.is_vararg);
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            if (broken) {
+                try f.emitIndent();
+            } else if (i > 0) {
+                try f.put(", ");
+            }
+            if (i < func.params.len) {
+                try f.put(func.params[i].text);
+            } else {
+                try f.put("...");
+                if (func.vararg_name) |vn| try f.put(vn.text);
+            }
+            if (broken) {
+                if (i + 1 < count) try f.putc(',');
+                try f.nl();
+            }
+        }
+        if (broken) {
+            f.indent -= 1;
+            try f.emitIndent();
+        }
+        try f.putc(')');
     }
 
     // -----------------------------------------------------------------
@@ -756,7 +985,10 @@ const Formatter = struct {
             },
             .string => |s| {
                 const k = f.tokAt(e.span.start);
-                if (f.literalSource(k, e.span.end)) |src| {
+                const double = if (f.strict and e.span.end <= f.src.len) try strict_rules.doubleQuoted(f.arena, f.src[e.span.start..e.span.end]) else null;
+                if (double) |text| {
+                    try f.put(text);
+                } else if (f.literalSource(k, e.span.end)) |src| {
                     try f.put(src);
                 } else if (f.toks[k].tag == .interp_simple) {
                     try f.putc('`');
@@ -795,9 +1027,7 @@ const Formatter = struct {
                     },
                     .table => try f.expr(c.args[0]),
                     .parens => {
-                        try f.putc('(');
-                        try f.exprList(c.args);
-                        try f.putc(')');
+                        try f.args(c.args);
                     },
                 }
             },
@@ -840,13 +1070,11 @@ const Formatter = struct {
         if (st.paren) try f.putc(')');
     }
 
-    fn methodCall(f: *Formatter, obj: *ast.Expr, name: ast.Name, args: []*ast.Expr) Error!void {
+    fn methodCall(f: *Formatter, obj: *ast.Expr, name: ast.Name, arg_list: []*ast.Expr) Error!void {
         try f.expr(obj);
         try f.putc(':');
         try f.put(name.text);
-        try f.putc('(');
-        try f.exprList(args);
-        try f.putc(')');
+        try f.args(arg_list);
     }
 
     fn catchExpr(f: *Formatter, c: ast.Catch) Error!void {
@@ -1090,14 +1318,61 @@ const Formatter = struct {
     /// that hold a comment, and tables with a function as a value go one
     /// field per line with a trailing comma. Each comment stays next to the
     /// field it was written by.
+    /// A table on one line.
+    fn tableFlat(f: *Formatter, fields: []ast.Field) Error!void {
+        try f.put("{ ");
+        for (fields, 0..) |fld, i| {
+            if (i > 0) try f.put(", ");
+            try f.field(fld);
+        }
+        try f.put(" }");
+    }
+
+    fn field(f: *Formatter, fld: ast.Field) Error!void {
+        switch (fld.kind) {
+            .positional => |v| try f.expr(v),
+            .named => |nv| {
+                try f.put(nv.name.text);
+                try f.put(" = ");
+                try f.expr(nv.value);
+            },
+            .keyed => |kv| {
+                try f.tableKey(kv.key);
+                try f.put(" = ");
+                try f.expr(kv.value);
+            },
+        }
+    }
+
     fn table(f: *Formatter, fields: []ast.Field, span: ast.Span) Error!void {
         if (fields.len == 0) return f.put("{}");
         const close_line = f.endLine(span.end);
         // Only a comment before the closing brace is inside the table. A
         // comment after it on the same line belongs to the statement.
         const has_comment = f.next_comment < f.comments.len and f.comments[f.next_comment].span.start < span.end;
-        const multiline = fields.len > 3 or has_comment or holdsFunction(fields);
+        var multiline = fields.len > 3 or has_comment or holdsFunction(fields);
+        if (f.strict) {
+            // A table that its source opens on a line of its own stays on
+            // several lines, and any other goes on one line if it fits.
+            const broken = f.startLine(span.start) != f.startLine(fieldStart(fields[0]));
+            multiline = has_comment or holdsFunction(fields) or broken;
+            if (!multiline and f.flat > 0) return f.tableFlat(fields);
+            if (!multiline) {
+                const m = f.mark();
+                f.flat += 1;
+                try f.tableFlat(fields);
+                f.flat -= 1;
+                if (f.flatSince(m) and f.fitsSince(m)) return;
+                f.reset(m);
+                multiline = true;
+            }
+        }
+        const flat = f.flat;
+        defer f.flat = flat;
         if (multiline) {
+            // The fields of a table on several lines lay out on lines of
+            // their own.
+            f.flat = 0;
             try f.putc('{');
             try f.trailingComment(f.startLine(span.start));
             try f.nl();
@@ -1112,19 +1387,10 @@ const Formatter = struct {
             } else if (i > 0) {
                 try f.put(", ");
             }
-            switch (fld.kind) {
-                .positional => |v| try f.expr(v),
-                .named => |nv| {
-                    try f.put(nv.name.text);
-                    try f.put(" = ");
-                    try f.expr(nv.value);
-                },
-                .keyed => |kv| {
-                    try f.tableKey(kv.key);
-                    try f.put(" = ");
-                    try f.expr(kv.value);
-                },
-            }
+            const reserve = f.reserve;
+            if (multiline) f.reserve = 1;
+            try f.field(fld);
+            f.reserve = reserve;
             if (multiline) {
                 try f.putc(',');
                 try f.trailingComment(f.endLine(fieldEnd(fld)));
@@ -1203,6 +1469,56 @@ const Formatter = struct {
     }
 
     fn binop(f: *Formatter, op: ast.BinOp, lhs: *ast.Expr, rhs: *ast.Expr) Error!void {
+        if (!f.strict or f.flat > 0) return f.binopFlat(op, lhs, rhs);
+        var operands: std.ArrayList(*ast.Expr) = .empty;
+        try collectChain(f.arena, op, lhs, &operands);
+        try collectChain(f.arena, op, rhs, &operands);
+        const p = prec(op);
+        const m = f.mark();
+        f.flat += 1;
+        for (operands.items, 0..) |e, i| {
+            if (i > 0) {
+                try f.putc(' ');
+                try f.put(op.symbol());
+                try f.putc(' ');
+            }
+            const wrap = needsParens(binopOf(e), p, i > 0);
+            if (wrap) try f.putc('(');
+            try f.expr(e);
+            if (wrap) try f.putc(')');
+        }
+        f.flat -= 1;
+        if (f.fitsSince(m)) return;
+        f.reset(m);
+        // A chain of one operator that does not fit breaks before each
+        // operator, one level in.
+        for (operands.items, 0..) |e, i| {
+            if (i > 0) {
+                try f.nl();
+                if (i == 1) f.indent += 1;
+                try f.emitIndent();
+                try f.put(op.symbol());
+                try f.putc(' ');
+            }
+            const wrap = needsParens(binopOf(e), p, i > 0);
+            if (wrap) try f.putc('(');
+            try f.expr(e);
+            if (wrap) try f.putc(')');
+        }
+        if (operands.items.len > 1) f.indent -= 1;
+    }
+
+    /// The operands of a chain of `op` without parentheses, in order.
+    fn collectChain(arena: Allocator, op: ast.BinOp, e: *ast.Expr, out: *std.ArrayList(*ast.Expr)) Error!void {
+        if (binopOf(e)) |inner| if (inner == op) {
+            const b = strip(e).e.kind.binop;
+            try collectChain(arena, op, b.lhs, out);
+            return collectChain(arena, op, b.rhs, out);
+        };
+        try out.append(arena, e);
+    }
+
+    fn binopFlat(f: *Formatter, op: ast.BinOp, lhs: *ast.Expr, rhs: *ast.Expr) Error!void {
         const p = prec(op);
         const lp = needsParens(binopOf(lhs), p, false);
         if (lp) try f.putc('(');
@@ -1239,6 +1555,16 @@ const Formatter = struct {
     // Queries
 
     fn query(f: *Formatter, q: *ast.Query) Error!void {
+        const m = f.mark();
+        try f.queryLayout(q, false);
+        if (!f.strict or f.flat > 0 or f.fitsSince(m)) return;
+        f.reset(m);
+        try f.queryLayout(q, true);
+    }
+
+    /// A query with each clause on a line of its own, one level in, when
+    /// `broken`.
+    fn queryLayout(f: *Formatter, q: *ast.Query, broken: bool) Error!void {
         try f.putc('@');
         for (q.sources, 0..) |src, i| {
             if (i > 0) try f.put(", ");
@@ -1289,8 +1615,17 @@ const Formatter = struct {
         }.lt);
 
         const words = [_][]const u8{ "where", "select", "group by", "having", "order by", "limit", "offset" };
+        if (broken) f.indent += 1;
+        defer if (broken) {
+            f.indent -= 1;
+        };
         for (cls[0..n]) |c| {
-            try f.putc(' ');
+            if (broken) {
+                try f.nl();
+                try f.emitIndent();
+            } else {
+                try f.putc(' ');
+            }
             try f.put(words[c.idx]);
             if (c.idx == 1 and q.distinct) try f.put(" distinct");
             try f.putc(' ');
@@ -1494,4 +1829,37 @@ test "format rejects invalid source" {
     defer arena_state.deinit();
     const res = try format(testing.allocator, arena_state.allocator(), "local = 1", .{ .chunkname = "=t" });
     try testing.expect(res == .fail);
+}
+
+fn expectStrict(src: []const u8, want: []const u8) !void {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const res = try format(testing.allocator, arena_state.allocator(), src, .{ .strict = true });
+    try testing.expectEqualStrings(want, res.ok);
+}
+
+test "format the strict style" {
+    // A blank line separates a block that spans several lines from the
+    // statements around it, except at the start and the end of a scope.
+    try expectStrict("local a = 1\nif a then b() end\nc()\n", "local a = 1\n\nif a then\n    b()\nend\n\nc()\n");
+    try expectStrict("do\n    if a then b() end\nend\n", "do\n    if a then\n        b()\n    end\nend\n");
+    try expectStrict("local a = 1\n-- note\nwhile a do end\n", "local a = 1\n\n-- note\nwhile a do\nend\n");
+    // Short strings take double quotes unless they hold one.
+    try expectStrict("x = 'pear' .. 'say \"hi\"' .. 'it\\'s'", "x = \"pear\" .. 'say \"hi\"' .. \"it's\"\n");
+    // A table stays on one line when it fits and its source has it there.
+    try expectStrict("x = { 1, 2, 3, 4, 5 }", "x = { 1, 2, 3, 4, 5 }\n");
+    try expectStrict("x = {\n    a = 1 }", "x = {\n    a = 1,\n}\n");
+    // Calls, tables, and chains that do not fit wrap at 100 columns.
+    try expectStrict(
+        "local result = call_something_with_a_long_name(first_argument_value, second_argument_value, third_value)",
+        "local result = call_something_with_a_long_name(\n    first_argument_value,\n    second_argument_value,\n    third_value\n)\n",
+    );
+    try expectStrict(
+        "local message = \"the first part of the message \" .. first_name .. \" and then the rest of it \" .. last_name",
+        "local message = \"the first part of the message \"\n    .. first_name\n    .. \" and then the rest of it \"\n    .. last_name\n",
+    );
+    try expectStrict(
+        "local config = { name = \"server\", host = \"localhost\", port = 8080, timeout = 30, retries = 5, verbose = true }",
+        "local config = {\n    name = \"server\",\n    host = \"localhost\",\n    port = 8080,\n    timeout = 30,\n    retries = 5,\n    verbose = true,\n}\n",
+    );
 }

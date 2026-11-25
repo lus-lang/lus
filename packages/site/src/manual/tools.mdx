@@ -41,6 +41,39 @@ lus fmt --check src
 
 When a file does not parse, the formatter leaves it unchanged, reports the syntax error, and exits with status 1. [`debug.format`](/manual/api#debug.format) runs the same formatter from Lus code.
 
+### The strict style
+
+`lus fmt --strict` writes a layout that leaves no choice to the author. `lus check --strict` reports each place where a file departs from it. The code of the Lus repository is in this style. Its rules are the following.
+
+- Each statement starts a line of its own. The body of every block, the body of a function included, takes lines of its own.
+- A blank line separates a block that spans several lines from the statements before and after it in the same scope. A block is a control structure, a function, or a statement whose value holds a function or a do-expression. The comments right above a block belong to it, so the blank line goes above them. A block at the start or at the end of its scope needs no blank line on that side.
+- A short string uses double quotes. It uses single quotes only when it holds a double quote.
+- A table goes on one line when it fits there and its source opens it on that line. Any other table puts each field on a line of its own and ends the last field with a comma.
+- A line holds at most 100 columns. A call that does not fit opens its last argument on the line of the call when that argument is a table or a function, and otherwise puts each argument on a line of its own. A chain of one operator that does not fit breaks before each operator, one level in. A string or a comment that crosses the limit stays as written.
+
+The following function is in the strict style.
+
+```lus
+local function total(prices, discount)
+    local sum = 0
+
+    for _, price in ipairs(prices) do
+        sum = sum + price
+    end
+
+    return sum * (1 - discount)
+end
+
+print(total({ 3, 4.5, 2 }, 0.5))  --> 4.75
+```
+
+`lus check --strict` also reports as warnings the hints that name a Lus form of a pattern that Lua code writes by hand: `use-from`, `use-for-from`, `use-optional-chain`, `use-if-assign`, `use-interpolation`, `format-to-interpolation`, `redundant-tostring`, and `use-continue`. `lus check --strict --fix` applies the fixes of the layout codes and of these hints. `lus fmt --strict` writes the rest of the layout.
+
+```sh
+lus fmt --strict --write src
+lus check --strict src
+```
+
 ## Checking
 
 `lus check` finds mistakes before a program runs. Without it, a misspelled variable or an assignment to an undeclared global is found only when its line runs, which may be rare. The command parses, lints, and compiles each file without running it and prints each problem as `file:line:column: severity: message [code]`, where the code names the diagnostic. The following file has two problems.
@@ -104,6 +137,13 @@ Every diagnostic has a code that stays the same between releases, so a tool can 
 | `duplicate-label` | error | A label repeats a visible label of the same function. |
 | `continue-outside-loop` | error | A `continue` appears outside every loop. |
 | `continue-into-scope` | error | A `continue` in a `repeat` loop skips a local that the condition can see. |
+| `use-continue` | hint | A `goto` jumps to a label at the end of its loop body, which `continue` expresses. |
+| `one-statement-per-line` | warning, with `--strict` | A statement starts on the line of the statement before it. |
+| `single-line-block` | warning, with `--strict` | The body of a block shares a line with its opening or its end. |
+| `blank-line-around-block` | warning, with `--strict` | A block that spans several lines touches the statement before or after it. |
+| `prefer-double-quotes` | warning, with `--strict` | A single-quoted string holds no double quote. |
+| `trailing-comma` | warning, with `--strict` | The last field of a multi-line table has no comma. |
+| `line-too-long` | warning, with `--strict` | A line is longer than 100 columns. |
 | `syntax` | error | The file does not parse. |
 | `compile` | error | The compiler rejects the file for another reason. |
 
@@ -219,6 +259,29 @@ local a, b, c from t
 print(a, b, c)  --> 1  2  3
 ```
 
+Lua has no `continue`, so Lua code skips to the next pass of a loop with a `goto` to a label at the end of the body. `continue` is a reserved word in Lus, so `goto continue` does not parse. For a label of any other name, `lus check` reports `use-continue`.
+
+```lus
+for i = 1, 4 do
+    if i % 2 == 0 then
+        goto next
+    end
+    print(i)
+    ::next::  -- the gotos to 'next' at the end of the loop body can be continue [use-continue]
+end
+```
+
+The same loop with `continue` needs no label.
+
+```lus
+for i = 1, 4 do
+    if i % 2 == 0 then
+        continue
+    end
+    print(i)
+end
+```
+
 ### Syntax hints
 
 When an operator from another language causes a syntax error, the message names the Lus spelling, which helps people and coding agents who write such an operator out of habit.
@@ -253,6 +316,10 @@ A file whose name ends in `_test.lus` is checked as a [test file](/manual/testin
 | `use-interpolation` | The concatenation becomes a string with interpolation, when every value in it is known to be a number, because `..` raises an error for other values where interpolation writes them. |
 | `use-from` | The locals become `local a, b from t`. |
 | `use-optional-chain` | `a and a.b and a.b.c` becomes `a?.b?.c`, which yields the same `nil` or `false` when a step is missing. |
+| `deprecated-pcall` | `pcall(f, ...)` becomes `catch f(...)`. `xpcall(f, h, ...)` becomes `catch[h] f(...)`. Both rewrites apply when `f` is a name or a field and the call is not an operand of an operator. |
+| `use-if-assign` | The declaration moves into the condition of the `if`. |
+| `use-continue` | Each `goto` becomes `continue`. The label is deleted. |
+| `blank-line-around-block`, `prefer-double-quotes`, `trailing-comma` | The blank line, the double quotes, or the comma is written. |
 
 The other diagnostics keep their place in the report, because their rewrites could change what a program does. The debug library sees a renamed variable under its new name, so `debug.getlocal` reports `_x` where it reported `x`.
 

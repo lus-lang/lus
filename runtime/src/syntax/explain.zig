@@ -28,6 +28,131 @@ pub const check_codes = [_]struct { code: []const u8, severity: lint.Severity, s
 
 pub const all = [_]Explanation{
     .{
+        .code = "use-continue",
+        .text = "A loop body that ends with a label which only gotos in the same body reach skips to the next pass of the loop, which `continue` does. Write `continue` in place of each goto and delete the label. `lus check --fix` makes both edits. A goto to the label from a nested loop keeps the label, so such a body is not reported.",
+        .flagged =
+        \\global print
+        \\for i = 1, 10 do
+        \\    if i % 2 == 0 then
+        \\        goto next
+        \\    end
+        \\    print(i)
+        \\    ::next::
+        \\end
+        ,
+        .fixed =
+        \\global print
+        \\for i = 1, 10 do
+        \\    if i % 2 == 0 then
+        \\        continue
+        \\    end
+        \\    print(i)
+        \\end
+        ,
+    },
+    .{
+        .code = "one-statement-per-line",
+        .text = "With `--strict`, each statement starts a line of its own, so every statement is found at the start of a line. Put the statement on a new line, or run `lus fmt --strict`, which writes one statement per line.",
+        .flagged =
+        \\global print
+        \\local width = 3 local height = 4
+        \\print(width * height)
+        ,
+        .fixed =
+        \\global print
+        \\local width = 3
+        \\local height = 4
+        \\print(width * height)
+        ,
+    },
+    .{
+        .code = "single-line-block",
+        .text = "With `--strict`, the body of every block, the body of a function included, takes lines of its own. The keyword that closes the block starts a line of its own. Move the body onto its own lines, or run `lus fmt --strict`, which writes every block this way.",
+        .flagged =
+        \\global ipairs, print
+        \\local items = { "pear", "fig" }
+        \\for _, item in ipairs(items) do print(item) end
+        ,
+        .fixed =
+        \\global ipairs, print
+        \\local items = { "pear", "fig" }
+        \\
+        \\for _, item in ipairs(items) do
+        \\    print(item)
+        \\end
+        ,
+    },
+    .{
+        .code = "blank-line-around-block",
+        .text = "With `--strict`, a blank line separates a block that spans several lines from the statements before and after it in the same scope. A block is a control structure, a function, or a statement whose value holds a function or a do-expression. A block at the start or at the end of its scope needs no blank line on that side. The comments right above a block belong to it, so the blank line goes above them. `lus check --fix` and `lus fmt --strict` add the blank lines.",
+        .flagged =
+        \\global print
+        \\local total = 0
+        \\for i = 1, 3 do
+        \\    total = total + i
+        \\end
+        \\print(total)
+        ,
+        .fixed =
+        \\global print
+        \\local total = 0
+        \\
+        \\for i = 1, 3 do
+        \\    total = total + i
+        \\end
+        \\
+        \\print(total)
+        ,
+    },
+    .{
+        .code = "prefer-double-quotes",
+        .text = "With `--strict`, a short string uses double quotes. Single quotes are for a string that holds a double quote, which double quotes would have to escape. `lus check --fix` rewrites the quotes.",
+        .flagged =
+        \\global print
+        \\print('hello')
+        ,
+        .fixed =
+        \\global print
+        \\print("hello")
+        \\print('say "hello"')
+        ,
+    },
+    .{
+        .code = "trailing-comma",
+        .text = "With `--strict`, the last field of a table that spans several lines ends with a comma, so every field line reads alike and a new field changes one line. `lus check --fix` adds the comma.",
+        .flagged =
+        \\global print
+        \\local point = {
+        \\    x = 1,
+        \\    y = 2
+        \\}
+        \\print(point.x)
+        ,
+        .fixed =
+        \\global print
+        \\local point = {
+        \\    x = 1,
+        \\    y = 2,
+        \\}
+        \\print(point.x)
+        ,
+    },
+    .{
+        .code = "line-too-long",
+        .text = "With `--strict`, a line holds at most 100 columns. `lus fmt --strict` wraps a long call, table, or chain of operators over several lines. A line that is long because a string or a comment crosses the limit is not reported, because only its author can shorten the text.",
+        .flagged =
+        \\global print
+        \\local width, height, depth, margin = 1920, 1080, 32, 16
+        \\print(width * height * depth + margin * width * height + margin * margin * depth + width * margin + height)
+        ,
+        .fixed =
+        \\global print
+        \\local width, height, depth, margin = 1920, 1080, 32, 16
+        \\local volume = width * height * depth
+        \\print(volume + margin * width * height + margin * margin * depth + width * margin + height)
+        ,
+    },
+    .{
         .code = "unknown-allow",
         .text = "A comment `-- lus: allow(CODE)` suppresses the warnings and hints with that code. At the end of a line of code it covers that line, on a line of its own it covers the next statement, and in the header doc comment of a module it covers the file. A code that no diagnostic has suppresses nothing, which usually means a misspelled code. `lus check --list` prints every code.",
     },
@@ -778,10 +903,16 @@ pub fn write(w: *std.Io.Writer, code: []const u8) !bool {
 
 const testing = std.testing;
 
-fn lintOf(arena: std.mem.Allocator, src: []const u8) ![]lint.Diagnostic {
+fn lintOf(arena: std.mem.Allocator, src: []const u8, strict: bool) ![]lint.Diagnostic {
     var diag: ?[]const u8 = null;
     const chunk = try @import("parser.zig").parse(testing.allocator, arena, src, .{ .chunkname = "=explain" }, &diag);
-    return lint.lint(arena, chunk, .{});
+    return lint.lint(arena, chunk, .{ .strict = strict });
+}
+
+/// Whether `code` is one of the layout codes of `lus check --strict`.
+fn isStrict(code: []const u8) bool {
+    for (lint.codes) |c| if (std.mem.eql(u8, c.code, code)) return c.strict;
+    return false;
 }
 
 test "every code has an explanation" {
@@ -803,12 +934,12 @@ test "every flagged example reports its code and every fixed example reports not
         defer arena_state.deinit();
         const arena = arena_state.allocator();
         var reported = false;
-        for (try lintOf(arena, e.flagged)) |d| reported = reported or std.mem.eql(u8, d.code, e.code);
+        for (try lintOf(arena, e.flagged, isStrict(e.code))) |d| reported = reported or std.mem.eql(u8, d.code, e.code);
         if (!reported) {
             std.debug.print("the flagged example of {s} does not report it\n", .{e.code});
             return error.TestUnexpectedResult;
         }
-        for (try lintOf(arena, e.fixed)) |d| {
+        for (try lintOf(arena, e.fixed, isStrict(e.code))) |d| {
             std.debug.print("the fixed example of {s} reports {s}: {s}\n", .{ e.code, d.code, d.message });
             return error.TestUnexpectedResult;
         }

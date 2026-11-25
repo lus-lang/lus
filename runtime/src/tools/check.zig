@@ -1,6 +1,6 @@
 //! `lus check`: reports errors and lint warnings without running code.
 //!
-//! Usage: lus check [--json] [--fix] [--list] [--explain CODE] [FILE...]
+//! Usage: lus check [--json] [--fix] [--strict] [--list] [--explain CODE] [FILE...]
 //!
 //! Every file is parsed, linted (`syntax/lint.zig`), and compiled. Each
 //! problem is printed as `file:line:column: severity: message [code]`.
@@ -10,7 +10,9 @@
 //! `--fix` applies the fix of every diagnostic that has one, a rewrite
 //! that keeps what the program does, writes the file, and reports what
 //! remains. A comment `-- lus: allow(CODE)` suppresses a warning or a hint
-//! (`syntax/suppress.zig`).
+//! (`syntax/suppress.zig`). `--strict` also reports the layout rules of
+//! `syntax/strict.zig`, the style that `lus fmt --strict` writes, and
+//! reports the hints that name a Lus form of a Lua pattern as warnings.
 //! `--list` prints every diagnostic code with its severity and summary,
 //! and `--explain CODE` prints the explanation of one code with an example
 //! that reports it and the same example fixed (`syntax/explain.zig`).
@@ -43,10 +45,11 @@ const suppress = @import("../syntax/suppress.zig");
 const fixes = @import("../syntax/fix.zig");
 
 const usage =
-    \\usage: lus check [--json] [--fix] [--list] [--explain CODE] [FILE...]
+    \\usage: lus check [--json] [--fix] [--strict] [--list] [--explain CODE] [FILE...]
     \\
     \\  --json          print the diagnostics as a JSON array
     \\  --fix           apply the rewrites that keep behavior, then report the rest
+    \\  --strict        also report the layout of lus fmt --strict and the Lus forms
     \\  --list          print every diagnostic code and exit
     \\  --explain CODE  explain a diagnostic code with an example and exit
     \\
@@ -70,6 +73,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     const io = init.io;
     var json = false;
     var fix = false;
+    var strict = false;
     var files: std.ArrayList([]const u8) = .empty;
     defer files.deinit(gpa);
     for (args) |a| {
@@ -77,6 +81,8 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             json = true;
         } else if (std.mem.eql(u8, a, "--fix")) {
             fix = true;
+        } else if (std.mem.eql(u8, a, "--strict")) {
+            strict = true;
         } else if (std.mem.eql(u8, a, "--list")) {
             return listCodes(gpa, io);
         } else if (std.mem.eql(u8, a, "--explain") or std.mem.startsWith(u8, a, "--explain=")) {
@@ -123,7 +129,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         const display = if (from_stdin) "<stdin>" else file;
         const chunkname = if (from_stdin) "=stdin" else try std.fmt.allocPrint(arena, "@{s}", .{file});
         const is_test = !from_stdin and paths.isTestFile(file);
-        const opts: lint.Options = .{ .builtins = if (is_test) &test_builtins else &builtins, .test_file = is_test };
+        const opts: lint.Options = .{ .builtins = if (is_test) &test_builtins else &builtins, .test_file = is_test, .strict = strict };
         var diags = try checkSource(gpa, arena, l.g, src, chunkname, opts);
         var current: []const u8 = src;
         if (fix and !from_stdin) {
@@ -383,7 +389,8 @@ fn listCodes(gpa: std.mem.Allocator, io: std.Io) !u8 {
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     for (lint.codes) |c| {
-        out.writer.print("{s: <24}{s: <9}{s}\n", .{ c.code, c.severity.label(), c.summary }) catch return error.OutOfMemory;
+        const prefix: []const u8 = if (c.strict) "With --strict: " else "";
+        out.writer.print("{s: <24}{s: <9}{s}{s}\n", .{ c.code, c.severity.label(), prefix, c.summary }) catch return error.OutOfMemory;
     }
     for (explain.check_codes) |c| {
         out.writer.print("{s: <24}{s: <9}{s}\n", .{ c.code, c.severity.label(), c.summary }) catch return error.OutOfMemory;

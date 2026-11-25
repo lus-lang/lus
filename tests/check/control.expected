@@ -1,5 +1,6 @@
 control.lus:7:9: warning: unreachable code [unreachable-code]
 control.lus:10:5: warning: unreachable code [unreachable-code]
+control.lus:11:5: hint: the gotos to 'next' at the end of the loop body can be continue [use-continue]
 control.lus:14:3: warning: unused label 'unused_label' [unused-label]
 control.lus:16:6: error: no visible label 'nowhere' for goto [undefined-label]
 control.lus:18:1: warning: unreachable code [unreachable-code]
