@@ -67,10 +67,7 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
       </div>
       <div class="intro">
         <p>
-          Short, idiomatic Lus programs. Each one is self-contained. Examples
-          marked <span class="tag soft">playground</span> run in
-          your browser, the rest run locally because they need real sockets,
-          files, or threads.{" "}
+          Short, idiomatic Lus programs.{" "}
           {
             examples.some((ex) => ex.unstable) && (
               <>
@@ -79,16 +76,6 @@ const skylineHeights = skyline(examples.map((ex) => ex.content.split("\n").lengt
               </>
             )
           }
-        </p>
-        <p>
-          Playground examples run in a dedicated browser Web Worker. The page
-          stops a run after five seconds and caps captured output at 256 KiB.
-          The browser sandbox separates the program from the host operating
-          system, while the worker keeps execution away from the interface
-          thread. The browser build provides the language core for local
-          interactive examples and omits native networking, native workers,
-          SQLite, and archive codecs. Services that run code for mutually
-          distrustful users should add a process or virtual-machine boundary.
         </p>
       </div>
       <nav class="jump" aria-label="Examples">

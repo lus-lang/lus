@@ -1,6 +1,6 @@
 ---
 /*
-** The site header: wordmark and main navigation. Layout uses it with the
+** The site header: logo and main navigation. Layout uses it with the
 ** page shell's width, and the playground spans it across the viewport.
 */
 import { Image } from "astro:assets"
@@ -41,17 +41,16 @@ function isActive(href: string) {
         src={currentLogo}
         alt=""
         class="lus-logo day-logo"
-        width={18}
-        height={20}
+        width={22}
+        height={25}
       />
       <Image
         src={nightLogo}
         alt=""
         class="lus-logo night-logo"
-        width={18}
-        height={20}
+        width={22}
+        height={25}
       />
-      <span class="wordmark">Lus</span>
     </a>
 
     <nav aria-label="Main">
@@ -109,25 +108,13 @@ function isActive(href: string) {
   }
 
   .site-header {
-    @apply bg-paper border-b-2 border-rule shrink-0;
+    @apply bg-paper shrink-0;
 
     .header-inner {
       @apply max-w-[1240px] mx-auto px-4 md:px-6 h-12 flex items-center gap-4;
-      /* the spine is marked at the twelve columns of the measure, inside
-         the page gutters */
-      background:
-        repeating-linear-gradient(
-            to right,
-            var(--color-rule) 0 1px,
-            transparent 1px calc((100% - 3rem) / 12)
-          )
-          1.5rem bottom / calc(100% - 3rem) 5px no-repeat,
-        linear-gradient(var(--color-rule), var(--color-rule)) calc(100% - 1.5rem)
-          bottom / 1px 5px no-repeat;
 
       &.wide {
         @apply max-w-none px-4;
-        background: none;
       }
     }
 
@@ -135,11 +122,7 @@ function isActive(href: string) {
       @apply flex items-center gap-2 no-underline shrink-0 text-ink hover:text-ink;
 
       .lus-logo {
-        @apply w-[18px] h-auto;
-      }
-
-      .wordmark {
-        @apply font-display font-extrabold text-[22px] tracking-[-0.045em] leading-none;
+        @apply w-[22px] h-auto;
       }
     }
 
@@ -147,7 +130,7 @@ function isActive(href: string) {
       @apply ml-auto flex flex-wrap items-center justify-end gap-0.5 font-mono text-[13px];
 
       a {
-        @apply no-underline font-normal text-ink-2 px-2.5 py-1.5 rounded-[4px] hover:bg-accent-soft hover:text-ink;
+        @apply no-underline font-normal text-ink-2 px-2.5 py-1.5 hover:bg-accent-soft hover:text-ink;
 
         &.active {
           @apply bg-solid text-on-solid hover:bg-solid hover:text-on-solid;
@@ -156,21 +139,10 @@ function isActive(href: string) {
     }
   }
 
-  /* phones use a narrower gutter, so the spine goes unmarked there */
-  @media (max-width: 767px) {
-    .site-header .header-inner {
-      background: none;
-    }
-  }
-
   @media (max-width: 520px) {
     .site-header {
       .header-inner {
         @apply gap-2;
-      }
-
-      .brand .wordmark {
-        @apply sr-only;
       }
 
       nav {
@@ -197,8 +169,6 @@ function isActive(href: string) {
   }
 
   :global(html.unstable) .site-header {
-    @apply border-ink-red;
-
     .brand,
     .brand:hover {
       @apply text-ink-red;

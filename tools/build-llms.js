@@ -270,18 +270,20 @@ function renderAgents(prompts, skills) {
     "",
     "## Prompts",
     "",
-    "Paste one of these into a coding agent. Each prompt names every command and page it uses.",
+    "Paste one of these into a coding agent.",
     "",
   ];
   for (const p of prompts) lines.push(`### ${p.title}`, "", "```text", p.text, "```", "");
   lines.push(
     "## Skills",
     "",
-    "In Claude Code, `claude plugin install lus --marketplace lus-lang/lus` installs the skills as a plugin. In any other agent, `lus agents init` writes the skills of the installed runtime into `.agents/skills/` of a project, links `.claude/skills` to them, and adds a Lus section to `AGENTS.md`. `lus help NAME` prints the reference for any standard library function from the same runtime.",
+    "`lus agents init` writes the skills of the installed runtime into `.agents/skills/` of a project and adds a Lus section to `AGENTS.md`. Agents that read `.agents/skills/` load the skills from there. `lus help NAME` prints the reference for any standard library function from the same runtime.",
     "",
   );
   for (const [name, text] of skills) lines.push(`- [${name}](${SITE}/agents/skills/${name}/SKILL.md): ${skillDescription(text)}`);
   lines.push(
+    "",
+    "In Claude Code, `claude plugin install lus --marketplace lus-lang/lus` installs the same skills as a plugin. `lus agents init` also links `.claude/skills` to `.agents/skills/`.",
     "",
     "## Documentation",
     "",

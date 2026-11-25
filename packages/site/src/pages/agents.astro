@@ -41,10 +41,6 @@ const docs = [
   <main id="main">
     <section>
       <div class="title-row"><h1 class="page-title">Agents</h1></div>
-      <p class="intro">
-        Hand Lus to a coding agent. Each prompt names every command and page
-        it uses, so you can read them first.
-      </p>
     </section>
 
     <section class="part">
@@ -52,13 +48,12 @@ const docs = [
       <div class="prompts">
         {
           prompts.map((p, i) => (
-            <figure class="figure crop">
-              <figcaption>
-                <span>{String(i + 1).padStart(2, "0")} · {p.title}</span>
-                <button type="button" class="copy" data-copy={`prompt-${i}`}>copy</button>
-              </figcaption>
-              <p class="prompt" id={`prompt-${i}`}>{p.text}</p>
-            </figure>
+            <div class="prompt-item">
+              <h3><span class="no">{String(i + 1).padStart(2, "0")}</span>{p.title}</h3>
+              <div class="prompt crop">
+                <pre><code>{p.text}</code></pre>
+              </div>
+            </div>
           ))
         }
       </div>
@@ -67,13 +62,11 @@ const docs = [
     <section class="part">
       <div class="sech"><h2>Skills</h2></div>
       <p class="lede">
-        In Claude Code, <code>claude plugin install lus --marketplace lus-lang/lus</code>
-        installs the skills as a plugin. In any other agent,
         <code>lus agents init</code> writes the skills of the installed runtime
-        into <code>.agents/skills/</code>, links <code>.claude/skills</code> to
-        them, and adds a Lus section to <code>AGENTS.md</code>.
-        <code>lus help NAME</code> prints the reference for any function from
-        the same runtime.
+        into <code>.agents/skills/</code> of a project and adds a Lus section to
+        <code>AGENTS.md</code>. Agents that read <code>.agents/skills/</code>
+        load the skills from there. <code>lus help NAME</code> prints the
+        reference for any function from the same runtime.
       </p>
       <dl class="ledger">
         {
@@ -85,10 +78,15 @@ const docs = [
           ))
         }
       </dl>
+      <p class="lede">
+        In Claude Code, <code>claude plugin install lus --marketplace lus-lang/lus</code>
+        installs the same skills as a plugin. <code>lus agents init</code> also
+        links <code>.claude/skills</code> to <code>.agents/skills/</code>.
+      </p>
     </section>
 
     <section class="part">
-      <div class="sech"><h2>Documentation</h2><span class="label">markdown</span></div>
+      <div class="sech"><h2>Documentation</h2></div>
       <nav class="index" aria-label="Documentation for agents">
         {
           docs.map((d) => (
@@ -104,21 +102,10 @@ const docs = [
   </main>
 </Layout>
 
-<script>
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-copy]")) {
-    button.addEventListener("click", () => {
-      const text = document.getElementById(button.dataset.copy!)?.textContent ?? ""
-      navigator.clipboard.writeText(text).then(() => {
-        button.textContent = "copied"
-      })
-    })
-  }
-</script>
 
 <style>
   @reference "../styles/global.css";
 
-  .intro,
   .lede {
     @apply text-ink-2 max-w-[48.5rem];
   }
@@ -133,12 +120,36 @@ const docs = [
     }
   }
 
-  .prompt {
-    @apply m-0 px-3 pt-1.5 pb-2.5 font-mono text-[13px] leading-[1.6] whitespace-pre-wrap;
+  /* each prompt: its title above, the text in a tint block with the
+     site's copy button */
+  .prompt-item {
+    @apply flex flex-col gap-2;
+
+    h3 {
+      @apply flex items-baseline gap-2 m-0 font-display font-bold text-lg tracking-[-0.02em];
+    }
+
+    .no {
+      @apply font-mono text-xs font-normal tracking-normal text-ink-3;
+    }
   }
 
-  .copy {
-    @apply font-mono text-[11px] normal-case tracking-normal bg-transparent border-0 p-0 cursor-pointer text-figure-link hover:text-figure-ink;
+  .prompt {
+    @apply relative flex-1 bg-figure text-figure-ink;
+
+    pre {
+      @apply m-0 h-full;
+    }
+
+    code {
+      @apply block bg-transparent font-mono text-[13px] leading-[1.6] pl-3 pr-10 pt-2.5 pb-2.5 whitespace-pre-wrap overflow-x-hidden;
+      overflow-wrap: anywhere;
+    }
+  }
+
+  .lede + .ledger,
+  .ledger + .lede {
+    @apply mt-3;
   }
 
   .ledger {

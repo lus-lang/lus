@@ -446,7 +446,7 @@ details[open] > summary::before {
 
 /* tags: the stable or unstable state of a release or feature */
 .tag {
-  @apply inline-block font-mono text-[10px] font-semibold uppercase rounded-[3px] px-1.5 py-px bg-accent text-on-accent text-center;
+  @apply inline-block font-mono text-[10px] font-semibold uppercase px-1.5 py-px bg-accent text-on-accent text-center;
 
   &.red {
     @apply bg-accent-soft-red text-link-red;
@@ -462,7 +462,7 @@ a {
 }
 
 .skip-link {
-  @apply sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-accent focus:text-on-accent focus:rounded-md focus:px-4 focus:py-2 focus:font-semibold focus:no-underline;
+  @apply sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-accent focus:text-on-accent focus:px-4 focus:py-2 focus:font-semibold focus:no-underline;
 }
 
 /* section defaults sit in the base layer so utilities such as
@@ -530,7 +530,7 @@ pre.astro-code {
 }
 
 :not(pre) > code {
-  @apply font-mono text-[0.9em] bg-tint px-1 rounded-[3px];
+  @apply font-mono text-[0.9em] bg-tint px-1;
   overflow-wrap: anywhere;
 }
 
@@ -545,7 +545,7 @@ pre.astro-code {
 }
 
 .copy-btn {
-  @apply absolute top-2 right-1.5 rounded-[4px] bg-field p-1 cursor-pointer hover:bg-accent-soft active:bg-accent-soft;
+  @apply absolute top-2 right-1.5 bg-field p-1 cursor-pointer hover:bg-accent-soft active:bg-accent-soft;
 }
 
 .copy-btn.copied {
@@ -596,7 +596,7 @@ table {
 
 /* reference badge palette; see grammar header; legend renders these chips */
 .api-badge {
-  @apply text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 mr-2 rounded-[3px] shrink-0;
+  @apply text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 mr-2 shrink-0;
 }
 
 .api-badge-lus {

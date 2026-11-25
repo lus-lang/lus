@@ -487,7 +487,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
   .btn-run,
   .btn-stop,
   .btn-clear {
-    @apply font-semibold text-sm px-3 py-1 rounded-md border cursor-pointer select-none;
+    @apply font-semibold text-sm px-3 py-1 border cursor-pointer select-none;
   }
 
   .btn-run {
@@ -512,7 +512,7 @@ const defaultExample = examples.find((e) => e.name === "hello") || examples[0]
 
   .version-select,
   .example-select {
-    @apply bg-field text-ink border border-ink/30 rounded-[4px] font-mono text-xs px-2 py-1 cursor-pointer;
+    @apply bg-field text-ink border border-ink/30 font-mono text-xs px-2 py-1 cursor-pointer;
 
     &:disabled {
       @apply text-ink-3 cursor-not-allowed;

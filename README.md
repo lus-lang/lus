@@ -6,7 +6,7 @@
 
 # [Lus](https://lus.dev)
 
-Lus is a small, productive programming language. It should be able to be picked up easily by programmers and put to good use right away.
+A small, fast, and productive language to build programs.
 
 [Instructions for compiling and using Lus can be found here.](https://lus.dev/manual/compiling/)
 

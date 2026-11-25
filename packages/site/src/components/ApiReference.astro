@@ -97,7 +97,7 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
     @apply sticky top-0 z-10 bg-paper flex flex-wrap items-center gap-x-3 gap-y-1 py-2 mb-2;
 
     input {
-      @apply border border-ink rounded-md bg-field px-3 py-1.5 w-full max-w-md font-mono text-sm;
+      @apply border border-ink bg-field px-3 py-1.5 w-full max-w-md font-mono text-sm;
 
       &::placeholder {
         @apply text-ink-3;
@@ -116,13 +116,13 @@ const entryCount = sections.reduce((n, s) => n + s.entries.length, 0)
       }
 
       kbd {
-        @apply border border-ink/40 px-1 rounded-sm not-italic;
+        @apply border border-ink/40 px-1 not-italic;
       }
     }
   }
 
   .pledge-chip-legend {
-    @apply font-mono text-[10px] font-bold px-1.5 py-0.5 mr-2 rounded-[3px] shrink-0
+    @apply font-mono text-[10px] font-bold px-1.5 py-0.5 mr-2 shrink-0
       bg-accent-soft text-ink;
   }
 

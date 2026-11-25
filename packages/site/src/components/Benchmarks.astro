@@ -44,7 +44,7 @@ const device = [
   `${data.device.cores} cores`,
   `${data.device.memory_gb} GB`,
   data.os,
-].join(" · ")
+].join(", ")
 
 const fmtTime = (s: number) => `${s.toFixed(2)} s`
 const fmtMem = (mb: number) =>
@@ -152,7 +152,6 @@ const modes: {
 <section class="bench part" id="benchmarks" data-mode="time">
   <div class="sech">
     <h2>Benchmarks</h2>
-    <span class="label">{device}</span>
     <span class="seg" role="group" aria-label="Measurement">
       <button type="button" data-set="time" aria-pressed="true">time</button>
       <button type="button" data-set="memory" aria-pressed="false">memory</button>
@@ -162,7 +161,6 @@ const modes: {
     modes.map((m) => (
       <div class="mode" data-show={m.mode}>
         <div class="scroll">
-          <p class="label skyline-label" aria-hidden="true">{m.caption}</p>
           <div class="skyline">
             <CubeField rows={1} heights={skylines[m.mode]} limeAt={0} glow={false} light={false} unit={0.16} depth={0.22} />
           </div>
@@ -196,7 +194,7 @@ const modes: {
           </table>
         {m.http && (
             <table class="http">
-              <caption>{m.httpCaption}</caption>
+              <caption class="sr-only">{m.httpCaption}</caption>
               <thead>
                 <tr>
                   <td />
@@ -223,9 +221,14 @@ const modes: {
             </table>
         )}
         </div>
+        <div class="notes label" aria-hidden="true">
+          <p>{m.caption}</p>
+          {m.http && <p>{m.httpCaption}</p>}
+        </div>
       </div>
     ))
   }
+  <p class="label device">{device}</p>
 </section>
 
 <script>
@@ -267,7 +270,7 @@ const modes: {
   }
 
   .seg {
-    @apply ml-auto flex border border-ink/30 rounded-[4px] overflow-hidden;
+    @apply ml-auto flex border border-ink/30 overflow-hidden;
 
     button {
       @apply font-mono text-xs bg-field px-2.5 py-[3px] cursor-pointer text-ink-2 hover:bg-accent-soft;
@@ -300,13 +303,22 @@ const modes: {
     @apply pt-0;
   }
 
-  .skyline-label {
-    @apply min-w-[760px] pt-2 m-0;
+  /* what each table measures and the machine, under the tables */
+  .notes {
+    @apply pt-3;
+
+    p {
+      @apply m-0;
+    }
+  }
+
+  .device {
+    @apply m-0 pt-0.5;
   }
 
   /* the runtime skyline stands over the runtime columns, one bar each */
   .skyline {
-    @apply min-w-[760px] pt-1 pl-[92px];
+    @apply min-w-[760px] pt-3 pl-[92px];
 
     :global(svg) {
       @apply w-full;
@@ -406,7 +418,7 @@ const modes: {
 
 
   td.best b {
-    @apply bg-accent text-on-accent px-[3px] rounded-[2px];
+    @apply bg-accent text-on-accent px-[3px];
   }
 
   td.na {

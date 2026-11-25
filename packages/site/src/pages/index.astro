@@ -10,8 +10,8 @@ import ReleaseStrip from "../components/ReleaseStrip.astro"
 import Benchmarks from "../components/Benchmarks.astro"
 import CubeField from "../components/CubeField.astro"
 
-import { INSTALL_SH, AGENT_PROMPT, WINDOWS_INSTALLER_URL, RELEASE_TAG } from "../lib/install"
-import { leadLine, standings, type BenchData } from "../lib/lead"
+import { INSTALL_SH, AGENT_PROMPT, WINDOWS_INSTALLER_URL } from "../lib/install"
+import { type BenchData } from "../lib/lead"
 import results from "../data/benchmarks.json"
 import { fmtDate } from "../lib/date"
 
@@ -20,10 +20,8 @@ const news = allNews
   .toSorted((a, b) => b.data.date.getTime() - a.data.date.getTime())
   .slice(0, 5)
 
-// what Lus does for a program, each chapter one sentence and one piece of
-// evidence. The speed line comes from the benchmark data (lib/lead.ts).
+// what Lus does best, each chapter one sentence and one piece of evidence
 const benchmarks = results as unknown as BenchData
-const speed = standings(benchmarks)
 
 const permissionsCode = `pledge("fs:read=./data/*")
 pledge("network:http=api.example.com")
@@ -39,12 +37,6 @@ const concurrencyCode = `network.serve("0.0.0.0", 8080, function(req)
     return status, body
 end)`
 
-const everywhereCode = `lus app.lus             # script
-lus build app.lus       # executable
-lus test                # tests
-cc host.c -llus         # C host
-npm install lus-wasm    # browser`
-
 // what ships in the executable, grouped by what a program does with it
 const batteries = [
   { group: "data", items: "JSON, CSV, and SQLite", href: "/manual/data" },
@@ -56,42 +48,59 @@ const batteries = [
   { group: "tools", items: "tests, formatter, checker, debugger, and bundler", href: "/manual/tools" },
 ]
 
+const queryCode = `local books = {
+    { title = "Dune", pages = 600, rating = 5 },
+    { title = "Emma", pages = 450, rating = 4 },
+    { title = "Solaris", pages = 210, rating = 4 },
+}
+
+for b in query(@books as b
+        where b.pages > 400
+        order by b.rating desc) do
+    print(b.title)
+end`
+
+// Lus's own measurements, program by program, for the speed figure
+const ownTimes = Object.entries(benchmarks.programs)
+  .map(([program, cells]) => ({ program, cell: cells.lus }))
+  .filter((r) => r.cell && r.cell.ok !== false && r.cell.best_s)
+
 const chapters = [
   {
     name: "fast",
-    title: "Faster than the runtimes you use today",
+    title: "Fast",
     href: "#benchmarks",
-    blurb: `A two-tier JIT and a generational, parallel collector. ${leadLine(benchmarks)}`,
+    blurb: "A two-tier JIT compiles hot code to machine code, and a generational, parallel collector keeps pauses short and memory low.",
   },
   {
     name: "batteries",
-    title: "Everything in one binary",
+    title: "All-in-one",
     href: "/manual/api",
-    blurb: "One executable of about 7 MB carries the runtime, the libraries most projects install, and the tools.",
+    blurb: "One executable of about 7 MB carries the runtime, the libraries most projects install, and the tools. It also builds a program into one file of its own.",
   },
   {
     name: "permissions",
-    title: "Every program states what it touches",
+    title: "Permissions",
     href: "/manual/permissions",
-    blurb: "Programs start with no access to files, network, processes, or environment, and pledge what they need.",
-  },
-  {
-    name: "concurrency",
-    title: "Thousands of connections, plain code",
-    href: "/manual/concurrency",
-    blurb: "Sockets suspend only the coroutine that waits, so a server reads top to bottom.",
-  },
-  {
-    name: "everywhere",
-    title: "Script, server, executable, library, browser",
-    href: "/manual/cli",
-    blurb: "The same code runs as a script, ships as one file, embeds in C and Zig hosts, and runs in the browser.",
+    blurb: "A program pledges the files, hosts, and processes it uses. Run with -P, it can pledge only what the command line grants.",
   },
   {
     name: "agents",
-    title: "Your agent already knows how",
+    title: "Agent-first",
     href: "/agents",
-    blurb: "Skills, Markdown documentation, and a checker with structured output let any coding agent write, test, and port Lus.",
+    blurb: "Skills, Markdown documentation, a checker with JSON output, and a test runner with no framework let any coding agent write, test, and port Lus.",
+  },
+  {
+    name: "queries",
+    title: "Queries",
+    href: "/manual/guide#queries",
+    blurb: "Filter, sort, group, and total a list of records in a few clauses. The same query runs on a SQLite table.",
+  },
+  {
+    name: "concurrency",
+    title: "Concurrency",
+    href: "/manual/concurrency",
+    blurb: "Sockets suspend only the coroutine that waits, so a server reads top to bottom and holds thousands of connections.",
   },
 ]
 
@@ -100,7 +109,7 @@ const chapters = [
 const stdlibMap = [
   {
     name: "base",
-    desc: "core globals · JSON · CSV",
+    desc: "core globals, JSON, CSV",
     href: "/manual/api#environment-functions",
   },
   {
@@ -160,8 +169,6 @@ const stdlibMap = [
   { name: "C API", desc: "embedding interface", href: "/manual/api/c" },
 ]
 
-// the version chip beside the wordmark: major.minor of the documented runtime
-const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 ---
 
 <Layout>
@@ -169,28 +176,26 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     <div class="band night">
       <section class="mast">
         <div class="pitch">
-          <h1>Lus<span class="chip">{versionChip}</span></h1>
+          <h1>Lus</h1>
           <p class="sub">
-            A small, productive programming language designed to be picked up
-            easily by programmers and put to good use right away.
+            A small, fast, and productive language to build programs.
           </p>
           <div class="seg" role="group" aria-label="Install with">
             <button type="button" data-via="agent" aria-pressed="true">agent</button>
             <button type="button" data-via="shell" aria-pressed="false">shell</button>
           </div>
           <div class="install crop" id="install-unix" hidden>
-            <span class="plat" id="install-platform">linux · x64</span>
+            <span class="plat" id="install-platform">linux, x64</span>
             <code id="install-shell">{INSTALL_SH}</code>
             <button type="button" data-copy="install-shell">copy</button>
           </div>
           <div class="install crop" id="install-windows" hidden>
-            <span class="plat">windows · x64</span>
+            <span class="plat">windows, x64</span>
             <a href={WINDOWS_INSTALLER_URL}>lus-setup.exe</a>
           </div>
           <div class="agent" id="install-agent">
             <div class="prompt-box crop">
-              <p id="agent-prompt">{AGENT_PROMPT}</p>
-              <button type="button" data-copy="agent-prompt">copy prompt</button>
+              <pre><code>{AGENT_PROMPT}</code></pre>
             </div>
             <div class="prompt-links">
               <a href="/agents/skills/lus/SKILL.md">SKILL.md</a>
@@ -201,7 +206,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
             <a class="btn solid" href="/manual/getting-started">Get started →</a>
             <a class="btn" href="/playground">Open the playground</a>
             <span class="alt">
-              <a href="/manual/getting-started">other platforms</a> ·
+              <a href="/manual/getting-started">other platforms</a>,
               <a href="/manual/compiling">build from source</a>
             </span>
           </div>
@@ -254,7 +259,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     <Benchmarks />
 
     <section class="part" id="software">
-      <div class="sech"><h2>In your software</h2></div>
+      <div class="sech"><h2>Overview</h2></div>
       <div class="chapters">
         {
           chapters.map((c, i) => (
@@ -268,11 +273,11 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
                     <a href="#benchmarks">all results ↑</a>
                   </figcaption>
                   <ol class="ratios">
-                    {speed.map((s) => (
-                      <li class:list={{ ahead: s.speedup >= 1 }}>
-                        <span>{s.name}</span>
+                    {ownTimes.map((r) => (
+                      <li class="ahead">
+                        <span>{r.program}</span>
                         <i aria-hidden="true" />
-                        <b>{s.speedup >= 1 ? `${s.speedup.toFixed(2)}× faster` : `${(1 / s.speedup).toFixed(2)}× slower`}</b>
+                        <b>{r.cell.best_s!.toFixed(2)} s, {Math.round(r.cell.peak_rss_mb ?? 0)} MB</b>
                       </li>
                     ))}
                   </ol>
@@ -303,9 +308,9 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
                   <Code lang={lusGrammar as any} themes={codeThemes as any} code={concurrencyCode} />
                 </figure>
               )}
-              {c.name === "everywhere" && (
+              {c.name === "queries" && (
                 <figure class="figure crop">
-                  <Code lang="sh" themes={codeThemes as any} code={everywhereCode} />
+                  <Code lang={lusGrammar as any} themes={codeThemes as any} code={queryCode} />
                 </figure>
               )}
               {c.name === "agents" && (
@@ -335,7 +340,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   ).toLowerCase()
   if (plat.includes("mac")) {
     document.getElementById("install-platform").textContent =
-      "macos · arm64"
+      "macos, arm64"
   }
   for (const button of document.querySelectorAll("[data-copy]")) {
     button.addEventListener("click", () => {
@@ -397,9 +402,6 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     letter-spacing: -0.065em;
     font-variation-settings: "opsz" 96;
 
-    .chip {
-      @apply font-mono text-base font-semibold tracking-normal leading-normal mt-2.5 px-2 py-0.5 rounded-[3px] bg-accent text-on-accent;
-    }
   }
 
   .sub {
@@ -408,7 +410,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
 
   /* shell or agent: a toggle over the install box */
   .seg {
-    @apply inline-flex mt-[22px] border border-ink/30 rounded-[4px] overflow-hidden;
+    @apply inline-flex mt-[22px] border border-ink/30 overflow-hidden;
 
     button {
       @apply font-mono text-xs bg-field px-2.5 py-[3px] cursor-pointer text-ink-2 hover:bg-accent-soft;
@@ -457,28 +459,25 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   }
 
   /* the agent prompt: a few lines of the prompt that scroll, fading out
-     under a solid copy button in the corner */
+     at the bottom, with the site's copy button in the corner */
   .prompt-box {
     @apply relative mt-2 max-w-[620px] bg-field;
 
-    p {
-      @apply m-0 font-mono text-[13px] leading-[1.6] px-3 pt-2.5 pb-11 max-h-[8.5rem] overflow-y-auto;
+    pre {
+      @apply m-0;
+    }
+
+    code {
+      @apply block m-0 bg-transparent font-mono text-[13px] leading-[1.6] pl-3 pr-10 pt-2.5 pb-8 max-h-[8.5rem] overflow-y-auto overflow-x-hidden whitespace-pre-wrap;
+      overflow-wrap: anywhere;
       scrollbar-width: thin;
     }
 
-    /* the fade over the last lines, under the button */
+    /* the fade over the last lines */
     &::before {
       content: "";
-      @apply absolute inset-x-0 bottom-0 h-12 pointer-events-none;
-      background: linear-gradient(to bottom, transparent, var(--color-field) 70%);
-    }
-
-    button {
-      @apply absolute right-2 bottom-2 font-mono text-xs font-semibold px-3 py-1.5 rounded-[4px] cursor-pointer bg-solid text-on-solid hover:bg-solid/85;
-
-      &:focus-visible {
-        outline-offset: 2px;
-      }
+      @apply absolute inset-x-0 bottom-0 h-10 pointer-events-none z-[1];
+      background: linear-gradient(to bottom, transparent, var(--color-field) 80%);
     }
   }
 
@@ -507,7 +506,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
   }
 
   .btn {
-    @apply inline-flex gap-1.5 font-semibold text-sm px-3.5 py-[7px] rounded-md no-underline border border-ink text-ink hover:bg-accent-soft hover:text-ink;
+    @apply inline-flex gap-1.5 font-semibold text-sm px-3.5 py-[7px] no-underline border border-ink text-ink hover:bg-accent-soft hover:text-ink;
 
     &.solid {
       @apply bg-solid border-solid text-on-solid hover:bg-solid/85 hover:text-on-solid;
@@ -696,7 +695,7 @@ const versionChip = RELEASE_TAG.slice(1).split(".").slice(0, 2).join(".")
     }
   }
 
-  /* the speed readout: one runtime per row, the factor on the right */
+  /* the speed readout: one program per row, its time and memory on the right */
   .ratios {
     @apply list-none m-0 px-3 pt-1.5 pb-2.5 font-mono text-[13px] leading-[1.6] space-y-0;
 

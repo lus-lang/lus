@@ -104,7 +104,7 @@ function haystack(d: any, from: From) {
   }
 
   .api-signature {
-    @apply font-mono text-[13px] bg-tint rounded-[3px] px-3 py-2 mb-1.5 whitespace-pre-wrap break-words;
+    @apply font-mono text-[13px] bg-tint px-3 py-2 mb-1.5 whitespace-pre-wrap break-words;
   }
 
   .api-meta {
@@ -212,22 +212,22 @@ function haystack(d: any, from: From) {
               <div class="api-meta">
                 since {d.since}
                 {d.kind === "constant" && d.value !== undefined
-                  ? ` · value: ${d.value}${d.type ? ` (${d.type})` : ""}`
+                  ? `, value: ${d.value}${d.type ? ` (${d.type})` : ""}`
                   : ""}
                 {(d.kind === "variable" || d.kind === "type") &&
                 !d.signature &&
                 d.type
-                  ? ` · type: ${d.type}`
+                  ? `, type: ${d.type}`
                   : ""}
                 {from === "deprecated" && d.deprecated_by ? (
                   <Fragment>
-                    {" · use "}
+                    {", use "}
                     <a href={`#${d.deprecated_by}`}>{d.deprecated_by}</a>
                   </Fragment>
                 ) : (
                   ""
                 )}
-                {d.removed_in ? ` · removed in ${d.removed_in}` : ""}
+                {d.removed_in ? `, removed in ${d.removed_in}` : ""}
               </div>
             )}
 

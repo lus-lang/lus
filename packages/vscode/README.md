@@ -1,6 +1,6 @@
 # Lus
 
-Language support for [Lus](https://github.com/lus-lang/lus), a small, productive, and sovereign programming language designed to be picked up easily by programmers and put to good use right away.
+Language support for [Lus](https://github.com/lus-lang/lus), a small, fast, and productive language to build programs.
 
 This extension provides completions, diagnostics, syntax highlighting, and formatting for `.lus` files. Each extension release carries its matching Lus WebAssembly runtime, language server, and standard library data.
 
