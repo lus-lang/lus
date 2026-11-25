@@ -310,6 +310,14 @@ const Formatter = struct {
     // Blocks and statements
 
     fn chunk(f: *Formatter, stats: []*ast.Stat) Error!void {
+        try f.statements(stats);
+        _ = try f.commentsBefore(null);
+    }
+
+    /// A list of statements. One blank line separates two statements, or
+    /// a statement and the comments before the next one, wherever the
+    /// source has at least one.
+    fn statements(f: *Formatter, stats: []*ast.Stat) Error!void {
         var prev_end: u32 = 0;
         for (stats) |s| {
             if (s.kind == .empty) continue;
@@ -324,14 +332,13 @@ const Formatter = struct {
             prev_end = f.endLine(s.span.end);
             try f.stat(s);
         }
-        _ = try f.commentsBefore(null);
     }
 
     /// The statements of `b`, one level in, then the comments that come
     /// after the last statement and before the token that closes the block.
     fn block(f: *Formatter, b: anytype) Error!void {
         f.indent += 1;
-        for (b.stats) |s| try f.stat(s);
+        try f.statements(b.stats);
         _ = try f.commentsBefore(b.end_line);
         f.indent -= 1;
     }
@@ -737,13 +744,13 @@ const Formatter = struct {
             .true => try f.put("true"),
             .false => try f.put("false"),
             .vararg => try f.put("..."),
-            .integer => |v| try f.integer(v),
-            .float => |v| try f.float(v),
-            .bigint => |d| {
+            .integer => |v| if (f.numeralSource(e)) |src| try f.put(src) else try f.integer(v),
+            .float => |v| if (f.numeralSource(e)) |src| try f.put(src) else try f.float(v),
+            .bigint => |d| if (f.numeralSource(e)) |src| try f.put(src) else {
                 try f.put(d);
                 try f.putc('n');
             },
-            .decimal => |d| {
+            .decimal => |d| if (f.numeralSource(e)) |src| try f.put(src) else {
                 try f.put(d);
                 try f.putc('d');
             },
@@ -800,7 +807,10 @@ const Formatter = struct {
                 try f.putc('[');
                 if (sl.from) |x| try f.expr(x);
                 try f.putc(',');
-                if (sl.to) |x| try f.expr(x);
+                if (sl.to) |x| {
+                    try f.putc(' ');
+                    try f.expr(x);
+                }
                 try f.putc(']');
             },
             .optional => |inner| {
@@ -848,6 +858,19 @@ const Formatter = struct {
         }
         try f.putc(' ');
         try f.expr(c.body);
+    }
+
+    /// The numeral as the source writes it, so hexadecimal, digit
+    /// separators, and exponents stay as written. Null for a number that
+    /// has no numeral of its own in the source.
+    fn numeralSource(f: *const Formatter, e: *ast.Expr) ?[]const u8 {
+        if (e.span.end <= e.span.start or e.span.end > f.src.len) return null;
+        const text = f.src[e.span.start..e.span.end];
+        if (!std.ascii.isDigit(text[0]) and text[0] != '.') return null;
+        for (text) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '.' and c != '+' and c != '-') return null;
+        }
+        return text;
     }
 
     fn integer(f: *Formatter, v: i64) Error!void {
@@ -1043,6 +1066,18 @@ const Formatter = struct {
         };
     }
 
+    fn holdsFunction(fields: []ast.Field) bool {
+        for (fields) |fld| {
+            const v = switch (fld.kind) {
+                .positional => |v| v,
+                .named => |nv| nv.value,
+                .keyed => |kv| kv.value,
+            };
+            if (strip(v).e.kind == .function) return true;
+        }
+        return false;
+    }
+
     fn fieldEnd(fld: ast.Field) u32 {
         return switch (fld.kind) {
             .positional => |v| v.span.end,
@@ -1051,14 +1086,17 @@ const Formatter = struct {
         };
     }
 
-    /// A table constructor. Tables with more than three fields, and tables
-    /// that hold a comment, go one field per line with a trailing comma.
-    /// Each comment stays next to the field it was written by.
+    /// A table constructor. Tables with more than three fields, tables
+    /// that hold a comment, and tables with a function as a value go one
+    /// field per line with a trailing comma. Each comment stays next to the
+    /// field it was written by.
     fn table(f: *Formatter, fields: []ast.Field, span: ast.Span) Error!void {
         if (fields.len == 0) return f.put("{}");
         const close_line = f.endLine(span.end);
-        const has_comment = f.next_comment < f.comments.len and f.commentLine(f.comments[f.next_comment]) <= close_line;
-        const multiline = fields.len > 3 or has_comment;
+        // Only a comment before the closing brace is inside the table. A
+        // comment after it on the same line belongs to the statement.
+        const has_comment = f.next_comment < f.comments.len and f.comments[f.next_comment].span.start < span.end;
+        const multiline = fields.len > 3 or has_comment or holdsFunction(fields);
         if (multiline) {
             try f.putc('{');
             try f.trailingComment(f.startLine(span.start));
@@ -1423,7 +1461,15 @@ test "format expressions" {
     try expectFormat("x = (a or b) and c", "x = (a or b) and c\n");
     try expectFormat("x = 2 ^ (3 ^ 2) .. (s .. t)", "x = 2 ^ (3 ^ 2) .. (s .. t)\n");
     try expectFormat("x = -(-1)", "x = - (-1)\n");
-    try expectFormat("x = 0x10 + 1.5e300", "x = 16 + 1.5e+300\n");
+    try expectFormat("x = 0x10 + 1.5e300", "x = 0x10 + 1.5e300\n");
+    try expectFormat("x = 0xff_ff + 1_000 + 12n + 1.50d", "x = 0xff_ff + 1_000 + 12n + 1.50d\n");
+    try expectFormat("x = t[1,3], t[,3], t[2,]", "x = t[1, 3], t[, 3], t[2,]\n");
+    // A table that holds a function goes one field per line.
+    try expectFormat("local t = { start = function(n) return n end }", "local t = {\n    start = function(n)\n        return n\n    end,\n}\n");
+    // A comment after the closing brace belongs to the statement.
+    try expectFormat("print(#{ 1, 2 })  --> 2", "print(#{ 1, 2 })  --> 2\n");
+    // A blank line inside a block stays.
+    try expectFormat("local function f()\n    local a = 1\n\n    return a\nend", "local function f()\n    local a = 1\n\n    return a\nend\n");
     try expectFormat("x = f 'a' .. g {1}", "x = f 'a' .. g{ 1 }\n");
     try expectFormat("x = { ['end'] = 1, ['a'] = 2 }", "x = { ['end'] = 1, a = 2 }\n");
     try expectFormat("x = a?.b", "x = a?.b\n");
