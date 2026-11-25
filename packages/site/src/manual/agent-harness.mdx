@@ -71,7 +71,7 @@ The harness gives the agent the following tools. Each shows a one-line summary o
 | `lus_lsp` | Asks the language server about a position or a file. |
 | `lus_run` | Runs a script with the permissions that the person approves. |
 
-The commands `/check`, `/fmt`, `/test`, and `/doc` ask the agent to run the matching tool, so the result is part of the conversation and the next prompt can refer to it.
+The commands `/check`, `/fmt`, `/test`, and `/doc` send the agent a prompt to run the matching tool, so the result is part of the conversation and the next prompt can refer to it.
 
 The agent reads the agent skills `lus`, `lus-rewrite`, and `lus-writing` when a task needs them. The system prompt lists the pages of the manual from [`llms.txt`](/llms.txt). In a project with its own copy of the skills in `.agents/skills`, such as one set up by [`lus agents init`](/manual/cli#lus-agents), the agent reads that copy.
 
@@ -106,7 +106,7 @@ In a checkout of the Lus repository, the harness adds tools for working on the r
 
 The build lock lets one build run at a time across every checkout and worktree of the machine. A shell command that starts `zig build` runs under the lock with at most two jobs. A mise task whose commands start `zig build` outside the lock runs under it too, unless the task or a task it depends on takes the lock itself.
 
-`lus_conformance` shows one mark per JIT mode, such as `on ✓  off ✓  eager ✓  opt-eager ✗ 1`, with the failing tests beneath it, and states how long ago the runtime was built. Modes that fail the same tests share one list.
+`lus_conformance` shows one mark per JIT mode, such as `on ✓  off ✓  eager ✓  opt-eager ✗ 1`, with the failing tests beneath it, followed by how long ago the runtime was built. Modes that fail the same tests share one list.
 
 After an edit of a file of the repository, the result includes the findings of `tools/lint-repo.js` for that file. An edit of a Markdown file is also checked for semicolons in prose, following the [prose style](/agents/skills/lus-writing/references/style.md). The system prompt includes `runtime/HACKING.md`. The commands `/build`, `/conformance`, `/mise`, and `/lint` ask the agent to run the matching tool.
 

@@ -37,7 +37,7 @@ The harness adds the following tools.
 | `lus_lsp` | A hover, definition, references, or symbols request to the language server. |
 | `lus_run` | A script under explicit `-P` grants, as the next section describes. |
 
-`/check`, `/fmt`, `/test`, and `/doc` ask the agent to run the matching tool, which puts the result into the conversation for the next prompt. The `lus`, `lus-rewrite`, and `lus-writing` skills load from `.agents/skills`. The system prompt includes the index of the Lus documentation from `llms.txt`.
+`/check`, `/fmt`, `/test`, and `/doc` send the agent a prompt to run the matching tool, which puts the result into the conversation for the next prompt. The `lus`, `lus-rewrite`, and `lus-writing` skills load from `.agents/skills`. The system prompt includes the index of the Lus documentation from `llms.txt`.
 
 ## Running scripts with permissions
 
@@ -57,7 +57,7 @@ Repository mode turns on when the working directory is inside the Lus monorepo. 
 | `mise_task` | `mise run` on a task of `mise.toml`, or lists the tasks. |
 | `lus_conformance` | `tests/conformance` and the language server tests with the built runtime, once per JIT mode. |
 
-A shell command that starts `zig build` runs under the build lock with at most two jobs. A mise task whose own commands start `zig build` outside the lock also runs under the lock, unless the task or one of its dependencies takes the lock itself, because that inner lock would then wait forever for the outer one. After an edit of a tracked file, the result includes the findings of `tools/lint-repo.js` for that file. A Markdown file is also checked against the semicolon rule of `spec/design/style.md`. The system prompt includes `runtime/HACKING.md`. `/build`, `/conformance`, `/mise`, and `/lint` ask the agent to run the matching tool.
+A shell command that starts `zig build` runs under the build lock with at most two jobs. A mise task whose own commands start `zig build` outside the lock also runs under the lock, unless the task or one of its dependencies takes the lock itself, because that inner lock would then wait forever for the outer one. After an edit of a tracked file, the result includes the findings of `tools/lint-repo.js` for that file. A Markdown file is also checked against the semicolon rule of `spec/design/style.md`. The system prompt includes `runtime/HACKING.md`. `/build`, `/conformance`, `/mise`, and `/lint` send the agent a prompt to run the matching tool.
 
 ## Appearance
 
