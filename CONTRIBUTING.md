@@ -14,8 +14,6 @@ If you haven't done any of the above, either submit a draft PR until you have or
 
 ## Before you open a pull request
 
-Meet every one of these requirements, or nobody will review your pull request. If you are a maintainer, a collaborator, or listed in [`.github/known-authors`](/.github/known-authors), you are exempt.
-
 - **Your account must be at least two years old.**
 - **Sign every commit.** GitHub must show each one as verified. See [Signed commits](#signed-commits).
 - **Fill in the template.** Name the [kind](#kind) of your pull request and [disclose any agent](#agent-disclosure) you used.
