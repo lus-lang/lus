@@ -76,9 +76,9 @@ Without `exact`, a number outside the range of a 64-bit integer or a float raise
 ```lus
 global fromjson, print
 
-print(catch fromjson('{"invalid}'))             --> false  JSON parse error at position 11: unterminated string
-print(catch fromjson("[1] x"))                  --> false  JSON parse error at position 5: unexpected trailing characters
-print(catch fromjson("99999999999999999999"))   --> false  JSON parse error at position 1: number out of range
+print(catch fromjson('{"invalid}'))             --> false  ...: JSON parse error at position 11: unterminated string
+print(catch fromjson("[1] x"))                  --> false  ...: JSON parse error at position 5: unexpected trailing characters
+print(catch fromjson("99999999999999999999"))   --> false  ...: JSON parse error at position 1: number out of range
 ```
 
 ### Serializing

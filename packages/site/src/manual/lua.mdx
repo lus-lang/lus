@@ -709,7 +709,7 @@ end
 
 print(parse_endpoint('{"port": 8080}'))      --> true  localhost  8080
 print(parse_endpoint('{"port": "http"}'))    --> false  port must be an integer
-print(parse_endpoint('{"port": '))           --> false  JSON parse error at position 10: unexpected end of input
+print(parse_endpoint('{"port": '))           --> false  ...: JSON parse error at position 10: unexpected end of input
 ```
 
 As in any block, a `return` inside a do expression returns from the enclosing function, while a `break` or `continue` applies to the enclosing loop.

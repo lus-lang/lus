@@ -50,4 +50,5 @@ print(tojson(path))  --> [[3,4],[0,1]]
 
 -- Invalid JSON raises an error, which `catch` turns into a status and a message.
 local ok, err = catch fromjson('{"id": 1043,}')
-print(ok, err)  --> false JSON parse error at position 13: expected string key
+local message = err:gsub("^.-:%d+: ", "")
+print(ok, message)  --> false JSON parse error at position 13: expected string key

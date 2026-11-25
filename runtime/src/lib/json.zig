@@ -70,7 +70,7 @@ const Parser = struct {
         const msg = std.fmt.bufPrint(&tmp, fmt, args) catch "error";
         var out: [220]u8 = undefined;
         const full = std.fmt.bufPrint(&out, "JSON parse error at position {d}: {s}", .{ p.i + 1, msg }) catch "JSON parse error";
-        return p.l.raiseMsg(full);
+        return p.l.raiseFmt("{s}", .{full});
     }
 
     fn ws(p: *Parser) void {

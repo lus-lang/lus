@@ -92,7 +92,7 @@ Invalid input raises an error, which stops the program. `catch` runs an expressi
 
 ```lus
 local ok, err = catch fromjson("{oops")
-print(ok, err)   --> false  JSON parse error at position 2: expected string key in object
+print(ok, err)   --> false  ...: JSON parse error at position 2: expected string key in object
 ```
 
 ## Asking for permission

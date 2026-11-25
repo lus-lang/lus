@@ -28,7 +28,7 @@ The value maps to Lus as follows:
 
 With `exact` set, an integer that overflows 64 bits decodes as a bigint and a number with a fraction or an exponent decodes as a decimal, so [`tojson`](/manual/api#tojson) reproduces the original digits on the way back.
 
-Invalid syntax, trailing data after the value, empty input, a number out of range, and nesting deeper than 1,000 levels raise an error of the form `JSON parse error at position N: MESSAGE`, where the position counts characters from 1.
+Invalid syntax, trailing data after the value, empty input, a number out of range, and nesting deeper than 1,000 levels raise an error of the form `FILE:LINE: JSON parse error at position N: MESSAGE`. `FILE:LINE` is the position of the call of `fromjson`, as in the message of [`error`](/manual/api#error), and `N` counts characters of the text from 1.
 
 ```lus
 local data = fromjson('{"name": "Alice", "scores": [95, 87.5], "note": null}')

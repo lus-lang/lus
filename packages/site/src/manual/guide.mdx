@@ -2107,8 +2107,10 @@ print(ok, settings.port)   --> true  8080
 
 local ok, message = catch fromjson('{"port": ')
 print(ok)        --> false
-print(message)   --> JSON parse error at position 10: unexpected end of input
+print(message)   --> ...: JSON parse error at position 10: unexpected end of input
 ```
+
+The message starts with the file name and the line number of the call, as the message of `error` does. The comment after `print` writes them as `...`.
 
 The program continues after the second `catch` with the error object in `message`. It can print the message, use default settings, or request another file from the user.
 
@@ -2190,7 +2192,7 @@ end
 
 local ok, err = catch[as_table] fromjson("[1, 2")
 print(ok, err.code)   --> false  internal
-print(err.message)    --> JSON parse error at position 6: expected ']' after array element
+print(err.message)    --> ...: JSON parse error at position 6: expected ']' after array element
 
 local ok, err = catch[as_table] error({ code = "timeout" })
 print(ok, err.code)   --> false  timeout
@@ -2343,7 +2345,7 @@ end
 load_settings('{"port": 8080, "hosts": ["a", "b"]}')   --> true  8080  2
 load_settings('{"port": "eighty", "hosts": []}')       --> false  port must be an integer  nil
 load_settings('{"port": ')
---> false  JSON parse error at position 10: unexpected end of input  nil
+--> false  ...: JSON parse error at position 10: unexpected end of input  nil
 ```
 
 The first call succeeds. The second fails the type check, because `math.type` returns `"integer"` only for a number whose subtype is integer. The same `catch` also captures the error that `fromjson` raises in the third call. The statements in the block use the parameter `text` directly, which a separate function would need as an argument.
@@ -4582,7 +4584,7 @@ The error that `fromjson` raises for invalid JSON gives the position of the prob
 
 ```lus
 local ok, problem = catch fromjson("{broken")
-print(ok, problem)  --> false  JSON parse error at position 2: expected string key in object
+print(ok, problem)  --> false  ...: JSON parse error at position 2: expected string key in object
 ```
 
 [`fromcsv`](/manual/api#fromcsv) parses CSV text into a list of rows, each a list of strings. When the second argument is `true`, the first row gives the column names, which become the keys of every other row. Every field is a string, so a program converts numeric fields with `tonumber`. [`tocsv`](/manual/api#tocsv) returns a list of rows as CSV text, with quotes around the fields that need them.

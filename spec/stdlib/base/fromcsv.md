@@ -27,7 +27,7 @@ The parameters control the parse:
 
 Without `headers`, the result is a sequence of rows, and each row is a sequence of strings. With `headers`, the result is a sequence of keyed rows, and a row shorter than the header has `nil` for its missing columns. Every field is a string, so numbers stay text until the program converts them. A quoted field may contain the delimiter, line breaks, and quotes written as `""`. The empty string returns an empty table.
 
-A quoted field without its closing quote raises `CSV parse error at position N: unterminated quoted field`, and a character after a closing quote other than a delimiter or a line ending raises `CSV parse error at position N: unexpected character after quoted field`. Positions count characters from 1. A delimiter that is not exactly one character raises `bad argument #3 to 'fromcsv' (delimiter must be a single character)`.
+A quoted field without its closing quote raises `CSV parse error at position N: unterminated quoted field`, and a character after a closing quote other than a delimiter or a line ending raises `CSV parse error at position N: unexpected character after quoted field`. Each message starts with the position of the call of `fromcsv`, as in the message of [`error`](/manual/api#error), and the position `N` counts characters of the text from 1. A delimiter that is not exactly one character raises `bad argument #3 to 'fromcsv' (delimiter must be a single character)`.
 
 ```lus
 local rows = fromcsv("name,age\nAlice,30\nBob,17\n", true)
