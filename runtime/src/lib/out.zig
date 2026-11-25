@@ -1,6 +1,8 @@
 //! Buffered standard output shared by `print`, `io.write`, and the
 //! runtime's warnings. Flushed when full, before reading standard input,
-//! before writing to standard error, and when the state closes.
+//! before writing to standard error, and when the state closes. The same
+//! moments flush every other file handle that holds buffered output,
+//! which the `io` library lists in `pending`.
 
 const std = @import("std");
 const state = @import("../vm/state.zig");
@@ -11,6 +13,11 @@ pub const Out = struct {
     file: std.Io.File,
     /// The buffering mode set by `setvbuf`.
     mode: Mode = .full,
+    /// The size of the buffer, which `setvbuf` sets.
+    limit: usize = 1 << 16,
+    /// The other file handles that hold buffered output, which
+    /// `flush_pending` writes out.
+    pending: std.ArrayList(*anyopaque) = .empty,
     /// The first write error since the last one `io.write` or `flush`
     /// reported. `print` and the runtime's own writes leave it in place.
     failed: ?anyerror = null,
@@ -23,8 +30,8 @@ pub const Out = struct {
             .no => o.flush(g),
             .line => if (std.mem.indexOfScalar(u8, bytes, '\n') != null) o.flush(g),
         };
-        if (o.buf.items.len + bytes.len > 1 << 16) o.flush(g);
-        if (bytes.len >= 1 << 16) {
+        if (o.buf.items.len + bytes.len > o.limit) o.flush(g);
+        if (bytes.len >= o.limit) {
             o.file.writeStreamingAll(g.io, bytes) catch |e| o.fail(e);
             return;
         }
@@ -67,10 +74,25 @@ pub fn prepare(g: *Global) error{OutOfMemory}!*Out {
     return o;
 }
 
+/// Writes the buffered output of the handles in `pending`. The `io`
+/// library sets it when it opens.
+pub var flush_pending: ?*const fn (g: *Global) void = null;
+
+/// Flushes the standard output alone.
+pub fn flushStdout(g: *Global) void {
+    if (g.ext.get("out.stdout")) |p| {
+        const o: *Out = @ptrCast(@alignCast(p));
+        o.flush(g);
+    }
+}
+
+/// Flushes the standard output, then every other handle with buffered
+/// output.
 pub fn flushAll(g: *Global) void {
     if (g.ext.get("out.stdout")) |p| {
         const o: *Out = @ptrCast(@alignCast(p));
         o.flush(g);
+        if (o.pending.items.len > 0) if (flush_pending) |f| f(g);
     }
 }
 
@@ -78,6 +100,8 @@ pub fn deinit(g: *Global) void {
     if (g.ext.get("out.stdout")) |p| {
         const o: *Out = @ptrCast(@alignCast(p));
         o.flush(g);
+        if (o.pending.items.len > 0) if (flush_pending) |f| f(g);
+        o.pending.deinit(g.gpa);
         o.buf.deinit(g.gpa);
         g.gpa.destroy(o);
         _ = g.ext.remove("out.stdout");

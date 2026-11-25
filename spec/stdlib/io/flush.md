@@ -17,4 +17,4 @@ io.write("buffered\n")   --> buffered
 print(io.flush())        --> true
 ```
 
-`file:flush()` flushes one handle. The runtime also flushes its standard output before [`os.execute`](/manual/api#os.execute) runs a command and before [`os.exit`](/manual/api#os.exit) ends the process.
+`file:flush()` flushes one handle. [`file:setvbuf`](/manual/api#file:setvbuf) sets how a handle buffers its output and lists the moments when the runtime flushes every handle, such as before [`os.execute`](/manual/api#os.execute) runs a command and before [`os.exit`](/manual/api#os.exit) ends the process.

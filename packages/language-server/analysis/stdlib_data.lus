@@ -3024,6 +3024,7 @@ The `catch` expression captures the error object, as [Error handling](/manual/gu
     children = {
       "file:isatty",
       "file:setraw",
+      "file:setvbuf",
       "file:sync",
     },
     kind = "type",
@@ -3110,6 +3111,67 @@ print()
     short_name = "setraw",
     since = "2.0.0",
     source = "stdlib/io/setraw.md",
+    stability = "stable",
+  },
+  ["file:setvbuf"] = {
+    children = {},
+    description = [[
+Sets how a file handle buffers the bytes written to it, and returns `true`.
+
+- `mode` is `"no"`, `"full"`, or `"line"`. In mode `"no"`, each `write` hands its bytes to the operating system before it returns. In mode `"full"`, the handle keeps the bytes in its buffer until the buffer is full or something flushes the handle. Mode `"line"` buffers as `"full"` does and also flushes at the end of each `write` whose bytes contain a line feed.
+- `size` is the size of the buffer in bytes, 65536 by default. A `write` that would overflow the buffer flushes it first. A `write` of at least `size` bytes then goes to the operating system at once.
+
+A handle that `io.open`, `io.popen`, or `io.tmpfile` returns starts in mode `"no"`, as do `io.stdin` and `io.stderr`. `io.stdout` starts in mode `"full"`. A handle flushes its buffer when `file:flush`, `file:sync`, or `file:close` runs, when the collector closes it, and before a read or a seek on the same handle, so a program that reads back what it wrote sees every byte. The runtime also flushes every buffered handle before it reads standard input, before [`os.execute`](/manual/api#os.execute), [`io.popen`](/manual/api#io.popen), [`os.spawn`](/manual/api#os.spawn), and [`os.exit`](/manual/api#os.exit), before it writes to the standard error, and when the program ends. The pipes of `os.spawn` hand every `write` to the operating system at once in each mode, because a full pipe pauses the coroutine that writes to it.
+
+A change of mode flushes the bytes that the old mode buffered. If the operating system refuses that flush, the method returns `nil`, the message, and the number of the error, as a refused write does. A flush that the runtime makes on its own and the system refuses keeps its error on the handle. The next `write`, `flush`, `seek`, or `close` of that handle returns the error. The method needs no permission. A `mode` that is not one of the three raises a `bad argument` error, as does a `size` below 1. A closed handle raises `attempt to use a closed file`.
+
+The following example keeps the lines of a log in the buffer of the handle until `close` writes all three with one system call.
+
+```lus
+pledge("env", "fs")
+local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-setvbuf-example.log")
+local function contents()
+    local f <close> = assert(io.open(path))
+    return f:read("a")
+end
+
+local log = assert(io.open(path, "w"))
+log:setvbuf("full")
+for step = 1, 3 do
+    log:write("step ", step, " done\n")
+end
+print(#contents())     --> 0
+log:close()
+print(#contents())     --> 36
+fs.remove(path)
+```
+
+[`io.flush`](/manual/api#io.flush) flushes the default output. [`file:sync`](/manual/api#file:sync) writes a file through to its storage device.]],
+    kind = "function",
+    module = "io",
+    name = "file:setvbuf",
+    origin = "lua",
+    params = {
+      {
+        name = "mode",
+        type = "string",
+      },
+      {
+        name = "size",
+        optional = true,
+        type = "integer",
+      },
+    },
+    parent = "file",
+    receiver = "file",
+    returns = {
+      {
+        type = "boolean|nil",
+      },
+    },
+    short_name = "setvbuf",
+    since = "0.1.0",
+    source = "stdlib/io/setvbuf.md",
     stability = "stable",
   },
   ["file:sync"] = {
@@ -4317,7 +4379,7 @@ io.write("buffered\n")   --> buffered
 print(io.flush())        --> true
 ```
 
-`file:flush()` flushes one handle. The runtime also flushes its standard output before [`os.execute`](/manual/api#os.execute) runs a command and before [`os.exit`](/manual/api#os.exit) ends the process.]],
+`file:flush()` flushes one handle. [`file:setvbuf`](/manual/api#file:setvbuf) sets how a handle buffers its output and lists the moments when the runtime flushes every handle, such as before [`os.execute`](/manual/api#os.execute) runs a command and before [`os.exit`](/manual/api#os.exit) ends the process.]],
     kind = "function",
     module = "io",
     name = "io.flush",
@@ -9992,16 +10054,16 @@ The sum it divides is computed in floating point in a fixed order. The value at 
   ["table.median"] = {
     children = {},
     description = [[
-Returns the median of the numeric values in the list `array`, as a float.
+Returns the median of the numeric values in the list `array`.
 
-`array` is the list to read, from index 1 to `#array`. Numbers of every subtype count, converted to the nearest float. Strings naming a number count as numeric values and are coerced. Other values are skipped.
+`array` is the list to read, from index 1 to `#array`. Numbers of every subtype count. A bigint or a decimal counts as the nearest float. Strings naming a number count as that number and are coerced. Other values are skipped.
 
-The result is a float. With an odd count of numeric values it is the middle value in sorted order, and with an even count it is the average of the two middle values. A list with no numeric values returns NaN. `array` is not modified, since the values are sorted in a copy.
+With an odd count of numeric values the result is the middle value in sorted order, which is an integer when that value is an integer. With an even count the result is the average of the two middle values, as a float. A list with no numeric values returns NaN. `array` is not modified, since the values are sorted in a copy.
 
 An `array` that is not a table raises `bad argument #1 to 'table.median' (table expected, got nil)` with its type.
 
 ```lus
-print(table.median({3, 1, 2}))        --> 2.0
+print(table.median({3, 1, 2}))        --> 2
 print(table.median({4, 1, 3, 2}))     --> 2.5
 print(table.median({"5", 1, "x"}))    --> 3.0
 print(table.median({}))               --> nan
@@ -10407,22 +10469,23 @@ The mean, and then the sum of squared deviations from it, are each computed in f
   ["table.sum"] = {
     children = {},
     description = [[
-Returns the sum of the numeric values in the list `array`, as a float.
+Returns the sum of the numeric values in the list `array`. The sum of integers is an integer, as with `+`. Any other sum is a float.
 
-`array` is the list to read, from index 1 to `#array`. Numbers of every subtype count, converted to the nearest float. Strings naming a number count as numeric values and are coerced. Other values are skipped.
+`array` is the list to read, from index 1 to `#array`. Numbers of every subtype count. Strings naming a number count as that number and are coerced. Other values are skipped.
 
-The result is always a float, even when every value is an integer. An empty list, or one with no numeric values, returns 0.0.
+When every numeric value is an integer, the result is their exact sum as an integer. An empty list, or one with no numeric values, returns `0`. If a partial sum in index order overflows a 64-bit integer, the result is the float sum. Any float, bigint, or decimal among the values makes the result the float sum, with each value converted to the nearest float.
 
 An `array` that is not a table raises `bad argument #1 to 'table.sum' (table expected, got nil)` with its type.
 
 ```lus
-print(table.sum({1, 2, 3}))           --> 6.0
+print(table.sum({1, 2, 3}))           --> 6
+print(table.sum({1, 2.5}))            --> 3.5
 print(table.sum({0.1, 0.2}))          --> 0.30000000000000004
-print(table.sum({"1", "a", 2, true})) --> 3.0
-print(table.sum({}))                  --> 0.0
+print(table.sum({"1", "a", 2, true})) --> 3
+print(table.sum({}))                  --> 0
 ```
 
-The sum is computed in floating point in a fixed order. The value at index `i` is added into accumulator `(i - 1) % 8`, starting from eight zeros, and the accumulators are then combined pairwise: accumulator `j` with `j + 4` for `j` from 0 to 3, then the first of those four sums with the third and the second with the fourth, and finally those two. The result is therefore the same on every platform and for every way the table is stored. Bigints and decimals lose the digits that a float cannot hold, so an exact total of such values comes from [`table.reduce`](/manual/api#table.reduce) with the `+` operator. [`table.mean`](/manual/api#table.mean) divides the sum by the count.]],
+The float sum is computed in a fixed order. The value at index `i` is added into accumulator `(i - 1) % 8`, starting from eight zeros, and the accumulators are then combined pairwise: accumulator `j` with `j + 4` for `j` from 0 to 3, then the first of those four sums with the third and the second with the fourth, and finally those two. The result is therefore the same on every platform and for every way the table is stored. Bigints and decimals lose the digits that a float cannot hold, so an exact total of such values comes from [`table.reduce`](/manual/api#table.reduce) with the `+` operator. [`table.mean`](/manual/api#table.mean) divides the sum by the count.]],
     fastcall = true,
     kind = "function",
     module = "table",

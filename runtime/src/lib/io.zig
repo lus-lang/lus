@@ -51,6 +51,18 @@ pub const Handle = struct {
     /// A pipe end of `os.spawn` in non-blocking mode, whose reads and
     /// writes wait through the scheduler.
     nonblock: bool = false,
+    /// The buffering mode that `setvbuf` sets. A handle starts writing
+    /// each call through at once, and the standard output keeps its own
+    /// buffer in `out.zig`.
+    wmode: out.Out.Mode = .no,
+    /// The size of the write buffer.
+    wlimit: usize = 1 << 16,
+    /// Output that waits for a flush, and the position in a file where it
+    /// starts.
+    wbuf: std.ArrayList(u8) = .empty,
+    wstart: u64 = 0,
+    /// The error of a flush that no call has reported yet.
+    werr: ?anyerror = null,
 };
 
 const handle_name = "FILE*";
@@ -103,6 +115,7 @@ pub fn open(l: *Thread) Error!void {
     try setDefault(l, "io.output", stdout);
     if (@import("build_options").sqlite) try @import("sqlite.zig").register(l, io_t);
     try aux.setGlobal(l, "io", Value.obj(.table, io_t));
+    out.flush_pending = flushPending;
 }
 
 fn setDefault(l: *Thread, key: []const u8, v: Value) Error!void {
@@ -150,6 +163,7 @@ fn checkHandle(l: *Thread, i: u32) Error!*Handle {
 fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
     const gpa = l.g.gpa;
     if (h.kind == .stdin) out.flushAll(l.g);
+    if (h.wbuf.items.len > 0) if (flushHandle(l.g, h)) |e| return readError(l, h, e);
     while (h.rbuf.items.len - h.rstart < n and !h.eof) {
         if (h.rstart > 0 and h.rstart == h.rbuf.items.len) {
             h.rbuf.clearRetainingCapacity();
@@ -409,28 +423,113 @@ fn doWrite(l: *Thread, h: *Handle, first: u32, self: Value) Error!u32 {
     return aux.ret(l, self);
 }
 
-/// Writes `bytes` to the handle. Returns the error of a write that the
-/// system refused.
+/// Writes `bytes` to the handle, or keeps them in its buffer as its mode
+/// asks. Returns the error of a write that the system refused.
 fn writeBytes(l: *Thread, h: *Handle, bytes: []const u8) ?anyerror {
+    const g = l.g;
+    if (h.kind == .stdout) {
+        const o = out.stdout(g);
+        o.write(g, bytes);
+        return o.takeError();
+    }
+    if (h.werr) |e| {
+        h.werr = null;
+        return e;
+    }
+    if (h.wmode == .no or h.nonblock) {
+        if (h.wbuf.items.len > 0) if (flushHandle(g, h)) |e| return e;
+        return writeThrough(g, h, bytes);
+    }
+    if (h.wbuf.items.len + bytes.len > h.wlimit) if (flushHandle(g, h)) |e| return e;
+    if (bytes.len >= h.wlimit) return writeThrough(g, h, bytes);
+    if (h.wbuf.items.len == 0) {
+        h.wstart = h.pos;
+        out.stdout(g).pending.append(g.gpa, h) catch return error.OutOfMemory;
+    }
+    h.wbuf.appendSlice(g.gpa, bytes) catch {
+        untrack(g, h);
+        return error.OutOfMemory;
+    };
+    if (h.kind == .file) {
+        h.pos += bytes.len;
+        dropReadAhead(h);
+    }
+    if (h.wmode == .line and std.mem.indexOfScalar(u8, bytes, '\n') != null) return flushHandle(g, h);
+    return null;
+}
+
+/// Writes `bytes` to the system at once.
+fn writeThrough(g: *state.Global, h: *Handle, bytes: []const u8) ?anyerror {
     switch (h.kind) {
-        .stdout => {
-            const o = out.stdout(l.g);
-            o.write(l.g, bytes);
-            if (o.takeError()) |e| return e;
-        },
-        .stderr => out.stderr(l.g, bytes),
+        .stdout => unreachable,
+        .stderr => out.stderr(g, bytes),
         .file => {
-            if (h.append) h.pos = h.file.length(l.g.io) catch h.pos;
-            h.file.writePositionalAll(l.g.io, bytes, h.pos) catch |e| return e;
+            if (h.append) h.pos = h.file.length(g.io) catch h.pos;
+            h.file.writePositionalAll(g.io, bytes, h.pos) catch |e| return e;
             h.pos += bytes.len;
-            // Buffered read-ahead is stale after a write.
-            h.rbuf.clearRetainingCapacity();
-            h.rstart = 0;
-            h.eof = false;
+            dropReadAhead(h);
         },
-        else => h.file.writeStreamingAll(l.g.io, bytes) catch |e| return e,
+        else => h.file.writeStreamingAll(g.io, bytes) catch |e| return e,
     }
     return null;
+}
+
+/// Buffered read-ahead is stale after a write.
+fn dropReadAhead(h: *Handle) void {
+    h.rbuf.clearRetainingCapacity();
+    h.rstart = 0;
+    h.eof = false;
+}
+
+/// Writes the buffered output of a handle. Returns the error of a write
+/// that the system refused, or the one an earlier flush recorded.
+fn flushHandle(g: *state.Global, h: *Handle) ?anyerror {
+    if (h.wbuf.items.len == 0) {
+        defer h.werr = null;
+        return h.werr;
+    }
+    untrack(g, h);
+    defer h.wbuf.clearRetainingCapacity();
+    const bytes = h.wbuf.items;
+    switch (h.kind) {
+        .stdout, .stdin => unreachable,
+        .stderr => {
+            out.flushStdout(g);
+            std.Io.File.stderr().writeStreamingAll(g.io, bytes) catch |e| return e;
+        },
+        .file => {
+            const at = if (h.append) h.file.length(g.io) catch h.wstart else h.wstart;
+            h.file.writePositionalAll(g.io, bytes, at) catch |e| return e;
+            if (h.append) h.pos = at + bytes.len;
+        },
+        .pipe => h.file.writeStreamingAll(g.io, bytes) catch |e| return e,
+    }
+    return null;
+}
+
+/// Removes a handle from the list of handles with buffered output.
+fn untrack(g: *state.Global, h: *Handle) void {
+    const p = g.ext.get("out.stdout") orelse return;
+    const o: *out.Out = @ptrCast(@alignCast(p));
+    for (o.pending.items, 0..) |x, i| {
+        if (x == @as(*anyopaque, h)) {
+            _ = o.pending.swapRemove(i);
+            return;
+        }
+    }
+}
+
+/// Flushes every handle with buffered output, for `out.flushAll`. A
+/// refused write stays on its handle until a call on it reports it.
+fn flushPending(g: *state.Global) void {
+    const p = g.ext.get("out.stdout") orelse return;
+    const o: *out.Out = @ptrCast(@alignCast(p));
+    while (o.pending.items.len > 0) {
+        const h: *Handle = @ptrCast(@alignCast(o.pending.items[o.pending.items.len - 1]));
+        if (flushHandle(g, h)) |e| {
+            if (h.werr == null) h.werr = e;
+        }
+    }
 }
 
 /// Writes all of `bytes` to a non-blocking pipe, waiting through the
@@ -518,6 +617,9 @@ pub fn newPipeHandle(l: *Thread, file: std.Io.File, readable: bool, nonblock: bo
 pub fn fileOf(l: *Thread, v: Value) ?std.Io.File {
     const h = toHandle(l, v) orelse return null;
     if (h.closed) return null;
+    if (h.wbuf.items.len > 0) if (flushHandle(l.g, h)) |e| {
+        h.werr = e;
+    };
     return h.file;
 }
 
@@ -525,10 +627,12 @@ pub fn fileOf(l: *Thread, v: Value) ?std.Io.File {
 pub fn closePipe(l: *Thread, v: Value) void {
     const h = toHandle(l, v) orelse return;
     if (h.closed) return;
+    _ = flushHandle(l.g, h);
     h.closed = true;
     if (h.nonblock) sched.forget(l.g, h.file.handle);
     h.file.close(l.g.io);
     h.rbuf.deinit(l.g.gpa);
+    h.wbuf.deinit(l.g.gpa);
 }
 
 // ---------------------------------------------------------------------
@@ -628,12 +732,17 @@ fn closeHandle(l: *Thread, h: *Handle) Error!u32 {
             return 2;
         },
         .pipe => {
+            // A refused flush still closes the pipe, and the close reports
+            // it.
+            const flushed = flushHandle(l.g, h);
+            h.wbuf.deinit(l.g.gpa);
             h.closed = true;
             if (h.child == null) {
                 // A coroutine that waits on the pipe finds it closed.
                 if (h.nonblock) sched.forget(l.g, h.file.handle);
                 h.file.close(l.g.io);
                 h.rbuf.deinit(l.g.gpa);
+                if (flushed) |e| return ioFail(l, e);
                 return aux.retBool(l, true);
             }
             var status: shell.Status = .{ .exited = 0 };
@@ -653,12 +762,16 @@ fn closeHandle(l: *Thread, h: *Handle) Error!u32 {
                 status = shell.wait(l.g.io, c) catch return aux.retNil(l);
             }
             h.rbuf.deinit(l.g.gpa);
+            if (flushed) |e| return ioFail(l, e);
             return pushStatus(l, status);
         },
         .file => {
+            const flushed = flushHandle(l.g, h);
+            h.wbuf.deinit(l.g.gpa);
             h.closed = true;
             h.file.close(l.g.io);
             h.rbuf.deinit(l.g.gpa);
+            if (flushed) |e| return ioFail(l, e);
             return aux.retBool(l, true);
         },
     }
@@ -696,11 +809,14 @@ fn fClose(l: *Thread) Error!u32 {
 fn fGc(l: *Thread) Error!u32 {
     const h = toHandle(l, l.arg(1)) orelse return 0;
     if (!h.closed and (h.kind == .file or h.kind == .pipe)) _ = try closeHandle(l, h);
-    // A standard handle never closes, but its read buffer goes with it.
+    // A standard handle never closes, but its buffers go with it.
     if (h.kind == .stdin or h.kind == .stdout or h.kind == .stderr) {
+        _ = flushHandle(l.g, h);
         h.rbuf.deinit(l.g.gpa);
         h.rbuf = .empty;
         h.rstart = 0;
+        h.wbuf.deinit(l.g.gpa);
+        h.wbuf = .empty;
     }
     return 0;
 }
@@ -742,12 +858,18 @@ fn fWrite(l: *Thread) Error!u32 {
 
 fn fFlush(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
-    if (h.kind == .stdout) {
-        const o = out.stdout(l.g);
-        o.flush(l.g);
-        if (o.takeError()) |e| return ioFail(l, e);
-    }
+    if (flush(l.g, h)) |e| return ioFail(l, e);
     return aux.ret(l, l.arg(1));
+}
+
+/// Flushes any handle, the standard output included.
+fn flush(g: *state.Global, h: *Handle) ?anyerror {
+    if (h.kind == .stdout) {
+        const o = out.stdout(g);
+        o.flush(g);
+        return o.takeError();
+    }
+    return flushHandle(g, h);
 }
 
 /// f:sync(): writes the data and the size of a file through to its
@@ -755,6 +877,7 @@ fn fFlush(l: *Thread) Error!u32 {
 /// not a file has nothing to keep and is only flushed.
 fn fSync(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
+    if (flush(l.g, h)) |e| return ioFail(l, e);
     switch (h.kind) {
         .file => {
             // Windows flushes only through a handle with write access, and a
@@ -763,12 +886,7 @@ fn fSync(l: *Thread) Error!u32 {
                 syncFile(l.g.io, h.file) catch |e| return ioFail(l, e);
             }
         },
-        .stdout => {
-            const o = out.stdout(l.g);
-            o.flush(l.g);
-            if (o.takeError()) |e| return ioFail(l, e);
-        },
-        .pipe, .stdin, .stderr => {},
+        .stdout, .pipe, .stdin, .stderr => {},
     }
     return aux.ret(l, l.arg(1));
 }
@@ -785,11 +903,7 @@ fn ioFlush(l: *Thread) Error!u32 {
     const v = try getDefault(l, "io.output");
     const h = toHandle(l, v).?;
     if (h.closed) return l.raiseFmt("default output file is closed", .{});
-    if (h.kind == .stdout) {
-        const o = out.stdout(l.g);
-        o.flush(l.g);
-        if (o.takeError()) |e| return ioFail(l, e);
-    }
+    if (flush(l.g, h)) |e| return ioFail(l, e);
     return aux.retBool(l, true);
 }
 
@@ -811,17 +925,28 @@ fn fSetraw(l: *Thread) Error!u32 {
     return aux.ret(l, l.arg(1));
 }
 
+/// f:setvbuf(mode [, size]): sets the buffering of the output of a
+/// handle and the size of its buffer. Returns true, or nil, the message,
+/// and the error number of the flush that a change of mode makes.
 fn fSetvbuf(l: *Thread) Error!u32 {
     const h = try checkHandle(l, 1);
-    const mode = try aux.checkOption(l, 2, null, &.{ "no", "full", "line" });
+    const mode: out.Out.Mode = switch (try aux.checkOption(l, 2, null, &.{ "no", "full", "line" })) {
+        0 => .no,
+        1 => .full,
+        else => .line,
+    };
+    const size = try aux.optInt(l, 3, 1 << 16);
+    if (size < 1) return aux.argError(l, 3, "size must be positive", .{});
+    const limit: usize = @intCast(@min(size, 1 << 30));
+    // The output buffered under the old mode goes out first.
+    if (flush(l.g, h)) |e| return ioFail(l, e);
     if (h.kind == .stdout) {
         const o = out.stdout(l.g);
-        o.mode = switch (mode) {
-            0 => .no,
-            1 => .full,
-            else => .line,
-        };
-        if (o.mode != .full) o.flush(l.g);
+        o.mode = mode;
+        o.limit = limit;
+    } else {
+        h.wmode = mode;
+        h.wlimit = limit;
     }
     return aux.retBool(l, true);
 }
@@ -831,6 +956,7 @@ fn fSeek(l: *Thread) Error!u32 {
     const whence = try aux.checkOption(l, 2, "cur", &.{ "set", "cur", "end" });
     const off = try aux.optInt(l, 3, 0);
     if (h.kind != .file) return failResult(l, "Illegal seek");
+    if (flushHandle(l.g, h)) |e| return ioFail(l, e);
     const base: i64 = switch (whence) {
         0 => 0,
         1 => @intCast(h.pos),

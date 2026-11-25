@@ -563,6 +563,100 @@ local function setvbuf_accepts_each_buffering_mode_test(mode)
     f:close()
 end
 
+-- full buffering keeps output in the handle until a flush
+local function full_buffering_keeps_output_until_a_flush_test()
+    reset_streams()
+    local f = io.open(path("vfull.txt"), "w")
+    assert(f:setvbuf("full") == true)
+    f:write("kept")
+    assert(readfile("vfull.txt") == "")
+    assert(f:flush() == f)
+    assert(readfile("vfull.txt") == "kept")
+    f:write(" more")
+    f:close()
+    assert(readfile("vfull.txt") == "kept more")
+end
+
+-- line buffering writes each complete line
+local function line_buffering_writes_each_complete_line_test()
+    reset_streams()
+    local f = io.open(path("vline.txt"), "w")
+    f:setvbuf("line")
+    f:write("first")
+    assert(readfile("vline.txt") == "")
+    f:write(" line\n")
+    assert(readfile("vline.txt") == "first line\n")
+    f:write("second")
+    assert(readfile("vline.txt") == "first line\n")
+    f:write(" line\nthird")
+    assert(readfile("vline.txt") == "first line\nsecond line\nthird")
+    f:setvbuf("no")
+    f:write("!")
+    assert(readfile("vline.txt") == "first line\nsecond line\nthird!")
+    f:close()
+end
+
+-- a buffer that fills writes its contents
+local function a_full_buffer_of_the_given_size_writes_its_contents_test()
+    reset_streams()
+    local f = io.open(path("vsize.txt"), "w")
+    f:setvbuf("full", 4)
+    f:write("ab")
+    assert(readfile("vsize.txt") == "")
+    f:write("cde")
+    assert(readfile("vsize.txt") == "ab")
+    f:close()
+    assert(readfile("vsize.txt") == "abcde")
+end
+
+-- reading and seeking a file see its buffered output
+local function reads_and_seeks_see_buffered_output_test()
+    reset_streams()
+    local f = io.open(path("vrw.txt"), "w+")
+    f:setvbuf("full")
+    f:write("hello")
+    assert(f:seek("end") == 5)
+    assert(f:seek("set", 0) == 0)
+    assert(f:read("a") == "hello")
+    f:write("!")
+    assert(f:seek("set", 0) == 0)
+    assert(f:read("a") == "hello!")
+    f:close()
+end
+
+-- a buffered append writes at the end of the file
+local function a_buffered_append_writes_at_the_end_test()
+    reset_streams()
+    writefile("vapp.txt", "start")
+    local f = io.open(path("vapp.txt"), "a")
+    f:setvbuf("full")
+    f:write(" end")
+    writefile("vapp.txt", "start longer")
+    f:close()
+    assert(readfile("vapp.txt") == "start longer end")
+end
+
+-- the collector flushes a dropped buffered handle
+local function the_collector_flushes_a_dropped_buffered_handle_test()
+    reset_streams()
+    do
+        local f = io.open(path("vgc.txt"), "w")
+        f:setvbuf("full")
+        f:write("dropped")
+    end
+    collectgarbage()
+    collectgarbage()
+    assert(readfile("vgc.txt") == "dropped")
+end
+
+-- setvbuf rejects a size that is not positive
+local function setvbuf_rejects_a_size_that_is_not_positive_test()
+    reset_streams()
+    local f = io.open(path("vbad.txt"), "w")
+    raises(function() f:setvbuf("full", 0) end, "size must be positive")
+    f:close()
+end
+
 -- ============================================
 -- io.lines and file:lines
 -- ============================================
