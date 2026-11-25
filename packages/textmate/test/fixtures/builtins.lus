@@ -1,0 +1,10 @@
+local records = fromjson(text)
+local amount = decimal("19.99")
+local digest = crypto.hash("sha256", data)
+local packed = vector.archive.zstd.compress(bytes)
+local child = os.spawn({ "ls" })
+local copy = table.clone(records)
+local day = time.weekday
+local turn = math.pi
+table.clone = replacement
+local custom = project.vector.archive.zstd.compress(bytes)

@@ -31,18 +31,18 @@
     }
   },
   "indentationRules": {
-    "increaseIndentPattern": "\\b(function|if|for|while|repeat|do|else|elseif)\\b(?!.*\\bend\\b).*$|\\{\\s*$",
+    "increaseIndentPattern": "\\b(function|if|for|while|repeat|do|else|elseif|enum)\\b(?!.*\\bend\\b).*$|\\{\\s*$",
     "decreaseIndentPattern": "^\\s*(end|else|elseif|until|\\})\\s*$"
   },
   "wordPattern": "[a-zA-Z_]\\w*",
   "onEnterRules": [
     {
-      "beforeText": "\\b(function|if|for|while|repeat|do|else|elseif)\\b.*$",
+      "beforeText": "\\b(function|if|for|while|repeat|do|else|elseif|enum)\\b.*$",
       "afterText": "^\\s*end\\b",
       "action": { "indent": "indentOutdent", "appendText": "\t" }
     },
     {
-      "beforeText": "\\b(function|if|for|while|repeat|do|else|elseif)\\b.*$",
+      "beforeText": "\\b(function|if|for|while|repeat|do|else|elseif|enum)\\b.*$",
       "action": { "indent": "indent" }
     }
   ]

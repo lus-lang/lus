@@ -48,6 +48,10 @@
               }
             },
             {
+              "match": "\\.{3}",
+              "name": "constant.language.lus"
+            },
+            {
               "match": "[a-zA-Z_][a-zA-Z0-9_]*",
               "name": "variable.parameter.function.lus"
             },
@@ -78,60 +82,12 @@
       "name": "meta.query.lus",
       "patterns": [
         {
-          "include": "#comment"
-        },
-        {
-          "include": "#string"
-        },
-        {
-          "match": "\\b(where|select|distinct|group|having|order|by|limit|offset|as|asc|desc)\\b",
-          "name": "keyword.control.query.lus"
-        },
-        {
-          "match": "\\b(count|sum|avg|min|max)\\b(?=\\s*\\()",
-          "name": "support.function.query.lus"
-        },
-        {
-          "match": "(?<![\\w\\d.])\\d+(\\.\\d*)?([eE]-?\\d*)?",
-          "name": "constant.numeric.float.lus"
-        },
-        {
-          "match": "\\b(and|or|not|nil|true|false)\\b",
-          "name": "keyword.operator.query.lus"
+          "include": "#query-body"
         }
       ]
     },
     {
-      "match": "(?<![\\w\\d.])(?:0[xX][0-9A-Fa-f]+|\\d+)n\\b",
-      "name": "constant.numeric.integer.bigint.lus"
-    },
-    {
-      "match": "(?<![\\w\\d.])(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?d\\b",
-      "name": "constant.numeric.decimal.lus"
-    },
-    {
-      "match": "(?<![\\w\\d.])0[xX][0-9A-Fa-f]+(\\.[0-9A-Fa-f]*)?([eE]-?\\d*)?([pP][-+]\\d+)?",
-      "name": "constant.numeric.float.hexadecimal.lus"
-    },
-    {
-      "match": "(?<![\\w\\d.])0[xX]\\.[0-9A-Fa-f]+([eE]-?\\d*)?([pP][-+]\\d+)?",
-      "name": "constant.numeric.float.hexadecimal.lus"
-    },
-    {
-      "match": "(?<![\\w\\d.])0[xX][0-9A-Fa-f]+(?![pPeE.0-9])",
-      "name": "constant.numeric.integer.hexadecimal.lus"
-    },
-    {
-      "match": "(?<![\\w\\d.])\\d+(\\.\\d*)?([eE]-?\\d*)?",
-      "name": "constant.numeric.float.lus"
-    },
-    {
-      "match": "(?<![\\w\\d.])\\.\\d+([eE]-?\\d*)?",
-      "name": "constant.numeric.float.lus"
-    },
-    {
-      "match": "(?<![\\w\\d.])\\d+(?![pPeE.0-9])",
-      "name": "constant.numeric.integer.lus"
+      "include": "#number"
     },
     {
       "include": "#string"
@@ -223,6 +179,34 @@
       ]
     },
     {
+      "begin": "\\b(enum)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.lus"
+        }
+      },
+      "end": "\\b(end)\\b",
+      "endCaptures": {
+        "1": {
+          "name": "keyword.control.lus"
+        }
+      },
+      "name": "meta.enum.lus",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
+          "name": "variable.other.enummember.lus"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.enum.lus"
+        }
+      ]
+    },
+    {
       "match": "\\b(break|catch|continue|do|else|end|enum|for|from|if|elseif|goto|in|provide|repeat|return|then|until|while)\\b",
       "name": "keyword.control.lus"
     },
@@ -255,16 +239,8 @@
       "name": "support.function.lus"
     },
     {
-      "match": "(?<![^.]\\.|:)\\b(async)\\b(?!\\s*=(?!=))",
-      "name": "entity.name.tag.lus"
-    },
-    {
       "match": "@@LUS_BUILTIN_QUALIFIED_FUNCTIONS@@",
       "name": "support.function.library.lus"
-    },
-    {
-      "match": "\\b(\\|\\||\\&\\&|\\!)\\b",
-      "name": "keyword.operator.lus"
     },
     {
       "match": "\\b(and|or|not)\\b",
@@ -291,7 +267,7 @@
       "name": "entity.name.function.lus"
     },
     {
-      "match": "\\+|-|%|#|\\*|\\/|\\^|==?|~=|!=|<=?|>=?|(?<!\\.)\\.{2}(?!\\.)|\\?\\.|\\?:|\\?",
+      "match": "\\.{3}|(?<!\\.)\\.{2}(?!\\.)|//|<<|>>|==|~=|<=|>=|\\?\\.|[-+*/%^#&~|<>=?]",
       "name": "keyword.operator.lus"
     }
   ],
@@ -299,7 +275,7 @@
     "escaped_char": {
       "patterns": [
         {
-          "match": "\\\\[abfnrtv\\\\\"'\\n]",
+          "match": "\\\\[abfnrtv\\\\\"'\\n\\r]",
           "name": "constant.character.escape.lus"
         },
         {
@@ -477,21 +453,81 @@
               "name": "comment.line.double-dash.lus"
             }
           ]
-        },
+        }
+      ]
+    },
+    "query-body": {
+      "patterns": [
         {
-          "begin": "\\/\\*",
+          "begin": "\\(",
+          "end": "\\)",
           "beginCaptures": {
             "0": {
-              "name": "punctuation.definition.comment.begin.lus"
+              "name": "punctuation.section.parens.begin.lus"
             }
           },
-          "end": "\\*\\/",
           "endCaptures": {
             "0": {
-              "name": "punctuation.definition.comment.end.lus"
+              "name": "punctuation.section.parens.end.lus"
             }
           },
-          "name": "comment.block.lus"
+          "patterns": [
+            {
+              "include": "#query-body"
+            }
+          ]
+        },
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "match": "\\b(where|select|distinct|group|having|order|by|limit|offset|as|asc|desc)\\b",
+          "name": "keyword.control.query.lus"
+        },
+        {
+          "match": "\\b(count|sum|avg|min|max)\\b(?=\\s*\\()",
+          "name": "support.function.query.lus"
+        },
+        {
+          "match": "\\b(and|or|not|nil|true|false)\\b",
+          "name": "keyword.operator.query.lus"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "match": "(?<!\\w)(?<![^.]\\.)(?:0[xX][0-9A-Fa-f](?:_?[0-9A-Fa-f])*|\\d(?:_?\\d)*)n\\b",
+          "name": "constant.numeric.integer.bigint.lus"
+        },
+        {
+          "match": "(?<!\\w)(?<![^.]\\.)(?:\\d(?:_?\\d)*(?:\\.(?:\\d(?:_?\\d)*)?)?|\\.\\d(?:_?\\d)*)(?:[eE][-+]?\\d(?:_?\\d)*)?d\\b",
+          "name": "constant.numeric.decimal.lus"
+        },
+        {
+          "match": "(?<!\\w)(?<![^.]\\.)0[xX](?:(?:[0-9A-Fa-f](?:_?[0-9A-Fa-f])*(?:\\.(?:[0-9A-Fa-f](?:_?[0-9A-Fa-f])*)?)?|\\.[0-9A-Fa-f](?:_?[0-9A-Fa-f])*)[pP][-+]?\\d(?:_?\\d)*|[0-9A-Fa-f](?:_?[0-9A-Fa-f])*\\.(?:[0-9A-Fa-f](?:_?[0-9A-Fa-f])*)?|\\.[0-9A-Fa-f](?:_?[0-9A-Fa-f])*)",
+          "name": "constant.numeric.float.hexadecimal.lus"
+        },
+        {
+          "match": "(?<!\\w)(?<![^.]\\.)0[xX][0-9A-Fa-f](?:_?[0-9A-Fa-f])*(?![\\w.])",
+          "name": "constant.numeric.integer.hexadecimal.lus"
+        },
+        {
+          "match": "(?<!\\w)(?<![^.]\\.)(?:\\d(?:_?\\d)*\\.(?!\\.)(?:\\d(?:_?\\d)*)?(?:[eE][-+]?\\d(?:_?\\d)*)?|\\.\\d(?:_?\\d)*(?:[eE][-+]?\\d(?:_?\\d)*)?|\\d(?:_?\\d)*[eE][-+]?\\d(?:_?\\d)*)",
+          "name": "constant.numeric.float.lus"
+        },
+        {
+          "match": "(?<!\\w)(?<![^.]\\.)\\d(?:_?\\d)*(?![\\w.])",
+          "name": "constant.numeric.integer.lus"
         }
       ]
     }

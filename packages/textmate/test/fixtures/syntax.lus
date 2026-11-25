@@ -1,0 +1,95 @@
+#!/usr/bin/env lus
+global Config <const>, counter
+global *
+pledge("fs:read", "network")
+
+-- A line comment.
+--[[ A long comment
+over two lines. ]]
+--[==[ A long comment ]] with a level. ]==]
+
+local integer, separated, float, exponent = 42, 1_000_000, 3.25, 1.5e-3
+local hex, hex_float, big, big_hex, exact = 0xff_ff, 0x1.8p1, 12345678901234567890n, 0xffn, 1.25d
+
+local single, double = 'it\'s', "tab\tnewline\n\x41\u{e9}\065"
+local long = [==[raw ]] text]==]
+local name = "Lus"
+local greeting = `hello, $name! $(#name) letters, $$5, \` and \$`
+local nested = `outer $(`inner $(1 + 1)`) done`
+local block = `first line
+second line $(name)`
+
+local Direction = enum North, East, South, West end
+local x, y from point
+for key, value from pairs_source do
+end
+
+local total <const> = 10
+local handle <close> = io.open("data.txt")
+local settings <group> = { width = 80, height <const> = 24 }
+local cached <lazy> = expensive()
+local doubled <observe> = total * 2
+local request_id <context> = 0
+local checked <only "number"> = 1
+
+local ok, err = catch risky()
+local value = catch[function(e) return e end] risky()
+catch cleanup()
+
+local street = person?.address?.street
+local maybe = callback?()
+local item = list?[1]
+
+local middle, head, tail = list[2, 4], list[, 3], list[2,]
+
+if found = lookup(key) then
+    print(found)
+elseif other <const> = fallback() then
+    print(other)
+end
+
+while line = reader() do
+    if line == "" then
+        continue
+    end
+end
+
+local result = do
+    local partial = 1 // 2 + 3 % 4 ^ 5
+    provide partial .. "!" , #list
+end
+
+local bits = (1 << 4) | (0xf0 >> 2) & ~3 ~ 5
+local same = 1 ~= 2 and 3 <= 4 or not (5 >= 6)
+
+local rows = @people as p
+    where p.age >= 18 and p.name ~= nil
+    group by p.city
+    having count(*) > 1
+    select distinct p.city as city, avg(p.age) as age
+    order by age desc
+    limit 10
+    offset 0
+
+function Config.load(path, ...)
+    local args = { ... }
+    return self, args
+end
+
+function Config:save(...rest)
+    return self.path, rest
+end
+
+local function helper(a, b)
+    goto done
+    ::done::
+    return a + b
+end
+
+global function exported()
+    return flags.debug, _ENV
+end
+
+repeat
+    counter = counter + 1
+until counter > 3
