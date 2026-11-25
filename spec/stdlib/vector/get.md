@@ -18,7 +18,7 @@ Returns the byte at a zero-based offset of a vector as an integer from 0 to 255,
 - `v` is the vector to read.
 - `offset` is the zero-based position of the byte, an integer.
 
-An offset below 0, or at or after the size of the vector, returns `nil`. A `v` that is not a vector raises `bad argument #1 to 'get' (vector expected)`, and a missing or non-integer `offset` raises `bad argument #2 to 'get'`.
+An offset below 0, or at or after the size of the vector, returns `nil`. Offsets of the `vector` functions count from 0, while a slice `v[i, j]` counts from 1 and includes `j`, as [Slices](/manual/guide#slices) describes. `vector.get(v, 0)` therefore reads the byte that the slice `v[1, 1]` holds. A `v` that is not a vector raises `bad argument #1 to 'get' (vector expected)`, and a missing or non-integer `offset` raises `bad argument #2 to 'get'`.
 
 The following example reads bytes inside and outside a vector.
 

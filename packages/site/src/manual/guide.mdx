@@ -4509,6 +4509,16 @@ local width, height = vector.unpack(header, 0, ">I4I4")
 print(width, height)                            --> 640  480
 ```
 
+Two conventions number the bytes of a vector. A [slice](#slices) `v[i, j]` counts from 1 and includes `j`, as every slice does. The functions of the `vector` library take offsets, which count from 0 and stop before the end of a range, as the offsets of a binary file format do. [`vector.find`](/manual/api#vector.find) returns the offset where a sequence of bytes starts. `vector.tostring(v, i, j)` decodes the bytes from offset `i` up to offset `j`, without the byte at `j`. The following example reads the method of an HTTP request line both ways. The space is at offset 3, which is the fourth byte, so the three bytes before it are the slice `line[1, 3]`.
+
+```lus
+local line = vector.fromstring("GET /index.html")
+local space = vector.find(line, " ")
+print(space)                              --> 3
+print(vector.tostring(line, 0, space))    --> GET
+print(vector.tostring(line[1, space]))    --> GET
+```
+
 [`vector.fromstring`](/manual/api#vector.fromstring) returns the bytes that encode a string, which [`vector.tostring`](/manual/api#vector.tostring) decodes back into text. The byte count of a string differs from its character count when the text has characters outside ASCII.
 
 ```lus

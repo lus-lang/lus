@@ -27,7 +27,7 @@ Decodes a range of bytes of a vector as WTF-8 text and returns the string.
 - `j` is the offset just past the last byte to decode. It defaults to the size of the vector.
 - `mode` is `"strict"` or `"lossy"`. It defaults to `"strict"`.
 
-Both offsets are clamped to the vector, and a range with `j` at or before `i` gives the empty string. With `mode` set to `"strict"`, input that is not valid WTF-8 raises `invalid UTF-8 at byte N`, where `N` is the offset of the first invalid sequence. With `mode` set to `"lossy"`, each invalid sequence becomes U+FFFD. Any other `mode` raises an error that names it, such as `bad argument #4 to 'tostring' (invalid option 'raw')`, and a `v` that is not a vector raises `bad argument #1 to 'tostring' (vector expected)`.
+Both offsets are clamped to the vector, and a range with `j` at or before `i` gives the empty string. Offsets of the `vector` functions count from 0, while a slice `v[i, j]` counts from 1 and includes `j`, as [Slices](/manual/guide#slices) describes. For `j` greater than `i`, `vector.tostring(v, i, j)` therefore decodes the same bytes as `vector.tostring(v[i + 1, j])`. With `mode` set to `"strict"`, input that is not valid WTF-8 raises `invalid UTF-8 at byte N`, where `N` is the offset of the first invalid sequence. With `mode` set to `"lossy"`, each invalid sequence becomes U+FFFD. Any other `mode` raises an error that names it, such as `bad argument #4 to 'tostring' (invalid option 'raw')`, and a `v` that is not a vector raises `bad argument #1 to 'tostring' (vector expected)`.
 
 The following example decodes a whole vector, a prefix, and a prefix that cuts a character in half.
 
