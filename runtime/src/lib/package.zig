@@ -150,6 +150,9 @@ pub fn searchSep(l: *Thread, name: []const u8, path: []const u8, sep: []const u8
     var it = std.mem.splitScalar(u8, path, ';');
     var first = true;
     while (it.next()) |tmpl| {
+        // An empty template, such as the whole of an empty path, names no
+        // file.
+        if (tmpl.len == 0) continue;
         const file = std.mem.replaceOwned(u8, gpa, tmpl, "?", mod) catch return l.raiseMem();
         if (pledge.allowed(l, "fs:read", file)) {
             if (std.Io.Dir.cwd().statFile(io, file, .{})) |st| {

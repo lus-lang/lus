@@ -385,10 +385,13 @@ local function a_failed_search_lists_every_tried_candidate_test()
     assert_has(msg, "no file 'tree/b/nope.lus'")
 end
 
-local function an_empty_path_yields_a_single_empty_candidate_test()
+local function an_empty_path_yields_no_candidate_test()
     local found, msg = package.searchpath("n", "")
     assert(found == nil)
-    assert(string.find(tostring(msg), "no file ''"))
+    assert(msg == "", msg)
+    -- An empty template between separators names no file either.
+    local _, msg2 = package.searchpath("n", "a/?.lus;;b/?.lus")
+    assert(not string.find(msg2, "no file ''", 1, true), msg2)
 end
 
 -- searchpath silently skips files outside the fs:read pledge. The fixture
