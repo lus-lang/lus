@@ -429,6 +429,11 @@ fn androidLibc(b: *std.Build, target: std.Build.ResolvedTarget) void {
         if (c.kind == .lib or c.kind == .obj) continue;
         if (static) {
             c.linkage = .static;
+            // The static `dl_iterate_phdr` of bionic finds the program
+            // headers through `__executable_start`, which LLD defines at
+            // the ELF header and the ELF linker of Zig leaves undefined.
+            c.use_lld = true;
+            c.use_llvm = true;
         } else {
             // Android loads only executables that are independent of
             // their position.

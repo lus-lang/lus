@@ -418,7 +418,10 @@ const elf_bounds = struct {
     extern const _end: u8;
 };
 /// Whether the C library can name the image and the symbol of an address.
-const has_dladdr = builtin.link_libc and builtin.os.tag != .windows;
+/// The static bionic of Android keeps `dladdr` in a `libdl.a` that the
+/// static build leaves out (`build.zig`, `androidLibc`).
+const has_dladdr = builtin.link_libc and builtin.os.tag != .windows and
+    !(builtin.abi.isAndroid() and builtin.link_mode == .static);
 const DlInfo = extern struct {
     fname: ?[*:0]const u8,
     fbase: ?*anyopaque,
