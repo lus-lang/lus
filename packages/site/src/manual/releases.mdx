@@ -87,9 +87,21 @@ gh attestation verify lus-v2.0.0-x86_64-linux-musl.tar.gz --repo lus-lang/lus
 
 `gh attestation verify` prints the workflow and the commit that built the file. It exits with a nonzero status when the file has no attestation from the repository. A file unpacked from an archive, such as `bin/lus` or `bin/lus-runtime.lo`, is checked the same way.
 
+## Code signatures
+
+The `lus` binary and the shared library of each macOS archive carry a Developer ID signature and are notarized by Apple. A bare binary cannot hold a stapled notarization ticket, so Gatekeeper looks the notarization up online the first time the binary runs. The following command prints the signature of an unpacked binary.
+
+```bash
+codesign --display --verbose=2 lus/bin/lus
+```
+
+On Windows, `lus.exe` and `lus.dll` in both archives, `lus-setup.exe`, and the uninstaller that it installs carry an Authenticode signature, which the Digital Signatures tab of the file's properties shows. In PowerShell, `Get-AuthenticodeSignature lus-setup.exe` prints the signer and the status of the signature.
+
+`lus-runtime` keeps the signature that the build gives it, an ad hoc signature on macOS and none on Windows, because `lus build` writes its executables from it. On macOS `lus build` signs each executable ad hoc. A program meant for distribution is signed with the certificate of its developer.
+
 ## How a release is made
 
-A stable release is one run of the release workflow of the repository. The run stops unless the continuous integration passed on its commit and the last nightly run passed. It then runs every check of the continuous integration on every runner. The build runs the full test suite, including the conformance suite and the documentation examples, before it compiles any target. After the tests it cross-compiles every archive, builds `lus.wasm` and the Windows installer, tests that the installer installs and uninstalls, attests the provenance of every file, and writes `SHA256SUMS`. A maintainer approves the run before it tags the release and publishes it with the VSCode extension, the `lus-wasm` package, and the signed index that `lus version` reads.
+A stable release is one run of the release workflow of the repository. The run stops unless the continuous integration passed on its commit and the last nightly run passed. It then runs every check of the continuous integration on every runner. The build runs the full test suite, including the conformance suite and the documentation examples, before it compiles any target. After the tests it cross-compiles every target and builds `lus.wasm`. After a maintainer approves the run, it signs and notarizes the macOS binaries, signs the Windows binaries, and builds, signs, and tests the Windows installer. The archives are written from the signed files. The run attests the provenance of every file and writes `SHA256SUMS`. It then tags the release and publishes it with the VSCode extension and the signed index that `lus version` reads.
 
 ## Versioning
 

@@ -8,17 +8,19 @@ name: Ship
 #      writes the changes of the release commit (tools/release-version.mjs
 #      release).
 #   2. full runs every job of full.yml on the commit, as the nightly run
-#      does. build runs release.yml on it, which tests it, builds every
-#      target, lus.wasm, the VSIX, and the Windows installer, and attests
-#      the provenance of each file.
-#   3. github waits for the approval of the environment release, then
-#      pushes the tag vX.Y.Z and publishes the release as the latest,
-#      which install.sh and lus-setup.exe download. The tag points to the
-#      release commit, whose parent is the commit of the run. No branch
-#      holds the release commit.
-#   4. index, vscode, and npm add the release to the signed index of
-#      `lus version`, publish the VSIX to Open VSX, and publish lus-wasm to
-#      npm.
+#      does. build runs release.yml on it, which tests it and builds every
+#      target, lus.wasm, the VSIX, and the Windows installer. Its signing
+#      jobs run in the environment release, so a real release waits there
+#      for the approval of a reviewer. They sign and notarize the macOS
+#      binaries and sign the Windows binaries and the installer. The
+#      archives are written from the signed files, and every file is
+#      attested.
+#   3. github pushes the tag vX.Y.Z and publishes the release as the
+#      latest, which install.sh and lus-setup.exe download. The tag points
+#      to the release commit, whose parent is the commit of the run. No
+#      branch holds the release commit.
+#   4. index and vscode add the release to the signed index of `lus
+#      version` and publish the VSIX to Open VSX.
 #   5. next opens a pull request that brings the dated changelog and the
 #      news page of the release to the branch and starts X.(Y+1).0-dev.
 #      The site deploys from the branch, so merging it publishes the news
@@ -39,10 +41,11 @@ name: Ship
 # what it would publish. A push to rewrite that changes the release
 # workflows or tools runs a dry run as well.
 #
-# The secrets are LUS_APP_ID and LUS_APP_PRIVATE_KEY (the Lus app),
-# LUS_RELEASE_SIGNING_SEED and LUS_RELEASE_SIGNING_KEY_ID
-# (release-index.yml), OVSX_PAT (publish-vscode.yml), and NPM_TOKEN, an
-# npm automation token that can publish lus-wasm.
+# The secrets of the repository are LUS_APP_ID and LUS_APP_PRIVATE_KEY
+# (the Lus app), LUS_RELEASE_SIGNING_SEED and LUS_RELEASE_SIGNING_KEY_ID
+# (release-index.yml), and OVSX_PAT (publish-vscode.yml). The settings of
+# code signing belong to the environment release, which
+# packaging/release/README.md lists.
 
 on:
   workflow_dispatch:
@@ -114,7 +117,6 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           LUS_APP_ID: ${{ secrets.LUS_APP_ID }}
           LUS_APP_PRIVATE_KEY: ${{ secrets.LUS_APP_PRIVATE_KEY }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
           LUS_RELEASE_SIGNING_SEED: ${{ secrets.LUS_RELEASE_SIGNING_SEED }}
           LUS_RELEASE_SIGNING_KEY_ID: ${{ secrets.LUS_RELEASE_SIGNING_KEY_ID }}
@@ -158,7 +160,7 @@ jobs:
           fi
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then problems+=("the tag $TAG exists"); fi
           if gh release view "$TAG" >/dev/null 2>&1; then problems+=("the release $TAG exists"); fi
-          for secret in LUS_APP_ID LUS_APP_PRIVATE_KEY NPM_TOKEN OVSX_PAT LUS_RELEASE_SIGNING_SEED LUS_RELEASE_SIGNING_KEY_ID; do
+          for secret in LUS_APP_ID LUS_APP_PRIVATE_KEY OVSX_PAT LUS_RELEASE_SIGNING_SEED LUS_RELEASE_SIGNING_KEY_ID; do
             if [ -z "${!secret}" ]; then problems+=("the secret $secret is not set"); fi
           done
           if [ ! -f packaging/release/keys.json ]; then problems+=("packaging/release/keys.json is missing"); fi
@@ -202,6 +204,11 @@ jobs:
       patch: ship-patch
       publish: false
       attest: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
+      # The signing jobs of a real release wait for a reviewer of the
+      # environment release, which also holds the signing settings. That
+      # approval is the only one, and every later job publishes only
+      # after them.
+      environment: ${{ (github.event_name == 'workflow_dispatch' && !inputs.dry_run) && 'release' || '' }}
     secrets: inherit
 
   # Every job of full.yml runs before the tag, as it does each night.
@@ -216,9 +223,6 @@ jobs:
   github:
     name: Publish the GitHub release
     needs: [prepare, build, full]
-    # A real release waits here for a reviewer of the environment release.
-    # Every later job publishes only after this one.
-    environment: ${{ (github.event_name == 'workflow_dispatch' && !inputs.dry_run) && 'release' || '' }}
     runs-on: ubuntu-24.04
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
@@ -324,66 +328,9 @@ jobs:
       dry_run: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
     secrets: inherit
 
-  npm:
-    name: Publish lus-wasm to npm
-    needs: [prepare, github]
-    runs-on: ubuntu-24.04
-    env:
-      VERSION: ${{ needs.prepare.outputs.version }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          registry-url: "https://registry.npmjs.org"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: ship-patch
-          path: ${{ runner.temp }}/patch
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-build
-          path: ${{ runner.temp }}/build
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: ship-sums
-          path: ${{ runner.temp }}/sums
-      - name: Stage the package
-        shell: bash
-        run: |
-          set -euo pipefail
-          git apply "$RUNNER_TEMP/patch/release.patch"
-          test "$(node -p 'require("./packages/wasm/package.json").version')" = "$VERSION"
-          # The package carries the lus.wasm of the release, byte for byte.
-          (cd "$RUNNER_TEMP/build" && grep ' lus.wasm$' "$RUNNER_TEMP/sums/SHA256SUMS" | sha256sum --check --strict)
-          mkdir -p packages/wasm/dist packages/wasm/licenses
-          cp "$RUNNER_TEMP/build/lus.wasm" packages/wasm/dist/lus.wasm
-          cp LICENSE.md packages/wasm/LICENSE.md
-          cp packaging/notices/THIRD_PARTY_NOTICES.WASM.md packages/wasm/THIRD_PARTY_NOTICES.md
-          for license in BROTLI LUA LUALS SQLITE TZDATA UNICODE WASI-LIBC ZIG ZSTD; do
-            cp "packaging/licenses/LICENSE.$license.txt" packages/wasm/licenses/
-          done
-      - name: Test the package
-        working-directory: packages/wasm
-        run: node --test
-      - name: Publish
-        working-directory: packages/wasm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "$DRY_RUN" = true ]; then
-            npm publish --dry-run --access public
-          else
-            npm publish --provenance --access public
-          fi
-
   next:
     name: Open the pull request of the next version
-    needs: [prepare, github, index, vscode, npm]
+    needs: [prepare, github, index, vscode]
     runs-on: ubuntu-24.04
     env:
       TAG: ${{ needs.prepare.outputs.tag }}

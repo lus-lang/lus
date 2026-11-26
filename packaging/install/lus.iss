@@ -1,11 +1,13 @@
 ; Inno Setup script for the Lus Windows installer (lus-setup.exe).
 ;
-; The windows-installer job in .github/workflows/release.yml unpacks the
-; x86_64-windows release archive into the archive directory beside this
+; The sign-windows job in .github/workflows/release.yml copies the
+; x86_64-windows release tree into the archive directory beside this
 ; file and compiles the installer with
 ;   ISCC.exe /DAppVer=2.0.0 /DNumVer=2.0.0 /O<outdir> lus.iss
 ; AppVer is the release version and NumVer its numeric x.y.z part, which
-; the Windows version resource requires.
+; the Windows version resource requires. A signed release adds /DSign and
+; the sign tool lus, /Slus=COMMAND, which signs the uninstaller and then
+; lus-setup.exe.
 ;
 ; The installer lays the release out as the Lus home that `lus version`
 ; manages (spec/tools/version.md). It copies the archive as it is into
@@ -55,6 +57,10 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\bin\lus.exe
+#ifdef Sign
+SignTool=lus
+SignedUninstaller=yes
+#endif
 
 [Files]
 Source: "{#Archive}\*"; DestDir: "{app}\versions\{#AppVer}"; Excludes: "*.pdb"; \

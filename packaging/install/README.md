@@ -40,10 +40,12 @@ SHA-256 digest of every asset in `SHA256SUMS`.
   `LUS_NO_MODIFY_PATH=1`) is given. No step needs `sudo`.
 
 - **`lus.iss`** is the Inno Setup script for `lus-setup.exe`, the Windows
-  installer. The `windows-installer` job of the release workflow unpacks
-  the `x86_64-windows` archive into `packaging/install/archive`, compiles
-  the script with ISCC, and round-trips a silent install and uninstall as a
-  smoke test before the installer joins the draft release. The installer
+  installer. The `sign-windows` job of the release workflow signs the
+  binaries of the `x86_64-windows` tree, copies the tree into
+  `packaging/install/archive`, and compiles the script with ISCC, which
+  signs the uninstaller and the installer. The job then round-trips a
+  silent install and uninstall as a smoke test before the installer joins
+  the release. The installer
   lays the archive out as the Lus home: it copies the archive into
   `versions\<version>`, copies `lus.exe` to `bin`, writes `default` and
   the `channel` file, and adds `bin` to `PATH`. Installation is per user
