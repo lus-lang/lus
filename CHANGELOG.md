@@ -4,100 +4,241 @@
 
 **Release date:** TBD
 
-Lus 2.0 is a new runtime written in Zig. It keeps every language feature and library of 1.6 and runs the same scripts, permissions, and command line pledges, apart from the removals listed below.
+Lus 2.0 is a new runtime with a compiler to machine code, a new garbage collector, a new embedding interface, and a set of tools in the `lus` command. It keeps the language features, the libraries, the permissions, and the command line pledges of Lus 1.6. A program written for Lus 1.6 runs once it accounts for the changed, deprecated, and removed entries of this release.
 
 ### Language
 
-- Added the `continue` statement, which starts the next iteration of the innermost `for`, `while`, or `repeat` loop. In a `repeat` loop it jumps to the `until` condition. `continue` is now a reserved word.
-- Added bigint and decimal numbers as subtypes of `number`, written with the literal suffixes `n` (`123n`, `0xffn`) and `d` (`1.50d`, `1e-2d`). The virtual machine handles them in every arithmetic, bitwise, and comparison operator, they compare by mathematical value with integers and floats, and they normalize to the same table keys. Mixing a decimal and a float raises an error that asks for an explicit conversion.
-- Added the `bigint` and `decimal` conversion functions. `math.type` reports `"bigint"` and `"decimal"`, and `math.tointeger` accepts every subtype.
-- Added the `{ exact = true }` option to `fromjson`, which decodes wide integers as bigints and fractional numbers as decimals. `tojson` writes both with their exact digits.
-- Strings are now well formed WTF-8 text, and every string function counts characters. `#s`, `string.len`, `string.sub`, slices, `string.find`, `string.match`, `string.gmatch`, and `string.gsub` use character positions. `string.byte` returns code points, `string.char` takes code points, and patterns match whole characters. A string literal must decode as text.
-- Raw bytes are now vectors throughout the standard library. `string.pack`, `string.dump`, the `vector.archive` compressors and decompressors, byte encodings of `string.transcode`, binary file reads, TCP and UDP receives, and the body returned by `network.fetch` all produce vectors, and the functions that read bytes accept them.
-- Added `vector.fromstring`, `vector.tostring` with strict and lossy decoding, `vector.get`, and `vector.set`.
-- Files opened in text mode validate what they read, and the option `{ lossy = true }` of `io.open` replaces invalid sequences with U+FFFD. Files opened in binary mode read vectors.
-- `load` accepts a vector produced by `string.dump` as a binary chunk.
-- Interpolating a vector raises an error that points to `vector.tostring`.
-- Added queries. The `@` expression builds a lazy query value with the contextual clauses `where`, `select distinct`, `group by`, `having`, `order by`, `limit`, and `offset`. The `query` iterator runs it over plain tables in memory or pushes it down to SQLite as parameterized SQL, and `debug.queryplan` renders the provider and push-down decisions of a query as a string.
-- Added the read-only `flags` table, populated from the `-F name[=value]` and `--flag` options, and folded at compile time in `if flags.x then` conditions.
-- Added the `time` module with immutable `instant`, `duration`, and `zoned` types, which keep exact instant arithmetic separate from calendar arithmetic. `zoned:with{}` replaces fields and `zoned:add{}` adds calendar amounts with day clamping, both correct across daylight saving changes. `time.parse` reads ISO 8601 strings and explicit `strftime` patterns.
-- Added time zones to the `time` module, resolved from an IANA tzdata database embedded in the runtime: named zones (`time.zone`), fixed offsets (`time.offset`), and the system zone (`time.localzone`), all without filesystem access. The trailing POSIX rule keeps offsets correct past the last explicit transition.
-- Added the `time.weekday` and `time.month` enums. `zoned.weekday` is a weekday member, and a month member is accepted wherever a month number is.
-- Added `io.sqlite`, an embedded SQLite database with prepared statements, placeholder-only parameter binding, transactions, WAL journaling, and pledge-checked file access that covers the sidecar files.
-- Added `getsockname` to TCP sockets, TCP servers, and UDP sockets, so code that binds port `0` can discover the selected address and port.
-- TCP line and all-data receives are bounded. Lines default to 1 MiB and all-data reads to 64 MiB, and the optional `max_bytes` argument sets the limit per call.
-- Added detached coroutines. `coroutine.detach(co, ...)` hands a coroutine to the runtime, which resumes it whenever what it waits for is ready. Inside a detached coroutine `coroutine.yield` gives the next turn to the others, `coroutine.resume` on a detached coroutine waits for its end and returns what `resume` returns for any coroutine that ends, and `coroutine.close` cancels it. A detached coroutine that fails with nothing left to collect its error stops the program with that error and its traceback.
-- TCP `connect`, `accept`, `send`, and `receive` and UDP `receive` and `sendto` are suspension points. Inside a detached coroutine they suspend the coroutine while its socket is not ready, and anywhere else they run the detached coroutines while their caller waits. Socket timeouts raise the same errors as before.
-- Added `network.serve(host, port, handler)`, an HTTP/1.1 server with keep-alive that runs every connection in a detached coroutine. The handler receives `{ method, path, query, headers, body }` and returns `status, body, headers`. It reads `Content-Length` and chunked request bodies, answers 500 when the handler fails, and limits headers to 64 KiB and bodies to 16 MiB. `network.serve(server, handler)` serves on a server from `network.tcp.bind`. An options table sets `idle_timeout`, `max_connections`, and `on_error`. Connections that make no progress for 60 seconds close, and handler errors go to standard error.
-- A `network.serve` handler upgrades its connection by returning 101 and a function, which receives the socket once the response is sent. A request with `Sec-WebSocket-Key` gets the WebSocket handshake headers, so a WebSocket shares the port of the HTTP routes.
-- A header value in a `network.serve` response or a `network.fetch` request may be a list, which sends one header line per element, as several `Set-Cookie` lines need.
-- Added `os.setenv(name, value)`, which sets or removes an environment variable under the new `env:write` permission. `os.getenv` checks `env:read`, and `env` grants both. Child processes see the changes, and each worker starts with a copy of the environment of its creator.
-- Added `os.pid()`, which returns the id of the process as an integer and needs no permission.
-- Added the file methods `isatty` and `setraw`. `setraw` switches a terminal to raw input for key-by-key prompts, on Windows through virtual terminal input, and the process restores the terminal when it ends.
-
-### Tools
-
-- Added `lus test`, a built-in test runner. Functions ending in `_test` in `*_test.lus` files are tests, a local `NAME_cases` table runs a test once per case, `assert` reports the values of a failed comparison, and the helpers `raises`, `same`, `skip`, and `snapshot` cover errors, structural equality, skipped tests, and recorded output. `TEST_DIR` names the directory of the test file and `LUS_EXE` the running interpreter. Each file runs in its own process and temporary directory, and files run in parallel.
-- Added `lus fmt`, which formats source files with `--check`, `--write`, and `--indent`.
-- Added `lus check`, which reports compile errors and lint warnings with stable codes, in text or JSON. Its warnings include the Lua idioms that a Lus feature expresses directly.
-- Added `lus doc`, which generates Markdown or JSON reference documentation from `---` doc comments with `@param`, `@return`, `@since`, and `@stability` annotations.
-- Added `lus ast`, which prints the syntax tree of a file as JSON.
-- Added `lus build`, which bundles a script and the modules it requires into a standalone executable, with `-o`, `-P`, `-F`, and `--include`.
-- Added `lus debug`, a Debug Adapter Protocol server with conditional breakpoints, hit counts, log points, error breakpoints, stepping through coroutines, pausing, and inspection of locals, upvalues, globals, and expressions. The VS Code extension registers it as the `lus` debugger.
-- Added `lus compile`, which writes a script as a binary chunk, with `-o`, `-s`, and `-F`.
-- Added `--dis`, which prints the bytecode of a script.
-- `--include path[:alias]` compiles modules at startup, so `require` loads them without the `load` or `fs` pledges.
-- The browser playground runs programs in a dedicated Web Worker with a five-second execution limit and a 256 KiB output limit.
-- `lus` keeps running the detached coroutines of a program after its main chunk returns, until every one of them has ended.
-- The language server reports its version as `2.0.0-dev`.
-
-### Embedding
-
-- Added `lus.h`, the C embedding interface of the 2.0 runtime. It is stack based, every fallible function returns a status and leaves the error value in place of its result, references keep values alive outside the stack, and userdata carry host memory with registered metatables.
-- Added the host permission policy to the embedding interface: `lus_grant`, `lus_reject`, and `lus_seal` set the starting permissions, `lus_onrequest` decides script pledges interactively, `lus_defcapability` declares new capabilities, and `lus_require` and `lus_allowed` check them.
-- Added `lus_runpending`, which runs the detached coroutines of a state for one pass or to their end, and `lus_pending`, which counts them. `lus_close` closes the coroutines that remain.
-- `zig build lib` produces the static and shared `liblus` with the vendored SQLite, Zstandard, and Brotli sources compiled in, so a host links one library.
-- Added the `lus-wasm` package, which runs the runtime compiled to `wasm32-wasi` in browsers, web workers, and Node through a dependency-free JavaScript host. The playground and the VS Code extension run on it.
+- Added the [`continue`](/manual/guide#break-and-continue) statement, which starts the next iteration of the innermost loop and makes `continue` a reserved word.
+- Added [bigint and decimal numbers](/manual/guide#numbers) as subtypes of `number`, written with the literal suffixes `n` and `d`.
+  - `bigint`: Converts a value to an arbitrary precision integer.
+  - `decimal`: Converts a value to an exact base 10 number.
+  - `math.type`: Reports `"bigint"` and `"decimal"` for the new subtypes.
+  - `fromjson`: Decodes wide integers as bigints and fractional numbers as decimals when its [`exact`](/manual/data#parsing) option is `true`.
+- Added [queries](/manual/guide#queries), which the `@` expression builds from clauses such as `where`, `select`, `group by`, and `order by` and which run over tables or an SQLite database.
+  - `query`: Returns an iterator over the records of a query.
+  - `debug.queryplan`: Describes how a query would run, as a string.
+- Added [`for` loops with `from`](/manual/guide#destructuring-each-item-with-from), which copy the named fields of each item into local variables.
+- Added the `<lazy>`, `<observe>`, `<context>`, and `<meta>` variable attributes.
+  - [`<lazy>`](/manual/guide#values-computed-on-first-use): Computes the value at the first read of the variable.
+  - [`<observe>`](/manual/guide#values-that-follow-other-values): Computes the value again whenever an observed variable that its initializer names is assigned.
+  - [`<context>`](/manual/guide#values-for-each-coroutine): Gives the variable a value for each coroutine.
+  - [`<meta>`](/manual/guide#values-computed-when-the-file-is-compiled): Runs the initializer when the file is compiled.
+- Added [build flags](/manual/guide#build-flags), which the `-F` option defines and a program reads from the read-only `flags` table.
+- Added [detached coroutines](/manual/concurrency#detached-coroutines), which the runtime resumes whenever the operation they wait for is ready.
+  - `coroutine.detach`: Hands a suspended coroutine to the runtime and returns it.
+  - `coroutine.sleep`: Returns a coroutine whose resume waits for a number of seconds.
+- Added [remote modules](/manual/guide#modules-from-the-network), which `require` loads from a URL and keeps in a cache.
+- Added the [`time`](/manual/time) library.
+  - `time.now`: Returns an instant for the current time of the wall clock.
+  - `time.monotonic`: Returns an instant of a monotonic clock, for measuring elapsed time.
+  - `time.instant`: Returns an instant for a count of Unix seconds.
+  - `time.duration`: Returns a duration that is the sum of the units in a table.
+  - `time.days`, `time.hours`, `time.minutes`, `time.seconds`, and `time.millis`: Return a duration of one unit.
+  - `time.zone`: Returns the zone with an IANA name such as `"Europe/Paris"`.
+  - `time.offset`: Returns a zone with a fixed offset from UTC.
+  - `time.localzone`: Returns the time zone of the system.
+  - `time.zoned`: Returns a civil date and time in a zone.
+  - `time.parse`: Reads an instant or a zoned time from ISO 8601 text or from an explicit pattern.
+  - `time.weekday` and `time.month`: Enumerate the days of the week and the months of the year.
+  - `time.tzdata_version`: Returns the release of the IANA time zone database that the runtime embeds.
+- Added the [`crypto`](/manual/crypto) library.
+  - `crypto.hash`: Returns the digest of data under a hash function.
+  - `crypto.hasher`: Returns an object that computes a digest over data added in pieces.
+  - `crypto.hmac`: Returns the HMAC of data under a key.
+  - `crypto.equal`: Compares two byte sequences in time that depends only on their lengths.
+  - `crypto.keypair`: Returns a new secret key and its public key.
+  - `crypto.importkey`: Reads an RSA, EC, or Ed25519 key.
+  - `crypto.sign`: Returns the signature of a message under a secret key.
+  - `crypto.verify`: Checks the signature of a message against a public key.
+  - `crypto.pbkdf2`: Derives a key from a password with PBKDF2.
+  - `crypto.hkdf`: Derives bytes from a key with HKDF.
+  - `crypto.encrypt`: Encrypts and authenticates a plaintext with AES-256-GCM.
+  - `crypto.decrypt`: Checks and decrypts a ciphertext of `crypto.encrypt`.
+  - `crypto.hashpassword`: Hashes a password with Argon2id.
+  - `crypto.verifypassword`: Checks a password against a hash of `crypto.hashpassword`.
+  - `crypto.random`: Returns bytes from the secure random source of the operating system.
+  - `crypto.uuid`: Returns a new UUID.
+  - `crypto.ulid`: Returns a new ULID.
+- Added [`io.sqlite`](/manual/sqlite), which opens a database of the SQLite engine that the runtime embeds.
+- Added `network.serve` and `network.lines`.
+  - [`network.serve`](/manual/network#http-server): Serves HTTP/1.1 or HTTPS with one detached coroutine per connection and hands an upgraded connection, such as a WebSocket, to the handler.
+  - [`network.lines`](/manual/api#network.lines): Returns an iterator over the lines of text that a coroutine yields in parts.
+- Added [TLS sockets](/manual/network#tls-sockets) with `network.tls.connect`, `tcp_socket:starttls`, and `tcp_socket:tlsinfo`.
+  - `network.tls.connect`: Opens a TCP connection, runs a TLS handshake over it, and returns the TLS socket.
+  - `tcp_socket:starttls`: Starts TLS over a connected TCP socket, as the client or as the server.
+  - `tcp_socket:tlsinfo`: Returns what the TLS handshake of a socket settled.
+- Added `tcp_socket:reader`, `tcp_socket.input`, `tcp_socket.output`, `tcp_server.accepted`, `tcp_server:getsockname`, and `udp_socket:getsockname`.
+  - [`tcp_socket:reader`](/manual/api#tcp_socket:reader): Returns a coroutine that yields the data of the socket as it arrives.
+  - [`tcp_socket.input`](/manual/api#tcp_socket.input): Holds the input of the socket as a coroutine.
+  - [`tcp_socket.output`](/manual/api#tcp_socket.output): Holds the output of the socket as a coroutine that sends what it is resumed with.
+  - [`tcp_server.accepted`](/manual/api#tcp_server.accepted): Holds the accepted connections of the server as a coroutine.
+  - [`tcp_server:getsockname`](/manual/api#tcp_server:getsockname): Returns the address and the port that the server is bound to.
+  - [`udp_socket:getsockname`](/manual/api#udp_socket:getsockname): Returns the local address and port of the socket.
+- Added the [`stream`](/manual/network#streamed-bodies) option of `network.fetch`, which returns the response body as a coroutine that hands it over in parts.
+- Added [list values](/manual/network#responses) for the headers of a `network.serve` response and of a `network.fetch` request, which send one header line per element.
+- Added `os.spawn`, `os.signal`, `os.setenv`, and `os.pid`.
+  - [`os.spawn`](/manual/processes#running-a-program): Starts a program without a shell and returns a process object with its pipes and its exit.
+  - [`os.signal`](/manual/processes#signals): Returns a coroutine that hands over the named signals as they arrive.
+  - [`os.setenv`](/manual/api#os.setenv): Sets or removes an environment variable.
+  - [`os.pid`](/manual/api#os.pid): Returns the id of the running process.
+- Added `fs.stat`, `fs.walk`, `fs.watch`, `fs.sync`, and `file:sync`.
+  - [`fs.stat`](/manual/filesystem#inspecting-a-path): Returns a table that describes a file, a directory, or a link.
+  - [`fs.walk`](/manual/filesystem#walking-a-directory-tree): Returns an iterator that visits every entry of a directory tree.
+  - [`fs.watch`](/manual/filesystem#watching-for-changes): Returns a coroutine that hands over each change to a file or a directory.
+  - [`fs.sync`](/manual/filesystem#durable-writes): Writes the entries of a directory to the storage device.
+  - [`file:sync`](/manual/filesystem#durable-writes): Writes the data of a file to the storage device.
+- Added [recursive globs](/manual/filesystem#listing-a-directory) to `fs.list`, in which a glob with `/` or `**` matches entries in subdirectories.
+- Added `file:isatty` and `file:setraw`.
+  - [`file:isatty`](/manual/api#file:isatty): Returns `true` when the file handle is a terminal.
+  - [`file:setraw`](/manual/api#file:setraw): Switches the terminal of a file handle to raw input and back.
+- Added `vector.fromstring`, `vector.tostring`, `vector.get`, `vector.set`, `vector.find`, and `vector.copy`.
+  - [`vector.fromstring`](/manual/text#strings-to-bytes-and-back): Returns a vector that holds the bytes of a string.
+  - [`vector.tostring`](/manual/text#strings-to-bytes-and-back): Decodes a range of bytes as text, strictly or with replacement characters.
+  - [`vector.get`](/manual/text#single-bytes): Returns the byte at an offset.
+  - [`vector.set`](/manual/text#single-bytes): Stores a byte at an offset.
+  - [`vector.find`](/manual/api#vector.find): Returns the offset of the first occurrence of a byte sequence.
+  - [`vector.copy`](/manual/api#vector.copy): Copies bytes from one vector into another.
+- Added the [`vector.archive.zip` and `vector.archive.tar`](/manual/text#archives) libraries, which read and write ZIP and tar archives.
+  - `list`: Returns the entries of an archive.
+  - `read`: Returns the contents of one file of an archive as a vector.
+  - `pack`: Writes an archive and returns it as a vector.
+  - `unpack`: Writes every entry of an archive under a directory.
+- Added the [`"base64url"` and `"base32"`](/manual/text#binary-to-text-encodings) encodings to `string.transcode`.
+- Added `debug.check`, `debug.jit`, `debug.getcontext`, and `debug.setcontext`.
+  - [`debug.check`](/manual/api#debug.check): Returns the diagnostics of `lus check` for a source string.
+  - [`debug.jit`](/manual/api#debug.jit): Reports the settings of the JIT and whether a function has machine code.
+  - [`debug.getcontext`](/manual/api#debug.getcontext): Returns a `<context>` variable as a coroutine sees it.
+  - [`debug.setcontext`](/manual/api#debug.setcontext): Assigns a `<context>` variable for a coroutine.
+- Changed strings to hold [text indexed by character](/manual/text#strings), so `#s`, `string.sub`, slices, and the pattern functions count characters, `string.byte` returns code points, and `string.char` takes code points.
+- Changed the standard library to [return raw bytes as vectors](/manual/text#bytes-in-the-standard-library), which applies to `string.pack`, `string.dump`, the `vector.archive` compressors, binary file reads, socket receives, and the body that `network.fetch` returns.
+- Changed `load` to accept a vector from `string.dump` as a [compiled chunk](/manual/text#compiled-chunks).
+- Changed files opened in [text mode](/manual/text#files) to raise an error for a read of bytes that are not valid UTF-8, unless the `{ lossy = true }` option of `io.open` replaces them with U+FFFD.
+- Changed the interpolation of a vector to raise an error that names [`vector.tostring`](/manual/text#strings-to-bytes-and-back).
+- Changed the operations of TCP and UDP sockets, `network.fetch`, and `worker.receive` into [suspension points](/manual/concurrency#suspension-points), which let the detached coroutines run while their caller waits.
+- Changed the default of `package.path` to `./?.lus;./?/init.lus;./?.lua;./?/init.lua`, which the [`LUS_PATH`](/manual/guide#search-paths) environment variable replaces.
+- Deprecated the following functions, which `lus check` reports under the code [`deprecated`](/manual/tools#lua-idioms-with-a-lus-form).
+  - `utf8.char`: `string.char` replaces it.
+  - `utf8.codepoint`: `string.byte` replaces it.
+  - `utf8.codes`: A numeric `for` from 1 to `#s` with `string.byte` replaces it.
+  - `utf8.len`: `#s` replaces it.
+  - `utf8.offset`: `i + n - 1` replaces it, because positions count characters.
+  - `utf8.charpattern`: The pattern `"."` replaces it.
+  - `string.len`: `#s` replaces it.
+  - `vector.size`: `#v` replaces it.
+  - `string.join`: `table.concat` replaces it.
+  - `os.time`: `time.now():epoch()` replaces it, or `time.zoned` for a table of fields.
+  - `os.date`: The `format` and `at` methods of `time.instant(t)` replace it.
+  - `os.difftime`: `t2 - t1` replaces it.
+  - `dofile`: `assert(loadfile(path))()` replaces it.
+- Removed the loading of [C modules](/manual/lua#c-modules) with `package.cpath` and `package.loadlib`, so native code extends Lus as part of a host program.
 
 ### Runtime
 
-- The runtime builds with Zig alone and compiles SQLite, Zstandard, and Brotli from source. Gzip, deflate, LZ4, and the TLS client are written in Zig.
-- The interpreter is a register machine with 32-bit instructions, quickened instructions that specialize in place, slot-prediction inline caches for string-keyed table access, and zero-cost entry into `catch`.
-- Hot functions compile to native code on aarch64 and x86-64 macOS and Linux. A baseline tier generated from the interpreter's own opcode definitions compiles functions that run often, and an optimizing tier recompiles those that stay hot with types predicted from inline caches, values kept in machine registers, inlining of small functions, loop-invariant code motion, and tables that never escape kept out of the heap. Guards leave optimized code for the baseline code whenever a prediction fails.
-- The WebAssembly build compiles hot functions to WebAssembly modules that the JavaScript host instantiates, so the playground and the VS Code extension run compiled code too.
-- The environment variable `LUS_JIT` selects `off`, `on`, `eager`, `baseline`, or `opt-eager`, and `debug.jit` reports the setting and whether a function is compiled.
-- The garbage collector is precise and non-moving, with size-classed pages, mark bitmaps, and lazy sweeping. It runs generationally by default and switches to incremental collections with a goal-based pacer when most new objects survive. Every worker owns its heap.
-- `package.path` defaults to `./?.lus;./?/init.lus;./?.lua;./?/init.lua`, and the environment variable `LUS_PATH` sets it.
-- The standard library is written once in Zig, and every builtin has a single implementation.
+- Added a [baseline JIT](/manual/guide#the-baseline-jit), which compiles the functions that run often to machine code on aarch64 and x86-64 processors.
+- Added an [optimizing tier](/manual/guide#the-optimizing-tier), which compiles again the code that stays hot, with predicted types, numbers in processor registers, and small functions compiled into their callers.
+- Added a [JIT for the WebAssembly build](/manual/webassembly#the-jit), which compiles hot functions to WebAssembly modules that the JavaScript host instantiates.
+- Added the [`LUS_JIT`, `LUS_JIT_THRESHOLD`, and `LUS_GC_THREADS`](/manual/cli#environment-variables) environment variables.
+  - `LUS_JIT`: Selects the interpreter alone, the baseline JIT, or both compilers.
+  - `LUS_JIT_THRESHOLD`: Sets how many calls and loop iterations a function makes before the JIT compiles it.
+  - `LUS_GC_THREADS`: Sets the number of threads that the garbage collector marks with.
+- Added [`lus.h`](/manual/embedding), a stack based C embedding interface in which every function that can fail returns a status.
+- Added the [host permission policy](/manual/embedding#permissions) to the embedding interface.
+  - `lus_grant`, `lus_reject`, and `lus_seal`: Set the starting permissions of a state.
+  - `lus_onrequest`: Registers a function that decides the pledges of a script.
+  - `lus_defcapability`: Declares a capability of the host.
+  - `lus_require` and `lus_allowed`: Check a permission from a C function.
+- Added `lus_runpending` and `lus_pending` to the embedding interface.
+  - `lus_runpending`: Runs the detached coroutines of a state for one pass or to their end.
+  - `lus_pending`: Counts the detached coroutines of a state.
+- Added the [`lus-wasm`](/manual/webassembly) package, which runs the WebAssembly build in browsers, web workers, and Node.
+- Added [release archives](/manual/releases#downloads) for Linux on aarch64, 32-bit ARM, riscv64, loong64, ppc64le, and s390x, for FreeBSD on x86_64 and aarch64, for macOS on x86_64, and for Windows on aarch64.
+- Added the [`-Dnet`, `-Dworkers`, `-Dsqlite`, `-Darchive`, and `-Djit`](/manual/compiling#optional-libraries) build options, each of which omits one part of the runtime from a build.
+- Changed the [build](/manual/compiling#building) to need the Zig compiler alone, which compiles SQLite, Zstandard, and Brotli from source.
+- Changed the [interpreter](/manual/guide#the-interpreter) to specialize instructions in place and to cache the slot of each table access with a string key.
+- Changed the [garbage collector](/manual/guide#the-garbage-collector) to a precise, non-moving, generational collector that marks large heaps on several threads.
+- Changed each [release archive](/manual/releases#archive-layout) to hold the interpreter, the static and shared embedding libraries, and the `lus.h` header.
+- Changed the Linux release builds to link musl statically, so one binary runs on every Linux distribution of its architecture.
+- Removed the `lua.h`, `lauxlib.h`, and `lualib.h` embedding headers, which [`lus.h`](/manual/embedding) replaces.
 
-### Removed
+### Tools
 
-- Removed `pcall` and `xpcall`. The `catch` expression covers protected calls, and `catch[handler]` covers message handlers.
-- Removed `os.remove` and `os.rename`. `fs.remove` and `fs.move` cover them.
-- Removed loading C modules through `package.cpath` and `package.loadlib`. Native code extends Lus through the embedding interface.
-- Removed `LUA_INIT` and the `LUA_PATH` family of environment variables. `-e`, `-l`, and `LUS_PATH` cover them.
-- Removed the `lusc` compiler and the `--standalone`, `--ast-json`, `--ast-graph`, `-Wpedantic`, `--no-fastcall`, and `--strip-debug` options, and the `lus format` command. `string.dump`, `lus build`, `lus ast`, `lus check`, and `lus fmt` cover them.
-- Removed the `lua.h`, `lauxlib.h`, and `lualib.h` embedding headers. `lus.h` is the embedding interface.
+- Added [`lus test`](/manual/testing), a test runner that runs the `_test` functions of `*_test.lus` files in parallel, with one process and one temporary directory per file.
+  - `assert`: Reports the values of the operands of a failed comparison in a test file.
+  - `raises`, `same`, `skip`, and `snapshot`: Test for an error, compare two structures, skip a test, and compare a value with a recorded copy.
+  - `NAME_cases`: Runs the test `NAME_test` once per entry of the table.
+  - [`--coverage`](/manual/testing#coverage): Reports which lines of the code under test ran and writes an lcov tracefile with `--coverage-out`.
+  - [`--bench`](/manual/testing#benchmarks): Measures the functions whose names end in `_bench` and compares them with a saved baseline.
+  - [`--doc`](/manual/testing#doc-tests): Runs the code blocks of Markdown files and of doc comments.
+  - `--list`: Prints each test and benchmark that a run would start.
+- Added [`lus fmt`](/manual/tools#formatting), which formats source files and writes the [strict style](/manual/tools#the-strict-style) with `--strict`.
+- Added [`lus check`](/manual/tools#checking), which reports compile errors, warnings, and hints with stable codes, as text or as JSON.
+  - [`--fix`](/manual/tools#fixes): Applies the rewrites that keep the behavior of the program.
+  - `--explain`: Prints why a diagnostic code matters and how to resolve it.
+  - `--strict`: Reports where a file departs from the strict style.
+  - `--list`: Prints every diagnostic code with its severity and summary.
+  - [`-- lus: allow(CODE)`](/manual/tools#suppressing-a-diagnostic): Suppresses the named warnings and hints for a line, a statement, or a file.
+- Added [`lus doc`](/manual/tools#documentation), which generates Markdown, JSON, or HTML reference documentation from doc comments.
+- Added [`lus ast`](/manual/tools#lus-ast), which prints the syntax tree of a file as JSON.
+- Added [`lus build`](/manual/tools#standalone-executables), which bundles a script and the modules it requires into one executable.
+  - [`--aot`](/manual/tools#compiling-ahead-of-time): Compiles the program to machine code from a training run.
+  - [`--link-object`](/manual/tools#linking-the-runtime): Links the executable from the runtime as a link object and keeps only the parts that the program reaches.
+- Added [`lus compile`](/manual/tools#binary-chunks), which writes a script as a binary chunk.
+- Added [`lus debug`](/manual/tools#debugger), a Debug Adapter Protocol server with breakpoints, stepping, pausing, and inspection of variables.
+- Added [`lus help`](/manual/tools#standard-library-reference), which prints the reference of the standard library in the terminal.
+- Added [`lus agents init`](/manual/tools#agent-setup), which writes the Lus agent skills and a section of `AGENTS.md` into a project.
+- Added [`lus tree`](/manual/cli#lus-tree), which prints the modules that a script requires as a tree.
+- Added [`lus lsp`](/manual/cli#lus-lsp), which runs the language server that is part of `lus` on standard input and output.
+- Added [`lus version`](/manual/cli#lus-version), which installs releases of Lus side by side and selects the default.
+- Added [`lus +VERSION`](/manual/cli#lus-version), which runs one command under another installed release.
+- Added the following [options](/manual/cli#options) to `lus`.
+  - `-F name[=value]`: Defines a build flag.
+  - `--offline`: Loads remote modules from the module cache only.
+  - `--reload`: Asks the server of every remote module whether it changed before the program runs.
+  - `--no-prefetch`: Downloads each remote module at its `require`.
+  - `--dis`: Prints the bytecode of a script.
+- Added [refactorings](/manual/ide-setup#refactoring) to the language server, which extract a local or a function, inline a local, and convert between concatenation and interpolation.
+- Added a [call hierarchy](/manual/ide-setup#call-hierarchy) to the language server, which shows the callers and the callees of a function.
+- Added quick fixes to the language server for the diagnostics that [`lus check --fix`](/manual/tools#fixes) rewrites.
+- Added a [Testing view](/manual/ide-setup#testing) to the VS Code extension, which lists the tests and benchmarks of the workspace and marks the covered lines.
+- Added the [`lus` debugger](/manual/ide-setup#debugging) to the VS Code extension, which starts `lus debug`.
+- Added [package completion](/manual/ide-setup#package-completion) to the VS Code extension, inside the string of a `require`.
+- Added the VS Code extension to the [Visual Studio Marketplace](/manual/ide-setup#vscode-based-editors) under the identifier `lus-language.lus`.
+- Added a [Claude Code plugin](/manual/ide-setup#claude-code), which installs the Lus skills and registers `lus lsp` for `.lus` files.
+- Changed [`--include`](/manual/guide#preincluded-modules) to compile modules when the interpreter starts, so `require` loads them with no `load` or `fs:read` permission.
+- Removed the following commands and options of `lus`.
+  - `lus format`: `lus fmt` replaces it.
+  - `lusc`: `lus compile` and `lus --dis` replace it.
+  - `--standalone`: `lus build` replaces it.
+  - `--ast-json` and `--ast-graph`: `lus ast` replaces them.
+  - `-Wpedantic`: `lus check` replaces it.
+  - `--strip-debug`: `lus compile --strip` replaces it for a compiled script.
+  - `--no-fastcall`: The fast call path of every builtin is always on.
+- Removed the `LUA_INIT` and `LUA_PATH` environment variables, which the `-e` and `-l` options and [`LUS_PATH`](/manual/cli#environment-variables) replace.
 
-### Deprecated
+### Security
 
-The following functions still run in 2.0 and are removed in a later release. `lus check` reports each use as `deprecated`. `lus check --fix` rewrites the uses where the replacement behaves the same.
+- Added the [`--sandbox`](/manual/cli#options) option, which seals the permissions after the `-P` grants and before any code runs.
+- Added the [`env:read`, `env:write`, and `network:server`](/manual/permissions#permission-names) permissions.
+  - `env:read`: Allows reading environment variables with `os.getenv`.
+  - `env:write`: Allows setting and removing environment variables with `os.setenv`.
+  - `network:server`: Allows serving HTTP with `network.serve`.
+- Added [program values](/manual/permissions#program-values) to the `exec` permission, which select the programs that `os.spawn` may start.
+- Added signature checks to [remote modules](/manual/guide#modules-from-the-network), so `lus` refuses a package of `atmosp.here` whose signature or content does not match.
+- Added signature and digest checks to [`lus version install`](/manual/releases#downloads), which verifies the Ed25519 signature of the release index and the SHA-256 digest of each archive.
+- Added [build provenance attestations](/manual/releases#checking-download-integrity) to every file of a release, which `gh attestation verify` checks.
+- Added [code signatures](/manual/releases#code-signatures) to the release binaries, a notarized Developer ID signature on macOS and an Authenticode signature on Windows.
+- Changed TCP [line and all-data receives](/manual/network#receiving-from-a-tcp-socket) to stop at a limit, by default 1 MiB for a line and 64 MiB for all data, which the `max_bytes` argument sets.
 
-| Deprecated | Replacement |
-| --- | --- |
-| `utf8.char` | `string.char` |
-| `utf8.codepoint` | `string.byte` |
-| `utf8.codes` | A numeric `for` from 1 to `#s` with `string.byte` |
-| `utf8.len` | `#s` |
-| `utf8.offset` | `i + n - 1`, because positions count characters |
-| `utf8.charpattern` | `"."` |
-| `string.len` | `#s` |
-| `vector.size` | `#v` |
-| `string.join` | `table.concat` |
-| `os.time` | `time.now():epoch()`, or `time.zoned` for a table of fields |
-| `os.date` | The `format` and `at` methods of `time.instant(t)` |
-| `os.difftime` | `t2 - t1` |
-| `dofile` | `assert(loadfile(path))()` |
+### Website
+
+- Added manual pages for the libraries and the tools.
+  - Libraries: [Text and bytes](/manual/text), [Data formats](/manual/data), [Filesystem](/manual/filesystem), [Network](/manual/network), [Processes and signals](/manual/processes), [Time](/manual/time), [SQLite](/manual/sqlite), [Cryptography](/manual/crypto), [Coroutines and workers](/manual/concurrency), and [Permissions](/manual/permissions).
+  - Tools: [Testing](/manual/testing), [Developer tools](/manual/tools), [Embedding](/manual/embedding), and [WebAssembly](/manual/webassembly).
+  - Guidance: [Lus for Lua programmers](/manual/lua), [Best practices](/manual/practices), and [Lus and other runtimes](/manual/runtimes), which compares the runtimes on measured benchmarks.
+- Added the [agents page](/agents), `llms.txt`, and a Markdown copy of every manual page for coding agents.
+- Changed the [guide](/manual/guide) into the complete reference of the language, which holds the content of the former acquis pages.
+- Changed the [examples page](/examples) to group its programs into sections.
+- Changed the [playground](/playground) to run programs on the `lus-wasm` host in a Web Worker, with a limit of five seconds per run and of 256 KiB of output.
 
 ## 1.6.2
 
