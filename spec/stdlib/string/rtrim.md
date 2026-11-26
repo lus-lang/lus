@@ -24,7 +24,7 @@ The result is a string. When every character of `s` belongs to the set, it is th
 A `s` that is neither a string nor a number raises `bad argument #1 to 'string.rtrim' (string expected, got nil)` with its type.
 
 ```lus
-print("[" .. string.rtrim("  hi \n") .. "]")  --> [  hi]
+print(`[$(string.rtrim("  hi \n"))]`)  --> [  hi]
 print(string.rtrim("hi=-=", "-="))  --> hi
 print(string.rtrim("aéé", "é"))  --> a
 ```

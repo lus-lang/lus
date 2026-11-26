@@ -49,7 +49,7 @@ local changes = fs.watch("config", {glob = "*.json"})
 while true do
     local _, event = coroutine.resume(changes)
     if event.kind ~= "remove" then
-        print("reloading " .. event.path)
+        print(`reloading $(event.path)`)
     end
 end
 ```

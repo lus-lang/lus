@@ -29,7 +29,7 @@ table.insert(package.searchers, 1, function(name)
         end, "virtual"
     end
 
-    return "no virtual module '" .. name .. "'"
+    return `no virtual module '$name'`
 end)
 
 print(require("virtual.answer").id)  --> virtual.answer

@@ -34,7 +34,7 @@ print(table.reduce({ 1, 2, 3, 4 }, add, 100))  --> 110
 print(table.reduce({}, add, 0))  --> 0
 
 print(table.reduce({ "a", "b" }, function(acc, x, i)  --> a1b2
-    return acc .. x .. i
+    return `$acc$x$i`
 end, ""))
 ```
 

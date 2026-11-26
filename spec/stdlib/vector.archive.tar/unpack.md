@@ -31,8 +31,8 @@ The following example unpacks a compressed tar file into a new directory.
 local tgz = vector.archive.gzip.compress(vector.archive.tar.pack({
     { name = "data/a.csv", data = "x,y\n1,2\n" },
 }))
-local dir = "tar-example-" .. time.now():epoch()
+local dir = `tar-example-$(time.now():epoch())`
 print(vector.archive.tar.unpack(vector.archive.gzip.decompress(tgz), dir))  --> 1
-print((fs.type(dir .. "/data/a.csv")))  --> file
+print((fs.type(`$dir/data/a.csv`)))  --> file
 fs.remove(dir, true)
 ```

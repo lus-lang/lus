@@ -38,9 +38,7 @@ end)
 local _, events = network.fetch(`http://127.0.0.1:$port/events`, "GET", nil, nil, { stream = true })
 
 for line in network.lines(events) do
-    local data = vector.tostring(line):match("^data: (.*)")
-
-    if data then
+    if data = vector.tostring(line):match("^data: (.*)") then
         print(data)
     end
 end

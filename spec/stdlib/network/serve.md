@@ -69,9 +69,7 @@ local status, events = network.fetch(`http://127.0.0.1:$port/events`, "GET", nil
 })
 
 for line in network.lines(events) do
-    local data = vector.tostring(line):match("^data: (.*)$")
-
-    if data then
+    if data = vector.tostring(line):match("^data: (.*)$") then
         print(fromjson(data).count)
     end
 end

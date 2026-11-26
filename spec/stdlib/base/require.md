@@ -25,7 +25,7 @@ Loading a module from a file requires `fs:read` for the file and the `load` perm
 package.preload.greeter = function(name)
     return {
         hello = function()
-            return "hello from " .. name
+            return `hello from $name`
         end,
     }
 end

@@ -27,11 +27,11 @@ local log = {}
 
 local function worker(name)
     for i = 1, 2 do
-        log[#log + 1] = name .. i
+        log[#log + 1] = `$name$i`
         coroutine.yield()
     end
 
-    return name .. " is done"
+    return `$name is done`
 end
 
 local a = coroutine.detach(coroutine.create(worker), "a")

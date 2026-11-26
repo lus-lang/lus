@@ -25,7 +25,7 @@ When `message` is a string and `level` is positive, `error` prefixes it with the
 
 ```lus
 local function parse(s)
-    return tonumber(s) or error("not a number: " .. s, 0)
+    return tonumber(s) or error(`not a number: $s`, 0)
 end
 
 print(catch parse("12"))  --> true  12

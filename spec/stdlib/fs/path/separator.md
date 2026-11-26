@@ -16,7 +16,7 @@ The value is a one-character string fixed when the runtime is built, and reading
 print(fs.path.separator)
 -->(posix) /
 -->(windows) \
-print(fs.path.join("a", "b") == "a" .. fs.path.separator .. "b")  --> true
+print(fs.path.join("a", "b") == `a$(fs.path.separator)b`)  --> true
 ```
 
 [`fs.path.delimiter`](/manual/api#fs.path.delimiter) separates the entries of a path list.

@@ -24,7 +24,7 @@ The result is a string. Characters of the set inside the string, between other c
 A `s` that is neither a string nor a number raises `bad argument #1 to 'string.trim' (string expected, got nil)` with its type.
 
 ```lus
-print("[" .. string.trim("\t a b \n") .. "]")  --> [a b]
+print(`[$(string.trim("\t a b \n"))]`)  --> [a b]
 print(string.trim("xxhixx", "x"))  --> hi
 print(string.trim("--==hi=-", "-="))  --> hi
 print(string.trim("aaa", "a") == "")  --> true

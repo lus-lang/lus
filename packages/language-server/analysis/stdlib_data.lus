@@ -357,11 +357,11 @@ local log = {}
 
 local function worker(name)
     for i = 1, 2 do
-        log[#log + 1] = name .. i
+        log[#log + 1] = `$name$i`
         coroutine.yield()
     end
 
-    return name .. " is done"
+    return `$name is done`
 end
 
 local a = coroutine.detach(coroutine.create(worker), "a")
@@ -3090,7 +3090,7 @@ When `message` is a string and `level` is positive, `error` prefixes it with the
 
 ```lus
 local function parse(s)
-    return tonumber(s) or error("not a number: " .. s, 0)
+    return tonumber(s) or error(`not a number: $s`, 0)
 end
 
 print(catch parse("12"))  --> true  12
@@ -3965,7 +3965,7 @@ The value is a one-character string fixed when the runtime is built, and reading
 print(fs.path.separator)
 -->(posix) /
 -->(windows) \
-print(fs.path.join("a", "b") == "a" .. fs.path.separator .. "b")  --> true
+print(fs.path.join("a", "b") == `a$(fs.path.separator)b`)  --> true
 ```
 
 [`fs.path.delimiter`](/manual/api#fs.path.delimiter) separates the entries of a path list.]],
@@ -4333,7 +4333,7 @@ local changes = fs.watch("config", {glob = "*.json"})
 while true do
     local _, event = coroutine.resume(changes)
     if event.kind ~= "remove" then
-        print("reloading " .. event.path)
+        print(`reloading $(event.path)`)
     end
 end
 ```
@@ -4637,7 +4637,7 @@ local out = io.open(path, "w")
 out:write("count: ", 2)
 out:close()
 print(io.open(path):read("a"))  --> count: 2
-local file, err = io.open(path .. ".missing")
+local file, err = io.open(`$path.missing`)
 print(file, err:match("No such file or directory"))  --> nil  No such file or directory
 fs.remove(path)
 ```
@@ -4863,7 +4863,7 @@ The following example pledges the database file and its sidecars in a temporary 
 ```lus
 pledge("env")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-sqlite-example.db")
-pledge("fs:read=" .. path .. "*", "fs:write=" .. path .. "*", "seal")
+pledge(`fs:read=$path*`, `fs:write=$path*`, "seal")
 
 do
     local db <close> = io.sqlite(path)
@@ -6665,9 +6665,7 @@ end)
 local _, events = network.fetch(`http://127.0.0.1:$port/events`, "GET", nil, nil, { stream = true })
 
 for line in network.lines(events) do
-    local data = vector.tostring(line):match("^data: (.*)")
-
-    if data then
+    if data = vector.tostring(line):match("^data: (.*)") then
         print(data)
     end
 end
@@ -6757,9 +6755,7 @@ local status, events = network.fetch(`http://127.0.0.1:$port/events`, "GET", nil
 })
 
 for line in network.lines(events) do
-    local data = vector.tostring(line):match("^data: (.*)$")
-
-    if data then
+    if data = vector.tostring(line):match("^data: (.*)$") then
         print(fromjson(data).count)
     end
 end
@@ -7730,7 +7726,7 @@ local serving = coroutine.detach(coroutine.create(network.serve), "127.0.0.1", 8
 end)
 local stop = os.signal("interrupt", "terminate")
 local _, name = coroutine.resume(stop)
-print("stopping on " .. name)
+print(`stopping on $name`)
 coroutine.close(serving)
 ```
 
@@ -8157,7 +8153,7 @@ table.insert(package.searchers, 1, function(name)
         end, "virtual"
     end
 
-    return "no virtual module '" .. name .. "'"
+    return `no virtual module '$name'`
 end)
 
 print(require("virtual.answer").id)  --> virtual.answer
@@ -8617,7 +8613,7 @@ Loading a module from a file requires `fs:read` for the file and the `load` perm
 package.preload.greeter = function(name)
     return {
         hello = function()
-            return "hello from " .. name
+            return `hello from $name`
         end,
     }
 end
@@ -9282,7 +9278,7 @@ The result is a string. When every character of `s` belongs to the set, it is th
 A `s` that is neither a string nor a number raises `bad argument #1 to 'string.ltrim' (string expected, got nil)` with its type.
 
 ```lus
-print("[" .. string.ltrim("  hi  ") .. "]")  --> [hi  ]
+print(`[$(string.ltrim("  hi  "))]`)  --> [hi  ]
 print(string.ltrim("--==hi", "-="))  --> hi
 print(string.ltrim("ééa", "é"))  --> a
 ```
@@ -9557,7 +9553,7 @@ The result is a string. When every character of `s` belongs to the set, it is th
 A `s` that is neither a string nor a number raises `bad argument #1 to 'string.rtrim' (string expected, got nil)` with its type.
 
 ```lus
-print("[" .. string.rtrim("  hi \n") .. "]")  --> [  hi]
+print(`[$(string.rtrim("  hi \n"))]`)  --> [  hi]
 print(string.rtrim("hi=-=", "-="))  --> hi
 print(string.rtrim("aéé", "é"))  --> a
 ```
@@ -9756,7 +9752,7 @@ The result is a string. Characters of the set inside the string, between other c
 A `s` that is neither a string nor a number raises `bad argument #1 to 'string.trim' (string expected, got nil)` with its type.
 
 ```lus
-print("[" .. string.trim("\t a b \n") .. "]")  --> [a b]
+print(`[$(string.trim("\t a b \n"))]`)  --> [a b]
 print(string.trim("xxhixx", "x"))  --> hi
 print(string.trim("--==hi=-", "-="))  --> hi
 print(string.trim("aaa", "a") == "")  --> true
@@ -9978,11 +9974,11 @@ A `t` that is not a table raises `bad argument #1 to 'compact' (table expected, 
 local cache = {}
 
 for i = 1, 1000 do
-    cache["k" .. i] = i
+    cache[`k$i`] = i
 end
 
 for i = 1, 990 do
-    cache["k" .. i] = nil
+    cache[`k$i`] = nil
 end
 
 print(table.compact(cache) == cache, cache.k995)  --> true  995
@@ -10505,7 +10501,7 @@ print(table.reduce({ 1, 2, 3, 4 }, add, 100))  --> 110
 print(table.reduce({}, add, 0))  --> 0
 
 print(table.reduce({ "a", "b" }, function(acc, x, i)  --> a1b2
-    return acc .. x .. i
+    return `$acc$x$i`
 end, ""))
 ```
 
@@ -13489,9 +13485,9 @@ The following example unpacks a compressed tar file into a new directory.
 local tgz = vector.archive.gzip.compress(vector.archive.tar.pack({
     { name = "data/a.csv", data = "x,y\n1,2\n" },
 }))
-local dir = "tar-example-" .. time.now():epoch()
+local dir = `tar-example-$(time.now():epoch())`
 print(vector.archive.tar.unpack(vector.archive.gzip.decompress(tgz), dir))  --> 1
-print((fs.type(dir .. "/data/a.csv")))  --> file
+print((fs.type(`$dir/data/a.csv`)))  --> file
 fs.remove(dir, true)
 ```
 
@@ -13729,7 +13725,7 @@ local zip = vector.archive.zip.pack({
     { name = "site/index.html", data = "<h1>hi</h1>" },
     { name = "site/css/main.css", data = "h1 { color: red }" },
 })
-local dir = "unpack-example-" .. time.now():epoch()
+local dir = `unpack-example-$(time.now():epoch())`
 print(vector.archive.zip.unpack(zip, dir))  --> 2
 print(catch vector.archive.zip.unpack(zip, dir))  --> false  ...: file exists: ...
 print(vector.archive.zip.unpack(zip, dir, { overwrite = true }))  --> 2

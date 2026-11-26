@@ -41,7 +41,7 @@ local serving = coroutine.detach(coroutine.create(network.serve), "127.0.0.1", 8
 end)
 local stop = os.signal("interrupt", "terminate")
 local _, name = coroutine.resume(stop)
-print("stopping on " .. name)
+print(`stopping on $name`)
 coroutine.close(serving)
 ```
 

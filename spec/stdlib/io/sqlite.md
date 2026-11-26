@@ -54,7 +54,7 @@ The following example pledges the database file and its sidecars in a temporary 
 ```lus
 pledge("env")
 local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-sqlite-example.db")
-pledge("fs:read=" .. path .. "*", "fs:write=" .. path .. "*", "seal")
+pledge(`fs:read=$path*`, `fs:write=$path*`, "seal")
 
 do
     local db <close> = io.sqlite(path)
