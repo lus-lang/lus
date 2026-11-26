@@ -34,7 +34,7 @@ local ok, value = catch divide(1, 0)
 assert(not ok and value == "division by zero")
 
 local ok2, err = catch[function(e)
-    return "wrapped: " .. e
+    return `wrapped: $e`
 end] divide(1, 0)
 
 assert(err == "wrapped: division by zero")
