@@ -130,9 +130,22 @@ fn note(n: Node) []const u8 {
     };
 }
 
-fn writeLine(w: *std.Io.Writer, n: Node, top: bool) !void {
-    try w.writeAll(n.name);
-    if (n.path) |p| if (!top and n.kind != .missing) try w.print(" ({s})", .{p});
+/// A path as the tree shows it: with `/` between its parts on every
+/// system, so the output reads the same on Windows, where `require` joins
+/// the parts of a dotted name with `\`. Elsewhere a backslash is part of a
+/// file name and stays.
+pub fn shown(arena: Allocator, path: []const u8, windows: bool) ![]const u8 {
+    if (!windows or std.mem.indexOfScalar(u8, path, '\\') == null) return path;
+    const copy = try arena.dupe(u8, path);
+    std.mem.replaceScalar(u8, copy, '\\', '/');
+    return copy;
+}
+
+const is_windows = @import("builtin").os.tag == .windows;
+
+fn writeLine(arena: Allocator, w: *std.Io.Writer, n: Node, top: bool) !void {
+    try w.writeAll(try shown(arena, n.name, is_windows));
+    if (n.path) |p| if (!top and n.kind != .missing) try w.print(" ({s})", .{try shown(arena, p, is_windows)});
     try w.writeAll(note(n));
     if (n.dynamic) try w.writeAll(" (dynamic)");
     if (n.repeat and n.kind == .file) try w.writeAll(" (*)");
@@ -143,7 +156,7 @@ fn writeKids(w: *std.Io.Writer, n: Node, prefix: *std.ArrayList(u8), arena: Allo
     for (n.requires, 0..) |kid, i| {
         const last = i + 1 == n.requires.len;
         try w.print("{s}{s}", .{ prefix.items, if (last) "└── " else "├── " });
-        try writeLine(w, kid, false);
+        try writeLine(arena, w, kid, false);
         const len = prefix.items.len;
         try prefix.appendSlice(arena, if (last) "    " else "│   ");
         try writeKids(w, kid, prefix, arena);
@@ -152,23 +165,23 @@ fn writeKids(w: *std.Io.Writer, n: Node, prefix: *std.ArrayList(u8), arena: Allo
 }
 
 pub fn writeText(arena: Allocator, w: *std.Io.Writer, root: Node) !void {
-    try writeLine(w, root, true);
+    try writeLine(arena, w, root, true);
     var prefix: std.ArrayList(u8) = .empty;
     try writeKids(w, root, &prefix, arena);
 }
 
-pub fn writeJson(w: *std.Io.Writer, n: Node) !void {
+pub fn writeJson(arena: Allocator, w: *std.Io.Writer, n: Node) !void {
     try w.writeAll("{\"name\": ");
-    try std.json.Stringify.encodeJsonString(n.name, .{}, w);
+    try std.json.Stringify.encodeJsonString(try shown(arena, n.name, is_windows), .{}, w);
     try w.print(", \"kind\": \"{s}\"", .{@tagName(n.kind)});
     if (n.path) |p| {
         try w.writeAll(", \"path\": ");
-        try std.json.Stringify.encodeJsonString(p, .{}, w);
+        try std.json.Stringify.encodeJsonString(try shown(arena, p, is_windows), .{}, w);
     }
     try w.print(", \"dynamic\": {}, \"repeat\": {}, \"requires\": [", .{ n.dynamic, n.repeat });
     for (n.requires, 0..) |kid, i| {
         if (i > 0) try w.writeAll(", ");
-        try writeJson(w, kid);
+        try writeJson(arena, w, kid);
     }
     try w.writeAll("]}");
 }
@@ -207,7 +220,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     var out: std.Io.Writer.Allocating = .init(init.gpa);
     defer out.deinit();
     if (json) {
-        try writeJson(&out.writer, root);
+        try writeJson(arena, &out.writer, root);
         try out.writer.writeAll("\n");
     } else try writeText(arena, &out.writer, root);
     std.Io.File.stdout().writeStreamingAll(io, out.written()) catch {};
@@ -245,7 +258,9 @@ test "tree follows literal requires and marks repeats, builtins, and missing nam
 
     var out: std.Io.Writer.Allocating = .init(a);
     try writeText(a, &out.writer, root);
-    const text = try std.mem.replaceOwned(u8, a, out.written(), base, "D");
+    // The real path of the directory is the one the tree shows, which on
+    // Windows has a drive letter and `/` in place of `\\`.
+    const text = try std.mem.replaceOwned(u8, a, out.written(), try shown(a, base, is_windows), "D");
     try std.testing.expectEqualStrings(
         \\D/main.lus
         \\├── a (D/a.lus)
@@ -257,4 +272,16 @@ test "tree follows literal requires and marks repeats, builtins, and missing nam
         \\└── https://example.com/x.lus (remote)
         \\
     , text);
+}
+
+test shown {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // What `resolve` builds on Windows for `util.b` from a template with
+    // a drive letter and forward slashes.
+    try std.testing.expectEqualStrings("C:/w/app/util/b.lus", try shown(a, "C:/w/app/util\\b.lus", true));
+    try std.testing.expectEqualStrings("C:/w/app/a.lus", try shown(a, "C:\\w\\app\\a.lus", true));
+    // Elsewhere a backslash belongs to the file name.
+    try std.testing.expectEqualStrings("odd\\name.lus", try shown(a, "odd\\name.lus", false));
 }
