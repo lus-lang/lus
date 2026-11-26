@@ -5,7 +5,7 @@ global print, time
 -- A fixed instant makes the output the same on every run.
 local meeting = time.instant(1795507200)
 
--- `iso` writes ISO 8601 in UTC. `format` takes the strftime specifiers of `os.date`.
+-- `iso` writes ISO 8601 in UTC. `format` takes the strftime specifiers.
 print(meeting:iso())  --> 2026-11-24T08:00:00Z
 print(meeting:format("%Y-%m-%d %H:%M"))  --> 2026-11-24 08:00
 print(meeting:format("%A, %d %B %Y"))  --> Tuesday, 24 November 2026

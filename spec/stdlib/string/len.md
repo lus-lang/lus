@@ -3,7 +3,8 @@ name: string.len
 module: string
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
+deprecated_by: "#"
 origin: lua
 fastcall: true
 params:
@@ -11,6 +12,8 @@ params:
     type: string
 returns: integer
 ---
+
+`string.len` is deprecated, because the length operator `#s` returns the same count.
 
 Returns the number of characters in `s`.
 

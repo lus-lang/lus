@@ -79,6 +79,26 @@ Lus 2.0 is a new runtime written in Zig. It keeps every language feature and lib
 - Removed the `lusc` compiler and the `--standalone`, `--ast-json`, `--ast-graph`, `-Wpedantic`, `--no-fastcall`, and `--strip-debug` options, and the `lus format` command. `string.dump`, `lus build`, `lus ast`, `lus check`, and `lus fmt` cover them.
 - Removed the `lua.h`, `lauxlib.h`, and `lualib.h` embedding headers. `lus.h` is the embedding interface.
 
+### Deprecated
+
+The following functions still run in 2.0 and are removed in a later release. `lus check` reports each use as `deprecated`. `lus check --fix` rewrites the uses where the replacement behaves the same.
+
+| Deprecated | Replacement |
+| --- | --- |
+| `utf8.char` | `string.char` |
+| `utf8.codepoint` | `string.byte` |
+| `utf8.codes` | A numeric `for` from 1 to `#s` with `string.byte` |
+| `utf8.len` | `#s` |
+| `utf8.offset` | `i + n - 1`, because positions count characters |
+| `utf8.charpattern` | `"."` |
+| `string.len` | `#s` |
+| `vector.size` | `#v` |
+| `string.join` | `table.concat` |
+| `os.time` | `time.now():epoch()`, or `time.zoned` for a table of fields |
+| `os.date` | The `format` and `at` methods of `time.instant(t)` |
+| `os.difftime` | `t2 - t1` |
+| `dofile` | `assert(loadfile(path))()` |
+
 ## 1.6.2
 
 **Release date:** July 1, 2026

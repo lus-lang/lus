@@ -6,7 +6,7 @@ Lus 2.0 strings hold text. Every string is well formed WTF-8, the superset of UT
 
 A character is one Unicode code point, including lone surrogates. Every string operation indexes by character:
 
-- `#s` and `string.len(s)` return the number of characters.
+- `#s` returns the number of characters.
 - `string.sub(s, i, j)`, slices `s[i, j]`, `string.byte`, `string.find`, `string.match`, `string.gmatch`, and `string.gsub` positions are character positions.
 - `string.byte(s, i, j)` returns code points and `string.char(...)` builds a string from code points.
 - `string.reverse` reverses characters.

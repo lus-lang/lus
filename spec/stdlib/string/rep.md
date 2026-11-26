@@ -32,4 +32,4 @@ print(string.rep("x", 0) == "")  --> true
 print(#string.rep("é", 4))  --> 4
 ```
 
-[`string.format`](/manual/api#string.format) pads with spaces through a width, and [`string.join`](/manual/api#string.join) joins different strings with a separator.
+[`string.format`](/manual/api#string.format) pads with spaces to a width. [`table.concat`](/manual/api#table.concat) joins different strings with a separator.

@@ -3,7 +3,8 @@ name: dofile
 module: base
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
+deprecated_by: "loadfile"
 pledges: ["load", "fs:read"]
 origin: lua
 params:
@@ -11,6 +12,8 @@ params:
     type: string
 returns: any
 ---
+
+`dofile` is deprecated, because `assert(loadfile(filename))()` compiles and runs the file in the same way.
 
 `dofile(filename)` compiles the file `filename` as a Lus chunk, runs it, and returns every value the chunk returns.
 

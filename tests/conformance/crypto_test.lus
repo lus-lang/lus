@@ -560,7 +560,7 @@ local function uuid4_test()
 end
 
 local function uuid7_test()
-    local before = os.time()
+    local before = time.now():epoch()
     local prev = crypto.uuid(7)
 
     for _ = 1, 2000 do
@@ -574,7 +574,7 @@ local function uuid7_test()
 
     -- The first 48 bits are the Unix time in milliseconds.
     local ms = tonumber(prev:sub(1, 8) .. prev:sub(10, 13), 16)
-    assert(ms // 1000 >= before - 1 and ms // 1000 <= os.time() + 1)
+    assert(ms // 1000 >= before - 1 and ms // 1000 <= time.now():epoch() + 1)
 end
 
 local function uuid_errors_test()
@@ -590,7 +590,7 @@ end
 local crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 local function ulid_test()
-    local before = os.time()
+    local before = time.now():epoch()
     local prev = crypto.ulid()
 
     for _ = 1, 2000 do
@@ -608,7 +608,7 @@ local function ulid_test()
         ms = ms * 32 + crockford:find(prev:sub(i, i), 1, true) - 1
     end
 
-    assert(ms // 1000 >= before - 1 and ms // 1000 <= os.time() + 1)
+    assert(ms // 1000 >= before - 1 and ms // 1000 <= time.now():epoch() + 1)
     -- 128 bits in 26 characters leave the first one below 8.
     assert(prev:sub(1, 1) <= "7")
 end

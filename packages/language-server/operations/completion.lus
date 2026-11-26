@@ -43,6 +43,9 @@ local KIND = {
     TypeParameter = 25,
 }
 
+-- LSP CompletionItemTag
+local TAG_DEPRECATED = 1
+
 -- ---------------------------------------------------------------------------
 -- Lus keywords
 -- ---------------------------------------------------------------------------
@@ -154,6 +157,7 @@ local function member_items(table_name)
             kind = stdlib_kind(symbol),
             detail = symbol.name,
             documentation = symbol.description,
+            tags = symbol.stability == "deprecated" and { TAG_DEPRECATED } or nil,
         }
     end
 
@@ -243,6 +247,7 @@ function completion.compute(uri, position)
                     kind = stdlib_kind(symbol),
                     detail = symbol and symbol.type or "global",
                     documentation = symbol and symbol.description,
+                    tags = symbol?.stability == "deprecated" and { TAG_DEPRECATED } or nil,
                 }
             end
         end
@@ -430,6 +435,7 @@ function completion.compute(uri, position)
                 kind = stdlib_kind(symbol),
                 detail = symbol and symbol.type or "global",
                 documentation = symbol and symbol.description,
+                tags = symbol?.stability == "deprecated" and { TAG_DEPRECATED } or nil,
             }
         end
     end

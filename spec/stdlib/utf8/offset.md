@@ -3,7 +3,7 @@ name: utf8.offset
 module: utf8
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
 origin: lua
 fastcall: true
 params:
@@ -16,6 +16,8 @@ params:
     optional: true
 returns: integer|nil
 ---
+
+`utf8.offset` is deprecated, because positions count characters, so the `n`th character from position `i` is at position `i + n - 1`.
 
 `utf8.offset(s, n, i)` returns the character position of the `n`th character of `s` counted from position `i`, twice, or `nil` when that character lies outside `s`.
 

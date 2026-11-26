@@ -18,6 +18,7 @@ local function run_hot(f)
     return table.unpack(r, 1, r.n)
 end
 
+-- lus: allow(deprecated)
 local function fast_paths_hand_unusual_calls_to_the_library_test()
     local ok, v = run_hot(function()
         return string.rep("ab", 3)

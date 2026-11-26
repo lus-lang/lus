@@ -20,7 +20,7 @@ pledge("load")
 pledge("fs:read=./fs2_x*", "fs:write=./fs2_x*", "fs:read=./fs2_ro_*")
 
 local SEP = fs.path.separator
-local RUN = tostring(os.time())
+local RUN = tostring(time.now():epoch())
 local SANDBOX = "fs2_x" .. RUN
 
 catch fs.remove(SANDBOX, true)

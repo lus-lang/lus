@@ -1535,17 +1535,17 @@ To compare two strings without regard to case, convert both to lower case first:
 
 ### Splitting, joining, and trimming
 
-[`string.split`](/manual/api#string.split) cuts a string at every occurrence of a delimiter and returns the pieces as a list. [`string.join`](/manual/api#string.join) does the reverse. It joins the items of a list into one string with a delimiter between them, converting items that are not strings as `tostring` does.
+[`string.split`](/manual/api#string.split) cuts a string at every occurrence of a delimiter and returns the pieces as a list. [`table.concat`](/manual/api#table.concat) does the reverse. It joins the strings and numbers of a list into one string with a delimiter between them.
 
 ```lus
 local fields = ("ada,36,london"):split(",")
 print(#fields, fields[1], fields[3])  --> 3  ada  london
 
-print(string.join(fields, " | "))  --> ada | 36 | london
-print(string.join({ 1, true, "x" }, "-"))  --> 1-true-x
+print(table.concat(fields, " | "))  --> ada | 36 | london
+print(table.concat({ 1, 2.5, "x" }, "-"))  --> 1-2.5-x
 ```
 
-`string.join` is also the efficient way to build a long string from many parts: add the parts to a list and join them once at the end.
+`table.concat` is also the efficient way to build a long string from many parts: add the parts to a list and join them once at the end.
 
 [`string.trim`](/manual/api#string.trim) removes whitespace from both ends of a string, which text that a person typed or that was read from a file often has. [`string.ltrim`](/manual/api#string.ltrim) removes it from the start only, [`string.rtrim`](/manual/api#string.rtrim) from the end only. When the optional second argument is a string of characters, the functions remove those characters and keep whitespace.
 
@@ -1560,7 +1560,7 @@ for i, part in ipairs(parts) do
     parts[i] = part:trim()
 end
 
-print(string.join(parts, "|"))  --> red|green|blue
+print(table.concat(parts, "|"))  --> red|green|blue
 ```
 
 The delimiter of `string.split` is literal text. To split at a delimiter that varies, such as any amount of whitespace, use a pattern with [`string.gmatch`](#every-match-with-stringgmatch).
@@ -1841,7 +1841,7 @@ for word in ("  the quick   brown fox "):gmatch("%S+") do
     words[#words + 1] = word
 end
 
-print(#words, string.join(words, ","))  --> 4  the,quick,brown,fox
+print(#words, table.concat(words, ","))  --> 4  the,quick,brown,fox
 ```
 
 With a different pattern, the same loop extracts numbers from text. The following example adds the durations in a line of timings.
@@ -2010,7 +2010,7 @@ for number in note:gmatch("-?%d+%.?%d*") do
     numbers[#numbers + 1] = tonumber(number)
 end
 
-print(string.join(numbers, " "))  --> 1042 3 2.5 59.9
+print(table.concat(numbers, " "))  --> 1042 3 2.5 59.9
 ```
 
 #### Fields with a varying delimiter
@@ -2024,7 +2024,7 @@ for tag in ("lus, lua;zig  wasm"):gmatch("[^,;%s]+") do
     tags[#tags + 1] = tag
 end
 
-print(#tags, string.join(tags, "|"))  --> 4  lus|lua|zig|wasm
+print(#tags, table.concat(tags, "|"))  --> 4  lus|lua|zig|wasm
 ```
 
 #### Converting a naming style
@@ -4583,17 +4583,9 @@ A mode with a `b`, such as `"rb"`, opens a file in binary mode, where a read ret
 
 ### `os`
 
-The `os` library reads the time and the environment from the operating system, creates temporary files, and ends the program.
+The `os` library reads the processor time and the environment from the operating system, creates temporary files, and ends the program.
 
-[`os.time`](/manual/api#os.time) returns the current time as a count of seconds since the start of 1970, the form in which most systems store times. Given a table with the fields `year`, `month`, and `day`, plus the optional fields `hour`, `min`, and `sec`, it returns the count for that local date and time. [`os.date`](/manual/api#os.date) converts such a count to text with a format string that uses codes such as `%Y` for the year, `%m` for the month, `%d` for the day, `%H` for the hour, and `%M` for the minute. A format that starts with `!` gives the time in UTC. Any other format gives the local time.
-
-```lus
-local release = os.time({ year = 2031, month = 4, day = 12, hour = 9 })
-print(os.date("%Y-%m-%d %H:%M", release))  --> 2031-04-12 09:00
-print(os.date("!%Y-%m-%d %H:%M:%S", 1700000000))  --> 2023-11-14 22:13:20
-```
-
-These functions are enough for timestamps and simple formatting. The [`time` library](#time) provides time zones, durations, and parsing.
+The [`time` library](#time) reads the current time and works with dates. `time.now():epoch()` returns the current time as a count of seconds since the start of 1970, the form in which most systems store times.
 
 [`os.clock`](/manual/api#os.clock) returns the processor time that the program has used, in seconds, so the difference between two readings is the processor time of the code between them. The following program times a loop.
 
@@ -4637,25 +4629,23 @@ end
 
 ### `utf8`
 
-The `utf8` library converts between characters and their [code points](#characters-and-code-points) and checks that text is valid Unicode. A Lus string may hold a _lone surrogate_, a code point that is not valid Unicode by itself, which can occur in file names from Windows. On such a string, `utf8.len` returns `nil` and the position of the first lone surrogate, while `utf8.codes` raises an error when it reaches one. A program can use either function to check text before it passes the text to a system that requires valid Unicode.
+The `utf8` library is deprecated, because Lus strings count characters. [`string.char`](/manual/api#string.char) builds a string from code points and [`string.byte`](/manual/api#string.byte) returns the code points of a range of characters. `#s` counts the characters, so a numeric `for` from 1 to `#s` visits each one.
 
-[`utf8.char`](/manual/api#utf8.char) builds a string from code points. [`utf8.codepoint`](/manual/api#utf8.codepoint) returns the code points of the characters in a range of a string. [`utf8.codes`](/manual/api#utf8.codes) is an iterator that visits each character with its position and its code point.
+A Lus string may hold a _lone surrogate_, a code point that is not valid Unicode by itself, which can occur in file names from Windows. [`string.transcode`](/manual/api#string.transcode) with `"utf-8"` as both encodings raises an error on such a string, so a program can check text before it passes the text to a system that requires valid Unicode.
 
 ```lus
-print(utf8.char(233, 9749))  --> é☕
-print(utf8.codepoint("héllo", 2))  --> 233
-print(utf8.len("héllo"))  --> 5
-print(utf8.len("a\u{D800}b"))  --> nil  2
+local word = "añb"
+print(string.char(233, 9749))  --> é☕
+print(string.byte(word, 2), #word)  --> 241  3
+print((catch string.transcode("a\u{D800}b", "utf-8", "utf-8")))  --> false
 
-for position, code in utf8.codes("añb") do
-    print(position, code)
+for position = 1, #word do
+    print(position, word:byte(position))
 end
 --> 1  97
 --> 2  241
 --> 3  98
 ```
-
-The [UTF-8 library reference](/manual/api#utf-8-library) lists every function. The [`vector`](#vector) library converts a string to its bytes.
 
 ### `vector`
 
@@ -4832,7 +4822,7 @@ pledge("network:server=127.0.0.1:8080")
 
 network.serve("127.0.0.1", 8080, function(request)
     if request.path == "/time" then
-        return 200, tojson({ now = os.time() }), { ["Content-Type"] = "application/json" }
+        return 200, tojson({ now = time.now():epoch() }), { ["Content-Type"] = "application/json" }
     end
     return 404, "not found\n"
 end)

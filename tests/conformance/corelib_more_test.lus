@@ -32,7 +32,7 @@ end
 
 local function concat_joins_surrogate_halves_test()
     local s = table.concat({ "\u{D800}", "\u{DC00}" })
-    assert(s == "\u{10000}" and utf8.len(s) == 1)
+    assert(s == "\u{10000}" and #s == 1)
     s = table.concat({ "a\u{D83D}", "\u{DE00}b" }, "")
     assert(s == "a\u{1F600}b")
     assert(table.concat({ "x", "y" }, "\u{D800}") ~= "")
@@ -44,9 +44,7 @@ local function short_concats_keep_their_text_test()
     local tags = { "a&b", "it's", "x" }
     local s = table.concat(tags, ", ")
     assert(s == "a&b, it's, x" and #s == 12)
-    assert(
-        table.concat({ "é", "ü" }, "-") == "é-ü" and utf8.len(table.concat({ "é", "ü" }, "-")) == 3
-    )
+    assert(table.concat({ "é", "ü" }, "-") == "é-ü" and #table.concat({ "é", "ü" }, "-") == 3)
     assert(table.concat({}, ", ") == "" and table.concat({ "", "" }) == "")
     assert(table.concat({ "one" }) == "one" and table.concat({ "a", "b", "c" }, "", 2, 3) == "bc")
     local seen = {}

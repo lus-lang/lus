@@ -1,4 +1,4 @@
-global ipairs, require, string, utf8
+global ipairs, require, string
 
 -- Call hierarchy: the functions that call a function, and the functions it
 -- calls. A function is a `local function`, a `function NAME` or
@@ -67,7 +67,11 @@ local function analyze(uri)
         local line, col = I.to_pos(starts, offset)
         local units, i = 0, 1
 
-        for _, cp in utf8.codes(lines[line] or "") do
+        local line_text = lines[line] or ""
+
+        for k = 1, #line_text do
+            local cp = string.byte(line_text, k)
+
             if i >= col then
                 break
             end
@@ -101,7 +105,7 @@ local function analyze(uri)
             after = after,
             body = body,
             range = span(first, after),
-            selection = span(name_at, name_at + utf8.len(name)),
+            selection = span(name_at, name_at + #name),
         }
     end
 
@@ -167,7 +171,7 @@ local function analyze(uri)
                     a.calls[#a.calls + 1] = {
                         key = key,
                         at = first,
-                        range = span(first, first + utf8.len(name)),
+                        range = span(first, first + #name),
                     }
                 end
             end

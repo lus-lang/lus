@@ -115,6 +115,7 @@ Every diagnostic has a code that stays the same between releases, so a tool can 
 | `duplicate-key` | warning | A table constructor sets the same constant key twice. |
 | `self-assign` | warning | A variable or field is assigned to itself. |
 | `deprecated-pcall` | warning | `pcall` or `xpcall` is used where Lus has `catch`. |
+| `deprecated` | warning | A deprecated library function or constant is used. |
 | `pledge-after-seal` | warning | A `pledge` follows `pledge("seal")` and has no effect. |
 | `use-from` | hint | Fields of one table are copied into same-named locals one by one. |
 | `use-optional-chain` | hint | Nested nil checks or an `and` chain do what optional chaining does. |
@@ -212,6 +213,12 @@ end
 
 local ok, err = catch risky()
 print(ok, err)  --> false  failed
+```
+
+A library function or constant that Lus deprecates still runs. `lus check` reports each use of one as `deprecated`, with a message that names the replacement. The `utf8` library, `string.len`, `string.join`, `vector.size`, `os.time`, `os.date`, `os.difftime`, and `dofile` are deprecated.
+
+```lus nocheck
+print(string.len(name))  -- 'string.len' is deprecated: use the length operator '#' [deprecated]
 ```
 
 A local that is used only by the `if` statement after it can be declared in the condition of that `if`. [Control flow](/manual/guide#control-flow) describes this form.
@@ -336,6 +343,7 @@ A file whose name ends in `_test.lus` is checked as a [test file](/manual/testin
 | `use-from` | The locals become `local a, b from t`. |
 | `use-optional-chain` | `a and a.b and a.b.c` becomes `a?.b?.c`, which yields the same `nil` or `false` when a step is missing. |
 | `deprecated-pcall` | `pcall(f, ...)` becomes `catch f(...)`. `xpcall(f, h, ...)` becomes `catch[h] f(...)`. Both rewrites apply when `f` is a name or a field and the call is not an operand of an operator. |
+| `deprecated` | `string.len(s)` becomes `#s` when `s` is a string literal, a string with interpolation, or a call of `tostring`. `vector.size(v)` becomes `#v` when `v` is a call of `vector.create`, `vector.fromstring`, or `vector.clone`. `utf8.char` becomes `string.char`. `utf8.charpattern` becomes `"."`. `os.time()` becomes `time.now():epoch()`. `string.join` becomes `table.concat` for a list of string and number literals. `dofile(path)` becomes `assert(loadfile(path))()`. |
 | `use-if-assign` | The declaration moves into the condition of the `if`. |
 | `use-continue` | Each `goto` becomes `continue`. The label is deleted. |
 | `blank-line-around-block`, `prefer-double-quotes`, `trailing-comma` | The blank line, the double quotes, or the comma is written. |

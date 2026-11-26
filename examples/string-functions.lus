@@ -1,6 +1,6 @@
 -- String Functions: Search, slice, split, and reshape text with the string library.
 -- playground: true
-global print, string
+global print, string, table
 
 local title = "  The Hitchhiker's Guide  "
 
@@ -36,10 +36,10 @@ end
 print(starts_with("report.csv", "report"), ends_with("report.csv", ".csv"))  --> true true
 print(starts_with("report.csv", "summary"), ends_with("report.csv", ".json"))  --> false false
 
--- `split` cuts at a literal delimiter and `join` puts the pieces back together.
+-- `split` cuts at a literal delimiter and `table.concat` puts the pieces back together.
 local tags = string.split("lua,lus,,zig", ",")
 print(#tags, tags[3] == "")  --> 4 true
-print(string.join(tags, " | "))  --> lua | lus |  | zig
+print(table.concat(tags, " | "))  --> lua | lus |  | zig
 
 -- `rep` repeats a string with an optional separator. `reverse` reverses characters.
 print(string.rep("ab", 3, "-"))  --> ab-ab-ab

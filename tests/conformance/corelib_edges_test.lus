@@ -98,6 +98,7 @@ local function a_normal_coroutine_cannot_detach_test()
     assert(ok and not inner_ok and err:find("cannot detach a normal coroutine", 1, true), err)
 end
 
+-- lus: allow(deprecated)
 local function utf8_checks_its_positions_test()
     raises(function()
         return utf8.codepoint("abc", 1, 1 << 40)

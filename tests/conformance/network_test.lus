@@ -99,7 +99,7 @@ end
 -- worker ends first, its error is raised from worker.receive.
 local function accept_from(server, w)
     server:settimeout(0.05)
-    local started = os.time()
+    local started = time.now():epoch()
 
     while true do
         if ok, conn = catch server:accept() then
@@ -112,7 +112,7 @@ local function accept_from(server, w)
             error("the worker ended before it connected", 0)
         end
 
-        if os.time() - started > wait_seconds then
+        if time.now():epoch() - started > wait_seconds then
             error("the worker did not connect", 0)
         end
     end

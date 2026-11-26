@@ -3,7 +3,7 @@ name: os.difftime
 module: os
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
 origin: lua
 params:
   - name: t2
@@ -12,6 +12,8 @@ params:
     type: integer
 returns: number
 ---
+
+`os.difftime` is deprecated, because the subtraction `t2 - t1` gives the same count of seconds as an integer.
 
 Returns the number of seconds from `t1` to `t2` as a float.
 

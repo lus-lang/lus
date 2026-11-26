@@ -37,7 +37,7 @@ end
 -- long strings
 local function long_strings_test()
     local b = string.rep("0123456789", 96)
-    assert(string.len(b) == 960)
+    assert(#b == 960)
 
     -- nested brackets
     assert([=[one [[two]] one]=] == "one [[two]] one")

@@ -1,3 +1,6 @@
+--- These tests cover the deprecated functions themselves.
+--- lus: allow(deprecated)
+
 pledge("load", "debug")
 
 -- Builtin parity suite, ported from h1/fastcall-parity.lus.

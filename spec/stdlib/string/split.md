@@ -30,4 +30,4 @@ local chars = string.split("héllo", "")
 print(#chars, chars[2])  --> 5  é
 ```
 
-[`string.join`](/manual/api#string.join) is the inverse. [`string.gmatch`](/manual/api#string.gmatch) splits on a pattern, such as runs of whitespace.
+[`table.concat`](/manual/api#table.concat) is the inverse. [`string.gmatch`](/manual/api#string.gmatch) splits on a pattern, such as runs of whitespace.

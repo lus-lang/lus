@@ -49,6 +49,11 @@ local function format_stdlib_symbol(symbol)
         end
     end
 
+    if symbol.stability == "deprecated" then
+        local by = symbol.deprecated_by
+        parts[#parts + 1] = by and `**Deprecated.** Use \`$by\`.` or "**Deprecated.**"
+    end
+
     if symbol.description then
         parts[#parts + 1] = "---"
         parts[#parts + 1] = symbol.description

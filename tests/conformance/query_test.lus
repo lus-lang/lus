@@ -1770,7 +1770,7 @@ local function every_sqlite_type_arrives_as_its_lus_counterpart_test()
     assert(math.type(r.f) == "float")
     assert(r.s == "x")
     assert(type(r.b) == "vector")
-    assert(vector.size(r.b) == 2)
+    assert(#r.b == 2)
     assert(r.n == nil)
 end
 

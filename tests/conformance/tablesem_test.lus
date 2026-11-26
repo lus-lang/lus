@@ -1003,7 +1003,7 @@ end
 local function concat_of_long_strings_with_a_separator_test()
     local part = ("é"):rep(40)
     local s = table.concat({ part, part, part }, "·")
-    assert(utf8.len(s) == 122)
+    assert(#s == 122)
     assert(s:sub(41, 41) == "·")
 end
 

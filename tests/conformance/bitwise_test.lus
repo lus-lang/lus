@@ -1,6 +1,6 @@
 pledge("load", `fs:read=$TEST_DIR/fixtures/bwcoercion/*`)
 
-dofile(TEST_DIR .. "/fixtures/bwcoercion/shim.lus")
+assert(loadfile(TEST_DIR .. "/fixtures/bwcoercion/shim.lus"))()
 
 local numbits = string.packsize("j") * 8
 

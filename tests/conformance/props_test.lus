@@ -160,6 +160,7 @@ local function random_string(r)
 end
 
 -- Strings keep the invariants of character indexing.
+-- lus: allow(deprecated)
 local function string_indexing_invariants_hold_test()
     local r = rng(5)
 

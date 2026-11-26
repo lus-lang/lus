@@ -454,7 +454,7 @@ print(catch table.reshape({ 1, 2, 3 }, 2, 2))  --> false  ...: array length 3 do
 
 ## String functions
 
-The `string` library has functions that cut a line into fields, join fields into a line, and remove the spaces around a value.
+The `string` and `table` libraries have functions that cut a line into fields, join fields into a line, and remove the spaces around a value.
 
 [`string.split(s, delimiter)`](/manual/api#string.split) cuts a string at every occurrence of a delimiter and returns an array of the pieces. The delimiter may be several characters long and is matched as plain text, so pattern characters such as `.` have no special meaning in it. Two adjacent delimiters produce an empty string between them. A delimiter at either end of the string produces an empty string at that end. An empty delimiter splits the string into its characters.
 
@@ -471,14 +471,14 @@ local chars = ("héllo"):split("")
 print(#chars, chars[2])  --> 5  é
 ```
 
-[`string.join(t, delimiter)`](/manual/api#string.join) is the reverse, joining the elements of an array into one string with the delimiter between them. It converts values that are not strings with `tostring`, so it accepts booleans and other values that [`table.concat`](/manual/api#table.concat) rejects. `table.concat` accepts strings and numbers only and is the function to use for building a long string from many pieces. An empty array produces the empty string. The delimiter is required.
+[`table.concat(t, delimiter)`](/manual/api#table.concat) is the reverse, joining the strings and numbers of an array into one string with the delimiter between them. An empty array produces the empty string. A value of any other type raises an error, so a program converts booleans and tables with `tostring` first.
 
 ```lus
-global print, string
+global print, table, tostring
 
-print(string.join({ "hello", "world" }, " "))  --> hello world
-print(string.join({ 1, true, 2.5 }, ","))  --> 1,true,2.5
-print(string.join({}, ",") == "")  --> true
+print(table.concat({ "hello", "world" }, " "))  --> hello world
+print(table.concat({ 1, tostring(true), 2.5 }, ","))  --> 1,true,2.5
+print(table.concat({}, ",") == "")  --> true
 ```
 
 Text from a person or a file often has spaces or line breaks around the value. [`string.trim`](/manual/api#string.trim) removes characters from both ends of a string, [`string.ltrim`](/manual/api#string.ltrim) from the start, and [`string.rtrim`](/manual/api#string.rtrim) from the end. Without a second argument, the three functions remove spaces, tabs, line feeds, and carriage returns. With a string as the second argument, they remove the characters in that string.

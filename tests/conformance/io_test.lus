@@ -25,7 +25,7 @@ local READONLY_FIXTURE = TEST_DIR .. "/fixtures/io/readonly.txt"
 
 pledge("fs:read=./iorw_*", "fs:write=./iorw_*", "fs:read=./ioro_*", "fs:read=" .. READONLY_FIXTURE)
 
-local RUN = tostring(os.time())
+local RUN = tostring(time.now():epoch())
 local SB = "./iorw_" .. RUN
 
 catch fs.remove(SB, true)
@@ -550,9 +550,9 @@ local function a_counted_read_returns_without_waiting_for_more_bytes_test()
 
     pledge("exec")
     local p <close> = io.popen("printf a; sleep 3; printf b")
-    local start = os.time()
+    local start = time.now():epoch()
     assert(p:read(1) == "a")
-    assert(os.time() - start <= 2)
+    assert(time.now():epoch() - start <= 2)
     assert(p:read(1) == "b")
 end
 

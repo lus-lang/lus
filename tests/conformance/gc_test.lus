@@ -170,7 +170,7 @@ end
 -- long strings
 local function long_strings_test()
     local x = "01234567890123456789012345678901234567890123456789012345678901234567890123456789"
-    assert(string.len(x) == 80)
+    assert(#x == 80)
     local s = ""
     local k = 100
 
@@ -178,7 +178,7 @@ local function long_strings_test()
         s = s .. x
     end
 
-    assert(string.len(s) == k * 80)
+    assert(#s == k * 80)
 end
 
 -- self-referenced threads
@@ -606,7 +606,7 @@ end
 local function checksum(v)
     local sum = 0
 
-    for i = 0, vector.size(v) - 1 do
+    for i = 0, #v - 1 do
         sum = (sum + vector.unpack(v, i, "B")) % 4294967296
     end
 
@@ -1058,7 +1058,7 @@ end
 local function large_held_vector_survives_small_garbage_churn_intact_test()
     local big = vector.create(65536)
 
-    for i = 0, vector.size(big) - 1 do
+    for i = 0, #big - 1 do
         vector.pack(big, i, "B", (i * 7 + 3) % 256)
     end
 
@@ -1077,7 +1077,7 @@ local function large_held_vector_survives_small_garbage_churn_intact_test()
     collectgarbage()
     collectgarbage()
     assert(checksum(big) == want, "held vector contents must be unchanged after churn")
-    assert(vector.size(big) == 65536)
+    assert(#big == 65536)
 end
 
 -- vector resize under GC churn preserves data
@@ -1267,7 +1267,7 @@ local function finalizer_can_read_a_vector_still_owned_by_the_dying_object_test(
         setmetatable({ buf = v }, {
             __gc = function(self)
                 seen.value = vector.unpack(self.buf, 0, "I4")
-                seen.size = vector.size(self.buf)
+                seen.size = #self.buf
             end,
         })
     end

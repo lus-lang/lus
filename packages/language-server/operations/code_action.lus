@@ -1,4 +1,4 @@
-global require, ipairs, math, string, utf8
+global require, ipairs, math, string
 
 local document = require("lus-language.document")
 local refactor = require("lus-language.operations.refactor")
@@ -37,7 +37,9 @@ end
 local function char_column(line_text, character)
     local units, col = 0, 1
 
-    for _, cp in utf8.codes(line_text) do
+    for k = 1, #line_text do
+        local cp = string.byte(line_text, k)
+
         if units >= character then
             break
         end
@@ -53,7 +55,9 @@ end
 local function lsp_character(line_text, col)
     local units, i = 0, 1
 
-    for _, cp in utf8.codes(line_text) do
+    for k = 1, #line_text do
+        local cp = string.byte(line_text, k)
+
         if i >= col then
             break
         end

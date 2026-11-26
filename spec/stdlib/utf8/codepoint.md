@@ -3,7 +3,8 @@ name: utf8.codepoint
 module: utf8
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
+deprecated_by: "string.byte"
 origin: lua
 fastcall: true
 params:
@@ -20,6 +21,8 @@ params:
     optional: true
 returns: integer
 ---
+
+`utf8.codepoint` is deprecated, because [`string.byte`](/manual/api#string.byte) returns the code points of the same characters and accepts lone surrogates.
 
 `utf8.codepoint(s, i, j, lax)` returns the code points of the characters of `s` from character position `i` through `j`, one integer per character.
 

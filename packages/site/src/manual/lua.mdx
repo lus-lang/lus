@@ -89,7 +89,7 @@ local bytes = vector.fromstring(s)
 print(#bytes, vector.get(bytes, 1), vector.get(bytes, 2))  --> 6  195  169
 ```
 
-Code can measure, cut, and print any Lus string without first checking that it is valid text, while converting between bytes and text takes an explicit call such as `vector.fromstring`. Lua code that uses strings as text needs no change, although its calls to `utf8.offset` are no longer necessary. Lua code that uses strings as byte arrays must account for the following differences.
+Code can measure, cut, and print any Lus string without first checking that it is valid text, while converting between bytes and text takes an explicit call such as `vector.fromstring`. Lua code that uses strings as text needs no change. The `utf8` library is deprecated but still runs. `lus check` names the string function or operator that replaces each of its calls. Lua code that uses strings as byte arrays must account for the following differences.
 
 - `#s`, `string.sub`, `string.find`, and the other string functions take and return character positions. The width in a `string.format` specifier such as `%5s` also counts characters.
 - `utf8.offset`, `utf8.codepoint`, and `utf8.codes` take and return character positions too. `utf8.offset("héllo", 3)` is 3, so Lua code that combined them with `string.sub` keeps working.

@@ -149,7 +149,7 @@ local function using_coroutines_test()
             return {}
         end)
 
-        assert(string.len(a()) == 10)
+        assert(#a() == 10)
         return a()
     end
 

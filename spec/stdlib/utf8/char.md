@@ -3,12 +3,15 @@ name: utf8.char
 module: utf8
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
+deprecated_by: "string.char"
 origin: lua
 fastcall: true
 vararg: true
 returns: string
 ---
+
+`utf8.char` is deprecated, because [`string.char`](/manual/api#string.char) returns the same string for the same code points.
 
 `utf8.char(...)` returns a string that holds one character for each code point argument, in order.
 

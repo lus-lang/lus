@@ -615,7 +615,7 @@ local function generate(seed, size)
             {
                 1,
                 function()
-                    return "(utf8.len(" .. e("str") .. ") or 0)"
+                    return "#(" .. e("str") .. ")"
                 end,
             },
             {
@@ -633,7 +633,7 @@ local function generate(seed, size)
             {
                 1,
                 function()
-                    return "string.len(string.rep(" .. e("str") .. ", " .. r.range(0, 4) .. "))"
+                    return "#string.rep(" .. e("str") .. ", " .. r.range(0, 4) .. ")"
                 end,
             },
         })
@@ -1014,7 +1014,7 @@ local function generate(seed, size)
             {
                 1,
                 function()
-                    return "(utf8.char("
+                    return "(string.char("
                         .. r.pick({ "65", "233", "0x65E5", "0x1F600", "0xD800" })
                         .. ") .. "
                         .. e("str")

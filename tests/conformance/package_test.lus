@@ -45,7 +45,7 @@ fs.createdirectory("tree/suite")
 copy_tree(TEST_DIR .. "/fixtures/preinclude", "tree/suite/preinclude")
 pledge("seal")
 
-local RUN = `$(tostring(os.time()))_$(tostring(math and math.random(1, 999999) or 0))`
+local RUN = `$(tostring(time.now():epoch()))_$(tostring(math and math.random(1, 999999) or 0))`
 local MODDIR = "./pkg_" .. RUN
 
 -- A single fixture module that already ships in the tree. Every path test

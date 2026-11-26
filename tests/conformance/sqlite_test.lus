@@ -390,7 +390,7 @@ local function sqlite_types_map_to_lus_types_test()
         assert(math.type(row.f) == "float")
         assert(row.s == "x")
         assert(type(row.b) == "vector")
-        assert(vector.size(row.b) == 2)
+        assert(#row.b == 2)
         assert(vector.unpack(row.b, 0, "B") == 1)
         assert(row.n == nil)
     end
@@ -454,7 +454,7 @@ local function embedded_nul_bytes_survive_blob_round_trips_test()
     vector.pack(v, 0, "BBB", 65, 0, 66)
 
     for row in db:query("SELECT ? AS b", v) do
-        assert(vector.size(row.b) == 3)
+        assert(#row.b == 3)
         assert(vector.unpack(row.b, 1, "B") == 0)
     end
 end
@@ -477,7 +477,7 @@ local function a_1_mb_blob_round_trips_intact_test()
     vector.pack(v, n - 1, "B", 128)
 
     for row in db:query("SELECT ? AS b", v) do
-        assert(vector.size(row.b) == n)
+        assert(#row.b == n)
         assert(vector.unpack(row.b, 0, "B") == 255)
         assert(vector.unpack(row.b, n - 1, "B") == 128)
     end
@@ -490,7 +490,7 @@ local function empty_string_and_zero_length_blob_are_distinct_from_null_test()
     for row in db:query("SELECT ? AS s, ? AS b, NULL AS n", "", empty) do
         assert(row.s == "")
         assert(type(row.b) == "vector")
-        assert(vector.size(row.b) == 0)
+        assert(#row.b == 0)
         assert(row.n == nil)
     end
 end
@@ -1054,7 +1054,7 @@ end
     exactdb_*     : reads cover sidecars while writes cover the db only
 ]]
 
-local RUN = tostring(os.time())
+local RUN = tostring(time.now():epoch())
 local SANDBOX = "sqlite_fs_" .. RUN
 
 -- The sandbox directory is created under the same grants that the tests use. The
@@ -1147,7 +1147,7 @@ local function blobs_and_large_text_persist_across_reopen_test()
 
         for row in db:query("SELECT s, b FROM t") do
             assert(row.s == big)
-            assert(vector.size(row.b) == 4)
+            assert(#row.b == 4)
             assert(vector.unpack(row.b, 3, "B") == 6)
         end
     end)

@@ -14,7 +14,7 @@ Because a string is always text, its length is its number of characters and no s
 
 A _character_ is one Unicode code point: a letter, a digit, a punctuation mark, an emoji, or any other entry of the Unicode standard. The letter `é` is one character, although UTF-8 stores it in two bytes. Every string operation indexes and measures by character:
 
-- `#s` and [`string.len`](/manual/api#string.len) return the number of characters.
+- `#s` returns the number of characters.
 - Positions in [`string.sub`](/manual/api#string.sub), [slices](/manual/guide#slices), [`string.find`](/manual/api#string.find), [`string.match`](/manual/api#string.match), [`string.gmatch`](/manual/api#string.gmatch), and [`string.gsub`](/manual/api#string.gsub) are character positions.
 - [`string.byte`](/manual/api#string.byte) returns the code points of characters. [`string.char`](/manual/api#string.char) builds a string from code points.
 - [`string.reverse`](/manual/api#string.reverse) reverses characters.
@@ -77,7 +77,7 @@ print(joined, #joined)  --> a𐀀b  3
 
 A _vector_ is a buffer of bytes that a program can read, change, and resize. A _byte_ is an integer from 0 to 255. Programs use vectors for data that is not text, such as the contents of binary files, compressed data, and the data that sockets send and receive.
 
-Offsets into a vector start at 0, as they do in the binary formats that vectors hold. `#v` and [`vector.size`](/manual/api#vector.size) return the size in bytes. Two vectors are equal only when they are the same vector, so two different vectors with the same contents are unequal.
+Offsets into a vector start at 0, as they do in the binary formats that vectors hold. `#v` returns the size in bytes. Two vectors are equal only when they are the same vector, so two different vectors with the same contents are unequal.
 
 ### Creating and resizing
 
@@ -89,7 +89,7 @@ global print, vector
 local v = vector.create(4)
 vector.set(v, 0, 255)
 vector.resize(v, 8)
-print(#v, vector.size(v), vector.get(v, 0), vector.get(v, 7))  --> 8  8  255  0
+print(#v, vector.get(v, 0), vector.get(v, 7))  --> 8  255  0
 
 local copy = vector.clone(v)
 vector.set(copy, 0, 1)

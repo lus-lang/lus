@@ -1,4 +1,4 @@
-global io, fromjson, tojson, string, tonumber, tostring, table, select, type, utf8
+global io, fromjson, tojson, string, tonumber, tostring, table, select, type
 
 local transport = {}
 
@@ -98,9 +98,8 @@ function transport.decode_json(body)
         return nil, "JSON-RPC body exceeds 16 MiB"
     end
 
-    local valid = utf8.len(body)
-
-    if not valid then
+    -- Strict decoding rejects a lone surrogate, which valid UTF-8 never holds.
+    if not catch string.transcode(body, "utf-8", "utf-8") then
         return nil, "JSON-RPC body is not valid UTF-8"
     end
 
@@ -244,7 +243,7 @@ function transport.encode_message(msg)
         return nil, "failed to encode JSON-RPC message"
     end
 
-    if not utf8.len(body) then
+    if not catch string.transcode(body, "utf-8", "utf-8") then
         return nil, "JSON-RPC response is not valid UTF-8"
     end
 

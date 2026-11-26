@@ -686,6 +686,7 @@ local function calls_test()
     assert(not ok and string.find(err, "stack overflow"))
 end
 
+-- lus: allow(deprecated)
 local function tables_test()
     local function f(n)
         local t = {}
@@ -1145,6 +1146,7 @@ end
 -- calls that native code runs inline. Each one first trains a site on the
 -- common case and then gives the same site the cases its guards reject.
 
+-- lus: allow(deprecated)
 local function field_cache_test()
     local function get(t)
         return t.x

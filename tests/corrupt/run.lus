@@ -316,7 +316,7 @@ local function drain(sock, wait)
     while true do
         local ok, got = catch sock:receive(1)
 
-        if not ok or got == nil or vector.size(got) == 0 then
+        if not ok or got == nil or #got == 0 then
             break
         end
 
@@ -534,7 +534,7 @@ local function bytesOf(seed)
 end
 
 local function sizeOf(seed)
-    return vector.size(bytesOf(seed))
+    return #bytesOf(seed)
 end
 
 -- The number of inputs of a kind for a seed, and the index of the k-th
@@ -583,7 +583,7 @@ local function input(target, seed, kind, k)
         return v
     end
 
-    if vector.size(v) == 0 then
+    if #v == 0 then
         return ""
     end
 

@@ -1,4 +1,4 @@
-global require, ipairs, string, debug, utf8
+global require, ipairs, string, debug
 
 local ast_mod = require("lus-language.analysis.ast")
 local scope_mod = require("lus-language.analysis.scope")
@@ -10,6 +10,9 @@ local linting = {}
 -- LSP DiagnosticSeverity
 local SEVERITY_WARNING = 2
 local SEVERITY_HINT = 4
+
+-- LSP DiagnosticTag
+local TAG_DEPRECATED = 2
 
 -- Standard library / built-in names that are always defined (from lus-spec)
 local STDLIB = {}
@@ -47,7 +50,9 @@ local function utf16_character(line_text, col)
     local units = 0
     local i = 1
 
-    for _, cp in utf8.codes(line_text) do
+    for k = 1, #line_text do
+        local cp = string.byte(line_text, k)
+
         if i >= col then
             break
         end
@@ -139,8 +144,9 @@ function linting.compute(uri)
     end
 
     -- Hints of `lus check`: faster or shorter forms of correct code
-    -- (spec/design/hints.md). The other checks of `lus check` overlap the
-    -- warnings above, so only its hints are added.
+    -- (spec/design/hints.md), and its warnings on deprecated library names.
+    -- The other checks of `lus check` overlap the warnings above, so only
+    -- these are added.
     local doc = document.get(uri)
 
     if doc and debug.check then
@@ -151,16 +157,20 @@ function linting.compute(uri)
             local lines
 
             for _, d in ipairs(list) do
-                if d.severity == "hint" then
+                local deprecated = d.code == "deprecated"
+
+                if d.severity == "hint" or deprecated then
                     local diag = {
                         range = {
                             start = { line = d.line - 1, character = d.column - 1 },
                             ["end"] = { line = d.endline - 1, character = d.endcolumn - 1 },
                         },
-                        severity = SEVERITY_HINT,
+                        severity = deprecated and SEVERITY_WARNING or SEVERITY_HINT,
                         source = "lus",
                         code = d.code,
                         message = d.message,
+                        -- The client strikes through a deprecated name.
+                        tags = deprecated and { TAG_DEPRECATED } or nil,
                     }
 
                     -- The client sends `data` back with a code action request, which

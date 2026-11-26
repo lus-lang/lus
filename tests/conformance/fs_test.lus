@@ -4,7 +4,7 @@ pledge("load", "fs", "exec")
 -- Test Helpers
 -- ============================================================================
 
-local SANDBOX = "test_fs_sandbox_" .. os.time()
+local SANDBOX = "test_fs_sandbox_" .. time.now():epoch()
 local SEP = fs.path.separator
 
 -- Ensure clean sandbox for each test run

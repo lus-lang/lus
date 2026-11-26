@@ -3,10 +3,12 @@ name: utf8.charpattern
 module: utf8
 kind: constant
 since: 0.1.0
-stability: stable
+stability: deprecated
 origin: lua
 type: string
 ---
+
+`utf8.charpattern` is deprecated, because the pattern `"."` matches one whole character.
 
 `utf8.charpattern` is the pattern that matches exactly one character, and its value is `"."`.
 

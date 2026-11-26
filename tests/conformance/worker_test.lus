@@ -599,7 +599,7 @@ while true do
         worker.message({t[s[1]], s[1] == s[2], #s[1], s[1]:sub(1, 3), s[3][s[1]]})
         worker.message(s)
     else
-        worker.message({#s, s:sub(-5), s:upper():sub(1, 5), s:find("needle", 1, true), utf8.len(s)})
+        worker.message({#s, s:sub(-5), s:upper():sub(1, 5), s:find("needle", 1, true), #s})
         worker.message(s)
     end
 end
@@ -1333,7 +1333,7 @@ local function shares_long_strings_with_a_worker_test()
         assert(info[2] == "tail!")
         assert(info[3] == "ABCDé")
         assert(info[4] == 201)
-        assert(info[5] == utf8.len(s))
+        assert(info[5] == #s)
         local back = worker.receive(w)
         assert(back == s)
         assert(#back == #s)

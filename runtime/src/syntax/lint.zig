@@ -80,6 +80,7 @@ pub const codes = [_]struct { code: []const u8, severity: Severity, summary: []c
     .{ .code = "duplicate-key", .severity = .warning, .summary = "A table constructor sets the same constant key twice." },
     .{ .code = "self-assign", .severity = .warning, .summary = "A variable or field is assigned to itself." },
     .{ .code = "deprecated-pcall", .severity = .warning, .summary = "'pcall' or 'xpcall' is used where Lus has 'catch'." },
+    .{ .code = "deprecated", .severity = .warning, .summary = "A deprecated library function or constant is used." },
     .{ .code = "pledge-after-seal", .severity = .warning, .summary = "A pledge follows pledge(\"seal\") and has no effect." },
     .{ .code = "use-from", .severity = .hint, .summary = "Fields of one table are copied into same-named locals one by one." },
     .{ .code = "use-optional-chain", .severity = .hint, .summary = "Nested nil checks or an and-chain spell out optional chaining." },
@@ -113,6 +114,46 @@ pub const codes = [_]struct { code: []const u8, severity: Severity, summary: []c
     .{ .code = "line-too-long", .severity = .warning, .strict = true, .summary = "A line is longer than 100 columns." },
 };
 
+/// A deprecated library name, what replaces it, and the rewrite that
+/// `lus check --fix` applies where the replacement does the same.
+const Deprecation = struct {
+    /// The library table, or null for a global function.
+    lib: ?[]const u8,
+    name: []const u8,
+    use: []const u8,
+    fix: Fix = .none,
+
+    const Fix = union(enum) {
+        none,
+        /// The name is replaced by a constant expression.
+        value: []const u8,
+        /// The callee of a call is renamed to `to`, which reads the
+        /// global `global`.
+        rename: struct { to: []const u8, global: []const u8 },
+        /// A call with one argument known to be of that type becomes `#x`.
+        length: enum { string, vector },
+        /// `os.time()` becomes `time.now():epoch()`.
+        now,
+        /// `string.join` of a list of literals becomes `table.concat`.
+        join,
+    };
+};
+
+const deprecations = [_]Deprecation{
+    .{ .lib = "string", .name = "len", .use = "use the length operator '#'", .fix = .{ .length = .string } },
+    .{ .lib = "string", .name = "join", .use = "use table.concat", .fix = .join },
+    .{ .lib = "vector", .name = "size", .use = "use the length operator '#'", .fix = .{ .length = .vector } },
+    .{ .lib = "utf8", .name = "char", .use = "use string.char", .fix = .{ .rename = .{ .to = "string.char", .global = "string" } } },
+    .{ .lib = "utf8", .name = "charpattern", .use = "the pattern \".\" matches one character", .fix = .{ .value = "\".\"" } },
+    .{ .lib = "utf8", .name = "codepoint", .use = "use string.byte, which also accepts lone surrogates" },
+    .{ .lib = "utf8", .name = "codes", .use = "loop over the positions 1 to #s with string.byte" },
+    .{ .lib = "utf8", .name = "len", .use = "use the length operator '#'" },
+    .{ .lib = "utf8", .name = "offset", .use = "positions count characters, so the nth character from i is at i + n - 1" },
+    .{ .lib = "os", .name = "time", .use = "use time.now():epoch(), or time.zoned for a table of fields", .fix = .now },
+    .{ .lib = "os", .name = "date", .use = "use the format and at methods of time.instant(t)" },
+    .{ .lib = "os", .name = "difftime", .use = "subtract the two times" },
+};
+
 const Linter = struct {
     arena: Allocator,
     chunk: ast.Chunk,
@@ -135,8 +176,20 @@ const Linter = struct {
     pcalls: std.AutoHashMapUnmanaged(u32, *ast.Expr) = .empty,
     /// Expressions that are operands of an operator.
     operands: std.AutoHashMapUnmanaged(*ast.Expr, void) = .empty,
+    /// Expressions that bind tighter than a unary operator around them
+    /// would: the left operand of `^` and the object of an index, a
+    /// method call, or a call.
+    tight: std.AutoHashMapUnmanaged(*ast.Expr, void) = .empty,
+    /// Assignment targets.
+    targets: std.AutoHashMapUnmanaged(*ast.Expr, void) = .empty,
+    /// Uses of deprecated names, by the offset of the name, with the
+    /// call around each one when there is one.
+    deprecated_uses: std.AutoHashMapUnmanaged(u32, DeprecatedUse) = .empty,
+    /// Calls of `dofile`, by the offset of the callee.
+    dofiles: std.AutoHashMapUnmanaged(u32, *ast.Expr) = .empty,
 
     const Nested = struct { block: *ast.Block, in_loop: LoopCtx };
+    const DeprecatedUse = struct { dep: *const Deprecation, use: *ast.Expr, call: ?*ast.Expr = null };
 
     fn report(l: *Linter, span: Span, severity: Severity, code: []const u8, comptime fmt: []const u8, args: anytype) Allocator.Error!void {
         try l.reportFix(span, severity, code, &.{}, fmt, args);
@@ -251,6 +304,10 @@ const Linter = struct {
                 continue;
             }
             if (l.assigned.contains(ref.name)) continue;
+            if (std.mem.eql(u8, ref.name, "dofile")) {
+                try l.report(ref.span, .warning, "deprecated", "'dofile' is deprecated: use assert(loadfile(path))()", .{});
+                continue;
+            }
             if (l.opts.builtins) |set| if (set.contains(ref.name)) continue;
             if (std.mem.eql(u8, ref.name, "flags")) continue;
             if ((try warned_undefined.fetchPut(l.arena, ref.name, {})) == null) {
@@ -597,12 +654,20 @@ const Linter = struct {
             .call => |c| if (c.callee.kind == .name) {
                 const n = c.callee.kind.name.text;
                 if (std.mem.eql(u8, n, "pcall") or std.mem.eql(u8, n, "xpcall")) try l.pcalls.put(l.arena, c.callee.span.start, e);
+                if (std.mem.eql(u8, n, "dofile")) try l.dofiles.put(l.arena, c.callee.span.start, e);
             },
             .binop => |b| {
                 l.operands.put(l.arena, b.lhs, {}) catch return error.OutOfMemory;
                 l.operands.put(l.arena, b.rhs, {}) catch return error.OutOfMemory;
             },
             .unop => |u| l.operands.put(l.arena, u.operand, {}) catch return error.OutOfMemory,
+            else => {},
+        }
+        switch (e.kind) {
+            .binop => |b| if (b.op == .pow) try l.tight.put(l.arena, b.lhs, {}),
+            .index => |ix| try l.tight.put(l.arena, ix.obj, {}),
+            .method => |m| try l.tight.put(l.arena, m.obj, {}),
+            .call => |c| try l.tight.put(l.arena, c.callee, {}),
             else => {},
         }
         switch (e.kind) {
@@ -647,6 +712,149 @@ const Linter = struct {
         }
         try out.append(l.arena, ')');
         d.fix = try l.edit(call.span, out.items);
+    }
+
+    /// Records a use of a deprecated library name (`deprecations`), and
+    /// the call around it.
+    fn collectDeprecated(l: *Linter, e: *ast.Expr) Allocator.Error!void {
+        switch (e.kind) {
+            .index => |ix| {
+                if (ix.key.kind != .string or ix.obj.kind != .name) return;
+                for (&deprecations) |*dep| {
+                    const lib = dep.lib orelse continue;
+                    if (!std.mem.eql(u8, dep.name, ix.key.kind.string)) continue;
+                    if (!l.isFree(ix.obj, lib) or l.assigned.contains(lib)) continue;
+                    try l.deprecated_uses.put(l.arena, e.span.start, .{ .dep = dep, .use = e });
+                    try l.report(e.span, .warning, "deprecated", "'{s}.{s}' is deprecated: {s}", .{ lib, dep.name, dep.use });
+                    return;
+                }
+            },
+            .call => |c| if (l.deprecated_uses.getPtr(c.callee.span.start)) |u| {
+                if (u.use == c.callee) u.call = e;
+            },
+            else => {},
+        }
+    }
+
+    /// Whether a rewrite may name the global `name` at any point of the
+    /// file: no local of that name exists, and a named global declaration
+    /// that would make the name undeclared declares it too.
+    fn globalUsable(l: *Linter, name: []const u8) bool {
+        var named_globals = false;
+        var declared = false;
+        for (l.res.bindings) |b| switch (b.kind) {
+            .global => {
+                named_globals = true;
+                if (std.mem.eql(u8, b.name, name)) declared = true;
+            },
+            .global_star => declared = true,
+            else => if (std.mem.eql(u8, b.name, name)) return false,
+        };
+        return !l.assigned.contains(name) and (!named_globals or declared);
+    }
+
+    /// Whether `e` is known to be a string whatever its parts hold: a
+    /// string literal, a string with interpolation, or a call of the
+    /// global `tostring`.
+    fn isStringStrict(l: *Linter, e: *const ast.Expr) bool {
+        const x = unparen(e);
+        return switch (x.kind) {
+            .string, .interp => true,
+            .call => |c| l.isFree(c.callee, "tostring") and c.args.len == 1,
+            else => false,
+        };
+    }
+
+    /// Whether `e` is known to be a vector: a call of `vector.create`,
+    /// `vector.fromstring`, or `vector.clone`.
+    fn isVectorStrict(l: *Linter, e: *const ast.Expr) bool {
+        const x = unparen(e);
+        if (x.kind != .call) return false;
+        const callee = x.kind.call.callee;
+        if (callee.kind != .index or callee.kind.index.key.kind != .string) return false;
+        if (!l.isFree(callee.kind.index.obj, "vector")) return false;
+        const n = callee.kind.index.key.kind.string;
+        return std.mem.eql(u8, n, "create") or std.mem.eql(u8, n, "fromstring") or std.mem.eql(u8, n, "clone");
+    }
+
+    /// `#x` for the rewrite of a length call, in parentheses where the
+    /// operator would bind to less than the call did.
+    fn lengthOf(l: *Linter, call: *ast.Expr, x: *const ast.Expr) Allocator.Error![]const u8 {
+        const inner = l.text(x.span);
+        const operand = switch (unparen(x).kind) {
+            .binop, .unop => try std.fmt.allocPrint(l.arena, "({s})", .{inner}),
+            else => inner,
+        };
+        if (l.tight.contains(call)) return std.fmt.allocPrint(l.arena, "(#{s})", .{operand});
+        return std.fmt.allocPrint(l.arena, "#{s}", .{operand});
+    }
+
+    /// The rewrite of a deprecated use where the replacement does the same
+    /// on every input: see `Deprecation.fix`.
+    fn deprecatedFix(l: *Linter, d: *Diagnostic) Allocator.Error!void {
+        const u = l.deprecated_uses.get(d.span.start) orelse return;
+        if (l.targets.contains(u.use)) return;
+        switch (u.dep.fix) {
+            .none => {},
+            .value => |v| d.fix = try l.edit(u.use.span, v),
+            .rename => |r| {
+                if (u.call == null or !l.globalUsable(r.global)) return;
+                d.fix = try l.edit(u.use.span, r.to);
+            },
+            .length => |kind| {
+                const call = u.call orelse return;
+                const c = call.kind.call;
+                if (c.args.len != 1 or c.args_kind != .parens) return;
+                const known = switch (kind) {
+                    .string => l.isStringStrict(c.args[0]),
+                    .vector => l.isVectorStrict(c.args[0]),
+                };
+                if (!known) return;
+                d.fix = try l.edit(call.span, try l.lengthOf(call, c.args[0]));
+            },
+            .now => {
+                const call = u.call orelse return;
+                if (call.kind.call.args.len != 0 or call.kind.call.args_kind != .parens) return;
+                if (!l.globalUsable("time")) return;
+                d.fix = try l.edit(call.span, "time.now():epoch()");
+            },
+            .join => {
+                // `table.concat` takes strings and numbers only and reads
+                // up to `#t`, where `string.join` converts any value and
+                // stops at the first nil, so the rewrite needs a list of
+                // literals.
+                const call = u.call orelse return;
+                const c = call.kind.call;
+                if (c.args.len != 2 or c.args_kind != .parens) return;
+                if (unparen(c.args[1]).kind != .string) return;
+                const list = unparen(c.args[0]);
+                if (list.kind != .table) return;
+                for (list.kind.table) |f| {
+                    if (f.kind != .positional) return;
+                    switch (unparen(f.kind.positional).kind) {
+                        .string, .integer, .float => {},
+                        else => return,
+                    }
+                }
+                if (!l.globalUsable("table")) return;
+                d.fix = try l.edit(u.use.span, "table.concat");
+            },
+        }
+    }
+
+    /// `dofile(path)` with one argument, which `assert(loadfile(path))()`
+    /// compiles and runs the same way, raising the same message when the
+    /// file cannot be loaded.
+    fn dofileFix(l: *Linter, d: *Diagnostic) Allocator.Error!void {
+        const call = l.dofiles.get(d.span.start) orelse return;
+        const c = call.kind.call;
+        if (c.args.len != 1 or c.args_kind != .parens) return;
+        switch (c.args[0].kind) {
+            .call, .method, .vararg => return,
+            else => {},
+        }
+        if (!l.globalUsable("assert") or !l.globalUsable("loadfile")) return;
+        d.fix = try l.edit(call.span, try std.fmt.allocPrint(l.arena, "assert(loadfile({s}))()", .{l.text(c.args[0].span)}));
     }
 
     fn duplicateKeys(l: *Linter, fields: []ast.Field) Allocator.Error!void {
@@ -753,8 +961,13 @@ const Linter = struct {
         }
     }
 
+    fn collectTargets(l: *Linter, st: *ast.Stat) anyerror!void {
+        if (st.kind == .assign) for (st.kind.assign.targets) |t| try l.targets.put(l.arena, t, {});
+    }
+
     fn collectCall(l: *Linter, slot: **ast.Expr) anyerror!void {
         const e = slot.*;
+        try l.collectDeprecated(e);
         if (e.kind == .call and l.isFree(e.kind.call.callee, "pledge")) try l.calls.append(l.arena, e);
         if (e.kind == .index and e.kind.index.key.kind == .string and l.isFree(e.kind.index.obj, "flags")) try l.flag_reads.append(l.arena, e);
     }
@@ -1578,7 +1791,7 @@ pub fn lint(arena: Allocator, chunk: ast.Chunk, opts: Options) Allocator.Error![
     const walk = @import("walk.zig");
     const v: walk.Visitor(*Linter) = .{ .ctx = &l, .func = Linter.visit };
     v.block(chunk.block) catch return error.OutOfMemory;
-    const vc: walk.Visitor(*Linter) = .{ .ctx = &l, .func = Linter.collectCall };
+    const vc: walk.Visitor(*Linter) = .{ .ctx = &l, .func = Linter.collectCall, .stat_func = Linter.collectTargets };
     vc.block(chunk.block) catch return error.OutOfMemory;
     try l.pledges();
     try l.packageHeader();
@@ -1594,6 +1807,10 @@ pub fn lint(arena: Allocator, chunk: ast.Chunk, opts: Options) Allocator.Error![
 
     for (l.out.items) |*d| {
         if (std.mem.eql(u8, d.code, "deprecated-pcall")) try l.pcallFix(d);
+        if (std.mem.eql(u8, d.code, "deprecated")) {
+            try l.deprecatedFix(d);
+            try l.dofileFix(d);
+        }
     }
     if (opts.strict) {
         for (l.out.items) |*d| {
@@ -1672,4 +1889,45 @@ test "lint statements" {
     try expectCodes("global print local t = { a = 1, a = 2, [1] = 3, 4 } print(t)", "duplicate-key duplicate-key");
     try expectCodes("global t t.a = t.a", "self-assign");
     try expectCodes("goto x", "undefined-label");
+}
+
+/// The text of `src` after the fixes of its `deprecated` diagnostics.
+fn expectDeprecatedFix(src: []const u8, want: []const u8) !void {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var diag: ?[]const u8 = null;
+    const chunk = try @import("parser.zig").parse(testing.allocator, arena, src, .{ .chunkname = "=t" }, &diag);
+    const list = try lint(arena, chunk, .{});
+    var kept: std.ArrayList(Diagnostic) = .empty;
+    for (list) |d| if (std.mem.eql(u8, d.code, "deprecated")) try kept.append(arena, d);
+    const r = try @import("fix.zig").apply(arena, src, kept.items);
+    try testing.expectEqualStrings(want, if (r) |x| x.text else src);
+}
+
+test "deprecated library names" {
+    try expectCodes("global string, s, print print(string.len(s))", "deprecated");
+    try expectCodes("global utf8 local f = utf8.codes return f", "deprecated");
+    try expectCodes("global os return os.difftime(2, 1), os.clock()", "deprecated");
+    try expectCodes("return dofile(\"a.lus\")", "deprecated");
+    // A local of the same name is another value.
+    try expectCodes("local string = {} return string.len(\"x\")", "");
+    try expectCodes("local function dofile() end return dofile()", "");
+}
+
+test "deprecated names with an exact rewrite" {
+    try expectDeprecatedFix("return string.len(\"abc\") ^ 2, string.len(`x$y`)", "return (#\"abc\") ^ 2, #`x$y`");
+    // An argument of unknown type keeps the call, because string.len
+    // converts a number and # raises.
+    try expectDeprecatedFix("return string.len(s)", "return string.len(s)");
+    try expectDeprecatedFix("return vector.size(vector.create(4))", "return #vector.create(4)");
+    try expectDeprecatedFix("return utf8.char(72, 105), utf8.charpattern", "return string.char(72, 105), \".\"");
+    try expectDeprecatedFix("return os.time(), os.time({ year = 2000, month = 1, day = 1 })", "return time.now():epoch(), os.time({ year = 2000, month = 1, day = 1 })");
+    try expectDeprecatedFix("return string.join({ \"a\", 1 }, \"-\"), string.join(t, \"-\")", "return table.concat({ \"a\", 1 }, \"-\"), string.join(t, \"-\")");
+    try expectDeprecatedFix("return dofile(\"a.lus\"), dofile(f())", "return assert(loadfile(\"a.lus\"))(), dofile(f())");
+    // A named global declaration that leaves out the new name, or a local
+    // that hides it, keeps the old form.
+    try expectDeprecatedFix("global utf8 return utf8.char(65)", "global utf8 return utf8.char(65)");
+    try expectDeprecatedFix("global utf8, string return utf8.char(65)", "global utf8, string return string.char(65)");
+    try expectDeprecatedFix("local time = 1 return os.time(), time", "local time = 1 return os.time(), time");
 }

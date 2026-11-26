@@ -454,7 +454,7 @@ end
 
 local function rejects_invalid_utf_8_and_json_trailing_data_test()
     -- A lone surrogate is the only invalid text a 2.0 string can hold (spec/design/strings.md).
-    local bad_utf8 = `{"x":"$(utf8.char(0xD800))"}`
+    local bad_utf8 = `{"x":"$(string.char(0xD800))"}`
     local msg, reason = transport.decode_json(bad_utf8)
     assert(msg == nil)
     assert(string.find(reason, "UTF%-8"))

@@ -7,7 +7,7 @@
 pledge("fs")
 
 local FIXTURES = TEST_DIR .. "/fixtures/archive/"
-local SANDBOX = "test_container_sandbox_" .. os.time()
+local SANDBOX = "test_container_sandbox_" .. time.now():epoch()
 local symlinks = os.platform() ~= "windows" and os.platform() ~= "wasi"
 
 local function fixture(name)

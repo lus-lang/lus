@@ -184,7 +184,7 @@ When the clocks move forward, one hour of the day is skipped. A time in that hou
 
 ## Formatting
 
-`i:format(fmt)` and `z:format(fmt)` return a date and time as text for people to read. The result is the string `fmt` with each _specifier_, a `%` followed by a letter, replaced by one part of the date or time. The following table lists the most common specifiers. The entry for [`os.date`](/manual/api#os.date) lists all of them.
+`i:format(fmt)` and `z:format(fmt)` return a date and time as text for people to read. The result is the string `fmt` with each _specifier_, a `%` followed by a letter, replaced by one part of the date or time. The following table lists the most common specifiers. The entry for [`os.date`](/manual/api#os.date), whose patterns are the same, lists all of them.
 
 | Specifier | Replaced by | Example |
 | --- | --- | --- |
@@ -258,12 +258,12 @@ print(catch start:iso())  --> false  ...: monotonic instants have no calendar re
 
 ## Integer epochs
 
-The functions [`os.time`](/manual/api#os.time), [`os.date`](/manual/api#os.date), and [`os.difftime`](/manual/api#os.difftime), which Lus keeps from Lua, work with Unix times as integers. Databases and file formats often store Unix times too. `time.instant(seconds)` and `i:epoch()` convert between such a Unix time and an instant.
+Databases and file formats often store a Unix time, an integer count of seconds since 1970-01-01T00:00:00Z. `time.instant(seconds)` and `i:epoch()` convert between such a Unix time and an instant. The deprecated functions [`os.time`](/manual/api#os.time), [`os.date`](/manual/api#os.date), and [`os.difftime`](/manual/api#os.difftime) of Lua work with the same integers.
 
 ```lus
-global os, print, time
+global print, time
 
-local now = os.time()
+local now = time.now():epoch()
 print(time.instant(now):epoch() == now)  --> true
 ```
 

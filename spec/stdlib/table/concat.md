@@ -36,4 +36,4 @@ print(table.concat({ 1.5, 2n, 1.50d }, " "))  --> 1.5 2 1.50
 print(table.concat({}, ",") == "")  --> true
 ```
 
-The elements are read through `__index` and the length through `__len`, so a proxy table joins as its metamethods describe. [`string.join`](/manual/api#string.join) converts every element with `tostring` and stops at the first `nil`.
+The elements are read through `__index` and the length through `__len`, so a proxy table joins as its metamethods describe.

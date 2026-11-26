@@ -3,7 +3,8 @@ name: os.time
 module: os
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
+deprecated_by: "time.now"
 origin: lua
 params:
   - name: t
@@ -11,6 +12,8 @@ params:
     optional: true
 returns: integer
 ---
+
+`os.time` is deprecated. [`time.now`](/manual/api#time.now)`():epoch()` returns the current time in the same seconds. [`time.zoned`](/manual/api#time.zoned) reads a table of date fields.
 
 Returns the current time, or the time that a table of date fields describes, as an integer count of seconds since the epoch.
 

@@ -344,6 +344,7 @@ local function now_round_trips_through_parse_test()
 end
 
 -- The wall clock may be stepped by NTP, so tolerate skew and keep this soft.
+-- lus: allow(deprecated)
 local function now_tracks_the_os_clock_within_a_couple_of_seconds_test()
     assert(math.abs(time.now():epoch() - os.time()) <= 2)
 end

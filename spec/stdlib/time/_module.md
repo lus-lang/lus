@@ -24,4 +24,4 @@ print((i + time.hours(72)):iso())  --> 2026-07-05T13:15:00Z
 print(i:at(time.zone("America/New_York")):iso())  --> 2026-07-02T09:15:00-04:00
 ```
 
-The module works alongside [`os.time`](/manual/api#os.time) and [`os.date`](/manual/api#os.date), which use integer Unix seconds. `time.instant(os.time())` turns such an epoch into an instant, and `instant:epoch()` turns an instant back into one. Time values are userdata, so a worker message cannot carry them and `tojson` writes them as `null`. The [time](/manual/time) page of the manual describes the module in full.
+`time.instant(seconds)` and `instant:epoch()` convert between an integer count of Unix seconds and an instant. Time values are userdata, so a worker message cannot carry them and `tojson` writes them as `null`. The [time](/manual/time) page of the manual describes the module in full.

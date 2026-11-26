@@ -35,7 +35,7 @@
 -- starts no new batch once that much time has passed.
 
 global arg, assert, error, fromjson, fs, io, ipairs, math, os, pairs, pledge, print, string, table,
-    tonumber, tostring, type, vector
+    time, tonumber, tostring, type, vector
 
 pledge("exec", "fs", "env")
 
@@ -140,7 +140,8 @@ assert(
     "no runtime at " .. lus .. ", run it from the root of the repository after a build"
 )
 
-local work = opts.work or fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-syntax-" .. os.time())
+local work = opts.work
+    or fs.path.join(os.getenv("TMPDIR") or "/tmp", `lus-syntax-$(time.now():epoch())`)
 fs.createdirectory(work, true)
 
 -- ===== the tokens =====
@@ -708,7 +709,7 @@ end
 table.sort(seeds)
 
 local findings = {}
-local started = os.time()
+local started = time.now():epoch()
 local total, batches = 0, 0
 local pending = {}
 
@@ -755,7 +756,7 @@ end
 local stopped = false
 
 for si, path in ipairs(seeds) do
-    if opts.minutes and os.time() - started >= opts.minutes * 60 then
+    if opts.minutes and time.now():epoch() - started >= opts.minutes * 60 then
         stopped = true
         break
     end

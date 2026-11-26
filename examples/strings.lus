@@ -1,6 +1,6 @@
 -- Strings: Strings are immutable text, measured and indexed by character.
 -- playground: true
-global print, string, utf8, ipairs
+global print, string, table, ipairs
 
 -- `#` counts characters, so an accented letter counts as one.
 local city = "Zürich"
@@ -27,22 +27,24 @@ print("apple" < "banana", "Zebra" < "apple")  --> true  true
 local greeting = "こんにちは"
 print(#greeting, greeting:sub(1, 2))  --> 5  こん
 
--- `byte` and `utf8.char` convert between characters and code points.
-print(("é"):byte(), utf8.char(9731))  --> 233  ☃
+-- `byte` and `char` convert between characters and code points.
+print(("é"):byte(), string.char(9731))  --> 233  ☃
 
-for position, code in utf8.codes("añb") do
-    print(position, code)
+local sample = "añb"
+
+for position = 1, #sample do
+    print(position, sample:byte(position))
 end
 
 --> 1  97
 --> 2  241
 --> 3  98
 
--- `split`, `trim`, and `string.join` cover the common text chores.
+-- `split`, `trim`, and `table.concat` cover the common text chores.
 local fields = (" red, green ,blue "):split(",")
 
 for i, field in ipairs(fields) do
     fields[i] = field:trim()
 end
 
-print(string.join(fields, "|"))  --> red|green|blue
+print(table.concat(fields, "|"))  --> red|green|blue

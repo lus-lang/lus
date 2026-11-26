@@ -1,6 +1,6 @@
 -- Characters and UTF-8: Work with characters, code points, and the bytes of UTF-8 text.
 -- playground: true
-global print, string, utf8, vector, io
+global print, string, vector, io
 
 -- A string holds characters, so length and positions count characters, not bytes.
 local word = "naïve café"
@@ -16,9 +16,11 @@ print(string.byte("é"))  --> 233
 print(string.byte("Añb", 1, -1))  --> 65 241 98
 print(string.char(99, 97, 102, 233))  --> café
 
--- `utf8.codes` walks a string and yields each position with its code point.
-for pos, cp in utf8.codes("€ 5") do
-    print(pos, string.format("U+%04X", cp))
+-- A numeric loop over the positions visits each character with its code point.
+local price = "€ 5"
+
+for pos = 1, #price do
+    print(pos, string.format("U+%04X", price:byte(pos)))
 end
 
 --> 1 U+20AC

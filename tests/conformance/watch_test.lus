@@ -18,7 +18,7 @@ local BASE = do
 
     provide fs.path.join(
         os.getenv("TMPDIR") or os.getenv("TEMP") or "/tmp",
-        "lus-watch-test-" .. os.time()
+        "lus-watch-test-" .. time.now():epoch()
     )
 end
 

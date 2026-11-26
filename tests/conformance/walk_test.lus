@@ -1,4 +1,4 @@
-global print, assert, table, fs, os, io, string, pledge, ipairs, tostring
+global print, assert, table, fs, os, io, string, pledge, ipairs, time, tostring
 
 pledge("fs", "env")
 
@@ -24,7 +24,7 @@ local ROOT = do
 
     provide fs.path.join(
         os.getenv("TMPDIR") or "/tmp",
-        `lus-walk-test-$(os.time())-$(tostring({}):sub(-6))`
+        `lus-walk-test-$(time.now():epoch())-$(tostring({}):sub(-6))`
     )
 end
 

@@ -21,4 +21,4 @@ print(time.instant(0) < n)  --> true
 print(n:iso():match("^%d%d%d%d%-%d%d%-%d%dT") ~= nil)  --> true
 ```
 
-[`time.monotonic`](/manual/api#time.monotonic) measures elapsed time with a clock that never moves backwards, and [`os.time`](/manual/api#os.time) returns the current time as integer Unix seconds.
+[`time.monotonic`](/manual/api#time.monotonic) measures elapsed time with a clock that never moves backwards. `time.now():epoch()` returns the current time as integer Unix seconds.

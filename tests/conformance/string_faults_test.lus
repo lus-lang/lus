@@ -1,3 +1,6 @@
+--- These tests cover the deprecated functions themselves.
+--- lus: allow(deprecated)
+
 --[[
     Errors inside the string library.
 

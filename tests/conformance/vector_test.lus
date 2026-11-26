@@ -1,3 +1,6 @@
+--- These tests cover the deprecated functions themselves.
+--- lus: allow(deprecated)
+
 -- Vector module completion suite.
 -- The second half of this file complements the first by pinning the spec
 -- behaviors that file leaves open. It focuses on vector.unpack's next-offset

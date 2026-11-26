@@ -78,7 +78,7 @@ local function every_sample_round_trips_test()
     assert(load(string.dump(sample_plain))() == 2.5)
     assert(type(load(string.dump(sample_enum))()) == type(sample_enum()))
     local G = load(string.dump(sample_meta))()
-    assert(G.a.self == G.a and G.keyed[G.a] == "by table" and vector.size(G.v) == 3)
+    assert(G.a.self == G.a and G.keyed[G.a] == "by table" and #G.v == 3)
     local sum, c = load(string.dump(sample_lazy))()
     assert(sum == 10 and c == 1)
 

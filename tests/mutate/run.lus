@@ -26,7 +26,7 @@
 -- harness starts no new mutant once that much time has passed.
 
 global arg, assert, crypto, error, fs, io, ipairs, math, os, pairs, pledge, print, string, table,
-    tonumber, tostring
+    time, tonumber, tostring
 
 pledge("exec", "fs", "env")
 
@@ -360,7 +360,7 @@ print(string.format("%d mutation sites in %d files", #pool, #targetFiles()))
 
 local skip = equivalents()
 math.randomseed(opts.seed)
-local started = os.time()
+local started = time.now():epoch()
 local results = { killed = 0, survived = 0, broken = 0, same = 0 }
 local survivors = {}
 local by_dir = {}
@@ -368,7 +368,7 @@ local tried = 0
 local seen = {}
 
 while results.killed + results.survived < opts.count and tried < #pool do
-    if opts.minutes and os.time() - started > opts.minutes * 60 then
+    if opts.minutes and time.now():epoch() - started > opts.minutes * 60 then
         print(string.format("stopping after %d minutes", opts.minutes))
         break
     end

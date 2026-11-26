@@ -32,6 +32,10 @@ for (const section of sections) {
   renderedSections.push({ title: section.title, id: section.id, page: section.page, entries })
 }
 
+// A replacement that names an entry links to it. Any other, such as the
+// length operator, is shown as code.
+const entryNames = new Set(renderedSections.flatMap((s) => s.entries.map((e) => e.data.name)))
+
 function fmtReturns(returns: string | { type: string; name?: string }[]) {
   if (typeof returns === "string") return returns
   return returns
@@ -222,7 +226,11 @@ function haystack(d: any, from: From) {
                 {from === "deprecated" && d.deprecated_by ? (
                   <Fragment>
                     {", use "}
-                    <a href={`#${d.deprecated_by}`}>{d.deprecated_by}</a>
+                    {entryNames.has(d.deprecated_by) ? (
+                      <a href={`#${d.deprecated_by}`}>{d.deprecated_by}</a>
+                    ) : (
+                      <code>{d.deprecated_by}</code>
+                    )}
                   </Fragment>
                 ) : (
                   ""

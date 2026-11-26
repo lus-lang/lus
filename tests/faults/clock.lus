@@ -1,6 +1,6 @@
 --- These programs run outside mise run test, which could prove a rewrite
 --- of their concatenations, so they stay as written.
---- lus: allow(use-interpolation)
+--- lus: allow(use-interpolation, deprecated)
 
 -- Jumps of the real clock (`LUS_CLOCK`, `runtime/src/vm/faultio.zig`).
 --

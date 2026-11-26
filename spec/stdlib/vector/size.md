@@ -3,7 +3,8 @@ name: vector.size
 module: vector
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
+deprecated_by: "#"
 origin: lus
 fastcall: true
 params:
@@ -11,6 +12,8 @@ params:
     type: vector
 returns: integer
 ---
+
+`vector.size` is deprecated, because the length operator `#v` returns the same size.
 
 Returns the size of a vector in bytes, the same value as `#v`.
 

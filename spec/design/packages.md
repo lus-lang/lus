@@ -276,7 +276,7 @@ program:run(arg)
 
 ```lus nocheck
 local jwt = require("https://atmosp.here/2.0/jwt.lus")
-local token = jwt.sign({ sub = "42", exp = os.time() + 3600 }, secret, { alg = "HS256" })
+local token = jwt.sign({ sub = "42", exp = time.now():epoch() + 3600 }, secret, { alg = "HS256" })
 local claims = jwt.verify(token, secret, { algorithms = { "HS256" } })
 ```
 

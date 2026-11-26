@@ -16,7 +16,7 @@
 -- status is 1 when anything was found.
 
 global arg, assert, fs, io, ipairs, math, os, package, pairs, pledge, print, require, string, table,
-    tonumber, tostring
+    time, tonumber, tostring
 
 pledge("exec", "fs", "env", "load")
 
@@ -55,13 +55,13 @@ local binaries = {
     wasmRunner = here .. "/wasm.mjs",
 }
 local count = tonumber(opts.count or "100")
-local start = tonumber(opts.start or tostring(os.time() % 1000000000))
+local start = tonumber(opts.start or tostring(time.now():epoch() % 1000000000))
 local jobs = tonumber(opts.jobs or "4")
 local size = tonumber(opts.size or "8")
 local seconds = tonumber(opts.timeout or "30")
 local outDir = opts.out or (here .. "/findings")
 local configs = lib.select(opts.configs, binaries)
-local deadline = opts.minutes and (os.time() + tonumber(opts.minutes) * 60) or math.huge
+local deadline = opts.minutes and (time.now():epoch() + tonumber(opts.minutes) * 60) or math.huge
 
 local function names(list)
     local out = {}
@@ -241,13 +241,13 @@ repeat
             one(seed)
         end
 
-        if os.time() >= deadline then
+        if time.now():epoch() >= deadline then
             break
         end
     end
 
     start = start + count
-until not opts.forever or os.time() >= deadline
+until not opts.forever or time.now():epoch() >= deadline
 
 lib.removeDir(tmp)
 

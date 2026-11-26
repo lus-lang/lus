@@ -3,7 +3,8 @@ name: utf8.len
 module: utf8
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
+deprecated_by: "#"
 origin: lua
 fastcall: true
 params:
@@ -20,6 +21,8 @@ params:
     optional: true
 returns: integer|nil
 ---
+
+`utf8.len` is deprecated, because the length operator `#s` counts the characters of a string.
 
 `utf8.len(s, i, j, lax)` returns the number of characters of `s` from character position `i` through `j`, or `nil` and the position of the first lone surrogate in that range.
 

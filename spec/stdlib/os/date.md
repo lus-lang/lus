@@ -3,7 +3,8 @@ name: os.date
 module: os
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
+deprecated_by: "time.instant"
 origin: lua
 params:
   - name: format
@@ -14,6 +15,8 @@ params:
     optional: true
 returns: string|table
 ---
+
+`os.date` is deprecated. [`time.instant`](/manual/api#time.instant)`(t)` turns seconds into an instant, whose `format` method writes the same `strftime` patterns and whose `at` method gives the date fields in a zone.
 
 Formats a time as a string, or breaks it into a table of date fields, and returns the result.
 

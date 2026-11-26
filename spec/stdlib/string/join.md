@@ -3,7 +3,8 @@ name: string.join
 module: string
 kind: function
 since: 1.6.0
-stability: stable
+stability: deprecated
+deprecated_by: "table.concat"
 origin: lus
 fastcall: true
 params:
@@ -13,6 +14,8 @@ params:
     type: string
 returns: string
 ---
+
+`string.join` is deprecated, because [`table.concat`](/manual/api#table.concat) joins a list of strings and numbers with a separator.
 
 Returns the elements of the list `t` converted to strings and joined into one string, with `delimiter` between each pair.
 

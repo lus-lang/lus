@@ -3,7 +3,8 @@ name: utf8.codes
 module: utf8
 kind: function
 since: 0.1.0
-stability: stable
+stability: deprecated
+deprecated_by: "string.byte"
 origin: lua
 params:
   - name: s
@@ -13,6 +14,8 @@ params:
     optional: true
 returns: function
 ---
+
+`utf8.codes` is deprecated, because a numeric `for` from 1 to `#s` with [`string.byte`](/manual/api#string.byte) visits the same positions and code points.
 
 `utf8.codes(s, lax)` returns an iterator function, `s`, and `0`, so that `for pos, cp in utf8.codes(s)` visits each character of `s` with its position and code point.
 

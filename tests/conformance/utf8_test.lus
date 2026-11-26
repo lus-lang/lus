@@ -1,3 +1,6 @@
+--- These tests cover the deprecated functions themselves.
+--- lus: allow(deprecated)
+
 --[[
     The utf8 library in Lus 2.0 (spec/design/strings.md). Strings are well formed WTF-8
     and every position is a character position, so `utf8.len(s) == #s`. A string can

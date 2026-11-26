@@ -3,7 +3,7 @@
 -- Usage, from the repository root:
 --   lus -Pload -Pfs:read tests/bench/hints/run.lus [runs]
 local dir = arg[0]:match("^(.*)/[^/]*$") or "."
-local cases = dofile(dir .. "/cases.lus")
+local cases = assert(loadfile(dir .. "/cases.lus"))()
 local runs = tonumber(arg[1]) or 5
 
 local function best(f)

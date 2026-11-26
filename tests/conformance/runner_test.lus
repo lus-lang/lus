@@ -90,7 +90,8 @@ end
 local function a_skip_reason_keeps_its_characters_test()
     local ok, err = catch skip("réservé pour plus tard")
     assert(not ok)
-    assert(err:len() == utf8.len(err))
+    -- Strict decoding raises on a character split in half.
+    assert(catch string.transcode(err, "utf-8", "utf-8"))
     assert(err:sub(-5) == " tard")
     assert(err:find("réservé", 1, true))
 end

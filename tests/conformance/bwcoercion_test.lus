@@ -3,7 +3,7 @@
 
 pledge("load", `fs:read=$TEST_DIR/fixtures/bwcoercion/*`)
 
-dofile(TEST_DIR .. "/fixtures/bwcoercion/shim.lus")
+assert(loadfile(TEST_DIR .. "/fixtures/bwcoercion/shim.lus"))()
 
 local function both_string_operands_coerce_for_every_operator_test()
     assert(("10" & "6") == 2)

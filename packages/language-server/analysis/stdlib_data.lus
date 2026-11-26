@@ -3024,7 +3024,10 @@ A hexadecimal string, a string with the `d` suffix, and an infinite or NaN float
   },
   ["dofile"] = {
     children = {},
+    deprecated_by = "loadfile",
     description = [[
+`dofile` is deprecated, because `assert(loadfile(filename))()` compiles and runs the file in the same way.
+
 `dofile(filename)` compiles the file `filename` as a Lus chunk, runs it, and returns every value the chunk returns.
 
 The parameter `filename` is the path of a source or binary chunk, relative to the working directory or absolute. The chunk runs with no arguments, in the global environment.
@@ -3068,7 +3071,7 @@ The chunk name is `@` followed by `filename`, so errors inside the chunk name th
     short_name = "dofile",
     since = "0.1.0",
     source = "stdlib/base/dofile.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["error"] = {
     children = {},
@@ -7308,7 +7311,7 @@ local used = os.clock() - start
 print(math.type(used), used >= 0)  --> float  true
 ```
 
-[`os.time`](/manual/api#os.time) reads the wall clock in whole seconds.]],
+[`time.now`](/manual/api#time.now) reads the wall clock.]],
     kind = "function",
     module = "os",
     name = "os.clock",
@@ -7327,7 +7330,10 @@ print(math.type(used), used >= 0)  --> float  true
   },
   ["os.date"] = {
     children = {},
+    deprecated_by = "time.instant",
     description = [[
+`os.date` is deprecated. [`time.instant`](/manual/api#time.instant)`(t)` turns seconds into an instant, whose `format` method writes the same `strftime` patterns and whose `at` method gives the date fields in a zone.
+
 Formats a time as a string, or breaks it into a table of date fields, and returns the result.
 
 `format` is a string that defaults to `"%c"`. A leading `"!"` formats the time in UTC, and without it the time is formatted in the local time zone, which comes from the `TZ` environment variable and then the system zone database. The rest of `format` is either `"*t"` or a `strftime` pattern in the "C" locale. `time` is an integer count of seconds since the epoch, as [`os.time`](/manual/api#os.time) returns, and defaults to the current time.
@@ -7367,11 +7373,13 @@ The `time` library offers time zones, durations, and parsing beyond these format
     short_name = "date",
     since = "0.1.0",
     source = "stdlib/os/date.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["os.difftime"] = {
     children = {},
     description = [[
+`os.difftime` is deprecated, because the subtraction `t2 - t1` gives the same count of seconds as an integer.
+
 Returns the number of seconds from `t1` to `t2` as a float.
 
 `t2` and `t1` are integer times in seconds since the epoch, as [`os.time`](/manual/api#os.time) returns, and both are required. The result is `t2 - t1` converted to a float, so it is negative when `t2` is earlier. A missing argument raises a `bad argument` error, and so does a number with a fraction. The function requires no permission.
@@ -7407,7 +7415,7 @@ print(os.difftime(t1, t2))  --> -21600.0
     short_name = "difftime",
     since = "0.1.0",
     source = "stdlib/os/difftime.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["os.execute"] = {
     children = {},
@@ -7839,7 +7847,10 @@ print(select(4, coroutine.resume(p.exit)))   --> 0
   },
   ["os.time"] = {
     children = {},
+    deprecated_by = "time.now",
     description = [[
+`os.time` is deprecated. [`time.now`](/manual/api#time.now)`():epoch()` returns the current time in the same seconds. [`time.zoned`](/manual/api#time.zoned) reads a table of date fields.
+
 Returns the current time, or the time that a table of date fields describes, as an integer count of seconds since the epoch.
 
 `t` is an optional table. Without it, the call returns the current time. With it, the call reads the integer fields `year`, `month`, and `day`, which are required, and `hour`, `min`, and `sec`, which default to 12, 0, and 0, and it interprets them in the local time zone. The boolean field `isdst` is optional.
@@ -7875,7 +7886,7 @@ print(os.time(t) == seconds)  --> true
     short_name = "time",
     since = "0.1.0",
     source = "stdlib/os/time.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["os.tmpname"] = {
     children = {},
@@ -9121,7 +9132,10 @@ Patterns match whole characters, so a replacement never splits a multi-byte char
   },
   ["string.join"] = {
     children = {},
+    deprecated_by = "table.concat",
     description = [[
+`string.join` is deprecated, because [`table.concat`](/manual/api#table.concat) joins a list of strings and numbers with a separator.
+
 Returns the elements of the list `t` converted to strings and joined into one string, with `delimiter` between each pair.
 
 `t` is a table read from index 1 up to the last element before the first `nil`. `delimiter` is the string placed between elements, and it is required. Pass `""` to join without a separator.
@@ -9162,11 +9176,14 @@ print(string.join({}, ",") == "")  --> true
     short_name = "join",
     since = "1.6.0",
     source = "stdlib/string/join.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["string.len"] = {
     children = {},
+    deprecated_by = "#",
     description = [[
+`string.len` is deprecated, because the length operator `#s` returns the same count.
+
 Returns the number of characters in `s`.
 
 `s` is the string to measure. A number is converted to its textual form first.
@@ -9203,7 +9220,7 @@ The `#` operator returns the same value for a string. The number of bytes of the
     short_name = "len",
     since = "0.1.0",
     source = "stdlib/string/len.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["string.lower"] = {
     children = {},
@@ -9448,7 +9465,7 @@ print(string.rep("x", 0) == "")  --> true
 print(#string.rep("é", 4))  --> 4
 ```
 
-[`string.format`](/manual/api#string.format) pads with spaces through a width, and [`string.join`](/manual/api#string.join) joins different strings with a separator.]],
+[`string.format`](/manual/api#string.format) pads with spaces to a width. [`table.concat`](/manual/api#table.concat) joins different strings with a separator.]],
     kind = "function",
     module = "string",
     name = "string.rep",
@@ -9583,7 +9600,7 @@ local chars = string.split("héllo", "")
 print(#chars, chars[2])  --> 5  é
 ```
 
-[`string.join`](/manual/api#string.join) is the inverse. [`string.gmatch`](/manual/api#string.gmatch) splits on a pattern, such as runs of whitespace.]],
+[`table.concat`](/manual/api#table.concat) is the inverse. [`string.gmatch`](/manual/api#string.gmatch) splits on a pattern, such as runs of whitespace.]],
     fastcall = true,
     kind = "function",
     module = "string",
@@ -10004,7 +10021,7 @@ print(table.concat({ 1.5, 2n, 1.50d }, " "))  --> 1.5 2 1.50
 print(table.concat({}, ",") == "")  --> true
 ```
 
-The elements are read through `__index` and the length through `__len`, so a proxy table joins as its metamethods describe. [`string.join`](/manual/api#string.join) converts every element with `tostring` and stops at the first `nil`.]],
+The elements are read through `__index` and the length through `__len`, so a proxy table joins as its metamethods describe.]],
     kind = "function",
     module = "table",
     name = "table.concat",
@@ -11388,7 +11405,7 @@ print((i + time.hours(72)):iso())  --> 2026-07-05T13:15:00Z
 print(i:at(time.zone("America/New_York")):iso())  --> 2026-07-02T09:15:00-04:00
 ```
 
-The module works alongside [`os.time`](/manual/api#os.time) and [`os.date`](/manual/api#os.date), which use integer Unix seconds. `time.instant(os.time())` turns such an epoch into an instant, and `instant:epoch()` turns an instant back into one. Time values are userdata, so a worker message cannot carry them and `tojson` writes them as `null`. The [time](/manual/time) page of the manual describes the module in full.]],
+`time.instant(seconds)` and `instant:epoch()` convert between an integer count of Unix seconds and an instant. Time values are userdata, so a worker message cannot carry them and `tojson` writes them as `null`. The [time](/manual/time) page of the manual describes the module in full.]],
     kind = "module",
     module = "time",
     name = "time",
@@ -11558,7 +11575,7 @@ print((i + time.days(1)):iso())  --> 2026-07-03T13:15:00Z
 print(time.instant(1, -1):nanos())  --> 999999999
 ```
 
-`time.instant(os.time())` turns an epoch from [`os.time`](/manual/api#os.time) into an instant. A year after 9999 prints with more than four digits, and a year before 1 prints as `0000` or a negative number. [`time.now`](/manual/api#time.now) returns the current instant, and [`time.parse`](/manual/api#time.parse) reads one from text.]],
+A year after 9999 prints with more than four digits, and a year before 1 prints as `0000` or a negative number. [`time.now`](/manual/api#time.now) returns the current instant, and [`time.parse`](/manual/api#time.parse) reads one from text.]],
     kind = "function",
     module = "time",
     name = "time.instant",
@@ -11752,7 +11769,7 @@ print(time.month[12] == time.month.december)  --> true
 print(type(time.month.july), time.month.smarch)  --> enum  nil
 ```
 
-The `month` field of a zoned value is a plain integer from 1 to 12, so that arithmetic on it works as with [`os.date`](/manual/api#os.date). Members follow the rules of every [enum](/manual/guide#enums): they compare in order with `<`, and arithmetic on them raises an error. The value `time.month` is itself the member `january`, since an enum evaluates to its first member. [`time.weekday`](/manual/api#time.weekday) is the enum of the days of the week.]],
+The `month` field of a zoned value is a plain integer from 1 to 12, so that arithmetic on it works as on any integer. Members follow the rules of every [enum](/manual/guide#enums): they compare in order with `<`, and arithmetic on them raises an error. The value `time.month` is itself the member `january`, since an enum evaluates to its first member. [`time.weekday`](/manual/api#time.weekday) is the enum of the days of the week.]],
     kind = "constant",
     module = "time",
     name = "time.month",
@@ -11780,7 +11797,7 @@ print(time.instant(0) < n)  --> true
 print(n:iso():match("^%d%d%d%d%-%d%d%-%d%dT") ~= nil)  --> true
 ```
 
-[`time.monotonic`](/manual/api#time.monotonic) measures elapsed time with a clock that never moves backwards, and [`os.time`](/manual/api#os.time) returns the current time as integer Unix seconds.]],
+[`time.monotonic`](/manual/api#time.monotonic) measures elapsed time with a clock that never moves backwards. `time.now():epoch()` returns the current time as integer Unix seconds.]],
     kind = "function",
     module = "time",
     name = "time.now",
@@ -12476,7 +12493,10 @@ print(from_port == select(2, sender:getsockname()))  --> true
   },
   ["utf8.char"] = {
     children = {},
+    deprecated_by = "string.char",
     description = [[
+`utf8.char` is deprecated, because [`string.char`](/manual/api#string.char) returns the same string for the same code points.
+
 `utf8.char(...)` returns a string that holds one character for each code point argument, in order.
 
 Each argument is an integer code point from 0 through 0x10FFFF, and surrogates are accepted. A value outside that range raises `bad argument #N to 'utf8.char' (value out of range)`, and a value that is not a number raises `number expected`. A call with no arguments returns the empty string.
@@ -12503,12 +12523,14 @@ A lead surrogate followed directly by a trail surrogate joins into one supplemen
     short_name = "char",
     since = "0.1.0",
     source = "stdlib/utf8/char.md",
-    stability = "stable",
+    stability = "deprecated",
     vararg = true,
   },
   ["utf8.charpattern"] = {
     children = {},
     description = [[
+`utf8.charpattern` is deprecated, because the pattern `"."` matches one whole character.
+
 `utf8.charpattern` is the pattern that matches exactly one character, and its value is `"."`.
 
 Lus patterns match whole characters, so `.` matches one character of any length in bytes. Programs written for Lua, where the pattern matches one UTF-8 sequence byte by byte, work unchanged.
@@ -12530,12 +12552,15 @@ print()  --> [a][ñ][b]
     short_name = "charpattern",
     since = "0.1.0",
     source = "stdlib/utf8/charpattern.md",
-    stability = "stable",
+    stability = "deprecated",
     type = "string",
   },
   ["utf8.codepoint"] = {
     children = {},
+    deprecated_by = "string.byte",
     description = [[
+`utf8.codepoint` is deprecated, because [`string.byte`](/manual/api#string.byte) returns the code points of the same characters and accepts lone surrogates.
+
 `utf8.codepoint(s, i, j, lax)` returns the code points of the characters of `s` from character position `i` through `j`, one integer per character.
 
 The parameters select the characters:
@@ -12589,11 +12614,14 @@ print(utf8.codepoint("héllo", -2, -1))  --> 108  111
     short_name = "codepoint",
     since = "0.1.0",
     source = "stdlib/utf8/codepoint.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["utf8.codes"] = {
     children = {},
+    deprecated_by = "string.byte",
     description = [[
+`utf8.codes` is deprecated, because a numeric `for` from 1 to `#s` with [`string.byte`](/manual/api#string.byte) visits the same positions and code points.
+
 `utf8.codes(s, lax)` returns an iterator function, `s`, and `0`, so that `for pos, cp in utf8.codes(s)` visits each character of `s` with its position and code point.
 
 The parameter `s` is the string to traverse. Positions count characters, like every string position, so they run from 1 to `#s`. The optional `lax`, when truthy, accepts lone surrogates. Without it, the loop raises `invalid UTF-8 code` when it reaches a lone surrogate, after it has visited the characters before it.
@@ -12632,11 +12660,14 @@ end
     short_name = "codes",
     since = "0.1.0",
     source = "stdlib/utf8/codes.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["utf8.len"] = {
     children = {},
+    deprecated_by = "#",
     description = [[
+`utf8.len` is deprecated, because the length operator `#s` counts the characters of a string.
+
 `utf8.len(s, i, j, lax)` returns the number of characters of `s` from character position `i` through `j`, or `nil` and the position of the first lone surrogate in that range.
 
 The parameters select the range:
@@ -12691,11 +12722,13 @@ Lus strings are always well formed apart from lone surrogates, so a lone surroga
     short_name = "len",
     since = "0.1.0",
     source = "stdlib/utf8/len.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["utf8.offset"] = {
     children = {},
     description = [[
+`utf8.offset` is deprecated, because positions count characters, so the `n`th character from position `i` is at position `i + n - 1`.
+
 `utf8.offset(s, n, i)` returns the character position of the `n`th character of `s` counted from position `i`, twice, or `nil` when that character lies outside `s`.
 
 The parameters select the character:
@@ -12743,7 +12776,7 @@ Character positions are plain integers in Lus, so [`string.sub`](/manual/api#str
     short_name = "offset",
     since = "0.1.0",
     source = "stdlib/utf8/offset.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["vector"] = {
     children = {
@@ -13447,7 +13480,7 @@ The following example unpacks a compressed tar file into a new directory.
 local tgz = vector.archive.gzip.compress(vector.archive.tar.pack({
     { name = "data/a.csv", data = "x,y\n1,2\n" },
 }))
-local dir = "tar-example-" .. os.time()
+local dir = "tar-example-" .. time.now():epoch()
 print(vector.archive.tar.unpack(vector.archive.gzip.decompress(tgz), dir))  --> 1
 print((fs.type(dir .. "/data/a.csv")))  --> file
 fs.remove(dir, true)
@@ -13687,7 +13720,7 @@ local zip = vector.archive.zip.pack({
     { name = "site/index.html", data = "<h1>hi</h1>" },
     { name = "site/css/main.css", data = "h1 { color: red }" },
 })
-local dir = "unpack-example-" .. os.time()
+local dir = "unpack-example-" .. time.now():epoch()
 print(vector.archive.zip.unpack(zip, dir))  --> 2
 print(catch vector.archive.zip.unpack(zip, dir))  --> false  ...: file exists: ...
 print(vector.archive.zip.unpack(zip, dir, { overwrite = true }))  --> 2
@@ -14275,7 +14308,10 @@ print(catch vector.set(v, 0, 256))  --> false  ...: bad argument #3 to 'set' (by
   },
   ["vector.size"] = {
     children = {},
+    deprecated_by = "#",
     description = [[
+`vector.size` is deprecated, because the length operator `#v` returns the same size.
+
 Returns the size of a vector in bytes, the same value as `#v`.
 
 - `v` is the vector to measure.
@@ -14312,7 +14348,7 @@ print(vector.size(v))  --> 0
     short_name = "size",
     since = "0.1.0",
     source = "stdlib/vector/size.md",
-    stability = "stable",
+    stability = "deprecated",
   },
   ["vector.tostring"] = {
     children = {},

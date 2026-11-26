@@ -1,4 +1,4 @@
-global debug, error, ipairs, math, pairs, setmetatable, string, table, tostring, type, utf8
+global debug, error, ipairs, math, pairs, setmetatable, string, table, tostring, type
 
 -- Refactoring assists: extract local, inline local, extract function, and
 -- conversion between interpolation and concatenation. Each one keeps what
@@ -311,7 +311,7 @@ local function new_resolver(text)
         text = text,
         -- The source after a name node, where its attributes are written.
         text_after = function(n)
-            return string.sub(text, to_offset(starts, n.line, n.column) + utf8.len(n.value))
+            return string.sub(text, to_offset(starts, n.line, n.column) + #n.value)
         end,
         refs = {},
         decls = {},
@@ -1000,10 +1000,7 @@ local function extract_local(text, tree, starts, lo, to, before)
     if found.stat.type == "local" or found.stat.type == "global" then
         for _, n in ipairs(found.stat.names or {}) do
             if n.line then
-                local after = string.sub(
-                    text,
-                    to_offset(starts, n.line, n.column) + utf8.len(n.value)
-                )
+                local after = string.sub(text, to_offset(starts, n.line, n.column) + #n.value)
                 local attrs = string.match(after, "^%s*(<[^>]*>)")
 
                 if attrs and attrs ~= "<const>" then
@@ -1053,7 +1050,7 @@ local function inline_local(text, tree, starts, lo, before, res)
         if d.kind == "local" and n.line and d.stat.type == "local" then
             local o = to_offset(starts, n.line, n.column)
 
-            if lo >= o and lo <= o + utf8.len(d.name) then
+            if lo >= o and lo <= o + #d.name then
                 decl = d
                 break
             end
@@ -1091,13 +1088,7 @@ local function inline_local(text, tree, starts, lo, before, res)
     -- the statement.
     local value_text = string.match(string.sub(text, value_from, stat_to - 1), "^(.-)%s*;?%s*$")
     -- That text must be exactly the value, which parsing it alone shows.
-    local check = find_expression(
-        tree,
-        text,
-        starts,
-        value_from,
-        value_from + utf8.len(value_text) - 1
-    )
+    local check = find_expression(tree, text, starts, value_from, value_from + #value_text - 1)
 
     if not check or check.node ~= value then
         return nil
@@ -1234,7 +1225,7 @@ local function inline_local(text, tree, starts, lo, before, res)
 
     for _, r in ipairs(decl.reads) do
         local o = to_offset(starts, r.node.line, r.node.column)
-        edits[#edits + 1] = { lo = o, to = o + utf8.len(decl.name) - 1, text = replacement }
+        edits[#edits + 1] = { lo = o, to = o + #decl.name - 1, text = replacement }
     end
 
     if not no_worse(before, apply(text, { table.unpack(edits) })) then

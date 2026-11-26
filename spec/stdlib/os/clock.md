@@ -24,4 +24,4 @@ local used = os.clock() - start
 print(math.type(used), used >= 0)  --> float  true
 ```
 
-[`os.time`](/manual/api#os.time) reads the wall clock in whole seconds.
+[`time.now`](/manual/api#time.now) reads the wall clock.

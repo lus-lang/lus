@@ -119,7 +119,7 @@ end
 
 local function vectors_are_readonly_test()
     local V <meta> = vector.fromstring("ab")
-    assert(vector.size(V) == 2)
+    assert(#V == 2)
     local ok, err = catch vector.set(V, 0, 7)
     assert(ok == false and tostring(err):find("read-only", 1, true) ~= nil)
     local copy = vector.clone(V)
@@ -140,7 +140,7 @@ local function survives_string_dump_test()
 
     local g = load(string.dump(f))
     local G = g()
-    assert(G.a.self == G.a and G.a.n == 1 and vector.size(G.v) == 3)
+    assert(G.a.self == G.a and G.a.n == 1 and #G.v == 3)
 
     assert((catch do
         G.a.n = 2
