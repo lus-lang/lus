@@ -1228,8 +1228,17 @@ fn getLocalVar(fs: *FuncState, i: u32) *VarDesc {
 
 fn newLocalVar(fs: *FuncState, name: []const u8, kind: VarKind) Error!u32 {
     const c = fs.c;
-    if (c.actvars.items.len + 1 - fs.first_local > max_vars) {
-        return c.err(fs.line, "too many local variables (limit is {d}) in {s}", .{ max_vars, whereFunc(fs) });
+    // A name of a `global` declaration takes no local slot, so only the
+    // other variables count toward the limit. The count runs only past
+    // `max_vars` entries.
+    if (kind != .global_named and kind != .global_star and c.actvars.items.len + 1 - fs.first_local > max_vars) {
+        var slots: usize = 0;
+        for (c.actvars.items[fs.first_local..]) |v| {
+            if (v.kind != .global_named and v.kind != .global_star) slots += 1;
+        }
+        if (slots + 1 > max_vars) {
+            return c.err(fs.line, "too many local variables (limit is {d}) in {s}", .{ max_vars, whereFunc(fs) });
+        }
     }
     try push(&c.actvars, c.gpa, .{ .name = name, .kind = kind, .readonly = kind == .const_ or kind == .ctc or kind == .close });
     return @intCast(c.actvars.items.len - 1 - fs.first_local);

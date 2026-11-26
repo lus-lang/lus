@@ -150,6 +150,27 @@ local function more_than_200_locals_is_rejected_test(n)
     expect_compile_error(many_locals(n), "too many local variables (limit is 200)")
 end
 
+-- A name of a `global` declaration takes no local slot, so a chunk that
+-- declares 60 globals still holds 200 locals.
+local function globals_take_no_local_slot_test()
+    local names = {}
+
+    for i = 1, 60 do
+        names[#names + 1] = `g$i`
+    end
+
+    local decl = `global $(table.concat(names, ", ")) `
+    local v = expect_run(decl .. many_locals(200))
+    assert(v == 200, `expected 200, got $v`)
+    expect_compile_error(decl .. many_locals(201), "too many local variables (limit is 200)")
+end
+
+-- A collective `global *` takes no local slot either.
+local function a_global_star_takes_no_local_slot_test()
+    local v = expect_run("global * " .. many_locals(200))
+    assert(v == 200, `expected 200, got $v`)
+end
+
 -- Build a chunk whose innermost function captures n distinct outer names as
 -- upvalues. The names are split across the main chunk and one nested function
 -- so that neither enclosing function trips the 200 local limit first.
