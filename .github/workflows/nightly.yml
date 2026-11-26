@@ -53,18 +53,43 @@ jobs:
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
       version: ${{ steps.commit.outputs.version }}
+      changed: ${{ steps.commit.outputs.changed }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: rewrite
+          fetch-depth: 0
+          fetch-tags: true
       - id: commit
+        # A scheduled run tests something only when rewrite changed. A daily
+        # run looks for commits of the last 25 hours, which covers the delay
+        # of a scheduled start. The Monday run compares with the commit of
+        # the newest unstable tag, so a week of commits reaches the unstable
+        # channel even when the daily runs already tested them. A manual
+        # run always tests.
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
         run: |
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "version=$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)" >> "$GITHUB_OUTPUT"
+          changed=true
+          if [ "$EVENT" = schedule ]; then
+            if [ "$SCHEDULE" = "17 3 * * 1" ]; then
+              last=$(git tag --list 'v*-unstable.*' --sort=-creatordate | head -n 1)
+              if [ -n "$last" ] && [ "$(git rev-list -n 1 "$last")" = "$sha" ]; then changed=false; fi
+            elif [ -z "$(git log --since='25 hours ago' --format=%H -n 1)" ]; then
+              changed=false
+            fi
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "rewrite changed since the last run: $changed"
 
   full:
     name: Full
     needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     uses: ./.github/workflows/full.yml
     with:
       ref: ${{ needs.commit.outputs.sha }}
@@ -73,6 +98,7 @@ jobs:
   canary:
     name: Canary build
     needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     # The release builds every artifact and tests the installers. With
     # `publish` and `attest` false it releases and attests nothing, so the
     # permissions that release.yml declares are never used here.
@@ -91,6 +117,7 @@ jobs:
   testmap:
     name: Map of sources to conformance files
     needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -125,6 +152,7 @@ jobs:
     # tools/ci/perf.json, goes to the open issue labelled perf-regression,
     # which the run opens when there is none. The maintainer closes it.
     needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -194,7 +222,7 @@ jobs:
   unstable-tag:
     name: Tag the unstable build
     needs: [commit, full, canary]
-    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 3 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.unstable) }}
+    if: ${{ needs.commit.outputs.changed == 'true' && ((github.event_name == 'schedule' && github.event.schedule == '17 3 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.unstable)) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -256,6 +284,8 @@ jobs:
 
   stress:
     name: Collect at every allocation (${{ matrix.os }})
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -293,6 +323,8 @@ jobs:
 
   emulated:
     name: Emulated architectures (${{ matrix.target }})
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     # Static builds for instruction sets that GitHub has no runners for,
     # run under qemu-user (spec/design/platforms.md, "Testing each
     # target"). LUS_EMULATED skips the test whose bound qemu-user breaks.
@@ -347,6 +379,8 @@ jobs:
 
   freebsd:
     name: FreeBSD (${{ matrix.arch }})
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     # A FreeBSD virtual machine on a Linux runner runs a build that the
     # runner cross-compiles (spec/design/platforms.md, "FreeBSD and
     # Android"). The arm64 machine is emulated, so it runs slowly.
@@ -392,6 +426,8 @@ jobs:
 
   differential:
     name: Differential tests (${{ matrix.os }})
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -427,6 +463,8 @@ jobs:
 
   oom:
     name: Allocation and I/O failure sweeps
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
@@ -467,6 +505,8 @@ jobs:
 
   tsan:
     name: ThreadSanitizer
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: macos-15
     timeout-minutes: 240
     steps:
@@ -489,6 +529,8 @@ jobs:
 
   limits:
     name: Every limit at the limit and one past it
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 200
     steps:
@@ -518,6 +560,8 @@ jobs:
 
   syntax:
     name: Mutated source through every tool that reads it
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -543,6 +587,8 @@ jobs:
 
   coverage:
     name: Branch coverage
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 340
     steps:
@@ -618,6 +664,8 @@ jobs:
 
   invariants:
     name: Invariant checks
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -642,6 +690,8 @@ jobs:
 
   mutate:
     name: Mutation testing
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     steps:
@@ -674,6 +724,8 @@ jobs:
 
   mcdc:
     name: MC/DC
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
@@ -711,6 +763,8 @@ jobs:
 
   sanitize:
     name: Vendored C under the undefined behavior sanitizer
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -734,6 +788,8 @@ jobs:
 
   fuzz:
     name: Fuzzing
+    needs: commit
+    if: ${{ needs.commit.outputs.changed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 200
     steps:
