@@ -1,7 +1,3 @@
---- These programs run outside mise run test, which could prove a rewrite
---- of their concatenations, so they stay as written.
---- lus: allow(use-interpolation)
-
 -- Truncated and corrupted input for every parser and decoder of the
 -- standard library.
 --
@@ -83,15 +79,10 @@ local function longJson()
     local items = {}
 
     for i = 1, 30 do
-        items[i] = string.format(
-            '{"id":%d,"name":"item %d","price":%d.25,"tags":["a","b"]}',
-            i,
-            i,
-            i
-        )
+        items[i] = `{"id":$i,"name":"item $i","price":$i.25,"tags":["a","b"]}`
     end
 
-    return "[" .. table.concat(items, ",") .. "]"
+    return `[$(table.concat(items, ","))]`
 end
 
 -- Each target names a function of the library. `seeds` gives inputs as
@@ -239,7 +230,7 @@ for _, c in ipairs({
     local codec = vector.archive[c[1]]
 
     targets[#targets + 1] = {
-        name = "vector.archive." .. c[1],
+        name = `vector.archive.$(c[1])`,
         seeds = { codec.compress(text) },
         run = function(v)
             local ok, out = catch codec.decompress(v)
@@ -266,7 +257,7 @@ for _, fmt in ipairs({ "zip", "tar" }) do
     local c = vector.archive[fmt]
 
     targets[#targets + 1] = {
-        name = "vector.archive." .. fmt,
+        name = `vector.archive.$fmt`,
         seeds = { c.pack(container_entries) },
         run = function(v)
             local ok, list = catch c.list(v)
@@ -347,8 +338,8 @@ local function recordTls()
     local dir = os.tmpname()
     fs.remove(dir)
     fs.createdirectory(dir)
-    local key, cert = dir .. "/key.pem", dir .. "/cert.pem"
-    local cnf = dir .. "/req.cnf"
+    local key, cert = `$dir/key.pem`, `$dir/cert.pem`
+    local cnf = `$dir/req.cnf`
     local f = assert(io.open(cnf, "w"))
     f:write("[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = localhost\n")
     f:close()
@@ -389,8 +380,8 @@ local function recordTls()
     local flight = drain(sock, 0.5)
     coroutine.close(serving)
     server:close()
-    writeAll(dir .. "/hello.bin", hello)
-    writeAll(dir .. "/flight.bin", flight)
+    writeAll(`$dir/hello.bin`, hello)
+    writeAll(`$dir/flight.bin`, flight)
     return dir
 end
 
@@ -405,9 +396,9 @@ if not tls_path and arg[1] ~= "--child" then
 end
 
 if tls_path then
-    local cert, key = readAll(tls_path .. "/cert.pem"), readAll(tls_path .. "/key.pem")
-    local hello, flight = readAll(tls_path .. "/hello.bin", "rb"), readAll(
-        tls_path .. "/flight.bin",
+    local cert, key = readAll(`$tls_path/cert.pem`), readAll(`$tls_path/key.pem`)
+    local hello, flight = readAll(`$tls_path/hello.bin`, "rb"), readAll(
+        `$tls_path/flight.bin`,
         "rb"
     )
     local tls_server, tls_port
@@ -481,7 +472,7 @@ end
 
 for _, enc in ipairs({ "base64", "base64url", "base32", "hex", "url" }) do
     targets[#targets + 1] = {
-        name = "string.transcode " .. enc,
+        name = `string.transcode $enc`,
         text = true,
         seeds = { string.transcode(text:sub(1, 120) .. "é日", "utf-8", enc) },
         run = function(s)
@@ -503,7 +494,7 @@ for _, enc in ipairs({ "base64", "base64url", "base32", "hex", "url" }) do
             local lax_ok, lax = catch string.transcode(s, enc, "utf-8", true)
 
             if not lax_ok then
-                return "lax decoding raised " .. tostring(lax)
+                return `lax decoding raised $lax`
             end
 
             if type(lax) ~= "string" then
@@ -520,7 +511,7 @@ local function targetNamed(name)
         end
     end
 
-    error("no target " .. name)
+    error(`no target $name`)
 end
 
 -- ===== the inputs =====
@@ -611,21 +602,12 @@ if arg[1] == "--child" then
             tried = tried + 1
 
             if problem = target.run(x) then
-                print(
-                    string.format(
-                        "finding %s seed %s %s %d: %s",
-                        target.name,
-                        arg[3],
-                        kind,
-                        k,
-                        problem
-                    )
-                )
+                print(`finding $(target.name) seed $(arg[3]) $kind $k: $problem`)
             end
         end
     end
 
-    print("done " .. tried)
+    print(`done $tried`)
     os.exit(0)
 end
 
@@ -648,7 +630,7 @@ do
         elseif a == "--timeout" then
             opts.timeout = tonumber(v)
         else
-            error("unknown option " .. a)
+            error(`unknown option $a`)
         end
 
         i = i + 2
@@ -656,7 +638,7 @@ do
 end
 
 local function quote(s)
-    return "'" .. s:gsub("'", "'\\''") .. "'"
+    return `'$(s:gsub("'", "'\\''"))'`
 end
 
 local findings = {}
@@ -667,17 +649,8 @@ local tried_total = 0
 -- Runs inputs first to first + count - 1 in one child. Returns whether the
 -- child finished, and records the findings it printed.
 local function runBatch(target, si, kind, first, count)
-    local cmd = string.format(
-        "perl -e 'alarm %d; exec @ARGV' %s %s --child %s %d %s %d %d 2>&1",
-        opts.timeout,
-        quote(opts.lus),
-        quote(arg[0]),
-        quote(target.name),
-        si,
-        kind,
-        first,
-        count
-    )
+    local lus, script, name = quote(opts.lus), quote(arg[0]), quote(target.name)
+    local cmd = `perl -e 'alarm $(opts.timeout); exec @ARGV' $lus $script --child $name $si $kind $first $count 2>&1`
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     p:close()
@@ -703,13 +676,7 @@ local function bisect(target, si, kind, first, count)
     end
 
     if count == 1 then
-        findings[#findings + 1] = string.format(
-            "crash %s seed %d %s %d",
-            target.name,
-            si,
-            kind,
-            first
-        )
+        findings[#findings + 1] = `crash $(target.name) seed $si $kind $first`
         return
     end
 
@@ -745,17 +712,10 @@ for _, target in ipairs(targets) do
     end
 end
 
-print(
-    string.format(
-        "\n%d inputs, %d of them valid for their target, %d findings",
-        total,
-        tried_total,
-        #findings
-    )
-)
+print(`\n$total inputs, $tried_total of them valid for their target, $(#findings) findings`)
 
 for _, f in ipairs(findings) do
-    print("  " .. f)
+    print(`  $f`)
 end
 
 if #findings > 0 then

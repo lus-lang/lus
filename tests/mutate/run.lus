@@ -1,7 +1,3 @@
---- These programs run outside mise run test, which could prove a rewrite
---- of their concatenations, so they stay as written.
---- lus: allow(use-interpolation)
-
 -- Mutation testing of the runtime.
 --
 -- The harness copies the runtime, then for each sampled mutant changes
@@ -64,7 +60,7 @@ do
         elseif a == "--file" then
             opts.files[#opts.files + 1] = v
         else
-            error("unknown option " .. a)
+            error(`unknown option $a`)
         end
 
         i = i + 2
@@ -80,14 +76,14 @@ assert(
 opts.work = opts.work or fs.path.join(root, "runtime", "zig-out-mutate")
 
 local function sh(cmd)
-    local p = assert(io.popen(cmd .. " 2>&1", "r"))
+    local p = assert(io.popen(`$cmd 2>&1`, "r"))
     local out = p:read("a")
     local ok, _, code = p:close()
     return ok == true or code == 0, out
 end
 
 local function quote(s)
-    return "'" .. s:gsub("'", "'\\''") .. "'"
+    return `'$(s:gsub("'", "'\\''"))'`
 end
 
 local function readText(path)
@@ -130,7 +126,7 @@ local function targetFiles()
 
     for _, d in ipairs(DEFAULT_DIRS) do
         for _, name in ipairs(fs.list(fs.path.join(root, "runtime", "src", d), "*.zig")) do
-            local rel = d .. "/" .. name
+            local rel = `$d/$name`
 
             if not EXCLUDED[rel] then
                 files[#files + 1] = rel
@@ -154,7 +150,7 @@ local function coveredLines()
 
     local lines = {}
 
-    for entry in assert(readText(opts.covered), "cannot read " .. opts.covered):gmatch("[^\n]+") do
+    for entry in assert(readText(opts.covered), `cannot read $(opts.covered)`):gmatch("[^\n]+") do
         local file, line = entry:match("^(.-):(%d+):%d+$")
 
         if file then
@@ -171,30 +167,29 @@ local mutate_tool = fs.path.join(root, "tests", "mutate", "mutate.zig")
 local bin = fs.path.join(work_rt, "zig-out", "bin", "lus")
 
 local function build()
-    sh("sh " .. quote(fs.path.join(root, "tools", "wait-for-memory.sh")))
-    return sh("cd " .. quote(work_rt) .. " && zig build -j2 -Doptimize=ReleaseFast")
+    sh(`sh $(quote(fs.path.join(root, "tools", "wait-for-memory.sh")))`)
+    return sh(`cd $(quote(work_rt)) && zig build -j2 -Doptimize=ReleaseFast`)
 end
 
 -- The conformance files, cheapest first, from the times of a run of the
 -- unchanged copy.
 local function orderedTests()
-    local dirs = fs.path.join(root, "tests", "conformance")
-        .. " "
-        .. fs.path.join(root, "packages", "language-server", "tests")
+    local conformance = fs.path.join(root, "tests", "conformance")
+    local server = fs.path.join(root, "packages", "language-server", "tests")
     os.setenv("LUS_BIN", bin)
     os.setenv("LUS_JIT", "off")
-    local _, out = sh(quote(bin) .. " test --timeout " .. opts.timeout .. " " .. dirs)
+    local _, out = sh(`$(quote(bin)) test --timeout $(opts.timeout) $conformance $server`)
     local files = {}
 
     for path, ms in out:gmatch("ok%s+(%S+) %([^)]-, (%d+) ms%)") do
         files[#files + 1] = { path = path, ms = tonumber(ms) }
     end
 
-    assert(#files > 0, "the unchanged copy passed no test file:\n" .. out)
+    assert(#files > 0, `the unchanged copy passed no test file:\n$out`)
 
     for line in out:gmatch("[^\n]+") do
         if line:find("^FAIL") then
-            error("the unchanged copy fails a test: " .. line)
+            error(`the unchanged copy fails a test: $line`)
         end
     end
 
@@ -220,37 +215,28 @@ local function firstFailure(tests)
         os.setenv("LUS_JIT", mode)
 
         for _, t in ipairs(tests) do
-            local ok = sh(quote(bin) .. " test --timeout " .. opts.timeout .. " " .. quote(t.path))
+            local ok = sh(`$(quote(bin)) test --timeout $(opts.timeout) $(quote(t.path))`)
 
             if not ok then
                 os.setenv("LUS_JIT", "off")
-                return fs.path.name(t.path) .. (mode == "off" and "" or ", " .. mode)
+                local name = fs.path.name(t.path)
+                return mode == "off" and name or `$name, $mode`
             end
         end
     end
 
     os.setenv("LUS_JIT", "off")
     local diff_out = fs.path.join(opts.work, "diff-findings")
-    local ok = sh(
-        quote(judge)
-            .. " "
-            .. quote(fs.path.join(root, "tests", "diff", "run.lus"))
-            .. " --count "
-            .. opts.diff
-            .. " --jobs 4 --timeout "
-            .. opts.timeout
-            .. " --lus "
-            .. quote(bin)
-            .. " --out "
-            .. quote(diff_out)
-    )
+    local script = quote(fs.path.join(root, "tests", "diff", "run.lus"))
+    local flags = `--count $(opts.diff) --jobs 4 --timeout $(opts.timeout)`
+    local ok = sh(`$(quote(judge)) $script $flags --lus $(quote(bin)) --out $(quote(diff_out))`)
 
     if not ok then
         return `the differential programs, see $diff_out`
     end
 
-    sh("sh " .. quote(fs.path.join(root, "tools", "wait-for-memory.sh")))
-    ok = sh("cd " .. quote(work_rt) .. " && zig build test -j2")
+    sh(`sh $(quote(fs.path.join(root, "tools", "wait-for-memory.sh")))`)
+    ok = sh(`cd $(quote(work_rt)) && zig build test -j2`)
 
     if not ok then
         return "the unit tests"
@@ -288,30 +274,26 @@ end
 
 local _ = catch fs.remove(opts.work, true)
 fs.createdirectory(opts.work, true)
-local ok, out = sh(
-    "rsync -a --exclude .zig-cache --exclude 'zig-out*' "
-        .. quote(fs.path.join(root, "runtime") .. "/")
-        .. " "
-        .. quote(work_rt .. "/")
-)
+local source, dest = quote(`$(fs.path.join(root, "runtime"))/`), quote(`$work_rt/`)
+local ok, out = sh(`rsync -a --exclude .zig-cache --exclude 'zig-out*' $source $dest`)
 assert(ok, out)
 
 -- The build reads the specification and the skills beside the runtime.
 for _, d in ipairs({ "spec", ".agents", "tests", "packages" }) do
-    sh("ln -s " .. quote(fs.path.join(root, d)) .. " " .. quote(fs.path.join(opts.work, d)))
+    sh(`ln -s $(quote(fs.path.join(root, d))) $(quote(fs.path.join(opts.work, d)))`)
 end
 
 print("building the unchanged copy")
 ok, out = build()
-assert(ok, "the unchanged copy does not build:\n" .. out)
+assert(ok, `the unchanged copy does not build:\n$out`)
 local original_digest = digest(bin)
 local tests = orderedTests()
-print(string.format("%d test files, cheapest first", #tests))
+print(`$(#tests) test files, cheapest first`)
 
 -- The unchanged copy passes everything that kills a mutant.
 do
     local failed = firstFailure({})
-    assert(not failed, "the unchanged copy fails " .. tostring(failed))
+    assert(not failed, `the unchanged copy fails $failed`)
 end
 
 -- Every site of every target file, on covered lines when the export says.
@@ -333,12 +315,10 @@ for _, rel in ipairs(targetFiles()) do
         local f = assert(io.open(lf, "w"))
         f:write(table.concat(list, "\n"), "\n")
         f:close()
-        lines_arg = " " .. quote(lf)
+        lines_arg = ` $(quote(lf))`
     end
 
-    local sok, sites = sh(
-        "zig run " .. quote(mutate_tool) .. " -- sites " .. quote(src) .. lines_arg
-    )
+    local sok, sites = sh(`zig run $(quote(mutate_tool)) -- sites $(quote(src))$lines_arg`)
     assert(sok, sites)
 
     for line in sites:gmatch("[^\n]+") do
@@ -356,7 +336,7 @@ for _, rel in ipairs(targetFiles()) do
     end
 end
 
-print(string.format("%d mutation sites in %d files", #pool, #targetFiles()))
+print(`$(#pool) mutation sites in $(#targetFiles()) files`)
 
 local skip = equivalents()
 math.randomseed(opts.seed)
@@ -369,14 +349,16 @@ local seen = {}
 
 while results.killed + results.survived < opts.count and tried < #pool do
     if opts.minutes and time.now():epoch() - started > opts.minutes * 60 then
-        print(string.format("stopping after %d minutes", opts.minutes))
+        print(`stopping after $(opts.minutes) minutes`)
         break
     end
 
     local pick = pool[math.random(#pool)]
-    local key = pick.file .. "#" .. pick.index
+    local key = `$(pick.file)#$(pick.index)`
 
-    if skip[string.format("%s:%d %s %s", pick.file, pick.line, pick.kind, pick.what)] then
+    local label = `$(pick.file):$(pick.line) $(pick.kind) $(pick.what)`
+
+    if skip[label] then
         seen[key] = true
     end
 
@@ -386,9 +368,7 @@ while results.killed + results.survived < opts.count and tried < #pool do
         local src = fs.path.join(work_rt, "src", pick.file)
         local saved = assert(readText(src))
         local verdict
-        local aok = sh(
-            "zig run " .. quote(mutate_tool) .. " -- apply " .. quote(src) .. " " .. pick.index
-        )
+        local aok = sh(`zig run $(quote(mutate_tool)) -- apply $(quote(src)) $(pick.index)`)
 
         if not aok then
             verdict = "broken"
@@ -417,20 +397,12 @@ while results.killed + results.survived < opts.count and tried < #pool do
             end
         end
 
-        local label = string.format("%s:%d %s %s", pick.file, pick.line, pick.kind, pick.what)
-
         if verdict == "survived" then
             survivors[#survivors + 1] = label
         end
 
-        print(
-            string.format(
-                "%-9s %s%s",
-                verdict,
-                label,
-                pick.by and ("  (by " .. pick.by .. ")") or ""
-            )
-        )
+        local by = pick.by and `  (by $(pick.by))` or ""
+        print(string.format("%-9s %s%s", verdict, label, by))
         io.stdout:flush()
     end
 end
@@ -438,14 +410,9 @@ end
 -- Restore the copy, so a later run starts from the original sources.
 build()
 local scored = results.killed + results.survived
+local killed, survived, broken, same from results
 print(
-    string.format(
-        "\n%d killed, %d survived, %d did not compile, %d compiled to the same binary",
-        results.killed,
-        results.survived,
-        results.broken,
-        results.same
-    )
+    `\n$killed killed, $survived survived, $broken did not compile, $same compiled to the same binary`
 )
 
 if scored > 0 then
@@ -482,6 +449,6 @@ if #survivors > 0 then
     print("\nsurvivors, each a change that no test notices:")
 
     for _, s in ipairs(survivors) do
-        print("  " .. s)
+        print(`  $s`)
     end
 end

@@ -1,7 +1,3 @@
---- These programs run outside mise run test, which could prove a rewrite
---- of their concatenations, so they stay as written.
---- lus: allow(use-interpolation)
-
 -- Sweeps allocation failures over Lus programs.
 --
 -- The sweep needs a binary built with `zig build -Dfail-alloc=true`. For
@@ -35,7 +31,7 @@ global arg, assert, io, ipairs, math, os, pairs, pledge, print, string, table, t
 pledge("exec", "fs", "env")
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
-local root = here .. "/../.."
+local root = `$here/../..`
 
 local opts, operands = {}, {}
 
@@ -59,7 +55,7 @@ do
 end
 
 local function quote(s)
-    return "'" .. tostring(s):gsub("'", [['\'']]) .. "'"
+    return `'$(tostring(s):gsub("'", [['\'']]))'`
 end
 
 local function shell(cmd)
@@ -70,16 +66,13 @@ local function shell(cmd)
 end
 
 local function absolute(p)
-    return (shell("cd " .. quote(p:match("^(.*)/[^/]*$") or ".") .. " && pwd"):gsub("\n$", ""))
-        .. "/"
-        .. (p:match("[^/]*$"))
+    local dir = shell(`cd $(quote(p:match("^(.*)/[^/]*$") or ".")) && pwd`):gsub("\n$", "")
+    return `$dir/$(p:match("[^/]*$"))`
 end
 
-root = (shell("cd " .. quote(root) .. " && pwd"):gsub("\n$", ""))
-local lus = absolute(
-    opts.lus
-        or (root .. (opts.io and "/runtime/zig-out-io/bin/lus" or "/runtime/zig-out-oom/bin/lus"))
-)
+root = (shell(`cd $(quote(root)) && pwd`):gsub("\n$", ""))
+local build = opts.io and "zig-out-io" or "zig-out-oom"
+local lus = absolute(opts.lus or `$root/runtime/$build/bin/lus`)
 local variable = opts.io and "LUS_FAIL_IO" or "LUS_FAIL_ALLOC"
 local counted = opts.io and "lus: (%d+) I/O operations" or "lus: (%d+) allocations"
 local suffix = opts.io and (opts.short and ":short" or "") or (opts.sticky and "+" or "")
@@ -88,7 +81,7 @@ local jobs = tonumber(opts.jobs or "8")
 local seconds = tonumber(opts.timeout or "30")
 
 if #operands == 0 then
-    operands[1] = root .. "/tests/conformance"
+    operands[1] = `$root/tests/conformance`
 end
 
 -- The runs of the binary under test write their coverage to this
@@ -102,7 +95,7 @@ local files = {}
 
 for _, p in ipairs(operands) do
     local list = shell(
-        "find " .. quote(p) .. " -name fixtures -prune -o -name '*.lus' -type f -print | sort"
+        `find $(quote(p)) -name fixtures -prune -o -name '*.lus' -type f -print | sort`
     )
 
     for f in list:gmatch("[^\n]+") do
@@ -129,43 +122,26 @@ end
 -- run was killed after `seconds`.
 local function runBatch(batch)
     local parts = {}
+    local bin, limit = quote(lus), math.floor(seconds)
 
     for i, job in ipairs(batch) do
-        local base = tmp .. "/j" .. i
-        local argv = job.file:find("_test%.lus$") and ("test --run-one " .. quote(job.file))
-            or quote(job.file)
-        parts[#parts + 1] = "( mkdir -p "
-            .. quote(base .. ".d")
-            .. " && cd "
-            .. quote(base .. ".d")
-            .. " && env "
-            .. (job.extra or "")
-            .. variable
-            .. "="
-            .. job.env
-            .. " perl -e 'alarm shift; exec @ARGV' "
-            .. math.floor(seconds)
-            .. " "
-            .. quote(lus)
-            .. " "
-            .. argv
-            .. " > /dev/null 2> "
-            .. quote(base .. ".err")
-            .. "; echo $? > "
-            .. quote(base .. ".code")
-            .. "; cd / && rm -rf "
-            .. quote(base .. ".d")
-            .. " ) &"
+        local base = `$tmp/j$i`
+        local file = quote(job.file)
+        local argv = job.file:find("_test%.lus$") and `test --run-one $file` or file
+        local dir, err, code = quote(`$base.d`), quote(`$base.err`), quote(`$base.code`)
+        local env = `$(job.extra or "")$variable=$(job.env)`
+        local run = `env $env perl -e 'alarm shift; exec @ARGV' $limit $bin $argv > /dev/null 2> $err`
+        parts[#parts + 1] = `( mkdir -p $dir && cd $dir && $run; echo \$? > $code; cd / && rm -rf $dir ) &`
     end
 
-    os.execute(table.concat(parts, "\n") .. "\nwait")
+    os.execute(`$(table.concat(parts, "\n"))\nwait`)
     local out = {}
 
     for i = 1, #batch do
-        local base = tmp .. "/j" .. i
+        local base = `$tmp/j$i`
         out[i] = {
-            code = tonumber(readFile(base .. ".code"):match("%d+")) or -1,
-            stderr = readFile(base .. ".err"),
+            code = tonumber(readFile(`$base.code`):match("%d+")) or -1,
+            stderr = readFile(`$base.err`),
         }
     end
 
@@ -176,31 +152,27 @@ end
 -- that ended cleanly. Status 2 is the test runner's own report of a file
 -- that could not load.
 local function verdict(res)
-    local where = ""
     local file, fn = res.stderr:match("\n%S*src/([^%s:]+:%d+):%d+: 0x%x+ in (%S+)")
-
-    if file then
-        where = " at " .. fn .. " (src/" .. file .. ")"
-    end
+    local where = file and ` at $fn (src/$file)` or ""
 
     if res.code == 142 then
         return "hang"
     end
 
     if panic = res.stderr:match("panic: ([^\n]*)") then
-        return "panic: " .. panic:gsub("%d%d%d+", "N") .. where
+        return `panic: $(panic:gsub("%d%d%d+", "N"))$where`
     end
 
     if res.code >= 128 then
-        return "signal " .. (res.code - 128) .. where
+        return `signal $(res.code - 128)$where`
     end
 
     if res.stderr:find("leaked", 1, true) then
-        return "leak" .. where
+        return `leak$where`
     end
 
     if res.code ~= 0 and res.code ~= 1 and res.code ~= 2 then
-        return "exit " .. res.code .. where
+        return `exit $(res.code)$where`
     end
 
     return nil
@@ -275,10 +247,10 @@ batches(counts, function(batch, results)
         local bad = verdict(res)
 
         if bad or not n then
-            print(job.file:sub(#root + 2) .. ": the clean run " .. (bad or "printed no count"))
+            print(`$(job.file:sub(#root + 2)): the clean run $(bad or "printed no count")`)
         elseif n > 0 then
             for _, a in ipairs(pick(n, job.index)) do
-                work[#work + 1] = { file = job.file, n = a, env = a .. suffix }
+                work[#work + 1] = { file = job.file, n = a, env = `$a$suffix` }
             end
         end
     end
@@ -384,7 +356,7 @@ for _, what in ipairs(order) do
     print(`  $(b.count) runs, first: $variable=$(b.n)$suffix $(b.file:sub(#root + 2))`)
 end
 
-os.execute("rm -rf " .. quote(tmp))
+os.execute(`rm -rf $(quote(tmp))`)
 print("")
 
 if unrepeated > 0 then

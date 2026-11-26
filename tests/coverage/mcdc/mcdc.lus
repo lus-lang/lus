@@ -1,7 +1,3 @@
---- These programs run outside mise run test, which could prove a rewrite
---- of their concatenations, so they stay as written.
---- lus: allow(use-interpolation)
-
 -- Turns the vectors that a run of the transformed runtime recorded into the
 -- MC/DC report: the share of conditions shown to affect the outcome of
 -- their decision on their own, by directory of src and by group of the
@@ -89,7 +85,7 @@ for _, name in ipairs(fs.list(dir, "*.mcdc")) do
     for line in readFile(fs.path.join(dir, name)):gmatch("[^\n]+") do
         local id, v, r = line:match("^(%d+) (%d+) (%d)$")
         local d = decisions[tonumber(id)]
-        local key = v .. " " .. r
+        local key = `$v $r`
 
         if d and not d.seen[key] then
             d.seen[key] = true
@@ -141,10 +137,7 @@ local total, hit = 0, 0
 for _, d in pairs(decisions) do
     local top = d.file:match("^([^/]+)/") or "."
 
-    for _, key in ipairs({ top }) do
-        byDir[key] = byDir[key] or { total = 0, hit = 0 }
-    end
-
+    byDir[top] = byDir[top] or { total = 0, hit = 0 }
     byFile[d.file] = byFile[d.file] or { total = 0, hit = 0 }
 
     for i = 0, d.n - 1 do
@@ -183,12 +176,11 @@ if only then
         return a.line < b.line or a.line == b.line and a.i < b.i
     end)
 
-    print(`conditions of {only} that no pair of vectors shows (* when the decision never ran):`)
+    print(`conditions of $only that no pair of vectors shows (* when the decision never ran):`)
 
     for _, m in ipairs(missed) do
-        print(
-            string.format("  %d condition %d of %d%s", m.line, m.i + 1, m.n, m.ran and "" or " *")
-        )
+        local mark = m.ran and "" or " *"
+        print(`  $(m.line) condition $(m.i + 1) of $(m.n)$mark`)
     end
 
     return
@@ -200,7 +192,7 @@ for _ in pairs(decisions) do
     decisionCount = decisionCount + 1
 end
 
-print(string.format("%d vector files, %d decisions, %d conditions\n", files, decisionCount, total))
+print(`$files vector files, $decisionCount decisions, $total conditions\n`)
 print("conditions shown by directory of src:")
 local dirs = {}
 

@@ -1,7 +1,3 @@
---- These programs run outside mise run test, which could prove a rewrite
---- of their concatenations, so they stay as written.
---- lus: allow(use-interpolation)
-
 -- Every limit of the language and the runtime, at the limit and one past
 -- it.
 --
@@ -43,7 +39,7 @@ do
         elseif a == "--emit" then
             opts.emit = v
         else
-            error("unknown option " .. a)
+            error(`unknown option $a`)
         end
 
         i = i + 2
@@ -110,6 +106,7 @@ local CASES = {
         doc = 200,
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return list(n, function(i)
                 return "local a" .. i .. " = " .. i
             end, "\n") .. "\nassert(a" .. n .. " == " .. n .. ")\nprint('ok')"
@@ -120,6 +117,7 @@ local CASES = {
         doc = 200,
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local " .. list(n, function(i)
                 return "a" .. i
             end) .. " = " .. list(n, function(i)
@@ -132,6 +130,7 @@ local CASES = {
         doc = 200,
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local function f(" .. list(n, function(i)
                 return "p" .. i
             end) .. ") return p" .. n .. " end\n" .. "assert(f(" .. list(n, function(i)
@@ -149,6 +148,7 @@ local CASES = {
             local a = math.min(n, 150)
             local b = n - a
 
+            -- lus: allow(use-interpolation)
             return "local function outer()\n"
                 .. list(a, function(i)
                     return "local x" .. i .. " = " .. i
@@ -177,6 +177,7 @@ local CASES = {
         name = "call arguments",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local function f(...) return select('#', ...) end\n"
                 .. "assert(f("
                 .. list(n, function(i)
@@ -191,6 +192,7 @@ local CASES = {
         name = "return values",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local function f() return " .. list(n, function(i)
                 return tostring(i)
             end) .. " end\n" .. "assert(select('#', f()) == " .. n .. ")\nprint('ok')"
@@ -200,6 +202,7 @@ local CASES = {
         name = "concatenation operands",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local v = 'a'\nlocal s = " .. list(n, function()
                 return "v"
             end, " .. ") .. "\nassert(#s == " .. n .. ")\nprint('ok')"
@@ -209,6 +212,7 @@ local CASES = {
         name = "interpolation segments",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local v = 'a'\nlocal s = `" .. list(n, function()
                 return "$(v)"
             end, "") .. "`\nassert(#s == " .. n .. ")\nprint('ok')"
@@ -218,6 +222,7 @@ local CASES = {
         name = "assignment targets",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = {}\n" .. list(n, function(i)
                 return "t[" .. i .. "]"
             end) .. " = " .. list(n, function(i)
@@ -229,6 +234,7 @@ local CASES = {
         name = "constructor positional fields",
         cap = 200000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = {" .. list(n, function(i)
                 return tostring(i)
             end) .. "}\nassert(#t == " .. n .. " and t[" .. n .. "] == " .. n .. ")\nprint('ok')"
@@ -238,6 +244,7 @@ local CASES = {
         name = "constructor constant keys",
         cap = 100000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = {" .. list(n, function(i)
                 return "k" .. i .. " = " .. i
             end) .. "}\nassert(t.k" .. n .. " == " .. n .. ")\nprint('ok')"
@@ -247,6 +254,7 @@ local CASES = {
         name = "constructor computed values",
         cap = 100000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local v = 1\nlocal t = {" .. list(n, function(i)
                 return "k" .. i .. " = v + " .. i
             end) .. "}\nassert(t.k" .. n .. " == " .. (n + 1) .. ")\nprint('ok')"
@@ -256,6 +264,7 @@ local CASES = {
         name = "constructor bracketed keys",
         cap = 100000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = {" .. list(n, function(i)
                 return "[" .. (i * 7) .. "] = " .. i
             end) .. "}\nassert(t[" .. (n * 7) .. "] == " .. n .. ")\nprint('ok')"
@@ -267,6 +276,7 @@ local CASES = {
         doc = 199,
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local g <group> = { " .. list(n, function(i)
                 return "f" .. i .. " = " .. i
             end) .. " }\n" .. "assert(g.f" .. n .. " == " .. n .. ")\nprint('ok')"
@@ -276,6 +286,7 @@ local CASES = {
         name = "string constants in a function",
         cap = 140000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = {}\n" .. list(n, function(i)
                 return "t[#t + 1] = 's" .. i .. "'"
             end, "\n") .. "\nassert(t[" .. n .. "] == 's" .. n .. "')\nprint('ok')"
@@ -285,6 +296,7 @@ local CASES = {
         name = "closures in a function",
         cap = 140000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = {}\n" .. list(n, function(i)
                 return "t[" .. i .. "] = function() return " .. i .. " end"
             end, "\n") .. "\nassert(t[" .. n .. "]() == " .. n .. ")\nprint('ok')"
@@ -295,6 +307,7 @@ local CASES = {
         doc = 255,
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local E = enum " .. list(n, function(i)
                 return "m" .. i
             end) .. " end\nprint('ok')"
@@ -304,6 +317,7 @@ local CASES = {
         name = "parenthesis nesting",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local x = "
                 .. string.rep("(", n)
                 .. "1"
@@ -315,6 +329,7 @@ local CASES = {
         name = "table constructor nesting",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = " .. string.rep("{", n) .. string.rep("}", n) .. "\nprint('ok')"
         end,
     },
@@ -322,6 +337,7 @@ local CASES = {
         name = "block nesting",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return string.rep("do ", n) .. string.rep("end ", n) .. "\nprint('ok')"
         end,
     },
@@ -329,6 +345,7 @@ local CASES = {
         name = "function nesting",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local f = "
                 .. string.rep("function() return ", n)
                 .. "1"
@@ -341,10 +358,12 @@ local CASES = {
         doc = 8,
         cap = 40,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             local decl = list(n, function(i)
                 return "local s" .. i .. " = { { v = " .. i .. " } }"
             end, "\n")
 
+            -- lus: allow(use-interpolation)
             return decl .. "\nlocal n = 0\nfor r in query(@" .. list(n, function(i)
                 return "s" .. i .. " as s" .. i
             end, ", ") .. " select " .. list(n, function(i)
@@ -357,6 +376,7 @@ local CASES = {
         doc = 16,
         cap = 60,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local rows = { { " .. list(n, function(i)
                 return "c" .. i .. " = " .. i
             end) .. " } }\nlocal n = 0\n" .. "for r in query(@rows as r select count(*) as k group by " .. list(n, function(
@@ -371,7 +391,7 @@ local CASES = {
         doc = 16,
         cap = 60,
         gen = function(n)
-            -- lus: allow(line-too-long)
+            -- lus: allow(line-too-long, use-interpolation)
             return "local rows = { { " .. list(n, function(i)
                 return "c" .. i .. " = " .. i
             end) .. " } }\nlocal n = 0\n" .. "for r in query(@rows as r order by " .. list(n, function(
@@ -386,6 +406,7 @@ local CASES = {
         doc = 32,
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local rows = { { v = 1 } }\nlocal n = 0\n"
                 .. "for r in query(@rows as r select "
                 .. list(n, function(i)
@@ -403,6 +424,7 @@ local CASES = {
         name = "query where conjuncts",
         cap = 2000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local rows = { { v = 5 }, { v = 0 } }\nlocal n = 0\n"
                 .. "for r in query(@rows as r where "
                 .. list(n, function()
@@ -417,6 +439,7 @@ local CASES = {
         name = "recursion depth",
         cap = 10000000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local function f(k) if k == 0 then return 0 end return 1 + f(k - 1) end\nassert(f("
                 .. n
                 .. ") == "
@@ -428,6 +451,7 @@ local CASES = {
         name = "nested callbacks through natives",
         cap = 100000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local function f(k) if k == 0 then return 0 end local r = 0 string.gsub('x', 'x', function() r = 1 + f(k - 1) end) return r end\n"
                 .. "assert(f("
                 .. n
@@ -440,6 +464,7 @@ local CASES = {
         name = "nested coroutine resumes",
         cap = 100000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local function f(k) if k == 0 then return 0 end local co = coroutine.create(function() return 1 + f(k - 1) end) local ok, v = coroutine.resume(co) assert(ok, v) return v end\n"
                 .. "assert(f("
                 .. n
@@ -453,6 +478,7 @@ local CASES = {
         doc = 1999,
         cap = 100000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = { v = 1 }\nfor i = 1, "
                 .. n
                 .. " do t = setmetatable({}, { __index = t }) end\nassert(t.v == 1)\nprint('ok')"
@@ -463,6 +489,7 @@ local CASES = {
         doc = 1999,
         cap = 100000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local base = {}\nlocal t = base\nfor i = 1, "
                 .. n
                 .. " do t = setmetatable({}, { __newindex = t }) end\nt.v = 1\nassert(rawget(base, 'v') == 1)\nprint('ok')"
@@ -473,6 +500,7 @@ local CASES = {
         doc = 15,
         cap = 1000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local f = function() return 7 end\nfor i = 1, "
                 .. n
                 .. " do f = setmetatable({}, { __call = f }) end\nassert(f() == 7)\nprint('ok')"
@@ -482,6 +510,7 @@ local CASES = {
         name = "table.unpack results",
         cap = 4000000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = table.create("
                 .. n
                 .. ", 0)\nfor i = 1, "
@@ -495,6 +524,7 @@ local CASES = {
         name = "pattern captures",
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local s = string.rep('a', "
                 .. n
                 .. ")\nassert(select('#', s:match(string.rep('(a)', "
@@ -509,6 +539,7 @@ local CASES = {
         doc = 99,
         cap = 400,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "assert(#string.format('%"
                 .. n
                 .. "d', 1) == "
@@ -523,6 +554,7 @@ local CASES = {
         doc = 198,
         cap = 100000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = {}\nfor i = 1, "
                 .. n
                 .. " do t = { t } end\nassert(#tojson(t) > 0)\nprint('ok')"
@@ -533,6 +565,7 @@ local CASES = {
         doc = 1000,
         cap = 1000000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local s = string.rep('[', "
                 .. n
                 .. ") .. string.rep(']', "
@@ -545,6 +578,7 @@ local CASES = {
         doc = 200,
         cap = 1000000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = {}\nfor i = 1, "
                 .. n
                 .. " do t = { t } end\nassert(type(table.clone(t, true)) == 'table')\nprint('ok')"
@@ -556,6 +590,7 @@ local CASES = {
         doc = 99,
         cap = 200000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "pledge('load', 'fs')\nlocal path = os.tmpname()\nlocal f = assert(io.open(path, 'w')) f:write('worker.message(worker.peek())') f:close()\n"
                 .. "local t = {}\nfor i = 1, "
                 .. n
@@ -567,6 +602,7 @@ local CASES = {
         name = "bigint digits",
         cap = 300000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local b = bigint(string.rep('9', "
                 .. n
                 .. "))\nassert(#tostring(b) == "
@@ -579,6 +615,7 @@ local CASES = {
         doc = 16383,
         cap = 100000,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local d = decimal('0.' .. string.rep('1', "
                 .. n
                 .. "))\nassert(#tostring(d) == "
@@ -592,6 +629,7 @@ local CASES = {
         name = "slice span past the limit",
         cap = 1,
         gen = function(n)
+            -- lus: allow(use-interpolation)
             return "local t = {}\nlocal ok, e = catch t[1, (1 << 26) + "
                 .. n
                 .. "]\nassert(not ok and tostring(e):find('slice span too large', 1, true), tostring(e))\nprint('ok')"
@@ -606,10 +644,12 @@ local _ = catch fs.remove(dir, true)
 fs.createdirectory(dir, true)
 
 local function quote(s)
-    return "'" .. s:gsub("'", "'\\''") .. "'"
+    return `'$(s:gsub("'", "'\\''"))'`
 end
 
-local lus = opts.lus:sub(1, 1) == "/" and opts.lus or fs.path.join(os.getenv("PWD"), opts.lus)
+local lus = quote(
+    opts.lus:sub(1, 1) == "/" and opts.lus or fs.path.join(os.getenv("PWD"), opts.lus)
+)
 
 -- Runs the program of `case` at size `n` in `mode` of the JIT. Returns
 -- "ok", "limit" with the message, or "bad" with what went wrong.
@@ -620,13 +660,7 @@ local function attempt(case, n, mode)
     -- slots of the local limit of its function.
     f:write(case.gen(n))
     f:close()
-    local cmd = string.format(
-        "cd %s && LUS_JIT=%s perl -e 'alarm %d; exec @ARGV' %s case.lus 2>&1",
-        quote(dir),
-        mode,
-        opts.timeout,
-        quote(lus)
-    )
+    local cmd = `cd $(quote(dir)) && LUS_JIT=$mode perl -e 'alarm $(opts.timeout); exec @ARGV' $lus case.lus 2>&1`
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     local _, kind, code = p:close()
@@ -640,7 +674,7 @@ local function attempt(case, n, mode)
     end
 
     for _, m in ipairs(MESSAGES) do
-        if found = out:match("[^\n]*" .. m .. "[^\n]*") then
+        if found = out:match(`[^\n]*$m[^\n]*`) then
             return "limit", found
         end
     end
@@ -653,8 +687,8 @@ local MODES = { "off", "default", "eager", "opt-eager" }
 local findings = {}
 local report = {}
 
-local function finding(case, fmt, ...)
-    findings[#findings + 1] = case.name .. ": " .. string.format(fmt, ...)
+local function finding(case, text)
+    findings[#findings + 1] = `$(case.name): $text`
 end
 
 for _, case in ipairs(CASES) do
@@ -696,7 +730,7 @@ for _, case in ipairs(CASES) do
             end
 
             if first_failure[1] == "bad" then
-                finding(case, "N = %d fails without a limit message: %s", badn, first_failure[2])
+                finding(case, `N = $badn fails without a limit message: $(first_failure[2])`)
             end
 
             -- Every mode runs the limit and fails cleanly one past it.
@@ -704,13 +738,13 @@ for _, case in ipairs(CASES) do
                 local r, msg = attempt(case, good, mode)
 
                 if good > 0 and r ~= "ok" then
-                    finding(case, "N = %d in mode %s: %s %s", good, mode, r, tostring(msg))
+                    finding(case, `N = $good in mode $mode: $r $msg`)
                 end
 
                 r, msg = attempt(case, good + 1, mode)
 
                 if r ~= "limit" then
-                    finding(case, "N = %d in mode %s: %s %s", good + 1, mode, r, tostring(msg))
+                    finding(case, `N = $(good + 1) in mode $mode: $r $msg`)
                 end
             end
 
@@ -721,19 +755,19 @@ for _, case in ipairs(CASES) do
                 local r, msg = attempt(case, far, "off")
 
                 if r ~= "limit" then
-                    finding(case, "N = %d far past the limit: %s %s", far, r, tostring(msg))
+                    finding(case, `N = $far far past the limit: $r $msg`)
                 end
             end
 
             if opts.emit and good > 0 then
-                local name = case.name:gsub("[^%w]+", "_") .. ".lus"
+                local name = `$(case.name:gsub("[^%w]+", "_")).lus`
                 local out = assert(io.open(fs.path.join(opts.emit, name), "w"))
                 out:write(case.gen(good))
                 out:close()
             end
 
             if case.doc and case.doc ~= good then
-                finding(case, "the limit is %d where the reference documents %d", good, case.doc)
+                finding(case, `the limit is $good where the reference documents $(case.doc)`)
             end
 
             report[#report + 1] = string.format(
@@ -747,16 +781,14 @@ for _, case in ipairs(CASES) do
                 local r, msg = attempt(case, good, mode)
 
                 if r ~= "ok" then
-                    finding(case, "N = %d in mode %s: %s %s", good, mode, r, tostring(msg))
+                    finding(case, `N = $good in mode $mode: $r $msg`)
                 end
             end
 
             if case.doc then
                 finding(
                     case,
-                    "runs at the cap %d where the reference documents a limit of %d",
-                    good,
-                    case.doc
+                    `runs at the cap $good where the reference documents a limit of $(case.doc)`
                 )
             end
 
@@ -774,10 +806,10 @@ for _, case in ipairs(CASES) do
 end
 
 fs.remove(dir, true)
-print(string.format("\n%d cases, %d findings", #report, #findings))
+print(`\n$(#report) cases, $(#findings) findings`)
 
 for _, f in ipairs(findings) do
-    print("  " .. f)
+    print(`  $f`)
 end
 
 if #findings > 0 then

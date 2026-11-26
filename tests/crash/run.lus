@@ -1,7 +1,3 @@
---- These programs run outside mise run test, which could prove a rewrite
---- of their concatenations, so they stay as written.
---- lus: allow(use-interpolation)
-
 -- Crash tests of the durability sequences that the manual recommends.
 --
 -- Each scenario is a writer, a program that changes some files, and a
@@ -46,7 +42,7 @@ do
         local key = names[arg[i]]
 
         if not key then
-            error("unknown option " .. arg[i])
+            error(`unknown option $(arg[i])`)
         end
 
         opts[key] = key == "seeds" and tonumber(arg[i + 1]) or arg[i + 1]
@@ -82,7 +78,7 @@ local function writeFile(path, data)
 end
 
 local function quote(s)
-    return "'" .. s:gsub("'", "'\\''") .. "'"
+    return `'$(s:gsub("'", "'\\''"))'`
 end
 
 local ENV = { "LUS_FAIL_IO", "LUS_FAIL_IO_SEED", "LUS_FAIL_IO_PSOW" }
@@ -94,13 +90,13 @@ local function run(bin, script, args, env)
         os.setenv(k, env[k])
     end
 
-    local cmd = quote(bin) .. " " .. quote(script)
+    local words = { quote(bin), quote(script) }
 
     for _, a in ipairs(args) do
-        cmd = cmd .. " " .. quote(a)
+        words[#words + 1] = quote(a)
     end
 
-    local p = assert(io.popen(cmd .. " 2>&1", "r"))
+    local p = assert(io.popen(`$(table.concat(words, " ")) 2>&1`, "r"))
     local out = p:read("a")
     local _, _, code = p:close()
 
@@ -162,20 +158,20 @@ local scenarios = {
         name = "replace",
         about = "write a temporary file, sync it, rename it over the target, sync the directory",
         setup = function(dir)
-            writeFile(dir .. "/data", OLD)
+            writeFile(`$dir/data`, OLD)
         end,
         writer = {
             'pledge("fs")',
             "local dir = arg[1]",
             'local f = assert(io.open(dir .. "/data.tmp", "w"))',
-            "f:write(" .. string.format("%q", NEW) .. ")",
+            "f:write(" .. string.format("%q", NEW) .. ")",  -- lus: allow(use-interpolation)
             "f:sync() -- step:sync",
             "f:close()",
             'fs.move(dir .. "/data.tmp", dir .. "/data", { replace = true })',
             "fs.sync(dir) -- step:dirsync",
         },
         check = function(dir, finished)
-            local s = readFile(dir .. "/data")
+            local s = readFile(`$dir/data`)
 
             if s ~= OLD and s ~= NEW then
                 return "the target holds neither the old nor the new contents"
@@ -193,7 +189,7 @@ local scenarios = {
         -- same sector, on a disk without powersafe overwrite.
         needs_psow = true,
         setup = function(dir)
-            writeFile(dir .. "/log", record(1) .. record(2))
+            writeFile(`$dir/log`, record(1) .. record(2))
         end,
         writer = {
             'pledge("fs")',
@@ -216,14 +212,14 @@ local scenarios = {
                 acked = math.max(acked, tonumber(i))
             end
 
-            local n, after = validRecords(readFile(dir .. "/log"))
+            local n, after = validRecords(readFile(`$dir/log`))
 
             if after then
                 return "a valid record follows a damaged one"
             end
 
             if n < acked then
-                return string.format("record %d was acknowledged and then lost", n + 1)
+                return `record $(n + 1) was acknowledged and then lost`
             end
 
             if finished and n < 5 then
@@ -236,7 +232,7 @@ local scenarios = {
         about = "overwrite a record of 700 bytes in place and sync the file",
         unsafe = true,
         setup = function(dir)
-            writeFile(dir .. "/table", ("A"):rep(700) .. ("B"):rep(700) .. ("C"):rep(700))
+            writeFile(`$dir/table`, ("A"):rep(700) .. ("B"):rep(700) .. ("C"):rep(700))
         end,
         writer = {
             'pledge("fs")',
@@ -248,7 +244,7 @@ local scenarios = {
             "f:close()",
         },
         check = function(dir, _finished)
-            local s = readFile(dir .. "/table") or ""
+            local s = readFile(`$dir/table`) or ""
             local mid = s:sub(701, 1400)
 
             if mid ~= ("B"):rep(700) and mid ~= ("Z"):rep(700) then
@@ -264,7 +260,7 @@ local scenarios = {
         name = "sqlite",
         about = "commit a transaction of 20 rows with synchronous = FULL",
         setup = function(dir, lus)
-            local setup = dir .. "/setup.lus"
+            local setup = `$dir/setup.lus`
             writeFile(setup, table.concat({
                 'pledge("fs")',
                 'local db = io.sqlite(arg[1] .. "/db.sqlite")',
@@ -288,7 +284,7 @@ local scenarios = {
             "db:close()",
         },
         check = function(dir, finished, _, lus)
-            local probe = dir .. "/../probe.lus"
+            local probe = `$dir/../probe.lus`
             writeFile(probe, table.concat({
                 'pledge("fs")',
                 'local db = io.sqlite(arg[1] .. "/db.sqlite")',
@@ -301,7 +297,7 @@ local scenarios = {
             local rows = tonumber(o:match("rows%s+(%d+)"))
 
             if integrity ~= "ok" then
-                return "the database is damaged: " .. (o:match("[^\n]+") or "no output")
+                return `the database is damaged: $(o:match("[^\n]+") or "no output")`
             end
 
             if rows ~= 5 and rows ~= 25 then
@@ -336,12 +332,12 @@ local function writerWithout(sc, step)
     local lines = {}
 
     for _, line in ipairs(sc.writer) do
-        if not (step and line:find("-- step:" .. step, 1, true)) then
+        if not (step and line:find(`-- step:$step`, 1, true)) then
             lines[#lines + 1] = line
         end
     end
 
-    return table.concat(lines, "\n") .. "\n"
+    return table.concat(lines, "\n") .. "\n"  -- lus: allow(use-interpolation)
 end
 
 -- Runs every crash of one variant. Returns the number of operations and of
@@ -351,8 +347,10 @@ local function crashAll(sc, script, dir)
     fresh(dir)
     sc.setup(dir, opts.lus)
     local out = run(opts.lus, script, { dir }, { LUS_FAIL_IO = "count" })
-    local count = tonumber(out:match("lus: (%d+) I/O operations"))
-    assert(count, "the writer of " .. sc.name .. " failed: " .. out)
+    local count = assert(
+        tonumber(out:match("lus: (%d+) I/O operations")),
+        `the writer of $(sc.name) failed: $out`
+    )
     local runs = 0
     local problems = { ["1"] = {}, ["0"] = {} }
 
@@ -360,7 +358,7 @@ local function crashAll(sc, script, dir)
         fresh(dir)
         sc.setup(dir, opts.lus)
         local o = run(opts.lus, script, { dir }, {
-            LUS_FAIL_IO = n .. ":" .. mode,
+            LUS_FAIL_IO = `$n:$mode`,
             LUS_FAIL_IO_SEED = tostring(seed),
             LUS_FAIL_IO_PSOW = psow,
         })
@@ -369,13 +367,7 @@ local function crashAll(sc, script, dir)
         local list = problems[psow]
 
         if problem and #list < 3 then
-            list[#list + 1] = string.format(
-                "%s at operation %s, seed %d: %s",
-                mode,
-                n == 0 and "end" or tostring(n),
-                seed,
-                problem
-            )
+            list[#list + 1] = `$mode at operation $(n == 0 and "end" or n), seed $seed: $problem`
         end
     end
 
@@ -411,13 +403,13 @@ local function verdict(label, count, runs, expect_safe, problems)
 
         if expect_safe then
             for _, p in ipairs(problems) do
-                print("    " .. p)
+                print(`    $p`)
             end
         else
             print("    no crash broke the check, so the model or the scenario misses this gap")
         end
     elseif not expect_safe then
-        print("    for example, " .. problems[1])
+        print(`    for example, $(problems[1])`)
     end
 end
 
@@ -425,34 +417,28 @@ fresh(opts.work)
 
 for _, sc in ipairs(scenarios) do
     if not opts.only or opts.only == sc.name then
-        local variants = { false }
-
-        for _, s in ipairs(stepsOf(sc)) do
-            variants[#variants + 1] = s
-        end
+        local variants = { false, table.unpack(stepsOf(sc)) }
 
         for _, step in ipairs(variants) do
-            local label = sc.name .. (step and (" without " .. step) or "")
-            local script = fs.path.join(
-                opts.work,
-                sc.name .. (step and ("-no-" .. step) or "") .. ".lus"
-            )
+            local label = step and `$(sc.name) without $step` or sc.name
+            local file = step and `$(sc.name)-no-$step.lus` or `$(sc.name).lus`
+            local script = fs.path.join(opts.work, file)
             writeFile(script, writerWithout(sc, step or nil))
             local count, runs, problems = crashAll(sc, script, fs.path.join(opts.work, "dir"))
             local full = not step and not sc.unsafe
 
             if sc.needs_psow and full then
-                verdict(label .. ", powersafe overwrite", count, runs, true, problems["1"])
-                verdict(label .. ", no powersafe overwrite", count, runs, false, problems["0"])
+                verdict(`$label, powersafe overwrite`, count, runs, true, problems["1"])
+                verdict(`$label, no powersafe overwrite`, count, runs, false, problems["0"])
             else
                 local all = {}
 
                 for _, p in ipairs(problems["1"]) do
-                    all[#all + 1] = p .. " (powersafe overwrite)"
+                    all[#all + 1] = `$p (powersafe overwrite)`
                 end
 
                 for _, p in ipairs(problems["0"]) do
-                    all[#all + 1] = p .. " (no powersafe overwrite)"
+                    all[#all + 1] = `$p (no powersafe overwrite)`
                 end
 
                 verdict(label, count, runs, full, all)

@@ -1,7 +1,3 @@
---- These programs run outside mise run test, which could prove a rewrite
---- of their concatenations, so they stay as written.
---- lus: allow(use-interpolation)
-
 -- Mutated source for every tool that reads Lus source.
 --
 -- The harness splits each seed file into tokens and makes mutants of it:
@@ -71,7 +67,7 @@ do
         elseif a == "--work" then
             opts.work = v
         else
-            error("unknown option " .. a, 0)
+            error(`unknown option $a`, 0)
         end
 
         i = i + 2
@@ -84,7 +80,7 @@ local BATCH = 100
 local LARGEST = 64 * 1024
 
 local function quote(s)
-    return "'" .. s:gsub("'", "'\\''") .. "'"
+    return `'$(s:gsub("'", "'\\''"))'`
 end
 
 local function readFile(path)
@@ -137,7 +133,7 @@ end
 
 assert(
     fs.type(lus) == "file",
-    "no runtime at " .. lus .. ", run it from the root of the repository after a build"
+    `no runtime at $lus, run it from the root of the repository after a build`
 )
 
 local work = opts.work
@@ -316,7 +312,7 @@ local function tokenize(src)
             return nil
         end
 
-        local close = "]" .. eq .. "]"
+        local close = `]$eq]`
         local _, e = src:find(close, at + #eq + 2, true)
         return e or n
     end
@@ -418,10 +414,11 @@ local function mutate(src, spans, rnd)
         return src:sub(1, s - 1), string.format("cut before token %d %q", k, tok)
     elseif kind == "cutbyte" then
         local at = rnd(#src + 1) - 1
-        return src:sub(1, at), string.format("cut after character %d", at)
+        return src:sub(1, at), `cut after character $at`
     elseif kind == "delete" then
         return src:sub(1, s - 1) .. src:sub(e + 1), string.format("delete token %d %q", k, tok)
     elseif kind == "repeat" then
+        -- lus: allow(use-interpolation)
         return src:sub(1, e) .. " " .. src:sub(s), string.format("repeat token %d %q", k, tok)
     elseif kind == "swap" then
         if k == n then
@@ -447,6 +444,7 @@ local function mutate(src, spans, rnd)
         )
     elseif kind == "insert" then
         local p = POOL[rnd(#POOL)]
+        -- lus: allow(use-interpolation)
         return src:sub(1, s - 1) .. p .. " " .. src:sub(s), string.format(
             "insert %q before token %d %q",
             p,
@@ -497,13 +495,13 @@ local function scriptFor(m)
         run("check", `$L check $m.lus`),
         run("ast", `$L ast $m.lus`),
         run("doc", `$L doc $m.lus`),
-        runTo("fmt", `$L fmt $m.lus`, m .. ".f.lus"),
+        runTo("fmt", `$L fmt $m.lus`, `$m.f.lus`),
         `if grep -q '^fmt 0\$' $m.rc; then`,
-        "  " .. runTo("refmt", `$L fmt $m.f.lus`, m .. ".g.lus"),
+        `  $(runTo("refmt", `$L fmt $m.f.lus`, `$m.g.lus`))`,
         `  cmp -s $m.f.lus $m.g.lus; echo "same \$?" >> $m.rc`,
-        "  " .. run("fcompile", `$L compile -o /dev/null $m.f.lus`),
-        "  " .. runTo("asta", `$L ast --no-comments --no-recover $m.lus`, m .. ".a.json"),
-        "  " .. runTo("astb", `$L ast --no-comments --no-recover $m.f.lus`, m .. ".b.json"),
+        `  $(run("fcompile", `$L compile -o /dev/null $m.f.lus`))`,
+        `  $(runTo("asta", `$L ast --no-comments --no-recover $m.lus`, `$m.a.json`))`,
+        `  $(runTo("astb", `$L ast --no-comments --no-recover $m.f.lus`, `$m.b.json`))`,
         "fi",
     }, "\n")
 end
@@ -612,7 +610,7 @@ end
 local function judge(m)
     local rc = {}
 
-    for line in (readFile(m .. ".rc") or ""):gmatch("[^\n]+") do
+    for line in (readFile(`$m.rc`) or ""):gmatch("[^\n]+") do
         local tool, status = line:match("^(%S+) (%d+)$")
 
         if tool then
@@ -640,9 +638,9 @@ local function judge(m)
         local s = rc[tool]
 
         if s == HUNG then
-            add(tool .. " ran past the time limit")
+            add(`$tool ran past the time limit`)
         elseif s and crashed(s) then
-            add(string.format("%s crashed with status %d", tool, s))
+            add(`$tool crashed with status $s`)
         end
     end
 
@@ -657,10 +655,10 @@ local function judge(m)
     local compiles = rc.compile == 0
 
     if rc.fmt == 0 then
-        local okf, formatted = catch readFile(m .. ".f.lus")
+        local okf, formatted = catch readFile(`$m.f.lus`)
 
         if doubled = okf and formatted and doubledParens(formatted) then
-            add("fmt nests parentheses around one expression: " .. doubled:sub(1, 80))
+            add(`fmt nests parentheses around one expression: $(doubled:sub(1, 80))`)
         end
 
         if rc.refmt ~= 0 then
@@ -678,11 +676,11 @@ local function judge(m)
         end
 
         if compiles and rc.asta == 0 and rc.astb == 0 then
-            local oka, a = catch fromjson(readFile(m .. ".a.json"))
-            local okb, b = catch fromjson(readFile(m .. ".b.json"))
+            local oka, a = catch fromjson(readFile(`$m.a.json`))
+            local okb, b = catch fromjson(readFile(`$m.b.json`))
 
             if not (oka and okb) then
-                add("ast writes JSON that fromjson rejects: " .. tostring(oka and b or a))
+                add(`ast writes JSON that fromjson rejects: $(oka and b or a)`)
             elseif not deepEqual(strip(a), strip(b)) then
                 add("fmt changes the syntax tree")
             end
@@ -719,29 +717,27 @@ local function flush()
     end
 
     batches = batches + 1
-    local dir = fs.path.join(work, "batch" .. batches)
+    local dir = fs.path.join(work, `batch$batches`)
     fs.createdirectory(dir, true)
-    local lines = { "cd " .. quote(dir) }
+    local lines = { `cd $(quote(dir))` }
 
     for i, mu in ipairs(pending) do
-        writeFile(fs.path.join(dir, "m" .. i .. ".lus"), mu.src)
-        lines[#lines + 1] = scriptFor("m" .. i)
+        writeFile(fs.path.join(dir, `m$i.lus`), mu.src)
+        lines[#lines + 1] = scriptFor(`m$i`)
     end
 
     local script = fs.path.join(dir, "run.sh")
-    writeFile(script, table.concat(lines, "\n") .. "\n")
-    os.execute("sh " .. quote(script))
+    writeFile(script, `$(table.concat(lines, "\n"))\n`)
+    os.execute(`sh $(quote(script))`)
     local keep = false
 
     for i, mu in ipairs(pending) do
-        local problems = judge(fs.path.join(dir, "m" .. i))
+        local problems = judge(fs.path.join(dir, `m$i`))
+        local mutant = fs.path.join(dir, `m$i.lus`)
 
         for _, p in ipairs(problems) do
             keep = true
-            findings[#findings + 1] = `$(mu.seed): $p\n    mutation: $(mu.what)\n    mutant: $(fs.path.join(
-                dir,
-                "m" .. i .. ".lus"
-            ))`
+            findings[#findings + 1] = `$(mu.seed): $p\n    mutation: $(mu.what)\n    mutant: $mutant`
         end
     end
 
@@ -789,15 +785,8 @@ for _, f in ipairs(findings) do
     print(f)
 end
 
-print(
-    string.format(
-        "%d seed files, %d mutants, %d findings%s",
-        #seeds,
-        total,
-        #findings,
-        stopped and ", stopped at the time limit" or ""
-    )
-)
+local note = stopped and ", stopped at the time limit" or ""
+print(`$(#seeds) seed files, $total mutants, $(#findings) findings$note`)
 
 if #findings == 0 and not opts.work then
     fs.remove(work, true)

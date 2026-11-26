@@ -1,7 +1,3 @@
---- These programs run outside mise run test, which could prove a rewrite
---- of their concatenations, so they stay as written.
---- lus: allow(use-interpolation, deprecated)
-
 -- Jumps of the real clock (`LUS_CLOCK`, `runtime/src/vm/faultio.zig`).
 --
 -- The first scenario sets the clock two seconds before a change of
@@ -43,7 +39,7 @@ do
         elseif a == "--timeout" then
             opts.timeout = tonumber(v)
         else
-            error("unknown option " .. a)
+            error(`unknown option $a`)
         end
 
         i = i + 2
@@ -135,21 +131,13 @@ for name, text in pairs({ ["dst.lus"] = DST, ["jumps.lus"] = JUMPS, ["empty.lus"
 end
 
 local function quote(s)
-    return "'" .. s:gsub("'", "'\\''") .. "'"
+    return `'$(s:gsub("'", "'\\''"))'`
 end
 
 local function run(spec, name, zone)
     zone = zone or "America/New_York"
-    local cmd = string.format(
-        "cd %s && TZ=%s LUS_CLOCK=%s perl -e 'alarm %d; exec @ARGV' %s %s %s 2>&1",
-        quote(dir),
-        zone,
-        spec,
-        opts.timeout,
-        quote(fs.path.join(os.getenv("PWD"), opts.lus)),
-        name,
-        zone
-    )
+    local lus = quote(fs.path.join(os.getenv("PWD"), opts.lus))
+    local cmd = `cd $(quote(dir)) && TZ=$zone LUS_CLOCK=$spec perl -e 'alarm $(opts.timeout); exec @ARGV' $lus $name $zone 2>&1`
     local p = assert(io.popen(cmd, "r"))
     local out = p:read("a")
     local _, _, code = p:close()
@@ -163,16 +151,16 @@ end
 
 local problems = {}
 
-local function problem(fmt, ...)
-    problems[#problems + 1] = string.format(fmt, ...)
+local function problem(text)
+    problems[#problems + 1] = text
 end
 
 -- The readings of a crossing of a change of daylight saving in `zone`
 -- that starts at `at`. `before` and `after` are the offsets of the zone
 -- in seconds, and `hour_after` the local hour right after the change.
 local function crossing(zone, at, before, after, hour_after)
-    local label = string.format("%s at %d", zone, at)
-    local out = run("1:=" .. at, "dst.lus", zone)
+    local label = `$zone at $at`
+    local out = run(`1:=$at`, "dst.lus", zone)
     local seen_before, seen_after, readings = false, false, 0
 
     for epoch_text, elapsed_text, iso, offset_text, same, local_time, resolved_text in out:gmatch(
@@ -193,34 +181,25 @@ local function crossing(zone, at, before, after, hour_after)
         end
 
         if resolved ~= expect_resolved then
-            problem(
-                "%s: the fields of %s resolve to %d, expected %d",
-                label,
-                iso,
-                resolved,
-                expect_resolved
-            )
+            problem(`$label: the fields of $iso resolve to $resolved, expected $expect_resolved`)
         end
 
         -- The scripted clock runs with the real one from its first read.
         if math.abs(epoch - at - elapsed) > 1.5 then
+            local seconds = string.format("%.3f", elapsed)
             problem(
-                "%s: reading %d is %d seconds after the start, after %.3f seconds",
-                label,
-                epoch,
-                epoch - at,
-                elapsed
+                `$label: reading $epoch is $(epoch - at) seconds after the start, after $seconds seconds`
             )
         end
 
         if same ~= "true" then
-            problem("%s: %s does not turn back into its instant", label, iso)
+            problem(`$label: $iso does not turn back into its instant`)
         end
 
         local want = epoch < at + 2 and before or after
 
         if offset ~= want then
-            problem("%s: %s has offset %d, expected %d", label, iso, offset, want)
+            problem(`$label: $iso has offset $offset, expected $want`)
         end
 
         if offset == before then
@@ -232,20 +211,20 @@ local function crossing(zone, at, before, after, hour_after)
         local hour = tonumber(iso:sub(12, 13))
 
         if offset == after and hour ~= hour_after then
-            problem("%s: %s has hour %d after the change", label, iso, hour)
+            problem(`$label: $iso has hour $hour after the change`)
         end
 
         if local_time:sub(1, 5) ~= iso:sub(12, 16) then
-            problem("%s: os.date shows %s at %s", label, local_time, iso)
+            problem(`$label: os.date shows $local_time at $iso`)
         end
     end
 
     if readings == 0 then
-        problem("%s: no readings: %s", label, out)
+        problem(`$label: no readings: $out`)
     end
 
     if not (seen_before and seen_after) then
-        problem("%s: the readings do not cross the change", label)
+        problem(`$label: the readings do not cross the change`)
     end
 
     return readings
@@ -258,11 +237,13 @@ for _, c in ipairs(CROSSINGS) do
 end
 
 -- The jumps, placed after the reads that the runtime makes as it starts.
-local startup = tonumber(run("count", "empty.lus"):match("lus: (%d+) reads of the real clock"))
-assert(startup, "the runtime did not count its reads of the clock")
+local startup = assert(
+    tonumber(run("count", "empty.lus"):match("lus: (%d+) reads of the real clock")),
+    "the runtime did not count its reads of the clock"
+)
 local back = startup + 2 * 2 + 1
 local forward = startup + 2 * 4 + 1
-local out = run(string.format("1:=%d,%d:-3600,%d:+86400", BASE, back, forward), "jumps.lus")
+local out = run(`1:=$BASE,$back:-3600,$forward:+86400`, "jumps.lus")
 local loops = {}
 
 for i, now, secs, mono in out:gmatch("loop (%d+) (%d+) (%d+) (%a+)") do
@@ -275,23 +256,20 @@ for i = 1, 6 do
     local l = loops[i]
 
     if not l then
-        problem("jumps: loop %d did not run: %s", i, out)
+        problem(`jumps: loop $i did not run: $out`)
     else
         if math.abs(l.now - BASE - expect[i]) > 2 then
             problem(
-                "jumps: time.now in loop %d is %d seconds from the base, expected %d",
-                i,
-                l.now - BASE,
-                expect[i]
+                `jumps: time.now in loop $i is $(l.now - BASE) seconds from the base, expected $(expect[i])`
             )
         end
 
         if math.abs(l.secs - l.now) > 1 then
-            problem("jumps: os.time in loop %d is %d, time.now %d", i, l.secs, l.now)
+            problem(`jumps: os.time in loop $i is $(l.secs), time.now $(l.now)`)
         end
 
         if l.mono ~= "true" then
-            problem("jumps: time.monotonic decreased in loop %d", i)
+            problem(`jumps: time.monotonic decreased in loop $i`)
         end
     end
 end
@@ -304,25 +282,16 @@ waited = tonumber(waited)
 -- forward or wait an hour after the jump back, which the bounds catch,
 -- while a loaded runner may run a little late.
 if what ~= "receive" or not waited or waited < 0.15 or waited > 5 then
-    problem(
-        "jumps: the timeout of 0.2 seconds ended with %s after %s seconds",
-        tostring(what),
-        tostring(waited)
-    )
+    problem(`jumps: the timeout of 0.2 seconds ended with $what after $waited seconds`)
 end
 
 fs.remove(dir, true)
 print(
-    string.format(
-        "%d crossings with %d readings, 6 loops with 2 jumps, %d problems",
-        #CROSSINGS,
-        readings,
-        #problems
-    )
+    `$(#CROSSINGS) crossings with $readings readings, 6 loops with 2 jumps, $(#problems) problems`
 )
 
 for _, p in ipairs(problems) do
-    print("  " .. p)
+    print(`  $p`)
 end
 
 if #problems > 0 then
