@@ -26,19 +26,15 @@ function modules.set_root(root_uri)
 end
 
 function modules.get_root()
-    if not root_uris[1] then
-        return nil
+    if root_uri = root_uris[1] then
+        return uri_util.to_path(root_uri)
     end
 
-    return uri_util.to_path(root_uris[1])
+    return nil
 end
 
 function modules.set_roots(roots)
-    root_uris = {}
-
-    for _, root_uri in ipairs(roots or {}) do
-        root_uris[#root_uris + 1] = root_uri
-    end
+    root_uris = table.clone(roots or {})
 
     module_cache = {}
     deps = {}
@@ -51,13 +47,7 @@ function modules.set_roots(roots)
 end
 
 function modules.get_roots()
-    local result = {}
-
-    for _, root_uri in ipairs(root_uris) do
-        result[#result + 1] = root_uri
-    end
-
-    return result
+    return table.clone(root_uris)
 end
 
 -- ---------------------------------------------------------------------------
@@ -85,8 +75,7 @@ end
 
 local function origin_root(origin_uri)
     if origin_uri then
-        local origin_doc = document.get(origin_uri)
-        local recorded = origin_doc and declared_root(origin_doc.root_uri)
+        local recorded = declared_root(document.get(origin_uri)?.root_uri)
 
         if recorded and uri_util.within(recorded, origin_uri) then
             return recorded
@@ -134,10 +123,10 @@ end
 local function candidates(module_name)
     local rel = string.gsub(module_name, "%.", "/")
     return {
-        rel .. ".lus",
-        rel .. "/init.lus",
-        rel .. ".lua",
-        rel .. "/init.lua",
+        `$rel.lus`,
+        `$rel/init.lus`,
+        `$rel.lua`,
+        `$rel/init.lua`,
     }
 end
 
@@ -159,9 +148,7 @@ local function may_probe_disk(origin_uri)
         return true
     end
 
-    local origin_doc = document.get(origin_uri)
-
-    if origin_doc and origin_doc.root_uri then
+    if document.get(origin_uri)?.root_uri then
         return false
     end
 
@@ -187,19 +174,13 @@ local function read_disk_path(path)
 end
 
 local function read_disk_uri(candidate_uri)
-    local path = uri_util.to_path(candidate_uri)
-
-    if not path then
-        return nil
+    if path = uri_util.to_path(candidate_uri) then
+        if content = read_disk_path(path) then
+            return content, path
+        end
     end
 
-    local content = read_disk_path(path)
-
-    if not content then
-        return nil
-    end
-
-    return content, path
+    return nil
 end
 
 -- Return exact URI, text, version, path, and origin root for a resolution.
@@ -223,9 +204,7 @@ local function resolve_source(module_name, origin_uri)
             end
 
             if probe_disk then
-                local content, path = read_disk_uri(candidate_uri)
-
-                if content then
+                if content, path = read_disk_uri(candidate_uri) then
                     return candidate_uri, content, "disk", path, origin
                 end
             end
@@ -257,8 +236,7 @@ function modules.resolve(module_name, origin_uri)
         end
     end
 
-    local resolved_uri = resolve_source(module_name, origin_uri)
-    return resolved_uri
+    return (resolve_source(module_name, origin_uri))
 end
 
 -- ---------------------------------------------------------------------------
@@ -340,13 +318,7 @@ local function extract_exports(ast, mod_uri)
     end
 
     -- Find what the module returns
-    local ret = find_return(ast.children)
-
-    if not ret or not ret.values then
-        return exports
-    end
-
-    local ret_val = ret.values[1]
+    local ret_val = find_return(ast.children)?.values?[1]
 
     if not ret_val then
         return exports
@@ -356,7 +328,7 @@ local function extract_exports(ast, mod_uri)
         -- return { key = value, ... }
         if ret_val.fields then
             for _, field in ipairs(ret_val.fields) do
-                if field.key and field.key.type == "string" then
+                if field.key?.type == "string" then
                     local exp = {
                         name = field.key.value,
                         kind = "field",
@@ -366,7 +338,7 @@ local function extract_exports(ast, mod_uri)
                     }
 
                     -- Check if the value is a function
-                    if field.value and field.value.type == "funcexpr" then
+                    if field.value?.type == "funcexpr" then
                         exp.kind = "function"
                         exp.params = {}
 
@@ -392,8 +364,7 @@ local function extract_exports(ast, mod_uri)
                 local ne = stmt.nameexpr
 
                 if ne.type == "field"
-                    and ne.table
-                    and ne.table.type == "name"
+                    and ne.table?.type == "name"
                     and ne.table.value == table_name
                     and ne.key then
                     if fname = ne.key.value then
@@ -419,8 +390,7 @@ local function extract_exports(ast, mod_uri)
                 -- M.foo = value
                 for idx, lhs in ipairs(stmt.lhs) do
                     if lhs.type == "field"
-                        and lhs.table
-                        and lhs.table.type == "name"
+                        and lhs.table?.type == "name"
                         and lhs.table.value == table_name
                         and lhs.key then
                         if fname = lhs.key.value then
@@ -433,10 +403,11 @@ local function extract_exports(ast, mod_uri)
                             }
 
                             -- Check if rhs is a function
-                            if stmt.rhs and stmt.rhs[idx] and stmt.rhs[idx].type == "funcexpr" then
+                            local fexpr = stmt.rhs?[idx]
+
+                            if fexpr?.type == "funcexpr" then
                                 exp.kind = "function"
                                 exp.params = {}
-                                local fexpr = stmt.rhs[idx]
 
                                 if fexpr.params then
                                     for _, p in ipairs(fexpr.params) do
@@ -475,8 +446,8 @@ local function find_requires(ast)
 
         -- Check for require("literal")
         if (node.type == "callexpr" or node.type == "callstat") then
-            if node.func and node.func.type == "name" and node.func.value == "require" then
-                if node.args and node.args[1] and node.args[1].type == "string" then
+            if node.func?.type == "name" and node.func.value == "require" then
+                if node.args?[1]?.type == "string" then
                     result[#result + 1] = {
                         module_name = node.args[1].value,
                         node = node,
@@ -657,12 +628,10 @@ end
 -- Check if a position (1-based) is on a require() string argument.
 -- Returns the resolved module URI if so, or nil.
 function modules.get_require_at(ast, line, col, origin_uri)
-    local reqs = find_requires(ast)
-
-    for _, req in ipairs(reqs) do
+    for _, req in ipairs(find_requires(ast)) do
         local sn = req.string_node
 
-        if sn and sn.line == line then
+        if sn?.line == line then
             -- The AST column points to the string content; the quote is one before.
             -- Cover the full span: opening quote through closing quote.
             local start_col = (sn.column or 1) - 1  -- include opening quote
@@ -700,8 +669,8 @@ function modules.get_require_for_decl(ast, decl)
                     local val = stmt.values[i]
 
                     if val and (val.type == "callexpr" or val.type == "callstat") then
-                        if val.func and val.func.type == "name" and val.func.value == "require" then
-                            if val.args and val.args[1] and val.args[1].type == "string" then
+                        if val.func?.type == "name" and val.func.value == "require" then
+                            if val.args?[1]?.type == "string" then
                                 return val.args[1].value
                             end
                         end
@@ -757,13 +726,13 @@ function modules.invalidate(uri)
     for invalid_uri in pairs(seen) do
         if old = deps[invalid_uri] then
             for _, dep in ipairs(old) do
-                if dep.resolved_uri and reverse_deps[dep.resolved_uri] then
-                    reverse_deps[dep.resolved_uri][invalid_uri] = nil
+                if dependants = reverse_deps[dep.resolved_uri] then
+                    dependants[invalid_uri] = nil
                 end
 
                 for _, candidate_uri in ipairs(dep.candidate_uris or {}) do
-                    if reverse_candidates[candidate_uri] then
-                        reverse_candidates[candidate_uri][invalid_uri] = nil
+                    if dependants = reverse_candidates[candidate_uri] then
+                        dependants[invalid_uri] = nil
                     end
                 end
             end
@@ -824,22 +793,21 @@ end
 function modules.build_deps(uri, ast)
     if old = deps[uri] then
         for _, dep in ipairs(old) do
-            if dep.resolved_uri and reverse_deps[dep.resolved_uri] then
-                reverse_deps[dep.resolved_uri][uri] = nil
+            if dependants = reverse_deps[dep.resolved_uri] then
+                dependants[uri] = nil
             end
 
             for _, candidate_uri in ipairs(dep.candidate_uris or {}) do
-                if reverse_candidates[candidate_uri] then
-                    reverse_candidates[candidate_uri][uri] = nil
+                if dependants = reverse_candidates[candidate_uri] then
+                    dependants[uri] = nil
                 end
             end
         end
     end
 
-    local reqs = find_requires(ast)
     local dep_list = {}
 
-    for _, req in ipairs(reqs) do
+    for _, req in ipairs(find_requires(ast)) do
         local resolved = modules.resolve(req.module_name, uri)
         local dep = {
             module_name = req.module_name,

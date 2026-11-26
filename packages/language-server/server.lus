@@ -102,8 +102,7 @@ function server.new()
             )
         end
 
-        local roots = roots_from_initialize(params)
-        modules.set_roots(roots)
+        modules.set_roots(roots_from_initialize(params))
         atmosphere.configure(params.initializationOptions)
         instance.initialized = true
         return response_or_nil(msg, protocol.initialize_result())
@@ -179,12 +178,9 @@ function server.new()
             return protocol.make_error(msg.id, protocol.INVALID_PARAMS, reason)
         end
 
-        local invalidated = modules.invalidate_workspace(
-            params.rootUri,
-            params.relativePath,
-            params.uri
+        publish_invalidated(
+            modules.invalidate_workspace(params.rootUri, params.relativePath, params.uri)
         )
-        publish_invalidated(invalidated)
         return response_or_nil(msg, true)
     end
 
@@ -210,12 +206,9 @@ function server.new()
             return protocol.make_error(msg.id, protocol.INVALID_PARAMS, reason)
         end
 
-        local invalidated = modules.invalidate_workspace(
-            params.rootUri,
-            params.relativePath,
-            params.uri
+        publish_invalidated(
+            modules.invalidate_workspace(params.rootUri, params.relativePath, params.uri)
         )
-        publish_invalidated(invalidated)
         return response_or_nil(msg, true)
     end
 
@@ -281,7 +274,7 @@ function server.new()
 
     handlers["textDocument/didOpen"] = function(msg)
         local params = params_table(msg)
-        local td = params and params.textDocument
+        local td = params?.textDocument
 
         if type(td) ~= "table" or type(td.uri) ~= "string" or type(td.text) ~= "string" then
             return nil
@@ -294,7 +287,7 @@ function server.new()
 
     handlers["textDocument/didChange"] = function(msg)
         local params = params_table(msg)
-        local td = params and params.textDocument
+        local td = params?.textDocument
 
         if type(td) ~= "table"
             or type(td.uri) ~= "string"
@@ -311,7 +304,7 @@ function server.new()
 
     handlers["textDocument/didClose"] = function(msg)
         local params = params_table(msg)
-        local td = params and params.textDocument
+        local td = params?.textDocument
 
         if type(td) ~= "table" or type(td.uri) ~= "string" then
             return nil
@@ -323,8 +316,7 @@ function server.new()
     end
 
     handlers["textDocument/documentSymbol"] = function(msg)
-        local uri = msg.params.textDocument.uri
-        return response_or_nil(msg, doc_symbols.compute(uri))
+        return response_or_nil(msg, doc_symbols.compute(msg.params.textDocument.uri))
     end
 
     handlers["textDocument/formatting"] = function(msg)
@@ -332,7 +324,7 @@ function server.new()
         local edits, reason = doc_format.compute(uri, msg.params.options)
 
         if reason then
-            return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, "Format: " .. reason)
+            return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, `Format: $reason`)
         end
 
         return response_or_nil(msg, edits)
@@ -343,7 +335,7 @@ function server.new()
         local edits, reason = doc_format.compute_range(uri, msg.params.range, msg.params.options)
 
         if reason then
-            return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, "Format: " .. reason)
+            return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, `Format: $reason`)
         end
 
         return response_or_nil(msg, edits)
@@ -361,7 +353,7 @@ function server.new()
     end
 
     handlers["textDocument/references"] = function(msg)
-        local include = msg.params.context and msg.params.context.includeDeclaration
+        local include = msg.params.context?.includeDeclaration
         return response_or_nil(
             msg,
             nav_references.compute(msg.params.textDocument.uri, msg.params.position, include)
@@ -460,10 +452,12 @@ function server.new()
 
     function instance.dispatch(msg)
         if type(msg) ~= "table" or msg.jsonrpc ~= "2.0" then
-            local invalid_id = protocol.JSON_NULL
+            local invalid_id = do
+                if type(msg) == "table" and msg.id ~= nil then
+                    provide msg.id
+                end
 
-            if type(msg) == "table" and msg.id ~= nil then
-                invalid_id = msg.id
+                provide protocol.JSON_NULL
             end
 
             return protocol.make_error(
@@ -512,7 +506,7 @@ function server.new()
                 return protocol.make_error(
                     msg.id,
                     protocol.METHOD_NOT_FOUND,
-                    "Method not found: " .. msg.method
+                    `Method not found: $(msg.method)`
                 )
             end
 
@@ -527,11 +521,7 @@ function server.new()
                 return nil
             end
 
-            return protocol.make_error(
-                msg.id,
-                protocol.INTERNAL_ERROR,
-                "Internal error: " .. tostring(response)
-            )
+            return protocol.make_error(msg.id, protocol.INTERNAL_ERROR, `Internal error: $response`)
         end
 
         return response

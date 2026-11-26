@@ -10,13 +10,7 @@ function position.build_line_index(text)
     local index = { 1 }  -- line 0 starts at byte 1
     local pos = 1
 
-    while true do
-        local nl = string.find(text, "\n", pos, true)
-
-        if not nl then
-            break
-        end
-
+    while nl = string.find(text, "\n", pos, true) do
         index[#index + 1] = nl + 1
         pos = nl + 1
     end

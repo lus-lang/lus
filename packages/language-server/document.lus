@@ -1,4 +1,4 @@
-global require, ipairs, pairs, string, type, table
+global require, pairs, string, type, table
 
 local position = require("lus-language.util.position")
 local uri_util = require("lus-language.util.uri")
@@ -63,9 +63,8 @@ end
 local function install_mirror(mirror)
     mirrors[mirror.uri] = mirror
     mirror_paths[path_key(mirror.root_uri, mirror.relative_path)] = mirror.uri
-    local current = documents[mirror.uri]
 
-    if not current or not current.is_open then
+    if not documents[mirror.uri]?.is_open then
         documents[mirror.uri] = new_document(
             mirror.uri,
             mirror.version,
@@ -91,21 +90,11 @@ function store.reset_workspace(roots)
 
     mirrors = {}
     mirror_paths = {}
-    workspace_roots = {}
-
-    for _, root_uri in ipairs(roots or {}) do
-        workspace_roots[#workspace_roots + 1] = root_uri
-    end
+    workspace_roots = table.clone(roots or {})
 end
 
 function store.workspace_roots()
-    local result = {}
-
-    for _, root_uri in ipairs(workspace_roots) do
-        result[#result + 1] = root_uri
-    end
-
-    return result
+    return table.clone(workspace_roots)
 end
 
 -- Add or replace a closed-file mirror. An open document keeps its text.
@@ -190,9 +179,8 @@ function store.delete(root_uri, relative_path, uri, version)
 
     mirrors[uri] = nil
     mirror_paths[path_key(root_uri, relative_path)] = nil
-    local current = documents[uri]
 
-    if current and not current.is_open then
+    if not documents[uri]?.is_open then
         documents[uri] = nil
     end
 
@@ -218,14 +206,7 @@ end
 -- Open editor text takes precedence over the mirrored copy.
 function store.open(uri, version, text)
     local mirror = mirrors[uri]
-    documents[uri] = new_document(
-        uri,
-        version,
-        text,
-        true,
-        mirror and mirror.root_uri or nil,
-        mirror and mirror.relative_path or nil
-    )
+    documents[uri] = new_document(uri, version, text, true, mirror?.root_uri, mirror?.relative_path)
 end
 
 -- Apply sequential incremental changes to an open document.
@@ -276,59 +257,45 @@ function store.get(uri)
 end
 
 function store.get_text(uri)
-    local doc = documents[uri]
-    return doc and doc.text or nil
+    return documents[uri]?.text
 end
 
 function store.content_version(uri)
-    local doc = documents[uri]
-    return doc and doc.version or nil
+    return documents[uri]?.version
 end
 
 function store.is_open(uri)
-    local doc = documents[uri]
-    return doc and doc.is_open or false
+    return documents[uri]?.is_open or false
 end
 
 function store.invalidate_analysis(uri)
-    local doc = documents[uri]
-
-    if not doc then
-        return
+    if doc = documents[uri] then
+        doc.ast = nil
+        doc.parse_errors = nil
     end
-
-    doc.ast = nil
-    doc.parse_errors = nil
 end
 
 function store.set_ast(uri, ast, errors)
-    local doc = documents[uri]
+    if doc = documents[uri] then
+        doc.ast = ast
+        doc.parse_errors = errors
 
-    if not doc then
-        return
-    end
-
-    doc.ast = ast
-    doc.parse_errors = errors
-
-    if ast then
-        doc.last_good_ast = ast
+        if ast then
+            doc.last_good_ast = ast
+        end
     end
 end
 
 function store.get_ast(uri)
-    local doc = documents[uri]
-
-    if not doc then
-        return nil
+    if doc = documents[uri] then
+        return doc.ast or doc.last_good_ast
     end
 
-    return doc.ast or doc.last_good_ast
+    return nil
 end
 
 function store.get_current_ast(uri)
-    local doc = documents[uri]
-    return doc and doc.ast or nil
+    return documents[uri]?.ast
 end
 
 function store.all()

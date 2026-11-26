@@ -79,22 +79,20 @@ function uri.from_path(path)
     path = string.gsub(path, "\\", "/")
 
     if string.sub(path, 1, 2) == "//" then
-        local authority, rest = string.match(path, "^//([^/]+)(/.*)$")
-
-        if authority then
+        if authority, rest = string.match(path, "^//([^/]+)(/.*)$") then
             return `file://$authority$(percent_encode(rest))`
         end
     end
 
     if string.match(path, "^[A-Za-z]:/") then
-        path = "/" .. path
+        path = `/$path`
     end
 
     if string.sub(path, 1, 1) ~= "/" then
-        return "file:" .. percent_encode(path)
+        return `file:$(percent_encode(path))`
     end
 
-    return "file://" .. percent_encode(path)
+    return `file://$(percent_encode(path))`
 end
 
 function uri.join(root_uri, relative_path)
@@ -102,8 +100,8 @@ function uri.join(root_uri, relative_path)
     rel = string.gsub(rel, "^/+", "")
     local parts = uri.parse(root_uri)
 
-    if parts and parts.path == "/" then
-        local prefix = parts.scheme .. ":"
+    if parts?.path == "/" then
+        local prefix = `$(parts.scheme):`
 
         if parts.authority ~= nil then
             prefix = `$prefix//$(parts.authority)`
@@ -146,7 +144,7 @@ function uri.within(root_uri, document_uri)
         return true
     end
 
-    return string.sub(doc_path, 1, #root_path + 1) == root_path .. "/"
+    return string.sub(doc_path, 1, #root_path + 1) == `$root_path/`
 end
 
 function uri.relative(root_uri, document_uri)

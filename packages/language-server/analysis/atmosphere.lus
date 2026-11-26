@@ -91,14 +91,15 @@ function atmosphere.complete(typed)
     local results = {}
 
     for _, server in ipairs(servers) do
-        local query = nil
+        local query = do
+            if string.sub(server, 1, #typed) == typed then
+                provide ""
+            end
 
-        if string.sub(server, 1, #typed) == typed then
-            query = ""
-        elseif string.sub(typed, 1, #server) == server then
-            local rest = string.sub(typed, #server + 2)
-            -- After the line, such as 2.0/, the rest is a package name.
-            query = string.match(rest, "^[^/]*/(.*)$") or ""
+            if string.sub(typed, 1, #server) == server then
+                -- After the line, such as 2.0/, the rest is a package name.
+                provide string.match(string.sub(typed, #server + 2), "^[^/]*/(.*)$") or ""
+            end
         end
 
         if query ~= nil then

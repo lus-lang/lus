@@ -46,7 +46,7 @@ function diagnostics.publish(uri)
 
     -- Add lint warnings (only if parsing succeeded, i.e., we have an AST)
 
-    if tree = ast_mod.get(uri) then
+    if ast_mod.get(uri) then
         if ok, lint_diags = catch linting.compute(uri) then
             for _, d in ipairs(lint_diags) do
                 diags[#diags + 1] = d

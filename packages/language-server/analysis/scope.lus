@@ -137,22 +137,16 @@ local function detect_type_narrowing(cond)
 
     local call_side, str_side
 
-    if cond.left
-        and cond.left.type == "callexpr"
-        and cond.right
-        and cond.right.type == "string" then
+    if cond.left?.type == "callexpr" and cond.right?.type == "string" then
         call_side, str_side = cond.left, cond.right
-    elseif cond.right
-        and cond.right.type == "callexpr"
-        and cond.left
-        and cond.left.type == "string" then
+    elseif cond.right?.type == "callexpr" and cond.left?.type == "string" then
         call_side, str_side = cond.right, cond.left
     else
         return nil
     end
 
     -- Check that the call is type(single_name)
-    if not call_side.func or call_side.func.type ~= "name" or call_side.func.value ~= "type" then
+    if call_side.func?.type ~= "name" or call_side.func.value ~= "type" then
         return nil
     end
 
@@ -166,14 +160,11 @@ local function detect_type_narrowing(cond)
         return nil
     end
 
-    local type_str = str_side.value
-    local constructor = TYPE_NAME_MAP[type_str]
-
-    if not constructor then
-        return nil
+    if constructor = TYPE_NAME_MAP[str_side.value] then
+        return arg.value, constructor()
     end
 
-    return arg.value, constructor()
+    return nil
 end
 
 -- Detect when an if condition is a catch status variable (Pattern A).
@@ -185,7 +176,7 @@ local function detect_catch_status(cond, s)
 
     local decl = resolve(cond.value, s)
 
-    if decl and decl.catch_siblings and #decl.catch_siblings > 0 then
+    if decl?.catch_siblings and #decl.catch_siblings > 0 then
         return decl
     end
 
@@ -199,7 +190,7 @@ local function detect_catch_assignment(cond)
         return nil
     end
 
-    if cond.rhs and cond.rhs[1] and cond.rhs[1].type == "catchexpr" then
+    if cond.rhs?[1]?.type == "catchexpr" then
         return cond.rhs[1]
     end
 
@@ -348,10 +339,8 @@ local function infer_with_scope(node, s)
     local ntype = node.type
 
     if ntype == "name" then
-        local decl = resolve(node.value, s)
-
-        if decl and decl.type_info then
-            return decl.type_info
+        if type_info = resolve(node.value, s)?.type_info then
+            return type_info
         end
 
         return types.unknown()
@@ -368,15 +357,11 @@ local function infer_with_scope(node, s)
 
         local table_type = infer_with_scope(node.table, s)
 
-        if table_type and table_type.tag == "table" and table_type.fields then
+        if table_type?.tag == "table" and table_type.fields then
             local key_name = node.key and (node.key.value or node.key.name)
 
-            if key_name and table_type.fields[key_name] then
-                local finfo = table_type.fields[key_name]
-
-                if finfo.type_info then
-                    return finfo.type_info
-                end
+            if type_info = key_name and table_type.fields[key_name]?.type_info then
+                return type_info
             end
         end
 
@@ -387,11 +372,7 @@ local function infer_with_scope(node, s)
         local return_type = stdlib_data.first_return(symbol)
 
         -- For generic stdlib functions, resolve the argument through scope
-        if symbol
-            and symbol.generic
-            and return_type == symbol.generic
-            and node.args
-            and node.args[1] then
+        if symbol?.generic and return_type == symbol.generic and node.args?[1] then
             local arg_type = infer_with_scope(node.args[1], s)
 
             if arg_type.tag ~= "unknown" then
@@ -415,7 +396,7 @@ local function infer_with_scope(node, s)
         if node.func then
             local callee_type = infer_with_scope(node.func, s)
 
-            if callee_type and callee_type.tag == "function" and callee_type.return_type then
+            if callee_type?.tag == "function" and callee_type.return_type then
                 return callee_type.return_type
             end
         end
@@ -434,15 +415,11 @@ local function infer_with_scope(node, s)
                 end
             end
 
-            if obj_type and obj_type.tag == "table" and obj_type.fields and node.method then
-                if method_name and obj_type.fields[method_name] then
-                    local minfo = obj_type.fields[method_name]
+            if obj_type?.tag == "table" and obj_type.fields and method_name then
+                local method_type = obj_type.fields[method_name]?.type_info
 
-                    if minfo.type_info
-                        and minfo.type_info.tag == "function"
-                        and minfo.type_info.return_type then
-                        return minfo.type_info.return_type
-                    end
+                if method_type?.tag == "function" and method_type.return_type then
+                    return method_type.return_type
                 end
             end
         end
@@ -469,27 +446,16 @@ walk_node = function(node, s)
         if node.names then
             for i, name_node in ipairs(node.names) do
                 if name = name_node.value or name_node.name then
-                    local kind = "local"
-
-                    if name_node.attr == "const" then
-                        kind = "local"
-                    end
-
-                    local decl = add_decl(s, name, kind, name_node)
+                    local decl = add_decl(s, name, "local", name_node)
 
                     -- Infer type from the corresponding value
-                    if node.isfrom and node.values and node.values[1] then
+                    if node.isfrom and node.values?[1] then
                         local src_type = infer_with_scope(node.values[1], s)
 
-                        if src_type
-                            and src_type.tag == "table"
-                            and src_type.fields
-                            and src_type.fields[name] then
+                        if src_type?.tag == "table" and src_type.fields?[name] then
                             decl.type_info = src_type.fields[name].type_info
                         end
-                    elseif node.values
-                        and node.values[1]
-                        and node.values[1].type == "catchexpr" then
+                    elseif node.values?[1]?.type == "catchexpr" then
                         -- catch returns (boolean, result_or_err, ...):
                         --   1st: boolean (status)
                         --   2nd: T | string (result on success, error message on failure)
@@ -519,7 +485,7 @@ walk_node = function(node, s)
                             local expr_type = infer_with_scope(node.values[1].expr, s)
                             decl.type_info = types.union({ expr_type, types.null() })
                         end
-                    elseif node.values and node.values[i] then
+                    elseif node.values?[i] then
                         decl.type_info = infer_with_scope(node.values[i], s)
                     end
 
@@ -542,18 +508,13 @@ walk_node = function(node, s)
                 if name = name_node.value or name_node.name then
                     local decl = add_decl(s, name, "global", name_node)
 
-                    if node.isfrom and node.values and node.values[1] then
+                    if node.isfrom and node.values?[1] then
                         local src_type = infer_with_scope(node.values[1], s)
 
-                        if src_type
-                            and src_type.tag == "table"
-                            and src_type.fields
-                            and src_type.fields[name] then
+                        if src_type?.tag == "table" and src_type.fields?[name] then
                             decl.type_info = src_type.fields[name].type_info
                         end
-                    elseif node.values
-                        and node.values[1]
-                        and node.values[1].type == "catchexpr" then
+                    elseif node.values?[1]?.type == "catchexpr" then
                         if i == 1 then
                             decl.type_info = types.boolean()
                             decl.catch_siblings = {}
@@ -578,7 +539,7 @@ walk_node = function(node, s)
                             local expr_type = infer_with_scope(node.values[1].expr, s)
                             decl.type_info = types.union({ expr_type, types.null() })
                         end
-                    elseif node.values and node.values[i] then
+                    elseif node.values?[i] then
                         decl.type_info = infer_with_scope(node.values[i], s)
                     end
 
@@ -603,23 +564,20 @@ walk_node = function(node, s)
                 walk_expr(lhs_node, s)
 
                 -- Track field assignments: t.field = value
-                if lhs_node.type == "field"
-                    and lhs_node.table
-                    and lhs_node.table.type == "name"
-                    and lhs_node.key then
+                if lhs_node.type == "field" and lhs_node.table?.type == "name" and lhs_node.key then
                     local table_name = lhs_node.table.value
                     local field_name = lhs_node.key.value
 
                     if table_name and field_name then
                         local table_decl = resolve(table_name, s)
 
-                        if table_decl
-                            and table_decl.type_info
-                            and table_decl.type_info.tag == "table" then
-                            local val_type = types.unknown()
+                        if table_decl?.type_info?.tag == "table" then
+                            local val_type = do
+                                if value = node.rhs?[i] then
+                                    provide infer_with_scope(value, s)
+                                end
 
-                            if node.rhs and node.rhs[i] then
-                                val_type = infer_with_scope(node.rhs[i], s)
+                                provide types.unknown()
                             end
 
                             types.merge_field(
@@ -637,7 +595,7 @@ walk_node = function(node, s)
                 if lhs_node.type == "name" then
                     local decl = resolve(lhs_node.value, s)
 
-                    if decl and node.rhs and node.rhs[i] then
+                    if decl and node.rhs?[i] then
                         decl.type_info = infer_with_scope(node.rhs[i], s)
                     end
                 end
@@ -645,11 +603,8 @@ walk_node = function(node, s)
         end
     elseif ntype == "localfunc" or ntype == "globalfunc" then
         -- Add function name to current scope
-        local kind = ntype == "localfunc" and "function" or "function"
-
         if node.name then
-            local name_node = node
-            local decl = add_decl(s, node.name, kind, name_node)
+            local decl = add_decl(s, node.name, "function", node)
             decl.type_info = types.infer_func_type(node)
 
             -- Use the precise name position if available
@@ -689,8 +644,7 @@ walk_node = function(node, s)
 
             -- Track field function assignment: function M.foo() -> add foo to M's fields
             if node.nameexpr.type == "field"
-                and node.nameexpr.table
-                and node.nameexpr.table.type == "name"
+                and node.nameexpr.table?.type == "name"
                 and node.nameexpr.key then
                 local table_name = node.nameexpr.table.value
                 local field_name = node.nameexpr.key.value
@@ -698,9 +652,7 @@ walk_node = function(node, s)
                 if table_name and field_name then
                     local table_decl = resolve(table_name, s)
 
-                    if table_decl
-                        and table_decl.type_info
-                        and table_decl.type_info.tag == "table" then
+                    if table_decl?.type_info?.tag == "table" then
                         types.merge_field(
                             table_decl.type_info,
                             field_name,
@@ -783,7 +735,7 @@ walk_node = function(node, s)
         -- Track catch-assignment siblings for narrowing in then-block
         local catch_assign_siblings
 
-        if node.cond and node.cond.type == "assign" then
+        if node.cond?.type == "assign" then
             -- If-assignment: declare lhs names in the if scope
             walk_expr_list(node.cond.rhs, s)  -- rhs evaluated in parent
             local catch_node = detect_catch_assignment(node.cond)
@@ -793,13 +745,10 @@ walk_node = function(node, s)
                     if lhs_node.type == "name" then
                         local decl = add_decl(if_scope, lhs_node.value, "local", lhs_node)
 
-                        if node.cond.isfrom and node.cond.rhs and node.cond.rhs[1] then
+                        if node.cond.isfrom and node.cond.rhs?[1] then
                             local src_type = infer_with_scope(node.cond.rhs[1], s)
 
-                            if src_type
-                                and src_type.tag == "table"
-                                and src_type.fields
-                                and src_type.fields[lhs_node.value] then
+                            if src_type?.tag == "table" and src_type.fields?[lhs_node.value] then
                                 decl.type_info = src_type.fields[lhs_node.value].type_info
                             end
                         elseif catch_node then
@@ -822,7 +771,7 @@ walk_node = function(node, s)
                                     error_type = error_type,
                                 }
                             end
-                        elseif node.cond.rhs and node.cond.rhs[i] then
+                        elseif node.cond.rhs?[i] then
                             decl.type_info = infer_with_scope(node.cond.rhs[i], s)
                         end
 
@@ -838,13 +787,7 @@ walk_node = function(node, s)
         local narrow_name, narrow_type = detect_type_narrowing(node.cond)
         local catch_status_decl = detect_catch_status(node.cond, s)
         -- Collect all catch siblings to narrow (from Pattern A or Pattern B)
-        local catch_narrows
-
-        if catch_status_decl then
-            catch_narrows = catch_status_decl.catch_siblings
-        elseif catch_assign_siblings then
-            catch_narrows = catch_assign_siblings
-        end
+        local catch_narrows = catch_status_decl?.catch_siblings or catch_assign_siblings
 
         if (narrow_name or catch_narrows) and node.children then
             -- Walk children manually with per-branch narrowing
@@ -858,9 +801,7 @@ walk_node = function(node, s)
                     if narrow_name then
                         local orig_decl = resolve(narrow_name, if_scope)
 
-                        if orig_decl
-                            and orig_decl.type_info
-                            and orig_decl.type_info.tag == "union" then
+                        if orig_decl?.type_info?.tag == "union" then
                             local complement = {}
 
                             for _, m in ipairs(orig_decl.type_info.members) do
@@ -900,10 +841,8 @@ walk_node = function(node, s)
 
                     if child.type == "elseif" then
                         walk_node(child, walk_scope)
-                    else
-                        if child.children then
-                            walk_children(child.children, walk_scope)
-                        end
+                    elseif child.children then
+                        walk_children(child.children, walk_scope)
                     end
                 else
                     -- Then-block: apply narrowing
@@ -935,7 +874,7 @@ walk_node = function(node, s)
         -- Check for while-assignment
         local while_scope = new_scope("block", s, node)
 
-        if node.cond and node.cond.type == "assign" then
+        if node.cond?.type == "assign" then
             walk_expr_list(node.cond.rhs, s)
 
             if node.cond.lhs then
@@ -943,16 +882,13 @@ walk_node = function(node, s)
                     if lhs_node.type == "name" then
                         local decl = add_decl(while_scope, lhs_node.value, "local", lhs_node)
 
-                        if node.cond.isfrom and node.cond.rhs and node.cond.rhs[1] then
+                        if node.cond.isfrom and node.cond.rhs?[1] then
                             local src_type = infer_with_scope(node.cond.rhs[1], s)
 
-                            if src_type
-                                and src_type.tag == "table"
-                                and src_type.fields
-                                and src_type.fields[lhs_node.value] then
+                            if src_type?.tag == "table" and src_type.fields?[lhs_node.value] then
                                 decl.type_info = src_type.fields[lhs_node.value].type_info
                             end
-                        elseif node.cond.rhs and node.cond.rhs[i] then
+                        elseif node.cond.rhs?[i] then
                             decl.type_info = infer_with_scope(node.cond.rhs[i], s)
                         end
 
@@ -1002,7 +938,7 @@ walk_node = function(node, s)
         -- Handle elseif-assignment (mirrors if-assignment logic)
         local elseif_catch_siblings
 
-        if node.cond and node.cond.type == "assign" then
+        if node.cond?.type == "assign" then
             walk_expr_list(node.cond.rhs, s)
             local catch_node = detect_catch_assignment(node.cond)
 
@@ -1011,13 +947,10 @@ walk_node = function(node, s)
                     if lhs_node.type == "name" then
                         local decl = add_decl(s, lhs_node.value, "local", lhs_node)
 
-                        if node.cond.isfrom and node.cond.rhs and node.cond.rhs[1] then
+                        if node.cond.isfrom and node.cond.rhs?[1] then
                             local src_type = infer_with_scope(node.cond.rhs[1], s)
 
-                            if src_type
-                                and src_type.tag == "table"
-                                and src_type.fields
-                                and src_type.fields[lhs_node.value] then
+                            if src_type?.tag == "table" and src_type.fields?[lhs_node.value] then
                                 decl.type_info = src_type.fields[lhs_node.value].type_info
                             end
                         elseif catch_node then
@@ -1038,7 +971,7 @@ walk_node = function(node, s)
                                     error_type = error_type,
                                 }
                             end
-                        elseif node.cond.rhs and node.cond.rhs[i] then
+                        elseif node.cond.rhs?[i] then
                             decl.type_info = infer_with_scope(node.cond.rhs[i], s)
                         end
 
@@ -1051,14 +984,8 @@ walk_node = function(node, s)
         end
 
         -- Detect catch status in elseif condition (Pattern A)
-        local elseif_catch_status = detect_catch_status(node.cond, s)
-        local elseif_narrows
-
-        if elseif_catch_status then
-            elseif_narrows = elseif_catch_status.catch_siblings
-        elseif elseif_catch_siblings then
-            elseif_narrows = elseif_catch_siblings
-        end
+        local elseif_narrows = detect_catch_status(node.cond, s)?.catch_siblings
+            or elseif_catch_siblings
 
         if elseif_narrows and node.children then
             -- Narrow catch siblings in the elseif's then-block
@@ -1080,11 +1007,9 @@ walk_node = function(node, s)
         end
     elseif ntype == "goto" or ntype == "label" or ntype == "break" then
         -- No references to walk
-    else
+    elseif node.children then
         -- Fallback: try to walk children for any block-like node
-        if node.children then
-            walk_children(node.children, s)
-        end
+        walk_children(node.children, s)
     end
 end
 
@@ -1182,11 +1107,7 @@ end
 
 -- Get all references to a declaration
 function scope.get_references(_analysis, decl)
-    if not decl then
-        return {}
-    end
-
-    return decl.references
+    return decl?.references or {}
 end
 
 -- Find the innermost scope containing a given 1-based line.
@@ -1245,13 +1166,11 @@ end
 -- Infer the type of an arbitrary expression node using scope context.
 -- Requires the analysis result (from scope.analyze) and the 1-based line.
 function scope.infer_expr_type(analysis, node, line)
-    local s = scope.get_scope_at(analysis.root, line)
-
-    if not s then
-        return types.unknown()
+    if s = scope.get_scope_at(analysis.root, line) then
+        return infer_with_scope(node, s)
     end
 
-    return infer_with_scope(node, s)
+    return types.unknown()
 end
 
 return scope

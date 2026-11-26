@@ -151,7 +151,7 @@ function linting.compute(uri)
 
     if doc and debug.check then
         local name = string.match(uri, "([^/]+)$") or uri
-        local ok, list = catch debug.check(doc.text, "@" .. name)
+        local ok, list = catch debug.check(doc.text, `@$name`)
 
         if ok then
             local lines

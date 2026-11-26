@@ -1,4 +1,4 @@
-global io, fromjson, tojson, string, tonumber, tostring, table, select, type
+global io, fromjson, tojson, string, tonumber, tostring, table, type
 
 local transport = {}
 
@@ -6,13 +6,13 @@ transport.MAX_FRAME_BYTES = 16 * 1024 * 1024
 local MAX_HEADER_BYTES = 8 * 1024
 
 function transport.log(...)
-    local parts = {}
+    local args = table.pack(...)
 
-    for i = 1, select("#", ...) do
-        parts[#parts + 1] = tostring(select(i, ...))
+    for i = 1, args.n do
+        args[i] = tostring(args[i])
     end
 
-    io.stderr:write(`[lus-language] $(table.concat(parts, " "))\n`)
+    io.stderr:write(`[lus-language] $(table.concat(args, " "))\n`)
     io.stderr:flush()
 end
 
@@ -50,7 +50,7 @@ local function parse_headers(block)
         name = string.lower(name)
 
         if headers[name] then
-            return nil, "duplicate LSP header: " .. name
+            return nil, `duplicate LSP header: $name`
         end
 
         headers[name] = value
@@ -106,7 +106,7 @@ function transport.decode_json(body)
     local ok, message = catch fromjson(body)
 
     if not ok then
-        return nil, "invalid JSON: " .. tostring(message)
+        return nil, `invalid JSON: $message`
     end
 
     -- JSON null and false decode to false-valued Lus results. An empty object
@@ -130,15 +130,13 @@ function transport.parse_frame(frame)
         return nil, "missing canonical LSP header terminator"
     end
 
-    local header_block = string.sub(frame, 1, header_end - 1)
-    local content_length, header_error = parse_headers(header_block)
+    local content_length, header_error = parse_headers(string.sub(frame, 1, header_end - 1))
 
     if not content_length then
         return nil, header_error
     end
 
-    local body_start = header_end + 4
-    local body = string.sub(frame, body_start)
+    local body = string.sub(frame, header_end + 4)
 
     if #body ~= content_length then
         if #body > content_length then
