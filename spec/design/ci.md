@@ -14,7 +14,7 @@ The nightly run adds a second source of conformance files. `tools/ci/testmap.mjs
 
 ## On each change
 
-`ci.yml` runs on every push to `main` and `rewrite` and on every pull request. Its first job writes the plan of the change to the summary of the run. Lint, the format of the Zig sources, and the generated files are checked on every change.
+`ci.yml` runs on every push to `main` and `rewrite` and on every pull request. Its first job writes the plan of the change to the summary of the run. A pull request plans from its base. A push plans from the newest commit of its branch whose run passed, or from the commit where the history of the push parts from that commit, so a check that failed runs again on every later push until it passes. When that commit is gone, as after a rewrite of the history, the plan covers every tracked file. Lint, the format of the Zig sources, and the generated files are checked on every change.
 
 The targeted runtime job runs once for each runner the plan names. Linux runs everything that is the same on every system. macOS and Windows run the areas whose code differs per system, such as the file system, processes, sockets, signals, the scheduler, and the JIT. Each runner builds lus and runs the chosen conformance files with `LUS_JIT=off`, with the default setting, with `LUS_JIT=eager`, and with `LUS_JIT=opt-eager`. The checks of the plan add the unit tests, the documentation examples, the collector at every 97th allocation, short chains of direct calls, the differential programs, the allocation failure sweep, the corrupted inputs, the mutated sources, the crash and fault tests, the WebAssembly build, and the installer.
 

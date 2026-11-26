@@ -63,15 +63,28 @@ jobs:
         run: |
           # A push plans from the newest commit of its branch whose run
           # passed, so a check that failed runs again on every later push
-          # until it passes, whatever those pushes change. A force push
-          # that drops that commit plans from the commit before the push.
+          # until it passes, whatever those pushes change. A force push that
+          # drops that commit from the branch plans from the commit where the
+          # two histories part. The clone holds only the commits that the
+          # branches reach, and GitHub serves no other, so after a rewrite of
+          # the history the passing commit can be gone. The plan then treats
+          # every tracked file as changed, until a run on the new history
+          # passes.
           base="$BASE"
+          have() { git cat-file -e "$1^{commit}" 2> /dev/null || git fetch --quiet --no-tags origin "$1" 2> /dev/null; }
           if [ "$EVENT" = push ]; then
             green=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$BRANCH" --event push --status success --limit 1 --json headSha --jq '.[0].headSha // empty' || true)
-            if [ -n "$green" ] && git merge-base --is-ancestor "$green" HEAD; then base="$green"; fi
+            if [ -n "$green" ]; then
+              if have "$green"; then base=$(git merge-base "$green" HEAD || echo gone); else base=gone; fi
+            fi
           fi
+          if [ "$base" != gone ] && ! printf '%s' "$base" | grep -qE '^0*$' && ! have "$base"; then base=gone; fi
           echo "base: $base"
-          node tools/ci/areas.mjs plan --base "$base" --head HEAD --testmap "$RUNNER_TEMP/testmap/testmap.json" > "$RUNNER_TEMP/plan.json"
+          if [ "$base" = gone ]; then
+            git ls-files -z | xargs -0 node tools/ci/areas.mjs plan --testmap "$RUNNER_TEMP/testmap/testmap.json" --files > "$RUNNER_TEMP/plan.json"
+          else
+            node tools/ci/areas.mjs plan --base "$base" --head HEAD --testmap "$RUNNER_TEMP/testmap/testmap.json" > "$RUNNER_TEMP/plan.json"
+          fi
           { echo '```json'; cat "$RUNNER_TEMP/plan.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   lint:
