@@ -14860,21 +14860,17 @@ function M.resolve_member(parent, child)
   if type(parent) ~= "string" or type(child) ~= "string" then
     return nil
   end
-  local direct = M.symbols[parent .. "." .. child]
-  if direct then return direct end
-  local parent_symbol = M.symbols[parent]
-  for _, child_name in ipairs(parent_symbol and parent_symbol.children or {}) do
+  if direct = M.symbols[`$parent.$child`] then return direct end
+  for _, child_name in ipairs(M.symbols[parent]?.children or {}) do
     local symbol = M.symbols[child_name]
-    if symbol and symbol.short_name == child then return symbol end
+    if symbol?.short_name == child then return symbol end
   end
   return nil
 end
 
 function M.children(name)
-  local parent = M.resolve(name)
   local result = {}
-  if not parent then return result end
-  for _, child_name in ipairs(parent.children or {}) do
+  for _, child_name in ipairs(M.resolve(name)?.children or {}) do
     result[#result + 1] = M.symbols[child_name]
   end
   return result
@@ -14887,21 +14883,20 @@ function M.expression_name(node)
   local parent = M.expression_name(node.table)
   local child = node.key.value or node.key.name
   if not parent or not child then return nil end
-  return parent .. "." .. child
+  return `$parent.$child`
 end
 
 function M.first_return(symbol_or_name)
   local symbol = symbol_or_name
   if type(symbol) == "string" then symbol = M.resolve(symbol) end
-  local result = symbol and symbol.returns and symbol.returns[1]
-  return result and result.type or nil
+  return symbol?.returns?[1]?.type
 end
 
 function M.format_returns(symbol_or_name)
   local symbol = symbol_or_name
   if type(symbol) == "string" then symbol = M.resolve(symbol) end
   local result = {}
-  for _, value in ipairs(symbol and symbol.returns or {}) do
+  for _, value in ipairs(symbol?.returns or {}) do
     result[#result + 1] = value.type or "any"
   end
   return table.concat(result, ", ")
