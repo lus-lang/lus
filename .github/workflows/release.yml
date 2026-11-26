@@ -332,7 +332,9 @@ jobs:
           echo "The Windows binaries and lus-setup.exe stay unsigned, since ${missing[*]} is not set." >> "$GITHUB_STEP_SUMMARY"
       - name: Unpack the Windows trees
         shell: bash
-        run: tar -xf "$RUNNER_TEMP/trees/trees.tar" out/x86_64-windows out/aarch64-windows
+        # GNU tar reads a path that starts with a drive letter, such as
+        # D:\a\_temp, as host:path unless --force-local is given.
+        run: tar --force-local -xf "$RUNNER_TEMP/trees/trees.tar" out/x86_64-windows out/aarch64-windows
       # lus-runtime.exe stays as built, since `lus build` appends a bundle
       # to it, which a signature would not cover.
       - name: Sign lus.exe and lus.dll

@@ -74,7 +74,9 @@ jobs:
           path: ${{ runner.temp }}/trees
       - name: Unpack the tree
         shell: bash
-        run: tar -xf "$RUNNER_TEMP/trees/trees.tar" out/x86_64-windows
+        # GNU tar reads a path that starts with a drive letter, such as
+        # D:\a\_temp, as host:path unless --force-local is given.
+        run: tar --force-local -xf "$RUNNER_TEMP/trees/trees.tar" out/x86_64-windows
       - name: Sign lus.exe
         uses: ./.github/actions/sign-windows
         with:
