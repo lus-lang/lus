@@ -77,7 +77,6 @@ Whenever you write any project prose (docs, changelog, spec `.md`, comments), fo
 - **No em dashes or en dashes.** Rewrite the sentence so the dash is unnecessary rather than swapping it for a hyphen. The repository is kept free of both, and `tools/lint-repo.js` enforces it.
 - **No semicolons.** Write separate full sentences.
 - **Use full sentences and flowing paragraphs**, including complete-sentence lead-ins before code blocks.
-- **Never name the Roblox Lua dialect** anywhere in the repository: code, comments, docs, design notes, or commit messages. Describe techniques neutrally (for example "slot-prediction inline caches" or "goal-based GC pacer"). `tools/lint-repo.js` enforces this too.
 
 Before posting an issue or committing prose, run `node tools/lint-repo.js`, grep for semicolons, and reread for any wording that presumes a rejected alternative.
 

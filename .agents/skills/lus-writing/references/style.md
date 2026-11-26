@@ -14,7 +14,6 @@ These rules hold in every file.
 2. **No em dashes or en dashes.** Rewrite the sentence so it needs no dash, without swapping the dash for a hyphen. `tools/lint-repo.js` enforces this.
 3. **No semicolons in prose.** Write two sentences. Semicolons inside code are code.
 4. **Full sentences and flowing paragraphs.** A code block follows a complete sentence that says what the block shows.
-5. **The name of the Roblox Lua dialect never appears** outside the benchmark files that the lint allows. Describe techniques by what they do, such as "slot-prediction inline caches". `tools/lint-repo.js` enforces this.
 
 ## 2. Voice
 
@@ -370,7 +369,7 @@ The rewrite says exactly what the `lus` command does:
 
 Some rules are enforced by a script, some can be found with a grep and judged by hand, and the rest need a reader.
 
-`tools/lint-repo.js` fails on an em dash or an en dash in any tracked file, and on the name of the Roblox Lua dialect outside the benchmark files. It reads only tracked files, so commit before running it. `lus test --doc` runs every ` ```lus ` block in the manual, the spec, and the skills. `lus check` covers the doc comments of a package.
+`tools/lint-repo.js` fails on an em dash or an en dash in any tracked file. It reads only tracked files, so commit before running it. `lus test --doc` runs every ` ```lus ` block in the manual, the spec, and the skills. `lus check` covers the doc comments of a package.
 
 The greps below find candidates. Each hit is judged by the rule it points to, since a list of three items legitimately contains ", and" and code legitimately contains semicolons.
 
