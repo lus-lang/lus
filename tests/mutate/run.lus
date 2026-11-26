@@ -278,8 +278,9 @@ local source, dest = quote(`$(fs.path.join(root, "runtime"))/`), quote(`$work_rt
 local ok, out = sh(`rsync -a --exclude .zig-cache --exclude 'zig-out*' $source $dest`)
 assert(ok, out)
 
--- The build reads the specification and the skills beside the runtime.
-for _, d in ipairs({ "spec", ".agents", "tests", "packages" }) do
+-- The build reads the specification, the skills, and the generated
+-- completions and man pages beside the runtime.
+for _, d in ipairs({ "spec", ".agents", "tests", "packages", "packaging" }) do
     sh(`ln -s $(quote(fs.path.join(root, d))) $(quote(fs.path.join(opts.work, d)))`)
 end
 

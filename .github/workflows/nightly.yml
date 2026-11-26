@@ -740,7 +740,7 @@ jobs:
         run: |
           mkdir -p zig-out-mcdc/runs
           rsync -a --exclude .zig-cache --exclude 'zig-out*' ./ zig-out-mcdc/runtime/
-          for d in spec .agents tests packages; do ln -s ../../$d zig-out-mcdc/$d; done
+          for d in spec .agents tests packages packaging; do ln -s ../../$d zig-out-mcdc/$d; done
           zig run ../tests/coverage/mcdc/transform.zig -- zig-out-mcdc/runtime/src zig-out-mcdc/table.txt ../tests/coverage/mcdc/mcdc_rt.zig
           cd zig-out-mcdc/runtime && zig build -Doptimize=ReleaseFast
       - name: Run the conformance suite
