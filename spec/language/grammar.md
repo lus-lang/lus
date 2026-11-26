@@ -877,7 +877,7 @@ if a, b from src then ... end   -- assignment condition (also elseif, while)
 ```lus
 local t = setmetatable({}, {
     __index = function(_, k)
-        return k .. "!"
+        return `$k!`
     end,
 })
 

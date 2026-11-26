@@ -166,7 +166,7 @@ pledge("seal")
 
 ```lus nocheck
 network.serve("0.0.0.0", 8080, function(req)
-    local status, body = network.fetch("http://inventory.internal" .. req.path)
+    local status, body = network.fetch(`http://inventory.internal$(req.path)`)
     return status, body
 end)
 ```
