@@ -59,9 +59,8 @@ local function sorted_pairs(t)
 
     return function()
         i = i + 1
-        local key = keys[i]
 
-        if key ~= nil then
+        if key = keys[i] then
             return key, t[key]
         end
     end

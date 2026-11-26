@@ -43,9 +43,9 @@ local total = 0
 local parts = {}
 
 for _, handle in ipairs(pool) do
-    local result = worker.receive(handle)
-    total = total + result.count
-    parts[#parts + 1] = `$(result.first): $(result.count)`
+    local first, count from worker.receive(handle)
+    total = total + count
+    parts[#parts + 1] = `$first: $count`
 end
 
 print(table.concat(parts, ", "))  --> 1: 5133, 50001: 4459, 100001: 4256, 150001: 4136

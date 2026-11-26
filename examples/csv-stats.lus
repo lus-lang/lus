@@ -1,6 +1,6 @@
 -- CSV: Parse CSV text into rows, summarize the columns, and write a CSV report.
 -- playground: true
-global print, fromcsv, tocsv, tonumber, table, pairs, ipairs, io, string, math
+global print, fromcsv, tocsv, tonumber, ipairs, io, string, query
 
 local sales = [[city,quarter,revenue
 Paris,Q1,1200
@@ -21,29 +21,16 @@ for _, row in ipairs(rows) do
     row.revenue = tonumber(row.revenue)
 end
 
--- `table.groupby` collects the rows under the key that the function returns.
-local by_city = table.groupby(rows, function(row)
-    return row.city
-end)
-
--- The order of `pairs` is unspecified, so the report sorts the city names first.
-local cities = {}
-
-for city in pairs(by_city) do
-    cities[#cities + 1] = city
-end
-
-table.sort(cities)
-
-local function revenue(row)
-    return row.revenue
-end
+-- A query with `group by` totals the revenue of each city. Its `order by`
+-- sorts the cities by name.
+local by_city = @rows as r
+    select r.city, sum(r.revenue) as total, avg(r.revenue) as mean
+    group by r.city
+    order by r.city
 
 local report = { { "city", "total", "mean" } }
 
-for _, city in ipairs(cities) do
-    local revenues = table.map(by_city[city], revenue)
-    local total, mean = table.sum(revenues), table.mean(revenues)
+for city, total, mean from query(by_city) do
     print(string.format("%-8s total %6.0f  mean %7.1f", city, total, mean))
     report[#report + 1] = { city, total, mean }
 end

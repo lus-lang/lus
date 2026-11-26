@@ -6,8 +6,7 @@ global print, vector, string, table, type
 local lines = {}
 
 for i = 1, 200 do
-    local second = string.format("%02d", i % 60)
-    lines[i] = `2026-11-25 12:00:$second INFO request served in $(i % 7) ms`
+    lines[i] = `2026-11-25 12:00:$(string.format("%02d", i % 60)) INFO request served in $(i % 7) ms`
 end
 
 local log = table.concat(lines, "\n")

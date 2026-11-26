@@ -16,7 +16,7 @@ local words = 0
 for _ in text:gmatch("%S+") do
     words = words + 1
 end
-print(words .. " words")
+print(`$words words`)
 ]]
 
 -- "pipe" connects a stream of the child to a field of the process object.
