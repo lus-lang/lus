@@ -473,7 +473,8 @@ The template contains the following files.
 
 - `NAME.lus` with a complete [package header](#the-package-header) and one documented function.
 - `NAME_test.lus` with one test.
-- `README.md`, `LICENSE`, and `AGENTS.md`, the last written by `lus agents init`.
+- `README.md` in the shape that the style guide gives every README, and `CONTRIBUTING.md` with the commands that check and publish the package.
+- `LICENSE` and `AGENTS.md`, the last written by `lus agents init`.
 - `.githooks/pre-commit`, which runs `lus fmt --check` and `lus check`.
 - `.githooks/pre-push`, which runs `atmos check` when `atmos` is installed and `lus check` and `lus test` otherwise.
 - `.gitignore` and a `.gitattributes` that marks `.lus` files as text with LF line endings.
