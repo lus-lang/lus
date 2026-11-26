@@ -1,0 +1,228 @@
+-- The refactorings of operations/refactor.lus. Each case checks which
+-- refactorings a selection offers, the text each one writes, and, for a
+-- program, that the refactored program prints what the original prints.
+local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
+
+pledge("load", `fs:read=$LANG_DIR/*`)
+
+table.insert(package.searchers, 2, function(name)
+    local rest = string.match(name, "^lus%-language%.(.+)$")
+
+    if rest == nil then
+        return nil
+    end
+
+    local path = package.searchpath(rest, LANG_DIR .. "/?.lus")
+
+    if path == nil then
+        return nil
+    end
+
+    return assert(loadfile(path)), path
+end)
+
+local refactor = require("lus-language.operations.refactor")
+
+-- The position of the first `needle` in `text`, as a selection from its
+-- first character to just past its last.
+local function select(text, needle, nth)
+    local at = 0
+
+    for _ = 1, nth or 1 do
+        at = assert(string.find(text, needle, at + 1, true), needle)
+    end
+
+    local function pos(offset)
+        local line, col = 1, 1
+
+        for i = 1, offset - 1 do
+            if string.sub(text, i, i) == "\n" then
+                line, col = line + 1, 1
+            else
+                col = col + 1
+            end
+        end
+
+        return { line = line, column = col }
+    end
+
+    return { start = pos(at), ["end"] = pos(at + #needle) }
+end
+
+local function titles(text, range)
+    local out = {}
+
+    for _, a in ipairs(refactor.actions(text, range)) do
+        out[#out + 1] = a.title
+    end
+
+    return table.concat(out, "; ")
+end
+
+local function applied(text, range, title)
+    for _, a in ipairs(refactor.actions(text, range)) do
+        if a.title == title then
+            return refactor.apply(text, a)
+        end
+    end
+
+    error(`no '$title' among: $(titles(text, range))`)
+end
+
+-- Runs a program and returns what it prints.
+local function output(program)
+    local lines = {}
+
+    local env = setmetatable({
+        print = function(...)
+            local parts = table.pack(...)
+
+            for i = 1, parts.n do
+                parts[i] = tostring(parts[i])
+            end
+
+            lines[#lines + 1] = table.concat(parts, "\t", 1, parts.n)
+        end,
+    }, { __index = _G })
+
+    assert(load(program, "=program", "t", env))()
+    return table.concat(lines, "\n")
+end
+
+-- Applies a refactoring and checks that the program prints the same.
+local function same_behavior(text, range, title)
+    local after = applied(text, range, title)
+    assert(output(after) == output(text), after)
+    return after
+end
+
+local function extract_local_names_a_pure_expression_test()
+    local src = "local a, b = 2, 3\nlocal y = a * b + 1\nprint(y)\n"
+    local after = same_behavior(src, select(src, "a * b"), "Extract into a local")
+    assert(
+        after == "local a, b = 2, 3\nlocal extracted = a * b\nlocal y = extracted + 1\nprint(y)\n",
+        after
+    )
+end
+
+local function extract_local_refuses_what_could_change_order_test()
+    local src = "local t = { n = 1 }\nlocal function bump() t.n = t.n + 1 return 0 end\nprint(bump(), t.n * 2)\nlocal z = t and t.n * 3\nprint(z)\n"
+    -- A call runs earlier in the same statement.
+    assert(not string.find(titles(src, select(src, "t.n * 2")), "Extract into a local"))
+    -- The right side of `and` runs only when the left side is truthy.
+    assert(not string.find(titles(src, select(src, "t.n * 3")), "Extract into a local"))
+    -- A call itself never moves.
+    assert(not string.find(titles(src, select(src, "bump()")), "Extract into a local"))
+    -- A selection that is no whole expression offers nothing.
+    assert(titles(src, select(src, "n * 2")) == "")
+end
+
+local function extract_local_refuses_a_loop_condition_test()
+    local src = "local i = 0\nwhile i * 2 < 10 do i = i + 1 end\nprint(i)\n"
+    assert(titles(src, select(src, "i * 2")) == "")
+end
+
+local function inline_local_replaces_a_literal_everywhere_test()
+    local src = "local scale = 10\nprint(scale, scale * 2)\n"
+    local after = same_behavior(src, select(src, "scale"), "Inline the local 'scale'")
+    assert(after == "print(10, 10 * 2)\n", after)
+end
+
+local function inline_local_wraps_an_operator_in_parentheses_test()
+    local src = "local a = 4\nlocal half = a / 2\nprint(half ^ 2)\n"
+    local after = same_behavior(src, select(src, "half"), "Inline the local 'half'")
+    assert(after == "local a = 4\nprint((a / 2) ^ 2)\n", after)
+end
+
+local function inline_local_refuses_a_changed_input_test()
+    local src = "local a = 1\nlocal b = a + 1\na = 5\nprint(b)\n"
+    assert(not string.find(titles(src, select(src, "b")), "Inline"))
+    -- A value read in a loop would run on every pass.
+    local loop = "local n = 3\nlocal twice = n * 2\nfor i = 1, 2 do print(twice + i) end\n"
+    assert(not string.find(titles(loop, select(loop, "twice")), "Inline"))
+    -- A local that is assigned keeps its declaration.
+    local assigned = "local x = 1\nx = 2\nprint(x)\n"
+    assert(not string.find(titles(assigned, select(assigned, "x")), "Inline"))
+end
+
+local function inline_local_refuses_a_captured_name_test()
+    local src = "local a = 1\nlocal b = a + 1\ndo\n    local a = 9\n    print(b, a)\nend\n"
+    assert(not string.find(titles(src, select(src, "b")), "Inline"))
+end
+
+local function extract_function_passes_inputs_and_returns_outputs_test()
+    local src = "local total = 0\nlocal items = { 1, 2, 3 }\nlocal count = #items\ntotal = total + count\nlocal avg = total / count\nprint(avg, total)\n"
+    local range = { start = { line = 3, column = 1 }, ["end"] = { line = 5, column = 26 } }
+    local after = same_behavior(src, range, "Extract into a function")
+    assert(string.find(after, "local function extracted(items)\n", 1, true), after)
+    assert(
+        string.find(after, "    return avg\nend\nlocal avg = extracted(items)\n", 1, true),
+        after
+    )
+end
+
+local function extract_function_refuses_a_jump_test()
+    local src = "for i = 1, 3 do\n    if i == 2 then break end\n    print(i)\nend\n"
+    local range = { start = { line = 2, column = 5 }, ["end"] = { line = 3, column = 13 } }
+    assert(not string.find(titles(src, range), "function"))
+    local ret = "local function f(x)\n    if x then return 1 end\n    return 2\nend\nprint(f(true))\n"
+    local r2 = { start = { line = 2, column = 5 }, ["end"] = { line = 2, column = 27 } }
+    assert(not string.find(titles(ret, r2), "function"))
+end
+
+local function extract_function_keeps_a_captured_local_an_upvalue_test()
+    local src = "local n = 1\nlocal get = function() return n end\nprint(get())\nn = 2\nprint(get())\n"
+    local range = { start = { line = 2, column = 1 }, ["end"] = { line = 3, column = 13 } }
+    local after = same_behavior(src, range, "Extract into a function")
+    assert(string.find(after, "local function extracted()\n", 1, true), after)
+end
+
+local function interpolation_and_concatenation_convert_test()
+    local src = "for i = 1, 2 do\n    print(`item $(i * 2) of $i`)\nend\n"
+    local after = same_behavior(
+        src,
+        select(src, "`item $(i * 2) of $i`"),
+        "Convert to concatenation"
+    )
+    assert(
+        string.find(after, 'print("item " .. tostring(i * 2) .. " of " .. tostring(i))', 1, true),
+        after
+    )
+    -- Converting back gives an interpolation again.
+    local back = same_behavior(
+        after,
+        select(after, '"item " .. tostring(i * 2) .. " of " .. tostring(i)'),
+        "Convert to a string with interpolation"
+    )
+    assert(string.find(back, "print(`item $(i * 2) of $(i)`)", 1, true), back)
+end
+
+local function concatenation_of_an_unknown_value_stays_test()
+    local src = "local name = 'x'\nprint('a' .. name .. 'b')\n"
+    assert(not string.find(titles(src, select(src, "'a' .. name .. 'b'")), "interpolation"))
+end
+
+local function extract_function_keeps_test_entries_at_the_top_level_test()
+    local src = "local x = 1\nlocal function one_test() assert(x == 1) end\nprint(x)\n"
+    local range = { start = { line = 1, column = 1 }, ["end"] = { line = 2, column = 46 } }
+    local found
+
+    for _, a in ipairs(refactor.actions(src, range, true)) do
+        if a.title == "Extract into a function" then
+            found = refactor.apply(src, a)
+        end
+    end
+
+    assert(found, "offered in a test file")
+    assert(string.find(found, "local x, one_test = extracted()", 1, true), found)
+end
+
+local function inline_refuses_a_runtime_attribute_test()
+    local src = "local inc = setmetatable({}, { __call = function(_, _, v) return v + 1 end })\nlocal x <inc> = 5\nprint(x)\n"
+    assert(
+        not string.find(titles(src, select(src, "x <")), "Inline"),
+        titles(src, select(src, "x <"))
+    )
+    local c = "local k <const> = 5\nprint(k)\n"
+    assert(string.find(titles(c, select(c, "k <")), "Inline", 1, true))
+end

@@ -1,6 +1,7 @@
-global require, ipairs, string
+global require, ipairs, math, string, utf8
 
 local document = require("lus-language.document")
+local refactor = require("lus-language.operations.refactor")
 
 local code_action = {}
 
@@ -20,16 +21,139 @@ local FIX_TITLES = {
 
 -- Compute code actions for a range and set of diagnostics.
 -- Returns an array of CodeAction objects.
-function code_action.compute(uri, _range, context)
-    if not context or not context.diagnostics then
+-- The lines of `text`, for converting between LSP positions, which count
+-- UTF-16 code units, and the character columns of the analysis.
+local function lines_of(text)
+    local lines = {}
+
+    for l in string.gmatch(text .. "\n", "([^\n]*)\n") do
+        lines[#lines + 1] = l
+    end
+
+    return lines
+end
+
+-- The 1-based character column of an LSP character on `line_text`.
+local function char_column(line_text, character)
+    local units, col = 0, 1
+
+    for _, cp in utf8.codes(line_text) do
+        if units >= character then
+            break
+        end
+
+        units = units + (cp > 0xFFFF and 2 or 1)
+        col = col + 1
+    end
+
+    return col + math.max(0, character - units)
+end
+
+-- The LSP character of a 1-based character column on `line_text`.
+local function lsp_character(line_text, col)
+    local units, i = 0, 1
+
+    for _, cp in utf8.codes(line_text) do
+        if i >= col then
+            break
+        end
+
+        units = units + (cp > 0xFFFF and 2 or 1)
+        i = i + 1
+    end
+
+    return units + (col - i)
+end
+
+-- Whether the client wants actions of `kind`, by the `only` filter of the
+-- request.
+local function wanted(context, kind)
+    if not context or not context.only then
+        return true
+    end
+
+    for _, k in ipairs(context.only) do
+        if kind == k or string.sub(kind, 1, #k + 1) == k .. "." then
+            return true
+        end
+    end
+
+    return false
+end
+
+-- The refactorings of `operations/refactor.lus` for a selection.
+local function refactorings(uri, doc, range, context)
+    local lines = lines_of(doc.text)
+    local sl, el = range.start.line + 1, range["end"].line + 1
+    local sel = {
+        start = { line = sl, column = char_column(lines[sl] or "", range.start.character) },
+        ["end"] = { line = el, column = char_column(lines[el] or "", range["end"].character) },
+    }
+    local ok, list = catch refactor.actions(doc.text, sel, string.find(uri, "_test%.lus$") ~= nil)
+
+    if not ok then
         return {}
     end
 
-    local actions = {}
+    local out = {}
+
+    for _, a in ipairs(list) do
+        if wanted(context, a.kind) then
+            local edits = {}
+
+            for _, e in ipairs(a.edits) do
+                local s, f = e.range.start, e.range["end"]
+                edits[#edits + 1] = {
+                    range = {
+                        start = {
+                            line = s.line - 1,
+                            character = lsp_character(lines[s.line] or "", s.column),
+                        },
+                        ["end"] = {
+                            line = f.line - 1,
+                            character = lsp_character(lines[f.line] or "", f.column),
+                        },
+                    },
+                    newText = e.text,
+                }
+            end
+
+            out[#out + 1] = {
+                title = a.title,
+                kind = a.kind,
+                edit = { changes = { [uri] = edits } },
+            }
+        end
+    end
+
+    return out
+end
+
+function code_action.compute(uri, range, context)
     local doc = document.get(uri)
 
     if not doc then
         return {}
+    end
+
+    local actions = code_action.quickfixes(uri, context)
+
+    -- The refactorings of the selection follow the quick fixes.
+    if range and wanted(context, "refactor") then
+        for _, a in ipairs(refactorings(uri, doc, range, context)) do
+            actions[#actions + 1] = a
+        end
+    end
+
+    return actions
+end
+
+-- The quick fixes for the diagnostics of the request.
+function code_action.quickfixes(uri, context)
+    local actions = {}
+
+    if not context or not context.diagnostics then
+        return actions
     end
 
     for _, diag in ipairs(context.diagnostics) do

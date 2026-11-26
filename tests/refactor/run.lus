@@ -1,0 +1,227 @@
+-- Applies the refactorings of the language server to the conformance
+-- suite and checks that every refactored test file still passes.
+--
+-- Usage: lus run.lus [--per-kind N] [--seed S] [--only TEXT] [--skip TEXT]
+--            [--lus PATH] [--out DIR]
+--
+-- The runner copies tests/conformance into DIR (default a fresh temporary
+-- directory) and runs each test file there once as it is. For each file
+-- that passes, it offers selections to `operations/refactor.lus`: every
+-- run of one to three statements, the name of every local, and the value
+-- of every local. Of the refactorings that come back it applies up to N of
+-- each kind per file (default 2), chosen by the seed, and runs the file
+-- again. A refactored file must pass the same number of tests and fail
+-- none. Each failure is printed with the refactoring and the edited text,
+-- and the exit status is 1 when any refactoring changed a result.
+
+global arg, assert, fs, io, ipairs, loadfile, math, os, pairs, pledge, print, string, table,
+    tonumber
+
+pledge("exec", "fs", "env", "load")
+
+local here = arg[0]:match("^(.*)[/\\][^/\\]*$") or "."
+local root = here .. "/../.."
+
+local opts = { ["per-kind"] = "2", seed = "1" }
+
+do
+    local i = 1
+
+    while arg[i] do
+        local a = arg[i]
+
+        if a:sub(1, 2) == "--" then
+            opts[a:sub(3)] = arg[i + 1]
+            i = i + 2
+        else
+            i = i + 1
+        end
+    end
+end
+
+local per_kind = tonumber(opts["per-kind"])
+local lus = opts.lus or arg[-1]
+local out = opts.out or os.tmpname() .. "-refactor"
+
+local refactor = assert(loadfile(root .. "/packages/language-server/operations/refactor.lus"))()
+local I = refactor.internal
+
+local function sh(cmd)
+    local p = io.popen(cmd .. " 2>&1")
+    local text = p:read("a")
+    local ok = p:close()
+    return ok == true or ok == 0, text
+end
+
+local function q(s)
+    local quoted = s:gsub("'", "'\\''")
+    return `'$quoted'`
+end
+
+local conformance = q(`$root/tests/conformance`)
+assert(sh(`rm -rf $(q(out)) && mkdir -p $(q(out)) && cp -R $conformance $(q(`$out/conformance`))`))
+local dir = out .. "/conformance"
+
+-- The number of tests that pass and fail when `lus test` runs `path`.
+local function run(path)
+    local _, text = sh(`$(q(lus)) test --timeout 60 $(q(path))`)
+    local passed = tonumber(text:match("(%d+) passed")) or 0
+    local failed = tonumber(text:match("(%d+) failed")) or 0
+    local errors = text:find("with errors", 1, true) ~= nil
+    return passed, failed + (errors and 1 or 0), text
+end
+
+-- A seeded shuffle, so a run can be repeated.
+local state = tonumber(opts.seed)
+
+local function random(n)
+    state = (state * 1103515245 + 12345) % 2147483648
+    return state % n + 1
+end
+
+local function shuffle(list)
+    for i = #list, 2, -1 do
+        local j = random(i)
+        list[i], list[j] = list[j], list[i]
+    end
+end
+
+-- The selections to offer in `text`.
+local function selections(text)
+    local tree = I.parse(text)
+
+    if not tree then
+        return {}
+    end
+
+    local starts = I.line_starts(text)
+
+    local function pos(offset)
+        local line, col = I.to_pos(starts, offset)
+        return { line = line, column = col }
+    end
+
+    local list = {}
+
+    I.each_statement(tree.children, function(s, block, i)
+        local first = I.first_offset(starts, s)
+
+        for j = i, math.min(i + 2, #block) do
+            if e = I.stat_end(starts, block[j]) then
+                list[#list + 1] = { start = pos(first), ["end"] = pos(e) }
+            end
+        end
+
+        if s.type == "local" and s.names and #s.names == 1 and s.values and #s.values == 1 then
+            local n = s.names[1]
+            local at = { line = n.line, column = n.column }
+            list[#list + 1] = { start = at, ["end"] = at }
+            local v = I.first_offset(starts, s.values[1])
+
+            if e = I.stat_end(starts, s) then
+                list[#list + 1] = { start = pos(v), ["end"] = pos(e) }
+            end
+        end
+    end)
+
+    return list
+end
+
+local files = {}
+
+for entry in fs.walk(dir) do
+    if entry:match("_test%.lus$")
+        and (not opts.only or entry:find(opts.only, 1, true))
+        and not (opts.skip and entry:find(opts.skip, 1, true)) then
+        files[#files + 1] = entry
+    end
+end
+
+table.sort(files)
+
+local applied, failures, skipped = 0, 0, 0
+local by_kind = {}
+
+for _, path in ipairs(files) do
+    local f = assert(io.open(path))
+    local text = f:read("a")
+    f:close()
+    local base_pass, base_fail = run(path)
+
+    if base_fail > 0 or base_pass == 0 then
+        skipped = skipped + 1
+    else
+        -- Every refactoring offered anywhere in the file, by kind.
+        local kinds = {}
+
+        for _, sel in ipairs(selections(text)) do
+            local ok, acts = catch refactor.actions(text, sel, true)
+
+            if ok then
+                for _, a in ipairs(acts) do
+                    local key = a.title:match("^Inline") and "Inline a local" or a.title
+                    kinds[key] = kinds[key] or {}
+                    table.insert(kinds[key], a)
+                end
+            end
+        end
+
+        local names = {}
+
+        for k in pairs(kinds) do
+            names[#names + 1] = k
+        end
+
+        table.sort(names)
+
+        for _, kind in ipairs(names) do
+            local list = kinds[kind]
+            shuffle(list)
+
+            for n = 1, math.min(per_kind, #list) do
+                local a = list[n]
+                local changed = refactor.apply(text, a)
+                local w = assert(io.open(path, "w"))
+                w:write(changed)
+                w:close()
+                local pass, fail, report = run(path)
+                applied = applied + 1
+                by_kind[kind] = (by_kind[kind] or 0) + 1
+
+                if pass ~= base_pass or fail > 0 then
+                    failures = failures + 1
+                    print(
+                        `FAIL $(path:sub(#dir + 2)): $(a.title) changed the result ($pass passed, $fail failed, expected $base_pass passed)`
+                    )
+
+                    for _, e in ipairs(a.edits) do
+                        print(`  at $(e.range.start.line):$(e.range.start.column) write: $(e.text)`)
+                    end
+
+                    print((report:gsub("\n", "\n    ")))
+                end
+            end
+        end
+
+        local w = assert(io.open(path, "w"))
+        w:write(text)
+        w:close()
+    end
+end
+
+local kinds = {}
+
+for k, n in pairs(by_kind) do
+    kinds[#kinds + 1] = `$k: $n`
+end
+
+table.sort(kinds)
+print(
+    `$(#files) files, $skipped skipped, $applied refactorings applied, $failures changed a result`
+)
+
+for _, k in ipairs(kinds) do
+    print("  " .. k)
+end
+
+os.exit(failures == 0 and 0 or 1)

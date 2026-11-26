@@ -1,0 +1,1915 @@
+global debug, error, ipairs, math, pairs, setmetatable, string, table, tostring, type, utf8
+
+-- Refactoring assists: extract local, inline local, extract function, and
+-- conversion between interpolation and concatenation. Each one keeps what
+-- the program does, so a refactoring is offered only where the analysis
+-- below proves that, and its result must check as cleanly as the source.
+--
+-- `refactor.actions(text, range, test_file)` takes the source and a
+-- selection with 1-based lines and character columns (the end column is
+-- exclusive), and returns a list of actions. In a test file the runner
+-- reads the top-level locals named `NAME_test`, `NAME_cases`, and
+-- `NAME_bench`, so they count as used and stay at the top level. An action has a `title`, an LSP `kind`, and
+-- `edits`, each with a 1-based `range` in the same units and a `text`.
+
+local refactor = {}
+
+-- ---------------------------------------------------------------------
+-- Text positions
+
+-- The character offset of the start of each line.
+local function line_starts(text)
+    local starts = { 1, text = text }
+    local pos = 1
+
+    while true do
+        local nl = string.find(text, "\n", pos, true)
+
+        if not nl then
+            break
+        end
+
+        starts[#starts + 1] = nl + 1
+        pos = nl + 1
+    end
+
+    return starts
+end
+
+local function to_offset(starts, line, col)
+    return (starts[line] or (starts[#starts] + 1)) + col - 1
+end
+
+local function to_pos(starts, offset)
+    local lo, hi = 1, #starts
+
+    while lo < hi do
+        local mid = (lo + hi + 1) // 2
+
+        if starts[mid] <= offset then
+            lo = mid
+        else
+            hi = mid - 1
+        end
+    end
+
+    return lo, offset - starts[lo] + 1
+end
+
+-- ---------------------------------------------------------------------
+-- The syntax tree
+
+local function parse_raw(text)
+    local ok, tree = catch debug.parse(text)
+
+    if not ok or type(tree) ~= "table" or tree.errors then
+        return nil
+    end
+
+    return tree
+end
+
+-- Every node that hangs off `node`, in no particular order.
+local function each_child(node, f)
+    for k, v in pairs(node) do
+        if type(v) == "table" and k ~= "errors" then
+            if v.type then
+                f(v, k)
+            else
+                for _, c in ipairs(v) do
+                    if type(c) == "table" and c.type then
+                        f(c, k)
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- The earliest position in the subtree of `node`, as a character offset.
+local function first_offset(starts, node)
+    local best = node.line and to_offset(starts, node.line, node.column) or math.maxinteger
+
+    each_child(node, function(c)
+        local o = first_offset(starts, c)
+
+        if o < best then
+            best = o
+        end
+    end)
+
+    return best
+end
+
+-- The offset of the last character of the token that starts at `at`: a
+-- name, keyword, or number, a quoted or long string, `...`, or one
+-- character of punctuation.
+local function token_end(text, at)
+    local c = string.sub(text, at, at)
+
+    if c == "\"" or c == "'" or c == "`" then
+        local i = at + 1
+
+        while i <= #text do
+            local d = string.sub(text, i, i)
+
+            if d == "\\" then
+                i = i + 2
+            elseif d == c then
+                return i
+            else
+                i = i + 1
+            end
+        end
+
+        return #text
+    end
+
+    if c == "[" then
+        if eq = string.match(text, "^%[(=*)%[", at) then
+            local close = string.find(text, `]$eq]`, at, true)
+            return close and (close + #eq + 1) or #text
+        end
+
+        return at
+    end
+
+    if string.match(c, "[%w_]") then
+        local word = string.match(text, "^[%w_]+", at)
+        local i = at + #word
+
+        -- A number may go on with a fraction or an exponent.
+        if string.match(c, "%d") then
+            local rest = string.match(text, "^[%w_%.]*", i) or ""
+            i = i + #rest
+        end
+
+        return i - 1
+    end
+
+    if string.sub(text, at, at + 2) == "..." then
+        return at + 2
+    end
+
+    return at
+end
+
+-- The offset one past the end of a statement. The tree records where its last token
+-- starts, which `token_end` follows to the end of that token.
+local function stat_end(starts, node)
+    if node.endline then
+        return token_end(starts.text, to_offset(starts, node.endline, node.endcolumn)) + 1
+    end
+
+    return nil
+end
+
+-- Moves every position of the subtree of `node` with `shift`.
+local function shift_tree(node, shift)
+    if node.line and node.column then
+        node.line, node.column = shift(node.line, node.column)
+    end
+
+    if node.endline and node.endcolumn then
+        node.endline, node.endcolumn = shift(node.endline, node.endcolumn)
+    end
+
+    each_child(node, function(c)
+        shift_tree(c, shift)
+    end)
+end
+
+-- The tree of `text`, or nil when it does not parse. The tree leaves out
+-- the condition of a `repeat` loop, as the reference parser it follows
+-- does, so the condition is parsed from the text after `until` and added
+-- as the `cond` of the loop.
+local function parse(text)
+    local tree = parse_raw(text)
+
+    if not tree then
+        return nil
+    end
+
+    local starts = line_starts(text)
+    local ok = true
+
+    local function fill(node)
+        if node.type == "repeat" and not node.cond and node.endline then
+            local stop = token_end(text, to_offset(starts, node.endline, node.endcolumn))
+            local last = node.children and node.children[#node.children]
+            local body_end = last
+                and last.endline
+                and (token_end(text, to_offset(starts, last.endline, last.endcolumn)) + 1)
+                or (to_offset(starts, node.line, node.column) + 6)
+            local kw = string.find(text, "%f[%w_]until%f[^%w_]", body_end)
+
+            if not kw or kw > stop then
+                ok = false
+                return
+            end
+
+            local cond_from = kw + 5
+            local src = string.sub(text, cond_from, stop)
+            local prefix = "return ("
+            local sub = parse_raw(`$prefix$src)`)
+
+            if not sub or not sub.children[1] or not sub.children[1].values then
+                ok = false
+                return
+            end
+
+            local sl, sc = to_pos(starts, cond_from)
+            local cond = sub.children[1].values[1]
+
+            shift_tree(cond, function(line, col)
+                if line == 1 then
+                    return sl, col - #prefix + sc - 1
+                end
+
+                return line + sl - 1, col
+            end)
+
+            node.cond = cond
+        end
+
+        each_child(node, fill)
+    end
+
+    fill(tree)
+
+    if not ok then
+        return nil
+    end
+
+    return tree
+end
+
+local STATEMENTS = {
+    ["local"] = true,
+    ["global"] = true,
+    assign = true,
+    ["if"] = true,
+    ["while"] = true,
+    ["repeat"] = true,
+    fornum = true,
+    forgen = true,
+    funcstat = true,
+    localfunc = true,
+    ["return"] = true,
+    callstat = true,
+    ["break"] = true,
+    ["continue"] = true,
+    ["goto"] = true,
+    label = true,
+    catchstat = true,
+    ["provide"] = true,
+    ["do"] = true,
+}
+
+-- Kinds of expressions whose evaluation can run code or change state.
+local EFFECTS = {
+    callexpr = true,
+    callstat = true,
+    catchstat = true,
+    methodcall = true,
+    funcexpr = true,
+    doexpr = true,
+    catchexpr = true,
+    vararg = true,
+    query = true,
+}
+
+local function has_effects(node)
+    if EFFECTS[node.type] then
+        return true
+    end
+
+    local found = false
+
+    each_child(node, function(c)
+        if not found and has_effects(c) then
+            found = true
+        end
+    end)
+
+    return found
+end
+
+-- ---------------------------------------------------------------------
+-- Names and their bindings
+
+-- Walks the tree with a stack of scopes and records, for every local, the
+-- node that declares it and every read and write of it. A reference
+-- records the function and loop depth it sits at.
+local Resolver = {}
+Resolver.__index = Resolver
+
+local function new_resolver(text)
+    local starts = line_starts(text)
+
+    return setmetatable({
+        text = text,
+        -- The source after a name node, where its attributes are written.
+        text_after = function(n)
+            return string.sub(text, to_offset(starts, n.line, n.column) + utf8.len(n.value))
+        end,
+        refs = {},
+        decls = {},
+        scope = nil,
+        fn = 0,
+        loop = 0,
+        unsupported = {},
+    }, Resolver)
+end
+
+function Resolver:push(node)
+    self.scope = {
+        parent = self.scope,
+        names = {},
+        node = node,
+        fn = self.fn,
+    }
+end
+
+function Resolver:pop()
+    self.scope = self.scope.parent
+end
+
+function Resolver:declare(name_node, kind, stat)
+    local d = {
+        name = name_node.value,
+        node = name_node,
+        kind = kind,
+        attr = name_node.attr,
+        reads = {},
+        writes = {},
+        stat = stat,
+        fn = self.fn,
+        scope = self.scope,
+    }
+    self.scope.names[d.name] = d
+    self.decls[#self.decls + 1] = d
+    return d
+end
+
+function Resolver:lookup(name, from_scope)
+    local s = from_scope or self.scope
+
+    while s do
+        if d = s.names[name] then
+            return d
+        end
+
+        s = s.parent
+    end
+
+    return nil
+end
+
+function Resolver:ref(name_node, write)
+    local d = self:lookup(name_node.value)
+    local r = {
+        node = name_node,
+        decl = d,
+        write = write,
+        fn = self.fn,
+        loop = self.loop,
+        scope = self.scope,
+    }
+    self.refs[#self.refs + 1] = r
+
+    if d and d.kind ~= "global" then
+        local list = write and d.writes or d.reads
+        list[#list + 1] = r
+    end
+end
+
+function Resolver:exprs(list)
+    for _, e in ipairs(list or {}) do
+        self:expr(e)
+    end
+end
+
+function Resolver:func(node)
+    self.fn = self.fn + 1
+    local saved_loop = self.loop
+    self.loop = 0
+    self:push(node)
+
+    if node.ismethod then
+        self:declare({ value = "self", type = "name" }, "param", node)
+    end
+
+    for _, p in ipairs(node.params or {}) do
+        if p.type == "name" then
+            self:declare(p, "param", node)
+        end
+    end
+
+    self:block(node.children)
+    self:pop()
+    self.loop = saved_loop
+    self.fn = self.fn - 1
+end
+
+function Resolver:expr(e)
+    if not e then
+        return
+    end
+
+    local t = e.type
+
+    if t == "name" then
+        self:ref(e, false)
+    elseif t == "funcexpr" then
+        self:func(e)
+    elseif t == "query" or t == "doexpr" then
+        self.unsupported[#self.unsupported + 1] = e
+
+        each_child(e, function(c)
+            self:expr(c)
+        end)
+    elseif t == "field" then
+        self:expr(e.table)
+    elseif t == "methodcall" then
+        self:expr(e.func)
+        self:exprs(e.args)
+    else
+        each_child(e, function(c)
+            -- The key of a named table field is a string node already.
+            self:expr(c)
+        end)
+    end
+end
+
+function Resolver:cond(c)
+    if c and c.type == "assign" then
+        self:exprs(c.rhs)
+
+        for _, n in ipairs(c.lhs or {}) do
+            if n.type == "name" then
+                self:declare(n, "local", c)
+            end
+        end
+    else
+        self:expr(c)
+    end
+end
+
+function Resolver:stat(s)
+    local t = s.type
+
+    if t == "local" then
+        self:exprs(s.values)
+
+        for _, n in ipairs(s.names or {}) do
+            local d = self:declare(n, "local", s)
+
+            if n.attr == "group" then
+                self.unsupported[#self.unsupported + 1] = s
+            end
+
+            d.attr = n.attr
+
+            -- A runtime attribute is an expression that the tree keeps
+            -- apart, so the source tells whether the name has one: any
+            -- attribute list other than exactly `<const>` counts.
+            if n.line and n.column then
+                local tail = string.match(self.text_after(n), "^%s*(<[^>]*>)")
+
+                if tail and tail ~= "<const>" then
+                    d.attr = tail
+                end
+            end
+        end
+    elseif t == "global" then
+        self:exprs(s.values)
+
+        for _, n in ipairs(s.names or {}) do
+            self:declare(n, "global", s)
+        end
+
+        if not s.names then
+            self.unsupported[#self.unsupported + 1] = s
+        end
+    elseif t == "localfunc" then
+        self:declare({
+            type = "name",
+            value = s.name,
+            line = s.nameline,
+            column = s.namecolumn,
+        }, "function", s)
+        self:func(s)
+    elseif t == "funcstat" then
+        local root = s.nameexpr
+
+        while root and root.type ~= "name" do
+            root = root.table
+        end
+
+        if root then
+            self:ref(root, s.nameexpr.type == "name")
+        end
+
+        self:func(s)
+    elseif t == "assign" then
+        self:exprs(s.rhs)
+
+        for _, target in ipairs(s.lhs or {}) do
+            if target.type == "name" then
+                self:ref(target, true)
+            else
+                self:expr(target)
+            end
+        end
+    elseif t == "if" then
+        -- The `elseif` and `else` clauses follow the statements of the
+        -- first branch in `children`, each with a scope of its own.
+        self:cond(s.cond)
+        self:push(s)
+        local clauses = {}
+
+        for _, c in ipairs(s.children or {}) do
+            if c.type == "elseif" or c.type == "else" then
+                clauses[#clauses + 1] = c
+            else
+                self:stat(c)
+            end
+        end
+
+        self:pop()
+
+        for _, c in ipairs(clauses) do
+            self:stat(c)
+        end
+    elseif t == "elseif" then
+        self:cond(s.cond)
+        self:push(s)
+        self:block(s.children)
+        self:pop()
+    elseif t == "else" or t == "do" then
+        self:push(s)
+        self:block(s.children)
+        self:pop()
+    elseif t == "while" then
+        self.loop = self.loop + 1
+        self:cond(s.cond)
+        self:push(s)
+        self:block(s.children)
+        self:pop()
+        self.loop = self.loop - 1
+    elseif t == "repeat" then
+        self.loop = self.loop + 1
+        self:push(s)
+        self:block(s.children)
+        self:expr(s.cond)
+        self:pop()
+        self.loop = self.loop - 1
+    elseif t == "fornum" then
+        self:expr(s.init)
+        self:expr(s.limit)
+        self:expr(s.step)
+        self.loop = self.loop + 1
+        self:push(s)
+        self:declare(s.var, "loop", s)
+        self:block(s.children)
+        self:pop()
+        self.loop = self.loop - 1
+    elseif t == "forgen" then
+        self:exprs(s.explist)
+        self.loop = self.loop + 1
+        self:push(s)
+
+        for _, n in ipairs(s.names or {}) do
+            self:declare(n, "loop", s)
+        end
+
+        self:block(s.children)
+        self:pop()
+        self.loop = self.loop - 1
+    else
+        -- return, callstat, catchstat, provide, and the jumps.
+        each_child(s, function(c)
+            if STATEMENTS[c.type] or c.type == "elseif" or c.type == "else" then
+                self:stat(c)
+            else
+                self:expr(c)
+            end
+        end)
+    end
+end
+
+function Resolver:block(stats)
+    for _, s in ipairs(stats or {}) do
+        self:stat(s)
+    end
+end
+
+local function resolve(tree, text)
+    local r = new_resolver(text)
+    r:push(tree)
+    r:block(tree.children)
+    r:pop()
+    return r
+end
+
+-- ---------------------------------------------------------------------
+-- Finding the selection in the tree
+
+-- Calls `f(stat, block, index, depth)` for every statement, with the list
+-- of statements that holds it.
+local function each_statement(stats, f, depth)
+    depth = depth or 0
+    -- A run of statements never includes the `elseif` and `else` clauses
+    -- that share the list of an `if`, so the list passed on is the one of
+    -- the branch.
+    local own = {}
+
+    for _, s in ipairs(stats or {}) do
+        if s.type == "elseif" or s.type == "else" then
+            each_statement(s.children, f, depth + 1)
+        else
+            own[#own + 1] = s
+        end
+    end
+
+    for i, s in ipairs(own) do
+        f(s, own, i, depth)
+
+        -- Function bodies inside expressions hold statements too.
+        local function nested(node)
+            if node.type == "funcexpr" then
+                each_statement(node.children, f, depth + 1)
+                return
+            end
+
+            if not STATEMENTS[node.type] and node.type ~= "elseif" and node.type ~= "else" then
+                each_child(node, nested)
+            end
+        end
+
+        each_child(s, function(c)
+            if not STATEMENTS[c.type] and c.type ~= "elseif" and c.type ~= "else" then
+                nested(c)
+            end
+        end)
+
+        if s.children then
+            each_statement(s.children, f, depth + 1)
+        end
+    end
+end
+
+-- Two subtrees are the same when their kinds, values, and shapes agree.
+-- Positions are compared after `shift` maps those of `a`.
+local function same_tree(a, b, shift)
+    if a.type ~= b.type or a.value ~= b.value or a.op ~= b.op or a.method ~= b.method then
+        return false
+    end
+
+    if a.line and b.line then
+        local l, c = shift(a.line, a.column)
+
+        if l ~= b.line or c ~= b.column then
+            return false
+        end
+    end
+
+    local ka, kb = {}, {}
+
+    each_child(a, function(c, k)
+        ka[#ka + 1] = { c, k }
+    end)
+
+    each_child(b, function(c, k)
+        kb[#kb + 1] = { c, k }
+    end)
+
+    if #ka ~= #kb then
+        return false
+    end
+
+    -- Children sort by field name, then by position, compared as numbers.
+    local function before(x, y)
+        if x[2] ~= y[2] then
+            return x[2] < y[2]
+        end
+
+        local xl, yl = x[1].line or 0, y[1].line or 0
+
+        if xl ~= yl then
+            return xl < yl
+        end
+
+        return (x[1].column or 0) < (y[1].column or 0)
+    end
+
+    table.sort(ka, before)
+    table.sort(kb, before)
+
+    for i = 1, #ka do
+        if ka[i][2] ~= kb[i][2] or not same_tree(ka[i][1], kb[i][1], shift) then
+            return false
+        end
+    end
+
+    return true
+end
+
+-- The node of the tree that is exactly the expression `text:sub(from, to)`,
+-- with its parent and the innermost statement around it, or nil.
+local function find_expression(tree, text, starts, lo, to)
+    local src = string.sub(text, lo, to)
+
+    if string.match(src, "^%s*$") then
+        return nil
+    end
+
+    local prefix = "return ("
+    local sub = parse(`$prefix$src)`)
+
+    if not sub or #sub.children ~= 1 or sub.children[1].type ~= "return" then
+        return nil
+    end
+
+    local values = sub.children[1].values
+
+    if not values or #values ~= 1 then
+        return nil
+    end
+
+    local want = values[1]
+    local sl, sc = to_pos(starts, lo)
+
+    local function shift(line, col)
+        if line == 1 then
+            return sl, col - #prefix + sc - 1
+        end
+
+        return line + sl - 1, col
+    end
+
+    local found
+
+    local function search(node, parent, stat)
+        if found then
+            return
+        end
+
+        if STATEMENTS[node.type] then
+            stat = node
+        end
+
+        if node.type == want.type and same_tree(want, node, shift) then
+            found = { node = node, parent = parent, stat = stat }
+            return
+        end
+
+        each_child(node, function(c)
+            search(c, node, stat)
+        end)
+    end
+
+    search(tree, nil, nil)
+    return found
+end
+
+-- The statements that the selection covers exactly, as a run of one list.
+local function find_statements(tree, starts, lo, to)
+    local result
+
+    each_statement(tree.children, function(s, list, i)
+        if result then
+            return
+        end
+
+        local so = first_offset(starts, s)
+
+        if so ~= lo then
+            return
+        end
+
+        -- The run starts here and ends at the statement that ends at `to`.
+        for j = i, #list do
+            local e = stat_end(starts, list[j])
+
+            if not e then
+                return
+            end
+
+            if e - 1 == to then
+                result = { list = list, first = i, last = j }
+                return
+            end
+
+            if e - 1 > to then
+                return
+            end
+        end
+    end)
+
+    return result
+end
+
+-- ---------------------------------------------------------------------
+-- Building results
+
+local function unique_name(text, base)
+    local name = base
+    local n = 1
+
+    while string.find(text, `%f[%w_]$name%f[^%w_]`) do
+        n = n + 1
+        name = base .. n
+    end
+
+    return name
+end
+
+local function indent_at(text, starts, offset)
+    local line = to_pos(starts, offset)
+    return string.match(string.sub(text, starts[line], offset - 1), "^%s*") or ""
+end
+
+local function apply(text, edits)
+    table.sort(edits, function(a, b)
+        return a.lo > b.lo
+    end)
+
+    for _, e in ipairs(edits) do
+        text = string.sub(text, 1, e.lo - 1) .. e.text .. string.sub(text, e.to + 1)
+    end
+
+    return text
+end
+
+-- The errors and undefined names of `text`, by code, as debug.check
+-- reports them.
+local function problems(text)
+    local ok, list = catch debug.check(text, "=refactor")
+
+    if not ok then
+        return nil
+    end
+
+    local counts = {}
+
+    for _, d in ipairs(list) do
+        if d.severity == "error" or d.code == "undefined-global" then
+            counts[d.code] = (counts[d.code] or 0) + 1
+        end
+    end
+
+    return counts
+end
+
+-- Whether `after` checks no worse than `before`: no new errors and no new
+-- undefined globals.
+local function no_worse(before, after_text)
+    local after = problems(after_text)
+
+    if not after or not before then
+        return false
+    end
+
+    for code, n in pairs(after) do
+        if n > (before[code] or 0) then
+            return false
+        end
+    end
+
+    return true
+end
+
+-- Converts offset edits into the result shape.
+local function action(starts, title, kind, edits)
+    local out = {}
+
+    for _, e in ipairs(edits) do
+        local sl, sc = to_pos(starts, e.lo)
+        local el, ec = to_pos(starts, e.to + 1)
+        out[#out + 1] = {
+            range = { start = { line = sl, column = sc }, ["end"] = { line = el, column = ec } },
+            text = e.text,
+        }
+    end
+
+    return {
+        title = title,
+        kind = kind,
+        edits = out,
+        offsets = edits,
+    }
+end
+
+-- ---------------------------------------------------------------------
+-- Extract local
+
+-- Whether evaluating `node` earlier, immediately before the statement, keeps the
+-- program the same: `node` runs no code, and nothing between the start of
+-- the statement and `node` runs code or decides whether `node` runs.
+local function movable(stat, target, starts)
+    if has_effects(target) then
+        return false
+    end
+
+    if stat.type == "while" or stat.type == "repeat" then
+        return false
+    end
+
+    local target_start = first_offset(starts, target)
+    local ok = true
+
+    local function scan(node, conditional)
+        if not ok then
+            return
+        end
+
+        if node == target then
+            if conditional then
+                ok = false
+            end
+
+            return
+        end
+
+        if STATEMENTS[node.type] and node ~= stat then
+            return
+        end
+
+        if node.type == "elseif" or node.type == "else" then
+            -- Code in later clauses runs only when earlier ones fail.
+            each_child(node, function(c)
+                scan(c, true)
+            end)
+
+            return
+        end
+
+        if node.type == "funcexpr" then
+            return
+        end
+
+        if EFFECTS[node.type] and first_offset(starts, node) < target_start then
+            ok = false
+            return
+        end
+
+        if node.type == "binop" and (node.op == "and" or node.op == "or") then
+            scan(node.left, conditional)
+            scan(node.right, true)
+            return
+        end
+
+        each_child(node, function(c)
+            scan(c, conditional)
+        end)
+    end
+
+    scan(stat, false)
+    return ok
+end
+
+local function extract_local(text, tree, starts, lo, to, before)
+    local found = find_expression(tree, text, starts, lo, to)
+
+    if not found or not found.stat then
+        return nil
+    end
+
+    local node = found.node
+
+    -- A table constructor stays where it is, because a local would keep
+    -- the new table alive until the end of its block.
+    if node.type == "name"
+        or node.type == "number"
+        or node.type == "string"
+        or node.type == "nil"
+        or node.type == "true"
+        or node.type == "false"
+        or node.type == "table" then
+        return nil
+    end
+
+    if not movable(found.stat, node, starts) then
+        return nil
+    end
+
+    -- The initializer of a variable with an attribute other than `<const>`,
+    -- such as `<lazy>` or `<observe>`, runs when the attribute decides.
+    if found.stat.type == "local" or found.stat.type == "global" then
+        for _, n in ipairs(found.stat.names or {}) do
+            if n.line then
+                local after = string.sub(
+                    text,
+                    to_offset(starts, n.line, n.column) + utf8.len(n.value)
+                )
+                local attrs = string.match(after, "^%s*(<[^>]*>)")
+
+                if attrs and attrs ~= "<const>" then
+                    return nil
+                end
+            end
+        end
+    end
+
+    local name = unique_name(text, "extracted")
+    local stat_start = first_offset(starts, found.stat)
+    local indent = indent_at(text, starts, stat_start)
+    local edits = {
+        {
+            lo = stat_start,
+            to = stat_start - 1,
+            text = `local $name = $(string.sub(text, lo, to))\n$indent`,
+        },
+        { lo = lo, to = to, text = name },
+    }
+
+    if not no_worse(before, apply(text, { edits[1], edits[2] })) then
+        return nil
+    end
+
+    return action(starts, "Extract into a local", "refactor.extract", edits)
+end
+
+-- ---------------------------------------------------------------------
+-- Inline local
+
+local LITERALS = {
+    number = true,
+    string = true,
+    ["nil"] = true,
+    ["true"] = true,
+    ["false"] = true,
+}
+
+local function inline_local(text, tree, starts, lo, before, res)
+    -- The cursor sits on the name of a local declared by `local NAME = e`.
+    local decl
+
+    for _, d in ipairs(res.decls) do
+        local n = d.node
+
+        if d.kind == "local" and n.line and d.stat.type == "local" then
+            local o = to_offset(starts, n.line, n.column)
+
+            if lo >= o and lo <= o + utf8.len(d.name) then
+                decl = d
+                break
+            end
+        end
+    end
+
+    if not decl then
+        return nil
+    end
+
+    local stat = decl.stat
+
+    if #stat.names ~= 1 or not stat.values or #stat.values ~= 1 or stat.isfrom then
+        return nil
+    end
+
+    if decl.attr and decl.attr ~= "const" then
+        return nil
+    end
+
+    if #decl.writes > 0 or #decl.reads == 0 then
+        return nil
+    end
+
+    local value = stat.values[1]
+    local value_from = first_offset(starts, value)
+    local stat_from = first_offset(starts, stat)
+    local stat_to = stat_end(starts, stat)
+
+    if not stat_to then
+        return nil
+    end
+
+    -- The text of the value runs from its first position to the end of
+    -- the statement.
+    local value_text = string.match(string.sub(text, value_from, stat_to - 1), "^(.-)%s*;?%s*$")
+    -- That text must be exactly the value, which parsing it alone shows.
+    local check = find_expression(
+        tree,
+        text,
+        starts,
+        value_from,
+        value_from + utf8.len(value_text) - 1
+    )
+
+    if not check or check.node ~= value then
+        return nil
+    end
+
+    -- A use inside a function of its own would turn the local into a
+    -- different upvalue, which the debug library can tell apart.
+    for _, r in ipairs(decl.reads) do
+        if r.fn ~= decl.fn then
+            return nil
+        end
+    end
+
+    if LITERALS[value.type] then
+        -- A literal reads the same anywhere.
+    else
+        if has_effects(value) or #decl.reads ~= 1 then
+            return nil
+        end
+
+        local r = decl.reads[1]
+
+        if r.fn ~= decl.fn or r.loop ~= res.loop_of[stat] then
+            return nil
+        end
+
+        -- No name that the value reads may change before the use.
+        local reads = {}
+
+        local function collect(n)
+            if n.type == "name" then
+                reads[n.value] = true
+            end
+
+            each_child(n, collect)
+        end
+
+        collect(value)
+
+        -- Each of those names must mean the same variable at the use. A
+        -- scope holds all the names its block declares, so a name declared
+        -- later in the block of the use also refuses the inlining.
+        for name in pairs(reads) do
+            local at_decl = res.lookup_at(name, decl.scope)
+
+            if res.lookup_at(name, r.scope) ~= at_decl then
+                return nil
+            end
+        end
+
+        local use_at = to_offset(starts, r.node.line, r.node.column)
+
+        for _, ref in ipairs(res.refs) do
+            if ref.write and reads[ref.node.value] then
+                local o = to_offset(starts, ref.node.line, ref.node.column)
+
+                if o > stat_from and o < use_at then
+                    return nil
+                end
+            end
+        end
+
+        -- Code that runs between the declaration and the use, such as a
+        -- call, could change a table that the value reads.
+        local function holds(n, target)
+            if n == target then
+                return true
+            end
+
+            local found = false
+
+            each_child(n, function(c)
+                if not found and holds(c, target) then
+                    found = true
+                end
+            end)
+
+            return found
+        end
+
+        local blocked = false
+
+        local function scan(n)
+            if blocked then
+                return
+            end
+
+            -- A call that holds the use runs after its arguments, so only
+            -- the code inside it before the use counts.
+            if EFFECTS[n.type] then
+                local o = first_offset(starts, n)
+
+                if o >= stat_to and o < use_at and not holds(n, r.node) then
+                    blocked = true
+                    return
+                end
+            end
+
+            if n.type == "assign" and n.line then
+                local o = to_offset(starts, n.line, n.column)
+
+                if o >= stat_to and o < use_at then
+                    for _, target in ipairs(n.lhs or {}) do
+                        if target.type ~= "name" then
+                            blocked = true
+                        end
+                    end
+                end
+            end
+
+            each_child(n, scan)
+        end
+
+        scan(tree)
+
+        if blocked then
+            return nil
+        end
+    end
+
+    local needs_parens = value.type == "binop" or value.type == "unop"
+    local replacement = needs_parens and `($value_text)` or value_text
+    local edits = {}
+    -- The declaration goes with its line when nothing else is on it.
+    local line_from = starts[(to_pos(starts, stat_from))]
+    local after = string.sub(text, stat_to, stat_to + 0)
+
+    if string.match(string.sub(text, line_from, stat_from - 1), "^%s*$")
+        and (after == "\n" or after == "") then
+        edits[#edits + 1] = { lo = line_from, to = stat_to, text = "" }
+    else
+        edits[#edits + 1] = { lo = stat_from, to = stat_to - 1, text = "" }
+    end
+
+    for _, r in ipairs(decl.reads) do
+        local o = to_offset(starts, r.node.line, r.node.column)
+        edits[#edits + 1] = { lo = o, to = o + utf8.len(decl.name) - 1, text = replacement }
+    end
+
+    if not no_worse(before, apply(text, { table.unpack(edits) })) then
+        return nil
+    end
+
+    return action(starts, `Inline the local '$(decl.name)'`, "refactor.inline", edits)
+end
+
+-- ---------------------------------------------------------------------
+-- Extract function
+
+-- Whether the statements jump out of the run, use `...`, or hold forms the
+-- resolver cannot follow.
+local function escapes(stats)
+    local bad = false
+
+    local function scan(node, in_loop)
+        if bad then
+            return
+        end
+
+        if node.type == "funcexpr" or node.type == "localfunc" or node.type == "funcstat" then
+            -- A nested function owns its returns and varargs.
+            return
+        end
+
+        if node.type == "return"
+            or node.type == "goto"
+            or node.type == "label"
+            or node.type == "vararg" then
+            bad = true
+            return
+        end
+
+        if (node.type == "break" or node.type == "continue") and not in_loop then
+            bad = true
+            return
+        end
+
+        local loop = in_loop
+            or node.type == "while"
+            or node.type == "repeat"
+            or node.type == "fornum"
+            or node.type == "forgen"
+
+        each_child(node, function(c)
+            scan(c, loop)
+        end)
+    end
+
+    for _, s in ipairs(stats) do
+        scan(s, false)
+    end
+
+    return bad
+end
+
+local function extract_function(text, tree, starts, lo, to, before, res)
+    local run = find_statements(tree, starts, lo, to)
+
+    if not run then
+        return nil
+    end
+
+    local stats = {}
+
+    for i = run.first, run.last do
+        stats[#stats + 1] = run.list[i]
+    end
+
+    if escapes(stats) then
+        return nil
+    end
+
+    local run_from = first_offset(starts, stats[1])
+    local run_to = stat_end(starts, stats[#stats]) - 1
+
+    local inside = function(node)
+        local o = to_offset(starts, node.line, node.column)
+        return o >= run_from and o <= run_to
+    end
+
+    -- Locals declared at the top of the run and read after it come back
+    -- as results. A local with an attribute cannot.
+    local outputs = {}
+
+    for _, d in ipairs(res.decls) do
+        if d.kind ~= "global" and d.node.line and inside(d.node) then
+            local top = false
+
+            for _, s in ipairs(stats) do
+                if d.stat == s then
+                    top = true
+                end
+            end
+
+            local used_after = res.test_file
+                and d.scope
+                and d.scope.node
+                and d.scope.node.type == "chunk"
+                and (string.match(d.name, "_test$")
+                    or string.match(d.name, "_cases$")
+                    or string.match(d.name, "_bench$"))
+                    ~= nil
+
+            for _, r in ipairs(d.reads) do
+                if to_offset(starts, r.node.line, r.node.column) > run_to then
+                    used_after = true
+                end
+            end
+
+            for _, r in ipairs(d.writes) do
+                if to_offset(starts, r.node.line, r.node.column) > run_to then
+                    used_after = true
+                end
+            end
+
+            if used_after then
+                if not top or d.attr then
+                    return nil
+                end
+
+                -- A function inside the run that captures an assigned local
+                -- keeps the copy of the new function, whose assignments
+                -- later code would not see, so such a run stays as it is.
+                for _, list in ipairs(#d.writes > 0 and { d.reads, d.writes } or {}) do
+                    for _, r in ipairs(list) do
+                        if inside(r.node) and r.fn > res.fn_of_run then
+                            return nil
+                        end
+                    end
+                end
+
+                outputs[#outputs + 1] = d.name
+            end
+        end
+    end
+
+    for _, u in ipairs(res.unsupported) do
+        if inside(u) then
+            return nil
+        end
+    end
+
+    -- Locals from outside that the run only reads, and that no function
+    -- inside the run captures, become parameters. The others stay
+    -- upvalues of the new function, which is defined immediately before the run.
+    local params, seen, captured, written = {}, {}, {}, {}
+
+    for _, r in ipairs(res.refs) do
+        if inside(r.node)
+            and r.decl
+            and r.decl.kind ~= "global"
+            and not inside(r.decl.node.line and r.decl.node or { line = 0, column = 0 }) then
+            if r.write then
+                written[r.decl] = true
+            end
+
+            if r.fn > res.fn_of_run then
+                captured[r.decl] = true
+            end
+        end
+    end
+
+    -- A `<close>` local of the run would close when the new function
+    -- returns, earlier than at the end of its block, and `_ENV` changes how
+    -- every global of the run resolves.
+    for _, d in ipairs(res.decls) do
+        if d.node.line
+            and inside(d.node)
+            and (d.name == "_ENV" or (d.attr and string.find(d.attr, "close"))) then
+            return nil
+        end
+    end
+
+    for _, r in ipairs(res.refs) do
+        if inside(r.node) and r.node.value == "_ENV" then
+            return nil
+        end
+    end
+
+    -- A local with an attribute other than `<const>` behaves differently
+    -- when a nested function uses it: an assignment through an upvalue
+    -- runs no handler. A run that uses such a local from outside stays.
+    for _, r in ipairs(res.refs) do
+        local d = r.decl
+
+        if inside(r.node)
+            and d
+            and d.kind ~= "global"
+            and d.node.line
+            and not inside(d.node)
+            and d.attr
+            and d.attr ~= "const" then
+            return nil
+        end
+    end
+
+    for _, r in ipairs(res.refs) do
+        local d = r.decl
+
+        if inside(r.node)
+            and d
+            and d.kind ~= "global"
+            and d.node.line
+            and not inside(d.node)
+            and not written[d]
+            and not captured[d]
+            and not seen[d]
+            and #d.writes == 0
+            and (d.attr == nil or d.attr == "const")
+            and d.name ~= "self" then
+            -- A parameter reads the value at the call, which would force a
+            -- `<lazy>` local early and freeze an `<observe>` one.
+
+            seen[d] = true
+            params[#params + 1] = d.name
+        end
+    end
+
+    table.sort(params)
+    local name = unique_name(text, "extracted")
+    local indent = indent_at(text, starts, run_from)
+    local body = string.sub(text, run_from, run_to)
+    -- The body moves one level deeper, unless a string in it spans lines,
+    -- whose text the indentation would change.
+    local inner = `$indent    `
+
+    if string.find(body, "%[=*%[")
+        or string.find(body, "\\\n")
+        or string.find(body, "\\z")
+        or string.find(body, "`[^`]*\n") then
+        body = `$indent$body`
+    else
+        body = inner .. string.gsub(body, `\n$indent`, `\n$inner`)
+    end
+
+    local plist = table.concat(params, ", ")
+    local fn = `local function $name($plist)\n$body\n`
+
+    if #outputs > 0 then
+        fn = `$fn$(inner)return $(table.concat(outputs, ", "))\n`
+    end
+
+    fn = `$fn$(indent)end\n$indent`
+    local call = `$name($plist)`
+
+    if #outputs > 0 then
+        call = `local $(table.concat(outputs, ", ")) = $call`
+    end
+
+    local edits = { { lo = run_from, to = run_to, text = fn .. call } }
+
+    if not no_worse(before, apply(text, { edits[1] })) then
+        return nil
+    end
+
+    return action(starts, "Extract into a function", "refactor.extract", edits)
+end
+
+-- ---------------------------------------------------------------------
+-- Interpolation and concatenation
+
+local function quote(s)
+    local body = string.gsub(s, "[\\\"\n\r\t%c]", function(c)
+        if c == "\\" then
+            return "\\\\"
+        end
+
+        if c == "\"" then
+            return "\\\""
+        end
+
+        if c == "\n" then
+            return "\\n"
+        end
+
+        if c == "\r" then
+            return "\\r"
+        end
+
+        if c == "\t" then
+            return "\\t"
+        end
+
+        return string.format("\\%03d", string.byte(c))
+    end)
+
+    return `"$body"`
+end
+
+local function interp_text(s)
+    return (string.gsub(s, "[\\`%$\n\r\t]", function(c)
+        if c == "\n" then
+            return "\\n"
+        end
+
+        if c == "\r" then
+            return "\\r"
+        end
+
+        if c == "\t" then
+            return "\\t"
+        end
+
+        return "\\" .. c
+    end))
+end
+
+-- The source text of an expression node: from its first position up to,
+-- but excluding, the first position after it in its parent.
+local function node_text(text, starts, node, limit)
+    local lo = first_offset(starts, node)
+    return string.match(string.sub(text, lo, limit), "^(.-)%s*$")
+end
+
+-- Whether a value is a number whatever its operands hold, as `lus check`
+-- decides for its fixes: a numeric literal, a numeric `for` variable that
+-- is never assigned, or arithmetic on such values.
+local function strict_number(node, res)
+    if node.type == "number" then
+        return true
+    end
+
+    if node.type == "unop" then
+        return (node.op == "-" or node.op == "~")
+            and strict_number(node.operand or node.expr or node.value, res)
+    end
+
+    if node.type == "binop" then
+        local arith = {
+            ["+"] = true,
+            ["-"] = true,
+            ["*"] = true,
+            ["/"] = true,
+            ["//"] = true,
+            ["%"] = true,
+            ["^"] = true,
+        }
+        return arith[node.op] == true
+            and strict_number(node.left, res)
+            and strict_number(node.right, res)
+    end
+
+    if node.type == "name" then
+        local d = res.decl_of[node]
+        return d ~= nil and d.kind == "loop" and d.stat.type == "fornum" and #d.writes == 0
+    end
+
+    return false
+end
+
+local function interp_to_concat(text, tree, starts, lo, to, before)
+    local found = find_expression(tree, text, starts, lo, to)
+
+    if not found or found.node.type ~= "interp" then
+        return nil
+    end
+
+    local node = found.node
+    local pieces = {}
+    local parts = node.parts or {}
+
+    -- The text of each value part, read from the source.
+    for _, p in ipairs(parts) do
+        if p.type == "string" then
+            if p.value ~= "" then
+                pieces[#pieces + 1] = quote(p.value)
+            end
+        else
+            local po = first_offset(starts, p)
+            local expr
+
+            if string.sub(text, po - 1, po - 1) == "(" then
+                -- `$(expression)`: the text up to the parenthesis that
+                -- closes the one before it.
+                local depth, i2 = 1, po
+                local quote_char
+
+                while i2 <= to do
+                    local ch = string.sub(text, i2, i2)
+
+                    if quote_char then
+                        if ch == "\\" then
+                            i2 = i2 + 1
+                        elseif ch == quote_char then
+                            quote_char = nil
+                        end
+                    elseif ch == "\"" or ch == "'" then
+                        quote_char = ch
+                    elseif ch == "(" then
+                        depth = depth + 1
+                    elseif ch == ")" then
+                        depth = depth - 1
+
+                        if depth == 0 then
+                            break
+                        end
+                    end
+
+                    i2 = i2 + 1
+                end
+
+                if depth ~= 0 then
+                    return nil
+                end
+
+                expr = string.sub(text, po, i2 - 1)
+            else
+                expr = string.match(string.sub(text, po, to), "^([%a_][%w_]*)")
+
+                if not expr then
+                    return nil
+                end
+            end
+
+            pieces[#pieces + 1] = `tostring($expr)`
+        end
+    end
+
+    if #pieces == 0 then
+        pieces = { "\"\"" }
+    end
+
+    local result = table.concat(pieces, " .. ")
+    local parent = found.parent
+
+    if #pieces > 1
+        and parent
+        and (parent.type == "binop"
+            or parent.type == "unop"
+            or parent.type == "field"
+            or parent.type == "index"
+            or parent.type == "methodcall"
+            or (parent.type == "callexpr" and parent.func == node)) then
+        result = `($result)`
+    end
+
+    local edits = { { lo = lo, to = to, text = result } }
+
+    if not no_worse(before, apply(text, { edits[1] })) then
+        return nil
+    end
+
+    return action(starts, "Convert to concatenation", "refactor.rewrite", edits)
+end
+
+local function concat_to_interp(text, tree, starts, lo, to, before, res)
+    local found = find_expression(tree, text, starts, lo, to)
+
+    if not found or found.node.type ~= "binop" or found.node.op ~= ".." then
+        return nil
+    end
+
+    local operands = {}
+
+    local function flatten(n)
+        if n.type == "binop" and n.op == ".." then
+            flatten(n.left)
+            flatten(n.right)
+        else
+            operands[#operands + 1] = n
+        end
+    end
+
+    flatten(found.node)
+    -- Each operand must convert as interpolation converts it: a string
+    -- literal, a number, or tostring of a value.
+    local out = { "`" }
+
+    for i, op in ipairs(operands) do
+        local limit = operands[i + 1] and (first_offset(starts, operands[i + 1]) - 1) or to
+
+        if op.type == "string" then
+            out[#out + 1] = interp_text(op.value)
+        elseif strict_number(op, res) then
+            local t = string.gsub(node_text(text, starts, op, limit), "%s*%.%.$", "")
+            out[#out + 1] = `\$($t)`
+        elseif op.type == "callexpr"
+            and op.func.type == "name"
+            and op.func.value == "tostring"
+            and res.decl_of[op.func] == nil
+            and op.args
+            and #op.args == 1 then
+            local t = string.gsub(node_text(text, starts, op, limit), "%s*%.%.$", "")
+            local inner = string.match(t, "^tostring%s*%((.*)%)$")
+
+            if not inner then
+                return nil
+            end
+
+            out[#out + 1] = `\$($inner)`
+        else
+            return nil
+        end
+    end
+
+    out[#out + 1] = "`"
+    local edits = { { lo = lo, to = to, text = table.concat(out) } }
+
+    if not no_worse(before, apply(text, { edits[1] })) then
+        return nil
+    end
+
+    return action(starts, "Convert to a string with interpolation", "refactor.rewrite", edits)
+end
+
+-- ---------------------------------------------------------------------
+-- Entry point
+
+-- A program that reads its own locals, upvalues, or lines with the debug
+-- library sees every renamed, moved, or inlined local and every added
+-- line, so it gets no refactoring.
+local INTROSPECTION = {
+    "getlocal",
+    "setlocal",
+    "getupvalue",
+    "setupvalue",
+    "upvalueid",
+    "upvaluejoin",
+    "getinfo",
+}
+
+-- The refactorings available for the selection `range` of `text`.
+function refactor.actions(text, range, test_file)
+    for _, f in ipairs(INTROSPECTION) do
+        if string.find(text, "debug%." .. f) then
+            return {}
+        end
+    end
+
+    local tree = parse(text)
+
+    if not tree then
+        return {}
+    end
+
+    local starts = line_starts(text)
+    local lo = to_offset(starts, range.start.line, range.start.column)
+    local to = to_offset(starts, range["end"].line, range["end"].column) - 1
+
+    -- A selection ignores the blanks around it.
+    while to >= lo and string.match(string.sub(text, lo, lo), "%s") do
+        lo = lo + 1
+    end
+
+    while to >= lo and string.match(string.sub(text, to, to), "%s") do
+        to = to - 1
+    end
+
+    local res = resolve(tree, text)
+
+    res.lookup_at = function(name, scope)
+        return res:lookup(name, scope)
+    end
+
+    res.test_file = test_file
+    res.decl_of = {}
+
+    for _, r in ipairs(res.refs) do
+        res.decl_of[r.node] = r.decl
+    end
+
+    res.loop_of = {}
+    res.fn_of_run = 0
+
+    -- The loop and function depth of each statement, for inline local and
+    -- extract function.
+    for _, d in ipairs(res.decls) do
+        if d.stat and d.stat.type == "local" then
+            res.loop_of[d.stat] = res.loop_of[d.stat] or 0
+        end
+    end
+
+    local loop_of_stat = {}
+
+    local function depths(stats, loop, fn)
+        for _, s in ipairs(stats or {}) do
+            loop_of_stat[s] = { loop = loop, fn = fn }
+            local is_loop = s.type == "while"
+                or s.type == "repeat"
+                or s.type == "fornum"
+                or s.type == "forgen"
+            local inner_loop = is_loop and loop + 1 or loop
+
+            local function sub(node, l, f)
+                if node.type == "funcexpr" then
+                    depths(node.children, 0, f + 1)
+                    return
+                end
+
+                each_child(node, function(c)
+                    sub(c, l, f)
+                end)
+            end
+
+            if s.type == "localfunc" or s.type == "funcstat" then
+                depths(s.children, 0, fn + 1)
+            else
+                if s.children then
+                    depths(s.children, inner_loop, fn)
+                end
+
+                for _, k in ipairs(s.elseifs or s.clauses or {}) do
+                    depths(k.children, inner_loop, fn)
+                end
+
+                if s["else"] then
+                    depths(s["else"].children, inner_loop, fn)
+                end
+
+                each_child(s, function(c)
+                    if not STATEMENTS[c.type] and c.type ~= "elseif" and c.type ~= "else" then
+                        sub(c, loop, fn)
+                    end
+                end)
+            end
+        end
+    end
+
+    depths(tree.children, 0, 0)
+
+    for s, d in pairs(loop_of_stat) do
+        res.loop_of[s] = d.loop
+    end
+
+    if run = find_statements(tree, starts, lo, to) then
+        res.fn_of_run = loop_of_stat[run.list[run.first]].fn
+    end
+
+    local before = problems(text)
+    local actions = {}
+
+    local function add(a)
+        if a then
+            actions[#actions + 1] = a
+        end
+    end
+
+    if to >= lo then
+        add(extract_local(text, tree, starts, lo, to, before))
+        add(extract_function(text, tree, starts, lo, to, before, res))
+        add(interp_to_concat(text, tree, starts, lo, to, before))
+        add(concat_to_interp(text, tree, starts, lo, to, before, res))
+    end
+
+    add(inline_local(text, tree, starts, lo, before, res))
+    return actions
+end
+
+-- The parts that the tests reach directly.
+refactor.internal = {
+    parse = parse,
+    line_starts = line_starts,
+    find_expression = function(text, lo, to)
+        local tree = parse(text)
+        return tree and find_expression(tree, text, line_starts(text), lo, to)
+    end,
+    token_end = token_end,
+    first_offset = first_offset,
+    stat_end = stat_end,
+    each_statement = each_statement,
+    to_pos = to_pos,
+}
+
+-- Applies the edits of an action to `text`, for tests and tools.
+function refactor.apply(text, a)
+    local copy = {}
+
+    for _, e in ipairs(a.offsets) do
+        copy[#copy + 1] = e
+    end
+
+    return apply(text, copy)
+end
+
+return refactor

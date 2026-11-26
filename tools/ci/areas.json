@@ -341,6 +341,12 @@
       "checks": ["diff"]
     },
     {
+      "name": "refactorings",
+      "paths": ["tests/refactor/**"],
+      "labels": ["tests", "lsp"],
+      "tests": ["packages/language-server/tests"]
+    },
+    {
       "name": "allocation-failures",
       "paths": ["tests/oom/**"],
       "labels": ["tests"],

@@ -36,6 +36,10 @@ code --install-extension lus-version.vsix
 
 Inside the string of a `require`, the extension completes the URLs of packages on `atmosp.here` when the `atmos` command is installed. The setting `lus.atmosphere.servers` adds the base URLs of other package servers, such as `https://pkgs.example.com`, whose packages the completion offers too.
 
+### Testing
+
+The Testing view lists every `*_test.lus` file of the workspace with its tests and benchmarks, with a run button beside each definition in the editor. A run starts `lus test`, so it needs the `lus` command, which the setting `lus.executablePath` names. A failed test shows its message at the line of the failed assertion. **Run with Coverage** marks the lines of the code under test that ran.
+
 ### Debugging
 
 The extension registers the `lus` debugger, so **Run and Debug** works on any `.lus` file. The debugger runs the program with a local installation of `lus`, which it starts as `lus debug`. The `lus.executablePath` setting names the command to start and defaults to `lus`, which must then be in a directory of the `PATH`. A launch configuration in `.vscode/launch.json` sets the program, its arguments, its working directory, and the permissions it receives:
@@ -135,6 +139,22 @@ Install [lsp-mode](https://github.com/emacs-lsp/lsp-mode) and [lua-mode](https:/
       :activation-fn (lsp-activate-on "lus")
       :server-id 'lus)))
 ```
+
+## Refactoring
+
+The language server offers refactorings for the selected code in every editor, as code actions. Each one is offered only where it keeps what the program does and where its result checks as cleanly as the source did.
+
+| Refactoring | Offered when |
+| --- | --- |
+| Extract into a local | The selection is one whole expression that calls no function, outside the right side of `and` or `or` and outside a loop condition, with no call that runs before it in the same statement. The new local goes immediately before the statement. |
+| Inline the local | The cursor is on a local declared as `local name = value` and never assigned again. Every use must be in the function of the declaration. A literal value replaces every use. Any other value must call no function and have exactly one use, in the same loop as the declaration, with no call or field write between the declaration and the use and no assignment to a variable that the value reads. |
+| Extract into a function | The selection is a run of whole statements without `return`, `break`, `continue`, `goto`, a label, `...`, a `<close>` local, or `_ENV`. The function is defined immediately before the run. A local that nothing assigns and that no function inside the run captures becomes a parameter. Any other local from outside stays shared with the new function. A local that the run declares and later code reads comes back as a result. |
+| Convert to concatenation | The selection is a string with interpolation. Each value becomes `tostring(value)`, which writes the same text. |
+| Convert to a string with interpolation | The selection is a concatenation of string literals, numbers, and calls of `tostring`, which interpolation writes the same way. |
+
+The new names are `extracted`, then `extracted2` and so on when the name is taken, so a rename usually follows. A local with an attribute other than `<const>`, such as `<lazy>` or `<observe>`, is never inlined, extracted from, or moved into a new function. A program that reads its own locals or lines with the debug library, such as with `debug.getlocal` or `debug.getinfo`, gets no refactoring.
+
+A few differences remain observable. A metamethod with side effects can tell an extracted local from the original code, because the value is computed before the rest of its statement. An error message can name another variable or line, because a refactoring adds or removes lines and an inlined value has no name of its own. A value held by an extracted local stays reachable until the end of its block, which a weak table or a finalizer can notice.
 
 ## Coding agents
 

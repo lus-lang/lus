@@ -1659,7 +1659,10 @@ local function offers_the_fix_of_a_check_hint_test()
     end
 
     assert(hint?.data?.fix, "the hint carries its fix")
-    local result = code_action.compute(uri, hint.range, { diagnostics = { hint } })
+    local result = code_action.compute(uri, hint.range, {
+        diagnostics = { hint },
+        only = { "quickfix" },
+    })
     assert(#result == 1)
     assert(result[1].title == "Use optional chaining")
     assert(result[1].kind == "quickfix" and result[1].isPreferred)

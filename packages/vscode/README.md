@@ -2,7 +2,7 @@
 
 Language support for [Lus](https://github.com/lus-lang/lus), a small, fast, and productive language to build programs.
 
-This extension provides completions, diagnostics, syntax highlighting, and formatting for `.lus` files. Each extension release carries its matching Lus WebAssembly runtime, language server, and standard library data.
+This extension provides completions, diagnostics, quick fixes, refactorings, syntax highlighting, and formatting for `.lus` files. Each extension release carries its matching Lus WebAssembly runtime, language server, and standard library data.
 
 The package runs in VS Code's Node-based workspace extension host. Remote workspaces run it in their remote workspace host, where it mirrors `.lus` and `.lua` files through the VS Code filesystem API for cross-file analysis. Browser-only extension-host packaging is planned for a future release.
 

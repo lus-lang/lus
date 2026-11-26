@@ -46,6 +46,11 @@ description = "Run 200 generated programs under every JIT mode and compare their
 depends = ["build"]
 run = "LUS_JIT=off runtime/zig-out/bin/lus tests/diff/run.lus --count 200 --start 1 --jobs 4 --timeout 60"
 
+[tasks.refactor]
+description = "Apply the refactorings of the language server across the conformance suite and check that every refactored file still passes"
+depends = ["build"]
+run = "runtime/zig-out/bin/lus tests/refactor/run.lus"
+
 [tasks."diff:long"]
 description = "Generate programs until stopped, under every JIT mode and the gc-stress, x86-64, and WebAssembly builds"
 depends = ["build", "build:stress", "build:x64", "wasm"]
