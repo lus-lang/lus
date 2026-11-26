@@ -17,7 +17,8 @@ When the environment variable `LUS_PATH` is set, its value becomes the initial `
 ```lus
 print(package.path)  --> ./?.lus;./?/init.lus;./?.lua;./?/init.lua
 print(package.searchpath("util.strings", "./lib/?.lus"))
---> nil  no file './lib/util/strings.lus'
+-->(posix) nil  no file './lib/util/strings.lus'
+-->(windows) nil  no file './lib/util\strings.lus'
 ```
 
 Programs that ship their modules together use `--include` or `lus build`, which make the modules available to `require` from any directory. [`package.searchpath`](/manual/api#package.searchpath) applies the same template rules to any path string, and [Search paths](/manual/guide#search-paths) in the guide describes the order of the searchers.

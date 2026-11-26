@@ -32,8 +32,10 @@ A candidate counts only when it exists, is not a directory, and the chunk may re
 
 ```lus
 print(package.searchpath("a.b", "./?.x;./lib/?.x"))
---> nil  no file './a/b.x'
--->      no file './lib/a/b.x'
+-->(posix) nil  no file './a/b.x'
+-->(posix)      no file './lib/a/b.x'
+-->(windows) nil  no file './a\b.x'
+-->(windows)      no file './lib/a\b.x'
 print(package.searchpath("a.b", "./?.x", ".", "_"))  --> nil  no file './a_b.x'
 ```
 

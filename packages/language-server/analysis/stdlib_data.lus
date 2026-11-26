@@ -3806,7 +3806,7 @@ Its functions work on strings alone and never touch the filesystem, so they need
 ```lus
 local path = fs.path.join("docs", "guide", "intro.md")
 print(fs.path.name(path))  --> intro.md
-print(fs.path.parent(path))  --> docs/guide
+print(fs.path.name(fs.path.parent(path)))  --> guide
 ```]],
     kind = "module",
     module = "fs",
@@ -3859,12 +3859,14 @@ Every argument is a path component given as a string, and a number is converted 
 The following example shows a plain join, an absolute component, and a component that already ends in a separator.
 
 ```lus
-print(fs.path.join("dir", "sub", "file.txt"))  --> dir/sub/file.txt
+print(fs.path.join("dir", "sub", "file.txt"))
+-->(posix) dir/sub/file.txt
+-->(windows) dir\sub\file.txt
 print(fs.path.join("relative", "/absolute"))  --> /absolute
 print(fs.path.join("a/", "", "b"))  --> a/b
 ```
 
-The example prints the output shown on POSIX systems, where the separator is `/`. [`fs.path.split`](/manual/api#fs.path.split) takes a path apart into its components.]],
+Only the first result depends on the platform, since the other two keep the separators of their arguments. [`fs.path.split`](/manual/api#fs.path.split) takes a path apart into its components.]],
     kind = "function",
     module = "fs.path",
     name = "fs.path.join",
@@ -3960,11 +3962,13 @@ The character that separates the components of a path, `"/"` on POSIX systems an
 The value is a one-character string fixed when the runtime is built, and reading it needs no permission. [`fs.path.join`](/manual/api#fs.path.join) places it between components.
 
 ```lus
-print(fs.path.separator)  --> /
+print(fs.path.separator)
+-->(posix) /
+-->(windows) \
 print(fs.path.join("a", "b") == "a" .. fs.path.separator .. "b")  --> true
 ```
 
-The example prints the output shown on POSIX systems. [`fs.path.delimiter`](/manual/api#fs.path.delimiter) separates the entries of a path list.]],
+[`fs.path.delimiter`](/manual/api#fs.path.delimiter) separates the entries of a path list.]],
     kind = "constant",
     module = "fs.path",
     name = "fs.path.separator",
@@ -8085,7 +8089,8 @@ When the environment variable `LUS_PATH` is set, its value becomes the initial `
 ```lus
 print(package.path)  --> ./?.lus;./?/init.lus;./?.lua;./?/init.lua
 print(package.searchpath("util.strings", "./lib/?.lus"))
---> nil  no file './lib/util/strings.lus'
+-->(posix) nil  no file './lib/util/strings.lus'
+-->(windows) nil  no file './lib/util\strings.lus'
 ```
 
 Programs that ship their modules together use `--include` or `lus build`, which make the modules available to `require` from any directory. [`package.searchpath`](/manual/api#package.searchpath) applies the same template rules to any path string, and [Search paths](/manual/guide#search-paths) in the guide describes the order of the searchers.]],
@@ -8186,8 +8191,10 @@ A candidate counts only when it exists, is not a directory, and the chunk may re
 
 ```lus
 print(package.searchpath("a.b", "./?.x;./lib/?.x"))
---> nil  no file './a/b.x'
--->      no file './lib/a/b.x'
+-->(posix) nil  no file './a/b.x'
+-->(posix)      no file './lib/a/b.x'
+-->(windows) nil  no file './a\b.x'
+-->(windows)      no file './lib/a\b.x'
 print(package.searchpath("a.b", "./?.x", ".", "_"))  --> nil  no file './a_b.x'
 ```
 

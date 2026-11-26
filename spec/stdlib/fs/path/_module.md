@@ -14,5 +14,5 @@ Its functions work on strings alone and never touch the filesystem, so they need
 ```lus
 local path = fs.path.join("docs", "guide", "intro.md")
 print(fs.path.name(path))  --> intro.md
-print(fs.path.parent(path))  --> docs/guide
+print(fs.path.name(fs.path.parent(path)))  --> guide
 ```

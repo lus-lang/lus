@@ -1195,6 +1195,16 @@ fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []co
 /// in an error message. Returns the message of the first comment that
 /// names no line, or null when every one does.
 pub fn missingOutput(gpa: std.mem.Allocator, code: []const u8, printed: []const u8) !?[]u8 {
+    return missingOutputOn(gpa, code, printed, if (windows) .windows else .posix);
+}
+
+/// The platforms that a `-->(PLATFORM)` comment can name.
+const DocPlatform = enum { posix, windows };
+
+/// `missingOutput` as it runs on `platform`, which decides the
+/// `-->(PLATFORM)` comments that count. A comment for another platform
+/// names no output. A comment that names no known platform fails.
+fn missingOutputOn(gpa: std.mem.Allocator, code: []const u8, printed: []const u8, platform: DocPlatform) !?[]u8 {
     var lines: std.ArrayList([]u8) = .empty;
     defer {
         for (lines.items) |x| gpa.free(x);
@@ -1207,7 +1217,17 @@ pub fn missingOutput(gpa: std.mem.Allocator, code: []const u8, printed: []const 
     while (src.next()) |line| {
         n += 1;
         const at = std.mem.indexOf(u8, line, "-->") orelse continue;
-        const want = try normalize(gpa, line[at + 3 ..]);
+        var text = line[at + 3 ..];
+        if (text.len > 0 and text[0] == '(') {
+            const close = std.mem.indexOfScalar(u8, text, ')') orelse
+                return try std.fmt.allocPrint(gpa, "line {d} of the block opens a platform with ( and never closes it", .{n});
+            const name = text[1..close];
+            const named = std.meta.stringToEnum(DocPlatform, name) orelse
+                return try std.fmt.allocPrint(gpa, "line {d} of the block names the platform \"{s}\", which is neither posix nor windows", .{ n, name });
+            if (named != platform) continue;
+            text = text[close + 1 ..];
+        }
+        const want = try normalize(gpa, text);
         defer gpa.free(want);
         var found = false;
         for (lines.items) |got| {
@@ -1259,6 +1279,16 @@ test missingOutput {
     const m = (try missingOutput(gpa, "print(3)  --> 4\n", "3\n")).?;
     defer gpa.free(m);
     try std.testing.expect(std.mem.indexOf(u8, m, "expects the output \"4\"") != null);
+    // A platform comment counts only on its own platform.
+    const both = "print(sep)  -->(posix) /\n-->(windows) \\\n";
+    try std.testing.expectEqual(@as(?[]u8, null), try missingOutputOn(gpa, both, "/\n", .posix));
+    try std.testing.expectEqual(@as(?[]u8, null), try missingOutputOn(gpa, both, "\\\n", .windows));
+    const w = (try missingOutputOn(gpa, both, "/\n", .windows)).?;
+    defer gpa.free(w);
+    try std.testing.expect(std.mem.indexOf(u8, w, "expects the output \"\\\"") != null);
+    const u = (try missingOutputOn(gpa, "print(1)  -->(linux) 1\n", "1\n", .posix)).?;
+    defer gpa.free(u);
+    try std.testing.expect(std.mem.indexOf(u8, u, "neither posix nor windows") != null);
 }
 
 /// The path of the file a child runs, as the user named it, which every

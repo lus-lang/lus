@@ -345,10 +345,12 @@ fs.remove(base)
 
 POSIX systems separate the parts of a path with `/` and Windows separates them with `\`, so a path built with `dir .. "/" .. name` is correct on only some systems. The functions of [`fs.path`](/manual/api#fs.path) build and split paths with the separator of the platform the program runs on. They compute on the path strings alone, so they require no permission. They accept `/` as a separator on every platform and `\` on Windows as well.
 
-[`fs.path.join(...)`](/manual/api#fs.path.join) joins its arguments with the platform separator, skipping empty arguments and adding no separator where one is already present. An absolute argument replaces everything before it. The following calls show the results on a POSIX system.
+[`fs.path.join(...)`](/manual/api#fs.path.join) joins its arguments with the platform separator, skipping empty arguments and adding no separator where one is already present. An absolute argument replaces everything before it. Only the first of the following calls gives a result that depends on the platform, so its comments show the result on POSIX systems and on Windows.
 
 ```lus
-print(fs.path.join("dir", "sub", "file.txt"))  --> dir/sub/file.txt
+print(fs.path.join("dir", "sub", "file.txt"))
+-->(posix) dir/sub/file.txt
+-->(windows) dir\sub\file.txt
 print(fs.path.join("relative", "/absolute"))  --> /absolute
 print(fs.path.join("a/", "", "b"))  --> a/b
 ```

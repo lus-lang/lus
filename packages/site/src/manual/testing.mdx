@@ -269,6 +269,14 @@ An example in documentation becomes wrong when the code it describes changes. `l
 
 The text after `-->` on a line of a block is a line that the block must print, to standard output or to standard error, in any order. Runs of spaces and tabs compare equal, so the tab that `print` puts between its values matches the spaces of a comment. `...` in a comment matches any text, such as the file name and the line number in front of an error message. A line that holds only a `-->` comment names output as well, which suits a loop that prints several lines.
 
+Output that differs between platforms, such as a path with the separator of the platform, takes one comment for each platform. A comment that starts with `-->(posix)` names a line that the block prints on every system other than Windows. A comment that starts with `-->(windows)` names a line that the block prints on Windows. The runner skips the comments for the other platform and fails a comment that names any other platform.
+
+```lus
+print(fs.path.join("logs", "today.txt"))
+-->(posix) logs/today.txt
+-->(windows) logs\today.txt
+```
+
 ```lus
 for _, name in ipairs({ "ada", "grace" }) do
     print(name:upper(), #name)
