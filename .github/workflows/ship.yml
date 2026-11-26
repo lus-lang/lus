@@ -21,8 +21,9 @@ name: Ship
 #      branch holds the release commit.
 #   4. index and vscode add the release to the signed index of `lus
 #      version` and publish the VSIX to Open VSX and to the Visual Studio
-#      Marketplace. The marketplace job runs in the environment release,
-#      so it waits for a reviewer as well.
+#      Marketplace. The marketplace job runs in the environment
+#      marketplace, which has no reviewer, so the approval of the signing
+#      jobs stays the only one.
 #   5. next opens a pull request that brings the dated changelog and the
 #      news page of the release to the branch and starts X.(Y+1).0-dev.
 #      The site deploys from the branch, so merging it publishes the news

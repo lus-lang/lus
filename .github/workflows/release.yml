@@ -608,7 +608,19 @@ jobs:
           pnpm test
           pnpm build
           pnpm check:package
+          # The two stores hold the extension under different publishers:
+          # lus on Open VSX and lus-language on the Visual Studio
+          # Marketplace, whose ID lus belongs to someone else. Each store
+          # gets a VSIX whose manifest names its publisher.
+          test "$(node -p 'require("./package.json").publisher')" = lus
           pnpm exec vsce package --no-dependencies --out "$out/lus-$version.vsix"
+          npm pkg set publisher=lus-language
+          pnpm exec vsce package --no-dependencies --out "$out/lus-$version-marketplace.vsix"
+          npm pkg set publisher=lus
+          for pair in "lus-$version.vsix lus" "lus-$version-marketplace.vsix lus-language"; do
+            set -- $pair
+            test "$(unzip -p "$out/$1" extension/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).publisher')" = "$2"
+          done
           publisher="$out/lus-$version-open-vsx-publisher.cjs"
           node scripts/build-open-vsx-publisher.mjs "$publisher"
           expected=$(node -p 'require("../../packaging/release/manifest.json").components.vscodePublisher.sha256')

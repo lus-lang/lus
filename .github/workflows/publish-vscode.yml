@@ -6,10 +6,17 @@ name: Publish VSCode Extension
 # other workflow. A dry run of ship.yml calls it with `dry_run`, which
 # checks the VSIX of the run and publishes nothing.
 #
+# The stores hold the extension under different publishers, lus on Open
+# VSX and lus-language on the Marketplace, so a release carries one VSIX
+# for each: lus-X.Y.Z.vsix and lus-X.Y.Z-marketplace.vsix. Each job checks
+# the digest of its VSIX against SHA256SUMS and the publisher that its
+# manifest names before it publishes.
+#
 # The marketplace job publishes with the trusted publishing of the
 # Marketplace: vsce exchanges the OpenID Connect token of the job for a
 # Marketplace credential that lasts 15 minutes, so the repository stores
-# no Marketplace token. It runs in the environment release and publishes
+# no Marketplace token. It runs in the environment marketplace, which has
+# no reviewer and allows only the main and rewrite branches. It publishes
 # only when that environment sets the variable MARKETPLACE_PUBLISHER to
 # the publisher of the VSIX (packaging/release/README.md).
 
@@ -74,6 +81,7 @@ jobs:
           fi
           version=${TAG#v}
           vsix="lus-$version.vsix"
+          marketplace="lus-$version-marketplace.vsix"
           publisher="lus-$version-open-vsx-publisher.cjs"
           mkdir anchor candidate
           # A dry run has no tag yet. The release commit leaves the
@@ -97,24 +105,25 @@ jobs:
             process.stdout.write(publisher.sha256);
           ' anchor/release-manifest.json)
           if [ "$DRY_RUN" = true ]; then
-            cp "run-assets/$vsix" "run-assets/$publisher" run-assets/SHA256SUMS candidate/
+            cp "run-assets/$vsix" "run-assets/$marketplace" "run-assets/$publisher" run-assets/SHA256SUMS candidate/
           else
             gh release download "$TAG" \
               --repo "${{ github.repository }}" \
               --pattern "$vsix" \
+              --pattern "$marketplace" \
               --pattern "$publisher" \
               --pattern SHA256SUMS \
               --dir candidate
           fi
           cd candidate
-          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 3
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 4
           test -s SHA256SUMS
-          test -s "$vsix"
-          test -s "$publisher"
-          test ! -L "$vsix"
-          test ! -L "$publisher"
+          for name in "$vsix" "$marketplace" "$publisher"; do
+            test -s "$name"
+            test ! -L "$name"
+          done
           : > PUBLISH-SUMS
-          for name in "$vsix" "$publisher"; do
+          for name in "$vsix" "$marketplace" "$publisher"; do
             awk -v name="$name" '$2 == name { print }' SHA256SUMS > INPUT-SUM
             test "$(wc -l < INPUT-SUM)" -eq 1
             grep -Eq "^[0-9a-f]{64}  ${name//./[.]}$" INPUT-SUM
@@ -122,7 +131,8 @@ jobs:
           done
           sha256sum --check --strict PUBLISH-SUMS
           test "$(sha256sum "$publisher" | awk '{ print $1 }')" = "$expected_publisher_sha"
-          chmod 0444 "$vsix" "$publisher" PUBLISH-SUMS
+          chmod 0444 "$vsix" "$marketplace" "$publisher" PUBLISH-SUMS
+          test "$(unzip -p "$vsix" extension/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).publisher')" = lus
           test "$(stat -c '%a' "$vsix")" = 444
           test "$(stat -c '%a' "$publisher")" = 444
           publisher_path="$PWD/$publisher"
@@ -136,12 +146,13 @@ jobs:
           echo "VSIX_SHA256=$(sha256sum "$vsix" | awk '{ print $1 }')" >> "$GITHUB_ENV"
           echo "PUBLISHER_SHA256=$(sha256sum "$publisher" | awk '{ print $1 }')" >> "$GITHUB_ENV"
           mkdir "$RUNNER_TEMP/verified"
-          cp "$vsix" "$RUNNER_TEMP/verified/"
-          grep " $vsix\$" PUBLISH-SUMS > "$RUNNER_TEMP/verified/VSIX-SUM"
+          cp "$marketplace" "$RUNNER_TEMP/verified/"
+          grep " $marketplace\$" PUBLISH-SUMS > "$RUNNER_TEMP/verified/VSIX-SUM"
           echo "verified=true" >> "$GITHUB_OUTPUT"
-      # The marketplace job takes the VSIX that this job verified. The
-      # upload comes before the publish to Open VSX, so a failure of one
-      # store leaves the other to publish.
+      # The marketplace job takes the Marketplace VSIX that this job
+      # verified and checks it again. The upload comes before the publish
+      # to Open VSX, so a failure of one store leaves the other to
+      # publish.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vscode-verified
@@ -165,9 +176,9 @@ jobs:
     needs: publish-vscode
     if: ${{ !cancelled() && needs.publish-vscode.outputs.verified == 'true' }}
     runs-on: ubuntu-24.04
-    # The trusted publishing policy of the Marketplace names this
-    # environment, so a token from any other job cannot publish.
-    environment: ${{ inputs.dry_run != true && 'release' || '' }}
+    # The trusted publishing policies of the Marketplace name this
+    # environment, so a token from a job outside it cannot publish.
+    environment: ${{ inputs.dry_run != true && 'marketplace' || '' }}
     permissions:
       contents: read
       id-token: write
@@ -205,7 +216,7 @@ jobs:
             echo "A release would publish $vsix of the publisher $publisher to the Visual Studio Marketplace." >> "$GITHUB_STEP_SUMMARY"
             echo "publish=false" >> "$GITHUB_OUTPUT"
           elif [ -z "$MARKETPLACE_PUBLISHER" ]; then
-            echo "::warning::$vsix is not published to the Visual Studio Marketplace, since the environment release does not set MARKETPLACE_PUBLISHER"
+            echo "::warning::$vsix is not published to the Visual Studio Marketplace, since the environment marketplace does not set MARKETPLACE_PUBLISHER"
             echo "publish=false" >> "$GITHUB_OUTPUT"
           elif [ "$MARKETPLACE_PUBLISHER" != "$publisher" ]; then
             echo "::error::the VSIX names the publisher $publisher, and MARKETPLACE_PUBLISHER is $MARKETPLACE_PUBLISHER"

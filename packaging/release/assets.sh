@@ -15,5 +15,5 @@ done
 # extension.
 case "$tag" in
   v*-*) ;;
-  v*) echo "lus-${tag#v}.vsix"; echo "lus-${tag#v}-open-vsx-publisher.cjs" ;;
+  v*) echo "lus-${tag#v}.vsix"; echo "lus-${tag#v}-marketplace.vsix"; echo "lus-${tag#v}-open-vsx-publisher.cjs" ;;
 esac

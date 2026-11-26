@@ -127,39 +127,47 @@ of the environment.
 
 ## The Visual Studio Marketplace
 
-The job `marketplace` of `publish-vscode.yml` publishes the VSIX with
-the trusted publishing of the Marketplace. `vsce publish --oidc` exchanges
-the OpenID Connect token of the job for a Marketplace credential that
-lasts 15 minutes, so the repository stores no Marketplace token and no
-Azure identity takes part. The job runs in the environment `release`, so
-it waits for a reviewer of the environment like the signing jobs. It
-publishes only when the environment sets the variable
-`MARKETPLACE_PUBLISHER` to the publisher that the VSIX names, which is
-`lus` in `packages/vscode/package.json`.
-`packaging/release/vsce/package-lock.json` pins `vsce` and each of its
-dependencies by digest.
+The two stores list the extension under different publishers. Open VSX
+lists it as `lus.lus`. Another account holds the ID `lus` on the Visual
+Studio Marketplace, so the Marketplace lists it as `lus-language.lus`. A
+stable release therefore carries two VSIX files that differ only in the
+publisher of their manifest: `lus-X.Y.Z.vsix` for Open VSX and
+`lus-X.Y.Z-marketplace.vsix` for the Marketplace. `release.yml` packages
+both from `packages/vscode`, whose `package.json` names the publisher
+`lus`. Before each job of `publish-vscode.yml` publishes its VSIX, it
+checks the digest against `SHA256SUMS` and the publisher that the
+manifest names.
 
-Set up the publisher once, with these steps.
+The job `marketplace` publishes with the trusted publishing of the
+Marketplace. `vsce publish --oidc` exchanges the OpenID Connect token of
+the job for a Marketplace credential that lasts 15 minutes, so the
+repository stores no Marketplace token. The job runs in the environment
+`marketplace`, which has no reviewer and allows only the branches `main`
+and `rewrite`, so a release keeps one approval. The job publishes only
+when that environment sets the variable `MARKETPLACE_PUBLISHER` to the
+publisher of the VSIX. `packaging/release/vsce/package-lock.json` pins
+`vsce` and each of its dependencies by digest.
 
-1. Sign in at `https://marketplace.visualstudio.com/manage` with the
-   Microsoft account that is to own the publisher, and select **Create
-   publisher**.
-2. Enter `lus` as the ID and `Lus` as the name, then select **Create**.
-   The ID is the `publisher` of `packages/vscode/package.json` and the
-   first part of the identifier `lus.lus`. It cannot change once the
-   publisher exists. When the form reports the ID as taken, choose
-   another ID and change `publisher` in `packages/vscode/package.json` to
-   match, which also changes the namespace on Open VSX.
-3. On the page of the publisher, open **Trusted Publishing** and create
-   a policy with the repository owner `lus-lang`, the repository `lus`,
-   the workflow `ship.yml`, and the environment `release`. Create a
-   second policy that names the workflow `publish-vscode.yml`. A release
-   calls `publish-vscode.yml` from `ship.yml`. The documentation of the
-   Marketplace does not say which of the two files a policy matches, so
-   the two policies cover both. A manual run of `publish-vscode.yml`
-   matches the second policy.
-4. In the environment `release` of the repository, set the variable
-   `MARKETPLACE_PUBLISHER` to `lus`.
+The publisher `lus-language` exists. The following steps finish the
+setup.
+
+1. On the page of the publisher at
+   `https://marketplace.visualstudio.com/manage`, open **Trusted
+   Publishing** and create a policy with the repository owner
+   `lus-lang`, the repository `lus`, the workflow `ship.yml`, and the
+   environment `marketplace`. Create a second policy that names the
+   workflow `publish-vscode.yml`. A release calls `publish-vscode.yml`
+   from `ship.yml`. The documentation of the Marketplace does not say
+   which of the two files a policy matches, so the two policies cover
+   both. A manual run of `publish-vscode.yml` matches the second policy.
+2. In the environment `marketplace` of the repository, set the variable
+   `MARKETPLACE_PUBLISHER` to `lus-language`.
+
+A release that is published by hand in the GitHub interface starts
+`publish-vscode.yml` on its tag. The environment allows no tag, so that
+run publishes to Open VSX and its job `marketplace` fails. A manual run
+of `publish-vscode.yml` from `rewrite` or `main` then publishes the VSIX
+to the Marketplace.
 
 ## Attestations
 
