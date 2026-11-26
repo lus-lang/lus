@@ -75,27 +75,19 @@ pub fn apply(arena: Allocator, src: []const u8, chunk: ?ast.Chunk, list: []lint.
 
     var ranges: std.ArrayList(Range) = .empty;
     var extra: std.ArrayList(lint.Diagnostic) = .empty;
-    var line_start: usize = 0;
-    var lineno: u32 = 1;
-    while (line_start <= src.len) : (lineno += 1) {
-        const line_end = std.mem.indexOfScalarPos(u8, src, line_start, '\n') orelse src.len;
-        const line = src[line_start..line_end];
-        defer line_start = line_end + 1;
-        const dash = std.mem.indexOf(u8, line, "--") orelse {
-            if (line_end == src.len) break;
-            continue;
-        };
-        const rest = std.mem.trimStart(u8, line[dash..], "-");
-        const after = std.mem.trimStart(u8, rest, " \t");
-        if (!std.mem.startsWith(u8, after, marker)) {
-            if (line_end == src.len) break;
-            continue;
-        }
-        const open = line_start + dash + (line[dash..].len - after.len) + marker.len;
-        const close = std.mem.indexOfScalarPos(u8, src[0..line_end], open, ')') orelse {
-            if (line_end == src.len) break;
-            continue;
-        };
+    // Only real comments count, so the same text inside a string literal
+    // suppresses nothing.
+    const comments: []const @import("lexer.zig").Comment = if (chunk) |c| c.comments else &.{};
+    for (comments) |cm| {
+        const after = std.mem.trimStart(u8, std.mem.trimStart(u8, cm.text, "-"), " \t");
+        if (!std.mem.startsWith(u8, after, marker)) continue;
+        // The text of a comment is a slice of the source, so offsets into
+        // it are offsets into the source.
+        const text_at = @intFromPtr(after.ptr) - @intFromPtr(src.ptr);
+        if (text_at > src.len) continue;
+        const open = text_at + marker.len;
+        const close_rel = std.mem.indexOfScalar(u8, after[marker.len..], ')') orelse continue;
+        const close = open + close_rel;
         var codes: std.ArrayList([]const u8) = .empty;
         var it = std.mem.tokenizeAny(u8, src[open..close], ", \t");
         while (it.next()) |code| {
@@ -113,7 +105,9 @@ pub fn apply(arena: Allocator, src: []const u8, chunk: ?ast.Chunk, list: []lint.
             }
             try codes.append(arena, code);
         }
-        const trailing = std.mem.trim(u8, line[0..dash], " \t").len > 0;
+        const lineno = cm.line;
+        const line_start = if (std.mem.lastIndexOfScalar(u8, src[0..cm.span.start], '\n')) |nl| nl + 1 else 0;
+        const trailing = std.mem.trim(u8, src[line_start..cm.span.start], " \t").len > 0;
         if (trailing) {
             try ranges.append(arena, .{ .first = lineno, .last = lineno, .codes = codes.items });
         } else if (lineno <= header) {
@@ -122,12 +116,11 @@ pub fn apply(arena: Allocator, src: []const u8, chunk: ?ast.Chunk, list: []lint.
             // The statement that starts first after the comment.
             var best: ?ast.Span = null;
             for (stats.spans.items) |sp| {
-                if (sp.start <= line_end) continue;
+                if (sp.start < cm.span.end) continue;
                 if (best == null or sp.start < best.?.start) best = sp;
             }
             if (best) |sp| try ranges.append(arena, .{ .first = lineOf(src, sp.start), .last = lineOf(src, sp.end -| 1), .codes = codes.items });
         }
-        if (line_end == src.len) break;
     }
 
     var out: std.ArrayList(lint.Diagnostic) = .empty;
@@ -207,4 +200,8 @@ test "errors stay and unknown codes are reported" {
 
 test "the codes of other diagnostics stay" {
     try expectCodes("local a = 1 -- lus: allow(shadowed-local)\n", "unused-local@1");
+}
+
+test "an allow inside a string literal is text" {
+    try expectCodes("local s = \"-- lus: allow(unused-lokal, unused-local)\"\n", "unused-local@1");
 }
