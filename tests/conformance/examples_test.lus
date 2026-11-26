@@ -106,7 +106,10 @@ local function example_test(name)
             local only, rest = want:match("^%((%a*)%)(.*)$")
 
             if only then
-                assert(only == "posix" or only == "windows", `$name.lus:$n names the platform "$only"`)
+                assert(
+                    only == "posix" or only == "windows",
+                    `$name.lus:$n names the platform "$only"`
+                )
                 want = only == platform and rest or nil
             end
 
