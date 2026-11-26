@@ -25,6 +25,8 @@
 //! every process it started is killed.
 
 const std = @import("std");
+
+const usage = @import("usage.zig").of("test");
 const lus = @import("../lus.zig");
 const ast = lus.syntax.ast;
 const parser = lus.syntax.parser;
@@ -140,6 +142,9 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         } else if (std.mem.eql(u8, a, "--file-timeout") and i + 1 < args.len) {
             i += 1;
             o.file_timeout_s = try std.fmt.parseInt(i64, args[i], 10);
+        } else if (a.len > 1 and a[0] == '-') {
+            std.debug.print("lus test: unknown option '{s}'\n{s}", .{ a, usage });
+            return 2;
         } else {
             try o.paths.append(gpa, a);
         }

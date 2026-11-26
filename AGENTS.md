@@ -85,6 +85,8 @@ Before posting an issue or committing prose, run `node tools/lint-repo.js`, grep
 
 `spec/stdlib/` contains one `.md` per stdlib entry with YAML frontmatter (`name`, `kind`, `module`, `params`, `returns`, `stability`). Running `node tools/build-lsp.js` generates `packages/language-server/analysis/stdlib_data.lus`, which the language server uses for completions, hover, and linting. `node tools/build-grammar.js` generates both TextMate grammar copies from the same spec. `node tools/build-llms.js --out DIR` builds the agent documentation from the spec, the manual, and `.agents/`: `llms.txt`, `llms-full.txt`, `llms-small.txt`, and a Markdown copy of every manual page.
 
+`spec/tools/cli.json` describes the commands and options of `lus`. `node tools/build-cli.js` generates from it the usage text in `runtime/src/tools/usage.zig`, the shell completions, and the man pages in `packaging/share`, taking the prose of the man pages from the CLI page of the manual. It fails when a parser in `runtime/src/tools` or the manual names an option that the source lacks, or the reverse.
+
 ## Code Style
 
 Zig code is formatted with `zig fmt`, and `mise run lint` checks it. C code in `tests/embed` and in the documentation uses 2-space indentation.

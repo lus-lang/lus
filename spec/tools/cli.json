@@ -1,0 +1,298 @@
+{
+  "$comment": "The command line of lus. tools/build-cli.js describes the format and generates the usage text, the shell completions, and the man pages from it.",
+  "name": "lus",
+  "summary": "run Lus programs and the tools of a Lus project",
+  "synopsis": ["[options] [script [args]]", "<command> [arguments]", "+VERSION [arguments]"],
+  "environment": [
+    { "name": "LUS_PATH", "summary": "the initial value of package.path" },
+    { "name": "LUS_JIT", "summary": "the setting of the JIT compiler", "values": ["on", "off", "baseline", "eager", "opt-eager"] },
+    { "name": "LUS_JIT_THRESHOLD", "summary": "the calls and loop iterations before a function compiles" },
+    { "name": "LUS_HOME", "summary": "the directory of installed releases and the module cache" },
+    { "name": "LUS_RELEASE_URL", "summary": "the address of a mirror of the release index" },
+    { "name": "LUS_GC_THREADS", "summary": "the number of threads that the garbage collector marks with" }
+  ],
+  "commands": [
+    {
+      "name": "run",
+      "default": true,
+      "summary": "run a script (default)",
+      "synopsis": ["[options] [script [args]]"],
+      "options": [
+        { "names": ["-e"], "value": { "name": "stat", "kind": "text" }, "repeat": true, "summary": "run the string stat as a chunk" },
+        { "names": ["-i"], "summary": "enter interactive mode after the script ends" },
+        { "names": ["-l"], "value": { "name": "[g=]mod", "kind": "text" }, "repeat": true, "summary": "require the module mod into the global mod, or into g" },
+        { "names": ["-P", "--pledge"], "value": { "name": "perm", "kind": "permission" }, "repeat": true, "summary": "grant a permission to the script" },
+        { "names": ["-F", "--flag"], "value": { "name": "name[=value]", "kind": "text" }, "repeat": true, "summary": "define a build flag" },
+        { "names": ["--include"], "value": { "name": "path[:alias]", "kind": "path" }, "repeat": true, "summary": "compile a module file or directory at startup for require" },
+        { "names": ["--readonly-env"], "summary": "make the globals and the library tables readonly once the script starts" },
+        { "names": ["--sandbox"], "summary": "seal the permissions after the grants of -P, before any code runs" },
+        { "names": ["--offline"], "summary": "load remote modules only from the module cache" },
+        { "names": ["--reload"], "summary": "revalidate every remote module before the run" },
+        { "names": ["--no-prefetch"], "summary": "download each remote module at its require" },
+        { "names": ["--gc-pause"], "value": { "name": "N", "kind": "number" }, "summary": "heap growth before a collection, in percent" },
+        { "names": ["-W"], "summary": "turn warnings on" },
+        { "names": ["-E"], "summary": "ignore the environment variables of the interpreter" },
+        { "names": ["--dis"], "summary": "print the bytecode of the script instead of running it" },
+        { "names": ["-v", "--version"], "summary": "print the version and exit" },
+        { "names": ["-h", "--help"], "summary": "print the commands and options and exit" }
+      ],
+      "separators": [
+        { "name": "--", "summary": "stop handling options" },
+        { "name": "-", "summary": "stop handling options and run standard input" }
+      ],
+      "positionals": [
+        { "name": "script", "kind": "script", "optional": true },
+        { "name": "args", "kind": "file", "optional": true, "repeat": true }
+      ],
+      "exit": [
+        { "status": 0, "summary": "the script ended normally" },
+        { "status": 1, "summary": "the script raised an error that it did not catch, or an option is malformed" }
+      ]
+    },
+    {
+      "name": "test",
+      "summary": "run the tests of a project",
+      "synopsis": ["[options] [path ...]"],
+      "options": [
+        { "names": ["--filter"], "value": { "name": "TEXT", "kind": "text" }, "summary": "run only the tests whose names contain TEXT" },
+        { "names": ["--list"], "summary": "print the tests and benchmarks without running them" },
+        { "names": ["-u", "--update"], "summary": "rewrite the snapshots that no longer match" },
+        { "names": ["--bench"], "summary": "measure the benchmarks and compare them with the baseline" },
+        { "names": ["--bench-time"], "value": { "name": "S", "kind": "number" }, "summary": "measure each benchmark for S seconds (default 1)" },
+        { "names": ["--coverage"], "summary": "report which lines of the code under test ran" },
+        { "names": ["--coverage-out"], "value": { "name": "FILE", "kind": "file" }, "summary": "also write the coverage to FILE as an lcov tracefile" },
+        { "names": ["--doc"], "summary": "run the lus code blocks of Markdown files and doc comments" },
+        { "names": ["-v"], "summary": "list the skipped tests of passing files too" },
+        { "names": ["--json"], "summary": "print one JSON record per test" },
+        { "names": ["--jobs"], "value": { "name": "N", "kind": "number" }, "summary": "run at most N files at once" },
+        { "names": ["--timeout"], "value": { "name": "S", "kind": "number" }, "summary": "stop a file that writes no output for S seconds (default 60)" },
+        { "names": ["--file-timeout"], "value": { "name": "S", "kind": "number" }, "summary": "stop a file that runs longer than S seconds in all" },
+        { "names": ["--run-one"], "value": { "name": "FILE", "kind": "file" }, "hidden": true, "summary": "run one file in the child process of a test run" },
+        { "names": ["--display"], "value": { "name": "NAME", "kind": "text" }, "hidden": true, "summary": "the name of the file in the records of a child process" },
+        { "names": ["--bench-ms"], "value": { "name": "MS", "kind": "number" }, "hidden": true, "summary": "the measuring time of a benchmark in a child process" }
+      ],
+      "positionals": [{ "name": "path", "kind": "path", "optional": true, "repeat": true }],
+      "exit": [
+        { "status": 0, "summary": "every file passed" },
+        { "status": 1, "summary": "a test failed or a file could not run" },
+        { "status": 2, "summary": "a named path does not exist or an option is malformed" }
+      ]
+    },
+    {
+      "name": "fmt",
+      "summary": "format source files",
+      "synopsis": ["[--check] [--write] [--strict] [--indent N] [path ...]"],
+      "options": [
+        { "names": ["--write"], "summary": "rewrite the files in place" },
+        { "names": ["--check"], "summary": "list the files that are not formatted and change nothing" },
+        { "names": ["--strict"], "summary": "write the strict style that lus check --strict checks" },
+        { "names": ["--indent"], "value": { "name": "N", "kind": "number" }, "summary": "spaces per indentation level (default 4)" }
+      ],
+      "positionals": [{ "name": "path", "kind": "path", "optional": true, "repeat": true }],
+      "exit": [
+        { "status": 0, "summary": "every file was formatted, or with --check is formatted already" },
+        { "status": 1, "summary": "a file would change or cannot be parsed" },
+        { "status": 2, "summary": "an option is malformed or a file cannot be read or written" }
+      ]
+    },
+    {
+      "name": "check",
+      "summary": "find errors and likely mistakes without running the code",
+      "synopsis": ["[--json] [--fix] [--strict] [--list] [--explain code] [path ...]"],
+      "options": [
+        { "names": ["--json"], "summary": "print the diagnostics as one JSON array" },
+        { "names": ["--strict"], "summary": "also report departures from the strict style" },
+        { "names": ["--list"], "summary": "print every diagnostic code and exit" },
+        { "names": ["--fix"], "summary": "apply the rewrites that keep behavior, then report the rest" },
+        { "names": ["--explain"], "value": { "name": "code", "kind": "text" }, "summary": "explain a diagnostic code with an example and exit" }
+      ],
+      "positionals": [{ "name": "path", "kind": "path", "optional": true, "repeat": true }],
+      "exit": [
+        { "status": 0, "summary": "no error or warning was reported" },
+        { "status": 1, "summary": "an error or a warning was reported" },
+        { "status": 2, "summary": "an option is malformed or a file cannot be read" }
+      ]
+    },
+    {
+      "name": "doc",
+      "summary": "generate API documentation from doc comments",
+      "synopsis": ["[-o DIR] [--format md|json|html] file ..."],
+      "options": [
+        { "names": ["-o"], "value": { "name": "DIR", "kind": "dir" }, "summary": "write one file per module into DIR" },
+        { "names": ["--format"], "value": { "name": "md|json|html", "kind": "enum", "values": ["md", "json", "html"] }, "summary": "the output format (default md)" }
+      ],
+      "positionals": [{ "name": "file", "kind": "script", "repeat": true }],
+      "exit": [
+        { "status": 0, "summary": "the documentation was written" },
+        { "status": 1, "summary": "a file does not parse" },
+        { "status": 2, "summary": "an option is malformed or a file cannot be read or written" }
+      ]
+    },
+    {
+      "name": "ast",
+      "summary": "print the syntax tree of a file as JSON",
+      "synopsis": ["[--no-comments] [--no-recover] file"],
+      "options": [
+        { "names": ["--no-comments"], "summary": "omit comments from the tree" },
+        { "names": ["--no-recover"], "summary": "stop at the first syntax error" }
+      ],
+      "positionals": [{ "name": "file", "kind": "script" }],
+      "exit": [
+        { "status": 0, "summary": "the file parsed without errors" },
+        { "status": 1, "summary": "the tree lists syntax errors" },
+        { "status": 2, "summary": "an option is malformed or the file cannot be read" }
+      ]
+    },
+    {
+      "name": "build",
+      "summary": "bundle a script and its modules into a standalone executable",
+      "synopsis": ["[options] script"],
+      "options": [
+        { "names": ["-o"], "value": { "name": "FILE", "kind": "file" }, "summary": "write the executable to FILE" },
+        { "names": ["-P", "--pledge"], "value": { "name": "perm", "kind": "permission" }, "repeat": true, "summary": "grant a permission every time the executable runs" },
+        { "names": ["-F", "--flag"], "value": { "name": "name[=value]", "kind": "text" }, "repeat": true, "summary": "define a build flag for the bundled code" },
+        { "names": ["--include"], "value": { "name": "path[:alias]", "kind": "path" }, "repeat": true, "summary": "bundle a module file or directory" },
+        { "names": ["--aot"], "summary": "compile the program to machine code from a training run" },
+        { "names": ["--train"], "value": { "name": "args", "kind": "text" }, "summary": "the arguments of the training run, separated by spaces" },
+        { "names": ["--aot-keep-jit"], "summary": "start the executable from lus, which keeps the JIT" },
+        { "names": ["--aot-static"], "summary": "compile ahead of time for a system without executable memory" },
+        { "names": ["--runtime"], "value": { "name": "FILE", "kind": "file" }, "summary": "start the executable from the runtime FILE" },
+        { "names": ["--link-object"], "value": { "name": "FILE", "kind": "file" }, "summary": "link the executable from the link object FILE" },
+        { "names": ["--link-all"], "summary": "keep every library function of the link object" },
+        { "names": ["--link-map"], "value": { "name": "FILE", "kind": "file" }, "summary": "write the size of each linked part of the runtime to FILE" }
+      ],
+      "positionals": [{ "name": "script", "kind": "script" }],
+      "exit": [
+        { "status": 0, "summary": "the executable was written" },
+        { "status": 1, "summary": "a module cannot be bundled or the executable cannot be written" },
+        { "status": 2, "summary": "an option is malformed" }
+      ]
+    },
+    {
+      "name": "compile",
+      "summary": "compile a script to a binary chunk",
+      "synopsis": ["[options] script"],
+      "options": [
+        { "names": ["-o"], "value": { "name": "FILE", "kind": "file" }, "summary": "write the chunk to FILE (default: the script with .lusc)" },
+        { "names": ["-s", "--strip"], "summary": "omit debug information" },
+        { "names": ["-F", "--flag"], "value": { "name": "name[=value]", "kind": "text" }, "repeat": true, "summary": "define a build flag, fixed in the chunk" },
+        { "names": ["-P", "--pledge"], "value": { "name": "perm", "kind": "permission" }, "repeat": true, "summary": "grant a permission to the initializers of <meta> variables" }
+      ],
+      "positionals": [{ "name": "script", "kind": "script" }],
+      "exit": [
+        { "status": 0, "summary": "the chunk was written" },
+        { "status": 1, "summary": "the script does not compile or the chunk cannot be written" },
+        { "status": 2, "summary": "an option is malformed" }
+      ]
+    },
+    {
+      "name": "debug",
+      "summary": "run a script under a debugger",
+      "synopsis": ["[--stdio | --port N] [-P perm]... [script [args]]"],
+      "options": [
+        { "names": ["--stdio"], "summary": "speak the Debug Adapter Protocol on standard input and output (default)" },
+        { "names": ["--port"], "value": { "name": "N", "kind": "number" }, "summary": "accept one client on 127.0.0.1:N" },
+        { "names": ["-P", "--pledge"], "value": { "name": "perm", "kind": "permission" }, "repeat": true, "summary": "grant a permission to the program" }
+      ],
+      "positionals": [
+        { "name": "script", "kind": "script", "optional": true },
+        { "name": "args", "kind": "file", "optional": true, "repeat": true }
+      ],
+      "exit": [
+        { "status": 0, "summary": "the session ended" },
+        { "status": 1, "summary": "the protocol channel cannot be opened or the session failed" },
+        { "status": 2, "summary": "an option is malformed" }
+      ]
+    },
+    {
+      "name": "help",
+      "summary": "print the standard library reference for a name",
+      "synopsis": ["[name | module | --search text]"],
+      "options": [
+        { "names": ["-s", "--search"], "value": { "name": "text", "kind": "text" }, "summary": "list the entries whose name or description contains text" }
+      ],
+      "positionals": [{ "name": "name", "kind": "text", "optional": true }],
+      "exit": [
+        { "status": 0, "summary": "the reference was printed" },
+        { "status": 1, "summary": "no entry has the name" },
+        { "status": 2, "summary": "an option is malformed" }
+      ]
+    },
+    {
+      "name": "agents",
+      "summary": "set a project up for coding agents",
+      "synopsis": ["init [dir]"],
+      "subcommands": [
+        { "name": "init", "summary": "write the Lus skills and an AGENTS.md section into a project", "positionals": [{ "name": "dir", "kind": "dir", "optional": true }] }
+      ],
+      "exit": [
+        { "status": 0, "summary": "the skills were written" },
+        { "status": 1, "summary": "a file cannot be written" },
+        { "status": 2, "summary": "the arguments are malformed" }
+      ]
+    },
+    {
+      "name": "tree",
+      "summary": "print the modules a script requires, as a tree",
+      "synopsis": ["[--json] file"],
+      "options": [{ "names": ["--json"], "summary": "print the tree as JSON" }],
+      "positionals": [{ "name": "file", "kind": "script" }],
+      "exit": [
+        { "status": 0, "summary": "every module resolved" },
+        { "status": 1, "summary": "a name resolves to no file or a file does not parse" },
+        { "status": 2, "summary": "an option is malformed or the file cannot be opened" }
+      ]
+    },
+    {
+      "name": "lsp",
+      "summary": "run the language server on standard input and output",
+      "synopsis": ["[--version]"],
+      "help": false,
+      "options": [{ "names": ["--version"], "summary": "print the version of the server and exit" }],
+      "exit": [
+        { "status": 0, "summary": "the client sent shutdown before the end of the input" },
+        { "status": 1, "summary": "the input ended without a shutdown" }
+      ]
+    },
+    {
+      "name": "version",
+      "summary": "install, list, and select releases of Lus",
+      "synopsis": [
+        "[list [--remote [channel]] | install request | use request | remove version | which [request]] [--json]",
+        "+request [arguments]"
+      ],
+      "options": [{ "names": ["--json"], "summary": "print one JSON object per command" }],
+      "subcommands": [
+        {
+          "name": "list",
+          "summary": "list the installed releases",
+          "options": [
+            { "names": ["--remote"], "value": { "name": "channel", "kind": "enum", "values": ["stable", "unstable"], "optional": true }, "summary": "list the published releases of a channel" }
+          ]
+        },
+        { "name": "install", "summary": "download, verify, and install a release", "positionals": [{ "name": "request", "kind": "enum", "values": ["stable", "unstable"] }] },
+        { "name": "use", "summary": "make an installed release the default", "positionals": [{ "name": "request", "kind": "installed" }] },
+        { "name": "remove", "summary": "delete an installed release", "positionals": [{ "name": "version", "kind": "installed" }] },
+        { "name": "which", "summary": "print the path of an installed release", "positionals": [{ "name": "request", "kind": "installed", "optional": true }] }
+      ],
+      "exit": [
+        { "status": 0, "summary": "the command succeeded" },
+        { "status": 1, "summary": "a download or a file operation failed" },
+        { "status": 2, "summary": "the arguments are malformed" },
+        { "status": 3, "summary": "no release matches the request" },
+        { "status": 4, "summary": "a signature or a digest does not verify" },
+        { "status": 5, "summary": "the release that remove names is the default" }
+      ]
+    },
+    {
+      "name": "completions",
+      "summary": "print a shell completion script",
+      "synopsis": ["bash|zsh|fish|powershell"],
+      "positionals": [{ "name": "shell", "kind": "enum", "values": ["bash", "zsh", "fish", "powershell"] }],
+      "exit": [
+        { "status": 0, "summary": "the script was printed" },
+        { "status": 2, "summary": "the shell is missing or unknown" }
+      ]
+    }
+  ]
+}

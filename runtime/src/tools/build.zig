@@ -46,24 +46,7 @@ const modtree = lus.modtree;
 const remote = lus.remote;
 const Allocator = std.mem.Allocator;
 
-const usage =
-    \\usage: lus build [options] SCRIPT
-    \\
-    \\Options:
-    \\  -o FILE                 write the executable to FILE
-    \\  -P perm                 grant a permission at every run (also --pledge)
-    \\  -F name[=value]         define a compile-time flag (also --flag)
-    \\  --include path[:alias]  bundle a module file or directory
-    \\  --runtime FILE          start the executable from FILE, such as lus-runtime
-    \\  --aot                   compile the program ahead of time from a training run
-    \\  --train ARGS            the arguments of the training run, separated by spaces
-    \\  --aot-keep-jit          keep the JIT, so code the training never reached compiles
-    \\  --aot-static            compile ahead of time for a target without executable memory
-    \\  --link-object FILE      link the executable from FILE, keeping only what the program reaches
-    \\  --link-all              link every builtin of the link object
-    \\  --link-map FILE         write the size of each linked atom and what reached it
-    \\
-;
+const usage = @import("usage.zig").of("build");
 
 const Options = struct {
     output: ?[]const u8 = null,

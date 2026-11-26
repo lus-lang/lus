@@ -15,6 +15,8 @@ packages/vscode/syntaxes/lus.tmLanguage.json linguist-generated
 runtime/src/lib/winzones.zig linguist-generated
 runtime/src/lib/data/** linguist-generated
 tests/bench/compare/results.json linguist-generated
+runtime/src/tools/usage.zig linguist-generated
+packaging/share/** linguist-generated
 
 # GitHub leaves vendored sources out of the language statistics.
 runtime/vendor/** linguist-vendored

@@ -3,7 +3,7 @@ order: 4
 title: CLI
 icon: terminal
 group: use
-shortdesc: "Every lus command and option: run, test, fmt, check, doc, ast, build, compile, debug, help, and agents."
+shortdesc: "Every command and option of the lus executable, with its shell completions and man pages."
 ---
 
 The `lus` executable runs Lus programs and provides the tools of a Lus project as commands, such as the test runner, the formatter, and the checker. [Testing](/manual/testing) and [Developer tools](/manual/tools) describe how to use the tools.
@@ -31,7 +31,10 @@ lus +VERSION [arguments]
 | [`debug`](#lus-debug) | Run a script under a debugger. |
 | [`help`](#lus-help) | Print the standard library reference for a name. |
 | [`agents`](#lus-agents) | Set a project up for coding agents. |
+| [`tree`](#lus-tree) | Print the modules that a script requires, as a tree. |
+| [`lsp`](#lus-lsp) | Run the language server. |
 | [`version`](#lus-version) | Install, list, and select releases of Lus. |
+| [`completions`](#lus-completions) | Print the completion script of a shell. |
 
 ### Options
 
@@ -236,7 +239,11 @@ Adds instructions for writing and testing Lus to a project, where coding agents 
 lus tree [--json] file
 ```
 
-Prints the modules that `file` requires, and the modules they require, as a tree. The tree follows the calls of `require` whose argument is a string literal. It resolves each name against the templates of `LUS_PATH`, or of the default `package.path` when `LUS_PATH` is unset, relative to the current directory. Each line names a module and the file it resolved to. A module of the standard library, a remote module, and a name that resolves to no file end their branch. A module that the tree already showed is marked `(*)`. A file that also loads modules in a way the tree cannot follow, such as `require(name)` or `load`, is marked `(dynamic)`. With `--json`, the tree is one JSON object per module with the fields `name`, `kind`, `path`, `dynamic`, `repeat`, and `requires`. The exit status is 1 when a name resolves to no file or a file does not parse.
+Prints the modules that `file` requires, and the modules they require, as a tree. The tree follows the calls of `require` whose argument is a string literal. It resolves each name against the templates of `LUS_PATH`, or of the default `package.path` when `LUS_PATH` is unset, relative to the current directory. Each line names a module and the file it resolved to. A module of the standard library, a remote module, and a name that resolves to no file end their branch. A module that the tree already showed is marked `(*)`. A file that also loads modules in a way the tree cannot follow, such as `require(name)` or `load`, is marked `(dynamic)`. The exit status is 1 when a name resolves to no file or a file does not parse.
+
+| Option | Effect |
+| --- | --- |
+| `--json` | Print the tree as one JSON object per module with the fields `name`, `kind`, `path`, `dynamic`, `repeat`, and `requires`. |
 
 ## lus lsp
 
@@ -244,7 +251,11 @@ Prints the modules that `file` requires, and the modules they require, as a tree
 lus lsp [--version]
 ```
 
-Runs the language server that is built into `lus`, which speaks the Language Server Protocol on standard input and output for files with the `.lus` extension and the language id `lus`. An editor or a coding agent starts it as the command `lus lsp`, so the server always matches the installed version. `--version` prints the version of the server and exits.
+Runs the language server that is built into `lus`, which speaks the Language Server Protocol on standard input and output for files with the `.lus` extension and the language id `lus`. An editor or a coding agent starts it as the command `lus lsp`, so the server always matches the installed version.
+
+| Option | Effect |
+| --- | --- |
+| `--version` | Print the version of the server and exit. |
 
 ## lus version
 
@@ -282,6 +293,25 @@ lus +unstable app.lus
 ```
 
 `--json` prints one JSON object per command for scripts. The output, the exit statuses, and the layout of the Lus home are the same in every release from 2.0 on. The exit status is 0 on success, 1 when a download or a file operation fails, 2 for malformed arguments, 3 when no release matches the request, 4 when a signature or a digest does not verify, and 5 when `remove` names the default release.
+
+## lus completions
+
+```
+lus completions bash|zsh|fish|powershell
+```
+
+Prints the script that completes the commands, options, and arguments of `lus` in a shell, such as the options of `lus test`, the formats of `lus doc --format`, and the permissions after `-P`. The script describes the running `lus`, so write it again after an upgrade that adds a command or an option. Each shell reads completions from a place of its own, which the following commands write to.
+
+| Shell | Setup |
+| --- | --- |
+| `bash` | `lus completions bash > ~/.local/share/bash-completion/completions/lus`, which bash-completion loads the first time `lus` is completed. |
+| `zsh` | `lus completions zsh > ~/.zfunc/_lus`, with `fpath+=~/.zfunc` in `~/.zshrc` before `compinit` runs. |
+| `fish` | `lus completions fish > ~/.config/fish/completions/lus.fish`. |
+| `powershell` | `lus completions powershell \| Out-String \| Invoke-Expression` in the file that `$PROFILE` names. |
+
+The exit status is 2 when the shell is missing or unknown.
+
+The release archives carry the same scripts and a man page for `lus` and for each command, such as `lus-test`, under `share`, at the paths that Linux distributions and Homebrew install from: `share/man/man1`, `share/bash-completion/completions`, `share/zsh/site-functions`, and `share/fish/vendor_completions.d`. `zig build install` puts the same tree under its prefix, so a package of a distribution copies it unchanged. The install script unpacks a release into `~/.lus/versions/VERSION`, so `man lus` finds the pages once `MANPATH` names `~/.lus/versions/VERSION/share/man`.
 
 ## Related pages
 

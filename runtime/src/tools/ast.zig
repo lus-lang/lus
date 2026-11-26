@@ -18,7 +18,7 @@ const ast = lus.syntax.ast;
 const api = lus.api;
 const codegen = lus.compile.codegen;
 
-const usage = "usage: lus ast [--no-comments] [--no-recover] FILE\n";
+const usage = @import("usage.zig").of("ast");
 
 pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     const gpa = init.gpa;

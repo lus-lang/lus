@@ -66,6 +66,9 @@ pub fn build(b: *std.Build) void {
     // build --aot` tells its addresses apart from integers of the program.
     if (target.result.os.tag == .linux and target.result.ptrBitWidth() == 64) exe.pie = true;
     b.installArtifact(exe);
+    // The man pages and the shell completions, at the paths under the
+    // prefix where distributions install them (../packaging/share).
+    b.installDirectory(.{ .source_dir = b.path("../packaging/share"), .install_dir = .prefix, .install_subdir = "share" });
 
     const run = b.addRunArtifact(exe);
     b.step("run", "Run the lus interpreter").dependOn(&run.step);
@@ -279,6 +282,18 @@ pub fn build(b: *std.Build) void {
     version_run.addArtifactArg(exe);
     version_run.addFileInput(b.path("../tests/lib/release.mjs"));
     version_step.dependOn(&version_run.step);
+
+    // The command line against its source, ../spec/tools/cli.json: the
+    // usage text, the options, and the completions (needs node).
+    const cli_step = b.step("test-cli", "Check the usage text, the options, and the completions of lus against spec/tools/cli.json");
+    const cli_run = b.addSystemCommand(&.{"node"});
+    cli_run.setName("lus command line (spec/tools/cli.json)");
+    cli_run.addFileArg(b.path("../tests/cli/cli.test.mjs"));
+    cli_run.addArtifactArg(exe);
+    cli_run.addFileInput(b.path("../spec/tools/cli.json"));
+    cli_run.addFileInput(b.path("../tools/build-cli.js"));
+    cli_run.addFileInput(b.path("../packages/site/src/manual/cli.mdx"));
+    cli_step.dependOn(&cli_run.step);
 
     // Remote requires against an atmosphere server and a generic server
     // served on loopback by ../tests/remote (needs node).
@@ -515,7 +530,8 @@ fn fixtureSuite(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
 /// The documentation that `lus help` and `lus agents init` read: every
 /// entry of `../spec/stdlib` and every file of the agent skills in
 /// `../.agents/skills`, embedded in a generated module whose `stdlib`
-/// and `skills` lists pair a relative path with the file contents.
+/// and `skills` lists pair a relative path with the file contents. The
+/// module also holds the scripts that `lus completions` prints.
 fn agentDocsModule(b: *std.Build) *std.Build.Module {
     const wf = b.addWriteFiles();
     var src: std.ArrayList(u8) = .empty;
@@ -572,6 +588,20 @@ fn agentDocsModule(b: *std.Build) *std.Build.Module {
     _ = wf.add("language_server.deflate", ls.compressed);
     w.line(&src, b, "pub const language_server_len = {d};\n", .{ls.raw_len});
     w.line(&src, b, "pub const language_server = @embedFile(\"language_server.deflate\");\n", .{});
+    // The shell completions of `lus completions`, which tools/build-cli.js
+    // generates into ../packaging/share.
+    w.line(&src, b, "pub const completions = struct {{\n", .{});
+    for ([_]struct { name: []const u8, rel: []const u8 }{
+        .{ .name = "bash", .rel = "bash-completion/completions/lus" },
+        .{ .name = "zsh", .rel = "zsh/site-functions/_lus" },
+        .{ .name = "fish", .rel = "fish/vendor_completions.d/lus.fish" },
+        .{ .name = "powershell", .rel = "powershell/lus.ps1" },
+    }) |c| {
+        const dest = b.fmt("completions/{s}", .{c.name});
+        _ = wf.addCopyFile(b.path(b.fmt("../packaging/share/{s}", .{c.rel})), dest);
+        w.line(&src, b, "    pub const {s} = @embedFile(\"{s}\");\n", .{ c.name, dest });
+    }
+    w.line(&src, b, "}};\n", .{});
     const root = wf.add("agent_docs.zig", src.items);
     return b.createModule(.{ .root_source_file = root });
 }

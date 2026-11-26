@@ -18,18 +18,7 @@ const codegen = lus.compile.codegen;
 const dump = lus.compile.dump;
 const Allocator = std.mem.Allocator;
 
-const usage =
-    \\usage: lus compile [options] SCRIPT
-    \\
-    \\Compiles SCRIPT to a binary chunk.
-    \\
-    \\Options:
-    \\  -o FILE           write the chunk to FILE (default: SCRIPT.lusc)
-    \\  -s, --strip       leave out debug information
-    \\  -F name[=value]   define a compile-time flag (also --flag)
-    \\  -P perm           grant a permission to <meta> initializers (also --pledge)
-    \\
-;
+const usage = @import("usage.zig").of("compile");
 
 const Options = struct {
     output: ?[]const u8 = null,

@@ -4,7 +4,7 @@
 //!   lus <command> [arguments]
 //!
 //! Commands: run (default), test, fmt, check, ast, doc, debug, build,
-//! compile, help, agents.
+//! compile, help, agents, tree, lsp, version, completions.
 
 const std = @import("std");
 const pledge = @import("lus").vm.pledge;
@@ -45,50 +45,9 @@ pub const std_options: std.Options = .{ .enable_segfault_handler = lus.has_compi
 /// Edge coverage, in a `-Dcoverage=true` build.
 const coverage = lus.coverage;
 
-const usage =
-    \\usage: lus [options] [script [args]]
-    \\       lus <command> [arguments]
-    \\
-    \\Commands:
-    \\  run       run a script (default)
-    \\  test      run tests (*_test.lus files and *_test functions)
-    \\  fmt       format source files
-    \\  check     check source files for errors and lint warnings
-    \\  ast       print the syntax tree of a file as JSON
-    \\  doc       generate API documentation from doc comments
-    \\  debug     run a script under the debug adapter protocol
-    \\  build     bundle a script into a standalone executable
-    \\  compile   compile a script to a binary chunk
-    \\  help      print the standard library reference for a name
-    \\  agents    set a project up for coding agents (agents init)
-    \\  tree      print the modules a script requires, as a tree
-    \\  lsp       run the language server on standard input and output
-    \\
-    \\Options:
-    \\  -e stat          execute string 'stat'
-    \\  -i               enter interactive mode after running 'script'
-    \\  -l mod           require library 'mod' into global 'mod'
-    \\  -l g=mod         require library 'mod' into global 'g'
-    \\  -v, --version    show version information
-    \\  -h, --help       show this help
-    \\  -E               ignore environment variables
-    \\  -W               turn warnings on
-    \\  -P perm          grant a permission (also --pledge perm)
-    \\  -F name[=value]  define a compile-time flag (also --flag)
-    \\  --include path[:alias]
-    \\                   preinclude a module file or directory for require
-    \\  --readonly-env   freeze the global environment after startup
-    \\  --sandbox        seal the permissions after the -P grants, before
-    \\                   any code runs, so the program can acquire no more
-    \\  --offline        load remote modules only from the module cache
-    \\  --reload         revalidate every remote module before the run
-    \\  --no-prefetch    fetch remote modules at their require
-    \\  --gc-pause N     heap growth before a collection, in percent
-    \\  --dis            print bytecode instead of running
-    \\  --               stop handling options
-    \\  -                stop handling options and run standard input
-    \\
-;
+/// The usage text, generated with the option table it describes from
+/// `spec/tools/cli.json` by `tools/build-cli.js`.
+const usage = lus.tools.usage.of("run");
 
 const Action = union(enum) {
     exec: []const u8,
@@ -200,6 +159,22 @@ const options = [_]OptSpec{
     .{ .short = null, .long = "no-prefetch", .takes_arg = false, .apply = optNoPrefetch },
 };
 
+// The option table has the options of `run` in `spec/tools/cli.json`,
+// with the same names and the same values, so the usage text describes
+// every option that `parseArgs` reads.
+comptime {
+    const spec = lus.tools.usage.run_options;
+    if (spec.len != options.len) @compileError("main.zig and spec/tools/cli.json list different options");
+    for (spec) |want| {
+        const found = for (options) |have| {
+            const short_ok = if (want.short) |c| (have.short != null and have.short.?[0] == c) else have.short == null;
+            const long_ok = if (want.long) |n| (have.long != null and std.mem.eql(u8, have.long.?, n)) else have.long == null;
+            if (short_ok and long_ok) break have.takes_arg == want.takes_value;
+        } else false;
+        if (!found) @compileError("an option of spec/tools/cli.json is missing from main.zig or takes a different value");
+    }
+}
+
 fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8, start: usize) !?Cli {
     var c: Cli = .{};
     var i = start;
@@ -310,7 +285,7 @@ fn mainWithCompiler(init: std.process.Init, args: []const []const u8) !u8 {
     // Subcommands.
     if (args.len >= 2) {
         const cmd = args[1];
-        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile", "help", "agents", "tree", "version" };
+        const tools = [_][]const u8{ "test", "fmt", "check", "ast", "doc", "debug", "build", "compile", "help", "agents", "tree", "version", "completions" };
         for (tools) |t| {
             if (std.mem.eql(u8, cmd, t)) {
                 defer reportAllocs();
@@ -416,7 +391,7 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
     defer cli.flags.deinit(gpa);
     defer cli.includes.deinit(gpa);
     if (cli.help) {
-        std.debug.print("{s}", .{usage});
+        std.Io.File.stdout().writeStreamingAll(io, usage) catch {};
         return 0;
     }
     if (cli.version) {

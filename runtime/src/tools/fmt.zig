@@ -22,18 +22,7 @@ const ast = lus.syntax.ast;
 const api = lus.api;
 const codegen = lus.compile.codegen;
 
-const usage =
-    \\usage: lus fmt [--check] [--write] [--strict] [--indent N] [FILE...]
-    \\
-    \\  --check     report the files that are not formatted, change nothing
-    \\  --write     rewrite the files in place
-    \\  --strict    write the strict style that lus check --strict checks
-    \\  --indent N  spaces per indentation level (default 4)
-    \\
-    \\A directory stands for every .lus file below it. With no FILE, or
-    \\when FILE is -, read standard input.
-    \\
-;
+const usage = @import("usage.zig").of("fmt");
 
 pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     const gpa = init.gpa;
@@ -63,7 +52,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             }
             indent = n;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            std.debug.print("{s}", .{usage});
+            std.Io.File.stdout().writeStreamingAll(init.io, usage) catch {};
             return 0;
         } else if (a.len > 1 and a[0] == '-') {
             std.debug.print("lus fmt: unknown option '{s}'\n{s}", .{ a, usage });

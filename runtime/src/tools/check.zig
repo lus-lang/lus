@@ -44,19 +44,7 @@ const explain = @import("../syntax/explain.zig");
 const suppress = @import("../syntax/suppress.zig");
 const fixes = @import("../syntax/fix.zig");
 
-const usage =
-    \\usage: lus check [--json] [--fix] [--strict] [--list] [--explain CODE] [FILE...]
-    \\
-    \\  --json          print the diagnostics as a JSON array
-    \\  --fix           apply the rewrites that keep behavior, then report the rest
-    \\  --strict        also report the layout of lus fmt --strict and the Lus forms
-    \\  --list          print every diagnostic code and exit
-    \\  --explain CODE  explain a diagnostic code with an example and exit
-    \\
-    \\A directory stands for every .lus file below it. With no FILE, or
-    \\when FILE is -, read standard input.
-    \\
-;
+const usage = @import("usage.zig").of("check");
 
 /// The globals `lus test` defines in a test file.
 pub const test_globals = [_][]const u8{ "raises", "same", "skip", "snapshot", "TEST_DIR" };
@@ -88,7 +76,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         } else if (std.mem.eql(u8, a, "--explain") or std.mem.startsWith(u8, a, "--explain=")) {
             return explainCode(gpa, io, args, a);
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            std.debug.print("{s}", .{usage});
+            std.Io.File.stdout().writeStreamingAll(init.io, usage) catch {};
             return 0;
         } else if (a.len > 1 and a[0] == '-') {
             std.debug.print("lus check: unknown option '{s}'\n{s}", .{ a, usage });

@@ -36,14 +36,7 @@ const ast = lus.syntax.ast;
 const parser = lus.syntax.parser;
 const Allocator = std.mem.Allocator;
 
-const usage =
-    \\usage: lus doc [-o DIR] [--format md|json|html] FILE...
-    \\
-    \\  -o DIR                  write one file per module into DIR
-    \\  --format md|json|html   output format (default md). html needs -o and
-    \\                          adds index.html and a search index
-    \\
-;
+const usage = @import("usage.zig").of("doc");
 
 const Format = enum { md, json, html };
 const html = @import("doc_html.zig");
@@ -107,7 +100,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
                 return 2;
             };
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            std.debug.print("{s}", .{usage});
+            std.Io.File.stdout().writeStreamingAll(init.io, usage) catch {};
             return 0;
         } else if (a.len > 1 and a[0] == '-') {
             std.debug.print("lus doc: unknown option '{s}'\n{s}", .{ a, usage });

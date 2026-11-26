@@ -28,15 +28,7 @@ const package = @import("../lib/package.zig");
 const remote = @import("../remote.zig");
 const Allocator = std.mem.Allocator;
 
-const usage =
-    \\usage: lus tree [--json] FILE
-    \\
-    \\Prints the modules that FILE requires, and the modules they require,
-    \\as a tree. Names resolve against LUS_PATH, or the default package.path
-    \\when it is unset, relative to the current directory. --json prints the
-    \\tree as JSON.
-    \\
-;
+const usage = @import("usage.zig").of("tree");
 
 pub const Kind = enum { file, builtin, remote, missing, invalid };
 
@@ -191,7 +183,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     var file: ?[]const u8 = null;
     for (args) |a| {
         if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            std.debug.print("{s}", .{usage});
+            std.Io.File.stdout().writeStreamingAll(init.io, usage) catch {};
             return 0;
         } else if (std.mem.eql(u8, a, "--json")) {
             json = true;

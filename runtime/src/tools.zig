@@ -1,24 +1,20 @@
 //! Developer tools behind `lus <command>`: test, fmt, check, ast, doc,
-//! debug, build, compile, help, agents, tree, version.
+//! debug, build, compile, help, agents, tree, version, completions.
 
 const std = @import("std");
 
-/// Usage for the commands that read their options themselves.
-const usages = .{
-    .{ "test", "usage: lus test [-u] [--doc] [--bench] [--bench-time SECONDS] [--coverage] [--coverage-out FILE] [--list] [--filter TEXT] [--jobs N] [--timeout SECONDS] [--file-timeout SECONDS] [--json] [-v] [PATH...]\n\nRuns every *_test.lus file under the given paths (default: the current\ndirectory). Each top-level function ending in _test is a test. Each one\nending in _bench is a benchmark, which a plain run calls once. --bench\nmeasures the benchmarks instead, each for --bench-time (default: 1 second),\nand compares them with the baseline that --bench -u saves. --coverage\nreports which lines of the code under test ran. --coverage-out also writes\nthem as an lcov file. --list prints the tests and benchmarks without running\nthem. -u updates snapshots. --doc runs the lus code blocks of Markdown files\nand of the doc comments of .lus files instead, skipping blocks fenced as\n```lus nocheck. --timeout stops a file that writes no output for that long\n(default: 60 seconds). --file-timeout stops a file that runs longer than\nthat in all (default: ten times the timeout).\n" },
-    .{ "ast", "usage: lus ast [--no-comments] [--no-recover] FILE\n\nPrints the syntax tree of FILE as JSON.\n" },
-    .{ "build", "usage: lus build [-o OUT] [-P PERM]... [-F NAME=VALUE]... [--include PATH[:ALIAS]]... MAIN.lus\n\nBundles MAIN.lus and the modules it requires into a standalone executable.\n" },
-    .{ "compile", "usage: lus compile [-o OUT] [-s] [-F NAME=VALUE]... SCRIPT\n\nCompiles SCRIPT to a binary chunk (default output: SCRIPT.lusc). -s leaves out\ndebug information.\n" },
-};
+/// The usage text of every command, generated from
+/// `spec/tools/cli.json` by `tools/build-cli.js`.
+pub const usage = @import("tools/usage.zig");
 
 /// The embedded language server of `lus lsp`, which `main.zig` runs.
 pub const lsp = @import("tools/lsp.zig");
 
 pub fn run(init: std.process.Init, cmd: []const u8, args: []const []const u8) !u8 {
     if (args.len > 0 and (std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h"))) {
-        inline for (usages) |u| {
-            if (std.mem.eql(u8, cmd, u[0])) {
-                std.debug.print("{s}", .{u[1]});
+        for (usage.commands) |c| {
+            if (std.mem.eql(u8, cmd, c.name)) {
+                std.Io.File.stdout().writeStreamingAll(init.io, c.usage) catch {};
                 return 0;
             }
         }
@@ -40,6 +36,7 @@ pub fn run(init: std.process.Init, cmd: []const u8, args: []const []const u8) !u
     if (std.mem.eql(u8, cmd, "agents")) return @import("tools/agents.zig").run(init, args);
     if (std.mem.eql(u8, cmd, "tree")) return @import("tools/tree.zig").run(init, args);
     if (std.mem.eql(u8, cmd, "version")) return @import("tools/version.zig").run(init, args);
+    if (std.mem.eql(u8, cmd, "completions")) return @import("tools/completions.zig").run(init, args);
     std.debug.print("lus {s}: not available yet\n", .{cmd});
     return 1;
 }

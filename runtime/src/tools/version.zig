@@ -27,19 +27,7 @@ const Io = std.Io;
 const Version = semver.Version;
 const Channel = semver.Channel;
 
-const usage =
-    \\usage: lus version [--json]
-    \\       lus version list [--remote [CHANNEL]] [--json]
-    \\       lus version install REQUEST [--json]
-    \\       lus version use REQUEST [--json]
-    \\       lus version remove VERSION [--json]
-    \\       lus version which [REQUEST] [--json]
-    \\       lus +REQUEST [ARGS...]
-    \\
-    \\A REQUEST is an exact version (2.0.3), a line (2.0), a major version (2),
-    \\or a channel (stable or unstable).
-    \\
-;
+const usage = @import("usage.zig").of("version");
 
 /// The exit statuses of the version manager.
 pub const Status = enum(u8) {

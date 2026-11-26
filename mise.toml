@@ -18,7 +18,7 @@ run = "sh ../tools/with-build-lock.sh zig build -j2 -Doptimize=ReleaseSafe"
 description = "Run the runtime unit, embedding, tool, and conformance tests"
 dir = "runtime"
 run = [
-  "zig build -j2 test test-embed test-bundle test-check test-doc test-debug test-version test-remote -Doptimize=ReleaseSafe",
+  "zig build -j2 test test-embed test-bundle test-check test-doc test-debug test-version test-remote test-cli -Doptimize=ReleaseSafe",
   "zig build -j2 -Doptimize=ReleaseSafe",
   "zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
   "LUS_JIT=off zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",

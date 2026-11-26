@@ -55,17 +55,7 @@ const Json = dap.Json;
 const JsonValue = std.json.Value;
 const fd_t = std.c.fd_t;
 
-const usage =
-    \\usage: lus debug [--stdio | --port N] [-P perm]... [SCRIPT [ARGS...]]
-    \\
-    \\  --stdio     speak the Debug Adapter Protocol on standard input and
-    \\              output (the default)
-    \\  --port N    accept one client on 127.0.0.1:N instead
-    \\  -P perm     grant a permission to the program (also --pledge)
-    \\
-    \\Without SCRIPT, the program comes from the launch request.
-    \\
-;
+const usage = @import("usage.zig").of("debug");
 
 /// The thread id reported for the program. Coroutines appear in the
 /// stack of this one thread, above the frames that resumed them.
@@ -102,7 +92,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         } else if (std.mem.startsWith(u8, a, "-P") and a.len > 2) {
             try pledges.append(gpa, a[2..]);
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            std.debug.print("{s}", .{usage});
+            std.Io.File.stdout().writeStreamingAll(init.io, usage) catch {};
             return 0;
         } else if (std.mem.eql(u8, a, "--")) {
             i += 1;

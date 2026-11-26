@@ -15,14 +15,7 @@
 const std = @import("std");
 const docs = @import("agent_docs");
 
-const usage =
-    \\usage: lus agents init [DIR]
-    \\
-    \\Writes the Lus skills for coding agents into DIR/.agents/skills (default:
-    \\the current directory), links .claude/skills to them, and adds a Lus
-    \\section to AGENTS.md.
-    \\
-;
+const usage = @import("usage.zig").of("agents");
 
 /// The lines that open and close the text `init` owns in AGENTS.md.
 const marker = "<!-- lus agents init -->";

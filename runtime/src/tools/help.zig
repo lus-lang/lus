@@ -16,14 +16,7 @@
 const std = @import("std");
 const docs = @import("agent_docs");
 
-const usage =
-    \\usage: lus help [NAME | MODULE | --search TEXT]
-    \\
-    \\Prints the reference for a standard library function, constant, or
-    \\module, from the documentation built into this executable. With no
-    \\argument, lists the modules.
-    \\
-;
+const usage = @import("usage.zig").of("help");
 
 /// One stdlib entry with the frontmatter fields the reference prints.
 pub const Entry = struct {
@@ -68,6 +61,8 @@ pub fn help(arena: std.mem.Allocator, w: *std.Io.Writer, args: []const []const u
         if (args.len < 2) return 2;
         return search(w, entries, args[1]);
     }
+    // No name of the reference starts with a dash.
+    if (a.len > 1 and a[0] == '-') return 2;
     for (entries) |e| {
         if (std.mem.eql(u8, e.name, a)) {
             try writeEntry(w, e);
