@@ -9,7 +9,7 @@
 //! with the key named by `LUS_RELEASE_KEY`, which the tests use.
 
 /// The root key of the Lus release process, base64 of 32 bytes.
-pub const lus_release: ?[]const u8 = null;
+pub const lus_release: ?[]const u8 = "X+ZPv3kWnkrI6QAtvPI3cp/+e2xFqi6ZnIhy0tGmeUM=";
 
 /// The root key of `atmosp.here`, base64 of 32 bytes.
 pub const atmosphere: ?[]const u8 = null;
