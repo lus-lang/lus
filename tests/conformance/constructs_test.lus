@@ -13,7 +13,7 @@ local function checkload(s, msg)
     if not f then
         assert(string.find(err, msg), `Expected '$msg' in '$(tostring(err))'`)
     else
-        error("Should fail: " .. s)
+        error(`Should fail: $s`)
     end
 end
 

@@ -74,7 +74,7 @@ local function catch_in_loop_doesn_t_accumulate_registers_test()
     local sum = 0
 
     for i = 1, 100 do
-        catch error("error " .. i)
+        catch error(`error $i`)
         sum = sum + i
     end
 
@@ -563,7 +563,7 @@ end
 
 local function catch_expression_error_handler_test()
     local ok, val = catch[function(e)
-        return "handled: " .. tostring(e)
+        return `handled: $e`
     end] error("oops")
 
     assert(ok == false)

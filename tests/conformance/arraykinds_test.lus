@@ -570,7 +570,7 @@ local function a_small_record_grows_past_its_cell_test()
     local r = { x = 1, y = 2 }
 
     for i = 1, 100 do
-        r["k" .. i] = i
+        r[`k$i`] = i
     end
 
     r.x = nil
@@ -589,7 +589,7 @@ local function many_small_tables_survive_collections_test()
     local keep = {}
 
     for i = 1, 5000 do
-        keep[i] = { i, i + 0.5, name = "n" .. i, { i } }
+        keep[i] = { i, i + 0.5, name = `n$i`, { i } }
 
         if i % 1000 == 0 then
             collectgarbage("step")
@@ -600,7 +600,7 @@ local function many_small_tables_survive_collections_test()
 
     for i = 1, 5000, 37 do
         local e = keep[i]
-        assert(e[1] == i and e[2] == i + 0.5 and e.name == "n" .. i and e[3][1] == i)
+        assert(e[1] == i and e[2] == i + 0.5 and e.name == `n$i` and e[3][1] == i)
     end
 end
 
@@ -678,7 +678,7 @@ local function strings_stored_while_the_collector_runs_survive_test()
     collectgarbage()
 
     for i = 1, 500 do
-        assert(t[i] == "r20:" .. i)
+        assert(t[i] == `r20:$i`)
     end
 end
 
@@ -703,13 +703,13 @@ local function weak_tables_keep_strings_in_their_array_parts_test()
     local w = setmetatable({}, { __mode = "v" })
 
     for i = 1, 100 do
-        w[i] = "weak" .. i
+        w[i] = `weak$i`
     end
 
     collectgarbage()
 
     for i = 1, 100 do
-        assert(w[i] == "weak" .. i)
+        assert(w[i] == `weak$i`)
     end
 end
 
@@ -732,13 +732,13 @@ local function a_list_of_tables_keeps_its_tables_through_collections_test()
     local t = {}
 
     for i = 1, 3000 do
-        t[i] = { i, name = "n" .. i }
+        t[i] = { i, name = `n$i` }
     end
 
     collectgarbage()
 
     for i = 1, 3000, 7 do
-        assert(t[i][1] == i and t[i].name == "n" .. i)
+        assert(t[i][1] == i and t[i].name == `n$i`)
     end
 
     t[5] = "five"
@@ -818,7 +818,7 @@ local function a_constructor_whose_lists_change_kind_keeps_every_value_test()
     local out = {}
 
     for i = 1, 400 do
-        out[i] = make(i, "s" .. i)
+        out[i] = make(i, `s$i`)
     end
 
     for i = 401, 800 do
@@ -832,7 +832,7 @@ local function a_constructor_whose_lists_change_kind_keeps_every_value_test()
     collectgarbage()
 
     for i = 1, 400 do
-        assert(out[i][1] == "s" .. i and out[i][2] == "s" .. i)
+        assert(out[i][1] == `s$i` and out[i][2] == `s$i`)
     end
 
     for i = 401, 800 do

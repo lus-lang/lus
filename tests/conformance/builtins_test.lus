@@ -132,13 +132,10 @@ local function math_max_min_nan_test()
     end
 
     local function check(fast, slow, label)
-        assert(
-            isnan(fast) == isnan(slow),
-            label .. ": fast path NaN-ness should match the C function"
-        )
+        assert(isnan(fast) == isnan(slow), `$label: fast path NaN-ness should match the C function`)
 
         if not isnan(slow) then
-            assert(fast == slow, label .. ": values should match")
+            assert(fast == slow, `$label: values should match`)
         end
     end
 
@@ -170,7 +167,7 @@ local function tainted_type_fallback_test()
 
     local chunk = load("return type(42)", "test", "t", env)
     local result = chunk()
-    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(result == "custom", `expected custom, got $result`)
     assert(custom_called)
 
     -- Verify original still works
@@ -193,7 +190,7 @@ local function tainted_math_max_fallback_test()
 
     local chunk = load("return math.max(3, 5)", "test", "t", env)
     local result = chunk()
-    assert(result == 8, "expected 8, got " .. tostring(result))
+    assert(result == 8, `expected 8, got $result`)
     assert(custom_called)
 end
 
@@ -281,7 +278,7 @@ local function local_env_rebinding_fallback_test()
     }, { __index = _G })
 
     local result = type(42)
-    assert(result == "rebound", "expected rebound, got " .. tostring(result))
+    assert(result == "rebound", `expected rebound, got $result`)
     assert(custom_type_called)
 end
 
@@ -292,7 +289,7 @@ local function rawset_gc_barrier_test()
     local t = {}
 
     for i = 1, 1000 do
-        rawset(t, "key" .. i, "value" .. i)
+        rawset(t, `key$i`, `value$i`)
     end
 
     -- Force a GC cycle
@@ -369,7 +366,7 @@ local function tainted_string_trim_fallback_test()
 
     local chunk = load('return string.trim("  hi  ")', "test", "t", env)
     local result = chunk()
-    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(result == "custom", `expected custom, got $result`)
     assert(custom_called)
 end
 
@@ -618,7 +615,7 @@ local function tainted_string_sub_fallback_test()
 
     local chunk = load('return string.sub("hello", 2, 4)', "test", "t", env)
     local result = chunk()
-    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(result == "custom", `expected custom, got $result`)
     assert(custom_called)
 end
 
@@ -638,7 +635,7 @@ local function tainted_string_lower_fallback_test()
 
     local chunk = load('return string.lower("HELLO")', "test", "t", env)
     local result = chunk()
-    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(result == "custom", `expected custom, got $result`)
     assert(custom_called)
 end
 
@@ -747,7 +744,7 @@ end
 local function table_stdev_correctness_test()
     -- Population stdev of {2, 4, 4, 4, 5, 5, 7, 9}
     local r = table.stdev({ 2, 4, 4, 4, 5, 5, 7, 9 })
-    assert(math.abs(r - 2.0) < 0.001, "expected ~2.0, got " .. tostring(r))
+    assert(math.abs(r - 2.0) < 0.001, `expected ~2.0, got $r`)
     -- Single element: stdev is 0
     assert(table.stdev({ 5 }) == 0.0)
     -- Empty returns NaN
@@ -781,10 +778,7 @@ local function table_stdev_sample_fallback_test()
     -- 2-arg variant is not fastcalled (nargs mismatch) and must compute
     -- the SAMPLE stdev, not the population stdev (2.0) of the same data
     local r = table.stdev({ 2, 4, 4, 4, 5, 5, 7, 9 }, true)
-    assert(
-        math.abs(r - 2.1380899352994) < 1e-9,
-        "sample stdev should be ~2.1381, got " .. tostring(r)
-    )
+    assert(math.abs(r - 2.1380899352994) < 1e-9, `sample stdev should be ~2.1381, got $r`)
 end
 
 -- ==== Correctness: table.transpose() ====
@@ -890,7 +884,7 @@ local function tainted_math_abs_fallback_test()
 
     local chunk = load("return math.abs(-5)", "test", "t", env)
     local result = chunk()
-    assert(result == 999, "expected 999, got " .. tostring(result))
+    assert(result == 999, `expected 999, got $result`)
     assert(custom_called)
 end
 
@@ -908,7 +902,7 @@ local function tainted_assert_fallback_test()
 
     local chunk = load("return assert(true)", "test", "t", env)
     local result = chunk()
-    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(result == "custom", `expected custom, got $result`)
     assert(custom_called)
 end
 
@@ -926,7 +920,7 @@ local function tainted_tonumber_fallback_test()
 
     local chunk = load('return tonumber("42")', "test", "t", env)
     local result = chunk()
-    assert(result == 999, "expected 999, got " .. tostring(result))
+    assert(result == 999, `expected 999, got $result`)
     assert(custom_called)
 end
 
@@ -944,7 +938,7 @@ local function tainted_tostring_fallback_test()
 
     local chunk = load("return tostring(42)", "test", "t", env)
     local result = chunk()
-    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(result == "custom", `expected custom, got $result`)
     assert(custom_called)
 end
 
@@ -964,7 +958,7 @@ local function tainted_vector_create_fallback_test()
 
     local chunk = load("return vector.create(4)", "test", "t", env)
     local result = chunk()
-    assert(result == "custom", "expected custom, got " .. tostring(result))
+    assert(result == "custom", `expected custom, got $result`)
     assert(custom_called)
 end
 
@@ -984,7 +978,7 @@ local function tainted_utf8_len_fallback_test()
 
     local chunk = load('return utf8.len("hello")', "test", "t", env)
     local result = chunk()
-    assert(result == 999, "expected 999, got " .. tostring(result))
+    assert(result == 999, `expected 999, got $result`)
     assert(custom_called)
 end
 

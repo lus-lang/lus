@@ -28,7 +28,7 @@ end
 -- read-back closure and observed state without touching real globals.
 local function runner_of(body)
     local fn, err = load(`return function(shared)\n$body\nend`, "attrs2_runner")
-    assert(fn ~= nil, "runner chunk failed to compile: " .. tostring(err))
+    assert(fn ~= nil, `runner chunk failed to compile: $err`)
     return fn()
 end
 
@@ -310,7 +310,7 @@ local attributes_are_rejected_in_unsupported_declaration_forms_cases = {
 }
 
 local function attributes_are_rejected_in_unsupported_declaration_forms_test(_label, src, pattern)
-    local fn, err = try_load("local function h(n, v) return v end\n" .. src)
+    local fn, err = try_load(`local function h(n, v) return v end\n$src`)
     assert(fn == nil)
     assert(tostring(err):find(pattern))
 end
@@ -325,7 +325,7 @@ local compile_time_attributes_must_precede_runtime_attributes_cases = {
 }
 
 local function compile_time_attributes_must_precede_runtime_attributes_test(_label, src, pattern)
-    local fn, err = try_load("local function h(n, v) return v end\n" .. src)
+    local fn, err = try_load(`local function h(n, v) return v end\n$src`)
     assert(fn == nil)
     assert(tostring(err):find(pattern))
 end

@@ -27,7 +27,7 @@ return m
 ]]
 
 local TEST = [[
-package.path = TEST_DIR .. "/?.lus;" .. package.path
+package.path = `$TEST_DIR/?.lus;$(package.path)`
 pledge("load", "fs:read")
 
 local m = require("covered")

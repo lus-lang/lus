@@ -20,7 +20,7 @@ local function make_large_table_prog(lim)
 
     prog[#prog + 1] = "}\n"
     prog[#prog + 1] = "X = y\n"
-    prog[#prog + 1] = ("assert(X[%d] == %d)"):format(lim - 1, lim - 2)
+    prog[#prog + 1] = `assert(X[$(lim - 1)] == $(lim - 2))`
     prog[#prog + 1] = "return 0"
     return table.concat(prog, ";"), lim
 end

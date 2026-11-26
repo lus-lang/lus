@@ -184,7 +184,7 @@ local stat_templates = {
 
 local function expect_error(src, message)
     local fn, err = load(src, "=paths")
-    assert(fn == nil, "compiled: " .. src)
+    assert(fn == nil, `compiled: $src`)
     assert(err:find(message, 1, true), `$src\n$err`)
 end
 
@@ -214,7 +214,7 @@ local function an_error_deep_in_nested_functions_is_reported_test()
         src = `(function() return $src end)`
     end
 
-    expect_error("return " .. src, expr_message)
+    expect_error(`return $src`, expr_message)
 end
 
 -- Rarer forms of statements, which compile to their own instructions.

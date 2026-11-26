@@ -459,7 +459,7 @@ local reference_cases = {
 local function reference_test(password, stored)
     assert(crypto.verifypassword(password, stored))
     assert(crypto.verifypassword(vector.fromstring(password), stored))
-    assert(not crypto.verifypassword(password .. "x", stored))
+    assert(not crypto.verifypassword(`$(password)x`, stored))
     assert(not crypto.verifypassword("", stored))
 end
 
@@ -865,12 +865,12 @@ local rs256_sig = "cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZ
 local function rs256_jws_test()
     local key = crypto.importkey(rfc7515_rsa)
     assert(key.type == "rsa" and key.private and key.bits == 2048 and key.curve == nil)
-    local input = "eyJhbGciOiJSUzI1NiJ9." .. jws_payload
+    local input = `eyJhbGciOiJSUzI1NiJ9.$jws_payload`
     local sig = crypto.sign(key, input, "RS256")
     assert(string.transcode(sig, "binary", "base64url") == rs256_sig)
     assert(crypto.verify(key:public(), input, sig, "RS256"))
     assert(crypto.verify(key, input, sig, "RS256"))
-    assert(not crypto.verify(key, input .. ".", sig, "RS256"))
+    assert(not crypto.verify(key, `$input.`, sig, "RS256"))
     assert(not crypto.verify(key, input, sig, "PS256"))
     assert(not crypto.verify(key, input, sig, "RS384"))
 end
@@ -886,13 +886,13 @@ local function es256_jws_test()
         d = "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI",
     })
     assert(key.type == "ec" and key.curve == "P-256" and key.bits == nil)
-    local input = "eyJhbGciOiJFUzI1NiJ9." .. jws_payload
+    local input = `eyJhbGciOiJFUzI1NiJ9.$jws_payload`
     local sig = b64url(
         "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q"
     )
     assert(crypto.verify(key:public(), input, sig))
     assert(crypto.verify(key, input, sig, "ES256"))
-    assert(not crypto.verify(key, input .. "x", sig))
+    assert(not crypto.verify(key, `$(input)x`, sig))
     local mine = crypto.sign(key, input)
     assert(#mine == 64)
     assert(crypto.verify(key:public(), input, mine))

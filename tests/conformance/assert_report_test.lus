@@ -58,7 +58,7 @@ end
 
 -- The report lines of one failed test, up to the next test.
 local function failure(report, name)
-    local start = report:find("FAIL " .. name, 1, true)
+    local start = report:find(`FAIL $name`, 1, true)
     assert(start, report)
     local stop = report:find("\n  FAIL ", start + 1, true) or #report
     return report:sub(start, stop)

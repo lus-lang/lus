@@ -7,7 +7,7 @@
 pledge("load", "fs", "exec", "env")
 
 local windows = package.config:sub(1, 1) == "\\"
-local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local lus_bin = os.getenv("LUS_BIN") or `$TEST_DIR/../../runtime/zig-out/bin/lus`
 
 local function shell_quote(value)
     if windows then
@@ -20,8 +20,8 @@ end
 local lus_cmd = shell_quote(lus_bin)
 
 local function run_command(command)
-    local h = io.popen(command .. " 2>&1")
-    assert(h, "could not start command: " .. command)
+    local h = io.popen(`$command 2>&1`)
+    assert(h, `could not start command: $command`)
     local out = h:read("a")
     local ok = h:close()
     return ok == true or ok == 0, out
@@ -74,7 +74,7 @@ local quiet = ...
 local function square(x) return x * x end
 local total = 0
 for i = 1, 1000 do total = total + square(i) end
-if not quiet then print("total " .. total) end
+if not quiet then print(`total $total`) end
 local folded = false
 if flags.answer then folded = true end
 return total, folded
@@ -84,7 +84,7 @@ local fixture_number = 0
 
 local function new_fixture()
     fixture_number = fixture_number + 1
-    local root = "compiletest" .. tostring(fixture_number)
+    local root = `compiletest$fixture_number`
     catch fs.remove(root, true)
     fs.createdirectory(root)
     return root
@@ -116,7 +116,7 @@ local function chunk_matches_string_dump_test()
     write_file(script, program)
     local ok, out = compile(`-o $(shell_quote(chunk)) $(shell_quote(script))`)
     assert(ok, out)
-    local dumped = string.dump(assert(load(program, "@" .. script)))
+    local dumped = string.dump(assert(load(program, `@$script`)))
     assert(same_bytes(read_bytes(chunk), dumped), "lus compile and string.dump disagree")
     catch fs.remove(root, true)
 end
@@ -251,7 +251,7 @@ local function comparisons_with_constants_at_the_edges_of_the_immediate_test(x)
                 want = x == c
             end
 
-            assert(results[i] == want, string.format("%d %s %d", x, op, c))
+            assert(results[i] == want, `$x $op $c`)
         end
     end
 end

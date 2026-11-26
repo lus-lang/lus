@@ -74,7 +74,7 @@ local function non_closable_declaration_values_error_at_declaration_time_test(la
     end
 
     local ok, err = catch decl()
-    assert(ok == false, label .. " must be rejected")
+    assert(ok == false, `$label must be rejected`)
     assert(string.find(tostring(err), "non%-closable"), `$label: $(tostring(err))`)
 end
 
@@ -117,7 +117,7 @@ local function a_rejected_declaration_still_closes_earlier_pending_variable_test
     assert(ok == false)
     assert(
         string.find(seen, "non%-closable"),
-        "a's handler must receive the declaration error, got " .. seen
+        `a's handler must receive the declaration error, got $seen`
     )
     assert(string.find(seen, "variable 'b'"), seen)
 end
@@ -328,7 +328,7 @@ local function break_out_of_an_inner_loop_closes_only_the_inner_variable_test()
 
         for j = 1, 5 do
             local inner <close> = func2close(function()
-                log[#log + 1] = "inner" .. j
+                log[#log + 1] = `inner$j`
             end)
 
             break
@@ -471,7 +471,7 @@ local function the_handler_receives_the_in_flight_error_as_its_second_argum_test
 
     local ok = catch foo()
     assert(ok == false)
-    assert(type(seen) == "string", "expected an error message, got " .. type(seen))
+    assert(type(seen) == "string", `expected an error message, got $(type(seen))`)
     assert(string.find(seen, "@boom"), seen)
 end
 
@@ -496,11 +496,11 @@ local function all_pending_handlers_receive_the_same_error_in_reverse_order_test
 
     local function foo()
         local a <close> = func2close(function(_, m)
-            log[#log + 1] = "a:" .. tostring(m)
+            log[#log + 1] = `a:$m`
         end)
 
         local b <close> = func2close(function(_, m)
-            log[#log + 1] = "b:" .. tostring(m)
+            log[#log + 1] = `b:$m`
         end)
 
         error("@five", 0)
@@ -536,12 +536,12 @@ local function one_error_closes_nested_scopes_from_the_inside_out_test()
 
     local function foo()
         local outer <close> = func2close(function(_, m)
-            log[#log + 1] = "outer:" .. tostring(m)
+            log[#log + 1] = `outer:$m`
         end)
 
         do
             local inner <close> = func2close(function(_, m)
-                log[#log + 1] = "inner:" .. tostring(m)
+                log[#log + 1] = `inner:$m`
             end)
 
             error("@deep", 0)
@@ -587,7 +587,7 @@ local function a_table_error_reaches_the_handler_as_the_raw_object_test()
 
     local ok = catch foo()
     assert(ok == false)
-    assert(seen == payload, "expected the raw error object, got " .. type(seen))
+    assert(seen == payload, `expected the raw error object, got $(type(seen))`)
 end
 
 local function an_error_caught_inside_the_block_leaves_the_close_argument_n_test()
@@ -632,11 +632,11 @@ local function a_failing_close_still_lets_remaining_handlers_run_with_the_n_test
 
     local function foo()
         local a <close> = func2close(function(_, m)
-            log[#log + 1] = "a:" .. tostring(m)
+            log[#log + 1] = `a:$m`
         end)
 
         local b <close> = func2close(function(_, m)
-            log[#log + 1] = "b:" .. tostring(m)
+            log[#log + 1] = `b:$m`
             error("@b", 0)
         end)
 
@@ -646,7 +646,7 @@ local function a_failing_close_still_lets_remaining_handlers_run_with_the_n_test
     local ok, err = catch foo()
     assert(ok == false)
     assert(string.find(log[1], "^b:nil"), tostring(log[1]))
-    assert(string.find(log[2], "^a:@b"), "a must receive b's error, got " .. tostring(log[2]))
+    assert(string.find(log[2], "^a:@b"), `a must receive b's error, got $(log[2])`)
     assert(string.find(tostring(err), "@b"), tostring(err))
 end
 
@@ -713,11 +713,11 @@ local function coroutine_close_runs_pending_handlers_in_reverse_order_and_r_test
 
     local co = coroutine.create(function()
         local a <close> = func2close(function(_, m)
-            log[#log + 1] = "a:" .. tostring(m)
+            log[#log + 1] = `a:$m`
         end)
 
         local b <close> = func2close(function(_, m)
-            log[#log + 1] = "b:" .. tostring(m)
+            log[#log + 1] = `b:$m`
         end)
 
         coroutine.yield()
@@ -767,7 +767,7 @@ local function coroutine_close_keeps_closing_after_a_failure_and_forwards_t_test
     assert(string.find(tostring(err), "@in"), tostring(err))
     assert(
         string.find(tostring(outer_got), "@in"),
-        "the outer handler must receive the inner failure, got " .. tostring(outer_got)
+        `the outer handler must receive the inner failure, got $outer_got`
     )
 end
 
@@ -789,7 +789,7 @@ local function coroutine_close_reports_the_last_error_when_two_handlers_fai_test
     assert(ok == false)
     assert(
         string.find(tostring(err), "@ca"),
-        "the error from the last-run handler must win, got " .. tostring(err)
+        `the error from the last-run handler must win, got $err`
     )
 end
 
@@ -813,7 +813,7 @@ local function a_resume_error_leaves_variables_pending_until_coroutine_clos_test
     assert(string.find(tostring(cerr), "^@dead"), tostring(cerr))
     assert(
         string.find(tostring(seen), "^@dead"),
-        "the handler must receive the coroutine's original error, got " .. tostring(seen)
+        `the handler must receive the coroutine's original error, got $seen`
     )
 end
 

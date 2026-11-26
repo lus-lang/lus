@@ -6,7 +6,7 @@ local windows = package.config:sub(1, 1) == "\\"
 local path_separator = package.config:sub(1, 1)
 local fixture_number = 0
 
-local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local lus_bin = os.getenv("LUS_BIN") or `$TEST_DIR/../../runtime/zig-out/bin/lus`
 
 local function shell_quote(value)
     if windows then
@@ -26,8 +26,8 @@ local function run_lus(args)
 end
 
 local function run_command(command)
-    local h = io.popen(command .. " 2>&1")
-    assert(h, "could not start command: " .. command)
+    local h = io.popen(`$command 2>&1`)
+    assert(h, `could not start command: $command`)
     local out = h:read("a")
     local ok = h:close()
     return ok == true or ok == 0, out
@@ -45,9 +45,9 @@ end
 
 local function new_fixture()
     fixture_number = fixture_number + 1
-    local root = "h3c" .. tostring(fixture_number)
-    local entry_base = "h3e" .. tostring(fixture_number)
-    local entry = path(root, entry_base .. ".lus")
+    local root = `h3c$fixture_number`
+    local entry_base = `h3e$fixture_number`
+    local entry = path(root, `$entry_base.lus`)
     local output = entry_base .. (windows and ".exe" or "")
     catch fs.remove(root, true)
     catch fs.remove(output)
@@ -90,7 +90,7 @@ local function run_standalone(output)
 end
 
 local function version_check_test()
-    local _, out = run_command(lus_cmd .. " -v")
+    local _, out = run_command(`$lus_cmd -v`)
     assert(string.find(out, "Lus"))
 end
 
@@ -172,12 +172,12 @@ print("link-object-ok")
     local inspected, inspect_out = run_command(table.concat({
         lus_cmd,
         "-Pload",
-        "-Pfs:read=./" .. script,
-        "-Pfs:read=./" .. allowed_link,
-        "-Pfs:write=./" .. allowed_link,
+        `-Pfs:read=./$script`,
+        `-Pfs:read=./$allowed_link`,
+        `-Pfs:write=./$allowed_link`,
         script,
         "inspect",
-        "./" .. allowed_link,
+        `./$allowed_link`,
     }, " "))
     assert(inspected and inspect_out:find("link-object-ok", 1, true), inspect_out)
     assert(not path_exists(allowed_link), "authorized link was not removed")
@@ -195,13 +195,13 @@ local function a_target_grant_does_not_authorize_removing_a_link_test()
     local removed, remove_out = run_command(table.concat({
         lus_cmd,
         "-Pload",
-        "-Pfs:read=./" .. script,
-        "-Pfs:write=./" .. target,
+        `-Pfs:read=./$script`,
+        `-Pfs:write=./$target`,
         script,
         "remove",
-        "./" .. blocked_link,
+        `./$blocked_link`,
     }, " "))
-    assert(not removed, "target authority removed an ungranted link: " .. remove_out)
+    assert(not removed, `target authority removed an ungranted link: $remove_out`)
     assert(path_exists(blocked_link), "ungranted link was removed")
     clean_fixture(root)
 end
@@ -227,7 +227,7 @@ f:close()
         "-o",
         output,
         "-Pload",
-        "-Pfs:read=./" .. data,
+        `-Pfs:read=./$data`,
     }, " "))
     assert(ok, out)
     local ran, run_out = run_command(`.$path_separator$output ./$data`)
@@ -265,7 +265,7 @@ local function standalone_owns_mixed_direct_and_recursive_include_specs_test()
 local direct = require("direct")
 local alpha = require("mods.alpha")
 local beta = require("mods.nested.beta")
-print(direct .. ":" .. alpha .. ":" .. beta)
+print(`$direct:$alpha:$beta`)
 ]])
 
     local ok, out = build_standalone(entry, output, {
@@ -291,7 +291,7 @@ local function standalone_fails_closed_after_a_partially_compiled_include_list_t
         path(root, "direct.lus"),
         broken,
     })
-    assert(not ok, "invalid include unexpectedly built: " .. out)
+    assert(not ok, `invalid include unexpectedly built: $out`)
     assert(out:find("bad.lus", 1, true), out)
     assert(not path_exists(output), "failed build left an executable")
     clean_fixture(root, output)
@@ -325,7 +325,7 @@ local function standalone_permits_1024_final_files_test()
     write_file(entry, "print('expanded-count-ok')\n")
 
     for i = 1, 1023 do
-        write_file(path(modules, string.format("m%04d.lus", i)), `return $(tostring(i))\n`)
+        write_file(path(modules, string.format("m%04d.lus", i)), `return $i\n`)
     end
 
     local exact_ok, exact_out = build_standalone(entry, output, { modules })
@@ -343,7 +343,7 @@ local function standalone_rejects_1025_final_files_test()
     write_file(entry, "print('expanded-count-ok')\n")
 
     for i = 1, 1024 do
-        write_file(path(modules, string.format("m%04d.lus", i)), `return $(tostring(i))\n`)
+        write_file(path(modules, string.format("m%04d.lus", i)), `return $i\n`)
     end
 
     local excess_ok, excess_out = build_standalone(entry, output, { modules })
@@ -405,7 +405,7 @@ local w = worker.create("readonly_worker.lus")
 local m = worker.receive(w)
 print(m.ok, m.replaced, m.err)
 ]])
-    local _, frozen = run_command(lus_cmd .. " -P load -P fs:read --readonly-env readonly_main.lus")
+    local _, frozen = run_command(`$lus_cmd -P load -P fs:read --readonly-env readonly_main.lus`)
     assert(
         string.find(
             frozen,
@@ -415,7 +415,7 @@ print(m.ok, m.replaced, m.err)
         ),
         frozen
     )
-    local _, open = run_command(lus_cmd .. " -P load -P fs:read readonly_main.lus")
+    local _, open = run_command(`$lus_cmd -P load -P fs:read readonly_main.lus`)
     assert(string.find(open, "true\ttrue\tnil", 1, true), open)
     fs.remove("readonly_worker.lus")
     fs.remove("readonly_main.lus")
@@ -429,7 +429,7 @@ end
 print(getmetatable(_G) == nil, getmetatable(math) == nil)
 print((catch setmetatable({}, {})))
 ]])
-    local _, out = run_command(lus_cmd .. " --readonly-env readonly_meta.lus")
+    local _, out = run_command(`$lus_cmd --readonly-env readonly_meta.lus`)
     local _, n = out:gsub("false\t[^\n]*attempt to modify a readonly table\n", "")
     assert(n == 4, out)
     assert(string.find(out, "true\ttrue\ntrue\n", 1, true), out)
@@ -442,8 +442,7 @@ local function temporary_files_need_a_grant_that_covers_them_test()
     end
 
     local _, out = run_command(
-        lus_cmd
-            .. " -P 'fs:write=/nowhere/*' -e 'print(catch os.tmpname()) print(catch io.tmpfile())'"
+        `$lus_cmd -P 'fs:write=/nowhere/*' -e 'print(catch os.tmpname()) print(catch io.tmpfile())'`
     )
     local _, n = out:gsub("false\t[^\n]*permission \"fs:write\" denied for '[^']*/lu[as]_", "")
     assert(n == 2, out)
@@ -472,20 +471,20 @@ local function disassembly_folds_compile_time_flags_as_running_does_test()
         "dis_flags.lus",
         'if flags.FAST then\n    print("fast")\nelse\n    print("slow")\nend\n'
     )
-    local _, ran = run_command(lus_cmd .. " -F FAST dis_flags.lus")
+    local _, ran = run_command(`$lus_cmd -F FAST dis_flags.lus`)
     assert(ran == "fast\n", ran)
     -- Folding keeps only the taken branch, so the listing calls print once,
     -- from line 2 with the flag and from line 4 without it.
-    local _, fast = run_command(lus_cmd .. " -F FAST --dis dis_flags.lus")
+    local _, fast = run_command(`$lus_cmd -F FAST --dis dis_flags.lus`)
     assert(string.find(fast, "function <dis_flags.lus:0> (5 instructions", 1, true), fast)
     assert(string.find(fast, "[  2] call", 1, true), fast)
     assert(not string.find(fast, "[  4] call", 1, true), fast)
     assert(not string.find(fast, "test_", 1, true), fast)
-    local _, slow = run_command(lus_cmd .. " --dis dis_flags.lus")
+    local _, slow = run_command(`$lus_cmd --dis dis_flags.lus`)
     assert(string.find(slow, "[  4] call", 1, true), slow)
     assert(not string.find(slow, "[  2] call", 1, true), slow)
     write_file("dis_error.lus", "x = = 1\n")
-    local _, err = run_command(lus_cmd .. " --dis dis_error.lus")
+    local _, err = run_command(`$lus_cmd --dis dis_error.lus`)
     assert(string.find(err, "dis_error.lus:1: unexpected symbol near '='", 1, true), err)
     fs.remove("dis_flags.lus")
     fs.remove("dis_error.lus")

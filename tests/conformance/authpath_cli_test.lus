@@ -1,6 +1,6 @@
 pledge("load", "fs", "exec", "env")
 
-local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local lus_bin = os.getenv("LUS_BIN") or `$TEST_DIR/../../runtime/zig-out/bin/lus`
 local windows = package.config:sub(1, 1) == "\\"
 
 local function shell_quote(value)
@@ -16,7 +16,7 @@ local function command_for(reads, script)
     local args = { lus_bin, "-Pload" }
 
     for i = 1, #reads do
-        args[#args + 1] = "-Pfs:read=" .. reads[i]
+        args[#args + 1] = `-Pfs:read=$(reads[i])`
     end
 
     args[#args + 1] = script
@@ -29,7 +29,7 @@ local function command_for(reads, script)
 end
 
 local function command_with_init(init, command)
-    local value = "@" .. init
+    local value = `@$init`
 
     if windows then
         assert(not value:find('"', 1, true), "Windows init path contains a quote")
@@ -40,7 +40,7 @@ local function command_with_init(init, command)
 end
 
 local function run(command)
-    local pipe = assert(io.popen(command .. " 2>&1"))
+    local pipe = assert(io.popen(`$command 2>&1`))
     local output = assert(pipe:read("*a"))
     local status = pipe:close()
     return status == true or status == 0, output
@@ -58,7 +58,7 @@ local fixture_number = 0
 
 local function fixture()
     fixture_number = fixture_number + 1
-    local root = "./authpath" .. tostring(fixture_number)
+    local root = `./authpath$fixture_number`
     fs.createdirectory(root)
     return root
 end
@@ -99,7 +99,7 @@ local function sealed_init_files_use_their_authorized_file_object_test()
     write_file(outside, "print('outside-init-ran')\n")
 
     local denied, denied_output = run(command_with_init(outside, command_for({ entry }, entry)))
-    assert(not denied, "init outside the read grant ran: " .. denied_output)
+    assert(not denied, `init outside the read grant ran: $denied_output`)
     assert(denied_output:find('permission "fs:read" denied', 1, true), denied_output)
     assert(not denied_output:find("outside-init-ran", 1, true), denied_output)
     assert(not denied_output:find("entry-ran", 1, true), denied_output)

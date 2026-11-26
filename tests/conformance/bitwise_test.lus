@@ -1,6 +1,6 @@
 pledge("load", `fs:read=$TEST_DIR/fixtures/bwcoercion/*`)
 
-assert(loadfile(TEST_DIR .. "/fixtures/bwcoercion/shim.lus"))()
+assert(loadfile(`$TEST_DIR/fixtures/bwcoercion/shim.lus`))()
 
 local numbits = string.packsize("j") * 8
 
@@ -154,13 +154,13 @@ local function bitwise_logic_test()
 end
 
 local function constant_folding_test()
-    local code = string.format("return -1 >> %d", math.maxinteger)
+    local code = `return -1 >> $(math.maxinteger)`
     assert(load(code)() == 0)
-    local code = string.format("return -1 >> %d", math.mininteger)
+    local code = `return -1 >> $(math.mininteger)`
     assert(load(code)() == 0)
-    local code = string.format("return -1 << %d", math.maxinteger)
+    local code = `return -1 << $(math.maxinteger)`
     assert(load(code)() == 0)
-    local code = string.format("return -1 << %d", math.mininteger)
+    local code = `return -1 << $(math.mininteger)`
     assert(load(code)() == 0)
 end
 

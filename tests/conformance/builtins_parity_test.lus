@@ -900,7 +900,7 @@ local function string_join_honors_table_length_and_indexing_metamethods_test()
             return 2
         end,
         __index = function(_, i)
-            return "item" .. i
+            return `item$i`
         end,
     })
 

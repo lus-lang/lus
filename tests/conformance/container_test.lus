@@ -6,19 +6,19 @@
 
 pledge("fs")
 
-local FIXTURES = TEST_DIR .. "/fixtures/archive/"
-local SANDBOX = "test_container_sandbox_" .. time.now():epoch()
+local FIXTURES = `$TEST_DIR/fixtures/archive/`
+local SANDBOX = `test_container_sandbox_$(time.now():epoch())`
 local symlinks = os.platform() ~= "windows" and os.platform() ~= "wasi"
 
 local function fixture(name)
-    local f = assert(io.open(FIXTURES .. name, "rb"))
+    local f = assert(io.open(`$FIXTURES$name`, "rb"))
     local v = f:read("a")
     f:close()
     return v
 end
 
 local function open_fixture(name)
-    return assert(io.open(FIXTURES .. name, "rb"))
+    return assert(io.open(`$FIXTURES$name`, "rb"))
 end
 
 local function read_text(path)
@@ -66,7 +66,7 @@ local entries = {
     { name = "bin/run.sh", data = "#!/bin/sh\necho hi\n", mode = 493 },
     { name = "link", kind = "symlink", target = "docs/readme.txt" },
     { name = "stored.bin", data = raw_bytes(0, 1, 2, 255), method = "store" },
-    { name = string.rep("deep/", 30) .. "file.txt", data = "deep" },
+    { name = `$(string.rep("deep/", 30))file.txt`, data = "deep" },
     { name = "café/naïve.txt", data = "unicode" },
     { name = "empty.txt" },
 }
@@ -299,15 +299,15 @@ local function unpack_test(format)
     end
 
     local a = vector.archive[format]
-    local dir = fresh("unpack_" .. format)
+    local dir = fresh(`unpack_$format`)
     local packed = a.pack(entries)
     assert(a.unpack(packed, dir) == #entries)
-    assert(read_text(dir .. "/docs/readme.txt") == string.rep("hello archive ", 200))
-    assert(read_text(dir .. "/bin/run.sh") == "#!/bin/sh\necho hi\n")
-    assert(fs.follow(dir .. "/link") == "docs/readme.txt")
-    assert(read_text(dir .. "/link") == string.rep("hello archive ", 200))
+    assert(read_text(`$dir/docs/readme.txt`) == string.rep("hello archive ", 200))
+    assert(read_text(`$dir/bin/run.sh`) == "#!/bin/sh\necho hi\n")
+    assert(fs.follow(`$dir/link`) == "docs/readme.txt")
+    assert(read_text(`$dir/link`) == string.rep("hello archive ", 200))
     assert(read_text(`$dir/$(string.rep("deep/", 30))file.txt`) == "deep")
-    assert(read_text(dir .. "/empty.txt") == "")
+    assert(read_text(`$dir/empty.txt`) == "")
 
     -- A second unpack meets existing files.
     raises(function()
@@ -318,18 +318,18 @@ local function unpack_test(format)
     -- Directories merge with ones already there.
     local more = a.pack({ { name = "docs/more.txt", data = "more" } })
     assert(a.unpack(more, dir) == 1)
-    assert(read_text(dir .. "/docs/more.txt") == "more")
-    assert(read_text(dir .. "/docs/readme.txt") == string.rep("hello archive ", 200))
+    assert(read_text(`$dir/docs/more.txt`) == "more")
+    assert(read_text(`$dir/docs/readme.txt`) == string.rep("hello archive ", 200))
 end
 
 local unpack_from_file_cases = formats
 
 local function unpack_from_file_test(format)
-    local dir = fresh("from_file_" .. format)
+    local dir = fresh(`from_file_$format`)
     local f = open_fixture(format == "zip" and "python.zip" or "pax.tar")
     vector.archive[format].unpack(f, dir)
     f:close()
-    assert(read_text(dir .. "/dir/text.txt") == quick_fox)
+    assert(read_text(`$dir/dir/text.txt`) == quick_fox)
 end
 
 -- Hostile archives raise before anything is written.
@@ -350,7 +350,7 @@ local hostile_cases = {
 
 local function hostile_test(name, message)
     local format = name:match("%.(%a+)$")
-    local dir = fresh("hostile_" .. name)
+    local dir = fresh(`hostile_$name`)
 
     raises(function()
         vector.archive[format].unpack(fixture(name), dir)
@@ -372,23 +372,23 @@ local function write_through_link_test()
         vector.archive.tar.unpack(fixture("link-write.tar"), dir)
     end, "cannot write '.-/l/x%.txt' %(a parent is a symlink or a file%)")
 
-    assert(not exists(dir .. "/sub/x.txt"))
+    assert(not exists(`$dir/sub/x.txt`))
     local outside = fresh("outside")
     fs.createdirectory(outside)
     local dir2 = fresh("pre_link")
     fs.createdirectory(dir2)
-    fs.createlink(dir2 .. "/pre", "../outside")
+    fs.createlink(`$dir2/pre`, "../outside")
     local packed = vector.archive.zip.pack({ { name = "pre/x.txt", data = "evil" } })
 
     raises(function()
         vector.archive.zip.unpack(packed, dir2)
     end, "a parent is a symlink or a file")
 
-    assert(not exists(outside .. "/x.txt"))
+    assert(not exists(`$outside/x.txt`))
     -- With overwrite, a file replaces a link in its place, never the
     -- file the link points at.
-    fs.createlink(dir2 .. "/f.txt", "../outside/target.txt")
-    local f = assert(io.open(outside .. "/target.txt", "w"))
+    fs.createlink(`$dir2/f.txt`, "../outside/target.txt")
+    local f = assert(io.open(`$outside/target.txt`, "w"))
     f:write("keep")
     f:close()
     local one = vector.archive.tar.pack({ { name = "f.txt", data = "new" } })
@@ -398,9 +398,9 @@ local function write_through_link_test()
     end, "file exists")
 
     vector.archive.tar.unpack(one, dir2, { overwrite = true })
-    assert(read_text(dir2 .. "/f.txt") == "new")
-    assert(not (catch fs.follow(dir2 .. "/f.txt")))
-    assert(read_text(outside .. "/target.txt") == "keep")
+    assert(read_text(`$dir2/f.txt`) == "new")
+    assert(not (catch fs.follow(`$dir2/f.txt`)))
+    assert(read_text(`$outside/target.txt`) == "keep")
 end
 
 -- ============================================================
@@ -422,7 +422,7 @@ local function size_limit_test(format)
         a.read(big, "zeros", 1000)
     end, "archive exceeds size limit %(1000 bytes%)")
 
-    local dir = fresh("limit_" .. format)
+    local dir = fresh(`limit_$format`)
 
     raises(function()
         a.unpack(big, dir, { max = 4096 })
@@ -431,11 +431,11 @@ local function size_limit_test(format)
     local many = {}
 
     for i = 1, 20 do
-        many[i] = { name = "f" .. i, data = "x" }
+        many[i] = { name = `f$i`, data = "x" }
     end
 
     raises(function()
-        a.unpack(a.pack(many), fresh("count_" .. format), { entries = 10 })
+        a.unpack(a.pack(many), fresh(`count_$format`), { entries = 10 })
     end, "archive exceeds entry limit %(10 entries%)")
 
     raises(function()

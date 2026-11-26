@@ -3,7 +3,7 @@
 
 pledge("load", `fs:read=$TEST_DIR/fixtures/bwcoercion/*`)
 
-assert(loadfile(TEST_DIR .. "/fixtures/bwcoercion/shim.lus"))()
+assert(loadfile(`$TEST_DIR/fixtures/bwcoercion/shim.lus`))()
 
 local function both_string_operands_coerce_for_every_operator_test()
     assert(("10" & "6") == 2)
@@ -27,13 +27,13 @@ local function string_floats_without_an_integer_representation_are_rejected_test
     assert(not ok, "'3.5' | 0 must raise")
     assert(
         string.find(err, "attempt to 'bor' a string with a number", 1, true),
-        "unexpected message: " .. err
+        `unexpected message: $err`
     )
     ok, err = catch (0 & "3.5")
     assert(not ok, "0 & '3.5' must raise")
     assert(
         string.find(err, "attempt to 'band' a number with a string", 1, true),
-        "unexpected message: " .. err
+        `unexpected message: $err`
     )
 end
 
@@ -42,25 +42,25 @@ local function non_coercible_operands_report_both_operand_orders_test()
     assert(not ok)
     assert(
         string.find(err, "attempt to 'band' a number with a string", 1, true),
-        "unexpected message: " .. err
+        `unexpected message: $err`
     )
     ok, err = catch ("a" & 4)
     assert(not ok)
     assert(
         string.find(err, "attempt to 'band' a string with a number", 1, true),
-        "unexpected message: " .. err
+        `unexpected message: $err`
     )
     ok, err = catch ("a" & {})
     assert(not ok)
     assert(
         string.find(err, "attempt to 'band' a string with a table", 1, true),
-        "unexpected message: " .. err
+        `unexpected message: $err`
     )
     ok, err = catch (~"zz")
     assert(not ok)
     assert(
         string.find(err, "attempt to 'bnot' a string with a string", 1, true),
-        "unexpected message: " .. err
+        `unexpected message: $err`
     )
 end
 
@@ -73,6 +73,6 @@ local function coercion_errors_blame_the_caller_s_line_test()
     assert(not ok)
     assert(
         string.find(err, "^shimtest:2: attempt to 'band' a number with a string"),
-        "the error must blame the caller's line, got: " .. err
+        `the error must blame the caller's line, got: $err`
     )
 end

@@ -41,7 +41,7 @@ local missing_argument_cases = {
 
 local function missing_argument_test(name, message)
     local ok, err = catch _G[name]()
-    assert(not ok, name .. " accepted no arguments")
+    assert(not ok, `$name accepted no arguments`)
     assert(err:find(message, 1, true), err)
 end
 

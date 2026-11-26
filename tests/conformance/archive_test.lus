@@ -420,7 +420,7 @@ local empty_string_compresses_to_a_valid_decompressible_stream_cases = {
 local function empty_string_compresses_to_a_valid_decompressible_stream_test(codec)
     local comp = vector.archive[codec].compress("")
     assert(type(comp) == "vector")
-    assert(#comp > 0, codec .. " empty input still produces a framed stream")
+    assert(#comp > 0, `$codec empty input still produces a framed stream`)
     local dec = vector.archive[codec].decompress(comp)
     assert(#dec == 0)
     assert(vector.tostring(dec) == "")
@@ -713,7 +713,7 @@ local highly_compressible_input_expands_to_the_correct_size_cases = {
 local function highly_compressible_input_expands_to_the_correct_size_test(codec)
     local zeros = string.rep("\0", 4 * 1024 * 1024)
     local comp = vector.archive[codec].compress(zeros)
-    assert(#comp < #zeros, codec .. " should compress a run of zeros tightly")
+    assert(#comp < #zeros, `$codec should compress a run of zeros tightly`)
     local ok, dec = catch vector.archive[codec].decompress(comp)
 
     if ok then
@@ -862,5 +862,5 @@ local function compress_does_not_mutate_the_input_vector_test(codec)
     local before = vector.unpack(v, 0, "c" .. #sample)
     vector.archive[codec].compress(v)
     local after = vector.unpack(v, 0, "c" .. #sample)
-    assert(before == after, codec .. " compress must not alter the input vector")
+    assert(before == after, `$codec compress must not alter the input vector`)
 end

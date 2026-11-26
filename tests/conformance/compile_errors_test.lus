@@ -23,15 +23,15 @@ local function checkfail(src, fragment)
     local f, err = load(src, "=cerr")
 
     if f ~= nil then
-        error("expected compile failure but chunk compiled: " .. src)
+        error(`expected compile failure but chunk compiled: $src`)
     end
 
     if type(err) ~= "string" then
-        error("expected a string error message, got " .. type(err))
+        error(`expected a string error message, got $(type(err))`)
     end
 
     if not string.find(err, "cerr:", 1, true) then
-        error("error message lacks the chunkname prefix: " .. err)
+        error(`error message lacks the chunkname prefix: $err`)
     end
 
     if not string.find(err, fragment, 1, true) then
@@ -44,7 +44,7 @@ local function checkok(src)
     local f, err = load(src, "=cerr")
 
     if not f then
-        error("expected chunk to compile but got: " .. tostring(err))
+        error(`expected chunk to compile but got: $err`)
     end
 
     return f

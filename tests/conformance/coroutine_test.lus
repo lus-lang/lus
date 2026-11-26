@@ -548,11 +548,11 @@ local function close_runs_pending_close_vars_in_reverse_order_and_surfaces_test(
 
     local co = coroutine.create(function()
         local outer <close> = func2close(function(_, e)
-            order[#order + 1] = "outer:" .. tostring(e)
+            order[#order + 1] = `outer:$e`
         end)
 
         local inner <close> = func2close(function(_, e)
-            order[#order + 1] = "inner:" .. tostring(e)
+            order[#order + 1] = `inner:$e`
             error("inner close error")
         end)
 
@@ -893,10 +893,7 @@ local function catch_containing_coroutine_yield_suspends_like_pcall_test()
 
     local s, y = coroutine.resume(co, 10)
     assert(s == true)
-    assert(
-        y == 11,
-        "coroutine must suspend at the yield inside catch, resume returned " .. tostring(y)
-    )
+    assert(y == 11, `coroutine must suspend at the yield inside catch, resume returned $y`)
     local s2, r1, r2, r3, r4 = coroutine.resume(co, "a", "b")
     assert(s2 == true)
     assert(r1 == "finished")
@@ -918,7 +915,7 @@ local function a_coroutine_that_caught_a_yield_ends_dead_after_completing_test()
         s, v = coroutine.resume(co)
         assert(s == true and v == "R")
     else
-        assert(v == "R", "unexpected first resume result " .. tostring(v))
+        assert(v == "R", `unexpected first resume result $v`)
     end
 
     assert(coroutine.status(co) == "dead")
