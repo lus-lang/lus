@@ -264,8 +264,10 @@ test("a replayed older index is refused", async () => {
 
 test("LUS_RELEASE_KEY applies only to a loopback release URL", async () => {
   const r = await json(["version", "install", "2.0.2"], { LUS_RELEASE_URL: "https://releases.invalid/" });
-  assert.equal(r.status, 4);
-  assert.match(r.value.error.message, /trusts no release key/);
+  // The test key is ignored, so lus falls back to the release root. A build
+  // without a root trusts no key, and a build with one fetches keys.json.
+  assert.notEqual(r.status, 0);
+  assert.match(r.value.error.message, /trusts no release key|keys\.json/);
 });
 
 test("an index that tools/release-index.mjs builds installs", async () => {
