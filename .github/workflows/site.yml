@@ -1,0 +1,64 @@
+name: Site
+
+# Builds lus.dev from main and deploys it to the Cloudflare Worker `lus`
+# that packages/site/wrangler.jsonc names. A push to main that changes the
+# site, the manual sources, the examples, the spec, or the changelog
+# deploys it, and a manual run deploys any branch. The job runs in the
+# environment `site`, which holds CLOUDFLARE_API_TOKEN, a token that may
+# only edit Workers scripts, and CLOUDFLARE_ACCOUNT_ID. The prebuild step
+# of the site downloads lus.wasm from the newest release, so the
+# playground runs the released runtime.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/site/**
+      - packages/textmate/**
+      - examples/**
+      - spec/**
+      - .agents/**
+      - CHANGELOG.md
+      - pnpm-lock.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.7.0"
+  PNPM_VERSION: "10.18.0"
+  WRANGLER_VERSION: "4.20.0"
+
+jobs:
+  deploy:
+    name: Build and deploy lus.dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: site
+      url: https://lus.dev
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install pnpm
+        run: npm install --global "pnpm@$PNPM_VERSION"
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        working-directory: packages/site
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm test && pnpm build
+      - name: Deploy
+        working-directory: packages/site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes "wrangler@$WRANGLER_VERSION" deploy
