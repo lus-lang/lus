@@ -5,19 +5,13 @@ local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 pledge("load", `fs:read=$LANG_DIR/*`)
 
 table.insert(package.searchers, 2, function(name)
-    local rest = string.match(name, "^lus%-language%.(.+)$")
-
-    if rest == nil then
-        return nil
+    if rest = string.match(name, "^lus%-language%.(.+)$") then
+        if path = package.searchpath(rest, `$LANG_DIR/?.lus`) then
+            return assert(loadfile(path)), path
+        end
     end
 
-    local path = package.searchpath(rest, LANG_DIR .. "/?.lus")
-
-    if path == nil then
-        return nil
-    end
-
-    return assert(loadfile(path)), path
+    return nil
 end)
 
 local document = require("lus-language.document")

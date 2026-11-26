@@ -5,19 +5,13 @@ local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 pledge("load", `fs:read=$LANG_DIR/*`)
 
 table.insert(package.searchers, 2, function(name)
-    local rest = string.match(name, "^lus%-language%.(.+)$")
-
-    if rest == nil then
-        return nil
+    if rest = string.match(name, "^lus%-language%.(.+)$") then
+        if path = package.searchpath(rest, `$LANG_DIR/?.lus`) then
+            return assert(loadfile(path)), path
+        end
     end
 
-    local path = package.searchpath(rest, LANG_DIR .. "/?.lus")
-
-    if path == nil then
-        return nil
-    end
-
-    return assert(loadfile(path)), path
+    return nil
 end)
 
 -- Override io.write to capture output BEFORE loading wasm.lus
@@ -26,10 +20,13 @@ local capture_buffer = ""
 local _original_write = io.write
 
 io.write = function(...)
-    for i = 1, select("#", ...) do
-        capture_buffer = capture_buffer .. tostring(select(i, ...))
+    local parts = table.pack(...)
+
+    for i = 1, parts.n do
+        parts[i] = tostring(parts[i])
     end
 
+    capture_buffer = capture_buffer .. table.concat(parts)
     return io  -- match io.write chaining
 end
 
@@ -435,14 +432,14 @@ end
 local function rejects_ambiguous_or_noncanonical_framing_test()
     local body = "{}"
     local cases = {
-        "Content-Length: 2\n\n" .. body,
-        "Content-Length: 2\r\nContent-Length: 2\r\n\r\n" .. body,
-        "Content-Length: 1\r\n\r\n" .. body,
-        "Content-Length: 3\r\n\r\n" .. body,
+        `Content-Length: 2\n\n$body`,
+        `Content-Length: 2\r\nContent-Length: 2\r\n\r\n$body`,
+        `Content-Length: 1\r\n\r\n$body`,
+        `Content-Length: 3\r\n\r\n$body`,
         "Content-Length: 16777217\r\n\r\n",
-        "Content-Length: +2\r\n\r\n" .. body,
-        "Content-Length: 02\r\n\r\n" .. body,
-        "Content-Length: 2\r\nContent-Type: text/plain\r\n\r\n" .. body,
+        `Content-Length: +2\r\n\r\n$body`,
+        `Content-Length: 02\r\n\r\n$body`,
+        `Content-Length: 2\r\nContent-Type: text/plain\r\n\r\n$body`,
     }
 
     for _, frame in ipairs(cases) do
@@ -516,9 +513,9 @@ end
 
 local ROOT_A = "vscode-remote://ssh-remote+box/work/a"
 local ROOT_B = "vscode-remote://ssh-remote+box/work/b"
-local URI_A = ROOT_A .. "/lib/tool.lus"
-local URI_B = ROOT_B .. "/lib/tool.lus"
-local MIRROR_URI = ROOT_A .. "/closed.lus"
+local URI_A = `$ROOT_A/lib/tool.lus`
+local URI_B = `$ROOT_B/lib/tool.lus`
+local MIRROR_URI = `$ROOT_A/closed.lus`
 
 local function upsert(root_uri, relative_path, exact_uri, version, text)
     send_notification("lus/workspace/upsert", {
@@ -544,7 +541,7 @@ local function accepts_a_silent_workspace_seed_before_initialization_test()
         params = {
             rootUri = ROOT_A,
             relativePath = "seeded.lus",
-            uri = ROOT_A .. "/seeded.lus",
+            uri = `$ROOT_A/seeded.lus`,
             version = 1,
             text = "return true",
         },
@@ -557,14 +554,14 @@ local function accepts_a_silent_workspace_seed_before_initialization_test()
         params = { workspaceFolders = { { uri = ROOT_A, name = "a" } } },
     })
     assert(response.result.serverInfo.version == "2.0.0-dev")
-    assert(modules.resolve("seeded", ROOT_A .. "/main.lus") == ROOT_A .. "/seeded.lus")
+    assert(modules.resolve("seeded", `$ROOT_A/main.lus`) == `$ROOT_A/seeded.lus`)
     capture_buffer = ""
     fresh.dispatch({
         jsonrpc = "2.0",
         method = "initialized",
         params = {},
     })
-    assert(string.find(capture_buffer, ROOT_A .. "/seeded.lus", 1, true) ~= nil)
+    assert(string.find(capture_buffer, `$ROOT_A/seeded.lus`, 1, true) ~= nil)
 end
 
 local function resolves_the_requesting_root_first_and_preserves_exact_uris_test()
@@ -572,35 +569,29 @@ local function resolves_the_requesting_root_first_and_preserves_exact_uris_test(
     upsert(ROOT_A, "lib/tool.lus", URI_A, 1, "local M = {}\nM.a = 1\nreturn M")
     upsert(ROOT_B, "lib/tool.lus", URI_B, 1, "local M = {}\nM.b = 2\nreturn M")
 
-    assert(modules.resolve("lib.tool", ROOT_A .. "/main.lus") == URI_A)
-    assert(modules.resolve("lib.tool", ROOT_B .. "/main.lus") == URI_B)
+    assert(modules.resolve("lib.tool", `$ROOT_A/main.lus`) == URI_A)
+    assert(modules.resolve("lib.tool", `$ROOT_B/main.lus`) == URI_B)
 end
 
 local function uses_the_documented_candidate_order_including_lua_init_files_test()
-    local direct = ROOT_B .. "/pkg.lus"
-    upsert(ROOT_B, "pkg/init.lus", ROOT_B .. "/pkg/init.lus", 1, "return {from_init = true}")
+    local direct = `$ROOT_B/pkg.lus`
+    upsert(ROOT_B, "pkg/init.lus", `$ROOT_B/pkg/init.lus`, 1, "return {from_init = true}")
     upsert(ROOT_B, "pkg.lus", direct, 1, "return {from_file = true}")
-    upsert(
-        ROOT_B,
-        "fallback/init.lua",
-        ROOT_B .. "/fallback/init.lua",
-        1,
-        "return {lua_init = true}"
-    )
+    upsert(ROOT_B, "fallback/init.lua", `$ROOT_B/fallback/init.lua`, 1, "return {lua_init = true}")
 
-    assert(modules.resolve("pkg", ROOT_B .. "/main.lus") == direct)
-    assert(modules.resolve("fallback", ROOT_B .. "/main.lus") == ROOT_B .. "/fallback/init.lua")
+    assert(modules.resolve("pkg", `$ROOT_B/main.lus`) == direct)
+    assert(modules.resolve("fallback", `$ROOT_B/main.lus`) == `$ROOT_B/fallback/init.lua`)
 end
 
 local function invalidates_versioned_module_exports_without_cross_root_leakage_test()
-    local a_exports = modules.get_exports("lib.tool", ROOT_A .. "/main.lus")
-    local b_exports = modules.get_exports("lib.tool", ROOT_B .. "/main.lus")
+    local a_exports = modules.get_exports("lib.tool", `$ROOT_A/main.lus`)
+    local b_exports = modules.get_exports("lib.tool", `$ROOT_B/main.lus`)
     assert(a_exports[1].name == "a")
     assert(b_exports[1].name == "b")
 
     upsert(ROOT_A, "lib/tool.lus", URI_A, 2, "local M = {}\nM.updated = 3\nreturn M")
-    a_exports = modules.get_exports("lib.tool", ROOT_A .. "/main.lus")
-    b_exports = modules.get_exports("lib.tool", ROOT_B .. "/main.lus")
+    a_exports = modules.get_exports("lib.tool", `$ROOT_A/main.lus`)
+    b_exports = modules.get_exports("lib.tool", `$ROOT_B/main.lus`)
     assert(a_exports[1].name == "updated")
     assert(b_exports[1].name == "b")
 end
@@ -609,21 +600,21 @@ local function promotes_a_newly_created_higher_priority_module_candidate_test()
     upsert(
         ROOT_B,
         "promote.lus",
-        ROOT_B .. "/promote.lus",
+        `$ROOT_B/promote.lus`,
         1,
         "local M = {}\nM.from_b = true\nreturn M"
     )
-    local exports = modules.get_exports("promote", ROOT_A .. "/main.lus")
+    local exports = modules.get_exports("promote", `$ROOT_A/main.lus`)
     assert(exports[1].name == "from_b")
 
     upsert(
         ROOT_A,
         "promote.lus",
-        ROOT_A .. "/promote.lus",
+        `$ROOT_A/promote.lus`,
         1,
         "local M = {}\nM.from_a = true\nreturn M"
     )
-    exports = modules.get_exports("promote", ROOT_A .. "/main.lus")
+    exports = modules.get_exports("promote", `$ROOT_A/main.lus`)
     assert(exports[1].name == "from_a")
 end
 
@@ -667,7 +658,7 @@ local function deletes_closed_mirrors_and_retains_uri_authorities_test()
 
     assert(uri_util.to_path("file://server/share/a.lus") == "//server/share/a.lus")
     assert(uri_util.within("file://SERVER/Share/Project", "file://server/share/project/a.lus"))
-    assert(uri_util.join(ROOT_A, "space name/main.lus") == ROOT_A .. "/space%20name/main.lus")
+    assert(uri_util.join(ROOT_A, "space name/main.lus") == `$ROOT_A/space%20name/main.lus`)
 end
 
 local function resolves_windows_drive_and_unc_workspace_uris_test()
@@ -689,34 +680,34 @@ end
 
 local function uses_recorded_and_most_specific_nested_workspace_roots_test()
     local parent_root = "vscode-remote://ssh-remote+box/work"
-    local nested_root = parent_root .. "/project"
+    local nested_root = `$parent_root/project`
     send_notification("lus/workspace/reset", {
         roots = { parent_root, nested_root, ROOT_B },
     })
     upsert(
         parent_root,
         "lib/choice.lus",
-        parent_root .. "/lib/choice.lus",
+        `$parent_root/lib/choice.lus`,
         1,
         "local M = {}\nM.from_parent = true\nreturn M"
     )
     upsert(
         nested_root,
         "lib/choice.lus",
-        nested_root .. "/lib/choice.lus",
+        `$nested_root/lib/choice.lus`,
         1,
         "local M = {}\nM.from_nested = true\nreturn M"
     )
-    upsert(parent_root, "lib/remaining.lus", parent_root .. "/lib/remaining.lus", 1, "return true")
-    upsert(ROOT_B, "lib/remaining.lus", ROOT_B .. "/lib/remaining.lus", 1, "return true")
+    upsert(parent_root, "lib/remaining.lus", `$parent_root/lib/remaining.lus`, 1, "return true")
+    upsert(ROOT_B, "lib/remaining.lus", `$ROOT_B/lib/remaining.lus`, 1, "return true")
 
-    local recorded_uri = nested_root .. "/src/recorded.lus"
+    local recorded_uri = `$nested_root/src/recorded.lus`
     upsert(parent_root, "project/src/recorded.lus", recorded_uri, 1, "return true")
-    assert(modules.resolve("lib.choice", recorded_uri) == parent_root .. "/lib/choice.lus")
+    assert(modules.resolve("lib.choice", recorded_uri) == `$parent_root/lib/choice.lus`)
 
-    local unrecorded_uri = nested_root .. "/src/unrecorded.lus"
-    assert(modules.resolve("lib.choice", unrecorded_uri) == nested_root .. "/lib/choice.lus")
-    assert(modules.resolve("lib.remaining", unrecorded_uri) == parent_root .. "/lib/remaining.lus")
+    local unrecorded_uri = `$nested_root/src/unrecorded.lus`
+    assert(modules.resolve("lib.choice", unrecorded_uri) == `$nested_root/lib/choice.lus`)
+    assert(modules.resolve("lib.remaining", unrecorded_uri) == `$parent_root/lib/remaining.lus`)
 
     local parent_exports = modules.get_exports("lib.choice", recorded_uri)
     local nested_exports = modules.get_exports("lib.choice", unrecorded_uri)
@@ -727,11 +718,11 @@ end
 local function treats_unavailable_disk_probes_as_absent_test()
     local denied_root = "file:///outside-lsp-workspace"
     send_notification("lus/workspace/reset", { roots = { denied_root } })
-    local ok, resolved = catch modules.resolve("missing", denied_root .. "/main.lus")
+    local ok, resolved = catch modules.resolve("missing", `$denied_root/main.lus`)
     assert(ok)
     assert(resolved == nil)
 
-    local denied_uri = denied_root .. "/lint.lus"
+    local denied_uri = `$denied_root/lint.lus`
     local raw = send_notification("textDocument/didOpen", {
         textDocument = {
             uri = denied_uri,
@@ -744,7 +735,7 @@ local function treats_unavailable_disk_probes_as_absent_test()
     local found_unused = false
 
     for _, message in ipairs(messages) do
-        for _, diagnostic in ipairs(message.params and message.params.diagnostics or {}) do
+        for _, diagnostic in ipairs(message.params?.diagnostics or {}) do
             if string.find(diagnostic.message, "Unused", 1, true) then
                 found_unused = true
             end
@@ -757,17 +748,14 @@ local function treats_unavailable_disk_probes_as_absent_test()
     })
 
     send_notification("lus/workspace/reset", { roots = {} })
-    ok, resolved = catch modules.resolve(
-        "/outside-lsp-workspace/missing",
-        denied_root .. "/main.lus"
-    )
+    ok, resolved = catch modules.resolve("/outside-lsp-workspace/missing", `$denied_root/main.lus`)
     assert(ok)
     assert(resolved == nil)
 end
 
 local function does_not_probe_host_disk_for_mirrored_or_virtual_origins_test()
     local file_root = "file:///mirrored-lsp-workspace"
-    local file_origin = file_root .. "/main.lus"
+    local file_origin = `$file_root/main.lus`
     send_notification("lus/workspace/reset", { roots = { file_root } })
     upsert(file_root, "main.lus", file_origin, 1, "return true")
 
@@ -786,7 +774,7 @@ local function does_not_probe_host_disk_for_mirrored_or_virtual_origins_test()
     assert(probes == 0)
 
     local virtual_root = "memory://workspace/project"
-    local virtual_origin = virtual_root .. "/main.lus"
+    local virtual_origin = `$virtual_root/main.lus`
     send_notification("lus/workspace/reset", { roots = { virtual_root } })
     upsert(virtual_root, "main.lus", virtual_origin, 1, "return true")
     probes = 0

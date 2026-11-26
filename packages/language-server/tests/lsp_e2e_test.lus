@@ -5,19 +5,13 @@ local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 pledge("load", `fs:read=$LANG_DIR/*`)
 
 table.insert(package.searchers, 2, function(name)
-    local rest = string.match(name, "^lus%-language%.(.+)$")
-
-    if rest == nil then
-        return nil
+    if rest = string.match(name, "^lus%-language%.(.+)$") then
+        if path = package.searchpath(rest, `$LANG_DIR/?.lus`) then
+            return assert(loadfile(path)), path
+        end
     end
 
-    local path = package.searchpath(rest, LANG_DIR .. "/?.lus")
-
-    if path == nil then
-        return nil
-    end
-
-    return assert(loadfile(path)), path
+    return nil
 end)
 
 -- Override io.write to capture output BEFORE loading wasm.lus
@@ -26,10 +20,13 @@ local capture_buffer = ""
 local _original_write = io.write
 
 io.write = function(...)
-    for i = 1, select("#", ...) do
-        capture_buffer = capture_buffer .. tostring(select(i, ...))
+    local parts = table.pack(...)
+
+    for i = 1, parts.n do
+        parts[i] = tostring(parts[i])
     end
 
+    capture_buffer = capture_buffer .. table.concat(parts)
     return io
 end
 
@@ -55,9 +52,8 @@ end
 
 local function send(msg)
     capture_buffer = ""
-    local ok, _err = catch _lsp_handle(tojson(msg))  -- lus: allow(undefined-global)
 
-    if not ok then
+    if not catch _lsp_handle(tojson(msg)) then  -- lus: allow(undefined-global)
         -- Server threw; return empty so callers see no diagnostics
         return ""
     end
@@ -507,7 +503,7 @@ local function typing_local_x_from_t_incrementally_never_flags_partial_keywords_
                 local varname = string.match(d.message, "'(%w+)'")
 
                 if varname == "fro" or varname == "fr" or varname == "f" then
-                    error("Spurious var-not-declared for partial keyword: " .. d.message)
+                    error(`Spurious var-not-declared for partial keyword: $(d.message)`)
                 end
             end
         end

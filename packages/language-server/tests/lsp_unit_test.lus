@@ -5,19 +5,13 @@ local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 pledge("load", `fs:read=$LANG_DIR/*`)
 
 table.insert(package.searchers, 2, function(name)
-    local rest = string.match(name, "^lus%-language%.(.+)$")
-
-    if rest == nil then
-        return nil
+    if rest = string.match(name, "^lus%-language%.(.+)$") then
+        if path = package.searchpath(rest, `$LANG_DIR/?.lus`) then
+            return assert(loadfile(path)), path
+        end
     end
 
-    local path = package.searchpath(rest, LANG_DIR .. "/?.lus")
-
-    if path == nil then
-        return nil
-    end
-
-    return assert(loadfile(path)), path
+    return nil
 end)
 
 -- Load LS modules
@@ -951,7 +945,7 @@ end
     -- Split source into lines for validation
     local lines = {}
 
-    for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+    for line in (`$source\n`):gmatch("([^\n]*)\n") do
         lines[#lines + 1] = line
     end
 
@@ -1038,7 +1032,7 @@ local function semantic_tokens_multi_line_comment_skipped_test()
 
     local lines = {}
 
-    for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+    for line in (`$source\n`):gmatch("([^\n]*)\n") do
         lines[#lines + 1] = line
     end
 
@@ -1095,7 +1089,7 @@ local function semantic_tokens_stale_ast_after_failed_parse_returns_empty_test()
     if #data > 0 then
         local lines = {}
 
-        for line in (source_v2 .. "\n"):gmatch("([^\n]*)\n") do
+        for line in (`$source_v2\n`):gmatch("([^\n]*)\n") do
             lines[#lines + 1] = line
         end
 
@@ -1126,7 +1120,7 @@ local function semantic_tokens_stale_ast_after_failed_parse_returns_empty_test()
             local cur_text = document.get_text(uri)
             local cur_lines = {}
 
-            for line in (cur_text .. "\n"):gmatch("([^\n]*)\n") do
+            for line in (`$cur_text\n`):gmatch("([^\n]*)\n") do
                 cur_lines[#cur_lines + 1] = line
             end
 
@@ -1217,7 +1211,7 @@ local function semantic_tokens_from_examples_full_file_test()
 
     local lines = {}
 
-    for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+    for line in (`$source\n`):gmatch("([^\n]*)\n") do
         lines[#lines + 1] = line
     end
 
@@ -1261,7 +1255,7 @@ local function semantic_tokens_from_examples_full_file_test()
         local src_line = abs_line + 1
         local src_col = abs_col + 1
         local line_text = lines[src_line] or ""
-        local tname = type_names[token_type] or ("type" .. token_type)
+        local tname = type_names[token_type] or `type$token_type`
 
         -- Check bounds
         if src_col < 1 or src_col + length - 1 > #line_text then
@@ -1683,7 +1677,7 @@ local function counts_utf16_units_in_fix_positions_test()
         end
     end
 
-    assert(hint and hint.data, "the hint carries its fix")
+    assert(hint?.data, "the hint carries its fix")
     local edit = hint.data.fix[1]
     -- The emoji before the call takes two UTF-16 code units.
     assert(edit.range.start.character == 26, tostring(edit.range.start.character))
@@ -1790,7 +1784,7 @@ local function tokens_correct_after_inserting_if_from_block_into_from_lus_test()
     local modified_text = document.get_text(uri)
     local lines = {}
 
-    for line in (modified_text .. "\n"):gmatch("([^\n]*)\n") do
+    for line in (`$modified_text\n`):gmatch("([^\n]*)\n") do
         lines[#lines + 1] = line
     end
 
@@ -1841,7 +1835,7 @@ local function tokens_correct_after_inserting_if_from_block_into_from_lus_test()
         local src_line = abs_line + 1
         local src_col = abs_col + 1
         local line_text = lines[src_line] or ""
-        local tname = type_names[token_type] or ("type" .. token_type)
+        local tname = type_names[token_type] or `type$token_type`
 
         -- Check bounds
         if src_col < 1 or src_col + length - 1 > #line_text then
@@ -2007,7 +2001,7 @@ local function exact_vs_code_edit_replay_character_by_character_typing_test()
     local function get_line(text, line_1based)
         local i = 1
 
-        for l in (text .. "\n"):gmatch("([^\n]*)\n") do
+        for l in (`$text\n`):gmatch("([^\n]*)\n") do
             if i == line_1based then
                 return l
             end

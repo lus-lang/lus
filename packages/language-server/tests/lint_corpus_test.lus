@@ -4,24 +4,18 @@ local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 
 -- The linted corpus is the conformance suite under tests/conformance in the repository root.
 local ROOT = string.match(LANG_DIR, "^(.*)[/\\]packages[/\\][^/\\]*$")
-local CORPUS = ROOT .. "/tests/conformance"
+local CORPUS = `$ROOT/tests/conformance`
 
-pledge("load", `fs:read=$LANG_DIR/*`, "fs:read=" .. CORPUS, `fs:read=$CORPUS/*`)
+pledge("load", `fs:read=$LANG_DIR/*`, `fs:read=$CORPUS`, `fs:read=$CORPUS/*`)
 
 table.insert(package.searchers, 2, function(name)
-    local rest = string.match(name, "^lus%-language%.(.+)$")
-
-    if rest == nil then
-        return nil
+    if rest = string.match(name, "^lus%-language%.(.+)$") then
+        if path = package.searchpath(rest, `$LANG_DIR/?.lus`) then
+            return assert(loadfile(path)), path
+        end
     end
 
-    local path = package.searchpath(rest, LANG_DIR .. "/?.lus")
-
-    if path == nil then
-        return nil
-    end
-
-    return assert(loadfile(path)), path
+    return nil
 end)
 
 local document = require("lus-language.document")
@@ -61,7 +55,7 @@ local function no_false_undefined_global_warnings_test(name)
     local source = f:read("a")
     f:close()
 
-    local uri = "file:///lint-test/" .. name
+    local uri = `file:///lint-test/$name`
     document.open(uri, 1, source)
     ast_mod.parse(uri)
     local diagnostics = linting.compute(uri)
