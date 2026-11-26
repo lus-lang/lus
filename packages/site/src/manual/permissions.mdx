@@ -158,7 +158,7 @@ print((catch os.setenv("PATH", "/tmp")))  --> false
 
 ### Program values
 
-An `exec` value selects the programs that [`os.spawn`](/manual/api#os.spawn) may start. A value without a separator matches the name of the program as `os.spawn` receives it, so `exec=git` allows `os.spawn({"git", ...})`. A value with a separator is a path glob, which matches the absolute path that the name resolves to, like a [filesystem value](#filesystem-values). `exec=/usr/bin/*` allows every program in `/usr/bin`, whatever name started it.
+An `exec` value selects the programs that [`os.spawn`](/manual/api#os.spawn) may start. A value without a separator matches the name of the program as `os.spawn` receives it, so `exec=git` allows `os.spawn({"git", ...})`. A value with a separator is a path glob, which matches the absolute path that the name resolves to, like a [filesystem value](#filesystem-values). `exec=/usr/bin/*` allows every program in `/usr/bin`, whatever name started it. On Windows a path value also covers that path with one of the extensions `.com`, `.exe`, `.bat`, and `.cmd` added, as Windows adds them when it runs a program, so `exec=C:/tools/lus` allows `C:\tools\lus.exe`.
 
 `os.execute` and `io.popen` run the system shell, which can start any program, so a grant with a value never allows them. The following script may run `sort` and no shell command.
 

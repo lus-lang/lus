@@ -63,7 +63,8 @@ const Options = struct {
     list: bool = false,
     /// Where to write the coverage as an lcov tracefile.
     coverage_out: ?[]const u8 = null,
-    tmp_root: []const u8 = "/tmp",
+    /// The directory under which each file gets a fresh working directory.
+    tmp_root: []const u8 = "",
 
     fn fileTimeout(o: *const Options) i64 {
         return o.file_timeout_s orelse o.timeout_s *| 10;
@@ -144,7 +145,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         }
     }
     if (o.paths.items.len == 0) try o.paths.append(gpa, ".");
-    if (init.environ_map.get("TMPDIR")) |t| o.tmp_root = t;
+    o.tmp_root = @import("../lib/os.zig").tempDirFrom(init.environ_map);
     if (o.list) return listTests(init, &o);
     return runAll(init, &o);
 }
@@ -652,7 +653,7 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
     const tmp_root = pool.o.tmp_root;
     var rnd: [8]u8 = undefined;
     io.random(&rnd);
-    const dir = try std.fmt.allocPrint(gpa, "{s}/lus-test-{x}", .{ std.mem.trimEnd(u8, tmp_root, "/"), std.mem.readInt(u64, &rnd, .little) });
+    const dir = try std.fmt.allocPrint(gpa, "{s}{s}lus-test-{x}", .{ tmp_root, @import("../lib/os.zig").path_separator, std.mem.readInt(u64, &rnd, .little) });
     defer gpa.free(dir);
     try std.Io.Dir.cwd().createDirPath(io, dir);
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};

@@ -264,6 +264,39 @@ local function a_restricted_grant_refuses_shell_commands_test()
     assert(under({ "exec=lus-spawn-test-*" }, code) == "false false")
 end
 
+-- The path of the binary under test holds `..`. On Windows it also mixes
+-- both separators and leaves out the extension of lus.exe. A grant of that
+-- path as written covers the program it names.
+local function a_grant_of_the_written_path_covers_the_program_test()
+    local code = 'io.write(tostring((catch os.spawn({bin, "-e", ""}))))'
+    assert(under({ `exec=$lus_bin` }, code) == "true")
+end
+
+-- A child whose environment names a temporary directory creates its
+-- temporary files there, under a grant of that directory alone.
+local function temporary_files_go_to_the_directory_of_the_environment_test()
+    local base = os.tmpname()
+    local dir = `$base.d`
+    fs.createdirectory(dir)
+    local env = { TMPDIR = dir, TMP = dir, TEMP = dir }
+
+    for _, name in ipairs({ "PATH", "SystemRoot" }) do
+        env[name] = os.getenv(name)
+    end
+
+    local code = string.format(
+        'local dir = %q local f = io.tmpfile() f:write("x") f:seek("set") io.write(f:read("a"), " ", tostring(os.tmpname():find(dir, 1, true) == 1))',
+        dir
+    )
+    local argv = { lus_bin, `-Pfs:write=$dir/*`, "-e", code }
+    local p = os.spawn(argv, { stdout = "pipe", stderr = "stdout", env = env })
+    local text = p.stdout:read("a")
+    exit_of(p)
+    fs.remove(dir, true)
+    fs.remove(base)
+    assert(text == "x true", text)
+end
+
 local function bad_arguments_raise_test()
     assert(not catch os.spawn({}))
     assert(not catch os.spawn({ "" }))

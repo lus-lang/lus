@@ -1104,8 +1104,8 @@ fn ioTmpfile(l: *Thread) Error!u32 {
     if (!@import("../vm/pledge.zig").allowed(l, "fs:write", null)) return l.raiseFmt("permission \"fs:write\" denied for io.tmpfile", .{});
     var rnd: [8]u8 = undefined;
     l.g.io.random(&rnd);
-    const dir = if (l.g.environ) |env| env.get("TMPDIR") orelse "/tmp" else "/tmp";
-    const path = std.fmt.allocPrint(l.g.gpa, "{s}/lus_{x}", .{ std.mem.trimEnd(u8, dir, "/"), std.mem.readInt(u64, &rnd, .little) }) catch return l.raiseMem();
+    const os_lib = @import("os.zig");
+    const path = std.fmt.allocPrint(l.g.gpa, "{s}{s}lus_{x}", .{ os_lib.tempDir(l), os_lib.path_separator, std.mem.readInt(u64, &rnd, .little) }) catch return l.raiseMem();
     defer l.g.gpa.free(path);
     // A grant limited to some paths must cover the file.
     try @import("../vm/pledge.zig").require(l, "fs:write", path);

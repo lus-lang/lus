@@ -612,6 +612,25 @@ fn canonicalPatternWith(gpa: Allocator, raw: []const u8, keep_last: bool, rules:
     return std.mem.concat(gpa, u8, &.{ rp, rest });
 }
 
+/// The extensions Windows tries when it runs a program named without one.
+const program_extensions = [_][]const u8{ ".com", ".exe", ".bat", ".cmd" };
+
+/// Whether a granted program path covers `resolved`, the canonical path of
+/// the program a call runs. Under the Windows rules a grant also covers the
+/// program with one of the extensions Windows adds, so a grant of
+/// `C:/tools/lus` covers `C:/tools/lus.exe` as running `C:/tools/lus` does.
+fn programPathMatches(granted: []const u8, resolved: []const u8, rules: PathRules) bool {
+    if (globMatchCase(granted, resolved, rules.windows)) return true;
+    if (!rules.windows) return false;
+    const base = splitParent(resolved, rules)[1];
+    const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse return false;
+    const ext = base[dot..];
+    for (program_extensions) |e| {
+        if (std.ascii.eqlIgnoreCase(ext, e)) return globMatchCase(granted, resolved[0 .. resolved.len - ext.len], true);
+    }
+    return false;
+}
+
 fn valueMatches(cap: Capability, granted: []const u8, requested: []const u8, canon_req: ?[]const u8) bool {
     return switch (cap.kind) {
         .none => true,
@@ -621,7 +640,7 @@ fn valueMatches(cap: Capability, granted: []const u8, requested: []const u8, can
         .custom => if (cap.match) |m| m(cap.ctx, granted, requested) else false,
         .program => {
             const nul = std.mem.indexOfScalar(u8, requested, 0) orelse requested.len;
-            if (hasSeparator(granted)) return if (canon_req) |c| globMatchCase(granted, c, host_rules.windows) else false;
+            if (hasSeparator(granted)) return if (canon_req) |c| programPathMatches(granted, c, host_rules) else false;
             const written = requested[0..nul];
             return written.len > 0 and globMatch(granted, written);
         },
@@ -1034,6 +1053,20 @@ test "canonical paths under the Windows rules" {
     try std.testing.expectEqualStrings("C:/Temp/lus-test-1/h3c3/blocked-link", link);
     // Grants and requests compare without regard to case.
     try std.testing.expect(globMatchCase("C:/Temp/lus-test-1/baselib_*", "c:/temp/LUS-TEST-1/baselib_1/a", true));
+}
+
+test "program paths under the Windows rules" {
+    const W = PathRules.win;
+    try std.testing.expect(programPathMatches("D:/a/bin/lus", "D:/a/bin/lus.exe", W));
+    try std.testing.expect(programPathMatches("d:/A/bin/lus", "D:/a/bin/LUS.EXE", W));
+    try std.testing.expect(programPathMatches("D:/a/bin/lus.exe", "D:/a/bin/lus.exe", W));
+    try std.testing.expect(programPathMatches("D:/a/bin/*", "D:/a/bin/lus.exe", W));
+    try std.testing.expect(programPathMatches("D:/a/bin/tool", "D:/a/bin/tool.cmd", W));
+    try std.testing.expect(!programPathMatches("D:/a/bin/lus", "D:/a/bin/lus.dll", W));
+    try std.testing.expect(!programPathMatches("D:/a/bin/lus", "D:/a/bin/lusx.exe", W));
+    try std.testing.expect(!programPathMatches("D:/a/bin/lus", "D:/a/lib/lus.exe", W));
+    try std.testing.expect(!programPathMatches("/a/bin/lus", "/a/bin/lus.exe", PathRules.posix));
+    try std.testing.expect(!programPathMatches("/a/bin/lus", "/a/bin/LUS", PathRules.posix));
 }
 
 test "device names and streams under the Windows rules" {

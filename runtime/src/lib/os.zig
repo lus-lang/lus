@@ -62,6 +62,37 @@ pub fn envGet(l: *Thread, name: []const u8) ?[]const u8 {
     return null;
 }
 
+/// The directory for temporary files, looked up as the system looks it
+/// up: `TMP`, then `TEMP`, then `USERPROFILE` on Windows, and `TMPDIR`
+/// elsewhere. `env` is any value with a `get` method that returns the value
+/// of a variable. Trailing separators are removed, so the root comes back
+/// empty.
+pub fn tempDirFrom(env: anytype) []const u8 {
+    if (builtin.os.tag == .windows) {
+        for ([_][]const u8{ "TMP", "TEMP", "USERPROFILE" }) |name| {
+            if (env.get(name)) |v| if (v.len > 0) return std.mem.trimEnd(u8, v, "/\\");
+        }
+        return ".";
+    }
+    return std.mem.trimEnd(u8, env.get("TMPDIR") orelse "/tmp", "/");
+}
+
+/// The directory for temporary files of the environment of `l`.
+pub fn tempDir(l: *Thread) []const u8 {
+    return tempDirFrom(ThreadEnv{ .l = l });
+}
+
+const ThreadEnv = struct {
+    l: *Thread,
+
+    fn get(e: ThreadEnv, name: []const u8) ?[]const u8 {
+        return envGet(e.l, name);
+    }
+};
+
+/// The separator the host puts between the components of a path.
+pub const path_separator: []const u8 = if (builtin.os.tag == .windows) "\\" else "/";
+
 fn getenv(l: *Thread) Error!u32 {
     const name = try aux.checkBytes(l, 1);
     try @import("../vm/pledge.zig").require(l, "env:read", name);
@@ -283,11 +314,8 @@ fn tmpname(l: *Thread) Error!u32 {
     // environment. A grant limited to some paths must cover the file.
     if (!pledge.allowed(l, "fs:write", null)) return l.raiseFmt("permission \"fs:write\" denied for os.tmpname", .{});
     const io = l.g.io;
-    const dir: []const u8 = if (builtin.os.tag == .windows)
-        (envGet(l, "TEMP") orelse ".")
-    else
-        std.mem.trimEnd(u8, envGet(l, "TMPDIR") orelse "/tmp", "/");
-    const sep: []const u8 = if (builtin.os.tag == .windows) "\\" else "/";
+    const dir = tempDir(l);
+    const sep = path_separator;
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     var seed: u64 = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
     seed ^= @intFromPtr(l) ^ l.g.seed;
@@ -299,7 +327,7 @@ fn tmpname(l: *Thread) Error!u32 {
             seed = seed *% 6364136223846793005 +% 1442695040888963407;
             c.* = alphabet[@intCast((seed >> 33) % alphabet.len)];
         }
-        const path = std.fmt.bufPrint(&buf, "{s}{s}lua_{s}", .{ if (dir.len == 0) "/" else dir, if (dir.len == 0) "" else sep, suffix }) catch break;
+        const path = std.fmt.bufPrint(&buf, "{s}{s}lua_{s}", .{ dir, sep, suffix }) catch break;
         try pledge.require(l, "fs:write", path);
         const f = std.Io.Dir.cwd().createFile(io, path, .{ .exclusive = true }) catch |e| switch (e) {
             error.PathAlreadyExists => continue,
