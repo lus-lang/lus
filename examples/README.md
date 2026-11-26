@@ -13,7 +13,7 @@ Start the file with two comment lines: the title and a sentence that says what t
 
 Set `playground: false` when the program uses files, processes, workers, signals, or the network. Add `-- posix: true` as a third line when the program cannot run on Windows. Declare every global with `global`, then pledge the narrowest permissions right after it.
 
-Write the exact line that each `print` shows as a comment that starts with `-->`, either after the call or on the lines below it. Annotate only output that stays the same from run to run. Then add the name of the file to a section of `index.json`.
+Write the exact line that each `print` shows as a comment that starts with `-->`, either after the call or on the lines below it. Annotate only output that stays the same from run to run. When a line differs between platforms, such as a path that holds the separator, write it twice, once in a comment that starts with `-->(posix)` and once in a comment that starts with `-->(windows)`. Then add the name of the file to a section of `index.json`.
 
 ## Checking an example
 

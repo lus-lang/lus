@@ -2,16 +2,27 @@
 -- playground: true
 global print, fs, table
 
--- join puts the platform separator between components. An absolute component
--- replaces everything before it. The output shown is that of POSIX systems.
+-- join puts the platform separator between components and keeps each
+-- component as written. An absolute component replaces everything before it.
+-- Windows separates components with a backslash and other systems with a
+-- slash, so each line of output that holds a separator is shown for both
+-- kinds of system.
 local report = fs.path.join("projects", "garden", "report.pdf")
-print(report)  --> projects/garden/report.pdf
-print(fs.path.join("projects", "/etc", "hosts"))  --> /etc/hosts
-print(fs.path.separator)  --> /
+print(report)
+-->(posix) projects/garden/report.pdf
+-->(windows) projects\garden\report.pdf
+print(fs.path.join("projects", "/etc", "hosts"))
+-->(posix) /etc/hosts
+-->(windows) /etc\hosts
+print(fs.path.separator)
+-->(posix) /
+-->(windows) \
 
 -- name is the last component and parent is everything before it.
 print(fs.path.name(report))  --> report.pdf
-print(fs.path.parent(report))  --> projects/garden
+print(fs.path.parent(report))
+-->(posix) projects/garden
+-->(windows) projects\garden
 print(fs.path.parent("report.pdf"))  --> .
 
 -- split returns the components as an array. An absolute path starts with an
@@ -40,8 +51,12 @@ local function with_extension(path, ext)
     return fs.path.join(fs.path.parent(path), `$(stem(path)).$ext`)
 end
 
-print(with_extension(report, "txt"))  --> projects/garden/report.txt
+print(with_extension(report, "txt"))
+-->(posix) projects/garden/report.txt
+-->(windows) projects\garden\report.txt
 
 -- delimiter separates the entries of a list of paths such as PATH.
 local search = table.concat({ "/usr/local/bin", "/usr/bin" }, fs.path.delimiter)
-print(search)  --> /usr/local/bin:/usr/bin
+print(search)
+-->(posix) /usr/local/bin:/usr/bin
+-->(windows) /usr/local/bin;/usr/bin

@@ -23,21 +23,23 @@ end
 
 -- Each step gives the path, its kind, and whether it is a link. A directory
 -- comes before its entries and names are sorted, so the order is the same on
--- every system.
+-- every system. The loop prints the name of each entry, indented under its
+-- parent, so the output holds no path separator.
 for path, kind in fs.walk("project") do
-    print(kind, path)
+    local depth = #fs.path.split(path) - 1
+    print(`$(("    "):rep(depth - 1))$kind $(fs.path.name(path))`)
 end
 
---> directory project/docs
---> file project/docs/guide.md
---> file project/main.lus
---> directory project/src
---> file project/src/parser.lus
---> directory project/src/util
---> file project/src/util/strings.lus
---> directory project/vendor
---> directory project/vendor/json
---> file project/vendor/json/json.lus
+--> directory docs
+-->     file guide.md
+--> file main.lus
+--> directory src
+-->     file parser.lus
+-->     directory util
+-->         file strings.lus
+--> directory vendor
+-->     directory json
+-->         file json.lus
 
 -- A filter in the loop keeps the Lus files and skips the vendor directory.
 local count = 0
@@ -55,12 +57,12 @@ print(`$count Lus files`)  --> 3 Lus files
 -- The glob and exclude options do the same filtering inside the walk, and
 -- the walk never enters an excluded directory. depth limits how far it goes.
 for path in fs.walk("project", { glob = "*.lus", exclude = "vendor" }) do
-    print(path)
+    print(fs.path.name(path))
 end
 
---> project/main.lus
---> project/src/parser.lus
---> project/src/util/strings.lus
+--> main.lus
+--> parser.lus
+--> strings.lus
 
 for path in fs.walk("project", { depth = 1 }) do
     print(fs.path.name(path))

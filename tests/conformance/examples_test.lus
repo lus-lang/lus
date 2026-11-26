@@ -2,8 +2,12 @@
 -- examples/index.json runs in a fresh temporary directory with a time
 -- limit, exits with status 0, leaves no file behind, and prints every line
 -- that a `-->` comment in its source names. Runs of whitespace compare
--- equal, so the tabs of print match the spaces of a comment.
+-- equal, so the tabs of print match the spaces of a comment. A comment
+-- that starts with `-->(posix)` or `-->(windows)` names a line that only
+-- that platform prints.
 pledge("exec", "fs", "env")
+
+local platform = package.config:sub(1, 1) == "\\" and "windows" or "posix"
 
 local lus_bin = os.getenv("LUS_BIN") or `$TEST_DIR/../../runtime/zig-out/bin/lus`
 local dir = `$TEST_DIR/../../examples`
@@ -80,7 +84,7 @@ local function example_test(name)
     local path = `$dir/$name.lus`
     local source = read(path)
 
-    if source:match("\n%-%- posix: true\n") and package.config:sub(1, 1) == "\\" then
+    if source:match("\n%-%- posix: true\n") and platform == "windows" then
         skip("the example needs a POSIX system")
     end
 
@@ -98,11 +102,20 @@ local function example_test(name)
     for line in (source .. "\n"):gmatch("([^\n]*)\n") do
         n = n + 1
 
-        if want = line:match("%-%->%s?(.*)$") then
-            assert(
-                lines[normalize(want)],
-                `$name.lus:$n prints no line "$(normalize(want))":\n$out`
-            )
+        if want = line:match("%-%->(.*)$") then
+            local only, rest = want:match("^%((%a*)%)(.*)$")
+
+            if only then
+                assert(only == "posix" or only == "windows", `$name.lus:$n names the platform "$only"`)
+                want = only == platform and rest or nil
+            end
+
+            if want then
+                assert(
+                    lines[normalize(want)],
+                    `$name.lus:$n prints no line "$(normalize(want))":\n$out`
+                )
+            end
         end
     end
 end
