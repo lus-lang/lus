@@ -140,6 +140,10 @@ Install [lsp-mode](https://github.com/emacs-lsp/lsp-mode) and [lua-mode](https:/
       :server-id 'lus)))
 ```
 
+## Call hierarchy
+
+The language server shows the callers and the callees of a function, in every editor that asks for a call hierarchy. A function is a `local function`, a `function` statement, or a local whose value is a function expression. A call to a local function finds exactly that function, even when another local of the same name hides it elsewhere. A call to a global or to a field, such as `M.scale(x)`, finds the function of that name in any open document. A call at the top level of a file has the file as its caller.
+
 ## Refactoring
 
 The language server offers refactorings for the selected code in every editor, as code actions. Each one is offered only where it keeps what the program does and where its result checks as cleanly as the source did.

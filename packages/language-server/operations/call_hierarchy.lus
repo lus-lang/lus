@@ -1,0 +1,379 @@
+global ipairs, require, string, utf8
+
+-- Call hierarchy: the functions that call a function, and the functions it
+-- calls. A function is a `local function`, a `function NAME` or
+-- `function A.B.C` statement, or a local whose value is a function
+-- expression. A call names its function by a local, by a global, or by a
+-- chain of fields. Locals resolve exactly with the resolver of
+-- `refactor.lus`. Globals and field chains match by their dotted name,
+-- across the open documents.
+
+local document = require("lus-language.document")
+local refactor = require("lus-language.operations.refactor")
+
+local I = refactor.internal
+
+local call_hierarchy = {}
+
+-- LSP symbol kinds.
+local KIND_FILE = 1
+local KIND_FUNCTION = 12
+
+-- The dotted text of a name or a chain of fields, such as `M.util.f`, or
+-- nil for any other expression.
+local function dotted(node)
+    if node.type == "name" then
+        return node.value
+    end
+
+    if node.type == "field" and node.key and node.key.type == "string" then
+        local base = dotted(node.table)
+        return base and `$base.$(node.key.value)`
+    end
+
+    return nil
+end
+
+-- The functions and calls of one document.
+local function analyze(uri)
+    local doc = document.get(uri)
+
+    if not doc then
+        return nil
+    end
+
+    local text = doc.text
+    local tree = I.parse(text)
+
+    if not tree then
+        return nil
+    end
+
+    local starts = I.line_starts(text)
+    local res = I.resolve(tree, text)
+    local decl_of = {}
+
+    for _, r in ipairs(res.refs) do
+        decl_of[r.node] = r.decl
+    end
+
+    local lines = {}
+
+    for l in string.gmatch(`$text\n`, "([^\n]*)\n") do
+        lines[#lines + 1] = l
+    end
+
+    local function lsp(offset)
+        local line, col = I.to_pos(starts, offset)
+        local units, i = 0, 1
+
+        for _, cp in utf8.codes(lines[line] or "") do
+            if i >= col then
+                break
+            end
+
+            units = units + (cp > 0xFFFF and 2 or 1)
+            i = i + 1
+        end
+
+        return { line = line - 1, character = units + (col - i) }
+    end
+
+    local function span(first, after)
+        return { start = lsp(first), ["end"] = lsp(after) }
+    end
+
+    -- The key of a declared local, by the position of its name.
+    local function local_key(d)
+        return `$uri#$(d.node.line):$(d.node.column)`
+    end
+
+    local a = { uri = uri, defs = {}, calls = {} }
+
+    local function add_def(name, key, stat, name_line, name_col, body)
+        local first = I.first_offset(starts, stat)
+        local after = I.stat_end(starts, stat) or first
+        local name_at = starts[name_line] + name_col - 1
+        a.defs[#a.defs + 1] = {
+            name = name,
+            key = key,
+            first = first,
+            after = after,
+            body = body,
+            range = span(first, after),
+            selection = span(name_at, name_at + utf8.len(name)),
+        }
+    end
+
+    I.each_statement(tree.children, function(s)
+        if s.type == "localfunc" and s.nameline then
+            -- The resolver declares the name before the body.
+            for _, d in ipairs(res.decls) do
+                if d.stat == s then
+                    add_def(s.name, local_key(d), s, s.nameline, s.namecolumn, s)
+                end
+            end
+        elseif s.type == "funcstat" and s.nameexpr then
+            if path = dotted(s.nameexpr) then
+                local root = s.nameexpr
+
+                while root.type ~= "name" do
+                    root = root.table
+                end
+
+                local d = decl_of[root]
+                local key = (s.nameexpr.type == "name" and d and d.kind ~= "global")
+                    and local_key(d)
+                    or `global:$path`
+                add_def(path, key, s, root.line, root.column, s)
+            end
+        elseif s.type == "local" and s.names and s.values then
+            for i, n in ipairs(s.names) do
+                local v = s.values[i]
+
+                if v and v.type == "funcexpr" and n.line then
+                    for _, d in ipairs(res.decls) do
+                        if d.node == n then
+                            add_def(n.value, local_key(d), s, n.line, n.column, v)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- The key of the function a call names.
+    local function target(callee)
+        if callee.type == "name" then
+            local d = decl_of[callee]
+
+            if d and d.kind ~= "global" then
+                return d.node.line and local_key(d)
+            end
+
+            return `global:$(callee.value)`
+        end
+
+        local path = dotted(callee)
+        return path and `global:$path`
+    end
+
+    local function walk(node)
+        if node.type == "callexpr" or node.type == "callstat" then
+            if callee = node.func then
+                if key = target(callee) then
+                    local first = I.first_offset(starts, callee)
+                    local name = dotted(callee) or ""
+                    a.calls[#a.calls + 1] = {
+                        key = key,
+                        at = first,
+                        range = span(first, first + utf8.len(name)),
+                    }
+                end
+            end
+        end
+
+        I.each_child(node, walk)
+    end
+
+    walk(tree)
+
+    -- The innermost function around each call, or nil at the top level.
+    for _, c in ipairs(a.calls) do
+        for _, d in ipairs(a.defs) do
+            if c.at >= d.first
+                and c.at < d.after
+                and (not c.caller or d.first >= c.caller.first) then
+                c.caller = d
+            end
+        end
+    end
+
+    return a
+end
+
+local function item(uri, def)
+    return {
+        name = def.name,
+        kind = KIND_FUNCTION,
+        uri = uri,
+        range = def.range,
+        selectionRange = def.selection,
+        data = { key = def.key },
+    }
+end
+
+local function file_item(uri)
+    local name = string.match(uri, "([^/]+)$") or uri
+    local zero = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 0 } }
+    return {
+        name = name,
+        kind = KIND_FILE,
+        uri = uri,
+        range = zero,
+        selectionRange = zero,
+        data = { key = `file:$uri` },
+    }
+end
+
+local function contains(range, position)
+    local s, e = range.start, range["end"]
+
+    if position.line < s.line or position.line > e.line then
+        return false
+    end
+
+    if position.line == s.line and position.character < s.character then
+        return false
+    end
+
+    return not (position.line == e.line and position.character > e.character)
+end
+
+-- The function at `position`: one whose name is there, or the function
+-- that a call there names.
+function call_hierarchy.prepare(uri, position)
+    local a = analyze(uri)
+
+    if not a then
+        return {}
+    end
+
+    for _, d in ipairs(a.defs) do
+        if contains(d.selection, position) then
+            return { item(uri, d) }
+        end
+    end
+
+    for _, c in ipairs(a.calls) do
+        if contains(c.range, position) then
+            for _, d in ipairs(a.defs) do
+                if d.key == c.key then
+                    return { item(uri, d) }
+                end
+            end
+
+            -- A function of another document is found by its global name.
+            for _, other in ipairs(document.all()) do
+                if other ~= uri then
+                    if b = analyze(other) then
+                        for _, d in ipairs(b.defs) do
+                            if d.key == c.key then
+                                return { item(other, d) }
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return {}
+end
+
+-- The documents whose calls can name the function of `key`: the document
+-- of a local, every open document for a global.
+local function documents_for(item_uri, key)
+    if string.sub(key, 1, 7) == "global:" then
+        return document.all()
+    end
+
+    return { item_uri }
+end
+
+function call_hierarchy.incoming(it)
+    local key = it.data and it.data.key
+
+    if not key then
+        return {}
+    end
+
+    local result = {}
+
+    for _, uri in ipairs(documents_for(it.uri, key)) do
+        if a = analyze(uri) then
+            local by_caller = {}
+            local order = {}
+
+            for _, c in ipairs(a.calls) do
+                if c.key == key then
+                    local caller = c.caller and c.caller.key or `file:$uri`
+
+                    if not by_caller[caller] then
+                        by_caller[caller] = {
+                            ["from"] = c.caller and item(uri, c.caller) or file_item(uri),
+                            fromRanges = {},
+                        }
+                        order[#order + 1] = caller
+                    end
+
+                    local ranges = by_caller[caller].fromRanges
+                    ranges[#ranges + 1] = c.range
+                end
+            end
+
+            for _, k in ipairs(order) do
+                result[#result + 1] = by_caller[k]
+            end
+        end
+    end
+
+    return result
+end
+
+function call_hierarchy.outgoing(it)
+    local key = it.data and it.data.key
+
+    if not key then
+        return {}
+    end
+
+    local a = analyze(it.uri)
+
+    if not a then
+        return {}
+    end
+
+    -- Every function that a document defines, by key, for the targets.
+    local known = {}
+
+    for _, d in ipairs(a.defs) do
+        known[d.key] = { uri = it.uri, def = d }
+    end
+
+    for _, other in ipairs(document.all()) do
+        if other ~= it.uri then
+            if b = analyze(other) then
+                for _, d in ipairs(b.defs) do
+                    if string.sub(d.key, 1, 7) == "global:" and not known[d.key] then
+                        known[d.key] = { uri = other, def = d }
+                    end
+                end
+            end
+        end
+    end
+
+    local result = {}
+    local by_target = {}
+
+    for _, c in ipairs(a.calls) do
+        if c.caller and c.caller.key == key then
+            if k = known[c.key] then
+                if not by_target[c.key] then
+                    by_target[c.key] = { to = item(k.uri, k.def), fromRanges = {} }
+                    result[#result + 1] = by_target[c.key]
+                end
+
+                local ranges = by_target[c.key].fromRanges
+                ranges[#ranges + 1] = c.range
+            end
+        end
+    end
+
+    return result
+end
+
+-- The functions and calls of a document, for the tests.
+call_hierarchy.analyze = analyze
+
+return call_hierarchy

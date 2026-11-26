@@ -86,6 +86,7 @@ function protocol.server_capabilities()
         },
         definitionProvider = true,
         referencesProvider = true,
+        callHierarchyProvider = true,
         hoverProvider = true,
         renameProvider = { prepareProvider = true },
         documentHighlightProvider = true,

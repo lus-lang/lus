@@ -68,7 +68,7 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 | code actions | Quick fixes that declare a global, prefix an unused name with `_`, and apply the fix of each hint of `lus check`. Refactorings extract a local or a function, inline a local, and convert between interpolation and concatenation, each where it keeps what the program does. | closed | |
 | go to implementation | Lus has no traits. The nearest question is which tables share a metatable, which static analysis answers only for simple cases. | by design | |
 | expand macro | Lus has no macros. Folded flags and `<meta>` values are the nearest equivalent. Showing their values inline is open. | open | medium |
-| call hierarchy, type hierarchy | Missing. | open | medium |
+| call hierarchy, type hierarchy | The language server shows the callers and the callees of a function, across the open documents for a global. Lus has no types to put in a hierarchy. | closed | |
 | run and debug code lenses, test explorer | The Testing view of the extension lists the tests and benchmarks of each test file, with a run button beside each definition and a coverage profile. Debugging one test is open. | partial | small |
 | debugger | `lus debug` speaks DAP with breakpoints, stepping, pausing, stack, variables, and evaluation. | closed | |
 
@@ -112,4 +112,4 @@ Rust projects are driven by cargo and a `Cargo.toml` manifest. A Lus package is 
 
 ## Order of work
 
-The medium gap that remains is call hierarchy. A fuzz harness for user code stays open.
+Debugging one test from the editor and a fuzz harness for user code follow the 2.0 release.

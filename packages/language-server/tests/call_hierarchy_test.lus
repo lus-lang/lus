@@ -1,0 +1,135 @@
+-- Call hierarchy: prepare, incoming calls, and outgoing calls over open
+-- documents.
+local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
+
+pledge("load", `fs:read=$LANG_DIR/*`)
+
+table.insert(package.searchers, 2, function(name)
+    local rest = string.match(name, "^lus%-language%.(.+)$")
+
+    if rest == nil then
+        return nil
+    end
+
+    local path = package.searchpath(rest, `$LANG_DIR/?.lus`)
+
+    if path == nil then
+        return nil
+    end
+
+    return assert(loadfile(path)), path
+end)
+
+local document = require("lus-language.document")
+local call_hierarchy = require("lus-language.operations.call_hierarchy")
+
+local MAIN = [[
+local M = {}
+
+local function helper(x)
+    return x * 2
+end
+
+function M.scale(x)
+    return helper(x) + helper(1)
+end
+
+local twice = function(x)
+    return M.scale(x) + shared(x)
+end
+
+function shared(x)
+    return helper(x)
+end
+
+print(twice(3), helper(4))
+]]
+
+local OTHER = [[
+local function run()
+    return shared(5)
+end
+
+return run
+]]
+
+local function open(uri, text)
+    document.open(uri, 1, text)
+end
+
+local function names(list, field)
+    local out = {}
+
+    for _, c in ipairs(list) do
+        out[#out + 1] = `$(c[field].name)x$(#c.fromRanges)`
+    end
+
+    table.sort(out)
+    return table.concat(out, " ")
+end
+
+local function at(line, character)
+    return { line = line, character = character }
+end
+
+local function prepare_finds_a_function_by_its_name_or_a_call_test()
+    open("file:///w/main.lus", MAIN)
+    local items = call_hierarchy.prepare("file:///w/main.lus", at(2, 16))
+    assert(#items == 1 and items[1].name == "helper" and items[1].kind == 12)
+    assert(
+        items[1].selectionRange.start.line == 2 and items[1].selectionRange.start.character == 15
+    )
+    -- A call names the same function.
+    local via_call = call_hierarchy.prepare("file:///w/main.lus", at(7, 12))
+    assert(#via_call == 1 and via_call[1].data.key == items[1].data.key)
+    -- A field function is named by its path.
+    local scale = call_hierarchy.prepare("file:///w/main.lus", at(6, 9))
+    assert(scale[1].name == "M.scale", scale[1] and scale[1].name)
+    document.close("file:///w/main.lus")
+end
+
+local function incoming_calls_group_by_caller_test()
+    open("file:///w/main.lus", MAIN)
+    local helper = call_hierarchy.prepare("file:///w/main.lus", at(2, 16))[1]
+    local incoming = call_hierarchy.incoming(helper)
+    -- M.scale calls it twice, shared once, and the top level once.
+    assert(names(incoming, "from") == "M.scalex2 main.lusx1 sharedx1", names(incoming, "from"))
+    document.close("file:///w/main.lus")
+end
+
+local function a_global_is_called_from_other_documents_test()
+    open("file:///w/main.lus", MAIN)
+    open("file:///w/other.lus", OTHER)
+    local shared = call_hierarchy.prepare("file:///w/main.lus", at(14, 10))[1]
+    assert(shared and shared.name == "shared")
+    local incoming = call_hierarchy.incoming(shared)
+    assert(names(incoming, "from") == "runx1 twicex1", names(incoming, "from"))
+    document.close("file:///w/main.lus")
+    document.close("file:///w/other.lus")
+end
+
+local function outgoing_calls_list_the_called_functions_test()
+    open("file:///w/main.lus", MAIN)
+    local twice = call_hierarchy.prepare("file:///w/main.lus", at(10, 7))[1]
+    assert(twice and twice.name == "twice")
+    local outgoing = call_hierarchy.outgoing(twice)
+    assert(names(outgoing, "to") == "M.scalex1 sharedx1", names(outgoing, "to"))
+    local scale = call_hierarchy.prepare("file:///w/main.lus", at(6, 9))[1]
+    assert(names(call_hierarchy.outgoing(scale), "to") == "helperx2")
+    document.close("file:///w/main.lus")
+end
+
+local function a_shadowing_local_is_another_function_test()
+    open(
+        "file:///w/shadow.lus",
+        "local function f() end\ndo\n    local function f() end\n    f()\nend\nf()\n"
+    )
+    local outer = call_hierarchy.prepare("file:///w/shadow.lus", at(0, 15))[1]
+    local inner = call_hierarchy.prepare("file:///w/shadow.lus", at(2, 19))[1]
+    assert(outer.data.key ~= inner.data.key)
+    local from_outer = call_hierarchy.incoming(outer)
+    assert(#from_outer == 1 and from_outer[1].fromRanges[1].start.line == 5)
+    local from_inner = call_hierarchy.incoming(inner)
+    assert(#from_inner == 1 and from_inner[1].fromRanges[1].start.line == 3)
+    document.close("file:///w/shadow.lus")
+end

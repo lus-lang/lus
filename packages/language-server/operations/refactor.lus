@@ -1899,6 +1899,8 @@ refactor.internal = {
     stat_end = stat_end,
     each_statement = each_statement,
     to_pos = to_pos,
+    each_child = each_child,
+    resolve = resolve,
 }
 
 -- Applies the edits of an action to `text`, for tests and tools.

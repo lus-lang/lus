@@ -22,6 +22,7 @@ local doc_highlight = require("lus-language.operations.highlight")
 local doc_prepare_rename = require("lus-language.operations.prepare_rename")
 local doc_selection = require("lus-language.operations.selection_range")
 local doc_code_action = require("lus-language.operations.code_action")
+local call_hierarchy = require("lus-language.operations.call_hierarchy")
 
 local server = {}
 
@@ -365,6 +366,21 @@ function server.new()
             msg,
             nav_references.compute(msg.params.textDocument.uri, msg.params.position, include)
         )
+    end
+
+    handlers["textDocument/prepareCallHierarchy"] = function(msg)
+        return response_or_nil(
+            msg,
+            call_hierarchy.prepare(msg.params.textDocument.uri, msg.params.position)
+        )
+    end
+
+    handlers["callHierarchy/incomingCalls"] = function(msg)
+        return response_or_nil(msg, call_hierarchy.incoming(msg.params.item))
+    end
+
+    handlers["callHierarchy/outgoingCalls"] = function(msg)
+        return response_or_nil(msg, call_hierarchy.outgoing(msg.params.item))
     end
 
     handlers["textDocument/hover"] = function(msg)
