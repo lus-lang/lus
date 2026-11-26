@@ -118,60 +118,89 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      # The default branch at the root of the workspace, where the agent
+      # starts, so its settings and rules are the trusted ones.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.repository.default_branch }}
-          path: base
           persist-credentials: false
-      # The files of the pull request, as data. Nothing in this directory
-      # runs: no install, no build, and no hook.
+      # The files of the pull request, as data, in a directory of their own.
+      # Nothing in this directory runs: no install, no build, and no hook.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
-          path: pr
+          path: pr-head
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Get a token of the Lus app that only reads
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Install the agent
-        env:
-          CLI: ${{ fromJSON(needs.gate.outputs.agents).cli }}
-        run: npm install --no-save --prefix "$RUNNER_TEMP/cli" "$CLI"
-      - name: Gather the change and the rules
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-issues: read
+      - name: Gather the change and the prompt
+        id: prompt
         env:
           GH_TOKEN: ${{ github.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
           NUMBER: ${{ github.event.pull_request.number }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
         run: |
           dir="$RUNNER_TEMP/review"
-          mkdir -p "$dir/rules/spec/design" "$dir/rules/runtime" "$RUNNER_TEMP/agent"
+          mkdir -p "$dir"
           printf '# %s\n\n%s\n' "$TITLE" "$BODY" > "$dir/description.md"
           gh api -H "Accept: application/vnd.github.diff" "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" > "$dir/change.diff"
-          cp base/AGENTS.md base/CONTRIBUTING.md "$dir/rules/"
-          cp base/spec/design/style.md "$dir/rules/spec/design/"
-          cp base/runtime/HACKING.md "$dir/rules/runtime/"
+          echo "bot_id=$(gh api "users/$APP_SLUG[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+          {
+            echo "text<<LUS_PROMPT_END"
+            sed -e "s|PR_DIR|$GITHUB_WORKSPACE/pr-head|g" -e "s|REVIEW_DIR|$dir|g" tools/ci/prompts/review.md
+            echo "LUS_PROMPT_END"
+          } >> "$GITHUB_OUTPUT"
+      # The author of an outside pull request has no write access. The gate
+      # has already checked the contribution, so the action admits every
+      # author. The agent holds a token that only reads, can only read
+      # files, and answers in the schema. The next job posts its answer.
       - name: Review
+        id: review
+        # v1.0.281, chosen on 2026-11-25.
+        uses: anthropics/claude-code-action@e5812cd75691ca7bbfc57c0ecf4441db3a1ab7dd # v1.0.281
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app.outputs.token }}
+          bot_name: ${{ steps.app.outputs.app-slug }}[bot]
+          bot_id: ${{ steps.prompt.outputs.bot_id }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          allowed_non_write_users: "*"
+          allow_fork_prs: "true"
+          restrict_untrusted_prs: "true"
+          show_full_output: "false"
+          display_report: "false"
+          claude_args: >-
+            --model ${{ fromJSON(needs.gate.outputs.agents).review.model }}
+            --max-turns ${{ fromJSON(needs.gate.outputs.agents).review.max_turns }}
+            --max-budget-usd ${{ fromJSON(needs.gate.outputs.agents).review.budget_usd }}
+            --tools ${{ join(fromJSON(needs.gate.outputs.agents).review.tools, ',') }}
+            --allowedTools ${{ join(fromJSON(needs.gate.outputs.agents).review.tools, ',') }}
+            --disallowedTools ${{ join(fromJSON(needs.gate.outputs.agents).review.denied_tools, ',') }}
+            --add-dir ${{ github.workspace }}/pr-head ${{ runner.temp }}/review
+            --setting-sources user --strict-mcp-config
+            --json-schema '{"type":"object","properties":{"review":{"type":"string"}},"required":["review"]}'
+      - name: Write the review
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MODEL: ${{ fromJSON(needs.gate.outputs.agents).review.model }}
-          BUDGET: ${{ fromJSON(needs.gate.outputs.agents).review.budget_usd }}
-        # The agent starts in an empty directory, so no settings, hooks, or
-        # instruction files of the pull request load, and it can only read.
-        run: |
-          prompt=$(sed -e "s|PR_DIR|$GITHUB_WORKSPACE/pr|g" -e "s|REVIEW_DIR|$RUNNER_TEMP/review|g" base/tools/ci/prompts/review.md)
-          cd "$RUNNER_TEMP/agent"
-          "$RUNNER_TEMP/cli/node_modules/.bin/claude" -p "$prompt" \
-            --model "$MODEL" --max-budget-usd "$BUDGET" \
-            --tools Read Grep Glob --add-dir "$GITHUB_WORKSPACE/pr" "$RUNNER_TEMP/review" \
-            --setting-sources user --strict-mcp-config --no-session-persistence \
-            --output-format text > "$RUNNER_TEMP/review.md"
+          ANSWER: ${{ steps.review.outputs.structured_output }}
+        run: printf '%s' "$ANSWER" | jq -r '.review // "The review agent gave no answer."' > "$RUNNER_TEMP/review.md"
       - name: The review holds no secret
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          if [ -n "$ANTHROPIC_API_KEY" ] && grep -qF "$ANTHROPIC_API_KEY" "$RUNNER_TEMP/review.md"; then echo "the review holds the API key" >&2; exit 1; fi
+          for secret in "$ANTHROPIC_API_KEY" "$APP_TOKEN"; do
+            if [ -n "$secret" ] && grep -qF "$secret" "$RUNNER_TEMP/review.md"; then echo "the review holds a secret" >&2; exit 1; fi
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: review
@@ -218,8 +247,8 @@ jobs:
       (contains(fromJSON('["opened", "reopened"]'), github.event.action) || needs.gate.outputs.newly_passed == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ fromJSON(needs.gate.outputs.agents).triage.timeout_minutes }}
-    # The agent reads the text of the issue, so this job writes nothing.
-    # The route job acts on its answer.
+    # The agent reads the text of the issue, so this job holds no token
+    # that writes. The route job acts on its answer.
     permissions:
       contents: read
     outputs:
@@ -230,33 +259,67 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Get a token of the Lus app that only reads
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Install the agent
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: read
+      - name: Gather the issue and the prompt
+        id: prompt
         env:
-          CLI: ${{ fromJSON(needs.gate.outputs.agents).cli }}
-        run: npm install --no-save --prefix "$RUNNER_TEMP/cli" "$CLI"
-      - name: Sort
-        id: sort
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MODEL: ${{ fromJSON(needs.gate.outputs.agents).triage.model }}
-          BUDGET: ${{ fromJSON(needs.gate.outputs.agents).triage.budget_usd }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
           TITLE: ${{ github.event.issue.title }}
           BODY: ${{ github.event.issue.body }}
         run: |
-          prompt=$(cat tools/ci/prompts/triage.md)
-          mkdir -p "$RUNNER_TEMP/triage"
-          printf '# %s\n\n%s\n' "$TITLE" "$BODY" > "$RUNNER_TEMP/triage/issue.md"
-          schema='{"type":"object","properties":{"kind":{"type":"string","enum":["bug","suggestion","design","question","other"]},"reason":{"type":"string"}},"required":["kind","reason"]}'
-          cd "$RUNNER_TEMP/triage"
-          "$RUNNER_TEMP/cli/node_modules/.bin/claude" -p "$prompt" \
-            --model "$MODEL" --max-budget-usd "$BUDGET" --tools Read \
-            --setting-sources user --strict-mcp-config --no-session-persistence \
-            --json-schema "$schema" --output-format json > "$RUNNER_TEMP/sorted.json"
-          kind=$(jq -r '(.structured_output // (.result | fromjson? // {})).kind // "other"' "$RUNNER_TEMP/sorted.json")
-          reason=$(jq -r '(.structured_output // (.result | fromjson? // {})).reason // ""' "$RUNNER_TEMP/sorted.json")
+          dir="$RUNNER_TEMP/triage"
+          mkdir -p "$dir"
+          printf '# %s\n\n%s\n' "$TITLE" "$BODY" > "$dir/issue.md"
+          echo "bot_id=$(gh api "users/$APP_SLUG[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+          {
+            echo "text<<LUS_PROMPT_END"
+            sed "s|ISSUE_DIR|$dir|g" tools/ci/prompts/triage.md
+            echo "LUS_PROMPT_END"
+          } >> "$GITHUB_OUTPUT"
+      # The author of an outside issue has no write access. The gate has
+      # already checked the issue, so the action admits every author. The
+      # agent holds a token that only reads, can only read files, and
+      # answers in the schema.
+      - name: Sort
+        id: agent
+        # v1.0.281, chosen on 2026-11-25.
+        uses: anthropics/claude-code-action@e5812cd75691ca7bbfc57c0ecf4441db3a1ab7dd # v1.0.281
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app.outputs.token }}
+          bot_name: ${{ steps.app.outputs.app-slug }}[bot]
+          bot_id: ${{ steps.prompt.outputs.bot_id }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          allowed_non_write_users: "*"
+          allow_fork_prs: "false"
+          restrict_untrusted_prs: "true"
+          show_full_output: "false"
+          display_report: "false"
+          claude_args: >-
+            --model ${{ fromJSON(needs.gate.outputs.agents).triage.model }}
+            --max-turns ${{ fromJSON(needs.gate.outputs.agents).triage.max_turns }}
+            --max-budget-usd ${{ fromJSON(needs.gate.outputs.agents).triage.budget_usd }}
+            --tools ${{ join(fromJSON(needs.gate.outputs.agents).triage.tools, ',') }}
+            --allowedTools ${{ join(fromJSON(needs.gate.outputs.agents).triage.tools, ',') }}
+            --disallowedTools ${{ join(fromJSON(needs.gate.outputs.agents).triage.denied_tools, ',') }}
+            --add-dir ${{ runner.temp }}/triage
+            --setting-sources user --strict-mcp-config
+            --json-schema '{"type":"object","properties":{"kind":{"type":"string","enum":["bug","suggestion","design","question","other"]},"reason":{"type":"string"}},"required":["kind","reason"]}'
+      - name: Read the answer
+        id: sort
+        env:
+          ANSWER: ${{ steps.agent.outputs.structured_output }}
+        run: |
+          kind=$(printf '%s' "$ANSWER" | jq -r '.kind // "other"' 2> /dev/null || echo other)
+          reason=$(printf '%s' "$ANSWER" | jq -r '.reason // ""' 2> /dev/null || true)
           case "$kind" in bug|suggestion|design|question|other) ;; *) kind=other ;; esac
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
           # One line of plain text, which the route job quotes.
@@ -367,6 +430,8 @@ jobs:
     needs: [gate, reproduce]
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ fromJSON(needs.gate.outputs.agents).hunt.timeout_minutes }}
+    # The agent reads the report, so this job holds no token that writes.
+    # The verify and publish jobs test and land its fix.
     permissions:
       contents: read
     steps:
@@ -374,32 +439,60 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: report
           path: ${{ runner.temp }}/report
-      - name: Install the agent
+      - name: Get a token of the Lus app that only reads
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.LUS_APP_ID }}
+          private-key: ${{ secrets.LUS_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: read
+      - name: Prepare the prompt
+        id: prompt
         env:
-          CLI: ${{ fromJSON(needs.gate.outputs.agents).cli }}
-        run: npm install --no-save --prefix "$RUNNER_TEMP/cli" "$CLI"
-      - name: Hunt
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MODEL: ${{ fromJSON(needs.gate.outputs.agents).hunt.model }}
-          BUDGET: ${{ fromJSON(needs.gate.outputs.agents).hunt.budget_usd }}
-        # The agent reads and edits files and runs nothing, so text in the
-        # report cannot make it reach the key or the network.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
         run: |
-          prompt=$(sed "s|REPORT_DIR|$RUNNER_TEMP/report|g" tools/ci/prompts/hunt.md)
-          "$RUNNER_TEMP/cli/node_modules/.bin/claude" -p "$prompt" \
-            --model "$MODEL" --max-budget-usd "$BUDGET" \
-            --tools Read Grep Glob Edit Write --permission-mode acceptEdits \
-            --add-dir "$RUNNER_TEMP/report" \
-            --setting-sources user --strict-mcp-config --no-session-persistence \
-            --output-format text > "$RUNNER_TEMP/report/transcript.txt" || true
+          echo "bot_id=$(gh api "users/$APP_SLUG[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+          {
+            echo "text<<LUS_PROMPT_END"
+            sed "s|REPORT_DIR|$RUNNER_TEMP/report|g" tools/ci/prompts/hunt.md
+            echo "LUS_PROMPT_END"
+          } >> "$GITHUB_OUTPUT"
+      # The reporter has no write access. The gate has already checked the
+      # issue, so the action admits every author. The agent reads and edits
+      # files and runs nothing, so text in the report cannot make it reach
+      # a secret or the network. It makes no commit and no push.
+      - name: Hunt
+        continue-on-error: true
+        # v1.0.281, chosen on 2026-11-25.
+        uses: anthropics/claude-code-action@e5812cd75691ca7bbfc57c0ecf4441db3a1ab7dd # v1.0.281
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app.outputs.token }}
+          bot_name: ${{ steps.app.outputs.app-slug }}[bot]
+          bot_id: ${{ steps.prompt.outputs.bot_id }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          allowed_non_write_users: "*"
+          allow_fork_prs: "false"
+          restrict_untrusted_prs: "true"
+          show_full_output: "false"
+          display_report: "false"
+          claude_args: >-
+            --model ${{ fromJSON(needs.gate.outputs.agents).hunt.model }}
+            --max-turns ${{ fromJSON(needs.gate.outputs.agents).hunt.max_turns }}
+            --max-budget-usd ${{ fromJSON(needs.gate.outputs.agents).hunt.budget_usd }}
+            --tools ${{ join(fromJSON(needs.gate.outputs.agents).hunt.tools, ',') }}
+            --allowedTools ${{ join(fromJSON(needs.gate.outputs.agents).hunt.tools, ',') }}
+            --disallowedTools ${{ join(fromJSON(needs.gate.outputs.agents).hunt.denied_tools, ',') }}
+            --add-dir ${{ runner.temp }}/report
+            --setting-sources user --strict-mcp-config
+      - name: Collect the fix
+        run: |
           git add -N .
           git diff > "$RUNNER_TEMP/report/fix.patch"
           [ -f "$RUNNER_TEMP/report/verdict.json" ] || echo '{"found": false, "test": "", "subject": ""}' > "$RUNNER_TEMP/report/verdict.json"
@@ -407,8 +500,11 @@ jobs:
       - name: The outputs hold no secret
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          if [ -n "$ANTHROPIC_API_KEY" ] && grep -rqF "$ANTHROPIC_API_KEY" "$RUNNER_TEMP/report"; then echo "an output holds the API key" >&2; exit 1; fi
+          for secret in "$ANTHROPIC_API_KEY" "$APP_TOKEN"; do
+            if [ -n "$secret" ] && grep -rqF "$secret" "$RUNNER_TEMP/report"; then echo "an output holds a secret" >&2; exit 1; fi
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hunt

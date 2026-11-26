@@ -1,20 +1,28 @@
 {
-  "about": "The coding agents that .github/workflows/contributions.yml runs, and the limits of each run. Every run costs money, so each has a dollar budget that the CLI enforces and a job timeout in minutes. The CLI version is pinned, and the API key is the repository secret ANTHROPIC_API_KEY. `discussions` names the category of Discussions that each kind of issue moves to. A missing category falls back to the first one.",
-  "cli": "@anthropic-ai/claude-code@2.1.325",
+  "about": "The coding agents that .github/workflows/contributions.yml runs with anthropics/claude-code-action, and the limits of each run. Every run costs money, so each has a dollar budget and a number of turns that the CLI enforces, and a job timeout in minutes. `tools` lists the only tools that the agent has and may use. `denied_tools` lists the tools that it may never use, whatever another setting allows. The pinned commit of the action fixes the version of the CLI. The API key is the repository secret ANTHROPIC_API_KEY. `discussions` names the category of Discussions that each kind of issue moves to. A missing category falls back to the first one.",
   "triage": {
     "model": "claude-sonnet-5-5",
     "budget_usd": 0.5,
-    "timeout_minutes": 10
+    "max_turns": 4,
+    "timeout_minutes": 10,
+    "tools": ["Read"],
+    "denied_tools": ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "mcp__github", "mcp__github_comment", "mcp__github_inline_comment", "mcp__github_file_ops", "mcp__github_ci"]
   },
   "hunt": {
     "model": "claude-fable-5-2",
     "budget_usd": 8,
-    "timeout_minutes": 45
+    "max_turns": 120,
+    "timeout_minutes": 45,
+    "tools": ["Read", "Grep", "Glob", "Edit", "Write"],
+    "denied_tools": ["Bash", "NotebookEdit", "WebFetch", "WebSearch", "Task", "mcp__github", "mcp__github_comment", "mcp__github_inline_comment", "mcp__github_file_ops", "mcp__github_ci"]
   },
   "review": {
     "model": "claude-fable-5-2",
     "budget_usd": 4,
-    "timeout_minutes": 30
+    "max_turns": 60,
+    "timeout_minutes": 30,
+    "tools": ["Read", "Grep", "Glob"],
+    "denied_tools": ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "mcp__github", "mcp__github_comment", "mcp__github_inline_comment", "mcp__github_file_ops", "mcp__github_ci"]
   },
   "discussions": {
     "suggestion": "Ideas",
