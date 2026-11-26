@@ -41,11 +41,11 @@ binaries and sign the Windows binaries and the installer. `release.yml`
 then writes the archives from the signed files and attests every file.
 Once `full.yml` passes as well, the run pushes the tag `vX.Y.Z`,
 publishes the GitHub release as the latest, signs the release index, and
-publishes the VSIX to Open VSX. Last, it opens a pull request that dates
-the section of `CHANGELOG.md`, adds that section to the news of the
-site, and sets the version to `X.(Y+1).0-dev`.
-`tools/release-version.mjs` writes both the release commit and the
-changes of the pull request.
+publishes the VSIX to Open VSX and the Visual Studio Marketplace. Last,
+it opens a pull request that dates the section of `CHANGELOG.md`, adds
+that section to the news of the site, and sets the version to
+`X.(Y+1).0-dev`. `tools/release-version.mjs` writes both the release
+commit and the changes of the pull request.
 
 The tag points to the release commit, which sets the version to `X.Y.Z`
 and whose parent is the commit of the run. No branch holds the release
@@ -75,6 +75,8 @@ Before the first real release, set up the following in the repository.
   identifier of the signing key as `LUS_RELEASE_SIGNING_SEED` and
   `LUS_RELEASE_SIGNING_KEY_ID`.
 - **The publishing token** `OVSX_PAT` for Open VSX.
+- **The publisher of the Visual Studio Marketplace**, which the section
+  "The Visual Studio Marketplace" describes.
 
 ## Code signing
 
@@ -122,6 +124,42 @@ of the environment.
 `lus-runtime` keeps the signature of the build on both systems, because
 `lus build` writes its executables from it. `release.yml` pins
 `rcodesign` and `jsign` by the SHA-256 digest of their release files.
+
+## The Visual Studio Marketplace
+
+The job `marketplace` of `publish-vscode.yml` publishes the VSIX with
+the trusted publishing of the Marketplace. `vsce publish --oidc` exchanges
+the OpenID Connect token of the job for a Marketplace credential that
+lasts 15 minutes, so the repository stores no Marketplace token and no
+Azure identity takes part. The job runs in the environment `release`, so
+it waits for a reviewer of the environment like the signing jobs. It
+publishes only when the environment sets the variable
+`MARKETPLACE_PUBLISHER` to the publisher that the VSIX names, which is
+`lus` in `packages/vscode/package.json`.
+`packaging/release/vsce/package-lock.json` pins `vsce` and each of its
+dependencies by digest.
+
+Set up the publisher once, with these steps.
+
+1. Sign in at `https://marketplace.visualstudio.com/manage` with the
+   Microsoft account that is to own the publisher, and select **Create
+   publisher**.
+2. Enter `lus` as the ID and `Lus` as the name, then select **Create**.
+   The ID is the `publisher` of `packages/vscode/package.json` and the
+   first part of the identifier `lus.lus`. It cannot change once the
+   publisher exists. When the form reports the ID as taken, choose
+   another ID and change `publisher` in `packages/vscode/package.json` to
+   match, which also changes the namespace on Open VSX.
+3. On the page of the publisher, open **Trusted Publishing** and create
+   a policy with the repository owner `lus-lang`, the repository `lus`,
+   the workflow `ship.yml`, and the environment `release`. Create a
+   second policy that names the workflow `publish-vscode.yml`. A release
+   calls `publish-vscode.yml` from `ship.yml`. The documentation of the
+   Marketplace does not say which of the two files a policy matches, so
+   the two policies cover both. A manual run of `publish-vscode.yml`
+   matches the second policy.
+4. In the environment `release` of the repository, set the variable
+   `MARKETPLACE_PUBLISHER` to `lus`.
 
 ## Attestations
 

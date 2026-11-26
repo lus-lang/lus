@@ -1,9 +1,17 @@
 name: Publish VSCode Extension
 
-# Publishes the VSIX of a stable release to Open VSX, byte for byte as the
-# release holds it. ship.yml calls it, since a release that the workflow
-# token creates starts no other workflow. A dry run of ship.yml calls it
-# with `dry_run`, which checks the VSIX of the run and publishes nothing.
+# Publishes the VSIX of a stable release to Open VSX and to the Visual
+# Studio Marketplace, byte for byte as the release holds it. ship.yml
+# calls it, since a release that the workflow token creates starts no
+# other workflow. A dry run of ship.yml calls it with `dry_run`, which
+# checks the VSIX of the run and publishes nothing.
+#
+# The marketplace job publishes with the trusted publishing of the
+# Marketplace: vsce exchanges the OpenID Connect token of the job for a
+# Marketplace credential that lasts 15 minutes, so the repository stores
+# no Marketplace token. It runs in the environment release and publishes
+# only when that environment sets the variable MARKETPLACE_PUBLISHER to
+# the publisher of the VSIX (packaging/release/README.md).
 
 on:
   release:
@@ -35,6 +43,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    outputs:
+      verified: ${{ steps.verify.outputs.verified }}
     steps:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -52,6 +62,7 @@ jobs:
           name: ship-sums
           path: run-assets
       - name: Download and verify release publication inputs
+        id: verify
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
@@ -124,6 +135,18 @@ jobs:
           echo "EXPECTED_PUBLISHER_SHA256=$expected_publisher_sha" >> "$GITHUB_ENV"
           echo "VSIX_SHA256=$(sha256sum "$vsix" | awk '{ print $1 }')" >> "$GITHUB_ENV"
           echo "PUBLISHER_SHA256=$(sha256sum "$publisher" | awk '{ print $1 }')" >> "$GITHUB_ENV"
+          mkdir "$RUNNER_TEMP/verified"
+          cp "$vsix" "$RUNNER_TEMP/verified/"
+          grep " $vsix\$" PUBLISH-SUMS > "$RUNNER_TEMP/verified/VSIX-SUM"
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+      # The marketplace job takes the VSIX that this job verified. The
+      # upload comes before the publish to Open VSX, so a failure of one
+      # store leaves the other to publish.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vscode-verified
+          path: ${{ runner.temp }}/verified/
+          if-no-files-found: error
       - name: Publish the verified bytes to Open VSX
         if: ${{ inputs.dry_run != true }}
         env:
@@ -136,3 +159,65 @@ jobs:
           sha256sum --check --strict PUBLISH-SUMS
           test "$(sha256sum "$PUBLISHER_PATH" | awk '{ print $1 }')" = "$EXPECTED_PUBLISHER_SHA256"
           echo "Published Open VSX artifact SHA-256 $VSIX_SHA256 with publisher $PUBLISHER_SHA256" >> "$GITHUB_STEP_SUMMARY"
+
+  marketplace:
+    name: Publish exact release VSIX to the Visual Studio Marketplace
+    needs: publish-vscode
+    if: ${{ !cancelled() && needs.publish-vscode.outputs.verified == 'true' }}
+    runs-on: ubuntu-24.04
+    # The trusted publishing policy of the Marketplace names this
+    # environment, so a token from any other job cannot publish.
+    environment: ${{ inputs.dry_run != true && 'release' || '' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          sparse-checkout: packaging/release/vsce
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: vscode-verified
+          path: ${{ runner.temp }}/verified
+      # package-lock.json pins vsce and each of its dependencies by digest.
+      - name: Install vsce
+        working-directory: packaging/release/vsce
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node_modules/.bin/vsce --version
+      - name: Check the VSIX and the settings
+        id: settings
+        env:
+          DRY_RUN: ${{ inputs.dry_run == true }}
+          MARKETPLACE_PUBLISHER: ${{ vars.MARKETPLACE_PUBLISHER }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/verified"
+          sha256sum --check --strict VSIX-SUM
+          vsix="$(awk '{ print $2 }' VSIX-SUM)"
+          publisher="$(unzip -p "$vsix" extension/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).publisher')"
+          echo "VSIX_PATH=$PWD/$vsix" >> "$GITHUB_ENV"
+          if [ "$DRY_RUN" = true ]; then
+            echo "A release would publish $vsix of the publisher $publisher to the Visual Studio Marketplace." >> "$GITHUB_STEP_SUMMARY"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$MARKETPLACE_PUBLISHER" ]; then
+            echo "::warning::$vsix is not published to the Visual Studio Marketplace, since the environment release does not set MARKETPLACE_PUBLISHER"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif [ "$MARKETPLACE_PUBLISHER" != "$publisher" ]; then
+            echo "::error::the VSIX names the publisher $publisher, and MARKETPLACE_PUBLISHER is $MARKETPLACE_PUBLISHER"
+            exit 1
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish the verified bytes to the Visual Studio Marketplace
+        if: steps.settings.outputs.publish == 'true'
+        working-directory: packaging/release/vsce
+        run: |
+          set -euo pipefail
+          # A rerun after a published version skips it.
+          node_modules/.bin/vsce publish --oidc --skip-duplicate --packagePath "$VSIX_PATH"
+          echo "Published $(basename "$VSIX_PATH") to the Visual Studio Marketplace" >> "$GITHUB_STEP_SUMMARY"

@@ -14,23 +14,13 @@ The [Lus extension](https://open-vsx.org/extension/lus/lus) provides syntax high
 
 The extension runs in the Node-based extension host of VS Code, so it also works in remote workspaces.
 
-### VSCodium, Cursor, and Antigravity
-
-These editors use the Open VSX registry, which hosts the extension. Search for `Lus` in the extensions panel and install it.
-
-### Visual Studio Code
-
-Visual Studio Code uses the Visual Studio Marketplace, which does not host the Lus extension. Install the extension from its file:
-
-1. Download the latest `.vsix` file from the [Open VSX page](https://open-vsx.org/extension/lus/lus).
-2. Open VSCode, go to the Extensions panel, click the `...` menu, and select **Install from VSIX...**.
-3. Select the downloaded `.vsix` file.
-
-The `code` command also installs the file. Replace `version` with the version of the downloaded extension:
+Visual Studio Code installs the extension from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=lus.lus). VSCodium, Cursor, and Antigravity install it from the [Open VSX registry](https://open-vsx.org/extension/lus/lus). In each editor, search for `Lus` in the extensions panel and install it. The `code` command also installs it by its identifier:
 
 ```bash
-code --install-extension lus-version.vsix
+code --install-extension lus.lus
 ```
+
+Each release also attaches the extension as a `.vsix` file, which the **Install from VSIX...** command of the `...` menu of the Extensions panel installs.
 
 ### Package completion
 

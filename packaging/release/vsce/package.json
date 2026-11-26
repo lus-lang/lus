@@ -1,0 +1,8 @@
+{
+  "name": "lus-release-vsce",
+  "private": true,
+  "description": "The vsce that publish-vscode.yml publishes to the Visual Studio Marketplace with",
+  "dependencies": {
+    "@vscode/vsce": "4.1.0"
+  }
+}

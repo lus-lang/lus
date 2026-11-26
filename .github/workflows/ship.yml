@@ -20,7 +20,9 @@ name: Ship
 #      to the release commit, whose parent is the commit of the run. No
 #      branch holds the release commit.
 #   4. index and vscode add the release to the signed index of `lus
-#      version` and publish the VSIX to Open VSX.
+#      version` and publish the VSIX to Open VSX and to the Visual Studio
+#      Marketplace. The marketplace job runs in the environment release,
+#      so it waits for a reviewer as well.
 #   5. next opens a pull request that brings the dated changelog and the
 #      news page of the release to the branch and starts X.(Y+1).0-dev.
 #      The site deploys from the branch, so merging it publishes the news
@@ -320,7 +322,7 @@ jobs:
     secrets: inherit
 
   vscode:
-    name: Open VSX
+    name: VSCode extension
     needs: [prepare, github]
     uses: ./.github/workflows/publish-vscode.yml
     with:
