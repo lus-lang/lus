@@ -68,9 +68,7 @@ function rename.compute(uri, position, new_name)
     }
 
     -- All references
-    local refs = scope_mod.get_references(analysis, decl)
-
-    for _, ref in ipairs(refs) do
+    for _, ref in ipairs(scope_mod.get_references(analysis, decl)) do
         edits[#edits + 1] = {
             range = {
                 start = { line = ref.line - 1, character = ref.column - 1 },
@@ -84,9 +82,7 @@ function rename.compute(uri, position, new_name)
 
     -- Cross-file rename for globals and top-level functions
     if decl.kind == "global" or decl.kind == "function" then
-        local all_uris = document.all()
-
-        for _, other_uri in ipairs(all_uris) do
+        for _, other_uri in ipairs(document.all()) do
             if other_uri ~= uri then
                 ast_mod.parse(other_uri)
 

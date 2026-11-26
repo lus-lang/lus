@@ -60,33 +60,24 @@ local KEYWORDS = require("lus-language.analysis.keywords")
 local GLOBAL_SYMBOLS = stdlib_data.globals
 local STDLIB_TABLES = stdlib_data.tables
 
+-- The completion kind of each kind of standard library symbol.
+local STDLIB_KINDS = {
+    ["function"] = KIND.Function,
+    constant = KIND.Constant,
+    variable = KIND.Variable,
+    module = KIND.Module,
+}
+
 local function stdlib_kind(symbol)
-    if not symbol then
-        return KIND.Field
-    end
-
-    if symbol.kind == "function" then
-        return KIND.Function
-    end
-
-    if symbol.kind == "constant" then
-        return KIND.Constant
-    end
-
-    if symbol.kind == "variable" then
-        return KIND.Variable
-    end
-
-    if symbol.kind == "module" then
-        return KIND.Module
-    end
-
-    return KIND.Field
+    return STDLIB_KINDS[symbol?.kind] or KIND.Field
 end
 
 -- ---------------------------------------------------------------------------
 -- Completion logic
 -- ---------------------------------------------------------------------------
+
+-- The kinds of completion, which the text before the cursor selects.
+local Context = enum require_string, global_decl, member, method, scope end
 
 -- Determine the completion context by examining text before the cursor
 local function get_context(text, line, col)
@@ -117,29 +108,29 @@ local function get_context(text, line, col)
     -- Inside the string of a require: complete module URLs
 
     if typed = string.match(before, "require%s*%(?%s*[\"']([^\"']*)$") then
-        return "require_string", typed
+        return Context.require_string, typed
     end
 
     -- Check for global statement: global name1, name2, ...
     if string.match(before, "^%s*global%s+") then
         -- Extract the last word being typed after global (or after a comma)
         local prefix = string.match(before, "[%w_]+$") or ""
-        return "global_decl", prefix
+        return Context.global_decl, prefix
     end
 
     -- Check for member access: identifier.  or identifier:
 
     if dot_match = string.match(before, "([%w_%.]+)%.$") then
-        return "member", dot_match
+        return Context.member, dot_match
     end
 
     if colon_match = string.match(before, "([%w_]+):$") then
-        return "method", colon_match
+        return Context.method, colon_match
     end
 
     -- Otherwise: scope completion with optional prefix filter
     local prefix = string.match(before, "([%w_]+)$") or ""
-    return "scope", prefix
+    return Context.scope, prefix
 end
 
 -- Check if a name is a valid Lus identifier (can use dot notation)
@@ -167,9 +158,8 @@ end
 -- Build completion items for module exports
 local function module_export_items(mod_name, origin_uri)
     local items = {}
-    local exports = modules.get_exports(mod_name, origin_uri)
 
-    for _, exp in ipairs(exports) do
+    for _, exp in ipairs(modules.get_exports(mod_name, origin_uri)) do
         local kind = exp.kind == "function" and KIND.Function or KIND.Field
         items[#items + 1] = {
             label = exp.name,
@@ -203,7 +193,7 @@ function completion.compute(uri, position)
 
     local context, value = get_context(doc.text, line, col)
 
-    if context == "require_string" then
+    if context == Context.require_string then
         -- Atmosphere URLs replace the whole string typed so far, which holds
         -- characters that are not part of a word.
         local items = {}
@@ -217,7 +207,7 @@ function completion.compute(uri, position)
             items[#items + 1] = {
                 label = pkg.url,
                 kind = KIND.Module,
-                detail = pkg.version and `$((pkg.name or "")) $(pkg.version)` or pkg.name,
+                detail = pkg.version and `$(pkg.name or "") $(pkg.version)` or pkg.name,
                 documentation = pkg.description,
                 filterText = pkg.url,
                 textEdit = {
@@ -233,7 +223,7 @@ function completion.compute(uri, position)
         return items
     end
 
-    if context == "global_decl" then
+    if context == Context.global_decl then
         -- Inside a `global` statement: suggest known environment globals
         local items = {}
         local seen = {}
@@ -245,8 +235,8 @@ function completion.compute(uri, position)
                 items[#items + 1] = {
                     label = name,
                     kind = stdlib_kind(symbol),
-                    detail = symbol and symbol.type or "global",
-                    documentation = symbol and symbol.description,
+                    detail = symbol?.type or "global",
+                    documentation = symbol?.description,
                     tags = symbol?.stability == "deprecated" and { TAG_DEPRECATED } or nil,
                 }
             end
@@ -280,7 +270,7 @@ function completion.compute(uri, position)
         return items
     end
 
-    if context == "member" or context == "method" then
+    if context == Context.member or context == Context.method then
         -- Member/method completion after . or :
         local items = {}
 
@@ -289,87 +279,75 @@ function completion.compute(uri, position)
 
         if #stdlib_items > 0 then
             items = stdlib_items
-        else
+        elseif analysis then
             -- Check scope for the variable
-            if analysis then
-                -- Split dot-chain: "user.profile" -> {"user", "profile"}
-                local segments = {}
+            -- Split dot-chain: "user.profile" -> {"user", "profile"}
+            local segments = {}
 
-                for seg in string.gmatch(value, "[%w_]+") do
-                    segments[#segments + 1] = seg
-                end
+            for seg in string.gmatch(value, "[%w_]+") do
+                segments[#segments + 1] = seg
+            end
 
-                if base_name = segments[1] then
-                    local decl = nil
+            if base_name = segments[1] then
+                local s = scope_mod.get_scope_at(analysis.root, line)
 
-                    if s = scope_mod.get_scope_at(analysis.root, line) then
-                        local visible = scope_mod.get_visible(s)
-                        decl = visible[base_name]
+                if decl = s and scope_mod.get_visible(s)[base_name] then
+                    -- Check if it's a require() result variable (single-segment only)
+                    if tree and #segments == 1 then
+                        if mod_name = modules.get_require_for_decl(tree, decl) then
+                            items = module_export_items(mod_name, uri)
+                        end
                     end
 
-                    if decl then
-                        -- Check if it's a require() result variable (single-segment only)
-                        if tree and #segments == 1 then
-                            if mod_name = modules.get_require_for_decl(tree, decl) then
-                                items = module_export_items(mod_name, uri)
+                    -- Traverse field chain to find final type
+                    if #items == 0 and decl.type_info then
+                        -- Show final type's fields
+                        if current_type = types_mod.resolve_field_chain(
+                            decl.type_info,
+                            segments,
+                            2
+                        ) then
+                            if receiver = types_mod.stdlib_receiver_name(current_type) then
+                                items = member_items(receiver)
                             end
-                        end
 
-                        -- Traverse field chain to find final type
-                        if #items == 0 and decl.type_info then
-                            -- Show final type's fields
-                            if current_type = types_mod.resolve_field_chain(
-                                decl.type_info,
-                                segments,
-                                2
-                            ) then
-                                if receiver = types_mod.stdlib_receiver_name(current_type) then
-                                    items = member_items(receiver)
-                                end
+                            if #items == 0 then
+                                if fields = types_mod.get_fields(current_type) then
+                                    for fname, finfo in pairs(fields) do
+                                        local fkind = finfo.type_info?.tag == "function"
+                                            and KIND.Function
+                                            or KIND.Field
 
-                                if #items == 0 then
-                                    if fields = types_mod.get_fields(current_type) then
-                                        for fname, finfo in pairs(fields) do
-                                            local fkind = KIND.Field
-
-                                            if finfo.type_info
-                                                and finfo.type_info.tag == "function" then
-                                                fkind = KIND.Function
-                                            end
-
-                                            local detail
-
+                                        local detail = do
                                             if finfo.type_info then
                                                 local type_str = types_mod.display(finfo.type_info)
 
                                                 if type_str ~= "unknown" then
-                                                    detail = type_str
+                                                    provide type_str
                                                 end
                                             end
 
-                                            if not detail then
-                                                detail = `$value.$fname`
-                                            end
-
-                                            local item = {
-                                                label = fname,
-                                                kind = fkind,
-                                                detail = detail,
-                                            }
-
-                                            -- Use bracket notation for special-character field names
-                                            if not is_valid_identifier(fname) then
-                                                item.filterText = fname
-
-                                                if string.find(fname, "'", 1, true) then
-                                                    item.insertText = `["$fname"]`
-                                                else
-                                                    item.insertText = `['$fname']`
-                                                end
-                                            end
-
-                                            items[#items + 1] = item
+                                            provide `$value.$fname`
                                         end
+
+                                        local item = {
+                                            label = fname,
+                                            kind = fkind,
+                                            detail = detail,
+                                        }
+
+                                        -- Use bracket notation for special-character field names
+                                        if not is_valid_identifier(fname) then
+                                            item.filterText = fname
+
+                                            if string.find(fname, "'", 1, true) then
+                                                item.insertText = `["$fname"]`
+                                            else
+                                                item.insertText = `['$fname']`
+                                            end
+                                        end
+
+                                        items[#items + 1] = item
                                     end
                                 end
                             end
@@ -380,7 +358,7 @@ function completion.compute(uri, position)
         end
 
         -- Filter to functions only for : (method) context
-        if context == "method" then
+        if context == Context.method then
             local filtered = {}
 
             for _, item in ipairs(items) do
@@ -407,17 +385,9 @@ function completion.compute(uri, position)
             for name, decl in pairs(visible) do
                 if not seen[name] then
                     seen[name] = true
-                    local kind = KIND.Variable
-
-                    if decl.kind == "function" then
-                        kind = KIND.Function
-                    elseif decl.kind == "param" then
-                        kind = KIND.Variable
-                    end
-
                     items[#items + 1] = {
                         label = name,
-                        kind = kind,
+                        kind = decl.kind == "function" and KIND.Function or KIND.Variable,
                         detail = decl.kind,
                     }
                 end
@@ -433,8 +403,8 @@ function completion.compute(uri, position)
             items[#items + 1] = {
                 label = name,
                 kind = stdlib_kind(symbol),
-                detail = symbol and symbol.type or "global",
-                documentation = symbol and symbol.description,
+                detail = symbol?.type or "global",
+                documentation = symbol?.description,
                 tags = symbol?.stability == "deprecated" and { TAG_DEPRECATED } or nil,
             }
         end

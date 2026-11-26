@@ -13,7 +13,7 @@ local signature = {}
 local function stdlib_signature(name)
     local symbol = stdlib_data.resolve(name)
 
-    if symbol and symbol.kind == "function" then
+    if symbol?.kind == "function" then
         return symbol
     end
 
@@ -34,17 +34,16 @@ local function receiver_signature(func_name, analysis, line)
     end
 
     local scope_at_call = scope_mod.get_scope_at(analysis.root, line)
-    local visible = scope_at_call and scope_mod.get_visible(scope_at_call)
-    local declaration = visible and visible[segments[1]]
+    local declaration = scope_at_call and scope_mod.get_visible(scope_at_call)[segments[1]]
 
-    if not declaration or not declaration.type_info then
+    if not declaration?.type_info then
         return nil
     end
 
     local receiver_type = types_mod.resolve_field_chain(declaration.type_info, segments, 2)
     local symbol = types_mod.resolve_stdlib_member(receiver_type, member)
 
-    if symbol and symbol.kind == "function" then
+    if symbol?.kind == "function" then
         return symbol
     end
 
@@ -153,10 +152,7 @@ function signature.compute(uri, position)
 
     -- Check stdlib signatures first
     local stdlib_symbol = stdlib_signature(func_name)
-
-    if not stdlib_symbol then
-        stdlib_symbol = receiver_signature(func_name, analysis, line)
-    end
+        or receiver_signature(func_name, analysis, line)
 
     if stdlib_symbol then
         -- Build typed label: name(param: type, ...)
@@ -172,7 +168,7 @@ function signature.compute(uri, position)
             end
 
             if p.optional then
-                part = part .. "?"
+                part = `$part?`
             end
 
             label_parts[#label_parts + 1] = part
@@ -184,7 +180,7 @@ function signature.compute(uri, position)
         end
 
         local returns = stdlib_data.format_returns(stdlib_symbol)
-        local ret_suffix = returns ~= "" and " -> " .. returns or ""
+        local ret_suffix = returns ~= "" and ` -> $returns` or ""
         label = `$func_name($(table.concat(label_parts, ", ")))$ret_suffix`
     end
 
@@ -197,7 +193,7 @@ function signature.compute(uri, position)
                 local visible = scope_mod.get_visible(s)
 
                 if decl = visible[base_name] then
-                    if decl.kind == "function" and decl.node and decl.node.params then
+                    if decl.kind == "function" and decl.node?.params then
                         params = {}
 
                         for _, p in ipairs(decl.node.params) do
@@ -209,9 +205,7 @@ function signature.compute(uri, position)
                         end
 
                         label = `function $base_name($(table.concat(params, ", ")))`
-                    elseif decl.type_info
-                        and decl.type_info.tag == "function"
-                        and decl.type_info.params then
+                    elseif decl.type_info?.tag == "function" and decl.type_info.params then
                         -- Variable holding a function value (e.g., local z = some_func)
                         params = decl.type_info.params
                         label = `$base_name($(table.concat(params, ", ")))`
@@ -230,9 +224,7 @@ function signature.compute(uri, position)
 
                     if decl = visible[table_name] then
                         if mod_name = modules.get_require_for_decl(tree, decl) then
-                            local exports = modules.get_exports(mod_name, uri)
-
-                            for _, exp in ipairs(exports) do
+                            for _, exp in ipairs(modules.get_exports(mod_name, uri)) do
                                 if exp.name == member and exp.params then
                                     params = exp.params
                                     label = `$table_name.$member($(table.concat(params, ", ")))`
@@ -262,7 +254,7 @@ function signature.compute(uri, position)
             end
 
             if p.optional then
-                param_label = param_label .. "?"
+                param_label = `$param_label?`
             end
 
             param_infos[#param_infos + 1] = { label = param_label }
@@ -290,13 +282,11 @@ function signature.compute(uri, position)
 end
 
 function signature.get_stdlib_params(name)
-    local symbol = stdlib_signature(name)
-
-    if not symbol then
-        return nil
+    if symbol = stdlib_signature(name) then
+        return symbol.params, symbol.vararg
     end
 
-    return symbol.params, symbol.vararg
+    return nil
 end
 
 return signature

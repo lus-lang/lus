@@ -72,12 +72,12 @@ end
 -- Whether the client wants actions of `kind`, by the `only` filter of the
 -- request.
 local function wanted(context, kind)
-    if not context or not context.only then
+    if not context?.only then
         return true
     end
 
     for _, k in ipairs(context.only) do
-        if kind == k or string.sub(kind, 1, #k + 1) == k .. "." then
+        if kind == k or string.sub(kind, 1, #k + 1) == `$k.` then
             return true
         end
     end
@@ -156,7 +156,7 @@ end
 function code_action.quickfixes(uri, context)
     local actions = {}
 
-    if not context or not context.diagnostics then
+    if not context?.diagnostics then
         return actions
     end
 
@@ -164,7 +164,7 @@ function code_action.quickfixes(uri, context)
         local msg = diag.message or ""
 
         -- A diagnostic of `lus check` that carries a fix in its data.
-        if diag.data and diag.data.fix then
+        if diag.data?.fix then
             actions[#actions + 1] = {
                 title = FIX_TITLES[diag.code] or "Apply the suggested rewrite",
                 kind = "quickfix",
@@ -201,8 +201,7 @@ function code_action.quickfixes(uri, context)
         local unused_name = extract_name(msg, "Unused %w+ '([^']+)'")
 
         if unused_name and string.sub(unused_name, 1, 1) ~= "_" then
-            local d_line = diag.range.start.line
-            local d_char = diag.range.start.character
+            local line, character from diag.range.start
             actions[#actions + 1] = {
                 title = `Prefix '$unused_name' with _`,
                 kind = "quickfix",
@@ -212,10 +211,10 @@ function code_action.quickfixes(uri, context)
                         [uri] = {
                             {
                                 range = {
-                                    start = { line = d_line, character = d_char },
-                                    ["end"] = { line = d_line, character = d_char + #unused_name },
+                                    start = { line = line, character = character },
+                                    ["end"] = { line = line, character = character + #unused_name },
                                 },
-                                newText = "_" .. unused_name,
+                                newText = `_$unused_name`,
                             },
                         },
                     },

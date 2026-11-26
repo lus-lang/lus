@@ -16,11 +16,7 @@ local function find_field_at(node, line, col)
         return nil
     end
 
-    if node.type == "field"
-        and node.table
-        and node.table.type == "name"
-        and node.key
-        and node.key.line == line then
+    if node.type == "field" and node.table?.type == "name" and node.key?.line == line then
         local key_col = node.key.column or 0
         local key_name = node.key.value
 
@@ -135,9 +131,7 @@ function definition.compute(uri, position)
                         -- Check if it's a require() result
 
                         if mod_name = modules.get_require_for_decl(tree, table_decl) then
-                            local exports = modules.get_exports(mod_name, uri)
-
-                            for _, exp in ipairs(exports) do
+                            for _, exp in ipairs(modules.get_exports(mod_name, uri)) do
                                 if exp.name == field_info.field_name then
                                     if target_uri = exp.uri or modules.resolve(mod_name, uri) then
                                         return {
@@ -159,26 +153,22 @@ function definition.compute(uri, position)
                         end
 
                         -- Check in-file table field definitions
-                        if table_decl.type_info then
-                            local fields = types_mod.get_fields(table_decl.type_info)
+                        local fields = types_mod.get_fields(table_decl.type_info)
 
-                            if fields and fields[field_info.field_name] then
-                                local f = fields[field_info.field_name]
-                                return {
-                                    uri = uri,
-                                    range = {
-                                        start = {
-                                            line = (f.line or 1) - 1,
-                                            character = (f.column or 1) - 1,
-                                        },
-                                        ["end"] = {
-                                            line = (f.line or 1) - 1,
-                                            character = (f.column or 1) - 1
-                                                + #field_info.field_name,
-                                        },
+                        if f = fields?[field_info.field_name] then
+                            return {
+                                uri = uri,
+                                range = {
+                                    start = {
+                                        line = (f.line or 1) - 1,
+                                        character = (f.column or 1) - 1,
                                     },
-                                }
-                            end
+                                    ["end"] = {
+                                        line = (f.line or 1) - 1,
+                                        character = (f.column or 1) - 1 + #field_info.field_name,
+                                    },
+                                },
+                            }
                         end
                     end
                 end

@@ -163,11 +163,9 @@ local function collect_enclosing(node, line, col, result)
         collect_enclosing(node.nameexpr, line, col, result)
     end
 
-    if node.names then
-        if type(node.names) == "table" and node.names[1] then
-            for _, n in ipairs(node.names) do
-                collect_enclosing(n, line, col, result)
-            end
+    if type(node.names) == "table" and node.names[1] then
+        for _, n in ipairs(node.names) do
+            collect_enclosing(n, line, col, result)
         end
     end
 end

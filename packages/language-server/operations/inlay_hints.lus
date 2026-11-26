@@ -55,10 +55,9 @@ local function get_param_names(func_node, analysis, uri)
         -- Check scope for user-defined function
         if analysis then
             if s = scope_mod.get_scope_at(analysis.root, func_node.line or 0) then
-                local visible = scope_mod.get_visible(s)
-                local decl = visible[name]
+                local decl = scope_mod.get_visible(s)[name]
 
-                if decl and decl.type_info and decl.type_info.tag == "function" then
+                if decl?.type_info?.tag == "function" then
                     return decl.type_info.params
                 end
 
@@ -119,9 +118,7 @@ local function get_param_names(func_node, analysis, uri)
 
                         if decl = visible[tname] then
                             if mod_name = modules.get_require_for_decl(tree, decl) then
-                                local exports = modules.get_exports(mod_name, uri)
-
-                                for _, exp in ipairs(exports) do
+                                for _, exp in ipairs(modules.get_exports(mod_name, uri)) do
                                     if exp.name == fname and exp.params then
                                         return exp.params
                                     end
@@ -139,11 +136,7 @@ end
 
 -- Check if an argument already matches the parameter name
 local function arg_matches_param(arg_node, param_name)
-    if arg_node and arg_node.type == "name" and arg_node.value == param_name then
-        return true
-    end
-
-    return false
+    return arg_node?.type == "name" and arg_node.value == param_name
 end
 
 -- Collect parameter hints from a call expression
@@ -160,11 +153,7 @@ local function collect_call_hints(node, analysis, uri, hints)
 
     -- Method calls (obj:method(a, b)) implicitly pass self as first param,
     -- so skip the first parameter in the hints
-    local param_offset = 0
-
-    if node.type == "methodcall" then
-        param_offset = 1
-    end
+    local param_offset = node.type == "methodcall" and 1 or 0
 
     local effective_params = #params - param_offset
 
@@ -190,7 +179,7 @@ local function collect_call_hints(node, analysis, uri, hints)
                         line = (arg.line or 1) - 1,
                         character = (arg.column or 1) - 1,
                     },
-                    label = pname .. ":",
+                    label = `$pname:`,
                     kind = KIND_PARAMETER,
                     paddingRight = true,
                 }
@@ -219,10 +208,9 @@ local function collect_type_hints(node, analysis, hints)
             -- Find the declaration
 
             if s = scope_mod.get_scope_at(analysis.root, name_node.line or 0) then
-                local visible = scope_mod.get_visible(s)
-                local decl = visible[name]
+                local decl = scope_mod.get_visible(s)[name]
 
-                if decl and decl.type_info and decl.type_info.tag ~= "unknown" then
+                if decl?.type_info and decl.type_info.tag ~= "unknown" then
                     local type_str = types_mod.display(decl.type_info)
 
                     if type_str ~= "unknown" then
@@ -231,7 +219,7 @@ local function collect_type_hints(node, analysis, hints)
                                 line = (name_node.line or 1) - 1,
                                 character = (name_node.column or 1) - 1 + #name,
                             },
-                            label = ": " .. type_str,
+                            label = `: $type_str`,
                             kind = KIND_TYPE,
                             paddingLeft = true,
                         }

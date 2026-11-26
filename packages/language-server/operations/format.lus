@@ -14,7 +14,7 @@ local function format_document(uri, options)
         return nil, "document not found"
     end
 
-    local indent = options and options.tabSize or 4
+    local indent = options?.tabSize or 4
     local ok, formatted = catch debug.format(doc.text, uri, indent)
 
     if not ok then

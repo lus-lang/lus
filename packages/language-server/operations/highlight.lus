@@ -54,9 +54,7 @@ function highlight.compute(uri, position)
     }
 
     -- References as read
-    local refs = scope_mod.get_references(analysis, decl)
-
-    for _, ref in ipairs(refs) do
+    for _, ref in ipairs(scope_mod.get_references(analysis, decl)) do
         result[#result + 1] = {
             range = {
                 start = { line = ref.line - 1, character = ref.column - 1 },

@@ -57,16 +57,12 @@ function references.compute(uri, position, include_declaration)
     end
 
     -- Add all references from current document
-    local refs = scope_mod.get_references(analysis, decl)
-
-    for _, ref in ipairs(refs) do
+    for _, ref in ipairs(scope_mod.get_references(analysis, decl)) do
         result[#result + 1] = to_location(uri, ref)
     end
 
     -- Search across other open documents for same-name references
-    local all_uris = document.all()
-
-    for _, other_uri in ipairs(all_uris) do
+    for _, other_uri in ipairs(document.all()) do
         if other_uri ~= uri then
             ast_mod.parse(other_uri)
 

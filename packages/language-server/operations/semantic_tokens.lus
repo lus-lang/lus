@@ -62,13 +62,7 @@ local function classify_name(ref)
 
     if not decl then
         -- Unresolved: treat as variable (possibly stdlib)
-        local mods = 0
-
-        if STDLIB[ref.name] then
-            mods = MOD_DEFAULT_LIB
-        end
-
-        return TOKEN_VARIABLE, mods
+        return TOKEN_VARIABLE, STDLIB[ref.name] and MOD_DEFAULT_LIB or 0
     end
 
     local kind = decl.kind
@@ -80,13 +74,7 @@ local function classify_name(ref)
     elseif kind == "for" then
         return TOKEN_VARIABLE, MOD_READONLY
     elseif kind == "global" then
-        local mods = 0
-
-        if STDLIB[ref.name] then
-            mods = MOD_DEFAULT_LIB
-        end
-
-        return TOKEN_VARIABLE, mods
+        return TOKEN_VARIABLE, STDLIB[ref.name] and MOD_DEFAULT_LIB or 0
     else
         -- local
         local mods = 0
@@ -147,11 +135,8 @@ walk_expr = function(node, analysis)
     elseif ntype == "methodcall" then
         walk_expr(node.func, analysis)
 
-        -- The method name is a property
-        if node.method then
-            -- Method name position is not directly in the AST;
-            -- it's part of the func node, so skip for now
-        end
+        -- The method name is a property, but its position is not in the
+        -- AST, so it gets no token.
 
         if node.args then
             for _, arg in ipairs(node.args) do
@@ -162,7 +147,7 @@ walk_expr = function(node, analysis)
         walk_expr(node.table, analysis)
 
         -- The field key is a property access
-        if node.key and node.key.type == "string" and node.key.line then
+        if node.key?.type == "string" and node.key.line then
             add_token(node.key.line, node.key.column, #node.key.value, TOKEN_PROPERTY, 0)
         end
     elseif ntype == "index" then
@@ -491,11 +476,9 @@ walk_node = function(node, analysis)
         if node.children then
             walk_children(node.children, analysis)
         end
-    else
+    elseif node.children then
         -- Fallback
-        if node.children then
-            walk_children(node.children, analysis)
-        end
+        walk_children(node.children, analysis)
     end
 end
 
@@ -527,13 +510,8 @@ local function encode_tokens(t)
 
     for _, tok in ipairs(t) do
         local delta_line = tok.line - 1 - prev_line  -- convert to 0-based
-        local delta_col
-
-        if delta_line == 0 then
-            delta_col = tok.col - 1 - prev_col  -- convert to 0-based
-        else
-            delta_col = tok.col - 1  -- new line resets column
-        end
+        -- A new line resets the column.
+        local delta_col = delta_line == 0 and tok.col - 1 - prev_col or tok.col - 1
 
         prev_line = tok.line - 1
         prev_col = tok.col - 1
@@ -578,11 +556,8 @@ function semantic_tokens.compute(uri)
 
                 if endline == comment.line then
                     -- Single-line comment only (multi-line tokens not supported by LSP)
-                    local len = #comment.text + 2  -- "--" prefix
-
-                    if comment.islong then
-                        len = #comment.text + 6  -- "--[[ ]]" wrapper
-                    end
+                    -- A long comment adds the "--[[ ]]" wrapper, a short one the "--" prefix.
+                    local len = #comment.text + (comment.islong and 6 or 2)
 
                     add_token(comment.line, comment.column, len, TOKEN_COMMENT, 0)
                 end

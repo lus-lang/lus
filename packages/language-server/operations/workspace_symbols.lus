@@ -39,9 +39,8 @@ end
 -- Compute workspace symbols matching a query.
 function workspace_symbols.compute(query)
     local results = {}
-    local uris = document.all()
 
-    for _, uri in ipairs(uris) do
+    for _, uri in ipairs(document.all()) do
         ast_mod.parse(uri)
 
         if analysis = scope_mod.analyze(uri) then
@@ -49,12 +48,16 @@ function workspace_symbols.compute(query)
                 -- Only include top-level and function declarations
                 if decl.kind == "function" or decl.kind == "local" or decl.kind == "global" then
                     if fuzzy_match(decl.name, query) then
-                        local kind = SYMBOL_KIND.Variable
+                        local kind = do
+                            if decl.kind == "function" then
+                                provide SYMBOL_KIND.Function
+                            end
 
-                        if decl.kind == "function" then
-                            kind = SYMBOL_KIND.Function
-                        elseif decl.node and decl.node.attr == "const" then
-                            kind = SYMBOL_KIND.Constant
+                            if decl.node?.attr == "const" then
+                                provide SYMBOL_KIND.Constant
+                            end
+
+                            provide SYMBOL_KIND.Variable
                         end
 
                         results[#results + 1] = {

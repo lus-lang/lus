@@ -26,7 +26,7 @@ local function dotted(node)
         return node.value
     end
 
-    if node.type == "field" and node.key and node.key.type == "string" then
+    if node.type == "field" and node.key?.type == "string" then
         local base = dotted(node.table)
         return base and `$base.$(node.key.value)`
     end
@@ -135,7 +135,7 @@ local function analyze(uri)
             for i, n in ipairs(s.names) do
                 local v = s.values[i]
 
-                if v and v.type == "funcexpr" and n.line then
+                if v?.type == "funcexpr" and n.line then
                     for _, d in ipairs(res.decls) do
                         if d.node == n then
                             add_def(n.value, local_key(d), s, n.line, n.column, v)
@@ -286,7 +286,7 @@ local function documents_for(item_uri, key)
 end
 
 function call_hierarchy.incoming(it)
-    local key = it.data and it.data.key
+    local key = it.data?.key
 
     if not key then
         return {}
@@ -301,7 +301,7 @@ function call_hierarchy.incoming(it)
 
             for _, c in ipairs(a.calls) do
                 if c.key == key then
-                    local caller = c.caller and c.caller.key or `file:$uri`
+                    local caller = c.caller?.key or `file:$uri`
 
                     if not by_caller[caller] then
                         by_caller[caller] = {
@@ -326,7 +326,7 @@ function call_hierarchy.incoming(it)
 end
 
 function call_hierarchy.outgoing(it)
-    local key = it.data and it.data.key
+    local key = it.data?.key
 
     if not key then
         return {}
@@ -361,7 +361,7 @@ function call_hierarchy.outgoing(it)
     local by_target = {}
 
     for _, c in ipairs(a.calls) do
-        if c.caller and c.caller.key == key then
+        if c.caller?.key == key then
             if k = known[c.key] then
                 if not by_target[c.key] then
                     by_target[c.key] = { to = item(k.uri, k.def), fromRanges = {} }

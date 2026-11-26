@@ -93,7 +93,7 @@ local function func_name(node)
             return tostring(key)
         elseif expr.type == "index" then
             if prefix = func_name({ nameexpr = expr.table }) then
-                return prefix .. "[]"
+                return `$prefix[]`
             end
         end
     end
@@ -161,12 +161,10 @@ local function walk(node, result)
                 end
             end
         end
-    else
+    elseif node.children then
         -- For block-like nodes, recurse into children
-        if node.children then
-            for _, child in ipairs(node.children) do
-                walk(child, result)
-            end
+        for _, child in ipairs(node.children) do
+            walk(child, result)
         end
     end
 end
