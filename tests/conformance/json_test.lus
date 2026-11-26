@@ -172,7 +172,7 @@ local function fromjson_rejects_out_of_range_numbers_test()
 
     for _, json in ipairs(bad) do
         local ok, err = catch fromjson(json)
-        assert(ok == false, "out-of-range number should error: " .. json)
+        assert(ok == false, `out-of-range number should error: $json`)
         assert(tostring(err):find("number out of range"), "error should mention range")
     end
 end
@@ -408,7 +408,7 @@ local function readfile(path)
 end
 
 local function get_json_test_files()
-    local json_dir = TEST_DIR .. "/fixtures/json"
+    local json_dir = `$TEST_DIR/fixtures/json`
 
     -- Check if directory exists using fs.type
     local ok = catch fs.type(json_dir)
@@ -465,7 +465,7 @@ end
 
 local function must_read(path)
     local content = readfile(path)
-    assert(content, "Failed to read file: " .. path)
+    assert(content, `Failed to read file: $path`)
     return content
 end
 
@@ -610,7 +610,7 @@ local function large_object_test()
     local parts = {}
 
     for i = 1, 500 do
-        parts[i] = string.format('"key%d":%d', i, i)
+        parts[i] = `"key$i":$i`
     end
 
     local json_str = `{$(table.concat(parts, ","))}`
@@ -634,12 +634,7 @@ end
 
 -- string with many escapes
 local function string_with_many_escapes_test()
-    local str_with_escapes = ""
-
-    for _i = 1, 100 do
-        str_with_escapes = str_with_escapes .. "\n\t\r\\\""
-    end
-
+    local str_with_escapes = string.rep("\n\t\r\\\"", 100)
     local json_str = tojson(str_with_escapes)
     local result = fromjson(json_str)
 
@@ -660,7 +655,7 @@ local function unicode_strings_test()
     for _, str in ipairs(tests_data) do
         local json_str = tojson(str)
         local result = fromjson(json_str)
-        assert(result == str, "unicode string should roundtrip: " .. str)
+        assert(result == str, `unicode string should roundtrip: $str`)
     end
 end
 
@@ -697,19 +692,19 @@ local function tojson_with_many_repeated_keys_test()
     local data = {}
 
     for i = 1, 100 do
-        data[i] = { id = i, name = "row" .. i, even = (i % 2 == 0) }
+        data[i] = { id = i, name = `row$i`, even = (i % 2 == 0) }
     end
 
     local json_str = tojson(data)
     local _, id_count = string.gsub(json_str, '"id":', "")
-    assert(id_count == 100, "the repeated key appears once per object, found " .. id_count)
+    assert(id_count == 100, `the repeated key appears once per object, found $id_count`)
 
     local result = fromjson(json_str)
     assert(#result == 100)
 
     for i = 1, 100 do
         assert(result[i].id == i)
-        assert(result[i].name == "row" .. i)
+        assert(result[i].name == `row$i`)
         assert(result[i].even == (i % 2 == 0))
     end
 end
@@ -757,7 +752,7 @@ local function whitespace_handling_variations_test()
 
     for _, json_str in ipairs(test_cases) do
         local ok, _result = catch fromjson(json_str)
-        assert(ok, "should parse: " .. json_str)
+        assert(ok, `should parse: $json_str`)
     end
 end
 
@@ -794,7 +789,7 @@ local function duplicate_keys_behavior_test()
     local json_str = '{"a":1, "a":2}'
     local result = fromjson(json_str)
     assert(type(result) == "table")
-    assert(result.a == 2, "the last duplicate wins, got " .. tostring(result.a))
+    assert(result.a == 2, `the last duplicate wins, got $(result.a)`)
     -- The rule holds when other keys sit between the duplicates.
     local spread = fromjson('{"a":1, "b":true, "a":3}')
     assert(spread.a == 3, "the last duplicate wins across gaps")
@@ -1537,7 +1532,7 @@ local function decoding_needs_stack_only_for_open_containers_test()
     local names, zeros = {}, {}
 
     for i = 1, 190 do
-        names[i] = "v" .. i
+        names[i] = `v$i`
         zeros[i] = "0"
     end
 
@@ -1609,7 +1604,7 @@ local function filter_that_grows_the_object_writes_each_key_once_test()
             grown = true
 
             for i = 1, 64 do
-                t["extra" .. i] = i
+                t[`extra$i`] = i
             end
         end
 

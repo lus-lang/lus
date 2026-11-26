@@ -10,7 +10,7 @@ global print, assert, type, load, string, table, tostring, setmetatable, error, 
 
 local function compile_error(src)
     local f, err = load(src)
-    assert(f == nil, "expected a compile error for: " .. src)
+    assert(f == nil, `expected a compile error for: $src`)
     return err
 end
 
@@ -162,7 +162,7 @@ end
 local function runtime_attributes_apply_to_the_value_test()
     local function positive(name, v)
         if v <= 0 then
-            error(name .. " must be positive", 0)
+            error(`$name must be positive`, 0)
         end
     end
 

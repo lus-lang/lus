@@ -38,7 +38,7 @@ end
 -- Assert that src fails to lex and its message contains every listed fragment.
 local function checkfail(src, ...)
     local msg = load_error(src)
-    assert(msg ~= nil, "expected a lexer error for source: " .. src)
+    assert(msg ~= nil, `expected a lexer error for source: $src`)
     local needles = { ... }
 
     for i = 1, #needles do
@@ -52,14 +52,14 @@ end
 -- able to fail against a runtime that rejects valid input.
 local function checkok(src)
     local msg = load_error(src)
-    assert(msg == nil, "expected clean compile but got error: " .. tostring(msg))
+    assert(msg == nil, `expected clean compile but got error: $msg`)
 end
 
 -- Compile src and run the resulting chunk, returning its first result. Used to
 -- pin the value of accepted escape forms so a miscompile is observable.
 local function eval(src)
     local f = load(src, "=eval")
-    assert(f ~= nil, "expected source to compile: " .. src)
+    assert(f ~= nil, `expected source to compile: $src`)
     return f()
 end
 
@@ -334,7 +334,7 @@ local function a_letter_outside_ascii_is_quoted_whole_test()
     for _, c in ipairs(cases) do
         local msg = load_error(c[1])
         assert(msg ~= nil, c[1])
-        assert(has(msg, "chunk:1: " .. c[2]), msg)
+        assert(has(msg, `chunk:1: $(c[2])`), msg)
     end
 end
 

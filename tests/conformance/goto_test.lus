@@ -46,7 +46,7 @@ local function goto_error_handling_scoping_test()
 
         -- load succeeded with a function, run it and expect runtime error
         local run_ok, run_err = catch f()
-        assert(not run_ok, "Expected runtime error for: " .. code)
+        assert(not run_ok, `Expected runtime error for: $code`)
         assert(string.find(run_err, msg), `Error '$run_err' missing '$msg'`)
     end
 

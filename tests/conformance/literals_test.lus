@@ -75,7 +75,7 @@ end
 -- syntax errors in literals
 local function syntax_errors_in_literals_test()
     local function lexerror(s, err)
-        local ok, st, msg = catch load("return " .. s, "")
+        local ok, st, msg = catch load(`return $s`, "")
 
         if not ok then
             -- load threw error - that's expected for syntax errors

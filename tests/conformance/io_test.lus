@@ -21,12 +21,12 @@ pledge("load")
 ]]
 
 -- The fixture file is readable but never writable.
-local READONLY_FIXTURE = TEST_DIR .. "/fixtures/io/readonly.txt"
+local READONLY_FIXTURE = `$TEST_DIR/fixtures/io/readonly.txt`
 
-pledge("fs:read=./iorw_*", "fs:write=./iorw_*", "fs:read=./ioro_*", "fs:read=" .. READONLY_FIXTURE)
+pledge("fs:read=./iorw_*", "fs:write=./iorw_*", "fs:read=./ioro_*", `fs:read=$READONLY_FIXTURE`)
 
 local RUN = tostring(time.now():epoch())
-local SB = "./iorw_" .. RUN
+local SB = `./iorw_$RUN`
 
 catch fs.remove(SB, true)
 fs.createdirectory(SB)

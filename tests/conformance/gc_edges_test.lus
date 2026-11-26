@@ -31,11 +31,11 @@ local function weak_tables_keep_strings_and_exact_numbers_test()
             t[1] = {}
             collectgarbage()
             collectgarbage()
-            assert(t[long] == long and t[10n ^ 30] == 10n ^ 30, mode .. weak)
-            assert(t[decimal("1.25")] == decimal("1.25") and t.short == "s", mode .. weak)
+            assert(t[long] == long and t[10n ^ 30] == 10n ^ 30, `$mode$weak`)
+            assert(t[decimal("1.25")] == decimal("1.25") and t.short == "s", `$mode$weak`)
 
             if weak == "v" or weak == "kv" then
-                assert(t[1] == nil, mode .. weak)
+                assert(t[1] == nil, `$mode$weak`)
             end
 
             local n = 0
@@ -47,7 +47,7 @@ local function weak_tables_keep_strings_and_exact_numbers_test()
             end
 
             if weak ~= "v" then
-                assert(n == 0, mode .. weak)
+                assert(n == 0, `$mode$weak`)
             end
         end
     end)
@@ -131,7 +131,7 @@ local function a_large_table_is_marked_in_parts_test()
         end
 
         for i = 1, 5000 do
-            big["k" .. i] = { i }
+            big[`k$i`] = { i }
         end
 
         collectgarbage()

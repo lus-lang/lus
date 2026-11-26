@@ -439,7 +439,7 @@ local function multiple_objects_with_finalizers_all_run_test()
     collectgarbage()
     collectgarbage()
 
-    assert(finalize_count == 5, "all 5 finalizers should run, got: " .. finalize_count)
+    assert(finalize_count == 5, `all 5 finalizers should run, got: $finalize_count`)
 
     for i = 1, 5 do
         assert(finalized_ids[i], `finalizer for object $i should have run`)
@@ -493,7 +493,7 @@ local function gc_operations_return_expected_values_test()
 
     -- gc("count") should return memory usage as a number
     local mem = collectgarbage("count")
-    assert(type(mem) == "number", "gc count should return number, got: " .. type(mem))
+    assert(type(mem) == "number", `gc count should return number, got: $(type(mem))`)
     assert(mem > 0, "memory usage should be positive")
 
     -- Allocate some memory
@@ -532,7 +532,7 @@ local function weak_key_table_collects_unreferenced_keys_test()
         count = count + 1
     end
 
-    assert(count == 1, "only the unreferenced key was collected, found " .. count)
+    assert(count == 1, `only the unreferenced key was collected, found $count`)
 
     -- Dropping the last key empties the table.
     live = nil
@@ -1219,9 +1219,9 @@ local function unpackmany_iteration_stays_correct_with_interleaved_gc_steps_test
         end
     end
 
-    assert(n == 1000, "must iterate every element, got " .. n)
+    assert(n == 1000, `must iterate every element, got $n`)
     -- Sum of 0..999 is 499500.
-    assert(sum == 499500, "iteration values must be intact under GC, got " .. sum)
+    assert(sum == 499500, `iteration values must be intact under GC, got $sum`)
 end
 
 -- distinct enum roots never collide as keys after collection
@@ -1317,7 +1317,7 @@ local function all_finalizers_holding_vectors_run_and_read_their_own_data_test()
     collectgarbage()
     collectgarbage()
     -- 100 + 200 + ... + 800 = 3600
-    assert(total == 3600, "every vector finalizer must run and read its payload, got " .. total)
+    assert(total == 3600, `every vector finalizer must run and read its payload, got $total`)
 end
 
 -- ===== gengc =====

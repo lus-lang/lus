@@ -10,7 +10,7 @@ pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
 local LUS = os.getenv("LUS_EXE")
 
 local function run(cmdline)
-    local f = io.popen(cmdline .. " 2>&1")
+    local f = io.popen(`$cmdline 2>&1`)
     local out = f:read("a")
     local ok = f:close()
     return (ok == true or ok == 0), out
