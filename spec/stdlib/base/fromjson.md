@@ -26,7 +26,7 @@ The value maps to Lus as follows:
 - JSON `null` becomes `nil`, so a null field is absent and a null array element leaves a hole. `tojson` writes `null` in that hole again, except at the end of an array, where the hole has no key.
 - An object with a duplicate key keeps the last value.
 
-With `exact` set, an integer that overflows 64 bits decodes as a bigint and a number with a fraction or an exponent decodes as a decimal, so [`tojson`](/manual/api#tojson) reproduces the original digits on the way back.
+With `exact` set, an integer that overflows 64 bits decodes as a bigint and a number with a fraction or an exponent decodes as a decimal, so [`tojson`](/manual/api#tojson) reproduces the original digits on the way back. An integer of more than 16,384 digits is out of range, as is a decimal past the limits of decimals.
 
 Invalid syntax, trailing data after the value, empty input, a number out of range, and nesting deeper than 1,000 levels raise an error of the form `FILE:LINE: JSON parse error at position N: MESSAGE`. `FILE:LINE` is the position of the call of `fromjson`, as in the message of [`error`](/manual/api#error), and `N` counts characters of the text from 1.
 

@@ -1721,7 +1721,14 @@ fn describe(l: *Thread, a: Allocator, buf: *std.ArrayList(u8), v: Value, quote: 
         else => {
             var tmp: std.ArrayList(u8) = .empty;
             defer tmp.deinit(l.g.gpa);
-            ops.rawToBuf(l, &tmp, v) catch return error.OutOfMemory;
+            ops.rawToBuf(l, &tmp, v) catch |e| switch (e) {
+                // A bigint too long for its numeral shows its size.
+                error.OutOfRange => {
+                    try buf.print(a, "bigint of {d} bits", .{v.as(@import("../vm/numeric.zig").BigInt).toConst().bitCountAbs()});
+                    return;
+                },
+                else => return error.OutOfMemory,
+            };
             try buf.appendSlice(a, tmp.items);
         },
     }

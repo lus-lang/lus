@@ -342,7 +342,11 @@ fn bigint(l: *Thread) Error!u32 {
         },
         .string => {
             const s = std.mem.trim(u8, v.as(String).bytes(), " \t\n\r");
-            const b = numeric.parseBigLiteral(g, s) catch return aux.retNil(l);
+            const b = numeric.parseBigText(g, s) catch |e| switch (e) {
+                error.OutOfRange => return numeric.raiseBigRange(l),
+                error.OutOfMemory => return l.raiseMem(),
+                else => return aux.retNil(l),
+            };
             return aux.ret(l, Value.obj(.bigint, b));
         },
         else => return aux.typeError(l, 1, "number"),
@@ -356,7 +360,15 @@ fn decimal(l: *Thread) Error!u32 {
     defer buf.deinit(g.gpa);
     switch (v.tag) {
         .decimal => return aux.ret(l, v),
-        .integer, .bigint => ops.numberToBuf(g.gpa, &buf, v) catch return l.raiseMem(),
+        .integer => ops.numberToBuf(g.gpa, &buf, v) catch return l.raiseMem(),
+        .bigint => {
+            // A bigint converts without text, so the limit of its numeral
+            // leaves the larger limit of a decimal in place.
+            const c = v.as(numeric.BigInt).toConst();
+            const r = numeric.decRange(g.gpa, c, 0) catch return l.raiseMem();
+            if (r != .ok) return numeric.raiseRange(l, r);
+            return aux.ret(l, Value.obj(.decimal, numeric.newDecFromConst(g, c, 0) catch return l.raiseMem()));
+        },
         .float => {
             // Shortest round-trip representation.
             buf.print(g.gpa, "{d}", .{v.asFloat()}) catch return l.raiseMem();

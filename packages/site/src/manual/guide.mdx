@@ -354,7 +354,7 @@ Dividing an integer by zero with `//` or `%` raises an error. Float division by 
 
 #### Bigints
 
-A bigint behaves like an integer without limits. An operation between a bigint and an integer produces a bigint.
+A bigint behaves like an integer without limits. An operation between a bigint and an integer produces a bigint. Arithmetic builds a bigint of any size, while its conversions to and from text, such as `tostring` and `bigint(s)`, handle at most 16,384 digits and raise an error past them.
 
 ```lus
 print(2n ^ 100)  --> 1267650600228229401496703205376

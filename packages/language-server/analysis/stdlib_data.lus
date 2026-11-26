@@ -118,6 +118,8 @@ The parameter `x` is a number or a string. Integers, bigints, floats with an int
 
 A float or decimal with a fractional part, and a float that is infinite or NaN, raise `bad argument #1 to 'bigint' (number has no integer representation)`. An argument of any other type raises `number expected`.
 
+A numeral holds at most 16,384 digits, not counting its sign and its `0x` prefix. A string numeral with more digits raises `bigint out of range: more than 16384 digits`, while a longer string that holds no numeral returns `nil`. The limit applies only to text, so arithmetic builds bigints of any size. [`tostring`](/manual/api#tostring) raises the same error for a bigint whose numeral is too long.
+
 ```lus
 print(bigint(2) ^ 100)  --> 1267650600228229401496703205376
 print(bigint("123456789012345678901234567890") + 1)
@@ -3394,7 +3396,7 @@ The value maps to Lus as follows:
 - JSON `null` becomes `nil`, so a null field is absent and a null array element leaves a hole. `tojson` writes `null` in that hole again, except at the end of an array, where the hole has no key.
 - An object with a duplicate key keeps the last value.
 
-With `exact` set, an integer that overflows 64 bits decodes as a bigint and a number with a fraction or an exponent decodes as a decimal, so [`tojson`](/manual/api#tojson) reproduces the original digits on the way back.
+With `exact` set, an integer that overflows 64 bits decodes as a bigint and a number with a fraction or an exponent decodes as a decimal, so [`tojson`](/manual/api#tojson) reproduces the original digits on the way back. An integer of more than 16,384 digits is out of range, as is a decimal past the limits of decimals.
 
 Invalid syntax, trailing data after the value, empty input, a number out of range, and nesting deeper than 1,000 levels raise an error of the form `FILE:LINE: JSON parse error at position N: MESSAGE`. `FILE:LINE` is the position of the call of `fromjson`, as in the message of [`error`](/manual/api#error), and `N` counts characters of the text from 1.
 
@@ -8967,7 +8969,7 @@ Returns a string built from `formatstring`, in which each directive is replaced 
 
 The conversions treat the number subtypes as follows:
 
-- `%d` and `%i` write an integer in decimal. They accept an integer, a float or decimal with an integral value, a numeric string, and a bigint of any size, which they write exactly. `%u` is the same.
+- `%d` and `%i` write an integer in decimal. They accept an integer, a float or decimal with an integral value, a numeric string, and a bigint whose numeral has at most 16,384 digits, which they write exactly. `%u` is the same.
 - `%x`, `%X`, and `%o` write an integer in hexadecimal or octal. A negative integer is written as its 64-bit two's complement, and a bigint must fit in 64 bits.
 - `%c` writes the character whose code point is the argument.
 - `%f`, `%F`, `%e`, `%E`, `%g`, `%G`, `%a`, and `%A` write a float. A decimal is written from its exact digits under `%f`, `%e`, and `%g`, rounded half to even, so `string.format("%.2f", 2.675d)` is `"2.68"`. A bigint, and a decimal under `%a`, are first converted to the nearest float. An infinity is written as `inf` and a NaN as `nan`, in capitals under the uppercase conversions. A NaN is written without a minus sign on every platform, and the `+` flag writes it as `+nan`.
@@ -12292,7 +12294,7 @@ The parameter `v` may be a value of any type. If `v` has a `__tostring` metameth
 
 - `nil` and booleans become `"nil"`, `"true"`, and `"false"`.
 - An integer prints in decimal. A float prints with 14 significant digits, or with the fewest digits up to 17 that read back as the same float when 14 do not, so `1 / 3` prints as `"0.3333333333333333"` and `0.1 + 0.2` as `"0.30000000000000004"`. A float always shows that it is a float, so `1.0` prints as `"1.0"` and large values use an exponent, as in `"1e+100"`. The infinities print as `"inf"` and `"-inf"`. Every NaN prints as `"nan"`, whatever its sign bit, so the output is the same on every platform.
-- A bigint prints in decimal without its `n` suffix, and a decimal prints exactly its stored digits, so `tostring(1.50d)` is `"1.50"`.
+- A bigint prints in decimal without its `n` suffix, and a decimal prints exactly its stored digits, so `tostring(1.50d)` is `"1.50"`. A bigint whose numeral has more than 16,384 digits raises `bigint out of range: more than 16384 digits`.
 - A string returns unchanged.
 - Any other value prints as its type and its address, as in `"table: 0x000001049d7cf0"`. A table whose metatable has a string `__name` field uses that name in place of the type.
 

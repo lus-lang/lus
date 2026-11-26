@@ -1864,7 +1864,7 @@ fn addValue(l: *Thread, b: *Builder, str: *String, m: anytype, s: usize, e: usiz
     }
     switch (r.tag) {
         .string => try b.append(r.as(String).bytes()),
-        .integer, .float, .bigint, .decimal => ops.numberToBuf(b.gpa(), &b.buf, r) catch return l.raiseMem(),
+        .integer, .float, .bigint, .decimal => ops.numberToBuf(b.gpa(), &b.buf, r) catch |err| return ops.raiseText(l, err),
         else => return l.raiseFmt("invalid replacement value (a {s})", .{value.typeName(r.tag)}),
     }
     return true;
@@ -2338,7 +2338,7 @@ fn addLiteral(l: *Thread, b: *Builder, arg: u32) Error!void {
                 hexFloatBody(&b.buf, b.gpa(), f, null, false) catch return l.raiseMem();
             }
         },
-        .bigint, .decimal => ops.numberToBuf(b.gpa(), &b.buf, v) catch return l.raiseMem(),
+        .bigint, .decimal => ops.numberToBuf(b.gpa(), &b.buf, v) catch |err| return ops.raiseText(l, err),
         .nil, .true, .false => try b.append((try ops.toString(l, v)).bytes()),
         else => return aux.argError(l, arg, "value has no literal form", .{}),
     }
@@ -2511,7 +2511,7 @@ fn formatInto(comptime leaf: bool, l: *Thread, b: *Builder, fmt: []const u8, arg
                     if (leaf) return error.LusError;
                     // Arbitrary precision integers print all their digits.
                     const sp = try parseSpec(l, form, spec, flags, true);
-                    const str = numeric.bigToString(l.g.gpa, v.as(numeric.BigInt)) catch return l.raiseMem();
+                    const str = numeric.bigToText(l.g.gpa, v.as(numeric.BigInt)) catch |err| return ops.raiseText(l, err);
                     defer l.g.gpa.free(str);
                     const neg = str.len > 0 and str[0] == '-';
                     try fmtIntDigits(b, sp, conv, neg, if (neg) str[1..] else str);

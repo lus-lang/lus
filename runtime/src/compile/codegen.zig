@@ -1545,7 +1545,8 @@ fn expr(fs: *FuncState, e: *ast.Expr, v: *ExpDesc) Error!void {
         .float => |f| v.* = .{ .kind = .kflt, .nval = f },
         .string => |s| v.* = .{ .kind = .kstr, .strval = s },
         .bigint => |d| {
-            const b = vm.numeric.parseBigLiteral(fs.c.g, d) catch |er| switch (er) {
+            const b = vm.numeric.parseBigText(fs.c.g, d) catch |er| switch (er) {
+                error.OutOfRange => return fs.c.err(e.line, "bigint literal out of range: a bigint numeral holds at most {d} digits", .{vm.numeric.max_big_digits}),
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return fs.c.err(e.line, "malformed number near '{s}n'", .{d}),
             };

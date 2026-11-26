@@ -127,6 +127,62 @@ pub fn parseBigLiteral(g: *Global, digits: []const u8) !*BigInt {
     return newBigFromConst(g, m.toConst());
 }
 
+/// The most digits of a bigint numeral that text conversions read or
+/// write: `bigint(s)`, a bigint literal, the bigint path of `fromjson`,
+/// and `tostring`. Arithmetic keeps any size. Parsing decimal text takes
+/// time that grows with the square of its digits, so the limit bounds
+/// the work of one conversion (`spec/design/numbers.md`, "Limits of
+/// bigints").
+pub const max_big_digits = 16384;
+
+/// The digits of the numeral `text`, without its sign and `0x` prefix,
+/// and whether they are hexadecimal.
+fn numeralDigits(text: []const u8) struct { []const u8, bool } {
+    var s = text;
+    if (s.len > 0 and (s[0] == '-' or s[0] == '+')) s = s[1..];
+    if (s.len > 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X')) return .{ s[2..], true };
+    return .{ s, false };
+}
+
+/// `parseBigLiteral` for text that a program supplies. A numeral of more
+/// than `max_big_digits` digits returns `error.OutOfRange`, and longer
+/// text that is no numeral returns `error.InvalidCharacter`.
+pub fn parseBigText(g: *Global, text: []const u8) !*BigInt {
+    const digits, const hex = numeralDigits(text);
+    if (digits.len > max_big_digits) {
+        for (digits) |ch| {
+            const ok = if (hex) std.ascii.isHex(ch) else std.ascii.isDigit(ch);
+            if (!ok) return error.InvalidCharacter;
+        }
+        return error.OutOfRange;
+    }
+    return parseBigLiteral(g, text);
+}
+
+/// `bigToString` for text that a program reads, which returns
+/// `error.OutOfRange` when the decimal numeral of `b` has more than
+/// `max_big_digits` digits. The bit length rules out most values before
+/// the conversion runs.
+pub fn bigToText(gpa: Allocator, b: *const BigInt) ![]u8 {
+    const c = b.toConst();
+    const bits = c.bitCountAbs();
+    // A value of `bits` bits has at least floor((bits - 1) * log10(2)) + 1
+    // decimal digits. The bound leaves a digit of room for rounding, and
+    // the length of the text decides the values near the limit.
+    if (bits > 1 and @as(f64, @floatFromInt(bits - 1)) * log10_2 >= max_big_digits + 1) return error.OutOfRange;
+    const s = try radix.toDecimal(gpa, c);
+    if (numeralDigits(s)[0].len > max_big_digits) {
+        gpa.free(s);
+        return error.OutOfRange;
+    }
+    return s;
+}
+
+/// The error of a bigint conversion past `max_big_digits` digits.
+pub fn raiseBigRange(l: *Thread) Error {
+    return l.raiseFmt("bigint out of range: more than {d} digits", .{max_big_digits});
+}
+
 /// The most digits a decimal holds before its point, and after it. Sums,
 /// differences, and products stay exact, and every operation checks its
 /// result against these limits, so the work of one operation stays

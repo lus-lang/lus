@@ -693,7 +693,7 @@ pub fn numberToBuf(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), v: Value) !v
         },
         .float => try formatFloat(gpa, buf, v.asFloat()),
         .bigint => {
-            const s = try numeric.bigToString(gpa, v.as(numeric.BigInt));
+            const s = try numeric.bigToText(gpa, v.as(numeric.BigInt));
             defer gpa.free(s);
             try buf.appendSlice(gpa, s);
         },
@@ -853,6 +853,13 @@ pub fn formatG(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), f: f64, precisio
     }
 }
 
+/// The error of `numberToBuf` or `rawToBuf` as a Lus error: a bigint past
+/// the digits of its numeral, or memory.
+pub fn raiseText(l: *Thread, e: anyerror) Error {
+    if (e == error.OutOfRange) return numeric.raiseBigRange(l);
+    return l.raiseMem();
+}
+
 /// `tostring` without metamethods for primitive values. Appends to `buf`.
 pub fn rawToBuf(l: *Thread, buf: *std.ArrayList(u8), v: Value) !void {
     const gpa = l.g.gpa;
@@ -881,7 +888,7 @@ pub fn toString(l: *Thread, v: Value) Error!*String {
     if (v.tag == .string) return v.as(String);
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(l.g.gpa);
-    rawToBuf(l, &buf, v) catch return l.raiseMem();
+    rawToBuf(l, &buf, v) catch |err| return raiseText(l, err);
     return l.newString(buf.items);
 }
 
@@ -1077,7 +1084,7 @@ pub fn appendForConcat(l: *Thread, gpa: std.mem.Allocator, buf: *std.ArrayList(u
         return;
     }
     const before = buf.items.len;
-    numberToBuf(gpa, buf, v) catch return l.raiseMem();
+    numberToBuf(gpa, buf, v) catch |err| return raiseText(l, err);
     chars.* += buf.items.len - before;
 }
 

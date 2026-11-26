@@ -18,7 +18,7 @@ Returns a string built from `formatstring`, in which each directive is replaced 
 
 The conversions treat the number subtypes as follows:
 
-- `%d` and `%i` write an integer in decimal. They accept an integer, a float or decimal with an integral value, a numeric string, and a bigint of any size, which they write exactly. `%u` is the same.
+- `%d` and `%i` write an integer in decimal. They accept an integer, a float or decimal with an integral value, a numeric string, and a bigint whose numeral has at most 16,384 digits, which they write exactly. `%u` is the same.
 - `%x`, `%X`, and `%o` write an integer in hexadecimal or octal. A negative integer is written as its 64-bit two's complement, and a bigint must fit in 64 bits.
 - `%c` writes the character whose code point is the argument.
 - `%f`, `%F`, `%e`, `%E`, `%g`, `%G`, `%a`, and `%A` write a float. A decimal is written from its exact digits under `%f`, `%e`, and `%g`, rounded half to even, so `string.format("%.2f", 2.675d)` is `"2.68"`. A bigint, and a decimal under `%a`, are first converted to the nearest float. An infinity is written as `inf` and a NaN as `nan`, in capitals under the uppercase conversions. A NaN is written without a minus sign on every platform, and the `+` flag writes it as `+nan`.

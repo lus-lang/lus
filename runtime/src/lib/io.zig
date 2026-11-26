@@ -414,7 +414,7 @@ fn doWrite(l: *Thread, h: *Handle, first: u32, self: Value) Error!u32 {
         } else if (v.tag == .string) {
             buf.appendSlice(l.g.gpa, v.as(String).bytes()) catch return l.raiseMem();
         } else if (v.isNumber()) {
-            ops.numberToBuf(l.g.gpa, &buf, v) catch return l.raiseMem();
+            ops.numberToBuf(l.g.gpa, &buf, v) catch |err| return ops.raiseText(l, err);
         } else return aux.typeError(l, i, "string");
     }
     if (h.nonblock) {

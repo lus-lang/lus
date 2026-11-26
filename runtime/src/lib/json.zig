@@ -285,7 +285,16 @@ const Parser = struct {
         const g = p.l.g;
         if (!is_float) {
             if (std.fmt.parseInt(i64, text, 10)) |v| return Value.int(v) else |_| {}
-            if (p.exact) return Value.obj(.bigint, numeric.parseBigLiteral(g, text) catch return p.l.raiseMem());
+            if (p.exact) {
+                const b = numeric.parseBigText(g, text) catch |e| switch (e) {
+                    error.OutOfRange => {
+                        p.i = start;
+                        return p.fail("number out of range", .{});
+                    },
+                    else => return p.l.raiseMem(),
+                };
+                return Value.obj(.bigint, b);
+            }
             const save = p.i;
             p.i = start;
             _ = save;
@@ -488,7 +497,7 @@ fn fromjson(l: *Thread) Error!u32 {
     if (a.tag == .string) {
         src = a.as(String).bytes();
     } else if (a.isNumber()) {
-        ops.numberToBuf(l.g.gpa, &tmp, a) catch return l.raiseMem();
+        ops.numberToBuf(l.g.gpa, &tmp, a) catch |err| return ops.raiseText(l, err);
         src = tmp.items;
     } else if (a.tag == .vector) {
         src = a.as(object.Vector).bytes.items;
@@ -657,7 +666,7 @@ const Writer = struct {
             else => {
                 var tmp: std.ArrayList(u8) = .empty;
                 defer tmp.deinit(gpa);
-                ops.numberToBuf(gpa, &tmp, v) catch return w.l.raiseMem();
+                ops.numberToBuf(gpa, &tmp, v) catch |err| return ops.raiseText(w.l, err);
                 try w.write(tmp.items);
             },
         }
