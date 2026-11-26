@@ -11,9 +11,10 @@ name: Release
 #
 # The jobs run in this order:
 #
-#   1. build tests the commit and builds the file tree of every target
-#      and lus.wasm, which it hands on as one tar file, so the modes of
-#      the files survive.
+#   1. test runs the tests of the commit. Each job of the matrix target
+#      builds the file tree of one target, and wasm builds lus.wasm, all
+#      at once on separate runners. build joins the trees into one tar
+#      file, which keeps the modes of the files.
 #   2. sign-macos signs and notarizes the macOS binaries on Linux with
 #      rcodesign (.github/actions/sign-macos). sign-windows signs the
 #      Windows binaries with Azure Artifact Signing
@@ -105,13 +106,57 @@ env:
     aarch64-macos x86_64-windows aarch64-windows
 
 jobs:
-  build:
-    name: Build release artifacts
+  # The jobs of the build stage check out the same commit and apply the
+  # same release patch. version reads the version once, and the other
+  # jobs take it from its outputs.
+  version:
+    name: Check the tag
+    runs-on: ubuntu-24.04
+    outputs:
+      flag: ${{ steps.version.outputs.flag }}
+      targets: ${{ steps.version.outputs.targets }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Download the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.patch }}
+          path: ${{ runner.temp }}/patch
+      - name: Apply the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        shell: bash
+        run: git apply "$RUNNER_TEMP/patch/release.patch"
+      - name: Check the tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)"
+          # An unstable build of X.Y.Z-dev is tagged vX.Y.Z-unstable.N and
+          # stamps that version into the binaries.
+          if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-unstable\.[0-9]+$ && "$version" == "${BASH_REMATCH[1]}-dev" ]]; then
+            echo "flag=-Dversion=${TAG#v}" >> "$GITHUB_OUTPUT"
+          elif [ "v$version" != "$TAG" ]; then
+            echo "tag $TAG does not match build.zig.zon version $version" >&2
+            exit 1
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+          echo "targets=$(printf '%s\n' $TARGETS | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test before building
+    needs: version
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          persist-credentials: false
       - name: Download the release patch
         if: ${{ inputs.patch != '' && inputs.patch != null }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -126,21 +171,8 @@ jobs:
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: ${{ env.ZIG_VERSION }}
-      - name: Check the tag
-        shell: bash
-        run: |
-          version="$(sed -n 's/^ *\.version = "\(.*\)",/\1/p' runtime/build.zig.zon)"
-          # An unstable build of X.Y.Z-dev is tagged vX.Y.Z-unstable.N and
-          # stamps that version into the binaries.
-          if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-unstable\.[0-9]+$ && "$version" == "${BASH_REMATCH[1]}-dev" ]]; then
-            echo "VERSION_FLAG=-Dversion=${TAG#v}" >> "$GITHUB_ENV"
-          elif [ "v$version" != "$TAG" ]; then
-            echo "tag $TAG does not match build.zig.zon version $version" >&2
-            exit 1
-          else
-            echo "VERSION_FLAG=" >> "$GITHUB_ENV"
-          fi
-      - name: Test before building
+          cache-key: release-test
+      - name: Test
         working-directory: runtime
         run: |
           zig build test test-embed test-bundle test-check test-doc test-version -Doptimize=ReleaseSafe
@@ -151,43 +183,143 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - name: Test the Unix installer
         run: node --test packaging/install/install.test.mjs
-      - name: Build every target
+
+  # Each target builds on its own runner, so the stage takes as long as
+  # its slowest target. The builds of a release start from an empty Zig
+  # cache, so no file that an earlier run left in the cache of the
+  # repository reaches a release.
+  target:
+    name: Build ${{ matrix.target }}
+    needs: version
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: true
+      matrix:
+        target: ${{ fromJSON(needs.version.outputs.targets) }}
+    env:
+      VERSION_FLAG: ${{ needs.version.outputs.flag }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Download the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.patch }}
+          path: ${{ runner.temp }}/patch
+      - name: Apply the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        shell: bash
+        run: git apply "$RUNNER_TEMP/patch/release.patch"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Build the target
         working-directory: runtime
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ../dist
-          for target in $TARGETS; do
-            prefix="../out/$target"
-            zig build -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
-            zig build lib -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
-            # `lus build --aot` links from the link object of the runtime
-            # where the linker writes executables for the target, and
-            # bundles on the prebuilt runtime elsewhere. It finds both next
-            # to `lus` (spec/design/aot.md, "The executable" and "The link
-            # object").
-            zig build runtime -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "$prefix"
-            case "$target" in
-              *linux-musl* | *-macos | *-windows | x86_64-freebsd)
-                zig build link-object -Doptimize=ReleaseFast -Dtarget="$target" $VERSION_FLAG --prefix "../out/lo-$target"
-                cp "../out/lo-$target/lib/lus-runtime.lo" "$prefix/bin/lus-runtime.lo"
-                ;;
-            esac
-            # The license of Lus and of every component compiled into the
-            # archive ship at its root.
-            cp ../LICENSE.md "$prefix/LICENSE.md"
-            cp ../packaging/notices/THIRD_PARTY_NOTICES.NATIVE.md "$prefix/THIRD_PARTY_NOTICES.md"
-            mkdir -p "$prefix/licenses"
-            for license in BROTLI LUA MBEDTLS SQLITE TZDATA UNICODE ZIG ZSTD; do
-              cp "../packaging/licenses/LICENSE.$license.txt" "$prefix/licenses/"
-            done
-            case "$target" in
-              *linux-musl*) cp ../packaging/licenses/LICENSE.MUSL.txt "$prefix/licenses/" ;;
-            esac
+          prefix="../out/$TARGET"
+          step() { local start=$SECONDS; zig build "$@" -Doptimize=ReleaseFast -Dtarget="$TARGET" $VERSION_FLAG; echo "zig build $1: $((SECONDS - start)) s"; }
+          step install --prefix "$prefix"
+          step lib --prefix "$prefix"
+          # `lus build --aot` links from the link object of the runtime
+          # where the linker writes executables for the target, and
+          # bundles on the prebuilt runtime elsewhere. It finds both next
+          # to `lus` (spec/design/aot.md, "The executable" and "The link
+          # object").
+          step runtime --prefix "$prefix"
+          case "$TARGET" in
+            *linux-musl* | *-macos | *-windows | x86_64-freebsd)
+              step link-object --prefix "../out/lo-$TARGET"
+              cp "../out/lo-$TARGET/lib/lus-runtime.lo" "$prefix/bin/lus-runtime.lo"
+              ;;
+          esac
+          # The license of Lus and of every component compiled into the
+          # archive ship at its root.
+          cp ../LICENSE.md "$prefix/LICENSE.md"
+          cp ../packaging/notices/THIRD_PARTY_NOTICES.NATIVE.md "$prefix/THIRD_PARTY_NOTICES.md"
+          mkdir -p "$prefix/licenses"
+          for license in BROTLI LUA MBEDTLS SQLITE TZDATA UNICODE ZIG ZSTD; do
+            cp "../packaging/licenses/LICENSE.$license.txt" "$prefix/licenses/"
           done
+          case "$TARGET" in
+            *linux-musl*) cp ../packaging/licenses/LICENSE.MUSL.txt "$prefix/licenses/" ;;
+          esac
+          dirs=("out/$TARGET")
+          if [ -d "../out/lo-$TARGET" ]; then dirs+=("out/lo-$TARGET"); fi
+          tar -C .. -cf "$RUNNER_TEMP/tree.tar" "${dirs[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tree-${{ matrix.target }}
+          path: ${{ runner.temp }}/tree.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  wasm:
+    name: Build lus.wasm
+    needs: version
+    runs-on: ubuntu-24.04
+    env:
+      VERSION_FLAG: ${{ needs.version.outputs.flag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Download the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.patch }}
+          path: ${{ runner.temp }}/patch
+      - name: Apply the release patch
+        if: ${{ inputs.patch != '' && inputs.patch != null }}
+        shell: bash
+        run: git apply "$RUNNER_TEMP/patch/release.patch"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Build lus.wasm
+        working-directory: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
           zig build wasm $VERSION_FLAG
+          mkdir -p ../dist
           cp zig-out/wasm/lus.wasm ../dist/lus.wasm
-          tar -C .. -cf "$RUNNER_TEMP/trees.tar" out dist
+          tar -C .. -cf "$RUNNER_TEMP/tree.tar" dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tree-wasm
+          path: ${{ runner.temp }}/tree.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    name: Collect the build
+    needs: [test, target, wasm]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: tree-*
+          path: ${{ runner.temp }}/trees
+      - name: Join the trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tree in "$RUNNER_TEMP"/trees/tree-*/tree.tar; do tar -xf "$tree"; done
+          for target in $TARGETS; do test -x "out/$target/bin/lus" || test -f "out/$target/bin/lus.exe"; done
+          test -f dist/lus.wasm
+          tar -cf "$RUNNER_TEMP/trees.tar" out dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unsigned-trees
@@ -589,7 +721,9 @@ jobs:
   # from nightly.yml comes after that workflow ran full.yml itself.
   full:
     name: Full
-    if: ${{ github.event_name == 'push' }}
+    # A caller on a push of a branch, such as a dry run of ship.yml, has
+    # the event push as well, and it runs full.yml itself.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     uses: ./.github/workflows/full.yml
     with:
       ref: ${{ github.ref }}

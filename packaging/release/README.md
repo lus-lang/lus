@@ -130,13 +130,14 @@ SHA-256 digest of their release files.
 `.github/workflows/sign-check.yml` runs the same actions from the branch
 `rewrite`, where a real release cannot run. A push to `rewrite` that
 changes `packaging/release/sign-check.txt` starts it. It builds `lus`
-for `x86_64-windows` and both macOS targets. Its signing jobs run in the
-environment `release`, so a check waits for one approval. It signs
-`lus.exe`, verifies the signature with `signtool verify /pa`, and runs
-the signed file. When the environment holds every `APPLE_*` secret, it
-also signs and notarizes the macOS builds and verifies them on a Mac
-with `codesign` and `spctl`. Otherwise it records a notice and skips
-them. The check publishes nothing.
+for `x86_64-windows`, signs `lus.exe`, verifies the signature with
+`signtool verify /pa`, and runs the signed file. When the environment
+`release` holds every `APPLE_*` secret, it also builds both macOS
+targets, signs and notarizes them, and verifies them on a Mac with
+`codesign` and `spctl`. Otherwise it records a notice and builds no
+macOS target. Its signing jobs run in the environment `release` and
+start together, so a check waits for one approval. The check publishes
+nothing.
 
 ## The Visual Studio Marketplace
 

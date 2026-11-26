@@ -1,17 +1,21 @@
 name: Sign check
 
 # Checks the code signing of a release from the branch rewrite, where
-# ship.yml cannot run a real release. It builds lus for x86_64-windows and
-# for both macOS targets, signs them with the actions that release.yml
+# ship.yml cannot run a real release. It builds lus for x86_64-windows,
+# and for both macOS targets when the Apple secrets exist, signs them with the actions that release.yml
 # signs with (.github/actions/sign-windows and sign-macos), and verifies
 # each signature. It publishes nothing, and its artifacts, which only
 # carry the build between its jobs, expire after a day.
 #
 # A push to rewrite that changes packaging/release/sign-check.txt starts
-# it. Both signing jobs run in the environment release, so a check waits
-# for one approval of a reviewer, which starts both. The macOS job signs
-# only when the environment holds every APPLE_* secret, and otherwise
-# records a notice.
+# it. build-windows cross compiles lus.exe on Linux, as release.yml does.
+# The signing jobs need the secrets and variables of the environment
+# release, which only a job in that environment can read, so each macOS
+# job reads the secrets first and builds its target only when every
+# APPLE_* secret is set. Without them it records a notice and builds
+# nothing. Every signing job waits for build-windows, so they all wait
+# for the approval of the environment at the same moment. One approval
+# starts the check.
 
 on:
   push:
@@ -31,37 +35,39 @@ env:
   ZIG_VERSION: "0.17.1"
 
 jobs:
-  build:
-    name: Build lus for Windows and macOS
+  build-windows:
+    name: Build lus.exe
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      # The cache key names the workflow and the target, so no other job
+      # that setup-zig keys by the same job name restores into it.
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: ${{ env.ZIG_VERSION }}
+          cache-key: sign-check-x86_64-windows
       - name: Build
         working-directory: runtime
         shell: bash
         run: |
           set -euo pipefail
-          for target in x86_64-windows x86_64-macos aarch64-macos; do
-            zig build -Doptimize=ReleaseFast -Dtarget="$target" --prefix "../out/$target"
-          done
-          zig build lib -Doptimize=ReleaseFast -Dtarget=aarch64-macos --prefix ../out/aarch64-macos
+          start=$SECONDS
+          zig build -Doptimize=ReleaseFast -Dtarget=x86_64-windows --prefix ../out/x86_64-windows
+          echo "zig build: $((SECONDS - start)) s"
           tar -C .. -cf "$RUNNER_TEMP/trees.tar" out
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sign-check-trees
+          name: sign-check-windows
           path: ${{ runner.temp }}/trees.tar
           if-no-files-found: error
           retention-days: 1
 
   windows:
     name: Sign and verify lus.exe
-    needs: build
+    needs: build-windows
     runs-on: windows-2022
     environment: release
     steps:
@@ -70,7 +76,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: sign-check-trees
+          name: sign-check-windows
           path: ${{ runner.temp }}/trees
       - name: Unpack the tree
         shell: bash
@@ -106,10 +112,16 @@ jobs:
           Write-Output "$reported"
 
   macos:
-    name: Sign and notarize lus for macOS
-    needs: build
+    name: Sign and notarize lus for ${{ matrix.target }}
+    needs: build-windows
     runs-on: ubuntu-24.04
     environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-macos, aarch64-macos]
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -133,24 +145,29 @@ jobs:
             echo "sign=true" >> "$GITHUB_OUTPUT"
           else
             echo "sign=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::The macOS check is skipped, since the environment release does not set ${missing[*]}"
-            echo "The macOS check is skipped, since the environment release does not set ${missing[*]}." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::The macOS check of $TARGET is skipped, since the environment release does not set ${missing[*]}"
+            echo "The macOS check of $TARGET is skipped, since the environment release does not set ${missing[*]}." >> "$GITHUB_STEP_SUMMARY"
           fi
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - name: Install Zig
         if: steps.settings.outputs.sign == 'true'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
-          name: sign-check-trees
-          path: ${{ runner.temp }}/trees
-      - name: Unpack the trees
+          version: ${{ env.ZIG_VERSION }}
+          cache-key: sign-check-${{ matrix.target }}
+      - name: Build
         if: steps.settings.outputs.sign == 'true'
+        working-directory: runtime
         shell: bash
         run: |
           set -euo pipefail
-          tar -xf "$RUNNER_TEMP/trees/trees.tar" out/x86_64-macos out/aarch64-macos
+          start=$SECONDS
+          zig build -Doptimize=ReleaseFast -Dtarget="$TARGET" --prefix "../out/$TARGET"
+          zig build lib -Doptimize=ReleaseFast -Dtarget="$TARGET" --prefix "../out/$TARGET"
+          echo "zig build: $((SECONDS - start)) s"
           {
             echo "libraries<<EOF"
-            for lib in out/aarch64-macos/lib/*.dylib; do
-              if [ ! -L "$lib" ]; then echo "$lib"; fi
+            for lib in "../out/$TARGET"/lib/*.dylib; do
+              if [ ! -L "$lib" ]; then echo "${lib#../}"; fi
             done
             echo "EOF"
           } >> "$GITHUB_ENV"
@@ -163,16 +180,13 @@ jobs:
           api-key-p8: ${{ secrets.APPLE_API_KEY_P8 }}
           api-key-id: ${{ secrets.APPLE_API_KEY_ID }}
           api-issuer: ${{ secrets.APPLE_API_ISSUER }}
-          executables: |
-            out/x86_64-macos/bin/lus
-            out/aarch64-macos/bin/lus
+          executables: out/${{ matrix.target }}/bin/lus
           libraries: ${{ env.libraries }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: steps.settings.outputs.sign == 'true'
+        if: steps.settings.outputs.sign == 'true' && matrix.target == 'aarch64-macos'
         with:
           name: sign-check-macos
-          path: |
-            out/aarch64-macos/bin/lus
+          path: out/aarch64-macos/bin/lus
           if-no-files-found: error
           retention-days: 1
 
