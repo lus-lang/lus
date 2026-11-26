@@ -1,3 +1,7 @@
+--- These programs run outside mise run test, which could prove a rewrite
+--- of their concatenations, so they stay as written.
+--- lus: allow(use-interpolation)
+
 -- Every limit of the language and the runtime, at the limit and one past
 -- it.
 --
@@ -367,6 +371,7 @@ local CASES = {
         doc = 16,
         cap = 60,
         gen = function(n)
+            -- lus: allow(line-too-long)
             return "local rows = { { " .. list(n, function(i)
                 return "c" .. i .. " = " .. i
             end) .. " } }\nlocal n = 0\n" .. "for r in query(@rows as r order by " .. list(n, function(
@@ -631,13 +636,11 @@ local function attempt(case, n, mode)
     end
 
     if kind == "signal" or code == 142 or (code and code >= 128) then
-        return "bad", string.format("ended by %s %s", tostring(kind), tostring(code))
+        return "bad", `ended by $(tostring(kind)) $(tostring(code))`
     end
 
     for _, m in ipairs(MESSAGES) do
-        local found = out:match("[^\n]*" .. m .. "[^\n]*")
-
-        if found then
+        if found = out:match("[^\n]*" .. m .. "[^\n]*") then
             return "limit", found
         end
     end

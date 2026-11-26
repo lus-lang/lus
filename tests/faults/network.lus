@@ -1,3 +1,7 @@
+--- These programs run outside mise run test, which could prove a rewrite
+--- of their concatenations, so they stay as written.
+--- lus: allow(use-interpolation)
+
 -- Network faults (`LUS_FAIL_NET`, `runtime/src/vm/faultio.zig`) for
 -- programs that talk to peers on the loopback interface.
 --
@@ -404,7 +408,7 @@ local function check(out, code)
     end
 
     if code ~= 0 then
-        return string.format("the run exited with %s: %s", tostring(code), out)
+        return `the run exited with $(tostring(code)): $out`
     end
 
     for msg in out:gmatch("error [%w]+: ([^\n]+)") do
@@ -424,7 +428,7 @@ local function check(out, code)
     local open = tonumber(out:match("lus: (%d+) sockets open at exit"))
 
     if open ~= 0 then
-        return string.format("%s sockets open at exit", tostring(open))
+        return `$(tostring(open)) sockets open at exit`
     end
 end
 
@@ -449,10 +453,9 @@ local runs = 0
 
 for _, name in ipairs(names) do
     local counts, out, code = countSteps(name)
-    local problem = check(out, code)
 
-    if problem then
-        problems[#problems + 1] = string.format("%s without faults: %s", name, problem)
+    if problem = check(out, code) then
+        problems[#problems + 1] = `$name without faults: $problem`
     end
 
     local parts = {}
@@ -465,9 +468,8 @@ for _, name in ipairs(names) do
         for n = 1, steps do
             local o, c = run(n .. ":" .. kind, name)
             runs = runs + 1
-            local p = check(o, c)
 
-            if p then
+            if p = check(o, c) then
                 problems[#problems + 1] = string.format("%s, %s %d: %s", name, kind, n, p)
             end
         end

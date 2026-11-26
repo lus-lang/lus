@@ -1,3 +1,7 @@
+--- These programs run outside mise run test, which could prove a rewrite
+--- of their concatenations, so they stay as written.
+--- lus: allow(use-interpolation)
+
 -- Crash tests of the durability sequences that the manual recommends.
 --
 -- Each scenario is a writer, a program that changes some files, and a
@@ -243,7 +247,7 @@ local scenarios = {
             "f:sync()",
             "f:close()",
         },
-        check = function(dir, finished)
+        check = function(dir, _finished)
             local s = readFile(dir .. "/table") or ""
             local mid = s:sub(701, 1400)
 
@@ -301,10 +305,7 @@ local scenarios = {
             end
 
             if rows ~= 5 and rows ~= 25 then
-                return string.format(
-                    "the table holds %s rows, part of a transaction",
-                    tostring(rows)
-                )
+                return `the table holds $(tostring(rows)) rows, part of a transaction`
             end
 
             if finished and rows ~= 25 then

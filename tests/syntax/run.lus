@@ -1,3 +1,7 @@
+--- These programs run outside mise run test, which could prove a rewrite
+--- of their concatenations, so they stay as written.
+--- lus: allow(use-interpolation)
+
 -- Mutated source for every tool that reads Lus source.
 --
 -- The harness splits each seed file into tokens and makes mutants of it:
@@ -425,6 +429,7 @@ local function mutate(src, spans, rnd)
 
         local a, b = spans[k], spans[k + 1]
         local ta, tb = src:sub(a[1], a[2]), src:sub(b[1], b[2])
+        -- lus: allow(line-too-long)
         return src:sub(1, a[1] - 1) .. tb .. src:sub(a[2] + 1, b[1] - 1) .. ta .. src:sub(b[2] + 1), string.format(
             "swap tokens %d %q and %q",
             k,
@@ -478,51 +483,26 @@ local function scriptFor(m)
     local t = tostring(opts.timeout)
 
     local function run(name, cmd)
-        return string.format(
-            "perl -e 'alarm shift; exec @ARGV' %s %s >/dev/null 2>>%s.err; echo \"%s $?\" >> %s.rc",
-            t,
-            cmd,
-            m,
-            name,
-            m
-        )
+        return `perl -e 'alarm shift; exec @ARGV' $t $cmd >/dev/null 2>>$m.err; echo "$name \$?" >> $m.rc`
     end
 
     local function runTo(name, cmd, out)
-        return string.format(
-            "perl -e 'alarm shift; exec @ARGV' %s %s >%s 2>>%s.err; echo \"%s $?\" >> %s.rc",
-            t,
-            cmd,
-            out,
-            m,
-            name,
-            m
-        )
+        return `perl -e 'alarm shift; exec @ARGV' $t $cmd >$out 2>>$m.err; echo "$name \$?" >> $m.rc`
     end
 
     return table.concat({
-        string.format(": > %s.rc; : > %s.err", m, m),
-        run("compile", string.format("%s compile -o /dev/null %s.lus", L, m)),
-        run("check", string.format("%s check %s.lus", L, m)),
-        run("ast", string.format("%s ast %s.lus", L, m)),
-        run("doc", string.format("%s doc %s.lus", L, m)),
-        runTo("fmt", string.format("%s fmt %s.lus", L, m), m .. ".f.lus"),
-        string.format("if grep -q '^fmt 0$' %s.rc; then", m),
-        "  " .. runTo("refmt", string.format("%s fmt %s.f.lus", L, m), m .. ".g.lus"),
-        string.format("  cmp -s %s.f.lus %s.g.lus; echo \"same $?\" >> %s.rc", m, m, m),
-        "  " .. run("fcompile", string.format("%s compile -o /dev/null %s.f.lus", L, m)),
-        "  "
-            .. runTo(
-                "asta",
-                string.format("%s ast --no-comments --no-recover %s.lus", L, m),
-                m .. ".a.json"
-            ),
-        "  "
-            .. runTo(
-                "astb",
-                string.format("%s ast --no-comments --no-recover %s.f.lus", L, m),
-                m .. ".b.json"
-            ),
+        `: > $m.rc; : > $m.err`,
+        run("compile", `$L compile -o /dev/null $m.lus`),
+        run("check", `$L check $m.lus`),
+        run("ast", `$L ast $m.lus`),
+        run("doc", `$L doc $m.lus`),
+        runTo("fmt", `$L fmt $m.lus`, m .. ".f.lus"),
+        `if grep -q '^fmt 0\$' $m.rc; then`,
+        "  " .. runTo("refmt", `$L fmt $m.f.lus`, m .. ".g.lus"),
+        `  cmp -s $m.f.lus $m.g.lus; echo "same \$?" >> $m.rc`,
+        "  " .. run("fcompile", `$L compile -o /dev/null $m.f.lus`),
+        "  " .. runTo("asta", `$L ast --no-comments --no-recover $m.lus`, m .. ".a.json"),
+        "  " .. runTo("astb", `$L ast --no-comments --no-recover $m.f.lus`, m .. ".b.json"),
         "fi",
     }, "\n")
 end
@@ -677,9 +657,8 @@ local function judge(m)
 
     if rc.fmt == 0 then
         local okf, formatted = catch readFile(m .. ".f.lus")
-        local doubled = okf and formatted and doubledParens(formatted)
 
-        if doubled then
+        if doubled = okf and formatted and doubledParens(formatted) then
             add("fmt nests parentheses around one expression: " .. doubled:sub(1, 80))
         end
 
@@ -758,13 +737,10 @@ local function flush()
 
         for _, p in ipairs(problems) do
             keep = true
-            findings[#findings + 1] = string.format(
-                "%s: %s\n    mutation: %s\n    mutant: %s",
-                mu.seed,
-                p,
-                mu.what,
-                fs.path.join(dir, "m" .. i .. ".lus")
-            )
+            findings[#findings + 1] = `$(mu.seed): $p\n    mutation: $(mu.what)\n    mutant: $(fs.path.join(
+                dir,
+                "m" .. i .. ".lus"
+            ))`
         end
     end
 

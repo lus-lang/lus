@@ -1,3 +1,7 @@
+--- These programs run outside mise run test, which could prove a rewrite
+--- of their concatenations, so they stay as written.
+--- lus: allow(use-interpolation)
+
 -- Cancels a detached coroutine at each suspension point of a program in
 -- turn (`LUS_CANCEL_AT`, `runtime/src/vm/faultio.zig`), as
 -- `coroutine.close` would, and checks what the program sees.
@@ -154,12 +158,7 @@ local function check(out, code)
                 local top = s[#s]
 
                 if top ~= n then
-                    return string.format(
-                        "%s closed variable %s while %s was the last open one",
-                        who,
-                        n,
-                        tostring(top)
-                    )
+                    return `$who closed variable $n while $(tostring(top)) was the last open one`
                 end
 
                 s[#s] = nil
@@ -176,7 +175,7 @@ local function check(out, code)
     local open = tonumber(out:match("lus: (%d+) sockets open at exit"))
 
     if open ~= 0 then
-        return string.format("%s sockets open at exit", tostring(open))
+        return `$(tostring(open)) sockets open at exit`
     end
 end
 
@@ -192,9 +191,8 @@ end
 
 for n = 1, steps do
     local o, c = run(tostring(n))
-    local p = check(o, c)
 
-    if p then
+    if p = check(o, c) then
         problems[#problems + 1] = string.format("suspension %d: %s", n, p)
     end
 end

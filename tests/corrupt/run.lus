@@ -1,3 +1,7 @@
+--- These programs run outside mise run test, which could prove a rewrite
+--- of their concatenations, so they stay as written.
+--- lus: allow(use-interpolation)
+
 -- Truncated and corrupted input for every parser and decoder of the
 -- standard library.
 --
@@ -348,22 +352,10 @@ local function recordTls()
     local f = assert(io.open(cnf, "w"))
     f:write("[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = localhost\n")
     f:close()
+    assert(os.execute(`openssl ecparam -name prime256v1 -genkey -noout -out '$key' 2>/dev/null`))
     assert(
         os.execute(
-            string.format(
-                "openssl ecparam -name prime256v1 -genkey -noout -out '%s' 2>/dev/null",
-                key
-            )
-        )
-    )
-    assert(
-        os.execute(
-            string.format(
-                "openssl req -x509 -new -key '%s' -sha256 -days 2 -subj /CN=localhost -config '%s' -out '%s' 2>/dev/null",
-                key,
-                cnf,
-                cert
-            )
+            `openssl req -x509 -new -key '$key' -sha256 -days 2 -subj /CN=localhost -config '$cnf' -out '$cert' 2>/dev/null`
         )
     )
     local identity = { cert = readAll(cert), key = readAll(key) }
@@ -617,9 +609,8 @@ if arg[1] == "--child" then
 
         if x ~= nil then
             tried = tried + 1
-            local problem = target.run(x)
 
-            if problem then
+            if problem = target.run(x) then
                 print(
                     string.format(
                         "finding %s seed %s %s %d: %s",

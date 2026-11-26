@@ -1,3 +1,7 @@
+--- These programs run outside mise run test, which could prove a rewrite
+--- of their concatenations, so they stay as written.
+--- lus: allow(use-interpolation)
+
 -- Jumps of the real clock (`LUS_CLOCK`, `runtime/src/vm/faultio.zig`).
 --
 -- The first scenario sets the clock two seconds before a change of
@@ -151,7 +155,7 @@ local function run(spec, name, zone)
     local _, _, code = p:close()
 
     if code ~= 0 then
-        error(string.format("%s exited with %s: %s", name, tostring(code), out))
+        error(`$name exited with $(tostring(code)): $out`)
     end
 
     return out
@@ -175,9 +179,11 @@ local function crossing(zone, at, before, after, hour_after)
         "reading (%d+) ([%d.]+) (%S+) (%-?%d+) (%a+) (%S+) (%d+)"
     ) do
         readings = readings + 1
-        local epoch, elapsed, offset, resolved = tonumber(epoch_text), tonumber(elapsed_text), tonumber(
-            offset_text
-        ), tonumber(resolved_text)
+        local epoch = tonumber(epoch_text)
+        local elapsed = tonumber(elapsed_text)
+        local offset = tonumber(offset_text)
+        local resolved = tonumber(resolved_text)
+
         -- After the end of daylight saving the wall clock repeats the
         -- hour it just showed, and its fields resolve to the earlier pass.
         local expect_resolved = epoch

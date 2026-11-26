@@ -1,3 +1,7 @@
+--- These programs run outside mise run test, which could prove a rewrite
+--- of their concatenations, so they stay as written.
+--- lus: allow(use-interpolation)
+
 -- Mutation testing of the runtime.
 --
 -- The harness copies the runtime, then for each sampled mutant changes
@@ -242,7 +246,7 @@ local function firstFailure(tests)
     )
 
     if not ok then
-        return string.format("the differential programs, see %s", diff_out)
+        return `the differential programs, see $diff_out`
     end
 
     sh("sh " .. quote(fs.path.join(root, "tools", "wait-for-memory.sh")))

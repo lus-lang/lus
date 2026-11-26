@@ -1,3 +1,7 @@
+--- These programs run outside mise run test, which could prove a rewrite
+--- of their concatenations, so they stay as written.
+--- lus: allow(use-interpolation)
+
 -- Sweeps allocation failures over Lus programs.
 --
 -- The sweep needs a binary built with `zig build -Dfail-alloc=true`. For
