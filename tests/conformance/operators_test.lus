@@ -178,7 +178,7 @@ local function check(op, a, b)
         local ok2, v2 = run(right, a[1])
         assert(
             ok1 == ok2 and (not ok1 or same(v1, v2)),
-            `$(tostring(a[1])) $op $(b[2]): $ok1 $(tostring(v1)) against $ok2 $(tostring(v2))`
+            `$(a[1]) $op $(b[2]): $ok1 $v1 against $ok2 $v2`
         )
     end
 
@@ -187,7 +187,7 @@ local function check(op, a, b)
         local ok3, v3 = run(left, b[1])
         assert(
             ok1 == ok3 and (not ok1 or same(v1, v3)),
-            `$(a[2]) $op $(tostring(b[1])): $ok1 $(tostring(v1)) against $ok3 $(tostring(v3))`
+            `$(a[2]) $op $(b[1]): $ok1 $v1 against $ok3 $v3`
         )
     end
 

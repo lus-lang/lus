@@ -19,7 +19,7 @@ local ROOT = do
 
     if ok then
         fs.remove(name)
-        provide name .. "-walk"
+        provide `$name-walk`
     end
 
     provide fs.path.join(
@@ -176,7 +176,7 @@ local function links_are_listed_or_followed_test()
 end
 
 local function a_missing_directory_raises_test()
-    local ok, err = catch fs.walk(ROOT .. "-missing")()
+    local ok, err = catch fs.walk(`$ROOT-missing`)()
     assert(not ok and err:find("cannot list directory", 1, true))
 end
 

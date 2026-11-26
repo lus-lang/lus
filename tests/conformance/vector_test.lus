@@ -818,7 +818,7 @@ local function unpackmany_iterator_test()
         count = count + 1
     end
 
-    assert(count == 3, "should have 3 iterations, got " .. count)
+    assert(count == 3, `should have 3 iterations, got $count`)
     assert(sum == 60, "sum should be 60")
 end
 
@@ -1036,7 +1036,7 @@ local function unpackmany_with_offset_test()
         sum = sum + val
     end
 
-    assert(sum == 2 + 3 + 4, "should unpack from offset 4: " .. sum)
+    assert(sum == 2 + 3 + 4, `should unpack from offset 4: $sum`)
 end
 
 -- vector.find searches plain bytes from a zero-based offset.

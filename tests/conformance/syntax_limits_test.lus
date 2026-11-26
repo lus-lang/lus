@@ -37,7 +37,7 @@ local function expect_run(src)
     local f, err = load(src)
 
     if not f then
-        error("expected the source to compile but got: " .. tostring(err))
+        error(`expected the source to compile but got: $err`)
     end
 
     return f()
@@ -48,7 +48,7 @@ local function expect_compiles(src)
     local f, err = load(src)
 
     if not f then
-        error("expected the source to compile but got: " .. tostring(err))
+        error(`expected the source to compile but got: $err`)
     end
 end
 
@@ -61,11 +61,11 @@ end
 -- Deep nesting that stays well under the parser recursion limit must compile
 -- and, where it produces a value, evaluate correctly.
 local deep_nesting_within_limits_compiles_cases = {
-    { "parentheses", "return " .. wrap("(", "1", ")", 100) },
-    { "do blocks", "local x = 1 " .. wrap("do ", "x = 2", " end", 150) },
-    { "if chains", "local x = 1 " .. wrap("if true then ", "x = 2", " end", 150) },
-    { "while blocks", "local x = 1 " .. wrap("while x == 2 do ", "x = 2", " end", 150) },
-    { "function definitions", "return " .. wrap("function() return ", "1", " end", 50) },
+    { "parentheses", `return $(wrap("(", "1", ")", 100))` },
+    { "do blocks", `local x = 1 $(wrap("do ", "x = 2", " end", 150))` },
+    { "if chains", `local x = 1 $(wrap("if true then ", "x = 2", " end", 150))` },
+    { "while blocks", `local x = 1 $(wrap("while x == 2 do ", "x = 2", " end", 150))` },
+    { "function definitions", `return $(wrap("function() return ", "1", " end", 50))` },
     { "do expressions", `local x = $(wrap("do provide ", "7", " end", 50)) return x` },
 }
 
@@ -77,24 +77,24 @@ end
 -- must survive intact, proving the nesting compiled to correct code rather
 -- than merely accepting the tokens.
 local function deeply_parenthesized_value_is_preserved_test()
-    local v = expect_run("return " .. wrap("(", "1234", ")", 120))
-    assert(v == 1234, "expected 1234, got " .. tostring(v))
+    local v = expect_run(`return $(wrap("(", "1234", ")", 120))`)
+    assert(v == 1234, `expected 1234, got $v`)
 end
 
 local function deeply_nested_do_expression_provides_its_value_test()
     local v = expect_run(`local x = $(wrap("do provide ", "99", " end", 40)) return x`)
-    assert(v == 99, "expected 99, got " .. tostring(v))
+    assert(v == 99, `expected 99, got $v`)
 end
 
 -- Nesting far past the recursion limit must be reported as a catchable stack
 -- overflow, never a crash. The threshold is build dependent so the failing
 -- depths here are chosen comfortably above it.
 local nesting_past_the_limit_errors_gracefully_cases = {
-    { "parentheses", "return " .. wrap("(", "1", ")", 800) },
-    { "do blocks", "local x = 1 " .. wrap("do ", "x = 2", " end", 800) },
-    { "if chains", "local x = 1 " .. wrap("if true then ", "x = 2", " end", 800) },
-    { "while blocks", "local x = 1 " .. wrap("while x == 2 do ", "x = 2", " end", 800) },
-    { "function definitions", "return " .. wrap("function() return ", "1", " end", 800) },
+    { "parentheses", `return $(wrap("(", "1", ")", 800))` },
+    { "do blocks", `local x = 1 $(wrap("do ", "x = 2", " end", 800))` },
+    { "if chains", `local x = 1 $(wrap("if true then ", "x = 2", " end", 800))` },
+    { "while blocks", `local x = 1 $(wrap("while x == 2 do ", "x = 2", " end", 800))` },
+    { "function definitions", `return $(wrap("function() return ", "1", " end", 800))` },
     { "do expressions", `local x = $(wrap("do provide ", "1", " end", 800)) return x` },
 }
 
@@ -131,13 +131,13 @@ local function many_locals(n)
         parts[#parts + 1] = `local a$i = $i`
     end
 
-    parts[#parts + 1] = "return a" .. n
+    parts[#parts + 1] = `return a$n`
     return table.concat(parts, " ")
 end
 
 local function exactly_200_locals_compiles_and_runs_test()
     local v = expect_run(many_locals(200))
-    assert(v == 200, "expected 200, got " .. tostring(v))
+    assert(v == 200, `expected 200, got $v`)
 end
 
 local more_than_200_locals_is_rejected_cases = {
@@ -167,7 +167,7 @@ end
 
 -- A collective `global *` takes no local slot either.
 local function a_global_star_takes_no_local_slot_test()
-    local v = expect_run("global * " .. many_locals(200))
+    local v = expect_run(`global * $(many_locals(200))`)
     assert(v == 200, `expected 200, got $v`)
 end
 
@@ -196,7 +196,7 @@ local function many_upvalues(total)
     local refs = {}
 
     for i = 1, total do
-        refs[#refs + 1] = "u" .. i
+        refs[#refs + 1] = `u$i`
     end
 
     return `$(table.concat(top, " ")) return function() $(table.concat(mid, " ")) return function() return $(table.concat(
@@ -236,7 +236,7 @@ local large_argument_counts_within_the_register_limit_run_cases = {
 
 local function large_argument_counts_within_the_register_limit_run_test(n, expected)
     local got = expect_run(call_with_args(n))
-    assert(got == expected, `expected $expected args, got $(tostring(got))`)
+    assert(got == expected, `expected $expected args, got $got`)
 end
 
 local argument_counts_past_the_register_limit_are_rejected_cases = {
@@ -253,7 +253,7 @@ local function big_enum(n)
     local m = {}
 
     for i = 1, n do
-        m[#m + 1] = "M" .. i
+        m[#m + 1] = `M$i`
     end
 
     return `local e = enum $(table.concat(m, ", ")) end return tonumber(e[$n])`
@@ -267,7 +267,7 @@ local enums_up_to_the_member_limit_compile_and_index_correctly_cases = {
 
 local function enums_up_to_the_member_limit_compile_and_index_correctly_test(n)
     local got = expect_run(big_enum(n))
-    assert(got == n, `expected last member index $n, got $(tostring(got))`)
+    assert(got == n, `expected last member index $n, got $got`)
 end
 
 local enums_past_the_member_limit_are_rejected_cases = {
@@ -311,7 +311,7 @@ local interpolation_with_many_segments_concatenates_correctly_cases = {
 local function interpolation_with_many_segments_concatenates_correctly_test(n)
     local got = expect_run(interp_segments(n))
     local want = decimal_run_length(n)
-    assert(got == want, `expected length $want, got $(tostring(got))`)
+    assert(got == want, `expected length $want, got $got`)
 end
 
 local interpolation_too_complex_for_registers_is_rejected_cases = {
@@ -334,7 +334,7 @@ local very_long_single_line_sources_compile_and_run_cases = {
 local function very_long_single_line_sources_compile_and_run_test(n)
     local src = `local x = 0 $(string.rep("x = x + 1 ", n))return x`
     local got = expect_run(src)
-    assert(got == n, `expected $n, got $(tostring(got))`)
+    assert(got == n, `expected $n, got $got`)
 end
 
 -- A table constructor flushes its elements periodically, so a very large
@@ -352,7 +352,7 @@ local function large_table_constructors_compile_test(n)
     end
 
     local got = expect_run(`local t = {$(table.concat(p, ","))} return #t`)
-    assert(got == n, `expected $n elements, got $(tostring(got))`)
+    assert(got == n, `expected $n elements, got $got`)
 end
 
 -- A chunk with hundreds of labels separated by real statements must compile
@@ -372,7 +372,7 @@ local function many_labels_with_statements_between_them_compile_and_run_test(n)
 
     parts[#parts + 1] = "return n"
     local got = expect_run(table.concat(parts, " "))
-    assert(got == n, `expected $n labels visited, got $(tostring(got))`)
+    assert(got == n, `expected $n labels visited, got $got`)
 end
 
 -- A deep run of optional chains against a nil base is fully short circuited
@@ -391,8 +391,8 @@ local function deep_optional_chains_short_circuit_to_nil_test(n)
         skip("deeper than the WebAssembly limit")
     end
 
-    local got = expect_run("local t = nil return t" .. string.rep("?.b", n))
-    assert(got == nil, "expected nil, got " .. tostring(got))
+    local got = expect_run(`local t = nil return t$(string.rep("?.b", n))`)
+    assert(got == nil, `expected nil, got $got`)
 end
 
 -- Feed a chunk to load() through a reader function that hands back one byte at
@@ -528,7 +528,7 @@ local overlong_chains_report_too_many_syntax_levels_cases = {
 }
 
 local function overlong_chains_report_too_many_syntax_levels_test(link)
-    local f, err = load("return t" .. string.rep(link, 100000))
+    local f, err = load(`return t$(string.rep(link, 100000))`)
 
     if f == nil then
         assert(err:find("too many syntax levels", 1, true), err)

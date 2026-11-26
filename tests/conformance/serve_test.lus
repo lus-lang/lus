@@ -77,7 +77,7 @@ end
 local function read_response(sock, no_body)
     local line = txt(sock:receive("*l"))
     local code, reason = string.match(line, "^HTTP/1%.1 (%d%d%d) (.*)$")
-    assert(code, "bad status line: " .. line)
+    assert(code, `bad status line: $line`)
     local headers = {}
     local count = 0
 
@@ -89,7 +89,7 @@ local function read_response(sock, no_body)
         end
 
         local name, value = string.match(header, "^([^:]+): (.*)$")
-        assert(name, "bad header line: " .. header)
+        assert(name, `bad header line: $header`)
         headers[string.lower(name)] = value
         count = count + 1
     end
@@ -361,14 +361,9 @@ local function chunk_extensions_within_the_limit_are_accepted_test()
         return 200, `$(#req.body)`
     end, function(port)
         local sock <close> = connect(port)
+        local head = "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
         local chunk = `1;$(string.rep("e", 1000))\r\na\r\n`
-        local r = exchange(
-            sock,
-            `POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n$(string.rep(
-                chunk,
-                60
-            ))0\r\n\r\n`
-        )
+        local r = exchange(sock, `$head$(string.rep(chunk, 60))0\r\n\r\n`)
         assert(r.status == 200 and r.body == "60")
     end)
 end
@@ -380,39 +375,23 @@ local function chunk_extensions_over_the_limit_are_refused_test()
         local sock <close> = connect(port)
         -- Every chunk spends 1006 bytes on one byte of the body. The line
         -- of the chunk 66 goes over the limit.
+        local head = "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
         local chunk = `1;$(string.rep("e", 1000))\r\na\r\n`
-        local r = exchange(
-            sock,
-            "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n"
-                .. string.rep(chunk, 66)
-        )
+        local r = exchange(sock, `$head$(string.rep(chunk, 66))`)
         assert(r.status == 413 and r.headers.connection == "close", `status $(r.status)`)
         assert(at_end(sock))
         -- A chunk line without an end is refused once it is too long.
         local endless <close> = connect(port)
-        r = exchange(
-            endless,
-            "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n1;"
-                .. string.rep("e", 1100)
-        )
+        r = exchange(endless, `$(head)1;$(string.rep("e", 1100))`)
         assert(r.status == 400)
         -- So is a complete line that is too long.
         local long <close> = connect(port)
-        r = exchange(
-            long,
-            `POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n1;$(string.rep(
-                "e",
-                1100
-            ))\r\n`
-        )
+        r = exchange(long, `$(head)1;$(string.rep("e", 1100))\r\n`)
         assert(r.status == 400)
         -- Trailers count as framing.
         local trailers <close> = connect(port)
-        r = exchange(
-            trailers,
-            "POST / HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n"
-                .. string.rep(`X-T: $(string.rep("t", 990))\r\n`, 66)
-        )
+        local trailer = `X-T: $(string.rep("t", 990))\r\n`
+        r = exchange(trailers, `$(head)0\r\n$(string.rep(trailer, 66))`)
         assert(r.status == 431)
     end)
 end
@@ -694,7 +673,7 @@ local function a_connection_serves_many_requests_test()
         local sock <close> = connect(port)
 
         for i = 1, 25 do
-            local r = exchange(sock, get("/r" .. i))
+            local r = exchange(sock, get(`/r$i`))
             assert(r.status == 200 and r.body == `/r$i $i`, r.body)
         end
     end)
@@ -916,13 +895,13 @@ local function a_websocket_upgrade_hands_over_the_socket_test()
 
         return 101, function(sock)
             local got = txt(sock:receive(5))
-            sock:send("echo " .. got)
+            sock:send(`echo $got`)
         end
     end, function(port)
         local sock <close> = connect(port)
         -- The first bytes after the request arrive with it, and the
         -- upgraded connection reads them first.
-        sock:send(websocket_request .. "hel")
+        sock:send(`$(websocket_request)hel`)
         local lines = raw_head(sock)
         assert(lines[1] == "HTTP/1.1 101 Switching Protocols", lines[1])
         local set = {}
@@ -1004,13 +983,13 @@ local function a_handler_may_suspend_test()
         for i = 1, 8 do
             clients[i] = spawn(function()
                 local sock <close> = connect(port)
-                return exchange(sock, get("/c" .. i)).body
+                return exchange(sock, get(`/c$i`)).body
             end)
         end
 
         for i = 1, 8 do
             local ok, body = resume(clients[i])
-            assert(ok and body == "/c" .. i, tostring(body))
+            assert(ok and body == `/c$i`, tostring(body))
         end
     end)
 
@@ -1024,13 +1003,13 @@ local function a_handler_may_use_sockets_test()
     local echo = spawn(function()
         while true do
             local sock <close> = upstream:accept()
-            sock:send(string.upper(txt(sock:receive("*l"))) .. "\n")
+            sock:send(`$(string.upper(txt(sock:receive("*l"))))\n`)
         end
     end)
 
     serving(function(req)
         local sock <close> = connect(upstream_port)
-        sock:send(req.path .. "\n")
+        sock:send(`$(req.path)\n`)
         return 200, txt(sock:receive("*l"))
     end, function(port)
         local sock <close> = connect(port)
@@ -1051,7 +1030,7 @@ local function a_handler_that_waits_inside_a_native_call_test()
     local echo = spawn(function()
         while true do
             local sock <close> = upstream:accept()
-            sock:send(string.upper(txt(sock:receive("*l"))) .. "\n")
+            sock:send(`$(string.upper(txt(sock:receive("*l"))))\n`)
         end
     end)
 
@@ -1062,7 +1041,7 @@ local function a_handler_that_waits_inside_a_native_call_test()
 
         return 200, (string.gsub("x", "x", function()
             local sock <close> = connect(upstream_port)
-            sock:send(req.path .. "\n")
+            sock:send(`$(req.path)\n`)
             return txt(sock:receive("*l"))
         end))
     end, function(port)
@@ -1836,7 +1815,7 @@ local function headers_over_the_limit_are_refused_test()
         assert(at_end(sock))
         -- A header block that never ends is refused once it is too long.
         local endless <close> = connect(port)
-        endless:send("GET / HTTP/1.1\r\n" .. string.rep("X-A: b\r\n", 9000))
+        endless:send(`GET / HTTP/1.1\r\n$(string.rep("X-A: b\r\n", 9000))`)
         r = read_response(endless)
         assert(r.status == 431)
     end)
@@ -1883,7 +1862,7 @@ local function empty_lines_before_a_request_are_skipped_test()
         return 200, req.path
     end, function(port)
         local sock <close> = connect(port)
-        local r = exchange(sock, "\r\n\r\n" .. get("/after"))
+        local r = exchange(sock, `\r\n\r\n$(get("/after"))`)
         assert(r.status == 200 and r.body == "/after")
     end)
 end
@@ -2167,7 +2146,7 @@ local function serve_blocks_its_caller_test()
         local sock <close> = connect(port)
 
         for i = 1, 3 do
-            assert(exchange(sock, get("/" .. i)).status == 200)
+            assert(exchange(sock, get(`/$i`)).status == 200)
         end
 
         -- Closing the server ends `serve` in the main chunk.

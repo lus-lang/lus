@@ -283,7 +283,7 @@ local function ephemeron_value_memory_is_reclaimed_when_its_key_dies_test()
     -- results use a compact representation that barely counts toward memory.
     -- The helper keeps the string temporary out of this frame's registers.
     local function attach(key)
-        t[key] = string.rep("x", 512 * 1024) .. "weak2-tail"
+        t[key] = `$(string.rep("x", 512 * 1024))weak2-tail`
     end
 
     attach(k)
@@ -367,12 +367,12 @@ end
 -- Group: value type keys
 
 local value_type_keys_survive_in_weak_keyed_tables_cases = {
-    { "k", "weak2-string-key-" .. string.rep("x", 40) },
+    { "k", `weak2-string-key-$(string.rep("x", 40))` },
     { "k", 7 },
     { "k", 2.5 },
     { "k", true },
     { "k", false },
-    { "kv", "weak2-string-key-" .. string.rep("y", 40) },
+    { "kv", `weak2-string-key-$(string.rep("y", 40))` },
     { "kv", 7 },
     { "kv", 2.5 },
     { "kv", true },

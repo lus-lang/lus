@@ -18,7 +18,7 @@ pledge("exec", "env=LUS_EXE")
 -- Without it the tests skip.
 local LUS = os.getenv("LUS_EXE")
 
-local CASES = TEST_DIR .. "/fixtures/traceback/cases.lus"
+local CASES = `$TEST_DIR/fixtures/traceback/cases.lus`
 
 -- Run one fixture case in a subprocess and capture its rendered traceback.
 local run_cache = {}
@@ -279,7 +279,7 @@ local function the_skipped_level_count_accounts_for_the_recursion_depth_test()
     local n = e:match("skipping (%d+) levels")
     assert(n, e)
     n = 0 + n
-    assert(n >= 170 and n <= 210, "skipped " .. tostring(n))
+    assert(n >= 170 and n <= 210, `skipped $n`)
 end
 
 local function the_error_site_frame_stays_in_the_section_before_the_marker_test()
@@ -420,7 +420,7 @@ local index_errors_carry_the_accessed_variable_s_name_cases = {
 local function index_errors_carry_the_accessed_variable_s_name_test(label, f, pat)
     local ok, e = catch f()
     assert(not ok, label)
-    assert(tostring(e):find(pat), `$label: $(tostring(e))`)
+    assert(tostring(e):find(pat), `$label: $e`)
 end
 
 local index_errors_on_temporaries_carry_no_name_suffix_cases = {
@@ -538,7 +538,7 @@ local call_errors_carry_the_callee_variable_s_name_cases = {
 local function call_errors_carry_the_callee_variable_s_name_test(label, f, pat)
     local ok, e = catch f()
     assert(not ok, label)
-    assert(tostring(e):find(pat), `$label: $(tostring(e))`)
+    assert(tostring(e):find(pat), `$label: $e`)
 end
 
 local call_errors_on_temporaries_carry_no_name_suffix_cases = {

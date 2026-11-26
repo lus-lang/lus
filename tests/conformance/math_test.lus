@@ -1230,7 +1230,7 @@ local function loop_values(f)
     local ok, err = catch f(out)
 
     if not ok then
-        return "error: " .. err:gsub("^.-:%d+: ", "")
+        return `error: $(err:gsub("^.-:%d+: ", ""))`
     end
 
     return table.concat(out, ",")
@@ -1472,7 +1472,7 @@ local exact_operands_of_math_functions_cases = {
 
 local function exact_operands_of_math_functions_test(label, f, kind, text)
     local v = f()
-    assert(math.type(v) == kind and tostring(v) == text, `$label: $(tostring(v))`)
+    assert(math.type(v) == kind and tostring(v) == text, `$label: $v`)
 end
 
 local function fmod_of_bigints_by_zero_raises_test()

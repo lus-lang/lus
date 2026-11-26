@@ -36,7 +36,7 @@ local function sweep(call)
             return k - 1
         end
 
-        assert(not ok and err == "fault", `call $k: $(tostring(err))`)
+        assert(not ok and err == "fault", `call $k: $err`)
         k = k + 1
     end
 end
@@ -123,7 +123,7 @@ local string_sweep_cases = {
 }
 
 local function string_sweep_test(name, call)
-    assert(sweep(call) > 0, name .. " made no call")
+    assert(sweep(call) > 0, `$name made no call`)
 end
 
 -- Each case is a call and either the fragment of the error it raises or,

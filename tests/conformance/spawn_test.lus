@@ -5,13 +5,13 @@
 pledge("exec", "env", "fs")
 
 local windows = package.config:sub(1, 1) == "\\"
-local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local lus_bin = os.getenv("LUS_BIN") or (`$TEST_DIR/../../runtime/zig-out/bin/lus`)
 
 local function lus(code, options, grants)
     local argv = { lus_bin }
 
     for _, g in ipairs(grants or {}) do
-        argv[#argv + 1] = "-P" .. g
+        argv[#argv + 1] = `-P$g`
     end
 
     argv[#argv + 1] = "-e"
@@ -236,7 +236,7 @@ local function under(grants, code)
     local argv = { lus_bin }
 
     for _, g in ipairs(grants) do
-        argv[#argv + 1] = "-P" .. g
+        argv[#argv + 1] = `-P$g`
     end
 
     argv[#argv + 1] = "-e"

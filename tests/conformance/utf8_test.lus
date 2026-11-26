@@ -12,11 +12,11 @@
 pledge("load")
 
 local function bytes(...)
-    local n = select("#", ...)
-    local v = vector.create(n)
+    local list = { ... }
+    local v = vector.create(#list)
 
-    for i = 1, n do
-        vector.set(v, i - 1, (select(i, ...)))
+    for i, b in ipairs(list) do
+        vector.set(v, i - 1, b)
     end
 
     return v

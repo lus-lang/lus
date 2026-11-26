@@ -5,7 +5,7 @@
 
 pledge("fs:read")
 
-local SPEC = TEST_DIR .. "/../../spec/stdlib"
+local SPEC = `$TEST_DIR/../../spec/stdlib`
 
 -- Names that exist only inside a worker's own state.
 local worker_only = { ["worker.message"] = true, ["worker.peek"] = true }
@@ -80,7 +80,7 @@ local function every_spec_entry_exists_at_run_time_test()
         end
     end
 
-    assert(#missing == 0, "spec entries absent at run time: " .. table.concat(missing, ", "))
+    assert(#missing == 0, `spec entries absent at run time: $(table.concat(missing, ", "))`)
 end
 
 local function removed_entries_are_absent_test()
@@ -92,7 +92,7 @@ local function removed_entries_are_absent_test()
         end
     end
 
-    assert(#present == 0, "removed entries still present: " .. table.concat(present, ", "))
+    assert(#present == 0, `removed entries still present: $(table.concat(present, ", "))`)
 end
 
 local function every_library_function_has_a_spec_entry_test()
@@ -138,7 +138,7 @@ local function every_library_function_has_a_spec_entry_test()
     end
 
     table.sort(real)
-    assert(#real == 0, "library functions without a spec entry: " .. table.concat(real, ", "))
+    assert(#real == 0, `library functions without a spec entry: $(table.concat(real, ", "))`)
 end
 
 local function the_spec_was_found_test()

@@ -3,11 +3,11 @@ pledge("load")
 -- Raw bytes are vectors in 2.0 (spec/design/strings.md), so the byte level cases below
 -- build their inputs with bytes() and compare outputs through their hexadecimal dump.
 local function bytes(...)
-    local n = select("#", ...)
-    local v = vector.create(n)
+    local list = { ... }
+    local v = vector.create(#list)
 
-    for i = 1, n do
-        vector.set(v, i - 1, (select(i, ...)))
+    for i, b in ipairs(list) do
+        vector.set(v, i - 1, b)
     end
 
     return v
@@ -35,7 +35,7 @@ local function checkerror(msg, f, ...)
     end)()
 
     -- Use plain search (4th arg = true) to avoid pattern interpretation
-    assert(not status and string.find(err, msg, 1, true), "expected error containing: " .. msg)
+    assert(not status and string.find(err, msg, 1, true), `expected error containing: $msg`)
 end
 
 -- ============================================
@@ -241,7 +241,7 @@ end
 
 local function strips_bom_when_decoding_utf_8bom_test()
     local bom = "\u{FEFF}"
-    assert(string.transcode(bom .. "hello", "utf-8bom", "utf-8") == "hello")
+    assert(string.transcode(`$(bom)hello`, "utf-8bom", "utf-8") == "hello")
     assert(string.transcode("hello", "utf-8bom", "utf-8") == "hello")  -- no BOM is fine
 end
 
@@ -464,11 +464,13 @@ local function handles_strings_with_null_bytes_test()
 end
 
 local function handles_all_ascii_printable_characters_test()
-    local s = ""
+    local chars = {}
 
     for i = 32, 126 do
-        s = s .. string.char(i)
+        chars[#chars + 1] = string.char(i)
     end
+
+    local s = table.concat(chars)
 
     -- Roundtrip through base64
     local encoded = string.transcode(s, "utf-8", "base64")

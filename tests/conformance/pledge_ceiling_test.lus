@@ -6,13 +6,13 @@
 -- lus with the grant and prints what the script found.
 pledge("exec", "env", "fs")
 
-local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local lus_bin = os.getenv("LUS_BIN") or (`$TEST_DIR/../../runtime/zig-out/bin/lus`)
 
 local function run(grant, code, more)
-    local argv = { lus_bin, "-P" .. grant }
+    local argv = { lus_bin, `-P$grant` }
 
     for _, g in ipairs(more or {}) do
-        argv[#argv + 1] = "-P" .. g
+        argv[#argv + 1] = `-P$g`
     end
 
     argv[#argv + 1] = "-e"

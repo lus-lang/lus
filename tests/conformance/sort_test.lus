@@ -124,12 +124,12 @@ local function table_compact_reclaims_capacity_after_mass_deletion_test()
 
     for i = 1, 50000 do
         t[i] = i
-        t["k" .. i] = i
+        t[`k$i`] = i
     end
 
     for i = 11, 50000 do
         t[i] = nil
-        t["k" .. i] = nil
+        t[`k$i`] = nil
     end
 
     collectgarbage("collect")
@@ -140,7 +140,7 @@ local function table_compact_reclaims_capacity_after_mass_deletion_test()
     assert(after < before / 4, "capacity should shrink substantially")
 
     for i = 1, 10 do
-        assert(t[i] == i and t["k" .. i] == i)
+        assert(t[i] == i and t[`k$i`] == i)
     end
 end
 
@@ -245,7 +245,7 @@ local function check(t, cmp)
     table.sort(t, cmp)
     assert(#t == n, "length changed during sort")
     local ok, at = is_ordered(t, n, cmp)
-    assert(ok, "result not ordered at index " .. tostring(at))
+    assert(ok, `result not ordered at index $at`)
     local after = multiset(t, n)
     assert(multiset_equal(before, after), "result is not a permutation of the input")
 end
@@ -295,7 +295,7 @@ local function build(shape, n, seed)
             a[i] = rng()
         end
     else
-        error("unknown shape " .. tostring(shape))
+        error(`unknown shape $shape`)
     end
 
     return a
@@ -507,7 +507,7 @@ local function lt_sort_with_ties_preserves_every_element_test()
     table.sort(a)
 
     for i = 2, 6 do
-        assert(not (a[i].v < a[i - 1].v), "not ordered under __lt at " .. i)
+        assert(not (a[i].v < a[i - 1].v), `not ordered under __lt at $i`)
     end
 
     local counts = {}
@@ -706,12 +706,12 @@ local function compact_reclaims_capacity_after_mass_deletion_test()
 
     for i = 1, 20000 do
         t[i] = i
-        t["k" .. i] = i
+        t[`k$i`] = i
     end
 
     for i = 6, 20000 do
         t[i] = nil
-        t["k" .. i] = nil
+        t[`k$i`] = nil
     end
 
     collectgarbage("collect")
@@ -721,7 +721,7 @@ local function compact_reclaims_capacity_after_mass_deletion_test()
     local after = collectgarbage("count")
 
     for i = 1, 5 do
-        assert(t[i] == i and t["k" .. i] == i, "surviving entries must remain after compaction")
+        assert(t[i] == i and t[`k$i`] == i, "surviving entries must remain after compaction")
     end
 
     assert(after < before, "compaction should not grow memory after a mass deletion")

@@ -13,12 +13,12 @@ local BASE = do
 
     if ok then
         fs.remove(name)
-        provide name .. "-watch"
+        provide `$name-watch`
     end
 
     provide fs.path.join(
         os.getenv("TMPDIR") or os.getenv("TEMP") or "/tmp",
-        "lus-watch-test-" .. time.now():epoch()
+        `lus-watch-test-$(time.now():epoch())`
     )
 end
 
@@ -87,7 +87,7 @@ local function past_changes(w, name)
     while true do
         local event = collect(w, 1)
 
-        if event ~= "modify " .. name then
+        if event ~= `modify $name` then
             return event
         end
     end
@@ -212,7 +212,7 @@ end
 
 local function bad_arguments_raise_test()
     setup()
-    assert(not catch fs.watch(ROOT .. "-missing"))
+    assert(not catch fs.watch(`$ROOT-missing`))
     assert(not catch fs.watch(ROOT, { recursive = "yes" }))
     assert(not catch fs.watch(ROOT, { glob = 1 }))
     fs.remove(ROOT, true)

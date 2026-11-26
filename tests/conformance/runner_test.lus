@@ -11,7 +11,7 @@ pledge("exec", "env=LUS_EXE")
 
 local LUS = os.getenv("LUS_EXE")
 local windows = package.config:sub(1, 1) == "\\"
-local FIX = TEST_DIR .. "/fixtures/runner/"
+local FIX = `$TEST_DIR/fixtures/runner/`
 
 -- Runs `lus test` with the given options on fixture files and returns its
 -- report and whether it exited with status 0.
@@ -20,13 +20,13 @@ local function run_tests(options, ...)
         skip("the interpreter is not reachable, set LUS_EXE")
     end
 
-    local cmd = `"$LUS" test $options`
+    local parts = { `"$LUS" test $options` }
 
     for _, name in ipairs({ ... }) do
-        cmd = cmd .. ` "$FIX$name"`
+        parts[#parts + 1] = `"$FIX$name"`
     end
 
-    local f = io.popen(cmd .. " 2>&1")
+    local f = io.popen(`$(table.concat(parts, " ")) 2>&1`)
     local report = f:read("a")
     local ok = f:close()
     return report, ok == true
@@ -76,7 +76,7 @@ local function two_files_left_behind_in_one_pass_test()
 
     for _, name in ipairs({ "stuck.lus", "stuck2.lus" }) do
         local line = file_line(report, name)
-        assert(line and line:find("^FAIL"), report)
+        assert(line?:find("^FAIL"), report)
         -- The time reported is the time the file ran before the runner
         -- left it behind.
         local ms = tonumber(line:match("(%d+) ms%)"))
@@ -134,7 +134,7 @@ local function power_assert_returns_every_value_test()
 
     for i, pair in ipairs(results) do
         if pair[1] ~= pair[2] then
-            error(`result $i: $(tostring(pair[1])) where $(tostring(pair[2])) was expected`, 0)
+            error(`result $i: $(pair[1]) where $(pair[2]) was expected`, 0)
         end
     end
 

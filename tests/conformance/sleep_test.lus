@@ -2,7 +2,7 @@
 -- (spec/stdlib/coroutine/sleep.md).
 pledge("fs", "exec", "env")
 
-local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local lus_bin = os.getenv("LUS_BIN") or (`$TEST_DIR/../../runtime/zig-out/bin/lus`)
 
 local function elapsed(f)
     local start = time.monotonic()

@@ -20,7 +20,7 @@ end
 
 -- Runs a command line and returns whether it succeeded.
 local function run(cmdline)
-    local f = io.popen(cmdline .. " 2>&1")
+    local f = io.popen(`$cmdline 2>&1`)
     local out = f:read("a")
     local ok = f:close()
     return ok == true or ok == 0, out
@@ -63,7 +63,7 @@ local function make_certs()
         return `"$dir/$name"`
     end
 
-    writefile(dir .. "/req.cnf", "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = test\n")
+    writefile(`$dir/req.cnf`, "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = test\n")
 
     local function key(name)
         assert(run(`openssl ecparam -name prime256v1 -genkey -noout -out $(p(name .. ".key"))`))
@@ -104,7 +104,7 @@ local function make_certs()
     )
     issue("other", "other.test", "subjectAltName=DNS:other.test\nextendedKeyUsage=serverAuth\n")
     issue("client", "client", "extendedKeyUsage=clientAuth\n")
-    certs = { ca = readfile(dir .. "/ca.pem") }
+    certs = { ca = readfile(`$dir/ca.pem`) }
 
     for _, name in ipairs({ "server", "other", "client" }) do
         certs[name] = {
@@ -136,7 +136,7 @@ local function serving(tls, handler, body)
 end
 
 local function hello(req)
-    return 200, "hello " .. req.path
+    return 200, `hello $(req.path)`
 end
 
 -- Sends one request over `sock` and returns the body of the response.

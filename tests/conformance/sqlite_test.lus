@@ -716,7 +716,7 @@ local function stmt_run_re_executes_with_fresh_bindings_test()
     local insert = db:prepare("INSERT INTO users (name, age) VALUES (?, ?)")
 
     for i = 1, 100 do
-        insert:run("user" .. i, i)
+        insert:run(`user$i`, i)
     end
 
     for row in db:query("SELECT count(*) AS n FROM users") do
@@ -1034,7 +1034,7 @@ end
 local function a_database_handle_cannot_cross_a_worker_boundary_test()
     local db <close> = io.sqlite(":memory:")
     pledge(`fs:read=$TEST_DIR/*`)
-    local w = worker.create(TEST_DIR .. "/fixtures/worker/echo.lus")
+    local w = worker.create(`$TEST_DIR/fixtures/worker/echo.lus`)
     local ok, err = catch worker.send(w, db)
     assert(not ok, "sending a database must fail")
     assert(string.find(tostring(err), "cannot serialize"))
@@ -1055,7 +1055,7 @@ end
 ]]
 
 local RUN = tostring(time.now():epoch())
-local SANDBOX = "sqlite_fs_" .. RUN
+local SANDBOX = `sqlite_fs_$RUN`
 
 -- The sandbox directory is created under the same grants that the tests use. The
 -- grants live in a coroutine, so they stay local to each test and to this setup.
@@ -1126,7 +1126,7 @@ local function a_write_leaves_the_wal_sidecar_on_disk_test()
         local db <close> = io.sqlite(path)
         db:exec("CREATE TABLE t (n INTEGER)")
         db:run("INSERT INTO t VALUES (1)")
-        assert(fs.type(path .. "-wal") == "file")
+        assert(fs.type(`$path-wal`) == "file")
     end)
 end
 
@@ -1197,7 +1197,7 @@ local function mode_r_reads_and_refuses_writes_test()
         local writer <close> = io.sqlite(path)
         writer:exec("CREATE TABLE t (n INTEGER)")
         writer:run("INSERT INTO t VALUES (5)")
-        assert(fs.type(path .. "-shm") == "file")
+        assert(fs.type(`$path-shm`) == "file")
         local db <close> = io.sqlite(path, "r")
 
         for row in db:query("SELECT n FROM t") do

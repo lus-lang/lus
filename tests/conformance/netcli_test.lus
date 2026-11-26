@@ -6,7 +6,7 @@
 -- tests need a POSIX shell.
 pledge("load", "fs", "exec", "env")
 
-local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local lus_bin = os.getenv("LUS_BIN") or (`$TEST_DIR/../../runtime/zig-out/bin/lus`)
 local windows = package.config:sub(1, 1) == "\\"
 local script_number = 0
 
@@ -44,7 +44,7 @@ end
 -- sockets that use up the descriptors that are left.
 local prelude = [[
     pledge("network")
-    local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
+    local create, detach, resume, yield from coroutine
     local server = network.tcp.bind("127.0.0.1", 0)
     if not server then
         print("unavailable")

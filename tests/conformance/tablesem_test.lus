@@ -259,7 +259,7 @@ local function a_newindex_function_receives_nil_keys_instead_of_erroring_test()
 
     local t = setmetatable({}, {
         __newindex = function(_, k, v)
-            got = `$(tostring(k))=$(tostring(v))`
+            got = `$k=$v`
         end,
     })
 
@@ -284,7 +284,7 @@ end
 local function an_index_function_receives_nil_keys_on_reads_test()
     local t = setmetatable({}, {
         __index = function(_, k)
-            return "via:" .. tostring(k)
+            return `via:$k`
         end,
     })
 
@@ -373,7 +373,7 @@ local function manual_traversal_may_delete_the_current_key_and_continue_test()
     local t = {}
 
     for i = 1, 30 do
-        t["k" .. i] = i
+        t[`k$i`] = i
     end
 
     local count = 0
@@ -394,7 +394,7 @@ local function a_pairs_loop_may_delete_the_current_key_test()
     local t = {}
 
     for i = 1, 25 do
-        t["field" .. i] = i
+        t[`field$i`] = i
     end
 
     local visited = 0
@@ -412,7 +412,7 @@ local function delete_as_you_go_works_across_array_and_hash_parts_test()
     local t = { 1, 2, 3, 4, 5 }
 
     for i = 1, 10 do
-        t["h" .. i] = i
+        t[`h$i`] = i
     end
 
     local visited = 0
@@ -485,8 +485,8 @@ local function mixed_array_and_hash_traversal_collects_the_complete_pair_set_tes
     end
 
     for _, name in ipairs({ "a", "b", "c", "d", "e" }) do
-        t[name] = name .. "!"
-        expected[name] = name .. "!"
+        t[name] = `$name!`
+        expected[name] = `$name!`
     end
 
     local collected = {}
@@ -549,7 +549,7 @@ local function hash_preallocation_accepts_hash_population_test()
     local t = table.create(0, 32)
 
     for i = 1, 32 do
-        t["key" .. i] = i
+        t[`key$i`] = i
     end
 
     local count = 0
@@ -619,7 +619,7 @@ local function hash_keys_added_after_an_array_clear_are_counted_exactly_test()
     end
 
     for i = 1, 5 do
-        t["s" .. i] = i * 10
+        t[`s$i`] = i * 10
     end
 
     local count = 0
@@ -644,7 +644,7 @@ local function reinsertion_after_a_clear_restores_exact_contents_test()
     end
 
     for i = 1, 5 do
-        t["s" .. i] = i
+        t[`s$i`] = i
     end
 
     for i = 1, 100 do
@@ -691,17 +691,17 @@ local function hash_part_mass_insert_delete_and_reinsert_is_exact_test()
     local t = {}
 
     for i = 1, 500 do
-        t["k" .. i] = i
+        t[`k$i`] = i
     end
 
     for i = 1, 500 do
-        t["k" .. i] = nil
+        t[`k$i`] = nil
     end
 
     assert(next(t) == nil)
 
     for i = 1, 50 do
-        t["r" .. i] = i
+        t[`r$i`] = i
     end
 
     local count = 0

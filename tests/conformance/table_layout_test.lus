@@ -148,7 +148,7 @@ local function sizes_around_the_inline_limit_keep_their_values_test()
         end
 
         for i = 1, nhash do
-            t["k" .. i] = i
+            t[`k$i`] = i
         end
 
         for i = 1, narr do
@@ -156,14 +156,14 @@ local function sizes_around_the_inline_limit_keep_their_values_test()
         end
 
         for i = 1, nhash do
-            assert(t["k" .. i] == i)
+            assert(t[`k$i`] == i)
         end
 
         assert(#t == narr)
         local s = table.create(narr, nhash)
 
         for i = 1, narr do
-            s[i] = "s" .. i
+            s[i] = `s$i`
         end
 
         t[narr + 1] = {}

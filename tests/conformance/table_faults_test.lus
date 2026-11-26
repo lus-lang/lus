@@ -89,7 +89,7 @@ local function sweep(make, call)
             return k - 1
         end
 
-        assert(not ok and err == "fault", `call $k: $(tostring(err))`)
+        assert(not ok and err == "fault", `call $k: $err`)
         k = k + 1
     end
 end
@@ -369,7 +369,7 @@ local each_table_function_cases = {
 }
 
 local function each_table_function_test(name, make, call)
-    assert(sweep(make, call) > 0, name .. " made no metamethod call")
+    assert(sweep(make, call) > 0, `$name made no metamethod call`)
 end
 
 -- Arguments that the table library rejects, and the error each raises.

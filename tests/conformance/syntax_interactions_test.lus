@@ -21,7 +21,7 @@ local function do_expression_providing_an_outer_local_inside_interpolation_test(
         provide name
     end) b`
 
-    assert(s == "a lus b", "got " .. tostring(s))
+    assert(s == "a lus b", `got $s`)
 end
 
 local function do_expression_computing_on_an_outer_local_inside_interpolation_test()
@@ -31,7 +31,7 @@ local function do_expression_computing_on_an_outer_local_inside_interpolation_te
         provide x + 1
     end)`
 
-    assert(s == "v 6", "got " .. tostring(s))
+    assert(s == "v 6", `got $s`)
 end
 
 local function multiline_do_expression_inside_interpolation_test()
@@ -41,7 +41,7 @@ local function multiline_do_expression_inside_interpolation_test()
         provide name
     end) b`
 
-    assert(s == "a lus b", "got " .. tostring(s))
+    assert(s == "a lus b", `got $s`)
 end
 
 local function do_expression_branching_on_an_outer_local_inside_interpolation_test()
@@ -55,7 +55,7 @@ local function do_expression_branching_on_an_outer_local_inside_interpolation_te
         end
     end)`
 
-    assert(s == "r=yes", "got " .. tostring(s))
+    assert(s == "r=yes", `got $s`)
 end
 
 local function do_expression_providing_two_values_inside_interpolation_keeps_test()
@@ -63,14 +63,14 @@ local function do_expression_providing_two_values_inside_interpolation_keeps_tes
         provide 1, 2
     end)`
 
-    assert(s == "v=1", "got " .. tostring(s))
+    assert(s == "v=1", `got $s`)
 end
 
 local function do_expression_without_provide_inside_interpolation_renders_nil_test()
     local s = `v=$(do
     end)`
 
-    assert(s == "v=nil", "got " .. tostring(s))
+    assert(s == "v=nil", `got $s`)
 end
 
 local function do_expression_with_a_block_local_inside_interpolation_test()
@@ -79,7 +79,7 @@ local function do_expression_with_a_block_local_inside_interpolation_test()
         provide q
     end)`
 
-    assert(s == "v=5", "got " .. tostring(s))
+    assert(s == "v=5", `got $s`)
 end
 
 local function do_expression_branching_on_a_block_local_inside_interpolation_test()
@@ -93,8 +93,8 @@ local function do_expression_branching_on_a_block_local_inside_interpolation_tes
         end
     end)`
 
-    assert(ok == true, "should not raise, got " .. tostring(s))
-    assert(s == "r=big", "got " .. tostring(s))
+    assert(ok == true, `should not raise, got $s`)
+    assert(s == "r=big", `got $s`)
 end
 
 local function interpolation_with_a_dollar_name_inside_a_do_expression_body_test()
@@ -103,13 +103,13 @@ local function interpolation_with_a_dollar_name_inside_a_do_expression_body_test
         provide `w=$w`
     end
 
-    assert(r == "w=5", "got " .. tostring(r))
+    assert(r == "w=5", `got $r`)
 end
 
 local function catch_expression_used_inside_interpolation_test()
     local ok, s = catch `x $(catch error("boom"))`
     assert(ok == true, "outer string build should succeed")
-    assert(s == "x false", "got " .. tostring(s))
+    assert(s == "x false", `got $s`)
 end
 
 -- =============================================================================
@@ -119,20 +119,20 @@ end
 local function slice_after_optional_field_access_on_a_non_nil_base_test()
     local t = { list = { 10, 20, 30, 40 } }
     local s = t?.list[2,]
-    assert(type(s) == "table", "expected table, got " .. type(s))
+    assert(type(s) == "table", `expected table, got $(type(s))`)
     assert(#s == 3 and s[1] == 20 and s[3] == 40)
 end
 
 local function slice_after_optional_field_access_short_circuits_on_nil_base_test()
     local n = nil
     local s = n?.list[2,]
-    assert(s == nil, "got " .. tostring(s))
+    assert(s == nil, `got $s`)
 end
 
 local function slice_after_optional_field_access_short_circuits_on_false_base_test()
     local f = false
     local s = f?.list[2,]
-    assert(s == false, "got " .. tostring(s))
+    assert(s == false, `got $s`)
 end
 
 local optional_slice_form_base_matrix_cases = {
@@ -176,13 +176,13 @@ end
 local function nil_field_then_guarded_slice_short_circuits_test()
     local t = {}
     local s = t?.list?[2,]
-    assert(s == nil, "got " .. tostring(s))
+    assert(s == nil, `got $s`)
 end
 
 local function optional_index_continues_after_a_plain_slice_test()
     local t = { list = { 10, 20, 30, 40 } }
     local v = t.list[2, 4]?[1]
-    assert(v == 20, "got " .. tostring(v))
+    assert(v == 20, `got $v`)
 end
 
 -- =============================================================================
@@ -197,7 +197,7 @@ local function from_destructuring_inside_a_do_expression_body_test()
         provide second .. first
     end
 
-    assert(r == "sf", "got " .. tostring(r))
+    assert(r == "sf", `got $r`)
 end
 
 local function do_expression_as_the_source_of_a_from_destructuring_test()
@@ -249,14 +249,14 @@ end
 local function enum_value_interpolates_like_tostring_test()
     local e = enum apple, orange end
     local s = `$(e.orange)`
-    assert(s == tostring(e.orange), "got " .. tostring(s))
+    assert(s == tostring(e.orange), `got $s`)
     assert(string.find(s, "enum"))
 end
 
 local function enum_comparison_result_inside_interpolation_test()
     local e = enum low, high end
     local s = `cmp $(e.low < e.high)`
-    assert(s == "cmp true", "got " .. tostring(s))
+    assert(s == "cmp true", `got $s`)
 end
 
 local function enum_values_as_keys_in_a_table_held_by_a_group_field_test()
@@ -302,7 +302,7 @@ local function enum_indices_via_direct_tonumber_calls_as_slice_bounds_test()
     local e = enum low, mid, high end
     local t = { "a", "b", "c", "d" }
     local s = t[tonumber(e.low), tonumber(e.high)]
-    assert(type(s) == "table", `expected table, got $(type(s)) ($(tostring(s)))`)
+    assert(type(s) == "table", `expected table, got $(type(s)) ($s)`)
     assert(#s == 3 and s[1] == "a" and s[3] == "c")
 end
 
@@ -436,7 +436,7 @@ end
 local function group_field_arithmetic_inside_interpolation_test()
     local g <group> = { lo <const> = 2, hi <const> = 4 }
     local s = `sum $(g.lo + g.hi)`
-    assert(s == "sum 6", "got " .. tostring(s))
+    assert(s == "sum 6", `got $s`)
 end
 
 -- =============================================================================
@@ -452,7 +452,7 @@ local function three_inline_nested_do_expressions_provide_outward_test()
         end
     end
 
-    assert(v == 7, "got " .. tostring(v))
+    assert(v == 7, `got $v`)
 end
 
 local function do_expression_in_an_if_assignment_condition_test()
@@ -495,7 +495,7 @@ local function do_expression_as_a_while_assignment_condition_re_evaluates_test()
         total = total + v
     end
 
-    assert(total == 60, "10+20+30 should be 60, got " .. tostring(total))
+    assert(total == 60, `10+20+30 should be 60, got $total`)
     assert(n == 4, "condition body must run once more to observe the exit")
 end
 
@@ -709,7 +709,7 @@ local function yield_inside_an_interpolation_segment_test()
     local ok, v = coroutine.resume(co)
     assert(ok and v == 1)
     local ok2, s = coroutine.resume(co, "mid")
-    assert(ok2 and s == "a mid b", "got " .. tostring(s))
+    assert(ok2 and s == "a mid b", `got $s`)
     assert(coroutine.status(co) == "dead")
 end
 
@@ -737,36 +737,36 @@ local function yield_inside_a_do_expression_body_test()
     local ok, q = coroutine.resume(co)
     assert(ok and q == "ask")
     local ok2, v = coroutine.resume(co, 21)
-    assert(ok2 and v == 42, "got " .. tostring(v))
+    assert(ok2 and v == 42, `got $v`)
 end
 
 local function yield_inside_an_if_assignment_condition_taking_the_then_branch_test()
     local co = coroutine.create(function()
         if v = coroutine.yield("cond?") then
-            return "then:" .. tostring(v)
+            return `then:$v`
         else
-            return "else:" .. tostring(v)
+            return `else:$v`
         end
     end)
 
     local ok, q = coroutine.resume(co)
     assert(ok and q == "cond?")
     local ok2, r = coroutine.resume(co, 7)
-    assert(ok2 and r == "then:7", "got " .. tostring(r))
+    assert(ok2 and r == "then:7", `got $r`)
 end
 
 local function yield_inside_an_if_assignment_condition_taking_the_else_branch_test()
     local co = coroutine.create(function()
         if v = coroutine.yield("cond?") then
-            return "then:" .. tostring(v)
+            return `then:$v`
         else
-            return "else:" .. tostring(v)
+            return `else:$v`
         end
     end)
 
     coroutine.resume(co)
     local ok, r = coroutine.resume(co, false)
-    assert(ok and r == "else:false", "got " .. tostring(r))
+    assert(ok and r == "else:false", `got $r`)
 end
 
 local function yield_inside_a_while_assignment_condition_drives_the_loop_test()
@@ -787,7 +787,7 @@ local function yield_inside_a_while_assignment_condition_drives_the_loop_test()
     local ok3, q3 = coroutine.resume(co, 5)
     assert(ok3 and q3 == "more?")
     local ok4, total = coroutine.resume(co, nil)
-    assert(ok4 and total == 15, "got " .. tostring(total))
+    assert(ok4 and total == 15, `got $total`)
     assert(coroutine.status(co) == "dead")
 end
 
@@ -805,7 +805,7 @@ local function yield_inside_an_optional_chain_method_call_test()
     local ok, q = coroutine.resume(co)
     assert(ok and q == "in-m")
     local ok2, v = coroutine.resume(co, 5)
-    assert(ok2 and v == 105, "got " .. tostring(v))
+    assert(ok2 and v == 105, `got $v`)
 end
 
 local function nil_base_never_reaches_a_yield_in_optional_call_arguments_test()
@@ -859,7 +859,7 @@ local function yield_expressions_as_slice_bounds_across_two_resumes_test()
     local ok2, q2 = coroutine.resume(co, 2)
     assert(ok2 and q2 == "hi?")
     local ok3, ty, len, first = coroutine.resume(co, 4)
-    assert(ok3, "final resume failed: " .. tostring(ty))
+    assert(ok3, `final resume failed: $ty`)
     assert(ty == "table" and len == 3 and first == 20)
 end
 
@@ -939,11 +939,11 @@ end
 local function string_slice_result_inside_interpolation_test()
     local s = "hello"
     local r = `mid: $(s[2, 4])`
-    assert(r == "mid: ell", "got " .. tostring(r))
+    assert(r == "mid: ell", `got $r`)
 end
 
 local function table_slice_length_inside_interpolation_test()
     local t = { 1, 2, 3, 4, 5 }
     local r = `len $(#t[2, 4])`
-    assert(r == "len 3", "got " .. tostring(r))
+    assert(r == "len 3", `got $r`)
 end

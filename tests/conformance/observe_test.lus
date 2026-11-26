@@ -10,7 +10,7 @@ global print, assert, load, string, table, tostring, error, coroutine, select
 
 local function compile_error(src)
     local f, err = load(src)
-    assert(f == nil, "expected a compile error for: " .. src)
+    assert(f == nil, `expected a compile error for: $src`)
     return err
 end
 

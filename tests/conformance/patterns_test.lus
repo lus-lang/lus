@@ -170,7 +170,7 @@ end
 local function gsub_replacement_error_propagates_its_message_test()
     raises(function()
         return string.gsub("abc", "%w", function(c)
-            error("boom:" .. c)
+            error(`boom:$c`)
         end)
     end, "boom:a")
 end
@@ -661,12 +661,13 @@ local function a_gsub_table_may_search_with_other_patterns_test()
     local lookups = setmetatable({}, {
         __index = function(_, k)
             local a, b = ("x=1 y=2"):match("(%a)=(%d)")
+            local letters = {}
 
             for w in ("p q r"):gmatch("%a") do
-                a = a .. w
+                letters[#letters + 1] = w
             end
 
-            return `<$k$a$b>`
+            return `<$k$a$(table.concat(letters))$b>`
         end,
     })
 

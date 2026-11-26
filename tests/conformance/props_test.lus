@@ -226,7 +226,7 @@ local function json_round_trips_generated_values_test()
         local t = {}
 
         for _ = 1, r(1, 4) do
-            t["k" .. r(1, 9)] = value(depth + 1)
+            t[`k$(r(1, 9))`] = value(depth + 1)
         end
 
         return t
@@ -281,7 +281,7 @@ local function queries_agree_with_loops_test()
         local t = {}
 
         for j = 1, r(0, 30) do
-            t[j] = { x = r(-5, 5), y = "r" .. r(1, 4), z = j }
+            t[j] = { x = r(-5, 5), y = `r$(r(1, 4))`, z = j }
         end
 
         local k = r(-5, 5)

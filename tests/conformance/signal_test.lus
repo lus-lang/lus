@@ -6,7 +6,7 @@
 pledge("exec", "env")
 
 local windows = package.config:sub(1, 1) == "\\"
-local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local lus_bin = os.getenv("LUS_BIN") or (`$TEST_DIR/../../runtime/zig-out/bin/lus`)
 
 local function child(code)
     return os.spawn({ lus_bin, "-e", code }, { stdin = "pipe", stdout = "pipe" })

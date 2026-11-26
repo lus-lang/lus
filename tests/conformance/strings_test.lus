@@ -1087,7 +1087,7 @@ local function join_follows_the_length_metamethod_test()
             return 3.0
         end,
         __index = function(_, i)
-            return "v" .. i
+            return `v$i`
         end,
     })
 

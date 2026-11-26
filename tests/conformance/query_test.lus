@@ -536,7 +536,7 @@ local function an_indexed_join_matches_numbers_strings_and_booleans_as_equality_
         { id = 4, k = true },
         { id = 5, k = 2 ^ 53 },
         { id = 6, k = -0.0 },
-        { id = 7, k = "long key " .. string.rep("x", 60) },
+        { id = 7, k = `long key $(string.rep("x", 60))` },
     }
     local b = {
         { id = 1, k = 1.0 },
@@ -545,7 +545,7 @@ local function an_indexed_join_matches_numbers_strings_and_booleans_as_equality_
         { id = 4, k = 1 },
         { id = 5, k = math.tointeger(2 ^ 53) },
         { id = 6, k = 0 },
-        { id = 7, k = "long key " .. string.rep("x", 60) },
+        { id = 7, k = `long key $(string.rep("x", 60))` },
         { id = 8, k = false },
     }
     local rows = joined(a, b)
@@ -1087,7 +1087,7 @@ end
 -- source arrives as a runtime parameter so one clause string can run
 -- against both a plain table and a db table reference.
 local function build(src, tail)
-    return load("local s = ... return @(s) as x " .. tail)(src)
+    return load(`local s = ... return @(s) as x $tail`)(src)
 end
 
 -- Serialize a single-column result, marking an absent field as NULL so a
@@ -1300,7 +1300,7 @@ local function at_line(atline, q)
     local src = "local t = {}"
 
     for _ = 2, atline - 1 do
-        src = src .. "\n"
+        src = `$src\n`
     end
 
     return `$src\n$q`
@@ -1308,7 +1308,7 @@ end
 
 local function checkdiag(atline, q, fragment)
     local f, err = load(at_line(atline, q))
-    assert(f == nil, "chunk must not compile: " .. q)
+    assert(f == nil, `chunk must not compile: $q`)
     local msg = tostring(err)
     assert(string.find(msg, fragment))
     assert(string.find(msg, `:$atline:`))
@@ -2016,7 +2016,7 @@ end
 
 local function checkload(src, fragment)
     local f, err = load(src)
-    assert(f == nil, "chunk must not compile: " .. src)
+    assert(f == nil, `chunk must not compile: $src`)
     assert(string.find(tostring(err), fragment))
 end
 
@@ -2156,7 +2156,7 @@ end
 local function a_query_cannot_cross_a_worker_boundary_test()
     pledge("load", `fs:read=$TEST_DIR/*`)
     local q = @people as p select p.name
-    local w = worker.create(TEST_DIR .. "/fixtures/worker/echo.lus")
+    local w = worker.create(`$TEST_DIR/fixtures/worker/echo.lus`)
     local ok, err = catch worker.send(w, q)
     assert(not ok)
     assert(string.find(tostring(err), "cannot serialize"))
@@ -2353,7 +2353,7 @@ local function canonical(rows)
         local f = {}
 
         for k, v in pairs(r) do
-            f[#f + 1] = `$(tostring(k))=$(tostring(v))`
+            f[#f + 1] = `$k=$v`
         end
 
         table.sort(f)
@@ -2415,7 +2415,7 @@ local grouping_by_an_expression_cases = {
 
 local function grouping_by_an_expression_test(label, q, want)
     local t = { { a = 1, b = 2, s = "x" }, { a = 2, b = 1, s = "x" }, { a = 3, b = 3, s = "y" } }
-    local f = assert(load("global t\nreturn @t as r " .. q, "=q", "t", { t = t }))
+    local f = assert(load(`global t\nreturn @t as r $q`, "=q", "t", { t = t }))
     assert(canonical(collect(f())) == want, label)
 end
 

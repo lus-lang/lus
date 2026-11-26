@@ -134,11 +134,11 @@ local function many_keys_make_a_dictionary_test()
     local t = {}
 
     for i = 1, 100 do
-        t["key" .. i] = i
+        t[`key$i`] = i
     end
 
     for i = 1, 100 do
-        assert(t["key" .. i] == i)
+        assert(t[`key$i`] == i)
     end
 
     local count = 0
@@ -150,11 +150,11 @@ local function many_keys_make_a_dictionary_test()
     assert(count == 100)
 
     for i = 1, 100, 2 do
-        t["key" .. i] = nil
+        t[`key$i`] = nil
     end
 
     for i = 1, 100 do
-        assert(t["key" .. i] == (i % 2 == 0 and i or nil))
+        assert(t[`key$i`] == (i % 2 == 0 and i or nil))
     end
 end
 
@@ -245,7 +245,7 @@ local function constructor_learns_its_shape_test()
     -- skip a field do not show it.
     local function make(i, full)
         local t = { id = i }
-        t.name = "n" .. i
+        t.name = `n$i`
 
         if full then
             t.extra = i
@@ -256,7 +256,7 @@ local function constructor_learns_its_shape_test()
 
     for i = 1, 100 do
         local t = make(i, i % 2 == 0)
-        assert(t.id == i and t.name == "n" .. i)
+        assert(t.id == i and t.name == `n$i`)
 
         if i % 2 == 0 then
             assert(t.extra == i)
@@ -384,7 +384,7 @@ local function collector_keeps_slot_values_test()
     local list = {}
 
     for i = 1, 2000 do
-        list[i] = { name = "item" .. i, value = { i } }
+        list[i] = { name = `item$i`, value = { i } }
 
         if i % 500 == 0 then
             collectgarbage()
@@ -394,7 +394,7 @@ local function collector_keeps_slot_values_test()
     collectgarbage()
 
     for i = 1, 2000 do
-        assert(list[i].name == "item" .. i and list[i].value[1] == i)
+        assert(list[i].name == `item$i` and list[i].value[1] == i)
     end
 end
 

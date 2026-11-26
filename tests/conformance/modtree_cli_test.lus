@@ -13,7 +13,7 @@
 pledge("exec", "env", "fs:write")
 
 local lus_cmd = os.getenv("LUS_EXE")
-local FIX = TEST_DIR .. "/fixtures/modtree/"
+local FIX = `$TEST_DIR/fixtures/modtree/`
 
 local function quote(s)
     return `"$s"`
@@ -28,7 +28,7 @@ local function run(cmdline, env)
 
     -- io.popen runs the line as written: sh -c on POSIX systems, and
     -- cmd.exe /s /c "line" on Windows, which keeps the inner quotes.
-    local f = io.popen(cmdline .. " 2>&1")
+    local f = io.popen(`$cmdline 2>&1`)
     local out = f:read("a")
     local ok = f:close()
 
@@ -41,7 +41,7 @@ end
 
 local function lus(script, env)
     env = env or {}
-    env.LUS_PATH = env.LUS_PATH or FIX .. "?.lus"
+    env.LUS_PATH = env.LUS_PATH or `$FIX?.lus`
     return run(`$(quote(lus_cmd)) $(quote(FIX .. script))`, env)
 end
 
@@ -71,8 +71,8 @@ local function a_package_path_change_wins_over_the_index_test()
     end
 
     local ok, out = lus("main_path.lus", {
-        MODTREE_TWO = FIX .. "two/",
-        LUS_PATH = FIX .. "one/?.lus",
+        MODTREE_TWO = `$(FIX)two/`,
+        LUS_PATH = `$(FIX)one/?.lus`,
     })
     assert(ok, out)
     assert(out == "PATH-TWO\n", out)
@@ -101,12 +101,12 @@ end
 
 local function build(script)
     local out = os.tmpname()
-    local dir = FIX .. "shake/"
+    local dir = `$(FIX)shake/`
     local ok, text = run(
         `$(quote(lus_cmd)) build --include $(quote(dir .. "lib")) -o $(quote(out)) $(quote(
             dir .. script
         ))`,
-        { LUS_PATH = dir .. "?.lus" }
+        { LUS_PATH = `$dir?.lus` }
     )
     catch fs.remove(out)
     return ok, text

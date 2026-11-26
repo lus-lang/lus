@@ -3780,7 +3780,7 @@ local function ipairs_with_metatables_and_other_values_test()
         local out = {}
 
         for i, v, extra in ipairs(t) do
-            out[#out + 1] = `$i$v$(tostring(extra))`
+            out[#out + 1] = `$i$v$extra`
         end
 
         return table.concat(out, " ")

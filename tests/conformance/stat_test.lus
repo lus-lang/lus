@@ -9,7 +9,7 @@ local dir = do
 
     if ok then
         fs.remove(name)
-        provide name .. "-stat"
+        provide `$name-stat`
     end
 
     provide fs.path.join(
@@ -53,7 +53,7 @@ local function links_are_followed_unless_asked_test()
 end
 
 local function a_missing_path_raises_test()
-    local ok, err = catch fs.stat(dir .. "-missing")
+    local ok, err = catch fs.stat(`$dir-missing`)
     assert(not ok and err:find("does not exist", 1, true))
     assert(not catch fs.stat(dir, { follow = "no" }))
 end

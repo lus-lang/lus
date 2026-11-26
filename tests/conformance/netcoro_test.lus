@@ -67,7 +67,7 @@ local function echo(sock)
             break
         end
 
-        conn:send(txt(line) .. "\n")
+        conn:send(`$(txt(line))\n`)
     end
 end
 
@@ -160,7 +160,7 @@ local function several_acceptors_share_a_server_test()
             while true do
                 local sock <close> = server:accept()
                 served[i] = served[i] + 1
-                sock:send(txt(sock:receive("*l")) .. "\n")
+                sock:send(`$(txt(sock:receive("*l")))\n`)
             end
         end)
     end
@@ -242,7 +242,7 @@ local function background_coroutines_run_while_the_main_chunk_waits_test()
             yield()
         end
 
-        sock:send(line .. "!\n")
+        sock:send(`$line!\n`)
     end)
 
     local sock <close> = connect(port)
@@ -438,7 +438,7 @@ local function a_coroutine_suspends_again_after_a_wait_inside_a_native_call_test
         order[#order + 1] = "sorted"
         peer:settimeout(10)
         local byte = txt(peer:receive(1))
-        order[#order + 1] = "received " .. byte
+        order[#order + 1] = `received $byte`
         return byte
     end)
 
@@ -895,7 +895,7 @@ local function connect_reports_a_refused_connection_test()
     local r = pack(resume(co))
     assert(r.n == 3 and r[1] == true and r[2] == nil and r[3].code == "refused")
     assert(
-        string.find(tostring(r[3]), "cannot connect to 127.0.0.1:" .. port, 1, true),
+        string.find(tostring(r[3]), `cannot connect to 127.0.0.1:$port`, 1, true),
         tostring(r[3])
     )
     assert(resume(keep))
@@ -950,7 +950,7 @@ local function datagrams_between_two_coroutines_test()
     local ponger = spawn(function()
         for _ = 1, 3 do
             local data, host, port = b:receive()
-            b:sendto("pong " .. txt(data), host, port)
+            b:sendto(`pong $(txt(data))`, host, port)
         end
     end)
 

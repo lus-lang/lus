@@ -15,10 +15,10 @@ local lus_cmd = os.getenv("LUS_EXE")
 
 local lus_ok = os.getenv("LUS_EXE") ~= nil
 
-local FIX = TEST_DIR .. "/fixtures/preinclude/"
+local FIX = `$TEST_DIR/fixtures/preinclude/`
 
 local function run(cmdline)
-    local f = io.popen(cmdline .. " 2>&1")
+    local f = io.popen(`$cmdline 2>&1`)
     local out = f:read("a")
     local ok = f:close()
     return (ok == true or ok == 0), out
@@ -48,7 +48,7 @@ local function control_without_include_the_same_driver_fails_test()
     end
 
     local ok, out = run(`$lus_cmd $(FIX)main_basic.lus`)
-    assert(not ok, "driver must fail without preinclusion: " .. out)
+    assert(not ok, `driver must fail without preinclusion: $out`)
     assert(out:find("not found") ~= nil or out:find("permission") ~= nil, out)
 end
 
@@ -84,7 +84,7 @@ local function missing_include_file_fails_startup_test()
     end
 
     local ok, out = run(`$lus_cmd --include $(FIX)nope.lus $(FIX)main_basic.lus`)
-    assert(not ok, "startup must fail: " .. out)
+    assert(not ok, `startup must fail: $out`)
     assert(out:find("cannot read include file") ~= nil, out)
 end
 
@@ -94,8 +94,8 @@ local function unparsable_include_file_fails_startup_naming_the_file_test()
     end
 
     local ok, out = run(`$lus_cmd --include $(FIX)broken.lus $(FIX)main_basic.lus`)
-    assert(not ok, "startup must fail: " .. out)
-    assert(out:find("broken.lus") ~= nil, "error should name the file: " .. out)
+    assert(not ok, `startup must fail: $out`)
+    assert(out:find("broken.lus") ~= nil, `error should name the file: $out`)
 end
 
 local function duplicate_module_names_fail_startup_test()
@@ -106,6 +106,6 @@ local function duplicate_module_names_fail_startup_test()
     local ok, out = run(
         `$lus_cmd --include $(FIX)hello.lus --include $(FIX)hello.lus $(FIX)main_basic.lus`
     )
-    assert(not ok, "duplicate include must fail: " .. out)
+    assert(not ok, `duplicate include must fail: $out`)
     assert(out:find("duplicate preincluded module") ~= nil, out)
 end

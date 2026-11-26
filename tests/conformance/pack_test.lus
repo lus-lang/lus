@@ -1,17 +1,15 @@
 pledge("load")
 
-local pack = string.pack
-local packsize = string.packsize
-local unpack = string.unpack
+local pack, packsize, unpack from string
 
 -- string.pack returns a vector and raw bytes are vectors (spec/design/strings.md), so the
 -- tests build byte inputs with bytes() and filled(), and read packed bytes with octets().
 local function bytes(...)
-    local n = select("#", ...)
-    local v = vector.create(n)
+    local list = { ... }
+    local v = vector.create(#list)
 
-    for i = 1, n do
-        vector.set(v, i - 1, (select(i, ...)))
+    for i, b in ipairs(list) do
+        vector.set(v, i - 1, b)
     end
 
     return v
@@ -133,11 +131,7 @@ end
 -- and float round trips including infinities, NaN and negative zero.
 -- The happy-path smoke tests come first in this file and are not repeated here.
 
-local pack = string.pack
-local packsize = string.packsize
-local unpack = string.unpack
-local rep = string.rep
-local _byte = string.byte
+local rep from string
 
 -- Whether the running platform packs "=" (native) integers little-endian.
 -- The first byte of the native encoding of 1 is 1 exactly when little-endian.
@@ -159,8 +153,8 @@ end
 local packsize_of_in_and_in_equals_n_cases = size_cases
 
 local function packsize_of_in_and_in_equals_n_test(n)
-    assert(packsize("i" .. n) == n)
-    assert(packsize("I" .. n) == n)
+    assert(packsize(`i$n`) == n)
+    assert(packsize(`I$n`) == n)
 end
 
 -- Unpacking an all-ones big-endian integer of any width yields -1 because
@@ -174,8 +168,8 @@ end
 local all_ones_in_sign_extends_to_1_cases = signext_cases
 
 local function all_ones_in_sign_extends_to_1_test(n)
-    assert(unpack(">i" .. n, filled(0xFF, n)) == -1)
-    assert(unpack("<i" .. n, filled(0xFF, n)) == -1)
+    assert(unpack(`>i$n`, filled(0xFF, n)) == -1)
+    assert(unpack(`<i$n`, filled(0xFF, n)) == -1)
 end
 
 -- Wide integers i9 through i16 round trip a value that needs more than
@@ -190,8 +184,8 @@ local wide_in_round_trips_a_positive_value_cases = wide_cases
 
 local function wide_in_round_trips_a_positive_value_test(n)
     local v = 0x0102030405
-    assert(unpack(">i" .. n, pack(">i" .. n, v)) == v)
-    assert(unpack("<i" .. n, pack("<i" .. n, v)) == v)
+    assert(unpack(`>i$n`, pack(`>i$n`, v)) == v)
+    assert(unpack(`<i$n`, pack(`<i$n`, v)) == v)
 end
 
 local function i0_width_is_out_of_limits_test()

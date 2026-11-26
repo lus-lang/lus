@@ -264,7 +264,7 @@ local common_directives_render_the_reference_instant_cases = {
 }
 
 local function common_directives_render_the_reference_instant_test(directive, expected)
-    assert(os.date("!" .. directive, REF) == expected)
+    assert(os.date(`!$directive`, REF) == expected)
 end
 
 -- an invalid conversion specifier raises

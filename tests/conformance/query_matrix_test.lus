@@ -276,7 +276,7 @@ local function projections_must_follow_the_group_keys_test()
         assert(
             not ok
                 and err:find("a grouped projection must be an aggregate or a group key", 1, true),
-            `$e: $(tostring(err))`
+            `$e: $err`
         )
     end
 end
