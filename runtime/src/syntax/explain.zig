@@ -369,6 +369,20 @@ pub const all = [_]Explanation{
         ,
     },
     .{
+        .code = "deprecated",
+        .text = "A deprecated library function or constant still runs until a later release removes it. The message names what replaces it: the length operator `#` for `string.len`, `utf8.len`, and `vector.size`, the `string` functions for the `utf8` library, `table.concat` for `string.join`, the `time` module for `os.time`, `os.date`, and `os.difftime`, and `assert(loadfile(path))()` for `dofile`.",
+        .flagged =
+        \\global print, string
+        \\local s = "hello"
+        \\print(string.len(s))
+        ,
+        .fixed =
+        \\global print
+        \\local s = "hello"
+        \\print(#s)
+        ,
+    },
+    .{
         .code = "pledge-after-seal",
         .text = "`pledge(\"seal\")` freezes the permissions of the program, so a later call of `pledge` grants nothing. Request every permission before the seal.",
         .flagged =
