@@ -56,6 +56,4 @@ A release tag runs every job of `full.yml` before `release.yml` creates the draf
 
 ## On the maintainer's machine
 
-`tools/security-review.sh` reviews an outside pull request for security problems with the model that `LUS_REVIEW_MODEL` names. It exports the files of the change to a temporary directory, starts the agent in an empty directory with read access to those files and no shell, network, editing, or MCP servers, and writes the report to a private file under `~/.local/state/lus/reviews`. Nothing leaves the machine except the request to the model.
-
 `tools/land-contribution.sh` lands an accepted pull request as one signed commit on a new branch. The commit squashes the contribution and the branch of fixes from its review. The author of the contribution stays its author, and the trailers of its commits stay in the message.

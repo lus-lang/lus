@@ -490,7 +490,7 @@
     },
     {
       "name": "workflows",
-      "paths": [".github/**", "tools/ci/**", "tools/git-hooks/**", "tools/agent-worktree.sh", "tools/with-build-lock.sh", "tools/wait-for-memory.sh", "tools/prune-zig-cache.sh", "tools/security-review.sh", "tools/land-contribution.sh", "mise.toml"],
+      "paths": [".github/**", "tools/ci/**", "tools/git-hooks/**", "tools/agent-worktree.sh", "tools/with-build-lock.sh", "tools/wait-for-memory.sh", "tools/prune-zig-cache.sh", "tools/land-contribution.sh", "mise.toml"],
       "labels": ["ci"],
       "checks": ["ci"],
       "contributor": "egregious"
