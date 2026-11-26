@@ -43,7 +43,7 @@ A permission name is either a base permission, such as `fs`, or a base permissio
 pledge("fs")
 
 local base = os.tmpname()
-local dir = base .. ".d"
+local dir = `$base.d`
 fs.createdirectory(dir)
 print((fs.type(dir)))  --> directory
 fs.remove(dir)
@@ -101,14 +101,14 @@ The following script pledges read access to a data directory and to everything i
 local base, data = coroutine.wrap(function()
     pledge("fs")
     local base = os.tmpname()
-    fs.createdirectory(base .. ".data/reports", true)
-    io.open(base .. ".data/reports/q1.txt", "w"):close()
-    return base, base .. ".data"
+    fs.createdirectory(`$base.data/reports`, true)
+    io.open(`$base.data/reports/q1.txt`, "w"):close()
+    return base, `$base.data`
 end)()
 
 pledge(`fs:read=$data`, `fs:read=$data/*`)
 print((fs.type(data)))  --> directory
-print((fs.type(data .. "/reports/q1.txt")))  --> file
+print((fs.type(`$data/reports/q1.txt`)))  --> file
 print((catch fs.list(fs.path.parent(data))))  --> false
 
 coroutine.wrap(function()

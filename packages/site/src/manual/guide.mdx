@@ -878,9 +878,7 @@ A function is a value, like a number or a string. It can be stored in a variable
 ```lus
 local function retry(attempts, action)
     for attempt = 1, attempts do
-        local result = action(attempt)
-
-        if result then
+        if result = action(attempt) then
             return result, attempt
         end
     end
@@ -1409,9 +1407,8 @@ local function sorted_pairs(t)
 
     return function()
         i = i + 1
-        local key = keys[i]
 
-        if key ~= nil then
+        if key = keys[i] then
             return key, t[key]
         end
     end
@@ -1551,7 +1548,7 @@ print(table.concat({ 1, 2.5, "x" }, "-"))  --> 1-2.5-x
 
 ```lus
 local input = "   ada@example.org \n"
-print("[" .. input:trim() .. "]")  --> [ada@example.org]
+print(`[$(input:trim())]`)  --> [ada@example.org]
 print(("--title--"):trim("-"))  --> title
 
 local parts = ("red, green , blue"):split(",")
@@ -1871,9 +1868,7 @@ debug=true
 local config = {}
 
 for line in text:gmatch("[^\n]+") do
-    local key, value = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
-
-    if key then
+    if key, value = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$") then
         config[key] = value
     end
 end
@@ -2236,9 +2231,7 @@ end
 local page
 
 for attempt = 1, 5 do
-    local ok, result = catch fetch_page(attempt)
-
-    if ok then
+    if ok, result = catch fetch_page(attempt) then
         page = result
         break
     elseif result.code == "timeout" then
@@ -2768,7 +2761,7 @@ function Savings:add_interest()
 end
 
 function Savings:describe()
-    return Account.describe(self) .. ` at $(self.rate)%`
+    return `$(Account.describe(self)) at $(self.rate)%`
 end
 
 local savings = Savings.new("Grace", 1000, 5)
@@ -3390,11 +3383,11 @@ local tree = {
 }
 
 local function walk(node, prefix)
-    local path = prefix .. node.name
+    local path = `$prefix$(node.name)`
 
     if node.children then
         for _, child in ipairs(node.children) do
-            walk(child, path .. "/")
+            walk(child, `$path/`)
         end
     else
         coroutine.yield(path)
@@ -3431,11 +3424,11 @@ local tree = {
 }
 
 local function walk(node, prefix)
-    local path = prefix .. node.name
+    local path = `$prefix$(node.name)`
 
     if node.children then
         for _, child in ipairs(node.children) do
-            walk(child, path .. "/")
+            walk(child, `$path/`)
         end
     else
         coroutine.yield(path, #node.name)
@@ -3553,7 +3546,7 @@ pledge("network:tcp")
 
 local function lookup(item)
     local conn <close> = network.tcp.connect("127.0.0.1", 7000)
-    conn:send(item .. "\n")
+    conn:send(`$item\n`)
     local price = tonumber(vector.tostring(conn:receive("*l", 1024)))
     if not price then
         error(`no price for $item`, 0)
@@ -3686,8 +3679,8 @@ local counter = worker.create("count_words.lus")
 worker.send(counter, { id = 1, text = "the quick brown fox" })
 worker.send(counter, { id = 2, text = "jumps over the lazy dog" })
 for i = 1, 2 do
-    local reply = worker.receive(counter)
-    print(reply.id, reply.words)
+    local id, words from worker.receive(counter)
+    print(id, words)
 end
 --> 1  4
 --> 2  5
@@ -4542,8 +4535,7 @@ pledge("fs:read")
 
 local total = 0
 for line in io.lines("stock.txt") do
-    local count = line:match("%d+")
-    total = total + tonumber(count)
+    total = total + tonumber(line:match("%d+"))
 end
 print(total)  --> 22
 ```
@@ -4936,7 +4928,7 @@ Parameters are needed for correctness and for security. The name `O'Brien` conta
 
 ```lus nocheck
 local author = "Flann O'Brien"
-print(catch db:exec("INSERT INTO books (title, author) VALUES ('x', '" .. author .. "')"))
+print(catch db:exec(`INSERT INTO books (title, author) VALUES ('x', '$author')`))
 --> false  near "Brien": syntax error
 ```
 

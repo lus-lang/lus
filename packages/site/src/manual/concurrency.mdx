@@ -49,7 +49,7 @@ local function serve(conn)
             break
         end
 
-        conn:send(vector.tostring(line):upper() .. "\n")
+        conn:send(`$(vector.tostring(line):upper())\n`)
     end
 end
 
@@ -81,7 +81,7 @@ Detached coroutines run one at a time. Each runs until it waits, yields, or ends
 
 ```lus
 local function greet(name)
-    print("hello, " .. name)
+    print(`hello, $name`)
     return #name
 end
 
@@ -107,7 +107,7 @@ local log = {}
 
 local function step(name)
     for i = 1, 2 do
-        log[#log + 1] = name .. i
+        log[#log + 1] = `$name$i`
         coroutine.yield()
     end
 end
@@ -527,7 +527,7 @@ end))
 
 local ticking = coroutine.detach(coroutine.create(function()
     for i = 1, 3 do
-        log[#log + 1] = "tick " .. i
+        log[#log + 1] = `tick $i`
         coroutine.yield()
     end
 end))

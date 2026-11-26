@@ -486,9 +486,9 @@ Text from a person or a file often has spaces or line breaks around the value. [
 ```lus
 global print, string
 
-print("[" .. string.trim("  hello  ") .. "]")  --> [hello]
-print("[" .. string.ltrim("  hello  ") .. "]")  --> [hello  ]
-print("[" .. string.rtrim("  hello  ") .. "]")  --> [  hello]
+print(`[$(string.trim("  hello  "))]`)  --> [hello]
+print(`[$(string.ltrim("  hello  "))]`)  --> [hello  ]
+print(`[$(string.rtrim("  hello  "))]`)  --> [  hello]
 print(string.trim("xyhixy", "yx"), string.trim("éhié", "é"))  --> hi  hi
 ```
 

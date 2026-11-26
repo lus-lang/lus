@@ -64,7 +64,7 @@ local rows = fromcsv(vector.tostring(body), true)
 ```lus nocheck
 local ok, err = catch network.fetch("https://invalid.host.example")
 if not ok then
-    print("request failed: " .. err)
+    print(`request failed: $err`)
 end
 ```
 
@@ -113,9 +113,7 @@ A request body may stream too. A coroutine in place of the body yields the chunk
 ```lus nocheck
 local file <close> = io.open("backup.tar", "rb")
 local upload = coroutine.create(function()
-    while true do
-        local piece = file:read(65536)
-        if piece == nil then return end
+    while piece = file:read(65536) do
         coroutine.yield(piece)
     end
 end)
@@ -447,7 +445,7 @@ local _, port = server:getsockname()
 local errors = {}
 
 local serving = coroutine.detach(coroutine.create(network.serve), server, function(req)
-    error("no route for " .. req.path, 0)
+    error(`no route for $(req.path)`, 0)
 end, {
     on_error = function(err)
         errors[#errors + 1] = err
@@ -492,7 +490,7 @@ With the `tls` option, `serve` answers HTTPS. The handler works as it does for H
 pledge("network", "fs:read=/etc/letsencrypt/live/example.com/*")
 
 local function read(path)
-    local f <close> = io.open("/etc/letsencrypt/live/example.com/" .. path)
+    local f <close> = io.open(`/etc/letsencrypt/live/example.com/$path`)
     return f:read("a")
 end
 

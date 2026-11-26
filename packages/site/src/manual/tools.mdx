@@ -540,7 +540,7 @@ print(x)
 ]]
 
 local function walk(node, depth)
-    print(string.rep("  ", depth) .. node.type .. " (line " .. node.line .. ")")
+    print(`$(string.rep("  ", depth))$(node.type) (line $(node.line))`)
 
     for _, child in ipairs(node.children or {}) do
         walk(child, depth + 1)

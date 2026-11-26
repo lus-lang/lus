@@ -46,7 +46,7 @@ local p = os.spawn({"cc", "-o", "app", "app.c"}, {stderr = "pipe"})
 local messages = p.stderr:read("a")
 local _, ok, how, code = coroutine.resume(p.exit)
 if not ok then
-    print("cc failed with " .. how .. " " .. code)
+    print(`cc failed with $how $code`)
     print(messages)
 end
 ```
@@ -100,7 +100,7 @@ local serving = coroutine.detach(coroutine.create(network.serve), "127.0.0.1", 8
 end)
 local stop = os.signal("interrupt", "terminate")
 local _, name = coroutine.resume(stop)
-print("stopping on " .. name)
+print(`stopping on $name`)
 coroutine.close(serving)
 ```
 

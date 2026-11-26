@@ -137,9 +137,9 @@ Lus removes the following Lua functions and environment variables, each of which
 pledge("fs")
 
 local path = os.tmpname()
-fs.move(path, path .. ".bak")
-fs.remove(path .. ".bak")
-print((catch fs.remove(path .. ".bak")))  --> false
+fs.move(path, `$path.bak`)
+fs.remove(`$path.bak`)
+print((catch fs.remove(`$path.bak`)))  --> false
 ```
 
 ### New global names
@@ -955,7 +955,7 @@ The `fs` library lists, creates, copies, moves, and removes files and directorie
 pledge("fs")
 
 local base = os.tmpname()
-local dir = base .. ".d"
+local dir = `$base.d`
 fs.createdirectory(dir)
 io.open(fs.path.join(dir, "a.txt"), "w"):write("first"):close()
 io.open(fs.path.join(dir, "b.txt"), "w"):write("second"):close()

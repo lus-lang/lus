@@ -54,7 +54,7 @@ The following program creates a directory with two files and lists it, sorting t
 pledge("fs")
 
 local base = os.tmpname()
-local dir = base .. ".d"
+local dir = `$base.d`
 fs.createdirectory(dir)
 io.open(fs.path.join(dir, "a.txt"), "w"):close()
 io.open(fs.path.join(dir, "b.txt"), "w"):close()
@@ -74,7 +74,7 @@ The following program counts the JSON files in a directory and finds the configu
 pledge("fs")
 
 local base = os.tmpname()
-local dir = base .. ".d"
+local dir = `$base.d`
 fs.createdirectory(dir)
 
 for _, name in ipairs({ "config1.json", "config22.json", "notes.md" }) do
@@ -95,7 +95,7 @@ The following program lists the Markdown and JSON files of a small tree.
 pledge("fs")
 
 local base = os.tmpname()
-local dir = base .. ".d"
+local dir = `$base.d`
 fs.createdirectory(fs.path.join(dir, "docs", "api"), true)
 
 for _, name in ipairs({
@@ -129,7 +129,7 @@ The following program adds up the sizes of the Lus files in a project and leaves
 pledge("fs")
 
 local base = os.tmpname()
-local dir = base .. ".d"
+local dir = `$base.d`
 fs.createdirectory(fs.path.join(dir, "src"), true)
 fs.createdirectory(fs.path.join(dir, "deps"), true)
 local files = {
@@ -190,7 +190,7 @@ The following program inspects a directory, a file, and a link to that file.
 pledge("fs")
 
 local base = os.tmpname()
-local dir = base .. ".d"
+local dir = `$base.d`
 fs.createdirectory(dir)
 io.open(fs.path.join(dir, "data.txt"), "w"):close()
 fs.createlink(fs.path.join(dir, "shortcut"), "data.txt")
@@ -226,10 +226,10 @@ Both calls under `catch` in the following program fail, the first because the di
 pledge("fs")
 
 local base = os.tmpname()
-local dir = base .. ".d"
+local dir = `$base.d`
 fs.createdirectory(dir)
 print((catch fs.createdirectory(dir)))  --> false
-print((catch fs.createdirectory(dir .. "/missing/child")))  --> false
+print((catch fs.createdirectory(`$dir/missing/child`)))  --> false
 fs.remove(dir)
 fs.remove(base)
 ```
@@ -242,10 +242,10 @@ The following program creates a tree of three directories, then calls `fs.create
 pledge("fs")
 
 local base = os.tmpname()
-local tree = base .. ".d"
-fs.createdirectory(tree .. "/a/b/c", true)
-fs.createdirectory(tree .. "/a/b/c", true)
-print((fs.type(tree .. "/a/b/c")))  --> directory
+local tree = `$base.d`
+fs.createdirectory(`$tree/a/b/c`, true)
+fs.createdirectory(`$tree/a/b/c`, true)
+print((fs.type(`$tree/a/b/c`)))  --> directory
 fs.remove(tree, true)
 fs.remove(base)
 ```
@@ -262,7 +262,7 @@ The following program makes a backup of a file, then copies it again, which fail
 pledge("fs")
 
 local original = os.tmpname()
-local backup = original .. ".bak"
+local backup = `$original.bak`
 io.open(original, "w"):write("contents"):close()
 fs.copy(original, backup)
 
@@ -283,10 +283,10 @@ The following program renames a file and then moves it into an archive directory
 pledge("fs")
 
 local base = os.tmpname()
-local archive = base .. ".archive"
+local archive = `$base.archive`
 fs.createdirectory(archive)
-fs.move(base, base .. ".final")
-fs.move(base .. ".final", fs.path.join(archive, "final.txt"))
+fs.move(base, `$base.final`)
+fs.move(`$base.final`, fs.path.join(archive, "final.txt"))
 print((fs.type(fs.path.join(archive, "final.txt"))))  --> file
 fs.remove(archive, true)
 ```
@@ -303,9 +303,9 @@ In the following program, the plain call fails to remove a directory that holds 
 pledge("fs")
 
 local base = os.tmpname()
-local scratch = base .. ".d"
-fs.createdirectory(scratch .. "/deep", true)
-io.open(scratch .. "/deep/file.txt", "w"):close()
+local scratch = `$base.d`
+fs.createdirectory(`$scratch/deep`, true)
+io.open(`$scratch/deep/file.txt`, "w"):close()
 
 print((catch fs.remove(scratch)))  --> false
 fs.remove(scratch, true)
@@ -327,7 +327,7 @@ The following program creates a link named `alias` to a file in the same directo
 pledge("fs")
 
 local base = os.tmpname()
-local dir = base .. ".d"
+local dir = `$base.d`
 fs.createdirectory(dir)
 io.open(fs.path.join(dir, "real.txt"), "w"):close()
 local alias = fs.path.join(dir, "alias")
@@ -391,7 +391,7 @@ After a crash at any point, the target holds either its complete old contents or
 
 ```lus
 local function replace(path, contents)
-    local tmp = path .. ".tmp"
+    local tmp = `$path.tmp`
     local f = assert(io.open(tmp, "w"))
     assert(f:write(contents))
     assert(f:sync())
@@ -450,12 +450,12 @@ end
 pledge("fs")
 
 local base = os.tmpname()
-fs.createdirectory(base .. ".project/src", true)
-io.open(base .. ".project/src/main.lus", "w"):write("print(1)"):close()
-copytree(base .. ".project", base .. ".backup")
-print((fs.type(base .. ".backup/src/main.lus")))  --> file
-fs.remove(base .. ".project", true)
-fs.remove(base .. ".backup", true)
+fs.createdirectory(`$base.project/src`, true)
+io.open(`$base.project/src/main.lus`, "w"):write("print(1)"):close()
+copytree(`$base.project`, `$base.backup`)
+print((fs.type(`$base.backup/src/main.lus`)))  --> file
+fs.remove(`$base.project`, true)
+fs.remove(`$base.backup`, true)
 fs.remove(base)
 ```
 
