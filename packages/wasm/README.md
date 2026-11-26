@@ -1,6 +1,6 @@
 # lus-wasm
 
-This package holds the Lus 2.0 runtime compiled to WebAssembly and the small JavaScript host that runs it. The website playground and the VS Code extension both load the runtime through it.
+This package holds the Lus runtime compiled to WebAssembly and the small JavaScript host that runs it. The website playground and the VS Code extension both load the runtime through it.
 
 ## Building
 

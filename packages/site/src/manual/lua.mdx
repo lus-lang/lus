@@ -1145,7 +1145,7 @@ The `lus` executable includes these tools as commands, so every project has the 
 
 The reference implementation of Lua is an interpreter written in portable ISO C, which runs on nearly any platform that has a C compiler and whose source is small enough to read in full.
 
-The [Lus runtime](/manual/guide#internals) is written in Zig. Every function starts in an interpreter. On macOS and Linux, a baseline JIT compiler translates a function that runs often to machine code for aarch64 or x86-64. An optimizing tier then recompiles the functions that continue to run often, using the types of the values that it has recorded. Every tier gives the same results, so a program needs no change to use them. The WebAssembly build of Lus has an interpreter and a compiler that produces WebAssembly. A generational garbage collector manages memory, which `collectgarbage` still controls.
+In the [Lus runtime](/manual/guide#internals), every function starts in an interpreter. On macOS and Linux, a baseline JIT compiler translates a function that runs often to machine code for aarch64 or x86-64. An optimizing tier then recompiles the functions that continue to run often, using the types of the values that it has recorded. Every tier gives the same results, so a program needs no change to use them. The WebAssembly build of Lus has an interpreter and a compiler that produces WebAssembly. A generational garbage collector manages memory, which `collectgarbage` still controls.
 
 Lua is designed as a small, portable core. Lus has a larger runtime, which buys more speed and a complete standard library.
 

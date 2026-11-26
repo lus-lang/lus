@@ -1,4 +1,4 @@
-Copyright © 2025-2026 Louka Ménard Blondin <louka.menard.blondin@pm.me>.
+Copyright © 2025-2026 Louka Ménard Blondin <hello@louka.sh>.
 
 Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted.
 

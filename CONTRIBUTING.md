@@ -6,7 +6,7 @@ If you _do_ make a PR, make sure to:
 
 - [**Read the project goals.**](https://lus.dev/manual/introduction/#goals) Changes that implement a _non-goal_ or contradict a goal are rejected.
 - **Test, test, test.** Run `mise run test` to make sure your changes break nothing. Compare `tests/bench` before and after to make sure you add no massive _performance_ regression. If you change the JIT or the heap, also run the extra checks in [`runtime/HACKING.md`](/runtime/HACKING.md). Add a test for every bug you fix.
-- **Document, document, document.** Add your change to the [CHANGELOG](/CHANGELOG.md) as a one-line summary and put any details in the body of the PR.
+- **Document, document, document.** Add your change to the [CHANGELOG](/CHANGELOG.md) as one entry that follows [the changelog rules](/spec/design/style.md#6c-changelogs), and put any details in the body of the PR.
 - **Format your code.** Format Zig code with `zig fmt` and Lus code with `lus fmt`. Run `mise run lint` before you push. Set your editor to format on save. No formatting, no merging.
 - **Pass the checks.** See [Before you open a pull request](#before-you-open-a-pull-request) and [Commit messages](#commit-messages).
 
@@ -17,8 +17,6 @@ If you haven't done any of the above, either submit a draft PR until you have or
 - **Your account must be at least two years old.**
 - **Sign commits.** GitHub must show each one as verified. See [Signed commits](#signed-commits).
 - **Fill in the template.** Name the kind of your pull request and [disclose any agent](#agent-disclosure) you used.
-
-To open an issue, your account must be at least two years old.
 
 ## Commit messages
 

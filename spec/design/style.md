@@ -120,7 +120,32 @@ A stdlib entry in `spec/stdlib/` follows one template, in this order:
 5. A short example.
 6. Edge cases and related entries.
 
-A package README follows the same idea at a larger scale. Its first sentence says what the package does, a short example shows it doing a recognisable job, and the paragraphs after it state the requirements, the permissions, and where the reference lives.
+Every official project has a README with the same shape, which the README of the Lus repository shows. The logo comes first when the project has one, then the name of the project as a heading that links to its website, then one sentence that says what the project is for, then a link to its documentation. A project with a single package continues with its license.
+
+```md
+<p><a href="https://lus.dev"><img src="logo.svg" width="64" height="64"></a></p>
+
+# [Project](https://example.com)
+
+One sentence that says what the project is for.
+
+[Instructions for using Project can be found here.](https://example.com/docs)
+
+## License
+
+The license terms.
+```
+
+A monorepository adds a project tree before the license. Each line of the tree links to a directory in bold code and gives it a short description.
+
+```md
+## Project tree
+
+- [**`/runtime`**](runtime): The runtime, the standard library, and the `lus` command line tools
+- [**`/packages/site`**](packages/site): Source code of lus.dev
+```
+
+The root README of a monorepository holds no instructions. Instructions for contributors go in `CONTRIBUTING.md`, in the README of the directory they concern, or in a `HACKING.md`. Everything a user of a package needs goes in its documentation, which the README links to. A README repeats nothing that the metadata of a package already states, such as its permissions or its version.
 
 ## 6a. Teaching pages
 
@@ -216,6 +241,43 @@ A claim that something outside Lus contradicts stays out, including a contrast t
 ### Design notes
 
 A design note in `spec/design/` states the decision, the reason, and the measurement that supports it. Alternatives that were built and measured belong in the note with their numbers, because the note is the record of what was tried. The note describes the design that ships first and the measured alternatives after it.
+
+## 6c. Changelogs
+
+A changelog lists the changes that a user of the project sees, release by release, with the newest release first. A release opens with its version as a heading, a line that gives its release date, and a paragraph that summarizes the release. A change that no entry verb below describes, such as a new runtime or a new license, belongs in that paragraph.
+
+An entry is one sentence that starts with one of five verbs, and the entries of a list come in the order of these verbs:
+
+1. **Added** for a new feature, function, option, or tool.
+2. **Changed** for different behavior of something that already existed.
+3. **Fixed** for a bug that no longer happens.
+4. **Deprecated** for something that still works and goes away in a later release.
+5. **Removed** for something that no longer exists.
+
+The sentence names the change and links to the documentation that describes it, so the entry needs no details. When an entry needs details all the same, they go in sub-bullets under it. An entry that adds functions to a library names every function, then gives each one a sub-bullet with a short description. An entry that adds a library names the library, then gives each of its functions a sub-bullet.
+
+```md
+- Added `fs.copy` and `fs.stat`.
+  - `fs.copy`: Copies a file or a directory tree to a new path.
+  - `fs.stat`: Returns the type, size, and times of a path.
+- Added the [`time`](/manual/time) library.
+  - `time.now`: Returns the current instant.
+  - `time.parse`: Reads an instant from an ISO 8601 string.
+- Fixed `string.find` returning a wrong position after a lone surrogate.
+- Deprecated `string.len`, which `#s` replaces.
+```
+
+The Lus changelog groups the entries of a release under these headings, in this order, and leaves out a heading with no entries:
+
+| Heading | Changes |
+|---|---|
+| Language | Syntax, grammar, semantics, and the standard library |
+| Runtime | The interpreter, the compilers, the garbage collector, the embedding interface, platforms, and performance |
+| Tools | The `lus` commands, the language server, the formatter, the checker, the debugger, and the editor extensions |
+| Security | Vulnerabilities, hardening, and the permission system |
+| Website | lus.dev, the manual, and the playground |
+
+The changelogs of atmosphere and the atmos packages have no headings. Each release there is one list in the order of the verbs.
 
 ## 7. Examples
 

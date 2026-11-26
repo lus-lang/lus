@@ -46,7 +46,7 @@ The design of Lus has the following goals.
 
 - **Strong release engineering.** The language has stable, tested releases and a design that changes deliberately.
 
-- **Backwards _embeddability_.** Lua was engineered to be embedded in other programs. Lus keeps that ease of integration, although standalone use has priority. The runtime is written in Zig and has a C interface, `lus.h`, so a host program [embeds Lus](/manual/embedding) much as it embeds Lua. The same runtime also runs in the browser as a [WebAssembly](/manual/webassembly) module.
+- **Backwards _embeddability_.** Lua was engineered to be embedded in other programs. Lus keeps that ease of integration, although standalone use has priority. The runtime has a C interface, `lus.h`, so a host program [embeds Lus](/manual/embedding) much as it embeds Lua. The same runtime also runs in the browser as a [WebAssembly](/manual/webassembly) module.
 
 The design also has the following **non-goals**, which Lus leaves to other languages.
 

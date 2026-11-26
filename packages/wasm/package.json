@@ -1,7 +1,7 @@
 {
   "name": "lus-wasm",
   "version": "2.0.0-dev",
-  "description": "The Lus 2.0 runtime as a WASI module, with a small JavaScript host for browsers, workers, and Node",
+  "description": "The Lus runtime as a WASI module, with a small JavaScript host for browsers, workers, and Node",
   "private": true,
   "type": "module",
   "exports": {

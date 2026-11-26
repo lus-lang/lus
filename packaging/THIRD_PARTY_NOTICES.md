@@ -1,8 +1,8 @@
 # Third-party notices
 
 Lus includes software and generated data maintained by other projects. The
-Lus 2.0 runtime is written in Zig and compiles the C sources it depends on
-into the same executable, library, or WebAssembly module. The corresponding
+runtime compiles the C sources it depends on into the same executable,
+library, or WebAssembly module. The corresponding
 license texts ship in the `licenses` directory.
 
 | Component | Distributed artifact | License | License file |

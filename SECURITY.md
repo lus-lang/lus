@@ -1,8 +1,10 @@
 # Security
 
-## Supported versions
+The table lists every vulnerability reported to the project and every vulnerability that the project found itself and that is severe enough for users to upgrade at once. Each row links to its advisory, and the newest comes first.
 
-The latest release of Lus receives security fixes. Earlier releases do not.
+| Advisory | Published | Severity | Affected releases | Fixed in | Summary |
+|---|---|---|---|---|---|
+| None reported | | | | | |
 
 ## Reporting a vulnerability
 

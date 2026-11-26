@@ -10,7 +10,7 @@ The language client and server accept JSON-RPC frames up to 16 MiB. Oversized or
 
 ## Debugging
 
-The `lus` debug type runs a script under `lus debug`, the debug adapter built into the Lus 2.0 command line. It supports line breakpoints with conditions, hit counts, and log messages, stopping on uncaught or on every raised error, stepping, pausing, and inspecting locals, upvalues, globals, and tables. Expressions typed in the debug console or added as watches read the variables of the selected frame and cannot assign to them.
+The `lus` debug type runs a script under `lus debug`, the debug adapter built into the `lus` command line. It supports line breakpoints with conditions, hit counts, and log messages, stopping on uncaught or on every raised error, stepping, pausing, and inspecting locals, upvalues, globals, and tables. Expressions typed in the debug console or added as watches read the variables of the selected frame and cannot assign to them.
 
 Pressing F5 in a `.lus` file debugs that file. A launch configuration takes `program`, `args`, `cwd`, `stopOnEntry`, and `pledges`. The `lus.executablePath` setting names the `lus` command, which defaults to the one on the `PATH`.
 
