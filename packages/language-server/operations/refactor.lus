@@ -22,13 +22,7 @@ local function line_starts(text)
     local starts = { 1, text = text }
     local pos = 1
 
-    while true do
-        local nl = string.find(text, "\n", pos, true)
-
-        if not nl then
-            break
-        end
-
+    while nl = string.find(text, "\n", pos, true) do
         starts[#starts + 1] = nl + 1
         pos = nl + 1
     end
@@ -213,7 +207,7 @@ local function parse(text)
             local prefix = "return ("
             local sub = parse_raw(`$prefix$src)`)
 
-            if not sub or not sub.children[1] or not sub.children[1].values then
+            if not sub?.children[1]?.values then
                 ok = false
                 return
             end
@@ -443,7 +437,7 @@ function Resolver:expr(e)
 end
 
 function Resolver:cond(c)
-    if c and c.type == "assign" then
+    if c?.type == "assign" then
         self:exprs(c.rhs)
 
         for _, n in ipairs(c.lhs or {}) do
@@ -820,7 +814,7 @@ local function unique_name(text, base)
 
     while string.find(text, `%f[%w_]$name%f[^%w_]`) do
         n = n + 1
-        name = base .. n
+        name = `$base$n`
     end
 
     return name
@@ -1228,7 +1222,7 @@ local function inline_local(text, tree, starts, lo, before, res)
         edits[#edits + 1] = { lo = o, to = o + #decl.name - 1, text = replacement }
     end
 
-    if not no_worse(before, apply(text, { table.unpack(edits) })) then
+    if not no_worse(before, apply(text, table.clone(edits))) then
         return nil
     end
 
@@ -1291,11 +1285,7 @@ local function extract_function(text, tree, starts, lo, to, before, res)
         return nil
     end
 
-    local stats = {}
-
-    for i = run.first, run.last do
-        stats[#stats + 1] = run.list[i]
-    end
+    local stats = run.list[run.first, run.last]
 
     if escapes(stats) then
         return nil
@@ -1324,9 +1314,7 @@ local function extract_function(text, tree, starts, lo, to, before, res)
             end
 
             local used_after = res.test_file
-                and d.scope
-                and d.scope.node
-                and d.scope.node.type == "chunk"
+                and d.scope?.node?.type == "chunk"
                 and (string.match(d.name, "_test$")
                     or string.match(d.name, "_cases$")
                     or string.match(d.name, "_bench$"))
@@ -1478,7 +1466,7 @@ local function extract_function(text, tree, starts, lo, to, before, res)
         call = `local $(table.concat(outputs, ", ")) = $call`
     end
 
-    local edits = { { lo = run_from, to = run_to, text = fn .. call } }
+    local edits = { { lo = run_from, to = run_to, text = `$fn$call` } }
 
     if not no_worse(before, apply(text, { edits[1] })) then
         return nil
@@ -1573,7 +1561,7 @@ local function strict_number(node, res)
 
     if node.type == "name" then
         local d = res.decl_of[node]
-        return d ~= nil and d.kind == "loop" and d.stat.type == "fornum" and #d.writes == 0
+        return d?.kind == "loop" and d.stat.type == "fornum" and #d.writes == 0
     end
 
     return false
@@ -1796,7 +1784,7 @@ function refactor.actions(text, range, test_file)
     -- The loop and function depth of each statement, for inline local and
     -- extract function.
     for _, d in ipairs(res.decls) do
-        if d.stat and d.stat.type == "local" then
+        if d.stat?.type == "local" then
             res.loop_of[d.stat] = res.loop_of[d.stat] or 0
         end
     end
@@ -1896,13 +1884,7 @@ refactor.internal = {
 
 -- Applies the edits of an action to `text`, for tests and tools.
 function refactor.apply(text, a)
-    local copy = {}
-
-    for _, e in ipairs(a.offsets) do
-        copy[#copy + 1] = e
-    end
-
-    return apply(text, copy)
+    return apply(text, table.clone(a.offsets))
 end
 
 return refactor
