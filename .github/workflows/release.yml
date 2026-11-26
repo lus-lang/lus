@@ -15,8 +15,9 @@ name: Release
 #      and lus.wasm, which it hands on as one tar file, so the modes of
 #      the files survive.
 #   2. sign-macos signs and notarizes the macOS binaries on Linux with
-#      rcodesign. sign-windows signs the Windows binaries through Azure
-#      Artifact Signing, then compiles, signs, and smoke tests
+#      rcodesign (.github/actions/sign-macos). sign-windows signs the
+#      Windows binaries with Azure Artifact Signing
+#      (.github/actions/sign-windows), then compiles, signs, and smoke tests
 #      lus-setup.exe. Both run in the environment that `environment`
 #      names, so one approval of a reviewer starts both.
 #   3. package copies the signed files into the trees, then writes the
@@ -102,12 +103,6 @@ env:
     riscv64-linux-musl loongarch64-linux-musl powerpc64le-linux-musl
     s390x-linux-musl x86_64-freebsd aarch64-freebsd x86_64-macos
     aarch64-macos x86_64-windows aarch64-windows
-  # The signing tools, pinned by the SHA-256 digest of the file that each
-  # release publishes.
-  RCODESIGN_VERSION: "0.29.0"
-  RCODESIGN_SHA256: "dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002"
-  JSIGN_VERSION: "7.6"
-  JSIGN_SHA256: "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5"
 
 jobs:
   build:
@@ -242,65 +237,40 @@ jobs:
       - name: Unpack the macOS trees
         shell: bash
         run: tar -xf "$RUNNER_TEMP/trees/trees.tar" out/x86_64-macos out/aarch64-macos
-      - name: Install rcodesign
+      - name: List the macOS binaries
+        id: binaries
         if: steps.settings.outputs.sign == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          name="apple-codesign-$RCODESIGN_VERSION-x86_64-unknown-linux-musl"
-          cd "$RUNNER_TEMP"
-          curl -fsSL -o "$name.tar.gz" "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/$RCODESIGN_VERSION/$name.tar.gz"
-          echo "$RCODESIGN_SHA256  $name.tar.gz" | sha256sum --check --strict
-          tar -xzf "$name.tar.gz"
-          install -m 755 "$name/rcodesign" /usr/local/bin/rcodesign
-          rcodesign --version
+          # lus-runtime stays as built, since `lus build` changes it and
+          # signs the result ad hoc.
+          {
+            echo "libraries<<EOF"
+            for target in x86_64-macos aarch64-macos; do
+              for lib in "out/$target"/lib/*.dylib; do
+                if [ ! -L "$lib" ]; then echo "$lib"; fi
+              done
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Sign and notarize
         if: steps.settings.outputs.sign == 'true'
-        env:
-          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
-          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        uses: ./.github/actions/sign-macos
+        with:
+          cert-p12: ${{ secrets.APPLE_CERT_P12 }}
+          cert-password: ${{ secrets.APPLE_CERT_PASSWORD }}
+          api-key-p8: ${{ secrets.APPLE_API_KEY_P8 }}
+          api-key-id: ${{ secrets.APPLE_API_KEY_ID }}
+          api-issuer: ${{ secrets.APPLE_API_ISSUER }}
+          executables: |
+            out/x86_64-macos/bin/lus
+            out/aarch64-macos/bin/lus
+          libraries: ${{ steps.binaries.outputs.libraries }}
+      - name: Record the signature
+        if: steps.settings.outputs.sign == 'true'
         shell: bash
-        run: |
-          set -euo pipefail
-          keys="$RUNNER_TEMP/apple"
-          (umask 077 && mkdir -p "$keys" \
-            && printf '%s' "$APPLE_CERT_P12" | base64 -d > "$keys/cert.p12" \
-            && printf '%s' "$APPLE_CERT_PASSWORD" > "$keys/cert.password" \
-            && printf '%s\n' "$APPLE_API_KEY_P8" > "$keys/api-key.p8")
-          rcodesign encode-app-store-connect-api-key -o "$keys/api-key.json" "$APPLE_API_ISSUER" "$APPLE_API_KEY_ID" "$keys/api-key.p8"
-          sign() {
-            rcodesign sign --p12-file "$keys/cert.p12" --p12-password-file "$keys/cert.password" --for-notarization "$@"
-          }
-          mkdir -p "$RUNNER_TEMP/notarize"
-          for target in x86_64-macos aarch64-macos; do
-            # The JIT maps code writable and executable, which the hardened
-            # runtime allows only with the entitlements of lus.entitlements.
-            sign --binary-identifier dev.lus.lus --entitlements-xml-file packaging/release/lus.entitlements "out/$target/bin/lus"
-            rcodesign verify "out/$target/bin/lus"
-            mkdir -p "$RUNNER_TEMP/notarize/$target"
-            cp "out/$target/bin/lus" "$RUNNER_TEMP/notarize/$target/"
-            # lus-runtime stays as built, since `lus build` changes it and
-            # signs the result ad hoc.
-            for lib in "out/$target"/lib/*.dylib; do
-              if [ -L "$lib" ]; then continue; fi
-              sign --binary-identifier dev.lus.liblus "$lib"
-              rcodesign verify "$lib"
-              cp "$lib" "$RUNNER_TEMP/notarize/$target/"
-            done
-          done
-          # Apple notarizes each signed binary in the zip. A bare binary
-          # cannot hold a stapled ticket, so Gatekeeper looks the
-          # notarization up online the first time it runs.
-          (cd "$RUNNER_TEMP/notarize" && zip -qr ../notarize.zip .)
-          rcodesign notary-submit --api-key-file "$keys/api-key.json" --wait --max-wait-seconds 1800 "$RUNNER_TEMP/notarize.zip"
-          echo "The macOS binaries are signed and notarized." >> "$GITHUB_STEP_SUMMARY"
-      - name: Remove the keys
-        if: always()
-        shell: bash
-        run: rm -rf "$RUNNER_TEMP/apple"
+        run: echo "The macOS binaries are signed and notarized." >> "$GITHUB_STEP_SUMMARY"
       - name: Collect the macOS files
         shell: bash
         run: |
@@ -363,53 +333,27 @@ jobs:
       - name: Unpack the Windows trees
         shell: bash
         run: tar -xf "$RUNNER_TEMP/trees/trees.tar" out/x86_64-windows out/aarch64-windows
-      - name: Log in to Azure
-        if: steps.settings.outputs.sign == 'true'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Install jsign
-        if: steps.settings.outputs.sign == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP"
-          curl -fsSL -o jsign.jar "https://github.com/ebourg/jsign/releases/download/$JSIGN_VERSION/jsign-$JSIGN_VERSION.jar"
-          echo "$JSIGN_SHA256  jsign.jar" | sha256sum --check --strict
-          java -jar jsign.jar --help > /dev/null
+      # lus-runtime.exe stays as built, since `lus build` appends a bundle
+      # to it, which a signature would not cover.
       - name: Sign lus.exe and lus.dll
         if: steps.settings.outputs.sign == 'true'
-        env:
-          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        uses: ./.github/actions/sign-windows
+        with:
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          account: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          profile: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: |
+            out/x86_64-windows/bin/lus.exe
+            out/x86_64-windows/bin/lus.dll
+            out/aarch64-windows/bin/lus.exe
+            out/aarch64-windows/bin/lus.dll
+      - name: Record the signature
+        if: steps.settings.outputs.sign == 'true'
         shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          # The access token lasts an hour, which covers the signatures of
-          # this job, the installer's included.
-          $token = az account get-access-token --resource https://codesigning.azure.net --query accessToken -o tsv
-          if ($LASTEXITCODE -ne 0 -or -not $token) { throw "no access token for Artifact Signing" }
-          Write-Output "::add-mask::$token"
-          "AZURE_SIGNING_TOKEN=$token" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          $env:AZURE_SIGNING_TOKEN = $token
-          $endpoint = ($env:AZURE_SIGNING_ENDPOINT -replace '^https://', '').TrimEnd('/')
-          $sign = "java -jar $env:RUNNER_TEMP\jsign.jar --storetype TRUSTEDSIGNING --keystore $endpoint --storepass env:AZURE_SIGNING_TOKEN --alias $env:AZURE_SIGNING_ACCOUNT/$env:AZURE_SIGNING_PROFILE"
-          "SIGN_COMMAND=$sign" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          # lus-runtime.exe stays as built, since `lus build` appends a
-          # bundle to it, which a signature would not cover.
-          foreach ($target in "x86_64-windows", "aarch64-windows") {
-            foreach ($file in "out\$target\bin\lus.exe", "out\$target\bin\lus.dll") {
-              if (-not (Test-Path $file)) { throw "$file is missing" }
-              & java -jar "$env:RUNNER_TEMP\jsign.jar" --storetype TRUSTEDSIGNING --keystore $endpoint --storepass env:AZURE_SIGNING_TOKEN --alias "$env:AZURE_SIGNING_ACCOUNT/$env:AZURE_SIGNING_PROFILE" $file
-              if ($LASTEXITCODE -ne 0) { throw "jsign failed on $file" }
-              $status = (Get-AuthenticodeSignature $file).Status
-              if ($status -ne "Valid") { throw "the signature of $file is $status" }
-            }
-          }
-          "The Windows binaries and lus-setup.exe are signed." | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+        run: '"The Windows binaries and lus-setup.exe are signed." | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY'
       - name: Compile lus-setup.exe
         shell: pwsh
         run: |

@@ -1,0 +1,3 @@
+A change to this file on rewrite runs .github/workflows/sign-check.yml,
+which signs a build of lus with the signing actions of the release and
+verifies each signature. Add a line to run it again.

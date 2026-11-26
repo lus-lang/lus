@@ -1,0 +1,106 @@
+name: Sign and notarize macOS binaries
+description: >-
+  Signs Mach-O binaries with rcodesign on a Linux runner, with a Developer
+  ID certificate, the hardened runtime, and a secure timestamp, then
+  submits them to the notary service of Apple with an App Store Connect
+  API key and waits for the result. release.yml and sign-check.yml run it.
+
+inputs:
+  cert-p12:
+    description: The Developer ID Application certificate and its private key as a PKCS#12 file, encoded in base64
+    required: true
+  cert-password:
+    description: The password of the PKCS#12 file
+    required: true
+  api-key-p8:
+    description: The text of the private key of the App Store Connect API key
+    required: true
+  api-key-id:
+    description: The identifier of the API key
+    required: true
+  api-issuer:
+    description: The issuer identifier of the team that owns the API key
+    required: true
+  executables:
+    description: The executables to sign with the identifier dev.lus.lus and the entitlements of lus, one path on each line
+    required: true
+  libraries:
+    description: The libraries to sign with the identifier dev.lus.liblus, one path on each line
+    required: false
+    default: ""
+  entitlements:
+    description: The entitlements of the executables
+    required: false
+    default: packaging/release/lus.entitlements
+
+runs:
+  using: composite
+  steps:
+    # rcodesign is pinned by the SHA-256 digest of the file its release
+    # publishes.
+    - name: Install rcodesign
+      shell: bash
+      env:
+        RCODESIGN_VERSION: "0.29.0"
+        RCODESIGN_SHA256: "dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002"
+      run: |
+        set -euo pipefail
+        name="apple-codesign-$RCODESIGN_VERSION-x86_64-unknown-linux-musl"
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o "$name.tar.gz" "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/$RCODESIGN_VERSION/$name.tar.gz"
+        echo "$RCODESIGN_SHA256  $name.tar.gz" | sha256sum --check --strict
+        tar -xzf "$name.tar.gz"
+        install -m 755 "$name/rcodesign" /usr/local/bin/rcodesign
+        rcodesign --version
+    - name: Sign and notarize
+      shell: bash
+      env:
+        APPLE_CERT_P12: ${{ inputs.cert-p12 }}
+        APPLE_CERT_PASSWORD: ${{ inputs.cert-password }}
+        APPLE_API_KEY_P8: ${{ inputs.api-key-p8 }}
+        APPLE_API_KEY_ID: ${{ inputs.api-key-id }}
+        APPLE_API_ISSUER: ${{ inputs.api-issuer }}
+        EXECUTABLES: ${{ inputs.executables }}
+        LIBRARIES: ${{ inputs.libraries }}
+        ENTITLEMENTS: ${{ inputs.entitlements }}
+      run: |
+        set -euo pipefail
+        keys="$RUNNER_TEMP/apple"
+        (umask 077 && mkdir -p "$keys" \
+          && printf '%s' "$APPLE_CERT_P12" | base64 -d > "$keys/cert.p12" \
+          && printf '%s' "$APPLE_CERT_PASSWORD" > "$keys/cert.password" \
+          && printf '%s\n' "$APPLE_API_KEY_P8" > "$keys/api-key.p8")
+        rcodesign encode-app-store-connect-api-key -o "$keys/api-key.json" "$APPLE_API_ISSUER" "$APPLE_API_KEY_ID" "$keys/api-key.p8"
+        stage="$RUNNER_TEMP/notarize"
+        rm -rf "$stage" && mkdir -p "$stage"
+        sign() {
+          local file="$1"
+          shift
+          rcodesign sign --p12-file "$keys/cert.p12" --p12-password-file "$keys/cert.password" --for-notarization "$@" "$file"
+          rcodesign verify "$file"
+          mkdir -p "$stage/$(dirname "$file")"
+          cp "$file" "$stage/$file"
+        }
+        count=0
+        # The JIT maps code writable and executable, which the hardened
+        # runtime allows only with the entitlements of lus.entitlements.
+        while IFS= read -r file; do
+          if [ -z "$file" ]; then continue; fi
+          sign "$file" --binary-identifier dev.lus.lus --entitlements-xml-file "$ENTITLEMENTS"
+          count=$((count + 1))
+        done <<< "$EXECUTABLES"
+        while IFS= read -r file; do
+          if [ -z "$file" ]; then continue; fi
+          sign "$file" --binary-identifier dev.lus.liblus
+          count=$((count + 1))
+        done <<< "$LIBRARIES"
+        if [ "$count" -eq 0 ]; then echo "no file to sign" >&2; exit 1; fi
+        # Apple notarizes each signed binary in the zip. A bare binary
+        # cannot hold a stapled ticket, so Gatekeeper looks the
+        # notarization up online the first time it runs.
+        (cd "$stage" && zip -qr "$RUNNER_TEMP/notarize.zip" .)
+        rcodesign notary-submit --api-key-file "$keys/api-key.json" --wait --max-wait-seconds 1800 "$RUNNER_TEMP/notarize.zip"
+    - name: Remove the keys
+      if: always()
+      shell: bash
+      run: rm -rf "$RUNNER_TEMP/apple" "$RUNNER_TEMP/notarize" "$RUNNER_TEMP/notarize.zip"

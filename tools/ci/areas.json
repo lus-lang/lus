@@ -483,7 +483,7 @@
     },
     {
       "name": "release",
-      "paths": [".github/workflows/ship.yml", ".github/workflows/release.yml", ".github/workflows/release-index.yml", ".github/workflows/publish-vscode.yml", "tools/release-version.mjs", "tools/release-version.test.mjs", "packaging/release/**"],
+      "paths": [".github/workflows/ship.yml", ".github/workflows/release.yml", ".github/workflows/sign-check.yml", ".github/actions/sign-windows/**", ".github/actions/sign-macos/**", ".github/workflows/release-index.yml", ".github/workflows/publish-vscode.yml", "tools/release-version.mjs", "tools/release-version.test.mjs", "packaging/release/**"],
       "labels": ["release"],
       "checks": ["ci"],
       "contributor": "egregious"

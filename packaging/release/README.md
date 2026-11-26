@@ -122,8 +122,21 @@ of the environment.
 - `AZURE_SIGNING_PROFILE`, the name of its certificate profile.
 
 `lus-runtime` keeps the signature of the build on both systems, because
-`lus build` writes its executables from it. `release.yml` pins
-`rcodesign` and `jsign` by the SHA-256 digest of their release files.
+`lus build` writes its executables from it.
+
+The steps that sign are the actions `.github/actions/sign-macos` and
+`.github/actions/sign-windows`, which pin `rcodesign` and `jsign` by the
+SHA-256 digest of their release files.
+`.github/workflows/sign-check.yml` runs the same actions from the branch
+`rewrite`, where a real release cannot run. A push to `rewrite` that
+changes `packaging/release/sign-check.txt` starts it. It builds `lus`
+for `x86_64-windows` and both macOS targets. Its signing jobs run in the
+environment `release`, so a check waits for one approval. It signs
+`lus.exe`, verifies the signature with `signtool verify /pa`, and runs
+the signed file. When the environment holds every `APPLE_*` secret, it
+also signs and notarizes the macOS builds and verifies them on a Mac
+with `codesign` and `spctl`. Otherwise it records a notice and skips
+them. The check publishes nothing.
 
 ## The Visual Studio Marketplace
 

@@ -1,0 +1,83 @@
+name: Sign Windows binaries
+description: >-
+  Signs Windows binaries with jsign through Azure Artifact Signing, after a
+  login to Azure with the OpenID Connect token of the job. release.yml and
+  sign-check.yml run it on a Windows runner, in a job with id-token write.
+  It writes SIGN_COMMAND, the jsign command without its file, and
+  AZURE_SIGNING_TOKEN to the environment of the later steps, so Inno Setup
+  signs with the same command.
+
+inputs:
+  tenant-id:
+    description: The Microsoft Entra tenant
+    required: true
+  client-id:
+    description: The app registration whose federated credential names the environment of the job
+    required: true
+  subscription-id:
+    description: The Azure subscription of the Artifact Signing account
+    required: true
+  endpoint:
+    description: The endpoint of the region of the account, such as https://wus2.codesigning.azure.net
+    required: true
+  account:
+    description: The name of the Artifact Signing account
+    required: true
+  profile:
+    description: The name of the certificate profile
+    required: true
+  files:
+    description: The files to sign, one path on each line
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to Azure
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+    # jsign is pinned by the SHA-256 digest of the file its release
+    # publishes.
+    - name: Install jsign
+      shell: bash
+      env:
+        JSIGN_VERSION: "7.6"
+        JSIGN_SHA256: "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5"
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o jsign.jar "https://github.com/ebourg/jsign/releases/download/$JSIGN_VERSION/jsign-$JSIGN_VERSION.jar"
+        echo "$JSIGN_SHA256  jsign.jar" | sha256sum --check --strict
+        java -jar jsign.jar --help > /dev/null
+    - name: Sign the files
+      shell: pwsh
+      env:
+        AZURE_SIGNING_ENDPOINT: ${{ inputs.endpoint }}
+        AZURE_SIGNING_ACCOUNT: ${{ inputs.account }}
+        AZURE_SIGNING_PROFILE: ${{ inputs.profile }}
+        FILES: ${{ inputs.files }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        # The access token lasts an hour, which covers the signatures of
+        # the job, an installer's included.
+        $token = az account get-access-token --resource https://codesigning.azure.net --query accessToken -o tsv
+        if ($LASTEXITCODE -ne 0 -or -not $token) { throw "no access token for Artifact Signing" }
+        Write-Output "::add-mask::$token"
+        "AZURE_SIGNING_TOKEN=$token" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+        $env:AZURE_SIGNING_TOKEN = $token
+        $endpoint = ($env:AZURE_SIGNING_ENDPOINT -replace '^https://', '').TrimEnd('/')
+        $sign = "java -jar $env:RUNNER_TEMP\jsign.jar --storetype TRUSTEDSIGNING --keystore $endpoint --storepass env:AZURE_SIGNING_TOKEN --alias $env:AZURE_SIGNING_ACCOUNT/$env:AZURE_SIGNING_PROFILE"
+        "SIGN_COMMAND=$sign" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+        $files = $env:FILES -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        if (-not $files) { throw "no file to sign" }
+        foreach ($file in $files) {
+          if (-not (Test-Path $file)) { throw "$file is missing" }
+          & java -jar "$env:RUNNER_TEMP\jsign.jar" --storetype TRUSTEDSIGNING --keystore $endpoint --storepass env:AZURE_SIGNING_TOKEN --alias "$env:AZURE_SIGNING_ACCOUNT/$env:AZURE_SIGNING_PROFILE" $file
+          if ($LASTEXITCODE -ne 0) { throw "jsign failed on $file" }
+          $status = (Get-AuthenticodeSignature $file).Status
+          if ($status -ne "Valid") { throw "the signature of $file is $status" }
+          Write-Output "Signed $file"
+        }

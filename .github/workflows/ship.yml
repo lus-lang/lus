@@ -64,7 +64,11 @@ on:
       - .github/workflows/release.yml
       - .github/workflows/release-index.yml
       - .github/workflows/publish-vscode.yml
+      - .github/actions/sign-windows/**
+      - .github/actions/sign-macos/**
       - packaging/release/**
+      # The file that starts sign-check.yml.
+      - "!packaging/release/sign-check.txt"
       - tools/release-version.mjs
       - tools/release-index.mjs
 
