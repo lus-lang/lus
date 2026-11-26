@@ -4,7 +4,7 @@
 
 **Release date:** TBD
 
-Lus 2.0 is a new runtime with a compiler to machine code, a new garbage collector, a new embedding interface, and a set of tools in the `lus` command. It keeps the language features, the libraries, the permissions, and the command line pledges of Lus 1.6. A program written for Lus 1.6 runs once it accounts for the changed, deprecated, and removed entries of this release.
+Lus 2.0 is a new runtime with a compiler to machine code, a new garbage collector, a new embedding interface, and a set of tools in the `lus` command.
 
 ### Language
 
