@@ -370,19 +370,24 @@ fn pushProcess(l: *Thread, pid: Pid, id: i64, ends: Ends) Error!u32 {
     try base_lib.registerFinalizer(l, &u.hdr, mt);
     if (windows) win.watch(p);
     // Each end becomes an io handle before the next allocation can
-    // collect, so none of them leaks.
+    // collect, so none of them leaks. The process may turn old during any
+    // of these allocations, so each store into it takes the barrier.
     const nb = true;
     if (ends.stdin) |f| u.userValues()[0] = io_lib.newPipeHandle(l, f, false, nb) catch |e| {
         closeEnds(l, .{ .stdout = ends.stdout, .stderr = ends.stderr });
         return e;
     };
+    gc.barrierBack(l.g, &u.hdr);
     if (ends.stdout) |f| u.userValues()[1] = io_lib.newPipeHandle(l, f, true, nb) catch |e| {
         closeEnds(l, .{ .stderr = ends.stderr });
         return e;
     };
+    gc.barrierBack(l.g, &u.hdr);
     if (ends.stderr) |f| u.userValues()[2] = try io_lib.newPipeHandle(l, f, true, nb);
+    gc.barrierBack(l.g, &u.hdr);
     // The coroutine that waits for the exit.
     u.userValues()[3] = try events.once(l, waitNative, "exit", uv);
+    gc.barrierBack(l.g, &u.hdr);
     l.top -= 1;
     return 1;
 }
