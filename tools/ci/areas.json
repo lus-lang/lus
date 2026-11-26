@@ -258,10 +258,10 @@
     },
     {
       "name": "cli",
-      "paths": ["runtime/src/main.zig", "runtime/src/tools.zig", "runtime/src/tools/**", "runtime/src/modtree.zig"],
+      "paths": ["runtime/src/main.zig", "runtime/src/tools.zig", "runtime/src/tools/**", "runtime/src/modtree.zig", "spec/tools/cli.json", "packaging/share/**", "tests/cli/**"],
       "labels": ["runtime"],
       "tests": ["tests/conformance/cli_test.lus", "tests/conformance/runner_test.lus", "tests/conformance/modtree_cli_test.lus", "tests/conformance/detach_cli_test.lus", "tests/conformance/authpath_cli_test.lus"],
-      "checks": ["unit", "doc"],
+      "checks": ["unit", "doc", "version"],
       "platforms": ["linux", "macos", "windows"]
     },
     {

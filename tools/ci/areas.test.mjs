@@ -151,7 +151,7 @@ test("CODEOWNERS lists the paths that the map denies", async () => {
 const TOOL_DIRS = {
   unit: ["tests/check", "tests/doc", "tests/build", "tests/embed"],
   debug: ["tests/debug"],
-  version: ["tests/version", "tests/remote", "tests/lib"],
+  version: ["tests/version", "tests/remote", "tests/lib", "tests/cli"],
 };
 
 const plansSomething = (p) => p.runtime.some((r) => r.checks.length > 0 || r.suite || r.tests) || p.full.length > 0 || p.ci || p.benches.length > 0;

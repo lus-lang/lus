@@ -440,13 +440,13 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: runtime
         run: zig build test-debug -Doptimize=ReleaseSafe
-      - name: Version manager and remote module tests
+      - name: Version manager, remote module, and command line tests
         timeout-minutes: 15
         # The fixtures build POSIX release archives. Windows installs are
         # covered by the installer job of the release workflow.
         if: runner.os != 'Windows'
         working-directory: runtime
-        run: zig build test-version test-remote -Doptimize=ReleaseSafe
+        run: zig build test-version test-remote test-cli -Doptimize=ReleaseSafe
       - name: Build
         timeout-minutes: 15
         working-directory: runtime
