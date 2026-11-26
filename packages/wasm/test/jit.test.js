@@ -19,9 +19,13 @@ function host(mode, options = {}) {
   return new Lus(module, { env: { LUS_JIT: mode }, ...options });
 }
 
-/** Runs `source` and returns its standard output, failing on errors. */
+/**
+ * Runs `source` and returns its standard output, failing on errors. A host
+ * grant takes `debug` away unless it names it, as `lus -P` does, so the
+ * grants name `debug` for the programs that set hooks.
+ */
 function output(lus, source) {
-  const r = lus.run(source, { pledges: ["load"] });
+  const r = lus.run(source, { pledges: ["load", "debug"] });
   assert.equal(r.error, null, r.traceback ?? undefined);
   return r.stdout;
 }
