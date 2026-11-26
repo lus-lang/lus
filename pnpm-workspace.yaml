@@ -1,5 +1,4 @@
 packages:
-  - packages/harness
   - packages/site
   - packages/vscode
   - packages/wasm

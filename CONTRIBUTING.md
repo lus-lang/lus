@@ -44,7 +44,6 @@ Write the first line of each commit message as `type(area): subject`. Write `sub
 | `lib` | the standard library |
 | `lsp` | the language server |
 | `vscode` | the VS Code extension and the TextMate grammar |
-| `harness` | the agent harness in `packages/harness` |
 | `www` | the pages of lus.dev |
 | `docs` | the manual and the design notes |
 | `spec` | the specification of the language and the standard library |

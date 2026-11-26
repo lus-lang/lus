@@ -59,7 +59,6 @@ Agents writing Lus should install the `lus` skill below, then work in a loop of 
 - [Standalone binaries](https://lus.dev/manual/tools.md#standalone-executables): One executable with the script, its modules, and its permissions.
 - [Faster forms](https://lus.dev/manual/tools.md#faster-forms): The `lus check` hints that name a measured faster form of correct code, and the [diagnostic codes](https://lus.dev/manual/tools.md#diagnostic-codes) with their severities.
 - [Debugger](https://lus.dev/manual/tools.md#debugger): `lus debug` over the Debug Adapter Protocol.
-- [Agent harness](https://lus.dev/manual/agent-harness.md): `lush`, the Pi coding agent with Lus diagnostics, the `lus` tools, and script runs under approved permissions.
 
 ## Optional
 

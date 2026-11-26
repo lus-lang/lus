@@ -20,8 +20,7 @@
     "packaging": "Versions, installers, and licenses",
     "release": "The release workflows and the tools that version and publish a release",
     "tools": "The generators, the repository lint, and the other tools of tools/",
-    "agents": "The agent skills, prompts, and instructions",
-    "harness": "The harness package of packages/harness"
+    "agents": "The agent skills, prompts, and instructions"
   },
   "status_labels": {
     "about": "Labels that the workflows set on pull requests and issues, apart from the areas.",
@@ -401,12 +400,6 @@
       "name": "vscode",
       "paths": ["packages/vscode/**"],
       "labels": ["vscode"],
-      "checks": ["web"]
-    },
-    {
-      "name": "harness",
-      "paths": ["packages/harness/**"],
-      "labels": ["harness"],
       "checks": ["web"]
     },
     {
