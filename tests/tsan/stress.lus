@@ -7,8 +7,7 @@
 --
 -- Usage: LUS_JIT=off lus stress.lus [ROUNDS]
 
-global arg, assert, collectgarbage, coroutine, fs, io, ipairs, os, pledge, print, string, table,
-    tonumber, worker
+global arg, assert, collectgarbage, coroutine, fs, io, ipairs, os, pledge, print, tonumber, worker
 
 pledge("load", "fs")
 
@@ -82,4 +81,4 @@ end
 
 fs.remove(path)
 assert(checked == WORKERS * ROUNDS)
-print(string.format("%d workers, %d messages each way, all checked", WORKERS, checked))
+print(`$WORKERS workers, $checked messages each way, all checked`)

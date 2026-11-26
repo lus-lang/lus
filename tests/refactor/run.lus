@@ -20,7 +20,7 @@ global arg, assert, fs, io, ipairs, loadfile, math, os, pairs, pledge, print, st
 pledge("exec", "fs", "env", "load")
 
 local here = arg[0]:match("^(.*)[/\\][^/\\]*$") or "."
-local root = here .. "/../.."
+local root = `$here/../..`
 
 local opts = { ["per-kind"] = "2", seed = "1" }
 
@@ -41,13 +41,13 @@ end
 
 local per_kind = tonumber(opts["per-kind"])
 local lus = opts.lus or arg[-1]
-local out = opts.out or os.tmpname() .. "-refactor"
+local out = opts.out or `$(os.tmpname())-refactor`
 
-local refactor = assert(loadfile(root .. "/packages/language-server/operations/refactor.lus"))()
+local refactor = assert(loadfile(`$root/packages/language-server/operations/refactor.lus`))()
 local I = refactor.internal
 
 local function sh(cmd)
-    local p = io.popen(cmd .. " 2>&1")
+    local p = io.popen(`$cmd 2>&1`)
     local text = p:read("a")
     local ok = p:close()
     return ok == true or ok == 0, text
@@ -60,7 +60,7 @@ end
 
 local conformance = q(`$root/tests/conformance`)
 assert(sh(`rm -rf $(q(out)) && mkdir -p $(q(out)) && cp -R $conformance $(q(`$out/conformance`))`))
-local dir = out .. "/conformance"
+local dir = `$out/conformance`
 
 -- The number of tests that pass and fail when `lus test` runs `path`.
 local function run(path)
@@ -221,7 +221,7 @@ print(
 )
 
 for _, k in ipairs(kinds) do
-    print("  " .. k)
+    print(`  $k`)
 end
 
 os.exit(failures == 0 and 0 or 1)

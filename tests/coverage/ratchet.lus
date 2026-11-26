@@ -44,7 +44,7 @@ end
 
 local reportPath, basePath, mode = arg[1], arg[2], arg[3]
 assert(reportPath and basePath, "usage: lus ratchet.lus REPORT BASELINE [--write]")
-local report = assert(readFile(reportPath), "cannot read " .. reportPath)
+local report = assert(readFile(reportPath), `cannot read $reportPath`)
 local groups = groupsOf(report)
 assert(#groups > 0, "the report has no groups")
 
@@ -62,13 +62,13 @@ if mode == "--write" then
     local f = assert(io.open(basePath, "w"))
     f:write(table.concat(lines, "\n"), "\n")
     f:close()
-    print("wrote " .. basePath)
+    print(`wrote $basePath`)
     os.exit(0)
 end
 
 local base = {}
 
-for line in (assert(readFile(basePath), "cannot read " .. basePath)):gmatch("[^\n]+") do
+for line in (assert(readFile(basePath), `cannot read $basePath`)):gmatch("[^\n]+") do
     if name, pct = line:match("^([^#].-)%s+(%d+%.%d)$") then
         base[name] = tonumber(pct)
     end
