@@ -2,6 +2,8 @@
 
 Lus is open-source, allowing you to make as many copies of it as desired and do whatever you want with those copies. Lus, however, is not fully _open-contribution_. Please submit only pull requests correcting bugs, optimizing existing code, proposing new tests for currently unaccounted edge cases, or improving the documentation.
 
+[Contributor tools](https://lus.dev/manual/contributing) lists the tools that each part of the repository needs.
+
 If you _do_ make a PR, make sure to:
 
 - [**Read the project goals.**](https://lus.dev/manual/introduction/#goals) Changes that implement a _non-goal_ or contradict a goal are rejected.

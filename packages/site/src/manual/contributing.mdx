@@ -1,0 +1,63 @@
+---
+order: 6.1
+title: Contributor tools
+icon: wrench
+group: use
+shortdesc: "The tools that each part of the Lus repository needs, from the runtime to the website."
+---
+
+Work on the Lus [repository](https://github.com/lus-lang/lus) needs the tools under the heading of the part you change, and the tools that every part needs. `mise.toml` pins the versions of Zig, Node, and pnpm. Each section lists its required tools first, then the optional tools and the tasks that use them. [`CONTRIBUTING.md`](https://github.com/lus-lang/lus/blob/main/CONTRIBUTING.md) describes how to send a change.
+
+## Every part
+
+- [Git](https://git-scm.com/downloads)
+- [mise](https://mise.jdx.dev/getting-started.html), which runs the tasks and provides the pinned tools
+- A key that signs commits, either a GnuPG key or an [SSH key](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#ssh-commit-signature-verification)
+  - Linux: [GnuPG](https://gnupg.org/download/)
+  - macOS: [GPG Suite](https://gpgtools.org)
+  - Windows: [Gpg4win](https://www.gpg4win.org/get-gpg4win.html)
+
+## Runtime
+
+- [Zig](https://ziglang.org/download/), at the version in `mise.toml`
+
+The following tools are optional:
+
+- [Node](https://nodejs.org/en/download), for the tests of the debugger, of `lus version`, and of the repository tools
+- [Lima](https://lima-vm.io/docs/installation/), for `mise run test:linux` on macOS
+- [QEMU](https://www.qemu.org/download/) in user mode, for the tests of emulated architectures
+
+## WebAssembly package
+
+- [Zig](https://ziglang.org/download/), at the version in `mise.toml`
+- [Node](https://nodejs.org/en/download), for the host and its tests
+
+## Language server
+
+- The `lus` executable built from `runtime`, which runs the server and its tests
+
+## VS Code extension
+
+- [Node](https://nodejs.org/en/download)
+- [pnpm](https://pnpm.io/installation)
+- [VS Code](https://code.visualstudio.com/download), to run the extension
+
+## Website
+
+- [Node](https://nodejs.org/en/download)
+- [pnpm](https://pnpm.io/installation)
+
+The `lus` executable built from `runtime` is optional. It runs the code blocks of the manual with `lus test --doc`.
+
+## Benchmarks
+
+Every tool that the cross-language benchmarks in `tests/bench/compare` run is optional, because the harness measures only the runtimes it finds.
+
+- [oha](https://github.com/hatoo/oha), for the HTTP server benchmark
+- [Lua 5.5](https://www.lua.org/download.html)
+- [LuaJIT](https://luajit.org/download.html)
+- [Python](https://www.python.org/downloads/)
+- [Node](https://nodejs.org/en/download)
+- [Bun](https://bun.sh/docs/installation)
+- [Ruby](https://www.ruby-lang.org/en/downloads/)
+- [PHP](https://www.php.net/downloads.php)
