@@ -19,12 +19,12 @@
 //
 // The owner, members, and collaborators of the repository, the logins of
 // .github/known-authors, and the Lus app itself (APP_SLUG), whose pull
-// requests carry the fixes of the agent, skip the gate. Everyone else needs an account
-// at least two years old. A pull request needs every commit verified by
-// GitHub, which also shows that the account has a verified email bound to
-// its signing key, a valid Kind and agent disclosure (tools/ci/pr.mjs),
-// and only paths that contributors may change (tools/ci/areas.json). An
-// issue needs only the account age.
+// requests carry the fixes of the agent, skip the gate. Any issue passes.
+// A pull request from anyone else needs an account at least two years
+// old, every commit verified by GitHub, which also shows that the account
+// has a verified email bound to its signing key, a valid Kind and agent
+// disclosure (tools/ci/pr.mjs), and only paths that contributors may
+// change (tools/ci/areas.json).
 //
 // A pull request that touches an egregious path is closed and locked. One
 // whose Kind asks for a feature or a design change is closed, and the
@@ -124,12 +124,11 @@ export function decide({kind, item, user, commits, files, known, now = Date.now(
   if (EXEMPT_ASSOCIATIONS.includes(item.author_association) || known.has(login.toLowerCase()) || login.toLowerCase() === app) {
     return {exempt: true, passed: true, action, failures, labels: [], verdict: "allowed"};
   }
-  const days = (now - Date.parse(user.created_at)) / 86400000;
-  if (days < MIN_AGE_DAYS) failures.push(`Your account must be at least two years old. @${login} is ${Math.floor(days)} days old.`);
-
   let verdict = "allowed";
   let fields = null;
   if (kind !== "issue") {
+    const days = (now - Date.parse(user.created_at)) / 86400000;
+    if (days < MIN_AGE_DAYS) failures.push(`Your account must be at least two years old. @${login} is ${Math.floor(days)} days old.`);
     const unsigned = commits.filter((c) => !c.commit.verification?.verified).map((c) => `${c.sha.slice(0, 10)} (${c.commit.verification?.reason ?? "unsigned"})`);
     if (unsigned.length) failures.push(`Sign these commits so that GitHub verifies them: ${unsigned.join(", ")}. CONTRIBUTING.md shows how.`);
     fields = checkPr(item.body ?? "", commits.map((c) => ({sha: c.sha, message: c.commit.message})));

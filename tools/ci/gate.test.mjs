@@ -40,8 +40,8 @@ test("a feature is closed, and an egregious path is locked", () => {
   assert.match(denied.failures[0], /build\.zig\.zon/);
 });
 
-test("an issue needs only the account age", () => {
-  const issue = {kind: "issue", item: {user: {login: "someone"}, author_association: "NONE"}, user: old, known: new Set(), now};
+test("an issue passes from an account of any age", () => {
+  const issue = {kind: "issue", item: {user: {login: "someone"}, author_association: "NONE"}, user: young, known: new Set(), now};
   assert.equal(decide(issue).action, "pass");
 });
 
