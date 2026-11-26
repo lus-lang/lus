@@ -403,7 +403,7 @@ end
 
 local function the_handler_transforms_the_error_and_ok_stays_false_test()
     local ok, err = catch[function(e)
-        return "H:" .. firstline(e)
+        return `H:$(firstline(e))`
     end] error("oops", 0)
 
     assert(not ok)
@@ -553,7 +553,7 @@ local function the_handler_receives_runtime_fault_text_too_test()
     local x = nil
 
     local ok, err = catch[function(e)
-        return "F:" .. firstline(e)
+        return `F:$(firstline(e))`
     end] (x + 1)
 
     assert(not ok)
@@ -568,7 +568,7 @@ local function the_handler_can_transform_a_stack_overflow_error_test()
     end
 
     local ok, err = catch[function(e)
-        return "OV:" .. firstline(e)
+        return `OV:$(firstline(e))`
     end] nontail(0)
 
     assert(not ok)
@@ -670,7 +670,7 @@ local function handler_statements_in_a_loop_keep_registers_intact_test()
         catch[function(e)
             hits = hits + 1
             return e
-        end] error("r" .. i, 0)
+        end] error(`r$i`, 0)
     end
 
     local c = 3

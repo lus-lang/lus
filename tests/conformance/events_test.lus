@@ -39,10 +39,10 @@ local function index_and_newindex_test()
 
     local mt = {
         __index = function(_t, k)
-            return "got " .. k
+            return `got $k`
         end,
         __newindex = function(t, k, v)  -- lus: allow(shadowed-local)
-            rawset(t, k, "set " .. v)
+            rawset(t, k, `set $v`)
         end,
     }
 

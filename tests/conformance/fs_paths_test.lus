@@ -21,7 +21,7 @@ pledge("fs:read=./fs2_x*", "fs:write=./fs2_x*", "fs:read=./fs2_ro_*")
 
 local SEP = fs.path.separator
 local RUN = tostring(time.now():epoch())
-local SANDBOX = "fs2_x" .. RUN
+local SANDBOX = `fs2_x$RUN`
 
 catch fs.remove(SANDBOX, true)
 fs.createdirectory(SANDBOX)
@@ -77,7 +77,7 @@ end
 local function a_trailing_separator_on_a_directory_still_reports_directory_test()
     local dir = spath("traildir")
     fs.createdirectory(dir)
-    assert(fs.type(dir .. SEP) == "directory")
+    assert(fs.type(`$dir$SEP`) == "directory")
     fs.remove(dir)
 end
 
@@ -186,14 +186,14 @@ local join_produces_the_expected_path_cases = {
     { { "a", "b", "c", "d.txt" }, `a$(SEP)b$(SEP)c$(SEP)d.txt` },
     { { "only" }, "only" },
     -- A trailing separator on the left is not doubled.
-    { { "a" .. SEP, "b" }, `a$(SEP)b` },
+    { { `a$SEP`, "b" }, `a$(SEP)b` },
     -- An empty component is skipped rather than producing a doubled separator.
     { { "", "b" }, "b" },
     { { "a", "", "b" }, `a$(SEP)b` },
     { { "", "" }, "" },
     -- An absolute component discards everything before it.
-    { { "a", SEP .. "b" }, SEP .. "b" },
-    { { "a", "b", SEP .. "root" }, SEP .. "root" },
+    { { "a", `$(SEP)b` }, `$(SEP)b` },
+    { { "a", "b", `$(SEP)root` }, `$(SEP)root` },
     -- A number argument is coerced through the string rules.
     { { "a", 5 }, `a$(SEP)5` },
 }
@@ -233,7 +233,7 @@ end
 local parent_extracts_the_containing_directory_cases = {
     { `a$(SEP)b$(SEP)file.txt`, `a$(SEP)b` },
     { "file.txt", "." },
-    { SEP .. "file.txt", SEP },
+    { `$(SEP)file.txt`, SEP },
     { `..$(SEP)file.txt`, ".." },
 }
 
@@ -362,7 +362,7 @@ end
 local function fs_createdirectory_on_an_ungranted_path_is_denied_for_writing_test()
     -- The existing parent makes the authorization boundary the only reason
     -- this new child path is rejected.
-    local ok, err = catch fs.createdirectory("./outside/fs2_denied_area_" .. RUN)
+    local ok, err = catch fs.createdirectory(`./outside/fs2_denied_area_$RUN`)
     assert(not ok)
     assert(string.find(tostring(err), 'permission "fs:write" denied'))
 end
@@ -372,7 +372,7 @@ local function a_read_only_grant_reads_but_refuses_to_create_test()
     -- The ./fs2_ro_* namespace carries read but not write. A read probe on a
     -- missing path passes the pledge and fails only at the syscall, while a
     -- create is stopped by the pledge itself.
-    local ro = "./fs2_ro_" .. RUN
+    local ro = `./fs2_ro_$RUN`
     local ok_read, err_read = catch fs.type(ro)
     assert(not ok_read)
     assert(string.find(tostring(err_read), "does not exist"))

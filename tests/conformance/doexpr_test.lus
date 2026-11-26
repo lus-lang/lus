@@ -14,7 +14,7 @@ local function basic_do_expression_with_provide_test()
         provide 42
     end
 
-    assert(x == 42, "x should be 42, got " .. tostring(x))
+    assert(x == 42, `x should be 42, got $x`)
 end
 
 local function do_expression_with_local_variable_test()
@@ -23,7 +23,7 @@ local function do_expression_with_local_variable_test()
         provide y
     end
 
-    assert(x == 10, "x should be 10, got " .. tostring(x))
+    assert(x == 10, `x should be 10, got $x`)
 end
 
 local function do_expression_without_provide_returns_nil_test()
@@ -31,7 +31,7 @@ local function do_expression_without_provide_returns_nil_test()
         local _y = 10
     end
 
-    assert(x == nil, "x should be nil, got " .. tostring(x))
+    assert(x == nil, `x should be nil, got $x`)
 end
 
 local function empty_provide_returns_nil_test()
@@ -39,7 +39,7 @@ local function empty_provide_returns_nil_test()
         provide
     end
 
-    assert(x == nil, "x should be nil, got " .. tostring(x))
+    assert(x == nil, `x should be nil, got $x`)
 end
 
 local function do_expression_in_arithmetic_test()
@@ -47,7 +47,7 @@ local function do_expression_in_arithmetic_test()
         provide 10
     end
 
-    assert(w == 15, "5 + do provide 10 end should be 15, got " .. tostring(w))
+    assert(w == 15, `5 + do provide 10 end should be 15, got $w`)
 end
 
 local function do_expression_in_string_concat_test()
@@ -55,7 +55,7 @@ local function do_expression_in_string_concat_test()
         provide "world"
     end
 
-    assert(s == "hello world", "string concat failed, got " .. tostring(s))
+    assert(s == "hello world", `string concat failed, got $s`)
 end
 
 -- =============================================================================
@@ -69,7 +69,7 @@ local function nested_do_expressions_2_levels_test()
         end
     end
 
-    assert(nested == 42, "nested should be 42, got " .. tostring(nested))
+    assert(nested == 42, `nested should be 42, got $nested`)
 end
 
 local function nested_do_expressions_3_levels_test()
@@ -85,7 +85,7 @@ local function nested_do_expressions_3_levels_test()
         provide a + 1
     end
 
-    assert(deep == 102, "deep should be 102, got " .. tostring(deep))
+    assert(deep == 102, `deep should be 102, got $deep`)
 end
 
 local function nested_do_with_local_variables_test()
@@ -100,7 +100,7 @@ local function nested_do_with_local_variables_test()
         provide inner_result * 2
     end
 
-    assert(result == 30, "result should be 30, got " .. tostring(result))
+    assert(result == 30, `result should be 30, got $result`)
 end
 
 -- =============================================================================
@@ -112,8 +112,8 @@ local function provide_multiple_values_test()
         provide 10, 20
     end
 
-    assert(x == 10, "x should be 10, got " .. tostring(x))
-    assert(y == 20, "y should be 20, got " .. tostring(y))
+    assert(x == 10, `x should be 10, got $x`)
+    assert(y == 20, `y should be 20, got $y`)
 end
 
 local function provide_three_values_test()
@@ -121,9 +121,9 @@ local function provide_three_values_test()
         provide 1, 2, 3
     end
 
-    assert(a == 1, "a should be 1, got " .. tostring(a))
-    assert(b == 2, "b should be 2, got " .. tostring(b))
-    assert(c == 3, "c should be 3, got " .. tostring(c))
+    assert(a == 1, `a should be 1, got $a`)
+    assert(b == 2, `b should be 2, got $b`)
+    assert(c == 3, `c should be 3, got $c`)
 end
 
 local function provide_fewer_values_than_expected_test()
@@ -131,9 +131,9 @@ local function provide_fewer_values_than_expected_test()
         provide 10
     end
 
-    assert(x == 10, "x should be 10, got " .. tostring(x))
-    assert(y == nil, "y should be nil, got " .. tostring(y))
-    assert(z == nil, "z should be nil, got " .. tostring(z))
+    assert(x == 10, `x should be 10, got $x`)
+    assert(y == nil, `y should be nil, got $y`)
+    assert(z == nil, `z should be nil, got $z`)
 end
 
 local function discard_extra_values_test()
@@ -141,7 +141,7 @@ local function discard_extra_values_test()
         provide 10, 20, 30
     end
 
-    assert(x == 10, "x should be 10, got " .. tostring(x))
+    assert(x == 10, `x should be 10, got $x`)
 end
 
 -- =============================================================================
@@ -159,7 +159,7 @@ local function provide_in_conditional_if_branch_test()
         end
     end
 
-    assert(cond == "big", "cond should be 'big', got " .. tostring(cond))
+    assert(cond == "big", `cond should be 'big', got $cond`)
 end
 
 local function provide_in_conditional_else_branch_test()
@@ -173,7 +173,7 @@ local function provide_in_conditional_else_branch_test()
         end
     end
 
-    assert(cond == "small", "cond should be 'small', got " .. tostring(cond))
+    assert(cond == "small", `cond should be 'small', got $cond`)
 end
 
 local function provide_terminates_block_test()
@@ -200,7 +200,7 @@ local function early_provide_in_loop_test()
         end
     end
 
-    assert(result == 5, "result should be 5, got " .. tostring(result))
+    assert(result == 5, `result should be 5, got $result`)
 end
 
 -- =============================================================================
@@ -215,7 +215,7 @@ local function access_outer_variables_test()
         provide outer + inner
     end
 
-    assert(result == 55, "result should be 55, got " .. tostring(result))
+    assert(result == 55, `result should be 55, got $result`)
 end
 
 local function inner_variables_don_t_leak_test()
@@ -240,8 +240,8 @@ local function shadowing_outer_variable_test()
         provide x
     end
 
-    assert(result == 200, "result should be 200, got " .. tostring(result))
-    assert(x == 100, "outer x should still be 100, got " .. tostring(x))
+    assert(result == 200, `result should be 200, got $result`)
+    assert(x == 100, `outer x should still be 100, got $x`)
 end
 
 -- =============================================================================
@@ -259,7 +259,7 @@ local function do_expression_as_function_argument_test()
         provide 20
     end)
 
-    assert(result == 30, "result should be 30, got " .. tostring(result))
+    assert(result == 30, `result should be 30, got $result`)
 end
 
 local function do_expression_in_table_constructor_test()
@@ -272,8 +272,8 @@ local function do_expression_in_table_constructor_test()
         end,
     }
 
-    assert(t.a == 1, "t.a should be 1, got " .. tostring(t.a))
-    assert(t.b == 2, "t.b should be 2, got " .. tostring(t.b))
+    assert(t.a == 1, `t.a should be 1, got $(t.a)`)
+    assert(t.b == 2, `t.b should be 2, got $(t.b)`)
 end
 
 local function chained_do_expressions_test()
@@ -285,7 +285,7 @@ local function chained_do_expressions_test()
         provide 30
     end
 
-    assert(x == 60, "chained sum should be 60, got " .. tostring(x))
+    assert(x == 60, `chained sum should be 60, got $x`)
 end
 
 local function do_expression_with_function_definition_test()
@@ -298,7 +298,7 @@ local function do_expression_with_function_definition_test()
     end
 
     assert(type(fn) == "function")
-    assert(fn() == 42, "fn() should return 42, got " .. tostring(fn()))
+    assert(fn() == 42, `fn() should return 42, got $(fn())`)
 end
 
 local function do_expression_modifying_upvalue_test()
@@ -327,8 +327,8 @@ local function catch_with_do_expression_success_test()
         provide 10
     end
 
-    assert(ok == true, "ok should be true, got " .. tostring(ok))
-    assert(val == 10, "val should be 10, got " .. tostring(val))
+    assert(ok == true, `ok should be true, got $ok`)
+    assert(val == 10, `val should be 10, got $val`)
 end
 
 local function do_expression_inside_catch_test()
@@ -341,7 +341,7 @@ local function do_expression_inside_catch_test()
     end
 
     assert(ok == true)
-    assert(result == 84, "result should be 84, got " .. tostring(result))
+    assert(result == 84, `result should be 84, got $result`)
 end
 
 -- =============================================================================

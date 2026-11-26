@@ -484,7 +484,7 @@ local function other_pending_finalizers_still_run_after_one_errors_test()
 
                 local bad = setmetatable({}, {  -- lus: allow(unused-local)
                     __gc = function()
-                        error("bad " .. i)
+                        error(`bad $i`)
                     end,
                 })
 

@@ -14,7 +14,7 @@ local REF = 1782998100
 local function instant_construction_and_epoch_round_trip_test()
     local i = time.instant(REF)
     assert(i:epoch() == REF)
-    assert(i:iso() == "2026-07-02T13:15:00Z", "iso mismatch: " .. i:iso())
+    assert(i:iso() == "2026-07-02T13:15:00Z", `iso mismatch: $(i:iso())`)
 end
 
 local function instant_duration_is_exact_seconds_test()
@@ -76,7 +76,7 @@ local function zoned_fields_and_offset_test()
     assert(z.weekday == time.weekday.thursday)
     assert(z.yearday == 183)
     assert(z.offset == -4 * 3600)
-    assert(z:iso() == "2026-07-02T09:15:00-04:00", "zoned iso: " .. z:iso())
+    assert(z:iso() == "2026-07-02T09:15:00-04:00", `zoned iso: $(z:iso())`)
 end
 
 local function zoned_collapses_to_the_correct_utc_instant_test()
@@ -91,7 +91,7 @@ end
 
 local function pre_1970_negative_epoch_fields_test()
     local i = time.instant(-1)  -- 1969-12-31T23:59:59Z
-    assert(i:iso() == "1969-12-31T23:59:59Z", "negative epoch iso: " .. i:iso())
+    assert(i:iso() == "1969-12-31T23:59:59Z", `negative epoch iso: $(i:iso())`)
 end
 
 local function strftime_formatting_test()
@@ -451,7 +451,7 @@ local negative_scalar_helper_keeps_magnitude_and_sets_the_flag_cases = {
 
 local function negative_scalar_helper_keeps_magnitude_and_sets_the_flag_test(d, mag, field)
     local p = d:parts()
-    assert(p.negative == true, field .. " is negative")
+    assert(p.negative == true, `$field is negative`)
     assert(p[field] == mag, `$field magnitude is $mag`)
 end
 
@@ -615,7 +615,7 @@ end
 local function duration_tostring_names_the_type_and_its_seconds_test()
     local s = tostring(time.minutes(90))
     assert(type(s) == "string" and #s > 0)
-    assert(s:find("5400") ~= nil, "shows the 5400 second span: " .. s)
+    assert(s:find("5400") ~= nil, `shows the 5400 second span: $s`)
 end
 
 -- ============================================================================
@@ -905,7 +905,7 @@ local invalid_fixed_offset_components_are_rejected_cases = {
 }
 
 local function invalid_fixed_offset_components_are_rejected_test(value)
-    assert(not (catch time.parse(value)), value .. " must raise")
+    assert(not (catch time.parse(value)), `$value must raise`)
 end
 
 local function the_exact_full_day_offset_remains_valid_test()
@@ -924,7 +924,7 @@ local pattern_parsing_rejects_invalid_fixed_offset_components_cases = {
 }
 
 local function pattern_parsing_rejects_invalid_fixed_offset_components_test(value)
-    assert(not (catch time.parse(value, "%Y-%m-%dT%H:%M:%S%z")), value .. " must raise")
+    assert(not (catch time.parse(value, "%Y-%m-%dT%H:%M:%S%z")), `$value must raise`)
 end
 
 -- Parsing is portable and independent of the platform strptime, and every

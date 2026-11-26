@@ -24,9 +24,9 @@ local keeps_every_escape_as_written_cases = {
 }
 
 local function keeps_every_escape_as_written_test(source)
-    local formatted, err = debug.format(source .. "\n", "=escapes")
+    local formatted, err = debug.format(`$source\n`, "=escapes")
     assert(formatted, err)
-    assert(formatted == source .. "\n", `\n$source\n$formatted`)
+    assert(formatted == `$source\n`, `\n$source\n$formatted`)
 end
 
 -- A string key written without escapes becomes a plain name, which is a

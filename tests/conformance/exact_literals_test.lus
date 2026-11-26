@@ -4,14 +4,14 @@
 pledge("load")
 
 local function eval(src)
-    local f, err = load("return " .. src)
+    local f, err = load(`return $src`)
     assert(f, err)
     return f()
 end
 
 local function malformed(src)
-    local f, err = load("return " .. src, "=lit")
-    assert(f == nil, src .. " should not compile")
+    local f, err = load(`return $src`, "=lit")
+    assert(f == nil, `$src should not compile`)
     assert(err == `lit:1: malformed number near '$src'`, err)
 end
 
@@ -89,7 +89,7 @@ local function decimal_exponents_reach_the_limits_test()
     assert(tostring(eval("1e-16383d")) == "1e-16383")
 
     for _, src in ipairs({ "1e131072d", "1e-16384d", "1e2147483648d", "1e-2147483649d" }) do
-        local f, err = load("return " .. src, "=lit")
+        local f, err = load(`return $src`, "=lit")
         assert(f == nil, src)
         assert(string.find(err, `decimal literal out of range near '$src'`, 1, true), err)
     end
@@ -454,26 +454,26 @@ end
 local function bigint_reads_a_numeral_of_16384_digits_test()
     local nines = string.rep("9", 16384)
     assert(bigint(nines) == 10n ^ 16384 - 1)
-    assert(bigint("-" .. nines) == 1n - 10n ^ 16384)
-    assert(bigint("0x" .. string.rep("f", 16384)) == 2n ^ 65536 - 1)
+    assert(bigint(`-$nines`) == 1n - 10n ^ 16384)
+    assert(bigint(`0x$(string.rep("f", 16384))`) == 2n ^ 65536 - 1)
 
     expect_big_range(function()
-        return bigint(nines .. "9")
+        return bigint(`$(nines)9`)
     end)
 
     expect_big_range(function()
-        return bigint("0x" .. string.rep("f", 16385))
+        return bigint(`0x$(string.rep("f", 16385))`)
     end)
 
     -- Longer text that holds no numeral reads as no numeral.
-    assert(bigint(nines .. "x") == nil)
+    assert(bigint(`$(nines)x`) == nil)
 end
 
 local function a_bigint_literal_holds_16384_digits_test()
     local nines = string.rep("9", 16384)
-    assert(eval(nines .. "n") == 10n ^ 16384 - 1)
+    assert(eval(`$(nines)n`) == 10n ^ 16384 - 1)
     -- Separators take no digit.
-    assert(eval(string.rep("9_", 8192) .. "9n") == 10n ^ 8193 - 1)
+    assert(eval(`$(string.rep("9_", 8192))9n`) == 10n ^ 8193 - 1)
     local f, err = load(`return $(nines)9n`, "=lit")
     assert(f == nil)
     local want = "lit:1: bigint literal out of range: a bigint numeral holds at most 16384 digits"
@@ -506,13 +506,13 @@ local function tostring_writes_a_bigint_of_16384_digits_test()
 
     -- Arithmetic keeps any size.
     assert((past * past) // past == past)
-    assert(tostring(past // 10n) == "1" .. string.rep("0", 16383))
+    assert(tostring(past // 10n) == `1$(string.rep("0", 16383))`)
 end
 
 local function fromjson_reads_an_integer_of_16384_digits_test()
     local nines = string.rep("9", 16384)
     assert(fromjson(nines, { exact = true }) == 10n ^ 16384 - 1)
-    local ok, err = catch fromjson(nines .. "9", { exact = true })
+    local ok, err = catch fromjson(`$(nines)9`, { exact = true })
     assert(not ok)
     assert(string.find(tostring(err), "number out of range", 1, true), err)
 end

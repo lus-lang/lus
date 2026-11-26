@@ -56,7 +56,7 @@ do
         end
 
         if next(results) == nil then
-            setup_error = "the child run produced no results: " .. out
+            setup_error = `the child run produced no results: $out`
         end
     end
 end

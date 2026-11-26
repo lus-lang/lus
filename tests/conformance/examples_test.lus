@@ -93,13 +93,13 @@ local function example_test(name)
     assert(#left == 0, `$name.lus left $(table.concat(left, ", ")) behind`)
     local lines = {}
 
-    for line in (out .. "\n"):gmatch("([^\n]*)\n") do
+    for line in (`$out\n`):gmatch("([^\n]*)\n") do
         lines[normalize(line)] = true
     end
 
     local n = 0
 
-    for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+    for line in (`$source\n`):gmatch("([^\n]*)\n") do
         n = n + 1
 
         if want = line:match("%-%->(.*)$") then

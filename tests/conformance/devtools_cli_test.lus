@@ -15,7 +15,7 @@ end
 -- Runs a command line and returns whether it succeeded and its output
 -- with line ends normalized.
 local function run(cmdline)
-    local f = io.popen(cmdline .. " 2>&1")
+    local f = io.popen(`$cmdline 2>&1`)
     local out = f:read("a")
     local ok = f:close()
     return (ok == true or ok == 0), (string.gsub(out, "\r\n", "\n"))
@@ -80,7 +80,7 @@ local function explain_covers_every_listed_code_test()
     local count = 0
 
     for code, severity in list:gmatch("([%w-]+)%s+(%a+)%s+[^\n]*\n") do
-        local eok, out = lus("check --explain " .. code)
+        local eok, out = lus(`check --explain $code`)
         assert(eok, `$code: $out`)
         assert(out:find(`^$(code:gsub("%-", "%%-")) %($severity%)\n`), out)
         count = count + 1

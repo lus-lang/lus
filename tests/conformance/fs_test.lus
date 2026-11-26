@@ -4,7 +4,7 @@ pledge("load", "fs", "exec")
 -- Test Helpers
 -- ============================================================================
 
-local SANDBOX = "test_fs_sandbox_" .. time.now():epoch()
+local SANDBOX = `test_fs_sandbox_$(time.now():epoch())`
 local SEP = fs.path.separator
 
 -- Ensure clean sandbox for each test run
@@ -84,25 +84,25 @@ end
 
 local function handles_single_component_test()
     local result = fs.path.join("only")
-    assert(result == "only", "Expected 'only', got " .. result)
+    assert(result == "only", `Expected 'only', got $result`)
 end
 
 local function handles_empty_string_components_test()
     local result = fs.path.join("", "b")
     -- Empty first should still work
-    assert(result == SEP .. "b" or result == "b", "Unexpected result: " .. result)
+    assert(result == `$(SEP)b` or result == "b", `Unexpected result: $result`)
 end
 
 local function handles_trailing_separator_in_first_component_test()
-    local result = fs.path.join("a" .. SEP, "b")
+    local result = fs.path.join(`a$SEP`, "b")
     -- Should not double the separator
     local expected1 = `a$(SEP)b`
     local expected2 = `a$SEP$(SEP)b`  -- Current buggy behavior
-    assert(result == expected1 or result == expected2, "Got: " .. result)
+    assert(result == expected1 or result == expected2, `Got: $result`)
 end
 
 local function handles_leading_separator_in_second_component_test()
-    local result = fs.path.join("a", SEP .. "b")
+    local result = fs.path.join("a", `$(SEP)b`)
     -- Ideally: absolute path in second should override, returning /b
     -- Current behavior likely: a//b
     assert(type(result) == "string")
@@ -110,7 +110,7 @@ end
 
 local function handles_no_arguments_test()
     local result = fs.path.join()
-    assert(result == "", "Expected empty string for no args, got: " .. tostring(result))
+    assert(result == "", `Expected empty string for no args, got: $result`)
 end
 
 local function handles_paths_with_spaces_test()
@@ -131,7 +131,7 @@ end
 
 local function splits_simple_path_test()
     local parts = fs.path.split(`a$(SEP)b$(SEP)c.txt`)
-    assert(#parts == 3, "Expected 3 parts, got " .. #parts)
+    assert(#parts == 3, `Expected 3 parts, got $(#parts)`)
     assert(parts[1] == "a")
     assert(parts[2] == "b")
     assert(parts[3] == "c.txt")
@@ -182,7 +182,7 @@ end
 
 local function extracts_filename_from_path_test()
     local name = fs.path.name(`a$(SEP)b$(SEP)file.txt`)
-    assert(name == "file.txt", "Expected file.txt, got " .. name)
+    assert(name == "file.txt", `Expected file.txt, got $name`)
 end
 
 local function returns_path_if_no_separator_test()
@@ -193,12 +193,12 @@ end
 local function handles_path_ending_in_separator_test()
     local name = fs.path.name(`a$(SEP)b$SEP`)
     -- Trailing separator means the "name" is empty
-    assert(name == "" or name == "b", "Got: " .. name)
+    assert(name == "" or name == "b", `Got: $name`)
 end
 
 local function handles_root_path_test()
     local name = fs.path.name(SEP)
-    assert(name == "" or name == SEP, "Got: " .. name)
+    assert(name == "" or name == SEP, `Got: $name`)
 end
 
 local function handles_dotfiles_test()
@@ -224,29 +224,29 @@ end
 
 local function returns_dot_for_simple_filename_test()
     local parent = fs.path.parent("file.txt")
-    assert(parent == ".", "Expected '.', got " .. parent)
+    assert(parent == ".", `Expected '.', got $parent`)
 end
 
 local function handles_root_level_file_test()
-    local parent = fs.path.parent(SEP .. "file.txt")
+    local parent = fs.path.parent(`$(SEP)file.txt`)
     assert(parent == SEP, `Expected '$SEP', got $parent`)
 end
 
 local function handles_trailing_separator_2_test()
     local parent = fs.path.parent(`a$(SEP)b$SEP`)
     -- Path "a/b/" - parent should be "a" (b is the "name")
-    assert(parent == "a" or parent == `a$(SEP)b`, "Got: " .. parent)
+    assert(parent == "a" or parent == `a$(SEP)b`, `Got: $parent`)
 end
 
 local function handles_just_root_test()
     local parent = fs.path.parent(SEP)
     -- Parent of root is root
-    assert(parent == SEP, "Got: " .. parent)
+    assert(parent == SEP, `Got: $parent`)
 end
 
 local function handles_relative_path_with_dot_dot_test()
     local parent = fs.path.parent(`..$(SEP)file.txt`)
-    assert(parent == "..", "Got: " .. parent)
+    assert(parent == "..", `Got: $parent`)
 end
 
 -- ============================================================================
@@ -267,7 +267,7 @@ local function separator_matches_platform_test()
     -- On POSIX systems separator should be /
     -- On Windows it should be \
     local sep = fs.path.separator
-    assert(sep == "/" or sep == "\\", "Unexpected separator: " .. sep)
+    assert(sep == "/" or sep == "\\", `Unexpected separator: $sep`)
 end
 
 -- ============================================================================
@@ -343,7 +343,7 @@ local function recursive_create_fails_if_file_blocks_path_test()
     -- Error message varies by platform: "is a file", "Not a directory", etc.
     assert(
         err:find("file") or err:find("directory") or err:find("blocker"),
-        "Error should be descriptive: " .. tostring(err)
+        `Error should be descriptive: $err`
     )
     cleanup_sandbox()
 end
@@ -375,7 +375,7 @@ local function returns_file_for_regular_file_test()
     local file = sandbox_path("regular.txt")
     write_file(file, "content")
     local t, is_link = fs.type(file)
-    assert(t == "file", "Expected 'file', got " .. tostring(t))
+    assert(t == "file", `Expected 'file', got $t`)
     assert(is_link == false)
     cleanup_sandbox()
 end
@@ -403,7 +403,7 @@ local function identifies_symlinks_test()
     write_file(target, "target content")
 
     local ok, err = catch fs.createlink(link, target)
-    assert(ok, "Could not create symlink: " .. tostring(err))
+    assert(ok, `Could not create symlink: $err`)
     local _t, is_link = fs.type(link)
     assert(is_link == true)
     cleanup_sandbox()
@@ -414,7 +414,7 @@ local function handles_empty_filename_component_test()
     -- Path with trailing separator
     local dir = sandbox_path("test_trailing")
     fs.createdirectory(dir)
-    local t = fs.type(dir .. SEP)
+    local t = fs.type(`$dir$SEP`)
     assert(t == "directory")
     cleanup_sandbox()
 end
@@ -434,7 +434,7 @@ local function lists_directory_contents_test()
     write_file(fs.path.join(dir, "c.lua"), "c")
 
     local entries = fs.list(dir)
-    assert(#entries == 3, "Expected 3 entries, got " .. #entries)
+    assert(#entries == 3, `Expected 3 entries, got $(#entries)`)
     cleanup_sandbox()
 end
 
@@ -484,7 +484,7 @@ local function supports_glob_pattern_test()
     write_file(fs.path.join(dir, "other.md"), "4")
 
     local txt_files = fs.list(dir, "*.txt")
-    assert(#txt_files == 2, "Expected 2 .txt files, got " .. #txt_files)
+    assert(#txt_files == 2, `Expected 2 .txt files, got $(#txt_files)`)
 
     local lua_files = fs.list(dir, "*.lua")
     assert(#lua_files == 1)
@@ -504,7 +504,7 @@ local function supports_glob_pattern_2_test()
     write_file(fs.path.join(dir, "a12.txt"), "")
 
     local matches = fs.list(dir, "a?.txt")
-    assert(#matches == 3, "Expected 3 matches for a?.txt, got " .. #matches)
+    assert(#matches == 3, `Expected 3 matches for a?.txt, got $(#matches)`)
     cleanup_sandbox()
 end
 
@@ -530,7 +530,7 @@ local function handles_directory_with_many_files_test()
     end
 
     local entries = fs.list(dir)
-    assert(#entries == 100, "Expected 100 entries, got " .. #entries)
+    assert(#entries == 100, `Expected 100 entries, got $(#entries)`)
     cleanup_sandbox()
 end
 
@@ -839,7 +839,7 @@ local function recursive_remove_handles_deep_nesting_test()
     for i = 1, 10 do
         fs.createdirectory(current)
         write_file(fs.path.join(current, `file$i.txt`), tostring(i))
-        current = fs.path.join(current, "level" .. i)
+        current = fs.path.join(current, `level$i`)
     end
 
     fs.createdirectory(current)
@@ -863,7 +863,7 @@ local function creates_symbolic_link_to_file_test()
     write_file(target, "target content")
 
     local ok, err = catch fs.createlink(link, target)
-    assert(ok, "Could not create symlink: " .. tostring(err))
+    assert(ok, `Could not create symlink: $err`)
     assert(file_exists(link))
     local _t, is_link = fs.type(link)
     assert(is_link == true)
@@ -879,7 +879,7 @@ local function creates_symbolic_link_to_directory_test()
     write_file(fs.path.join(target, "inside.txt"), "inside")
 
     local ok, err = catch fs.createlink(link, target)
-    assert(ok, "Could not create symlink: " .. tostring(err))
+    assert(ok, `Could not create symlink: $err`)
     local _t, is_link = fs.type(link)
     assert(is_link == true)
     cleanup_sandbox()
@@ -896,7 +896,7 @@ local function resolves_symbolic_link_test()
 
     -- Use simple filename for symlink target (relative to symlink's directory)
     local ok, err = catch fs.createlink(link, "follow_target.txt")
-    assert(ok, "Could not create symlink: " .. tostring(err))
+    assert(ok, `Could not create symlink: $err`)
     local resolved = fs.follow(link)
     assert(type(resolved) == "string")
     assert(resolved:find("follow_target"), "Resolved path should reference target")
@@ -980,7 +980,7 @@ end
 local function handles_very_long_filename_test()
     setup_sandbox()
     -- Create a long but valid filename
-    local long_name = string.rep("a", 100) .. ".txt"
+    local long_name = `$(string.rep("a", 100)).txt`
     local file = sandbox_path(long_name)
 
     if ok = catch write_file(file, "content") then
@@ -1034,7 +1034,7 @@ local function list_error_includes_directory_name_test()
     assert(ok == false)
     assert(
         err:find("nonexistent_dir_error_test") or err:find("cannot") or err:find("directory"),
-        "Error should be descriptive: " .. tostring(err)
+        `Error should be descriptive: $err`
     )
 end
 
@@ -1188,7 +1188,7 @@ local function the_replace_sequence_leaves_the_new_contents_test()
     setup_sandbox()
     local target = sandbox_path("config.json")
     write_file(target, "{}")
-    local tmp = target .. ".tmp"
+    local tmp = `$target.tmp`
     local f = assert(io.open(tmp, "w"))
     f:write('{"version": 2}')
     f:sync()

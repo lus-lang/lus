@@ -5,7 +5,7 @@
 -- early. Each test runs a script in a child process.
 pledge("load", "fs", "exec", "env")
 
-local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin/lus")
+local lus_bin = os.getenv("LUS_BIN") or `$TEST_DIR/../../runtime/zig-out/bin/lus`
 local windows = package.config:sub(1, 1) == "\\"
 local script_number = 0
 

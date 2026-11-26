@@ -273,7 +273,7 @@ local function catch_in_loop_test()
     local errors = 0
 
     for i = 1, 5 do
-        local ok = catch error("loop " .. i)
+        local ok = catch error(`loop $i`)
 
         if not ok then
             errors = errors + 1
@@ -335,7 +335,7 @@ end
 
 local function catch_multiple_times_in_sequence_test()
     for i = 1, 100 do
-        local ok = catch error("seq " .. i)
+        local ok = catch error(`seq $i`)
         assert(ok == false)
     end
 end
@@ -403,7 +403,7 @@ local function catch_with_assert_failure_test()
     -- assert call itself, not appear bare or blame another frame
     assert(
         err:match("errors_test%.lus:%d+: assert failed"),
-        "assert message should carry the caller's position prefix, got: " .. err
+        `assert message should carry the caller's position prefix, got: $err`
     )
 end
 
@@ -565,9 +565,9 @@ local function catch_with_multiple_sequential_errors_test()
     -- catches. Each caught error must carry its own message and the
     -- success immediately after it must be unaffected.
     for i = 1, 10 do
-        local ok, err = catch error("error " .. i)
+        local ok, err = catch error(`error $i`)
         assert(not ok)
-        assert(err:find("error " .. i, 1, true), `iteration $i saw the wrong message: $err`)
+        assert(err:find(`error $i`, 1, true), `iteration $i saw the wrong message: $err`)
         local ok2, val = catch (i * 2)
         assert(ok2 == true and val == i * 2)
     end

@@ -64,7 +64,7 @@ local function debug_getlocal_setlocal_in_coroutine_test()
     local ok, result = coroutine.resume(co)
     assert(ok)
     -- the resumed function itself computes with the mutated local
-    assert(result == 12, "the coroutine observes the new value, got " .. tostring(result))
+    assert(result == 12, `the coroutine observes the new value, got $result`)
 end
 
 local function parameter_names_test()

@@ -374,7 +374,7 @@ local function yield_takes_turns_in_arrival_order_test()
 
     local function body(name, n)
         for i = 1, n do
-            log[#log + 1] = name .. i
+            log[#log + 1] = `$name$i`
             yield()
         end
 
@@ -759,7 +759,7 @@ local function a_plain_coroutine_inside_a_detached_one_waits_test()
     local outer = spawn(function()
         local plain = create(function(prefix)
             local ok, v = resume(target)
-            local again = yield(prefix .. v)
+            local again = yield(`$prefix$v`)
             return again, ok
         end)
 
