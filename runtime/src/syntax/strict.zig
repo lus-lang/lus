@@ -8,7 +8,7 @@
 //! - A short string uses double quotes unless it holds a double quote.
 //! - The last field of a multi-line table ends with a comma.
 //! - A line holds at most 100 columns, unless a string or a comment
-//!   crosses the limit.
+//!   reaches the limit.
 //!
 //! Strict checking also raises the hints that name a Lus form of a
 //! Lua-era pattern to warnings (`promoted`).
@@ -291,7 +291,7 @@ const Checker = struct {
             var limit_off: ?u32 = null;
             while (it.nextCodepointSlice()) |cp| {
                 cols += 1;
-                if (cols == max_width + 1) limit_off = @intCast(@intFromPtr(cp.ptr) - @intFromPtr(c.src.ptr));
+                if (cols == max_width) limit_off = @intCast(@intFromPtr(cp.ptr) - @intFromPtr(c.src.ptr));
             }
             const at = limit_off orelse continue;
             if (c.inStringOrComment(at)) continue;

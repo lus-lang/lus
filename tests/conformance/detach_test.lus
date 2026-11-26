@@ -4,8 +4,8 @@
 -- run, and `coroutine.close` cancels it. Every test collects the
 -- coroutines it detaches, so no test leaves one behind.
 
-local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
-local status, close = coroutine.status, coroutine.close
+local create, detach, resume, yield from coroutine
+local status, close from coroutine
 
 -- Packs every return value with its count, so trailing nils compare too.
 local function pack(...)
@@ -303,7 +303,7 @@ local function detach_rejects_a_normal_coroutine_test()
 
     outer = create(function()
         local inner = create(function()
-            local ok, err = catch detach(outer)
+            local _ok, err = catch detach(outer)
             message = err
         end)
 
@@ -339,7 +339,7 @@ local function detach_rejects_the_main_thread_test()
     local message
 
     local co = create(function()
-        local ok, err = catch detach(main)
+        local _ok, err = catch detach(main)
         message = err
     end)
 
@@ -494,7 +494,7 @@ local function wrap_works_inside_a_detached_coroutine_test()
 
         local sum = 0
 
-        for i = 1, 4 do
+        for _i = 1, 4 do
             sum = sum + next()
             yield()
         end
@@ -788,7 +788,7 @@ local function two_levels_of_plain_coroutines_wait_test()
     local outer = spawn(function()
         local middle = create(function()
             local inner = coroutine.wrap(function()
-                local ok, v = resume(target)
+                local _ok, v = resume(target)
                 yield(v)
                 return v + 1
             end)
@@ -1173,7 +1173,7 @@ local function close_rejects_a_coroutine_that_runs_test()
 
     outer = spawn(function()
         local inner = create(function()
-            local ok, err = catch close(outer)
+            local _ok, err = catch close(outer)
             message = err
         end)
 
@@ -1305,7 +1305,7 @@ local function a_coroutine_that_waits_is_a_root_test()
 
     local function start()
         weak[spawn(function()
-            local ok, v = resume(target)
+            local _ok, v = resume(target)
             result = v
         end)] = true
     end
@@ -1376,7 +1376,7 @@ local function many_coroutines_come_and_go_test()
     local total = 0
     local last
 
-    for round = 1, 20 do
+    for _round = 1, 20 do
         local batch = {}
 
         for i = 1, 50 do

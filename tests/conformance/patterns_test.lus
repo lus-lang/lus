@@ -383,7 +383,7 @@ local function gmatch_advances_past_empty_matches_test()
     local acc = {}
 
     for x in string.gmatch("ab", "a*") do
-        table.insert(acc, "[" .. x .. "]")
+        table.insert(acc, `[$x]`)
     end
 
     assert(table.concat(acc) == "[a][]")
@@ -610,7 +610,7 @@ end
 -- Plain searches find needles at every offset, including long needles
 -- in subjects full of near matches.
 local function plain_find_at_every_offset_test()
-    local hay = string.rep("ab", 40) .. "needle" .. string.rep("ab", 40)
+    local hay = `$(string.rep("ab", 40))needle$(string.rep("ab", 40))`
     assert(hay:find("needle", 1, true) == 81)
     assert(hay:find("needle", 82, true) == nil)
     assert(hay:find("bab", 1, true) == 2)

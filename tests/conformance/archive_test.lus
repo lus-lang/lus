@@ -45,9 +45,10 @@ local function join(...)
     return out
 end
 
-local sample = "Hello, World! This is a test of the compression library. "
-    .. "We need enough data to make compression meaningful. "
-    .. string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
+local sample = `Hello, World! This is a test of the compression library. We need enough data to make compression meaningful. $(string.rep(
+    "abcdefghijklmnopqrstuvwxyz ",
+    20
+))`
 
 local empty = ""
 
@@ -333,12 +334,13 @@ end
 -- the process, which is what makes these tests able to fail.
 
 -- A compressible sample with enough redundancy that every codec shrinks it.
-local sample = "Hello, World! This is a test of the compression library. "
-    .. "We need enough data to make compression meaningful. "
-    .. string.rep("abcdefghijklmnopqrstuvwxyz ", 20)
+local sample = `Hello, World! This is a test of the compression library. We need enough data to make compression meaningful. $(string.rep(
+    "abcdefghijklmnopqrstuvwxyz ",
+    20
+))`
 
 -- The full set of codec names for table-driven matrices.
-local all_codecs = { "gzip", "deflate", "zstd", "brotli", "lz4" }
+local _all_codecs = { "gzip", "deflate", "zstd", "brotli", "lz4" }
 
 -- Flip a single bit at a 1-based byte position, returning a new vector. Used to
 -- inject deterministic corruption rather than relying on randomness.

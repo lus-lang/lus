@@ -6,10 +6,10 @@ local windows = package.config:sub(1, 1) == "\\"
 local function shell_quote(value)
     if windows then
         assert(not value:find('"', 1, true), "Windows test path contains a quote")
-        return '"' .. value .. '"'
+        return `"$value"`
     end
 
-    return "'" .. value:gsub("'", "'\\''") .. "'"
+    return `'$(value:gsub("'", "'\\''"))'`
 end
 
 local function command_for(reads, script)
@@ -33,15 +33,10 @@ local function command_with_init(init, command)
 
     if windows then
         assert(not value:find('"', 1, true), "Windows init path contains a quote")
-        return 'set "LUA_INIT_1_7=' .. value .. '"&&set "LUA_INIT=' .. value .. '"&&' .. command
+        return `set "LUA_INIT_1_7=$value"&&set "LUA_INIT=$value"&&$command`
     end
 
-    return "LUA_INIT_1_7="
-        .. shell_quote(value)
-        .. " LUA_INIT="
-        .. shell_quote(value)
-        .. " "
-        .. command
+    return `LUA_INIT_1_7=$(shell_quote(value)) LUA_INIT=$(shell_quote(value)) $command`
 end
 
 local function run(command)

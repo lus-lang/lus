@@ -111,7 +111,7 @@ end
 local function require_works_with_load_permission_test()
     with_baseline(BASE_A, function()
         -- We have load permission, so require should work
-        local ok, mod = catch require("tree.runner")
+        local ok, _mod = catch require("tree.runner")
         assert(ok, "require should work with load permission")
     end)
 end
@@ -237,9 +237,7 @@ end
 
 local function file_access_within_permitted_path_succeeds_test()
     with_baseline(BASE_A, function()
-        local f = io.open("tree/suite/enum.lus", "r")
-
-        if f then
+        if f = io.open("tree/suite/enum.lus", "r") then
             local content = f:read(100)
             f:close()
             assert(content ~= nil, "should read file content")
@@ -457,7 +455,7 @@ end
 local function wildcard_heavy_url_pattern_is_checked_in_linear_time_test()
     with_baseline(BASE_A, function()
         pledge("network:http=http://a*a*a*a*a*a*a*b/*")
-        local url = "http://" .. string.rep("a", 200) .. "/"
+        local url = `http://$(string.rep("a", 200))/`
         local t0 = os.clock()
         local ok = catch network.fetch(url)
         local elapsed = os.clock() - t0
@@ -473,7 +471,7 @@ local function state_is_sealed_after_pledge_seal_test()
         pledge("seal")
         -- Can verify by trying to pledge again
         -- After seal, pledge should either error or return false/nil
-        local ok, result = catch pledge("network")
+        local ok, result = catch pledge("network")  -- lus: allow(pledge-after-seal)
         -- Either it errors (ok is false) or it returns false/nil
         assert(not ok or not result, "pledge should fail or return falsy after seal")
     end)
@@ -481,7 +479,7 @@ end
 
 local function existing_permissions_still_work_after_seal_test()
     with_baseline(BASE_A, function()
-        pledge("seal")
+        pledge("seal")  -- lus: allow(pledge-after-seal)
         -- load should still work
         local fn = load("return 42")
         assert(fn ~= nil, "load should work after seal")
@@ -491,10 +489,9 @@ end
 
 local function file_reading_still_works_after_seal_with_granted_permission_test()
     with_baseline(BASE_A, function()
-        pledge("seal")
-        local f = io.open("tree/runner.lus", "r")
+        pledge("seal")  -- lus: allow(pledge-after-seal)
 
-        if f then
+        if f = io.open("tree/runner.lus", "r") then
             local content = f:read(10)
             f:close()
             assert(content ~= nil, "should still read permitted files after seal")
@@ -542,7 +539,7 @@ local malformed_permission_string_raises_cases = {
 local function malformed_permission_string_raises_test(perm, pattern)
     with_baseline(BASE_B, function()
         raises(function()
-            pledge(perm)
+            pledge(perm)  -- lus: allow(pledge-after-seal)
         end, pattern)
     end)
 end
@@ -558,7 +555,7 @@ local unanchored_fs_wildcard_pattern_is_refused_cases = {
 local function unanchored_fs_wildcard_pattern_is_refused_test(perm)
     with_baseline(BASE_B, function()
         raises(function()
-            pledge(perm)
+            pledge(perm)  -- lus: allow(pledge-after-seal)
         end, "absolute path")
     end)
 end
@@ -568,7 +565,7 @@ local function overlong_permission_name_is_refused_test()
         local huge = string.rep("a", 300)
 
         raises(function()
-            pledge(huge)
+            pledge(huge)  -- lus: allow(pledge-after-seal)
         end, "too long")
     end)
 end
@@ -578,7 +575,7 @@ end
 local function numeric_argument_is_coerced_to_a_string_then_rejected_as_unknown_test()
     with_baseline(BASE_B, function()
         raises(function()
-            pledge(42)
+            pledge(42)  -- lus: allow(pledge-after-seal)
         end, "unknown permission")
     end)
 end
@@ -593,7 +590,7 @@ local non_coercible_argument_raises_cases = {
 local function non_coercible_argument_raises_test(_, badarg)
     with_baseline(BASE_B, function()
         raises(function()
-            pledge(badarg)
+            pledge(badarg)  -- lus: allow(pledge-after-seal)
         end)
     end)
 end
@@ -601,7 +598,7 @@ end
 local function a_nil_argument_raises_test()
     with_baseline(BASE_B, function()
         raises(function()
-            pledge(nil)
+            pledge(nil)  -- lus: allow(pledge-after-seal)
         end)
     end)
 end
@@ -615,7 +612,7 @@ end
 local function pledge_all_always_raises_when_called_from_a_script_test()
     with_baseline(BASE_B, function()
         raises(function()
-            pledge("all")
+            pledge("all")  -- lus: allow(pledge-after-seal)
         end, "cannot be requested from scripts")
     end)
 end
@@ -628,7 +625,7 @@ end
 
 local function rejecting_a_fresh_permission_returns_true_test()
     with_baseline(BASE_B, function()
-        assert(pledge("~exec") == true)
+        assert(pledge("~exec") == true)  -- lus: allow(pledge-after-seal)
     end)
 end
 
@@ -636,32 +633,32 @@ end
 -- a silent false, because the program declared it never wants that capability.
 local function granting_a_rejected_permission_raises_was_rejected_test()
     with_baseline(BASE_B, function()
-        pledge("~exec")
+        pledge("~exec")  -- lus: allow(pledge-after-seal)
 
         raises(function()
-            pledge("exec")
+            pledge("exec")  -- lus: allow(pledge-after-seal)
         end, "was rejected")
     end)
 end
 
 local function rejecting_a_subpermission_form_returns_true_test()
     with_baseline(BASE_B, function()
-        assert(pledge("~network:tcp") == true)
+        assert(pledge("~network:tcp") == true)  -- lus: allow(pledge-after-seal)
     end)
 end
 
 local function rejecting_the_network_base_returns_true_test()
     with_baseline(BASE_B, function()
-        assert(pledge("~network") == true)
+        assert(pledge("~network") == true)  -- lus: allow(pledge-after-seal)
     end)
 end
 
 local function re_granting_the_rejected_network_base_raises_was_rejected_test()
     with_baseline(BASE_B, function()
-        pledge("~network")
+        pledge("~network")  -- lus: allow(pledge-after-seal)
 
         raises(function()
-            pledge("network")
+            pledge("network")  -- lus: allow(pledge-after-seal)
         end, "was rejected")
     end)
 end
@@ -669,7 +666,7 @@ end
 -- The rejection also denies the underlying capability at use time.
 local function network_use_is_denied_after_the_base_is_rejected_test()
     with_baseline(BASE_B, function()
-        pledge("~network")
+        pledge("~network")  -- lus: allow(pledge-after-seal)
 
         raises(function()
             network.tcp.connect("127.0.0.1", 1)
@@ -778,8 +775,8 @@ local function a_granted_symbolic_link_stays_bound_to_its_original_target_test()
         local original = dir_ok .. "/link_original.txt"
         local outside = dir_sibling .. "/link_outside.txt"
         local link = "./retargeted_pledge2_link"
-        assert(pledge("fs:write=" .. original) == true)
-        assert(pledge("fs:write=" .. outside) == true)
+        assert(pledge("fs:write=" .. original) == true)  -- lus: allow(pledge-after-seal)
+        assert(pledge("fs:write=" .. outside) == true)  -- lus: allow(pledge-after-seal)
         local first = io.open(original, "w")
         first:write("original")
         first:close()
@@ -787,10 +784,9 @@ local function a_granted_symbolic_link_stays_bound_to_its_original_target_test()
         second:write("outside")
         second:close()
         catch fs.remove(link)
-        local linked = catch fs.createlink(link, original)
 
-        if linked then
-            assert(pledge("fs:read=" .. link) == true)
+        if linked = catch fs.createlink(link, original) then
+            assert(pledge("fs:read=" .. link) == true)  -- lus: allow(pledge-after-seal)
             local readable = io.open(link, "r")
             assert(readable:read("a") == "original")
             readable:close()
@@ -820,7 +816,7 @@ end
 -- upgrading to global read access.
 local function valueless_fs_read_re_pledge_returns_true_test()
     with_baseline(BASE_B, function()
-        assert(pledge("fs:read") == true)
+        assert(pledge("fs:read") == true)  -- lus: allow(pledge-after-seal)
     end)
 end
 
@@ -844,7 +840,7 @@ end
 -- already-scoped grant.
 local function empty_value_fs_read_re_pledge_returns_true_test()
     with_baseline(BASE_B, function()
-        assert(pledge("fs:read=") == true)
+        assert(pledge("fs:read=") == true)  -- lus: allow(pledge-after-seal)
     end)
 end
 
@@ -896,7 +892,7 @@ end
 -- permission returns true and the seal returns true, in that order.
 local function grant_and_seal_in_a_single_call_both_return_true_test()
     with_baseline(BASE_B, function()
-        local granted, sealed = pledge("env=LUS_PLEDGE2_OK", "seal")
+        local granted, sealed = pledge("env=LUS_PLEDGE2_OK", "seal")  -- lus: allow(pledge-after-seal)
         assert(granted == true)
         assert(sealed == true)
     end)
@@ -904,8 +900,8 @@ end
 
 local function sealing_again_is_idempotent_and_returns_true_test()
     with_baseline(BASE_B, function()
-        pledge("seal")
-        assert(pledge("seal") == true)
+        pledge("seal")  -- lus: allow(pledge-after-seal)
+        assert(pledge("seal") == true)  -- lus: allow(pledge-after-seal)
     end)
 end
 
@@ -913,8 +909,8 @@ end
 -- check happens before any unknown-permission or rejection handling.
 local function a_new_grant_after_seal_returns_false_without_raising_test()
     with_baseline(BASE_B, function()
-        pledge("seal")
-        local ok, result = catch pledge("fs:read=./tree/tmp-pledge2/deep/*")
+        pledge("seal")  -- lus: allow(pledge-after-seal)
+        local ok, result = catch pledge("fs:read=./tree/tmp-pledge2/deep/*")  -- lus: allow(pledge-after-seal)
         assert(ok)
         assert(result == false)
     end)
@@ -924,9 +920,9 @@ end
 -- re-granting the earlier-rejected network base now returns false silently.
 local function granting_a_rejected_permission_after_seal_returns_false_without_test()
     with_baseline(BASE_B, function()
-        pledge("~network")
-        pledge("seal")
-        local ok, result = catch pledge("network")
+        pledge("~network")  -- lus: allow(pledge-after-seal)
+        pledge("seal")  -- lus: allow(pledge-after-seal)
+        local ok, result = catch pledge("network")  -- lus: allow(pledge-after-seal)
         assert(ok)
         assert(result == false)
     end)
@@ -934,8 +930,8 @@ end
 
 local function a_reject_request_after_seal_returns_false_without_raising_test()
     with_baseline(BASE_B, function()
-        pledge("seal")
-        local ok, result = catch pledge("~load")
+        pledge("seal")  -- lus: allow(pledge-after-seal)
+        local ok, result = catch pledge("~load")  -- lus: allow(pledge-after-seal)
         assert(ok)
         assert(result == false)
     end)
@@ -944,7 +940,7 @@ end
 -- Capabilities granted before the seal keep working afterwards.
 local function a_granted_read_still_works_after_seal_test()
     with_baseline(BASE_B, function()
-        pledge("seal")
+        pledge("seal")  -- lus: allow(pledge-after-seal)
         local f = io.open("./tree/runner.lus", "r")
         assert(f ~= nil)
         f:close()
@@ -953,7 +949,7 @@ end
 
 local function the_granted_env_variable_still_reads_after_seal_test()
     with_baseline(BASE_B, function()
-        pledge("seal")
+        pledge("seal")  -- lus: allow(pledge-after-seal)
         local ok = catch os.getenv("LUS_PLEDGE2_OK")
         assert(ok)
     end)
@@ -962,7 +958,7 @@ end
 -- Denials granted before the seal stay denied afterwards.
 local function an_out_of_scope_read_stays_denied_after_seal_test()
     with_baseline(BASE_B, function()
-        pledge("seal")
+        pledge("seal")  -- lus: allow(pledge-after-seal)
 
         raises(function()
             io.open("/etc/hostname", "r")
@@ -972,7 +968,7 @@ end
 
 local function network_stays_denied_after_seal_test()
     with_baseline(BASE_B, function()
-        pledge("seal")
+        pledge("seal")  -- lus: allow(pledge-after-seal)
 
         raises(function()
             network.tcp.connect("127.0.0.1", 1)
@@ -1014,10 +1010,10 @@ local function grant_order_test(first, second)
     for _, together in ipairs({ true, false }) do
         isolated(function()
             if together then
-                assert(select("#", pledge(first, second)) == 2)
+                assert(select("#", pledge(first, second)) == 2)  -- lus: allow(pledge-after-seal)
             else
-                assert(pledge(first))
-                assert(pledge(second))
+                assert(pledge(first))  -- lus: allow(pledge-after-seal)
+                assert(pledge(second))  -- lus: allow(pledge-after-seal)
             end
 
             local ok, err = catch os.getenv("LUS_PLEDGE_ORDER_X")
@@ -1029,7 +1025,7 @@ end
 -- Values of one permission and of its base permission add up.
 local function values_add_up_across_parts_test()
     isolated(function()
-        pledge("env=LUS_PLEDGE_BASE_*", "env:read=LUS_PLEDGE_PART_*")
+        pledge("env=LUS_PLEDGE_BASE_*", "env:read=LUS_PLEDGE_PART_*")  -- lus: allow(pledge-after-seal)
         assert(catch os.getenv("LUS_PLEDGE_BASE_X"))
         assert(catch os.getenv("LUS_PLEDGE_PART_X"))
 
@@ -1050,7 +1046,7 @@ end
 -- one call permit reading any file.
 local function bare_read_after_narrowed_read_test()
     isolated(function()
-        pledge("fs:read=./no-such-directory/*", "fs:read")
+        pledge("fs:read=./no-such-directory/*", "fs:read")  -- lus: allow(pledge-after-seal)
         local f = assert(io.open(TEST_DIR .. "/pledge_test.lus", "r"))
         f:close()
     end)
@@ -1059,7 +1055,7 @@ end
 -- A rejection still narrows whatever was granted.
 local function rejection_narrows_a_bare_grant_test()
     isolated(function()
-        pledge("env", "env:read=OTHER_*", "~env:read")
+        pledge("env", "env:read=OTHER_*", "~env:read")  -- lus: allow(pledge-after-seal)
 
         raises(function()
             os.getenv("LUS_PLEDGE_ORDER_X")

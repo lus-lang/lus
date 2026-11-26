@@ -49,7 +49,7 @@ When a file does not parse, the formatter leaves it unchanged, reports the synta
 - A blank line separates a block that spans several lines from the statements before and after it in the same scope. A block is a control structure, a function, or a statement whose value holds a function or a do-expression. The comments right above a block belong to it, so the blank line goes above them. A block at the start or at the end of its scope needs no blank line on that side.
 - A short string uses double quotes. It uses single quotes only when it holds a double quote.
 - A table goes on one line when it fits there and its source opens it on that line. Any other table puts each field on a line of its own and ends the last field with a comma.
-- A line holds at most 100 columns. A call that does not fit opens its last argument on the line of the call when that argument is a table or a function, and otherwise puts each argument on a line of its own. A chain of one operator that does not fit breaks before each operator, one level in. A string or a comment that crosses the limit stays as written.
+- A line holds at most 100 columns. A call that does not fit opens its last argument on the line of the call when that argument is a table or a function, and otherwise puts each argument on a line of its own. A chain of one operator that does not fit breaks before each operator, one level in. A line where a string or a comment reaches the limit stays as written.
 
 The following function is in the strict style.
 

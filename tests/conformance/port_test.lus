@@ -6,8 +6,8 @@
 -- binds port 0 on the loopback interface.
 pledge("network")
 
-local create, detach, resume = coroutine.create, coroutine.detach, coroutine.resume
-local status, close = coroutine.status, coroutine.close
+local create, detach, resume from coroutine
+local status, close from coroutine
 
 local function txt(v)
     if type(v) == "vector" then
@@ -139,7 +139,7 @@ local function ports_wait_inside_detached_coroutines_test()
             local conn = server:accept()
 
             detach(create(function()
-                local input, output = conn.input, conn.output
+                local input, output from conn
 
                 while true do
                     local _, line = resume(input)

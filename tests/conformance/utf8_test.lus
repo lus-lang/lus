@@ -126,7 +126,7 @@ local function boundary_codepoint_round_trips_test()
 end
 
 local function utf8_len_with_character_range_test()
-    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local s = `A$(utf8.char(0x20AC))B`
     assert(utf8.len(s) == 3)
     assert(utf8.len(s, 2, 2) == 1)
     assert(utf8.len(s, 1, 1) == 1)
@@ -153,7 +153,7 @@ local function rejects_overlong_encoding_test()
 end
 
 local function codes_iterates_mixed_multi_byte_correctly_test()
-    local s = "A" .. utf8.char(0xE9) .. utf8.char(0x20AC) .. utf8.char(0x1F600)
+    local s = `A$(utf8.char(0xE9))$(utf8.char(0x20AC))$(utf8.char(0x1F600))`
     local cps = {}
 
     for _, c in utf8.codes(s) do
@@ -181,7 +181,7 @@ local function charpattern_matches_exactly_one_character_test()
 end
 
 local function charpattern_over_mixed_text_yields_one_match_per_character_test()
-    local mixed = "A" .. utf8.char(0xE9) .. utf8.char(0x20AC) .. utf8.char(0x1F600)
+    local mixed = `A$(utf8.char(0xE9))$(utf8.char(0x20AC))$(utf8.char(0x1F600))`
     local count = 0
     local rebuilt = ""
 
@@ -266,7 +266,7 @@ local utf8_len_reports_nil_and_the_surrogate_position_cases = {
     { utf8.char(0xD800), 1 },
     { utf8.char(0xDFFF), 1 },
     { "A" .. utf8.char(0xD800), 2 },
-    { "ab" .. utf8.char(0xDBFF) .. "c", 3 },
+    { `ab$(utf8.char(0xDBFF))c`, 3 },
 }
 
 local function utf8_len_reports_nil_and_the_surrogate_position_test(s, pos)
@@ -308,7 +308,7 @@ local function utf8_len_empty_range_edges_count_zero_test()
 end
 
 local function utf8_len_negative_indices_resolve_from_the_end_test()
-    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local s = `A$(utf8.char(0x20AC))B`
     assert(utf8.len(s, -1) == 1)
     assert(utf8.len(s, 1, -1) == 3)
     assert(utf8.len(s, -2, -1) == 2)
@@ -317,7 +317,7 @@ end
 -- Group: utf8.codepoint
 
 local function utf8_codepoint_negative_indices_test()
-    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local s = `A$(utf8.char(0x20AC))B`
     assert(utf8.codepoint(s, -1) == 66)
     assert(utf8.codepoint(s, -2) == 0x20AC)
     local a, b, c = utf8.codepoint(s, -3, -1)
@@ -327,13 +327,13 @@ local function utf8_codepoint_negative_indices_test()
 end
 
 local function utf8_codepoint_default_j_equals_i_test()
-    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local s = `A$(utf8.char(0x20AC))B`
     assert(select("#", utf8.codepoint(s, 2)) == 1)
     assert(utf8.codepoint(s, 2) == 0x20AC)
 end
 
 local function utf8_codepoint_explicit_range_spans_multi_byte_characters_test()
-    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local s = `A$(utf8.char(0x20AC))B`
     local a, b, c = utf8.codepoint(s, 1, 3)
     assert(a == 65)
     assert(b == 0x20AC)
@@ -400,7 +400,7 @@ local function utf8_codes_over_an_empty_string_never_iterates_test()
 end
 
 local function utf8_codes_reports_character_positions_across_a_1_2_3_4_byte_mix_test()
-    local s = "A" .. utf8.char(0xE9) .. utf8.char(0x20AC) .. utf8.char(0x1F600)
+    local s = `A$(utf8.char(0xE9))$(utf8.char(0x20AC))$(utf8.char(0x1F600))`
     local positions = {}
     local codes = {}
 
@@ -414,10 +414,10 @@ local function utf8_codes_reports_character_positions_across_a_1_2_3_4_byte_mix_
 end
 
 local function utf8_codes_raises_on_a_lone_surrogate_mid_iteration_test()
-    local s = "A" .. utf8.char(0xD800) .. "b"
+    local s = `A$(utf8.char(0xD800))b`
     local last
 
-    local err = raises(function()
+    local _err = raises(function()
         for p in utf8.codes(s) do
             last = p
         end
@@ -554,7 +554,7 @@ end
 
 -- A character occupies one position, so both results of utf8.offset name the same position.
 local function utf8_offset_returns_the_character_position_twice_test()
-    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local s = `A$(utf8.char(0x20AC))B`
     assert(select("#", utf8.offset(s, 2)) == 2)
     local a, b = utf8.offset(s, 2)
     assert(a == 2)
@@ -562,20 +562,20 @@ local function utf8_offset_returns_the_character_position_twice_test()
 end
 
 local function utf8_offset_with_n_0_finds_the_enclosing_character_test()
-    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local s = `A$(utf8.char(0x20AC))B`
     assert(utf8.offset(s, 0, 2) == 2)
     assert(utf8.offset(s, 0, 1) == 1)
     assert(utf8.offset(s, 0, 3) == 3)
 end
 
 local function utf8_offset_counts_from_an_explicit_position_i_with_positive_n_test()
-    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local s = `A$(utf8.char(0x20AC))B`
     assert(utf8.offset(s, 1, 2) == 2)
     assert(utf8.offset(s, 2, 2) == 3)
 end
 
 local function utf8_offset_counts_backward_from_an_explicit_position_i_test()
-    local s = "A" .. utf8.char(0x20AC) .. "B"
+    local s = `A$(utf8.char(0x20AC))B`
     assert(utf8.offset(s, -1, 3) == 2)
 end
 

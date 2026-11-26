@@ -10,16 +10,16 @@ local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin
 
 local function shell_quote(value)
     if windows then
-        return '"' .. value .. '"'
+        return `"$value"`
     end
 
-    return "'" .. value:gsub("'", "'\\''") .. "'"
+    return `'$(value:gsub("'", "'\\''"))'`
 end
 
 local lus_cmd = shell_quote(lus_bin)
 
 local function run_lus(args)
-    local h = io.popen(lus_cmd .. " " .. args)
+    local h = io.popen(`$lus_cmd $args`)
     local out = h:read("a")
     h:close()
     return out
@@ -85,7 +85,7 @@ local function build_standalone(entry, output, includes, extra)
 end
 
 local function run_standalone(output)
-    local executable = "." .. path_separator .. output
+    local executable = `.$path_separator$output`
     return run_command(executable)
 end
 
@@ -96,7 +96,7 @@ end
 
 local function execute_string_test()
     local quote = windows and '"' or "'"
-    local out = run_lus("-e " .. quote .. "print(10*10)" .. quote)
+    local out = run_lus(`-e $(quote)print(10*10)$quote`)
     assert(string.find(out, "100"))
 end
 
@@ -116,9 +116,9 @@ local function stdin_execution_test()
     local cmd
 
     if windows then
-        cmd = "echo print(123) | " .. lus_cmd .. " -"
+        cmd = `echo print(123) | $lus_cmd -`
     else
-        cmd = "echo \"print(123)\" | " .. lus_cmd .. " -"
+        cmd = `echo "print(123)" | $lus_cmd -`
     end
 
     local h = io.popen(cmd)
@@ -230,9 +230,9 @@ f:close()
         "-Pfs:read=./" .. data,
     }, " "))
     assert(ok, out)
-    local ran, run_out = run_command("." .. path_separator .. output .. " ./" .. data)
+    local ran, run_out = run_command(`.$path_separator$output ./$data`)
     assert(ran and run_out:find("granted", 1, true), run_out)
-    local denied, denied_out = run_command("." .. path_separator .. output .. " ./" .. other)
+    local denied, denied_out = run_command(`.$path_separator$output ./$other`)
     assert(not denied, denied_out)
     assert(denied_out:find('permission "fs:read" denied', 1, true), denied_out)
     clean_fixture(root, output)
@@ -304,7 +304,7 @@ local function standalone_accepts_256_and_257_direct_include_arguments_test()
 
     for i = 1, 257 do
         local filename = path(root, string.format("m%03d.lus", i))
-        write_file(filename, "return " .. tostring(i) .. "\n")
+        write_file(filename, `return $(tostring(i))\n`)
         includes[i] = filename
     end
 
@@ -325,7 +325,7 @@ local function standalone_permits_1024_final_files_test()
     write_file(entry, "print('expanded-count-ok')\n")
 
     for i = 1, 1023 do
-        write_file(path(modules, string.format("m%04d.lus", i)), "return " .. tostring(i) .. "\n")
+        write_file(path(modules, string.format("m%04d.lus", i)), `return $(tostring(i))\n`)
     end
 
     local exact_ok, exact_out = build_standalone(entry, output, { modules })
@@ -343,7 +343,7 @@ local function standalone_rejects_1025_final_files_test()
     write_file(entry, "print('expanded-count-ok')\n")
 
     for i = 1, 1024 do
-        write_file(path(modules, string.format("m%04d.lus", i)), "return " .. tostring(i) .. "\n")
+        write_file(path(modules, string.format("m%04d.lus", i)), `return $(tostring(i))\n`)
     end
 
     local excess_ok, excess_out = build_standalone(entry, output, { modules })
@@ -365,14 +365,14 @@ local function same_build_compiler_chunks_round_trip_and_reject_header_damage_te
     local bytes = string.dump(fn)
     assert(#bytes > 5, "dump emitted a short chunk")
     write_file(chunk, bytes)
-    local ran, run_out = run_command(lus_cmd .. " " .. chunk)
+    local ran, run_out = run_command(`$lus_cmd $chunk`)
     assert(ran, run_out)
     assert(run_out:find("binary-round-trip", 1, true), run_out)
 
     local damaged = vector.clone(bytes)
     vector.set(damaged, 4, (vector.get(damaged, 4) + 1) & 0xff)
     write_file(corrupt, damaged)
-    local accepted, damage_out = run_command(lus_cmd .. " " .. corrupt)
+    local accepted, damage_out = run_command(`$lus_cmd $corrupt`)
     assert(not accepted, "damaged binary header was accepted")
     assert(
         damage_out:find("bad binary format", 1, true) or damage_out:find("binary", 1, true),
@@ -384,9 +384,9 @@ end
 local function a_syntax_error_at_a_letter_outside_ascii_reads_as_text_test()
     local tmp = "nonascii_name.lus"
     write_file(tmp, "local é = 1\n")
-    local _, out = run_command(lus_cmd .. " " .. tmp)
+    local _, out = run_command(`$lus_cmd $tmp`)
     assert(string.find(out, "nonascii_name.lus:1: unexpected symbol near 'é'", 1, true), out)
-    local _, checked = run_command(lus_cmd .. " check " .. tmp)
+    local _, checked = run_command(`$lus_cmd check $tmp`)
     assert(
         string.find(checked, "nonascii_name.lus:1:7: error: unexpected symbol near 'é'", 1, true),
         checked
@@ -448,9 +448,7 @@ local function temporary_files_need_a_grant_that_covers_them_test()
     local _, n = out:gsub("false\t[^\n]*permission \"fs:write\" denied for '[^']*/lu[as]_", "")
     assert(n == 2, out)
     local _, ok = run_command(
-        "TMPDIR=. "
-            .. lus_cmd
-            .. " -P 'fs:write=./*' -P fs:read -e 'local p = os.tmpname() print(p:sub(1, 6)) fs.remove(p)'"
+        `TMPDIR=. $lus_cmd -P 'fs:write=./*' -P fs:read -e 'local p = os.tmpname() print(p:sub(1, 6)) fs.remove(p)'`
     )
     assert(ok == "./lua_\n", ok)
 end
@@ -463,7 +461,7 @@ local function reading_standard_input_frees_its_buffer_test()
     end
 
     write_file("stdin_read.lus", "print(io.read())\nprint(io.stdin:read('a'))\n")
-    local ok, out = run_command("printf 'one\\ntwo\\n' | " .. lus_cmd .. " stdin_read.lus")
+    local ok, out = run_command(`printf 'one\\ntwo\\n' | $lus_cmd stdin_read.lus`)
     fs.remove("stdin_read.lus")
     assert(ok, out)
     assert(out == "one\ntwo\n\n", out)

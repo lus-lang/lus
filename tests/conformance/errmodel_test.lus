@@ -74,7 +74,7 @@ local non_string_payloads_are_caught_as_the_raw_value_cases = {
     },
 }
 
-local function non_string_payloads_are_caught_as_the_raw_value_test(label, make)
+local function non_string_payloads_are_caught_as_the_raw_value_test(_label, make)
     local value = make()
     local ok, err = catch error(value)
     assert(not ok)
@@ -249,7 +249,7 @@ end
 
 local function rethrowing_a_prefixed_first_line_at_level_0_keeps_it_unchang_test()
     local f = load("error('base')", "=rchunk")
-    local ok, err = catch f()
+    local _ok, err = catch f()
     local first = firstline(err)
     assert(first == "rchunk:1: base")
     local ok2, err2 = catch error(first, 0)
@@ -259,7 +259,7 @@ end
 
 local function rethrowing_the_full_caught_text_at_level_0_does_not_double_t_test()
     local f = load("error('base')", "=r2chunk")
-    local ok, err = catch f()
+    local _ok, err = catch f()
     local ok2, err2 = catch error(err, 0)
     assert(not ok2)
     assert(firstline(err2) == "r2chunk:1: base")
@@ -269,7 +269,7 @@ end
 -- byte for byte and repeated catch/rethrow cycles are stable.
 local function a_caught_error_rethrown_at_level_0_is_byte_identical_test()
     local f = load("error('base')", "=r3chunk")
-    local ok, err = catch f()
+    local _ok, err = catch f()
     assert(tbcount(err) == 0)
     local ok2, err2 = catch error(err, 0)
     assert(not ok2)
@@ -279,7 +279,7 @@ end
 
 local function rethrowing_at_level_1_prepends_a_fresh_position_prefix_test()
     local f = load("error('base')", "=r4chunk")
-    local ok, err = catch f()
+    local _ok, err = catch f()
     local first = firstline(err)
     local ok2, err2 = catch error(first)
     assert(not ok2)
@@ -465,7 +465,7 @@ end
 local function the_handler_runs_exactly_once_per_error_test()
     local calls = 0
 
-    local ok, err = catch[function(e)
+    local ok, err = catch[function(_e)
         calls = calls + 1
         return calls
     end] error("once")
@@ -476,7 +476,7 @@ local function the_handler_runs_exactly_once_per_error_test()
 end
 
 local function a_handler_referenced_through_a_local_variable_works_test()
-    local myh = function(e)
+    local myh = function(_e)
         return "local-h"
     end
 
@@ -581,22 +581,22 @@ end
 -- ============================================================================
 
 local function a_handler_returning_nothing_leaves_a_nil_error_slot_test()
-    local ok, err = catch[function(e)
+    local ok, err = catch[function(_e)
     end] error("z")
 
     assert(not ok)
     assert(err == nil)
 
-    assert(select("#", catch[function(e)
+    assert(select("#", catch[function(_e)
     end] error("z")) == 2)
 end
 
 local function only_the_handler_s_first_return_value_is_kept_test()
-    assert(select("#", catch[function(e)
+    assert(select("#", catch[function(_e)
         return 1, 2, 3
     end] error("m")) == 2)
 
-    local ok, first = catch[function(e)
+    local ok, first = catch[function(_e)
         return "x", "y", "z"
     end] error("m")
 
@@ -605,7 +605,7 @@ local function only_the_handler_s_first_return_value_is_kept_test()
 end
 
 local function extra_assignment_targets_are_nil_filled_on_a_handled_error_test()
-    local a, b, c, d = catch[function(e)
+    local a, b, c, d = catch[function(_e)
         return "only"
     end] error("m")
 
@@ -617,7 +617,7 @@ end
 
 local function a_handled_error_expands_to_two_values_in_a_table_constructor_test()
     local t = {
-        catch[function(e)
+        catch[function(_e)
             return "r"
         end] error("x", 0),
     }
@@ -632,7 +632,7 @@ end
 -- ============================================================================
 
 local function an_error_inside_the_handler_propagates_to_an_outer_catch_test()
-    local ok, err = catch (catch[function(e)
+    local ok, err = catch (catch[function(_e)
         error("handler boom", 0)
     end] error("orig"))
 
@@ -680,11 +680,11 @@ end
 
 local function nested_handlers_transform_their_own_errors_independently_test()
     local inner_h = function(e)
-        return "inner<" .. firstline(e) .. ">"
+        return `inner<$(firstline(e))>`
     end
 
     local outer_h = function(e)
-        return "outer<" .. firstline(e) .. ">"
+        return `outer<$(firstline(e))>`
     end
 
     local inner_seen
@@ -736,7 +736,7 @@ end
 
 local function a_call_table_handler_is_rejected_like_a_plain_table_test()
     local callable = setmetatable({}, {
-        __call = function(self, e)
+        __call = function(self, _e)
             return "callable"
         end,
     })

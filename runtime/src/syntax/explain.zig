@@ -139,7 +139,7 @@ pub const all = [_]Explanation{
     },
     .{
         .code = "line-too-long",
-        .text = "With `--strict`, a line holds at most 100 columns. `lus fmt --strict` wraps a long call, table, or chain of operators over several lines. A line that is long because a string or a comment crosses the limit is not reported, because only its author can shorten the text.",
+        .text = "With `--strict`, a line holds at most 100 columns. `lus fmt --strict` wraps a long call, table, or chain of operators over several lines. A line where a string or a comment reaches the limit is not reported, because only its author can shorten the text.",
         .flagged =
         \\global print
         \\local width, height, depth, margin = 1920, 1080, 32, 16

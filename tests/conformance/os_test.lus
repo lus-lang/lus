@@ -59,7 +59,7 @@ local function measures_cpu_time_consumed_by_a_busy_loop_test()
     -- until the clock moves, within a bound.
     local after = before
 
-    for round = 1, 1000 do
+    for _round = 1, 1000 do
         for i = 1, 1000000 do
             s = s + i * 0.5
         end
@@ -139,7 +139,7 @@ local a_missing_required_field_names_that_field_cases = {
 local function a_missing_required_field_names_that_field_test(tbl, field)
     raises(function()
         os.time(tbl)
-    end, "field '" .. field .. "' missing in date table")
+    end, `field '$field' missing in date table`)
 end
 
 -- a non-integer field raises 'is not an integer'

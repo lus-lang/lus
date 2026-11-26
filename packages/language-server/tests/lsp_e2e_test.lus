@@ -2,7 +2,7 @@
 -- that name onto the package directory next to the tests.
 local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 
-pledge("load", "fs:read=" .. LANG_DIR .. "/*")
+pledge("load", `fs:read=$LANG_DIR/*`)
 
 table.insert(package.searchers, 2, function(name)
     local rest = string.match(name, "^lus%-language%.(.+)$")
@@ -23,7 +23,7 @@ end)
 -- Override io.write to capture output BEFORE loading wasm.lus
 local capture_buffer = ""
 
-local original_write = io.write
+local _original_write = io.write
 
 io.write = function(...)
     for i = 1, select("#", ...) do
@@ -55,7 +55,7 @@ end
 
 local function send(msg)
     capture_buffer = ""
-    local ok, err = catch _lsp_handle(tojson(msg))
+    local ok, _err = catch _lsp_handle(tojson(msg))  -- lus: allow(undefined-global)
 
     if not ok then
         -- Server threw; return empty so callers see no diagnostics
@@ -108,9 +108,8 @@ local function parse_all_responses(raw)
 
         local body_start = header_end + 4
         local body = string.sub(raw, body_start, body_start + len - 1)
-        local ok, msg = catch fromjson(body)
 
-        if ok and msg then
+        if ok, msg = catch fromjson(body) then
             results[#results + 1] = msg
         end
 
@@ -270,9 +269,7 @@ local function assert_no_var_not_declared(diags, msg_prefix, allowed)
 
                 if not (varname and allowed[varname]) then
                     error(
-                        (msg_prefix or "")
-                            .. "Unexpected variable-not-declared error: "
-                            .. d.message
+                        `$((msg_prefix or ""))Unexpected variable-not-declared error: $(d.message)`
                     )
                 end
             end
@@ -349,7 +346,7 @@ local function typing_local_x_1_char_by_char_never_produces_var_not_declared_tes
     local _, _, results = type_chars(uri, 0, 0, "local x = 1")
 
     for _, r in ipairs(results) do
-        assert_no_var_not_declared(r.diagnostics, "after typing '" .. r.char .. "': ")
+        assert_no_var_not_declared(r.diagnostics, `after typing '$(r.char)': `)
     end
 
     close_doc(uri)
@@ -372,7 +369,7 @@ local function typing_local_function_f_end_char_by_char_never_produces_var_not_t
     local _, _, results = type_chars(uri, 0, 0, "local function f()\nend")
 
     for _, r in ipairs(results) do
-        assert_no_var_not_declared(r.diagnostics, "after typing '" .. r.char .. "': ")
+        assert_no_var_not_declared(r.diagnostics, `after typing '$(r.char)': `)
     end
 
     close_doc(uri)
@@ -384,7 +381,7 @@ local function typing_return_1_char_by_char_never_produces_var_not_declared_test
     local _, _, results = type_chars(uri, 0, 0, "return 1")
 
     for _, r in ipairs(results) do
-        assert_no_var_not_declared(r.diagnostics, "after typing '" .. r.char .. "': ")
+        assert_no_var_not_declared(r.diagnostics, `after typing '$(r.char)': `)
     end
 
     close_doc(uri)
@@ -396,7 +393,7 @@ local function typing_if_true_then_end_char_by_char_never_produces_var_not_test(
     local _, _, results = type_chars(uri, 0, 0, "if true then\nend")
 
     for _, r in ipairs(results) do
-        assert_no_var_not_declared(r.diagnostics, "after typing '" .. r.char .. "': ")
+        assert_no_var_not_declared(r.diagnostics, `after typing '$(r.char)': `)
     end
 
     close_doc(uri)
@@ -414,7 +411,7 @@ local function typing_practical_example_never_produces_var_not_declared_test()
     local _, _, results = type_chars(uri, 0, 0, "-- Practical example")
 
     for _, r in ipairs(results) do
-        assert_no_var_not_declared(r.diagnostics, "after typing '" .. r.char .. "': ")
+        assert_no_var_not_declared(r.diagnostics, `after typing '$(r.char)': `)
     end
 
     close_doc(uri)
@@ -437,7 +434,7 @@ local function typing_a_long_comment_char_by_char_is_clean_test()
     local _, _, results = type_chars(uri, 1, 0, "-- Hello world, this is a test comment")
 
     for _, r in ipairs(results) do
-        assert_no_var_not_declared(r.diagnostics, "after typing '" .. r.char .. "': ")
+        assert_no_var_not_declared(r.diagnostics, `after typing '$(r.char)': `)
     end
 
     close_doc(uri)

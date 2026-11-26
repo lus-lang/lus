@@ -13,10 +13,10 @@ local script_number = 0
 -- text between single quotes as it is.
 local function shell_quote(value)
     if windows then
-        return '"' .. value .. '"'
+        return `"$value"`
     end
 
-    return "'" .. value:gsub("'", "'\\''") .. "'"
+    return `'$(value:gsub("'", "'\\''"))'`
 end
 
 local function run_script(source)
@@ -192,5 +192,5 @@ local function a_failure_closes_pending_variables_and_keeps_the_traceback_test()
     end
 
     assert(string.find(report(closing), "'inner'", 1, true), closing)
-    assert(report(closing) == report(plain), report(closing) .. "\n---\n" .. report(plain))
+    assert(report(closing) == report(plain), `$(report(closing))\n---\n$(report(plain))`)
 end

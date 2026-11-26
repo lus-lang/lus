@@ -89,7 +89,7 @@ local function sweep(make, call)
             return k - 1
         end
 
-        assert(not ok and err == "fault", "call " .. k .. ": " .. tostring(err))
+        assert(not ok and err == "fault", `call $k: $(tostring(err))`)
         k = k + 1
     end
 end

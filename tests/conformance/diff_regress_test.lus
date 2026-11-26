@@ -19,7 +19,7 @@ local function error_in_close_during_nested_catch_unwind_test()
         local n = select("#", ...)
 
         for i = 1, n do
-            missing_global[i] = render(0)
+            missing_global[i] = render(0)  -- lus: allow(undefined-global)
         end
     end
 
@@ -34,7 +34,7 @@ local function error_in_close_during_nested_catch_unwind_test()
             end,
         })
 
-        local r = also_missing("")
+        local _r = also_missing("")  -- lus: allow(undefined-global)
     end
 
     local function unit()

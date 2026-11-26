@@ -31,9 +31,9 @@ local function a_finalizer_may_collect_garbage_with_finalizers_test()
     local ran = {}
 
     do
-        local outer = setmetatable({}, {
+        local outer = setmetatable({}, {  -- lus: allow(unused-local)
             __gc = function()
-                local inner = setmetatable({}, {
+                local inner = setmetatable({}, {  -- lus: allow(unused-local)
                     __gc = function()
                         ran[#ran + 1] = "inner"
                     end,

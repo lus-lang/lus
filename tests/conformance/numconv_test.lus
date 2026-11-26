@@ -701,7 +701,7 @@ local function floats_print_with_the_fewest_round_trip_digits_test()
         local digits = #(s:gsub("e.*", ""):gsub("%.0$", ""):gsub("[^%d]", ""):gsub("^0+", ""))
 
         if digits > 14 then
-            assert(tonumber(string.format("%." .. (digits - 1) .. "g", f)) ~= f, s)
+            assert(tonumber(string.format(`%.$((digits - 1))g`, f)) ~= f, s)
         end
     end
 end

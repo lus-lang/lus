@@ -185,7 +185,7 @@ local stat_templates = {
 local function expect_error(src, message)
     local fn, err = load(src, "=paths")
     assert(fn == nil, "compiled: " .. src)
-    assert(err:find(message, 1, true), src .. "\n" .. err)
+    assert(err:find(message, 1, true), `$src\n$err`)
 end
 
 local function an_error_in_each_expression_is_reported_test()
@@ -195,7 +195,7 @@ local function an_error_in_each_expression_is_reported_test()
         -- The same position with a valid expression compiles.
         local ok_src = prelude .. template:gsub("@", "a")
         local fn, err = load(ok_src, "=paths")
-        assert(fn, ok_src .. "\n" .. tostring(err))
+        assert(fn, `$ok_src\n$(tostring(err))`)
     end
 end
 
@@ -211,7 +211,7 @@ local function an_error_deep_in_nested_functions_is_reported_test()
     local src = bad_expr
 
     for _ = 1, 20 do
-        src = "(function() return " .. src .. " end)"
+        src = `(function() return $src end)`
     end
 
     expect_error("return " .. src, expr_message)

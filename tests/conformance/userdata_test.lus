@@ -11,7 +11,7 @@
   no fs pledge. Sockets require the `network` pledge.
 ]]
 
-pledge("load", "fs:read=" .. TEST_DIR .. "/*", "network")
+pledge("load", `fs:read=$TEST_DIR/*`, "network")
 
 -- Loopback sockets may be unavailable, so the socket tests skip when binding fails.
 local function bind_or_skip()

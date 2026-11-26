@@ -89,7 +89,7 @@ local every_comparison_operator_filters_cases = {
 
 local function every_comparison_operator_filters_test(op, expected)
     local t = people()
-    local q = load("local t = ... return @t as p where p.age " .. op .. " 30 select p.name")(t)
+    local q = load(`local t = ... return @t as p where p.age $op 30 select p.name`)(t)
     assert(#collect(q) == expected)
 end
 
@@ -295,12 +295,14 @@ local function every_aggregate_over_groups_test()
         { region = "west", amount = 50 },
         { region = "east", amount = 26 },
     }
+    -- lus: allow(line-too-long)
     local rows = collect(
         @sales as s
             select s.region, sum(s.amount) as total, count(*) as n, avg(s.amount) as mean, min(s.amount) as lo, max(s.amount) as hi
             group by s.region
             order by total desc
     )
+
     assert(#rows == 2)
     assert(rows[1].region == "east")
     assert(rows[1].total == 126)
@@ -330,12 +332,12 @@ local function min_and_max_validate_every_non_nil_value_test()
         local one_table = { { v = {} } }
 
         raises(function()
-            local make = load("local t = ... return @t as r select " .. name .. "(r.v) as value")
+            local make = load(`local t = ... return @t as r select $name(r.v) as value`)
             collect(make(one_boolean))
         end, "cannot aggregate a boolean value")
 
         raises(function()
-            local make = load("local t = ... return @t as r select " .. name .. "(r.v) as value")
+            local make = load(`local t = ... return @t as r select $name(r.v) as value`)
             collect(make(one_table))
         end, "cannot aggregate a table value")
 
@@ -344,9 +346,7 @@ local function min_and_max_validate_every_non_nil_value_test()
             { { v = "1" }, { v = 1 } },
         }) do
             raises(function()
-                local make = load(
-                    "local t = ... return @t as r select " .. name .. "(r.v) as value"
-                )
+                local make = load(`local t = ... return @t as r select $name(r.v) as value`)
                 collect(make(values))
             end, "cannot aggregate")
         end
@@ -1011,7 +1011,7 @@ end
 local function the_plan_names_providers_and_conjunct_shapes_test()
     local t = people()
 
-    local function opaque(p)
+    local function opaque(_p)
         return true
     end
 
@@ -1160,7 +1160,7 @@ local function a_query_iterator_built_outside_drives_inside_a_coroutine_test()
         return table.concat(acc, ",")
     end)
 
-    local ok, joined = coroutine.resume(co)
+    local ok, joined = coroutine.resume(co)  -- lus: allow(shadowed-local)
     assert(ok == true)
     assert(joined == "1,2,3")
 end
@@ -1207,7 +1207,7 @@ end
 local function coroutine_wrap_surfaces_the_boundary_error_as_a_raise_test()
     local t = { { a = 1 } }
 
-    local function pred(r)
+    local function pred(_r)
         coroutine.yield("mid-where")
         return true
     end
@@ -1303,7 +1303,7 @@ local function at_line(atline, q)
         src = src .. "\n"
     end
 
-    return src .. "\n" .. q
+    return `$src\n$q`
 end
 
 local function checkdiag(atline, q, fragment)
@@ -1311,7 +1311,7 @@ local function checkdiag(atline, q, fragment)
     assert(f == nil, "chunk must not compile: " .. q)
     local msg = tostring(err)
     assert(string.find(msg, fragment))
-    assert(string.find(msg, ":" .. atline .. ":"))
+    assert(string.find(msg, `:$atline:`))
 end
 
 -- Each documented query syntax error, pinned by message fragment and by a
@@ -1448,7 +1448,7 @@ local function serialize_groups(src)
     local out = {}
 
     for r in query(@(src) as x select x.c, count(*) as n group by x.c order by x.c, n) do
-        out[#out + 1] = r.c .. "=" .. r.n
+        out[#out + 1] = `$(r.c)=$(r.n)`
     end
 
     return table.concat(out, ",")
@@ -1607,7 +1607,7 @@ local function probe_counting_proves_the_split_test()
     local db <close> = freshdb()
     local calls = 0
 
-    local function probe(u)
+    local function probe(_u)
         calls = calls + 1
         return true
     end
@@ -1621,7 +1621,7 @@ local function a_fully_opaque_where_fetches_every_row_test()
     local db <close> = freshdb()
     local calls = 0
 
-    local function probe(u)
+    local function probe(_u)
         calls = calls + 1
         return false
     end
@@ -1675,7 +1675,7 @@ local function identical_data_gives_identical_results_through_both_providers_tes
                 select u.name, u.age
                 order by u.age desc, u.name
         ) do
-            out[#out + 1] = r.name .. "=" .. r.age
+            out[#out + 1] = `$(r.name)=$(r.age)`
         end
 
         return table.concat(out, ",")
@@ -1818,7 +1818,7 @@ local function per_source_conjuncts_push_while_the_join_runs_in_memory_test()
     local calls = 0
     local notes = { { who = "Alice" }, { who = "Bob" } }
 
-    local function probe(u, n)
+    local function probe(_u, _n)
         calls = calls + 1
         return true
     end
@@ -2154,7 +2154,7 @@ local function a_query_is_not_closable_test()
 end
 
 local function a_query_cannot_cross_a_worker_boundary_test()
-    pledge("load", "fs:read=" .. TEST_DIR .. "/*")
+    pledge("load", `fs:read=$TEST_DIR/*`)
     local q = @people as p select p.name
     local w = worker.create(TEST_DIR .. "/fixtures/worker/echo.lus")
     local ok, err = catch worker.send(w, q)
@@ -2180,7 +2180,7 @@ end
 -- Group: GC
 
 local function queries_survive_collection_and_keep_sources_alive_test()
-    local function build()
+    local function build()  -- lus: allow(shadowed-local)
         local hidden = { { n = 7 } }
         return @hidden as h select h.n
     end
@@ -2214,7 +2214,7 @@ local function discarded_queries_do_not_leak_test()
     local after = collectgarbage("count")
     assert(
         after < before + 256,
-        "10000 discarded queries must not retain memory, grew from " .. before .. " to " .. after
+        `10000 discarded queries must not retain memory, grew from $before to $after`
     )
 end
 
@@ -2233,9 +2233,7 @@ local function debug_parse_exposes_a_structured_query_node_test()
         end
 
         for _, v in pairs(node) do
-            local r = find(v, ty)
-
-            if r then
+            if r = find(v, ty) then
                 return r
             end
         end
@@ -2276,10 +2274,10 @@ local function wide_where(src, count)
 
     local f = assert(
         load(
-            "local src = ... local out = {} "
-                .. "for row in query(@src as r where "
-                .. table.concat(parts, " and ")
-                .. " select r.n order by r.n) do out[#out + 1] = row.n end return out"
+            `local src = ... local out = {} for row in query(@src as r where $(table.concat(
+                parts,
+                " and "
+            )) select r.n order by r.n) do out[#out + 1] = row.n end return out`
         )
     )
     return f(src)
@@ -2306,7 +2304,7 @@ local function a_wide_where_over_sqlite_matches_the_plain_table_test()
     local t = {}
 
     for n = 1, 120 do
-        db:exec("INSERT INTO t VALUES (" .. n .. ")")
+        db:exec(`INSERT INTO t VALUES ($n)`)
         t[#t + 1] = { n = n }
     end
 
@@ -2355,11 +2353,11 @@ local function canonical(rows)
         local f = {}
 
         for k, v in pairs(r) do
-            f[#f + 1] = tostring(k) .. "=" .. tostring(v)
+            f[#f + 1] = `$(tostring(k))=$(tostring(v))`
         end
 
         table.sort(f)
-        parts[#parts + 1] = "{" .. table.concat(f, ",") .. "}"
+        parts[#parts + 1] = `{$(table.concat(f, ","))}`
     end
 
     table.sort(parts)

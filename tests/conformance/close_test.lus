@@ -75,7 +75,7 @@ local function non_closable_declaration_values_error_at_declaration_time_test(la
 
     local ok, err = catch decl()
     assert(ok == false, label .. " must be rejected")
-    assert(string.find(tostring(err), "non%-closable"), label .. ": " .. tostring(err))
+    assert(string.find(tostring(err), "non%-closable"), `$label: $(tostring(err))`)
 end
 
 local function the_non_closable_error_names_the_variable_test()
@@ -321,7 +321,7 @@ end
 local function break_out_of_an_inner_loop_closes_only_the_inner_variable_test()
     local log = {}
 
-    for i = 1, 1 do
+    for _i = 1, 1 do
         local outer <close> = func2close(function()
             log[#log + 1] = "outer"
         end)
@@ -619,7 +619,7 @@ local function catch_reports_the_original_error_after_a_successful_close_test()
     assert(not rawequal(err, zobj), "catch returned the closed object itself instead of the error")
     assert(
         type(err) == "string" and string.find(err, "@body"),
-        "expected the '@body' message, got a " .. type(err) .. ": " .. tostring(err)
+        `expected the '@body' message, got a $(type(err)): $(tostring(err))`
     )
 end
 
@@ -862,13 +862,13 @@ end
 local function the_fourth_for_list_value_is_closed_when_the_loop_ends_test()
     local closed = false
 
-    local function iter(s, c)
+    local function iter(_s, c)
         if c < 2 then
             return c + 1
         end
     end
 
-    for i in iter, nil, 0, func2close(function(_, e)
+    for _i in iter, nil, 0, func2close(function(_, e)
         closed = (e == nil)
     end) do
     end
@@ -879,7 +879,7 @@ end
 local function the_fourth_for_list_value_is_closed_on_break_test()
     local closed = false
 
-    local function iter(s, c)
+    local function iter(_s, c)
         if c < 10 then
             return c + 1
         end
@@ -897,7 +897,7 @@ local function the_fourth_for_list_value_is_closed_on_break_test()
 end
 
 local function a_non_closable_fourth_for_list_value_errors_at_loop_entry_test()
-    local function iter(s, c)
+    local function iter(_s, c)
         if c < 2 then
             return c + 1
         end
@@ -906,7 +906,7 @@ local function a_non_closable_fourth_for_list_value_errors_at_loop_entry_test()
     local entered = false
 
     local function run()
-        for i in iter, nil, 0, 42 do
+        for _i in iter, nil, 0, 42 do
             entered = true
         end
     end
@@ -920,14 +920,14 @@ end
 local function an_error_in_the_loop_body_closes_the_closing_state_with_that_test()
     local seen = "unset"
 
-    local function iter(s, c)
+    local function iter(_s, c)
         if c < 5 then
             return c + 1
         end
     end
 
     local function body()
-        for i in iter, nil, 0, func2close(function(_, m)
+        for _i in iter, nil, 0, func2close(function(_, m)
             seen = m
         end) do
             error("@loop", 0)

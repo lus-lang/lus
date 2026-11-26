@@ -164,7 +164,7 @@ local function closing_closes_the_pipes_and_waits_test()
         child.stdin:write("12345")
     end
 
-    local success, how, code = p:poll()
+    local success, _how, code = p:poll()
     assert(success == true and code == 0)
 end
 
@@ -250,7 +250,7 @@ end
 local function a_path_grant_covers_programs_below_it_test()
     local real = fs.path.parent(lus_bin)
     local code = 'io.write(tostring((catch os.spawn({bin, "-e", ""}))), " ", tostring((catch os.spawn({"lus-spawn-test-denied"}))))'
-    assert(under({ "exec=" .. real .. "/*" }, code) == "true false")
+    assert(under({ `exec=$real/*` }, code) == "true false")
 end
 
 local function a_name_grant_covers_the_name_as_written_test()

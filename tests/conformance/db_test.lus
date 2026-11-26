@@ -2,7 +2,7 @@ pledge("load", "debug")
 
 local debug = require "debug"
 
-local function dostring(s)
+local function dostring(s)  -- lus: allow(unused-function)
     return assert(load(s))()
 end
 
@@ -36,7 +36,7 @@ end
 local function file_and_string_names_truncation_test()
     local a = "function f () end"
     assert(load(a))()
-    assert(debug.getinfo(_G.f).short_src == string.format('[string "%s"]', a))
+    assert(debug.getinfo(_G.f).short_src == `[string "$a"]`)
 
     assert(load(a, "@xuxu"))()
     assert(debug.getinfo(_G.f).short_src == "xuxu")
@@ -68,8 +68,8 @@ local function debug_getlocal_setlocal_in_coroutine_test()
 end
 
 local function parameter_names_test()
-    local function foo(a, b, ...)
-        local d, e
+    local function foo(a, b, ...)  -- lus: allow(unused-param)
+        local d, e  -- lus: allow(unused-local)
     end
 
     local co = coroutine.create(foo)
@@ -90,7 +90,7 @@ local function invalid_levels_in_getlocal_setlocal_test()
 end
 
 local function varargs_in_getlocal_test()
-    local function foo(a, ...)
+    local function foo(a, ...)  -- lus: allow(unused-param)
         local t = table.pack(...)
 
         for i = 1, t.n do
@@ -142,9 +142,9 @@ local function upvalue_access_comprehensive_test()
         return t
     end
 
-    local a, b, c = 1, 2, 3
+    local a, b, c = 1, 2, 3  -- lus: allow(unused-local)
 
-    local function foo1(a)
+    local function foo1(a)  -- lus: allow(shadowed-local)
         b = a
         return c
     end
@@ -217,28 +217,28 @@ end
 local function count_hooks_test()
     local a = 0
 
-    debug.sethook(function(e)
+    debug.sethook(function(e)  -- lus: allow(unused-param)
         a = a + 1
     end, "", 1)
 
     a = 0
 
-    for i = 1, 100 do
+    for i = 1, 100 do  -- lus: allow(unused-loop-var)
     end
 
     assert(100 < a and a < 120)
 
-    debug.sethook(function(e)
+    debug.sethook(function(e)  -- lus: allow(unused-param)
         a = a + 1
     end, "", 4)
 
     a = 0
 
-    for i = 1, 100 do
+    for i = 1, 100 do  -- lus: allow(unused-loop-var)
     end
 
     assert(25 < a and a < 35)
-    local f, m, c = debug.gethook()
+    local f, m, c = debug.gethook()  -- lus: allow(unused-local)
     assert(m == "" and c == 4)
     debug.sethook()
 end
@@ -247,12 +247,12 @@ local function nparams_nups_isvararg_test()
     local t = debug.getinfo(print, "u")
     assert(t.isvararg == true and t.nparams == 0 and t.nups == 0)
 
-    t = debug.getinfo(function(a, b, c)
+    t = debug.getinfo(function(a, b, c)  -- lus: allow(unused-param)
     end, "u")
 
     assert(t.isvararg == false and t.nparams == 3 and t.nups == 0)
 
-    t = debug.getinfo(function(a, b, ...)
+    t = debug.getinfo(function(a, b, ...)  -- lus: allow(unused-param)
         return t[a]
     end, "u")
 
@@ -280,7 +280,7 @@ local function tail_calls_test()
     end
 
     local function h(x)
-        local f = g
+        local f = g  -- lus: allow(shadowed-local)
         return f(x)
     end
 

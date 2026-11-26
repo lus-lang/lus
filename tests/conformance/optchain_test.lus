@@ -120,7 +120,7 @@ local function chained_method_calls_test()
     local obj = {
         getInner = function(self)
             return {
-                getValue = function(self2)
+                getValue = function(_self2)
                     return 100
                 end,
             }

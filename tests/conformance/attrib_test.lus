@@ -64,7 +64,7 @@ end
 
 local function package_preload_test()
     local p = package
-    package = {}
+    package = {}  -- lus: allow(implicit-global)
 
     p.preload.pl = function(...)
         local _ENV = { ... }
@@ -76,7 +76,7 @@ local function package_preload_test()
         return { xuxu = xuxu, ... }
     end
 
-    local pl, ext = require "pl"
+    local pl, _ext = require "pl"
     assert(require "pl" == pl)
     assert(pl.xuxu(10) == 30)
     assert(pl[1] == "pl")
@@ -210,12 +210,12 @@ local function table_indexing_with_various_types_test()
     a[print](a[a[f]] == a[print])
 
     assert(not (catch (function()
-        local a = {}
+        local a = {}  -- lus: allow(shadowed-local)
         a[nil] = 10
     end)()))
 
     assert(not (catch (function()
-        local a = { [nil] = 10 }
+        local _a = { [nil] = 10 }
     end)()))
 
     assert(a[nil] == nil)
@@ -229,9 +229,9 @@ local function constructors_with_thousands_of_constant_keys_test()
         keyed[#keyed + 1] = `["s$i"] = $i, [$(i + 0.5)] = $i`
     end
 
-    local t = load("return { " .. table.concat(named, ", ") .. " }")()
+    local t = load(`return { $(table.concat(named, ", ")) }`)()
     assert(t.k1 == 1 and t.k2000 == 2000)
-    local u = load("return { 1, " .. table.concat(keyed, ", ") .. ", 2 }")()
+    local u = load(`return { 1, $(table.concat(keyed, ", ")), 2 }`)()
     assert(u.s1999 == 1999 and u[1999.5] == 1999 and u[1] == 1 and u[2] == 2)
 end
 
@@ -242,7 +242,7 @@ local function complex_table_constructor_test()
 
     local a, b, c
     a = { 10, 9, 8, 7, 6, 5, 4, 3, 2, [-3] = "a", [f] = print, a = "a", b = "ab" }
-    a, a.x, a.y = a, a[-3]
+    a, a.x, a.y = a, a[-3]  -- lus: allow(self-assign)
     assert(a[1] == 10 and a[-3] == a.a and a[f] == print and a.x == "a" and not a.y)
     a[1], f(a)[2], b, c = { alo = assert }, 10, a[1], a[f], 6, 10, 23, f(a), 2
     a[1].alo(a[2] == 10 and b == 10 and c == print)
@@ -339,7 +339,7 @@ local function multiple_assignment_with_upvalues_test()
     assert(i == 2 and b[1] == 1 and a == 1 and j == b and b[2] == 2 and b[3] == 1)
     local t = {}
 
-    (function(a)
+    (function(a)  -- lus: allow(shadowed-local)
         t[a], a = 10, 20
     end)(1)
 

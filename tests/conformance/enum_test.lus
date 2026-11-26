@@ -177,14 +177,14 @@ end
 local function cross_root_greater_than_raises_error_test()
     local e1 = enum a, b end
     local e2 = enum x, y end
-    local ok, err = catch (e1.b > e2.x)
+    local ok, _err = catch (e1.b > e2.x)
     assert(ok == false)
 end
 
 local function cross_root_greater_equal_raises_error_test()
     local e1 = enum a, b end
     local e2 = enum x, y end
-    local ok, err = catch (e1.b >= e2.x)
+    local ok, _err = catch (e1.b >= e2.x)
     assert(ok == false)
 end
 

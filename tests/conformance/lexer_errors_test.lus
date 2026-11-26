@@ -42,10 +42,7 @@ local function checkfail(src, ...)
     local needles = { ... }
 
     for i = 1, #needles do
-        assert(
-            has(msg, needles[i]),
-            "expected error to contain '" .. needles[i] .. "' but got: " .. msg
-        )
+        assert(has(msg, needles[i]), `expected error to contain '$(needles[i])' but got: $msg`)
     end
 
     return msg
@@ -252,7 +249,7 @@ end
 -- report the error on line 3 whether the terminator is LF, CRLF, or CR. Each
 -- source places an unfinished string on the third line.
 local function three_line_source(sep)
-    return "local a = 1" .. sep .. "local b = 2" .. sep .. 'local c = "bad'
+    return `local a = 1$(sep)local b = 2$(sep)local c = "bad`
 end
 
 -- reports line 3 for an unfinished string
@@ -271,7 +268,7 @@ end
 -- A malformed number on line 3 is likewise reported on line 3 for every line
 -- ending style, confirming the line counter advances on each terminator form.
 local function three_line_number(sep)
-    return "local a = 1" .. sep .. "local b = 2" .. sep .. "local c = 0x"
+    return `local a = 1$(sep)local b = 2$(sep)local c = 0x`
 end
 
 -- reports line 3 for a malformed number
@@ -356,8 +353,8 @@ end
 
 -- The [string "..."] form cuts a long first line on a character boundary.
 local function the_string_form_cuts_on_a_character_boundary_test()
-    local src = "--" .. string.rep("a", 42) .. "é\nx = = 1"
+    local src = `--$(string.rep("a", 42))é\nx = = 1`
     local f, msg = load(src)
     assert(f == nil)
-    assert(has(msg, '[string "--' .. string.rep("a", 42) .. '..."]:2:'), msg)
+    assert(has(msg, `[string "--$(string.rep("a", 42))..."]:2:`), msg)
 end

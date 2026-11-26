@@ -233,7 +233,7 @@ local name_and_name_placeholders_bind_too_cases = { { "@" }, { "$" } }
 
 local function name_and_name_placeholders_bind_too_test(sigil)
     local db <close> = fresh()
-    db:run("INSERT INTO users (name, age) VALUES (" .. sigil .. "name, " .. sigil .. "age)", {
+    db:run(`INSERT INTO users (name, age) VALUES ($(sigil)name, $(sigil)age)`, {
         name = "Eve",
         age = 33,
     })
@@ -572,7 +572,7 @@ end
 
 local function interpolated_hostile_values_reach_the_database_as_data_test()
     local db <close> = io.sqlite(":memory:")
-    local fragment = [[quo"te, back\slash, per%cent and 'single']]
+    local _fragment = [[quo"te, back\slash, per%cent and 'single']]
     local hostile = `built by interpolation: {fragment} #{1 + 1}`
 
     for row in db:query("SELECT ? AS s", hostile) do
@@ -585,8 +585,8 @@ local function nested_iteration_over_one_database_works_test()
     seed(db)
     local pairs_seen = 0
 
-    for a in db:query("SELECT name FROM users") do
-        for b in db:query("SELECT name FROM users") do
+    for _a in db:query("SELECT name FROM users") do
+        for _b in db:query("SELECT name FROM users") do
             pairs_seen = pairs_seen + 1
         end
     end
@@ -598,7 +598,7 @@ local function breaking_out_of_a_query_loop_releases_the_statement_test()
     local db <close> = fresh()
     seed(db)
 
-    for row in db:query("SELECT * FROM users") do
+    for _row in db:query("SELECT * FROM users") do
         break
     end
 
@@ -1010,7 +1010,7 @@ local function the_weak_registry_does_not_retain_dropped_statements_test()
     local db = io.sqlite(":memory:")
 
     do
-        local stmt = db:prepare("SELECT 1")
+        local stmt = db:prepare("SELECT 1")  -- lus: allow(unused-local)
         stmt = nil
     end
 
@@ -1033,7 +1033,7 @@ end
 
 local function a_database_handle_cannot_cross_a_worker_boundary_test()
     local db <close> = io.sqlite(":memory:")
-    pledge("fs:read=" .. TEST_DIR .. "/*")
+    pledge(`fs:read=$TEST_DIR/*`)
     local w = worker.create(TEST_DIR .. "/fixtures/worker/echo.lus")
     local ok, err = catch worker.send(w, db)
     assert(not ok, "sending a database must fail")
@@ -1086,7 +1086,7 @@ with_grants(function()
 end)
 
 local function dbpath(name)
-    return SANDBOX .. "/" .. name
+    return `$SANDBOX/$name`
 end
 
 -- Group: persistence
@@ -1214,7 +1214,7 @@ local function mode_r_skips_the_write_pledge_and_surfaces_sqlite_s_error_test()
     with_grants(function()
         -- sqlite_ro_* paths carry a read grant only, and the file does not
         -- exist, so the failure is SQLite's and never a permission denial
-        local ok, err = catch io.sqlite("./sqlite_ro_" .. RUN .. ".db", "r")
+        local ok, err = catch io.sqlite(`./sqlite_ro_$RUN.db`, "r")
         assert(not ok, "opening a missing file read-only fails")
         assert(string.find(tostring(err), "unable to open"))
         assert(
@@ -1228,7 +1228,7 @@ end
 
 local function an_ungranted_path_is_denied_at_open_test()
     with_grants(function()
-        local ok, err = catch io.sqlite("./elsewhere_" .. RUN .. "/x.db")
+        local ok, err = catch io.sqlite(`./elsewhere_$RUN/x.db`)
         assert(not ok)
         assert(string.find(tostring(err), 'permission "fs:read" denied'))
     end)
@@ -1236,7 +1236,7 @@ end
 
 local function a_read_only_grant_denies_the_default_writable_mode_test()
     with_grants(function()
-        local ok, err = catch io.sqlite("./sqlite_ro_" .. RUN .. ".db")
+        local ok, err = catch io.sqlite(`./sqlite_ro_$RUN.db`)
         assert(not ok)
         assert(string.find(tostring(err), 'permission "fs:write" denied'))
     end)
@@ -1246,7 +1246,7 @@ local function sidecar_creation_requires_a_matching_write_grant_test()
     with_grants(function()
         -- Reads cover the database and every sidecar. Writes cover only the
         -- database, so the VFS rejects the first writable sidecar operation.
-        local ok, err = catch io.sqlite("./exactdb_" .. RUN .. ".db")
+        local ok, err = catch io.sqlite(`./exactdb_$RUN.db`)
         assert(not ok)
         assert(string.find(tostring(err), 'permission "fs:write" denied'))
         assert(string.find(tostring(err), "exactdb_"))

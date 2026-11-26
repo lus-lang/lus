@@ -1,7 +1,7 @@
 pledge("load")
 
 -- ===== locals =====
-local debug = require "debug"
+local _debug = require "debug"
 
 local function func2close(f, x, y)
     local obj = setmetatable({}, { __close = f })
@@ -18,21 +18,21 @@ local function local_variables_scope_test()
     local i = 10
 
     do
-        local i = 100
+        local i = 100  -- lus: allow(shadowed-local)
         assert(i == 100)
     end
 
     do
-        local i = 1000
+        local i = 1000  -- lus: allow(shadowed-local)
         assert(i == 1000)
     end
 
     assert(i == 10)
 
     if i ~= 10 then
-        local i = 20
+        local _i = 20
     else
-        local i = 30
+        local i = 30  -- lus: allow(shadowed-local)
         assert(i == 30)
     end
 end
@@ -42,10 +42,10 @@ local function function_with_locals_test()
     local function f(a)
         local x = 3
         local b = a
-        local c, d = a, b
+        local _c, d = a, b
 
         if (d == b) then
-            local x = "q"
+            local x = "q"  -- lus: allow(shadowed-local)
             x = b
             assert(x == 2)
         end
@@ -133,7 +133,7 @@ local function to_be_closed_with_return_test()
 
     assert(x == 100)
 
-    local function foo(x)
+    local function foo(x)  -- lus: allow(shadowed-local)
         local _ <close> = closescope
         return x, X, 23
     end
@@ -153,8 +153,8 @@ local function to_be_closed_x_compile_time_constants_test()
         end,
     })
 
-    local y <const> = nil
-    local z <const> = nil
+    local y <const> = nil  -- lus: allow(unused-local)
+    local z <const> = nil  -- lus: allow(unused-local)
 
     do
         local a <close> = x

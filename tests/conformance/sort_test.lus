@@ -486,7 +486,7 @@ local function default_sort_dispatches_through_lt_metamethod_test()
     table.sort(a)
 
     for i = 1, 5 do
-        assert(a[i].v == i, "expected " .. i .. " at position " .. i .. " got " .. a[i].v)
+        assert(a[i].v == i, `expected $i at position $i got $(a[i].v)`)
     end
 end
 

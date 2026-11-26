@@ -43,7 +43,7 @@ local function setup()
     end
 
     count = count + 1
-    ROOT = BASE .. "-" .. count
+    ROOT = `$BASE-$count`
     fs.createdirectory(fs.path.join(ROOT, "sub"), true)
 end
 
@@ -68,7 +68,7 @@ local function collect(w, n)
     for i = 1, n do
         local ok, ev = coroutine.resume(w)
         assert(ok, ev)
-        out[i] = ev.kind .. " " .. ev.path:sub(#ROOT + 2):gsub("\\", "/")
+        out[i] = `$(ev.kind) $(ev.path:sub(#ROOT + 2):gsub("\\", "/"))`
     end
 
     return table.concat(out, ", ")

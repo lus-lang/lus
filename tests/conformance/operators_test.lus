@@ -170,42 +170,24 @@ local function run(f, ...)
 end
 
 local function check(op, a, b)
-    local both = compiled("return function(a, b) return a " .. op .. " b end")
+    local both = compiled(`return function(a, b) return a $op b end`)
     local ok1, v1 = run(both, a[1], b[1])
 
     if b[2] then
-        local right = compiled("return function(a) return a " .. op .. " (" .. b[2] .. ") end")
+        local right = compiled(`return function(a) return a $op ($(b[2])) end`)
         local ok2, v2 = run(right, a[1])
         assert(
             ok1 == ok2 and (not ok1 or same(v1, v2)),
-            string.format(
-                "%s %s %s: %s %s against %s %s",
-                tostring(a[1]),
-                op,
-                b[2],
-                ok1,
-                tostring(v1),
-                ok2,
-                tostring(v2)
-            )
+            `$(tostring(a[1])) $op $(b[2]): $ok1 $(tostring(v1)) against $ok2 $(tostring(v2))`
         )
     end
 
     if a[2] then
-        local left = compiled("return function(b) return (" .. a[2] .. ") " .. op .. " b end")
+        local left = compiled(`return function(b) return ($(a[2])) $op b end`)
         local ok3, v3 = run(left, b[1])
         assert(
             ok1 == ok3 and (not ok1 or same(v1, v3)),
-            string.format(
-                "%s %s %s: %s %s against %s %s",
-                a[2],
-                op,
-                tostring(b[1]),
-                ok1,
-                tostring(v1),
-                ok3,
-                tostring(v3)
-            )
+            `$(a[2]) $op $(tostring(b[1])): $ok1 $(tostring(v1)) against $ok3 $(tostring(v3))`
         )
     end
 
@@ -225,13 +207,13 @@ local function matrix()
     end
 
     for _, op in ipairs{ "-", "~", "#", "not " } do
-        local f = compiled("return function(a) return " .. op .. "a end")
+        local f = compiled(`return function(a) return $(op)a end`)
 
         for _, a in ipairs(operands) do
             local ok, v = run(f, a[1])
 
             if a[2] and op ~= "#" then
-                local g = compiled("return function() return " .. op .. "(" .. a[2] .. ") end")
+                local g = compiled(`return function() return $op($(a[2])) end`)
                 local ok2, v2 = run(g)
                 assert(ok == ok2 and (not ok or same(v, v2)), op .. a[2])
             end

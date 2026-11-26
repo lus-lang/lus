@@ -11,7 +11,7 @@ local windows = package.config:sub(1, 1) == "\\"
 local script_number = 0
 
 local function shell_quote(value)
-    return "'" .. value:gsub("'", "'\\''") .. "'"
+    return `'$(value:gsub("'", "'\\''"))'`
 end
 
 -- Runs `source` with at most `limit` open descriptors and returns its

@@ -846,7 +846,7 @@ end
 -- ============================================================
 
 local function fixture(name, mode)
-    local f = assert(io.open(TEST_DIR .. "/fixtures/crypto/" .. name, mode or "r"))
+    local f = assert(io.open(`$TEST_DIR/fixtures/crypto/$name`, mode or "r"))
     local s = f:read("a")
     f:close()
     return s
@@ -1016,7 +1016,7 @@ local function ec_keypair_test()
         local secret, public = crypto.keypair(curve)
         assert(secret.private and not public.private)
         assert(secret.curve == curve and public.curve == curve)
-        assert(tostring(secret) == "crypto.key: " .. curve .. " private")
+        assert(tostring(secret) == `crypto.key: $curve private`)
         local sig = crypto.sign(secret, "data")
         assert(#sig == (curve == "P-256" and 64 or 96))
         assert(crypto.verify(public, "data", sig))

@@ -33,7 +33,7 @@ local function sweep(call)
             return k - 1
         end
 
-        assert(not ok and err == "fault", "call " .. k .. ": " .. tostring(err))
+        assert(not ok and err == "fault", `call $k: $(tostring(err))`)
         k = k + 1
     end
 end
@@ -498,7 +498,7 @@ local function every_conversion_formats_or_raises_a_known_error_test()
 
     for _, conv in ipairs(convs) do
         for _, mod in ipairs(mods) do
-            local spec = "%" .. mod .. conv
+            local spec = `%$mod$conv`
 
             for _, v in ipairs(values) do
                 local ok, err = catch string.format(spec, v)
@@ -514,7 +514,7 @@ local function every_conversion_formats_or_raises_a_known_error_test()
                         end
                     end
 
-                    assert(known, spec .. ": " .. err)
+                    assert(known, `$spec: $err`)
                 end
             end
 

@@ -108,7 +108,7 @@ local function arithmetic_changes_operand_types_test()
     assert(s == 9 and math.type(s) == "integer")
 
     local mt = {
-        __add = function(x, y)
+        __add = function(_x, _y)
             return "added"
         end,
         __sub = function()
@@ -257,7 +257,7 @@ local function unary_operands_test()
 
     ok = catch len(5)
     assert(not ok)
-    _ = f
+    _ = f  -- lus: allow(implicit-global)
 end
 
 -- ---------------------------------------------------------------------
@@ -491,7 +491,7 @@ local function numeric_loop_shapes_test()
     assert(not ok and string.find(err, "'for' step is zero"))
 
     local function down(a, b)
-        local s = 0
+        local s = 0  -- lus: allow(shadowed-local)
 
         for i = a, b, -1 do
             s = s + i
@@ -1341,7 +1341,7 @@ local function an_error_inside_an_inline_call_has_its_frame_test()
     assert(hot(outer, { field = { deep = 4 } }) == 10)
     local ok, err = catch outer({})
     assert(not ok and string.find(err, "field 'field'"), err)
-    local trace
+    local trace  -- lus: allow(unused-local)
 
     local function handler(t)
         local ok2 = catch (function()
@@ -1738,7 +1738,7 @@ local function tables_that_are_never_needed_still_drive_the_collector_test()
     local function wait_plain()
         local finish = false
 
-        local u = setmetatable({}, {
+        local u = setmetatable({}, {  -- lus: allow(unused-local)
             __gc = function()
                 finish = true
             end,
@@ -1790,7 +1790,7 @@ local function tables_that_are_never_needed_still_drive_the_collector_test()
     local function wait_method()
         local finish = false
 
-        local u = setmetatable({}, {
+        local u = setmetatable({}, {  -- lus: allow(unused-local)
             __gc = function()
                 finish = true
             end,
@@ -1943,7 +1943,7 @@ local function unallocated_tables_test()
 
     local function fin(n)
         for i = 1, n do
-            local t = setmetatable({ i = i }, Fin)
+            local _t = setmetatable({ i = i }, Fin)
         end
     end
 
@@ -2469,7 +2469,7 @@ local function frames_are_complete_after_a_failed_guard_test()
     end
 
     local mt = {
-        __add = function(a, b)
+        __add = function(_a, _b)
             levels = probe()
             return 100
         end,
@@ -2579,7 +2579,7 @@ local function yields_cross_recursion_that_left_optimized_code_test()
     local k = 1
 
     local mt = {
-        __add = function(a, b)
+        __add = function(_a, b)
             return coroutine.yield("inside") + b
         end,
     }
@@ -2655,7 +2655,7 @@ local function the_collector_runs_inside_recursion_test()
     local k = 1
 
     local mt = {
-        __add = function(a, b)
+        __add = function(_a, _b)
             collectgarbage()
             return 1
         end,
@@ -2890,7 +2890,7 @@ local function a_function_that_goes_wrong_often_keeps_working_test()
 
     assert(hot(add, 5, 1) == 6)
 
-    for i = 1, 40 do
+    for _i = 1, 40 do
         assert(add(5, 1) == 6)
         assert(add(5, 1.5) == 6.5)
         assert(add(5, "1") == 6)
@@ -2989,7 +2989,7 @@ local function a_callee_in_other_code_leaves_with_its_callers_complete_test()
     local seen = {}
 
     local mt = {
-        __add = function(x, a)
+        __add = function(_x, a)
             local level = 2
 
             while true do
@@ -3002,10 +3002,9 @@ local function a_callee_in_other_code_leaves_with_its_callers_complete_test()
                 if info.func == inner or info.func == outer then
                     local _, n = debug.getlocal(level, 1)
                     local name, mine = debug.getlocal(level, 3)
-                    seen[#seen + 1] = (info.func == inner and "i" or "o")
-                        .. n
-                        .. ":"
-                        .. tostring(name == "mine" and mine or "-")
+                    seen[#seen + 1] = `$((info.func == inner and "i" or "o"))$n:$(tostring(
+                        name == "mine" and mine or "-"
+                    ))`
                 end
 
                 level = level + 1
@@ -3038,7 +3037,7 @@ local function a_loop_meets_the_stack_limit_through_recursion_test()
         local s = 0
         local keep = n + 7
 
-        for i = 1, n do
+        for _i = 1, n do
             s = s + bounded(depth)
         end
 
@@ -3382,13 +3381,13 @@ local function an_inline_result_lands_in_a_register_a_later_loop_closes_test()
     -- that `i` uses in the numeric loop, and the call of `rnd` is
     -- compiled inline on a path that reaches `long` with `i` unread.
     local function long(prefix, i)
-        return prefix .. tostring(i % 10)
+        return prefix .. tostring(i % 10)  -- lus: allow(redundant-tostring)
     end
 
     local function run()
         local total = 0
 
-        for round = 1, 3 do
+        for _round = 1, 3 do
             local t = {}
             local seed = 12345
 
@@ -3399,13 +3398,13 @@ local function an_inline_result_lands_in_a_register_a_later_loop_closes_test()
 
             for step = 1, 40 do
                 local i = rnd(400)
-                local k = i % 2 == 0 and ("key" .. i) or (long("s", i) .. "_" .. i)
+                local k = i % 2 == 0 and ("key" .. i) or (`$(long("s", i))_$i`)
                 t[k] = step
             end
 
             local n = 0
 
-            for k, v in pairs(t) do
+            for _k, _v in pairs(t) do
                 n = n + 1
             end
 
@@ -3459,7 +3458,7 @@ local function an_inlined_callee_reads_a_captured_argument_after_its_write_test(
     local out = {}
     load(src)(out)
     assert(table.concat(out, ",") == "string 5,string 5,string 5,string 5,string 5")
-    S = nil
+    S = nil  -- lus: allow(implicit-global)
 end
 
 -- ---------------------------------------------------------------------
@@ -3573,7 +3572,7 @@ local function insert_keeps_integer_keys_of_the_hash_part_test()
         assert(rawget(t, n + 1) == v)
     end
 
-    local function count(t)
+    local function count(t)  -- lus: allow(shadowed-local)
         local n = 0
 
         for _ in pairs(t) do
@@ -3668,7 +3667,7 @@ local function ipairs_walks_each_kind_of_list_test()
 end
 
 local function ipairs_stops_at_the_first_nil_and_reads_past_the_array_part_test()
-    local function count(t)
+    local function count(t)  -- lus: allow(shadowed-local)
         local n = 0
 
         for _, v in ipairs(t) do
@@ -3813,7 +3812,7 @@ local function a_loop_that_calls_a_function_once_gets_optimized_code_test()
     local function f(n)
         local s, done = 0, false
 
-        for i = 1, n do
+        for _i = 1, n do
             if not done then
                 s = s + once()
                 done = true

@@ -38,10 +38,10 @@ local function index_and_newindex_test()
     local t = {}
 
     local mt = {
-        __index = function(t, k)
+        __index = function(_t, k)
             return "got " .. k
         end,
-        __newindex = function(t, k, v)
+        __newindex = function(t, k, v)  -- lus: allow(shadowed-local)
             rawset(t, k, "set " .. v)
         end,
     }
@@ -56,7 +56,7 @@ end
 local function index_chain_with_parent_test()
     local t = {}
 
-    t.__index = function(t, i, e)
+    t.__index = function(t, i, e)  -- lus: allow(shadowed-local)
         assert(not e)
         local p = rawget(t, "parent")
         return (p and p[i] + 3), "dummy return"
@@ -72,7 +72,7 @@ local function newindex_function_test()
     local t = {}
     local a = setmetatable({}, t)
 
-    local function f(t, i, v)
+    local function f(t, i, v)  -- lus: allow(shadowed-local)
         rawset(t, i, v - 3)
     end
 
@@ -278,7 +278,7 @@ end
 local function call_metamethod_test()
     local t = {}
 
-    local function f(t, ...)
+    local function f(t, ...)  -- lus: allow(shadowed-local)
         return t, { ... }
     end
 
@@ -333,7 +333,7 @@ local function concat_metamethod_test()
     local d = setmetatable({ val = "d" }, t)
 
     assert(c .. d == "cd")
-    assert(0 .. "a" .. "b" .. c .. d .. "e" .. "f" .. (5 + 3) .. "g" == "0abcdef8g")
+    assert(0 .. "a" .. "b" .. c .. d .. "e" .. "f" .. (5 + 3) .. "g" == "0abcdef8g")  -- lus: allow(use-interpolation)
 end
 
 -- metatables for basic types
@@ -363,11 +363,11 @@ local function loops_in_delegation_test()
     a.__index = a
     a.__newindex = a
 
-    assert(not (catch (function(a, b)
+    assert(not (catch (function(a, b)  -- lus: allow(shadowed-local)
         return a[b]
     end)(a, 10)))
 
-    assert(not (catch (function(a, b, c)
+    assert(not (catch (function(a, b, c)  -- lus: allow(shadowed-local)
         a[b] = c
     end)(a, 10, true)))
 end

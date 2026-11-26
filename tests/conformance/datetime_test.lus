@@ -451,7 +451,7 @@ local negative_scalar_helper_keeps_magnitude_and_sets_the_flag_cases = {
 local function negative_scalar_helper_keeps_magnitude_and_sets_the_flag_test(d, mag, field)
     local p = d:parts()
     assert(p.negative == true, field .. " is negative")
-    assert(p[field] == mag, field .. " magnitude is " .. mag)
+    assert(p[field] == mag, `$field magnitude is $mag`)
 end
 
 local function negative_millis_normalizes_into_the_nanos_part_test()
@@ -632,7 +632,7 @@ local fixed_offset_formats_its_name_cases = {
 }
 
 local function fixed_offset_formats_its_name_test(secs, name)
-    assert(time.offset(secs):name() == name, "offset " .. secs .. " is " .. name)
+    assert(time.offset(secs):name() == name, `offset $secs is $name`)
 end
 
 local function a_fixed_offset_never_varies_with_the_instant_test()
@@ -747,10 +747,12 @@ local function with_normalizes_a_rolled_over_day_and_rejects_a_bad_field_test()
         time.zoned{ year = 2026, month = 1, day = 31 }:with({ month = 2 }):iso()
             == "2026-03-03T00:00:00Z"
     )
+    -- lus: allow(line-too-long)
     assert(
         time.zoned{ year = 2026, month = 6, day = 15 }:with({ month = 12, day = 25, hour = 8 }):iso()
             == "2026-12-25T08:00:00Z"
     )
+
     assert(
         not (catch time.zoned{ year = 2026, month = 1, day = 1 }:with({ month = 13 })),
         "an out-of-range replacement raises"
@@ -852,6 +854,7 @@ local function half_hour_zone_renders_and_round_trips_asia_kolkata_test()
     assert(kol:offset(time.instant(REF)) == 5 * 3600 + 30 * 60)
     assert(time.instant(REF):at(kol):iso() == "2026-07-02T18:45:00+05:30")
     -- Interpreting that same wall time collapses back to the reference.
+    -- lus: allow(line-too-long)
     assert(
         time.zoned({ year = 2026, month = 7, day = 2, hour = 18, minute = 45 }, kol):instant():epoch()
             == REF
@@ -934,7 +937,7 @@ local two_digit_year_always_resolves_into_the_2000s_cases = {
 }
 
 local function two_digit_year_always_resolves_into_the_2000s_test(yy, full)
-    assert(time.parse(yy, "%y"):iso():sub(1, 4) == full, yy .. " -> " .. full)
+    assert(time.parse(yy, "%y"):iso():sub(1, 4) == full, `$yy -> $full`)
 end
 
 local function pattern_parsing_matches_a_literal_percent_and_a_z_of_z_test()

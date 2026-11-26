@@ -16,7 +16,7 @@ local lus_cmd = os.getenv("LUS_EXE")
 local FIX = TEST_DIR .. "/fixtures/modtree/"
 
 local function quote(s)
-    return '"' .. s .. '"'
+    return `"$s"`
 end
 
 -- Runs a command line with the variables of `env` set, and returns
@@ -42,7 +42,7 @@ end
 local function lus(script, env)
     env = env or {}
     env.LUS_PATH = env.LUS_PATH or FIX .. "?.lus"
-    return run(quote(lus_cmd) .. " " .. quote(FIX .. script), env)
+    return run(`$(quote(lus_cmd)) $(quote(FIX .. script))`, env)
 end
 
 local function module_bodies_run_at_require_in_order_test()
@@ -103,13 +103,9 @@ local function build(script)
     local out = os.tmpname()
     local dir = FIX .. "shake/"
     local ok, text = run(
-        quote(lus_cmd)
-            .. " build --include "
-            .. quote(dir .. "lib")
-            .. " -o "
-            .. quote(out)
-            .. " "
-            .. quote(dir .. script),
+        `$(quote(lus_cmd)) build --include $(quote(dir .. "lib")) -o $(quote(out)) $(quote(
+            dir .. script
+        ))`,
         { LUS_PATH = dir .. "?.lus" }
     )
     catch fs.remove(out)

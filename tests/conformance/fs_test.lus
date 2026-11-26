@@ -74,12 +74,12 @@ end
 
 local function joins_two_simple_components_test()
     local result = fs.path.join("a", "b")
-    assert(result == "a" .. SEP .. "b", "Expected a" .. SEP .. "b, got " .. result)
+    assert(result == `a$(SEP)b`, `Expected a$(SEP)b, got $result`)
 end
 
 local function joins_multiple_components_test()
     local result = fs.path.join("a", "b", "c", "d.txt")
-    assert(result == "a" .. SEP .. "b" .. SEP .. "c" .. SEP .. "d.txt")
+    assert(result == `a$(SEP)b$(SEP)c$(SEP)d.txt`)
 end
 
 local function handles_single_component_test()
@@ -96,8 +96,8 @@ end
 local function handles_trailing_separator_in_first_component_test()
     local result = fs.path.join("a" .. SEP, "b")
     -- Should not double the separator
-    local expected1 = "a" .. SEP .. "b"
-    local expected2 = "a" .. SEP .. SEP .. "b"  -- Current buggy behavior
+    local expected1 = `a$(SEP)b`
+    local expected2 = `a$SEP$(SEP)b`  -- Current buggy behavior
     assert(result == expected1 or result == expected2, "Got: " .. result)
 end
 
@@ -115,12 +115,12 @@ end
 
 local function handles_paths_with_spaces_test()
     local result = fs.path.join("path with spaces", "file name.txt")
-    assert(result == "path with spaces" .. SEP .. "file name.txt")
+    assert(result == `path with spaces$(SEP)file name.txt`)
 end
 
 local function handles_unicode_paths_test()
     local result = fs.path.join("日本語", "файл.txt")
-    assert(result == "日本語" .. SEP .. "файл.txt")
+    assert(result == `日本語$SEPфайл.txt`)
 end
 
 -- ============================================================================
@@ -130,7 +130,7 @@ end
 -- Group: fs.path.split.
 
 local function splits_simple_path_test()
-    local parts = fs.path.split("a" .. SEP .. "b" .. SEP .. "c.txt")
+    local parts = fs.path.split(`a$(SEP)b$(SEP)c.txt`)
     assert(#parts == 3, "Expected 3 parts, got " .. #parts)
     assert(parts[1] == "a")
     assert(parts[2] == "b")
@@ -146,7 +146,7 @@ local function splits_absolute_path_unix_style_test()
 end
 
 local function handles_trailing_separator_test()
-    local parts = fs.path.split("a" .. SEP .. "b" .. SEP)
+    local parts = fs.path.split(`a$(SEP)b$SEP`)
     -- Last empty component might or might not be included
     assert(parts[1] == "a")
     assert(parts[2] == "b")
@@ -169,7 +169,7 @@ local function handles_just_separator_test()
 end
 
 local function handles_consecutive_separators_test()
-    local parts = fs.path.split("a" .. SEP .. SEP .. "b")
+    local parts = fs.path.split(`a$SEP$(SEP)b`)
     -- Behavior depends on implementation
     assert(#parts >= 2)
 end
@@ -181,7 +181,7 @@ end
 -- Group: fs.path.name.
 
 local function extracts_filename_from_path_test()
-    local name = fs.path.name("a" .. SEP .. "b" .. SEP .. "file.txt")
+    local name = fs.path.name(`a$(SEP)b$(SEP)file.txt`)
     assert(name == "file.txt", "Expected file.txt, got " .. name)
 end
 
@@ -191,7 +191,7 @@ local function returns_path_if_no_separator_test()
 end
 
 local function handles_path_ending_in_separator_test()
-    local name = fs.path.name("a" .. SEP .. "b" .. SEP)
+    local name = fs.path.name(`a$(SEP)b$SEP`)
     -- Trailing separator means the "name" is empty
     assert(name == "" or name == "b", "Got: " .. name)
 end
@@ -202,7 +202,7 @@ local function handles_root_path_test()
 end
 
 local function handles_dotfiles_test()
-    local name = fs.path.name(SEP .. "home" .. SEP .. ".bashrc")
+    local name = fs.path.name(`$(SEP)home$SEP.bashrc`)
     assert(name == ".bashrc")
 end
 
@@ -218,8 +218,8 @@ end
 -- Group: fs.path.parent.
 
 local function extracts_parent_directory_test()
-    local parent = fs.path.parent("a" .. SEP .. "b" .. SEP .. "file.txt")
-    assert(parent == "a" .. SEP .. "b", "Expected a" .. SEP .. "b, got " .. parent)
+    local parent = fs.path.parent(`a$(SEP)b$(SEP)file.txt`)
+    assert(parent == `a$(SEP)b`, `Expected a$(SEP)b, got $parent`)
 end
 
 local function returns_dot_for_simple_filename_test()
@@ -229,13 +229,13 @@ end
 
 local function handles_root_level_file_test()
     local parent = fs.path.parent(SEP .. "file.txt")
-    assert(parent == SEP, "Expected '" .. SEP .. "', got " .. parent)
+    assert(parent == SEP, `Expected '$SEP', got $parent`)
 end
 
 local function handles_trailing_separator_2_test()
-    local parent = fs.path.parent("a" .. SEP .. "b" .. SEP)
+    local parent = fs.path.parent(`a$(SEP)b$SEP`)
     -- Path "a/b/" - parent should be "a" (b is the "name")
-    assert(parent == "a" or parent == "a" .. SEP .. "b", "Got: " .. parent)
+    assert(parent == "a" or parent == `a$(SEP)b`, "Got: " .. parent)
 end
 
 local function handles_just_root_test()
@@ -245,7 +245,7 @@ local function handles_just_root_test()
 end
 
 local function handles_relative_path_with_dot_dot_test()
-    local parent = fs.path.parent(".." .. SEP .. "file.txt")
+    local parent = fs.path.parent(`..$(SEP)file.txt`)
     assert(parent == "..", "Got: " .. parent)
 end
 
@@ -300,7 +300,7 @@ local function fails_if_file_exists_at_path_test()
     setup_sandbox()
     local path = sandbox_path("file_not_dir")
     write_file(path, "content")
-    local ok, err = catch fs.createdirectory(path)
+    local ok, _err = catch fs.createdirectory(path)
     assert(ok == false)
     cleanup_sandbox()
 end
@@ -308,7 +308,7 @@ end
 local function fails_if_parent_directory_does_not_exist_test()
     setup_sandbox()
     local nested = sandbox_path("nonexistent", "child")
-    local ok, err = catch fs.createdirectory(nested)
+    local ok, _err = catch fs.createdirectory(nested)
     assert(ok == false)
     cleanup_sandbox()
 end
@@ -404,7 +404,7 @@ local function identifies_symlinks_test()
 
     local ok, err = catch fs.createlink(link, target)
     assert(ok, "Could not create symlink: " .. tostring(err))
-    local t, is_link = fs.type(link)
+    local _t, is_link = fs.type(link)
     assert(is_link == true)
     cleanup_sandbox()
 end
@@ -469,7 +469,7 @@ local function errors_when_path_is_a_file_test()
     setup_sandbox()
     local file = sandbox_path("not_a_dir.txt")
     write_file(file, "content")
-    local ok, err = catch fs.list(file)
+    local ok, _err = catch fs.list(file)
     assert(ok == false)
     cleanup_sandbox()
 end
@@ -526,7 +526,7 @@ local function handles_directory_with_many_files_test()
     fs.createdirectory(dir)
 
     for i = 1, 100 do
-        write_file(fs.path.join(dir, "file" .. i .. ".txt"), tostring(i))
+        write_file(fs.path.join(dir, `file$i.txt`), tostring(i))
     end
 
     local entries = fs.list(dir)
@@ -595,7 +595,7 @@ end
 
 local function fails_when_source_does_not_exist_test()
     setup_sandbox()
-    local ok, err = catch fs.copy(sandbox_path("nonexistent"), sandbox_path("dst"))
+    local ok, _err = catch fs.copy(sandbox_path("nonexistent"), sandbox_path("dst"))
     assert(ok == false)
     cleanup_sandbox()
 end
@@ -607,7 +607,7 @@ local function fails_when_destination_already_exists_test()
     write_file(src, "source")
     write_file(dst, "destination")
 
-    local ok, err = catch fs.copy(src, dst)
+    local ok, _err = catch fs.copy(src, dst)
     assert(ok == false)
     cleanup_sandbox()
 end
@@ -648,7 +648,7 @@ local function handles_large_file_test()
     local chunk = string.rep("X", 1024)
 
     if f = io.open(src, "wb") then
-        for i = 1, 100 do
+        for _i = 1, 100 do
             f:write(chunk)
         end
 
@@ -669,7 +669,7 @@ local function fails_when_destination_parent_does_not_exist_test()
     local dst = sandbox_path("nonexistent_dir", "dst.txt")
     write_file(src, "content")
 
-    local ok, err = catch fs.copy(src, dst)
+    local ok, _err = catch fs.copy(src, dst)
     assert(ok == false)
     cleanup_sandbox()
 end
@@ -712,7 +712,7 @@ end
 
 local function fails_when_source_does_not_exist_2_test()
     setup_sandbox()
-    local ok, err = catch fs.move(sandbox_path("nonexistent"), sandbox_path("dst"))
+    local ok, _err = catch fs.move(sandbox_path("nonexistent"), sandbox_path("dst"))
     assert(ok == false)
     cleanup_sandbox()
 end
@@ -724,7 +724,7 @@ local function fails_when_destination_already_exists_2_test()
     write_file(src, "source")
     write_file(dst, "dest")
 
-    local ok, err = catch fs.move(src, dst)
+    local ok, _err = catch fs.move(src, dst)
     assert(ok == false)
 
     -- Source should still exist
@@ -793,7 +793,7 @@ local function fails_to_remove_non_empty_directory_without_recursive_flag_test()
     fs.createdirectory(dir)
     write_file(fs.path.join(dir, "file.txt"), "content")
 
-    local ok, err = catch fs.remove(dir)
+    local ok, _err = catch fs.remove(dir)
     assert(ok == false)
     assert(file_exists(dir), "Directory should still exist")
     cleanup_sandbox()
@@ -816,7 +816,7 @@ local function removes_directory_recursively_test()
 end
 
 local function fails_on_non_existent_path_test()
-    local ok, err = catch fs.remove("this_does_not_exist_xyz")
+    local ok, _err = catch fs.remove("this_does_not_exist_xyz")
     assert(ok == false)
 end
 
@@ -838,7 +838,7 @@ local function recursive_remove_handles_deep_nesting_test()
     -- Create deeply nested structure
     for i = 1, 10 do
         fs.createdirectory(current)
-        write_file(fs.path.join(current, "file" .. i .. ".txt"), tostring(i))
+        write_file(fs.path.join(current, `file$i.txt`), tostring(i))
         current = fs.path.join(current, "level" .. i)
     end
 
@@ -865,7 +865,7 @@ local function creates_symbolic_link_to_file_test()
     local ok, err = catch fs.createlink(link, target)
     assert(ok, "Could not create symlink: " .. tostring(err))
     assert(file_exists(link))
-    local t, is_link = fs.type(link)
+    local _t, is_link = fs.type(link)
     assert(is_link == true)
     cleanup_sandbox()
 end
@@ -880,7 +880,7 @@ local function creates_symbolic_link_to_directory_test()
 
     local ok, err = catch fs.createlink(link, target)
     assert(ok, "Could not create symlink: " .. tostring(err))
-    local t, is_link = fs.type(link)
+    local _t, is_link = fs.type(link)
     assert(is_link == true)
     cleanup_sandbox()
 end
@@ -916,7 +916,7 @@ local function errors_on_non_symlink_test()
 end
 
 local function errors_on_non_existent_path_2_test()
-    local ok, err = catch fs.follow("nonexistent_link_xyz")
+    local ok, _err = catch fs.follow("nonexistent_link_xyz")
     assert(ok == false)
 end
 
@@ -983,9 +983,7 @@ local function handles_very_long_filename_test()
     local long_name = string.rep("a", 100) .. ".txt"
     local file = sandbox_path(long_name)
 
-    local ok = catch write_file(file, "content")
-
-    if ok then
+    if ok = catch write_file(file, "content") then
         assert(fs.type(file) == "file")
         fs.remove(file)
     end
@@ -1000,7 +998,7 @@ local function copy_doesn_t_affect_original_on_target_write_fail_test()
     write_file(src, content)
 
     -- Try to copy to invalid destination
-    local ok = catch fs.copy(src, sandbox_path("nonexistent_dir", "file.txt"))
+    local _ok = catch fs.copy(src, sandbox_path("nonexistent_dir", "file.txt"))
 
     -- Source should be intact
     assert(read_file(src) == content)

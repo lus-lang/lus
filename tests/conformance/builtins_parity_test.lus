@@ -426,7 +426,7 @@ local function err_core(e)
     )
 
     if prefix then
-        return prefix .. " " .. reason
+        return `$prefix $reason`
     end
 
     return stripped
@@ -454,7 +454,7 @@ end
 -- Runs one corpus case through the fast form and the alias form, asserting
 -- identical outcome, identical first result, and identical error core.
 local function run_pair(fastf, slowf, nargs, case, name)
-    local label = name .. " [" .. tostring(case[1]) .. "]"
+    local label = `$name [$(tostring(case[1]))]`
     -- On success catch yields (true, true, result) because call_one always
     -- returns two values. On failure it yields (false, error) and the third
     -- receiver is never read.
@@ -471,31 +471,18 @@ local function run_pair(fastf, slowf, nargs, case, name)
 
     if okf ~= oks then
         error(
-            label
-                .. ": fast ok="
-                .. tostring(okf)
-                .. " slow ok="
-                .. tostring(oks)
-                .. " fast result="
-                .. tostring(rf)
-                .. " slow result="
-                .. tostring(rs)
+            `$label: fast ok=$(tostring(okf)) slow ok=$(tostring(oks)) fast result=$(tostring(rf)) slow result=$(tostring(
+                rs
+            ))`
         )
     end
 
     if okf then
         if not deep_same(rf, rs) then
             error(
-                label
-                    .. ": fast="
-                    .. tostring(rf)
-                    .. " ("
-                    .. tostring(math.type(rf))
-                    .. ") slow="
-                    .. tostring(rs)
-                    .. " ("
-                    .. tostring(math.type(rs))
-                    .. ")"
+                `$label: fast=$(tostring(rf)) ($(tostring(math.type(rf)))) slow=$(tostring(rs)) ($(tostring(
+                    math.type(rs)
+                )))`
             )
         end
     else
@@ -503,7 +490,7 @@ local function run_pair(fastf, slowf, nargs, case, name)
         local cs = err_core(rs)
 
         if cf ~= cs then
-            error(label .. ": fast error [" .. cf .. "] slow error [" .. cs .. "]")
+            error(`$label: fast error [$cf] slow error [$cs]`)
         end
     end
 end
@@ -937,7 +924,7 @@ local function string_join_honors_element_tostring_metamethods_test()
     debug.setmetatable("", {
         __index = string,
         __tostring = function(v)
-            return "<" .. v .. ">"
+            return `<$v>`
         end,
     })
 
@@ -1016,7 +1003,7 @@ local function tostring_honors_primitive_type_metatables_test()
 
     debug.setmetatable(0, {
         __tostring = function(n)
-            return "number(" .. n .. ")"
+            return `number($n)`
         end,
     })
 
@@ -2018,7 +2005,7 @@ local direct_form_fallback_errors_carry_compiler_mode_names_cases = {
 }
 
 local function direct_form_fallback_errors_carry_compiler_mode_names_test(
-    label,
+    _label,
     fn,
     want_name,
     want_argn,
@@ -2068,8 +2055,8 @@ local base_library_fallback_errors_carry_plain_names_cases = {
     },
 }
 
-local function base_library_fallback_errors_carry_plain_names_test(label, fn, want_name, want_argn)
-    local name, argn, full = caught_name(fn)
+local function base_library_fallback_errors_carry_plain_names_test(_label, fn, want_name, want_argn)
+    local name, argn, _full = caught_name(fn)
     assert(name == want_name)
     assert(argn == want_argn)
 end
@@ -2112,8 +2099,8 @@ local arity_variations_report_the_qualified_name_cases = {
     },
 }
 
-local function arity_variations_report_the_qualified_name_test(label, fn, want_name, want_argn)
-    local name, argn, full = caught_name(fn)
+local function arity_variations_report_the_qualified_name_test(_label, fn, want_name, want_argn)
+    local name, argn, _full = caught_name(fn)
     assert(name == want_name)
     assert(argn == want_argn)
 end

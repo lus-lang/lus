@@ -212,7 +212,7 @@ local function method_name_looked_up_exactly_once_through_index_test()
     }
 
     local prox = setmetatable({}, {
-        __index = function(t, k)
+        __index = function(_t, k)
             lookups = lookups + 1
             return target[k]
         end,
@@ -339,12 +339,12 @@ local function proxy_swap_reads_left_to_right_then_stores_with_the_old_valu_test
     local mark, joined = recorder()
 
     local proxy = setmetatable({}, {
-        __index = function(t, k)
+        __index = function(_t, k)
             mark("get:" .. tostring(k))
             return k .. "V"
         end,
-        __newindex = function(t, k, v)
-            mark("set:" .. tostring(k) .. "=" .. tostring(v))
+        __newindex = function(_t, k, v)
+            mark(`set:$(tostring(k))=$(tostring(v))`)
         end,
     })
 
@@ -356,7 +356,7 @@ local function multiple_assignment_stores_happen_right_to_left_test()
     local mark, joined = recorder()
 
     local t = setmetatable({}, {
-        __newindex = function(tb, k, v)
+        __newindex = function(_tb, k, _v)
             mark("store:" .. tostring(k))
         end,
     })
@@ -399,7 +399,7 @@ local function newindex_fires_exactly_once_per_store_test()
     local n = 0
 
     local t = setmetatable({}, {
-        __newindex = function(tb, k, v)
+        __newindex = function(_tb, _k, _v)
             n = n + 1
         end,
     })
@@ -561,8 +561,8 @@ local function concat_kit(mark)
         __concat = function(l, r)
             local ln = type(l) == "table" and l.name or tostring(l)
             local rn = type(r) == "table" and r.name or tostring(r)
-            mark("concat(" .. ln .. "," .. rn .. ")")
-            return setmetatable({ name = "(" .. ln .. rn .. ")" }, mt)
+            mark(`concat($ln,$rn)`)
+            return setmetatable({ name = `($ln$rn)` }, mt)
         end,
     }
 
@@ -708,7 +708,7 @@ local function inequality_invokes_eq_once_and_negates_the_result_test()
     local n = 0
 
     local mt = {
-        __eq = function(a, b)
+        __eq = function(_a, _b)
             n = n + 1
             return true
         end,
@@ -932,7 +932,7 @@ local function from_reads_fields_in_declaration_order_test()
     local mark, joined = recorder()
 
     local proxy = setmetatable({}, {
-        __index = function(t, k)
+        __index = function(_t, k)
             mark("get:" .. tostring(k))
             return k
         end,
@@ -949,7 +949,7 @@ local function from_reads_each_field_exactly_once_test()
     local counts = {}
 
     local proxy = setmetatable({}, {
-        __index = function(t, k)
+        __index = function(_t, k)
             counts[k] = (counts[k] or 0) + 1
             return 1
         end,
@@ -1001,14 +1001,14 @@ local function slice_bounds_each_evaluated_exactly_once_test()
     local t = { 10, 20, 30, 40, 50 }
 
     local blo = setmetatable({}, {
-        __add = function(a, b)
+        __add = function(_a, b)
             nlo = nlo + 1
             return 2 + b
         end,
     })
 
     local bhi = setmetatable({}, {
-        __add = function(a, b)
+        __add = function(_a, b)
             nhi = nhi + 1
             return 4 + b
         end,
@@ -1449,7 +1449,7 @@ local function numeric_for_bounds_evaluated_exactly_once_each_test()
 
     local iters = 0
 
-    for i = flo(), fhi(), fst() do
+    for _i = flo(), fhi(), fst() do
         iters = iters + 1
     end
 

@@ -81,7 +81,7 @@ local function addition_that_fails_at_the_end_of_a_loop_raises_test()
     local function run()
         local s = "a"
 
-        for i = 1, 3 do
+        for _i = 1, 3 do
             rounds = rounds + 1
             s = s + {}
         end

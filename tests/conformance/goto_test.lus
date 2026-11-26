@@ -31,7 +31,7 @@ local function goto_error_handling_scoping_test()
 
         if not ok then
             -- load raised error directly (status=false means throw)
-            assert(string.find(f, msg), "Load raise '" .. f .. "' missing '" .. msg .. "'")
+            assert(string.find(f, msg), `Load raise '$f' missing '$msg'`)
             return
         end
 
@@ -40,17 +40,14 @@ local function goto_error_handling_scoping_test()
             -- load returned (nil, error_message), which catch wraps as (true, nil, error_message)
             -- So 'err' contains the actual error message
             assert(err ~= nil, "Expected error message from load")
-            assert(
-                string.find(err, msg),
-                "Load error '" .. tostring(err) .. "' missing '" .. msg .. "'"
-            )
+            assert(string.find(err, msg), `Load error '$(tostring(err))' missing '$msg'`)
             return
         end
 
         -- load succeeded with a function, run it and expect runtime error
         local run_ok, run_err = catch f()
         assert(not run_ok, "Expected runtime error for: " .. code)
-        assert(string.find(run_err, msg), "Error '" .. run_err .. "' missing '" .. msg .. "'")
+        assert(string.find(run_err, msg), `Error '$run_err' missing '$msg'`)
     end
 
     -- cannot see label inside block

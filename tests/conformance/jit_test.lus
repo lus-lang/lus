@@ -444,7 +444,7 @@ local function other_loops_test()
     local function g(t)
         local keys, total = 0, 0
 
-        for k, v in pairs(t) do
+        for _k, v in pairs(t) do
             keys = keys + 1
             total = total + v
         end
@@ -473,9 +473,9 @@ local function other_loops_test()
     end
 
     local function h(n)
-        local s = 0
+        local s = 0  -- lus: allow(shadowed-local)
 
-        for i, sq in iter(n) do
+        for _i, sq in iter(n) do
             s = s + sq
         end
 
@@ -583,7 +583,7 @@ local function calls_test()
     local len, s, w, one = hot(spread)
     assert(len == 3 and s == 6 and w == nil and one == 1)
 
-    local function count(n, acc)
+    local function count(n, acc)  -- lus: allow(shadowed-local)
         if n == 0 then
             return acc
         end
@@ -593,7 +593,7 @@ local function calls_test()
 
     assert(count(100000, 0) == 100000)
 
-    local function few(a, b, c)
+    local function few(a, b, c)  -- lus: allow(shadowed-local)
         return a, b, c
     end
 
@@ -613,10 +613,10 @@ local function calls_test()
     end
 
     local function wants()
-        local a, b, c = one()
+        local a, b, c = one()  -- lus: allow(shadowed-local)
         local d, e = none()
         local t = { one() }
-        local n = select("#", none())
+        local n = select("#", none())  -- lus: allow(shadowed-local)
         local m = select("#", one())
         one()
         return a, b, c, d, e, #t, n, m, (none())
@@ -652,7 +652,7 @@ local function calls_test()
 
     assert(hot(both) == 11 and closed == 300)
 
-    local function natives(s)
+    local function natives(s)  -- lus: allow(shadowed-local)
         return string.upper(s), #s, math.max(1, 5, 3), tostring(12)
     end
 
@@ -678,7 +678,7 @@ local function calls_test()
 
     assert(not ok and string.find(err, "attempt to call a nil value"))
 
-    local function deep(n)
+    local function deep(n)  -- lus: allow(shadowed-local)
         return 1 + deep(n + 1)
     end
 
@@ -729,14 +729,14 @@ local function tables_test()
     ok = catch g(nil, 1, 1)
     assert(not ok)
 
-    local function h(s)
+    local function h(s)  -- lus: allow(shadowed-local)
         return s.len, #s, s:upper()
     end
 
     local fn, n, up = hot(h, "abc")
     assert(fn == string.len and n == 3 and up == "ABC")
 
-    local function index3(t)
+    local function index3(t)  -- lus: allow(shadowed-local)
         return t[1], t[2], t[3]
     end
 
@@ -756,7 +756,7 @@ local function tables_test()
 end
 
 local function globals_test()
-    jit_test_counter = 0
+    jit_test_counter = 0  -- lus: allow(implicit-global)
 
     local function f()
         jit_test_counter = jit_test_counter + 1
@@ -795,7 +795,7 @@ local function metamethods_test()
         return setmetatable({ x = -a.x }, V)
     end
 
-    V.__concat = function(a, b)
+    V.__concat = function(_a, b)
         return "v" .. (type(b) == "table" and b.x or b)
     end
 
@@ -835,10 +835,10 @@ local function metamethods_test()
     local log = {}
 
     local proxy = setmetatable({}, {
-        __index = function(t, k)
+        __index = function(_t, k)
             return k .. "?"
         end,
-        __newindex = function(t, k, v)
+        __newindex = function(_t, k, _v)
             log[#log + 1] = k
         end,
     })
@@ -895,13 +895,13 @@ local function coroutines_test()
 
     -- A yield inside a metamethod suspends the frame that ran the operator.
     local Y = setmetatable({}, {
-        __add = function(a, b)
+        __add = function(_a, b)
             return coroutine.yield(b) + 1
         end,
     })
 
     local function adder(n)
-        local s = 0
+        local s = 0  -- lus: allow(shadowed-local)
 
         for i = 1, n do
             s = s + (Y + i)
@@ -912,7 +912,7 @@ local function coroutines_test()
 
     local function drive(n)
         local co = coroutine.create(adder)
-        local ok, v = coroutine.resume(co, n)
+        local ok, v = coroutine.resume(co, n)  -- lus: allow(unused-local)
 
         while coroutine.status(co) == "suspended" do
             ok, v = coroutine.resume(co, v * 10)
@@ -979,7 +979,7 @@ local function errors_test()
     hot(lines, { x = { y = 1 } })
     local ok, err = catch lines({})
     local expected = debug.getinfo(lines, "S").linedefined + 2
-    assert(not ok and string.find(err, "jit_test.lus:" .. expected .. ":"), err)
+    assert(not ok and string.find(err, `jit_test.lus:$expected:`), err)
 
     local function arith(a)
         local x = 1
@@ -989,7 +989,7 @@ local function errors_test()
     hot(arith, 1)
     ok, err = catch arith({})
     expected = debug.getinfo(arith, "S").linedefined + 2
-    assert(not ok and string.find(err, "jit_test.lus:" .. expected .. ":"), err)
+    assert(not ok and string.find(err, `jit_test.lus:$expected:`), err)
 
     -- A traceback lists the frames of compiled functions with their lines.
     local function inner()
@@ -1004,8 +1004,8 @@ local function errors_test()
     local tb = hot(outer)
     local base = debug.getinfo(inner, "S").linedefined
     local caller = debug.getinfo(outer, "S").linedefined
-    assert(string.find(tb, "jit_test.lus:" .. (base + 1) .. ":"), tb)
-    assert(string.find(tb, "jit_test.lus:" .. (caller + 1) .. ":"), tb)
+    assert(string.find(tb, `jit_test.lus:$((base + 1)):`), tb)
+    assert(string.find(tb, `jit_test.lus:$((caller + 1)):`), tb)
     local info
 
     local function who()
@@ -1224,7 +1224,7 @@ local function field_cache_test()
     local seen = {}
 
     local guarded = setmetatable({}, {
-        __newindex = function(t, k, v)
+        __newindex = function(_t, _k, v)
             seen[#seen + 1] = v
         end,
     })
@@ -1256,7 +1256,7 @@ local function field_cache_test()
     local key = next(flags)
 
     if type(key) == "string" and string.find(key, "^[%a_][%w_]*$") then
-        local store = load("local t, v = ... t." .. key .. " = v return t." .. key)
+        local store = load(`local t, v = ... t.$key = v return t.$key`)
         local normal = { [key] = 1 }
 
         for _ = 1, 300 do
@@ -1314,7 +1314,7 @@ local function constructor_test()
 
     -- The same key twice, and a key next to list items.
     local function twice(v)
-        return { x = v, x = v + 1 }
+        return { x = v, x = v + 1 }  -- lus: allow(duplicate-key)
     end
 
     assert(hot(twice, 1).x == 2)
@@ -1368,7 +1368,7 @@ local function method_cache_test()
     local o = Class.new(3)
     assert(hot(call, o) == 3)
 
-    local function chain(o, n)
+    local function chain(o, n)  -- lus: allow(shadowed-local)
         for _ = 1, n do
             o = o:add(1)
         end
@@ -1527,7 +1527,7 @@ local function method_cache_test()
 
     local changed = shout("q")
 
-    smt.__index = function(s, k)
+    smt.__index = function(_s, k)
         return function()
             return k
         end
@@ -1664,7 +1664,7 @@ local function array_kinds_test()
     local log = {}
 
     local watched = setmetatable(fill({}, 4, 1), {
-        __newindex = function(_, k, v)
+        __newindex = function(_, k, _v)
             log[#log + 1] = k
         end,
     })
@@ -1726,11 +1726,11 @@ local function array_kinds_test()
 end
 
 local function environment_test()
-    jit_test_a = 1
-    jit_test_b = nil
+    jit_test_a = 1  -- lus: allow(implicit-global)
+    jit_test_b = nil  -- lus: allow(implicit-global)
 
     local function read()
-        return jit_test_a, jit_test_b, jit_test_missing
+        return jit_test_a, jit_test_b, jit_test_missing  -- lus: allow(undefined-global)
     end
 
     local a, b, c = hot(read)
@@ -1876,7 +1876,7 @@ local function barriers_test()
 
     -- An upvalue table and a global table take the same stores.
     local holder = { v = false }
-    jit_test_holder = { v = false }
+    jit_test_holder = { v = false }  -- lus: allow(implicit-global)
     collectgarbage()
 
     local function through(n)
@@ -1946,7 +1946,7 @@ local function frames_test()
 
         for level = 1, 4 do
             local info = debug.getinfo(level, "nl")
-            names[level] = info.name .. ":" .. info.currentline
+            names[level] = `$(info.name):$(info.currentline)`
         end
 
         return table.concat(names, " ")
@@ -1966,13 +1966,7 @@ local function frames_test()
     local l_b = debug.getinfo(b, "S").linedefined
     local l_a = debug.getinfo(a, "S").linedefined
     local got = hot(a)
-    assert(
-        string.find(
-            got,
-            "^levels:" .. (l_levels + 4) .. " b:" .. (l_b + 1) .. " f:" .. (l_a + 1) .. " "
-        ),
-        got
-    )
+    assert(string.find(got, `^levels:$((l_levels + 4)) b:$((l_b + 1)) f:$((l_a + 1)) `), got)
 
     -- An error raised two frames down names its own line, and the frames
     -- above it continue.
@@ -2011,7 +2005,7 @@ local function frames_test()
     local caught, sum, where = hot(protect, 40)
     assert(caught == 10 and sum == 40 * 41 // 2 - 4 * 55 + 30)
     assert(
-        string.find(where, "jit_test.lus:" .. (debug.getinfo(thrower, "S").linedefined + 4) .. ":"),
+        string.find(where, `jit_test.lus:$((debug.getinfo(thrower, "S").linedefined + 4)):`),
         where
     )
 
@@ -2028,14 +2022,8 @@ local function frames_test()
     local ok = coroutine.resume(co)
     tb = debug.traceback(co)
     assert(not ok)
-    assert(
-        string.find(tb, "jit_test.lus:" .. (debug.getinfo(thrower, "S").linedefined + 4) .. ":"),
-        tb
-    )
-    assert(
-        string.find(tb, "jit_test.lus:" .. (debug.getinfo(relay, "S").linedefined + 1) .. ":"),
-        tb
-    )
+    assert(string.find(tb, `jit_test.lus:$((debug.getinfo(thrower, "S").linedefined + 4)):`), tb)
+    assert(string.find(tb, `jit_test.lus:$((debug.getinfo(relay, "S").linedefined + 1)):`), tb)
 
     -- A yield under several native calls, resumed many times.
     local function producer(n)
@@ -2245,11 +2233,11 @@ local function tail_calls_test()
 
     -- A yield in tail position, and a tail call whose arguments need a
     -- larger stack.
-    local function relay(v)
+    local function relay(v)  -- lus: allow(shadowed-local)
         return coroutine.yield(v)
     end
 
-    local function pump(n)
+    local function pump(n)  -- lus: allow(shadowed-local)
         local co = coroutine.wrap(function()
             local got = 0
 
@@ -2260,7 +2248,7 @@ local function tail_calls_test()
             return got
         end)
 
-        local v = co()
+        local v = co()  -- lus: allow(shadowed-local)
         local sent = 0
 
         while sent < n do
@@ -2346,7 +2334,7 @@ local function tail_calls_test()
         __lt = function()
             return yes()
         end,
-        __add = function(x, y)
+        __add = function(_x, _y)
             return suffix("sum")
         end,
         __len = function()

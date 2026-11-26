@@ -11,7 +11,7 @@ local function next_traversal_test()
 
     local count = 0
 
-    for k, v in pairs(a) do
+    for _k, _v in pairs(a) do
         count = count + 1
     end
 
@@ -55,7 +55,7 @@ local function ipairs_stops_at_nil_test()
     local t = { 1, 2, nil, 4 }
     local count = 0
 
-    for k, v in ipairs(t) do
+    for _k, _v in ipairs(t) do
         count = count + 1
     end
 
@@ -90,7 +90,7 @@ local function next_with_deleted_keys_test()
     t.b = nil
     local count = 0
 
-    for k, v in pairs(t) do
+    for _k, _v in pairs(t) do
         count = count + 1
     end
 
@@ -155,7 +155,7 @@ local function generic_for_with_function_test()
     local t = { 10, 20, 30 }
     local sum = 0
 
-    for i, v in iter, t, 0 do
+    for _i, v in iter, t, 0 do
         sum = sum + v
     end
 

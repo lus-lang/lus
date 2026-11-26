@@ -5,7 +5,7 @@ local WDIR1 = TEST_DIR .. "/fixtures/worker/"
 -- Workers are spawned from the fixture scripts and from scripts written into the
 -- temporary working directory. The grants are sealed after the setup, so workers
 -- inherit a store they cannot escalate out of.
-pledge("load", "fs:read=" .. TEST_DIR .. "/*", "fs:read=./*", "fs:write=./*", "seal")
+pledge("load", `fs:read=$TEST_DIR/*`, "fs:read=./*", "fs:write=./*", "seal")
 
 -- Group: worker.create
 
@@ -278,7 +278,7 @@ end
 
 local function non_existent_script_propagates_error_via_receive_test()
     local w = worker.create(WDIR1 .. "nonexistent.lus")
-    local ok, err = catch worker.receive(w)
+    local ok, _err = catch worker.receive(w)
     assert(not ok)
     assert(worker.status(w) == "dead")
 end
@@ -318,7 +318,7 @@ local function many_workers_with_message_churn_test()
         pool[i] = worker.create(WDIR1 .. "processor.lus")
 
         for j = 1, 20 do
-            worker.send(pool[i], "w" .. i .. "-" .. j)
+            worker.send(pool[i], `w$i-$j`)
         end
 
         worker.send(pool[i], "STOP")
@@ -338,7 +338,7 @@ local function many_workers_with_message_churn_test()
         end
 
         assert(#messages == 21)
-        assert(messages[1] == "GOT: w" .. i .. "-1")
+        assert(messages[1] == `GOT: w$i-1`)
         assert(messages[21] == "STOPPED")
     end
 end
@@ -625,7 +625,7 @@ error("worker broke", 0)
 local script_names = {}
 
 for name, src in pairs(scripts) do
-    local path = TMP .. "/" .. name .. ".lus"
+    local path = `$TMP/$name.lus`
     local f = io.open(path, "w")
     assert(f ~= nil, "could not write helper script " .. path)
     f:write(src)
@@ -635,7 +635,7 @@ end
 
 -- Path to a generated helper script by name.
 local function gen(name)
-    return TMP .. "/" .. name .. ".lus"
+    return `$TMP/$name.lus`
 end
 
 -- Collects every message a worker produces until it is drained.
@@ -695,7 +695,7 @@ local scalar_cases = {
     { -math.huge, "float" },
     { "", false },
     { "hello", false },
-    { "with" .. string.char(0) .. "nul", false },
+    { `with$(string.char(0))nul`, false },
 }
 
 local scalar_survives_a_full_round_trip_cases = scalar_cases
@@ -839,7 +839,7 @@ end
 
 local function preserves_exotic_table_keys_through_the_deep_copy_test()
     local w = worker.create(gen("exotickeys"))
-    local nulkey = "a" .. string.char(0) .. "b"
+    local nulkey = `a$(string.char(0))b`
     worker.send(w, {
         [1.5] = "F",
         [true] = "T",
@@ -956,7 +956,7 @@ end
 -- content. Length-prefixed strings must carry the NUL through unchanged.
 local function preserves_embedded_nul_bytes_in_string_content_test()
     local w = worker.create(WDIR .. "processor.lus")
-    local payload = "hello" .. string.char(0) .. "world"
+    local payload = `hello$(string.char(0))world`
     worker.send(w, payload)
     local reply = worker.receive(w)
     assert(reply == "GOT: " .. payload)
@@ -1312,7 +1312,7 @@ end
 local function transports_a_large_payload_parent_to_worker_test()
     local w = worker.create(gen("lenecho"))
     worker.send(w, string.rep("z", 300000))
-    worker.send(w, "hello" .. string.char(0) .. "world")
+    worker.send(w, `hello$(string.char(0))world`)
     local msgs = stop_processor(w)
     assert(msgs[1] == 300000)
     assert(msgs[2] == 11)
@@ -1324,7 +1324,7 @@ end
 -- original.
 local function shares_long_strings_with_a_worker_test()
     local w = worker.create(gen("sharedops"))
-    local s = string.rep("abcdé", 40) .. "needle" .. string.rep("xyzŵ", 30) .. "tail!"
+    local s = `$(string.rep("abcdé", 40))needle$(string.rep("xyzŵ", 30))tail!`
 
     for _ = 1, 3 do
         worker.send(w, s)

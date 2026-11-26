@@ -14,7 +14,7 @@ local dir = do
 
     provide fs.path.join(
         os.getenv("TMPDIR") or "/tmp",
-        "lus-stat-test-" .. os.time() .. "-" .. tostring({}):sub(-6)
+        `lus-stat-test-$(os.time())-$(tostring({}):sub(-6))`
     )
 end
 

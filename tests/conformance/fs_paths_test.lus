@@ -182,20 +182,20 @@ end
 -- can be built from it directly.
 -- join produces the expected path
 local join_produces_the_expected_path_cases = {
-    { { "a", "b" }, "a" .. SEP .. "b" },
-    { { "a", "b", "c", "d.txt" }, "a" .. SEP .. "b" .. SEP .. "c" .. SEP .. "d.txt" },
+    { { "a", "b" }, `a$(SEP)b` },
+    { { "a", "b", "c", "d.txt" }, `a$(SEP)b$(SEP)c$(SEP)d.txt` },
     { { "only" }, "only" },
     -- A trailing separator on the left is not doubled.
-    { { "a" .. SEP, "b" }, "a" .. SEP .. "b" },
+    { { "a" .. SEP, "b" }, `a$(SEP)b` },
     -- An empty component is skipped rather than producing a doubled separator.
     { { "", "b" }, "b" },
-    { { "a", "", "b" }, "a" .. SEP .. "b" },
+    { { "a", "", "b" }, `a$(SEP)b` },
     { { "", "" }, "" },
     -- An absolute component discards everything before it.
     { { "a", SEP .. "b" }, SEP .. "b" },
     { { "a", "b", SEP .. "root" }, SEP .. "root" },
     -- A number argument is coerced through the string rules.
-    { { "a", 5 }, "a" .. SEP .. "5" },
+    { { "a", 5 }, `a$(SEP)5` },
 }
 
 local function join_produces_the_expected_path_test(args, expected)
@@ -219,9 +219,9 @@ end
 
 -- name extracts the final component
 local name_extracts_the_final_component_cases = {
-    { "a" .. SEP .. "b" .. SEP .. "file.txt", "file.txt" },
+    { `a$(SEP)b$(SEP)file.txt`, "file.txt" },
     { "file.txt", "file.txt" },
-    { SEP .. "home" .. SEP .. ".bashrc", ".bashrc" },
+    { `$(SEP)home$SEP.bashrc`, ".bashrc" },
     { "archive.tar.gz", "archive.tar.gz" },
 }
 
@@ -231,10 +231,10 @@ end
 
 -- parent extracts the containing directory
 local parent_extracts_the_containing_directory_cases = {
-    { "a" .. SEP .. "b" .. SEP .. "file.txt", "a" .. SEP .. "b" },
+    { `a$(SEP)b$(SEP)file.txt`, `a$(SEP)b` },
     { "file.txt", "." },
     { SEP .. "file.txt", SEP },
-    { ".." .. SEP .. "file.txt", ".." },
+    { `..$(SEP)file.txt`, ".." },
 }
 
 local function parent_extracts_the_containing_directory_test(input, expected)
@@ -245,7 +245,7 @@ end
 
 -- splits a relative path into its components
 local function splits_a_relative_path_into_its_components_test()
-    local parts = fs.path.split("a" .. SEP .. "b" .. SEP .. "c.txt")
+    local parts = fs.path.split(`a$(SEP)b$(SEP)c.txt`)
     assert(#parts == 3)
     assert(parts[1] == "a")
     assert(parts[2] == "b")
@@ -254,7 +254,7 @@ end
 
 -- an absolute path leads with an empty root component
 local function an_absolute_path_leads_with_an_empty_root_component_test()
-    local parts = fs.path.split(SEP .. "a" .. SEP .. "b")
+    local parts = fs.path.split(`$(SEP)a$(SEP)b`)
     assert(parts[1] == "")
     assert(parts[2] == "a")
     assert(parts[3] == "b")
@@ -304,7 +304,7 @@ local function a_dangling_link_is_created_and_its_target_is_preserved_test()
     local missing = spath("no_such_target.txt")
     local link = spath("dead_link.txt")
     fs.createlink(link, missing)
-    local t, is_link = fs.type(link)
+    local _t, is_link = fs.type(link)
     assert(is_link == true)
     assert(fs.follow(link) == missing)
     fs.remove(link)

@@ -236,9 +236,7 @@ local function nested_catch_statements_test()
 end
 
 local function catch_in_if_statement_test()
-    local x = true
-
-    if x then
+    if x = true then
         catch error("in if")
     end
 
@@ -246,9 +244,7 @@ local function catch_in_if_statement_test()
 end
 
 local function catch_in_else_branch_test()
-    local x = false
-
-    if x then
+    if x = false then
         assert(false)
     else
         catch error("in else")
@@ -326,7 +322,7 @@ end
 
 local function catch_with_call_metamethod_test()
     local mt = {
-        __call = function(t, ...)
+        __call = function(_t, ...)
             return "called"
         end,
     }
@@ -338,7 +334,7 @@ end
 
 local function catch_with_failing_call_test()
     local mt = {
-        __call = function(t, ...)
+        __call = function(_t, ...)
             error("__call error")
         end,
     }
@@ -350,7 +346,7 @@ end
 
 local function catch_with_index_error_test()
     local mt = {
-        __index = function(t, k)
+        __index = function(_t, _k)
             error("__index error")
         end,
     }
@@ -362,7 +358,7 @@ end
 
 local function catch_with_newindex_error_test()
     local mt = {
-        __newindex = function(t, k, v)
+        __newindex = function(_t, _k, _v)
             error("__newindex error")
         end,
     }
@@ -556,7 +552,7 @@ end
 
 local function nested_catch_expressions_test()
     local ok1, val1 = catch (function()
-        local ok2, val2 = catch error("inner")
+        local ok2, _val2 = catch error("inner")
         assert(ok2 == false)
         return "outer"
     end)()
@@ -650,7 +646,7 @@ end
 -- the interpreter's C-call counter, and enough repetitions then produced a bogus
 -- "C stack overflow".
 local function repeated_errors_across_c_boundaries_keep_nccalls_balanced_test()
-    for i = 1, 200 do
+    for _i = 1, 200 do
         local ok = catch table.sort({ 3, 1, 2 }, function()
             error("cmp")
         end)

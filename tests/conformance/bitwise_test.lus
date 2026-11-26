@@ -1,4 +1,4 @@
-pledge("load", "fs:read=" .. TEST_DIR .. "/fixtures/bwcoercion/*")
+pledge("load", `fs:read=$TEST_DIR/fixtures/bwcoercion/*`)
 
 dofile(TEST_DIR .. "/fixtures/bwcoercion/shim.lus")
 

@@ -35,7 +35,7 @@ local function checkfail(src, fragment)
     end
 
     if not string.find(err, fragment, 1, true) then
-        error("expected fragment '" .. fragment .. "' in message: " .. err)
+        error(`expected fragment '$fragment' in message: $err`)
     end
 end
 
@@ -136,7 +136,7 @@ local global_statement_rejects_non_name_declarations_cases = {
     { "string instead of name", "global \"x\"", "<name> expected" },
 }
 
-local function global_statement_rejects_non_name_declarations_test(label, src, fragment)
+local function global_statement_rejects_non_name_declarations_test(_label, src, fragment)
     checkfail(src, fragment)
 end
 
@@ -189,7 +189,7 @@ local duplicate_or_stacked_attributes_are_rejected_cases = {
     { "close then const", "local x <close> <const> = nil" },
 }
 
-local function duplicate_or_stacked_attributes_are_rejected_test(label, src)
+local function duplicate_or_stacked_attributes_are_rejected_test(_label, src)
     checkfail(src, "unexpected symbol near '<'")
 end
 
@@ -238,7 +238,7 @@ local group_overwrite_must_be_a_constructor_or_group_cases = {
     },
 }
 
-local function group_overwrite_must_be_a_constructor_or_group_test(label, src)
+local function group_overwrite_must_be_a_constructor_or_group_test(_label, src)
     checkfail(src, "group can only be assigned a constructor or another group")
 end
 
@@ -247,7 +247,7 @@ local group_constructors_require_name_keys_cases = {
     { "array part", "local z <group> = { 1, 2 }", "<name> expected near '1'" },
 }
 
-local function group_constructors_require_name_keys_test(label, src, fragment)
+local function group_constructors_require_name_keys_test(_label, src, fragment)
     checkfail(src, fragment)
 end
 
@@ -276,7 +276,7 @@ local malformed_enum_declarations_are_rejected_cases = {
     { "nil member", "local e = enum nil end", "<name> expected near 'nil'" },
 }
 
-local function malformed_enum_declarations_are_rejected_test(label, src, fragment)
+local function malformed_enum_declarations_are_rejected_test(_label, src, fragment)
     checkfail(src, fragment)
 end
 
@@ -309,7 +309,7 @@ local provide_outside_a_do_expression_is_rejected_cases = {
     },
 }
 
-local function provide_outside_a_do_expression_is_rejected_test(label, src)
+local function provide_outside_a_do_expression_is_rejected_test(_label, src)
     checkfail(src, "'provide' outside do expression")
 end
 
@@ -345,7 +345,7 @@ local slices_cannot_be_assigned_to_cases = {
     },
 }
 
-local function slices_cannot_be_assigned_to_test(label, src, fragment)
+local function slices_cannot_be_assigned_to_test(_label, src, fragment)
     checkfail(src, fragment)
 end
 
@@ -405,7 +405,7 @@ local optional_chains_are_not_assignment_targets_cases = {
     { "multi-assignment", "local t = {} t?.x = 1, 2" },
 }
 
-local function optional_chains_are_not_assignment_targets_test(label, src)
+local function optional_chains_are_not_assignment_targets_test(_label, src)
     checkfail(src, "syntax error near '='")
 end
 
@@ -424,7 +424,7 @@ local malformed_if_assignments_are_rejected_cases = {
     { "trailing comma in variable list", "if x, = 1 then end", "<name> expected near '='" },
 }
 
-local function malformed_if_assignments_are_rejected_test(label, src, fragment)
+local function malformed_if_assignments_are_rejected_test(_label, src, fragment)
     checkfail(src, fragment)
 end
 
@@ -462,7 +462,7 @@ local unterminated_interpolated_strings_are_rejected_cases = {
     },
 }
 
-local function unterminated_interpolated_strings_are_rejected_test(label, src, fragment)
+local function unterminated_interpolated_strings_are_rejected_test(_label, src, fragment)
     checkfail(src, fragment)
 end
 
@@ -476,7 +476,7 @@ local dollar_must_introduce_a_name_or_parenthesized_expression_cases = {
     { "dollar before digit", "return `$1`" },
 }
 
-local function dollar_must_introduce_a_name_or_parenthesized_expression_test(label, src)
+local function dollar_must_introduce_a_name_or_parenthesized_expression_test(_label, src)
     checkfail(src, "invalid interpolation after '$'")
 end
 
@@ -503,7 +503,7 @@ local lus_keywords_cannot_be_local_variable_names_cases = {
 }
 
 local function lus_keywords_cannot_be_local_variable_names_test(kw)
-    checkfail("local " .. kw .. " = 1", "<name> expected near '" .. kw .. "'")
+    checkfail(`local $kw = 1`, `<name> expected near '$kw'`)
 end
 
 -- =============================================================================
@@ -685,6 +685,6 @@ local code_generator_diagnostics_cases = {
     },
 }
 
-local function code_generator_diagnostics_test(label, src, fragment)
+local function code_generator_diagnostics_test(_label, src, fragment)
     checkfail(src, fragment)
 end

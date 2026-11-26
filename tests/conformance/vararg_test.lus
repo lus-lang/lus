@@ -27,7 +27,7 @@ local function named_vararg_test()
 end
 
 local function named_vararg_with_zero_extra_arguments_test()
-    local function f(a, ...b)
+    local function f(_a, ...b)
         return b
     end
 
@@ -152,7 +152,7 @@ local function vararg_with_multiple_returns_test()
         return 1, 2, 3, 4
     end
 
-    local function f(a, ...)
+    local function f(_a, ...)
         return select("#", ...)
     end
 

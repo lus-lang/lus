@@ -273,7 +273,7 @@ local function next_during_kind_changes_test()
     t.name = "x"
     local seen = 0
 
-    for k, v in pairs(t) do
+    for k, _v in pairs(t) do
         seen = seen + 1
 
         if type(k) == "number" then
@@ -485,9 +485,7 @@ local function aggregates_match_a_lane_ordered_sum_test()
         local acc = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }
 
         for i = 1, n do
-            local v = tonumber(t[i])
-
-            if v then
+            if v = tonumber(t[i]) then
                 local j = (i - 1) % 8 + 1
                 acc[j] = acc[j] + v
             end
@@ -614,13 +612,13 @@ local function a_list_of_strings_keeps_its_strings_through_collections_test()
     local t = {}
 
     for i = 1, 3000 do
-        t[i] = "s" .. i .. string.rep("x", i % 50)
+        t[i] = `s$i$(string.rep("x", i % 50))`
     end
 
     collectgarbage()
 
     for i = 1, 3000 do
-        local s = "s" .. i .. string.rep("x", i % 50)
+        local s = `s$i$(string.rep("x", i % 50))`
         assert(t[i] == s, `index {i}`)
     end
 
@@ -670,8 +668,8 @@ local function strings_stored_while_the_collector_runs_survive_test()
 
     for round = 1, 20 do
         for i = 1, 500 do
-            t[i] = "r" .. round .. ":" .. i
-            local junk = { i, tostring(i) }
+            t[i] = `r$round:$i`
+            local _junk = { i, tostring(i) }
         end
 
         collectgarbage("step")
@@ -813,7 +811,7 @@ local function library_functions_on_lists_of_tables_test()
 end
 
 local function a_constructor_whose_lists_change_kind_keeps_every_value_test()
-    local function make(i, x)
+    local function make(_i, x)
         return { x, x }
     end
 

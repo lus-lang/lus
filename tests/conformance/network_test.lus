@@ -1,6 +1,6 @@
 local FIXTURES = TEST_DIR .. "/fixtures/network"
 
-pledge("load", "network", "fs:read=" .. FIXTURES .. "/*")
+pledge("load", "network", `fs:read=$FIXTURES/*`)
 
 -- ===== netio =====
 --[[
@@ -102,9 +102,7 @@ local function accept_from(server, w)
     local started = os.time()
 
     while true do
-        local ok, conn = catch server:accept()
-
-        if ok and conn then
+        if ok, conn = catch server:accept() then
             conn:settimeout(wait_seconds)
             return conn
         end
@@ -212,9 +210,7 @@ local function fetch_sends_a_list_header_as_several_lines_test()
     local values = {}
 
     for _, line in ipairs(r.request) do
-        local v = line:match("^X%-Multi: (.*)$")
-
-        if v then
+        if v = line:match("^X%-Multi: (.*)$") then
             values[#values + 1] = v
         end
     end
@@ -272,7 +268,7 @@ local function with_server(handler, body)
 end
 
 local function fetch_streams_a_response_body_test()
-    with_server(function(req)
+    with_server(function(_req)
         local i = 0
 
         return 200, function()
@@ -298,7 +294,7 @@ local function fetch_streams_a_response_body_test()
 end
 
 local function fetch_yields_a_streamed_body_in_parts_test()
-    with_server(function(req)
+    with_server(function(_req)
         return 200, string.rep("abcdefgh", 20000)
     end, function(base)
         local _, body = fetch(base .. "/", "GET", nil, nil, { stream = true })
@@ -323,7 +319,7 @@ end
 -- Closing the coroutine of a body ends the response early and closes its
 -- connection.
 local function closing_a_body_closes_its_connection_test()
-    with_server(function(req)
+    with_server(function(_req)
         return 200, string.rep("z", 500000)
     end, function(base)
         local _, body = fetch(base .. "/", "GET", nil, nil, { stream = true })
@@ -402,7 +398,7 @@ local function fetch_sends_a_function_body_with_a_length_as_is_test()
     end, function(base)
         local sent = false
 
-        local status, body = fetch(base .. "/up", "PUT", { ["Content-Length"] = 3 }, function()
+        local _status, body = fetch(base .. "/up", "PUT", { ["Content-Length"] = 3 }, function()
             if sent then
                 return nil
             end
@@ -1317,7 +1313,7 @@ end
 -- fetch to a closed local port reports it cannot connect
 local function fetch_to_a_closed_local_port_reports_it_cannot_connect_test()
     local port = closed_tcp_port()
-    local url = "http://127.0.0.1:" .. tostring(port) .. "/"
+    local url = `http://127.0.0.1:$(tostring(port))/`
     local ok, err = catch network.fetch(url)
     assert(not ok)
     assert(string.find(tostring(err), "cannot connect to 127.0.0.1:" .. tostring(port)))
@@ -1444,9 +1440,7 @@ local function local_fetch(status, location, body)
     local fixture = worker.create(FIXTURES .. "/http_server.lus")
     worker.send(fixture, { status = status, location = location, body = body, port = port })
     assert(worker.receive(fixture) == "ready", "local HTTP fixture should bind")
-    local got_status, got_body, got_headers = fetch(
-        "http://127.0.0.1:" .. tostring(port) .. "/fixture"
-    )
+    local got_status, got_body, got_headers = fetch(`http://127.0.0.1:$(tostring(port))/fixture`)
     assert(worker.receive(fixture) == "done", "local HTTP fixture should finish")
     return got_status, got_body, got_headers
 end
@@ -1494,7 +1488,7 @@ local function a_closed_local_endpoint_reports_a_fetch_error_test()
     local server = tcp_bind("127.0.0.1", 0)
     local _, port = server:getsockname()
     server:close()
-    local ok, err = catch network.fetch("https://127.0.0.1:" .. tostring(port) .. "/")
+    local ok, err = catch network.fetch(`https://127.0.0.1:$(tostring(port))/`)
     assert(not ok, "should fail for a closed local endpoint")
     assert(
         err.code == "refused" and type(tostring(err)) == "string",

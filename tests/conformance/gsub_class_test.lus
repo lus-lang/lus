@@ -24,7 +24,7 @@ end
 -- functions, __index, and false values behave as for any pattern
 local function other_replacements_test()
     assert(("x1y2"):gsub("%d", function(d)
-        return "<" .. d .. ">"
+        return `<$d>`
     end) == "x<1>y<2>")
 
     local mt = setmetatable({}, {

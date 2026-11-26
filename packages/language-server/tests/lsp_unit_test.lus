@@ -2,7 +2,7 @@
 -- that name onto the package directory next to the tests.
 local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 
-pledge("load", "fs:read=" .. LANG_DIR .. "/*")
+pledge("load", `fs:read=$LANG_DIR/*`)
 
 table.insert(package.searchers, 2, function(name)
     local rest = string.match(name, "^lus%-language%.(.+)$")
@@ -53,7 +53,7 @@ local doc_counter = 0
 
 local function open_doc(source)
     doc_counter = doc_counter + 1
-    local uri = "file:///test/doc_" .. doc_counter .. ".lus"
+    local uri = `file:///test/doc_$doc_counter.lus`
     document.open(uri, 1, source)
     ast_mod.parse(uri)
     return uri
@@ -133,7 +133,7 @@ end
 
 local function returns_errors_for_invalid_code_test()
     local uri = open_doc("local = = =")
-    local tree, errors = ast_mod.parse(uri)
+    local _tree, errors = ast_mod.parse(uri)
     assert(errors ~= nil and #errors > 0)
     close_doc(uri)
 end
@@ -207,11 +207,11 @@ end
 local function handles_shadowing_correctly_test()
     local uri = open_doc("local x = 1\ndo\n  local x = 2\n  local y = x\nend")
     local analysis = scope_mod.analyze(uri)
+
     -- The reference to x on line 4 should resolve to the inner x (line 3)
     -- "  local y = x" -> x is at column 13
-    local ref = scope_mod.find_at(analysis, 4, 13)
 
-    if ref then
+    if ref = scope_mod.find_at(analysis, 4, 13) then
         assert(ref.declaration ~= nil)
 
         if ref.declaration then
@@ -956,7 +956,7 @@ end
     end
 
     -- Token type names for diagnostics
-    local type_names = {
+    local _type_names = {
         [0] = "variable",
         [1] = "parameter",
         [2] = "function",
@@ -979,7 +979,7 @@ end
         local d_col = data[i + 1]
         local length = data[i + 2]
         local token_type = data[i + 3]
-        local token_idx = (i - 1) / 5 + 1
+        local _token_idx = (i - 1) / 5 + 1
 
         local abs_line = prev_line + d_line
         local abs_col
@@ -1048,8 +1048,8 @@ local function semantic_tokens_multi_line_comment_skipped_test()
         local d_line = data[i]
         local d_col = data[i + 1]
         local length = data[i + 2]
-        local token_type = data[i + 3]
-        local token_idx = (i - 1) / 5 + 1
+        local _token_type = data[i + 3]
+        local _token_idx = (i - 1) / 5 + 1
 
         local abs_line = prev_line + d_line
         local abs_col
@@ -1105,8 +1105,8 @@ local function semantic_tokens_stale_ast_after_failed_parse_returns_empty_test()
             local d_line = data[i]
             local d_col = data[i + 1]
             local length = data[i + 2]
-            local token_type = data[i + 3]
-            local token_idx = (i - 1) / 5 + 1
+            local _token_type = data[i + 3]
+            local _token_idx = (i - 1) / 5 + 1
 
             local abs_line = prev_line + d_line
             local abs_col
@@ -1497,7 +1497,7 @@ end
 local function range_formatting_returns_edits_test()
     local uri = open_doc("if true then\nx=1\nend")
     local range = make_range(0, 0, 2, 3)
-    local result, err = format_mod.compute_range(uri, range, { tabSize = 4 })
+    local result, _err = format_mod.compute_range(uri, range, { tabSize = 4 })
     assert(result ~= nil)
     assert(#result > 0)
     close_doc(uri)
@@ -1658,7 +1658,7 @@ local function offers_the_fix_of_a_check_hint_test()
         end
     end
 
-    assert(hint and hint.data and hint.data.fix, "the hint carries its fix")
+    assert(hint?.data?.fix, "the hint carries its fix")
     local result = code_action.compute(uri, hint.range, { diagnostics = { hint } })
     assert(#result == 1)
     assert(result[1].title == "Use optional chaining")
@@ -1768,7 +1768,7 @@ local function tokens_correct_after_inserting_if_from_block_into_from_lus_test()
 
     -- Open the document (version 1)
     doc_counter = doc_counter + 1
-    local uri = "file:///test/doc_" .. doc_counter .. ".lus"
+    local uri = `file:///test/doc_$doc_counter.lus`
     document.open(uri, 1, original)
     ast_mod.parse(uri)
 
@@ -1988,7 +1988,7 @@ local function exact_vs_code_edit_replay_character_by_character_typing_test()
     }, "\n")
 
     doc_counter = doc_counter + 1
-    local uri = "file:///test/doc_" .. doc_counter .. ".lus"
+    local uri = `file:///test/doc_$doc_counter.lus`
     document.open(uri, 1, original)
 
     local function count_lines(text)

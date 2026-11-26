@@ -20,13 +20,13 @@ pledge("load", "fs:read=./baselib_*", "fs:write=./baselib_*", "debug")
 local raw_assert = assert
 
 -- Per-run sandbox so concurrent suites never collide on the same path.
-local RUN = tostring(os.time()) .. "_" .. tostring(math.random(1, 1000000))
+local RUN = `$(tostring(os.time()))_$(tostring(math.random(1, 1000000)))`
 local DIR = "baselib_" .. RUN
 fs.createdirectory(DIR)
 
 -- Writes a fixture file into the sandbox and returns its path.
 local function fixture(name, content)
-    local path = DIR .. "/" .. name
+    local path = `$DIR/$name`
     local f = io.open(path, "w")
     f:write(content)
     f:close()
@@ -224,7 +224,7 @@ end
 local function next_walks_every_pair_exactly_once_test()
     local t = { a = 1, b = 2, c = 3, d = 4 }
     local seen = {}
-    local k, v = next(t)
+    local k, v = next(t)  -- lus: allow(unused-local)
     local count = 0
 
     while k ~= nil do
@@ -266,7 +266,7 @@ local function pairs_visits_all_key_value_pairs_test()
     local total = 0
     local keys = 0
 
-    for k, v in pairs(t) do
+    for _k, v in pairs(t) do
         total = total + v
         keys = keys + 1
     end
@@ -390,7 +390,7 @@ local function level_1_reports_the_exact_line_of_the_error_call_test()
     -- The error call is on the line after the debug.getinfo call, so the
     -- reported line must be the next one.
     local expected = debug.getinfo(1, "l").currentline + 1
-    local ok, err = catch error("here", 1)
+    local _ok, err = catch error("here", 1)
     local reported = tonumber(firstline(err):match("baselib_test%.lus:(%d+):"))
     assert(reported == expected)
 end
@@ -402,7 +402,7 @@ local function level_2_blames_the_caller_of_the_raising_function_test()
 
     -- thrower is invoked on the next line, so level 2 must point there.
     local callsite = debug.getinfo(1, "l").currentline + 1
-    local ok, err = catch thrower()
+    local _ok, err = catch thrower()
     local reported = tonumber(firstline(err):match("baselib_test%.lus:(%d+):"))
     assert(reported == callsite)
 end

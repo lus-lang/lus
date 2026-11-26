@@ -34,7 +34,7 @@ local function read_text(path)
 end
 
 local function fresh(name)
-    local dir = SANDBOX .. "/" .. name
+    local dir = `$SANDBOX/$name`
     catch fs.remove(dir, true)
     return dir
 end
@@ -91,9 +91,7 @@ local function round_trip_test(format)
     assert(#listed == #entries)
     assert(
         names(listed)
-            == "docs/ docs/readme.txt bin/run.sh link stored.bin "
-                .. string.rep("deep/", 30)
-                .. "file.txt café/naïve.txt empty.txt"
+            == `docs/ docs/readme.txt bin/run.sh link stored.bin $(string.rep("deep/", 30))file.txt café/naïve.txt empty.txt`
     )
     assert(listed[1].kind == "directory" and listed[1].mode == 493)
     assert(
@@ -198,7 +196,7 @@ end
 -- range travel in pax records.
 local function tar_pax_test()
     local t = vector.archive.tar
-    local long = string.rep("x", 150) .. "/" .. string.rep("y", 120)
+    local long = `$(string.rep("x", 150))/$(string.rep("y", 120))`
     local target = string.rep("t/", 80)
     local packed = t.pack({
         { name = long, data = "long" },
@@ -222,11 +220,11 @@ local python_cases = {
     { "ustar.tar", "dir/ dir/text.txt dir/run.sh link" },
     {
         "gnu.tar",
-        "dir/ dir/text.txt dir/run.sh link long/" .. string.rep("x", 120) .. "/name.txt café.txt",
+        `dir/ dir/text.txt dir/run.sh link long/$(string.rep("x", 120))/name.txt café.txt`,
     },
     {
         "pax.tar",
-        "dir/ dir/text.txt dir/run.sh link long/" .. string.rep("x", 120) .. "/name.txt café.txt",
+        `dir/ dir/text.txt dir/run.sh link long/$(string.rep("x", 120))/name.txt café.txt`,
     },
 }
 
@@ -269,7 +267,7 @@ local file_source_cases = formats
 local function file_source_test(format)
     local a = vector.archive[format]
     catch fs.createdirectory(SANDBOX)
-    local path = SANDBOX .. "/source." .. format
+    local path = `$SANDBOX/source.$format`
     local f = assert(io.open(path, "wb"))
     f:write(a.pack(entries))
     f:close()
@@ -308,13 +306,13 @@ local function unpack_test(format)
     assert(read_text(dir .. "/bin/run.sh") == "#!/bin/sh\necho hi\n")
     assert(fs.follow(dir .. "/link") == "docs/readme.txt")
     assert(read_text(dir .. "/link") == string.rep("hello archive ", 200))
-    assert(read_text(dir .. "/" .. string.rep("deep/", 30) .. "file.txt") == "deep")
+    assert(read_text(`$dir/$(string.rep("deep/", 30))file.txt`) == "deep")
     assert(read_text(dir .. "/empty.txt") == "")
 
     -- A second unpack meets existing files.
     raises(function()
         a.unpack(packed, dir)
-    end, "file exists: " .. dir:gsub("%p", "%%%0") .. "/docs/readme.txt")
+    end, `file exists: $(dir:gsub("%p", "%%%0"))/docs/readme.txt`)
 
     assert(a.unpack(packed, dir, { overwrite = true }) == #entries)
     -- Directories merge with ones already there.

@@ -135,7 +135,7 @@ local function popen_lines_then_close_returns_the_status_test()
     end
 
     -- cmd.exe on Windows, /bin/sh elsewhere.
-    local windows = package.config:sub(1, 1) == "\\"
+    local windows = package.config:sub(1, 1) == "\\"  -- lus: allow(shadowed-local)
     local p = assert(
         io.popen(windows and "(echo x& echo y& exit 3)" or "printf 'x\\ny\\n'; exit 3")
     )
@@ -144,9 +144,7 @@ local function popen_lines_then_close_returns_the_status_test()
     local seen = {}
 
     for line in p:lines() do
-        local word = line:match("%a+")
-
-        if word then
+        if word = line:match("%a+") then
             seen[#seen + 1] = word
         end
     end
@@ -169,7 +167,7 @@ local function a_command_that_a_signal_ends_reports_the_signal_test(name, number
         skip("Windows has no signals")
     end
 
-    local ok, kind, code = os.execute("kill -" .. name .. " $$")
+    local ok, kind, code = os.execute(`kill -$name \$\$`)
     assert(ok == nil and kind == "signal" and code == number, `$ok $kind $code`)
 end
 

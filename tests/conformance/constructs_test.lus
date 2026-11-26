@@ -6,12 +6,12 @@ local function checkload(s, msg)
     local ok, f, err = catch load(s)
 
     if not ok then
-        assert(string.find(f, msg), "Expected '" .. msg .. "' in '" .. tostring(f) .. "'")
+        assert(string.find(f, msg), `Expected '$msg' in '$(tostring(f))'`)
         return
     end
 
     if not f then
-        assert(string.find(err, msg), "Expected '" .. msg .. "' in '" .. tostring(err) .. "'")
+        assert(string.find(err, msg), `Expected '$msg' in '$(tostring(err))'`)
     else
         error("Should fail: " .. s)
     end
@@ -31,7 +31,7 @@ end
 
 local function invalid_operations_not_executed_test()
     -- invalid operations should not raise errors when not executed
-    local a
+    local a  -- lus: allow(unused-local)
 
     if false then
         a = 3 // 0
@@ -102,9 +102,9 @@ end
 
 local function upvalue_in_first_position_test()
     -- test old bug (first name could not be an `upvalue')
-    local a
+    local _a
 
-    local function f(x)
+    local function _f(x)  -- lus: allow(unused-param)
         x = { a = 1 }
         x = { x = 1 }
         x = { G = 1 }
@@ -148,7 +148,7 @@ local function if_elseif_chains_test()
 end
 
 local function nested_for_loops_test()
-    for i = 1, 1000 do
+    for _i = 1, 1000 do
         break
     end
 
@@ -160,8 +160,8 @@ local function nested_for_loops_test()
     while not a do
         a = 0
 
-        for i = 1, n do
-            for i = i, 1, -1 do
+        for i = 1, n do  -- lus: allow(shadowed-local)
+            for i = i, 1, -1 do  -- lus: allow(shadowed-local)
                 a = a + 1
                 t[i] = 1
             end
@@ -177,10 +177,10 @@ local function repeat_until_with_break_and_local_test()
         local x = 1
 
         repeat
-            local a
+            local _a
 
             if b == 1 then
-                local b = 1
+                local _b = 1
                 x = 10
                 break
             elseif b == 2 then
@@ -189,7 +189,7 @@ local function repeat_until_with_break_and_local_test()
             elseif b == 3 then
                 x = 30
             else
-                local a, b, c, d = math.sin(1)
+                local _a, _b, _c, _d = math.sin(1)
                 x = x + 1
             end
         until x >= 12
@@ -294,9 +294,8 @@ local function constants_validation_test()
     -- With runtime attributes, <XXX> is a valid expression (variable lookup).
     -- If XXX is nil at runtime, it errors when trying to call it as a handler.
     -- This is a runtime error, so we need to actually run the code.
-    local ok, f = catch load([[local x <XXX> = 10]])
 
-    if ok and f then
+    if ok, f = catch load([[local x <XXX> = 10]]) then
         local rok, err = catch f()
         assert(
             not rok and string.find(err, "attempt to call a nil value"),
@@ -323,7 +322,7 @@ local function complex_boolean_expressions_test()
     local f, a = load(f)()
     assert(a.a == 1 and a.b)
 
-    local function g(a, b, c, d, e)
+    local function g(a, b, c, d, e)  -- lus: allow(shadowed-local)
         if not (a >= b or c or d and e or nil) then
             return 0
         else
@@ -331,7 +330,7 @@ local function complex_boolean_expressions_test()
         end
     end
 
-    local function h(a, b, c, d, e)
+    local function h(a, b, c, d, e)  -- lus: allow(shadowed-local)
         while (a >= b or c or (d and e) or nil) do
             return 1
         end

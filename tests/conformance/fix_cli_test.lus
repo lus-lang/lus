@@ -1,6 +1,6 @@
 --[[
     `lus check --fix` applies the rewrites that keep what a program does,
-    and `-- lus: allow(CODE)` suppresses a warning or a hint. The fixed
+    and an allow comment suppresses a warning or a hint. The fixed
     program must print what the original prints. `lus check --json` lists
     the edits of each fix. Each case writes its files into the temporary
     directory of this test.
@@ -116,7 +116,8 @@ local function allow_suppresses_a_warning_test()
     assert(not ok, out)
     assert(not out:find("a.lus:1:", 1, true), out)
     assert(out:find("a.lus:2:7: warning: unused local 'b'", 1, true), out)
-    write("b.lus", "local a = 1 -- lus: allow(unused-lokal)\n")
+    -- The second dash is written as \45, so this file holds no allow comment.
+    write("b.lus", "local a = 1 -\45 lus: allow(unused-lokal)\n")
     ok, out = run("check b.lus")
     assert(out:find("[unknown-allow]", 1, true), out)
     assert(out:find("[unused-local]", 1, true), out)

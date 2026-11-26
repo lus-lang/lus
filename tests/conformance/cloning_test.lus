@@ -156,7 +156,7 @@ local function deep_clone_of_an_extremely_nested_table_errors_cleanly_test()
     local t = {}
     local cur = t
 
-    for i = 1, 5000 do
+    for _i = 1, 5000 do
         cur.n = {}
         cur = cur.n
     end

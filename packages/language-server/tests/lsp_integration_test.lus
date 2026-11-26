@@ -2,7 +2,7 @@
 -- that name onto the package directory next to the tests.
 local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 
-pledge("load", "fs:read=" .. LANG_DIR .. "/*")
+pledge("load", `fs:read=$LANG_DIR/*`)
 
 table.insert(package.searchers, 2, function(name)
     local rest = string.match(name, "^lus%-language%.(.+)$")
@@ -23,7 +23,7 @@ end)
 -- Override io.write to capture output BEFORE loading wasm.lus
 local capture_buffer = ""
 
-local original_write = io.write
+local _original_write = io.write
 
 io.write = function(...)
     for i = 1, select("#", ...) do
@@ -61,7 +61,7 @@ end
 
 local function send(msg)
     capture_buffer = ""
-    _lsp_handle(tojson(msg))
+    _lsp_handle(tojson(msg))  -- lus: allow(undefined-global)
     return capture_buffer
 end
 
@@ -139,9 +139,8 @@ local function parse_all_responses(raw)
 
         local body_start = header_end + 4
         local body = string.sub(raw, body_start, body_start + len - 1)
-        local ok, msg = catch fromjson(body)
 
-        if ok and msg then
+        if ok, msg = catch fromjson(body) then
             results[#results + 1] = msg
         end
 
@@ -368,7 +367,7 @@ end
 
 -- Close document
 local function accepts_didclose_without_error_test()
-    local raw = send_notification("textDocument/didClose", {
+    local _raw = send_notification("textDocument/didClose", {
         textDocument = { uri = "file:///test/integration.lus" },
     })
     -- Should produce no direct response (notification)
@@ -422,16 +421,12 @@ end
 
 local function accepts_one_canonical_frame_test()
     local body = '{"jsonrpc":"2.0","id":1,"method":"shutdown"}'
-    local msg, reason = transport.parse_frame("Content-Length: " .. #body .. "\r\n\r\n" .. body)
+    local msg, reason = transport.parse_frame(`Content-Length: $(#body)\r\n\r\n$body`)
     assert(reason == nil)
     assert(msg.method == "shutdown")
 
     msg, reason = transport.parse_frame(
-        "Content-Length: "
-            .. #body
-            .. "\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8"
-            .. "\r\n\r\n"
-            .. body
+        `Content-Length: $(#body)\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n$body`
     )
     assert(reason == nil)
     assert(msg.method == "shutdown")
@@ -459,7 +454,7 @@ end
 
 local function rejects_invalid_utf_8_and_json_trailing_data_test()
     -- A lone surrogate is the only invalid text a 2.0 string can hold (spec/design/strings.md).
-    local bad_utf8 = "{\"x\":\"" .. utf8.char(0xD800) .. "\"}"
+    local bad_utf8 = `{"x":"$(utf8.char(0xD800))"}`
     local msg, reason = transport.decode_json(bad_utf8)
     assert(msg == nil)
     assert(string.find(reason, "UTF%-8"))
@@ -511,7 +506,7 @@ local function keeps_framed_wasm_dispatch_aligned_with_the_shared_server_test()
         params = {},
     })
     capture_buffer = ""
-    _lsp_handle_frame("Content-Length: " .. #body .. "\r\n\r\n" .. body)
+    _lsp_handle_frame(`Content-Length: $(#body)\r\n\r\n$body`)  -- lus: allow(undefined-global)
     local framed = parse_response(capture_buffer)
     assert(framed.error.code == direct.error.code)
     assert(framed.error.message == direct.error.message)

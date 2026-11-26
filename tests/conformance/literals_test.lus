@@ -80,10 +80,7 @@ local function syntax_errors_in_literals_test()
         if not ok then
             -- load threw error - that's expected for syntax errors
             if err then
-                assert(
-                    string.find(st, err),
-                    "Expected error '" .. err .. "' in '" .. tostring(st) .. "'"
-                )
+                assert(string.find(st, err), `Expected error '$err' in '$(tostring(st))'`)
             end
 
             return
@@ -92,10 +89,7 @@ local function syntax_errors_in_literals_test()
         if not st then
             -- load returned nil, msg
             if err then
-                assert(
-                    string.find(msg, err),
-                    "Expected error '" .. err .. "' in '" .. tostring(msg) .. "'"
-                )
+                assert(string.find(msg, err), `Expected error '$err' in '$(tostring(msg))'`)
             end
         end
     end
@@ -111,9 +105,8 @@ local function decimal_point_locale_test()
 
     if os.setlocale("pt_BR") or os.setlocale("pt_BR.UTF-8") then
         -- Only test if locale change succeeded and changes decimal separator
-        local n = tonumber("3,4")
 
-        if n then
+        if n = tonumber("3,4") then
             assert(n == 3.4)
         end
 

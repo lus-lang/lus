@@ -287,7 +287,7 @@ local function queries_agree_with_loops_test()
         local got = {}
 
         for row in query(@t as p where p.x > k select p.x, p.z order by p.x desc, p.z) do
-            got[#got + 1] = row.x .. ":" .. row.z
+            got[#got + 1] = `$(row.x):$(row.z)`
         end
 
         local want = {}
@@ -307,7 +307,7 @@ local function queries_agree_with_loops_test()
         end)
 
         for j, p in ipairs(want) do
-            want[j] = p.x .. ":" .. p.z
+            want[j] = `$(p.x):$(p.z)`
         end
 
         assert(

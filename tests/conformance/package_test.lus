@@ -17,7 +17,7 @@
 
 pledge(
     "load",
-    "fs:read=" .. TEST_DIR .. "/*",
+    `fs:read=$TEST_DIR/*`,
     "fs:read=./tree/*",
     "fs:write=./*",
     "fs:read=./pkg_*",
@@ -30,7 +30,7 @@ local function copy_tree(src, dst)
     fs.createdirectory(dst)
 
     for _, name in ipairs(fs.list(src)) do
-        local origin, target = src .. "/" .. name, dst .. "/" .. name
+        local origin, target = `$src/$name`, `$dst/$name`
 
         if fs.type(origin) == "directory" then
             copy_tree(origin, target)
@@ -45,7 +45,7 @@ fs.createdirectory("tree/suite")
 copy_tree(TEST_DIR .. "/fixtures/preinclude", "tree/suite/preinclude")
 pledge("seal")
 
-local RUN = tostring(os.time()) .. "_" .. tostring(math and math.random(1, 999999) or 0)
+local RUN = `$(tostring(os.time()))_$(tostring(math and math.random(1, 999999) or 0))`
 local MODDIR = "./pkg_" .. RUN
 
 -- A single fixture module that already ships in the tree. Every path test
@@ -80,7 +80,7 @@ end
 local function assert_has(haystack, needle)
     assert(
         string.find(tostring(haystack), needle, 1, true) ~= nil,
-        "expected to find '" .. needle .. "' in: " .. tostring(haystack)
+        `expected to find '$needle' in: $(tostring(haystack))`
     )
 end
 
@@ -112,13 +112,7 @@ local function the_config_separators_are_the_ones_searchpath_honors_test()
     -- searchpath resolves the fixture through it.
     local tmpl_sep = ";"
     local sub = "?"
-    local path = "tree/none/"
-        .. sub
-        .. ".lus"
-        .. tmpl_sep
-        .. "tree/suite/preinclude/"
-        .. sub
-        .. ".lus"
+    local path = `tree/none/$sub.lus$(tmpl_sep)tree/suite/preinclude/$sub.lus`
     local found = package.searchpath("hello", path)
     assert(found == "tree/suite/preinclude/hello.lus")
 end
@@ -149,7 +143,7 @@ local function a_pre_seeded_entry_short_circuits_every_searcher_test()
     with_saved(function()
         local tripped = false
 
-        table.insert(package.searchers, function(name)
+        table.insert(package.searchers, function(_name)
             tripped = true
         end)
 
@@ -254,7 +248,7 @@ local function dots_in_the_module_name_map_to_the_directory_separator_test()
         local mod, where = require("suite.preinclude.hello")
         assert(type(mod) == "table")
         local dirsep = string.sub(package.config, 1, 1)
-        assert(where == "tree/suite" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
+        assert(where == `tree/suite$(dirsep)preinclude$(dirsep)hello.lus`)
         package.loaded["suite.preinclude.hello"] = nil
     end)
 end
@@ -382,7 +376,7 @@ local function an_empty_searcher_table_still_raises_a_clean_not_found_error_test
         package.searchers = {}
         local ok, msg = catch require("pkg_empty_" .. RUN)
         assert(not ok)
-        assert(string.find(tostring(msg), "module 'pkg_empty_" .. RUN .. "' not found"))
+        assert(string.find(tostring(msg), `module 'pkg_empty_$RUN' not found`))
     end)
 end
 
@@ -405,7 +399,7 @@ end
 local function the_default_separator_rewrites_dots_to_the_directory_separator_test()
     local found = package.searchpath("suite.preinclude.hello", "tree/?.lus")
     local dirsep = string.sub(package.config, 1, 1)
-    assert(found == "tree/suite" .. dirsep .. "preinclude" .. dirsep .. "hello.lus")
+    assert(found == `tree/suite$(dirsep)preinclude$(dirsep)hello.lus`)
 end
 
 local function explicit_sep_and_rep_control_the_substitution_test()
@@ -484,7 +478,7 @@ end
 local function loadlib_raises_fs_read_denial_for_an_ungranted_path_test()
     -- This path is covered by no grant in the pledge preamble, so the Lus
     -- gate raises rather than returning a failure value.
-    local ok, err = catch package.loadlib("/opt/pkg_denied_lib_" .. RUN .. ".so", "f")
+    local ok, err = catch package.loadlib(`/opt/pkg_denied_lib_$RUN.so`, "f")
     assert(not ok)
     assert(string.find(tostring(err), 'permission "fs:read" denied'))
 end
@@ -514,7 +508,7 @@ end
 -- exact name before require goes to the network, so a host or a test can
 -- provide a remote module. Neither path needs a network permission.
 local function preload_provides_a_module_url_test()
-    local url = "https://pkg.invalid/2.0/preloaded_" .. RUN .. ".lus"
+    local url = `https://pkg.invalid/2.0/preloaded_$RUN.lus`
 
     package.preload[url] = function(name, extra)
         return { name = name, extra = extra }
@@ -529,7 +523,7 @@ local function preload_provides_a_module_url_test()
 end
 
 local function loaded_provides_a_module_url_test()
-    local url = "https://pkg.invalid/2.0/loaded_" .. RUN .. ".lus"
+    local url = `https://pkg.invalid/2.0/loaded_$RUN.lus`
     local value = {}
     package.loaded[url] = value
     assert(require(url) == value)

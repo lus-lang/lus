@@ -230,9 +230,10 @@ local function initializer_in_dead_branch_never_runs_test()
 end
 
 local function folded_condition_with_meta_and_calls_test()
-    local src = "local MODE <meta> = 'fast'\nif MODE:upper() == 'FAST' and #MODE == 4 then return 'yes' else "
-        .. string.rep("tostring(1) ", 200)
-        .. " return 'no' end"
+    local src = `local MODE <meta> = 'fast'\nif MODE:upper() == 'FAST' and #MODE == 4 then return 'yes' else $(string.rep(
+        "tostring(1) ",
+        200
+    )) return 'no' end`
     local f = load(src)
     assert(f() == "yes")
     assert(#string.dump(f, true) < 400, "the dead branch should be gone")

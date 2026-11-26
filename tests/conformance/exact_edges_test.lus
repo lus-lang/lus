@@ -229,8 +229,8 @@ local exact_edge_cases = {
 
 local function exact_edge_test(label, f, want)
     local ok, v = catch f()
-    assert(ok, label .. ": " .. tostring(v))
-    assert(tostring(v) == want, label .. ": " .. tostring(v))
+    assert(ok, `$label: $(tostring(v))`)
+    assert(tostring(v) == want, `$label: $(tostring(v))`)
 end
 
 local function a_decimal_power_needs_an_integral_exponent_test()

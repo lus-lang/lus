@@ -8,7 +8,7 @@
 
 pledge("exec", "fs:read", "fs:write", "env:read", "network")
 
-local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
+local create, detach, resume, yield from coroutine
 
 local function txt(v)
     if type(v) == "vector" then
@@ -60,7 +60,7 @@ local function make_certs()
     fs.createdirectory(dir)
 
     local function p(name)
-        return '"' .. dir .. "/" .. name .. '"'
+        return `"$dir/$name"`
     end
 
     writefile(dir .. "/req.cnf", "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = test\n")
@@ -71,7 +71,7 @@ local function make_certs()
 
     local function issue(name, cn, ext)
         key(name)
-        writefile(dir .. "/" .. name .. ".ext", ext)
+        writefile(`$dir/$name.ext`, ext)
         assert(
             run(
                 `openssl req -new -key $(p(name .. ".key")) -subj "/CN=$cn" -config $(p("req.cnf")) -out $(p(
@@ -108,13 +108,13 @@ local function make_certs()
 
     for _, name in ipairs({ "server", "other", "client" }) do
         certs[name] = {
-            cert = readfile(dir .. "/" .. name .. ".pem"),
-            key = readfile(dir .. "/" .. name .. ".key"),
+            cert = readfile(`$dir/$name.pem`),
+            key = readfile(`$dir/$name.key`),
         }
     end
 
     for _, entry in ipairs(fs.list(dir)) do
-        fs.remove(dir .. "/" .. entry)
+        fs.remove(`$dir/$entry`)
     end
 
     fs.remove(dir)
@@ -602,7 +602,7 @@ end
 local function a_websocket_upgrade_works_over_tls_test()
     local c = make_certs()
 
-    serving(c.server, function(req)
+    serving(c.server, function(_req)
         return 101, function(sock)
             sock:send("upgraded")
         end

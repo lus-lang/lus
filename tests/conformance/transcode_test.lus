@@ -553,9 +553,8 @@ local padding_only_ends_the_data_cases = {
 
 local function padding_only_ends_the_data_test(encoding, input, lax_result)
     local ok = catch string.transcode(input, encoding, "utf-8")
-    local trailing = input:match("=+[%s=]*$") == input:sub(input:find("=") or #input + 1)
 
-    if trailing then
+    if trailing = input:match("=+[%s=]*$") == input:sub(input:find("=") or #input + 1) then
         assert(ok, `$encoding $input should decode`)
     else
         assert(not ok, `$encoding $input decoded with data after the padding`)

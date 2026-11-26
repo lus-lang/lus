@@ -73,7 +73,7 @@ local function finalized_objects_leave_weak_values_test()
         collectgarbage()
         collectgarbage()
         assert(values[1] == nil, mode)
-        assert(seen_key == "kept until finalized", mode .. ": " .. tostring(seen_key))
+        assert(seen_key == "kept until finalized", `$mode: $(tostring(seen_key))`)
     end)
 end
 

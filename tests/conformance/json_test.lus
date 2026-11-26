@@ -1,8 +1,4 @@
-pledge(
-    "load",
-    "fs:read=" .. TEST_DIR .. "/fixtures/json",
-    "fs:read=" .. TEST_DIR .. "/fixtures/json/*"
-)
+pledge("load", `fs:read=$TEST_DIR/fixtures/json`, `fs:read=$TEST_DIR/fixtures/json/*`)
 
 -- ===== json =====
 -- fromjson parses null as nil
@@ -137,31 +133,31 @@ end
 
 -- fromjson rejects invalid JSON
 local function fromjson_rejects_invalid_json_test()
-    local ok, err = catch fromjson("not json")
+    local ok, _err = catch fromjson("not json")
     assert(ok == false, "invalid JSON should error")
 end
 
 -- fromjson rejects trailing comma in array
 local function fromjson_rejects_trailing_comma_in_array_test()
-    local ok, err = catch fromjson("[1, 2,]")
+    local ok, _err = catch fromjson("[1, 2,]")
     assert(ok == false, "trailing comma should error")
 end
 
 -- fromjson rejects unquoted keys
 local function fromjson_rejects_unquoted_keys_test()
-    local ok, err = catch fromjson("{key: 1}")
+    local ok, _err = catch fromjson("{key: 1}")
     assert(ok == false, "unquoted keys should error")
 end
 
 -- fromjson rejects single quotes
 local function fromjson_rejects_single_quotes_test()
-    local ok, err = catch fromjson("'hello'")
+    local ok, _err = catch fromjson("'hello'")
     assert(ok == false, "single quotes should error")
 end
 
 -- fromjson rejects control characters in string
 local function fromjson_rejects_control_characters_in_string_test()
-    local ok, err = catch fromjson('"hello\tworld"')
+    local ok, _err = catch fromjson('"hello\tworld"')
     assert(ok == false, "unescaped tab should error")
 end
 
@@ -331,7 +327,7 @@ end
 local function tojson_detects_circular_references_test()
     local a = {}
     a.self = a
-    local ok, err = catch tojson(a)
+    local ok, _err = catch tojson(a)
     assert(ok == false, "circular reference should error")
 end
 
@@ -559,7 +555,7 @@ end
 local function deeply_nested_objects_test()
     -- Create deeply nested structure
     local depth = 50
-    local json_str = string.rep('{"a":', depth) .. "1" .. string.rep("}", depth)
+    local json_str = `$(string.rep('{"a":', depth))1$(string.rep("}", depth))`
 
     local result = fromjson(json_str)
 
@@ -567,7 +563,7 @@ local function deeply_nested_objects_test()
     local current = result
 
     for i = 1, depth do
-        assert(type(current) == "table", "level " .. i .. " should be table")
+        assert(type(current) == "table", `level $i should be table`)
         current = current.a
     end
 
@@ -577,14 +573,14 @@ end
 -- deeply nested arrays
 local function deeply_nested_arrays_test()
     local depth = 50
-    local json_str = string.rep("[", depth) .. "42" .. string.rep("]", depth)
+    local json_str = `$(string.rep("[", depth))42$(string.rep("]", depth))`
 
     local result = fromjson(json_str)
 
     local current = result
 
     for i = 1, depth do
-        assert(type(current) == "table", "level " .. i .. " should be table")
+        assert(type(current) == "table", `level $i should be table`)
         current = current[1]
     end
 
@@ -599,7 +595,7 @@ local function large_array_test()
         parts[i] = tostring(i)
     end
 
-    local json_str = "[" .. table.concat(parts, ",") .. "]"
+    local json_str = `[$(table.concat(parts, ","))]`
 
     local result = fromjson(json_str)
 
@@ -617,7 +613,7 @@ local function large_object_test()
         parts[i] = string.format('"key%d":%d', i, i)
     end
 
-    local json_str = "{" .. table.concat(parts, ",") .. "}"
+    local json_str = `{$(table.concat(parts, ","))}`
 
     local result = fromjson(json_str)
 
@@ -640,7 +636,7 @@ end
 local function string_with_many_escapes_test()
     local str_with_escapes = ""
 
-    for i = 1, 100 do
+    for _i = 1, 100 do
         str_with_escapes = str_with_escapes .. "\n\t\r\\\""
     end
 
@@ -744,7 +740,7 @@ local function numeric_precision_test()
             tolerance = 1e-15
         end
 
-        assert(diff <= tolerance, "number " .. n .. " should roundtrip, got " .. result)
+        assert(diff <= tolerance, `number $n should roundtrip, got $result`)
     end
 end
 
@@ -760,7 +756,7 @@ local function whitespace_handling_variations_test()
     }
 
     for _, json_str in ipairs(test_cases) do
-        local ok, result = catch fromjson(json_str)
+        local ok, _result = catch fromjson(json_str)
         assert(ok, "should parse: " .. json_str)
     end
 end
@@ -813,20 +809,20 @@ end
 local function deeply_nested_tables_serialize_or_fail_cleanly_test()
     local t = { v = 1 }
 
-    for i = 1, 150 do
+    for _i = 1, 150 do
         t = { v = t }
     end
 
     local s = tojson(t)
     local back = fromjson(s)
 
-    for i = 1, 150 do
+    for _i = 1, 150 do
         back = back.v
     end
 
     assert(back.v == 1, "deep round-trip must preserve the leaf")
 
-    for i = 1, 500 do
+    for _i = 1, 500 do
         t = { v = t }
     end
 
@@ -857,7 +853,7 @@ end
 -- Build a fresh enum root through the compiler, since enums are declared
 -- statically. The expression form takes members with no name.
 local function make_enum(members)
-    return assert(load("return enum " .. members .. " end"))()
+    return assert(load(`return enum $members end`))()
 end
 
 -- ============================================================
@@ -1228,7 +1224,7 @@ end
 
 -- the filter recurses into nested tables
 local function the_filter_recurses_into_nested_tables_test()
-    local result = tojson({ a = "x", b = { c = "y" } }, function(k, v)
+    local result = tojson({ a = "x", b = { c = "y" } }, function(_k, v)
         if type(v) == "string" then
             return string.upper(v)
         end
@@ -1242,7 +1238,7 @@ end
 
 -- a filter may replace a scalar with a table that is then serialized
 local function a_filter_may_replace_a_scalar_with_a_table_that_is_then_serialized_test()
-    local result = tojson({ x = 1 }, function(k, v)
+    local result = tojson({ x = 1 }, function(_k, v)
         if v == 1 then
             return { wrapped = true }
         end
@@ -1266,7 +1262,7 @@ end
 -- yielding across the serializer from a filter raises a boundary error
 local function yielding_across_the_serializer_from_a_filter_raises_a_boundary_error_test()
     local co = coroutine.create(function()
-        return tojson({ 1, 2 }, function(k, v)
+        return tojson({ 1, 2 }, function(_k, v)
             coroutine.yield(v)
             return v
         end)
@@ -1443,7 +1439,7 @@ end
 
 -- nesting far beyond the limit raises a catchable error and leaves the parser usable
 local function nesting_far_beyond_the_limit_raises_a_catchable_error_and_leaves_the_p_test()
-    local deep = string.rep("[", 100000) .. "1" .. string.rep("]", 100000)
+    local deep = `$(string.rep("[", 100000))1$(string.rep("]", 100000))`
     local ok, err = catch fromjson(deep)
     assert(not ok)
     assert(string.find(tostring(err), "maximum nesting depth"))
@@ -1453,9 +1449,9 @@ end
 
 -- exactly one thousand levels parse but one more raises
 local function exactly_one_thousand_levels_parse_but_one_more_raises_test()
-    local ok_at_limit = catch fromjson(string.rep("[", 1000) .. "1" .. string.rep("]", 1000))
+    local ok_at_limit = catch fromjson(`$(string.rep("[", 1000))1$(string.rep("]", 1000))`)
     assert(ok_at_limit)
-    local ok_over = catch fromjson(string.rep("[", 1001) .. "1" .. string.rep("]", 1001))
+    local ok_over = catch fromjson(`$(string.rep("[", 1001))1$(string.rep("]", 1001))`)
     assert(not ok_over)
 end
 
@@ -1566,7 +1562,7 @@ return fill`)()
     end
 
     assert(lo > 0)
-    local text = "[" .. string.rep('{"a":[1,{"b":2}]}', 10000, ",") .. "]"
+    local text = `[$(string.rep('{"a":[1,{"b":2}]}', 10000, ","))]`
     local t = fill(lo, text)
     assert(#t == 10000 and t[10000].a[2].b == 2)
 end

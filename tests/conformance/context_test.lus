@@ -177,7 +177,7 @@ local function unreachable_variables_are_reclaimed_test()
     local before = count()
 
     for i = 1, 50 do
-        local t <context> = i
+        local t <context> = i  -- lus: allow(unused-local)
     end
 
     collectgarbage()
@@ -270,7 +270,7 @@ local function hot_writes_copy_an_array_they_share_test()
         assert(last == 5000)
         assert(hot == 0)
 
-        for i = 1, 5000 do
+        for _i = 1, 5000 do
             hot = hot + 1
         end
 

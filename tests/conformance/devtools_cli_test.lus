@@ -9,7 +9,7 @@ pledge("exec", "env=LUS_EXE", "fs:read", "fs:write")
 local lus_cmd = os.getenv("LUS_EXE")
 
 local function quote(s)
-    return '"' .. s .. '"'
+    return `"$s"`
 end
 
 -- Runs a command line and returns whether it succeeded and its output
@@ -22,7 +22,7 @@ local function run(cmdline)
 end
 
 local function lus(args)
-    return run(quote(lus_cmd) .. " " .. args)
+    return run(`$(quote(lus_cmd)) $args`)
 end
 
 local function write(path, text)
@@ -33,7 +33,7 @@ end
 
 -- Runs lus inside the directory `dir`.
 local function lus_in(dir, args)
-    return run("cd " .. quote(dir) .. " && " .. quote(lus_cmd) .. " " .. args)
+    return run(`cd $(quote(dir)) && $(quote(lus_cmd)) $args`)
 end
 
 local function tree_prints_the_require_tree_test()
@@ -81,8 +81,8 @@ local function explain_covers_every_listed_code_test()
 
     for code, severity in list:gmatch("([%w-]+)%s+(%a+)%s+[^\n]*\n") do
         local eok, out = lus("check --explain " .. code)
-        assert(eok, code .. ": " .. out)
-        assert(out:find("^" .. code:gsub("%-", "%%-") .. " %(" .. severity .. "%)\n"), out)
+        assert(eok, `$code: $out`)
+        assert(out:find(`^$(code:gsub("%-", "%%-")) %($severity%)\n`), out)
         count = count + 1
     end
 

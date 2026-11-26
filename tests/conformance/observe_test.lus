@@ -174,7 +174,7 @@ end
 
 local function assignment_during_an_update_raises_test()
     local a <observe> = 1
-    local other <observe> = 0
+    local other <observe> = 0  -- lus: allow(unused-local)
 
     local function poke()
         other = 1

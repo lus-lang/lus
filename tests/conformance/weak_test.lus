@@ -16,7 +16,7 @@ end
 local function count_entries(t)
     local n = 0
 
-    for k in pairs(t) do
+    for _k in pairs(t) do
         n = n + 1
     end
 
@@ -657,7 +657,7 @@ local function ephemeron_cascade_works_under_generational_mode_test()
             t[keys[i]] = { next_key = keys[i + 1] }
         end
 
-        local head = keys[1]
+        local head = keys[1]  -- lus: allow(unused-local)
         keys = nil
         collectgarbage("collect")
         assert(count_entries(t) == 5)

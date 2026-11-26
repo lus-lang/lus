@@ -135,7 +135,7 @@ local function the_program_ends_while_a_coroutine_is_parked_test()
         print("done")
     ]] }, { stdout = "pipe" })
     assert(p.stdout:read("l") == "done")
-    local _, ok, how, code = coroutine.resume(p.exit)
+    local _, ok, _how, code = coroutine.resume(p.exit)
     assert(ok == true and code == 0)
 end
 

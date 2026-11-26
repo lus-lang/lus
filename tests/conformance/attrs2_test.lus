@@ -27,7 +27,7 @@ end
 -- the runner. The runner receives a shared table so the chunk can publish a
 -- read-back closure and observed state without touching real globals.
 local function runner_of(body)
-    local fn, err = load("return function(shared)\n" .. body .. "\nend", "attrs2_runner")
+    local fn, err = load(`return function(shared)\n$body\nend`, "attrs2_runner")
     assert(fn ~= nil, "runner chunk failed to compile: " .. tostring(err))
     return fn()
 end
@@ -46,8 +46,8 @@ local non_callable_attribute_errors_at_declaration_cases = {
     { "absent key", "local t = {}\nlocal x <t.missing> = 1", "attempt to call a nil value" },
 }
 
-local function non_callable_attribute_errors_at_declaration_test(label, src, pattern)
-    local fn, cerr = try_load(src)
+local function non_callable_attribute_errors_at_declaration_test(_label, src, pattern)
+    local fn, _cerr = try_load(src)
     assert(fn ~= nil)
 
     raises(function()
@@ -72,7 +72,7 @@ local function call_table_used_as_handler_fires_on_init_and_assignment_test()
     local count = 0
 
     local ct = setmetatable({}, {
-        __call = function(self, name, value)
+        __call = function(self, _name, value)
             count = count + 1
             return value + 100
         end,
@@ -96,7 +96,7 @@ local function call_table_receives_the_variable_name_test()
         end,
     })
 
-    local y <ct> = 7
+    local y <ct> = 7  -- lus: allow(unused-local)
     assert(seen_name == "y")
 end
 
@@ -176,7 +176,7 @@ end
 -- =============================================================================
 
 local function handler_returning_false_sets_the_variable_to_false_test()
-    local function retfalse(name, value)
+    local function retfalse(_name, _value)
         return false
     end
 
@@ -188,7 +188,7 @@ local function handler_returning_false_sets_the_variable_to_false_test()
 end
 
 local function handler_with_no_return_statement_keeps_the_incoming_value_test()
-    local function noret(name, value)
+    local function noret(_name, _value)
     end
 
     local x <noret> = 42
@@ -198,7 +198,7 @@ local function handler_with_no_return_statement_keeps_the_incoming_value_test()
 end
 
 local function handler_returning_multiple_values_uses_only_the_first_test()
-    local function multi(name, value)
+    local function multi(_name, value)
         return value + 1, "extra", 999
     end
 
@@ -207,7 +207,7 @@ local function handler_returning_multiple_values_uses_only_the_first_test()
 end
 
 local function nil_return_uses_the_incoming_value_not_the_stored_one_test()
-    local function keep(name, value)
+    local function keep(_name, value)
         if value == 99 then
             return nil
         end
@@ -231,12 +231,12 @@ local function attribute_expression_is_evaluated_exactly_once_at_declaratio_test
     local function make()
         factory_calls = factory_calls + 1
 
-        return function(name, value)
+        return function(_name, value)
             return value
         end
     end
 
-    local x <make()> = 1
+    local x <make()> = 1  -- lus: allow(unused-local)
     x = 2
     x = 3
     assert(factory_calls == 1)
@@ -248,7 +248,7 @@ local function attribute_expression_runs_before_the_initializer_expression_test(
     local function make_attr()
         order[#order + 1] = "attr"
 
-        return function(name, value)
+        return function(_name, value)
             return value
         end
     end
@@ -268,7 +268,7 @@ end
 -- =============================================================================
 
 local function coroutine_yield_inside_a_handler_is_resumable_and_threads_th_test()
-    local function yhandler(name, value)
+    local function yhandler(_name, value)
         local extra = coroutine.yield(value)
         return value + extra
     end
@@ -285,7 +285,7 @@ local function coroutine_yield_inside_a_handler_is_resumable_and_threads_th_test
 end
 
 local function assignment_to_an_attributed_local_inside_a_coroutine_transfo_test()
-    local function inc(name, value)
+    local function inc(_name, value)
         return value + 1
     end
 
@@ -309,7 +309,7 @@ local attributes_are_rejected_in_unsupported_declaration_forms_cases = {
     { "from destructuring", "local x <h> from { x = 1 }", "with 'from'" },
 }
 
-local function attributes_are_rejected_in_unsupported_declaration_forms_test(label, src, pattern)
+local function attributes_are_rejected_in_unsupported_declaration_forms_test(_label, src, pattern)
     local fn, err = try_load("local function h(n, v) return v end\n" .. src)
     assert(fn == nil)
     assert(tostring(err):find(pattern))
@@ -324,7 +324,7 @@ local compile_time_attributes_must_precede_runtime_attributes_cases = {
     { "handler then close", "local x <h, close> = 1", "'close' must come before" },
 }
 
-local function compile_time_attributes_must_precede_runtime_attributes_test(label, src, pattern)
+local function compile_time_attributes_must_precede_runtime_attributes_test(_label, src, pattern)
     local fn, err = try_load("local function h(n, v) return v end\n" .. src)
     assert(fn == nil)
     assert(tostring(err):find(pattern))
@@ -333,7 +333,7 @@ end
 local function close_before_handler_still_invokes_the_handler_and_runs_clos_test()
     local log = {}
 
-    local function h(name, value)
+    local function h(_name, value)
         log[#log + 1] = "handler"
         return value
     end
@@ -354,7 +354,7 @@ end
 local function const_before_handler_invokes_the_handler_on_init_test()
     local fired = false
 
-    local function h(name, value)
+    local function h(_name, value)
         fired = true
         return value + 1
     end
@@ -371,7 +371,7 @@ end
 local function attribute_with_no_initializer_skips_the_handler_and_yields_n_test()
     local called = false
 
-    local function h(name, value)
+    local function h(_name, value)
         called = true
         return value
     end
@@ -388,20 +388,20 @@ end
 local function shadowed_attributed_locals_each_dispatch_to_their_own_handle_test()
     local log = {}
 
-    local function outer(name, value)
+    local function outer(_name, value)
         log[#log + 1] = "outer"
         return value
     end
 
-    local function inner(name, value)
+    local function inner(_name, value)
         log[#log + 1] = "inner"
         return value
     end
 
-    local s <outer> = 1
+    local s <outer> = 1  -- lus: allow(unused-local)
 
     do
-        local s <inner> = 2
+        local s <inner> = 2  -- lus: allow(shadowed-local, unused-local)
         s = 3
     end
 
@@ -437,7 +437,7 @@ end
 local function an_upvalue_write_from_a_closure_updates_without_re_invoking_test()
     local seen = 0
 
-    local function h(name, value)
+    local function h(_name, value)
         seen = seen + 1
         return value
     end
@@ -458,14 +458,14 @@ end
 -- =============================================================================
 
 local function group_init_requires_named_fields_rejecting_array_entries_test()
-    local fn, err = try_load(
+    local fn, _err = try_load(
         "local function h(n, v) return v end\nlocal z <group, h> = { \"a\", \"b\" }"
     )
     assert(fn == nil)
 end
 
 local function group_init_rejects_integer_literal_keys_test()
-    local fn, err = try_load(
+    local fn, _err = try_load(
         "local function h(n, v) return v end\nlocal z <group, h> = { [1] = \"a\" }"
     )
     assert(fn == nil)
@@ -480,7 +480,7 @@ local function writing_a_field_absent_from_the_group_init_is_a_compile_erro_test
 end
 
 local function bracket_indexing_a_group_with_a_new_key_is_a_compile_error_test()
-    local fn, err = try_load(
+    local fn, _err = try_load(
         "local function h(n, v) return v end\nlocal z <group, h> = { a = 1 }\nz[\"c\"] = 2"
     )
     assert(fn == nil)
@@ -494,13 +494,13 @@ local function group_handler_dotted_names_cover_every_named_init_field_test()
         return value
     end
 
-    local z <group, h> = { x = 10, nested = { p = 1 } }
+    local z <group, h> = { x = 10, nested = { p = 1 } }  -- lus: allow(unused-local)
     table.sort(names)
     assert(table.concat(names, ",") == "z.nested,z.x")
 end
 
 local function group_handler_transforms_values_on_init_and_on_field_assignm_test()
-    local function inc(name, value)
+    local function inc(_name, value)
         if type(value) == "number" then
             return value + 1
         end
@@ -517,7 +517,7 @@ end
 local function assigning_nil_to_a_group_field_skips_the_handler_test()
     local calls = 0
 
-    local function h(name, value)
+    local function h(_name, value)
         calls = calls + 1
         return value
     end
@@ -531,7 +531,7 @@ end
 local function writing_into_a_nested_table_under_a_group_field_does_not_fir_test()
     local calls = 0
 
-    local function h(name, value)
+    local function h(_name, value)
         calls = calls + 1
         return value
     end

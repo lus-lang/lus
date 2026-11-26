@@ -58,7 +58,7 @@ local function built_keys_index_like_literals_test()
     assert(t.beta0 == 2000 and t.beta1 == 1999)
     local count = 0
 
-    for k in pairs(t) do
+    for _k in pairs(t) do
         count = count + 1
     end
 
@@ -103,7 +103,7 @@ local function built_names_reach_methods_test()
         end,
     }
 
-    for i = 1, 500 do
+    for _i = 1, 500 do
         assert(obj["gr" .. "eet"]() == "hi")
     end
 

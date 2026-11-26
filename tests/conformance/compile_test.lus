@@ -11,10 +11,10 @@ local lus_bin = os.getenv("LUS_BIN") or (TEST_DIR .. "/../../runtime/zig-out/bin
 
 local function shell_quote(value)
     if windows then
-        return '"' .. value .. '"'
+        return `"$value"`
     end
 
-    return "'" .. value:gsub("'", "'\\''") .. "'"
+    return `'$(value:gsub("'", "'\\''"))'`
 end
 
 local lus_cmd = shell_quote(lus_bin)
@@ -91,7 +91,7 @@ local function new_fixture()
 end
 
 local function compile(args)
-    return run_command(lus_cmd .. " compile " .. args)
+    return run_command(`$lus_cmd compile $args`)
 end
 
 local function compiled_chunk_runs_test()
@@ -101,7 +101,7 @@ local function compiled_chunk_runs_test()
     local ok, out = compile(shell_quote(script))
     assert(ok, out)
     local chunk = fs.path.join(root, "p.lusc")
-    ok, out = run_command(lus_cmd .. " " .. shell_quote(chunk))
+    ok, out = run_command(`$lus_cmd $(shell_quote(chunk))`)
     assert(ok, out)
     assert(out:find("total 333833500", 1, true), out)
     local f = assert(load(read_bytes(chunk), "=compiled", "b"))
@@ -114,7 +114,7 @@ local function chunk_matches_string_dump_test()
     local script = fs.path.join(root, "m.lus")
     local chunk = fs.path.join(root, "out.lusc")
     write_file(script, program)
-    local ok, out = compile("-o " .. shell_quote(chunk) .. " " .. shell_quote(script))
+    local ok, out = compile(`-o $(shell_quote(chunk)) $(shell_quote(script))`)
     assert(ok, out)
     local dumped = string.dump(assert(load(program, "@" .. script)))
     assert(same_bytes(read_bytes(chunk), dumped), "lus compile and string.dump disagree")
@@ -127,9 +127,9 @@ local function strip_and_flags_test()
     local full = fs.path.join(root, "full.lusc")
     local stripped = fs.path.join(root, "stripped.lusc")
     write_file(script, program)
-    local ok, out = compile("-o " .. shell_quote(full) .. " -Fanswer=42 " .. shell_quote(script))
+    local ok, out = compile(`-o $(shell_quote(full)) -Fanswer=42 $(shell_quote(script))`)
     assert(ok, out)
-    ok, out = compile("-s -o " .. shell_quote(stripped) .. " " .. shell_quote(script))
+    ok, out = compile(`-s -o $(shell_quote(stripped)) $(shell_quote(script))`)
     assert(ok, out)
     assert(#read_bytes(stripped) < #read_bytes(full))
     local f = assert(load(read_bytes(stripped), "=stripped", "b"))

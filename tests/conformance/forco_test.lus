@@ -4,7 +4,7 @@
 -- nil, as every generic for ends at a nil. The loop closes the coroutine
 -- when it leaves early, and an error in the coroutine leaves the loop.
 
-local create, yield, status = coroutine.create, coroutine.yield, coroutine.status
+local create, yield, status from coroutine
 
 local function counter(n)
     return create(function()

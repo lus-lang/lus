@@ -29,7 +29,7 @@ local function run_case(name)
     end
 
     if run_cache[name] == nil then
-        local f = io.popen(LUS .. " " .. CASES .. " " .. name .. " 2>&1")
+        local f = io.popen(`$LUS $CASES $name 2>&1`)
         run_cache[name] = f:read("a")
         f:close()
     end
@@ -271,7 +271,7 @@ local function the_elided_traceback_renders_exactly_21_frames_plus_the_marker_te
     end
 
     -- Ten leading frames, the marker line, and eleven trailing frames.
-    assert(cnt - tails == 22, "got " .. tostring(cnt - tails) .. " lines\n" .. e)
+    assert(cnt - tails == 22, `got $(tostring(cnt - tails)) lines\n$e`)
 end
 
 local function the_skipped_level_count_accounts_for_the_recursion_depth_test()
@@ -317,7 +317,7 @@ end
 
 local function a_caught_runtime_fault_carries_no_traceback_section_test()
     local x
-    local ok, e = catch (x + 1)
+    local _ok, e = catch (x + 1)
     assert(count_tracebacks(e) == 0, tostring(e))
 end
 
@@ -374,7 +374,7 @@ local index_errors_carry_the_accessed_variable_s_name_cases = {
     {
         "global",
         function()
-            return tb2_undefined.foo
+            return tb2_undefined.foo  -- lus: allow(undefined-global)
         end,
         "attempt to index a nil value %(global 'tb2_undefined'%)",
     },
@@ -420,7 +420,7 @@ local index_errors_carry_the_accessed_variable_s_name_cases = {
 local function index_errors_carry_the_accessed_variable_s_name_test(label, f, pat)
     local ok, e = catch f()
     assert(not ok, label)
-    assert(tostring(e):find(pat), label .. ": " .. tostring(e))
+    assert(tostring(e):find(pat), `$label: $(tostring(e))`)
 end
 
 local index_errors_on_temporaries_carry_no_name_suffix_cases = {
@@ -450,7 +450,7 @@ local function index_errors_on_temporaries_carry_no_name_suffix_test(label, f)
     local ok, e = catch f()
     assert(not ok, label)
     local first = tostring(e):match("^[^\n]*")
-    assert(first:find("attempt to index a nil value$"), label .. ": " .. first)
+    assert(first:find("attempt to index a nil value$"), `$label: $first`)
 end
 
 -- ---- variable naming for call errors ----
@@ -520,7 +520,7 @@ local call_errors_carry_the_callee_variable_s_name_cases = {
     {
         "nil for iterator",
         function()
-            for x in nil do
+            for _x in nil do
             end
         end,
         "attempt to call a nil value %(for iterator 'for iterator'%)",
@@ -528,7 +528,7 @@ local call_errors_carry_the_callee_variable_s_name_cases = {
     {
         "non-callable for iterator",
         function()
-            for x in 5 do
+            for _x in 5 do
             end
         end,
         "attempt to call a number value %(for iterator 'for iterator'%)",
@@ -538,7 +538,7 @@ local call_errors_carry_the_callee_variable_s_name_cases = {
 local function call_errors_carry_the_callee_variable_s_name_test(label, f, pat)
     local ok, e = catch f()
     assert(not ok, label)
-    assert(tostring(e):find(pat), label .. ": " .. tostring(e))
+    assert(tostring(e):find(pat), `$label: $(tostring(e))`)
 end
 
 local call_errors_on_temporaries_carry_no_name_suffix_cases = {
@@ -568,5 +568,5 @@ local function call_errors_on_temporaries_carry_no_name_suffix_test(label, f)
     local ok, e = catch f()
     assert(not ok, label)
     local first = tostring(e):match("^[^\n]*")
-    assert(first:find("attempt to call a nil value$"), label .. ": " .. first)
+    assert(first:find("attempt to call a nil value$"), `$label: $first`)
 end

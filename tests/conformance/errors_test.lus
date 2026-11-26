@@ -235,7 +235,7 @@ local function catch_in_print_success_test()
     local old_print = print
     local captured = {}
 
-    print = function(...)
+    print = function(...)  -- lus: allow(implicit-global)
         captured = { ... }
     end
 
@@ -298,11 +298,11 @@ local function catch_does_not_affect_outer_scope_on_error_test()
 end
 
 local function pcall_is_not_defined_test()
-    assert(pcall == nil)
+    assert(pcall == nil)  -- lus: allow(deprecated-pcall)
 end
 
 local function xpcall_is_not_defined_test()
-    assert(xpcall == nil)
+    assert(xpcall == nil)  -- lus: allow(deprecated-pcall)
 end
 
 local function catch_with_very_deep_call_stack_test()
@@ -392,7 +392,7 @@ local function catch_with_metamethod_error_call_test()
 end
 
 local function catch_with_coroutine_yield_in_main_thread_test()
-    local ok, err = catch coroutine.yield()
+    local ok, _err = catch coroutine.yield()
     assert(ok == false)
 end
 
@@ -470,7 +470,7 @@ local function error_in_gc_finalizer_becomes_warning_test()
 
     -- Run GC - the finalizer error becomes a warning, not a caught error
     local inner_ok, inner_result = catch (function()
-        local obj = setmetatable({}, mt)
+        local obj = setmetatable({}, mt)  -- lus: allow(unused-local)
         obj = nil
         collectgarbage()
         collectgarbage()
@@ -567,10 +567,7 @@ local function catch_with_multiple_sequential_errors_test()
     for i = 1, 10 do
         local ok, err = catch error("error " .. i)
         assert(not ok)
-        assert(
-            err:find("error " .. i, 1, true),
-            "iteration " .. i .. " saw the wrong message: " .. err
-        )
+        assert(err:find("error " .. i, 1, true), `iteration $i saw the wrong message: $err`)
         local ok2, val = catch (i * 2)
         assert(ok2 == true and val == i * 2)
     end
@@ -582,7 +579,7 @@ local function error_during_table_construction_test()
     end
 
     local ok, err = catch (function()
-        local t = { a = 1, b = throwing() }
+        local _t = { a = 1, b = throwing() }
     end)()
 
     assert(not ok)

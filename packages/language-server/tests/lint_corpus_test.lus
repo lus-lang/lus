@@ -6,7 +6,7 @@ local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 local ROOT = string.match(LANG_DIR, "^(.*)[/\\]packages[/\\][^/\\]*$")
 local CORPUS = ROOT .. "/tests/conformance"
 
-pledge("load", "fs:read=" .. LANG_DIR .. "/*", "fs:read=" .. CORPUS, "fs:read=" .. CORPUS .. "/*")
+pledge("load", `fs:read=$LANG_DIR/*`, "fs:read=" .. CORPUS, `fs:read=$CORPUS/*`)
 
 table.insert(package.searchers, 2, function(name)
     local rest = string.match(name, "^lus%-language%.(.+)$")
@@ -56,7 +56,7 @@ for _, name in ipairs(corpus_files) do
 end
 
 local function no_false_undefined_global_warnings_test(name)
-    local path = CORPUS .. "/" .. name
+    local path = `$CORPUS/$name`
     local f = assert(io.open(path, "r"))
     local source = f:read("a")
     f:close()
@@ -74,10 +74,9 @@ local function no_false_undefined_global_warnings_test(name)
         local flagged = string.match(d.message, "^Undefined global '(.*)'$")
 
         if flagged ~= nil and RUNNER_GLOBALS[flagged] then
-            false_positives[#false_positives + 1] = d.message
-                .. " (line "
-                .. tostring(d.range.start.line + 1)
-                .. ")"
+            false_positives[#false_positives + 1] = `$(d.message) (line $(tostring(
+                d.range.start.line + 1
+            )))`
         end
     end
 

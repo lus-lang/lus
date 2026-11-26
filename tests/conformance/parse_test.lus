@@ -1,10 +1,10 @@
-pledge("load", "fs:read=" .. TEST_DIR, "fs:read=" .. TEST_DIR .. "/*")
+pledge("load", "fs:read=" .. TEST_DIR, `fs:read=$TEST_DIR/*`)
 
 -- ===== parse =====
 -- serializes deeply nested calls
 local function serializes_deeply_nested_calls_test()
     local depth = 64
-    local source = "return " .. string.rep("f(", depth) .. "31337" .. string.rep(")", depth)
+    local source = `return $(string.rep("f(", depth))31337$(string.rep(")", depth))`
     local ast = debug.parse(source, "nested-calls.lus")
     local node = ast.children[1].values[1]
 
@@ -67,7 +67,7 @@ local every_conformance_file_parses_cases = files
 local function every_conformance_file_parses_test(path, name)
     local content = readfile(path)
     assert(content, "Could not read file: " .. path)
-    local ok, ast = catch debug.parse(content, name)
+    local ok, _ast = catch debug.parse(content, name)
     assert(ok, "Failed to parse file: " .. path)
 end
 
@@ -79,10 +79,10 @@ local function every_conformance_file_formats_idempotently_test(path, name)
     assert(content, "Could not read file: " .. path)
     -- Format once.
     local formatted, err = debug.format(content, name)
-    assert(formatted, "Failed to format file: " .. path .. ": " .. tostring(err))
+    assert(formatted, `Failed to format file: $path: $(tostring(err))`)
     -- Format again: the result must be identical (idempotent).
     local formatted2, err2 = debug.format(formatted, name)
-    assert(formatted2, "Failed to re-format: " .. path .. ": " .. tostring(err2))
+    assert(formatted2, `Failed to re-format: $path: $(tostring(err2))`)
 
     if formatted2 ~= formatted then
         local exp_lines = {}
@@ -108,14 +108,9 @@ local function every_conformance_file_formats_idempotently_test(path, name)
         end
 
         error(
-            "Formatter not idempotent for "
-                .. path
-                .. " at line "
-                .. diff_line
-                .. ":\n  first:  "
-                .. tostring(exp_lines[diff_line])
-                .. "\n  second: "
-                .. tostring(got_lines[diff_line])
+            `Formatter not idempotent for $path at line $diff_line:\n  first:  $(tostring(
+                exp_lines[diff_line]
+            ))\n  second: $(tostring(got_lines[diff_line]))`
         )
     end
 end

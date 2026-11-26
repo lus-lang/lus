@@ -91,7 +91,7 @@ local function fromcsv_parses_empty_quoted_field_test()
 end
 
 local function fromcsv_errors_on_unterminated_quote_test()
-    local ok, err = catch fromcsv('"unterminated')
+    local ok, _err = catch fromcsv('"unterminated')
     assert(not ok, "should error on unterminated quote")
 end
 
@@ -318,7 +318,7 @@ local function large_number_of_rows_test()
     local rows = {}
 
     for i = 1, 1000 do
-        rows[i] = { tostring(i), "value" .. tostring(i) }
+        rows[i] = { tostring(i), "value" .. i }
     end
 
     local csv = tocsv(rows)
@@ -333,7 +333,7 @@ local function large_number_of_columns_test()
     local row = {}
 
     for i = 1, 200 do
-        row[i] = "col" .. tostring(i)
+        row[i] = "col" .. i
     end
 
     local csv = tocsv({ row })
@@ -806,7 +806,7 @@ local function many_single_column_rows_survive_a_round_trip_test()
     local rows = {}
 
     for i = 1, 500 do
-        rows[i] = { "v" .. tostring(i) }
+        rows[i] = { "v" .. i }
     end
 
     local back = fromcsv(tocsv(rows))

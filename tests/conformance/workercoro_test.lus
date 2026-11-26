@@ -5,7 +5,7 @@
 -- writes its worker script into the temporary working directory.
 pledge("load", "network", "fs:read=./*", "fs:write=./*", "seal")
 
-local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
+local create, detach, resume, yield from coroutine
 local script_number = 0
 
 local function spawn(f, ...)
@@ -144,7 +144,7 @@ local function receive_suspends_a_detached_coroutine_test()
     -- The worker answers only after this coroutine ran, which it does
     -- while the receiver waits.
     local sender = spawn(function()
-        for i = 1, 5 do
+        for _i = 1, 5 do
             turns = turns + 1
             yield()
         end
@@ -166,7 +166,7 @@ local function receive_in_the_main_chunk_runs_the_coroutines_test()
     local watchdog = guard(w)
 
     local sender = spawn(function()
-        for i = 1, 5 do
+        for _i = 1, 5 do
             yield()
         end
 

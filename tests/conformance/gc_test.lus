@@ -30,7 +30,7 @@ local function gc_with_weak_tables_k_mode_test()
     -- keys should be collected
     local count = 0
 
-    for k, v in pairs(a) do
+    for _k, _v in pairs(a) do
         count = count + 1
     end
 
@@ -53,7 +53,7 @@ local function gc_with_weak_tables_v_mode_test()
     collectgarbage()
     local count = 0
 
-    for k, v in pairs(a) do
+    for _k, _v in pairs(a) do
         count = count + 1
     end
 
@@ -94,7 +94,7 @@ end
 local function gc_finalizers_gc_test()
     local finished = false
 
-    local u = setmetatable({}, {
+    local u = setmetatable({}, {  -- lus: allow(unused-local)
         __gc = function()
             finished = true
         end,
@@ -143,7 +143,7 @@ local function clearing_tables_test()
         collectgarbage()
     end
 
-    for n in pairs(a) do
+    for _n in pairs(a) do
         error("cannot be here")
     end
 end
@@ -152,7 +152,7 @@ end
 local function gc_activation_test()
     local finish = false
 
-    local u = setmetatable({}, {
+    local u = setmetatable({}, {  -- lus: allow(unused-local)
         __gc = function()
             finish = true
         end,
@@ -174,7 +174,7 @@ local function long_strings_test()
     local s = ""
     local k = 100
 
-    for n = 1, k do
+    for _n = 1, k do
         s = s .. x
     end
 
@@ -186,7 +186,7 @@ local function self_referenced_threads_test()
     local thread_id = 0
     local threads = {}
 
-    local function fn(thread)
+    local function fn(thread)  -- lus: allow(unused-param)
         local x = {}
 
         threads[thread_id] = function()
@@ -231,9 +231,9 @@ local function json_serialization_deserialization_doesn_t_leak_test()
             nested = { a = 1, b = 2, c = { d = 3 } },
         }
         local json = tojson(data)
-        local parsed = fromjson(json)
+        local _parsed = fromjson(json)
         -- Also test error paths (caught errors shouldn't leak)
-        local ok = catch fromjson("invalid json " .. i)
+        local _ok = catch fromjson("invalid json " .. i)
     end
 
     collectgarbage()
@@ -242,7 +242,7 @@ local function json_serialization_deserialization_doesn_t_leak_test()
 
     -- Memory shouldn't grow significantly (allow some slack for interned strings)
     local growth = after - before
-    assert(growth < 100, "JSON operations leaked memory: " .. growth .. " KB")
+    assert(growth < 100, `JSON operations leaked memory: $growth KB`)
 end
 
 -- ============================================
@@ -266,7 +266,7 @@ local function resurrection_in_finalizer_test()
         end,
     }
 
-    local obj = setmetatable({ value = 42 }, mt)
+    local obj = setmetatable({ value = 42 }, mt)  -- lus: allow(unused-local)
     obj = nil
     collectgarbage()
     collectgarbage()
@@ -301,7 +301,7 @@ local function finalizer_receives_the_dying_object_and_runs_exactly_once_test()
     collectgarbage()
     collectgarbage()
 
-    assert(runs == 1, "finalizer should have run once, ran " .. runs .. " times")
+    assert(runs == 1, `finalizer should have run once, ran $runs times`)
     assert(received ~= nil, "finalizer receives the object as its argument")
     assert(received.tag == "victim", "the object's data is intact when finalized")
     assert(getmetatable(received) == mt, "the metatable is intact when finalized")
@@ -339,7 +339,7 @@ local function weak_table_creation_and_collection_test()
     -- Verify weak key entry was collected
     local key_count = 0
 
-    for k, v in pairs(weak_k) do
+    for _k, _v in pairs(weak_k) do
         key_count = key_count + 1
     end
 
@@ -359,7 +359,7 @@ local function gc_during_table_iteration_is_safe_test()
 
     local count = 0
 
-    for k, v in pairs(t) do
+    for _k, _v in pairs(t) do
         count = count + 1
 
         if count % 10 == 0 then
@@ -377,10 +377,10 @@ local function many_small_allocations_stress_test()
     local before = collectgarbage("count")
 
     for i = 1, 10000 do
-        local t = { a = 1, b = 2, c = 3 }
-        local s = "string" .. i
+        local _t = { a = 1, b = 2, c = 3 }
+        local _s = "string" .. i
 
-        local f = function()
+        local _f = function()
             return i
         end
     end
@@ -392,10 +392,7 @@ local function many_small_allocations_stress_test()
     local after = collectgarbage("count")
     -- Memory shouldn't grow unboundedly - GC should have collected the garbage
     -- Allow some growth for test infrastructure, but not 10000x
-    assert(
-        after < before + 1000,
-        "memory should be reclaimed, before: " .. before .. " after: " .. after
-    )
+    assert(after < before + 1000, `memory should be reclaimed, before: $before after: $after`)
 end
 
 -- nested table structures with gc
@@ -430,7 +427,7 @@ local function multiple_objects_with_finalizers_all_run_test()
     local finalized_ids = {}
 
     for i = 1, 5 do
-        local obj = setmetatable({ id = i }, {
+        local _obj = setmetatable({ id = i }, {
             __gc = function(self)
                 finalize_count = finalize_count + 1
                 finalized_ids[self.id] = true
@@ -445,7 +442,7 @@ local function multiple_objects_with_finalizers_all_run_test()
     assert(finalize_count == 5, "all 5 finalizers should run, got: " .. finalize_count)
 
     for i = 1, 5 do
-        assert(finalized_ids[i], "finalizer for object " .. i .. " should have run")
+        assert(finalized_ids[i], `finalizer for object $i should have run`)
     end
 end
 
@@ -468,7 +465,7 @@ local function incremental_gc_step_works_without_error_test()
     -- Do incremental collection - verify step returns a boolean (did it finish)
     local step_count = 0
 
-    for i = 1, 100 do
+    for _i = 1, 100 do
         local finished = collectgarbage("step", 10)
         step_count = step_count + 1
 
@@ -531,7 +528,7 @@ local function weak_key_table_collects_unreferenced_keys_test()
     assert(weak[live] == "kept", "the entry with a live key survives")
     local count = 0
 
-    for k, v in pairs(weak) do
+    for _k, _v in pairs(weak) do
         count = count + 1
     end
 
@@ -543,7 +540,7 @@ local function weak_key_table_collects_unreferenced_keys_test()
     collectgarbage()
     count = 0
 
-    for k, v in pairs(weak) do
+    for _k, _v in pairs(weak) do
         count = count + 1
     end
 
@@ -618,7 +615,7 @@ end
 
 -- Build a fresh enum root at runtime through the compiler.
 local function make_enum(src)
-    local chunk = assert(load("return enum " .. src .. " end"))
+    local chunk = assert(load(`return enum $src end`))
     return chunk()
 end
 
@@ -660,10 +657,7 @@ local function allocate_and_drop_vectors_does_not_grow_the_heap_test(size, iters
     local after = collectgarbage("count")
     -- A leak of one buffer per iteration would be size*iters bytes. Allow a
     -- generous fixed slack so the bound stays well clear of interning noise.
-    assert(
-        after - before < 128,
-        "dropped vectors leaked " .. (after - before) .. " KB for size " .. size
-    )
+    assert(after - before < 128, `dropped vectors leaked $((after - before)) KB for size $size`)
 end
 
 -- uninitialized fast vectors also drop cleanly
@@ -672,14 +666,14 @@ local function uninitialized_fast_vectors_also_drop_cleanly_test()
     collectgarbage()
     local before = collectgarbage("count")
 
-    for i = 1, 3000 do
-        local v = vector.create(512, true)
+    for _i = 1, 3000 do
+        local _v = vector.create(512, true)
     end
 
     collectgarbage()
     collectgarbage()
     local after = collectgarbage("count")
-    assert(after - before < 128, "fast vectors leaked " .. (after - before) .. " KB")
+    assert(after - before < 128, `fast vectors leaked $((after - before)) KB`)
 end
 
 -- cloned vectors drop cleanly
@@ -690,14 +684,14 @@ local function cloned_vectors_drop_cleanly_test()
     collectgarbage()
     local before = collectgarbage("count")
 
-    for i = 1, 2000 do
-        local c = vector.clone(seed)
+    for _i = 1, 2000 do
+        local _c = vector.clone(seed)
     end
 
     collectgarbage()
     collectgarbage()
     local after = collectgarbage("count")
-    assert(after - before < 128, "cloned vectors leaked " .. (after - before) .. " KB")
+    assert(after - before < 128, `cloned vectors leaked $((after - before)) KB`)
     -- The retained seed must be untouched by all that churn.
     assert(vector.unpack(seed, 0, "I4") == 0x11223344)
 end
@@ -712,7 +706,7 @@ local function allocate_and_drop_enum_roots_does_not_grow_the_heap_test()
     collectgarbage()
     local before = collectgarbage("count")
 
-    for i = 1, 2000 do
+    for _i = 1, 2000 do
         local e = make_enum("alpha, beta, gamma, delta")
         -- Touch a member so the root is genuinely built, then drop it.
         assert(tonumber(e.delta) == 4)
@@ -721,7 +715,7 @@ local function allocate_and_drop_enum_roots_does_not_grow_the_heap_test()
     collectgarbage()
     collectgarbage()
     local after = collectgarbage("count")
-    assert(after - before < 128, "dropped enums leaked " .. (after - before) .. " KB")
+    assert(after - before < 128, `dropped enums leaked $((after - before)) KB`)
 end
 
 -- ============================================================
@@ -797,14 +791,14 @@ local function vectors_nested_in_a_dropped_table_tree_do_not_leak_test()
     collectgarbage()
     local before = collectgarbage("count")
 
-    for i = 1, 1000 do
-        local tree = { left = { buf = vector.create(128) }, right = { buf = vector.create(128) } }
+    for _i = 1, 1000 do
+        local _tree = { left = { buf = vector.create(128) }, right = { buf = vector.create(128) } }
     end
 
     collectgarbage()
     collectgarbage()
     local after = collectgarbage("count")
-    assert(after - before < 128, "nested vectors leaked " .. (after - before) .. " KB")
+    assert(after - before < 128, `nested vectors leaked $((after - before)) KB`)
 end
 
 -- dropping a coroutine collects vectors reachable only from its stack
@@ -841,10 +835,7 @@ local function vectors_do_not_leak_in_generational_mode_test()
     collectgarbage()
     local after = collectgarbage("count")
     collectgarbage(prev)
-    assert(
-        after - before < 128,
-        "vectors leaked in generational mode: " .. (after - before) .. " KB"
-    )
+    assert(after - before < 128, `vectors leaked in generational mode: $((after - before)) KB`)
 end
 
 -- single basic step and a huge step leave vectors intact
@@ -957,14 +948,14 @@ local function enum_with_many_members_allocates_and_drops_without_leaking_test()
     local names = "m1"
 
     for i = 2, 60 do
-        names = names .. ", m" .. i
+        names = `$names, m$i`
     end
 
     collectgarbage()
     collectgarbage()
     local before = collectgarbage("count")
 
-    for i = 1, 500 do
+    for _i = 1, 500 do
         local e = make_enum(names)
         assert(tonumber(e.m60) == 60)
     end
@@ -972,7 +963,7 @@ local function enum_with_many_members_allocates_and_drops_without_leaking_test()
     collectgarbage()
     collectgarbage()
     local after = collectgarbage("count")
-    assert(after - before < 128, "wide enums leaked " .. (after - before) .. " KB")
+    assert(after - before < 128, `wide enums leaked $((after - before)) KB`)
 end
 
 -- ============================================================
@@ -1076,7 +1067,7 @@ local function large_held_vector_survives_small_garbage_churn_intact_test()
     -- Churn a lot of small collectable garbage, forcing collections while the
     -- large buffer is held live.
     for i = 1, 20000 do
-        local junk = { i, tostring(i), vector.create(16) }
+        local _junk = { i, tostring(i), vector.create(16) }
 
         if i % 2000 == 0 then
             collectgarbage("step", 20)
@@ -1097,7 +1088,7 @@ local function vector_resize_under_gc_churn_preserves_data_test()
     for i = 1, 2000 do
         vector.resize(v, 8 + (i % 4096))
         -- Allocate throwaway garbage between resizes to drive collections.
-        local junk = vector.create(128)
+        local _junk = vector.create(128)
 
         if i % 200 == 0 then
             collectgarbage("step", 10)
@@ -1115,7 +1106,7 @@ local function resize_down_then_up_under_churn_zero_fills_re_exposed_bytes_test(
 
     for i = 1, 500 do
         vector.resize(v, 8)
-        local junk = vector.create(256)
+        local _junk = vector.create(256)
         vector.resize(v, 64)
 
         if i % 100 == 0 then
@@ -1186,7 +1177,7 @@ local function slice_results_are_vectors_that_drop_without_leaking_test()
     collectgarbage()
     local before = collectgarbage("count")
 
-    for i = 1, 3000 do
+    for _i = 1, 3000 do
         local s = base[1, 512]
         assert(type(s) == "vector")
     end
@@ -1194,7 +1185,7 @@ local function slice_results_are_vectors_that_drop_without_leaking_test()
     collectgarbage()
     collectgarbage()
     local after = collectgarbage("count")
-    assert(after - before < 128, "slice copies leaked " .. (after - before) .. " KB")
+    assert(after - before < 128, `slice copies leaked $((after - before)) KB`)
     -- The base buffer must be untouched by all the slicing.
     assert(vector.unpack(base, 100, "B") == 100)
 end
@@ -1330,7 +1321,7 @@ local function all_finalizers_holding_vectors_run_and_read_their_own_data_test()
 end
 
 -- ===== gengc =====
-local debug = require "debug"
+local _debug = require "debug"
 
 -- gc mode switching
 local function gc_mode_switching_2_test()
@@ -1378,7 +1369,7 @@ end
 local function finalized_objects_test()
     local finalized = false
 
-    local obj = setmetatable({}, {
+    local obj = setmetatable({}, {  -- lus: allow(unused-local)
         __gc = function()
             finalized = true
         end,

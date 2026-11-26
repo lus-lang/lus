@@ -1,7 +1,7 @@
 -- Bitwise string-coercion shim and its test suite. The shim lives in a fixture
 -- because bitwise_test.lus loads it as well.
 
-pledge("load", "fs:read=" .. TEST_DIR .. "/fixtures/bwcoercion/*")
+pledge("load", `fs:read=$TEST_DIR/fixtures/bwcoercion/*`)
 
 dofile(TEST_DIR .. "/fixtures/bwcoercion/shim.lus")
 

@@ -14,7 +14,7 @@ local live, removed, on_objects = {}, {}, {}
 
 local function scan(dir)
     for _, entry in ipairs(fs.list(dir)) do
-        local path = dir .. "/" .. entry
+        local path = `$dir/$entry`
         local kind = fs.type(path)
 
         if kind == "directory" then
@@ -23,9 +23,8 @@ local function scan(dir)
             local f = io.open(path)
             local text = f:read("a")
             f:close()
-            local name = text:match("\nname: ([^\n]+)")
 
-            if name then
+            if name = text:match("\nname: ([^\n]+)") then
                 if text:match("\nreceiver: ") then
                     on_objects[name] = true
                 end
@@ -102,7 +101,7 @@ local function every_library_function_has_a_spec_entry_test()
     local function walk(prefix, t, depth)
         for k, v in pairs(t) do
             if type(k) == "string" then
-                local full = prefix == "" and k or prefix .. "." .. k
+                local full = prefix == "" and k or `$prefix.$k`
 
                 if type(v) == "function" and not live[full] then
                     undocumented[#undocumented + 1] = full

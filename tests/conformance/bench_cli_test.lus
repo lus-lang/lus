@@ -65,7 +65,7 @@ end
 
 local function bench_line(report, name)
     for line in report:gmatch("[^\n]+") do
-        if line:find("bench " .. name .. ":", 1, true) then
+        if line:find(`bench $name:`, 1, true) then
             return line
         end
     end

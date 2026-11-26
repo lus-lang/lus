@@ -495,7 +495,7 @@ local function unpackmany_count_limits_the_iterations_test()
     vector.pack(v, 0, "I4I4I4", 1, 2, 3)
     local count = 0
 
-    for x in vector.unpackmany(v, 0, "I4", 2) do
+    for _x in vector.unpackmany(v, 0, "I4", 2) do
         count = count + 1
     end
 
@@ -507,7 +507,7 @@ local function unpackmany_count_of_zero_means_unlimited_test()
     vector.pack(v, 0, "I4I4I4", 1, 2, 3)
     local count = 0
 
-    for x in vector.unpackmany(v, 0, "I4", 0) do
+    for _x in vector.unpackmany(v, 0, "I4", 0) do
         count = count + 1
     end
 
@@ -532,7 +532,7 @@ local function unpackmany_count_applies_per_record_for_multi_value_formats_test(
     vector.pack(v, 0, "BBBBBB", 1, 2, 3, 4, 5, 6)
     local rows = 0
 
-    for a, b in vector.unpackmany(v, 0, "BB", 2) do
+    for _a, _b in vector.unpackmany(v, 0, "BB", 2) do
         rows = rows + 1
     end
 
@@ -543,7 +543,7 @@ local function unpackmany_starting_at_the_end_yields_no_iterations_test()
     local v = vector.create(8)
     local count = 0
 
-    for x in vector.unpackmany(v, 8, "I4") do
+    for _x in vector.unpackmany(v, 8, "I4") do
         count = count + 1
     end
 
@@ -555,7 +555,7 @@ local function unpackmany_raises_on_a_trailing_partial_record_test()
     local v = vector.create(10)
 
     raises(function()
-        for x in vector.unpackmany(v, 0, "I4") do
+        for _x in vector.unpackmany(v, 0, "I4") do
         end
     end, "falls out of bounds")
 end
@@ -565,7 +565,7 @@ local function unpackmany_raises_on_an_unterminated_z_string_mid_loop_test()
     vector.pack(v, 0, "BBB", 1, 2, 3)
 
     raises(function()
-        for s in vector.unpackmany(v, 0, "z") do
+        for _s in vector.unpackmany(v, 0, "z") do
         end
     end, "unfinished string in vector")
 end
@@ -575,7 +575,7 @@ local function unpackmany_raises_on_an_oversized_length_prefix_mid_loop_test()
     vector.pack(v, 0, "BBB", 250, 65, 66)
 
     raises(function()
-        for s in vector.unpackmany(v, 0, "s1") do
+        for _s in vector.unpackmany(v, 0, "s1") do
         end
     end, "data too short")
 end
@@ -603,7 +603,7 @@ local function resizing_to_zero_inside_an_unpackmany_loop_terminates_cleanly_tes
     vector.pack(v, 0, "I4I4I4", 1, 2, 3)
     local count = 0
 
-    for x in vector.unpackmany(v, 0, "I4") do
+    for _x in vector.unpackmany(v, 0, "I4") do
         count = count + 1
         vector.resize(v, 0)
     end
@@ -826,7 +826,7 @@ end
 local function pack_out_of_bounds_test()
     local v = vector.create(4)
     -- Packing beyond vector size should error
-    local ok, err = catch vector.pack(v, 2, "I4", 123)
+    local ok, _err = catch vector.pack(v, 2, "I4", 123)
     assert(not ok, "should error when packing beyond bounds")
 end
 
@@ -834,27 +834,27 @@ local function unpack_out_of_bounds_test()
     local v = vector.create(4)
     vector.pack(v, 0, "I4", 42)
     -- Unpacking beyond vector size should error
-    local ok, err = catch vector.unpack(v, 2, "I4")
+    local ok, _err = catch vector.unpack(v, 2, "I4")
     assert(not ok, "should error when unpacking beyond bounds")
 end
 
 local function negative_offset_errors_test()
     local v = vector.create(8)
-    local ok, err = catch vector.pack(v, -1, "I4", 123)
+    local ok, _err = catch vector.pack(v, -1, "I4", 123)
     assert(not ok, "should error with negative offset")
 end
 
 local function unpackmany_rejects_invalid_bounds_test()
     local v = vector.create(8)
-    local ok, err = catch vector.unpackmany(v, -1, "I4")
+    local ok, _err = catch vector.unpackmany(v, -1, "I4")
     assert(not ok, "should error with negative offset")
-    local ok2, err2 = catch vector.unpackmany(v, 0, "I4", -1)
+    local ok2, _err2 = catch vector.unpackmany(v, 0, "I4", -1)
     assert(not ok2, "should error with negative count")
 end
 
 local function invalid_format_string_test()
     local v = vector.create(8)
-    local ok, err = catch vector.pack(v, 0, "%", 123)
+    local ok, _err = catch vector.pack(v, 0, "%", 123)
     assert(not ok, "should error with invalid format")
 end
 
@@ -863,11 +863,11 @@ local function operations_on_zero_size_vector_test()
     assert(#v == 0, "zero-size vector should have length 0")
 
     -- Can't pack anything into zero-size
-    local ok, err = catch vector.pack(v, 0, "B", 1)
+    local ok, _err = catch vector.pack(v, 0, "B", 1)
     assert(not ok, "should error packing into zero-size vector")
 
     -- Can't unpack anything from zero-size
-    local ok2, err2 = catch vector.unpack(v, 0, "B")
+    local ok2, _err2 = catch vector.unpack(v, 0, "B")
     assert(not ok2, "should error unpacking from zero-size vector")
 end
 
@@ -929,10 +929,7 @@ local function resize_larger_preserves_data_test()
     assert(#v == 1024, "size should be 1024")
 
     for i = 0, 63 do
-        assert(
-            vector.unpack(v, i, "B") == (i * 7 + 3) % 256,
-            "byte " .. i .. " should survive the grow"
-        )
+        assert(vector.unpack(v, i, "B") == (i * 7 + 3) % 256, `byte $i should survive the grow`)
     end
 
     assert(vector.unpack(v, 64, "B") == 0, "first grown byte should be zero")
@@ -962,7 +959,7 @@ local function unpack_string_from_insufficient_data_test()
     local v = vector.create(3)
     vector.pack(v, 0, "c3", "abc")
     -- Try to unpack more than available
-    local ok, err = catch vector.unpack(v, 0, "c10")
+    local ok, _err = catch vector.unpack(v, 0, "c10")
     assert(not ok, "should error when unpacking more than available")
 end
 
@@ -988,7 +985,7 @@ local function unpackmany_on_empty_vector_test()
     local v = vector.create(0)
     local count = 0
 
-    for val in vector.unpackmany(v, 0, "I4") do
+    for _val in vector.unpackmany(v, 0, "I4") do
         count = count + 1
     end
 

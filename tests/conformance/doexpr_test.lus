@@ -28,7 +28,7 @@ end
 
 local function do_expression_without_provide_returns_nil_test()
     local x = do
-        local y = 10
+        local _y = 10
     end
 
     assert(x == nil, "x should be nil, got " .. tostring(x))
@@ -235,6 +235,7 @@ local function shadowing_outer_variable_test()
     local x = 100
 
     local result = do
+        -- lus: allow(shadowed-local)
         local x = 200  -- shadows outer x
         provide x
     end

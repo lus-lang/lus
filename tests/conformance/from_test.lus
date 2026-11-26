@@ -228,7 +228,7 @@ end
 
 -- inner scope shadows outer
 local function inner_scope_shadows_outer_test()
-    local a = 999
+    local _a = 999
 
     do
         local t = { a = 1 }
@@ -243,7 +243,7 @@ local function outer_scope_unchanged_test()
 
     do
         local t = { a = 1 }
-        local a from t
+        local _a from t
     end
 
     assert(a == 999)

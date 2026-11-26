@@ -52,7 +52,7 @@ local function basic_closure_execution_test()
     setmetatable(x, { __mode = "kv" })
 
     while x[1] do
-        local s = A .. A .. A .. A  -- create garbage
+        local _s = A .. A .. A .. A  -- create garbage
         A = A + 1
     end
 
@@ -72,7 +72,7 @@ local function closure_equality_test()
     local a = {}
 
     for i = 1, 5 do
-        a[i] = function(x)
+        a[i] = function(_x)
             return i + a + _ENV
         end
     end
@@ -287,7 +287,7 @@ local function closures_in_if_then_else_with_goto_test()
             end
         elseif i % 3 == 1 then
             goto L1
-            error("not here")
+            error("not here")  -- lus: allow(unreachable-code)
             ::L1::
             local y = 1
 
@@ -302,18 +302,18 @@ local function closures_in_if_then_else_with_goto_test()
             ::l4a::
             a[i] = t
             goto l4b
-            error("should never be here!")
+            error("should never be here!")  -- lus: allow(unreachable-code)
             ::l4::
             local y = 2
 
             t = function(x)
-                local t = y
+                local t = y  -- lus: allow(shadowed-local)
                 y = x
                 return t
             end
 
             goto l4a
-            error("should never be here!")
+            error("should never be here!")  -- lus: allow(unreachable-code)
             ::l4b::
         end
     end
@@ -347,7 +347,7 @@ local function debug_upvalue_manipulation_test()
     local foo1, foo2, foo3
 
     do
-        local a, b, c = 3, 5, 7
+        local a, b, _c = 3, 5, 7
 
         foo1 = function()
             return a + b
@@ -358,7 +358,7 @@ local function debug_upvalue_manipulation_test()
         end
 
         do
-            local a = 10
+            local a = 10  -- lus: allow(shadowed-local)
 
             foo3 = function()
                 return a + b

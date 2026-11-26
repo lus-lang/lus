@@ -938,7 +938,7 @@ end
 
 -- named vararg packs extras into a table with a count field
 local function named_vararg_packs_extras_into_a_table_with_a_count_field_test()
-    local function named(a, ...b)
+    local function named(_a, ...b)
         return b
     end
 
@@ -951,7 +951,7 @@ end
 
 -- named vararg counts trailing nils
 local function named_vararg_counts_trailing_nils_test()
-    local function named(a, ...b)
+    local function named(_a, ...b)
         return b
     end
 
@@ -963,7 +963,7 @@ end
 
 -- named vararg captures a final call's expansion
 local function named_vararg_captures_a_final_call_s_expansion_test()
-    local function named(a, ...b)
+    local function named(_a, ...b)
         return b
     end
 
@@ -976,7 +976,7 @@ end
 
 -- named vararg with no extras has count zero
 local function named_vararg_with_no_extras_has_count_zero_test()
-    local function named(a, ...b)
+    local function named(_a, ...b)
         return b
     end
 

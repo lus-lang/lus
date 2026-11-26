@@ -24,7 +24,7 @@ local ROOT = do
 
     provide fs.path.join(
         os.getenv("TMPDIR") or "/tmp",
-        "lus-walk-test-" .. os.time() .. "-" .. tostring({}):sub(-6)
+        `lus-walk-test-$(os.time())-$(tostring({}):sub(-6))`
     )
 end
 

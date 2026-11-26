@@ -28,8 +28,8 @@ local function computed_once_on_first_read_test()
 end
 
 local function never_read_never_computed_test()
-    local x <lazy> = error("never")
-    local y <lazy> = undefined_global_function()
+    local x <lazy> = error("never")  -- lus: allow(unused-local)
+    local y <lazy> = undefined_global_function()  -- lus: allow(unused-local)
 end
 
 local function sees_values_at_first_read_test()
@@ -137,7 +137,7 @@ local function close_only_when_read_test()
 
     local function resource(name)
         return setmetatable({}, {
-            __close = function(_, err)
+            __close = function(_, err)  -- lus: allow(unused-param)
                 log[#log + 1] = name
             end,
         })
@@ -166,7 +166,7 @@ local function runtime_attributes_apply_to_the_value_test()
         end
     end
 
-    local function doubled(name, v)
+    local function doubled(name, v)  -- lus: allow(unused-param)
         return v * 2
     end
 
@@ -191,7 +191,7 @@ local function group_fields_test()
     assert(stats.median == 4 and stats.median == 4 and calls == 1)
     local copy <group> = stats
     assert(copy.median == 4)
-    local count, median from stats
+    local count, median from stats  -- lus: allow(unused-local)
     assert(median == 4)
     assert(
         compile_error("local g <group> = { a <lazy> = 1 } g.a = 2"):find(
@@ -278,7 +278,7 @@ local function hot_loop_reads_test()
     local x <lazy> = 3
     local s = 0
 
-    for i = 1, 1000 do
+    for i = 1, 1000 do  -- lus: allow(unused-loop-var)
         s = s + x
     end
 

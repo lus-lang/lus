@@ -35,9 +35,11 @@ export const skipped = [
 
 // Files that are formatted but not checked. The scripts of the
 // differential tests must print the same output under Lus and under the
-// reference, so they keep the forms both understand. The other tests are
-// checked as they become clean.
-export const unchecked = ["tests/", "packages/language-server/tests/"];
+// reference, so they keep the forms both understand. The conformance
+// suite and the tests of the language server are checked, and the other
+// test programs are checked as they become clean.
+export const unchecked = ["tests/"];
+const checkedTests = ["tests/conformance/"];
 
 // The Markdown files whose ```lus blocks are code to format.
 const docRoots = ["packages/site/src/manual/", "spec/", ".agents/", "examples/README.md", "README.md"];
@@ -93,7 +95,9 @@ function main(argv) {
     process.stderr.write(fmt.stderr);
     failed++;
   }
-  const checked = files.filter((f) => !unchecked.some((prefix) => f.startsWith(prefix)));
+  const checked = files.filter(
+    (f) => !unchecked.some((prefix) => f.startsWith(prefix)) || checkedTests.some((prefix) => f.startsWith(prefix)),
+  );
   const check = spawnSync(lus, ["check", "--strict", ...checked], { cwd: root, encoding: "utf8" });
   if (check.status !== 0) {
     process.stdout.write(check.stdout);

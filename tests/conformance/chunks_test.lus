@@ -290,9 +290,7 @@ local function a_shortened_or_lengthened_query_plan_raises_an_error_test()
 
     for newlen = 3, len + 2 do
         if newlen ~= len then
-            local f = load(rebuild(newlen, 32), "=q", "b")
-
-            if f then
+            if f = load(rebuild(newlen, 32), "=q", "b") then
                 local ok, err = catch f(data, 1)
 
                 if not ok then

@@ -124,7 +124,7 @@ end
 local function tostring_with_expression_test()
     local mt = {
         __tostring = function(self)
-            return "point(" .. self.x .. "," .. self.y .. ")"
+            return `point($(self.x),$(self.y))`
         end,
     }
 
@@ -170,7 +170,7 @@ end
 -- A backtick string takes every escape of a quoted string.
 local function escapes_of_quoted_strings_test()
     local code = 31
-    assert(`\27[$(code)m` == "\27[" .. code .. "m")
+    assert(`\27[$(code)m` == `\027[$(code)m`)
     assert(`\x41\65\u{e9}` == "AA\u{e9}")
     assert(`\a\b\f\v` == "\a\b\f\v")
     assert(`\"\'` == "\"'")
@@ -257,7 +257,7 @@ end
 local function string_concat_in_expression_test()
     local a = "hello"
     local b = "world"
-    local s = `$(a .. " " .. b)`
+    local s = `$(`$a $b`)`
     assert(s == "hello world")
 end
 

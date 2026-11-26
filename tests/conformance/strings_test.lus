@@ -1061,9 +1061,9 @@ end
 
 local function rep_joins_a_lead_and_a_trail_surrogate_across_copies_test()
     local lead, trail = "\u{D83D}", "\u{DE00}"
-    assert((trail .. lead):rep(2) == trail .. "\u{1F600}" .. lead)
+    assert((trail .. lead):rep(2) == `$trail😀$lead`)
     assert((trail .. lead):rep(2):len() == 3)
-    assert(("x"):rep(3, trail) == "x" .. trail .. "x" .. trail .. "x")
+    assert(("x"):rep(3, trail) == `x$(trail)x$(trail)x`)
 end
 
 local function reverse_works_by_character_test()

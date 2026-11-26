@@ -111,29 +111,29 @@ end
 for _, op in ipairs{ "==", "~=", "<", "<=", ">", ">=" } do
     for _, x in ipairs(num_atoms) do
         for _, y in ipairs(num_atoms) do
-            addPred(x[1] .. " " .. op .. " " .. y[1], function(p)
+            addPred(`$(x[1]) $op $(y[1])`, function(p)
                 return cmp(op, x[2](p), y[2](p))
             end)
         end
 
-        addPred(x[1] .. " " .. op .. " " .. missing[1], function(p)
+        addPred(`$(x[1]) $op $(missing[1])`, function(p)
             return cmp(op, x[2](p), nil)
         end)
 
-        addPred(missing[1] .. " " .. op .. " " .. x[1], function(p)
+        addPred(`$(missing[1]) $op $(x[1])`, function(p)
             return cmp(op, nil, x[2](p))
         end)
     end
 
     for _, x in ipairs(str_atoms) do
         for _, y in ipairs(str_atoms) do
-            addPred(x[1] .. " " .. op .. " " .. y[1], function(p)
+            addPred(`$(x[1]) $op $(y[1])`, function(p)
                 return cmp(op, x[2](p), y[2](p))
             end)
         end
     end
 
-    addPred("p.a " .. op .. " nil", function()
+    addPred(`p.a $op nil`, function()
         return false
     end)
 end
@@ -144,11 +144,11 @@ for i = 1, base_count, 7 do
     for j = 1, base_count, 11 do
         local l, r = predicates[i], predicates[j]
 
-        addPred("(" .. l[1] .. ") and (" .. r[1] .. ")", function(p)
+        addPred(`($(l[1])) and ($(r[1]))`, function(p)
             return l[2](p) and r[2](p)
         end)
 
-        addPred("(" .. l[1] .. ") or (" .. r[1] .. ")", function(p)
+        addPred(`($(l[1])) or ($(r[1]))`, function(p)
             return l[2](p) or r[2](p)
         end)
     end
@@ -169,7 +169,7 @@ for _, op in ipairs{ "+", "-", "*" } do
     for _, x in ipairs(num_atoms) do
         for _, y in ipairs(num_atoms) do
             values[#values + 1] = {
-                "(" .. x[1] .. " " .. op .. " " .. y[1] .. ")",
+                `($(x[1]) $op $(y[1]))`,
                 function(p)
                     return arith(op, x[2](p), y[2](p))
                 end,
@@ -181,14 +181,14 @@ end
 for _, x in ipairs(str_atoms) do
     for _, y in ipairs(num_atoms) do
         values[#values + 1] = {
-            "(" .. x[1] .. " .. " .. y[1] .. ")",
+            `($(x[1]) .. $(y[1]))`,
             function(p)
                 return x[2](p) .. y[2](p)
             end,
         }
 
         values[#values + 1] = {
-            "(" .. y[1] .. " .. " .. x[1] .. ")",
+            `($(y[1]) .. $(x[1]))`,
             function(p)
                 return y[2](p) .. x[2](p)
             end,
@@ -199,9 +199,7 @@ end
 local function run(src)
     local f = assert(
         load(
-            "local t, lim = ... local out = {} for row in query("
-                .. src
-                .. ") do out[#out + 1] = row end return out",
+            `local t, lim = ... local out = {} for row in query($src) do out[#out + 1] = row end return out`,
             "=q"
         )
     )
@@ -210,7 +208,7 @@ end
 
 local function every_predicate_selects_the_rows_a_loop_selects_test()
     for _, pred in ipairs(predicates) do
-        local got = run("@t as p where " .. pred[1] .. " select p.id")
+        local got = run(`@t as p where $(pred[1]) select p.id`)
         local want = {}
 
         for _, p in ipairs(rows) do
@@ -219,7 +217,7 @@ local function every_predicate_selects_the_rows_a_loop_selects_test()
             end
         end
 
-        assert(#got == #want, pred[1] .. ": " .. #got .. " rows against " .. #want)
+        assert(#got == #want, `$(pred[1]): $(#got) rows against $(#want)`)
 
         for i = 1, #want do
             assert(got[i].id == want[i], pred[1])
@@ -229,10 +227,10 @@ end
 
 local function every_value_projects_as_a_loop_computes_test()
     for _, v in ipairs(values) do
-        local got = run("@t as p select " .. v[1] .. " as v")
+        local got = run(`@t as p select $(v[1]) as v`)
 
         for i, p in ipairs(rows) do
-            assert(got[i].v == v[2](p), v[1] .. " at row " .. i)
+            assert(got[i].v == v[2](p), `$(v[1]) at row $i`)
         end
     end
 end
@@ -240,7 +238,7 @@ end
 local function every_value_groups_as_a_loop_groups_test()
     for _, v in ipairs(values) do
         local got = run(
-            "@t as p select " .. v[1] .. " as k, count(*) as n, sum(p.a) as s group by " .. v[1]
+            `@t as p select $(v[1]) as k, count(*) as n, sum(p.a) as s group by $(v[1])`
         )
         local counts, sums, keys = {}, {}, 0
 
@@ -269,16 +267,16 @@ local function projections_must_follow_the_group_keys_test()
     local ok_cases = { "p.a + 1", "p.a * p.a", "p.a .. \"!\"", "p.a > 1", "p.a == 2 or p.a == 3" }
 
     for _, e in ipairs(ok_cases) do
-        local got = run("@t as p select " .. e .. " as k, count(*) as n group by p.a")
+        local got = run(`@t as p select $e as k, count(*) as n group by p.a`)
         assert(#got == 3, e)
     end
 
     for _, e in ipairs{ "p.c", "p.a + p.c", "p.b .. p.a", "p.c > 1", "p.a == 2 and p.c > 0" } do
-        local ok, err = catch run("@t as p select " .. e .. " as k, count(*) as n group by p.a")
+        local ok, err = catch run(`@t as p select $e as k, count(*) as n group by p.a`)
         assert(
             not ok
                 and err:find("a grouped projection must be an aggregate or a group key", 1, true),
-            e .. ": " .. tostring(err)
+            `$e: $(tostring(err))`
         )
     end
 end
@@ -326,11 +324,7 @@ local function group_keys_may_read_hosts_and_deep_fields_test()
     for _, e in ipairs{ "p.x.y", "p.x.y + 1", "cfg.n * p.x.y", "lim * p.x.y" } do
         local f = assert(
             load(
-                "local t, cfg, lim = ... local n = 0 for r in query(@t as p select "
-                    .. e
-                    .. " as k, count(*) as n group by "
-                    .. e
-                    .. ") do n = n + 1 end return n",
+                `local t, cfg, lim = ... local n = 0 for r in query(@t as p select $e as k, count(*) as n group by $e) do n = n + 1 end return n`,
                 "=q"
             )
         )

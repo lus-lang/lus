@@ -302,7 +302,7 @@ local function enum_indices_via_direct_tonumber_calls_as_slice_bounds_test()
     local e = enum low, mid, high end
     local t = { "a", "b", "c", "d" }
     local s = t[tonumber(e.low), tonumber(e.high)]
-    assert(type(s) == "table", "expected table, got " .. type(s) .. " (" .. tostring(s) .. ")")
+    assert(type(s) == "table", `expected table, got $(type(s)) ($(tostring(s)))`)
     assert(#s == 3 and s[1] == "a" and s[3] == "c")
 end
 
@@ -351,7 +351,7 @@ local function slice_of_a_non_sliceable_value_raises_test(kind, pattern)
     end
 
     local ok, err = catch value[1, 2]
-    assert(ok == false, "slicing " .. kind .. " must raise")
+    assert(ok == false, `slicing $kind must raise`)
     assert(string.find(tostring(err), pattern))
 end
 

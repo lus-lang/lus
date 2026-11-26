@@ -90,7 +90,7 @@ local function basic_float_notation_and_equality_test()
     assert(a == -a and 0 == -0)
 
     local x = -1
-    local mz = 0 / x  -- minus zero
+    local _mz = 0 / x  -- minus zero
 end
 
 -- math.modf
@@ -122,7 +122,7 @@ local function floor_division_and_conversions_test()
     assert(eqT(3.5 // 1.5, 2.0))
     assert(eqT(3.5 // -1.5, -3.0))
 
-    local x, y
+    local x, _y
     x = 1
     assert(x // 0.0 == 1 / 0)
     x = 1.0
@@ -256,7 +256,7 @@ local function division_edge_cases_test()
     assert(-1.0 / 0.0 == -math.huge)
 
     -- Integer division by zero errors
-    local ok1, err1 = catch (function()
+    local ok1, _err1 = catch (function()
         return 1 // 0
     end)()
 
@@ -407,13 +407,13 @@ end
 -- math.random range validation
 local function math_random_range_validation_test()
     -- Random with range
-    for i = 1, 100 do
+    for _i = 1, 100 do
         local r = math.random(5, 10)
         assert(r >= 5 and r <= 10)
     end
 
     -- Single bound
-    for i = 1, 100 do
+    for _i = 1, 100 do
         local r = math.random(100)
         assert(r >= 1 and r <= 100)
     end
@@ -695,7 +695,7 @@ end
 -- up to but not including one.
 -- random with no argument returns a float in [0, 1)
 local function random_with_no_argument_returns_a_float_in_0_1_test()
-    for i = 1, 200 do
+    for _i = 1, 200 do
         local r = math.random()
         assert(math.type(r) == "float")
         assert(r >= 0.0 and r < 1.0)
@@ -708,7 +708,7 @@ end
 local function random_with_one_bound_returns_an_integer_in_1_m_test()
     local saw_low, saw_high = false, false
 
-    for i = 1, 400 do
+    for _i = 1, 400 do
         local r = math.random(4)
         assert(math.type(r) == "integer")
         assert(r >= 1 and r <= 4)
@@ -737,7 +737,7 @@ local random_with_two_bounds_stays_inside_the_inclusive_interval_cases = {
 }
 
 local function random_with_two_bounds_stays_inside_the_inclusive_interval_test(lo, hi)
-    for i = 1, 200 do
+    for _i = 1, 200 do
         local r = math.random(lo, hi)
         assert(math.type(r) == "integer")
         assert(r >= lo and r <= hi)
@@ -747,7 +747,7 @@ end
 -- A degenerate interval whose bounds are equal always returns that value.
 -- random of a single-point interval returns that point
 local function random_of_a_single_point_interval_returns_that_point_test()
-    for i = 1, 20 do
+    for _i = 1, 20 do
         assert(math.random(7, 7) == 7)
     end
 end
@@ -758,7 +758,7 @@ end
 local function random_of_zero_draws_from_the_full_integer_range_test()
     local saw_negative = false
 
-    for i = 1, 400 do
+    for _i = 1, 400 do
         local r = math.random(0)
         assert(math.type(r) == "integer")
 
@@ -774,7 +774,7 @@ end
 -- an integer, exercising the unsigned projection path.
 -- random over the whole integer range returns an integer
 local function random_over_the_whole_integer_range_returns_an_integer_test()
-    for i = 1, 50 do
+    for _i = 1, 50 do
         local r = math.random(minint, maxint)
         assert(math.type(r) == "integer")
     end
@@ -893,7 +893,7 @@ end
 -- has no integer representation and raises.
 -- randomseed accepts an integer-valued float and rejects a fractional one
 local function randomseed_accepts_an_integer_valued_float_and_rejects_a_fractional_on_test()
-    local a, b = math.randomseed(100.0)
+    local a, _b = math.randomseed(100.0)
     assert(a == 100)
 
     raises(function()
@@ -1075,7 +1075,7 @@ end
 local function an_integer_loop_ending_at_maxinteger_terminates_test()
     local count = 0
 
-    for i = maxint - 2, maxint do
+    for _i = maxint - 2, maxint do
         count = count + 1
     end
 
@@ -1086,7 +1086,7 @@ end
 -- a zero step raises
 local function a_zero_step_raises_test()
     raises(function()
-        for i = 1, 10, 0 do
+        for _i = 1, 10, 0 do
         end
     end, "'for' step is zero")
 end
@@ -1123,7 +1123,7 @@ end
 local function a_negative_step_with_an_ascending_range_runs_zero_times_test()
     local count = 0
 
-    for i = 1, 5, -1 do
+    for _i = 1, 5, -1 do
         count = count + 1
     end
 
@@ -1135,7 +1135,7 @@ end
 local function a_positive_step_with_a_descending_range_runs_zero_times_test()
     local count = 0
 
-    for i = 5, 1, 1 do
+    for _i = 5, 1, 1 do
         count = count + 1
     end
 
@@ -1175,7 +1175,7 @@ local function a_float_limit_with_an_integer_start_converts_per_lua_rules_test(
 )
     local count = 0
 
-    for i = start, limit, step do
+    for _i = start, limit, step do
         count = count + 1
     end
 
@@ -1211,7 +1211,7 @@ end
 local function a_loop_with_an_infinite_float_limit_is_bounded_only_by_break_test()
     local count = 0
 
-    for i = 1, math.huge do
+    for _i = 1, math.huge do
         count = count + 1
 
         if count >= 3 then
@@ -1398,7 +1398,7 @@ local numeric_loop_edges_cases = {
 
 local function numeric_loop_edges_test(label, f, want)
     local got = loop_values(f)
-    assert(got == want, label .. ": " .. got)
+    assert(got == want, `$label: $got`)
 end
 
 -- ==== Exact operands of the math functions ====
@@ -1472,7 +1472,7 @@ local exact_operands_of_math_functions_cases = {
 
 local function exact_operands_of_math_functions_test(label, f, kind, text)
     local v = f()
-    assert(math.type(v) == kind and tostring(v) == text, label .. ": " .. tostring(v))
+    assert(math.type(v) == kind and tostring(v) == text, `$label: $(tostring(v))`)
 end
 
 local function fmod_of_bigints_by_zero_raises_test()

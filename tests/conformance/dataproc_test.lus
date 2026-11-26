@@ -600,7 +600,7 @@ local rejects_a_non_table_first_argument_with_a_table_expected_err_cases = {
     },
     {
         function()
-            return table.reduce(42, function(a, b)
+            return table.reduce(42, function(a, _b)
                 return a
             end, 0)
         end,
@@ -830,10 +830,7 @@ local function table_sum_is_consistent_between_fastcall_and_dynamic_dispatc_test
     local via_dispatch = dispatched({ 1, "10", 2 })
     assert(
         via_fastcall == via_dispatch,
-        "fastcall gave "
-            .. tostring(via_fastcall)
-            .. " but dispatch gave "
-            .. tostring(via_dispatch)
+        `fastcall gave $(tostring(via_fastcall)) but dispatch gave $(tostring(via_dispatch))`
     )
 end
 
@@ -879,10 +876,7 @@ local function table_mean_is_consistent_between_fastcall_and_dynamic_dispat_test
     local both_nan = (via_fastcall ~= via_fastcall) and (via_dispatch ~= via_dispatch)
     assert(
         both_nan or via_fastcall == via_dispatch,
-        "fastcall gave "
-            .. tostring(via_fastcall)
-            .. " but dispatch gave "
-            .. tostring(via_dispatch)
+        `fastcall gave $(tostring(via_fastcall)) but dispatch gave $(tostring(via_dispatch))`
     )
 end
 
@@ -1061,7 +1055,7 @@ end
 local function table_reduce_without_an_initial_value_starts_indexing_at_the_test()
     local first
 
-    table.reduce({ 10, 20, 30 }, function(a, x, i)
+    table.reduce({ 10, 20, 30 }, function(a, _x, i)
         if not first then
             first = i
         end

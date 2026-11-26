@@ -92,7 +92,7 @@ local function old_garbage_is_collected_in_generational_mode_test()
     local old = collectgarbage("generational")
     local done = false
 
-    local u = setmetatable({}, {
+    local u = setmetatable({}, {  -- lus: allow(unused-local)
         __gc = function()
             done = true
         end,
@@ -104,7 +104,7 @@ local function old_garbage_is_collected_in_generational_mode_test()
     local n = 0
 
     while not done and n < 20000000 do
-        local t = { n }
+        local _t = { n }
         n = n + 1
     end
 

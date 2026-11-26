@@ -10,10 +10,10 @@ local script_number = 0
 
 local function shell_quote(value)
     if windows then
-        return '"' .. value .. '"'
+        return `"$value"`
     end
 
-    return "'" .. value:gsub("'", "'\\''") .. "'"
+    return `'$(value:gsub("'", "'\\''"))'`
 end
 
 local function write(path, source)

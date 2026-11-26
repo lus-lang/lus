@@ -159,7 +159,7 @@ local function tainted_type_fallback_test()
 
     -- Rebind type in a new environment
     local env = setmetatable({
-        type = function(x)
+        type = function(_x)
             custom_called = true
             return "custom"
         end,
@@ -205,7 +205,7 @@ end
 -- ==== Argument count: type with 0 args ====
 -- type 0 args error
 local function type_0_args_error_test()
-    local ok, err = catch (function()
+    local ok, _err = catch (function()
         return type()
     end)()
 
@@ -271,7 +271,7 @@ local function local_env_rebinding_fallback_test()
     local custom_type_called = false
 
     local _ENV = setmetatable({
-        type = function(x)
+        type = function(_x)
             custom_type_called = true
             return "rebound"
         end,
@@ -303,7 +303,7 @@ end
 -- rawget bypasses __index
 local function rawget_bypasses_index_test()
     local mt = {
-        __index = function(t, k)
+        __index = function(_t, _k)
             return "meta"
         end,
     }
@@ -318,7 +318,7 @@ local function rawset_bypasses_newindex_test()
     local blocked = false
 
     local mt = {
-        __newindex = function(t, k, v)
+        __newindex = function(_t, _k, _v)
             blocked = true
         end,
     }
@@ -332,7 +332,7 @@ end
 -- ==== string.len type error fallback ====
 -- string.len type error fallback
 local function string_len_type_error_fallback_test()
-    local ok, err = catch (function()
+    local ok, _err = catch (function()
         return string.len({})
     end)()
 
@@ -357,7 +357,7 @@ local function tainted_string_trim_fallback_test()
 
     local env = setmetatable({
         string = {
-            trim = function(s)
+            trim = function(_s)
                 custom_called = true
                 return "custom"
             end,
@@ -373,7 +373,7 @@ end
 -- ==== string.trim type error fallback ====
 -- string.trim type error fallback
 local function string_trim_type_error_fallback_test()
-    local ok, err = catch (function()
+    local ok, _err = catch (function()
         return string.trim({})
     end)()
 
@@ -397,7 +397,7 @@ local function tainted_string_ltrim_fallback_test()
 
     local env = setmetatable({
         string = {
-            ltrim = function(s)
+            ltrim = function(_s)
                 custom_called = true
                 return "custom"
             end,
@@ -427,7 +427,7 @@ local function tainted_string_rtrim_fallback_test()
 
     local env = setmetatable({
         string = {
-            rtrim = function(s)
+            rtrim = function(_s)
                 custom_called = true
                 return "custom"
             end,
@@ -469,7 +469,7 @@ local function tainted_string_split_fallback_test()
 
     local env = setmetatable({
         string = {
-            split = function(s, d)
+            split = function(_s, _d)
                 custom_called = true
                 return { "custom" }
             end,
@@ -485,7 +485,7 @@ end
 -- ==== string.split type error fallback ====
 -- string.split type error fallback
 local function string_split_type_error_fallback_test()
-    local ok, err = catch (function()
+    local ok, _err = catch (function()
         return string.split({}, ",")
     end)()
 
@@ -509,7 +509,7 @@ local function tainted_string_join_fallback_test()
 
     local env = setmetatable({
         string = {
-            join = function(t, d)
+            join = function(_t, _d)
                 custom_called = true
                 return "custom"
             end,
@@ -525,7 +525,7 @@ end
 -- ==== string.join type error fallback ====
 -- string.join type error fallback
 local function string_join_type_error_fallback_test()
-    local ok, err = catch (function()
+    local ok, _err = catch (function()
         return string.join("notatable", ",")
     end)()
 
@@ -606,7 +606,7 @@ local function tainted_string_sub_fallback_test()
 
     local env = setmetatable({
         string = {
-            sub = function(s, i, j)
+            sub = function(_s, _i, _j)
                 custom_called = true
                 return "custom"
             end,
@@ -626,7 +626,7 @@ local function tainted_string_lower_fallback_test()
 
     local env = setmetatable({
         string = {
-            lower = function(s)
+            lower = function(_s)
                 custom_called = true
                 return "custom"
             end,
@@ -655,7 +655,7 @@ local function tainted_table_sum_fallback_test()
 
     local env = setmetatable({
         table = {
-            sum = function(t)
+            sum = function(_t)
                 custom_called = true
                 return 999
             end,
@@ -671,7 +671,7 @@ end
 -- ==== table.sum type error fallback ====
 -- table.sum type error fallback
 local function table_sum_type_error_fallback_test()
-    local ok, err = catch (function()
+    local ok, _err = catch (function()
         return table.sum("notatable")
     end)()
 
@@ -695,7 +695,7 @@ local function tainted_table_mean_fallback_test()
 
     local env = setmetatable({
         table = {
-            mean = function(t)
+            mean = function(_t)
                 custom_called = true
                 return 42
             end,
@@ -726,7 +726,7 @@ local function tainted_table_median_fallback_test()
 
     local env = setmetatable({
         table = {
-            median = function(t)
+            median = function(_t)
                 custom_called = true
                 return 99
             end,
@@ -759,7 +759,7 @@ local function tainted_table_stdev_fallback_test()
 
     local env = setmetatable({
         table = {
-            stdev = function(t)
+            stdev = function(_t)
                 custom_called = true
                 return 77
             end,
@@ -805,7 +805,7 @@ local function tainted_table_transpose_fallback_test()
 
     local env = setmetatable({
         table = {
-            transpose = function(t)
+            transpose = function(_t)
                 custom_called = true
                 return { { 99 } }
             end,
@@ -821,7 +821,7 @@ end
 -- ==== table.transpose type error fallback ====
 -- table.transpose type error fallback
 local function table_transpose_type_error_fallback_test()
-    local ok, err = catch (function()
+    local ok, _err = catch (function()
         return table.transpose("nope")
     end)()
 
@@ -848,7 +848,7 @@ local function tainted_table_reshape_fallback_test()
 
     local env = setmetatable({
         table = {
-            reshape = function(t, r, c)
+            reshape = function(_t, _r, _c)
                 custom_called = true
                 return { { 0 } }
             end,
@@ -864,7 +864,7 @@ end
 -- ==== table.reshape dimension mismatch fallback ====
 -- table.reshape dimension error
 local function table_reshape_dimension_error_test()
-    local ok, err = catch (function()
+    local ok, _err = catch (function()
         return table.reshape({ 1, 2, 3 }, 2, 2)
     end)()
 
@@ -878,7 +878,7 @@ local function tainted_math_abs_fallback_test()
 
     local env = setmetatable({
         math = {
-            abs = function(x)
+            abs = function(_x)
                 custom_called = true
                 return 999
             end,
@@ -897,7 +897,7 @@ local function tainted_assert_fallback_test()
     local custom_called = false
 
     local env = setmetatable({
-        assert = function(v)
+        assert = function(_v)
             custom_called = true
             return "custom"
         end,
@@ -915,7 +915,7 @@ local function tainted_tonumber_fallback_test()
     local custom_called = false
 
     local env = setmetatable({
-        tonumber = function(x)
+        tonumber = function(_x)
             custom_called = true
             return 999
         end,
@@ -933,7 +933,7 @@ local function tainted_tostring_fallback_test()
     local custom_called = false
 
     local env = setmetatable({
-        tostring = function(x)
+        tostring = function(_x)
             custom_called = true
             return "custom"
         end,
@@ -952,7 +952,7 @@ local function tainted_vector_create_fallback_test()
 
     local env = setmetatable({
         vector = {
-            create = function(n)
+            create = function(_n)
                 custom_called = true
                 return "custom"
             end,
@@ -972,7 +972,7 @@ local function tainted_utf8_len_fallback_test()
 
     local env = setmetatable({
         utf8 = {
-            len = function(s)
+            len = function(_s)
                 custom_called = true
                 return 999
             end,
@@ -992,13 +992,13 @@ local function assert_correctness_test()
     assert(assert("hello") == "hello")
     assert(assert(true) == true)
 
-    local ok, err = catch (function()
+    local ok, _err = catch (function()
         assert(false)
     end)()
 
     assert(not ok)
 
-    local ok2, err2 = catch (function()
+    local ok2, _err2 = catch (function()
         assert(nil, "msg")
     end)()
 
@@ -1212,7 +1212,7 @@ end
 local function setmetatable_blocked_by_metatable_test()
     local mt = { __metatable = "locked" }
     local t = setmetatable({}, mt)
-    local ok, err = catch setmetatable(t, {})
+    local ok, _err = catch setmetatable(t, {})
     assert(not ok)
 end
 
@@ -1275,8 +1275,8 @@ local function allocating_fastcalls_give_the_collector_a_step_test()
     local before = collectgarbage("count")
 
     for i = 1, 200000 do
-        local d = time.seconds(i)
-        local s = string.sub("hello world", 1, 5)
+        local _d = time.seconds(i)
+        local _s = string.sub("hello world", 1, 5)
     end
 
     local after = collectgarbage("count")

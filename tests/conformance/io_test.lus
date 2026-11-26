@@ -32,7 +32,7 @@ catch fs.remove(SB, true)
 fs.createdirectory(SB)
 
 local function path(name)
-    return SB .. "/" .. name
+    return `$SB/$name`
 end
 
 local function writefile(name, content)
@@ -841,7 +841,7 @@ local every_writable_mode_on_a_read_only_path_is_denied_cases = {
 
 local function every_writable_mode_on_a_read_only_path_is_denied_test(mode)
     reset_streams()
-    local ok, err = catch io.open("./ioro_" .. RUN .. "_x.txt", mode)
+    local ok, err = catch io.open(`./ioro_$(RUN)_x.txt`, mode)
     assert(not ok, "the write grant is withheld for ioro_ paths")
     assert(string.find(tostring(err), 'permission "fs:write" denied'))
 end
@@ -859,7 +859,7 @@ local function a_read_mode_on_a_read_only_path_passes_the_pledge_sweep_test()
     reset_streams()
     -- The file does not exist, so the failure is the ordinary nil-plus-message
     -- return and never a permission denial.
-    local f, msg = io.open("./ioro_" .. RUN .. "_y.txt", "r")
+    local f, msg = io.open(`./ioro_$(RUN)_y.txt`, "r")
     assert(f == nil)
     assert(not tostring(msg):find("permission"), "the read grant alone satisfies the sweep")
 end
@@ -869,7 +869,7 @@ local function io_lines_on_an_ungranted_path_is_denied_test()
     reset_streams()
 
     local ok, err = catch (function()
-        for _ in io.lines("./ionope_" .. RUN .. ".txt") do
+        for _ in io.lines(`./ionope_$RUN.txt`) do
         end
     end)()
 

@@ -311,7 +311,7 @@ local function a_line_mask_hook_receives_the_current_line_number_as_its_sec_test
     end, "l")
 
     local a = 1
-    local b = a + 1
+    local b = a + 1  -- lus: allow(unused-local)
     debug.sethook()
     assert(kind == "number")
 end
@@ -328,10 +328,10 @@ local function a_count_hook_reports_the_count_and_the_count_event_test()
         end
     end, "", 1)
 
-    for i = 1, 50 do
+    for i = 1, 50 do  -- lus: allow(unused-loop-var)
     end
 
-    local _, mask, count = debug.gethook()
+    local _, mask, count = debug.gethook()  -- lus: allow(unused-local)
     debug.sethook()
     assert(count == 1)
     assert(n > 0)
@@ -398,7 +398,7 @@ end
 
 local function getinfo_names_a_global_call_site_as_namewhat_global_test()
     -- A bare global call site is described by namewhat 'global'.
-    function myglobalfn()
+    function myglobalfn()  -- lus: allow(implicit-global)
         return debug.getinfo(1, "n").namewhat
     end
 
@@ -435,8 +435,8 @@ end
 
 local function setlocal_returns_the_name_of_the_variable_it_wrote_test()
     local co = coroutine.create(function()
-        local a = 1
-        local b = 2
+        local a = 1  -- lus: allow(unused-local)
+        local b = 2  -- lus: allow(unused-local)
         coroutine.yield()
     end)
 
@@ -455,7 +455,7 @@ local out_of_range_positive_local_indices_return_nil_cases = {
 
 local function out_of_range_positive_local_indices_return_nil_test(idx)
     local co = coroutine.create(function()
-        local a = 1
+        local a = 1  -- lus: allow(unused-local)
         coroutine.yield()
     end)
 
@@ -488,7 +488,7 @@ end
 
 local function type_changing_local_writes_round_trip_through_getlocal_test()
     local function bar()
-        local x = 5
+        local x = 5  -- lus: allow(unused-local)
         debug.setlocal(1, 1, nil)
         local _, after_nil = debug.getlocal(1, 1)
         assert(after_nil == nil)

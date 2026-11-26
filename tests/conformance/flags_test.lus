@@ -2,8 +2,8 @@ pledge(
     "load",
     "exec",
     "env=LUS_EXE",
-    "fs:read=" .. TEST_DIR .. "/fixtures/flags",
-    "fs:read=" .. TEST_DIR .. "/fixtures/flags/*"
+    `fs:read=$TEST_DIR/fixtures/flags`,
+    `fs:read=$TEST_DIR/fixtures/flags/*`
 )
 
 --[[
@@ -25,7 +25,7 @@ pledge(
 local LUS = os.getenv("LUS_EXE") or "lus"
 
 local function run(args)
-    local h = io.popen(LUS .. " " .. args .. " 2>&1", "r")
+    local h = io.popen(`$LUS $args 2>&1`, "r")
 
     if not h then
         return nil, "cannot start the interpreter"
@@ -41,9 +41,7 @@ local setup_error
 
 do
     local out = run(
-        "-Pload -Pworker -Pfs:read -Fdebug -Fversion=1.5 -Fcount=3 -Fname=alpha --flag empty= "
-            .. TEST_DIR
-            .. "/fixtures/flags/cases.lus"
+        `-Pload -Pworker -Pfs:read -Fdebug -Fversion=1.5 -Fcount=3 -Fname=alpha --flag empty= $TEST_DIR/fixtures/flags/cases.lus`
     )
 
     if out == nil then
@@ -65,7 +63,7 @@ end
 
 local function check(name)
     if setup_error then
-        skip("2.0 gap: " .. setup_error .. " (set LUS_EXE to the interpreter path)")
+        skip(`2.0 gap: $setup_error (set LUS_EXE to the interpreter path)`)
     end
 
     local r = results[name]
@@ -211,10 +209,10 @@ end
 -- interpreter without -F still has an empty flags table
 local function interpreter_without_f_still_has_an_empty_flags_table_test()
     if setup_error then
-        skip("2.0 gap: " .. setup_error .. " (set LUS_EXE to the interpreter path)")
+        skip(`2.0 gap: $setup_error (set LUS_EXE to the interpreter path)`)
     end
 
     local script = "if type(flags) == 'table' and next(flags) == nil and not flags.debug then os.exit(0) end os.exit(1)"
-    local out, ok = run("-Pload -e \"" .. script .. "\"")
+    local _out, ok = run(`-Pload -e "$script"`)
     assert(ok == true or ok == 0)
 end

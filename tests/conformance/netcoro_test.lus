@@ -6,8 +6,8 @@
 -- detaches.
 pledge("network")
 
-local create, detach, resume, yield = coroutine.create, coroutine.detach, coroutine.resume, coroutine.yield
-local status, close = coroutine.status, coroutine.close
+local create, detach, resume, yield from coroutine
+local status, close from coroutine
 
 local function txt(v)
     if type(v) == "vector" then
@@ -132,7 +132,7 @@ local function connections_interleave_test()
         local sock <close> = connect(port)
 
         for round = 1, 3 do
-            sock:send(name .. round .. "\n")
+            sock:send(`$name$round\n`)
             local line = txt(sock:receive("*l"))
             log[#log + 1] = line
         end
@@ -357,7 +357,7 @@ local function two_levels_of_plain_coroutines_read_a_socket_test()
 
             local ok, a, b = resume(inner)
             yield(ok)
-            return a .. " and " .. b
+            return `$a and $b`
         end)
 
         local first = outer()
@@ -400,7 +400,7 @@ local function a_socket_wait_inside_a_native_call_runs_the_scheduler_test()
         -- The callback of gsub cannot suspend, so each receive keeps the
         -- coroutine on the stack and runs the scheduler while it waits.
         local text = string.gsub("abc", ".", function(c)
-            sock:send(c .. c .. "\n")
+            sock:send(`$c$c\n`)
             return txt(sock:receive("*l"))
         end)
 
@@ -447,7 +447,7 @@ local function a_coroutine_suspends_again_after_a_wait_inside_a_native_call_test
             yield()
         end
 
-        for i = 1, 3 do
+        for _i = 1, 3 do
             yield()
         end
 
@@ -500,7 +500,7 @@ local function a_coroutine_goes_on_after_a_timeout_test()
     local responder = spawn(function()
         local sock <close> = server:accept()
         local line = txt(sock:receive("*l"))
-        sock:send("late " .. line .. "\n")
+        sock:send(`late $line\n`)
     end)
 
     local co = spawn(function()
@@ -548,9 +548,7 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
     -- has it too for a while. It goes on after a timeout of its own.
     local greedy = spawn(function()
         while true do
-            local sock = server:accept()
-
-            if sock then
+            if sock = server:accept() then
                 taken = taken + 1
                 sock:close()
             end
@@ -580,7 +578,7 @@ local function a_timeout_spans_the_wakes_of_one_operation_test()
         end
 
         -- A connection arrives every 20 ms for longer than the timeout.
-        for i = 1, 30 do
+        for _i = 1, 30 do
             network.tcp.connect("127.0.0.1", port):close()
             idle:accept()
         end
@@ -946,7 +944,7 @@ local function udp_open()
 end
 
 local function datagrams_between_two_coroutines_test()
-    local a, port_a = udp_open()
+    local a, _port_a = udp_open()
     local b, port_b = udp_open()
 
     local ponger = spawn(function()
@@ -1008,7 +1006,7 @@ end
 
 local function fetch_reads_a_body_that_ends_with_the_connection_while_coroutines_wait_test()
     local server, port = listen()
-    local idle, idle_port = listen()
+    local idle, _idle_port = listen()
 
     -- A coroutine that waits keeps the scheduler running during the fetch.
     local waiting = spawn(function()
@@ -1016,7 +1014,7 @@ local function fetch_reads_a_body_that_ends_with_the_connection_while_coroutines
     end)
 
     local peer = closing_peer(server, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nthe whole body")
-    local status, body = network.fetch("http://127.0.0.1:" .. port .. "/")
+    local status, body = network.fetch(`http://127.0.0.1:$port/`)  -- lus: allow(shadowed-local)
     assert(status == 200 and txt(body) == "the whole body", txt(body))
     assert(resume(peer))
     close(waiting)
@@ -1046,7 +1044,7 @@ local function fetch_in_a_detached_coroutine_suspends_only_that_coroutine_test()
     end)
 
     fetcher = spawn(function()
-        local code, body = network.fetch("http://127.0.0.1:" .. port .. "/", "GET", nil, nil, {
+        local code, body = network.fetch(`http://127.0.0.1:$port/`, "GET", nil, nil, {
             timeout = 10,
         })
         return code, txt(body)
@@ -1072,7 +1070,7 @@ local function an_https_fetch_from_a_plain_http_peer_raises_test()
         sock:send("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
     end)
 
-    local ok, err = catch network.fetch("https://127.0.0.1:" .. port .. "/")
+    local ok, err = catch network.fetch(`https://127.0.0.1:$port/`)
     assert(not ok and string.find(tostring(err), "TLS handshake failed: ", 1, true), tostring(err))
     resume(peer)
     server:close()

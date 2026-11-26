@@ -26,7 +26,7 @@ local keeps_every_escape_as_written_cases = {
 local function keeps_every_escape_as_written_test(source)
     local formatted, err = debug.format(source .. "\n", "=escapes")
     assert(formatted, err)
-    assert(formatted == source .. "\n", "\n" .. source .. "\n" .. formatted)
+    assert(formatted == source .. "\n", `\n$source\n$formatted`)
 end
 
 -- A string key written without escapes becomes a plain name, which is a
@@ -47,5 +47,5 @@ end
 local function comments_keep_their_place_test()
     local src = "local t = {\n    a = 1,  -- first\n}\nfor i = 1, 2 do\n    f(i)\n    -- after\nend\n"
     local formatted, err = debug.format(src, "=comments")
-    assert(formatted == src, tostring(err) .. "\n" .. tostring(formatted))
+    assert(formatted == src, `$(tostring(err))\n$(tostring(formatted))`)
 end

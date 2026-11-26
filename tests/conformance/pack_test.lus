@@ -120,7 +120,7 @@ local function position_return_test()
     local s = pack("iii", 10, 20, 30)
     local a, pos = unpack("i", s)
     assert(a == 10)
-    local b, pos2 = unpack("i", s, pos)
+    local b, _pos2 = unpack("i", s, pos)
     assert(b == 20)
 end
 
@@ -137,7 +137,7 @@ local pack = string.pack
 local packsize = string.packsize
 local unpack = string.unpack
 local rep = string.rep
-local byte = string.byte
+local _byte = string.byte
 
 -- Whether the running platform packs "=" (native) integers little-endian.
 -- The first byte of the native encoding of 1 is 1 exactly when little-endian.

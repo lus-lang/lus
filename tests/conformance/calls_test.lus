@@ -50,7 +50,7 @@ local function declarations_and_method_calls_test()
 
     a.t = { i = -100 }
 
-    a["t"].x = function(self, a, b)
+    a["t"].x = function(self, a, b)  -- lus: allow(shadowed-local)
         return self.i + a + b
     end
 
@@ -85,9 +85,9 @@ local function nested_object_functions_test()
 end
 
 local function function_arguments_test()
-    t = nil
+    t = nil  -- lus: allow(implicit-global)
 
-    function f(a, b, c)
+    function f(a, b, c)  -- lus: allow(implicit-global)
         local d = "a"
         t = { a, b, c, d }
     end
@@ -100,11 +100,11 @@ local function function_arguments_test()
 end
 
 local function load_and_function_loading_test()
-    function fat(x)
+    function fat(x)  -- lus: allow(implicit-global)
         if x <= 1 then
             return 1
         else
-            return x * load("return fat(" .. x - 1 .. ")", "")()
+            return x * load(`return fat($(x - 1))`, "")()
         end
     end
 
@@ -210,7 +210,7 @@ local function tail_calls_with_varargs_test()
         return foo3(...)
     end
 
-    local a, b, c = foo1()
+    local a, b, c = foo1()  -- lus: allow(unused-local)
     assert(X == nil and Y == nil and #A == 0)
 
     a, b, c = foo1(10)
@@ -236,7 +236,7 @@ local function chains_of_call_test()
     end
 
     -- build a chain of __call metamethods ending in function 'foo'
-    for i = 1, 15 do
+    for _i = 1, 15 do
         foo = setmetatable({}, { __call = foo })
     end
 
@@ -268,7 +268,7 @@ end
 local function chains_too_long_test()
     local a = {}
 
-    for i = 1, 16 do  -- one too many
+    for _i = 1, 16 do  -- one too many
         a = setmetatable({}, { __call = a })
     end
 
@@ -377,7 +377,7 @@ local function generic_load_test()
 
     -- cannot read text in binary mode - load returns nil + error message
     -- catch wraps the call, so we get (true, nil, error) on success (no throw)
-    local status, result, err = catch load(read1(x), "modname", "b", {})
+    local status, result, err = catch load(read1(x), "modname", "b", {})  -- lus: allow(unused-local)
     assert(status == true and result == nil)
 
     status, result, err = catch load(x, "modname", "b")
@@ -448,7 +448,7 @@ local function limit_of_multiple_returns_254_values_test()
 
     code = code .. ",10"
     -- load returns nil + error for too many returns (doesn't throw)
-    local status, result, err = catch load(code)
+    local status, result, _err = catch load(code)
     -- catch returns (true, nil, error) since load doesn't throw
     assert(status == true)
     assert(result == nil)

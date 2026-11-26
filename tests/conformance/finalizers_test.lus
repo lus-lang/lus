@@ -101,7 +101,7 @@ local function basic_finalizer_runs_after_drop_test(mode)
         local ran = false
 
         do
-            local o = setmetatable({}, {
+            local o = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     ran = true
                 end,
@@ -124,7 +124,7 @@ local function gc_added_after_setmetatable_is_inert_test(mode)
 
         do
             local mt = {}
-            local o = setmetatable({}, mt)
+            local o = setmetatable({}, mt)  -- lus: allow(unused-local)
 
             mt.__gc = function()
                 ran = true
@@ -190,7 +190,7 @@ local function gc_replaced_before_collection_runs_the_replacement_test()
             end,
         }
 
-        local o = setmetatable({}, mt)
+        local o = setmetatable({}, mt)  -- lus: allow(unused-local)
 
         mt.__gc = function()
             which = "replacement"
@@ -214,7 +214,7 @@ local function gc_removed_from_the_metatable_before_collection_runs_nothing_test
             end,
         }
 
-        local o = setmetatable({}, mt)
+        local o = setmetatable({}, mt)  -- lus: allow(unused-local)
         mt.__gc = nil
         o = nil
     end
@@ -286,7 +286,7 @@ local function finalizable_object_reachable_only_through_a_dropped_container_tes
     local ran = false
 
     do
-        local holder = {
+        local holder = {  -- lus: allow(unused-local)
             inner = setmetatable({}, {
                 __gc = function()
                     ran = true
@@ -321,9 +321,9 @@ local function finalization_order_is_reverse_of_marking_order_test(mode)
                 }
             end
 
-            local a = setmetatable({}, tag(1))
-            local b = setmetatable({}, tag(2))
-            local c = setmetatable({}, tag(3))
+            local a = setmetatable({}, tag(1))  -- lus: allow(unused-local)
+            local b = setmetatable({}, tag(2))  -- lus: allow(unused-local)
+            local c = setmetatable({}, tag(3))  -- lus: allow(unused-local)
             a, b, c = nil, nil, nil
         end
 
@@ -344,7 +344,7 @@ local function twenty_objects_sharing_one_metatable_finalize_once_each_in_revers
         }
 
         for i = 1, 20 do
-            local o = setmetatable({ id = i }, mt)
+            local o = setmetatable({ id = i }, mt)  -- lus: allow(unused-local)
             o = nil
         end
     end
@@ -369,7 +369,7 @@ local function step_driven_collection_also_finalizes_in_reverse_marking_order_te
         }
 
         for i = 1, 5 do
-            local o = setmetatable({ id = i }, mt)
+            local o = setmetatable({ id = i }, mt)  -- lus: allow(unused-local)
             o = nil
         end
     end
@@ -397,16 +397,16 @@ local function two_collection_batches_each_finalize_in_their_own_reverse_order_t
     end
 
     do
-        local a = setmetatable({}, tag(1))
-        local b = setmetatable({}, tag(2))
+        local a = setmetatable({}, tag(1))  -- lus: allow(unused-local)
+        local b = setmetatable({}, tag(2))  -- lus: allow(unused-local)
         a, b = nil, nil
     end
 
     full()
 
     do
-        local c = setmetatable({}, tag(3))
-        local d = setmetatable({}, tag(4))
+        local c = setmetatable({}, tag(3))  -- lus: allow(unused-local)
+        local d = setmetatable({}, tag(4))  -- lus: allow(unused-local)
         c, d = nil, nil
     end
 
@@ -420,19 +420,19 @@ local function an_erroring_finalizer_does_not_disturb_the_order_of_the_others_te
         local order = {}
 
         do
-            local a = setmetatable({}, {
+            local a = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     order[#order + 1] = "a"
                 end,
             })
 
-            local b = setmetatable({}, {
+            local b = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     error("mid finalizer failure")
                 end,
             })
 
-            local c = setmetatable({}, {
+            local c = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     order[#order + 1] = "c"
                 end,
@@ -454,7 +454,7 @@ end
 local function a_finalizer_error_does_not_propagate_to_the_collectgarbage_caller_test()
     quietly(function()
         do
-            local o = setmetatable({}, {
+            local o = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     error("finalizer boom")
                 end,
@@ -476,13 +476,13 @@ local function other_pending_finalizers_still_run_after_one_errors_test()
 
         do
             for i = 1, 3 do
-                local good = setmetatable({}, {
+                local good = setmetatable({}, {  -- lus: allow(unused-local)
                     __gc = function()
                         survivors = survivors + 1
                     end,
                 })
 
-                local bad = setmetatable({}, {
+                local bad = setmetatable({}, {  -- lus: allow(unused-local)
                     __gc = function()
                         error("bad " .. i)
                     end,
@@ -501,7 +501,7 @@ end
 local function allocation_and_collection_keep_working_after_a_finalizer_error_test()
     quietly(function()
         do
-            local o = setmetatable({}, {
+            local o = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     error("earlier failure")
                 end,
@@ -523,7 +523,7 @@ local function allocation_and_collection_keep_working_after_a_finalizer_error_te
     local ran = false
 
     do
-        local o = setmetatable({}, {
+        local o = setmetatable({}, {  -- lus: allow(unused-local)
             __gc = function()
                 ran = true
             end,
@@ -540,7 +540,7 @@ end
 local function a_finalizer_error_carrying_a_table_value_is_tolerated_test()
     quietly(function()
         do
-            local o = setmetatable({}, {
+            local o = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     error({ code = 42 })
                 end,
@@ -559,7 +559,7 @@ end
 local function a_non_callable_gc_value_is_tolerated_at_collection_time_test()
     quietly(function()
         do
-            local o = setmetatable({}, { __gc = 42 })
+            local o = setmetatable({}, { __gc = 42 })  -- lus: allow(unused-local)
             o = nil
         end
 
@@ -569,7 +569,7 @@ local function a_non_callable_gc_value_is_tolerated_at_collection_time_test()
     local ran = false
 
     do
-        local o = setmetatable({}, {
+        local o = setmetatable({}, {  -- lus: allow(unused-local)
             __gc = function()
                 ran = true
             end,
@@ -586,7 +586,7 @@ end
 local function gc_set_to_false_marks_the_object_and_the_failed_call_is_tolerated_test()
     quietly(function()
         do
-            local o = setmetatable({}, { __gc = false })
+            local o = setmetatable({}, { __gc = false })  -- lus: allow(unused-local)
             o = nil
         end
 
@@ -596,7 +596,7 @@ local function gc_set_to_false_marks_the_object_and_the_failed_call_is_tolerated
     local ran = false
 
     do
-        local o = setmetatable({}, {
+        local o = setmetatable({}, {  -- lus: allow(unused-local)
             __gc = function()
                 ran = true
             end,
@@ -615,7 +615,7 @@ local function catch_works_inside_a_finalizer_and_contains_the_error_test()
     local caught_msg = nil
 
     do
-        local o = setmetatable({}, {
+        local o = setmetatable({}, {  -- lus: allow(unused-local)
             __gc = function()
                 local ok, err = catch error("inner_fail")
                 caught_ok = ok
@@ -645,7 +645,7 @@ local function automatic_collection_restores_state_after_a_finalizer_error_test(
                 local closed = false
 
                 local function abandon_finalizer()
-                    local o = setmetatable({}, {
+                    local o = setmetatable({}, {  -- lus: allow(unused-local)
                         __gc = function()
                             local guard <close> = setmetatable({}, {
                                 __close = function()
@@ -669,7 +669,7 @@ local function automatic_collection_restores_state_after_a_finalizer_error_test(
 
                 local function allocate_until_finalized()
                     for i = 1, 200000 do
-                        local churn = { i, i, i }
+                        local _churn = { i, i, i }
 
                         if finalized then
                             return
@@ -706,7 +706,7 @@ local function a_callable_table_works_as_gc_test()
             end,
         })
 
-        local o = setmetatable({}, { __gc = handler })
+        local o = setmetatable({}, { __gc = handler })  -- lus: allow(unused-local)
         o = nil
         handler = nil
     end
@@ -721,7 +721,7 @@ local function the_finalizer_receives_exactly_one_argument_the_object_itself_tes
     local marker = nil
 
     do
-        local o = setmetatable({ marker = "self-check" }, {
+        local o = setmetatable({ marker = "self-check" }, {  -- lus: allow(unused-local)
             __gc = function(...)
                 nargs = select("#", ...)
                 local self = select(1, ...)
@@ -749,7 +749,7 @@ local function a_resurrected_object_stays_fully_usable_test()
     local saved = nil
 
     do
-        local o = setmetatable({ answer = 42, list = { 1, 2, 3 } }, {
+        local o = setmetatable({ answer = 42, list = { 1, 2, 3 } }, {  -- lus: allow(unused-local)
             __gc = function(self)
                 saved = self
             end,
@@ -779,7 +779,7 @@ local function a_resurrected_object_keeps_its_metatable_test()
     }
 
     do
-        local o = setmetatable({}, mt)
+        local o = setmetatable({}, mt)  -- lus: allow(unused-local)
         o = nil
     end
 
@@ -799,7 +799,7 @@ local function dropping_a_resurrected_object_does_not_rerun_its_finalizer_test(m
         local count = 0
 
         do
-            local o = setmetatable({}, {
+            local o = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function(self)
                     count = count + 1
                     saved = self
@@ -835,11 +835,11 @@ local function re_marking_inside_the_finalizer_runs_it_again_and_terminates_test
     }
 
     do
-        local o = setmetatable({}, mt)
+        local o = setmetatable({}, mt)  -- lus: allow(unused-local)
         o = nil
     end
 
-    for i = 1, 10 do
+    for _i = 1, 10 do
         collectgarbage("collect")
     end
 
@@ -857,8 +857,8 @@ local function finalization_counts_stay_stable_across_later_collections_and_mode
             end,
         }
 
-        for i = 1, 3 do
-            local o = setmetatable({}, mt)
+        for _i = 1, 3 do
+            local o = setmetatable({}, mt)  -- lus: allow(unused-local)
             o = nil
         end
     end
@@ -898,7 +898,7 @@ local function a_finalizer_chain_that_spawns_finalizable_objects_terminates_test
 
     spawn(4)
 
-    for i = 1, 20 do
+    for _i = 1, 20 do
         collectgarbage("collect")
 
         if finalized == 4 then
@@ -917,7 +917,7 @@ local function a_finalizer_can_allocate_plain_data_and_call_stdlib_functions_tes
     local rendered = nil
 
     do
-        local o = setmetatable({}, {
+        local o = setmetatable({}, {  -- lus: allow(unused-local)
             __gc = function()
                 local t = {}
 
@@ -954,7 +954,7 @@ local function collectgarbage_is_locked_out_inside_a_finalizer_test(opt)
     local result = "unset"
 
     do
-        local o = setmetatable({}, {
+        local o = setmetatable({}, {  -- lus: allow(unused-local)
             __gc = function()
                 result = collectgarbage(opt)
             end,
@@ -980,7 +980,7 @@ local function explicit_collection_finalizes_while_the_collector_is_stopped_test
         local ran = false
 
         do
-            local o = setmetatable({}, {
+            local o = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     ran = true
                 end,
@@ -1019,7 +1019,7 @@ local function mode_switch_between_marking_and_collection_still_finalizes_test(
         local ran = false
 
         do
-            local o = setmetatable({}, {
+            local o = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     ran = true
                 end,
@@ -1072,7 +1072,7 @@ local function a_finalizer_can_read_a_sibling_finalizable_object_it_references_t
             end,
         })
 
-        local a = setmetatable({ ref = b }, {
+        local a = setmetatable({ ref = b }, {  -- lus: allow(unused-local)
             __gc = function(self)
                 seen = self.ref.value
             end,
@@ -1092,7 +1092,7 @@ local function data_referenced_by_a_resurrected_object_survives_with_it_test()
     do
         local payload = { data = "kept alive" }
 
-        local o = setmetatable({ ref = payload }, {
+        local o = setmetatable({ ref = payload }, {  -- lus: allow(unused-local)
             __gc = function(self)
                 saved = self
             end,
@@ -1114,7 +1114,7 @@ local function an_object_created_inside_a_dead_coroutine_is_finalized_test()
 
     do
         local co = coroutine.create(function()
-            local o = setmetatable({}, {
+            local o = setmetatable({}, {  -- lus: allow(unused-local)
                 __gc = function()
                     ran = true
                 end,

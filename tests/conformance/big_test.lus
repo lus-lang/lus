@@ -6,7 +6,7 @@
 
 pledge("load")
 
-local debug = require "debug"
+local _debug = require "debug"
 
 -- Helper to create a large table program
 -- Uses 2^14 (16384) elements - large enough to test behavior, small enough to be fast
@@ -49,17 +49,17 @@ local function metamethod_access_on_large_table_env_test()
     local accesses = {}
 
     setmetatable(env, {
-        __index = function(t, n)
+        __index = function(_t, n)
             accesses[#accesses + 1] = { "index", n }
             return _G[n]
         end,
-        __newindex = function(t, n, v)
+        __newindex = function(_t, n, v)
             accesses[#accesses + 1] = { "newindex", n }
             _G[n] = v
         end,
     })
 
-    X = nil
+    X = nil  -- lus: allow(implicit-global)
     f()
 
     -- Verify we had accesses through metamethods
@@ -68,7 +68,7 @@ local function metamethod_access_on_large_table_env_test()
 end
 
 local function errors_in_accesses_larger_than_k_test()
-    local prog, lim = make_large_table_prog()
+    local prog, _lim = make_large_table_prog()
 
     local env = { string = string, assert = assert }
     local f = assert(load(prog, nil, nil, env))
@@ -85,7 +85,7 @@ local function errors_in_accesses_larger_than_k_test()
 end
 
 local function errors_in_metamethods_propagate_test()
-    local prog, lim = make_large_table_prog()
+    local prog, _lim = make_large_table_prog()
 
     local env = { string = string, assert = assert }
     local f = assert(load(prog, nil, nil, env))
@@ -115,7 +115,7 @@ local function large_table_iteration_test()
     local count = 0
     local sum = 0
 
-    for k, v in pairs(t) do
+    for _k, v in pairs(t) do
         count = count + 1
         sum = sum + v
     end
@@ -149,11 +149,11 @@ local function nested_large_tables_test()
 
         for j, v in pairs(row) do
             cols = cols + 1
-            assert(v == i * j, "corrupted entry at " .. i .. "," .. j)
+            assert(v == i * j, `corrupted entry at $i,$j`)
             total = total + v
         end
 
-        assert(cols == n, "row " .. i .. " lost entries")
+        assert(cols == n, `row $i lost entries`)
     end
 
     assert(rows == n)
