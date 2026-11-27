@@ -8,6 +8,7 @@ local stdlib_data = require("lus-language.analysis.stdlib_data")
 local linting = {}
 
 -- LSP DiagnosticSeverity
+local SEVERITY_ERROR = 1
 local SEVERITY_WARNING = 2
 local SEVERITY_HINT = 4
 
@@ -145,8 +146,9 @@ function linting.compute(uri)
 
     -- Hints of `lus check`: faster or shorter forms of correct code
     -- (spec/design/hints.md), and its warnings on deprecated library names.
-    -- The other checks of `lus check` overlap the warnings above, so only
-    -- these are added.
+    -- The checks of `lus check` for unused names and undeclared globals
+    -- overlap the diagnostics above, and its syntax errors overlap those
+    -- of the parser, so every other check is added.
     local doc = document.get(uri)
 
     if doc and debug.check then
@@ -158,14 +160,27 @@ function linting.compute(uri)
 
             for _, d in ipairs(list) do
                 local deprecated = d.code == "deprecated"
+                local code = d.code or ""
 
-                if d.severity == "hint" or deprecated then
+                local overlaps = code == "syntax"
+                    or code == "undeclared-global"
+                    or string.sub(code, 1, 7) == "unused-"
+
+                local severity = SEVERITY_HINT
+
+                if d.severity == "error" then
+                    severity = SEVERITY_ERROR
+                elseif d.severity == "warning" or deprecated then
+                    severity = SEVERITY_WARNING
+                end
+
+                if d.severity == "hint" or deprecated or not overlaps then
                     local diag = {
                         range = {
                             start = { line = d.line - 1, character = d.column - 1 },
                             ["end"] = { line = d.endline - 1, character = d.endcolumn - 1 },
                         },
-                        severity = deprecated and SEVERITY_WARNING or SEVERITY_HINT,
+                        severity = severity,
                         source = "lus",
                         code = d.code,
                         message = d.message,

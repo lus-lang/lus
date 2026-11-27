@@ -117,6 +117,7 @@ Every diagnostic has a code that stays the same between releases, so a tool can 
 | `deprecated-pcall` | warning | `pcall` or `xpcall` is used where Lus has `catch`. |
 | `deprecated` | warning | A deprecated library function or constant is used. |
 | `pledge-after-seal` | warning | A `pledge` follows `pledge("seal")` and has no effect. |
+| `catch-operand` | hint | A comparison, an `and`, or an `or` after `catch` is part of its operand. |
 | `use-from` | hint | Fields of one table are copied into same-named locals one by one. |
 | `use-optional-chain` | hint | Nested nil checks or an `and` chain do what optional chaining does. |
 | `use-if-assign` | hint | A local exists only for the truth test of the next `if`. |

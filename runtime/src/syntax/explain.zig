@@ -412,6 +412,22 @@ pub const all = [_]Explanation{
         ,
     },
     .{
+        .code = "catch-operand",
+        .text = "The operand of `catch` is the whole expression to its right, so a comparison, an `and`, or an `or` after a call belongs to the operand and runs inside the protection. The `catch` then returns `true` for any result of that expression. Parentheses around the `catch` make its own result the operand of the comparison.",
+        .flagged =
+        \\global print
+        \\local function ready() return false end
+        \\local failed = catch ready() == false
+        \\print(failed)
+        ,
+        .fixed =
+        \\global print
+        \\local function ready() return false end
+        \\local failed = (catch ready()) == false
+        \\print(failed)
+        ,
+    },
+    .{
         .code = "use-optional-chain",
         .text = "A chain of `and` tests or nested `if` statements that guards each step of a field access against `nil` can be written with optional chaining. Each `?.` step yields `nil` when the value before it is `nil`.",
         .flagged =

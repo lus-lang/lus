@@ -83,6 +83,7 @@ pub const codes = [_]struct { code: []const u8, severity: Severity, summary: []c
     .{ .code = "deprecated", .severity = .warning, .summary = "A deprecated library function or constant is used." },
     .{ .code = "pledge-after-seal", .severity = .warning, .summary = "A pledge follows pledge(\"seal\") and has no effect." },
     .{ .code = "use-from", .severity = .hint, .summary = "Fields of one table are copied into same-named locals one by one." },
+    .{ .code = "catch-operand", .severity = .hint, .summary = "A comparison, 'and', or 'or' after 'catch' is part of its operand." },
     .{ .code = "use-optional-chain", .severity = .hint, .summary = "Nested nil checks or an and-chain spell out optional chaining." },
     .{ .code = "use-if-assign", .severity = .hint, .summary = "A local exists only for the truth test of the next if." },
     .{ .code = "use-interpolation", .severity = .hint, .summary = "A chain of three or more concatenations mixes literals and values." },
@@ -489,6 +490,7 @@ const Linter = struct {
 
     /// `if x ~= nil then if x.y ~= nil then ... end end`.
     fn nestedNilChecks(l: *Linter, s: *ast.Stat) Allocator.Error!void {
+        var outer: ?*const ast.Expr = null;
         var depth: u32 = 0;
         var cur = s;
         while (true) {
@@ -501,7 +503,13 @@ const Linter = struct {
                 .expr => |e| e,
                 else => break,
             };
-            if (!isNotNil(c)) break;
+            const subject = notNilSubject(c) orelse break;
+            // Optional chaining replaces a check of a value followed by a
+            // check of a field of that same value.
+            if (outer) |o| {
+                if (subject.kind != .index or !sameChain(subject.kind.index.obj, o)) break;
+            }
+            outer = subject;
             depth += 1;
             const body = i.clauses[0].body.stats;
             if (body.len != 1) break;
@@ -513,8 +521,28 @@ const Linter = struct {
     }
 
     fn isNotNil(e: *const ast.Expr) bool {
-        if (e.kind != .binop or e.kind.binop.op != .ne) return false;
-        return e.kind.binop.rhs.kind == .nil or e.kind.binop.lhs.kind == .nil;
+        return notNilSubject(e) != null;
+    }
+
+    /// The expression that `e` compares with nil, when `e` is `x ~= nil`.
+    fn notNilSubject(e: *const ast.Expr) ?*const ast.Expr {
+        if (e.kind != .binop or e.kind.binop.op != .ne) return null;
+        if (e.kind.binop.rhs.kind == .nil) return e.kind.binop.lhs;
+        if (e.kind.binop.lhs.kind == .nil) return e.kind.binop.rhs;
+        return null;
+    }
+
+    /// Whether `a` and `b` are the same name, or the same field of the
+    /// same chain.
+    fn sameChain(a: *const ast.Expr, b: *const ast.Expr) bool {
+        if (a.kind == .name and b.kind == .name) return std.mem.eql(u8, a.kind.name.text, b.kind.name.text);
+        if (a.kind == .index and b.kind == .index) {
+            const ka = a.kind.index.key;
+            const kb = b.kind.index.key;
+            if (ka.kind != .string or kb.kind != .string) return false;
+            return std.mem.eql(u8, ka.kind.string, kb.kind.string) and sameChain(a.kind.index.obj, b.kind.index.obj);
+        }
+        return false;
     }
 
     /// `local x = f()` followed by `if x then`, where `x` is used nowhere
@@ -673,6 +701,7 @@ const Linter = struct {
         switch (e.kind) {
             .table => |fields| try l.duplicateKeys(fields),
             .binop => |b| if (b.op == .@"and") try l.andChain(e),
+            .catch_ => |c| try l.catchOperand(e, c),
             .function => |f| try l.nested.append(l.arena, .{ .block = f.body, .in_loop = .none }),
             .do_ => |b| try l.nested.append(l.arena, .{ .block = b, .in_loop = .unknown }),
             else => {},
@@ -890,6 +919,19 @@ const Linter = struct {
     }
 
     /// `x and x.y and x.y.z`, where each operand indexes the previous one.
+    /// `catch f() == false` and `catch a() and catch b()`. The operand of
+    /// a `catch` is the whole expression to its right, so the comparison
+    /// or the `and` runs inside the protection, and the `catch` returns
+    /// `true` for any result of it.
+    fn catchOperand(l: *Linter, e: *ast.Expr, c: ast.Catch) Allocator.Error!void {
+        if (c.body.kind != .binop) return;
+        switch (c.body.kind.binop.op) {
+            .eq, .ne, .lt, .le, .gt, .ge, .@"and", .@"or" => {},
+            else => return,
+        }
+        try l.report(e.span, .hint, "catch-operand", "the operand of 'catch' is the whole expression after it: write (catch f()) to use its result in this expression", .{});
+    }
+
     fn andChain(l: *Linter, e: *ast.Expr) Allocator.Error!void {
         // Only the outermost `and` of a chain reports.
         if (l.inner_ands.contains(e)) return;
@@ -950,14 +992,24 @@ const Linter = struct {
                 return a.span.start < b.span.start;
             }
         }.lt);
+        // The statements of the chunk run in order, so a seal among them
+        // freezes the permissions for the ones that follow. A call inside
+        // a function or a coroutine runs at another time, under a set of
+        // its own, and is left alone.
         var sealed = false;
-        for (l.calls.items) |c| {
+        for (l.chunk.block.stats) |st| {
+            const c = switch (st.kind) {
+                .expr => |e| e,
+                else => continue,
+            };
+            if (c.kind != .call or !l.isFree(c.kind.call.callee, "pledge")) continue;
             if (sealed) {
                 try l.report(c.span, .warning, "pledge-after-seal", "pledge() after pledge(\"seal\") has no effect, permissions are frozen", .{});
                 continue;
             }
-            const args = c.kind.call.args;
-            if (args.len >= 1 and args[0].kind == .string and std.mem.eql(u8, args[0].kind.string, "seal")) sealed = true;
+            for (c.kind.call.args) |a| {
+                if (a.kind == .string and std.mem.eql(u8, a.kind.string, "seal")) sealed = true;
+            }
         }
     }
 
@@ -1401,6 +1453,17 @@ const Hints = struct {
             } else try h.interpText(&rewrite, text[j .. j + 1]);
         }
         try rewrite.append(h.l.arena, '`');
+        // `%s` accepts a vector and reads a call without results as an
+        // argument error, where interpolation raises for the first and
+        // writes `nil` for the second. The rewrite is certain to keep the
+        // behavior only for literals, so only those are fixed for the
+        // program.
+        var certain = true;
+        for (args) |a| switch (unparen(a).kind) {
+            .string, .integer, .float => {},
+            else => certain = false,
+        };
+        if (!certain) return h.report(e.span, "format-to-interpolation", "this format holds only %s: a string with interpolation is faster", .{});
         try h.reportFix(e.span, "format-to-interpolation", try h.l.edit(e.span, rewrite.items), "this format holds only %s: a string with interpolation is faster", .{});
     }
 

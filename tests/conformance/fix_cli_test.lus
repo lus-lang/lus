@@ -27,7 +27,7 @@ print(host, port)
 local url = config and config.db and config.db.url
 print(url)
 
-print(string.format("%s has %s", host, port))
+print(host, port)
 
 for n = 1, 2 do
     print("n=" .. tostring(n) .. "!")
@@ -56,7 +56,7 @@ print(host, port)
 local url = config?.db?.url
 print(url)
 
-print(`$host has $port`)
+print(host, port)
 
 for n = 1, 2 do
     print(`n=$n!`)
@@ -94,7 +94,7 @@ local function fix_rewrites_the_file_test()
     write("prog.lus", ORIGINAL)
     local ok, out = run("check --fix prog.lus")
     assert(ok, out)
-    assert(out:find("applied 9 fixes", 1, true), out)
+    assert(out:find("applied 8 fixes", 1, true), out)
     assert(read("prog.lus") == FIXED, read("prog.lus"))
     -- A second run finds nothing left.
     ok, out = run("check prog.lus")
@@ -128,4 +128,15 @@ local function json_lists_the_edits_test()
     local list = fromjson(out)
     local edit = list[1].fix[1]
     assert(edit.line == 1 and edit.column == 7 and edit.endColumn == 7 and edit.text == "_", out)
+end
+
+-- `%s` takes a vector, which interpolation refuses, so a format of values
+-- that are not literals keeps its call and gets the hint alone.
+local function a_format_of_variables_is_hinted_and_kept_test()
+    local source = 'global print, string\nlocal host = "db"\nprint(string.format("%s!", host))\n'
+    write("format.lus", source)
+    local ok, out = run("check --fix format.lus")
+    assert(ok, out)
+    assert(out:find("format-to-interpolation", 1, true), out)
+    assert(read("format.lus") == source, read("format.lus"))
 end

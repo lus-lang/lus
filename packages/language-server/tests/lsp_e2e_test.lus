@@ -811,4 +811,24 @@ local function comment_with_non_ascii_does_not_produce_var_not_declared_test()
     assert(#errors == 0)
     close_doc(uri)
 end
+
 -- =========================================================================
+
+local function warnings_of_the_checker_reach_the_client_test()
+    local uri = "file:///test/e2e-check-1.lus"
+    local diags = open_doc(
+        uri,
+        "local t = { a = 1, a = 2 }\nwhile true do\n    break\n    t.a = 3\nend\nreturn t\n"
+    )
+    local codes = {}
+
+    for _, d in ipairs(diags) do
+        if d.code then
+            codes[d.code] = d.severity
+        end
+    end
+
+    assert(codes["duplicate-key"] == 2, tojson(diags))
+    assert(codes["unreachable-code"] == 2, tojson(diags))
+    close_doc(uri)
+end

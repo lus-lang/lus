@@ -214,7 +214,9 @@ const Resolver = struct {
                     }
                     strict = true;
                 },
-                .global_star => if (star == null and !strict) {
+                // A `global *` in scope takes every free name, whichever
+                // named declaration stands nearer, as the compiler has it.
+                .global_star => if (star == null) {
                     star = b;
                 },
                 else => if (std.mem.eql(u8, b.name, name)) {
