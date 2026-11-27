@@ -103,13 +103,29 @@ local function parse_all_responses(raw)
         end
 
         local body_start = header_end + 4
-        local body = string.sub(raw, body_start, body_start + len - 1)
+        -- The header counts bytes and the capture is a string, so the
+        -- body ends at the character where its bytes reach the count.
+        local last = body_start - 1
+        local hi = math.min(#raw, body_start + len - 1)
+
+        while last < hi do
+            local mid = (last + hi + 1) // 2
+
+            if string.bytelen(string.sub(raw, body_start, mid)) <= len then
+                last = mid
+            else
+                hi = mid - 1
+            end
+        end
+
+        local body = string.sub(raw, body_start, last)
+        assert(string.bytelen(body) == len, "a frame whose Content-Length is not its size in bytes")
 
         if ok, msg = catch fromjson(body) then
             results[#results + 1] = msg
         end
 
-        pos = body_start + len
+        pos = last + 1
     end
 
     return results
@@ -761,14 +777,28 @@ end
 
 local function edit_on_same_line_after_multi_byte_string_test()
     local uri = "file:///test/e2e-utf8-3.lus"
-    -- local x = 'café' has é (2 bytes) inside the string.
-    -- Bytes:  l(1)o(2)c(3)a(4)l(5) (6)x(7) (8)=(9) (10)'(11)c(12)a(13)f(14)é(15-16)'(17)
-    -- UTF-16: l(0)o(1)c(2)a(3)l(4) (5)x(6) (7)=(8) (9)'(10)c(11)a(12)f(13)é(14)'(15)
-    open_doc(uri, "local x = 'caf\xC3\xA9'\nlocal y = 1")
-    -- Edit "1" on line 1; line 1 is ASCII-only so no encoding issue
-    local diags = edit_doc(uri, make_range(1, 10, 1, 11), "42")
+    -- The edit replaces the "1" that follows 'café' on the same line. The
+    -- text before it, "local x = 'café' local y = ", is 27 UTF-16 code
+    -- units and 28 bytes, so a position counted in bytes lands one
+    -- character early and leaves a line that does not parse.
+    open_doc(uri, "local x = 'caf\xC3\xA9' local y = 1")
+    local diags = edit_doc(uri, make_range(0, 27, 0, 28), "42")
     local errors = get_errors(diags)
     assert(#errors == 0)
+    -- The string itself, quotes included, is the code units 10 to 16. A
+    -- range that is off by one leaves a quote behind, which is an error.
+    diags = edit_doc(uri, make_range(0, 10, 0, 16), "7")
+    assert(#get_errors(diags) == 0)
+    close_doc(uri)
+end
+
+local function edit_on_same_line_after_a_surrogate_pair_test()
+    local uri = "file:///test/e2e-utf8-5.lus"
+    -- The emoji is one character, four bytes, and two UTF-16 code units,
+    -- so "local x = '😀' local y = " is 25 code units.
+    open_doc(uri, "local x = '\xF0\x9F\x98\x80' local y = 1")
+    local diags = edit_doc(uri, make_range(0, 25, 0, 26), "42")
+    assert(#get_errors(diags) == 0)
     close_doc(uri)
 end
 

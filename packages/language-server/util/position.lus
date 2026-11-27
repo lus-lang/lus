@@ -20,29 +20,12 @@ function position.build_line_index(text)
     return index
 end
 
--- Determine the byte length of a UTF-8 sequence from its leading byte.
-local function utf8_seq_len(byte)
-    if byte < 0x80 then
-        return 1
-    elseif byte < 0xC0 then  -- continuation byte (shouldn't lead)
-        return 1
-    elseif byte < 0xE0 then
-        return 2
-    elseif byte < 0xF0 then
-        return 3
-    else
-        return 4
-    end
-end
-
--- Count how many UTF-16 code units a UTF-8 sequence of `nbytes` represents.
--- Codepoints U+0000..U+FFFF = 1 code unit; U+10000+ = 2 (surrogate pair).
-local function utf16_units(nbytes)
-    if nbytes <= 3 then
-        return 1
-    end
-
-    return 2  -- 4-byte UTF-8 = codepoint >= U+10000 = surrogate pair
+-- How many UTF-16 code units the character with code point `cp` takes.
+-- A character past U+FFFF is a surrogate pair. A string is indexed by
+-- character, so `string.byte` returns a code point and each step of a
+-- walk is one character.
+local function utf16_units(cp)
+    return cp > 0xFFFF and 2 or 1
 end
 
 -- Convert a 0-based LSP line and character (UTF-16 code units) to a
@@ -77,11 +60,8 @@ function position.line_col_to_offset(line_index, line, character, text)
     local utf16_pos = 0
 
     while utf16_pos < character and byte_pos <= line_end do
-        local b = string.byte(text, byte_pos)
-        local seq = utf8_seq_len(b)
-        local units = utf16_units(seq)
-        utf16_pos = utf16_pos + units
-        byte_pos = byte_pos + seq
+        utf16_pos = utf16_pos + utf16_units(string.byte(text, byte_pos))
+        byte_pos = byte_pos + 1
     end
 
     return byte_pos
@@ -120,11 +100,8 @@ function position.offset_to_line_col(line_index, offset, text)
     local byte_pos = line_start
 
     while byte_pos < offset do
-        local b = string.byte(text, byte_pos)
-        local seq = utf8_seq_len(b)
-        local units = utf16_units(seq)
-        utf16_pos = utf16_pos + units
-        byte_pos = byte_pos + seq
+        utf16_pos = utf16_pos + utf16_units(string.byte(text, byte_pos))
+        byte_pos = byte_pos + 1
     end
 
     return { line = line, character = utf16_pos }

@@ -1,4 +1,4 @@
-global io, fromjson, tojson, string, tonumber, tostring, table, type
+global io, fromjson, tojson, string, tonumber, tostring, table, type, vector
 
 local transport = {}
 
@@ -94,7 +94,7 @@ function transport.decode_json(body)
         return nil, "JSON-RPC body must be text"
     end
 
-    if #body > transport.MAX_FRAME_BYTES then
+    if string.bytelen(body) > transport.MAX_FRAME_BYTES then
         return nil, "JSON-RPC body exceeds 16 MiB"
     end
 
@@ -138,8 +138,11 @@ function transport.parse_frame(frame)
 
     local body = string.sub(frame, header_end + 4)
 
-    if #body ~= content_length then
-        if #body > content_length then
+    -- Content-Length counts the bytes of the body, as the protocol says.
+    local size = string.bytelen(body)
+
+    if size ~= content_length then
+        if size > content_length then
             return nil, "trailing data after LSP frame"
         end
 
@@ -219,10 +222,18 @@ function transport.read_message()
         return nil, header_error, "framing"
     end
 
-    local body = io.read(content_length)
+    -- The header counts bytes, and a text read counts characters, so the
+    -- body is read as bytes and then made a string.
+    local bytes = content_length > 0 and io.input():readbytes(content_length) or vector.create(0)
 
-    if not body or #body ~= content_length then
+    if not bytes or #bytes ~= content_length then
         return nil, "short LSP frame body", "framing"
+    end
+
+    local valid, body = catch vector.tostring(bytes)
+
+    if not valid then
+        return nil, "LSP frame body is not valid UTF-8", "json"
     end
 
     local message, json_error = transport.decode_json(body)
@@ -245,11 +256,13 @@ function transport.encode_message(msg)
         return nil, "JSON-RPC response is not valid UTF-8"
     end
 
-    if #body > transport.MAX_FRAME_BYTES then
+    local size = string.bytelen(body)
+
+    if size > transport.MAX_FRAME_BYTES then
         return nil, "JSON-RPC response exceeds 16 MiB"
     end
 
-    return `Content-Length: $(#body)\r\n\r\n$body`
+    return `Content-Length: $size\r\n\r\n$body`
 end
 
 function transport.write_message(msg)
