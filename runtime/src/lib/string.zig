@@ -42,6 +42,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "gsub", .func = gsub, .leaf = gsubLeaf, .leaf_first = true },
     .{ .name = "join", .func = join },
     .{ .name = "len", .func = len },
+    .{ .name = "bytelen", .func = bytelen },
     .{ .name = "lower", .func = lower, .leaf = lowerLeaf },
     .{ .name = "ltrim", .func = ltrim },
     .{ .name = "match", .func = match },
@@ -246,6 +247,13 @@ const Scratch = struct {
 
 // ---------------------------------------------------------------------
 // Basic functions
+
+/// `string.bytelen(s)`: the number of bytes of the UTF-8 form of `s`,
+/// which the string records, so the call reads no character.
+fn bytelen(l: *Thread) Error!u32 {
+    const s = try aux.checkString(l, 1);
+    return aux.retInt(l, @intCast(s.bytes().len));
+}
 
 fn len(l: *Thread) Error!u32 {
     const s = try aux.checkString(l, 1);

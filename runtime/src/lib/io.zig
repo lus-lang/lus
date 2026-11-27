@@ -89,6 +89,7 @@ pub fn open(l: *Thread) Error!void {
         .{ .name = "isatty", .func = fIsatty },
         .{ .name = "lines", .func = fLines },
         .{ .name = "read", .func = fRead },
+        .{ .name = "readbytes", .func = fReadBytes },
         .{ .name = "seek", .func = fSeek },
         .{ .name = "setraw", .func = fSetraw },
         .{ .name = "setvbuf", .func = fSetvbuf },
@@ -852,6 +853,30 @@ fn ioRead(l: *Thread) Error!u32 {
 
 fn fRead(l: *Thread) Error!u32 {
     return doRead(l, try checkHandle(l, 1), 2);
+}
+
+/// `file:readbytes(n)` reads up to `n` bytes as a vector, whatever the
+/// mode of the handle, and returns nil at the end of the file. A protocol
+/// that frames its messages by a count of bytes reads them this way from
+/// a text handle such as the standard input.
+fn fReadBytes(l: *Thread) Error!u32 {
+    const h = try checkHandle(l, 1);
+    const n = try aux.checkInt(l, 2);
+    if (n < 0) return aux.argError(l, 2, "the count must not be negative", .{});
+    h.read_err = null;
+    const want: usize = std.math.cast(usize, n) orelse std.math.maxInt(usize);
+    const got = fill(l, h, @max(want, 1)) catch |e| {
+        if (h.read_err) |re| {
+            h.read_err = null;
+            return ioFail(l, re);
+        }
+        return e;
+    };
+    if (got == 0) return aux.retNil(l);
+    const take = @min(got, want);
+    const v = Value.obj(.vector, try vector.newVector(l, pending(h)[0..take]));
+    consume(h, take);
+    return aux.ret(l, v);
 }
 
 fn ioWrite(l: *Thread) Error!u32 {

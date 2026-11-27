@@ -3126,6 +3126,7 @@ The `catch` expression captures the error object, as [Error handling](/manual/gu
   ["file"] = {
     children = {
       "file:isatty",
+      "file:readbytes",
       "file:setraw",
       "file:setvbuf",
       "file:sync",
@@ -3166,6 +3167,54 @@ print(type(color))  --> boolean
     short_name = "isatty",
     since = "2.0.0",
     source = "stdlib/io/isatty.md",
+    stability = "stable",
+  },
+  ["file:readbytes"] = {
+    children = {},
+    description = [[
+Reads up to `n` bytes from the file handle and returns them as a vector.
+
+`n` is the number of bytes to read. The call waits until `n` bytes arrived or the file ended, so the vector holds fewer than `n` bytes only at the end of the file. It returns `nil` when the file ended before any byte. A negative `n` raises `bad argument #2 to 'readbytes' (the count must not be negative)`.
+
+The bytes are returned as they are in the file, whatever the mode of the handle. A handle in text mode, such as the standard input, therefore reads a message whose size is given in bytes with this method, and [`vector.tostring`](/manual/api#vector.tostring) turns the bytes into a string. The method shares the position of the handle with [`file:read`](/manual/api#io.read), so a program reads the header lines of a message with `read` and its body with `readbytes`.
+
+The following example writes a message with a size in bytes and reads it back.
+
+```lus
+pledge("env", "fs")
+local path = fs.path.join(os.getenv("TMPDIR") or "/tmp", "lus-readbytes-example.txt")
+local body = "héllo"
+io.open(path, "w"):write(`$(string.bytelen(body))\n$body`):close()
+local f = io.open(path)
+local size = tonumber(f:read("l"))
+print(size)  --> 6
+print(vector.tostring(f:readbytes(size)))  --> héllo
+print(f:readbytes(1))  --> nil
+f:close()
+fs.remove(path)
+```
+
+[`string.bytelen`](/manual/api#string.bytelen) returns the size of a string in bytes.]],
+    kind = "function",
+    module = "io",
+    name = "file:readbytes",
+    origin = "lus",
+    params = {
+      {
+        name = "n",
+        type = "integer",
+      },
+    },
+    parent = "file",
+    receiver = "file",
+    returns = {
+      {
+        type = "vector|nil",
+      },
+    },
+    short_name = "readbytes",
+    since = "2.0.0",
+    source = "stdlib/io/readbytes.md",
     stability = "stable",
   },
   ["file:setraw"] = {
@@ -8745,6 +8794,7 @@ print(p:norm(), getmetatable(p) == Point)  --> 5.0  true
   ["string"] = {
     children = {
       "string.byte",
+      "string.bytelen",
       "string.char",
       "string.dump",
       "string.find",
@@ -8825,6 +8875,45 @@ Positions outside the string are clamped to it. A start before the first charact
     short_name = "byte",
     since = "0.1.0",
     source = "stdlib/string/byte.md",
+    stability = "stable",
+  },
+  ["string.bytelen"] = {
+    children = {},
+    description = [[
+Returns the number of bytes that `s` takes in UTF-8.
+
+`s` is the string to measure. A number is converted to its textual form first.
+
+The result is a non-negative integer. A string records its size in bytes, so the call takes the same time for a string of any length. The length operator `#s` counts characters, and the two results differ for a string with a character outside ASCII: `"héllo"` has 5 characters and 6 bytes. A protocol that states the size of a message in bytes, such as the `Content-Length` header of HTTP, takes its count from this function.
+
+An argument that is neither a string nor a number raises `bad argument #1 to 'bytelen' (string expected, got nil)` with its type.
+
+```lus
+print(string.bytelen("héllo"), #"héllo")  --> 6  5
+print(string.bytelen("😀"), string.bytelen(""))  --> 4  0
+print(string.bytelen("a\0b"))  --> 3
+```
+
+[`vector.fromstring`](/manual/api#vector.fromstring) returns the bytes themselves.]],
+    kind = "function",
+    module = "string",
+    name = "string.bytelen",
+    origin = "lus",
+    params = {
+      {
+        name = "s",
+        type = "string",
+      },
+    },
+    parent = "string",
+    returns = {
+      {
+        type = "integer",
+      },
+    },
+    short_name = "bytelen",
+    since = "2.0.0",
+    source = "stdlib/string/bytelen.md",
     stability = "stable",
   },
   ["string.char"] = {
