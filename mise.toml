@@ -46,6 +46,11 @@ description = "Run 200 generated programs under every JIT mode and compare their
 depends = ["build"]
 run = "LUS_JIT=off runtime/zig-out/bin/lus tests/diff/run.lus --count 200 --start 1 --jobs 4 --timeout 60"
 
+[tasks.callbacks]
+description = "Run 100 generated programs whose callbacks change, detach, and collect the tables that natives are reading, on the runtime and on a gc-stress build when runtime/zig-out-stress holds one"
+depends = ["build"]
+run = "LUS_JIT=off runtime/zig-out/bin/lus tests/callbacks/run.lus --count 100 --start 1 $([ -x runtime/zig-out-stress/bin/lus ] && echo --stress runtime/zig-out-stress/bin/lus)"
+
 [tasks.refactor]
 description = "Apply the refactorings of the language server across the conformance suite and check that every refactored file still passes"
 depends = ["build"]

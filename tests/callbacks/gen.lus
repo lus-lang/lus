@@ -1,0 +1,377 @@
+-- Generates programs in which a callback attacks the container that a
+-- native is reading.
+--
+-- A native that calls back into a program holds tables, strings, and
+-- stack slots of its own while the callback runs. The callback of a
+-- generated program detaches, empties, or grows the table the native is
+-- walking, makes it weak, grows the stack, raises an error, and then
+-- collects. Every scenario runs under `catch`, so a program always ends
+-- with the line `done` and the count of its scenarios. A build that
+-- collects at every allocation (`-Dgc-stress`) turns a value that the
+-- native kept in a local of its own into a crash.
+--
+-- The generator is a module for run.lus, and a script that prints one
+-- program: lus gen.lus SEED [SIZE] [light].
+
+global arg, io, ipairs, string, table, tonumber, tostring
+
+local PRELUDE = [[
+pledge("load", "fs:read")
+
+local junk
+
+local function churn()
+    collectgarbage()
+    junk = {}
+
+    for i = 1, CHURN do
+        junk[i] = { i, tostring(i), {} }
+    end
+end
+
+local function deep(n)
+    if n == 0 then
+        return 0
+    end
+
+    return 1 + deep(n - 1)
+end
+
+-- Calls a native from inside a callback of a native, one level deep, so
+-- the work of a program stays bounded.
+local entered = false
+
+local function reenter(f)
+    if entered then
+        return
+    end
+
+    entered = true
+    local _ = catch f()
+    entered = false
+end
+
+local ran = 0
+
+local function run(body)
+    ran = ran + 1
+    local _ = catch body()
+    churn()
+end
+
+local function rows(n)
+    local t = {}
+
+    for i = 1, n do
+        t[i] = { k = i % 5, id = i, name = `row$i`, sub = { i, i + 1 } }
+    end
+
+    return t
+end
+]]
+
+-- What a callback does to `root[key]`, which is `box`. An action that
+-- adds elements stops at a size, so a loop over the table ends.
+local ACTIONS = {
+    "root[key] = nil",
+    "for k in pairs(box) do box[k] = nil end",
+    "for i = 1, 48 do box[`g$i`] = { i } end",
+    "if #box < 400 then for i = 1, 48 do box[#box + 1] = { k = i, id = i } end end",
+    "local _ = catch setmetatable(box, { __mode = \"kv\" })",
+    "local _ = catch setmetatable(box, { __mode = \"k\" })",
+    "root[key] = {}",
+    "root = { [key] = box }",
+    "local _ = deep(DEPTH)",
+    "box = nil",
+    "churn()",
+    "error({ code = 1 })",
+    "box[1] = nil",
+    "local _ = catch table.remove(box)",
+    "reenter(function() return table.clone(root, true) end)",
+    "reenter(function() return tojson(root) end)",
+}
+
+-- Each scenario declares `root`, `key`, and `box`, defines `hostile`, and
+-- hands a function that calls it to a native. `%H` is replaced with the
+-- body of `hostile`, and `%N` with a size.
+local SCENARIOS = {
+    [[
+    local root, key = {}, 1
+    local box = {}
+    local function hostile() %H end
+    for i = 1, %N do
+        box[i] = setmetatable({ i }, { __json = function() hostile() return "x" end })
+    end
+    root[key] = { box, { box } }
+    local _ = tojson(root)]],
+    [[
+    local root, key = { n = 1 }, "inner"
+    local box = setmetatable({}, { __mode = "v" })
+    local function hostile() %H end
+    for i = 1, %N do
+        box[`k$i`] = setmetatable({ i }, { __json = function(self) hostile() return self[1] end })
+    end
+    root[key] = box
+    local _ = tojson(root, function(_, v) return v end)]],
+    [[
+    local root, key = {}, "list"
+    local box = {}
+    local function hostile() %H end
+    for i = 1, %N do
+        box[`a long key that is never interned because it has more than forty bytes $i`] = { { i } }
+    end
+    root[key] = box
+    local _ = tojson(root, function(_, v) hostile() return v end)]],
+    [[
+    local root, key = {}, 1
+    local box = setmetatable({}, { __mode = "kv" })
+    local function hostile() %H end
+    for i = 1, %N do
+        box[{ i, {} }] = setmetatable({ {}, {} }, { __gc = function() hostile() end })
+    end
+    root[key] = box
+    local _ = table.clone(root, true)]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    table.sort(box, function(a, b) hostile() return a.id < b.id end)]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local _ = table.map(box, function(r) hostile() return r.sub end)
+    local _ = table.filter(box, function(r) hostile() return r ~= nil end)
+    local _ = table.reduce(box, function(acc, r) hostile() return acc + 1 end, 0)]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local _ = table.groupby(box, function(r) hostile() return r.k end)
+    local _ = table.sortby(box, function(r) hostile() return r.id end)]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local function gone(r) hostile() return true end
+    for row in query(@box as r where gone(r) select r.k, count(*) as c group by r.k, r.name) do
+        local _ = row.c
+    end]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local other = rows(%N)
+    local function gone(r) hostile() return true end
+    for row in query(@box as a, other as b where a.id == b.id and gone(a) select distinct a.name, b.k) do
+        local _ = row.name
+    end]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local s = string.rep("abc", %N)
+    local _ = s:gsub("%a", function(c) hostile() return c end)
+    local _ = s:gsub("b", setmetatable({}, { __index = function() hostile() return "B" end }))]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local shown = setmetatable({}, { __tostring = function() hostile() return "shown" end })
+    local _ = string.format("%s %s %s %s", shown, box, shown, shown)
+    local _ = `$shown and $shown`
+    local _ = tostring(shown) .. tostring(shown)]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local closing = setmetatable({}, { __close = function() hostile() end })
+    local function body()
+        local a <close> = closing
+        local b <close> = setmetatable({}, { __close = function() error({ box, `late $(#box)` }) end })
+        local c <close> = closing
+        error({ "first", box })
+    end
+    local _ = catch body()]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local co = coroutine.create(function()
+        local a <close> = setmetatable({}, { __close = function() hostile() end })
+        local b <close> = setmetatable({}, { __close = function() error(string.rep("e", 80)) end })
+        coroutine.yield(box)
+    end)
+    coroutine.resume(co)
+    local _ = coroutine.close(co)]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local again = {}
+    for i = 1, %N do
+        setmetatable({ i }, { __gc = function(self)
+            hostile()
+            root.kept = self
+            -- Each object registers its finalizer one more time.
+            if not again[i] then
+                again[i] = true
+                setmetatable(self, getmetatable(self))
+            end
+        end })
+    end
+    churn()
+    churn()]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local proxy = setmetatable({}, {
+        __index = function() hostile() return box end,
+        __newindex = function(t, k, v) hostile() rawset(t, k, v) end,
+        __len = function() hostile() return 3 end,
+        __concat = function() hostile() return "joined" end,
+        __eq = function() hostile() return true end,
+        __lt = function() hostile() return true end,
+        __call = function() hostile() return box end,
+    })
+    local other = setmetatable({}, getmetatable(proxy))
+    local _ = proxy.missing?.sub?[1]
+    proxy[`new$(#box)`] = { box }
+    local _ = #proxy + #proxy
+    local _ = proxy .. "x" .. proxy
+    local _ = proxy == other, proxy < other, proxy <= other
+    local _ = proxy(1, 2, 3)]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    for k, v in pairs(box) do
+        hostile()
+        local _ = k, v
+    end
+    for i, v in ipairs(root[key] or {}) do
+        hostile()
+        local _ = i, v
+    end]],
+    [[
+    local root, key = {}, 1
+    local box = {}
+    local function hostile() %H end
+    root[key] = box
+    local old = package.searchers
+    local mine = {}
+    mine[1] = function() package.searchers = old mine = nil hostile() return "\n\tfirst" end
+    for i = 2, 5 do
+        mine[i] = function() return `\n\tsearcher $i` end
+    end
+    package.searchers = mine
+    local _ = catch require("no.such.module.of.this.program")
+    package.searchers = old]],
+    [[
+    local root, key = {}, 1
+    local box = rows(%N)
+    local function hostile() %H end
+    root[key] = box
+    local keys = {}
+    for i = 1, %N do
+        keys[i] = { a = 1e29d + i, b = 0.5d * i, c = 100000000000000000000n + i }
+    end
+    local function gone(r) hostile() return true end
+    for row in query(@keys as r where gone(r) select r.a, r.b, count(*) as c group by r.a, r.b) do
+        local _ = row.c
+    end
+    local seen = {}
+    for i, r in ipairs(keys) do
+        seen[r.a], seen[r.b], seen[r.c] = i, i, i
+    end]],
+    [[
+    local root, key = {}, 1
+    local box = {}
+    local function hostile() %H end
+    root[key] = box
+    local function fresh(i, drop)
+        local t = { a = i, b = { i }, c = 3, d = 4, e = 5, f = 6, g = 7, h = 8 }
+        local alias = t
+        if drop then
+            alias = nil
+        end
+        local inner = { x = i }
+        t.h = inner
+        box[1] = alias
+        return t, rawequal(alias, t), setmetatable(inner, { __len = function() return i end })
+    end
+    for i = 1, %N * 8 do
+        local t, same, inner = fresh(i, i % 7 == 0)
+        if t.h.x ~= i or same == (i % 7 == 0) or #inner ~= i then
+            error("a wrong value in compiled code")
+        end
+        if i % 16 == 0 then
+            hostile()
+        end
+    end]],
+}
+
+local M = {}
+
+-- A small generator of its own, so a program depends on its seed alone.
+local function newRng(seed)
+    local state = (seed * 2654435761 + 12345) % 2147483648
+
+    return function(n)
+        state = (state * 1103515245 + 12345) % 2147483648
+        return state // 65536 % n + 1
+    end
+end
+
+-- The program for `seed`, with `size` scenarios. A light program works
+-- on small tables, for a build that collects at every allocation.
+function M.generate(seed, size, light)
+    local pick = newRng(seed)
+    local parts = {
+        `local CHURN, DEPTH = $(light and 8 or 120), $(light and 300 or 2500)\n`,
+        PRELUDE,
+    }
+
+    for _ = 1, size do
+        local actions = {}
+
+        for a = 1, pick(3) do
+            actions[a] = `local _ = catch (function() $(ACTIONS[pick(#ACTIONS)]) end)()`
+        end
+
+        -- One action in three runs outside `catch`, so its error leaves
+        -- through the native.
+        if pick(3) == 1 then
+            actions[#actions + 1] = ACTIONS[pick(#ACTIONS)]
+        end
+
+        actions[#actions + 1] = "churn()"
+        local count = (light and { 2, 3, 5, 8 } or { 3, 8, 24, 60 })[pick(4)]
+        local body = SCENARIOS[pick(#SCENARIOS)]
+        body = body:gsub("%%H", (table.concat(actions, " "):gsub("%%", "%%%%")))
+        body = body:gsub("%%N", tostring(count))
+        parts[#parts + 1] = `run(function()\n$body\nend)\n`
+    end
+
+    parts[#parts + 1] = 'print("done", ran)\n'
+    return table.concat(parts, "\n")
+end
+
+if arg and arg[0] and arg[0]:find("gen%.lus$") then
+    io.write(M.generate(tonumber(arg[1] or "1"), tonumber(arg[2] or "10"), arg[3] == "light"))
+end
+
+return M

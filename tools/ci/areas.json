@@ -335,7 +335,7 @@
     },
     {
       "name": "differential",
-      "paths": ["tests/diff/**"],
+      "paths": ["tests/diff/**", "tests/callbacks/**"],
       "labels": ["tests"],
       "checks": ["diff"]
     },

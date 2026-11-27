@@ -1,0 +1,90 @@
+-- Runs the programs of gen.lus and reports each one that a runtime does
+-- not finish.
+--
+-- Usage: LUS_JIT=off lus run.lus [--count N] [--start SEED] [--size S]
+--            [--lus PATH] [--stress PATH] [--timeout SECONDS] [--out DIR]
+--
+-- Each program runs in a process of its own under the interpreter and
+-- under the optimizing tier, with the runtime at PATH and, with --stress,
+-- with a build that collects at every allocation as well, which runs a
+-- light program of the same seed. A program that
+-- ends without its `done` line is a finding, written to DIR (default
+-- tests/callbacks/findings) with what it printed. The exit status is 1
+-- when anything was found.
+
+global arg, assert, fs, io, ipairs, os, package, pledge, print, require, string, tonumber, tostring
+
+pledge("exec", "fs", "env", "load")
+
+local here = arg[0]:match("^(.*)[/\\][^/\\]*$") or "."
+package.path = `$here/?.lus;$(package.path)`
+local gen = require("gen")
+local opts = {}
+
+do
+    local i = 1
+
+    while arg[i] do
+        opts[arg[i]:sub(3)] = arg[i + 1]
+        i = i + 2
+    end
+end
+
+local root = `$here/../..`
+local count = tonumber(opts.count or "50")
+local start = tonumber(opts.start or "1")
+local size = tonumber(opts.size or "10")
+local seconds = tonumber(opts.timeout or "120")
+local out = opts.out or `$here/findings`
+local runtimes = { { name = "lus", path = opts.lus or `$root/runtime/zig-out/bin/lus` } }
+
+-- The stress build runs a light program of the same seed.
+if opts.stress then
+    runtimes[#runtimes + 1] = { name = "stress", path = opts.stress, light = true }
+end
+
+local MODES = { "off", "opt-eager" }
+
+local function quote(s)
+    return `'$(s:gsub("'", "'\\''"))'`
+end
+
+local work = os.tmpname()
+fs.remove(work)
+fs.createdirectory(work)
+local found = 0
+
+for seed = start, start + count - 1 do
+    for _, rt in ipairs(runtimes) do
+        local file = `$work/p$seed-$(rt.name).lus`
+        local f = assert(io.open(file, "w"))
+        f:write(gen.generate(seed, size, rt.light))
+        f:close()
+
+        for _, mode in ipairs(MODES) do
+            local cmd = `LUS_JIT=$mode perl -e 'alarm $seconds; exec @ARGV' $(quote(rt.path)) $(quote(
+                file
+            )) 2>&1`
+            local p = assert(io.popen(cmd, "r"))
+            local text = p:read("a")
+            p:close()
+
+            if not text:find("\ndone\t%d+\n$") and not text:find("^done\t%d+\n$") then
+                found = found + 1
+                fs.createdirectory(out, true)
+                local name = `$out/seed$seed-$(rt.name)-$mode`
+                fs.copy(file, `$name.lus`)
+                local report = assert(io.open(`$name.txt`, "w"))
+                report:write(text)
+                report:close()
+                print(`finding: seed $seed, $(rt.name), LUS_JIT=$mode, written to $name.lus`)
+            end
+        end
+
+        fs.remove(file)
+    end
+end
+
+fs.remove(work, true)
+print(`$count programs, $found findings`)
+os.exit(found == 0 and 0 or 1)
