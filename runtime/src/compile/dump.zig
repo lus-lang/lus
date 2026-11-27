@@ -482,10 +482,12 @@ const Reader = struct {
 };
 
 /// Rejects structurally broken prototypes: unknown opcodes, jumps and
-/// handlers outside the code, and constant or prototype operands outside
-/// their tables. Binary chunks remain trusted input (see `load` mode "t"
-/// for untrusted sources), so this guards against corruption, not against
-/// a crafted chunk.
+/// handlers outside the code, a function whose last instruction falls
+/// off its end, and the constant operand of `loadk` or the prototype
+/// operand of `closure` outside its table. Register operands and the
+/// other constant operands are not checked. A binary chunk remains
+/// trusted input, which only a host grants the permission to load, so
+/// this guards against corruption and not against a crafted chunk.
 fn verify(p: *Proto) error{Malformed}!void {
     const opc = @import("opcodes.zig");
     if (p.code.len == 0) return error.Malformed;
@@ -506,5 +508,28 @@ fn verify(p: *Proto) error{Malformed}!void {
     }
     for (p.handlers) |h| {
         if (h.start_pc > h.end_pc or h.end_pc > p.code.len or h.handler_pc >= p.code.len) return error.Malformed;
+        // The unwinder stores into these registers.
+        if (h.dest >= p.max_stack or h.level > p.max_stack) return error.Malformed;
+        if (h.has_handler and h.dest == 0) return error.Malformed;
+    }
+    // Every jump lands on an instruction, and the last instruction leaves
+    // the function or jumps, so the interpreter never runs past the code.
+    const n: i64 = @intCast(p.code.len);
+    for (p.code, 0..) |ins, i| {
+        const pc: i64 = @intCast(i);
+        const target: ?i64 = switch (opc.op(ins)) {
+            .jmp => pc + 1 + opc.sj(ins),
+            .eq, .lt, .le, .eqk, .lti, .lei, .gti, .gei, .test_, .testset, .testnil => pc + 2,
+            .forprep => pc + @as(i64, opc.bx(ins)) + 2,
+            .forloop, .tforloop => pc + 1 - @as(i64, opc.bx(ins)),
+            .tforprep => pc + 1 + @as(i64, opc.bx(ins)),
+            .setlist => pc + 2,
+            else => null,
+        };
+        if (target) |t| if (t < 0 or t >= n) return error.Malformed;
+    }
+    switch (opc.op(p.code[p.code.len - 1])) {
+        .ret, .ret0, .ret1, .tailcall, .jmp => {},
+        else => return error.Malformed,
     }
 }

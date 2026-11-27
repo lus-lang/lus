@@ -185,6 +185,13 @@ fn slot(l: *Thread, idx: c_int) ?u32 {
     return null;
 }
 
+/// Whether the frame of the host holds fewer than `n` values. A function
+/// that takes its operands from the top of the stack does nothing then,
+/// where reading below the frame would reach the values of its caller.
+fn lacks(l: *Thread, n: u32) bool {
+    return l.top - frameBase(l) < n;
+}
+
 fn at(l: *Thread, idx: c_int) Value {
     const s = slot(l, idx) orelse return .nil;
     return l.stack[s];
@@ -219,6 +226,7 @@ export fn lus_pushvalue(l: *Thread, idx: c_int) void {
 }
 
 export fn lus_remove(l: *Thread, idx: c_int) void {
+    if (lacks(l, 1)) return;
     const s = slot(l, idx) orelse return;
     var i = s;
     while (i + 1 < l.top) : (i += 1) l.stack[i] = l.stack[i + 1];
@@ -226,6 +234,7 @@ export fn lus_remove(l: *Thread, idx: c_int) void {
 }
 
 export fn lus_insert(l: *Thread, idx: c_int) void {
+    if (lacks(l, 1)) return;
     const s = slot(l, idx) orelse return;
     const v = l.stack[l.top - 1];
     var i = l.top - 1;
@@ -234,6 +243,7 @@ export fn lus_insert(l: *Thread, idx: c_int) void {
 }
 
 export fn lus_replace(l: *Thread, idx: c_int) void {
+    if (lacks(l, 1)) return;
     const s = slot(l, idx) orelse return;
     l.stack[s] = l.stack[l.top - 1];
     l.top -= 1;
@@ -529,6 +539,7 @@ export fn lus_getfield(l: *Thread, idx: c_int, k: [*:0]const u8) c_int {
 }
 
 export fn lus_setfield(l: *Thread, idx: c_int, k: [*:0]const u8) c_int {
+    if (lacks(l, 1)) return LUS_ERRRUN;
     const obj = at(l, idx);
     const top = l.top - 1;
     return protect(l, top, struct {
@@ -542,6 +553,7 @@ export fn lus_setfield(l: *Thread, idx: c_int, k: [*:0]const u8) c_int {
 }
 
 export fn lus_gettable(l: *Thread, idx: c_int) c_int {
+    if (lacks(l, 1)) return LUS_ERRRUN;
     const obj = at(l, idx);
     const top = l.top - 1;
     return protect(l, top, struct {
@@ -554,6 +566,7 @@ export fn lus_gettable(l: *Thread, idx: c_int) c_int {
 }
 
 export fn lus_settable(l: *Thread, idx: c_int) c_int {
+    if (lacks(l, 2)) return LUS_ERRRUN;
     const obj = at(l, idx);
     const top = l.top - 2;
     return protect(l, top, struct {
@@ -574,6 +587,7 @@ export fn lus_getglobal(l: *Thread, name: [*:0]const u8) c_int {
 }
 
 export fn lus_setglobal(l: *Thread, name: [*:0]const u8) c_int {
+    if (lacks(l, 1)) return LUS_ERRRUN;
     const top = l.top - 1;
     return protect(l, top, struct {
         fn f(t: *Thread, key: [*:0]const u8) Error!void {
@@ -591,7 +605,9 @@ fn tableAt(l: *Thread, idx: c_int) ?*Table {
 }
 
 export fn lus_rawget(l: *Thread, idx: c_int) c_int {
-    const key = l.stack[l.top - 1];
+    if (lacks(l, 1)) return typeCode(.nil);
+    // A bigint or a decimal names the slot of the number it equals.
+    const key = ops.normKey(l, l.stack[l.top - 1]) catch l.stack[l.top - 1];
     const v = if (tableAt(l, idx)) |t| table.get(t, key) else Value.nil;
     l.stack[l.top - 1] = v;
     return typeCode(v.tag);
@@ -604,6 +620,7 @@ export fn lus_rawgeti(l: *Thread, idx: c_int, n: i64) c_int {
 }
 
 export fn lus_rawset(l: *Thread, idx: c_int) c_int {
+    if (lacks(l, 2)) return LUS_ERRRUN;
     const tv = at(l, idx);
     const top = l.top - 2;
     return protect(l, top, struct {
@@ -616,6 +633,7 @@ export fn lus_rawset(l: *Thread, idx: c_int) c_int {
 }
 
 export fn lus_rawseti(l: *Thread, idx: c_int, n: i64) c_int {
+    if (lacks(l, 1)) return LUS_ERRRUN;
     const tv = at(l, idx);
     const top = l.top - 1;
     return protect(l, top, struct {
@@ -725,6 +743,7 @@ export fn lus_getmetatable(l: *Thread, tname: [*:0]const u8) void {
 }
 
 export fn lus_setmetatable(l: *Thread, idx: c_int) c_int {
+    if (lacks(l, 1)) return LUS_ERRRUN;
     const obj = at(l, idx);
     const top = l.top - 1;
     return protect(l, top, struct {
@@ -791,6 +810,7 @@ fn refTable(l: *Thread) Error!*Table {
 }
 
 export fn lus_ref(l: *Thread) c_int {
+    if (lacks(l, 1)) return LUS_NOREF;
     const v = l.stack[l.top - 1];
     if (v.isNil()) {
         l.top -= 1;
