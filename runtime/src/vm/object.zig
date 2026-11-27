@@ -532,13 +532,17 @@ pub const LocVar = struct {
 /// Entry of a function's exception table. Instructions in
 /// [start_pc, end_pc) are protected. On error the unwinder closes upvalues
 /// and to-be-closed variables down to `level`, stores the error in `dest`
-/// and jumps to `handler_pc`.
+/// and jumps to `handler_pc`. With `has_handler`, the register below
+/// `dest` holds the handler of a `catch[handler]`, which the unwinder
+/// calls with the error before it unwinds, while the frames of the error
+/// still stand, and the result of the handler is what it stores.
 pub const Handler = struct {
     start_pc: u32,
     end_pc: u32,
     handler_pc: u32,
     level: u8,
     dest: u8,
+    has_handler: bool = false,
 };
 
 pub const Proto = struct {

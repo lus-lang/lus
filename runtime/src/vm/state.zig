@@ -604,6 +604,9 @@ pub const Thread = struct {
     err_traceback: ?*String = null,
     /// Nesting of native-to-Lus calls, bounded to protect the native stack.
     ncalls: u32 = 0,
+    /// Set while the handler of a `catch` runs for an error of this
+    /// thread.
+    handling_error: bool = false,
     /// The thread that resumed this one.
     resumer: ?*Thread = null,
     /// The scheduler record of a thread that waited or was detached.
@@ -660,6 +663,9 @@ pub const Thread = struct {
     jit_budget: u32 = 1,
 
     pub const max_stack = 1_000_000;
+    /// The slots past `max_stack` that the handler of a `catch` may use
+    /// after a stack overflow.
+    pub const handler_room = 8192;
     pub const hook_call: u8 = 1;
     pub const hook_ret: u8 = 2;
     pub const hook_line: u8 = 4;
@@ -697,10 +703,13 @@ pub const Thread = struct {
     pub fn ensure(l: *Thread, n: usize) Error!void {
         const need = @as(usize, l.top) + n;
         if (need <= l.stack.len) return;
-        if (need > max_stack) return l.raiseMsg("stack overflow");
+        // The handler of a `catch` runs on top of the frames of the
+        // error, so it has room of its own past the limit.
+        const limit: usize = if (l.handling_error) max_stack + handler_room else max_stack;
+        if (need > limit) return l.raiseMsg("stack overflow");
         var size = @max(l.stack.len * 2, 64);
         while (size < need) size *= 2;
-        size = @min(size, max_stack + 256);
+        size = @min(size, limit + 256);
         const old = l.stack;
         const new = l.g.gpa.alloc(Value, size) catch return l.raiseMem();
         @memcpy(new[0..old.len], old);

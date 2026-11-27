@@ -311,6 +311,12 @@ pub const Flow = struct {
                     if (pc >= h.start_pc and pc < h.end_pc) {
                         _ = out.merge(f.live[h.handler_pc]);
                         _ = in.merge(f.live[h.handler_pc]);
+                        // The unwinder reads the handler of the `catch`
+                        // from its register.
+                        if (h.has_handler) {
+                            out.set(h.dest - 1);
+                            in.set(h.dest - 1);
+                        }
                     }
                 }
                 if (f.live_out[pc].merge(out)) changed = true;

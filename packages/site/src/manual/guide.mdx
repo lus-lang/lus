@@ -2272,6 +2272,18 @@ print(ok, err.code)  --> false  timeout
 
 Every `catch[as_table]` produces an error object with a `code` field, whatever raised the error.
 
+Lus calls the handler at the place of the error, before any function returns and before any `<close>` variable closes. A handler therefore sees the functions that led to the error, so `catch[debug.traceback]` gives the message followed by the traceback of the failing call.
+
+```lus
+local function parse(text)
+    return fromjson(text)
+end
+
+local ok, trace = catch[debug.traceback] parse("[1, 2")
+print(ok)  --> false
+print(trace:find("parse", 1, true) ~= nil)  --> true
+```
+
 ### The catch statement
 
 The failure of some operations has no consequence for the program, such as removing a temporary file that may already be gone, closing a connection that the other side may have closed, or sending a usage statistic. A `catch` at the start of a statement evaluates its expression and discards the results along with any error. The following loop calls every listener of an event, even when one of them raises an error.

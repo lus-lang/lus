@@ -1110,3 +1110,38 @@ print((catch debug.getregistry()))]])
     local out = os.spawn({ exe, "nodebug.lus" }, { stdout = "pipe" }).stdout:read("a")
     assert(out == "false\nstring\ntrue\ntrue\n", out)
 end
+
+local function a_catch_handler_runs_above_the_failing_frames_test()
+    local function innermost()
+        error("boom")
+    end
+
+    local function middle()
+        local r = innermost()
+        return r
+    end
+
+    local ok, trace = catch[debug.traceback] middle()
+    assert(not ok)
+    assert(trace:find("boom", 1, true) and trace:find("innermost", 1, true), trace)
+    assert(trace:find("middle", 1, true), trace)
+    local order = {}
+
+    local function closing()
+        local x <close> = setmetatable({}, {
+            __close = function(_, e)
+                order[#order + 1] = `close $e`
+            end,
+        })
+
+        error("first")
+    end
+
+    local caught, value = catch[function(e)
+        order[#order + 1] = "handler"
+        return `seen $(e:match("first"))`
+    end] closing()
+
+    assert(not caught and value == "seen first")
+    assert(order[1] == "handler" and order[2] == "close seen first", table.concat(order, ","))
+end

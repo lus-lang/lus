@@ -184,7 +184,7 @@ local function an_unknown_version_or_size_is_an_error_test()
 
     local v = string.dump(sample_enum)
 
-    for _, version in ipairs{ 0, 3, 7, 255 } do
+    for _, version in ipairs{ 0, 3, 8, 255 } do
         local w = vector.clone(v)
         vector.set(w, 4, version)
         local g, err = load(w, "=t", "b")

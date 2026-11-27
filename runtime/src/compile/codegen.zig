@@ -2077,14 +2077,10 @@ fn genCatch(fs: *FuncState, c: ast.Catch, base: u8, nresults: i32) Error!void {
         .handler_pc = @intCast(handler_pc),
         .level = vals,
         .dest = vals,
+        // The unwinder calls the handler in the status slot before it
+        // unwinds, and stores what the handler returns.
+        .has_handler = has_handler,
     });
-    if (has_handler) {
-        // vals = handler(err)
-        try checkStack(fs, 3);
-        try codeABC(fs, .move, vals + 1, vals, 0);
-        try codeABC(fs, .move, vals, base, 0);
-        try codeABC(fs, .call, vals, 2, 2);
-    }
     try codeABC(fs, .loadfalse, base, 0, 0);
     if (nresults < 0) try codeABC(fs, .settop, vals + 1, 0, 0);
     if (nresults > 2) try loadNil(fs, @as(u32, base) + 2, @intCast(nresults - 2));

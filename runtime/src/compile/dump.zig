@@ -30,8 +30,10 @@ pub const signature = "\x1bLus";
 /// immediate comparisons, version 4 renumbered the opcodes after the
 /// generic loop instructions, version 5 added the read-only table and
 /// vector constants of `<meta>` locals, and version 6 added the join shape
-/// of query conjuncts.
-const format_version: u8 = 6;
+/// of query conjuncts. Version 7 added the flag of a `catch` with a
+/// handler, which the unwinder calls. An older chunk calls its handler
+/// with instructions of its own.
+const format_version: u8 = 7;
 /// The oldest version that loads. Versions 4 and 5 lack table and vector
 /// constants and join conjuncts, and otherwise load the same way.
 const oldest_version: u8 = 4;
@@ -125,6 +127,7 @@ const Writer = struct {
             try w.uint(h.handler_pc);
             try w.byte(h.level);
             try w.byte(h.dest);
+            try w.byte(@intFromBool(h.has_handler));
         }
         // Debug information.
         const lines: []const u32 = if (w.strip) &.{} else p.lines;
@@ -257,6 +260,7 @@ pub fn undump(g: *Global, src: []const u8, chunkname: []const u8) UndumpError!*P
     r.pos = signature.len;
     const version = try r.byte();
     if (version < oldest_version or version > format_version) return error.Malformed;
+    r.version = version;
     if (try r.byte() != @sizeOf(u32) or try r.byte() != @sizeOf(i64) or try r.byte() != @sizeOf(f64)) return error.Malformed;
     r.default_source = vm.state.newStringIn(g, chunkname) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -272,6 +276,7 @@ const Reader = struct {
     src: []const u8,
     pos: usize = 0,
     default_source: ?*String = null,
+    version: u8 = format_version,
 
     fn byte(r: *Reader) !u8 {
         if (r.pos >= r.src.len) return error.Malformed;
@@ -360,6 +365,7 @@ const Reader = struct {
             .handler_pc = @intCast(try r.uint()),
             .level = try r.byte(),
             .dest = try r.byte(),
+            .has_handler = r.version >= 7 and try r.byte() != 0,
         };
         const nl = try r.len();
         p.lines = try gpa.alloc(u32, nl);

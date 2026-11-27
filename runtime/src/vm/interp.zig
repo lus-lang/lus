@@ -456,12 +456,22 @@ fn handleError(l: *Thread, stop: usize) bool {
             if (pc >= h.start_pc and pc < h.end_pc) {
                 // A nil payload becomes the standard message.
                 if (l.err.isNil()) l.err = Value.obj(.string, state.newStringKnown(l.g, "<no error object>", true, 17) catch l.g.memerr);
+                // The handler of a `catch[handler]` runs first, above the
+                // frames of the error, so a traceback it makes shows them.
+                if (h.has_handler) {
+                    const handled = runCatchHandler(l, l.stack[l.frames.items[i].base + h.dest - 1]);
+                    if (l.self_closed or l.g.halting or l.g.sched.fatal) return false;
+                    if (!handled) continue;
+                }
                 const err = l.err;
-                const level = fr.base + h.level;
+                // The handler pushed frames of its own, which can move the
+                // frame list, so the frame is read again.
+                const frame_base = l.frames.items[i].base;
+                const level = frame_base + h.level;
                 // Drop inner frames.
                 l.frames.items.len = i + 1;
                 closeUpvals(l, level);
-                l.top = fr.base + cl.proto.max_stack;
+                l.top = frame_base + cl.proto.max_stack;
                 // An error in __close replaces the caught error. A `catch`
                 // that ran inside a handler cleared the error of the
                 // thread, and the caught error stays the one saved here.
@@ -482,9 +492,32 @@ fn handleError(l: *Thread, stop: usize) bool {
                 return true;
             }
         }
-        if (fr.boundary) return false;
+        // A handler may have moved the frame list.
+        if (l.frames.items[i].boundary) return false;
     }
     return false;
+}
+
+/// Calls the handler of a `catch[handler]` with the error of `l`, on top
+/// of the frames that raised it, and makes its result the error. Returns
+/// false when the handler raised: its error is then the error of `l`,
+/// which the next `catch` outward receives.
+fn runCatchHandler(l: *Thread, handler: Value) bool {
+    const err = l.err;
+    const was_handling = l.handling_error;
+    l.handling_error = true;
+    defer l.handling_error = was_handling;
+    // The registers of the deepest function stay below the call.
+    const deepest = l.frames.items[l.frames.items.len - 1];
+    if (deepest.closure) |cl| l.top = @max(l.top, deepest.base + cl.proto.max_stack);
+    const depth = l.frames.items.len;
+    const result = ops.call1(l, handler, &.{err}) catch {
+        // A native handler that raised left its frame behind.
+        if (l.frames.items.len > depth) l.frames.items.len = depth;
+        return false;
+    };
+    l.err = result;
+    return true;
 }
 
 /// The parts of the dispatch loop that differ between its instantiations.
