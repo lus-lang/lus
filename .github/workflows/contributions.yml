@@ -561,7 +561,7 @@ jobs:
           # The new test without the fix of the sources must fail.
           git apply --include="$test" "$hunt/fix.patch"
           (cd runtime && zig build -Doptimize=ReleaseSafe)
-          if (cd runtime && zig-out/bin/lus test "../$test" > "$RUNNER_TEMP/before.txt" 2>&1); then fail "The regression test passes without the fix, so it does not show the bug."; fi
+          if (cd runtime && zig-out/bin/lus test -P bytecode "../$test" > "$RUNNER_TEMP/before.txt" 2>&1); then fail "The regression test passes without the fix, so it does not show the bug."; fi
           git checkout -- . && git clean -fdq -- tests runtime/src
           git apply "$hunt/fix.patch"
           (cd runtime && zig build -Doptimize=ReleaseSafe) || fail "The runtime does not build with the fix."
@@ -569,7 +569,7 @@ jobs:
           tests=$(echo "$plan" | jq -r '.runtime[] | select(.os == "linux") | .tests')
           for mode in off default eager opt-eager; do
             if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
-            (cd runtime && zig-out/bin/lus test "../$test" $tests) > "$RUNNER_TEMP/after-$mode.txt" 2>&1 || fail "The tests fail with the fix under LUS_JIT=$mode."
+            (cd runtime && zig-out/bin/lus test -P bytecode "../$test" $tests) > "$RUNNER_TEMP/after-$mode.txt" 2>&1 || fail "The tests fail with the fix under LUS_JIT=$mode."
           done
           echo "verified=true" >> "$GITHUB_OUTPUT"
           printf '\nCI checked that the regression test fails without the fix and passes with it, and that the tests of the areas of the fix pass in every mode of the JIT.\n' >> "$hunt/report.md"

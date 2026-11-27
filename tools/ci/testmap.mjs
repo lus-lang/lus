@@ -78,7 +78,7 @@ async function main() {
     fs.mkdirSync(dir);
     const env = {...process.env, LUS_COVERAGE: dir, LUS_BIN: lus, LUS_JIT: "off"};
     // A failing test still reached what it reached, so the map keeps it.
-    const result = await run(lus, ["test", test], {cwd: path.join(ROOT, "runtime"), env}, Number(args.timeout));
+    const result = await run(lus, ["test", "-P", "bytecode", test], {cwd: path.join(ROOT, "runtime"), env}, Number(args.timeout));
     if (result.code !== 0) {
       failed++;
       console.error(`${test}: exit ${result.code}`);

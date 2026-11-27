@@ -185,28 +185,28 @@ jobs:
         if: ${{ matrix.tests != '' }}
         timeout-minutes: 20
         working-directory: runtime
-        run: zig-out/bin/lus test ${{ matrix.tests }}
+        run: zig-out/bin/lus test -P bytecode ${{ matrix.tests }}
       - name: Conformance tests in native code
         if: ${{ matrix.tests != '' }}
         timeout-minutes: 20
         working-directory: runtime
         env:
           LUS_JIT: eager
-        run: zig-out/bin/lus test ${{ matrix.tests }}
+        run: zig-out/bin/lus test -P bytecode ${{ matrix.tests }}
       - name: Conformance tests interpreted
         if: ${{ matrix.tests != '' }}
         timeout-minutes: 20
         working-directory: runtime
         env:
           LUS_JIT: "off"
-        run: zig-out/bin/lus test ${{ matrix.tests }}
+        run: zig-out/bin/lus test -P bytecode ${{ matrix.tests }}
       - name: Conformance tests in optimized code
         if: ${{ matrix.tests != '' }}
         timeout-minutes: 20
         working-directory: runtime
         env:
           LUS_JIT: opt-eager
-        run: zig-out/bin/lus test ${{ matrix.tests }}
+        run: zig-out/bin/lus test -P bytecode ${{ matrix.tests }}
       - name: Conformance tests with short chains of direct calls
         if: ${{ contains(matrix.checks, 'direct') && matrix.tests != '' }}
         timeout-minutes: 20
@@ -214,7 +214,7 @@ jobs:
         env:
           LUS_JIT: opt-eager
           LUS_JIT_DIRECT: "1024"
-        run: zig-out/bin/lus test ${{ matrix.tests }}
+        run: zig-out/bin/lus test -P bytecode ${{ matrix.tests }}
       - name: Conformance tests under the collector at every 97th allocation
         # HACKING.md asks for this run after a change to the heap, a store,
         # or the JIT, since the verifier finds a missing barrier. The
@@ -227,12 +227,12 @@ jobs:
           LUS_JIT: eager
         run: |
           zig build -Doptimize=ReleaseSafe -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-stress
-          zig-out-stress/bin/lus test ${{ matrix.tests }}
+          zig-out-stress/bin/lus test -P bytecode ${{ matrix.tests }}
       - name: Documentation examples
         if: ${{ contains(matrix.checks, 'doc') }}
         timeout-minutes: 10
         working-directory: runtime
-        run: zig-out/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents
+        run: zig-out/bin/lus test --doc -P bytecode ../packages/site/src/manual ../spec ../.agents
       - name: WebAssembly
         if: ${{ contains(matrix.checks, 'wasm') && runner.os == 'Linux' }}
         timeout-minutes: 40

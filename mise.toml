@@ -134,10 +134,10 @@ depends = ["build:coverage"]
 dir = "runtime"
 run = [
   "rm -rf zig-out-cov/runs && mkdir -p zig-out-cov/runs",
-  "LUS_JIT=off LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_JIT=opt-eager LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents",
+  "LUS_JIT=off LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
+  "LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=opt-eager LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
+  "LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/zig-out-cov/runs zig-out-cov/bin/lus test --doc -P bytecode ../packages/site/src/manual ../spec ../.agents",
   "LUS_COVERAGE_REPORT=$PWD/zig-out-cov/runs zig-out-cov/bin/lus | tee zig-out-cov/report.txt",
   "LUS_JIT=off zig-out-cov/bin/lus ../tests/coverage/ratchet.lus zig-out-cov/report.txt ../tests/coverage/baseline.txt",
 ]
@@ -172,7 +172,7 @@ dir = "runtime"
 run = [
   "zig build -j1 -Doptimize=ReleaseFast -Dcoverage=true -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-cov-verify",
   "rm -rf zig-out-cov-verify/runs && mkdir -p zig-out-cov-verify/runs",
-  "LUS_JIT=off LUS_BIN=$PWD/zig-out-cov-verify/bin/lus LUS_COVERAGE=$PWD/zig-out-cov-verify/runs zig-out-cov-verify/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=off LUS_BIN=$PWD/zig-out-cov-verify/bin/lus LUS_COVERAGE=$PWD/zig-out-cov-verify/runs zig-out-cov-verify/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
   "LUS_COVERAGE_REPORT=$PWD/zig-out-cov-verify/runs LUS_COVERAGE_EXPORT=$PWD/zig-out-cov/verify.keys zig-out-cov-verify/bin/lus > /dev/null",
 ]
 
@@ -189,9 +189,9 @@ run = [
   "for d in spec .agents tests packages packaging; do ln -s ../../$d zig-out-mcdc/$d; done",
   "zig run ../tests/coverage/mcdc/transform.zig -- zig-out-mcdc/runtime/src zig-out-mcdc/table.txt ../tests/coverage/mcdc/mcdc_rt.zig",
   "cd zig-out-mcdc/runtime && zig build -j2 -Doptimize=ReleaseFast",
-  "LUS_JIT=off LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_JIT=opt-eager LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=off LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
+  "LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=opt-eager LUS_BIN=$PWD/zig-out-mcdc/runtime/zig-out/bin/lus LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
   "cd zig-out-mcdc/runtime && zig build unit-binary -j2",
   "LUS_MCDC=$PWD/zig-out-mcdc/runs zig-out-mcdc/runtime/zig-out/bin/lus-unit > /dev/null",
   "LUS_JIT=off zig-out-mcdc/runtime/zig-out/bin/lus ../tests/coverage/mcdc/mcdc.lus zig-out-mcdc/table.txt zig-out-mcdc/runs | tee zig-out-mcdc/report.txt",
@@ -207,7 +207,7 @@ description = "Run the conformance suite and the fuzz targets with the vendored 
 depends = ["build:sanitize"]
 dir = "runtime"
 run = [
-  "zig-out-ubsan/bin/lus test ../tests/conformance",
+  "zig-out-ubsan/bin/lus test -P bytecode ../tests/conformance",
   "zig build -j2 test --fuzz=200K -Doptimize=ReleaseSafe -Dsanitize-c=true",
 ]
 

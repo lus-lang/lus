@@ -54,7 +54,7 @@ export LUS_JIT=off
 export TSAN_OPTIONS="halt_on_error=0 report_signal_unsafe=0 report_thread_leaks=0 log_path=$out/report"
 
 status=0
-zig-out-tsan/bin/lus test --timeout 600 ../tests/conformance ../packages/language-server/tests > "$out/suite.txt" 2>&1 || true
+zig-out-tsan/bin/lus test -P bytecode --timeout 600 ../tests/conformance ../packages/language-server/tests > "$out/suite.txt" 2>&1 || true
 tail -n 1 "$out/suite.txt"
 zig-out-tsan/bin/lus ../tests/tsan/stress.lus 200 || status=1
 zig-out-tsan-stress/bin/lus ../tests/tsan/stress.lus 60 || status=1

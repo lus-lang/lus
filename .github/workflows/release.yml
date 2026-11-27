@@ -177,7 +177,7 @@ jobs:
         run: |
           zig build test test-embed test-bundle test-check test-doc test-version -Doptimize=ReleaseSafe
           zig build -Doptimize=ReleaseSafe
-          zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+          zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}

@@ -307,19 +307,19 @@ jobs:
         working-directory: runtime
         env:
           LUS_JIT: "off"
-        run: zig-out/bin/lus test ../tests/conformance
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance
       - name: Conformance tests in native code
         timeout-minutes: 110
         working-directory: runtime
         env:
           LUS_JIT: eager
-        run: zig-out/bin/lus test ../tests/conformance
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance
       - name: Conformance tests in optimized code
         timeout-minutes: 110
         working-directory: runtime
         env:
           LUS_JIT: opt-eager
-        run: zig-out/bin/lus test ../tests/conformance
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance
 
   emulated:
     name: Emulated architectures (${{ matrix.target }})
@@ -362,10 +362,10 @@ jobs:
         run: |
           for mode in off on eager baseline opt-eager; do
             echo "== LUS_JIT=$mode"
-            LUS_JIT=$mode zig-out/bin/lus test --timeout 300 ../tests/conformance ../packages/language-server/tests
+            LUS_JIT=$mode zig-out/bin/lus test -P bytecode --timeout 300 ../tests/conformance ../packages/language-server/tests
           done
           echo "== LUS_JIT=opt-eager LUS_JIT_DIRECT=1024"
-          LUS_JIT=opt-eager LUS_JIT_DIRECT=1024 zig-out/bin/lus test --timeout 300 ../tests/conformance
+          LUS_JIT=opt-eager LUS_JIT_DIRECT=1024 zig-out/bin/lus test -P bytecode --timeout 300 ../tests/conformance
       - name: Conformance tests in a collector stress build
         timeout-minutes: 120
         working-directory: runtime
@@ -374,7 +374,7 @@ jobs:
         run: |
           for mode in eager opt-eager; do
             echo "== LUS_JIT=$mode"
-            LUS_JIT=$mode zig-out-stress/bin/lus test --timeout 600 ../tests/conformance
+            LUS_JIT=$mode zig-out-stress/bin/lus test -P bytecode --timeout 600 ../tests/conformance
           done
 
   freebsd:
@@ -418,7 +418,7 @@ jobs:
             LUS_JIT=eager zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
             for mode in on eager opt-eager; do
               echo "== LUS_JIT=$mode"
-              LUS_JIT=$mode zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+              LUS_JIT=$mode zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
             done
             cd ../tests/build
             ../../runtime/zig-out/bin/lus build --aot linked.lus -o "$HOME/linked"
@@ -607,9 +607,9 @@ jobs:
         run: |
           mkdir -p runs
           for mode in off on opt-eager; do
-            LUS_JIT=$mode LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests || true
+            LUS_JIT=$mode LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests || true
           done
-          LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents || true
+          LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test --doc -P bytecode ../packages/site/src/manual ../spec ../.agents || true
       - name: Report of the suite
         working-directory: runtime
         run: |
@@ -647,7 +647,7 @@ jobs:
         run: |
           zig build -Doptimize=ReleaseFast -Dcoverage=true -Dgc-stress=97 -Dgc-verify=true --prefix zig-out-cov-verify
           mkdir -p verify-runs
-          LUS_JIT=off LUS_BIN=$PWD/zig-out-cov-verify/bin/lus LUS_COVERAGE=$PWD/verify-runs zig-out-cov-verify/bin/lus test ../tests/conformance ../packages/language-server/tests || true
+          LUS_JIT=off LUS_BIN=$PWD/zig-out-cov-verify/bin/lus LUS_COVERAGE=$PWD/verify-runs zig-out-cov-verify/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests || true
           LUS_COVERAGE_REPORT=$PWD/verify-runs LUS_COVERAGE_EXPORT=$PWD/verify.keys zig-out-cov-verify/bin/lus > /dev/null
       - name: Report with every build
         working-directory: runtime
@@ -685,7 +685,7 @@ jobs:
         # new shape, and the heap at the end of each mark phase.
         run: |
           for mode in off opt-eager; do
-            LUS_JIT=$mode LUS_BIN=$PWD/zig-out-inv/bin/lus zig-out-inv/bin/lus test ../tests/conformance ../packages/language-server/tests
+            LUS_JIT=$mode LUS_BIN=$PWD/zig-out-inv/bin/lus zig-out-inv/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
           done
 
   mutate:
@@ -708,7 +708,7 @@ jobs:
           zig build -Doptimize=ReleaseSafe
           zig build -Doptimize=ReleaseFast -Dcoverage=true --prefix zig-out-cov
           mkdir -p runs
-          LUS_JIT=off LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests || true
+          LUS_JIT=off LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests || true
           LUS_COVERAGE_REPORT=$PWD/runs LUS_COVERAGE_EXPORT=$PWD/covered.keys zig-out-cov/bin/lus > /dev/null
       - name: Sample 40 mutants
         timeout-minutes: 285
@@ -780,7 +780,7 @@ jobs:
       - name: Conformance tests
         timeout-minutes: 30
         working-directory: runtime
-        run: zig-out/bin/lus test ../tests/conformance
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance
       - name: Fuzz the archive codecs and the other targets
         timeout-minutes: 75
         working-directory: runtime

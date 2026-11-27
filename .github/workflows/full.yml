@@ -111,10 +111,10 @@ jobs:
           mkdir -p runs
           for mode in off default opt-eager; do
             if [ "$mode" = default ]; then unset LUS_JIT; else export LUS_JIT=$mode; fi
-            LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test ../tests/conformance ../packages/language-server/tests > /dev/null || true
+            LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests > /dev/null || true
           done
           unset LUS_JIT
-          LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents > /dev/null || true
+          LUS_BIN=$PWD/zig-out-cov/bin/lus LUS_COVERAGE=$PWD/runs zig-out-cov/bin/lus test --doc -P bytecode ../packages/site/src/manual ../spec ../.agents > /dev/null || true
       - name: Compare with the baseline
         timeout-minutes: 10
         working-directory: runtime
@@ -250,7 +250,7 @@ jobs:
             cd runtime
             # The JIT compiles a function on its first call under eager.
             LUS_JIT=eager zig-out/bin/lus -e "local function f() end f() assert(debug.jit(f), 'no native code')"
-            zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+            zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
             # lus linked from the link object, whose tests of the command
             # line start the binary that LUS_BIN names.
             LUS_BIN="$PWD/zig-out-lo/lus-linked" zig-out-lo/lus-linked test --timeout 300 ../tests/conformance ../packages/language-server/tests
@@ -370,25 +370,25 @@ jobs:
       - name: Conformance tests
         timeout-minutes: 30
         working-directory: runtime
-        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - name: Conformance tests in native code
         timeout-minutes: 30
         working-directory: runtime
         env:
           LUS_JIT: eager
-        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - name: Conformance tests interpreted
         timeout-minutes: 30
         working-directory: runtime
         env:
           LUS_JIT: "off"
-        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - name: Conformance tests in optimized code
         timeout-minutes: 30
         working-directory: runtime
         env:
           LUS_JIT: opt-eager
-        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - name: The linker of lus build --aot on Windows on arm64
         timeout-minutes: 45
         working-directory: runtime
@@ -462,7 +462,7 @@ jobs:
       - name: Conformance tests
         timeout-minutes: 20
         working-directory: runtime
-        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - name: Conformance tests in native code
         timeout-minutes: 20
         # Every function compiles on its first call. A platform without
@@ -470,27 +470,27 @@ jobs:
         working-directory: runtime
         env:
           LUS_JIT: eager
-        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - name: Conformance tests interpreted
         timeout-minutes: 20
         working-directory: runtime
         env:
           LUS_JIT: "off"
-        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - name: Conformance tests in optimized code
         timeout-minutes: 20
         # Every function goes through both JIT tiers on its first call.
         working-directory: runtime
         env:
           LUS_JIT: opt-eager
-        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - name: Conformance tests in baseline code
         timeout-minutes: 20
         if: runner.os == 'Windows'
         working-directory: runtime
         env:
           LUS_JIT: baseline
-        run: zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
       - name: Conformance tests with short chains of direct calls
         timeout-minutes: 20
         # Every chain of direct calls in optimized code ends after a few
@@ -500,7 +500,7 @@ jobs:
         env:
           LUS_JIT: opt-eager
           LUS_JIT_DIRECT: "1024"
-        run: zig-out/bin/lus test ../tests/conformance
+        run: zig-out/bin/lus test -P bytecode ../tests/conformance
       - name: Native code runs as the loader of an executable relocates it
         timeout-minutes: 30
         # Both tiers compile in the form of code compiled ahead of time.
@@ -515,7 +515,7 @@ jobs:
         working-directory: runtime
         run: |
           for mode in opt-eager on; do
-            LUS_JIT=$mode LUS_JIT_AOT="reload:$RUNNER_TEMP/aot.log" zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests
+            LUS_JIT=$mode LUS_JIT_AOT="reload:$RUNNER_TEMP/aot.log" zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests
           done
           if [ -s "$RUNNER_TEMP/aot.log" ]; then cat "$RUNNER_TEMP/aot.log"; exit 1; fi
       - name: The linker of lus build --aot
@@ -606,7 +606,7 @@ jobs:
       - name: Documentation examples
         timeout-minutes: 10
         working-directory: runtime
-        run: zig-out/bin/lus test --doc ../packages/site/src/manual ../spec
+        run: zig-out/bin/lus test --doc -P bytecode ../packages/site/src/manual ../spec
       - name: WebAssembly build
         timeout-minutes: 30
         if: runner.os == 'Linux'
