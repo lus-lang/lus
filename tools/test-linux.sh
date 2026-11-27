@@ -139,7 +139,7 @@ run_suite() {
         case "$arch" in arm64*) ;; *) jit="$jit LUS_EMULATED=1" ;; esac
         # The status of `lus test` decides, and the report shows every line
         # except the files that passed.
-        if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch-$checkout/runtime && env TMPDIR=\$HOME/lus-linux-$arch-$checkout/tmp $jit zig-out/bin/lus test --timeout 120 ../tests/conformance ../packages/language-server/tests > ../report.txt 2>&1; s=\$?; grep -a -v '^ok ' ../report.txt; if [ -s ../aot.log ]; then head -5 ../aot.log; s=1; fi; exit \$s"; then
+        if ! limactl shell "$vm" -- sh -c "cd ~/lus-linux-$arch-$checkout/runtime && env TMPDIR=\$HOME/lus-linux-$arch-$checkout/tmp $jit zig-out/bin/lus test -P bytecode --timeout 120 ../tests/conformance ../packages/language-server/tests > ../report.txt 2>&1; s=\$?; grep -a -v '^ok ' ../report.txt; if [ -s ../aot.log ]; then head -5 ../aot.log; s=1; fi; exit \$s"; then
             case "$arch" in arm64*) failed=1 ;; *) emulated_failed=1 ;; esac
         fi
     done
