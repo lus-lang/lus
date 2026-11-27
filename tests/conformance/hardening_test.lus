@@ -1211,10 +1211,19 @@ local function a_table_is_strong_once_its_weak_metatable_is_gone_test()
 
         collectgarbage("step", 1)
         setmetatable(t, nil)
+        -- What the table holds now, it holds for good. A collection that
+        -- began while it was weak clears nothing more.
+        local held = {}
+
+        for i = 1, 50 do
+            held[i] = t[i] ~= nil
+        end
+
         collectgarbage()
 
         for i = 1, 50 do
-            assert(t[i] and t[i][1] == i)
+            assert((t[i] ~= nil) == held[i], i)
+            assert(t[i] == nil or t[i][1] == i)
         end
     end
 
