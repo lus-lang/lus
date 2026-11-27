@@ -1,6 +1,6 @@
 pledge("load")
 
-global print, assert, load, string, table, tostring, error, coroutine, select
+global print, assert, skip, load, string, table, tostring, error, coroutine, select
 
 --[[
     Tests for `<observe>` locals (spec/design/observe.md). A derived
@@ -259,7 +259,18 @@ local function closing_a_paused_update_ends_it_test()
     assert(b == 30)
 end
 
+-- A binary chunk loads only with the `bytecode` permission, which the
+-- command line grants, as in `lus test -P bytecode`.
+local has_bytecode = (catch load(string.dump(function()
+end)))
+
+local needs_bytecode = "needs the bytecode permission, granted with -P bytecode"
+
 local function survives_string_dump_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local f = load(string.dump(function()
         local a <observe> = 1
         local b <observe> = a + 1

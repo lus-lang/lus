@@ -7,7 +7,7 @@ lus-compile \- compile a script to a binary chunk
 \fBlus compile\fR [options] script
 .fi
 .SH DESCRIPTION
-Compiles a script to a binary chunk, which \fBlus\fR runs as it runs a script and \fBload\fR reads in binary mode.
+Compiles a script to a binary chunk, which \fBlus\fR runs as it runs a script and \fBload\fR reads in binary mode under the \fBbytecode\fR permission.
 Loading a binary chunk skips parsing.
 A binary chunk can be distributed without its source.
 The default output is the script name with the extension \fB.lusc\fR.

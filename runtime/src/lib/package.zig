@@ -301,6 +301,7 @@ fn searcherLus(l: *Thread) Error!u32 {
     defer l.g.gpa.free(src);
     const chunkname = std.fmt.allocPrint(l.g.gpa, "@{s}", .{file}) catch return l.raiseMem();
     defer l.g.gpa.free(chunkname);
+    try @import("base.zig").requireBytecode(l, src);
     api.load(l, src, chunkname) catch {
         return l.raiseFmt("error loading module '{s}' from file '{s}':\n\t{s}", .{ name, file, api.errorMessage(l, l.err) });
     };

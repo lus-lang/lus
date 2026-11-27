@@ -801,7 +801,11 @@ fn create(l: *Thread) Error!u32 {
     // The creator opens the script, so the worker reads exactly the file
     // its creator was allowed to read.
     if (Io.Dir.cwd().readFileAlloc(g.io, path, gpa, .unlimited)) |src| {
-        w.source = src;
+        const base_lib = @import("base.zig");
+        if (base_lib.isBinaryChunk(src) and !base_lib.mayLoadBinary(l)) {
+            gpa.free(src);
+            w.load_error = std.fmt.allocPrint(gpa, "cannot load worker script '{s}': permission \"bytecode\" denied", .{path}) catch return l.raiseMem();
+        } else w.source = src;
     } else |e| {
         const reason = @import("os.zig").errnoOf(e).msg;
         w.load_error = std.fmt.allocPrint(gpa, "cannot open worker script '{s}': {s}", .{ path, reason }) catch return l.raiseMem();
@@ -950,7 +954,12 @@ fn receive(l: *Thread) Error!u32 {
 fn handleGc(l: *Thread) Error!u32 {
     const v = l.arg(1);
     if (v.tag != .userdata) return 0;
-    const slot: *?*Worker = @ptrCast(@alignCast(v.as(Userdata).data()));
+    // Only a worker handle holds a worker in its payload. A script reaches
+    // this native through the metatable and calls it with any userdata.
+    const u = v.as(Userdata);
+    const mt = l.g.ext.get(mt_key) orelse return 0;
+    if (u.metatable != @as(*Table, @ptrCast(@alignCast(mt)))) return 0;
+    const slot: *?*Worker = @ptrCast(@alignCast(u.data()));
     const w = slot.* orelse return 0;
     slot.* = null;
     w.handle_alive = false;
@@ -971,6 +980,7 @@ pub fn open(l: *Thread) Error!void {
     try aux.setField(l, mt, "__name", try l.newStringValue("worker"));
     try aux.setField(l, mt, "__gc", try aux.native(l, handleGc, "gc"));
     try aux.setField(l, mt, "__tostring", try aux.native(l, handleToString, "tostring"));
+    try aux.setField(l, mt, "__metatable", Value.boolean(false));
     g.ext.put(g.gpa, mt_key, mt) catch return l.raiseMem();
     const t = try aux.newLib(l, .fields, "worker", &.{
         .{ .name = "create", .func = create },

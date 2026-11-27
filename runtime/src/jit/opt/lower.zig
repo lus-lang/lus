@@ -191,6 +191,10 @@ pub const Persist = struct {
     self_writes: u32 = 0,
     /// Builds that changed the two predictions.
     self_rounds: u32 = 0,
+    /// Array accesses check their own index. A build sets it when it
+    /// used the range of a numeric loop for a bounds check and also ran
+    /// a baseline template, which keeps no value of the build alive.
+    no_range: bool = false,
 };
 
 /// What makes two instructions of a block the same. The class is part of
@@ -269,6 +273,10 @@ pub const Lower = struct {
     snap_cache: u32 = ir.no_snap,
     fresh: ?Fresh = null,
     rebuild: bool = false,
+    /// The build covered an array access by the range of its loop.
+    range_used: bool = false,
+    /// The build emitted a baseline template.
+    generic_seen: bool = false,
     hash_ptr: i32,
     hash_len: i32,
     /// Loops of the function, for the passes.
@@ -1409,6 +1417,8 @@ pub const Lower = struct {
         const succ = flow_mod.successors(fr.proto, pc, &buf);
         const nd = fr.cfg.nodes.items[b.node];
         const term = try b.emit(.{ .op = .generic, .imm = pc, .a = start, .b = 0 });
+        b.generic_seen = true;
+        b.rangeConflict();
         b.clobberAll();
         b.snap_cache = ir.no_snap;
         if (!last) {
@@ -2478,7 +2488,7 @@ pub const Lower = struct {
     /// one from at least one is covered by a guard on the last index the
     /// loop reaches, which does not change while the loop runs.
     fn boundsGuard(b: *Lower, key_ref: Ref, zi: Ref, asize: Ref) Error!Ref {
-        if (b.marks() == 0 and b.fr.parent == null) {
+        if (b.marks() == 0 and b.fr.parent == null and !b.persist.no_range) {
             for (b.fr.headers) |maybe| {
                 const hs = maybe orelse continue;
                 if (hs.for_phi == ir.none or hs.for_phi != key_ref) continue;
@@ -2489,10 +2499,23 @@ pub const Lower = struct {
                     _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ge), .a = hs.for_init, .imm = 1 });
                 }
                 _ = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.ge), .a = hs.for_last, .b = hs.for_init });
+                b.range_used = true;
+                b.rangeConflict();
                 return b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.ls), .a = hs.for_last, .b = asize });
             }
         }
         return b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.lo), .a = zi, .b = asize });
+    }
+
+    /// The last index of a loop is computed once in front of it, and a
+    /// baseline template keeps neither its register nor the loop index in
+    /// its range. A build that has both starts again with every access
+    /// checking its own index.
+    fn rangeConflict(b: *Lower) void {
+        if (!b.range_used or !b.generic_seen or b.persist.no_range) return;
+        b.persist.no_range = true;
+        b.rebuild = true;
+        if (b.l.g.jit.opt_dump) std.debug.print("  rebuild: a template runs beside a loop range check\n", .{});
     }
 
     fn getTable(b: *Lower, ra: u32, rt: u32, k: Key) Error!bool {

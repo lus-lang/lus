@@ -119,8 +119,43 @@ pub fn adoptEnviron(g: *state.Global, m: *Environ) error{OutOfMemory}!void {
     g.environ = m;
 }
 
+const startup_path_key = "os.startup_path";
+const StartupPath = struct { value: ?[]u8 };
+
+/// The `PATH` the state started with, which decides the program that a
+/// permission to run a program by name covers. A change made with
+/// `os.setenv` and the `env` option of `os.spawn` leave it as it was.
+pub fn startupPath(l: *Thread) ?[]const u8 {
+    if (l.g.ext.get(startup_path_key)) |p| {
+        const sp: *StartupPath = @ptrCast(@alignCast(p));
+        return sp.value;
+    }
+    return currentPath(l);
+}
+
+fn currentPath(l: *Thread) ?[]const u8 {
+    return envGet(l, "PATH") orelse (if (builtin.os.tag == .windows) envGet(l, "Path") else null);
+}
+
+/// Keeps the `PATH` of the state before its environment first changes.
+fn keepStartupPath(l: *Thread) error{OutOfMemory}!void {
+    const g = l.g;
+    if (g.ext.get(startup_path_key) != null) return;
+    const sp = try environ_gpa.create(StartupPath);
+    errdefer environ_gpa.destroy(sp);
+    sp.* = .{ .value = if (currentPath(l)) |v| try environ_gpa.dupe(u8, v) else null };
+    errdefer if (sp.value) |v| environ_gpa.free(v);
+    try g.ext.put(g.gpa, startup_path_key, sp);
+}
+
 /// Frees the environment map that state `g` owns.
 pub fn deinitEnviron(g: *state.Global) void {
+    if (g.ext.get(startup_path_key)) |p| {
+        const sp: *StartupPath = @ptrCast(@alignCast(p));
+        _ = g.ext.remove(startup_path_key);
+        if (sp.value) |v| environ_gpa.free(v);
+        environ_gpa.destroy(sp);
+    }
     const m = ownedEnviron(g) orelse return;
     _ = g.ext.remove(environ_key);
     if (g.environ == m) g.environ = null;
@@ -160,6 +195,7 @@ pub fn copyEnviron(g: *state.Global) error{OutOfMemory}!*Environ {
 /// other states share is never written.
 fn writableEnviron(l: *Thread) Error!*Environ {
     const g = l.g;
+    keepStartupPath(l) catch return l.raiseMem();
     if (ownedEnviron(g)) |m| return m;
     const m = copyEnviron(g) catch return l.raiseMem();
     adoptEnviron(g, m) catch {

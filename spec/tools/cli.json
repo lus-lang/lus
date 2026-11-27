@@ -65,6 +65,7 @@
         { "names": ["-v"], "summary": "list the skipped tests of passing files too" },
         { "names": ["--json"], "summary": "print one JSON record per test" },
         { "names": ["--jobs"], "value": { "name": "N", "kind": "number" }, "summary": "run at most N files at once" },
+        { "names": ["-P", "--pledge"], "value": { "name": "perm", "kind": "permission" }, "repeat": true, "summary": "grant a permission to every test file" },
         { "names": ["--timeout"], "value": { "name": "S", "kind": "number" }, "summary": "stop a file that writes no output for S seconds (default 60)" },
         { "names": ["--file-timeout"], "value": { "name": "S", "kind": "number" }, "summary": "stop a file that runs longer than S seconds in all" },
         { "names": ["--run-one"], "value": { "name": "FILE", "kind": "file" }, "hidden": true, "summary": "run one file in the child process of a test run" },

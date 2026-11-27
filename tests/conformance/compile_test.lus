@@ -94,7 +94,18 @@ local function compile(args)
     return run_command(`$lus_cmd compile $args`)
 end
 
+-- A binary chunk loads only with the `bytecode` permission, which the
+-- command line grants, as in `lus test -P bytecode`.
+local has_bytecode = (catch load(string.dump(function()
+end)))
+
+local needs_bytecode = "needs the bytecode permission, granted with -P bytecode"
+
 local function compiled_chunk_runs_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local root = new_fixture()
     local script = fs.path.join(root, "p.lus")
     write_file(script, program)
@@ -122,6 +133,10 @@ local function chunk_matches_string_dump_test()
 end
 
 local function strip_and_flags_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local root = new_fixture()
     local script = fs.path.join(root, "s.lus")
     local full = fs.path.join(root, "full.lusc")
@@ -144,6 +159,10 @@ local function strip_and_flags_test()
 end
 
 local function trailing_bytes_are_malformed_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local root = new_fixture()
     local script = fs.path.join(root, "t.lus")
     write_file(script, program)

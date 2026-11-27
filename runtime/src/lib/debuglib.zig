@@ -223,7 +223,7 @@ fn activeLocal(co: *Thread, fi: usize, n: i64) ?struct { []const u8, u32 } {
         if (k == n) return .{ lv.name.bytes(), f.base + lv.reg };
     }
     // Varargs: negative indices.
-    if (n < 0 and -n <= f.nvarargs) {
+    if (n < 0 and n != std.math.minInt(i64) and -n <= f.nvarargs) {
         const idx = f.func - f.nvarargs + @as(u32, @intCast(-n - 1));
         return .{ "(vararg)", idx };
     }
@@ -268,6 +268,11 @@ fn setlocal(l: *Thread) Error!u32 {
     const n = try aux.checkInt(l, a + 1);
     const fi = frameAt(co, level) orelse return aux.argError(l, a, "level out of range", .{});
     const loc = activeLocal(co, fi, n) orelse return aux.retNil(l);
+    // The slots that a loop keeps for itself hold what the loop
+    // instructions wrote, and those instructions read them without a check.
+    if (loc[0].len > 0 and loc[0][0] == '(' and !std.mem.eql(u8, loc[0], "(vararg)")) {
+        return aux.argError(l, a + 1, "cannot set the internal local '{s}'", .{loc[0]});
+    }
     co.stack[loc[1]] = l.arg(a + 2);
     return aux.retStr(l, loc[0]);
 }
@@ -303,6 +308,8 @@ fn getupvalue(l: *Thread) Error!u32 {
 fn setupvalue(l: *Thread) Error!u32 {
     try requireDebug(l, "setupvalue");
     _ = try aux.checkAny(l, 3);
+    // A native reads its upvalues as the values it stored there.
+    if (l.arg(1).tag == .native) return aux.argError(l, 1, "cannot set an upvalue of a native function", .{});
     const u = (try upvalueOf(l, 1, 2)) orelse return 0;
     u[1].* = l.arg(3);
     // The value lives in an upvalue object or in the native itself.
@@ -464,7 +471,7 @@ fn sethook(l: *Thread) Error!u32 {
         else => Thread.hook_line,
     };
     if (count > 0) mask |= Thread.hook_countm;
-    co.hook_count = @intCast(@max(count, 0));
+    co.hook_count = @intCast(std.math.clamp(count, 0, std.math.maxInt(@TypeOf(co.hook_count))));
     co.hook_left = co.hook_count;
     co.hook_oldfi = std.math.maxInt(usize);
     co.hook_mask = mask | debuggerMask(l);

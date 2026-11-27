@@ -55,6 +55,10 @@ Print one JSON record per test, for other tools to read.
 Run at most N files at once.
 The default is the number of processors, or 1 with \fB\-\-bench\fR.
 .TP
+\fB\-P perm\fR, \fB\-\-pledge perm\fR
+Grant a permission to every test file, as \fB\-P\fR does for a script.
+Repeat the option for several permissions.
+.TP
 \fB\-\-timeout S\fR
 Stop a file that writes no output for S seconds.
 The default is 60.

@@ -1,7 +1,7 @@
 pledge("load")
 
-global print, assert, type, load, string, table, tostring, setmetatable, error, coroutine, debug,
-    select, undefined_global_function
+global print, assert, skip, type, load, string, table, tostring, setmetatable, error, coroutine,
+    debug, select, undefined_global_function
 
 --[[
     Tests for `<lazy>` locals (spec/design/lazy.md). The initializer runs
@@ -258,7 +258,18 @@ local function plain_coroutines_cannot_wait_test()
     assert(w == 1)
 end
 
+-- A binary chunk loads only with the `bytecode` permission, which the
+-- command line grants, as in `lus test -P bytecode`.
+local has_bytecode = (catch load(string.dump(function()
+end)))
+
+local needs_bytecode = "needs the bytecode permission, granted with -P bytecode"
+
 local function survives_string_dump_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local f = load(string.dump(function()
         local c = 0
 

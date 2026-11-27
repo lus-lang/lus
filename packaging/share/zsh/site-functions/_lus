@@ -70,6 +70,7 @@ _lus_test() {
         '-v[list the skipped tests of passing files too]' \
         '--json[print one JSON record per test]' \
         '--jobs[run at most N files at once]:N: ' \
+        '*'{-P,--pledge}'[grant a permission to every test file]:perm:_lus_permissions' \
         '--timeout[stop a file that writes no output for S seconds (default 60)]:S: ' \
         '--file-timeout[stop a file that runs longer than S seconds in all]:S: ' \
         '(-h --help)'{-h,--help}'[print this help and exit]' \

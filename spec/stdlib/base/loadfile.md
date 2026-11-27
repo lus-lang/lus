@@ -42,3 +42,5 @@ fs.remove(path)
 ```
 
 The chunk name is `@` followed by `filename`, so errors inside the chunk name the file. Binary chunks are version-dependent artifacts for trusted build and storage paths. Treat every binary chunk as trusted input, and use `mode = "t"` for a file supplied across an untrusted boundary. [`load`](/manual/api#load) compiles a string, a vector, or the pieces of a reader function, and [`dofile`](/manual/api#dofile) compiles and runs a file in one call.
+
+A file that holds a binary chunk also requires the `bytecode` permission, which only the command line grants.

@@ -231,7 +231,7 @@ Command line arguments, environment variables, and filesystem paths are always s
 
 A _compiled chunk_ is the compiled form of a function, which a program stores so that it can load the function later without compiling the source again. `string.dump` returns the compiled chunk of a Lus function as a vector. `load` accepts that vector and returns the function. A function of the standard library, such as `print`, has no compiled chunk, so `string.dump` raises the error `unable to dump given function` for it.
 
-The mode argument of `load` selects what `load` accepts: mode `"t"` accepts source text only, mode `"b"` accepts compiled chunks only, and mode `"bt"`, the default, accepts both. Loading code requires the `load` [permission](/manual/permissions). A compiled chunk works only with the version of Lus that produced it. Because `load` accepts a compiled chunk without checking that its contents are safe to run, a program that loads code from a source it does not trust passes mode `"t"`.
+The mode argument of `load` selects what `load` accepts: mode `"t"` accepts source text only, mode `"b"` accepts compiled chunks only, and mode `"bt"`, the default, accepts both. Loading code requires the `load` [permission](/manual/permissions). A compiled chunk works only with the version of Lus that produced it. `load` accepts a compiled chunk without checking that its contents are safe to run, so loading one also requires the `bytecode` permission, which only the command line grants, as in `lus -P bytecode main.lus`.
 
 ```lus
 global print, string, load, pledge

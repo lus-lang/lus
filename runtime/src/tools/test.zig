@@ -44,6 +44,8 @@ const shell = @import("../lib/shell.zig");
 
 const Options = struct {
     paths: std.ArrayList([]const u8) = .empty,
+    /// The permissions that `-P` grants to every test file.
+    pledges: std.ArrayList([]const u8) = .empty,
     filter: ?[]const u8 = null,
     update: bool = false,
     json: bool = false,
@@ -80,6 +82,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
         var filter: ?[]const u8 = null;
         var update = false;
         var bench: ?u32 = null;
+        defer host_pledges.deinit(gpa);
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             if (std.mem.eql(u8, args[i], "-u")) update = true;
@@ -93,6 +96,10 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             }
             if (std.mem.eql(u8, args[i], "--coverage")) coverage_on = true;
             if (std.mem.eql(u8, args[i], "--doc")) doc_mode = true;
+            if (std.mem.eql(u8, args[i], "-P") and i + 1 < args.len) {
+                try host_pledges.append(gpa, args[i + 1]);
+                i += 1;
+            }
             if (std.mem.eql(u8, args[i], "--bench-ms") and i + 1 < args.len) {
                 bench = std.fmt.parseInt(u32, args[i + 1], 10) catch 1000;
                 i += 1;
@@ -104,6 +111,7 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
     }
     var o: Options = .{};
     defer o.paths.deinit(gpa);
+    defer o.pledges.deinit(gpa);
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const a = args[i];
@@ -121,6 +129,11 @@ pub fn run(init: std.process.Init, args: []const []const u8) !u8 {
             o.coverage = true;
         } else if (std.mem.eql(u8, a, "--list")) {
             o.list = true;
+        } else if ((std.mem.eql(u8, a, "-P") or std.mem.eql(u8, a, "--pledge")) and i + 1 < args.len) {
+            i += 1;
+            try o.pledges.append(gpa, args[i]);
+        } else if (std.mem.startsWith(u8, a, "-P") and a.len > 2) {
+            try o.pledges.append(gpa, a[2..]);
         } else if (std.mem.eql(u8, a, "--coverage-out") and i + 1 < args.len) {
             i += 1;
             o.coverage = true;
@@ -671,6 +684,7 @@ fn runChild(pool: *Pool, slot: *Slot, r: *FileResult) !void {
     if (pool.o.bench) try argv.appendSlice(gpa, &.{ "--bench-ms", try std.fmt.bufPrint(&ms_buf, "{d}", .{pool.o.bench_ms}) });
     if (pool.o.coverage) try argv.append(gpa, "--coverage");
     if (pool.o.doc) try argv.append(gpa, "--doc");
+    for (pool.o.pledges.items) |spec| try argv.appendSlice(gpa, &.{ "-P", spec });
     const start = std.Io.Clock.Timestamp.now(io, .awake);
     var child = try std.process.spawn(io, .{
         .argv = argv.items,
@@ -913,6 +927,11 @@ fn runOne(init: std.process.Init, path: []const u8, filter: ?[]const u8, update:
     defer cov.deinit();
     if (coverage_on) cov.attach(l);
     api.openLibs(l) catch return 2;
+    // The grants of `-P` are host grants, as they are for `lus FILE`.
+    api.grantPledges(l, host_pledges.items) catch {
+        std.debug.print("lus test: {s}\n", .{api.errorMessage(l, l.err)});
+        return 2;
+    };
     var snap = Snapshots{ .gpa = gpa, .io = io, .path = path, .update = update };
     defer snap.deinit();
     snap.load() catch {};
@@ -1157,7 +1176,10 @@ fn runDocBlock(init: std.process.Init, path: []const u8, line: usize, code: []co
     // A block that pledges its permissions starts with none, as the same
     // code does under `lus`, so the denials that its comments show
     // happen. Any other block holds every permission.
-    if (std.mem.indexOf(u8, code, "pledge(") == null) api.grantPledges(l, &.{"all"}) catch {};
+    // The grants of `-P` reach it as they reach a script.
+    if (std.mem.indexOf(u8, code, "pledge(") == null) {
+        api.grantPledges(l, &.{"all"}) catch {};
+    } else api.grantPledges(l, host_pledges.items) catch {};
     if (module_dir) |dir| prependPath(l, dir) catch {};
     const chunkname = try std.fmt.allocPrint(gpa, "={s}:{d}", .{ std.fs.path.basename(path), line });
     defer gpa.free(chunkname);
@@ -1301,6 +1323,8 @@ test missingOutput {
 /// record carries in its `file` field. A child runs one file, so this is
 /// set once in child mode.
 var record_file: []const u8 = "";
+/// The permissions that `-P` grants to the file a child runs.
+var host_pledges: std.ArrayList([]const u8) = .empty;
 
 /// Writes the opening of a result record: `status`, `name`, `file`,
 /// `line`, and `duration` in milliseconds. The caller adds any further

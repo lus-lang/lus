@@ -43,7 +43,7 @@ mise run wasm:test     # build lus.wasm and run its host tests
 mise run wasm:conformance
 ```
 
-The test steps of `zig build` do not reinstall `zig-out/bin/lus`, so build before running `lus test` by hand. The conformance suite runs with `lus test ../tests/conformance ../packages/language-server/tests` from `runtime/`. Run it under every JIT mode a change can reach: `LUS_JIT=off`, the default, `LUS_JIT=eager`, and `LUS_JIT=opt-eager`. A change to the heap, a store, or the JIT also needs a run of a `-Dgc-stress=97 -Dgc-verify=true` build. `lus test --doc ../packages/site/src/manual ../spec ../.agents` runs the code blocks of the manual, the spec, and the agent skills.
+The test steps of `zig build` do not reinstall `zig-out/bin/lus`, so build before running `lus test` by hand. The conformance suite runs with `lus test -P bytecode ../tests/conformance ../packages/language-server/tests` from `runtime/`. The tests that load a binary chunk need the `bytecode` permission and skip themselves without `-P bytecode`. Run it under every JIT mode a change can reach: `LUS_JIT=off`, the default, `LUS_JIT=eager`, and `LUS_JIT=opt-eager`. A change to the heap, a store, or the JIT also needs a run of a `-Dgc-stress=97 -Dgc-verify=true` build. `lus test --doc ../packages/site/src/manual ../spec ../.agents` runs the code blocks of the manual, the spec, and the agent skills.
 
 ### Website
 

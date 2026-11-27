@@ -225,6 +225,10 @@ pub const Options = struct {
     /// Whether compile-time evaluation runs. Tools that only check or
     /// format a file turn it off, because opening a file must not run it.
     meta_eval: bool = true,
+    /// Set by a compile that must run no code of the chunk, such as the
+    /// one of the require index. The first compile-time evaluation stores
+    /// true and fails the compile, so the chunk compiles where it loads.
+    meta_deferred: ?*bool = null,
     /// Set when compiling a compile-time evaluation: the free names that
     /// are locals without a compile-time value in the enclosing code.
     meta_unknown: ?*const std.StringHashMapUnmanaged(void) = null,
@@ -3406,6 +3410,10 @@ fn isKnown(fs: *FuncState, e: *const ast.Expr) bool {
 fn metaState(fs: *FuncState, line: u32) Error!*meta.Meta {
     const c = fs.c;
     if (c.meta) |m| return m;
+    if (c.opts.meta_deferred) |flag| {
+        flag.* = true;
+        return c.err(line, "meta: compile-time evaluation waits for the load of the chunk", .{});
+    }
     c.meta = meta.open(c.g, c.opts.flags, c.opts.meta_grants) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         error.MetaSetup => return c.err(line, "meta: cannot create the compile-time state", .{}),

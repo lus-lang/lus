@@ -1150,7 +1150,7 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     if (p.desc.len == 1 and p.has(qgen.flag_plain_window)) {
         early = try plainWindow(l, q, p);
         if (early) |w| {
-            if (w.limit >= 0) sink.top = @intCast(@min(w.offset + w.limit, std.math.maxInt(u32)));
+            if (w.limit >= 0) sink.top = @intCast(@min(w.offset +| w.limit, std.math.maxInt(u32)));
             if (sink.top == 0) early = null;
         }
     }
@@ -1209,8 +1209,11 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
             seq[si] = null;
             len[si] = @intCast(sizes[si]);
             if (indexes[si]) |*ix| {
-                const outer = args[ix.outer + 1].as(Table);
-                const v = table.get(outer, ix.outer_name);
+                // The step function runs user code, which can replace a
+                // row of a source that is read in place.
+                const outer_row = args[ix.outer + 1];
+                if (outer_row.tag != .table) return l.raiseFmt("query source row is not a record", .{});
+                const v = table.get(outer_row.as(Table), ix.outer_name);
                 len[si] = 0;
                 if (!matchesNothing(v)) {
                     const found = table.get(ix.map, try ops.normKey(l, v));
@@ -1371,7 +1374,7 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
         if (oneClassPerKey(keys, nk)) {
             const w = try evalWindow(l, q, p);
             if (w.limit >= 0 and w.offset < n) {
-                const m: usize = @intCast(@min(@as(i64, @intCast(n)), w.offset + w.limit));
+                const m: usize = @intCast(@min(@as(i64, @intCast(n)), w.offset +| w.limit));
                 if (m * 4 <= n) {
                     const out = try l.newTable(0, 0);
                     l.stack[base + slot_dmap] = Value.obj(.table, out);

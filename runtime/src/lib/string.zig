@@ -2349,7 +2349,12 @@ fn format(l: *Thread) Error!u32 {
     var b: Builder = undefined;
     b.init(l);
     defer b.deinit();
-    try formatInto(false, l, &b, fmt, l.stack[l.base()..][0..l.argCount()]);
+    // A `%s` conversion runs `__tostring`, which can grow the stack and
+    // free the block the arguments are in, so the conversions read a copy.
+    // The arguments stay rooted in their stack slots.
+    const args = l.g.gpa.dupe(Value, l.stack[l.base()..][0..l.argCount()]) catch return l.raiseMem();
+    defer l.g.gpa.free(args);
+    try formatInto(false, l, &b, fmt, args);
     return aux.ret(l, try b.finish());
 }
 

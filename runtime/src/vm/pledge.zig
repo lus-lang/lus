@@ -59,7 +59,19 @@ const builtin_caps = [_]Capability{
     .{ .name = "ffi", .kind = .none },
     .{ .name = "worker", .kind = .none },
     .{ .name = "debug", .kind = .none },
+    .{ .name = bytecode, .kind = .none },
 };
+
+/// The permission to load a binary chunk. The loader trusts a binary
+/// chunk as it trusts the compiler, so only the host grants it, on the
+/// command line or through the embedding interface. `pledge` refuses it.
+/// The grant sets no ceiling and leaves a fresh state fresh, so it changes
+/// nothing else about what a script may pledge.
+pub const bytecode = "bytecode";
+
+fn isBytecode(name: []const u8) bool {
+    return std.mem.eql(u8, name, bytecode);
+}
 
 pub const Entry = struct {
     name: []u8,
@@ -123,6 +135,10 @@ const Registry = struct {
     /// what the ceiling allows.
     ceiling: ?*Set = null,
     on_request: ?RequestHook = null,
+    /// The permission set a finalizer runs with, for each object whose
+    /// `__gc` was registered by a thread that held another set than the
+    /// main thread. Each entry holds a reference to its set.
+    finalizer_sets: std.AutoHashMapUnmanaged(*anyopaque, ?*Set) = .empty,
 };
 
 /// The capability registry of a state. `openAll` creates it with
@@ -149,6 +165,9 @@ pub fn deinit(g: *Global) void {
     const p = g.ext.get("pledge.registry") orelse return;
     const r: *Registry = @ptrCast(@alignCast(p));
     if (r.ceiling) |c| c.destroy(g.gpa);
+    var fin = r.finalizer_sets.valueIterator();
+    while (fin.next()) |v| dropSet(g, v.*);
+    r.finalizer_sets.deinit(g.gpa);
     for (r.caps.items) |c| if (c.owned) {
         for (c.subs) |sub| g.gpa.free(sub);
         g.gpa.free(c.subs);
@@ -184,6 +203,49 @@ fn findCap(g: *Global, base: []const u8) ?Capability {
 fn setOf(l: *Thread) ?*Set {
     const p = l.pledges orelse return null;
     return @ptrCast(@alignCast(p));
+}
+
+fn dropSet(g: *Global, set: ?*Set) void {
+    const s = set orelse return;
+    s.refs -= 1;
+    if (s.refs == 0) s.destroy(g.gpa);
+}
+
+/// Records the permission set of `l` for the finalizer of `obj`, so the
+/// finalizer runs with the permissions of the code that registered it,
+/// whichever thread collects. A thread that holds the set of the main
+/// thread records nothing.
+pub fn noteFinalizer(l: *Thread, obj: *anyopaque) Error!void {
+    const g = l.g;
+    if (l.pledges == g.main_thread.pledges) return;
+    const r = registry(g);
+    const gop = r.finalizer_sets.getOrPut(g.gpa, obj) catch return l.raiseMem();
+    if (gop.found_existing) dropSet(g, gop.value_ptr.*);
+    gop.value_ptr.* = setOf(l);
+    if (setOf(l)) |s| s.refs += 1;
+}
+
+/// What `beginFinalizer` hands to `endFinalizer`.
+pub const FinalizerScope = struct { swapped: bool = false, saved: ?*anyopaque = null };
+
+/// Gives `l` the permission set recorded for the finalizer of `obj`, if
+/// there is one, and forgets the record.
+pub fn beginFinalizer(l: *Thread, obj: *anyopaque) FinalizerScope {
+    const p = l.g.ext.get("pledge.registry") orelse return .{};
+    const r: *Registry = @ptrCast(@alignCast(p));
+    if (r.finalizer_sets.count() == 0) return .{};
+    const kv = r.finalizer_sets.fetchRemove(obj) orelse return .{};
+    const saved = l.pledges;
+    // The reference of the record becomes the reference of the thread.
+    l.pledges = if (kv.value) |s| s else null;
+    return .{ .swapped = true, .saved = saved };
+}
+
+/// Gives `l` its own permission set back.
+pub fn endFinalizer(l: *Thread, scope: FinalizerScope) void {
+    if (!scope.swapped) return;
+    release(l);
+    l.pledges = scope.saved;
 }
 
 /// A writable set for `l`, cloning a shared one first.
@@ -493,13 +555,20 @@ fn realPath(g: *Global, path: []const u8) ![]u8 {
 
 /// Resolves paths on the host file system. The path functions below take
 /// any value with a `resolve` method that returns the absolute path of an
-/// existing file with `/` separators, so tests can supply a file system of
-/// their own.
+/// existing file with `/` separators, and an `isLink` method that says
+/// whether a path names a symbolic link, so tests can supply a file system
+/// of their own.
 const HostResolver = struct {
     g: *Global,
 
     fn resolve(r: HostResolver, path: []const u8) ![]u8 {
         return realPath(r.g, path);
+    }
+
+    /// Whether `path` names a symbolic link, whatever it points to.
+    fn isLink(r: HostResolver, path: []const u8) bool {
+        const st = std.Io.Dir.cwd().statFile(r.g.io, path, .{ .follow_symlinks = false }) catch return false;
+        return st.kind == .sym_link;
     }
 };
 
@@ -533,6 +602,9 @@ fn resolveExisting(gpa: Allocator, p: []const u8, rules: PathRules, resolver: an
             defer gpa.free(rp);
             return appendMissing(gpa, rp, p[if (at_top) root else end..], rules);
         } else |_| {}
+        // A link that does not resolve is no missing component: opening
+        // the path would follow it to wherever it points.
+        if (resolver.isLink(dir)) return null;
         if (at_top) return null;
         end = if (std.mem.lastIndexOfScalar(u8, p[root..end], '/')) |sl| root + sl else root;
     }
@@ -721,7 +793,7 @@ pub fn allowedUnrestricted(l: *Thread, perm: []const u8) bool {
 /// grants some values only does not cover: a check that names no value
 /// passes such a ceiling, so `setAllows` alone would widen the grant.
 fn ceilingCovers(g: *Global, ceil: *Set, name: []const u8, val: ?[]const u8) bool {
-    if (val != null) return setAllows(g, ceil, name, val);
+    if (val) |v| return ceilingCoversValue(g, ceil, name, v);
     const parts = split(name);
     const cap = findCap(g, parts[0]) orelse return false;
     if (cap.kind == .none) return setAllows(g, ceil, name, null);
@@ -738,13 +810,125 @@ fn ceilingCovers(g: *Global, ceil: *Set, name: []const u8, val: ?[]const u8) boo
     return false;
 }
 
+/// Whether every string that the glob `pledged` matches is also matched by
+/// the glob `ceiling`. A `*` of the ceiling covers any run of the pledged
+/// pattern, a `?` covers one literal byte or one `?`, and a literal byte
+/// covers the same literal byte. A `*` of the pledged pattern is covered
+/// by a `*` only, since it stands for strings of every length.
+pub fn patternCovers(ceiling: []const u8, pledged: []const u8, fold: bool) bool {
+    var c: usize = 0;
+    var i: usize = 0;
+    var star_c: ?usize = null;
+    var star_i: usize = 0;
+    while (i < pledged.len) {
+        const one = c < ceiling.len and ceiling[c] != '*' and pledged[i] != '*' and
+            (ceiling[c] == '?' or (pledged[i] != '?' and (ceiling[c] == pledged[i] or
+                (fold and std.ascii.toLower(ceiling[c]) == std.ascii.toLower(pledged[i])))));
+        if (one) {
+            c += 1;
+            i += 1;
+        } else if (c < ceiling.len and ceiling[c] == '*') {
+            star_c = c;
+            star_i = i;
+            c += 1;
+        } else if (star_c) |sc| {
+            c = sc + 1;
+            star_i += 1;
+            i = star_i;
+        } else return false;
+    }
+    while (c < ceiling.len and ceiling[c] == '*') c += 1;
+    return c == ceiling.len;
+}
+
+fn hasScheme(v: []const u8) bool {
+    return std.mem.startsWith(u8, v, "http://") or std.mem.startsWith(u8, v, "https://");
+}
+
+/// `patternCovers` for two values of the `host` kind, part by part as
+/// `hostMatch` reads them. A value with a scheme is one glob over a whole
+/// URL, so it is covered only by a ceiling value with a scheme.
+fn hostCovers(ceiling: []const u8, pledged: []const u8) bool {
+    if (hasScheme(ceiling) or hasScheme(pledged)) {
+        return hasScheme(ceiling) and hasScheme(pledged) and patternCovers(ceiling, pledged, false);
+    }
+    const c_slash = std.mem.indexOfScalar(u8, ceiling, '/');
+    const p_slash = std.mem.indexOfScalar(u8, pledged, '/');
+    const c_auth = ceiling[0 .. c_slash orelse ceiling.len];
+    const p_auth = pledged[0 .. p_slash orelse pledged.len];
+    const c_port = std.mem.indexOfScalar(u8, c_auth, ':') != null;
+    const p_colon = std.mem.indexOfScalar(u8, p_auth, ':');
+    if (c_port) {
+        // The ceiling names a port, so the pledge must name one too.
+        if (p_colon == null or !patternCovers(c_auth, p_auth, false)) return false;
+    } else {
+        // The ceiling matches the host alone, whatever the port.
+        if (!patternCovers(c_auth, p_auth[0 .. p_colon orelse p_auth.len], false)) return false;
+    }
+    if (c_slash) |cs| {
+        const ps = p_slash orelse return false;
+        return patternCovers(ceiling[cs..], pledged[ps..], false);
+    }
+    return true;
+}
+
+/// Whether the ceiling covers a script pledge of `name` with the value
+/// `val`. The value is a pattern, so it is compared with the patterns of
+/// the ceiling in the form a grant stores them.
+fn ceilingCoversValue(g: *Global, ceil: *Set, name: []const u8, val: []const u8) bool {
+    const parts = split(name);
+    const base = parts[0];
+    const cap = findCap(g, base) orelse return false;
+    // A matcher of an extension reads values in its own way.
+    if (cap.kind == .custom or cap.kind == .none) return setAllows(g, ceil, name, val);
+    if (ceil.find(name)) |e| if (e.rejected) return false;
+    if (ceil.find(base)) |e| if (e.rejected) return false;
+    const is_path = cap.kind == .path or (cap.kind == .program and hasSeparator(val));
+    var stored: ?[]u8 = null;
+    defer if (stored) |s| g.gpa.free(s);
+    var link: ?[]u8 = null;
+    defer if (link) |s| g.gpa.free(s);
+    if (is_path) {
+        stored = canonicalPattern(g, val, false) catch return false;
+        link = canonicalPattern(g, val, true) catch return false;
+    }
+    const candidates = [_][]const u8{ name, base };
+    var plain = false;
+    var as_link = !is_path;
+    for (candidates, 0..) |cand, ci| {
+        if (ci == 1 and std.mem.eql(u8, name, base)) break;
+        const e = ceil.find(cand) orelse continue;
+        if (e.unrestricted) return true;
+        for (e.values.items) |cv| {
+            const covers = switch (cap.kind) {
+                .path => patternCovers(cv, stored.?, host_rules.windows),
+                .program => if (is_path) hasSeparator(cv) and patternCovers(cv, stored.?, host_rules.windows) else !hasSeparator(cv) and patternCovers(cv, val, false),
+                .host => hostCovers(cv, val),
+                .pattern => patternCovers(cv, val, false),
+                .custom, .none => unreachable,
+            };
+            if (covers) plain = true;
+        }
+        if (is_path) for (e.link_values.items) |cv| {
+            if (patternCovers(cv, link.?, host_rules.windows)) as_link = true;
+        };
+    }
+    if (plain and as_link) return true;
+    if (ceil.find("all")) |e| if (e.unrestricted) return true;
+    return false;
+}
+
 /// Whether `perm`, a capability that a fresh state holds, is granted. A
 /// thread holds it while its permission set is unchanged, with no pledge,
 /// no rejection, no seal, and no grant of the host. Once the set
 /// has changed, `perm` must be granted like any other capability.
 pub fn allowedUntouched(l: *Thread, perm: []const u8) bool {
     const s = setOf(l) orelse return true;
-    if (s.entries.items.len == 0 and !s.sealed) return true;
+    var changes = s.entries.items.len;
+    if (s.find(bytecode)) |e| {
+        if (!e.rejected) changes -= 1;
+    }
+    if (changes == 0 and !s.sealed) return true;
     return allowed(l, perm, null);
 }
 
@@ -825,6 +1009,7 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
         };
     }
     if (setOf(l)) |s| if (s.sealed) return .refused;
+    if (!reject and !from_host and isBytecode(name)) return .refused;
     if (!reject) {
         if (setOf(l)) |s| if (s.find(name)) |e| if (e.rejected) return l.raiseFmt("permission \"{s}\" was rejected", .{name});
         // The host ceiling bounds what scripts may grant. With a request
@@ -845,6 +1030,7 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
         // The ceiling holds host decisions only, so script pledges made
         // earlier never widen what later script pledges may reach.
         const r = registry(g);
+        if (isBytecode(name) and !reject) return .granted;
         if (r.ceiling == null and !reject) {
             const n = gpa.create(Set) catch return l.raiseMem();
             n.* = .{};
@@ -912,6 +1098,25 @@ pub fn hostGrant(l: *Thread, specs: []const []const u8) Error!void {
     for (specs) |spec| _ = try apply(l, spec, true);
 }
 
+test "a ceiling covers a pledged pattern" {
+    try std.testing.expect(patternCovers("/data/*", "/data/a.txt", false));
+    try std.testing.expect(patternCovers("/data/*", "/data/*.txt", false));
+    try std.testing.expect(patternCovers("/data/a?c", "/data/a?c", false));
+    try std.testing.expect(patternCovers("*", "a*b?c", false));
+    try std.testing.expect(!patternCovers("/data/file?.txt", "/data/file*.txt", false));
+    try std.testing.expect(!patternCovers("APP_?", "APP_*", false));
+    try std.testing.expect(!patternCovers("/data/a", "/data/?", false));
+    try std.testing.expect(!patternCovers("/data/*", "/dat*", false));
+    try std.testing.expect(hostCovers("127.0.0.1", "127.0.0.1"));
+    try std.testing.expect(hostCovers("127.0.0.1", "127.0.0.1:80"));
+    try std.testing.expect(hostCovers("*.example.com", "api.example.com/v1/*"));
+    try std.testing.expect(!hostCovers("127.0.0.1", "127.0.0.1?*"));
+    try std.testing.expect(!hostCovers("api.example.com", "api.example.com*"));
+    try std.testing.expect(!hostCovers("example.com:443", "example.com"));
+    try std.testing.expect(!hostCovers("example.com/api/*", "example.com"));
+    try std.testing.expect(!hostCovers("example.com", "https://example.com/*"));
+}
+
 test "host" {
     try std.testing.expect(hostMatch("example.com", "https://example.com/a"));
     try std.testing.expect(hostMatch("example.com", "example.com:443"));
@@ -949,6 +1154,10 @@ const FakeFs = struct {
             if (same) return f.gpa.dupe(u8, e[1]);
         }
         return error.FileNotFound;
+    }
+
+    fn isLink(_: FakeFs, _: []const u8) bool {
+        return false;
     }
 };
 

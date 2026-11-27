@@ -103,6 +103,16 @@ pub const State = struct {
     period: u32 = 1,
     seed: u32 = 12345,
     arena: if (is_wasm or !enabled) NoArena else mem.Arena = .{},
+    /// The calls of `run` that are on the machine stack.
+    active: u32 = 0,
+    /// The native code of collected functions, which is freed once no
+    /// routine that native code called can still return into it.
+    retired: std.ArrayList(Retired) = .empty,
+    /// The functions whose native code called a routine that has not
+    /// returned yet, innermost first. The collector marks them, because
+    /// such a routine can pop the frame of its function and go on to run
+    /// code that collects, and it then returns into that native code.
+    step_roots: ?*StepRoot = null,
     /// Functions that have native code now.
     live: usize = 0,
     /// Functions compiled since the state started.
@@ -495,6 +505,12 @@ pub fn run(l: *Thread, stop: usize) (Error || interp.YieldError || interp.LoopEr
     if (has_opt) setFloor(&l.g.jit, @frameAddress(), l.g.native_depth <= 1);
     const code: *Code = @ptrCast(@alignCast(l.frame().closure.?.proto.jit_code.?));
     const enter: Enter = @ptrFromInt(code.base);
+    const g = l.g;
+    g.jit.active += 1;
+    defer {
+        g.jit.active -= 1;
+        if (g.jit.active == 0 and g.jit.retired.items.len != 0) flushRetired(g, true);
+    }
     return switch (enter(l, stop, t.addr, t.base)) {
         interp.Step.done => {},
         interp.Step.failed => error.LusError,
@@ -662,6 +678,75 @@ fn compileMachine(l: *Thread, p: *Proto) bool {
     return true;
 }
 
+/// Native code that waits for the last call of `run` to return.
+pub const Retired = union(enum) {
+    code: *Code,
+    unit: if (has_opt) *opt.Unit else void,
+};
+
+fn destroyCode(g: *Global, code: *Code) void {
+    g.jit.arena.release(g.gpa, @as([*]u8, @ptrFromInt(code.base))[0..code.size]);
+    g.gpa.free(code.offs[0..code.count]);
+    g.gpa.destroy(code);
+}
+
+/// One entry of `Jit.step_roots`, which lives in the stack frame of the
+/// routine that native code called.
+pub const StepRoot = struct {
+    prev: ?*StepRoot,
+    closure: ?*object.Closure,
+};
+
+/// Keeps the function of the top frame alive while a routine that its
+/// native code called runs. The caller is a live function, so this is
+/// also a point where the queued code of collected functions is free.
+pub fn rootStep(l: *Thread, node: *StepRoot) void {
+    const js = &l.g.jit;
+    if (js.retired.items.len != 0) flushRetired(l.g, js.active <= 1 and js.step_roots == null);
+    node.* = .{ .prev = js.step_roots, .closure = l.frames.items[l.frames.items.len - 1].closure };
+    js.step_roots = node;
+}
+
+pub fn unrootStep(l: *Thread, node: *StepRoot) void {
+    inv.assert(l.g.jit.step_roots == node);
+    l.g.jit.step_roots = node.prev;
+}
+
+/// Frees native code now, or queues it while a call of `run` is on the
+/// machine stack. Code that cannot be queued stays mapped until the state
+/// closes.
+pub fn retire(g: *Global, r: Retired) void {
+    if (g.jit.active != 0) {
+        g.jit.retired.append(g.gpa, r) catch {};
+        return;
+    }
+    destroyRetired(g, r);
+}
+
+fn destroyRetired(g: *Global, r: Retired) void {
+    switch (r) {
+        .code => |c| destroyCode(g, c),
+        .unit => |u| if (has_opt) opt.destroyUnit(g, u),
+    }
+}
+
+/// Frees the queued code. Baseline code is only returned into by the
+/// routines that root their function, so it is free at every call of one.
+/// Optimized code also runs routines of its own and calls other optimized
+/// code without a frame, so it waits until `units` says that nothing
+/// native is pending.
+fn flushRetired(g: *Global, units: bool) void {
+    const items = g.jit.retired.items;
+    var kept: usize = 0;
+    for (items) |r| {
+        if (r == .unit and !units) {
+            items[kept] = r;
+            kept += 1;
+        } else destroyRetired(g, r);
+    }
+    g.jit.retired.shrinkRetainingCapacity(kept);
+}
+
 /// Frees the native code of a function that is being collected.
 pub fn freeProto(g: *Global, p: *Proto) void {
     if (!enabled) return;
@@ -679,9 +764,7 @@ pub fn freeProto(g: *Global, p: *Proto) void {
     if (g.jit.aot) |st| st.forget(p);
     _ = g.jit.aot_ids.remove(p);
     const code: *Code = @ptrCast(@alignCast(p.jit_code orelse return));
-    g.jit.arena.release(g.gpa, @as([*]u8, @ptrFromInt(code.base))[0..code.size]);
-    g.gpa.free(code.offs[0..code.count]);
-    g.gpa.destroy(code);
+    retire(g, .{ .code = code });
     p.jit_code = null;
     p.jit_entry = 0;
     p.jit_tail = 0;
@@ -706,6 +789,9 @@ pub fn reportAot(g: *Global) void {
 /// Releases the executable memory of a state that is closing.
 pub fn deinit(g: *Global) void {
     if (!enabled or is_wasm) return;
+    g.jit.active = 0;
+    flushRetired(g, true);
+    g.jit.retired.deinit(g.gpa);
     g.jit.callers.deinit(g.gpa);
     g.jit.arena.deinit(g.gpa);
     if (g.jit.aot) |st| st.destroy();

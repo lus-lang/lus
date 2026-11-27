@@ -375,6 +375,11 @@ pub const Store = struct {
             const h = urlHash(p.url);
             const src = s.readCache(&.{ "modules", &h, "source.lus" }, 64 << 20) orelse
                 return fail(s.gpa, why, "the cached copy of {s} is incomplete", .{p.url});
+            // The cache holds what `generic` stored, which is source text.
+            if (@import("compile/dump.zig").isBinary(src)) {
+                s.gpa.free(src);
+                return fail(s.gpa, why, "the cached copy of {s} is a binary chunk, and remote modules must be source", .{p.url});
+            }
             p.kind = .generic;
             p.source = src;
             return;

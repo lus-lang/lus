@@ -71,6 +71,7 @@ complete -c lus -n '__lus_using test' -l doc -d 'run the lus code blocks of Mark
 complete -c lus -n '__lus_using test' -s v -d 'list the skipped tests of passing files too'
 complete -c lus -n '__lus_using test' -l json -d 'print one JSON record per test'
 complete -c lus -n '__lus_using test' -l jobs -x -d 'run at most N files at once'
+complete -c lus -n '__lus_using test' -s P -l pledge -x -a 'fs fs:read fs:write fs:exec network network:tcp network:udp network:http network:tls network:server exec env env:read env:write load ffi worker debug' -d 'grant a permission to every test file'
 complete -c lus -n '__lus_using test' -l timeout -x -d 'stop a file that writes no output for S seconds (default 60)'
 complete -c lus -n '__lus_using test' -l file-timeout -x -d 'stop a file that runs longer than S seconds in all'
 complete -c lus -n '__lus_using test' -s h -l help -d 'print this help and exit'

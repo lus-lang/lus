@@ -28,7 +28,9 @@ A capability has a name, a list of subcapabilities, and a value kind. The value 
 | `custom` | any string | a matcher function supplied at registration |
 | `program` | a program name glob, or a path glob | a value without a separator matches the name of the program as written, and one with a separator matches the absolute path the name resolves to, canonical as for `path` |
 
-The runtime registers its own capabilities through the same registry that extensions use: `fs` (with `read`, `write`, `exec`), `network` (with `tcp`, `udp`, `http`, `tls`), `exec`, `env`, `load`, `ffi`, `worker`, and `seal`.
+The runtime registers its own capabilities through the same registry that extensions use: `fs` (with `read`, `write`, `exec`), `network` (with `tcp`, `udp`, `http`, `tls`), `exec`, `env`, `load`, `bytecode`, `ffi`, `worker`, and `seal`.
+
+`bytecode` gates the loading of a binary chunk by a script. Only the host grants it, on the command line or with `lus_grant`, and `pledge` returns `false` for it. Its grant sets no ceiling and leaves a fresh state fresh, so a script that runs under `-P bytecode` pledges its other permissions as it does without the option.
 
 `exec` has the `program` kind. `os.spawn` asks for the program it runs, so `pledge("exec=git")` lets a script run `git` and nothing else. `os.execute` and `io.popen` run a shell, which runs any program, so they need `exec` without a value. The kind is not part of the C interface, which registers the other kinds.
 

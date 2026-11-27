@@ -58,6 +58,7 @@ The standard library checks the following permissions.
 | `fs:read` | Reading files, listing directories, and inspecting paths. |
 | `fs:write` | Creating, changing, moving, and removing files, directories, and links. |
 | `load` | Running code that the program loads while it runs, from a string or from a file. |
+| `bytecode` | Loading a [binary chunk](/manual/tools#binary-chunks) while the program runs. Only the command line grants it. |
 | `exec` | Running other programs with `os.spawn`, and commands in the system shell with `os.execute` and `io.popen`. |
 | `env` | Reading and setting environment variables. |
 | `env:read` | Reading environment variables with `os.getenv`. |
@@ -77,6 +78,8 @@ Several functions check more than one permission.
 - [`io.sqlite`](/manual/api#io.sqlite) requires `fs:read` for a database file, plus `fs:write` unless it opens the file read-only.
 - [`worker.create`](/manual/api#worker.create) requires `load` and `fs:read` for the script of the worker.
 - [`network.serve`](/manual/api#network.serve) requires `network:server` for the address it serves and `network:tcp` to bind it.
+
+Each of these functions also requires `bytecode` when the code it loads is a binary chunk. A binary chunk runs without the checks that the compiler makes on source text, so a script cannot grant `bytecode` to itself: `pledge("bytecode")` returns `false`. The person who runs the program grants it with `-P bytecode`, and a host program grants it with `lus_grant`. The grant leaves the other permissions as they are, so the script still pledges what it needs. The script named on the command line, the modules of `--include`, and the modules of a standalone executable load as binary chunks without it.
 
 `pledge` also accepts the names `fs:exec`, `network:tls`, `ffi`, and `worker`, which are reserved for host programs and extensions. No standard library function checks them.
 

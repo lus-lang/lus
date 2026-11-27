@@ -3049,6 +3049,8 @@ fs.remove(path)
 
 The chunk name is `@` followed by `filename`, so errors inside the chunk name the file. [`loadfile`](/manual/api#loadfile) compiles a file without running it and returns failures as values, and [`require`](/manual/api#require) loads a module once and caches it.
 
+A file that holds a binary chunk also requires the `bytecode` permission, which only the command line grants.
+
 **Requires pledges:** `load`, `fs:read`]],
     kind = "function",
     module = "base",
@@ -5140,7 +5142,7 @@ The parameters refine the load:
 
 - `chunk` is the code. A string holds source text or a binary chunk. A vector holds the bytes of a binary chunk, which is the form [`string.dump`](/manual/api#string.dump) produces. A function is a reader that `load` calls repeatedly, and the pieces it returns are joined until it returns `nil` or the empty string.
 - `chunkname` names the chunk in error messages and tracebacks. It defaults to the source string itself for a string chunk and to `"=(load)"` otherwise.
-- `mode` sets which chunks are accepted: `"t"` for source text, `"b"` for binary chunks, and `"bt"` for both. The default is `"bt"`.
+- `mode` sets which chunks are accepted: `"t"` for source text, `"b"` for binary chunks, and `"bt"` for both. The default is `"bt"`. A binary chunk also requires the `bytecode` permission, which only the command line grants, and `load` raises the permission error without it.
 - `env`, when given, becomes the first upvalue of the chunk, which is its `_ENV`. Without it the chunk uses the global environment.
 
 On success, `load` returns one function, which runs the chunk when called and passes its arguments to the chunk as `...`. On failure it returns `nil` and a message. The failures are a syntax error, a chunk that `mode` rejects, with the message `attempt to load a text chunk (mode is 'b')` or its binary counterpart, a reader that raises an error, and a reader that returns a value other than a string, with the message `reader function must return a string`.
@@ -5224,6 +5226,8 @@ fs.remove(path)
 ```
 
 The chunk name is `@` followed by `filename`, so errors inside the chunk name the file. Binary chunks are version-dependent artifacts for trusted build and storage paths. Treat every binary chunk as trusted input, and use `mode = "t"` for a file supplied across an untrusted boundary. [`load`](/manual/api#load) compiles a string, a vector, or the pieces of a reader function, and [`dofile`](/manual/api#dofile) compiles and runs a file in one call.
+
+A file that holds a binary chunk also requires the `bytecode` permission, which only the command line grants.
 
 **Requires pledges:** `load`, `fs:read`]],
     kind = "function",

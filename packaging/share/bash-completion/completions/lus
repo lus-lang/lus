@@ -92,6 +92,10 @@ _lus() {
             _lus_value number
             return
             ;;
+        test:-P | test:--pledge)
+            _lus_value words 'fs fs:read fs:write fs:exec network network:tcp network:udp network:http network:tls network:server exec env env:read env:write load ffi worker debug'
+            return
+            ;;
         test:--timeout)
             _lus_value number
             return
@@ -180,7 +184,7 @@ _lus() {
     if [[ $cur == -* ]]; then
         case "$cmd:$sub" in
             run:) _lus_value words '-e -i -l -P --pledge -F --flag --include --readonly-env --sandbox --offline --reload --no-prefetch --gc-pause -W -E --dis -v --version -h --help' ;;
-            test:) _lus_value words '--filter --list -u --update --bench --bench-time --coverage --coverage-out --doc -v --json --jobs --timeout --file-timeout -h --help' ;;
+            test:) _lus_value words '--filter --list -u --update --bench --bench-time --coverage --coverage-out --doc -v --json --jobs -P --pledge --timeout --file-timeout -h --help' ;;
             fmt:) _lus_value words '--write --check --strict --indent -h --help' ;;
             check:) _lus_value words '--json --strict --list --fix --explain -h --help' ;;
             doc:) _lus_value words '-o --format -h --help' ;;
@@ -212,7 +216,7 @@ _lus() {
     local n=0 i takes
     case "$cmd" in
         run) takes='-e -l -P --pledge -F --flag --include --gc-pause' ;;
-        test) takes='--filter --bench-time --coverage-out --jobs --timeout --file-timeout' ;;
+        test) takes='--filter --bench-time --coverage-out --jobs -P --pledge --timeout --file-timeout' ;;
         fmt) takes='--indent' ;;
         check) takes='--explain' ;;
         doc) takes='-o --format' ;;

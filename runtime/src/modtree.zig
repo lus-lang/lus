@@ -302,12 +302,17 @@ pub fn build(l: *state.Thread, src: []const u8, chunkname: []const u8, opts: Opt
             const was_stopped = g.gc_stopped;
             g.gc_stopped = true;
             defer g.gc_stopped = was_stopped;
-            const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = mname, .flags = api.flagsTable(g), .meta_grants = .{ .thread = g.main_thread } });
+            // Compiling for the index runs no code of the module. A module
+            // with compile-time evaluation compiles at its `require`, after
+            // the permission checks of the load and with the permissions
+            // the requiring thread holds then.
+            var deferred = false;
+            const r = try codegen.compileAst(g, arena, chunk, .{ .chunkname = mname, .flags = api.flagsTable(g), .meta_grants = .none, .meta_deferred = &deferred });
             switch (r) {
                 .err => |m| {
                     // The compiler allocates the message with the state.
                     defer g.gpa.free(m);
-                    entry.err = try gpa.dupe(u8, m);
+                    if (!deferred) entry.err = try gpa.dupe(u8, m);
                 },
                 .ok => |p| entry.chunk = dump.dump(gpa, p, false) catch |e| switch (e) {
                     error.OutOfMemory => return error.OutOfMemory,

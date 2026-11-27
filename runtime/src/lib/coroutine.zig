@@ -520,6 +520,7 @@ fn isyieldable(l: *Thread) Error!u32 {
 
 fn wrapAux(l: *Thread) Error!u32 {
     const nat = l.frame().native.?;
+    if (nat.upvalues()[0].tag != .thread) return l.raiseFmt("the wrapped coroutine is gone", .{});
     const co = nat.upvalues()[0].as(Thread);
     const nargs = l.argCount();
     return resumeCo(l, co, nargs) catch {
@@ -636,6 +637,7 @@ pub fn forPrep(l: *Thread, r: u32) Error!void {
 /// ends, the loop ends, and the values it returned are dropped. An error
 /// in the coroutine closes it and leaves the loop with that error.
 fn iterate(l: *Thread) Error!u32 {
+    if (l.arg(1).tag != .thread) return aux.typeError(l, 1, "coroutine");
     const co = l.arg(1).as(Thread);
     // The control value stays out of the resume, so a port sees no
     // arguments and reads with its defaults.

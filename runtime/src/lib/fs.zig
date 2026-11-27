@@ -299,8 +299,18 @@ fn sync(l: *Thread) Error!u32 {
     return 0;
 }
 
+/// `path` without its trailing separators. A system call resolves a link
+/// whose name ends in a separator, so a native that acts on a link itself
+/// passes the name without them, which is also the name its permission
+/// check reads.
+fn withoutTrailingSeparators(path: []const u8) []const u8 {
+    var end = path.len;
+    while (end > 1 and (path[end - 1] == '/' or (windows and path[end - 1] == '\\'))) end -= 1;
+    return path[0..end];
+}
+
 fn remove(l: *Thread) Error!u32 {
-    const path = try aux.checkBytes(l, 1);
+    const path = withoutTrailingSeparators(try aux.checkBytes(l, 1));
     const recursive = l.arg(2).truthy();
     try pledge.requireNoFollow(l, "fs:write", path);
     const io = l.g.io;
@@ -326,8 +336,9 @@ fn remove(l: *Thread) Error!u32 {
 }
 
 fn fsType(l: *Thread) Error!u32 {
-    const path = try aux.checkBytes(l, 1);
-    try pledge.require(l, "fs:read", path);
+    const path = withoutTrailingSeparators(try aux.checkBytes(l, 1));
+    // The type of a link is read from the link itself.
+    try pledge.requireNoFollow(l, "fs:read", path);
     const io = l.g.io;
     const cwd = Dir.cwd();
     const st = cwd.statFile(io, path, .{ .follow_symlinks = false }) catch |e| switch (e) {
@@ -337,8 +348,12 @@ fn fsType(l: *Thread) Error!u32 {
     const is_link = st.kind == .sym_link;
     var kind = st.kind;
     if (is_link) {
-        // A link reports the type of its target. A dangling link is a file.
-        if (cwd.statFile(io, path, .{})) |target| kind = target.kind else |_| kind = .file;
+        // A link reports the type of its target. A dangling link is a
+        // file, and so is a link whose target the script may not read.
+        kind = .file;
+        if (pledge.allowed(l, "fs:read", path)) {
+            if (cwd.statFile(io, path, .{})) |target| kind = target.kind else |_| {}
+        }
     }
     try l.push(try l.newStringValue(if (kind == .directory) "directory" else "file"));
     try l.push(Value.boolean(is_link));
@@ -357,7 +372,7 @@ fn stat(l: *Thread) Error!u32 {
             follow_links = f.tag == .true;
         }
     }
-    try pledge.require(l, "fs:read", path);
+    if (follow_links) try pledge.require(l, "fs:read", path) else try pledge.requireNoFollow(l, "fs:read", path);
     const st = Dir.cwd().statFile(l.g.io, path, .{ .follow_symlinks = follow_links }) catch |e| switch (e) {
         error.FileNotFound => return l.raiseFmt("path '{s}' does not exist", .{path}),
         else => return l.raiseFmt("cannot stat '{s}': {s}", .{ path, errMsg(e) }),
@@ -380,8 +395,8 @@ fn stat(l: *Thread) Error!u32 {
 }
 
 fn follow(l: *Thread) Error!u32 {
-    const path = try aux.checkBytes(l, 1);
-    try pledge.require(l, "fs:read", path);
+    const path = withoutTrailingSeparators(try aux.checkBytes(l, 1));
+    try pledge.requireNoFollow(l, "fs:read", path);
     const io = l.g.io;
     const cwd = Dir.cwd();
     const st = cwd.statFile(io, path, .{ .follow_symlinks = false }) catch |e|
@@ -400,8 +415,16 @@ fn createLink(l: *Thread) Error!u32 {
     const target = try aux.checkBytes(l, 2);
     try pledge.require(l, "fs:write", at);
     // The target is gated too, so a script cannot plant a link that leads
-    // outside its writable scope.
-    try pledge.require(l, "fs:write", target);
+    // outside its writable scope. The system resolves a relative target
+    // from the directory of the link, so the check reads it from there.
+    if (std.fs.path.isAbsolute(target)) {
+        try pledge.require(l, "fs:write", target);
+    } else {
+        const dir = std.fs.path.dirname(withoutTrailingSeparators(at)) orelse ".";
+        const from_link = std.fs.path.join(l.g.gpa, &.{ dir, target }) catch return l.raiseMem();
+        defer l.g.gpa.free(from_link);
+        if (!pledge.allowed(l, "fs:write", from_link)) return l.raiseFmt("permission \"fs:write\" denied for '{s}'", .{target});
+    }
     const io = l.g.io;
     const cwd = Dir.cwd();
     var is_dir = false;

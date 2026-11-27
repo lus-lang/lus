@@ -1,0 +1,342 @@
+--[[
+    Programs that hand the runtime values and shapes it does not expect.
+
+    Each test must end in its result or in a clean error, in every JIT
+    mode. The tests cover calls with fewer arguments than parameters,
+    natives reached through a metatable, tables that change while a query
+    or a native reads them, stacks that grow inside a callback, and
+    permissions at the edge of a grant.
+]]
+
+pledge("load", "fs", "exec", "env", "debug")
+
+local function deep(n)
+    if n == 0 then
+        return 0
+    end
+
+    return 1 + deep(n - 1)
+end
+
+-- Runs `f` below `n` Lus frames, so the stack is a large block when the
+-- callback of the test grows it.
+local function at_depth(n, f)
+    if n == 0 then
+        return f()
+    end
+
+    local r = at_depth(n - 1, f)
+    return r
+end
+
+local function vararg_function_with_many_parameters_test()
+    local function v(p1, p2, p3, p4, p5, p6, p7, p8, p9, ...)
+        return p1 or p2 or p3 or p4 or p5 or p6 or p7 or p8 or p9, select("#", ...)
+    end
+
+    local function nested(n)
+        if n == 0 then
+            local r = v()
+            return r
+        end
+
+        local r = nested(n - 1)
+        return r
+    end
+
+    for d = 0, 300 do
+        assert(nested(d) == nil)
+    end
+
+    local names = {}
+
+    for i = 1, 190 do
+        names[i] = `p$i`
+    end
+
+    local wide = load(
+        `local function f($(table.concat(names, ", ")), ...) return p190 end return f()`
+    )
+    assert(wide() == nil)
+end
+
+local function enum_metatable_natives_check_their_argument_test()
+    local E = enum A, B end
+
+    local mt = getmetatable(E.A)
+    assert(mt.__index(E.A, "B") == E.B)
+    local ok, err = catch mt.__index(1, "A")
+    assert(not ok and tostring(err):find("enum expected", 1, true), tostring(err))
+end
+
+local function query_join_sees_a_replaced_row_test()
+    local a = { { k = 1, id = "a1" }, { k = 2, id = "a2" }, { k = 3, id = "a3" } }
+    local b = { { k = 1, id = "b1" }, { k = 2, id = "b2" }, { k = 3, id = "b3" } }
+
+    local function replace()
+        a[2] = 1
+        return true
+    end
+
+    local ok, err = catch (function()
+        for _ in query(@a as x, b as y where x.k == y.k and replace() select x.id, y.id as yid) do
+        end
+    end)()
+
+    assert(not ok and tostring(err):find("not a record", 1, true), tostring(err))
+end
+
+local function query_window_with_huge_limit_test()
+    local rows = {}
+
+    for i = 1, 20 do
+        rows[i] = { a = i, b = -i }
+    end
+
+    local n = 0
+
+    for _ in query(@rows as r order by r.a, r.b limit math.maxinteger offset 1) do
+        n = n + 1
+    end
+
+    assert(n == 19)
+    n = 0
+
+    for _ in query(@rows as r order by r.a limit math.maxinteger offset 1) do
+        n = n + 1
+    end
+
+    assert(n == 19)
+end
+
+local function format_survives_a_stack_that_grows_test()
+    local obj = setmetatable({}, {
+        __tostring = function()
+            deep(60000)
+            return "obj"
+        end,
+    })
+
+    local s = at_depth(5000, function()
+        return string.format("%s %d %d %d", obj, 1, 2, 3)
+    end)
+
+    assert(s == "obj 1 2 3")
+end
+
+local function reduce_survives_a_stack_that_grows_test()
+    local sum = at_depth(5000, function()
+        return table.reduce({ 1, 2, 3 }, function(acc, x)
+            deep(60000)
+            return acc + x
+        end, 0)
+    end)
+
+    assert(sum == 6)
+end
+
+local function worker_metatable_is_protected_test()
+    if not worker then
+        skip("this build has no workers")
+    end
+
+    local w = worker.create("/nonexistent/x.lus")
+    assert(getmetatable(w) == false)
+end
+
+local function debug_keeps_loop_slots_and_native_upvalues_test()
+    local wrapped = coroutine.wrap(function()
+    end)
+
+    local ok, err = catch debug.setupvalue(wrapped, 1, 42)
+    assert(not ok and tostring(err):find("native function", 1, true), tostring(err))
+    local refused = false
+
+    for _ = 1, 2 do
+        local i = 1
+
+        while true do
+            local name = debug.getlocal(1, i)
+
+            if not name then
+                break
+            end
+
+            if name == "(for state)" then
+                refused = not (catch debug.setlocal(1, i, {}))
+                break
+            end
+
+            i = i + 1
+        end
+    end
+
+    assert(refused)
+    assert(debug.getlocal(1, math.mininteger) == nil)
+end
+
+local function many_loop_carried_locals_test()
+    local names, inits, sums = {}, {}, {}
+
+    for i = 1, 66 do
+        names[i] = `a$i`
+        inits[i] = tostring(i)
+        sums[i] = `a$i = a$i + 1`
+    end
+
+    local src = `local function f(n)
+    local $(table.concat(names, ", ")) = $(table.concat(inits, ", "))
+    local t = { 5 }
+    for i = 1, n do
+        $(table.concat(sums, " "))
+        t[1] = t[1] + 1
+    end
+    return a1, a14, a66, t[1]
+end
+local r
+for _ = 1, 400 do r = { f(10) } end
+return r`
+
+    local r = load(src)()
+    assert(r[1] == 11 and r[2] == 24 and r[3] == 76 and r[4] == 15, table.concat(r, " "))
+end
+
+local function loop_range_guard_beside_a_template_test()
+    local cur, small
+
+    local function f(n, flag, q1, q2, q3, q4, q5, q6, q7, q8)
+        local s = 0
+
+        for i = 1, n do
+            local z = q1 + q2 + q3 + q4 + q5 + q6 + q7 + q8
+            local v = cur[i]
+            s = s + v + z
+            cur = small
+            local y = flag or z
+            s = s + (y == nil and 1 or 0)
+        end
+
+        return s
+    end
+
+    local big = {}
+
+    for i = 1, 64 do
+        big[i] = 1
+    end
+
+    small = { 1, 1, 1, 1 }
+
+    for _ = 1, 300 do
+        cur = big
+        f(0, 5, 0, 0, 0, 0, 0, 0, 0, 0)
+    end
+
+    cur = big
+    local ok = catch f(64, 5, 0, 0, 0, 0, 0, 0, 0, 0)
+    assert(not ok, "the read past the small table must raise")
+end
+
+local function sqlite_attach_needs_a_literal_name_test()
+    if not io.sqlite then
+        skip("this build has no SQLite")
+    end
+
+    local db = io.sqlite(":memory:")
+    local ok = catch db:run("ATTACH ? AS x", "attached.db")
+    assert(not ok)
+    ok = catch db:exec("ATTACH ('attached' || '.db') AS x")
+    assert(not ok)
+    db:exec("CREATE TABLE t (v TEXT)")
+    db:exec("VACUUM")
+    db:close()
+    assert(not (catch fs.stat("attached.db")))
+end
+
+-- Runs `body` as a script of its own that holds only the directory `sb`
+-- of the working directory, and returns what it printed.
+local function in_sandbox(body)
+    local exe = os.getenv("LUS_EXE")
+
+    if not exe then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local script = io.open("sandboxed.lus", "w")
+    script:write(`assert(pledge("fs=./sb/*", "fs=./sb", "seal"))\n$body\n`)
+    script:close()
+    local p = os.spawn({ exe, "sandboxed.lus" }, { stdout = "pipe" })
+    return p.stdout:read("a")
+end
+
+local function links_are_checked_where_the_system_resolves_them_test()
+    if os.platform() == "windows" then
+        skip("needs symbolic links")
+    end
+
+    catch fs.createdirectory("sb")
+
+    local out = in_sandbox([[
+fs.createdirectory("sb/sb/x/y/z", true)
+print((catch fs.createlink("sb/p", "sb/x/y/z")))
+fs.createdirectory("sb/sb/p")
+print((catch fs.createlink("sb/L", "sb/p/../../../escaped.txt")))
+print((catch fs.createlink("sb/inner", "x")))]])
+
+    assert(out == "true\nfalse\ntrue\n", out)
+end
+
+local function a_link_name_with_a_separator_names_the_link_test()
+    if os.platform() == "windows" then
+        skip("needs symbolic links")
+    end
+
+    fs.createdirectory("keep")
+    io.open("keep/a.txt", "w"):close()
+    fs.createdirectory("box")
+    fs.createlink("box/L", "../keep")
+    fs.remove("box/L/", true)
+    assert(fs.stat("keep/a.txt"))
+    assert(not (catch fs.stat("box/L", { follow = false })))
+end
+
+local function a_dangling_link_is_no_missing_file_test()
+    if os.platform() == "windows" then
+        skip("needs symbolic links")
+    end
+
+    catch fs.createdirectory("sb")
+    fs.createlink("sb/dangling", "../outside.txt")
+
+    local out = in_sandbox([[
+print((catch io.open("sb/dangling", "w")))
+print((catch io.open("sb/new.txt", "w")))
+print(fs.stat("sb/dangling", { follow = false }).kind)]])
+
+    assert(out == "false\ntrue\nlink\n", out)
+    assert(not (catch fs.stat("outside.txt")))
+end
+
+local function pledge_refuses_bytecode_test()
+    assert(pledge("bytecode") == false)
+end
+
+local function finalizer_runs_with_the_permissions_of_its_thread_test()
+    local seen
+
+    local co = coroutine.create(function()
+        pledge("~env", "seal")
+
+        setmetatable({}, {
+            __gc = function()
+                seen = (catch os.getenv("HOME"))
+            end,
+        })
+    end)
+
+    assert(coroutine.resume(co))
+    collectgarbage()
+    collectgarbage()
+    assert(seen == false, "the finalizer must run without the env permission")
+    assert(catch os.getenv("HOME"))
+end

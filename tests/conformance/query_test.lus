@@ -2165,7 +2165,18 @@ end
 
 -- Group: bytecode round trip
 
+-- A binary chunk loads only with the `bytecode` permission, which the
+-- command line grants, as in `lus test -P bytecode`.
+local has_bytecode = (catch load(string.dump(function()
+end)))
+
+local needs_bytecode = "needs the bytecode permission, granted with -P bytecode"
+
 local function string_dump_preserves_query_building_functions_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local function maker(src, minimum)
         return @src as r where r.age >= minimum select r.name
     end

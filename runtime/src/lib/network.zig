@@ -1611,15 +1611,25 @@ fn socketSend(l: *Thread) Error!u32 {
         const r = @import("string.zig").byteRange(i, j, whole.len);
         data = whole[r.from..r.to];
         last = if (r.to > r.from) r.to else 0;
+        // Another coroutine can resize the vector while the send waits,
+        // so the send reads the buffer again after every wait.
+        try sendAll(l, s, data, .{ .vector = l.arg(2).as(object.Vector), .from = r.from, .to = r.to });
+        return aux.retInt(l, @intCast(last));
     }
-    try sendAll(l, s, data);
+    try sendAll(l, s, data, null);
     return aux.retInt(l, @intCast(last));
 }
 
-/// Sends all of `data`, which stays where it is while the send waits.
-fn sendAll(l: *Thread, s: *Socket, data: []const u8) Error!void {
+/// The part of a vector that a send reads.
+const VectorPart = struct { vector: *object.Vector, from: usize, to: usize };
+
+/// Sends all of `data`. A string stays where it is while the send waits.
+/// The bytes of a vector move when it is resized, so `part` names the
+/// vector that `data` came from.
+fn sendAll(l: *Thread, s: *Socket, first: []const u8, part: ?VectorPart) Error!void {
     const io = l.g.io;
     const h = s.stream.socket.handle;
+    var data = first;
     // A send that waited continues after the bytes it already wrote.
     var total: usize = @min(sched.progress(l), data.len);
     while (total < data.len) {
@@ -1637,6 +1647,11 @@ fn sendAll(l: *Thread, s: *Socket, data: []const u8) Error!void {
                 try sched.saveProgress(l, total);
                 try awaitIo(l, h, againDir(s, .write), s.timeout_ms, "send");
                 try stillOpen(l, s);
+                if (part) |p| {
+                    const items = p.vector.bytes.items;
+                    if (p.to > items.len) return l.raiseFmt("the vector shrank while it was being sent", .{});
+                    data = items[p.from..p.to];
+                }
             },
             .fail => |e| return failResult(l, "send", e),
         }
@@ -2227,7 +2242,8 @@ fn outputStep(l: *Thread, co: *Thread, args: []const Value) Error!u32 {
         else => return l.raiseFmt("bad argument #1 to 'output' (string or vector expected, got {s})", .{l.typeNameOf(v)}),
     };
     const s = try portSocket(l, co);
-    try sendAll(l, s, data);
+    const part: ?VectorPart = if (v.tag == .vector) .{ .vector = v.as(object.Vector), .from = 0, .to = data.len } else null;
+    try sendAll(l, s, data, part);
     return 0;
 }
 

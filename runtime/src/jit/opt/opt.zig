@@ -460,9 +460,15 @@ fn valOf(f: *ir.Func, ra: regalloc.Result, r: ir.Ref) Val {
 }
 
 fn freeUnit(g: *Global, u: *Unit) void {
-    const gpa = g.gpa;
     if (g.jit.aot) |st| st.forgetUnit(u);
     if (g.jit.aot_section) |s| s.forgetUnit(u);
+    jit.retire(g, .{ .unit = u });
+}
+
+/// Frees the code and the tables of a unit. `jit.retire` calls it once
+/// no native code can return into the unit.
+pub fn destroyUnit(g: *Global, u: *Unit) void {
+    const gpa = g.gpa;
     if (u.code.len != 0) g.jit.arena.release(gpa, u.code);
     gpa.free(u.snaps);
     gpa.free(u.frames);

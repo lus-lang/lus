@@ -653,7 +653,8 @@ export fn lus_len(l: *Thread, idx: c_int) c_int {
     return protect(l, top, struct {
         fn f(t: *Thread, x: Value) Error!void {
             try t.push(x);
-            t.stack[t.top - 1] = try ops.length(t, x);
+            const len_value = try ops.length(t, x);
+            t.stack[t.top - 1] = len_value;
         }
     }.f, .{ l, v });
 }

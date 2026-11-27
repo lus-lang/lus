@@ -24,6 +24,9 @@ fn StepOf(comptime o: Op) type {
         /// the top frame, and returns an `interp.Step` code.
         fn step(l: *Thread, pc: usize, stop: usize, ins: usize) callconv(jit.cc) usize {
             l.frames.items[l.frames.items.len - 1].pc = @truncate(pc);
+            var root: jit.StepRoot = undefined;
+            jit.rootStep(l, &root);
+            defer jit.unrootStep(l, &root);
             return interp.run(l, stop, .{ .step = o }, @truncate(ins)) catch |e| {
                 l.meta_finish = null;
                 return switch (e) {
@@ -136,6 +139,9 @@ inline fn ctxSlot(l: *Thread, v: Value) ?u32 {
 /// A step of a generic `for` over `next` or `ipairs` (`interp.stepIterator`).
 /// Returns 1 when it ran and 0 when the step routine must make the call.
 pub fn tforStep(l: *Thread, rp: [*]Value, want: usize) callconv(jit.cc) usize {
+    var root: jit.StepRoot = undefined;
+    jit.rootStep(l, &root);
+    defer jit.unrootStep(l, &root);
     return @intFromBool(interp.stepIterator(l, rp, @intCast(want)));
 }
 
@@ -238,6 +244,9 @@ pub const retry: usize = 7;
 pub fn callNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(jit.cc) usize {
     const ins: u32 = @truncate(ins_word);
     const pc: u32 = @truncate(pc_word);
+    var root: jit.StepRoot = undefined;
+    jit.rootStep(l, &root);
+    defer jit.unrootStep(l, &root);
     const fr = l.frame();
     fr.pc = pc;
     if (l.g.tobefnz.items.len > 0) return retry;
@@ -272,6 +281,9 @@ pub fn callNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(jit.cc) 
 pub fn tailNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(jit.cc) usize {
     const ins: u32 = @truncate(ins_word);
     const pc: u32 = @truncate(pc_word);
+    var root: jit.StepRoot = undefined;
+    jit.rootStep(l, &root);
+    defer jit.unrootStep(l, &root);
     const fr = l.frame();
     const func = fr.base + opc.a(ins);
     const callee = l.stack[func];
@@ -296,6 +308,9 @@ pub fn tailNative(l: *Thread, ins_word: usize, pc_word: usize) callconv(jit.cc) 
 /// that was called in tail position.
 pub fn returnAll(l: *Thread, stop: usize, ins_word: usize) callconv(jit.cc) usize {
     const ins: u32 = @truncate(ins_word);
+    var root: jit.StepRoot = undefined;
+    jit.rootStep(l, &root);
+    defer jit.unrootStep(l, &root);
     const func = l.frame().base + opc.a(ins);
     return interp.returnStep(l, func, l.top - func, stop) catch |e| {
         l.meta_finish = null;

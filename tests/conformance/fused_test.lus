@@ -257,7 +257,18 @@ local function hooks_see_each_instruction_of_a_pair_test()
     assert(#lines >= 3)
 end
 
+-- A binary chunk loads only with the `bytecode` permission, which the
+-- command line grants, as in `lus test -P bytecode`.
+local has_bytecode = (catch load(string.dump(function()
+end)))
+
+local needs_bytecode = "needs the bytecode permission, granted with -P bytecode"
+
 local function fused_code_survives_a_binary_chunk_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local src = [[
         local base = 100
         local function f(n)

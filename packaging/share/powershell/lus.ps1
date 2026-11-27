@@ -42,6 +42,7 @@ $lusCommands = [ordered]@{
             @{ Names = @('-v'); Summary = 'list the skipped tests of passing files too'; Value = $null }
             @{ Names = @('--json'); Summary = 'print one JSON record per test'; Value = $null }
             @{ Names = @('--jobs'); Summary = 'run at most N files at once'; Value = @{ Kind = 'number'; Values = @() } }
+            @{ Names = @('-P', '--pledge'); Summary = 'grant a permission to every test file'; Value = @{ Kind = 'permission'; Values = @('fs', 'fs:read', 'fs:write', 'fs:exec', 'network', 'network:tcp', 'network:udp', 'network:http', 'network:tls', 'network:server', 'exec', 'env', 'env:read', 'env:write', 'load', 'ffi', 'worker', 'debug') } }
             @{ Names = @('--timeout'); Summary = 'stop a file that writes no output for S seconds (default 60)'; Value = @{ Kind = 'number'; Values = @() } }
             @{ Names = @('--file-timeout'); Summary = 'stop a file that runs longer than S seconds in all'; Value = @{ Kind = 'number'; Values = @() } }
             @{ Names = @('-h', '--help'); Summary = 'print this help and exit'; Value = $null }

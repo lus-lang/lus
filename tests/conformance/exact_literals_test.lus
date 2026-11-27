@@ -144,7 +144,18 @@ end
 
 -- Group: literals in compiled code
 
+-- A binary chunk loads only with the `bytecode` permission, which the
+-- command line grants, as in `lus test -P bytecode`.
+local has_bytecode = (catch load(string.dump(function()
+end)))
+
+local needs_bytecode = "needs the bytecode permission, granted with -P bytecode"
+
 local function literals_survive_a_binary_chunk_round_trip_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local f = assert(load("return 1.50d, 0xffn, 12345678901234567890123n, 1e-2d, -7n"))
     local g = assert(load(string.dump(f)))
     local a, b, c, d, e = g()

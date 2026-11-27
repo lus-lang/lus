@@ -1186,6 +1186,14 @@ fn MarkerOf(comptime par: bool) type {
             // So do the coroutines that the scheduler runs.
             @import("sched.zig").markRoots(g, m);
             @import("context.zig").markRoots(g, m);
+            // So do the functions whose native code waits for a routine
+            // to return.
+            if (@hasField(@TypeOf(g.jit), "step_roots")) {
+                var node = g.jit.step_roots;
+                while (node) |n| : (node = n.prev) {
+                    if (n.closure) |cl| m.markObject(&cl.hdr);
+                }
+            }
         }
 
         /// Traces the gray stack until it is empty, on several threads

@@ -965,15 +965,20 @@ fn closeDb(g: *state.Global, d: *Db) void {
 // Opening and closing
 
 /// Denies ATTACH with a filename, which also covers the VACUUM INTO target.
-/// Both would open files the pledge checks never saw. A nameless attach is
-/// how plain VACUUM builds its temp database, which SQLITE_TEMP_STORE=3
-/// keeps in memory, so it stays allowed.
+/// Both would open files the pledge checks never saw. SQLite passes the
+/// filename only when it is a literal, so an attach whose filename is a
+/// parameter or an expression is denied as well. An attach of the empty
+/// literal is how plain VACUUM builds its temp database, which
+/// SQLITE_TEMP_STORE=3 keeps in memory, so it stays allowed.
 fn authorizer(ud: ?*anyopaque, action: c_int, a3: ?[*:0]const u8, a4: ?[*:0]const u8, a5: ?[*:0]const u8, a6: ?[*:0]const u8) callconv(.c) c_int {
     _ = ud;
     _ = a4;
     _ = a5;
     _ = a6;
-    if (action == c.ATTACH) if (a3) |name| if (name[0] != 0) return c.DENY;
+    if (action == c.ATTACH) {
+        const name = a3 orelse return c.DENY;
+        if (name[0] != 0) return c.DENY;
+    }
     if (action == c.PRAGMA) if (a3) |name| {
         for ([_][*:0]const u8{ "data_store_directory", "temp_store_directory", "lock_proxy_file" }) |p| {
             if (c.sqlite3_stricmp(name, p) == 0) return c.DENY;
@@ -1006,9 +1011,9 @@ fn ioSqlite(l: *Thread) Error!u32 {
     const d = ud.p;
     d.* = .{ .db = null, .vfs = null, .readonly = readonly };
     ud.v.as(Userdata).userValues()[0] = Value.obj(.thread, l);
-    if (!in_memory) {
-        d.vfs = createVfs(l, readonly) orelse return l.raiseFmt("cannot create pledge-aware SQLite VFS", .{});
-    }
+    // A database in memory gets the VFS too, so any file that SQLite opens
+    // for it meets the pledge checks.
+    d.vfs = createVfs(l, readonly) orelse return l.raiseFmt("cannot create pledge-aware SQLite VFS", .{});
     const zpath = l.g.gpa.dupeSentinel(u8, path, 0) catch return l.raiseMem();
     defer l.g.gpa.free(zpath);
     const flags: c_int = if (readonly) c.OPEN_READONLY else c.OPEN_READWRITE | c.OPEN_CREATE;

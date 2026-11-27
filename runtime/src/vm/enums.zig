@@ -30,6 +30,9 @@ pub fn enumMember(l: *Thread, root: *object.EnumRoot, idx: usize) Error!*object.
 }
 
 fn enumIndex(l: *Thread) Error!u32 {
+    // A script reaches this native through the metatable and calls it
+    // with any value.
+    if (l.arg(1).tag != .enum_value) return l.raiseFmt("bad argument #1 (enum expected, got {s})", .{l.typeNameOf(l.arg(1))});
     const e = l.arg(1).as(object.EnumValue);
     const k = l.arg(2);
     const root = e.root;
@@ -78,6 +81,7 @@ fn enumLe(l: *Thread) Error!u32 {
 }
 
 fn enumToString(l: *Thread) Error!u32 {
+    if (l.arg(1).tag != .enum_value) return l.raiseFmt("bad argument #1 (enum expected, got {s})", .{l.typeNameOf(l.arg(1))});
     const e = l.arg(1).as(object.EnumValue);
     try l.push(Value.obj(.string, e.root.names[e.index]));
     return 1;

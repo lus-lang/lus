@@ -241,7 +241,18 @@ fn spawn(l: *Thread) Error!u32 {
     const resolved = findProgram(gpa, io, name, cwd, path_env, pathext) catch return l.raiseMem();
     defer if (resolved) |r| gpa.free(r);
     {
-        const req = pledge.programRequest(gpa, if (hasSep(name)) null else name, resolved orelse "") catch return l.raiseMem();
+        // A permission by name covers the program that the name resolves
+        // to through the `PATH` the state started with. A `PATH` that the
+        // script chose reaches the child and decides nothing here.
+        // A name that resolves to nothing runs nothing, so it keeps the
+        // answer its permission gives.
+        var by_name = !hasSep(name);
+        if (by_name) if (resolved) |r| {
+            const trusted = findProgram(gpa, io, name, null, os_lib.startupPath(l), pathext) catch return l.raiseMem();
+            defer if (trusted) |t| gpa.free(t);
+            by_name = if (trusted) |t| std.mem.eql(u8, t, r) else false;
+        };
+        const req = pledge.programRequest(gpa, if (by_name) name else null, resolved orelse "") catch return l.raiseMem();
         defer gpa.free(req);
         if (!pledge.allowed(l, "exec", req)) return l.raiseFmt("permission \"exec\" denied for '{s}'", .{name});
     }

@@ -20,11 +20,11 @@ dir = "runtime"
 run = [
   "zig build -j2 test test-embed test-bundle test-check test-doc test-debug test-version test-remote test-cli -Doptimize=ReleaseSafe",
   "zig build -j2 -Doptimize=ReleaseSafe",
-  "zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_JIT=off zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_JIT=eager zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "LUS_JIT=opt-eager zig-out/bin/lus test ../tests/conformance ../packages/language-server/tests",
-  "zig-out/bin/lus test --doc ../packages/site/src/manual ../spec ../.agents",
+  "zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=off zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=eager zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
+  "LUS_JIT=opt-eager zig-out/bin/lus test -P bytecode ../tests/conformance ../packages/language-server/tests",
+  "zig-out/bin/lus test --doc -P bytecode ../packages/site/src/manual ../spec ../.agents",
 ]
 
 [tasks."test:linux"]

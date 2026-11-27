@@ -1058,7 +1058,17 @@ pub const Codegen = struct {
 
     /// The moves that fill the phis of `to` on the edge from `from`.
     fn phiMoves(c: *Codegen, from: BlockId, to: BlockId) void {
-        var buf: [64]Move = undefined;
+        // Every move of the edge belongs to one parallel move, because the
+        // register of one phi may hold the incoming value of another.
+        var count: usize = 0;
+        for (c.f.blocks.items[to].insts.items) |r| {
+            if (c.f.at(r).op != .phi) break;
+            count += 1;
+        }
+        const buf = c.arena.alloc(Move, count) catch {
+            c.em.oom = true;
+            return;
+        };
         var n: usize = 0;
         for (c.f.blocks.items[to].insts.items) |r| {
             const p = c.f.at(r);
@@ -1066,10 +1076,6 @@ pub const Codegen = struct {
             if (c.ra.loc[r] == .none) continue;
             for (c.f.phi_args.items[p.a..][0..p.b]) |arg| {
                 if (arg.pred != from) continue;
-                if (n == buf.len) {
-                    c.parallel(buf[0..n]);
-                    n = 0;
-                }
                 buf[n] = .{ .dst = c.place(r), .src = c.place(arg.ref), .float = p.ty == .float };
                 n += 1;
                 break;

@@ -820,7 +820,10 @@ fn reduce(l: *Thread) Error!u32 {
     var i = start;
     while (i <= len) : (i += 1) {
         const elem = try geti(l, t, i);
-        l.stack[acc] = try ops.call1(l, f, &.{ l.stack[acc], elem, Value.int(i) });
+        // The callback can grow the stack, so the slot is addressed after
+        // the call returns.
+        const r = try ops.call1(l, f, &.{ l.stack[acc], elem, Value.int(i) });
+        l.stack[acc] = r;
     }
     return 1;
 }

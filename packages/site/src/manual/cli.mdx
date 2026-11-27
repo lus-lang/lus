@@ -99,6 +99,7 @@ Runs the tests in the named files, or in every `*_test.lus` file inside the name
 | `-v` | List the skipped tests of passing files too. |
 | `--json` | Print one JSON record per test, for other tools to read. |
 | `--jobs N` | Run at most N files at once. The default is the number of processors, or 1 with `--bench`. |
+| `-P perm`, `--pledge perm` | Grant a permission to every test file, as `-P` does for a script. Repeat the option for several permissions. |
 | `--timeout S` | Stop a file that writes no output for S seconds. The default is 60. |
 | `--file-timeout S` | Stop a file that runs longer than S seconds in all. The default is ten times the timeout. |
 
@@ -190,7 +191,7 @@ Bundles a script and the modules it requires into one executable, which runs on 
 lus compile [options] script
 ```
 
-Compiles a script to a binary chunk, which `lus` runs as it runs a script and `load` reads in binary mode. Loading a binary chunk skips parsing. A binary chunk can be distributed without its source. The default output is the script name with the extension `.lusc`. [Binary chunks](/manual/tools#binary-chunks) describes the format.
+Compiles a script to a binary chunk, which `lus` runs as it runs a script and `load` reads in binary mode under the `bytecode` [permission](/manual/permissions). Loading a binary chunk skips parsing. A binary chunk can be distributed without its source. The default output is the script name with the extension `.lusc`. [Binary chunks](/manual/tools#binary-chunks) describes the format.
 
 | Option | Effect |
 | --- | --- |

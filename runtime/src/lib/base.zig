@@ -230,6 +230,7 @@ pub fn registerFinalizer(l: *Thread, h: *gc.Header, mt: *Table) Error!void {
     if (state.tmLookup(l.g, mt, .gc).isNil()) return;
     h.finalize = .pending;
     l.g.finobj.append(l.g.gpa, h) catch return l.raiseMem();
+    try @import("../vm/pledge.zig").noteFinalizer(l, h);
 }
 
 fn rawequal(l: *Thread) Error!u32 {
@@ -439,6 +440,11 @@ pub fn runFinalizers(l: *Thread) Error!void {
         // The object is an ordinary object again: setting a metatable with
         // __gc inside its finalizer registers it for one more round.
         h.finalize = .none;
+        // The finalizer runs with the permissions of the thread that
+        // registered it.
+        const pledge = @import("../vm/pledge.zig");
+        const scope = pledge.beginFinalizer(l, h);
+        defer pledge.endFinalizer(l, scope);
         const v = switch (h.tag) {
             .table => Value.obj(.table, h),
             .userdata => Value.obj(.userdata, h),
@@ -554,11 +560,33 @@ pub fn readFile(l: *Thread, path: []const u8) Error![]u8 {
     };
 }
 
+/// Whether `src` is a binary chunk.
+pub fn isBinaryChunk(src: []const u8) bool {
+    return @import("../compile/dump.zig").isBinary(src);
+}
+
+/// Whether `l` may hand the binary chunk `src` to the loader. The loader
+/// trusts a binary chunk as it trusts the compiler, so a script loads one
+/// only with the `bytecode` permission, which the host alone grants.
+pub fn mayLoadBinary(l: *Thread) bool {
+    const pledge = @import("../vm/pledge.zig");
+    return pledge.allowed(l, pledge.bytecode, null);
+}
+
+/// Raises the permission error when `src` is a binary chunk that `l` may
+/// not load.
+pub fn requireBytecode(l: *Thread, src: []const u8) Error!void {
+    if (!isBinaryChunk(src)) return;
+    const pledge = @import("../vm/pledge.zig");
+    try pledge.require(l, pledge.bytecode, null);
+}
+
 /// Checks a chunk against a load mode such as "b", "t", or "bt". When
 /// the mode rejects the chunk, pushes the conventional failure and
-/// returns true.
+/// returns true. A binary chunk also needs the `bytecode` permission.
 fn modeRejects(l: *Thread, src: []const u8, mode: []const u8) Error!bool {
-    const binary = @import("../compile/dump.zig").isBinary(src);
+    const binary = isBinaryChunk(src);
+    if (binary) try requireBytecode(l, src);
     const want: u8 = if (binary) 'b' else 't';
     if (std.mem.indexOfScalar(u8, mode, want) != null) return false;
     const msg = std.fmt.allocPrint(l.g.gpa, "attempt to load a {s} chunk (mode is '{s}')", .{ if (binary) "binary" else "text", mode }) catch return l.raiseMem();
@@ -607,6 +635,7 @@ fn dofile(l: *Thread) Error!u32 {
     const name = std.fmt.allocPrint(l.g.gpa, "@{s}", .{path}) catch return l.raiseMem();
     defer l.g.gpa.free(name);
     const base = l.top;
+    try requireBytecode(l, src);
     api.load(l, src, name) catch return l.raise(l.stack[l.top - 1]);
     _ = try interp.call(l, base, 0, -1);
     return l.top - base;

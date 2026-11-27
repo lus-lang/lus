@@ -74,7 +74,18 @@ local function binary_error(err)
     return err == "bad binary format (truncated or corrupted chunk)"
 end
 
+-- A binary chunk loads only with the `bytecode` permission, which the
+-- command line grants, as in `lus test -P bytecode`.
+local has_bytecode = (catch load(string.dump(function()
+end)))
+
+local needs_bytecode = "needs the bytecode permission, granted with -P bytecode"
+
 local function every_sample_round_trips_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     assert(load(string.dump(sample_plain))() == 2.5)
     assert(type(load(string.dump(sample_enum))()) == type(sample_enum()))
     local G = load(string.dump(sample_meta))()
@@ -88,6 +99,10 @@ local function every_sample_round_trips_test()
 end
 
 local function every_truncation_is_a_clean_error_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     for _, f in ipairs(samples) do
         for _, strip in ipairs{ false, true } do
             local v = string.dump(f, strip)
@@ -102,6 +117,10 @@ local function every_truncation_is_a_clean_error_test()
 end
 
 local function bit_flips_never_crash_the_loader_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local rejected = 0
 
     for _, f in ipairs(samples) do
@@ -125,6 +144,10 @@ local function bit_flips_never_crash_the_loader_test()
 end
 
 local function an_extra_byte_after_the_chunk_is_an_error_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local v = string.dump(sample_plain)
     local w = vector.clone(v)
     vector.resize(w, #v + 1)
@@ -139,6 +162,10 @@ end
 local header = 8
 
 local function an_overlong_count_is_an_error_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local w = prefix(string.dump(sample_enum), header)
     vector.resize(w, header + 12)
 
@@ -151,6 +178,10 @@ local function an_overlong_count_is_an_error_test()
 end
 
 local function an_unknown_version_or_size_is_an_error_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local v = string.dump(sample_enum)
 
     for _, version in ipairs{ 0, 3, 7, 255 } do
@@ -205,6 +236,10 @@ local function plan_bounds(v)
 end
 
 local function a_damaged_query_plan_raises_an_error_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local v = string.dump(query_maker)
     local start, len = plan_bounds(v)
     assert(start and len > 20, "found no plan")
@@ -261,6 +296,10 @@ end
 -- A plan one or more bytes shorter, or longer, ends early or carries
 -- bytes after its end. The length before the plan names the new size.
 local function a_shortened_or_lengthened_query_plan_raises_an_error_test()
+    if not has_bytecode then
+        skip(needs_bytecode)
+    end
+
     local v = string.dump(query_maker)
     local start, len = plan_bounds(v)
     assert(len < 126, "the plan needs a one-byte length")

@@ -33,3 +33,5 @@ fs.remove(path)
 ```
 
 The chunk name is `@` followed by `filename`, so errors inside the chunk name the file. [`loadfile`](/manual/api#loadfile) compiles a file without running it and returns failures as values, and [`require`](/manual/api#require) loads a module once and caches it.
+
+A file that holds a binary chunk also requires the `bytecode` permission, which only the command line grants.

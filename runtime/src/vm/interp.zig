@@ -174,7 +174,10 @@ pub fn precall(l: *Thread, func: u32, nargs: u32, want: i32) (Error || YieldErro
                 const cl = callee.as(Closure);
                 const p = cl.proto;
                 const np: u32 = p.num_params;
-                try l.ensure(@as(usize, p.max_stack) + n + 8);
+                // A vararg function moves itself and its parameters above the
+                // arguments, so the frame starts after whichever of the two
+                // counts is larger.
+                try l.ensure(@as(usize, p.max_stack) + @max(n, np) + @as(usize, if (p.is_vararg) np + 1 else 0) + 8);
                 // Missing fixed parameters become nil.
                 var top = f + 1 + n;
                 while (n < np) : (n += 1) {
@@ -1201,7 +1204,7 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
                 }
             } else {
                 c.fr.pc = pc;
-                const more = try exactForStep(l, r);
+                const more = try exactForStep(l, c.fr.base + opc.a(ins));
                 c.refresh(l, mode);
                 if (more) {
                     pc -= opc.bx(ins);
@@ -2404,12 +2407,15 @@ fn exactPast(l: *Thread, v: Value, limit: Value, ascending: bool) Error!bool {
 }
 
 /// One step of an exact numeric loop. Returns true when the loop goes on.
-noinline fn exactForStep(l: *Thread, r: [*]Value) Error!bool {
-    const next = try ops.arith(l, .add, r[0], r[2]);
-    const ascending = (@import("numeric.zig").compare(l.g.gpa, r[2], Value.int(0)) orelse .gt) == .gt;
-    if (try exactPast(l, next, r[1], ascending)) return false;
-    r[0] = next;
-    r[3] = next;
+/// `at` is the stack index of the loop registers. The addition can run a
+/// metamethod that grows the stack, so the registers are addressed by
+/// index after it.
+noinline fn exactForStep(l: *Thread, at: u32) Error!bool {
+    const next = try ops.arith(l, .add, l.stack[at], l.stack[at + 2]);
+    const ascending = (@import("numeric.zig").compare(l.g.gpa, l.stack[at + 2], Value.int(0)) orelse .gt) == .gt;
+    if (try exactPast(l, next, l.stack[at + 1], ascending)) return false;
+    l.stack[at] = next;
+    l.stack[at + 3] = next;
     return true;
 }
 
