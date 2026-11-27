@@ -74,7 +74,9 @@ pub fn sameHost(from: std.Uri, to: std.Uri) bool {
     var b: [256]u8 = undefined;
     const ha = hostOf(from, &a) orelse return false;
     const hb = hostOf(to, &b) orelse return false;
-    return std.ascii.eqlIgnoreCase(ha, hb) and from.port == to.port;
+    // A host over another scheme is another place: a redirect from
+    // `https` to `http` would drop the protection of the first.
+    return std.ascii.eqlIgnoreCase(ha, hb) and from.port == to.port and std.ascii.eqlIgnoreCase(from.scheme, to.scheme);
 }
 
 /// The host of `uri` without percent encoding, or null.
@@ -168,16 +170,19 @@ pub const Client = struct {
                     out.cache_control = try gpa.dupe(u8, h.value);
                 }
             }
-            var body: std.Io.Writer.Allocating = .init(gpa);
-            defer body.deinit();
             var transfer: [64]u8 = undefined;
             const r = resp.reader(&transfer);
-            _ = r.streamRemaining(&body.writer) catch |e| switch (e) {
-                error.WriteFailed => return error.OutOfMemory,
-                error.ReadFailed => return error.Network,
+            // The limit applies while the body arrives, so a server
+            // cannot fill memory with a body that is refused afterwards.
+            out.body = r.allocRemaining(gpa, .limited(opts.max_body +| 1)) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.StreamTooLong => return error.TooLarge,
+                else => return error.Network,
             };
-            if (body.written().len > opts.max_body) return error.TooLarge;
-            out.body = try body.toOwnedSlice();
+            if (out.body.len > opts.max_body) {
+                gpa.free(out.body);
+                return error.TooLarge;
+            }
             return out;
         }
     }

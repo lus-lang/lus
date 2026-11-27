@@ -382,7 +382,12 @@ fn setmetatable(l: *Thread) Error!u32 {
         .userdata => v.as(object.Userdata).metatable = mt,
         else => l.g.type_metatables[value.typeSlot(v.tag)] = mt,
     }
-    if (v.tag == .table or v.tag == .userdata) gc.barrierBack(l.g, v.header());
+    if (v.tag == .table or v.tag == .userdata) {
+        gc.barrierBack(l.g, v.header());
+        // A metatable with `__gc` registers the finalizer, as
+        // `setmetatable` does.
+        if (mt) |m| try @import("base.zig").registerFinalizer(l, v.header(), m);
+    }
     return aux.ret(l, v);
 }
 
