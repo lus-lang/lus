@@ -521,8 +521,10 @@ fn pKill(l: *Thread) Error!u32 {
 }
 
 fn pIndex(l: *Thread) Error!u32 {
+    // The metamethod is reachable as a plain function, so it checks its
+    // receiver as any method does.
+    const p = try checkProcess(l, 1);
     const u = l.arg(1).as(Userdata);
-    const p: *Process = @ptrCast(@alignCast(u.data()));
     const k = l.arg(2);
     if (k.tag == .string) {
         const s = k.as(String).bytes();

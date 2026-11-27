@@ -218,12 +218,12 @@ end
 
 -- ---- debug.setuservalue ----
 
-local function setuservalue_returns_fail_when_the_slot_is_out_of_range_test()
+local function setuservalue_leaves_an_object_of_the_runtime_test()
     local f = open_fixture()
-    -- The io file has zero slots, so writing slot 1 fails.
-    local res = debug.setuservalue(f, "x", 1)
+    -- A file belongs to the runtime, which keeps its user values.
+    local ok, err = catch debug.setuservalue(f, "x", 1)
     f:close()
-    assert(res == nil)
+    assert(not ok and tostring(err):find("keeps its user values", 1, true), tostring(err))
 end
 
 local function setuservalue_raises_when_the_first_argument_is_not_full_user_test()

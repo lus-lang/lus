@@ -805,7 +805,7 @@ pub fn pushStatus(l: *Thread, status: shell.Status) Error!u32 {
 
 fn ioClose(l: *Thread) Error!u32 {
     if (!l.hasArg(1)) {
-        const h = toHandle(l, try getDefault(l, "io.output")).?;
+        const h = toHandle(l, try getDefault(l, "io.output")) orelse return l.raiseFmt("default output file is closed", .{});
         return closeHandle(l, h);
     }
     return closeHandle(l, try checkHandle(l, 1));
@@ -845,7 +845,7 @@ fn ioType(l: *Thread) Error!u32 {
 
 fn ioRead(l: *Thread) Error!u32 {
     const v = try getDefault(l, "io.input");
-    const h = toHandle(l, v).?;
+    const h = toHandle(l, v) orelse return l.raiseFmt("default input file is closed", .{});
     if (h.closed) return l.raiseFmt("default input file is closed", .{});
     return doRead(l, h, 1);
 }
@@ -856,7 +856,7 @@ fn fRead(l: *Thread) Error!u32 {
 
 fn ioWrite(l: *Thread) Error!u32 {
     const v = try getDefault(l, "io.output");
-    const h = toHandle(l, v).?;
+    const h = toHandle(l, v) orelse return l.raiseFmt("default output file is closed", .{});
     if (h.closed) return l.raiseFmt("default output file is closed", .{});
     return doWrite(l, h, 1, v);
 }
@@ -910,7 +910,7 @@ pub fn syncFile(io: std.Io, file: std.Io.File) !void {
 /// io.flush(): flushes the default output file and returns true.
 fn ioFlush(l: *Thread) Error!u32 {
     const v = try getDefault(l, "io.output");
-    const h = toHandle(l, v).?;
+    const h = toHandle(l, v) orelse return l.raiseFmt("default output file is closed", .{});
     if (h.closed) return l.raiseFmt("default output file is closed", .{});
     if (flush(l.g, h)) |e| return ioFail(l, e);
     return aux.retBool(l, true);

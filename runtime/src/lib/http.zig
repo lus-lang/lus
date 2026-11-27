@@ -668,6 +668,7 @@ pub fn registerLines(l: *Thread) Error!void {
     defer l.top -= 1;
     if (aux.guarded(.methods, "network:" ++ lines_name, "__gc", "gc", linesGc)) |f| try aux.setField(l, mt, "__gc", try aux.native(l, f, "gc"));
     try aux.setField(l, mt, "__name", try l.newStringValue(lines_name));
+    try aux.lockMetatable(l, mt);
     try aux.setField(l, g.registry.as(Table), lines_name, Value.obj(.table, mt));
     g.ext.put(g.gpa, lines_name, mt) catch return l.raiseMem();
 }

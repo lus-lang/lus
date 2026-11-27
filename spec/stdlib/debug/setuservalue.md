@@ -25,14 +25,12 @@ Stores a value in a user value slot of a full userdata and returns the userdata,
 
 If `u` has a slot at index `n`, the function stores `value` there and returns `u`. Otherwise it changes nothing and returns `nil`. A `u` that is not a full userdata raises `bad argument #1 to 'setuservalue' (userdata expected)`. A missing `value` raises `bad argument #2 to 'setuservalue' (value expected)`, so storing `nil` takes an explicit `nil`.
 
-The following example stores a value in a slot that exists and in one that does not. A file handle has no slots, and a named zone has one.
+The objects that the runtime makes, such as files, sockets, databases, and zoned times, keep in their slots what they depend on. A `u` of the runtime raises `bad argument #1 to 'setuservalue' (an object of the runtime keeps its user values)`, so the function stores into the userdata of a host program only.
+
+The following example shows the error for a file handle.
 
 ```lus
-print(debug.setuservalue(io.stdout, "tag"))  --> nil
-local paris = time.zone("Europe/Paris")
-print(debug.setuservalue(paris, "Paris") == paris)  --> true
-print(debug.getuservalue(paris))  --> Paris  true
-print(paris:name())  --> Paris
+print((catch debug.setuservalue(io.stdout, "tag")))  --> false
 ```
 
-The library types read their own slots, so a store changes their behavior. A zoned value keeps its zone in its slot, and replacing it with any value other than a zone breaks every later operation on that zoned value. [`debug.getuservalue`](/manual/api#debug.getuservalue) reads a slot.
+[`debug.getuservalue`](/manual/api#debug.getuservalue) reads a slot.

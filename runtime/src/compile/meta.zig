@@ -142,7 +142,9 @@ pub fn open(g: *Global, flags: ?*const FlagsMap, grants: Grants) OpenError!*Meta
     if (can_interrupt) {
         const aux = @import("../lib/auxlib.zig");
         aux.setGlobal(l, "__lus_meta_interrupted", aux.native(l, interruptedNative, "interrupted") catch return error.MetaSetup) catch return error.MetaSetup;
-        const hook = "debug.sethook(function() if __lus_meta_interrupted() then error('interrupted', 2) end end, '', 100000)";
+        // The hook is set while the state still pledges freely. The
+        // permissions of the evaluation replace this set below.
+        const hook = "pledge('debug') debug.sethook(function() if __lus_meta_interrupted() then error('interrupted', 2) end end, '', 100000)";
         if (api.doString(l, hook, "=meta") != null) return error.MetaSetup;
         watchInterrupts();
     }

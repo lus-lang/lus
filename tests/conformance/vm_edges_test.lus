@@ -10,6 +10,8 @@
     runs.
 ]]
 
+pledge("debug")
+
 local function false_and_nil_need_no_close_test()
     local closed = 0
 

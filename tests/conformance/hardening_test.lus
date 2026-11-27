@@ -1081,3 +1081,32 @@ local function a_url_under_a_path_grant_holds_no_other_separator_test()
         assert(r, i)
     end
 end
+
+local function debug_leaves_runtime_objects_as_they_are_test()
+    local db = io.sqlite(":memory:")
+    local other = setmetatable({}, {})
+    assert(not (catch debug.setmetatable(db, getmetatable(other))))
+    assert(not (catch debug.setmetatable(io.stdout, {})))
+    assert(not (catch debug.setmetatable(other, debug.getmetatable(io.stdout))))
+    assert(not (catch debug.setuservalue(db, {}, 1)))
+    db:close()
+end
+
+local function debug_is_a_permission_to_pledge_test()
+    local exe = os.getenv("LUS_EXE")
+
+    if not exe then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local script = io.open("nodebug.lus", "w")
+
+    script:write([[print((catch debug.getregistry()))
+print(type(debug.traceback()))
+print(pledge("debug"))
+print((catch debug.getregistry()))]])
+
+    script:close()
+    local out = os.spawn({ exe, "nodebug.lus" }, { stdout = "pipe" }).stdout:read("a")
+    assert(out == "false\nstring\ntrue\ntrue\n", out)
+end

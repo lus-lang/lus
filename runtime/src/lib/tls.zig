@@ -699,6 +699,7 @@ fn serverCache(l: *Thread) Error!*Table {
     try l.push(Value.obj(.table, mt));
     try aux.setField(l, mt, "__gc", try aux.native(l, configGc, "gc"));
     try aux.setField(l, mt, "__name", try l.newStringValue(config_name));
+    try aux.lockMetatable(l, mt);
     try aux.setField(l, g.registry.as(Table), config_name, Value.obj(.table, mt));
     g.ext.put(g.gpa, config_name, mt) catch return l.raiseMem();
     l.top -= 1;

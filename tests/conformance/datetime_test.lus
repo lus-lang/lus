@@ -981,15 +981,14 @@ end
 -- a replaced user value reads as no zone
 -- ============================================================================
 
--- debug.setuservalue can replace the slot that holds the zone of a zoned
--- value. Anything but a zone then reads as no zone, and the value keeps
--- its fixed offset.
-local function a_replaced_zone_slot_reads_as_no_zone_test()
+-- The slot that holds the zone of a zoned value belongs to the runtime,
+-- so debug.setuservalue leaves it and the value keeps its zone.
+local function the_zone_slot_of_a_zoned_value_stays_test()
     local z = time.zoned(
         { year = 2026, month = 7, day = 2, hour = 9 },
         time.zone("America/New_York")
     )
-    debug.setuservalue(z, "not a zone")
+    assert(not (catch debug.setuservalue(z, "not a zone")))
     assert(z:iso() == "2026-07-02T09:00:00-04:00")
     assert(z:with({ hour = 10 }):iso() == "2026-07-02T10:00:00-04:00")
     assert(z:format("%Y %z") == "2026 -0400")

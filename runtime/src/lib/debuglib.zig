@@ -21,9 +21,9 @@ const gc = @import("../vm/gc.zig");
 
 /// The functions that reach the state of other functions, the registry,
 /// metatables, hooks, or user values need the `debug` permission, which a
-/// thread holds until its permission set first changes.
+/// program pledges or receives with `-P debug` like any other.
 fn requireDebug(l: *Thread, comptime name: []const u8) Error!void {
-    if (@import("../vm/pledge.zig").allowedUntouched(l, "debug")) return;
+    if (@import("../vm/pledge.zig").allowed(l, "debug", null)) return;
     return l.raiseFmt("permission \"debug\" denied for debug." ++ name, .{});
 }
 
@@ -358,12 +358,25 @@ fn getmetatable(l: *Thread) Error!u32 {
     return aux.ret(l, Value.obj(.table, mt));
 }
 
+/// Whether `mt` is a metatable that the runtime made for its own objects,
+/// which it closes with `__metatable = false`. A native trusts that an
+/// object with such a metatable has the memory layout of its type.
+fn ownedByRuntime(l: *Thread, mt: ?*Table) Error!bool {
+    const t = mt orelse return false;
+    return (try aux.getField(l, t, "__metatable")).tag == .false;
+}
+
 fn setmetatable(l: *Thread) Error!u32 {
     try requireDebug(l, "setmetatable");
     const v = l.arg(1);
     const mtv = l.arg(2);
     if (mtv.tag != .nil and mtv.tag != .table) return aux.typeError(l, 2, "nil or table");
     const mt: ?*Table = if (mtv.tag == .table) mtv.as(Table) else null;
+    // The metatable of a runtime object names its type, so no object
+    // gains or loses one.
+    if (try ownedByRuntime(l, mt)) return aux.argError(l, 2, "a metatable of the runtime belongs to its own objects", .{});
+    if (v.tag == .userdata and try ownedByRuntime(l, v.as(object.Userdata).metatable)) return aux.argError(l, 1, "an object of the runtime keeps its metatable", .{});
+    if (v.tag == .table and v.as(Table).isReadonly()) return l.raiseRun("attempt to modify a readonly table", .{});
     switch (v.tag) {
         .table => v.as(Table).metatable = mt,
         .userdata => v.as(object.Userdata).metatable = mt,
@@ -502,6 +515,8 @@ fn setuservalue(l: *Thread) Error!u32 {
     const n = try aux.optInt(l, 3, 1);
     if (l.arg(1).tag != .userdata) return aux.typeError(l, 1, "userdata");
     const v = try aux.checkAny(l, 2);
+    // The user values of a runtime object keep what it depends on alive.
+    if (try ownedByRuntime(l, l.arg(1).as(object.Userdata).metatable)) return aux.argError(l, 1, "an object of the runtime keeps its user values", .{});
     const vals = l.arg(1).as(object.Userdata).userValues();
     if (n < 1 or n > vals.len) return aux.retNil(l);
     vals[@intCast(n - 1)] = v;

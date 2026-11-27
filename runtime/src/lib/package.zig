@@ -629,6 +629,7 @@ fn require(l: *Thread) Error!u32 {
     const name = try aux.checkString(l, 1);
     const pkg = packageTable(l);
     const loaded_v = try aux.getField(l, l.g.registry.as(Table), "_LOADED");
+    if (loaded_v.tag != .table) return l.raiseFmt("the table of loaded modules is missing from the registry", .{});
     const loaded = loaded_v.as(Table);
     // A URL that `package.loaded` or `package.preload` holds under its
     // exact name loads from there, as any other name does, so a host or a

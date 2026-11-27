@@ -274,6 +274,7 @@ test "optimized code agrees with the interpreter and leaves through its guards" 
 
 test "direct calls agree with the interpreter and build their frames" {
     try expectSameOptimized(
+        \\pledge("debug")
         \\local out = {}
         \\local k = 1
         \\local function fib(n) if n < 2 then return n end return fib(n - 1) + fib(n - 2) end

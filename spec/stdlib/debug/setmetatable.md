@@ -36,3 +36,5 @@ print(catch (21):double())  --> false  ...: attempt to index a number value
 ```
 
 The metatable of a type is shared by every chunk in the state, including the standard library, so a change affects all code that runs afterwards. [`debug.getmetatable`](/manual/api#debug.getmetatable) reads a metatable without the protection.
+
+An object that the runtime made, such as a file, a socket, or a database, keeps its metatable, and a metatable of the runtime goes to no other object. Both raise a bad argument error. A read-only table raises `attempt to modify a readonly table`.
