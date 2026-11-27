@@ -824,32 +824,56 @@ pub fn normalizeKey(l: *Thread, k: Value) Error!Value {
     switch (k.tag) {
         .bigint => {
             if (bigToInt(k.as(BigInt))) |i| return Value.int(i);
-            return (try floatKey(l, k)) orelse k;
+            return exactFloat(k.as(BigInt).toConst()) orelse k;
         },
         .decimal => {
             var whole = decIntegral(l.g.gpa, k.as(Decimal)) catch return l.raiseMem();
             if (whole) |*m| {
                 defer m.deinit();
                 if (m.toConst().toInt(i64)) |i| return Value.int(i) else |_| {}
-                if (try floatKey(l, k)) |f| return f;
+                if (exactFloat(m.toConst())) |f| return f;
                 return Value.obj(.bigint, newBigFromConst(l.g, m.toConst()) catch return l.raiseMem());
             }
-            if (try floatKey(l, k)) |f| return f;
+            if (fractionFloat(l.g.gpa, k.as(Decimal)) catch return l.raiseMem()) |f| return f;
             return canonicalDecimal(l, k.as(Decimal));
         },
         else => return k,
     }
 }
 
-/// The float with exactly the value of the bigint or decimal `v`, or null
-/// when no float holds that value.
-fn floatKey(l: *Thread, v: Value) Error!?Value {
-    const f = toFloat(l.g.gpa, v);
-    if (!std.math.isFinite(f)) return null;
-    // Both sides are finite numbers, so only a failed allocation gives no
-    // order.
-    const order = compare(l.g.gpa, v, Value.float(f)) orelse return l.raiseMem();
-    return if (order == .eq) Value.float(f) else null;
+/// The float with exactly the value of the integer `c`, or null when no
+/// float holds that value.
+fn exactFloat(c: big.Const) ?Value {
+    const r = c.toFloat(f64, .nearest_even);
+    if (r[1] != .exact or !std.math.isFinite(r[0])) return null;
+    return Value.float(r[0]);
+}
+
+/// The float with exactly the value of the decimal `d`, which has a
+/// fraction, or null when no float holds that value. A float is a whole
+/// number over a power of two, so the coefficient must hold every factor
+/// of five of the power of ten that divides it.
+fn fractionFloat(gpa: Allocator, d: *const Decimal) Allocator.Error!?Value {
+    const k: u32 = @intCast(-@as(i64, d.exponent));
+    // No float has more than 1074 binary places.
+    if (k > 1074) return null;
+    var m = try d.coef().toManaged(gpa);
+    defer m.deinit();
+    var five = try M.initSet(gpa, 5);
+    defer five.deinit();
+    try five.pow(&five, k);
+    var q = try M.init(gpa);
+    defer q.deinit();
+    var r = try M.init(gpa);
+    defer r.deinit();
+    try M.divTrunc(&q, &r, &m, &five);
+    if (!r.eqlZero()) return null;
+    const whole = q.toConst().toFloat(f64, .nearest_even);
+    if (whole[1] != .exact) return null;
+    const f = std.math.ldexp(whole[0], -@as(i32, @intCast(k)));
+    // A result below the normal range may have lost bits.
+    if (!std.math.isNormal(f)) return null;
+    return Value.float(f);
 }
 
 /// Whether the coefficient of `d` ends in a zero digit.
