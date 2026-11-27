@@ -526,15 +526,26 @@ fn cloneDeep(l: *Thread, src: *Table, map_t: *Table, depth: u32) Error!*Table {
     const dst = try pushNewTable(l, src.asize, table.hashCount(src));
     const dst_slot = l.top - 1;
     try ops.rawSet(l, map_t, key, Value.obj(.table, dst));
-    var k: Value = .nil;
-    while (table.next(src, k) catch null) |kv| : (k = kv.key) {
+    // Cloning a nested table allocates, which may collect, and a weak
+    // `src` holds its pairs for nobody. The stack keeps the current key
+    // and value alive, and each clone stays on the stack above them until
+    // it is stored.
+    const key_slot = dst_slot + 1;
+    const val_slot = dst_slot + 2;
+    try l.push(.nil);
+    try l.push(.nil);
+    while (table.next(src, l.stack[key_slot]) catch null) |kv| {
+        l.stack[key_slot] = kv.key;
+        l.stack[val_slot] = kv.val;
         var nk = kv.key;
         var nv = kv.val;
         if (nk.tag == .table) nk = Value.obj(.table, try cloneDeep(l, nk.as(Table), map_t, depth + 1));
-        if (nv.tag == .table) nv = Value.obj(.table, try cloneDeep(l, nv.as(Table), map_t, depth + 1));
+        const v = l.stack[val_slot];
+        if (v.tag == .table) nv = Value.obj(.table, try cloneDeep(l, v.as(Table), map_t, depth + 1));
         try ops.rawSet(l, dst, nk, nv);
-        l.top = dst_slot + 1;
+        l.top = dst_slot + 3;
     }
+    l.top = dst_slot + 1;
     if (src.metatable) |mt| setMetatable(l, dst, mt);
     return dst;
 }

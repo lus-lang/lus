@@ -22,8 +22,10 @@ Starts a program without a shell and returns a process object, or `nil` and a me
 `options` is a table with these optional fields.
 
 - `stdin`, `stdout`, and `stderr` each name what the stream of the child is connected to. `"inherit"`, the default, gives the child the stream of the program. `"pipe"` connects the stream to a pipe whose other end is a field of the process object. `"null"` connects it to the null device. An open file from `io.open` connects it to that file. `stderr` also accepts `"stdout"`, which sends the errors of the child wherever its output goes, into the same pipe when `stdout` is `"pipe"`.
-- `env` is a table of strings that replaces the environment of the child. Without it the child receives the environment of the program, including the changes that `os.setenv` made.
-- `cwd` is the working directory of the child.
+- `env` is a table of strings that replaces the environment of the child. Each variable in it needs the `env:write` permission for its name. Without the option the child receives the environment of the program, including the changes that `os.setenv` made.
+- `cwd` is the working directory of the child, which needs the `fs:read` permission.
+
+A program that runs under an `exec` permission with a value receives the variables that make a loader, a shell, or a language runtime load code exactly as the program started with them. They include `PATH`, `ENV`, `BASH_ENV`, `IFS`, `PYTHONPATH`, `NODE_OPTIONS`, every name that begins with `LD_` or `DYLD_`, and the names of exported shell functions. When the environment of the child holds another value for one of them, `os.spawn` raises `permission "exec" denied for 'NAME': the permission names this program, and the variable 'VAR' changes what it runs`. An `exec` permission without a value sets no such limit.
 
 The process object has these fields and methods.
 

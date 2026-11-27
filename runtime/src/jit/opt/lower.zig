@@ -1914,11 +1914,13 @@ pub const Lower = struct {
             sample = a.vals[cs.n];
         } else {
             if (cs.n >= l.g.ctx.defaults.items.len) return false;
-            dep = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = arr, .imm = 0 });
+            const no_array = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = arr, .imm = 0 });
             const g = try b.load(th, @offsetOf(Thread, "g"), .int, ptr_size, .fixed, ir.none);
             const lay = sliceLayout(std.ArrayList(Value), "items");
-            const at: i32 = @offsetOf(state.Global, "ctx") + @offsetOf(context.Store, "defaults") + lay.ptr;
-            vals = try b.load(g, at, .int, ptr_size, .ctx, dep);
+            const defaults: i32 = @offsetOf(state.Global, "ctx") + @offsetOf(context.Store, "defaults");
+            const len = try b.load(g, defaults + lay.len, .int, ptr_size, .ctx, no_array);
+            dep = try b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.lo), .a = cs.slot, .b = len });
+            vals = try b.load(g, defaults + lay.ptr, .int, ptr_size, .ctx, dep);
             sample = l.g.ctx.defaults.items[cs.n];
         }
         const at = try b.pure(.{ .op = .addsh, .ty = .int, .a = vals, .b = cs.slot, .imm = 4 });
@@ -2072,7 +2074,21 @@ pub const Lower = struct {
     /// Guards that table `t` has the shape that its sample `st` has.
     fn shapeGuard(b: *Lower, t: Ref, st: *Table) Error!Ref {
         const used = try b.load(t, tl.hash_used, .int, 4, .tab_hash, ir.none);
+        if (b.l.g.jit.aot != null and st.isShaped()) {
+            const want = try b.shapeWord(table.shapeOf(st));
+            return b.guard(.{ .op = .guard, .cond = @backingInt(ir.Cond.eq), .a = used, .b = want });
+        }
         return b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = used, .imm = @intCast(st.hash_used) });
+    }
+
+    /// What `Table.hash_used` holds for a table of shape `sh`. The id of
+    /// a shape belongs to one process, so code compiled ahead of time
+    /// reads the word from the shape, whose address the loader finds
+    /// from its keys. The JIT writes the word as a constant.
+    fn shapeWord(b: *Lower, sh: *shape.Shape) Error!Ref {
+        if (b.l.g.jit.aot == null) return b.kint(sh.word);
+        const at = try b.kptr(.int, @intFromPtr(sh));
+        return b.load(at, @offsetOf(shape.Shape, "word"), .int, 4, .fixed, ir.none);
     }
 
     /// The slot `idx` of the shaped table `t`, whose shape is guarded by
@@ -2235,7 +2251,7 @@ pub const Lower = struct {
         } else {
             const m = try b.load(t.ref, tl.metatable, .table, ptr_size, .tab_meta, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = m, .imm = 0 });
-            _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = m, .imm = tl.tm_absent + il.absent_newindex / 8, .aux = @as(u64, il.absent_newindex % 8) | (1 << 8) });
+            _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = m, .imm = tl.tm_absent + il.absentByte(il.absent_newindex), .aux = @as(u64, il.absent_newindex % 8) | (1 << 8) });
         }
         return true;
     }
@@ -2318,7 +2334,7 @@ pub const Lower = struct {
         const hp = try b.load(t.ref, b.hash_ptr, .int, ptr_size, .tab_hash, sg);
         const cap = try b.load(hp, -1, .int, 1, .tab_hash, sg);
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.hi), .a = cap, .imm = sh.n, .c = sg });
-        _ = try b.store(t.ref, tl.hash_used, try b.kint(Table.shaped_bit | @as(u32, c.id)), 4, .tab_hash, false);
+        _ = try b.store(t.ref, tl.hash_used, try b.shapeWord(c), 4, .tab_hash, false);
         const n = try b.shapedSlot(t.ref, sh.n, sg);
         try b.storeRegNode(n.hp, n.val(), n.valTag(), rv, t.ref);
         b.clobber(.tab_absent);
@@ -2351,7 +2367,7 @@ pub const Lower = struct {
                 fz.nodes[fz.used] = sh.n;
                 fz.used += 1;
                 fz.shape = c;
-                _ = try b.emit(.{ .op = .store, .size = 4, .cls = .tab_hash, .a = fz.ref, .b = try b.kint(Table.shaped_bit | @as(u32, c.id)), .imm = tl.hash_used, .flags = .{ .fresh = true } });
+                _ = try b.emit(.{ .op = .store, .size = 4, .cls = .tab_hash, .a = fz.ref, .b = try b.shapeWord(c), .imm = tl.hash_used, .flags = .{ .fresh = true } });
             }
             try b.storeValueAt(fz.ref, slotDisp(fz.cap, slot.?), slotTagDisp(fz.cap, slot.?), 1, v, .node_val, true);
             _ = try b.emit(.{ .op = .barrier, .a = fz.ref, .b = v, .imm = @bitCast(@as(u64, @intFromPtr(key_str))) });
@@ -3198,7 +3214,7 @@ pub const Lower = struct {
                 .op = .callc,
                 .ty = .table,
                 .a = try b.kint(cap),
-                .b = try b.kint(shp.id),
+                .b = try b.shapeWord(shp),
                 .imm = @bitCast(@as(u64, @intFromPtr(&opt.rt.newShapedTable))),
                 .flags = .{ .thread = true },
             });
@@ -3358,6 +3374,22 @@ pub const Lower = struct {
                         other.ok = false;
                     }
                 }
+            }
+        }
+        // A register that holds a table of the group on one edge and
+        // another value on a second edge would merge the unallocated table
+        // with that value, so such a group is allocated on its edges.
+        for (groups.items) |*gr| {
+            if (!gr.ok) continue;
+            for (fr.regs, 0..) |_, i| {
+                const r: u32 = @intCast(i);
+                if (!live.has(r) or b.captured(r)) continue;
+                var holds = false;
+                var all = true;
+                for (incs, 0..) |inc, k| {
+                    if (inc.regs[i].val == gr.refs[k]) holds = true else all = false;
+                }
+                if (holds and !all) gr.ok = false;
             }
         }
         // Whatever stays outside a group is allocated on its edge.
@@ -4003,7 +4035,7 @@ pub const Lower = struct {
                 if (b.vobjs.items[vi0].mt != ir.none) return null;
                 try b.guardNative(ra, f);
                 var mt = try b.typed(a1 + 1, .table);
-                _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + bit0 / 8, .aux = @as(u64, bit0 % 8) | (1 << 8) });
+                _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + il.absentByte(bit0), .aux = @as(u64, bit0 % 8) | (1 << 8) });
                 // In a loop that carries such a table, the metatable is
                 // most often the one from the last iteration. Proving
                 // that makes it one value for the whole loop.
@@ -4027,7 +4059,7 @@ pub const Lower = struct {
             const ro = try b.load(t, tl.readonly, .int, 1, .tab_meta, ir.none);
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = ro, .imm = 0 });
             const bit: u8 = @backingInt(state.TM.gc);
-            _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + bit / 8, .aux = @as(u64, bit % 8) | (1 << 8) });
+            _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + il.absentByte(bit), .aux = @as(u64, bit % 8) | (1 << 8) });
             const is_fresh = if (b.fresh) |fz| fz.ref == t else false;
             _ = try b.store(t, tl.metatable, mt, ptr_size, .tab_meta, is_fresh);
             _ = try b.emit(.{ .op = .barrier, .a = t, .aux = 1 });

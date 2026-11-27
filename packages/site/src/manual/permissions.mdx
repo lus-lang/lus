@@ -165,6 +165,8 @@ print((catch os.setenv("PATH", "/tmp")))  --> false
 
 An `exec` value selects the programs that [`os.spawn`](/manual/api#os.spawn) may start. A value without a separator matches the name of the program as `os.spawn` receives it, so `exec=git` allows `os.spawn({"git", ...})`. A value with a separator is a path glob, which matches the absolute path that the name resolves to, like a [filesystem value](#filesystem-values). `exec=/usr/bin/**` allows every program in `/usr/bin`, whatever name started it. On Windows a path value also covers that path with one of the extensions `.com`, `.exe`, `.bat`, and `.cmd` added, as Windows adds them when it runs a program, so `exec=C:/tools/lus` allows `C:\tools\lus.exe`.
 
+A grant with a value covers the program as its host would run it. The `env` option of `os.spawn` needs `env:write` for each variable it sets, and the `cwd` option needs `fs:read` for the directory. The child of a grant with a value also receives every variable that makes a loader, a shell, or a language runtime load code, such as `PATH`, `LD_PRELOAD`, `BASH_ENV`, and `PYTHONPATH`, with the value it had when the program started, and `os.spawn` raises an error when the script changed one of them. A worker resolves a program name through the `PATH` that the program started with, as the main chunk does.
+
 `os.execute` and `io.popen` run the system shell, which can start any program, so a grant with a value never allows them. The following script may run `sort` and no shell command.
 
 ```lus

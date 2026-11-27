@@ -353,6 +353,10 @@ const Worker = struct {
     /// Set when `environ` is a copy that the worker owns, made because its
     /// creator changed its environment with `os.setenv`.
     environ_owned: bool = false,
+    /// The `PATH` that the creator started with, when the creator changed
+    /// its environment. A permission to run a program by name resolves
+    /// the name through it in the worker as well.
+    startup_path: ?*anyopaque = null,
     warn_on: bool = false,
     env_frozen: bool = false,
     pause: usize = 200,
@@ -378,6 +382,7 @@ const Worker = struct {
         gpa.free(w.flags);
         if (w.pledges) |p| pledge.discard(gpa, p);
         if (w.environ_owned) if (w.environ) |m| os.freeEnviron(m);
+        if (w.startup_path) |p| os.freeStartupPath(p);
         gpa.destroy(w);
     }
 };
@@ -602,6 +607,10 @@ fn run(w: *Worker, msg: *?[]u8, val: *?*Packet) void {
     if (w.environ_owned) {
         os.adoptEnviron(g, w.environ.?) catch return fail(msg, gpa, "failed to create worker state");
         w.environ_owned = false;
+    }
+    if (w.startup_path) |p| {
+        os.adoptStartupPath(g, p) catch return fail(msg, gpa, "failed to create worker state");
+        w.startup_path = null;
     }
     g.warn_on = w.warn_on;
     g.pause = w.pause;
@@ -832,6 +841,7 @@ fn create(l: *Thread) Error!u32 {
         w.environ = os.copyEnviron(g) catch return l.raiseMem();
         w.environ_owned = true;
     } else w.environ = g.environ;
+    w.startup_path = os.copyStartupPath(l) catch return l.raiseMem();
     w.warn_on = g.warn_on;
     w.env_frozen = g.env_frozen;
     w.pause = g.pause;

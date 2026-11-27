@@ -1940,6 +1940,13 @@ pub const layout = struct {
     /// Bits of `Table.tm_absent`.
     pub const absent_index: u4 = @backingInt(state.TM.index);
     pub const absent_newindex: u4 = @backingInt(state.TM.newindex);
+    /// The byte of `Table.tm_absent`, counted from the start of the field,
+    /// that holds bit `bit`. The field is two bytes wide, and native code
+    /// tests one bit of one byte.
+    pub inline fn absentByte(bit: u32) i32 {
+        const low: i32 = @intCast(bit / 8);
+        return if (@import("builtin").cpu.arch.endian() == .little) low else 1 - low;
+    }
 
     comptime {
         std.debug.assert(@FieldType(object.IcEntry, "own") == u16);

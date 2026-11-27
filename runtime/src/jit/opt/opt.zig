@@ -1101,7 +1101,9 @@ pub const rt = struct {
     /// shape `id` and `cap` empty slots in its cell, which the code then
     /// fills. Its constructor already counted the table as sunk.
     pub fn newShapedTable(lw: u64, cap: u64, id: u64) callconv(jit.cc) u64 {
-        return @intFromPtr(shapedTable(jit.fromWide(*Thread, lw), @intCast(cap), @intCast(id)));
+        // `id` is the word of the shape, which holds its id below the bit
+        // of shaped tables.
+        return @intFromPtr(shapedTable(jit.fromWide(*Thread, lw), @intCast(cap), @as(u16, @truncate(id))));
     }
 
     fn shapedTable(l: *Thread, cap: usize, id: usize) ?*Table {

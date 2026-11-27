@@ -633,6 +633,9 @@ fn require(l: *Thread) Error!u32 {
     if (existing.truthy()) return aux.ret(l, existing);
     const searchers = try aux.getField(l, pkg, "searchers");
     if (searchers.tag != .table) return l.raiseFmt("'package.searchers' must be a table", .{});
+    // A searcher may assign a new `package.searchers`, so the stack keeps
+    // the table of this call alive.
+    try l.push(searchers);
     // Each searcher message goes on its own indented line.
     var msg: std.ArrayList(u8) = .empty;
     defer msg.deinit(l.g.gpa);

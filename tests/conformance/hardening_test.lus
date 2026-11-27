@@ -472,3 +472,316 @@ local function an_empty_permission_value_raises_test()
     local ok, err = catch pledge("env:read=")
     assert(not ok and tostring(err):find("empty value", 1, true), tostring(err))
 end
+
+local function deep_clone_of_a_weak_table_test()
+    for _ = 1, 3000 do
+        local src = setmetatable({}, { __mode = "v" })
+        local key = { {}, {}, {}, {}, {}, {} }
+        src[key] = { marker = 12345, {}, {}, {} }
+        local copy = table.clone(src, true)
+
+        for _, v in pairs(copy) do
+            assert(type(v) == "table" and v.marker == 12345)
+        end
+    end
+
+    for _ = 1, 3000 do
+        local src = setmetatable({}, { __mode = "k" })
+        src[{ {}, {}, {} }] = { marker = 7 }
+
+        for k, v in pairs(table.clone(src, true)) do
+            assert(type(k) == "table" and v.marker == 7)
+        end
+    end
+end
+
+local function grouped_query_whose_filter_removes_its_row_test()
+    local rows = {}
+
+    for i = 1, 3000 do
+        rows[i] = { k = i, id = i }
+    end
+
+    local function drop(r)
+        rows[r.id] = nil
+        return true
+    end
+
+    local groups = 0
+
+    for row in query(@rows as r where drop(r) select r.k, count(*) as c group by r.k) do
+        assert(type(row.k) == "number" and row.c == 1)
+        groups = groups + 1
+    end
+
+    assert(groups == 3000, groups)
+end
+
+local function grouped_query_with_wide_decimal_keys_test()
+    local rows = {}
+
+    for i = 1, 500 do
+        rows[i] = { a = 1e29d + i, b = i % 7 }
+    end
+
+    local groups = 0
+
+    for row in query(@rows as r select r.a, r.b, count(*) as c group by r.a, r.b) do
+        assert(row.c == 1)
+        groups = groups + 1
+    end
+
+    assert(groups == 500, groups)
+end
+
+local function tojson_of_a_table_that_a_function_detaches_test()
+    local root = {}
+    local victim = {}
+
+    for i = 1, 40 do
+        victim[i] = setmetatable({}, {
+            __json = function()
+                root[1] = nil
+                victim = nil
+                collectgarbage()
+
+                local junk = {}
+
+                for j = 1, 200 do
+                    junk[j] = { j, j, j, j }
+                end
+
+                return "x"
+            end,
+        })
+    end
+
+    root[1] = victim
+    local _, count = tojson(root):gsub('"x"', "")
+    assert(count == 40, count)
+
+    -- A weak table holds its values for nobody while they are written.
+    for _ = 1, 300 do
+        local weak = setmetatable({}, { __mode = "v" })
+
+        for i = 1, 8 do
+            weak[i] = setmetatable({ i }, {
+                __json = function(self)
+                    return self[1]
+                end,
+            })
+        end
+
+        assert(type(tojson(weak)) == "string")
+    end
+end
+
+local function require_with_searchers_replaced_by_a_searcher_test()
+    local old = package.searchers
+    local mine = {}
+
+    mine[1] = function()
+        package.searchers = old
+        mine = nil
+        collectgarbage()
+
+        local junk = {}
+
+        for i = 1, 400 do
+            junk[i] = { i, i, i, i }
+        end
+
+        return "\n\tfirst searcher"
+    end
+
+    for i = 2, 6 do
+        mine[i] = function()
+            return `\n\tsearcher $i`
+        end
+    end
+
+    package.searchers = mine
+    local ok, err = catch require("no.such.module.anywhere")
+    package.searchers = old
+    assert(not ok and tostring(err):find("searcher 6", 1, true), tostring(err))
+end
+
+local function a_new_table_under_two_names_at_a_join_test()
+    local function kind(c)
+        local t = { v = 1 }
+        local x = t
+
+        if c then
+            x = nil
+        end
+
+        return type(x), x == t, t.v
+    end
+
+    local sink = {}
+
+    local function stored(c)
+        local t = { v = 1 }
+        local x = t
+
+        if c then
+            x = nil
+        end
+
+        sink[1] = x
+        return t.v
+    end
+
+    local function same(n, bad)
+        local t = { v = 1 }
+        local count = 0
+
+        for i = 1, n do
+            local x = t
+
+            if i == bad then
+                x = nil
+            end
+
+            if rawequal(x, t) then
+                count = count + 1
+            end
+        end
+
+        return count
+    end
+
+    for _ = 1, 300 do
+        kind(false)
+        stored(false)
+    end
+
+    local a, b, c = kind(false)
+    assert(a == "table" and b == true and c == 1)
+    a, b, c = kind(true)
+    assert(a == "nil" and b == false and c == 1)
+    assert(stored(false) == 1 and sink[1].v == 1)
+    assert(stored(true) == 1 and sink[1] == nil)
+    assert(same(300, -1) == 300)
+    assert(same(300, 180) == 299)
+end
+
+local function a_pipe_closed_while_its_reader_waits_test()
+    if os.platform() == "windows" then
+        skip("POSIX programs")
+    end
+
+    local p = os.spawn({ "/bin/sleep", "1" }, { stdout = "pipe" })
+    local out = p.stdout
+
+    coroutine.detach(coroutine.create(function()
+        out:close()
+        local q = os.spawn({ "/bin/echo", "data of another pipe" }, { stdout = "pipe" })
+        coroutine.resume(coroutine.sleep(0.1))
+        q.stdout:close()
+    end))
+
+    local ok, err = catch out:read(5)
+    assert(not ok and tostring(err):find("closed file", 1, true), tostring(err))
+end
+
+-- Runs `body` as a script of its own with the options `flags` and the
+-- `PATH` of this process behind `dir`, and returns what it printed.
+local function with_path(dir, flags, body)
+    local exe = os.getenv("LUS_EXE")
+
+    if not exe then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    if os.platform() == "windows" then
+        skip("POSIX shell scripts")
+    end
+
+    local script = io.open("named.lus", "w")
+    script:write(body)
+    script:close()
+    local argv = { exe }
+
+    for _, f in ipairs(flags) do
+        argv[#argv + 1] = "-P"
+        argv[#argv + 1] = f
+    end
+
+    local here = os.spawn({ "/bin/pwd" }, { stdout = "pipe" }).stdout:read("l")
+    argv[#argv + 1] = "named.lus"
+    argv[#argv + 1] = here
+
+    local p = os.spawn(argv, {
+        stdout = "pipe",
+        stderr = "stdout",
+        env = { PATH = `$here/$dir:/usr/bin:/bin` },
+    })
+
+    return p.stdout:read("a")
+end
+
+local function tools(name)
+    for _, kind in ipairs({ "good", "evil" }) do
+        fs.createdirectory(`$(name)_$kind`, true)
+        local f = io.open(`$(name)_$kind/mytool`, "w")
+        f:write(`#!/bin/sh\necho $kind\n`)
+        f:close()
+        os.execute(`chmod +x $(name)_$kind/mytool`)
+    end
+end
+
+local function a_worker_runs_the_named_program_of_the_startup_path_test()
+    if os.platform() == "windows" then
+        skip("POSIX shell scripts")
+    end
+
+    tools("wp")
+    local w = io.open("named_worker.lus", "w")
+
+    w:write([[
+local ok, p = catch os.spawn({ "mytool" }, { stdout = "pipe" })
+worker.message(ok and p.stdout:read("a") or "denied")]])
+
+    w:close()
+
+    local out = with_path("wp_good", { "exec=mytool", "env", "fs:read", "load" }, [[
+local dir = ...
+print(os.spawn({ "mytool" }, { stdout = "pipe" }).stdout:read("l"))
+os.setenv("PATH", `$dir/wp_evil:/usr/bin:/bin`)
+print((catch os.spawn({ "mytool" }, { stdout = "pipe" })))
+print(worker.receive(worker.create("named_worker.lus")))]])
+
+    assert(out == "good\nfalse\ndenied\n", out)
+end
+
+local function a_named_program_keeps_the_variables_that_load_code_test()
+    if os.platform() == "windows" then
+        skip("POSIX shell scripts")
+    end
+
+    tools("ev")
+
+    local out = with_path("ev_good", { "exec=mytool", "env" }, [[
+local dir = ...
+local path = `$dir/ev_good:/usr/bin:/bin`
+local function run(env)
+    local ok, p = catch os.spawn({ "mytool" }, { stdout = "pipe", env = env })
+    return ok and p.stdout:read("l") or "denied"
+end
+print(run({ PATH = path, GREETING = "hello" }))
+print(run({ PATH = path, LD_PRELOAD = "/tmp/x.so" }))
+print(run({ PATH = path, ["BASH_FUNC_echo%%"] = "() { id; }" }))
+print(run({ PATH = `$dir/ev_evil:/usr/bin:/bin` }))
+os.setenv("BASH_ENV", "/tmp/x")
+print((catch os.spawn({ "mytool" }, { stdout = "pipe" })))]])
+
+    assert(out == "good\ndenied\ndenied\ndenied\nfalse\n", out)
+
+    -- Without the permission to write a variable, the option gives none.
+    out = with_path("ev_good", { "exec" }, [[
+print((catch os.spawn({ "mytool" }, { stdout = "pipe", env = { GREETING = "hello" } })))
+print((catch os.spawn({ "mytool" }, { stdout = "pipe", cwd = "/" })))]])
+
+    assert(out == "false\nfalse\n", out)
+end

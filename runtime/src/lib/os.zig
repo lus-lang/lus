@@ -119,42 +119,95 @@ pub fn adoptEnviron(g: *state.Global, m: *Environ) error{OutOfMemory}!void {
     g.environ = m;
 }
 
-const startup_path_key = "os.startup_path";
-const StartupPath = struct { value: ?[]u8 };
+const startup_key = "os.startup_env";
 
-/// The `PATH` the state started with, which decides the program that a
-/// permission to run a program by name covers. A change made with
-/// `os.setenv` and the `env` option of `os.spawn` leave it as it was.
+/// The environment the state started with, kept from before its first
+/// change. It decides the program that a permission to run a program by
+/// name covers, and the variables such a program must receive unchanged.
+/// A change made with `os.setenv` and the `env` option of `os.spawn`
+/// leave it as it was.
+fn startupEnviron(g: *state.Global) ?*Environ {
+    const p = g.ext.get(startup_key) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
+/// The value that variable `name` had when the state started.
+pub fn startupGet(l: *Thread, name: []const u8) ?[]const u8 {
+    if (startupEnviron(l.g)) |m| return m.get(name);
+    return envGet(l, name);
+}
+
+/// The `PATH` the state started with.
 pub fn startupPath(l: *Thread) ?[]const u8 {
-    if (l.g.ext.get(startup_path_key)) |p| {
-        const sp: *StartupPath = @ptrCast(@alignCast(p));
-        return sp.value;
-    }
-    return currentPath(l);
+    return startupGet(l, "PATH") orelse (if (builtin.os.tag == .windows) startupGet(l, "Path") else null);
 }
 
-fn currentPath(l: *Thread) ?[]const u8 {
-    return envGet(l, "PATH") orelse (if (builtin.os.tag == .windows) envGet(l, "Path") else null);
+/// Whether the environment of the state has changed since it started.
+pub fn environChanged(l: *Thread) bool {
+    return startupEnviron(l.g) != null;
 }
 
-/// Keeps the `PATH` of the state before its environment first changes.
-fn keepStartupPath(l: *Thread) error{OutOfMemory}!void {
+/// Keeps the environment of the state before its first change.
+fn keepStartup(l: *Thread) error{OutOfMemory}!void {
     const g = l.g;
-    if (g.ext.get(startup_path_key) != null) return;
-    const sp = try environ_gpa.create(StartupPath);
-    errdefer environ_gpa.destroy(sp);
-    sp.* = .{ .value = if (currentPath(l)) |v| try environ_gpa.dupe(u8, v) else null };
-    errdefer if (sp.value) |v| environ_gpa.free(v);
-    try g.ext.put(g.gpa, startup_path_key, sp);
+    if (g.ext.get(startup_key) != null) return;
+    const m = try copyEnviron(g);
+    errdefer freeEnviron(m);
+    try g.ext.put(g.gpa, startup_key, m);
+}
+
+/// A copy of the kept environment of the state of `l` for a worker, or
+/// null when the state has kept none because its environment never
+/// changed.
+pub fn copyStartupPath(l: *Thread) error{OutOfMemory}!?*anyopaque {
+    const from = startupEnviron(l.g) orelse return null;
+    const m = try environ_gpa.create(Environ);
+    errdefer environ_gpa.destroy(m);
+    m.* = try from.clone(environ_gpa);
+    return m;
+}
+
+/// Makes `p`, which `copyStartupPath` returned, the kept environment of
+/// state `g`.
+pub fn adoptStartupPath(g: *state.Global, p: *anyopaque) error{OutOfMemory}!void {
+    g.ext.put(g.gpa, startup_key, p) catch return error.OutOfMemory;
+}
+
+/// Frees a copy that no state adopted.
+pub fn freeStartupPath(p: *anyopaque) void {
+    freeEnviron(@ptrCast(@alignCast(p)));
+}
+
+/// Whether `name` is a variable that makes a dynamic loader, a shell, or
+/// a language runtime load code or change how it finds programs. A
+/// program that runs under a permission for that program alone receives
+/// each of them as the state started with it.
+pub fn loadsCode(name: []const u8) bool {
+    const prefixes = [_][]const u8{ "LD_", "DYLD_", "BASH_FUNC_", "__BASH_FUNC" };
+    for (prefixes) |pre| if (std.mem.startsWith(u8, name, pre)) return true;
+    const names = [_][]const u8{
+        "PATH",              "PATHEXT",        "COMSPEC",          "IFS",             "ENV",
+        "BASH_ENV",          "SHELLOPTS",      "BASHOPTS",         "PS4",             "CDPATH",
+        "GLOBIGNORE",        "PROMPT_COMMAND", "ZDOTDIR",          "LIBPATH",         "SHLIB_PATH",
+        "GCONV_PATH",        "LOCPATH",        "NLSPATH",          "HOSTALIASES",     "PYTHONPATH",
+        "PYTHONSTARTUP",     "PYTHONHOME",     "PYTHONINSPECT",    "PERL5LIB",        "PERLLIB",
+        "PERL5OPT",          "RUBYLIB",        "RUBYOPT",          "NODE_OPTIONS",    "NODE_PATH",
+        "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",  "JDK_JAVA_OPTIONS", "LUA_PATH",        "LUA_CPATH",
+        "LUA_INIT",          "LUS_PATH",       "GIT_SSH",          "GIT_SSH_COMMAND", "GIT_EXEC_PATH",
+        "EDITOR",            "VISUAL",         "PAGER",            "GIT_PAGER",       "GIT_EDITOR",
+    };
+    for (names) |n| {
+        const same = if (builtin.os.tag == .windows) std.ascii.eqlIgnoreCase(name, n) else std.mem.eql(u8, name, n);
+        if (same) return true;
+    }
+    return false;
 }
 
 /// Frees the environment map that state `g` owns.
 pub fn deinitEnviron(g: *state.Global) void {
-    if (g.ext.get(startup_path_key)) |p| {
-        const sp: *StartupPath = @ptrCast(@alignCast(p));
-        _ = g.ext.remove(startup_path_key);
-        if (sp.value) |v| environ_gpa.free(v);
-        environ_gpa.destroy(sp);
+    if (startupEnviron(g)) |m| {
+        _ = g.ext.remove(startup_key);
+        freeEnviron(m);
     }
     const m = ownedEnviron(g) orelse return;
     _ = g.ext.remove(environ_key);
@@ -195,7 +248,7 @@ pub fn copyEnviron(g: *state.Global) error{OutOfMemory}!*Environ {
 /// other states share is never written.
 fn writableEnviron(l: *Thread) Error!*Environ {
     const g = l.g;
-    keepStartupPath(l) catch return l.raiseMem();
+    keepStartup(l) catch return l.raiseMem();
     if (ownedEnviron(g)) |m| return m;
     const m = copyEnviron(g) catch return l.raiseMem();
     adoptEnviron(g, m) catch {

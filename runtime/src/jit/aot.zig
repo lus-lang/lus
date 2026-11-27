@@ -29,6 +29,7 @@ const gc = @import("../vm/gc.zig");
 const heap = @import("../vm/heap.zig");
 const table = @import("../vm/table.zig");
 const value = @import("../vm/value.zig");
+const shape = @import("../vm/shape.zig");
 const reloc = @import("reloc.zig");
 const helpers = @import("helpers.zig");
 const mem = @import("mem.zig");
@@ -339,6 +340,20 @@ pub const Context = struct {
             }
         }
         if (c.objects.get(v)) |o| return .{ .address = .{ .kind = .const_obj, .a = o.proto, .b = o.index } };
+        if (shapeAt(c.g, v)) |sh| {
+            // A shape is named by its keys, since its id and its address
+            // belong to this process.
+            var keys: std.ArrayList(u8) = .empty;
+            defer keys.deinit(c.g.gpa);
+            for (sh.keys[0..sh.n]) |k| {
+                var len: [4]u8 = undefined;
+                std.mem.writeInt(u32, &len, @intCast(k.bytes().len), .little);
+                keys.appendSlice(c.g.gpa, &len) catch return c.unknownAt(v);
+                keys.appendSlice(c.g.gpa, k.bytes()) catch return c.unknownAt(v);
+            }
+            if (c.st.intern(keys.items)) |i| return .{ .address = .{ .kind = .shape, .a = i } };
+            return c.unknownAt(v);
+        }
         // A word of the global state that holds the address.
         const words: [*]const usize = @ptrCast(@alignCast(c.g));
         for (words[0 .. @sizeOf(Global) / @sizeOf(usize)], 0..) |w, i| {
@@ -359,6 +374,32 @@ pub const Context = struct {
         return .literal;
     }
 };
+
+/// The shape of state `g` at address `v`, or null when `v` is no shape.
+fn shapeAt(g: *Global, v: usize) ?*shape.Shape {
+    if (v == @intFromPtr(&shape.root)) return &shape.root;
+    for (g.shapes.all.items) |s| if (@intFromPtr(s) == v) return s;
+    return null;
+}
+
+/// The shape of state `g` whose keys `list` holds in the form that a
+/// `shape` relocation names, made when the state has none yet.
+fn shapeOfKeys(g: *Global, list: []const u8) ?*shape.Shape {
+    var sh: *shape.Shape = &shape.root;
+    var at: usize = 0;
+    while (at < list.len) {
+        if (list.len - at < 4) return null;
+        const len = std.mem.readInt(u32, list[at..][0..4], .little);
+        at += 4;
+        if (len > list.len - at) return null;
+        const key = state.newStringIn(g, list[at..][0..len]) catch return null;
+        at += len;
+        // A shape holds interned keys only.
+        if (!key.flags().interned) return null;
+        sh = (g.shapes.transition(g.gpa, sh, key, g) catch return null) orelse return null;
+    }
+    return sh;
+}
 
 /// The entry pc that names the baseline code of a function in a `code`
 /// relocation, where the optimized units name their own entry pc.
@@ -1213,6 +1254,10 @@ pub const Section = struct {
                 g.fixed.append(g.gpa, &str.hdr) catch return null;
                 s.interned.put(s.gpa, r.a, @intFromPtr(str)) catch {};
                 break :blk @intFromPtr(str);
+            },
+            .shape => blk: {
+                if (r.a >= s.strings.items.len) return null;
+                break :blk @intFromPtr(shapeOfKeys(g, s.strings.items[r.a]) orelse return null);
             },
             .unit => blk: {
                 const p = s.ids.get(r.a) orelse return null;

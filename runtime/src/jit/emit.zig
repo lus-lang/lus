@@ -1241,7 +1241,7 @@ pub const Emitter = struct {
         a.bind(absent);
         a.loadWord(A.t1, .{ .base = A.t0, .disp = tl.metatable });
         a.jumpIfImm(.eq, A.t1, 0, nil_result);
-        a.jumpIfBit(.{ .base = A.t1, .disp = tl.tm_absent + il.absent_index / 8 }, il.absent_index % 8, false, call);
+        a.jumpIfBit(.{ .base = A.t1, .disp = tl.tm_absent + il.absentByte(il.absent_index) }, il.absent_index % 8, false, call);
         a.bind(nil_result);
         e.storeConst(dst, .nil);
         a.jmp(done);
@@ -1334,7 +1334,7 @@ pub const Emitter = struct {
         a.jumpIfByte(.ne, .{ .base = tab, .disp = tl.readonly }, 0, miss);
         a.loadWord(tmp, .{ .base = tab, .disp = tl.metatable });
         a.jumpIfImm(.eq, tmp, 0, plain);
-        a.jumpIfBit(.{ .base = tmp, .disp = tl.tm_absent + il.absent_newindex / 8 }, il.absent_newindex % 8, false, miss);
+        a.jumpIfBit(.{ .base = tmp, .disp = tl.tm_absent + il.absentByte(il.absent_newindex) }, il.absent_newindex % 8, false, miss);
         a.bind(plain);
     }
 
@@ -1965,7 +1965,7 @@ pub const Emitter = struct {
                 a.loadWord(A.t1, .{ .base = A.t0, .disp = tl.metatable });
                 a.bind(have_metatable);
                 a.jumpIfImm(.eq, A.t1, 0, helper);
-                a.jumpIfBit(.{ .base = A.t1, .disp = tl.tm_absent + il.absent_index / 8 }, il.absent_index % 8, true, helper);
+                a.jumpIfBit(.{ .base = A.t1, .disp = tl.tm_absent + il.absentByte(il.absent_index) }, il.absent_index % 8, true, helper);
                 e.predictedNode(e.prediction(c.pc, il.ic_index), A.t1, g.tm_names[@backingInt(state.TM.index)].?, A.t2, A.t4, A.t3, helper, helper);
                 a.jumpIfByte(.ne, .{ .base = A.t4, .disp = tl.tag_val }, tag_table, helper);
                 a.load64(A.t1, .{ .base = A.t2, .disp = tl.node_val });

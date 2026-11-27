@@ -15,6 +15,10 @@ const object = @import("object.zig");
 const String = object.String;
 const Allocator = std.mem.Allocator;
 
+/// The bit of `Table.hash_used` that marks a shaped table, which the word
+/// of the root is, its id being zero.
+pub const shaped_word: u32 = 1 << 31;
+
 /// The most keys a shape holds.
 pub const max_keys = 32;
 /// The most children a shape has.
@@ -37,6 +41,10 @@ fn wellFormed(s: *const Shape) bool {
 
 pub const Shape = struct {
     id: u16,
+    /// What `Table.hash_used` holds for a table of this shape: the bit
+    /// that marks a shaped table, with the id. Code compiled ahead of
+    /// time reads it from here, since an id belongs to one process.
+    word: u32 = shaped_word,
     /// Number of keys.
     n: u8,
     nchildren: u8 = 0,
@@ -242,6 +250,7 @@ pub const Shapes = struct {
             gpa.free(keys);
             return null;
         };
+        s.word = shaped_word | @as(u32, s.id);
         sh.all.appendAssumeCapacity(s);
         if (inv.deep) inv.assert(wellFormed(s));
         return s;

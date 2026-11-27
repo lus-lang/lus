@@ -12,7 +12,7 @@ A Lus program runs another program with `os.spawn`, which starts it without a sh
 
 [`os.spawn(argv, options)`](/manual/api#os.spawn) starts the program that `argv[1]` names with the arguments in the rest of `argv` and returns a _process object_ that represents it. No shell reads the arguments, so a file name with a space or a quote reaches the program as written. A name without a separator is looked up in the directories of `PATH`. A name with a separator is a path.
 
-The options name what each standard stream of the child is connected to. `"inherit"`, the default, shares the stream of the program. `"pipe"` connects it to a pipe whose other end is the field of the same name on the process object. `"null"` discards the stream. An open file connects the stream to that file. `stderr = "stdout"` sends the errors of the child to the same place as its output. `env` replaces the environment of the child with a table of strings. `cwd` sets its working directory.
+The options name what each standard stream of the child is connected to. `"inherit"`, the default, shares the stream of the program. `"pipe"` connects it to a pipe whose other end is the field of the same name on the process object. `"null"` discards the stream. An open file connects the stream to that file. `stderr = "stdout"` sends the errors of the child to the same place as its output. `env` replaces the environment of the child with a table of strings, and each variable in it needs the `env:write` permission. `cwd` sets its working directory, which needs `fs:read`.
 
 The following program sorts a list of names with the system command `sort` and reads the result from a pipe.
 

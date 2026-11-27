@@ -695,6 +695,10 @@ const Writer = struct {
         var steps: usize = 0;
         while (cur.tag == .table) {
             const mt = w.l.metatable(cur) orelse break;
+            // Creating the key may collect, and a weak table holds `cur`
+            // for nobody.
+            try w.l.push(cur);
+            defer w.l.top -= 1;
             const k = state.newStringKnown(w.l.g, "__json", true, 6) catch return w.l.raiseMem();
             const j = table.getStr(mt, k);
             if (j.isNil()) break;
@@ -720,12 +724,13 @@ const Writer = struct {
         return !w.filter.isNil() or (v.tag == .table and v.as(Table).metatable != null);
     }
 
-    /// Writes `item`, which a filter or `__json` returned when `fresh` is
-    /// true. Such a table may be reachable from nothing else, and the Lus
-    /// code that runs while it is written may collect, so the stack keeps
-    /// it alive.
+    /// Writes `item`. A table that a filter or `__json` returned may be
+    /// reachable from nothing else, and a `__json` function deeper in the
+    /// tree may detach any table from its parent and collect, so the stack
+    /// keeps every table alive while it is written.
     inline fn item_(w: *Writer, item: Value, fresh: bool) Error!void {
-        if (!fresh or item.tag != .table) return w.value_(item);
+        _ = fresh;
+        if (item.tag != .table) return w.value_(item);
         try w.l.push(item);
         defer w.l.top -= 1;
         return w.value_(item);

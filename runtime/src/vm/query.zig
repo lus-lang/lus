@@ -558,7 +558,10 @@ fn keyLeaf(l: *Thread, map: *Table, keys: []const Value) Error!*Table {
             level = sub.as(Table);
         } else {
             const t = try l.newTable(0, 0);
+            // The store may allocate a normalized key, which may collect.
+            try l.push(Value.obj(.table, t));
             try ops.rawSet(l, level, k, Value.obj(.table, t));
+            l.top -= 1;
             level = t;
         }
     }
@@ -1027,6 +1030,11 @@ const Sink = struct {
                 }
                 kbuf[i] = try normKey(l, kv, false);
             }
+            // The key map allocates, and a record with weak values holds
+            // its fields for nobody.
+            const keys_at = l.top;
+            for (kbuf[0..n]) |kv| try l.push(kv);
+            defer l.top = keys_at;
             const leaf = try keyLeaf(l, s.tbl(slot_dmap), kbuf[0 .. n - 1]);
             const last = try ops.normKey(l, kbuf[n - 1]);
             if (!table.get(leaf, last).isNil()) return;
@@ -1194,6 +1202,11 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
     // finds for the current row of the outer source.
     const step = q.operand(p.op_step);
     var args: [qgen.max_sources + 1]Value = undefined;
+    // The step function runs user code, which can remove a row from a
+    // source that is read in place. The stack keeps the current row of
+    // each source alive from one step to the next.
+    const rows_at = l.top;
+    for (0..nsrc + 1) |_| try l.push(.nil);
     var at: [qgen.max_sources]usize = @splat(0);
     var len: [qgen.max_sources]usize = @splat(0);
     var seq: [qgen.max_sources]?[]const u32 = @splat(null);
@@ -1230,9 +1243,11 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
                     break;
                 };
                 args[si] = rowAt(l, base, &seq, &at, si - 1);
+                l.stack[rows_at + si] = args[si];
                 continue;
             }
             args[si + 1] = rowAt(l, base, &seq, &at, si);
+            l.stack[rows_at + si + 1] = args[si + 1];
             si += 1;
         }
         if (done) break;
@@ -1290,7 +1305,9 @@ fn execute(l: *Thread, q: *Query, qv: Value) Error!*Table {
         // Advance the odometer.
         fresh = advance(&at, &len, nsrc) orelse break;
         args[fresh] = rowAt(l, base, &seq, &at, fresh - 1);
+        l.stack[rows_at + fresh] = args[fresh];
     }
+    l.top = rows_at;
 
     if (grouped) {
         if (ngroups == 0 and p.nkeys == 0) {

@@ -49,6 +49,11 @@ pub const Kind = enum(u8) {
     /// starts at instruction `b`, or its baseline code when `b` is
     /// `aot.baseline_pc`.
     code,
+    /// The shape whose keys string `a` of the string table of the code
+    /// lists, each as four bytes of length, low byte first, and its
+    /// characters. The loader makes the shape again in its state, where
+    /// it has another id.
+    shape,
 };
 
 pub const Reloc = struct {

@@ -144,7 +144,9 @@ pub fn reclaim(g: *Global, slot: u32) void {
 /// The value of `slot` as the coroutine `l` sees it.
 pub inline fn get(l: *Thread, slot: u32) Value {
     if (l.ctx) |arr| if (slot < arr.vals.len) return arr.vals[slot];
-    return l.g.ctx.defaults.items[slot];
+    // A slot object forged through the debug library names no variable.
+    const defaults = l.g.ctx.defaults.items;
+    return if (slot < defaults.len) defaults[slot] else .nil;
 }
 
 /// Assigns `v` to `slot` for the coroutine `l` alone. The array is copied
@@ -158,6 +160,7 @@ pub fn set(l: *Thread, slot: u32, v: Value) error{OutOfMemory}!void {
     };
     const gpa = g.gpa;
     const len = g.ctx.defaults.items.len;
+    if (slot >= len) return;
     const vals = try gpa.alloc(Value, len);
     errdefer gpa.free(vals);
     const fresh = try gpa.create(Array);

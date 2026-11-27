@@ -228,10 +228,13 @@ fn spawn(l: *Thread) Error!u32 {
                 if (kv.key.tag != .string or kv.val.tag != .string) return aux.argError(l, 2, "option 'env' must map strings to strings", .{});
                 const k = kv.key.as(String).bytes();
                 if (k.len == 0 or std.mem.indexOfAny(u8, k, "=\x00") != null) return aux.argError(l, 2, "invalid environment variable name '{s}'", .{k});
+                // Giving the child a variable is a write of that variable.
+                try pledge.require(l, "env:write", k);
                 env_map.?.put(k, kv.val.as(String).bytes()) catch return l.raiseMem();
             }
         }
     }
+    if (cwd) |dir| try pledge.require(l, "fs:read", dir);
 
     // The program is looked up in the PATH of the environment the child
     // gets.
@@ -255,6 +258,20 @@ fn spawn(l: *Thread) Error!u32 {
         const req = pledge.programRequest(gpa, if (by_name) name else null, resolved orelse "") catch return l.raiseMem();
         defer gpa.free(req);
         if (!pledge.allowed(l, "exec", req)) return l.raiseFmt("permission \"exec\" denied for '{s}'", .{name});
+    }
+    // A permission for this program alone covers the program as the host
+    // would run it. A variable that makes a loader, a shell, or a language
+    // runtime load other code would turn it into a permission for any
+    // program, so the child receives each such variable as the state
+    // started with it.
+    if (!pledge.allowedUnrestricted(l, "exec")) {
+        if (env_map) |*m| {
+            var it = m.iterator();
+            while (it.next()) |e| try sameAsStartup(l, name, e.key_ptr.*, e.value_ptr.*);
+        } else if (os_lib.environChanged(l)) if (l.g.environ) |m| {
+            var it = m.iterator();
+            while (it.next()) |e| try sameAsStartup(l, name, e.key_ptr.*, e.value_ptr.*);
+        };
     }
     const exe = resolved orelse {
         try l.push(.nil);
@@ -427,6 +444,14 @@ fn tryReap(p: *Process) bool {
     // Another waiter of the process reaped it, so how it ended is lost.
     p.status = if (r == p.pid) decode(st) else .{ .exited = 0 };
     return true;
+}
+
+/// Raises when `key` loads code into a child and `value` is not what the
+/// state started with.
+fn sameAsStartup(l: *Thread, program: []const u8, key: []const u8, val: []const u8) Error!void {
+    if (!os_lib.loadsCode(key)) return;
+    if (os_lib.startupGet(l, key)) |v| if (std.mem.eql(u8, v, val)) return;
+    return l.raiseFmt("permission \"exec\" denied for '{s}': the permission names this program, and the variable '{s}' changes what it runs", .{ program, key });
 }
 
 /// Waits until the process ends. Inside a detached coroutine the wait

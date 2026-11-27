@@ -184,6 +184,8 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
                 },
                 .empty => {
                     try sched.waitNotifyFor(l, winpipe.poll_ms);
+                    // Another coroutine ran during the wait.
+                    if (h.closed) return l.raiseFmt("attempt to use a closed file", .{});
                     continue;
                 },
             }
@@ -197,6 +199,9 @@ fn fill(l: *Thread, h: *Handle, n: usize) Error!usize {
                     // The bytes read so far stay in the buffer, so the
                     // native that runs again after the wait finds them.
                     _ = try sched.waitIo(l, h.file.handle, .read, -1);
+                    // Another coroutine ran during the wait, and a close
+                    // there frees the buffers.
+                    if (h.closed) return l.raiseFmt("attempt to use a closed file", .{});
                     continue;
                 },
                 else => |x| return readError(l, h, x),
@@ -544,6 +549,7 @@ fn writeWaiting(l: *Thread, h: *Handle, bytes: []const u8) Error!?anyerror {
             if (room == 0) {
                 try sched.saveProgress(l, done);
                 try sched.waitNotifyFor(l, winpipe.poll_ms);
+                if (h.closed) return l.raiseFmt("attempt to use a closed file", .{});
                 continue;
             }
             chunk = chunk[0..@min(chunk.len, room)];
@@ -552,6 +558,7 @@ fn writeWaiting(l: *Thread, h: *Handle, bytes: []const u8) Error!?anyerror {
             error.WouldBlock => {
                 try sched.saveProgress(l, done);
                 _ = try sched.waitIo(l, h.file.handle, .write, -1);
+                if (h.closed) return l.raiseFmt("attempt to use a closed file", .{});
                 continue;
             },
             else => |x| {
