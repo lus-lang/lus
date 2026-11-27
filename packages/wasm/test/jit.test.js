@@ -100,6 +100,7 @@ end
 collectgarbage()
 print(closed)
 local calls = 0
+pledge("debug")
 debug.sethook(function() calls = calls + 1 end, "c")
 fib(5)
 debug.sethook()

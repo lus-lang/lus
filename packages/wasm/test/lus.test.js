@@ -73,10 +73,12 @@ describe("run", () => {
     assert.equal(r.stdout, "false\nfalse\t(playground):3: permission \"fs:read\" denied for '/x'\n");
   });
 
-  test("keeps the debug library only under grants that name it", () => {
+  test("gives the debug library only to a program that holds the permission", () => {
     const hook = 'print(catch debug.sethook(function() end, "c"))\ndebug.sethook()';
-    assert.equal(lus.run(hook).stdout, "true\n");
+    // A script holds it once it pledges it, or once the host grants it.
+    assert.equal(lus.run(`pledge("debug")\n${hook}`).stdout, "true\n");
     assert.equal(lus.run(hook, { pledges: ["load", "debug"] }).stdout, "true\n");
+    assert.equal(lus.run(hook).stdout, 'false\t(playground):1: permission "debug" denied for debug.sethook\n');
     const r = lus.run(hook, { pledges: ["load"] });
     assert.equal(r.stdout, 'false\t(playground):1: permission "debug" denied for debug.sethook\n');
     assert.match(r.error, /^\(playground\):2: permission "debug" denied for debug.sethook$/);
