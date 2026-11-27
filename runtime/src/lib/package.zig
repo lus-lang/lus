@@ -523,7 +523,13 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
 
     // Resolve, and read the source while the store is locked.
     st.lock();
-    const pkg = st.get(pkg_url, &why) catch |e| {
+    const Guard = struct {
+        fn allow(ctx: *anyopaque, url: []const u8) bool {
+            const t: *Thread = @ptrCast(@alignCast(ctx));
+            return pledge.allowed(t, "network:http", url);
+        }
+    };
+    const pkg = st.getGuarded(pkg_url, &why, .{ .ctx = l, .allow = Guard.allow }) catch |e| {
         st.unlock();
         return switch (e) {
             error.OutOfMemory => l.raiseMem(),
@@ -564,6 +570,7 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
         return l.raiseFmt("module '{s}' not found in {s}", .{ name, pkg_url });
     }
     const code = cached orelse src.?;
+    const meta_before = l.g.meta_opens;
     if (cached == null and pkg.kind == .atmosphere) {
         if (comptime !@import("build_options").compiler) return l.raiseFmt("the compiler is not part of this executable", .{});
         const r = @import("../compile/codegen.zig").compile(l.g, code, .{ .chunkname = chunkname, .flags = &fmap, .fold_flag_reads = true, .debug = l.g.debugger != null, .meta_grants = .{ .thread = l } }) catch return l.raiseMem();
@@ -583,7 +590,10 @@ fn requireRemote(l: *Thread, name: []const u8, loaded: *Table) Error!?u32 {
         };
     }
     const loader = l.stack[l.top - 1];
-    if (cached == null) {
+    // A chunk whose compile ran compile-time evaluation holds values read
+    // under the permissions of this thread, so it stays out of the cache
+    // that every state shares.
+    if (cached == null and l.g.meta_opens == meta_before) {
         // Every later state loads the compiled chunk.
         if (loader.tag == .closure) {
             // The store outlives this state, so its entries use the

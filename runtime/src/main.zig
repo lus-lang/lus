@@ -779,11 +779,11 @@ fn indexTree(l: *lus.vm.state.Thread, gpa: std.mem.Allocator, src: []const u8, c
     const Ceiling = struct {
         fn mayRead(ctx: *anyopaque, path: []const u8) bool {
             const t: *lus.vm.state.Thread = @ptrCast(@alignCast(ctx));
-            return pledge.allowed(t, "fs:read", path);
+            return pledge.couldEverAllow(t, "fs:read", path);
         }
         fn mayFetch(ctx: *anyopaque, url: []const u8) bool {
             const t: *lus.vm.state.Thread = @ptrCast(@alignCast(ctx));
-            return pledge.allowed(t, "network:http", url);
+            return pledge.couldEverAllow(t, "network:http", url);
         }
     };
     const path = blk: {
@@ -793,8 +793,10 @@ fn indexTree(l: *lus.vm.state.Thread, gpa: std.mem.Allocator, src: []const u8, c
     const ix = lus.modtree.build(l, src, chunkname, .{
         .gpa = gpa,
         .path = path,
-        .may_read = if (limitsFileReads(cli.pledges.items)) Ceiling.mayRead else null,
-        .may_fetch = if (cli.no_prefetch) null else if (limitsGrants(cli.pledges.items)) Ceiling.mayFetch else Always.yes,
+        // The index reads and fetches only what the script holds or may
+        // still pledge, whatever option limited it.
+        .may_read = Ceiling.mayRead,
+        .may_fetch = if (cli.no_prefetch) null else Ceiling.mayFetch,
         .ctx = l,
         .skip = package.answeredEarly,
     }) catch return null;
@@ -806,23 +808,4 @@ fn dropIndex(gpa: std.mem.Allocator, ix: *lus.modtree.Index) void {
     lus.modtree.current = null;
     ix.deinit();
     gpa.destroy(ix);
-}
-
-const Always = struct {
-    fn yes(_: *anyopaque, _: []const u8) bool {
-        return true;
-    }
-};
-
-/// Whether `-P` limits what the script may pledge. The script may then
-/// pledge only within the grants of the command line.
-fn limitsGrants(specs: []const []const u8) bool {
-    return specs.len > 0;
-}
-
-fn limitsFileReads(specs: []const []const u8) bool {
-    for (specs) |spec| {
-        if (std.mem.startsWith(u8, spec, "fs") and (spec.len == 2 or spec[2] == ':' or spec[2] == '=')) return true;
-    }
-    return false;
 }

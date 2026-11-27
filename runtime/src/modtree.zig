@@ -359,7 +359,7 @@ fn prefetch(gpa: Allocator, st: *remote.Store, start: []const []u8, may: *const 
         st.lock();
         defer st.unlock();
         if (st.peek(url) != null) continue;
-        const p = st.get(url, &why) catch continue;
+        const p = st.getGuarded(url, &why, .{ .ctx = ctx, .allow = may }) catch continue;
         // A fetch before the run is the expected one, so `require` prints
         // no warning for it.
         p.fetched = false;

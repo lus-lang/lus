@@ -20,7 +20,16 @@ pub const Error = error{
     TooLarge,
     /// Too many redirects, or a redirect the policy refused.
     Redirect,
+    /// The guard of the client refused the URL of a request.
+    Denied,
     OutOfMemory,
+};
+
+/// Decides whether the client may send a request to `url`. It sees the
+/// URL of every request, the first one and each redirect.
+pub const Guard = struct {
+    ctx: *anyopaque,
+    allow: *const fn (ctx: *anyopaque, url: []const u8) bool,
 };
 
 pub const Response = struct {
@@ -98,6 +107,9 @@ pub const Options = struct {
 pub const Client = struct {
     gpa: Allocator,
     http: std.http.Client,
+    /// Set by a caller for the requests it makes, such as the permission
+    /// check of the thread that requires a remote module.
+    guard: ?Guard = null,
 
     pub fn init(gpa: Allocator, io: std.Io) Client {
         return .{ .gpa = gpa, .http = .{ .allocator = gpa, .io = io } };
@@ -118,6 +130,7 @@ pub const Client = struct {
         while (true) {
             const uri = std.Uri.parse(current) catch return error.BadUrl;
             if (!acceptable(uri)) return error.BadUrl;
+            if (c.guard) |g| if (!g.allow(g.ctx, current)) return error.Denied;
             var req = c.http.request(.GET, uri, .{
                 .redirect_behavior = .unhandled,
                 .extra_headers = opts.headers,

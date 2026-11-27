@@ -534,6 +534,12 @@ fn hostPartsMatch(granted: []const u8, rest: []const u8) bool {
 /// plainly or with `%2e`.
 fn hasDotSegment(target: []const u8) bool {
     const path = target[0 .. std.mem.indexOfAny(u8, target, "?#") orelse target.len];
+    // An encoded separator and a backslash are separators to some servers,
+    // so a path under a grant with a path holds neither.
+    if (std.mem.indexOfScalar(u8, path, '\\') != null) return true;
+    for ([_][]const u8{ "%2f", "%2F", "%5c", "%5C" }) |enc| {
+        if (std.mem.indexOf(u8, path, enc) != null) return true;
+    }
     var it = std.mem.splitScalar(u8, path, '/');
     while (it.next()) |seg| {
         var dots: usize = 0;
@@ -906,6 +912,25 @@ fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, 
     }
     if (s.find("all")) |e| if (e.unrestricted) return true;
     return false;
+}
+
+/// Whether `l` holds `perm` for `requested` now, or a later `pledge` of
+/// the script could grant it. Work that happens before the script runs,
+/// such as reading the modules that it requires, stays within this, so a
+/// script that can never hold a permission causes no use of it.
+pub fn couldEverAllow(l: *Thread, perm: []const u8, requested: []const u8) bool {
+    const g = l.g;
+    if (allowed(l, perm, requested)) return true;
+    if (setOf(l)) |s| {
+        if (s.sealed or allRejected(s)) return false;
+        if (s.find(perm)) |e| if (e.rejected) return false;
+        if (s.find(split(perm)[0])) |e| if (e.rejected) return false;
+    }
+    const r = registry(g);
+    // A hook of the host decides each pledge when it is made.
+    if (r.on_request != null) return false;
+    const ceil = r.ceiling orelse return true;
+    return ceilingCoversValue(g, ceil, perm, requested);
 }
 
 /// Whether the set rejected every permission at once, with `~all`.

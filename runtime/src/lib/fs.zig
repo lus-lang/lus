@@ -392,8 +392,11 @@ fn stat(l: *Thread) Error!u32 {
             follow_links = f.tag == .true;
         }
     }
-    if (follow_links) try pledge.require(l, "fs:read", path) else try pledge.requireNoFollow(l, "fs:read", path);
-    const st = Dir.cwd().statFile(l.g.io, path, .{ .follow_symlinks = follow_links }) catch |e| switch (e) {
+    // A trailing separator makes the system follow a link to a directory,
+    // so the path that names the link itself goes without it.
+    const named = if (follow_links) path else withoutTrailingSeparators(path);
+    if (follow_links) try pledge.require(l, "fs:read", path) else try pledge.requireNoFollow(l, "fs:read", named);
+    const st = Dir.cwd().statFile(l.g.io, named, .{ .follow_symlinks = follow_links }) catch |e| switch (e) {
         error.FileNotFound => return l.raiseFmt("path '{s}' does not exist", .{path}),
         else => return l.raiseFmt("cannot stat '{s}': {s}", .{ path, errMsg(e) }),
     };

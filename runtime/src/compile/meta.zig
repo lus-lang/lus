@@ -123,6 +123,7 @@ pub const OpenError = Allocator.Error || error{MetaSetup};
 
 /// Creates the meta state of a compilation of `g`.
 pub fn open(g: *Global, flags: ?*const FlagsMap, grants: Grants) OpenError!*Meta {
+    g.meta_opens +%= 1;
     const gpa = g.gpa;
     const m = try gpa.create(Meta);
     errdefer gpa.destroy(m);

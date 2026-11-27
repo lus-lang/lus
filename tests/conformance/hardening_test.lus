@@ -1035,3 +1035,49 @@ print((catch io.open("none.lus")))]])
     local out = p.stdout:read("a")
     assert(out == "false\nfalse\n", out)
 end
+
+local function stat_of_a_link_with_a_trailing_separator_test()
+    if os.platform() == "windows" then
+        skip("symbolic links need a POSIX file system")
+    end
+
+    catch fs.createdirectory("sb")
+    catch fs.createdirectory("outside_dir")
+    catch fs.remove("sb/dirlink")
+    fs.createlink("sb/dirlink", "../outside_dir")
+
+    local out = in_sandbox([[
+print((catch fs.stat("sb/dirlink", { follow = false })))
+local ok, st = catch fs.stat("sb/dirlink/", { follow = false })
+print(ok and st.kind)
+print((catch fs.stat("sb/dirlink/")))]])
+
+    assert(out == "true\nlink\nfalse\n", out)
+end
+
+local function a_url_under_a_path_grant_holds_no_other_separator_test()
+    local co = coroutine.create(function()
+        pledge("network:http=https://api.example.invalid/public/**", "seal")
+        local refused = {}
+
+        for _, url in ipairs({
+            "https://api.example.invalid/public/a%2f..%2fadmin",
+            "https://api.example.invalid/public/a%5C..%5Cadmin",
+            "https://api.example.invalid/public/a\\..\\admin",
+            "https://api.example.invalid/public/../admin",
+            "https://api.example.invalid/admin",
+        }) do
+            local ok, err = catch network.fetch(url)
+            refused[#refused + 1] = not ok and tostring(err):find("denied", 1, true) ~= nil
+        end
+
+        return refused
+    end)
+
+    local ok, refused = coroutine.resume(co)
+    assert(ok, tostring(refused))
+
+    for i, r in ipairs(refused) do
+        assert(r, i)
+    end
+end

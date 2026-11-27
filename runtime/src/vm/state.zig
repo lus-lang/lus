@@ -417,6 +417,10 @@ pub const Global = struct {
     /// started from this state freeze their own environment too.
     env_frozen: bool = false,
     running_finalizers: bool = false,
+    /// How many chunks this state compiled with compile-time evaluation.
+    /// Such a chunk holds what the evaluation read under the permissions
+    /// of its thread, so no other state takes it from a cache.
+    meta_opens: u32 = 0,
     /// Native recursion depth across all threads (calls from natives into
     /// Lus and coroutine resumes), bounded to protect the native stack.
     native_depth: u32 = 0,

@@ -289,6 +289,15 @@ pub const Store = struct {
         return true;
     }
 
+    /// Resolves a normalized module URL as `get` does, with `guard`
+    /// deciding every request this makes: the module, the keys of its
+    /// host, its bundle, and each redirect. The caller holds the lock.
+    pub fn getGuarded(s: *Store, url: []const u8, why: *std.ArrayList(u8), guard: httpc.Guard) Failure!*Package {
+        s.http.guard = guard;
+        defer s.http.guard = null;
+        return s.get(url, why);
+    }
+
     /// Resolves a normalized module URL. The caller holds the lock.
     pub fn get(s: *Store, url: []const u8, why: *std.ArrayList(u8)) Failure!*Package {
         if (s.packages.get(url)) |p| return p;

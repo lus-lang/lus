@@ -788,7 +788,10 @@ fn parseUrl(url: []const u8) ?ParsedUrl {
         r.port = @intCast(port);
         i = j;
     }
-    r.path = if (i < rest.len) rest[i..] else "/";
+    // A fragment stays with the client and never goes on the wire.
+    var path = rest[i..];
+    if (std.mem.indexOfScalar(u8, path, '#')) |at| path = path[0..at];
+    r.path = if (path.len > 0) path else "/";
     if (r.path.len >= 2048) return null;
     return r;
 }
