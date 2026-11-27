@@ -121,7 +121,7 @@ A later version may record each input that an initializer reads from outside the
 
 Binary chunks have two constant kinds for meta values, the read-only table and the read-only vector, in format version 5. A table constant is stored as a graph of numbered tables, which keeps sharing and cycles between tables. A vector that a table graph holds twice loads as two vectors with the same bytes. `string.dump` writes the same constants, so a dumped function that reads `CRC32` loads with the table. A chunk of format version 4 still loads.
 
-A future `lus build --aot` compiles the program ahead of time. Meta values are constants for that compiler, and read-only tables let it fold reads with constant keys. Meta initializers run in the interpreter of the build machine before ahead-of-time compilation starts, so both compilers see the same values.
+`lus build --aot` compiles the program ahead of time. Meta values are constants for that compiler, and read-only tables let it fold reads with constant keys. Meta initializers run in the interpreter of the build machine before ahead-of-time compilation starts, so both compilers see the same values.
 
 ## 8. Tools and errors
 

@@ -28,7 +28,7 @@ A capability has a name, a list of subcapabilities, and a value kind. The value 
 | `custom` | any string | a matcher function supplied at registration |
 | `program` | a program name glob, or a path glob | a value without a separator matches the name of the program as written, and one with a separator matches the absolute path the name resolves to, canonical as for `path` |
 
-The runtime registers its own capabilities through the same registry that extensions use: `fs` (with `read`, `write`, `exec`), `network` (with `tcp`, `udp`, `http`, `tls`), `exec`, `env`, `load`, `bytecode`, `ffi`, `worker`, and `seal`.
+The runtime registers its own capabilities through the same registry that extensions use: `fs` (with `read`, `write`, `exec`), `network` (with `tcp`, `udp`, `http`, `tls`), `exec`, `env`, `load`, `bytecode`, `debug`, `ffi`, `worker`, and `seal`.
 
 `bytecode` gates the loading of a binary chunk by a script. Only the host grants it, on the command line or with `lus_grant`, and `pledge` returns `false` for it. Its grant sets no ceiling and leaves a fresh state fresh, so a script that runs under `-P bytecode` pledges its other permissions as it does without the option.
 
@@ -65,9 +65,9 @@ lus_require(L, "myfs:read", path);   /* raises the standard permission error */
 if (lus_allowed(L, "myfs:read", path)) { ... }   /* returns a boolean */
 ```
 
-Builtins written in Zig declare the capability in their descriptor, and the call site check is generated from it. The same descriptor produces the `pledges` list in the stdlib specification, so the documentation always matches the code.
+A builtin written in Zig checks its capability with a call to `pledge.require` before it acts, and the `pledges` list of its page in the stdlib specification names the same capability.
 
-The standard permission error reads `permission denied: myfs:read=<value>`, and its error value is a table with the fields `capability`, `value`, and `message`.
+The standard permission error is the string `permission "fs:read" denied for 'VALUE'`, or `permission "NAME" denied` for a check that names no value.
 
 ## Host policy
 

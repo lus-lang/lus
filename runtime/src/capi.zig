@@ -71,7 +71,9 @@ export fn lus_newstate() ?*Thread {
         gpa.destroy(h);
         return null;
     };
-    l.g.ext.put(gpa, host_key, h) catch {
+    // The map belongs to the state, so it grows with the allocator of the
+    // state, which counts what the state holds.
+    l.g.ext.put(l.g.gpa, host_key, h) catch {
         api.close(l);
         h.threaded.deinit();
         gpa.destroy(h);
@@ -175,9 +177,10 @@ fn slot(l: *Thread, idx: c_int) ?u32 {
         return if (s < l.top) s else null;
     }
     if (idx < 0) {
-        const back: u32 = @intCast(-idx);
+        // The lowest index has no negation in its own type.
+        const back: u64 = @intCast(-@as(i64, idx));
         if (back > l.top - frameBase(l)) return null;
-        return l.top - back;
+        return l.top - @as(u32, @intCast(back));
     }
     return null;
 }
@@ -201,8 +204,8 @@ export fn lus_settop(l: *Thread, idx: c_int) void {
         }
         l.top = want;
     } else {
-        const drop: u32 = @intCast(-idx - 1);
-        l.top = if (drop > l.top - b) b else l.top - drop;
+        const drop: u64 = @intCast(-@as(i64, idx) - 1);
+        l.top = if (drop > l.top - b) b else l.top - @as(u32, @intCast(drop));
     }
 }
 
@@ -664,6 +667,13 @@ export fn lus_len(l: *Thread, idx: c_int) c_int {
 
 export fn lus_newuserdata(l: *Thread, size: usize) ?*anyopaque {
     const g = l.g;
+    // A size past this has no allocation, and the sum with the header of
+    // the object must not wrap.
+    if (size > std.math.maxInt(u32)) {
+        _ = l.raiseMem() catch {};
+        pushErr(l);
+        return null;
+    }
     gc.maybeCollect(g);
     const u = gc.alloc(g, object.Userdata, .userdata, object.Userdata.allocSize(size, 0)) catch {
         _ = l.raiseMem() catch {};

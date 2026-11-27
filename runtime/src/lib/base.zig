@@ -31,6 +31,7 @@ pub const funcs = [_]aux.Reg{
     .{ .name = "next", .func = next },
     .{ .name = "pairs", .func = pairs },
     .{ .name = "print", .func = print },
+    .{ .name = "arity", .func = arity },
     .{ .name = "rawequal", .func = rawequal },
     .{ .name = "rawget", .func = rawget },
     .{ .name = "rawlen", .func = rawlen },
@@ -216,10 +217,10 @@ noinline fn setmetatableSlow(l: *Thread) Error!u32 {
         }
     }
     t.metatable = if (mtv.tag == .table) mtv.as(Table) else null;
-    if (t.metatable) |mt| {
-        gc.barrierBack(l.g, &t.hdr);
-        try registerFinalizer(l, &t.hdr, mt);
-    }
+    // The collector traces the table again, with or without a metatable,
+    // so a table that was weak under its old one is strong from now on.
+    gc.barrierBack(l.g, &t.hdr);
+    if (t.metatable) |mt| try registerFinalizer(l, &t.hdr, mt);
     return aux.ret(l, l.arg(1));
 }
 
@@ -253,6 +254,25 @@ fn rawset(l: *Thread) Error!u32 {
     _ = try aux.checkAny(l, 3);
     try ops.rawSet(l, t, l.arg(2), l.arg(3));
     return aux.ret(l, l.arg(1));
+}
+
+/// `arity(f)`: the number of parameters that the function `f` declares
+/// and whether it takes extra arguments. It tells what a function is and
+/// nothing of what it holds, so it needs no permission.
+fn arity(l: *Thread) Error!u32 {
+    const v = l.arg(1);
+    switch (v.tag) {
+        .closure => {
+            const p = v.as(object.Closure).proto;
+            try l.push(Value.int(p.num_params));
+            try l.push(Value.boolean(p.is_vararg));
+            return 2;
+        },
+        // A function of the runtime or of a host declares no parameters
+        // in a form the runtime can read.
+        .native => return aux.retNil(l),
+        else => return aux.typeError(l, 1, "function"),
+    }
 }
 
 fn rawlen(l: *Thread) Error!u32 {

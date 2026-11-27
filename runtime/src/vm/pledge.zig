@@ -660,6 +660,15 @@ pub fn isDosDevice(base: []const u8) bool {
 /// grant. Every path is ordinary under the POSIX rules.
 pub fn isOrdinaryPath(p: []const u8, rules: PathRules) bool {
     if (!rules.windows) return true;
+    // `//./` and `//?/` name devices and paths that skip the rules of
+    // ordinary paths, so no permission value and no request takes them.
+    if (p.len >= 4 and (p[2] == '.' or p[2] == '?')) {
+        var seps = true;
+        for ([_]u8{ p[0], p[1], p[3] }) |c| {
+            if (c != '/' and c != '\\') seps = false;
+        }
+        if (seps) return false;
+    }
     const root = rootLen(p, rules);
     if (std.mem.indexOfScalar(u8, p[root..], ':') != null) return false;
     const trimmed = std.mem.trimEnd(u8, p, "/");

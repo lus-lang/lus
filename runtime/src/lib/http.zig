@@ -887,6 +887,7 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
     var has_conn = false;
     var has_agent = false;
     var has_length = false;
+    var has_coding = false;
     if (l.arg(3).tag == .table) {
         const ht = l.arg(3).as(Table);
         var key: Value = .nil;
@@ -899,8 +900,9 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
             name.clearRetainingCapacity();
             val.clearRetainingCapacity();
             if (!try headerText(l, kv.key, &name)) continue;
-            if (std.mem.indexOfAny(u8, name.items, "\r\n") != null)
-                return l.raiseFmt("invalid characters in HTTP header", .{});
+            // A header name is a token, so it holds no space, colon, or
+            // control character.
+            if (!isToken(name.items)) return l.raiseFmt("invalid characters in HTTP header", .{});
             // A list sends one header line for each of its values.
             const list: ?*Table = if (kv.val.tag == .table) kv.val.as(Table) else null;
             const n: i64 = if (list) |t| table.length(t) else 1;
@@ -909,8 +911,13 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
                 val.clearRetainingCapacity();
                 const v = if (list) |t| table.getInt(t, i) else kv.val;
                 if (!try headerText(l, v, &val)) continue;
-                if (std.mem.indexOfAny(u8, val.items, "\r\n") != null)
-                    return l.raiseFmt("invalid characters in HTTP header", .{});
+                // A value holds no control character other than a tab.
+                for (val.items) |c| {
+                    if ((c < 0x20 and c != '\t') or c == 0x7f) return l.raiseFmt("invalid characters in HTTP header", .{});
+                }
+                // One message has one way to say where its body ends.
+                if (std.ascii.eqlIgnoreCase(name.items, "content-length") and has_length) return l.raiseFmt("the header 'Content-Length' is given twice", .{});
+                if (std.ascii.eqlIgnoreCase(name.items, "transfer-encoding")) has_coding = true;
                 if (std.ascii.eqlIgnoreCase(name.items, "host")) has_host = true;
                 if (std.ascii.eqlIgnoreCase(name.items, "connection")) has_conn = true;
                 if (std.ascii.eqlIgnoreCase(name.items, "user-agent")) has_agent = true;
@@ -928,10 +935,14 @@ fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: Pars
     if (!has_conn) req.appendSlice(gpa, "Connection: close\r\n") catch return l.raiseMem();
     if (!has_agent) req.appendSlice(gpa, user_agent) catch return l.raiseMem();
     req.appendSlice(gpa, own.items) catch return l.raiseMem();
+    if (has_length and has_coding) return l.raiseFmt("the headers 'Content-Length' and 'Transfer-Encoding' are given together", .{});
     if (body_fn) {
-        if (!has_length) req.appendSlice(gpa, "Transfer-Encoding: chunked\r\n") catch return l.raiseMem();
+        if (!has_length and !has_coding) req.appendSlice(gpa, "Transfer-Encoding: chunked\r\n") catch return l.raiseMem();
     } else if (body) |b| if (b.len > 0) {
-        req.print(gpa, "Content-Length: {d}\r\n", .{b.len}) catch return l.raiseMem();
+        // The length of a body that the request holds whole is its own
+        // count, which a header of the caller cannot contradict.
+        if (has_coding) return l.raiseFmt("the header 'Transfer-Encoding' needs a body given as a function", .{});
+        if (!has_length) req.print(gpa, "Content-Length: {d}\r\n", .{b.len}) catch return l.raiseMem();
     };
     req.appendSlice(gpa, "\r\n") catch return l.raiseMem();
     if (body) |b| req.appendSlice(gpa, b) catch return l.raiseMem();
@@ -1069,7 +1080,11 @@ pub fn fetch(l: *Thread) Error!u32 {
     };
     const o = try fetchOptions(l);
     if (!isToken(method)) return l.raiseFmt("invalid characters in HTTP method", .{});
-    if (std.mem.indexOfAny(u8, url, "\r\n") != null) return l.raiseFmt("invalid characters in URL", .{});
+    // The URL goes into the request line, which a space or a control
+    // character would cut short.
+    for (url) |c| {
+        if (c < 0x21 or c == 0x7f) return l.raiseFmt("invalid characters in URL", .{});
+    }
     try pledge.require(l, "network:http", url);
     const u = parseUrl(url) orelse return l.raiseFmt("invalid URL: {s}", .{url});
 

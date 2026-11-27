@@ -1145,3 +1145,78 @@ local function a_catch_handler_runs_above_the_failing_frames_test()
     assert(not caught and value == "seen first")
     assert(order[1] == "handler" and order[2] == "close seen first", table.concat(order, ","))
 end
+
+local function arity_tells_the_parameters_of_a_function_test()
+    local n, extra = arity(function(_a, _b)
+    end)
+
+    assert(n == 2 and extra == false)
+
+    n, extra = arity(function(_a, ...)
+    end)
+
+    assert(n == 1 and extra == true)
+    assert(arity(print) == nil)
+    assert(not (catch arity(1)))
+end
+
+local function times_at_the_ends_of_the_range_raise_clean_errors_test()
+    for _, t in ipairs({
+        math.maxinteger,
+        math.mininteger,
+        1 << 62,
+        -(1 << 62),
+        math.mininteger + 5000,
+    }) do
+        local _ = catch time.instant(t):iso()
+    end
+end
+
+local function a_request_refuses_what_would_split_its_head_test()
+    local co = coroutine.create(function()
+        pledge("network")
+        local refused = {}
+
+        local function try(url, headers)
+            local ok, err = catch network.fetch(url, "GET", headers)
+            refused[#refused + 1] = not ok
+                and tostring(err):find("invalid characters", 1, true) ~= nil
+        end
+
+        try("http://127.0.0.1:9/a b")
+        try("http://127.0.0.1:9/a\tb")
+        try("http://127.0.0.1:9/", { ["X Bad"] = "v" })
+        try("http://127.0.0.1:9/", { ["X:Bad"] = "v" })
+        try("http://127.0.0.1:9/", { Good = "a\0b" })
+        return refused
+    end)
+
+    local ok, refused = coroutine.resume(co)
+    assert(ok, tostring(refused))
+
+    for i, r in ipairs(refused) do
+        assert(r, i)
+    end
+end
+
+local function a_table_is_strong_once_its_weak_metatable_is_gone_test()
+    collectgarbage("incremental")
+
+    for _ = 1, 20 do
+        local t = setmetatable({}, { __mode = "v" })
+
+        for i = 1, 50 do
+            t[i] = { i }
+        end
+
+        collectgarbage("step", 1)
+        setmetatable(t, nil)
+        collectgarbage()
+
+        for i = 1, 50 do
+            assert(t[i] and t[i][1] == i)
+        end
+    end
+
+    collectgarbage("generational")
+end

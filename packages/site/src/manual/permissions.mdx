@@ -91,7 +91,7 @@ A script holds `debug` once it pledges it or receives it with `-P debug`, like a
 
 A permission can be limited to certain paths, hosts, or variable names, so the program holds only the access it uses. For example, a script that reads its own data directory pledges `fs:read=./data/**` and cannot read any other part of the disk.
 
-The limit is a _value_ written after `=`. In a value, `*` matches any sequence of characters, including `/` and the empty sequence, while `?` matches exactly one byte.
+The limit is a _value_ written after `=`. In a value, `*` matches any sequence of characters, including the empty sequence, and `?` matches exactly one byte. The values of paths have rules of their own for `/`, which the next section gives.
 
 ### Filesystem values
 

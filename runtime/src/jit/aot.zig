@@ -1445,14 +1445,19 @@ pub const Section = struct {
             return .wait;
         };
         u.* = m;
-        if (u.sites.len != 0) g.jit.callers.append(gpa, u) catch {};
+        // The unit joins the callers only once it is a unit of its
+        // function, so a failed install leaves no pointer to it there.
         info.units.append(gpa, u) catch {
             u.entry = 0;
             freeMeta(gpa, u);
             return .drop;
         };
+        if (u.sites.len != 0) g.jit.callers.append(gpa, u) catch {};
         info.compiles += 1;
         u.cell = 1;
+        // The function now refers to the functions compiled inline, as a
+        // unit that the JIT installs makes it do.
+        if (u.protos.len != 0) gc.barrierBack(g, &p.hdr);
         if (rec.pc == 0) {
             if (u.call_entry != 0) p.jit_entry = u.call_entry;
             if (u.tail_entry != 0) p.jit_tail = u.tail_entry;

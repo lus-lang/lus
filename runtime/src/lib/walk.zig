@@ -251,9 +251,13 @@ pub const Walker = struct {
                     if (st) |s| {
                         is_link = s.kind == .sym_link;
                         if (is_link) {
-                            if (Dir.cwd().statFile(io, path, .{})) |t| {
-                                if (t.kind == .directory) kind = .directory;
-                            } else |_| {}
+                            // The kind of the target is read only where
+                            // the program may read the target.
+                            if (pledge.allowed(l, "fs:read", path)) {
+                                if (Dir.cwd().statFile(io, path, .{})) |t| {
+                                    if (t.kind == .directory) kind = .directory;
+                                } else |_| {}
+                            }
                         } else if (s.kind == .directory) kind = .directory;
                     }
                 },

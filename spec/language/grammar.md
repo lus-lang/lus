@@ -76,7 +76,7 @@ Several words are contextual. They are ordinary names everywhere except in the p
 
 | Word | Special meaning | Where |
 | --- | --- | --- |
-| `const`, `close`, `group` | compile-time attribute names | first token of an attribute inside `< >` (section 5.9) |
+| `const`, `close`, `group`, `meta`, `lazy`, `observe`, `context` | compile-time attribute names | first token of an attribute inside `< >` (section 5.9) |
 | `flags` | reserved pseudo-global | free-name resolution (section 5.11) |
 | `where`, `select`, `group`, `having`, `order`, `limit`, `offset` | query clause keywords | between clauses of an `@` query |
 | `by`, `as`, `distinct`, `asc`, `desc` | query sub-keywords | inside query clauses and sources |
@@ -1051,7 +1051,7 @@ Compile-time attributes must come before runtime attributes in one list. **Teste
 #### Static semantics of runtime attributes
 
 - Each runtime attribute expression is compiled at the declaration, before the initializer, into a hidden local named `(attr)`. These hidden locals stay alive for the rest of the block and count toward the local limit.
-- An attribute name of `const`, `close`, or `group` always means the compile-time attribute. A runtime attribute cannot be a variable with one of those names unless the expression begins differently (for example `<(const)>`).
+- An attribute name of `const`, `close`, `group`, `meta`, `lazy`, `observe`, or `context` always means the compile-time attribute. A runtime attribute cannot be a variable with one of those names unless the expression begins differently (for example `<(const)>`).
 - In a context that rejects runtime attributes, the expression is still parsed before the error is raised.
 
 #### Dynamic semantics of runtime attributes
@@ -1129,7 +1129,7 @@ local a, b from z  -- group source
 - A group name is usable only as the prefix of a field path (`g.f`, `g.sub.f`), as the target of a group overwrite, as the value of another group's initializer, and as a `from` source. Anywhere else, including as a call argument, after `?`, or alone, it raises `cannot pass local group`. A group-copy initializer that is not a group name raises `group can only be copied from another group`.
 - A field path naming an absent field raises `'f' is not a field of group 'g'`, for reads and writes alike.
 - `<const>` fields reject assignment with the const error. **Tested**: `local z <group> = { a = 1, b <const> = 2 } z.b = 3` fails with `attempt to assign to const variable 'b'`.
-- A group overwrite `g = { ... }` accepts only a constructor (`group can only be assigned a constructor or another group`), and every listed field must already exist (`'d' is not a field of group 'z'`). Subgroups cannot be overwritten (`cannot overwrite subgroups`). Fields are separated by `,` or `;`, so `z = { a = 1 a = 2 }` fails with `'}' expected near 'a'`.
+- A group overwrite accepts a constructor, as in `g = { ... }`, or the name of another group, as in `g = h`. Any other value raises `group can only be assigned a constructor or another group`. In a constructor, every listed field must already exist (`'d' is not a field of group 'z'`). Subgroups cannot be overwritten (`cannot overwrite subgroups`). Fields are separated by `,` or `;`, so `z = { a = 1 a = 2 }` fails with `'}' expected near 'a'`.
 - Groups are always local. `global g <group>` raises `global variables cannot be groups`.
 - Group names resolve lexically to the innermost group in scope. In `local g <group> = {a=1} do local g <group> = {b=2} end print(g.a)`, the last `g.a` names the field of the outer group.
 - A nested function reaches the fields of a group declared in an enclosing function through the same group paths. Each field it names becomes an upvalue of the nested function that refers to the field local, so reads and writes on either side see one variable, exactly as for a captured ordinary local. Overwrites, copies, and `from` sources work the same way inside the nested function. **Tested** (`groups_test.lus`): a closure created in each loop iteration captures that iteration's field.
@@ -1455,7 +1455,7 @@ A chunk that fails to compile produces a single string message. `load` returns `
 11. `provide` may jump out of loops and nested blocks. `break`, `continue`, `goto`, and `return` may leave a do-expression. `provide` takes no trailing `;`.
 12. Runtime attribute handlers are skipped for `nil`, ignore `nil` results, and do not run for upvalue writes, group overwrites, or subgroup fields.
 13. Group copies share subgroups with their source. Group field locals are reachable only through group paths.
-14. Folding only touches `if`/`elseif` with the four exact shapes and never runs when an AST is built.
+14. Folding touches the condition of an `if` or `elseif` whose value is known at compile time (section 5.11) and never runs when an AST is built.
 15. A query ends at the first token that is not a clause keyword. `order by name` with a non-row name is an alias reference. Aggregate names followed by `(` are always aggregates inside clauses.
 16. `global *` anywhere in scope re-enables free names below later named declarations.
 17. Every string literal is well formed WTF-8. Raw bytes belong in vectors.

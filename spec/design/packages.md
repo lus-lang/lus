@@ -89,7 +89,7 @@ app:listen("127.0.0.1", 8080)
 
 A handler returns its response the way a `network.serve` handler does. If the first result is an integer, it is the status, followed by the body and the headers. Otherwise the first result is the body with status 200 and the second result is the headers. A table body is encoded as JSON by the response schema of the route when it has one, or by `tojson` otherwise. A string or vector body is sent as it is, with `text/plain` unless the headers name a type.
 
-A handler that declares a second parameter receives a reply object with `reply:header(name, value)`, `reply:cookie(name, value, options)`, `reply:type(mime)`, and `reply:redirect(url, status)`. `app:get` reads the number of parameters with `debug.getinfo` when it registers the route, so a handler with one parameter costs no reply object.
+A handler that declares a second parameter receives a reply object with `reply:header(name, value)`, `reply:cookie(name, value, options)`, `reply:type(mime)`, and `reply:redirect(url, status)`. `app:get` reads the number of parameters with `arity` when it registers the route, so a handler with one parameter costs no reply object. `arity` needs no permission, where `debug.getinfo` needs `debug`.
 
 The request table is the table that `network.serve` passes, with these fields added.
 

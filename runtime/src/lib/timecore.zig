@@ -172,7 +172,9 @@ pub fn isoWeekday(days: i64) i64 {
 /// day.
 pub fn splitDays(seconds: i64) struct { days: i64, secs: i64 } {
     const days = @divFloor(seconds, 86400);
-    return .{ .days = days, .secs = seconds - days * 86400 };
+    // The second of the day comes from the remainder, since the product
+    // of the days has no place in 64 bits near the lowest time.
+    return .{ .days = days, .secs = @mod(seconds, 86400) };
 }
 
 /// Seconds since the epoch of a civil wall clock time, or null on

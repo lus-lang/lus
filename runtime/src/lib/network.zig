@@ -1671,40 +1671,46 @@ pub fn fill(l: *Thread, s: *Socket, max: usize) Error!Fill {
 /// Reads up to `max` more bytes into the socket buffer, waiting at most
 /// the socket timeout. Returns null when it expires.
 pub fn tryFill(l: *Thread, s: *Socket, max: usize) Error!?Fill {
-    s.buf.ensureUnusedCapacity(l.g.gpa, max) catch return l.raiseMem();
-    const dst = s.buf.unusedCapacitySlice()[0..max];
     var n: usize = 0;
-    if (s.tls == null and !s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
-        n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
-    } else while (true) {
-        const handle = s.stream.socket.handle;
-        // The last read drained the socket and the poller has reported
-        // nothing for it since, so a receive would only report that it
-        // blocks. The read waits at once.
-        if (s.quiet) |q| {
-            s.quiet = null;
-            if (s.tls == null and s.timeout_ms != 0 and sched.active(l.g) and sched.quietCount(l.g, handle) == q) {
-                if (!try sched.waitIo(l, handle, .read, s.timeout_ms)) return null;
-                try stillOpen(l, s);
-                return tryFill(l, s, max);
-            }
+    // Each wait starts the attempt again, since the buffer may have moved
+    // while other coroutines ran. A peer that sends one byte at a time
+    // causes many waits, so the attempts are a loop.
+    attempt: while (true) {
+        s.buf.ensureUnusedCapacity(l.g.gpa, max) catch return l.raiseMem();
+        const dst = s.buf.unusedCapacitySlice()[0..max];
+        if (s.tls == null and !s.nonblocking and blocksPlainly(l, s.timeout_ms)) {
+            n = readSome(l.g.io, s.stream, dst) catch |e| return .{ .fail = e };
+            break :attempt;
         }
-        switch (tryRecv(l, s, dst)) {
-            .n => |got| {
-                n = got;
-                if (got > 0 and got < dst.len) s.quiet = sched.quietCount(l.g, handle);
-                sched.opDone(l);
-                break;
-            },
-            // The bytes already read stay in the buffer of the socket, so
-            // the receive that runs again continues from them.
-            .again => {
-                if (!try sched.waitIo(l, s.stream.socket.handle, againDir(s, .read), s.timeout_ms)) return null;
-                try stillOpen(l, s);
-                // The buffer may have moved while other coroutines ran.
-                return tryFill(l, s, max);
-            },
-            .fail => |e| return .{ .fail = e },
+        while (true) {
+            const handle = s.stream.socket.handle;
+            // The last read drained the socket and the poller has reported
+            // nothing for it since, so a receive would only report that it
+            // blocks. The read waits at once.
+            if (s.quiet) |q| {
+                s.quiet = null;
+                if (s.tls == null and s.timeout_ms != 0 and sched.active(l.g) and sched.quietCount(l.g, handle) == q) {
+                    if (!try sched.waitIo(l, handle, .read, s.timeout_ms)) return null;
+                    try stillOpen(l, s);
+                    continue :attempt;
+                }
+            }
+            switch (tryRecv(l, s, dst)) {
+                .n => |got| {
+                    n = got;
+                    if (got > 0 and got < dst.len) s.quiet = sched.quietCount(l.g, handle);
+                    sched.opDone(l);
+                    break :attempt;
+                },
+                // The bytes already read stay in the buffer of the socket, so
+                // the receive that runs again continues from them.
+                .again => {
+                    if (!try sched.waitIo(l, s.stream.socket.handle, againDir(s, .read), s.timeout_ms)) return null;
+                    try stillOpen(l, s);
+                    continue :attempt;
+                },
+                .fail => |e| return .{ .fail = e },
+            }
         }
     }
     if (n == 0) {
@@ -1799,7 +1805,12 @@ fn receiveValues(l: *Thread, s: *Socket, pattern: Value, limit: Value) Error!u32
     const max: ?i64 = switch (limit.tag) {
         .nil => null,
         .integer => limit.asInt(),
-        .float => if (@floor(limit.asFloat()) == limit.asFloat()) @as(i64, @intFromFloat(limit.asFloat())) else return l.raiseFmt("max_bytes must be an integer", .{}),
+        .float => blk: {
+            const f = limit.asFloat();
+            // An infinity is its own floor, and no integer holds it.
+            if (@floor(f) != f or !(f >= -9.2e18 and f <= 9.2e18)) return l.raiseFmt("max_bytes must be an integer", .{});
+            break :blk @as(i64, @intFromFloat(f));
+        },
         else => return l.raiseFmt("max_bytes must be an integer", .{}),
     };
     if (max) |m| if (m <= 0) return l.raiseFmt("max_bytes must be positive", .{});
