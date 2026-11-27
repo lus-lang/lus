@@ -650,6 +650,8 @@ const hash_len = 32;
 /// with a higher cost is treated as malformed rather than allocated.
 const max_memory = 1 << 22;
 const max_time = 1 << 16;
+/// The most lanes a password hash may ask for.
+const max_lanes = 64;
 
 /// Reads the optional integer field `name` of the options table, between
 /// `lo` and `hi`.
@@ -702,7 +704,8 @@ fn verifypassword(l: *Thread) Error!u32 {
     const mode = std.meta.stringToEnum(argon2.Mode, h.alg_id) orelse
         return aux.argError(l, 2, "unsupported password hash '{s}'", .{h.alg_id});
     if (h.alg_version) |v| if (v != argon2_version) return aux.argError(l, 2, "unsupported Argon2 version", .{});
-    if (h.m > max_memory or h.t > max_time) return aux.argError(l, 2, "invalid password hash", .{});
+    // The hash names its own cost, so each part of it has a bound.
+    if (h.m > max_memory or h.t > max_time or h.p > max_lanes) return aux.argError(l, 2, "invalid password hash", .{});
     const expected = h.hash.constSlice();
     if (expected.len < 4) return aux.argError(l, 2, "invalid password hash", .{});
     var buf: [64]u8 = undefined;

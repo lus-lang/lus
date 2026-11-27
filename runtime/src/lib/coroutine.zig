@@ -47,6 +47,13 @@ fn checkCo(l: *Thread, i: u32) Error!*Thread {
 }
 
 pub fn newCoroutine(l: *Thread, f: Value) Error!*Thread {
+    // A program that makes coroutines in a loop gives the collector a
+    // chance to run here, as every other allocation does. The stack
+    // holds `f` meanwhile, since a caller may pass a function it just
+    // made.
+    try l.push(f);
+    @import("../vm/gc.zig").maybeCollect(l.g);
+    l.top -= 1;
     const co = state.newThread(l.g) catch return l.raiseMem();
     co.status = .suspended;
     @import("../vm/pledge.zig").inherit(co, l);

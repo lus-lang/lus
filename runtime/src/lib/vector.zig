@@ -96,7 +96,7 @@ fn create(l: *Thread) Error!u32 {
 
 fn from(l: *Thread) Error!u32 {
     const a = l.arg(1);
-    if (a.tag == .vector) return aux.ret(l, Value.obj(.vector, try newVector(l, a.as(Vector).bytes.items)));
+    if (a.tag == .vector) return aux.ret(l, Value.obj(.vector, try newVector(l, (try checkVector(l, 1)).bytes.items)));
     const s = try aux.checkBytes(l, 1);
     return aux.ret(l, Value.obj(.vector, try newVector(l, s)));
 }
@@ -270,7 +270,7 @@ pub fn stringPack(l: *Thread) Error!u32 {
 pub fn stringUnpack(l: *Thread) Error!u32 {
     const fmt = try aux.checkBytes(l, 1);
     const d = l.arg(2);
-    const data = if (d.tag == .vector) d.as(Vector).bytes.items else try aux.checkBytes(l, 2);
+    const data = if (d.tag == .vector) (try checkVector(l, 2)).bytes.items else try aux.checkBytes(l, 2);
     var pos = try aux.optInt(l, 3, 1);
     // Positions follow the string functions: zero and negative positions
     // beyond the start clamp to the first byte.
