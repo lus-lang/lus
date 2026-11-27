@@ -319,9 +319,16 @@ fn poison(block: []u8) void {
         else => @memset(block, 0),
     }
     if (windows) {
-        _ = VirtualProtect(@ptrFromInt(lo), hi - lo, page_execute_read, &old);
+        // The pages hold other blocks that still run, so a failure to
+        // make them executable again cannot be passed over.
+        if (VirtualProtect(@ptrFromInt(lo), hi - lo, page_execute_read, &old) == 0) @panic("VirtualProtect failed");
         _ = FlushInstructionCache(GetCurrentProcess(), block.ptr, block.len);
-    } else writeEnd(block.ptr, block.len);
+    } else {
+        writeEnd(block.ptr, block.len);
+        // A core that still holds the old instructions in its cache
+        // would run them where the traps now stand.
+        syncIcache(block.ptr, block.len);
+    }
 }
 
 /// Copies finished code into a block and makes it runnable.
@@ -331,6 +338,14 @@ pub fn install(block: []u8, code: []const u8) void {
     writeBegin(block.ptr, code.len);
     @memcpy(block[0..code.len], code);
     writeEnd(block.ptr, code.len);
+    syncIcache(block.ptr, code.len);
+}
+
+/// Makes every core fetch the bytes at `ptr` again, on the targets whose
+/// instruction cache does not follow stores by itself.
+fn syncIcache(ptr: [*]u8, len: usize) void {
+    const block: struct { ptr: [*]u8 } = .{ .ptr = ptr };
+    const code: struct { len: usize } = .{ .len = len };
     if (darwin) {
         sys_icache_invalidate(block.ptr, code.len);
     } else if (builtin.cpu.arch == .aarch64) {

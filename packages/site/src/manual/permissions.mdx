@@ -192,11 +192,11 @@ print((catch os.execute("true")))  --> false
 print((catch pledge("exec")))  --> false
 ```
 
-Rejecting a base permission rejects every one of its parts. A later `pledge` of one of those parts returns `true`, but the operation still fails because the base permission stays rejected.
+Rejecting a base permission rejects every one of its parts. A later `pledge` of one of those parts raises the same error as a pledge of the base permission.
 
 ```lus
 pledge("~network")
-print(pledge("network:http"))  --> true
+print((catch pledge("network:http")))  --> false
 print((catch network.fetch("http://127.0.0.1/")))  --> false
 ```
 

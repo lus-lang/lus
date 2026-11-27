@@ -1142,12 +1142,15 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
     var rel_buf: ?[]u8 = null;
     defer if (rel_buf) |b| gpa.free(b);
     if (std.mem.eql(u8, name, "seal")) {
+        // A seal takes no value and has no rejection.
+        if (reject or val != null) return l.raiseFmt("'seal' takes no '~' and no value (got '{s}')", .{spec});
         const set = try writable(l);
         set.sealed = true;
         return .granted;
     }
     if (std.mem.eql(u8, name, "all")) {
         if (!from_host) return l.raiseFmt("permission \"all\" cannot be requested from scripts", .{});
+        if (val != null) return l.raiseFmt("'all' takes no value (got '{s}')", .{spec});
     } else {
         const parts = split(name);
         const cap = findCap(g, parts[0]) orelse return l.raiseFmt("unknown permission: '{s}'", .{name});
@@ -1177,6 +1180,8 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
     if (!reject) {
         if (setOf(l)) |s| if (s.find(name)) |e| if (e.rejected) return l.raiseFmt("permission \"{s}\" was rejected", .{name});
         if (setOf(l)) |s| if (allRejected(s)) return l.raiseFmt("permission \"{s}\" was rejected", .{name});
+        // A rejected base permission rejects each of its parts.
+        if (setOf(l)) |s| if (s.find(split(name)[0])) |e| if (e.rejected) return l.raiseFmt("permission \"{s}\" was rejected", .{name});
         // The host ceiling bounds what scripts may grant. With a request
         // hook installed, the hook decides every script pledge the ceiling
         // does not already cover.
@@ -1186,6 +1191,12 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
             if (!covered) {
                 if (r.on_request) |hook| {
                     if (!hook.func(hook.ctx, l, name, val)) return .refused;
+                    // The hook ran code of the host, which may have
+                    // sealed or rejected in the meantime.
+                    if (setOf(l)) |s| {
+                        if (s.sealed) return .refused;
+                        if (s.find(name)) |e| if (e.rejected) return .refused;
+                    }
                 } else if (r.ceiling != null) return .refused;
             }
         }
