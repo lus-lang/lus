@@ -6,7 +6,7 @@ local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 local ROOT = string.match(LANG_DIR, "^(.*)[/\\]packages[/\\][^/\\]*$")
 local CORPUS = `$ROOT/tests/conformance`
 
-pledge("load", `fs:read=$LANG_DIR/*`, `fs:read=$CORPUS`, `fs:read=$CORPUS/*`)
+pledge("load", `fs:read=$LANG_DIR/**`, `fs:read=$CORPUS`, `fs:read=$CORPUS/**`)
 
 table.insert(package.searchers, 2, function(name)
     if rest = string.match(name, "^lus%-language%.(.+)$") then

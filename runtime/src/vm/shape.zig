@@ -157,13 +157,20 @@ pub const Shapes = struct {
     root_children: u16 = 0,
     /// Every shape of the state, for `deinit`.
     all: std.ArrayList(*Shape) = .empty,
+    /// Set by `deinit`, the only place that gives an id back.
+    closing: bool = false,
 
     /// The most children of the root in one state, one for each first key
     /// of the records of a program.
     const max_root_children = 256;
 
     pub fn deinit(sh: *Shapes, gpa: Allocator) void {
+        // Native code and inline caches compare a table with a shape by
+        // its id alone, which holds because a state gives no id back
+        // while it lives.
+        sh.closing = true;
         for (sh.all.items) |s| {
+            inv.assert(sh.closing);
             releaseId(s.id);
             freeShape(gpa, s);
         }

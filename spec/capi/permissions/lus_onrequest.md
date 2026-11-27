@@ -35,7 +35,7 @@ static int ask(void *ud, lus_State *L, const char *capability, const char *value
 }
 
 static int setup(lus_State *L) {
-  if (lus_grant(L, "fs:read=/srv/data/*") != LUS_OK ||
+  if (lus_grant(L, "fs:read=/srv/data/**") != LUS_OK ||
       lus_reject(L, "exec") != LUS_OK)
     return lus_error(L);
   lus_onrequest(L, ask, NULL);

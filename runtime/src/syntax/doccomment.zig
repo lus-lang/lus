@@ -422,7 +422,7 @@ test "parse a package header" {
         "@flag tzdata string Path of a time zone database.",
         "@flag strict boolean false Reject unknown fields.",
         "@flag mode \"fast\"|\"small\" \"fast\" The tradeoff.",
-        "@permission fs:read=/usr/share/zoneinfo/* Reads the time zone database.",
+        "@permission fs:read=/usr/share/zoneinfo/** Reads the time zone database.",
         "@includes strings https://atmosp.here/2.0/strings.lus 1.0.0",
     };
     const d = try parse(arena_state.allocator(), &lines, 1, 10);
@@ -435,7 +435,7 @@ test "parse a package header" {
     try testing.expectEqualStrings("Path of a time zone database.", p.flags[0].description);
     try testing.expectEqualStrings("false", p.flags[1].default.?);
     try testing.expectEqualStrings("\"fast\"", p.flags[2].default.?);
-    try testing.expectEqualStrings("fs:read=/usr/share/zoneinfo/*", p.permissions[0].pledge);
+    try testing.expectEqualStrings("fs:read=/usr/share/zoneinfo/**", p.permissions[0].pledge);
     try testing.expectEqualStrings("1.0.0", p.includes[0].version);
 }
 

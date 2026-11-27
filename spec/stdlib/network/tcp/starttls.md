@@ -41,7 +41,7 @@ print(sock:tlsinfo().servername)   --> mail.example.com
 The following server side of the same exchange reads its certificate once and upgrades each connection after the `STARTTLS` command.
 
 ```lus nocheck
-pledge("network", "fs:read=/etc/mail/*")
+pledge("network", "fs:read=/etc/mail/**")
 local function read(path)
     local f <close> = io.open(path)
     return f:read("a")

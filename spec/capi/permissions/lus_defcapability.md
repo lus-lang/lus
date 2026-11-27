@@ -34,4 +34,4 @@ static int open_store(lus_State *L) {
 }
 ```
 
-With the grant `"store:read=users/*"`, a check of `store:read` for `users/ada` passes and a check for `secrets/key` fails.
+With the grant `"store:read=users/**"`, a check of `store:read` for `users/ada` passes and a check for `secrets/key` fails.

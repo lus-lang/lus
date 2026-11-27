@@ -146,9 +146,12 @@ pub fn closeTbc(l: *Thread, level: u32, err: ?Value) Error!void {
             _ = try ops.callMeta(l, tm, &.{ obj, .nil });
             unreachable;
         }
+        const depth = l.frames.items.len;
         _ = ops.callN(l, tm, &.{ obj, cur_err orelse .nil }, 0) catch {
             cur_err = l.err;
             failed = true;
+            // A native handler that raised left its frame behind.
+            if (l.frames.items.len > depth) l.frames.items.len = depth;
         };
         l.top = saved_top;
     }
@@ -435,6 +438,10 @@ fn handleError(l: *Thread, stop: usize) bool {
                 closeTbc(l, level, err) catch {
                     // An error in __close replaces the caught error.
                 };
+                // A handler that closed the running coroutine ends it, so
+                // no `catch` of the coroutine takes the error.
+                if (l.self_closed) return false;
+                l.frames.items.len = i + 1;
                 // A __close handler pushes frames of its own, which can
                 // move the frame list, so the frame is read again.
                 const here = &l.frames.items[i];
@@ -1335,7 +1342,9 @@ pub fn run(l: *Thread, stop: usize, comptime mode: Mode, step_ins: u32) (Error |
             }
             if (l.tbc.items.len > 0 and l.tbc.items[l.tbc.items.len - 1] >= level) {
                 c.fr.pc = pc;
-                l.meta_finish = .{ .redo = false };
+                // B is 1 when values of a variable count sit above the
+                // variables being closed, so the top stays where it is.
+                l.meta_finish = .{ .redo = opc.b(ins) != 0 };
                 defer l.meta_finish = null;
                 try closeTbc(l, level, null);
                 c.refresh(l, mode);
@@ -1519,6 +1528,7 @@ pub fn restartNative(l: *Thread) (Error || YieldError)!void {
     l.top = fr.base + t.saved_top;
     l.meta_finish = null;
     t.restarted = true;
+    t.restart_frames = l.frames.items.len;
     const r = nat.func(l);
     t.restarted = false;
     const nres = r catch |e| {
@@ -1734,7 +1744,8 @@ inline fn doReturn(l: *Thread, c: *Ctx, pc: *u32, first: u32, n: u32, stop: usiz
             c.fr.pc = pc.*;
             if (keep_top) {
                 // The instruction runs again with the top it had, which a
-                // multiple-result `ret` counts its results from.
+                // multiple-result `ret` counts its results from, and so
+                // does the `moverange` after a `close` whose B is 1.
                 l.top = dst;
                 return false;
             }

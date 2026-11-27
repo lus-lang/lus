@@ -142,6 +142,8 @@ pub fn checkClosed(l: *Thread) Error!void {
 fn sleepWait(l: *Thread) Error!u32 {
     const v = l.arg(1);
     if (v.tag != .userdata) return 0;
+    // The state of a sleep is a userdata of this size with no metatable.
+    if (v.as(Userdata).metatable != null or v.as(Userdata).size != @sizeOf(Sleep)) return 0;
     const st: *Sleep = @ptrCast(@alignCast(v.as(Userdata).data()));
     const g = l.g;
     if (st.forever) {

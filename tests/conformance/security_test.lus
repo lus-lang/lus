@@ -5,7 +5,7 @@
 -- The pledged subtree is created in the temporary working directory first. The
 -- write grant lives in a coroutine, so it stays local to the setup.
 local setup = coroutine.create(function()
-    pledge("fs:write=./*")
+    pledge("fs:write=./**")
     fs.createdirectory("tree")
     fs.createdirectory("tree/suite")
     local f = assert(io.open("tree/suite/security.lus", "w"))
@@ -21,7 +21,7 @@ end)
 assert(coroutine.resume(setup))
 
 pledge("load")
-pledge("fs:read=./tree/*")
+pledge("fs:read=./tree/**")
 pledge("env=LUS_TEST_ALLOWED")
 pledge("seal")
 

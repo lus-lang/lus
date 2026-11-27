@@ -3258,14 +3258,14 @@ Some operations need two permissions: loading a module file or starting a worker
 A program rarely needs the whole filesystem or the whole network. A value after `=` narrows a permission to the paths, hosts, or names that match the value, where `*` matches any run of characters. The following script may read only the files in `./data` and its subdirectories. It reads the first line of a sales file with `file:read("l")`, then fails to open a file outside `./data`.
 
 ```lus nocheck
-pledge("fs:read=./data/*")
+pledge("fs:read=./data/**")
 
 local file <close> = io.open("data/sales.csv")
 print(file:read("l"))                    --> region,amount
 print((catch io.open("secrets.txt")))    --> false
 ```
 
-A filesystem value is an absolute path or a path that starts with `.`, which is relative to the working directory. A network value names a host, with an optional port and path, as in `network:http=api.example.com/*` or `network:tcp=127.0.0.1:*`. An `env` value names a variable. The following script may read only `EDITOR` with `os.getenv`, so it cannot read the credentials that other variables hold.
+A filesystem value is an absolute path or a path that starts with `.`, which is relative to the working directory. A network value names a host, with an optional port and path, as in `network:http=api.example.com/**` or `network:tcp=127.0.0.1:*`. An `env` value names a variable. The following script may read only `EDITOR` with `os.getenv`, so it cannot read the credentials that other variables hold.
 
 ```lus
 pledge("env=EDITOR")
@@ -3306,7 +3306,7 @@ print(pledge("fs:write"))  --> false
 The `-P` option of `lus` grants a permission before the script starts. It may appear several times and takes the same names as `pledge`, including values and the `~` prefix.
 
 ```bash
-lus -Pnetwork:http -Pfs:read=./report.lus -Pfs:read=./data/* report.lus
+lus -Pnetwork:http -Pfs:read=./report.lus -Pfs:read=./data/** report.lus
 ```
 
 When the command line grants at least one permission, those grants are the limit for the whole run. A `pledge` in the script succeeds for a permission that the command line granted and returns `false` for any other. A person can therefore run a script they did not write without reading all of it first. A filesystem grant on the command line must cover the script file itself, which is why the example command grants `fs:read=./report.lus`.
@@ -4796,7 +4796,7 @@ The `network` library has functions for sending web requests, serving them, and 
 [`network.fetch`](/manual/api#network.fetch) sends one HTTP or HTTPS request and returns the status code, the body of the response, and its headers. The body is a vector, because a response can hold any bytes. `vector.tostring` converts it to text. The following program reads one user from a web service.
 
 ```lus nocheck
-pledge("network:http=api.example.com/*")
+pledge("network:http=api.example.com/**")
 
 local status, body = network.fetch("https://api.example.com/users/17")
 if status == 200 then
@@ -5055,7 +5055,7 @@ static int add(lus_State *L) {
 int main(void) {
   lus_State *L = lus_newstate();
   lus_openlibs(L);
-  lus_grant(L, "fs:read=/srv/data/*");
+  lus_grant(L, "fs:read=/srv/data/**");
   lus_pushcfunction(L, add);
   lus_setglobal(L, "add");
   if (lus_dostring(L, "print(add(2, 3))") != LUS_OK)

@@ -1,4 +1,4 @@
-pledge("load", `fs:read=$TEST_DIR/fixtures/json`, `fs:read=$TEST_DIR/fixtures/json/*`)
+pledge("load", `fs:read=$TEST_DIR/fixtures/json`, `fs:read=$TEST_DIR/fixtures/json/**`)
 
 -- ===== json =====
 -- fromjson parses null as nil

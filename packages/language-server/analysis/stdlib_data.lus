@@ -6515,7 +6515,7 @@ The `<` operator compares the same integers as signed values. [`math.maxinteger`
     description = [[
 Sends one HTTP or HTTPS request to `url` and returns the response status, the response body, and the response headers.
 
-`url` is a string that starts with `http://` or `https://`. The arguments after it are positional and optional. `method` is a string that defaults to `"GET"`. `headers` is a table from header names to values. A value is a string, a number, or a list of them, and a list sends one header line for each element in order. `body` is the request body and defaults to an empty body. The request carries `Host`, `Connection: close`, and `User-Agent: Lus/VERSION`, where `VERSION` is the full version of the runtime such as `2.0.0`, except those that `headers` names in any case, then the entries of `headers`, then the framing of the body.
+`url` is a string that starts with `http://` or `https://`. The arguments after it are positional and optional. `method` is a string that defaults to `"GET"`. It holds letters, digits, and the marks ``!#$%&'*+-.^_`|~``, and any other character raises an error. `headers` is a table from header names to values. A value is a string, a number, or a list of them, and a list sends one header line for each element in order. `body` is the request body and defaults to an empty body. The request carries `Host`, `Connection: close`, and `User-Agent: Lus/VERSION`, where `VERSION` is the full version of the runtime such as `2.0.0`, except those that `headers` names in any case, then the entries of `headers`, then the framing of the body.
 
 A string or a vector `body` goes out whole after a `Content-Length` header. A coroutine or a function produces the request body as it goes out. `fetch` resumes a coroutine again and again, sends each chunk that it yields, and ends the body when the coroutine ends, after a chunk that the coroutine returns at its end. `fetch` calls a function again and again, sends each chunk that it returns, and ends the body when it returns `nil`. A chunk is a string or a vector, and an empty chunk or a `nil` that a coroutine yields sends nothing. Such a body goes out with `Transfer-Encoding: chunked`, unless `headers` sets `Content-Length`, in which case the chunks go out as they are and must add up to that length. Any other value raises an error, and so does an error of the coroutine or the function.
 
@@ -7106,7 +7106,7 @@ On success the call returns one socket with the methods of a TCP socket and [`tl
 The following example connects to a server with a private certificate authority and asks for HTTP/1.1 through ALPN.
 
 ```lus nocheck
-pledge("network", "fs:read=/etc/myapp/*")
+pledge("network", "fs:read=/etc/myapp/**")
 local f <close> = io.open("/etc/myapp/ca.pem")
 local sock <close> = network.tls.connect("db.internal", 5433, {
     ca = f:read("a"),
@@ -7784,7 +7784,7 @@ The process object has these fields and methods.
 
 Leaving the scope of a process in a `<close>` variable closes its pipes and then waits for it to end, so a child that reads its input to the end sees the end and exits. A process object that the collector reclaims while the process runs leaves it running, and the runtime collects its exit status so that it never remains a zombie. A child keeps running after the program ends.
 
-The call requires the `exec` permission for the program. A grant without a value covers every program. A value without a separator is a glob over the name as `argv[1]` writes it, so `pledge("exec=git")` allows `{"git", ...}`. A value with a separator is a path glob over the absolute path the name resolves to, which resolves through symbolic links like a grant of `fs:read`, so `pledge("exec=/usr/bin/*")` allows every program found there. On Windows a path value also covers that path with one of the extensions `.com`, `.exe`, `.bat`, and `.cmd` added, as Windows adds them when it runs a program, so `exec=C:/tools/lus` allows `C:\tools\lus.exe`. A denied program raises `permission "exec" denied for 'NAME'`. Since a shell runs any program, `os.execute` and `io.popen` need the grant without a value.
+The call requires the `exec` permission for the program. A grant without a value covers every program. A value without a separator is a glob over the name as `argv[1]` writes it, so `pledge("exec=git")` allows `{"git", ...}`. A value with a separator is a path glob over the absolute path the name resolves to, which resolves through symbolic links like a grant of `fs:read`, so `pledge("exec=/usr/bin/**")` allows every program found there. On Windows a path value also covers that path with one of the extensions `.com`, `.exe`, `.bat`, and `.cmd` added, as Windows adds them when it runs a program, so `exec=C:/tools/lus` allows `C:\tools\lus.exe`. A denied program raises `permission "exec" denied for 'NAME'`. Since a shell runs any program, `os.execute` and `io.popen` need the grant without a value.
 
 On Windows the arguments are quoted for the rules that the C runtime uses to split a command line, so a program built with any common compiler receives them unchanged. A `.bat` or `.cmd` program runs through `cmd.exe`, which parses its arguments with rules of its own. An argument for such a program that holds `%`, `!`, `"`, or a line break cannot reach it intact, so the call raises an error before it starts anything.
 
@@ -8276,7 +8276,7 @@ The order of traversal is unspecified, as it is for [`next`](/manual/api#next). 
     description = [[
 `pledge(...)` grants, rejects, or seals permissions for the running coroutine and returns one boolean for each permission name, in order.
 
-Each argument is a permission name, such as `"fs"`, `"fs:read"`, or `"network:http"`, optionally followed by `=` and a value that limits it to matching paths, hosts, or names, as in `"fs:read=./data/*"`. Two forms have a special meaning:
+Each argument is a permission name, such as `"fs"`, `"fs:read"`, or `"network:http"`, optionally followed by `=` and a value that limits it to matching paths, hosts, or names, as in `"fs:read=./data/**"`. Two forms have a special meaning:
 
 - A name with the prefix `~` rejects that permission permanently, as in `"~exec"`.
 - The name `"seal"` freezes the permission set, so that every later grant and rejection fails.
@@ -11303,7 +11303,7 @@ print(sock:tlsinfo().servername)   --> mail.example.com
 The following server side of the same exchange reads its certificate once and upgrades each connection after the `STARTTLS` command.
 
 ```lus nocheck
-pledge("network", "fs:read=/etc/mail/*")
+pledge("network", "fs:read=/etc/mail/**")
 local function read(path)
     local f <close> = io.open(path)
     return f:read("a")

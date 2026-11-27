@@ -442,12 +442,15 @@ local function temporary_files_need_a_grant_that_covers_them_test()
     end
 
     local _, out = run_command(
-        `$lus_cmd -P 'fs:write=/nowhere/*' -e 'print(catch os.tmpname()) print(catch io.tmpfile())'`
+        `$lus_cmd -P 'fs:write=/nowhere/**' -e 'print(catch os.tmpname()) print(catch io.tmpfile())'`
     )
-    local _, n = out:gsub("false\t[^\n]*permission \"fs:write\" denied for '[^']*/lu[as]_", "")
+    local _, n = out:gsub(
+        "false\t[^\n]*permission \"fs:write\" denied for the directory of temporary files",
+        ""
+    )
     assert(n == 2, out)
     local _, ok = run_command(
-        `TMPDIR=. $lus_cmd -P 'fs:write=./*' -P fs:read -e 'local p = os.tmpname() print(p:sub(1, 6)) fs.remove(p)'`
+        `TMPDIR=. $lus_cmd -P 'fs:write=./**' -P fs:read -e 'local p = os.tmpname() print(p:sub(1, 6)) fs.remove(p)'`
     )
     assert(ok == "./lua_\n", ok)
 end

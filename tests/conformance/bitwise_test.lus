@@ -1,4 +1,4 @@
-pledge("load", `fs:read=$TEST_DIR/fixtures/bwcoercion/*`)
+pledge("load", `fs:read=$TEST_DIR/fixtures/bwcoercion/**`)
 
 assert(loadfile(`$TEST_DIR/fixtures/bwcoercion/shim.lus`))()
 

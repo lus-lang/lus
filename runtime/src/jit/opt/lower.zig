@@ -562,6 +562,14 @@ pub const Lower = struct {
         b.slot_ver.items[s] += 1;
     }
 
+    /// Ends the special standing of the new table. Its stores so far
+    /// skipped `clobber`, so the classes they wrote start a new epoch,
+    /// and every later read of the table loads from memory.
+    fn endFresh(b: *Lower) void {
+        for ([_]ir.Class{ .tab_hash, .node_key, .node_val, .tab_meta, .tab_absent }) |c| b.clobber(c);
+        b.fresh = null;
+    }
+
     /// Forgets everything the block knows about memory.
     fn clobberAll(b: *Lower) void {
         for (&b.epochs) |*e| e.* +%= 1;
@@ -628,6 +636,13 @@ pub const Lower = struct {
     /// tag goes to `tdisp`, as a word, or as a byte when `tsize` is 1, as
     /// in a hash node.
     fn storeValueAt(b: *Lower, base: Ref, disp: i32, tdisp: i32, tsize: u8, v: Ref, cls: ir.Class, fresh: bool) Error!void {
+        // A new table that is stored somewhere has another name from here
+        // on, so its later stores are ordinary stores.
+        // A store of the table into itself gives it no other name, and the
+        // caller of such a store still reads the record of the table.
+        if (b.fresh) |fz| {
+            if (v == fz.ref and base != fz.ref) b.endFresh();
+        }
         const ty = b.tyOf(v);
         var tag_store: Ref = undefined;
         switch (ty) {

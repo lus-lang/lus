@@ -1,6 +1,6 @@
 local FIXTURES = `$TEST_DIR/fixtures/network`
 
-pledge("load", "network", `fs:read=$FIXTURES/*`)
+pledge("load", "network", `fs:read=$FIXTURES/**`)
 
 -- ===== netio =====
 --[[

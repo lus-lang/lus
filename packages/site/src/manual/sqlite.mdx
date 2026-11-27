@@ -450,6 +450,8 @@ Lus denies the SQL statements that name other files, so that SQLite opens only p
 
 ## Workers
 
+A database handle keeps the permissions of the code that opened it. SQLite opens the files of a database, such as its journal, while statements run, and each of those opens is checked against the permissions that the opener held. A handle that is passed to a [coroutine with fewer permissions](/manual/permissions#permissions-in-coroutines) therefore still reaches the files that its opener could reach, so pass such a coroutine the rows it needs and keep the handle.
+
 A call to SQLite blocks the whole program until it returns, including its [detached coroutines](/manual/concurrency#detached-coroutines). A program that moves long database work to a [worker](/manual/concurrency#workers) keeps running during that work. A database handle cannot be sent in a message, so the worker opens the same file with its own call to `io.sqlite`. Several connections may read a database while one writes to it.
 
 ## Builds

@@ -3,7 +3,7 @@
 -- `worker.receive` and `worker.peek` are suspension points: the other
 -- coroutines of the state run while one waits for a message. Each test
 -- writes its worker script into the temporary working directory.
-pledge("load", "network", "fs:read=./*", "fs:write=./*", "seal")
+pledge("load", "network", "fs:read=./**", "fs:write=./**", "seal")
 
 local create, detach, resume, yield from coroutine
 local script_number = 0

@@ -73,6 +73,9 @@ pub const Task = struct {
     wake: Wake = .none,
     /// True while `interp.restartNative` runs the native again.
     restarted: bool = false,
+    /// The frame count of the thread when the restarted native began, so
+    /// that a function it calls is not taken for the one that waited.
+    restart_frames: usize = 0,
     /// The stack top above the base of the native frame when it waited.
     saved_top: u32 = 0,
     /// What the native keeps across its runs: a count and a pointer with
@@ -293,13 +296,13 @@ pub fn suspendThread(l: *Thread, t: *Task) Error {
 
 /// True when the scheduler is running the native of `l` again.
 pub inline fn restarted(l: *Thread) bool {
-    return if (l.task) |t| t.restarted else false;
+    return if (l.task) |t| t.restarted and l.frames.items.len == t.restart_frames else false;
 }
 
 /// The count that the native of `l` saved before it waited, or zero in
 /// its first run.
 pub inline fn progress(l: *Thread) usize {
-    return if (l.task) |t| (if (t.restarted) t.progress else 0) else 0;
+    return if (l.task) |t| (if (t.restarted and l.frames.items.len == t.restart_frames) t.progress else 0) else 0;
 }
 
 /// Saves a count for the next run of the native of `l`.

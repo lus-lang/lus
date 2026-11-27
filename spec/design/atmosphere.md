@@ -177,7 +177,7 @@ The following header declares a package that reads time zone data.
 --- @lus 2.0
 --- @license 0BSD
 --- @repository https://github.com/example/dates
---- @permission fs:read=/usr/share/zoneinfo/* Reads the system time zone database.
+--- @permission fs:read=/usr/share/zoneinfo/** Reads the system time zone database.
 --- @flag tzdata string Path of a time zone database to use in place of the system one.
 
 local dates = {}
@@ -226,7 +226,7 @@ A package declares its permissions with `@permission`. The analysis reads the sy
 | `package-flag` | error | A package reads a field of `flags` that no `@flag` declares. `lus check` reports it. |
 | `package-header` | error | The package header lacks a required annotation. `lus check` reports it. |
 
-Restricting permissions is the job of the main program. A program grants the permissions that its dependencies declare, loads them, and then seals, as in `pledge("fs:read=/usr/share/zoneinfo/*", "seal")` after its last `require`. A package that seals or rejects permits nothing more to the program that loads it, so the program loses permissions that it may still need and fails far from the cause. A package that grants itself a permission defeats the program's choice in the same way, which is why `package-pledge` is reported. The push is refused when the granted permission is not declared.
+Restricting permissions is the job of the main program. A program grants the permissions that its dependencies declare, loads them, and then seals, as in `pledge("fs:read=/usr/share/zoneinfo/**", "seal")` after its last `require`. A package that seals or rejects permits nothing more to the program that loads it, so the program loses permissions that it may still need and fails far from the cause. A package that grants itself a permission defeats the program's choice in the same way, which is why `package-pledge` is reported. The push is refused when the granted permission is not declared.
 
 The package page shows the declared permissions of the package and, separately, the union of the permissions of all its dependencies. A user sees the permissions that a dependency needs before adding it.
 

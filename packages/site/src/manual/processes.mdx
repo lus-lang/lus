@@ -76,7 +76,7 @@ A child that writes much to both of its pipes can fill one while the program rea
 
 ## Permissions
 
-`os.spawn` requires the [`exec` permission](/manual/permissions#program-values) for the program it starts. `pledge("exec")` allows every program. A value without a separator allows the programs whose name, as `argv[1]` writes it, matches the value, so `pledge("exec=git")` allows `git` and nothing else. A value with a separator allows the programs whose absolute path matches it, such as `pledge("exec=/usr/bin/*")`.
+`os.spawn` requires the [`exec` permission](/manual/permissions#program-values) for the program it starts. `pledge("exec")` allows every program. A value without a separator allows the programs whose name, as `argv[1]` writes it, matches the value, so `pledge("exec=git")` allows `git` and nothing else. A value with a separator allows the programs whose absolute path matches it, such as `pledge("exec=/usr/bin/**")`.
 
 `os.execute` and `io.popen` run a command line in the system shell, which can start any program, so they require `exec` without a value.
 

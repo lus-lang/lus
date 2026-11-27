@@ -14,7 +14,7 @@ Parses, formats, and compares dates in ISO 8601.
 
 **Permissions**
 
-- `fs:read=/usr/share/zoneinfo/*`: Reads the system time zone database.
+- `fs:read=/usr/share/zoneinfo/**`: Reads the system time zone database.
 
 **Flags**
 

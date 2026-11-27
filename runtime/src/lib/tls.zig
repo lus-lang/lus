@@ -671,7 +671,9 @@ fn configGc(l: *Thread) Error!u32 {
     const v = l.arg(1);
     if (v.tag != .userdata) return 0;
     const u = v.as(object.Userdata);
-    if (u.size != @sizeOf(?*Config)) return 0;
+    // Only a configuration holds this state behind this metatable.
+    const own: ?*Table = if (l.g.ext.get(config_name)) |p| @ptrCast(@alignCast(p)) else null;
+    if (own == null or u.metatable != own or u.size != @sizeOf(?*Config)) return 0;
     const slot: *?*Config = @ptrCast(@alignCast(u.data()));
     if (slot.*) |cfg| lus_tls_config_free(cfg);
     slot.* = null;

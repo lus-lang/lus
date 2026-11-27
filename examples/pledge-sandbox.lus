@@ -18,7 +18,7 @@ setup()
 -- The main program may read the data directory and its files, and nothing
 -- else. "~exec" rejects running programs for good. "seal" makes every later
 -- pledge return false.
-print(pledge("fs:read=./data", "fs:read=./data/*", "~exec", "seal"))  --> true  true  true  true
+print(pledge("fs:read=./data", "fs:read=./data/**", "~exec", "seal"))  --> true  true  true  true
 
 -- The error of a denied call names the permission, so the example keeps
 -- that part and drops the path, which differs between machines.

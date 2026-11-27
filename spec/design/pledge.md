@@ -7,7 +7,7 @@ Pledge is the capability system of Lus. A script states the capabilities it need
 The script syntax is the one documented on the [Permissions](/manual/permissions) page:
 
 ```lus
-pledge("fs:read=/tmp/*")  -- grant a capability with a value
+pledge("fs:read=/tmp/**")  -- grant a capability with a value
 pledge("network")  -- grant a capability and all of its subcapabilities
 pledge("~exec")  -- reject a capability permanently
 pledge("seal")  -- forbid any further change
@@ -17,13 +17,13 @@ pledge("seal")  -- forbid any further change
 
 ## Capabilities
 
-A capability has a name, a list of subcapabilities, and a value kind. The value kind decides how a granted value such as `/tmp/*` matches a requested value such as `/tmp/a.txt`.
+A capability has a name, a list of subcapabilities, and a value kind. The value kind decides how a granted value such as `/tmp/**` matches a requested value such as `/tmp/a.txt`.
 
 | Value kind | Granted value | Matching |
 |---|---|---|
 | `none` | no value allowed | presence of the grant |
-| `path` | a path glob | both sides are made absolute and canonical, then matched with the linear time glob matcher |
-| `host` | `host[:port][/path-glob]`, with `*` allowed in the host | host labels, port, and path are matched separately |
+| `path` | a path glob | both sides are made absolute and canonical, then matched as paths: `*` and `?` stay inside one component, and `**` spans `/` |
+| `host` | `host[:port][/path-glob]`, with `*` allowed in the host, and an optional `http://` or `https://` in front | the scheme when the value has one, the host, the port, and the path are matched separately, the path as a path glob. A request path with a `.` or `..` segment matches no value with a path |
 | `pattern` | a glob over an opaque string | the linear time glob matcher |
 | `custom` | any string | a matcher function supplied at registration |
 | `program` | a program name glob, or a path glob | a value without a separator matches the name of the program as written, and one with a separator matches the absolute path the name resolves to, canonical as for `path` |
@@ -36,9 +36,9 @@ The runtime registers its own capabilities through the same registry that extens
 
 ## Path values
 
-A path value is an absolute path or a relative path, which resolves against the working directory. A relative value without a leading `./`, such as `data/*`, is read as `./data/*`. A granted value, up to its first wildcard, and a requested path resolve the same way. Each resolves to the realpath of its longest existing prefix followed by the components that do not exist yet, so a grant of `/tmp/new/*` made before `/tmp/new` exists matches a later request for `/tmp/new/x` on a system where `/tmp` is a link to `/private/tmp`. A path whose missing part holds `..` never matches, since the place it names depends on what is created later. Both sides then use `/` as their only separator.
+A path value is an absolute path or a relative path, which resolves against the working directory. A relative value without a leading `./`, such as `data/**`, is read as `./data/**`. A granted value, up to its first wildcard, and a requested path resolve the same way. Each resolves to the realpath of its longest existing prefix followed by the components that do not exist yet, so a grant of `/tmp/new/**` made before `/tmp/new` exists matches a later request for `/tmp/new/x` on a system where `/tmp` is a link to `/private/tmp`. A path whose missing part holds `..` never matches, since the place it names depends on what is created later. Both sides then use `/` as their only separator.
 
-On Windows a path value may also start with a drive (`C:\` or `C:/`), a UNC share (`\\server\share`), or a single separator, and `\` and `/` are both separators, so a value such as `D:\a\tests/fixtures/*` that joins a native directory with `/` is valid. A walk up the directory part stops at the drive or the share. Windows paths match without regard to ASCII case, because NTFS compares names that way by default. The resolved parts of both sides carry the case stored on disk, so the rule only decides components that do not exist yet. A non ASCII name that differs from the grant only in case is denied.
+On Windows a path value may also start with a drive (`C:\` or `C:/`), a UNC share (`\\server\share`), or a single separator, and `\` and `/` are both separators, so a value such as `D:\a\tests/fixtures/**` that joins a native directory with `/` is valid. A walk up the directory part stops at the drive or the share. Windows paths match without regard to ASCII case, because NTFS compares names that way by default. The resolved parts of both sides carry the case stored on disk, so the rule only decides components that do not exist yet. A non ASCII name that differs from the grant only in case is denied.
 
 ## Registering a capability
 

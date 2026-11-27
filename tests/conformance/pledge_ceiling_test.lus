@@ -24,14 +24,14 @@ local function run(grant, code, more)
 end
 
 local function a_path_grant_is_not_widened_test()
-    local out = run("fs:read=./scoped/*", [[
+    local out = run("fs:read=./scoped/**", [[
         print(pledge("fs:read"), pledge("fs"), (catch io.open("/etc/hosts")))
     ]])
     assert(out == "false\tfalse\tfalse\n", out)
 end
 
 local function a_part_under_a_scoped_base_is_not_widened_test()
-    local out = run("fs=./scoped/*", [[
+    local out = run("fs=./scoped/**", [[
         print(pledge("fs:read"), (catch io.open("/etc/hosts")))
     ]])
     assert(out == "false\tfalse\n", out)
@@ -66,7 +66,7 @@ local function an_unscoped_grant_still_covers_an_unscoped_pledge_test()
 end
 
 local function a_scoped_pledge_within_the_grant_succeeds_test()
-    local out = run("fs:read=./scoped/*", [[
+    local out = run("fs:read=./scoped/**", [[
         print(pledge("fs:read=./scoped/a.txt"))
     ]])
     assert(out == "true\n", out)
@@ -86,7 +86,7 @@ local function a_grant_covers_a_directory_created_later_test()
         f:write("inside")
         f:close()
         print(io.open(dir .. "/a.txt"):read("a"))
-    `, { `fs=$dir/*` })
+    `, { `fs=$dir/**` })
 
     if fs.type(dir) then
         fs.remove(dir, true)

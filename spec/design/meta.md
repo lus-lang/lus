@@ -103,7 +103,7 @@ lus build -Pfs:read=./schema.json -o validate validate.lus
 
 `lus build` stores its `-P` grants in the executable as the limit of every run, so the executable keeps every permission that its build needed. The executable above can therefore read `schema.json` when it runs, although it carries the parsed schema and never reads the file. A program that must not keep a permission its build needed reads the file in a separate build step and embeds the result.
 
-A chunk that the command compiles before the program starts takes the `-P` grants: the main chunk, the modules of the require index, and every chunk of `lus build` and `lus compile`, which accepts `-P` for this purpose. A chunk compiled while the program runs takes the permissions of the program at that moment: a chunk of `load`, `loadfile`, or `dofile`, and a module that `require` compiles outside the index.
+A chunk that the command compiles before the program starts takes the `-P` grants: the main chunk, and every chunk of `lus build` and `lus compile`, which accepts `-P` for this purpose. A chunk compiled while the program runs takes the permissions of the program at that moment: a chunk of `load`, `loadfile`, or `dofile`, and a module that `require` compiles. The require index runs no code of a module (`modules.md`, section 2), so a module with compile-time evaluation stays out of the index and compiles at its `require`, after the permission checks of that load.
 
 Paths in an initializer resolve against the current directory of the compiling process, as they do at run time.
 
@@ -111,7 +111,7 @@ Paths in an initializer resolve against the current directory of the compiling p
 
 A meta value is a function of its source, the flags, the runtime version, and whatever its initializer reads. `math.random` in the meta state starts from a fixed seed, so an initializer that draws random numbers produces the same values on every build.
 
-Lus caches compiled chunks only within a process: the require index compiles each module once per process (`modules.md`, section 2). A script run with `lus script.lus` therefore evaluates its meta initializers on every start, as it would evaluate the same code at run time. `lus build` and `lus compile` evaluate them once, at build time.
+Lus caches compiled chunks only within a process: the require index compiles each module without compile-time evaluation once per process (`modules.md`, section 2). A script run with `lus script.lus` therefore evaluates its meta initializers on every start, as it would evaluate the same code at run time. `lus build` and `lus compile` evaluate them once, at build time.
 
 A later version may record each input that an initializer reads from outside the source, such as the path and digest of every file it opens, as the key of an on-disk cache of compiled chunks and as the list of files a build system watches.
 

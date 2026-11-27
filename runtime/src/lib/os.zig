@@ -215,6 +215,11 @@ fn setenv(l: *Thread) Error!u32 {
     if (val) |v| if (std.mem.indexOfScalar(u8, v, 0) != null)
         return aux.argError(l, 2, "environment variable value contains a zero byte", .{});
     try @import("../vm/pledge.zig").require(l, "env:write", name);
+    // `TZ` may name a file, which `os.date` then reads.
+    if (std.mem.eql(u8, name, "TZ")) if (val) |v| {
+        const file = if (v.len > 0 and v[0] == ':') v[1..] else v;
+        if (file.len > 0 and file[0] == '/') try @import("../vm/pledge.zig").require(l, "fs:read", file);
+    };
     const m = try writableEnviron(l);
     if (val) |v| {
         m.put(name, v) catch return l.raiseMem();
@@ -364,7 +369,9 @@ fn tmpname(l: *Thread) Error!u32 {
             c.* = alphabet[@intCast((seed >> 33) % alphabet.len)];
         }
         const path = std.fmt.bufPrint(&buf, "{s}{s}lua_{s}", .{ dir, sep, suffix }) catch break;
-        try pledge.require(l, "fs:write", path);
+        // The message leaves the directory out, which comes from the
+        // environment.
+        if (!pledge.allowed(l, "fs:write", path)) return l.raiseFmt("permission \"fs:write\" denied for the directory of temporary files", .{});
         const f = std.Io.Dir.cwd().createFile(io, path, .{ .exclusive = true }) catch |e| switch (e) {
             error.PathAlreadyExists => continue,
             else => break,

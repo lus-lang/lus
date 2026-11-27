@@ -222,12 +222,32 @@ fn isDir(l: *Thread, path: []const u8) bool {
     return st.kind == .directory;
 }
 
+/// A link keeps its text when it moves, and the system resolves a
+/// relative text from the new directory. The place it then names needs
+/// the permission that creating the link there would need.
+fn checkMovedLink(l: *Thread, src: []const u8, dst: []const u8) Error!void {
+    const cwd = Dir.cwd();
+    const st = cwd.statFile(l.g.io, src, .{ .follow_symlinks = false }) catch return;
+    if (st.kind != .sym_link) return;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = cwd.readLink(l.g.io, src, &buf) catch return;
+    const target = buf[0..n];
+    if (std.fs.path.isAbsolute(target)) return pledge.require(l, "fs:write", target);
+    const dir = std.fs.path.dirname(dst) orelse ".";
+    const from_link = std.fs.path.join(l.g.gpa, &.{ dir, target }) catch return l.raiseMem();
+    defer l.g.gpa.free(from_link);
+    if (!pledge.allowed(l, "fs:write", from_link)) return l.raiseFmt("permission \"fs:write\" denied for '{s}'", .{target});
+}
+
 fn move(l: *Thread) Error!u32 {
-    const src = try aux.checkBytes(l, 1);
-    const dst = try aux.checkBytes(l, 2);
-    try pledge.require(l, "fs:read", src);
-    try pledge.require(l, "fs:write", src);
-    try pledge.require(l, "fs:write", dst);
+    const src = withoutTrailingSeparators(try aux.checkBytes(l, 1));
+    const dst = withoutTrailingSeparators(try aux.checkBytes(l, 2));
+    // A move renames the entry itself, so a link is checked where it
+    // lies and stays a link.
+    try pledge.requireNoFollow(l, "fs:read", src);
+    try pledge.requireNoFollow(l, "fs:write", src);
+    try pledge.requireNoFollow(l, "fs:write", dst);
+    try checkMovedLink(l, src, dst);
     var replace = false;
     if (!l.arg(3).isNil()) {
         const opts = try aux.checkTable(l, 3);

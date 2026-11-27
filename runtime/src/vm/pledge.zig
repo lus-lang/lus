@@ -365,25 +365,113 @@ pub fn globMatch(pattern: []const u8, s: []const u8) bool {
 /// `globMatch`, comparing ASCII letters without regard to case when `fold`
 /// is set.
 pub fn globMatchCase(pattern: []const u8, s: []const u8, fold: bool) bool {
+    return globCore(pattern, s, .{ .fold = fold });
+}
+
+/// `globMatchCase` for a path. `*` and `?` match inside one component, so
+/// neither matches `/`, and `**` matches any run of characters, `/`
+/// included. `/data/*` covers the files of `/data`, and `/data/**` covers
+/// everything below it.
+pub fn pathGlobMatch(pattern: []const u8, s: []const u8, fold: bool) bool {
+    return globCore(pattern, s, .{ .fold = fold, .components = true });
+}
+
+const GlobOptions = struct {
+    /// ASCII letters compare without regard to case.
+    fold: bool = false,
+    /// The path rules: `*` and `?` stay inside a component, `**` spans.
+    components: bool = false,
+    /// The subject is a pattern too, and the question is whether the
+    /// pattern matches every string that the subject matches.
+    covers: bool = false,
+};
+
+const GlobToken = struct {
+    kind: enum { literal, one, run, span },
+    char: u8 = 0,
+    len: usize = 1,
+};
+
+/// The token at `i` of `text`. Outside the path rules `*` is a span.
+fn globToken(text: []const u8, i: usize, is_pattern: bool, components: bool) GlobToken {
+    const c = text[i];
+    if (is_pattern and c == '*') {
+        if (!components) return .{ .kind = .span };
+        if (i + 1 < text.len and text[i + 1] == '*') return .{ .kind = .span, .len = 2 };
+        return .{ .kind = .run };
+    }
+    if (is_pattern and c == '?') return .{ .kind = .one };
+    return .{ .kind = .literal, .char = c };
+}
+
+/// Whether a `*` of the path rules takes the subject token `t`.
+fn runTakes(t: GlobToken) bool {
+    return switch (t.kind) {
+        .literal => t.char != '/',
+        .one, .run => true,
+        .span => false,
+    };
+}
+
+/// The matcher behind every glob of a permission value. It walks the
+/// pattern and the subject once and returns to the last `*`, or to the
+/// last `**`, when a later part fails.
+fn globCore(pattern: []const u8, subject: []const u8, o: GlobOptions) bool {
     var p: usize = 0;
     var i: usize = 0;
-    var star_p: ?usize = null;
-    var star_i: usize = 0;
-    while (i < s.len) {
-        if (p < pattern.len and (pattern[p] == '?' or pattern[p] == s[i] or
-            (fold and std.ascii.toLower(pattern[p]) == std.ascii.toLower(s[i]))))
-        {
-            p += 1;
-            i += 1;
-        } else if (p < pattern.len and pattern[p] == '*') {
-            star_p = p;
-            star_i = i;
-            p += 1;
-        } else if (star_p) |sp| {
-            p = sp + 1;
-            star_i += 1;
-            i = star_i;
-        } else return false;
+    var run_p: ?usize = null;
+    var run_i: usize = 0;
+    var span_p: ?usize = null;
+    var span_i: usize = 0;
+    while (i < subject.len) {
+        const st = globToken(subject, i, o.covers, o.components);
+        if (p < pattern.len) {
+            const pt = globToken(pattern, p, true, o.components);
+            switch (pt.kind) {
+                .span => {
+                    span_p = p + pt.len;
+                    span_i = i;
+                    run_p = null;
+                    p += pt.len;
+                    continue;
+                },
+                .run => {
+                    run_p = p + 1;
+                    run_i = i;
+                    p += 1;
+                    continue;
+                },
+                .one => if (st.kind == .one or (st.kind == .literal and !(o.components and st.char == '/'))) {
+                    p += 1;
+                    i += st.len;
+                    continue;
+                },
+                .literal => if (st.kind == .literal and (pt.char == st.char or
+                    (o.fold and std.ascii.toLower(pt.char) == std.ascii.toLower(st.char))))
+                {
+                    p += 1;
+                    i += st.len;
+                    continue;
+                },
+            }
+        }
+        if (run_p) |rp| {
+            const t = globToken(subject, run_i, o.covers, o.components);
+            if (runTakes(t)) {
+                run_i += t.len;
+                i = run_i;
+                p = rp;
+                continue;
+            }
+            run_p = null;
+        }
+        if (span_p) |sp| {
+            span_i += globToken(subject, span_i, o.covers, o.components).len;
+            i = span_i;
+            p = sp;
+            continue;
+        }
+        return false;
     }
     while (p < pattern.len and pattern[p] == '*') p += 1;
     return p == pattern.len;
@@ -399,14 +487,27 @@ fn skipScheme(url: []const u8) []const u8 {
 /// `host[:port][/path]`. Its host part is matched against the host of the
 /// requested value (a URL or `host:port`), and against the whole authority
 /// when the granted value names a port. A path in the granted value is
-/// matched against the requested path. A granted value with a scheme is
-/// matched against the whole requested URL. Anchoring the match on the
+/// matched against the requested path under the rules of `pathGlobMatch`.
+/// A granted value with a scheme is matched the same way against a
+/// request of that scheme. Anchoring the match on the
 /// host keeps a grant such as `example.com` from matching a different
 /// host like `example.com.attacker.test`.
 pub fn hostMatch(granted: []const u8, requested: []const u8) bool {
-    if (std.mem.startsWith(u8, granted, "http://") or std.mem.startsWith(u8, granted, "https://"))
-        return globMatch(granted, requested);
-    const rest = skipScheme(requested);
+    // A granted value with a scheme covers requests of that scheme only.
+    if (schemeLen(granted)) |n| {
+        if (!std.mem.startsWith(u8, requested, granted[0..n])) return false;
+        return hostPartsMatch(granted[n..], requested[n..]);
+    }
+    return hostPartsMatch(granted, skipScheme(requested));
+}
+
+fn schemeLen(v: []const u8) ?usize {
+    if (std.mem.startsWith(u8, v, "http://")) return 7;
+    if (std.mem.startsWith(u8, v, "https://")) return 8;
+    return null;
+}
+
+fn hostPartsMatch(granted: []const u8, rest: []const u8) bool {
     const auth_end = std.mem.indexOfAny(u8, rest, "/?") orelse rest.len;
     const authority = rest[0..auth_end];
     const host = authority[0 .. std.mem.indexOfScalar(u8, authority, ':') orelse authority.len];
@@ -419,9 +520,38 @@ pub fn hostMatch(granted: []const u8, requested: []const u8) bool {
     if (slash) |sl| {
         var path = rest[auth_end..];
         if (path.len == 0 or path[0] == '?') path = "/";
-        return globMatch(granted[sl..], path);
+        // A server may resolve `.` and `..` before it routes a request,
+        // so a path with such a segment names no path that a grant can
+        // be compared with.
+        if (hasDotSegment(path)) return false;
+        return pathGlobMatch(granted[sl..], path, false);
     }
     return true;
+}
+
+/// Whether the path of a request target has a `.` or `..` segment, written
+/// plainly or with `%2e`.
+fn hasDotSegment(target: []const u8) bool {
+    const path = target[0 .. std.mem.indexOfAny(u8, target, "?#") orelse target.len];
+    var it = std.mem.splitScalar(u8, path, '/');
+    while (it.next()) |seg| {
+        var dots: usize = 0;
+        var i: usize = 0;
+        var only_dots = seg.len > 0;
+        while (i < seg.len) {
+            if (seg[i] == '.') {
+                i += 1;
+            } else if (i + 2 < seg.len and seg[i] == '%' and seg[i + 1] == '2' and (seg[i + 2] == 'e' or seg[i + 2] == 'E')) {
+                i += 3;
+            } else {
+                only_dots = false;
+                break;
+            }
+            dots += 1;
+        }
+        if (only_dots and dots <= 2) return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------
@@ -692,13 +822,13 @@ const program_extensions = [_][]const u8{ ".com", ".exe", ".bat", ".cmd" };
 /// program with one of the extensions Windows adds, so a grant of
 /// `C:/tools/lus` covers `C:/tools/lus.exe` as running `C:/tools/lus` does.
 fn programPathMatches(granted: []const u8, resolved: []const u8, rules: PathRules) bool {
-    if (globMatchCase(granted, resolved, rules.windows)) return true;
+    if (pathGlobMatch(granted, resolved, rules.windows)) return true;
     if (!rules.windows) return false;
     const base = splitParent(resolved, rules)[1];
     const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse return false;
     const ext = base[dot..];
     for (program_extensions) |e| {
-        if (std.ascii.eqlIgnoreCase(ext, e)) return globMatchCase(granted, resolved[0 .. resolved.len - ext.len], true);
+        if (std.ascii.eqlIgnoreCase(ext, e)) return pathGlobMatch(granted, resolved[0 .. resolved.len - ext.len], true);
     }
     return false;
 }
@@ -706,7 +836,7 @@ fn programPathMatches(granted: []const u8, resolved: []const u8, rules: PathRule
 fn valueMatches(cap: Capability, granted: []const u8, requested: []const u8, canon_req: ?[]const u8) bool {
     return switch (cap.kind) {
         .none => true,
-        .path => if (canon_req) |c| globMatchCase(granted, c, host_rules.windows) else false,
+        .path => if (canon_req) |c| pathGlobMatch(granted, c, host_rules.windows) else false,
         .host => hostMatch(granted, requested),
         .pattern => globMatch(granted, requested),
         .custom => if (cap.match) |m| m(cap.ctx, granted, requested) else false,
@@ -816,46 +946,31 @@ fn ceilingCovers(g: *Global, ceil: *Set, name: []const u8, val: ?[]const u8) boo
 /// covers the same literal byte. A `*` of the pledged pattern is covered
 /// by a `*` only, since it stands for strings of every length.
 pub fn patternCovers(ceiling: []const u8, pledged: []const u8, fold: bool) bool {
-    var c: usize = 0;
-    var i: usize = 0;
-    var star_c: ?usize = null;
-    var star_i: usize = 0;
-    while (i < pledged.len) {
-        const one = c < ceiling.len and ceiling[c] != '*' and pledged[i] != '*' and
-            (ceiling[c] == '?' or (pledged[i] != '?' and (ceiling[c] == pledged[i] or
-                (fold and std.ascii.toLower(ceiling[c]) == std.ascii.toLower(pledged[i])))));
-        if (one) {
-            c += 1;
-            i += 1;
-        } else if (c < ceiling.len and ceiling[c] == '*') {
-            star_c = c;
-            star_i = i;
-            c += 1;
-        } else if (star_c) |sc| {
-            c = sc + 1;
-            star_i += 1;
-            i = star_i;
-        } else return false;
-    }
-    while (c < ceiling.len and ceiling[c] == '*') c += 1;
-    return c == ceiling.len;
+    return globCore(ceiling, pledged, .{ .fold = fold, .covers = true });
 }
 
-fn hasScheme(v: []const u8) bool {
-    return std.mem.startsWith(u8, v, "http://") or std.mem.startsWith(u8, v, "https://");
+/// `patternCovers` for two path patterns, under the rules of
+/// `pathGlobMatch`. A `*` of the ceiling covers neither a `/` nor a `**`.
+pub fn pathPatternCovers(ceiling: []const u8, pledged: []const u8, fold: bool) bool {
+    return globCore(ceiling, pledged, .{ .fold = fold, .components = true, .covers = true });
 }
 
 /// `patternCovers` for two values of the `host` kind, part by part as
-/// `hostMatch` reads them. A value with a scheme is one glob over a whole
-/// URL, so it is covered only by a ceiling value with a scheme.
+/// `hostMatch` reads them.
 fn hostCovers(ceiling: []const u8, pledged: []const u8) bool {
-    if (hasScheme(ceiling) or hasScheme(pledged)) {
-        return hasScheme(ceiling) and hasScheme(pledged) and patternCovers(ceiling, pledged, false);
-    }
-    const c_slash = std.mem.indexOfScalar(u8, ceiling, '/');
-    const p_slash = std.mem.indexOfScalar(u8, pledged, '/');
-    const c_auth = ceiling[0 .. c_slash orelse ceiling.len];
-    const p_auth = pledged[0 .. p_slash orelse pledged.len];
+    // A ceiling with a scheme covers pledges of that scheme only. A
+    // pledge with a scheme asks for less than the same value without one.
+    var c = ceiling;
+    var p = pledged;
+    if (schemeLen(ceiling)) |n| {
+        if (!std.mem.startsWith(u8, pledged, ceiling[0..n])) return false;
+        c = ceiling[n..];
+        p = pledged[n..];
+    } else if (schemeLen(pledged)) |n| p = pledged[n..];
+    const c_slash = std.mem.indexOfScalar(u8, c, '/');
+    const p_slash = std.mem.indexOfScalar(u8, p, '/');
+    const c_auth = c[0 .. c_slash orelse c.len];
+    const p_auth = p[0 .. p_slash orelse p.len];
     const c_port = std.mem.indexOfScalar(u8, c_auth, ':') != null;
     const p_colon = std.mem.indexOfScalar(u8, p_auth, ':');
     if (c_port) {
@@ -867,7 +982,7 @@ fn hostCovers(ceiling: []const u8, pledged: []const u8) bool {
     }
     if (c_slash) |cs| {
         const ps = p_slash orelse return false;
-        return patternCovers(ceiling[cs..], pledged[ps..], false);
+        return pathPatternCovers(c[cs..], p[ps..], false);
     }
     return true;
 }
@@ -901,8 +1016,8 @@ fn ceilingCoversValue(g: *Global, ceil: *Set, name: []const u8, val: []const u8)
         if (e.unrestricted) return true;
         for (e.values.items) |cv| {
             const covers = switch (cap.kind) {
-                .path => patternCovers(cv, stored.?, host_rules.windows),
-                .program => if (is_path) hasSeparator(cv) and patternCovers(cv, stored.?, host_rules.windows) else !hasSeparator(cv) and patternCovers(cv, val, false),
+                .path => pathPatternCovers(cv, stored.?, host_rules.windows),
+                .program => if (is_path) hasSeparator(cv) and pathPatternCovers(cv, stored.?, host_rules.windows) else !hasSeparator(cv) and patternCovers(cv, val, false),
                 .host => hostCovers(cv, val),
                 .pattern => patternCovers(cv, val, false),
                 .custom, .none => unreachable,
@@ -910,7 +1025,7 @@ fn ceilingCoversValue(g: *Global, ceil: *Set, name: []const u8, val: []const u8)
             if (covers) plain = true;
         }
         if (is_path) for (e.link_values.items) |cv| {
-            if (patternCovers(cv, link.?, host_rules.windows)) as_link = true;
+            if (pathPatternCovers(cv, link.?, host_rules.windows)) as_link = true;
         };
     }
     if (plain and as_link) return true;
@@ -972,7 +1087,9 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
     if (std.mem.indexOfScalar(u8, s_spec, '=')) |eq| {
         name = s_spec[0..eq];
         val = s_spec[eq + 1 ..];
-        if (val.?.len == 0) val = null;
+        // A value that came out empty, as from an unset shell variable,
+        // would otherwise read as a grant of every value.
+        if (val.?.len == 0) return l.raiseFmt("permission '{s}' has an empty value", .{spec});
     }
     if (name.len >= 64) return l.raiseFmt("permission name too long: '{s}'", .{spec});
     var rel_buf: ?[]u8 = null;
@@ -1095,7 +1212,9 @@ pub fn hostApply(l: *Thread, spec: []const u8) Error!GrantResult {
 /// Host grants from the command line: applied to the main thread and
 /// recorded as the ceiling for script pledges.
 pub fn hostGrant(l: *Thread, specs: []const []const u8) Error!void {
-    for (specs) |spec| _ = try apply(l, spec, true);
+    for (specs) |spec| {
+        if (try apply(l, spec, true) == .refused) return l.raiseFmt("permission '{s}' was refused: the permissions are sealed", .{spec});
+    }
 }
 
 test "a ceiling covers a pledged pattern" {
@@ -1114,7 +1233,37 @@ test "a ceiling covers a pledged pattern" {
     try std.testing.expect(!hostCovers("api.example.com", "api.example.com*"));
     try std.testing.expect(!hostCovers("example.com:443", "example.com"));
     try std.testing.expect(!hostCovers("example.com/api/*", "example.com"));
-    try std.testing.expect(!hostCovers("example.com", "https://example.com/*"));
+    try std.testing.expect(hostCovers("example.com", "https://example.com/*"));
+    try std.testing.expect(!hostCovers("https://example.com", "example.com"));
+    try std.testing.expect(!hostCovers("https://example.com", "http://example.com"));
+}
+
+test "path globs keep a star inside one component" {
+    try std.testing.expect(pathGlobMatch("/data/*", "/data/a.txt", false));
+    try std.testing.expect(!pathGlobMatch("/data/*", "/data/a/b.txt", false));
+    try std.testing.expect(pathGlobMatch("/data/**", "/data/a/b.txt", false));
+    try std.testing.expect(pathGlobMatch("/data/**/x.lus", "/data/a/b/x.lus", false));
+    try std.testing.expect(pathGlobMatch("/data/*/x.lus", "/data/a/x.lus", false));
+    try std.testing.expect(!pathGlobMatch("/data/*/x.lus", "/data/a/b/x.lus", false));
+    try std.testing.expect(!pathGlobMatch("/data*", "/database/x", false));
+    try std.testing.expect(pathGlobMatch("/data*", "/database", false));
+    try std.testing.expect(!pathGlobMatch("/a?c", "/a/c", false));
+    try std.testing.expect(pathGlobMatch("/a/**", "/a/", false));
+    try std.testing.expect(pathPatternCovers("/data/**", "/data/*/x", false));
+    try std.testing.expect(pathPatternCovers("/data/**", "/data/**", false));
+    try std.testing.expect(!pathPatternCovers("/data/*", "/data/**", false));
+    try std.testing.expect(!pathPatternCovers("/data/*", "/data/a/b", false));
+    try std.testing.expect(pathPatternCovers("/data/*", "/data/a?.txt", false));
+}
+
+test "a scheme grant matches part by part" {
+    try std.testing.expect(hostMatch("https://*.example.com/**", "https://api.example.com/v1/x"));
+    try std.testing.expect(!hostMatch("https://*.example.com/**", "https://evil.net/.example.com/"));
+    try std.testing.expect(!hostMatch("https://*.example.com/**", "http://api.example.com/"));
+    try std.testing.expect(!hostMatch("example.com/api/*", "http://example.com/api/../admin"));
+    try std.testing.expect(!hostMatch("example.com/api/*", "http://example.com/api/%2e%2E/admin"));
+    try std.testing.expect(hostMatch("example.com/api/*", "http://example.com/api/users?x=1"));
+    try std.testing.expect(!hostMatch("example.com/api/*", "http://example.com/api/a/b"));
 }
 
 test "host" {

@@ -437,7 +437,7 @@ A package is a module that other programs load by URL, as [Modules from the netw
 --- @lus 2.0
 --- @license 0BSD
 --- @repository https://github.com/example/dates
---- @permission fs:read=/usr/share/zoneinfo/* Reads the system time zone database.
+--- @permission fs:read=/usr/share/zoneinfo/** Reads the system time zone database.
 --- @flag tzdata string Path of a time zone database to use in place of the system one.
 
 local dates = {}
@@ -754,7 +754,7 @@ The [Lus extension](/manual/ide-setup) registers the `lus` debugger type, so **R
       "program": "${file}",
       "cwd": "${workspaceFolder}",
       "args": [],
-      "pledges": ["fs:read=${workspaceFolder}/*"],
+      "pledges": ["fs:read=${workspaceFolder}/**"],
       "stopOnEntry": false
     }
   ]

@@ -143,7 +143,7 @@ When `lus` starts a program, and when `lus build` bundles one, it first indexes 
 The index does three things.
 
 - It fetches every remote module in the tree before the program runs (section 3), so a program pays the network latency once, up front, in parallel.
-- It compiles every module in the tree once per process. Every state of the process, including workers, loads the compiled module from memory.
+- It compiles every module in the tree once per process. Every state of the process, including workers, loads the compiled module from memory. A module with compile-time evaluation (`meta.md`) is the exception: compiling it would run its code before the program starts, so it compiles at its `require`.
 - It gives `lus build` the set of modules to bundle and tells it which modules no code can reach.
 
 ### What the index may not change
@@ -247,7 +247,7 @@ A package runs with the permissions of the program that loads it. A package decl
 The guide's best practices change accordingly. Only the main program pledges restrictions or seals. It loads its dependencies first, then rejects what it no longer needs and seals.
 
 ```lus nocheck
-pledge("load", "network:http=atmosp.here", "fs:read=./data/*")
+pledge("load", "network:http=atmosp.here", "fs:read=./data/**")
 
 local dates = require("https://atmosp.here/2.0/dates.lus")
 local csvx = require("https://atmosp.here/2.0/csvx.lus")
@@ -301,7 +301,7 @@ The client requests the module URL. An atmosphere server answers with status 200
 A release document is canonical JSON, which is UTF-8 with keys sorted by byte value and no insignificant whitespace. Its fields are these.
 
 ```json
-{"bundle":"https://atmosp.here/b/3be1....tar.zst","commit":"9c41...","deprecated":null,"files":{"dates.lus":"a1f0...","dates/zones.lus":"77c2..."},"flags":[{"default":null,"name":"tzdata","type":"string"}],"key":"atmos-2027-1","lus":"2.0","lus_min":"2.0.0","main":"dates.lus","name":"dates","permissions":["fs:read=/usr/share/zoneinfo/*"],"requires":["https://atmosp.here/2.0/strings.lus"],"sha256":"3be1...","signature":"<base64>","signed":"2027-02-01T12:00:00Z","size":18213,"version":"1.4.1","yanked":false}
+{"bundle":"https://atmosp.here/b/3be1....tar.zst","commit":"9c41...","deprecated":null,"files":{"dates.lus":"a1f0...","dates/zones.lus":"77c2..."},"flags":[{"default":null,"name":"tzdata","type":"string"}],"key":"atmos-2027-1","lus":"2.0","lus_min":"2.0.0","main":"dates.lus","name":"dates","permissions":["fs:read=/usr/share/zoneinfo/**"],"requires":["https://atmosp.here/2.0/strings.lus"],"sha256":"3be1...","signature":"<base64>","signed":"2027-02-01T12:00:00Z","size":18213,"version":"1.4.1","yanked":false}
 ```
 
 - `name`, `version`, and `main` name the package, its version, and the path of its main module in the bundle.
@@ -346,7 +346,7 @@ A _package_ is a set of modules with one main module. The main module starts wit
 --- @lus 2.0
 --- @license 0BSD
 --- @repository https://github.com/example/dates
---- @permission fs:read=/usr/share/zoneinfo/* Reads the system time zone database.
+--- @permission fs:read=/usr/share/zoneinfo/** Reads the system time zone database.
 --- @flag tzdata string Path of a time zone database to use in place of the system one.
 
 local dates = {}
@@ -367,7 +367,7 @@ A blank line separates the header from the first declaration, so the header docu
 
 ### Build flags of a package
 
-A program passes a flag to a package with the package name as a prefix, as in `lus -F dates.tzdata=/opt/tz main.lus`. Inside the modules of `dates`, `flags.tzdata` is `"/opt/tz"`. The runtime compiles the modules of each bundle with a flags table of their own, which holds the flags that carry the package's prefix, with the prefix removed, and the declared defaults of the others. A package therefore sees only its own flags. The flags of two packages never collide with each other or with the program's flags. Branch removal by flags works in package modules as it does in the program. In the package's own repository the package is the program, so its flags have no prefix there.
+A program passes a flag to a package with the package name as a prefix, as in `lus -F dates.tzdata=/opt/tz main.lus`. Inside the modules of `dates`, `flags.tzdata` is `"/opt/tz"`. The runtime compiles the modules of each bundle with a flags table of their own, which holds the flags that carry the package's prefix, with the prefix removed, and the declared defaults of the others. The flags of two packages therefore never collide with each other or with the program's flags, which is what the separate tables are for. They keep nothing secret: the global `flags` of the program is an ordinary global, so a module that reads it through a local, through `_G`, or with `pairs` sees every flag of the program, as it sees every other global. The runtime checks a flag that the program passes against the type that the package declares, and a declared string keeps the text of its default. A package name and a flag name hold letters, digits, `_`, and `-`, so the dot of `dates.tzdata` always separates the two. Branch removal by flags works in package modules as it does in the program. In the package's own repository the package is the program, so its flags have no prefix there.
 
 A dependency copied into a self-contained bundle keeps its own flags. The modules of a name that an `@includes` annotation of the main module lists, such as `dates.lus` and every file below `dates/`, compile with the flags that carry the prefix `dates.`. Every other module of the bundle compiles with the flags of the bundle's own package. `-F dates.tzdata=/opt/tz` therefore reaches `dates` whether the program loads it by URL or through a package that copied it.
 

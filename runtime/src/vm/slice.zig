@@ -68,7 +68,9 @@ pub fn slice(l: *Thread, obj: Value, from: Value, to: Value) Error!Value {
             const t = obj.as(Table);
             const i = (try sliceBound(l, from)) orelse 1;
             const j = (try sliceBound(l, to)) orelse table.length(t);
-            const span: i64 = if (i <= j) j - i + 1 else i - j + 1;
+            // The bounds are any two integers, so their distance is taken
+            // without overflow.
+            const span: i64 = (std.math.sub(i64, @max(i, j), @min(i, j)) catch std.math.maxInt(i64)) +| 1;
             if (span > (1 << 26)) return l.raiseFmt("slice span too large", .{});
             const r = try l.newTable(@intCast(@max(span, 0)), 0);
             var k: i64 = i;

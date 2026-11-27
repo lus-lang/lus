@@ -263,7 +263,7 @@ local function in_sandbox(body)
     end
 
     local script = io.open("sandboxed.lus", "w")
-    script:write(`assert(pledge("fs=./sb/*", "fs=./sb", "seal"))\n$body\n`)
+    script:write(`assert(pledge("fs=./sb/**", "fs=./sb", "seal"))\n$body\n`)
     script:close()
     local p = os.spawn({ exe, "sandboxed.lus" }, { stdout = "pipe" })
     return p.stdout:read("a")
@@ -339,4 +339,136 @@ local function finalizer_runs_with_the_permissions_of_its_thread_test()
     collectgarbage()
     assert(seen == false, "the finalizer must run without the env permission")
     assert(catch os.getenv("HOME"))
+end
+
+local function native_close_handler_that_raises_test()
+    local function f()
+        local x <close> = setmetatable({}, { __close = error })
+        error("boom")
+    end
+
+    local ok = catch f()
+    assert(not ok)
+    local t = {}
+
+    for i = 1, 10 do
+        t[i] = i
+    end
+
+    assert(#t == 10)
+end
+
+local function provide_after_a_close_handler_keeps_its_count_test()
+    local function fill()
+        local a, b, c, d, e, f, g, h = "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"
+        return a and b and c and d and e and f and g and h
+    end
+
+    local function none()
+    end
+
+    local function three()
+        return 1, 2, 3
+    end
+
+    local closer = setmetatable({}, {
+        __close = function()
+        end,
+    })
+
+    local function empty()
+        return do
+            local x <close> = closer
+            provide none()
+        end
+    end
+
+    local function triple()
+        return do
+            local x <close> = closer
+            provide three()
+        end
+    end
+
+    fill()
+    assert(select("#", empty()) == 0)
+    local a, b, c = triple()
+    assert(select("#", triple()) == 3 and a == 1 and b == 2 and c == 3)
+end
+
+local function extreme_arguments_raise_clean_errors_test()
+    local t = { 1, 2, 3 }
+
+    assert(not (catch (function()
+        return t[math.mininteger, math.maxinteger]
+    end)()))
+
+    assert(not (catch getmetatable(io.stdout).__tostring(1)))
+    assert(not (catch string.unpack(string.rep("X", 100000), "a")))
+    assert(not (catch string.unpack("!8 b Xi8 c0", "a")))
+    assert(not (catch string.packsize(string.rep("i16", 2) .. "c9223372036854775807")))
+end
+
+local function repeated_json_key_with_null_test()
+    local t = fromjson('{"a":{"K":1},"a":null,"K":2,"b":{"K":3}}')
+    assert(t.a == nil and t.K == 2 and t.b.K == 3)
+end
+
+local function a_stored_table_is_read_through_its_other_name_test()
+    local function f(a, b)
+        local t = { k = 1 }
+        a.x = t
+        local u = b.x
+        local v1 = u.k
+        t.k = 2
+        return v1 + u.k * 10
+    end
+
+    local holder = { x = { k = 0 } }
+    local last
+
+    for _ = 1, 400 do
+        last = f(holder, holder)
+    end
+
+    assert(last == 21)
+end
+
+local function a_star_stays_inside_one_path_component_test()
+    catch fs.createdirectory("sb")
+    fs.createdirectory("sb/deep", true)
+    io.open("sb/top.txt", "w"):close()
+    io.open("sb/deep/in.txt", "w"):close()
+
+    local exe = os.getenv("LUS_EXE")
+
+    if not exe then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local script = io.open("globs.lus", "w")
+
+    script:write([[
+print(pledge("fs:read=./sb/*", "seal"))
+print((catch io.open("sb/top.txt")))
+print((catch io.open("sb/deep/in.txt")))]])
+
+    script:close()
+    local out = os.spawn({ exe, "globs.lus" }, { stdout = "pipe" }).stdout:read("a")
+    assert(out == "true\ttrue\ntrue\nfalse\n", out)
+    script = io.open("globs.lus", "w")
+
+    script:write([[
+print(pledge("fs:read=./sb/**", "seal"))
+print((catch io.open("sb/top.txt")))
+print((catch io.open("sb/deep/in.txt")))]])
+
+    script:close()
+    out = os.spawn({ exe, "globs.lus" }, { stdout = "pipe" }).stdout:read("a")
+    assert(out == "true\ttrue\ntrue\ntrue\n", out)
+end
+
+local function an_empty_permission_value_raises_test()
+    local ok, err = catch pledge("env:read=")
+    assert(not ok and tostring(err):find("empty value", 1, true), tostring(err))
 end

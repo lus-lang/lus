@@ -1,6 +1,6 @@
 -- A test that fails while a coroutine it detached waits for a worker
 -- that never answers. The runner closes that coroutine and goes on.
-pledge("load", "fs:read=./*", "fs:write=./*")
+pledge("load", "fs:read=./**", "fs:write=./**")
 
 local function a_failed_test_leaves_a_waiting_coroutine_test()
     local file = assert(io.open("./silent_worker.lus", "w"))

@@ -17,10 +17,11 @@
 
 pledge(
     "load",
-    `fs:read=$TEST_DIR/*`,
-    "fs:read=./tree/*",
-    "fs:write=./*",
+    `fs:read=$TEST_DIR/**`,
+    "fs:read=./tree/**",
+    "fs:write=./**",
     "fs:read=./pkg_*",
+    "fs:read=./pkg_*/**",
     "fs:write=./pkg_*"
 )
 

@@ -576,7 +576,9 @@ pub fn linesGc(l: *Thread) Error!u32 {
     const v = l.arg(1);
     if (v.tag != .userdata) return 0;
     const u = v.as(Userdata);
-    if (u.size != @sizeOf(Lines)) return 0;
+    // Only a line reader holds this state behind this metatable.
+    const own: ?*Table = if (l.g.ext.get(lines_name)) |p| @ptrCast(@alignCast(p)) else null;
+    if (own == null or u.metatable != own or u.size != @sizeOf(Lines)) return 0;
     const st: *Lines = @ptrCast(@alignCast(u.data()));
     st.pending.deinit(l.g.gpa);
     st.pending = .empty;
@@ -856,6 +858,19 @@ const user_agent = "User-Agent: Lus/" ++ @import("build_options").version ++ "\r
 /// a vector. `body_fn` says the body comes from a function, which the
 /// request sends with chunked transfer coding unless the caller set a
 /// `Content-Length`.
+/// Whether `text` is a token of HTTP, the form of a method: one or more
+/// letters, digits, and the marks that RFC 9110 lists. A method is the
+/// first word of the request line, so a space in it would start the
+/// request target early.
+fn isToken(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |c| {
+        if (std.ascii.isAlphanumeric(c)) continue;
+        if (std.mem.indexOfScalar(u8, "!#$%&'*+-.^_`|~", c) == null) return false;
+    }
+    return true;
+}
+
 fn buildRequest(l: *Thread, req: *std.ArrayList(u8), method: []const u8, u: ParsedUrl, body: ?[]const u8, body_fn: bool) Error!void {
     const gpa = l.g.gpa;
     const default_port: u16 = if (u.https) 443 else 80;
@@ -1049,7 +1064,7 @@ pub fn fetch(l: *Thread) Error!u32 {
         else => return aux.typeError(l, 4, "string, vector, function, or coroutine"),
     };
     const o = try fetchOptions(l);
-    if (std.mem.indexOfAny(u8, method, "\r\n") != null) return l.raiseFmt("invalid characters in HTTP method", .{});
+    if (!isToken(method)) return l.raiseFmt("invalid characters in HTTP method", .{});
     if (std.mem.indexOfAny(u8, url, "\r\n") != null) return l.raiseFmt("invalid characters in URL", .{});
     try pledge.require(l, "network:http", url);
     const u = parseUrl(url) orelse return l.raiseFmt("invalid URL: {s}", .{url});

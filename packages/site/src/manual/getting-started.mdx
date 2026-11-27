@@ -108,7 +108,7 @@ local user = os.getenv("USER") or "stranger"
 print(`Hello, $user!`)
 ```
 
-Without the `pledge` line, the program stops at `os.getenv` with the error `permission "env:read" denied for 'USER'`. Other kinds of access have their own permissions, such as `fs:read` for reading a file and `network` for an HTTP request. The person who runs a script can also limit its permissions on the command line. A script started with `-P` options, as in `lus -Pfs:read=./data/* script.lus`, has only the permissions that those options grant, so a script that you have not read can reach only what you granted. [Permissions](/manual/permissions) describes every permission and how to narrow one to a single path or host.
+Without the `pledge` line, the program stops at `os.getenv` with the error `permission "env:read" denied for 'USER'`. Other kinds of access have their own permissions, such as `fs:read` for reading a file and `network` for an HTTP request. The person who runs a script can also limit its permissions on the command line. A script started with `-P` options, as in `lus -Pfs:read=./data/** script.lus`, has only the permissions that those options grant, so a script that you have not read can reach only what you granted. [Permissions](/manual/permissions) describes every permission and how to narrow one to a single path or host.
 
 ## Where next
 

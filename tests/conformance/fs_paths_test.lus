@@ -17,7 +17,14 @@ pledge("load")
     and are skipped where the platform forbids them.
 ]]
 
-pledge("fs:read=./fs2_x*", "fs:write=./fs2_x*", "fs:read=./fs2_ro_*")
+pledge(
+    "fs:read=./fs2_x*",
+    "fs:read=./fs2_x*/**",
+    "fs:write=./fs2_x*",
+    "fs:write=./fs2_x*/**",
+    "fs:read=./fs2_ro_*",
+    "fs:read=./fs2_ro_*/**"
+)
 
 local SEP = fs.path.separator
 local RUN = tostring(time.now():epoch())

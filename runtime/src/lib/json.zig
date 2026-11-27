@@ -405,15 +405,21 @@ const Parser = struct {
             // key repeated and its earlier value is gone.
             const used = table.hashCount(t);
             var added: usize = 0;
+            // A null that repeats a key removes the earlier value, which
+            // the count below does not show.
+            var removed = false;
             var i: usize = 0;
             while (i < pairs) : (i += 1) {
                 const k = &l.stack[first + 2 * i];
                 const v = &l.stack[first + 2 * i + 1];
-                if (v.isNil()) p.forget(k.as(String)) else added += 1;
+                if (v.isNil()) {
+                    p.forget(k.as(String));
+                    if (!table.getStr(t, k.as(String)).isNil()) removed = true;
+                } else added += 1;
                 if (table.storeStr(t, k, v) == null)
                     table.set(gpa, t, k.*, v.*) catch return l.raiseMem();
             }
-            if (table.hashCount(t) != used + added) p.keys = @splat(null);
+            if (removed or table.hashCount(t) != used + added) p.keys = @splat(null);
             t.tm_absent = 0;
             gc.barrierBack(l.g, &t.hdr);
         }

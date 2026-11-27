@@ -86,7 +86,7 @@ static void script_pledges(void) {
 
   /* A script pledges the third-party capability with a value. */
   CHECK_OK(L, lus_dostring(L,
-      "assert(pledge('myext:read=docs/*'))\n"
+      "assert(pledge('myext:read=docs/**'))\n"
       "local a = myext.read('docs/a')\n"
       "local ok, e = catch myext.read('secret/x')\n"
       "return a, ok, e, myext.canwrite('docs/a')"));
@@ -149,9 +149,9 @@ static void host_policy(void) {
   CHECK(lus_gettop(L) == 0);
 
   /* Host grants bound what scripts may pledge. */
-  CHECK_OK(L, lus_grant(L, "myext:read=docs/*"));
+  CHECK_OK(L, lus_grant(L, "myext:read=docs/**"));
   CHECK_OK(L, lus_dostring(L,
-      "return pledge('myext:read=docs/a'), pledge('myext:read=etc/*')"));
+      "return pledge('myext:read=docs/a'), pledge('myext:read=etc/**')"));
   CHECK(lus_toboolean(L, 1) == 1);
   CHECK(lus_toboolean(L, 2) == 0);
   lus_settop(L, 0);
@@ -199,7 +199,7 @@ static void request_hook(void) {
   lus_State *L = fresh();
   lus_onrequest(L, approve, &requests);
   CHECK_OK(L, lus_dostring(L,
-      "return pledge('myext:write=tmp/*'), pledge('myext:write=/etc/*'),"
+      "return pledge('myext:write=tmp/**'), pledge('myext:write=/etc/**'),"
       " pledge('myext:read'), myext.canwrite('tmp/a'), myext.canwrite('/etc/x')"));
   CHECK(lus_toboolean(L, 1) == 1);
   CHECK(lus_toboolean(L, 2) == 0);
@@ -210,7 +210,7 @@ static void request_hook(void) {
   lus_settop(L, 0);
 
   /* What the host granted needs no approval. */
-  CHECK_OK(L, lus_grant(L, "myext:read=docs/*"));
+  CHECK_OK(L, lus_grant(L, "myext:read=docs/**"));
   CHECK_OK(L, lus_dostring(L, "return pledge('myext:read=docs/x')"));
   CHECK(lus_toboolean(L, -1) == 1);
   CHECK(requests == 3);

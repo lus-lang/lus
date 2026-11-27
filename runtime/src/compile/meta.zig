@@ -326,6 +326,10 @@ const Converter = struct {
     arena: Allocator,
     seen: std.AutoHashMapUnmanaged(*Table, *Table) = .empty,
     bad: ?@FieldType(ConvertResult, "bad") = null,
+    /// Tables entered and not yet left, which bounds the native stack.
+    depth: u32 = 0,
+
+    const max_depth = 200;
 
     fn value(cv: *Converter, v: Value, path: []const u8) Allocator.Error!Value {
         if (cv.bad != null) return .nil;
@@ -364,6 +368,12 @@ const Converter = struct {
                     cv.bad = .{ .type_name = "table with a metatable", .path = path };
                     return .nil;
                 }
+                if (cv.depth >= max_depth) {
+                    cv.bad = .{ .type_name = "table nested too deeply", .path = path };
+                    return .nil;
+                }
+                cv.depth += 1;
+                defer cv.depth -= 1;
                 const out = try vm.state.newTableIn(g, 0, 0);
                 try cv.seen.put(cv.arena, src, out);
                 var key: Value = .nil;

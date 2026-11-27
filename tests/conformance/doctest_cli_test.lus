@@ -116,7 +116,7 @@ local PLEDGED = [=[
 Text.
 
 ```lus
-pledge("fs:read=./*")
+pledge("fs:read=./**")
 print((catch io.open("/etc/hosts")))   --> false
 ```
 

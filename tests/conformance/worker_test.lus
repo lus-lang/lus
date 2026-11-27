@@ -5,7 +5,7 @@ local WDIR1 = `$TEST_DIR/fixtures/worker/`
 -- Workers are spawned from the fixture scripts and from scripts written into the
 -- temporary working directory. The grants are sealed after the setup, so workers
 -- inherit a store they cannot escalate out of.
-pledge("load", `fs:read=$TEST_DIR/*`, "fs:read=./*", "fs:write=./*", "seal")
+pledge("load", `fs:read=$TEST_DIR/**`, "fs:read=./**", "fs:write=./**", "seal")
 
 -- Group: worker.create
 

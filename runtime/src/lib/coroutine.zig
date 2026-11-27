@@ -557,6 +557,10 @@ fn close(l: *Thread) Error!u32 {
     const co = if (l.hasArg(1)) try checkCo(l, 1) else l;
     if (co == l) {
         if (co == l.g.main_thread) return l.raiseFmt("cannot close main thread", .{});
+        // A finalizer runs inside whatever the coroutine was doing, and
+        // its error is reported and dropped, so the coroutine would go on
+        // as a closed one.
+        if (l.g.running_finalizers) return l.raiseFmt("cannot close the running coroutine from a finalizer", .{});
         // Closing the running coroutine runs its pending to-be-closed
         // variables and ends it, as if its body had returned nothing.
         interp.closeUpvals(co, 0);
@@ -603,6 +607,13 @@ pub fn closeCo(l: *Thread, co: *Thread) ?Value {
     if (sched.taskOf(co)) |t| {
         if (t.detached) sched.cancel(l.g, t);
     }
+    // A coroutine whose pending variables close further coroutines nests
+    // one native call for each, as a call from Lus does.
+    if (l.g.native_depth >= Thread.max_ncalls) {
+        return Value.obj(.string, state.newStringKnown(l.g, "stack overflow (too many nested coroutines to close)", true, 52) catch l.g.memerr);
+    }
+    l.g.native_depth += 1;
+    defer l.g.native_depth -= 1;
     return closeThread(co);
 }
 

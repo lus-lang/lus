@@ -2135,7 +2135,9 @@ fn provideStat(fs: *FuncState, vals: []*ast.Expr, line: u32) Error!void {
     // Close upvalues and tbc variables of the do body while the provided
     // values still sit above them, then move the values into place.
     const level = blockLevel(fs, ctx.nactvar);
-    if (level < first) try codeABC(fs, .close, @max(level, ctx.base + 1), 0, 0);
+    // B tells the instruction that a variable count of values sits above
+    // the variables, which a handler that runs as a frame must leave.
+    if (level < first) try codeABC(fs, .close, @max(level, ctx.base + 1), @intFromBool(multi), 0);
     const want = ctx.nresults;
     if (want < 0) {
         if (multi) {

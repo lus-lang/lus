@@ -3,7 +3,7 @@
     
     The pledge system provides capability-based security by restricting
     what operations a Lus program can perform. Permissions can be:
-    - Granted: pledge("load"), pledge("fs:read=./path/*")
+    - Granted: pledge("load"), pledge("fs:read=./path/**")
     - Sealed: pledge("seal") - no more permission changes allowed
     
     Note: These tests run with limited pledges to test the system.
@@ -21,14 +21,14 @@ local function isolated(body)
     end
 end
 
-local BASE_A = { "load", "fs:read=./tree/*" }
+local BASE_A = { "load", "fs:read=./tree/**" }
 local BASE_B = {
     "load",
     "fs:read=./tree/runner.lus",
     "fs:read=./tree/suite/enum.lus*",
-    "fs:read=./tree/tmp-pledge2/*",
+    "fs:read=./tree/tmp-pledge2/**",
     "fs:write=./tree/tmp-pledge2",
-    "fs:write=./tree/tmp-pledge2/*",
+    "fs:write=./tree/tmp-pledge2/**",
     "fs:write=./tree/tmp-pledge2x",
     "fs:read=./tree/tmp-pledge2x/missing-prefix*",
     "fs:write=./tree/tmp-pledge2x/missing-prefix*",
@@ -45,7 +45,7 @@ end
 
 -- The files the permission tests read are created in the temporary working directory.
 isolated(function()
-    pledge("fs:write=./*")
+    pledge("fs:write=./**")
 
     for _, dir in ipairs({
         "tree",
@@ -118,7 +118,7 @@ end
 
 local function io_open_works_with_matching_fs_read_permission_test()
     with_baseline(BASE_A, function()
-        -- We have fs:read=./tree/*, so reading runner.lus should work
+        -- We have fs:read=./tree/**, so reading runner.lus should work
         local f = io.open("tree/runner.lus", "r")
         assert(f ~= nil, "should be able to open file within permitted path")
         f:close()
@@ -219,7 +219,7 @@ local function permission_with_glob_pattern_test()
         -- non-matching paths in the same directory
         local denied = catch io.open("lib/src/api.h", "r")
         assert(not denied, "header should be denied before the glob grant")
-        local result = pledge("fs:read=./lib/src/*.h")
+        local result = pledge("fs:read=./lib/src/**.h")
         assert(result == true, "pledge should return true on success")
         local f = io.open("lib/src/api.h", "r")
         assert(f ~= nil, "path matching the glob should be readable")
@@ -281,7 +281,7 @@ end
 local function pledge_with_multiple_permissions_succeeds_test()
     with_baseline(BASE_A, function()
         -- Can pass multiple permissions in one call
-        local ok, result = catch pledge("load", "fs:read=./test/*")
+        local ok, result = catch pledge("load", "fs:read=./test/**")
         assert(ok, "pledge with multiple permissions should succeed")
         assert(result == true, "pledge should return true on success")
     end)
@@ -305,7 +305,7 @@ end
 local function pledge_with_special_characters_in_path_succeeds_test()
     with_baseline(BASE_A, function()
         -- Paths with glob patterns (* and ?)
-        local ok, result = catch pledge("fs:read=./tree/suite/*.lus")
+        local ok, result = catch pledge("fs:read=./tree/suite/**.lus")
         assert(ok, "pledge with glob pattern should succeed")
         assert(result == true, "pledge should return true")
     end)
@@ -314,7 +314,7 @@ end
 local function pledge_path_with_dots_succeeds_test()
     with_baseline(BASE_A, function()
         -- Paths with . and .. components
-        local ok, result = catch pledge("fs:read=./tree/./suite/../suite/*.lus")
+        local ok, result = catch pledge("fs:read=./tree/./suite/../suite/**.lus")
         assert(ok, "pledge with dot components should succeed")
         assert(result == true, "pledge should return true")
     end)
@@ -454,7 +454,7 @@ end
 
 local function wildcard_heavy_url_pattern_is_checked_in_linear_time_test()
     with_baseline(BASE_A, function()
-        pledge("network:http=http://a*a*a*a*a*a*a*b/*")
+        pledge("network:http=http://a*a*a*a*a*a*a*b/**")
         local url = `http://$(string.rep("a", 200))/`
         local t0 = os.clock()
         local ok = catch network.fetch(url)
@@ -836,11 +836,13 @@ local function in_scope_reads_still_work_after_the_valueless_re_pledge_test()
     end)
 end
 
--- An empty value string carries no path, so it likewise cannot widen an
--- already-scoped grant.
-local function empty_value_fs_read_re_pledge_returns_true_test()
+-- An empty value string carries no path, so `pledge` raises for it. A value
+-- that an unset variable left empty would otherwise read as every path.
+local function empty_value_fs_read_re_pledge_raises_test()
     with_baseline(BASE_B, function()
-        assert(pledge("fs:read=") == true)  -- lus: allow(pledge-after-seal)
+        raises(function()
+            pledge("fs:read=")  -- lus: allow(pledge-after-seal)
+        end, "empty value")
     end)
 end
 
@@ -910,7 +912,7 @@ end
 local function a_new_grant_after_seal_returns_false_without_raising_test()
     with_baseline(BASE_B, function()
         pledge("seal")  -- lus: allow(pledge-after-seal)
-        local ok, result = catch pledge("fs:read=./tree/tmp-pledge2/deep/*")  -- lus: allow(pledge-after-seal)
+        local ok, result = catch pledge("fs:read=./tree/tmp-pledge2/deep/**")  -- lus: allow(pledge-after-seal)
         assert(ok)
         assert(result == false)
     end)
@@ -1046,7 +1048,7 @@ end
 -- one call permit reading any file.
 local function bare_read_after_narrowed_read_test()
     isolated(function()
-        pledge("fs:read=./no-such-directory/*", "fs:read")  -- lus: allow(pledge-after-seal)
+        pledge("fs:read=./no-such-directory/**", "fs:read")  -- lus: allow(pledge-after-seal)
         local f = assert(io.open(`$TEST_DIR/pledge_test.lus`, "r"))
         f:close()
     end)

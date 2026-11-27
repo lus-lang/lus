@@ -35,6 +35,8 @@ pub const Parser = struct {
     maxalign: usize = 1,
     l: *Thread,
     argi: u32,
+    /// Set while the option after an `X` is read.
+    in_padding: bool = false,
 
     fn digit(c: u8) bool {
         return c >= '0' and c <= '9';
@@ -109,9 +111,12 @@ pub const Parser = struct {
             var alignment = it.size;
             if (it.kind == .paddalign) {
                 if (p.pos >= p.fmt.len) return p.l.raiseFmt("invalid next option for option 'X'", .{});
-                const save_pos = p.pos;
+                // The option after `X` only gives its size, and another `X`
+                // has none, so the options never nest.
+                if (p.in_padding) return p.l.raiseFmt("invalid next option for option 'X'", .{});
+                p.in_padding = true;
+                defer p.in_padding = false;
                 const nx = (try p.next(0)) orelse return p.l.raiseFmt("invalid next option for option 'X'", .{});
-                _ = save_pos;
                 alignment = nx.size;
                 if (alignment == 0 or nx.kind == .char) return p.l.raiseFmt("invalid next option for option 'X'", .{});
                 // Rewind is not needed: Lua consumes the option after X
@@ -249,7 +254,9 @@ pub fn size(l: *Thread, fmt: []const u8) Error!usize {
     var total: usize = 0;
     while (try p.next(total)) |it| {
         if (it.kind == .string or it.kind == .zstr) return aux.argError(l, 1, "variable-length format", .{});
-        total += it.ntoalign + it.size;
+        total = std.math.add(usize, total, std.math.add(usize, it.ntoalign, it.size) catch std.math.maxInt(usize)) catch
+            return aux.argError(l, 1, "format result too large", .{});
+        if (total > std.math.maxInt(i64)) return aux.argError(l, 1, "format result too large", .{});
     }
     return total;
 }
@@ -274,6 +281,8 @@ pub fn unpack(l: *Thread, fmt: []const u8, data: []const u8, start: usize, msgs:
         if (it.ntoalign + it.size > data.len -| pos and it.kind != .zstr and it.kind != .nop and it.kind != .paddalign) {
             return aux.argError(l, 2, "{s}", .{msgs.short});
         }
+        // Padding alone never moves the position past the data.
+        if (it.ntoalign > data.len -| pos) return aux.argError(l, 2, "{s}", .{msgs.short});
         pos += it.ntoalign;
         switch (it.kind) {
             .int, .uint => {

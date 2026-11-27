@@ -206,7 +206,7 @@ static void fire(lus_State *L) {
 
 A host usually runs scripts that its own author did not write, so the host limits what those scripts can do. A state starts with no [permissions](/manual/permissions), which the host sets before any script runs, with the same names and values that `pledge` takes. `lus.h` calls a permission a _capability_, which is why the names of its functions and types contain `capability`.
 
-- [`lus_grant`](/manual/api/c#lus_grant) grants a permission, such as `"fs:read=/srv/data/*"` or `"network"`.
+- [`lus_grant`](/manual/api/c#lus_grant) grants a permission, such as `"fs:read=/srv/data/**"` or `"network"`.
 - [`lus_reject`](/manual/api/c#lus_reject) rejects a permission for the life of the state, so every later grant of it fails.
 - [`lus_seal`](/manual/api/c#lus_seal) seals the permissions, as `pledge("seal")` does in a script.
 
@@ -228,7 +228,7 @@ static int ask(void *ud, lus_State *L, const char *capability, const char *value
 }
 
 void configure(lus_State *L) {
-  lus_grant(L, "fs:read=/srv/data/*");
+  lus_grant(L, "fs:read=/srv/data/**");
   lus_reject(L, "exec");
   lus_onrequest(L, ask, NULL);
 }
@@ -276,7 +276,7 @@ static void open_store(lus_State *L) {
 }
 ```
 
-After `lus_grant(L, "store:read=users/*")`, the call `store.get("users/ada")` succeeds, while the call `store.get("secrets/key")` raises `permission "store:read" denied for 'secrets/key'`.
+After `lus_grant(L, "store:read=users/**")`, the call `store.get("users/ada")` succeeds, while the call `store.get("secrets/key")` raises `permission "store:read" denied for 'secrets/key'`.
 
 ## Related pages
 

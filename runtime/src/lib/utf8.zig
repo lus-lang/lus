@@ -173,7 +173,7 @@ fn offset(l: *Thread) Error!u32 {
         if (n - 1 > slen - posi) return aux.retNil(l);
         target = posi + n - 1;
     } else {
-        if (-n > posi) return aux.retNil(l);
+        if (n == std.math.minInt(i64) or -n > posi) return aux.retNil(l);
         target = posi + n;
     }
     try l.push(Value.int(target + 1));

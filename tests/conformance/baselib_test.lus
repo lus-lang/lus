@@ -13,7 +13,14 @@
   exercise a real permission boundary against a path outside the grant.
 ]]
 
-pledge("load", "fs:read=./baselib_*", "fs:write=./baselib_*", "debug")
+pledge(
+    "load",
+    "fs:read=./baselib_*",
+    "fs:read=./baselib_*/**",
+    "fs:write=./baselib_*",
+    "fs:write=./baselib_*/**",
+    "debug"
+)
 
 -- The runner rewrites calls named assert into power asserts, so the tests of
 -- the real assert builtin call it through this alias.

@@ -154,7 +154,7 @@ The page reads in this order: the masthead with the agent prompt and the news, t
 **Evidence:**
 
 ```lus nocheck
-pledge("fs:read=./data/*", "network:http=api.example.com")
+pledge("fs:read=./data/**", "network:http=api.example.com")
 pledge("seal")
 ```
 

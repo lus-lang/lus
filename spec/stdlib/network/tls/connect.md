@@ -26,7 +26,7 @@ On success the call returns one socket with the methods of a TCP socket and [`tl
 The following example connects to a server with a private certificate authority and asks for HTTP/1.1 through ALPN.
 
 ```lus nocheck
-pledge("network", "fs:read=/etc/myapp/*")
+pledge("network", "fs:read=/etc/myapp/**")
 local f <close> = io.open("/etc/myapp/ca.pem")
 local sock <close> = network.tls.connect("db.internal", 5433, {
     ca = f:read("a"),

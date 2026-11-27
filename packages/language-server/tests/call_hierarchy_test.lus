@@ -2,7 +2,7 @@
 -- documents.
 local LANG_DIR = string.match(TEST_DIR, "^(.*)[/\\][^/\\]*$")
 
-pledge("load", `fs:read=$LANG_DIR/*`)
+pledge("load", `fs:read=$LANG_DIR/**`)
 
 table.insert(package.searchers, 2, function(name)
     if rest = string.match(name, "^lus%-language%.(.+)$") then

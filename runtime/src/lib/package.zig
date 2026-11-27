@@ -370,6 +370,24 @@ fn runLoader(l: *Thread, loaded: *Table, key: Value, loader: Value, extra: Value
     return 2;
 }
 
+/// Whether the flag value `v` fits the declared type `ty`: `boolean`,
+/// `number`, `string`, or a list of quoted strings joined with `|`. A
+/// number passes for `string`, since the command line reads `-F p.f=10`
+/// as a number.
+fn flagFits(ty: []const u8, v: Value) bool {
+    if (std.mem.eql(u8, ty, "boolean")) return v.tag == .true or v.tag == .false;
+    if (std.mem.eql(u8, ty, "number")) return v.tag == .integer or v.tag == .float;
+    if (std.mem.eql(u8, ty, "string")) return v.tag == .string or v.tag == .integer or v.tag == .float;
+    if (v.tag != .string) return false;
+    const text = v.as(String).bytes();
+    var it = std.mem.splitScalar(u8, ty, '|');
+    while (it.next()) |alt| {
+        const quoted = std.mem.trim(u8, alt, " ");
+        if (quoted.len >= 2 and quoted[0] == '"' and quoted[quoted.len - 1] == '"' and std.mem.eql(u8, quoted[1 .. quoted.len - 1], text)) return true;
+    }
+    return false;
+}
+
 /// Builds the flags that a module of an atmosphere package compiles with:
 /// the program flags that carry the package's prefix, without the prefix,
 /// and the declared defaults of the package for the others. Writes a
@@ -382,8 +400,13 @@ pub fn packageFlags(l: *Thread, gpa: std.mem.Allocator, pkg: *const remote.Packa
         var it = prog.iterator();
         while (it.next()) |e| {
             const k = e.key_ptr.*;
-            if (k.len > prefix.len + 1 and std.mem.startsWith(u8, k, prefix) and k[prefix.len] == '.')
-                map.put(gpa, k[prefix.len + 1 ..], e.value_ptr.*) catch return l.raiseMem();
+            if (k.len > prefix.len + 1 and std.mem.startsWith(u8, k, prefix) and k[prefix.len] == '.') {
+                const fname = k[prefix.len + 1 ..];
+                if (std.mem.eql(u8, prefix, pkg.name)) if (pkg.flagType(fname)) |ty| {
+                    if (!flagFits(ty, e.value_ptr.*)) return l.raiseFmt("flag '{s}' of package '{s}' must be {s}", .{ fname, pkg.name, ty });
+                };
+                map.put(gpa, fname, e.value_ptr.*) catch return l.raiseMem();
+            }
         }
     }
     if (std.mem.eql(u8, prefix, pkg.name)) for (pkg.flag_defaults) |spec| {
@@ -393,7 +416,13 @@ pub fn packageFlags(l: *Thread, gpa: std.mem.Allocator, pkg: *const remote.Packa
         var v: Value = .true;
         if (eq) |i| {
             const raw = spec[i + 1 ..];
-            if (@import("../syntax/lexer.zig").parseNumber(raw)) |n| {
+            const textual = if (pkg.flagType(fname)) |ty| !std.mem.eql(u8, ty, "number") and !std.mem.eql(u8, ty, "boolean") else false;
+            if (textual) {
+                // A flag declared as a string keeps the text of its
+                // default, digits included.
+                v = try l.newStringValue(raw);
+                try l.push(v);
+            } else if (@import("../syntax/lexer.zig").parseNumber(raw)) |n| {
                 v = switch (n) {
                     .integer => |x| Value.int(x),
                     .float => |x| Value.float(x),

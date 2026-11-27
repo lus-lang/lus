@@ -13,7 +13,7 @@ returns: boolean
 
 `pledge(...)` grants, rejects, or seals permissions for the running coroutine and returns one boolean for each permission name, in order.
 
-Each argument is a permission name, such as `"fs"`, `"fs:read"`, or `"network:http"`, optionally followed by `=` and a value that limits it to matching paths, hosts, or names, as in `"fs:read=./data/*"`. Two forms have a special meaning:
+Each argument is a permission name, such as `"fs"`, `"fs:read"`, or `"network:http"`, optionally followed by `=` and a value that limits it to matching paths, hosts, or names, as in `"fs:read=./data/**"`. Two forms have a special meaning:
 
 - A name with the prefix `~` rejects that permission permanently, as in `"~exec"`.
 - The name `"seal"` freezes the permission set, so that every later grant and rejection fails.

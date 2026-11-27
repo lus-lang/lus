@@ -33,12 +33,12 @@ print(#search_path() > 0)  --> true
 
 ### Pledge the narrowest permission
 
-Pledge a permission for only the files, hosts, or variables that the program uses. `fs:read=./*` permits reads below the current directory, while `fs` permits every filesystem operation. With a narrow pledge, a path built from bad input fails with a permission error at the operation that used it, where a broad pledge could let the same path read or overwrite an unrelated file. The following program may read only below the current directory.
+Pledge a permission for only the files, hosts, or variables that the program uses. `fs:read=./**` permits reads below the current directory, while `fs` permits every filesystem operation. With a narrow pledge, a path built from bad input fails with a permission error at the operation that used it, where a broad pledge could let the same path read or overwrite an unrelated file. The following program may read only below the current directory.
 
 ```lus
 global io, pledge, print
 
-pledge("fs:read=./*")
+pledge("fs:read=./**")
 pledge("seal")
 
 print(io.open("./missing.txt"))
@@ -58,7 +58,7 @@ After the pledges, reject the permissions that the program does not need. A reje
 ```lus
 global pledge, print
 
-pledge("fs:read=./*", "~exec")
+pledge("fs:read=./**", "~exec")
 pledge("seal")
 
 print(pledge("network:http"))  --> false
@@ -73,7 +73,7 @@ A package runs with the permissions of the program that loads it, so only the ma
 ```lus nocheck
 global pledge, require
 
-pledge("load", "network:http=atmosp.here", "fs:read=./data/*")
+pledge("load", "network:http=atmosp.here", "fs:read=./data/**")
 
 local dates = require("https://atmosp.here/2.0/dates.lus")
 local csvx = require("https://atmosp.here/2.0/csvx.lus")

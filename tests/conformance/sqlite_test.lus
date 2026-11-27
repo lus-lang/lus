@@ -13,7 +13,7 @@ pledge("load")
 -- The read grant used by one test below only resolves when its directory exists, so the
 -- directory is created in a coroutine that keeps its write grant to itself.
 local setup = coroutine.create(function()
-    pledge("fs:write=./*")
+    pledge("fs:write=./**")
     fs.createdirectory("lus-tests")
     fs.createdirectory("lus-tests/h1")
 end)
@@ -85,7 +85,7 @@ local function memory_opens_under_a_sealed_pledge_with_no_fs_grants_for_it_test(
     -- the exemption is real rather than the pledge being inert. The grants
     -- live in a coroutine, so they stay local to this test.
     local co = coroutine.create(function()
-        pledge("fs:read=./lus-tests/*", "seal")
+        pledge("fs:read=./lus-tests/**", "seal")
 
         raises(function()
             return io.sqlite("./sqlite-pledge-probe.db")
@@ -1033,7 +1033,7 @@ end
 
 local function a_database_handle_cannot_cross_a_worker_boundary_test()
     local db <close> = io.sqlite(":memory:")
-    pledge(`fs:read=$TEST_DIR/*`)
+    pledge(`fs:read=$TEST_DIR/**`)
     local w = worker.create(`$TEST_DIR/fixtures/worker/echo.lus`)
     local ok, err = catch worker.send(w, db)
     assert(not ok, "sending a database must fail")
@@ -1062,8 +1062,11 @@ local SANDBOX = `sqlite_fs_$RUN`
 local FS_GRANTS = {
     "load",
     "fs:read=./sqlite_fs_*",
+    "fs:read=./sqlite_fs_*/**",
     "fs:write=./sqlite_fs_*",
+    "fs:write=./sqlite_fs_*/**",
     "fs:read=./sqlite_ro_*",
+    "fs:read=./sqlite_ro_*/**",
     "fs:read=./exactdb_*",
     "fs:write=./exactdb_*.db",
 }

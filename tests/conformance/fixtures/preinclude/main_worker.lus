@@ -3,7 +3,7 @@ global require, worker, assert, print, pledge, tostring, arg
 -- the pledge-free part under test is the require() INSIDE the worker,
 -- whose fresh state inherits these pledges but reads from retained memory.
 local dir = arg[0]:match("^(.*)/[^/]*$")
-pledge("load", "fs:read=" .. dir .. "/*", "seal")
+pledge("load", "fs:read=" .. dir .. "/**", "seal")
 local w = worker.create(dir .. "/worker_child.lus")
 local msg = worker.receive(w)
 assert(msg == "worker got: hello from preinclude", "worker preinclude, got: " .. tostring(msg))

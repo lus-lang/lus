@@ -104,7 +104,7 @@ pub const Op = enum(u8) {
     vararg, // R[A], ..., R[A+C-2] = vararg
     varargprep, // adjust varargs on entry (A = number of fixed params)
     varargtab, // R[A] = { vararg..., n = #vararg }
-    close, // close upvalues and tbc variables >= R[A]
+    close, // close upvalues and tbc variables >= R[A]. B is 1 when the stack top holds a variable count of values
     tbc, // mark R[A] as to-be-closed
 
     // Slices, enums, queries, global declarations, catch handlers, and the

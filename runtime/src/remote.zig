@@ -82,6 +82,22 @@ fn fail(gpa: Allocator, why: *std.ArrayList(u8), comptime fmt: []const u8, args:
 }
 
 /// The host of a normalized URL, with its port when it has one.
+/// The host of `url` without its port.
+fn hostName(url: []const u8) []const u8 {
+    const h = hostOf(url);
+    if (h.len > 0 and h[0] == '[') return h[0 .. (std.mem.indexOfScalar(u8, h, ']') orelse h.len - 1) + 1];
+    return h[0 .. std.mem.lastIndexOfScalar(u8, h, ':') orelse h.len];
+}
+
+/// The line that the directory of `url` names, as in `/2.0/dates.lus`,
+/// or null when the directory is no line.
+fn urlLine(url: []const u8) ?[]const u8 {
+    const dir = std.mem.trimEnd(u8, dirOf(url), "/");
+    const seg = dir[(std.mem.lastIndexOfScalar(u8, dir, '/') orelse return null) + 1 ..];
+    if (semver.parseLine(seg) == null) return null;
+    return seg;
+}
+
 pub fn hostOf(url: []const u8) []const u8 {
     const rest = url[std.mem.indexOf(u8, url, "://").? + 3 ..];
     return rest[0 .. std.mem.indexOfScalar(u8, rest, '/') orelse rest.len];
@@ -111,12 +127,23 @@ pub const Package = struct {
     requires: [][]u8 = &.{},
     /// Declared flags with their defaults, as `name=value` specs.
     flag_defaults: [][]u8 = &.{},
+    /// The declared type of each flag, as `name=TYPE` specs, where the
+    /// type is `boolean`, `number`, `string`, or a list of quoted strings
+    /// joined with `|`.
+    flag_types: [][]u8 = &.{},
     /// The copied dependencies that `@includes` lists in the main module.
     includes: [][]u8 = &.{},
     /// Whether the store contacted the network for this package.
     fetched: bool = false,
+    /// The SHA-256 digest of each file of the bundle, in lowercase hex,
+    /// as the signed release document lists them. A file is compared with
+    /// its digest each time it is read from the cache.
+    digests: std.StringHashMapUnmanaged([64]u8) = .empty,
 
     fn deinit(p: *Package, gpa: Allocator) void {
+        var names = p.digests.keyIterator();
+        while (names.next()) |k| gpa.free(k.*);
+        p.digests.deinit(gpa);
         gpa.free(p.url);
         gpa.free(p.name);
         gpa.free(p.version);
@@ -129,6 +156,17 @@ pub const Package = struct {
         gpa.free(p.flag_defaults);
         for (p.includes) |r| gpa.free(r);
         gpa.free(p.includes);
+        for (p.flag_types) |r| gpa.free(r);
+        gpa.free(p.flag_types);
+    }
+
+    /// The declared type of the flag `name`, or null when the package
+    /// declares none.
+    pub fn flagType(p: *const Package, name: []const u8) ?[]const u8 {
+        for (p.flag_types) |spec| {
+            if (spec.len > name.len and spec[name.len] == '=' and std.mem.startsWith(u8, spec, name)) return spec[name.len + 1 ..];
+        }
+        return null;
     }
 
     /// The package whose flags a module of this bundle reads: a copied
@@ -147,19 +185,31 @@ pub const Package = struct {
     /// no such file. The caller frees the result.
     pub fn read(p: *const Package, gpa: Allocator, io: Io, name: ?[]const u8) !?[]u8 {
         if (p.kind == .generic) return try gpa.dupe(u8, p.source);
-        if (name == null) {
-            const f = try std.fs.path.join(gpa, &.{ p.bundle_dir, p.main });
-            defer gpa.free(f);
-            return try Io.Dir.cwd().readFileAlloc(io, f, gpa, .limited(max_unpacked));
-        }
+        if (name == null) return try p.readFile(gpa, io, p.main);
         const rel = try std.mem.replaceOwned(u8, gpa, name.?, ".", "/");
         defer gpa.free(rel);
         for ([_][]const u8{ ".lus", "/init.lus" }) |suffix| {
-            const f = try std.mem.concat(gpa, u8, &.{ p.bundle_dir, "/", rel, suffix });
-            defer gpa.free(f);
-            if (Io.Dir.cwd().readFileAlloc(io, f, gpa, .limited(max_unpacked))) |src| return src else |_| {}
+            const inner = try std.mem.concat(gpa, u8, &.{ rel, suffix });
+            defer gpa.free(inner);
+            if (p.readFile(gpa, io, inner)) |src| return src else |e| switch (e) {
+                error.BundleChanged, error.OutOfMemory => return e,
+                else => {},
+            }
         }
         return null;
+    }
+
+    /// Reads the file `inner` of the bundle and compares it with the
+    /// digest that the release document gives for it.
+    fn readFile(p: *const Package, gpa: Allocator, io: Io, inner: []const u8) ![]u8 {
+        const f = try std.fs.path.join(gpa, &.{ p.bundle_dir, inner });
+        defer gpa.free(f);
+        const src = try Io.Dir.cwd().readFileAlloc(io, f, gpa, .limited(max_unpacked));
+        errdefer gpa.free(src);
+        const want = p.digests.get(inner) orelse return error.BundleChanged;
+        const hex = std.fmt.bytesToHex(crypto.sha256(src), .lower);
+        if (!std.mem.eql(u8, &hex, &want)) return error.BundleChanged;
+        return src;
     }
 };
 
@@ -375,6 +425,12 @@ pub const Store = struct {
             const h = urlHash(p.url);
             const src = s.readCache(&.{ "modules", &h, "source.lus" }, 64 << 20) orelse
                 return fail(s.gpa, why, "the cached copy of {s} is incomplete", .{p.url});
+            // The record holds the digest of what `generic` stored.
+            const have = std.fmt.bytesToHex(crypto.sha256(src), .lower);
+            if (!std.mem.eql(u8, &have, r.source)) {
+                s.gpa.free(src);
+                return fail(s.gpa, why, "the cached copy of {s} does not match its record", .{p.url});
+            }
             // The cache holds what `generic` stored, which is source text.
             if (@import("compile/dump.zig").isBinary(src)) {
                 s.gpa.free(src);
@@ -389,13 +445,23 @@ pub const Store = struct {
         const doc_bytes = s.readCache(&.{ "releases", name }, 16 << 20) orelse
             return fail(s.gpa, why, "the cached copy of {s} is incomplete", .{p.url});
         defer s.gpa.free(doc_bytes);
-        // The cached document was verified when it arrived. Parsing it
-        // again restores the fields.
-        var parsed = std.json.parseFromSlice(std.json.Value, s.gpa, doc_bytes, .{}) catch
-            return fail(s.gpa, why, "the cached copy of {s} is corrupt", .{p.url});
-        defer parsed.deinit();
-        try s.fill(p, parsed.value.object, why);
-        const sha = parsed.value.object.get("sha256").?.string;
+        // The cache is a directory that other programs can write, so the
+        // document is verified again under the cached keys, as it was
+        // when it arrived.
+        const host = hostOf(p.url);
+        var key_doc = (try s.cachedKeys(host, why)) orelse
+            return fail(s.gpa, why, "the cached copy of {s} cannot be verified without the keys of {s}", .{ p.url, host });
+        defer key_doc.deinit();
+        const keys = try s.keysIn(&key_doc, host, why);
+        defer s.gpa.free(keys);
+        var doc = signed.openDocument(s.gpa, doc_bytes, keys) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return fail(s.gpa, why, "the cached copy of {s} does not verify: {s}", .{ p.url, @errorName(e) }),
+        };
+        defer doc.deinit();
+        try s.fill(p, doc.root(), why);
+        const sha = strField(doc.root(), "sha256") orelse return fail(s.gpa, why, "the cached copy of {s} is corrupt", .{p.url});
+        if (!isDigest(sha)) return fail(s.gpa, why, "the cached copy of {s} is corrupt", .{p.url});
         const dir = (try s.cachePath(&.{ "bundles", sha })) orelse return fail(s.gpa, why, "no Lus home to cache {s}", .{p.url});
         p.bundle_dir = dir;
         _ = Io.Dir.cwd().statFile(s.io, dir, .{}) catch return fail(s.gpa, why, "the cached bundle of {s} is missing", .{p.url});
@@ -412,7 +478,8 @@ pub const Store = struct {
         p.source = try s.gpa.dupe(u8, body);
         const h = urlHash(p.url);
         s.writeCache(&.{ "modules", &h, "source.lus" }, body);
-        s.saveRecord(p.url, .{ .kind = "generic", .etag = etag orelse "", .fetched = s.now(), .expires = s.expiresFrom(cc) });
+        const source_hex = std.fmt.bytesToHex(crypto.sha256(body), .lower);
+        s.saveRecord(p.url, .{ .kind = "generic", .source = &source_hex, .etag = etag orelse "", .fetched = s.now(), .expires = s.expiresFrom(cc) });
         if (s.opts.home != null and s.hostKind(hostOf(p.url)) == null) s.setHostKind(hostOf(p.url), "generic", null);
     }
 
@@ -589,10 +656,13 @@ pub const Store = struct {
         // The patch rule of a line URL, which also refuses a replayed
         // older document.
         const is_unstable = std.mem.indexOf(u8, p.url[std.mem.indexOf(u8, p.url, "://").? + 3 ..], "/unstable/") != null;
-        if (at == null and !is_unstable) if (prev) |r| if (std.mem.eql(u8, r.kind, "atmosphere")) {
+        // A line URL answers with a release of its own line.
+        if (urlLine(p.url)) |url_line| if (!std.mem.eql(u8, url_line, lus_s))
+            return fail(s.gpa, why, "{s} answered with a release for Lus {s}", .{ p.url, lus_s });
+        if (at == null) if (prev) |r| if (std.mem.eql(u8, r.kind, "atmosphere")) {
             const old = semver.parse(r.version);
             const new = semver.parse(p.version);
-            if (old != null and new != null and (old.?.major != new.?.major or old.?.minor != new.?.minor))
+            if (!is_unstable and old != null and new != null and (old.?.major != new.?.major or old.?.minor != new.?.minor))
                 return fail(s.gpa, why, "{s} moved from {s} to {s}, and a line URL accepts only patch releases", .{ p.url, r.version, p.version });
             if (signed.parseTime(r.signed)) |t| if (doc.signed < t)
                 return fail(s.gpa, why, "{s} answered with a release document older than one accepted before", .{p.url});
@@ -600,6 +670,7 @@ pub const Store = struct {
 
         // The bundle.
         const sha = strField(o, "sha256") orelse return fail(s.gpa, why, "the release document of {s} has no sha256", .{p.url});
+        if (!isDigest(sha)) return fail(s.gpa, why, "the release document of {s} has a malformed sha256", .{p.url});
         const size_v = o.get("size") orelse return fail(s.gpa, why, "the release document of {s} has no size", .{p.url});
         if (size_v != .integer) return fail(s.gpa, why, "the release document of {s} has a malformed size", .{p.url});
         const bundle_url = strField(o, "bundle") orelse return fail(s.gpa, why, "the release document of {s} has no bundle", .{p.url});
@@ -610,7 +681,11 @@ pub const Store = struct {
         if (Io.Dir.cwd().statFile(s.io, dir, .{})) |_| {} else |_| {
             const abs = try resolveUrl(s.gpa, p.url, bundle_url);
             defer s.gpa.free(abs);
-            var b = s.http.get(abs, .{ .max_body = 64 << 20 }) catch |e|
+            // Only a server on this machine names a bundle over plain
+            // `http`, and no redirect leaves `https` for it.
+            if (!httpc.isLoopback(hostName(p.url)) and !std.ascii.startsWithIgnoreCase(abs, "https://"))
+                return fail(s.gpa, why, "the bundle of {s} is not at an https address", .{p.url});
+            var b = s.http.get(abs, .{ .max_body = 64 << 20, .redirect = httpc.keepsHttps }) catch |e|
                 return fail(s.gpa, why, "cannot fetch the bundle of {s}: {s}", .{ p.url, @errorName(e) });
             defer b.deinit(s.gpa);
             if (b.status != 200) return fail(s.gpa, why, "cannot fetch the bundle of {s}: status {d}", .{ p.url, b.status });
@@ -680,6 +755,9 @@ pub const Store = struct {
         const version = strField(o, "version") orelse return fail(s.gpa, why, "the release document of {s} has no version", .{p.url});
         const main = strField(o, "main") orelse return fail(s.gpa, why, "the release document of {s} has no main", .{p.url});
         if (!safePath(main)) return fail(s.gpa, why, "the release document of {s} names a malformed main module", .{p.url});
+        // A flag reaches a package as `NAME.FLAG`, so neither part holds
+        // a dot.
+        if (!plainName(name)) return fail(s.gpa, why, "the release document of {s} names a malformed package, {s}", .{ p.url, name });
         p.name = try s.gpa.dupe(u8, name);
         p.version = try s.gpa.dupe(u8, version);
         p.main = try s.gpa.dupe(u8, main);
@@ -695,9 +773,16 @@ pub const Store = struct {
             for (defs.items) |d| s.gpa.free(d);
             defs.deinit(s.gpa);
         }
+        var types: std.ArrayList([]u8) = .empty;
+        errdefer {
+            for (types.items) |d| s.gpa.free(d);
+            types.deinit(s.gpa);
+        }
         if (o.get("flags")) |f| if (f == .array) for (f.array.items) |it| {
             if (it != .object) continue;
             const fname = strField(it.object, "name") orelse continue;
+            if (!plainName(fname)) return fail(s.gpa, why, "the release document of {s} declares a malformed flag, {s}", .{ p.url, fname });
+            if (strField(it.object, "type")) |ty| try types.append(s.gpa, try std.fmt.allocPrint(s.gpa, "{s}={s}", .{ fname, ty }));
             const dv = it.object.get("default") orelse continue;
             switch (dv) {
                 .null => {},
@@ -709,6 +794,17 @@ pub const Store = struct {
             }
         };
         p.flag_defaults = try defs.toOwnedSlice(s.gpa);
+        p.flag_types = try types.toOwnedSlice(s.gpa);
+        if (o.get("files")) |files| if (files == .object) {
+            var it = files.object.iterator();
+            while (it.next()) |e| {
+                if (e.value_ptr.* != .string or !isDigest(e.value_ptr.string))
+                    return fail(s.gpa, why, "the release document of {s} has a malformed digest", .{p.url});
+                const key = try s.gpa.dupe(u8, e.key_ptr.*);
+                errdefer s.gpa.free(key);
+                try p.digests.put(s.gpa, key, e.value_ptr.string[0..64].*);
+            }
+        };
     }
 
     /// Unpacks a verified bundle into `dir` through a temporary directory.
@@ -717,12 +813,22 @@ pub const Store = struct {
         const window = s.gpa.alloc(u8, std.compress.zstd.default_window_len + std.compress.zstd.block_size_max) catch return error.OutOfMemory;
         defer s.gpa.free(window);
         var dec: std.compress.zstd.Decompress = .init(&in, window, .{});
-        var tar: std.Io.Writer.Allocating = .init(s.gpa);
-        defer tar.deinit();
-        _ = dec.reader.streamRemaining(&tar.writer) catch return fail(s.gpa, why, "the bundle of {s} is not valid Zstandard data", .{url});
-        if (tar.written().len > max_unpacked + max_entries * 1024) return fail(s.gpa, why, "the bundle of {s} unpacks to more than 64 MiB", .{url});
-        const entries = try parseTar(s.gpa, tar.written(), why, url);
+        // The limit applies while the data unpacks, so a small bundle
+        // cannot fill memory.
+        const tar = dec.reader.allocRemaining(s.gpa, .limited(max_unpacked + max_entries * 1024)) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.StreamTooLong => return fail(s.gpa, why, "the bundle of {s} unpacks to more than 64 MiB", .{url}),
+            else => return fail(s.gpa, why, "the bundle of {s} is not valid Zstandard data", .{url}),
+        };
+        defer s.gpa.free(tar);
+        const entries = try parseTar(s.gpa, tar, why, url);
         defer freeEntries(s.gpa, entries);
+        // Each file comes once, so the count below compares like with like.
+        for (entries, 0..) |e, i| {
+            for (entries[0..i]) |earlier| {
+                if (std.mem.eql(u8, earlier.name, e.name)) return fail(s.gpa, why, "the bundle of {s} holds {s} twice", .{ url, e.name });
+            }
+        }
 
         // The bundle must hold exactly the files of the document.
         var count: usize = 0;
@@ -763,6 +869,22 @@ pub const Store = struct {
         };
     }
 };
+
+/// Whether `name` is a package or flag name: letters, digits, `_`, and
+/// `-`, and at least one of them.
+fn plainName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    for (name) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) return false;
+    return true;
+}
+
+/// Whether `text` is a SHA-256 digest in lowercase hex. A digest names a
+/// directory of the cache, so nothing else is accepted.
+fn isDigest(text: []const u8) bool {
+    if (text.len != 64) return false;
+    for (text) |c| if (!((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f'))) return false;
+    return true;
+}
 
 fn strField(o: std.json.ObjectMap, name: []const u8) ?[]const u8 {
     const v = o.get(name) orelse return null;

@@ -3,7 +3,7 @@ pledge(
     "exec",
     "env=LUS_EXE",
     `fs:read=$TEST_DIR/fixtures/flags`,
-    `fs:read=$TEST_DIR/fixtures/flags/*`
+    `fs:read=$TEST_DIR/fixtures/flags/**`
 )
 
 --[[

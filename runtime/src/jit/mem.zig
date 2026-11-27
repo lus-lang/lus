@@ -16,6 +16,26 @@ const darwin = builtin.os.tag.isDarwin();
 const toggles = darwin and builtin.cpu.arch == .aarch64;
 
 extern "c" fn pthread_jit_write_protect_np(enabled: c_int) void;
+
+/// Every other POSIX system maps chunks readable and executable and makes
+/// the pages of a block writable only while code is copied into it, as
+/// Windows does. A state and its arena belong to one thread, so no other
+/// thread runs code from pages that are writable.
+const protects = !windows and !toggles and builtin.os.tag != .wasi and builtin.os.tag != .freestanding;
+extern "c" fn mprotect(addr: *anyopaque, len: usize, prot: c_int) c_int;
+
+/// Switches the pages that hold `block` between writable and executable.
+fn protect(start: usize, len: usize, writable: bool) bool {
+    const page = std.heap.pageSize();
+    const lo = std.mem.alignBackward(usize, start, page);
+    const hi = std.mem.alignForward(usize, start + len, page);
+    if (builtin.os.tag == .linux and !builtin.link_libc) {
+        const prot: std.os.linux.PROT = .{ .READ = true, .WRITE = writable, .EXEC = !writable };
+        return std.os.linux.errno(std.os.linux.mprotect(@ptrFromInt(lo), hi - lo, prot)) == .SUCCESS;
+    }
+    const prot: c_int = if (writable) 1 | 2 else 1 | 4;
+    return mprotect(@ptrFromInt(lo), hi - lo, prot) == 0;
+}
 extern "c" fn sys_icache_invalidate(start: *anyopaque, len: usize) void;
 
 /// Windows maps chunks writable and switches the pages of a block to
@@ -127,6 +147,7 @@ pub const Arena = struct {
             if (start >= c.span.start and start < c.span.start + c.span.len) break true;
         } else false;
         if (!owned) return;
+        poison(block);
         inv.assert(a.used >= block.len);
         a.used -= block.len;
         // The list has room unless growing it failed. A block that cannot
@@ -237,10 +258,16 @@ fn map(size: usize) ?Span {
         }
         return .{ .start = @intFromPtr(m), .len = size };
     }
-    const prot: posix.PROT = .{ .READ = true, .WRITE = true, .EXEC = true };
+    const prot: posix.PROT = .{ .READ = true, .WRITE = true, .EXEC = toggles or !protects };
     var flags: posix.MAP = .{ .TYPE = .PRIVATE, .ANONYMOUS = true };
     if (darwin) flags.JIT = true;
     const m = posix.mmap(null, size, prot, flags, -1, 0) catch return null;
+    // A system that refuses to make written pages executable finds out
+    // here, before any code depends on it.
+    if (protects and !protect(@intFromPtr(m.ptr), size, false)) {
+        posix.munmap(m);
+        return null;
+    }
     return .{ .start = @intFromPtr(m.ptr), .len = size };
 }
 
@@ -253,13 +280,57 @@ fn unmap(s: Span) void {
     posix.munmap(p[0..s.len]);
 }
 
+fn writeBegin(ptr: [*]u8, len: usize) void {
+    if (toggles) pthread_jit_write_protect_np(0);
+    // The pages were mapped with the chunk, so switching their protection
+    // fails only when the system is out of resources.
+    if (protects and !protect(@intFromPtr(ptr), len, true)) @panic("cannot make native code writable");
+}
+
+fn writeEnd(ptr: [*]u8, len: usize) void {
+    if (protects and !protect(@intFromPtr(ptr), len, false)) @panic("cannot make native code executable");
+    if (toggles) pthread_jit_write_protect_np(1);
+}
+
+/// Overwrites a block that is no longer code with instructions that trap,
+/// so a return into it stops the program.
+fn poison(block: []u8) void {
+    if (block.len == 0) return;
+    var old: u32 = 0;
+    const page = std.heap.pageSize();
+    const lo = std.mem.alignBackward(usize, @intFromPtr(block.ptr), page);
+    const hi = std.mem.alignForward(usize, @intFromPtr(block.ptr) + block.len, page);
+    if (windows) {
+        if (VirtualProtect(@ptrFromInt(lo), hi - lo, page_readwrite, &old) == 0) return;
+    } else writeBegin(block.ptr, block.len);
+    switch (builtin.cpu.arch) {
+        .x86_64, .x86 => @memset(block, 0xCC),
+        .aarch64 => {
+            // brk #0
+            var i: usize = 0;
+            while (i + 4 <= block.len) : (i += 4) std.mem.writeInt(u32, block[i..][0..4], 0xD4200000, .little);
+        },
+        .arm => {
+            // udf #0
+            var i: usize = 0;
+            while (i + 4 <= block.len) : (i += 4) std.mem.writeInt(u32, block[i..][0..4], 0xE7F000F0, .little);
+        },
+        // An all-zero word is no valid instruction on the other targets.
+        else => @memset(block, 0),
+    }
+    if (windows) {
+        _ = VirtualProtect(@ptrFromInt(lo), hi - lo, page_execute_read, &old);
+        _ = FlushInstructionCache(GetCurrentProcess(), block.ptr, block.len);
+    } else writeEnd(block.ptr, block.len);
+}
+
 /// Copies finished code into a block and makes it runnable.
 pub fn install(block: []u8, code: []const u8) void {
     inv.assert(code.len <= block.len and @intFromPtr(block.ptr) % block_align == 0);
     if (windows) return installWindows(block, code);
-    if (toggles) pthread_jit_write_protect_np(0);
+    writeBegin(block.ptr, code.len);
     @memcpy(block[0..code.len], code);
-    if (toggles) pthread_jit_write_protect_np(1);
+    writeEnd(block.ptr, code.len);
     if (darwin) {
         sys_icache_invalidate(block.ptr, code.len);
     } else if (builtin.cpu.arch == .aarch64) {

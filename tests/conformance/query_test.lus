@@ -2154,7 +2154,7 @@ local function a_query_is_not_closable_test()
 end
 
 local function a_query_cannot_cross_a_worker_boundary_test()
-    pledge("load", `fs:read=$TEST_DIR/*`)
+    pledge("load", `fs:read=$TEST_DIR/**`)
     local q = @people as p select p.name
     local w = worker.create(`$TEST_DIR/fixtures/worker/echo.lus`)
     local ok, err = catch worker.send(w, q)

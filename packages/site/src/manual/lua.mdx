@@ -195,7 +195,7 @@ pledge("fs:read", "load")
 local util = require("util")
 ```
 
-`pledge` is an ordinary function, so a program may call it at any point. A pledge may limit a permission to certain paths or hosts, as in `pledge("fs:read=./data/*")`. After `pledge("seal")`, the program can acquire no more permissions. The `-P` option of `lus` also grants permissions, so an unmodified Lua script can run without a call to `pledge`. `-Pall` grants every permission.
+`pledge` is an ordinary function, so a program may call it at any point. A pledge may limit a permission to certain paths or hosts, as in `pledge("fs:read=./data/**")`. After `pledge("seal")`, the program can acquire no more permissions. The `-P` option of `lus` also grants permissions, so an unmodified Lua script can run without a call to `pledge`. `-Pall` grants every permission.
 
 ```sh
 lus -Pfs:read -Pload app.lua
@@ -1005,7 +1005,7 @@ print(#utf16, string.transcode(utf16, "utf-16le", "utf-8"))  --> 4  hé
 `network.fetch` makes an HTTP or HTTPS request and returns the status, the body as a vector, and the headers. The following program counts the items that a remote API returns.
 
 ```lus nocheck
-pledge("network:http=api.example.com/*")
+pledge("network:http=api.example.com/**")
 
 local status, body = network.fetch("https://api.example.com/v1/items")
 if status == 200 then

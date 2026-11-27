@@ -250,7 +250,7 @@ end
 local function a_path_grant_covers_programs_below_it_test()
     local real = fs.path.parent(lus_bin)
     local code = 'io.write(tostring((catch os.spawn({bin, "-e", ""}))), " ", tostring((catch os.spawn({"lus-spawn-test-denied"}))))'
-    assert(under({ `exec=$real/*` }, code) == "true false")
+    assert(under({ `exec=$real/**` }, code) == "true false")
 end
 
 local function a_name_grant_covers_the_name_as_written_test()
@@ -288,7 +288,7 @@ local function temporary_files_go_to_the_directory_of_the_environment_test()
         'local dir = %q local f = io.tmpfile() f:write("x") f:seek("set") io.write(f:read("a"), " ", tostring(os.tmpname():find(dir, 1, true) == 1))',
         dir
     )
-    local argv = { lus_bin, `-Pfs:write=$dir/*`, "-e", code }
+    local argv = { lus_bin, `-Pfs:write=$dir/**`, "-e", code }
     local p = os.spawn(argv, { stdout = "pipe", stderr = "stdout", env = env })
     local text = p.stdout:read("a")
     exit_of(p)

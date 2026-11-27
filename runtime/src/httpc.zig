@@ -50,6 +50,15 @@ pub fn anyRedirect(_: std.Uri, _: std.Uri) bool {
     return true;
 }
 
+/// Follows a redirect to `https`, and one to plain `http` only from a
+/// server on this machine.
+pub fn keepsHttps(from: std.Uri, to: std.Uri) bool {
+    if (std.ascii.eqlIgnoreCase(to.scheme, "https")) return true;
+    var buf: [256]u8 = undefined;
+    const h = hostOf(from, &buf) orelse return false;
+    return isLoopback(h);
+}
+
 /// Follows redirects within the host of the original URL only.
 pub fn sameHost(from: std.Uri, to: std.Uri) bool {
     var a: [256]u8 = undefined;

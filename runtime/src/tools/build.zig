@@ -397,7 +397,14 @@ const Collector = struct {
             // dates/zones.lus is the module dates.zones, dates/init.lus
             // the module dates.
             var stem = sub_rel[0 .. sub_rel.len - 4];
-            if (std.mem.endsWith(u8, stem, "/init")) stem = stem[0 .. stem.len - 5];
+            if (std.mem.endsWith(u8, stem, "/init")) {
+                // `x.lus` is the module `x` when the bundle also holds
+                // `x/init.lus`, as it is for `require`.
+                const sibling = try std.mem.concat(c.gpa, u8, &.{ dir, ".lus" });
+                defer c.gpa.free(sibling);
+                if (std.Io.Dir.cwd().statFile(c.io, sibling, .{})) |_| continue else |_| {}
+                stem = stem[0 .. stem.len - 5];
+            }
             const mod = try std.mem.replaceOwned(u8, c.gpa, stem, "/", ".");
             defer c.gpa.free(mod);
             const key = try std.mem.concat(c.gpa, u8, &.{ pkg.url, "#", mod });

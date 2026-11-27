@@ -83,19 +83,21 @@ Each of these functions also requires `bytecode` when the code it loads is a bin
 
 `pledge` also accepts the names `fs:exec`, `network:tls`, `ffi`, and `worker`, which are reserved for host programs and extensions. No standard library function checks them.
 
-A script holds `debug` until its permissions first change. The first `pledge`, rejection, or `seal`, or a `-P` grant on the command line, removes `debug` unless that change names it too. A script that pledges nothing keeps the whole `debug` library, while a script that pledges `fs:read` and seals cannot read the registry or the locals of other functions. `debug.traceback`, `debug.parse`, `debug.format`, `debug.check`, and `debug.jit` need no permission.
+A script holds `debug` until its permissions first change. The first `pledge`, rejection, or `seal`, or a `-P` grant on the command line, removes `debug` unless that change names it too. A script that pledges nothing keeps the whole `debug` library, while a script that pledges `fs:read` and seals cannot read the registry or the locals of other functions. `debug.traceback`, `debug.parse`, `debug.format`, `debug.check`, and `debug.jit` need no permission. The `debug` permission reaches the registry, the upvalues of every function, and the hooks of every coroutine, so code that holds it can act with every permission that any part of the program holds. Grant it only to code that is trusted with all of them.
 
 `pledge` raises an error for an unknown name, such as `unknown permission: 'bogus'`. It also raises an error for a part that the base permission lacks, such as `invalid fs subpermission 'nope'`. The name `"all"` grants every permission, but only the command line and a host program may use it, so a script that pledges `"all"` gets the error `permission "all" cannot be requested from scripts`.
 
 ## Restricting a permission to values
 
-A permission can be limited to certain paths, hosts, or variable names, so the program holds only the access it uses. For example, a script that reads its own data directory pledges `fs:read=./data/*` and cannot read any other part of the disk.
+A permission can be limited to certain paths, hosts, or variable names, so the program holds only the access it uses. For example, a script that reads its own data directory pledges `fs:read=./data/**` and cannot read any other part of the disk.
 
 The limit is a _value_ written after `=`. In a value, `*` matches any sequence of characters, including `/` and the empty sequence, while `?` matches exactly one byte.
 
 ### Filesystem values
 
-A filesystem value is an absolute path or a relative path, which Lus resolves against the working directory, so `data/*` and `./data/*` name the same place. A value without a wildcard matches that one path. A value that ends in `/*` matches everything inside the directory but not the directory itself, so a program that also lists the directory pledges both forms.
+A filesystem value is an absolute path or a relative path, which Lus resolves against the working directory, so `data/**` and `./data/**` name the same place. A value without a wildcard matches that one path. In a value, `*` matches any run of characters inside one component of a path and `?` matches one such character, so neither matches a `/`. `**` matches any run of characters, `/` included. `./data/*` therefore covers the entries directly in `./data`, and `./data/**` covers everything below it. A value that ends in `/**` matches everything inside the directory but not the directory itself, so a program that also lists the directory pledges both forms. An empty value, as in `fs:read=`, raises an error.
+
+Lus checks a path as it resolves when the call starts and opens the file afterward. Another process that replaces a file with a link between those two steps can therefore redirect that one open, so grant directories that only the program and trusted programs write.
 
 The following script pledges read access to a data directory and to everything inside it, so listing the parent directory fails. The setup and the cleanup run in [coroutines](#permissions-in-coroutines), so the main script never holds their wider permissions.
 
@@ -109,7 +111,7 @@ local base, data = coroutine.wrap(function()
     return base, `$base.data`
 end)()
 
-pledge(`fs:read=$data`, `fs:read=$data/*`)
+pledge(`fs:read=$data`, `fs:read=$data/**`)
 print((fs.type(data)))  --> directory
 print((fs.type(`$data/reports/q1.txt`)))  --> file
 print((catch fs.list(fs.path.parent(data))))  --> false
@@ -125,12 +127,12 @@ Before Lus compares the granted path with the requested path, it makes both abso
 
 ### Network values
 
-A network value has the form `host[:port][/path]`, where the host may contain `*`. The host part matches the host of the requested URL or address. When present, the port part matches its port and the path part matches the path of a requested URL. A value that starts with `http://` or `https://` matches the whole requested URL. `network.fetch` requests its URL, while TCP and UDP operations request `host:port`.
+A network value has the form `host[:port][/path]`, where the host may contain `*`. The host part matches the host of the requested URL or address. When present, the port part matches its port and the path part matches the path of a requested URL under the rules of a filesystem value, so `/v1/*` covers one segment and `/v1/**` covers every path below `/v1/`. A request whose path has a `.` or `..` segment, written plainly or with `%2e`, matches no value that has a path part, because a server may resolve such a segment before it routes the request. A value that starts with `http://` or `https://` matches requests of that scheme only, part by part in the same way. The path part compares the URL of the request. The `Host` header, the `servername` option, and the `verify` option of a request stay the choice of the script, so a grant for one name also reaches the other sites that the same server hosts. `network.fetch` requests its URL, while TCP and UDP operations request `host:port`.
 
 The following pledges limit HTTP requests to the `/v1/` paths of one host, TCP to the ports of `127.0.0.1`, and UDP to the hosts whose names end in `.internal.test`.
 
 ```lus nocheck
-pledge("network:http=api.example.com/v1/*")
+pledge("network:http=api.example.com/v1/**")
 network.fetch("https://api.example.com/v1/users")   -- allowed
 network.fetch("https://api.example.com/admin")      -- permission error
 
@@ -161,7 +163,7 @@ print((catch os.setenv("PATH", "/tmp")))  --> false
 
 ### Program values
 
-An `exec` value selects the programs that [`os.spawn`](/manual/api#os.spawn) may start. A value without a separator matches the name of the program as `os.spawn` receives it, so `exec=git` allows `os.spawn({"git", ...})`. A value with a separator is a path glob, which matches the absolute path that the name resolves to, like a [filesystem value](#filesystem-values). `exec=/usr/bin/*` allows every program in `/usr/bin`, whatever name started it. On Windows a path value also covers that path with one of the extensions `.com`, `.exe`, `.bat`, and `.cmd` added, as Windows adds them when it runs a program, so `exec=C:/tools/lus` allows `C:\tools\lus.exe`.
+An `exec` value selects the programs that [`os.spawn`](/manual/api#os.spawn) may start. A value without a separator matches the name of the program as `os.spawn` receives it, so `exec=git` allows `os.spawn({"git", ...})`. A value with a separator is a path glob, which matches the absolute path that the name resolves to, like a [filesystem value](#filesystem-values). `exec=/usr/bin/**` allows every program in `/usr/bin`, whatever name started it. On Windows a path value also covers that path with one of the extensions `.com`, `.exe`, `.bat`, and `.cmd` added, as Windows adds them when it runs a program, so `exec=C:/tools/lus` allows `C:\tools\lus.exe`.
 
 `os.execute` and `io.popen` run the system shell, which can start any program, so a grant with a value never allows them. The following script may run `sort` and no shell command.
 
@@ -175,7 +177,7 @@ print((catch os.execute("sort")))  --> false
 
 Each grant with a value adds that value to the permission. A check succeeds when any of the values matches.
 
-A grant only ever adds access. A grant without a value allows every value, so it covers the grants of the same permission that have values, whichever comes first. A base permission granted without a value covers its parts in the same way. For example, `pledge("fs:read=./data/*", "fs")` permits every read and every write, as does `pledge("fs", "fs:read=./data/*")`. A program that needs fewer permissions [rejects](#rejecting-permissions) the others or runs code in a [coroutine](#permissions-in-coroutines) that holds fewer.
+A grant only ever adds access. A grant without a value allows every value, so it covers the grants of the same permission that have values, whichever comes first. A base permission granted without a value covers its parts in the same way. For example, `pledge("fs:read=./data/**", "fs")` permits every read and every write, as does `pledge("fs", "fs:read=./data/**")`. A program that needs fewer permissions [rejects](#rejecting-permissions) the others or runs code in a [coroutine](#permissions-in-coroutines) that holds fewer.
 
 ## Rejecting permissions
 
@@ -219,7 +221,7 @@ print((fs.type(".")))  --> directory
 `pledge` processes its arguments in order, so a program usually pledges and seals in one call.
 
 ```lus
-print(pledge("fs:read=./data/*", "~exec", "seal"))  --> true  true  true
+print(pledge("fs:read=./data/**", "~exec", "seal"))  --> true  true  true
 ```
 
 An unknown name still raises an error after a seal.
@@ -231,15 +233,17 @@ The person who runs a script grants permissions with the `-P` option of `lus`, a
 ```bash
 lus -Pfs script.lus
 lus --pledge=fs script.lus
-lus -Pfs:read=/srv/app/* -Pnetwork:http script.lus
+lus -Pfs:read=/srv/app/** -Pnetwork:http script.lus
 lus -P~exec script.lus
 lus -Pall script.lus
 ```
 
-When the command line grants at least one permission, those grants are the limit of the script. A `pledge` in the script returns `true` for what the command line already allows and `false` for anything else. A person can therefore run a script that they have not read, granting what the script is supposed to need so that every other sensitive operation fails. The following script runs under `lus -Pfs:read=/srv/app/* script.lus`.
+A `-P` option that cannot apply, such as a grant after `-P seal` or a value that is empty, ends `lus` with an error before the script starts.
+
+When the command line grants at least one permission, those grants are the limit of the script. A `pledge` in the script returns `true` for what the command line already allows and `false` for anything else. A person can therefore run a script that they have not read, granting what the script is supposed to need so that every other sensitive operation fails. The following script runs under `lus -Pfs:read=/srv/app/** script.lus`.
 
 ```lus nocheck
-print(pledge("fs:read=/srv/app/*"))   --> true
+print(pledge("fs:read=/srv/app/**"))   --> true
 print(pledge("fs:write"))             --> false
 print(pledge("network"))              --> false
 ```

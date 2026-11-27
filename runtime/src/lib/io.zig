@@ -822,7 +822,7 @@ fn fGc(l: *Thread) Error!u32 {
 }
 
 fn fToString(l: *Thread) Error!u32 {
-    const h = toHandle(l, l.arg(1)).?;
+    const h = toHandle(l, l.arg(1)) orelse return aux.typeError(l, 1, "file");
     if (h.closed) return aux.retStr(l, "file (closed)");
     var buf: [64]u8 = undefined;
     return aux.retStr(l, std.fmt.bufPrint(&buf, "file (0x{x})", .{l.arg(1).payload}) catch "file");
@@ -1107,8 +1107,9 @@ fn ioTmpfile(l: *Thread) Error!u32 {
     const os_lib = @import("os.zig");
     const path = std.fmt.allocPrint(l.g.gpa, "{s}{s}lus_{x}", .{ os_lib.tempDir(l), os_lib.path_separator, std.mem.readInt(u64, &rnd, .little) }) catch return l.raiseMem();
     defer l.g.gpa.free(path);
-    // A grant limited to some paths must cover the file.
-    try @import("../vm/pledge.zig").require(l, "fs:write", path);
+    // A grant limited to some paths must cover the file. The message
+    // leaves the directory out, which comes from the environment.
+    if (!@import("../vm/pledge.zig").allowed(l, "fs:write", path)) return l.raiseFmt("permission \"fs:write\" denied for the directory of temporary files", .{});
     const v = (try openFile(l, path, "w+", false)) orelse return l.raise(l.err);
     // The file is removed right away and lives until closed.
     std.Io.Dir.cwd().deleteFile(l.g.io, path) catch {};
