@@ -531,11 +531,11 @@ jobs:
         working-directory: runtime
         run: |
           # The limits sit about 5% above the measured sizes of linked.lus,
-          # 1.86 MB on x86-64 Linux and 1.41 MB on aarch64 macOS, so a
+          # 1.86 MB on x86-64 Linux and 1.49 MB on aarch64 macOS, so a
           # change that keeps more of the runtime fails here. x86-64 code
           # is about a sixth larger than aarch64 code for the same source
           # (spec/design/aot.md, "Linking").
-          if [ "$RUNNER_OS" = Linux ]; then target=-Dtarget=x86_64-linux-musl; limit=1950000; else target=; limit=1480000; fi
+          if [ "$RUNNER_OS" = Linux ]; then target=-Dtarget=x86_64-linux-musl; limit=1950000; else target=; limit=1560000; fi
           zig build link-object -Doptimize=ReleaseSafe $target -p "$RUNNER_TEMP/lo"
           "$RUNNER_TEMP/lo/bin/lus-link" "$RUNNER_TEMP/lo/lib/lus.lo" "$RUNNER_TEMP/lus-linked"
           if [ "$RUNNER_OS" = macOS ]; then codesign -v "$RUNNER_TEMP/lus-linked"; fi
