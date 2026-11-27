@@ -900,10 +900,10 @@ const Writer = struct {
                 key = r.key;
                 if (r.key.tag != .string) continue;
                 const fresh = w.mayRun(r.val);
-                if (fresh) try l.push(r.key);
-                defer if (fresh) {
-                    l.top -= 1;
-                };
+                // A function deeper in the tree may remove the key, so the
+                // stack keeps it for the walk to continue from.
+                try l.push(r.key);
+                defer l.top -= 1;
                 if (try w.transform(r.key, r.val)) |item| {
                     if (serializable(item)) {
                         if (!first) try w.write(",");
@@ -923,21 +923,23 @@ const Writer = struct {
             if (n.key.tag != .string or n.val.isNil()) continue;
             const parts = t.nodes();
             const fresh = w.mayRun(n.val);
-            if (fresh) try l.push(n.key);
-            defer if (fresh) {
-                l.top -= 1;
-            };
-            if (try w.transform(n.key, n.val)) |item| {
+            // The node may move when a function changes the table, so the
+            // key and the value are read from it once.
+            const held = n.key;
+            const val = n.val;
+            try l.push(held);
+            defer l.top -= 1;
+            if (try w.transform(held, val)) |item| {
                 if (serializable(item)) {
                     if (!first) try w.write(",");
                     first = false;
-                    try w.str(n.key.as(String));
+                    try w.str(held.as(String));
                     try w.write(":");
                     try w.item_(item, fresh);
                 }
             }
-            if (fresh and (t.hash_ptr != parts.ptr or t.hash_len != parts.len)) {
-                h = table.findSlot(t, n.key) orelse break;
+            if (t.hash_ptr != parts.ptr or t.hash_len != parts.len) {
+                h = table.findSlot(t, held) orelse break;
             }
         }
         try w.write("}");

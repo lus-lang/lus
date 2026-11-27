@@ -33,7 +33,9 @@ pub const Header = extern struct {
     /// native or a userdata aligned.
     tag: Tag align(if (@sizeOf(usize) == 8) 8 else 16),
     flags: Flags = .{},
-    /// Set on objects that wait for (or already ran) their finalizer.
+    /// `pending` on an object with a registered finalizer, and `separated`
+    /// from the collection that found it unreachable until the finalizer
+    /// runs.
     finalize: Finalize = .none,
     /// Bytes that the alignment of the header leaves over, which an
     /// object type may use. The struct is extern, so these fields fill
@@ -57,7 +59,7 @@ pub const Header = extern struct {
         _pad: u4 = 0,
     };
 
-    pub const Finalize = enum(u8) { none, pending, done };
+    pub const Finalize = enum(u8) { none, pending, separated };
 
     pub inline fn as(h: *Header, comptime T: type) *T {
         return @ptrCast(@alignCast(h));
@@ -1286,9 +1288,29 @@ fn MarkerOf(comptime par: bool) type {
 
         /// Appends a weak table to a list of the collector.
         fn remember(m: *M, list: *std.ArrayList(*object.Table), t: *object.Table) void {
-            if (par) m.drain.lock.lock();
-            defer if (par) m.drain.lock.unlock();
-            list.append(m.g.gpa, t) catch {};
+            const kept = blk: {
+                if (par) m.drain.lock.lock();
+                defer if (par) m.drain.lock.unlock();
+                list.append(m.g.gpa, t) catch break :blk false;
+                break :blk true;
+            };
+            // A weak table that no list holds would keep its entries
+            // past the objects they name, so this collection treats it as
+            // an ordinary table and marks everything it holds.
+            if (!kept) m.markStrong(t);
+        }
+
+        /// Marks every key and value of `t`.
+        fn markStrong(m: *M, t: *object.Table) void {
+            if (t.kind == .boxed) for (t.values()) |v| m.markValue(v);
+            if (t.kind == .table) m.markTables(t.words());
+            for (0..t.hash_len) |hi| {
+                const n = t.entry(hi);
+                if (n.val.isNil()) continue;
+                m.markValue(n.key);
+                m.markValue(n.val);
+            }
+            if (t.isShaped()) m.traverseSlots(t, .none);
         }
 
         fn traverseTable(m: *M, t: *object.Table) void {
@@ -1426,8 +1448,15 @@ fn MarkerOf(comptime par: bool) type {
             var keep: usize = 0;
             for (g.finobj.items) |h| {
                 if (!isMarked(h)) {
-                    g.tobefnz.append(g.gpa, h) catch {};
                     m.markObject(h);
+                    // An object that the queue has no room for keeps its
+                    // finalizer for a later collection.
+                    g.tobefnz.append(g.gpa, h) catch {
+                        g.finobj.items[keep] = h;
+                        keep += 1;
+                        continue;
+                    };
+                    h.finalize = .separated;
                 } else {
                     g.finobj.items[keep] = h;
                     keep += 1;
@@ -1539,8 +1568,12 @@ fn isValueLike(v: Value) bool {
     return v.tag == .string or v.tag == .bigint or v.tag == .decimal;
 }
 
+/// Whether `v` is an object that this collection found unreachable and
+/// queued for its finalizer. A weak table drops such a value. An object
+/// that is still reachable keeps its place in weak tables, whether or not
+/// it has a finalizer.
 fn isFinalizedObject(v: Value) bool {
-    return v.tag.isCollectable() and v.header().finalize == .pending;
+    return v.tag.isCollectable() and v.header().finalize == .separated;
 }
 
 fn weakModeOf(g: *Global, t: *object.Table) object.Table.WeakMode {
@@ -1595,13 +1628,16 @@ pub fn setParam(g: *Global, p: Param, v: i64) i64 {
     if (v < 0) return old;
     const n = std.math.cast(usize, v) orelse std.math.maxInt(usize);
     const s = &g.gcs;
+    // The pace multiplies these by a count of bytes, so each has a bound
+    // that keeps the product in 64 bits.
+    const most = 1 << 16;
     switch (p) {
-        .pause => g.pause = n,
-        .stepmul => s.stepmul = @max(n, 1),
-        .stepsize => s.stepsize = @max(n, 1024),
-        .minormul => s.minormul = @max(n, 1),
+        .pause => g.pause = @min(n, most),
+        .stepmul => s.stepmul = std.math.clamp(n, 1, most),
+        .stepsize => s.stepsize = std.math.clamp(n, 1024, 1 << 30),
+        .minormul => s.minormul = std.math.clamp(n, 1, most),
         .majorminor => s.majorminor = @min(n, 100),
-        .minormajor => s.minormajor = n,
+        .minormajor => s.minormajor = @min(n, most),
     }
     // A new pace applies from the next threshold.
     if (s.phase == .pause and s.live != 0) {

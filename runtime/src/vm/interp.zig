@@ -119,6 +119,14 @@ fn newClosedUpval(l: *Thread, v: Value) Error!*Upvalue {
 pub fn closeTbc(l: *Thread, level: u32, err: ?Value) Error!void {
     var cur_err = err;
     var failed = false;
+    // A handler may drop its error argument and collect, and a `catch`
+    // inside it clears the error of the thread, so a stack slot above
+    // every variable still to close keeps the current error alive.
+    const entry_top = l.top;
+    var err_slot: ?u32 = null;
+    if (err) |e| {
+        if (e.tag.isCollectable()) err_slot = try rootAbove(l, e);
+    }
     while (l.tbc.items.len > 0) {
         const lv = l.tbc.items[l.tbc.items.len - 1];
         if (lv < level) break;
@@ -129,6 +137,9 @@ pub fn closeTbc(l: *Thread, level: u32, err: ?Value) Error!void {
             if (@import("../lib/coroutine.zig").closeCo(l, obj.as(Thread))) |e| {
                 cur_err = e;
                 failed = true;
+                if (err_slot) |at| {
+                    l.stack[at] = e;
+                } else err_slot = try rootAbove(l, e);
             }
             continue;
         }
@@ -143,6 +154,7 @@ pub fn closeTbc(l: *Thread, level: u32, err: ?Value) Error!void {
             // A normal block exit inside the interpreter: the handler runs
             // as a frame (so it may yield) and the instruction runs again
             // for the remaining variables.
+            if (err_slot != null) l.top = @max(entry_top, lv + 1);
             _ = try ops.callMeta(l, tm, &.{ obj, .nil });
             unreachable;
         }
@@ -152,10 +164,25 @@ pub fn closeTbc(l: *Thread, level: u32, err: ?Value) Error!void {
             failed = true;
             // A native handler that raised left its frame behind.
             if (l.frames.items.len > depth) l.frames.items.len = depth;
+            l.top = saved_top;
+            if (err_slot) |at| {
+                l.stack[at] = l.err;
+            } else err_slot = rootAbove(l, l.err) catch null;
         };
-        l.top = saved_top;
+        l.top = if (err_slot) |at| @max(saved_top, at + 1) else saved_top;
     }
+    if (err_slot != null) l.top = entry_top;
     if (failed) return l.raise(cur_err.?);
+}
+
+/// Pushes `v` above the top of the stack and above every variable still
+/// to close, and returns its slot.
+fn rootAbove(l: *Thread, v: Value) Error!u32 {
+    var at = l.top;
+    if (l.tbc.items.len > 0) at = @max(at, l.tbc.items[l.tbc.items.len - 1] + 1);
+    l.top = at;
+    try l.push(v);
+    return at;
 }
 
 // ---------------------------------------------------------------------
@@ -435,8 +462,12 @@ fn handleError(l: *Thread, stop: usize) bool {
                 l.frames.items.len = i + 1;
                 closeUpvals(l, level);
                 l.top = fr.base + cl.proto.max_stack;
+                // An error in __close replaces the caught error. A `catch`
+                // that ran inside a handler cleared the error of the
+                // thread, and the caught error stays the one saved here.
+                var caught = err;
                 closeTbc(l, level, err) catch {
-                    // An error in __close replaces the caught error.
+                    caught = l.err;
                 };
                 // A handler that closed the running coroutine ends it, so
                 // no `catch` of the coroutine takes the error.
@@ -445,7 +476,7 @@ fn handleError(l: *Thread, stop: usize) bool {
                 // A __close handler pushes frames of its own, which can
                 // move the frame list, so the frame is read again.
                 const here = &l.frames.items[i];
-                l.stack[here.base + h.dest] = l.err;
+                l.stack[here.base + h.dest] = caught;
                 l.err = .nil;
                 here.pc = h.handler_pc;
                 return true;

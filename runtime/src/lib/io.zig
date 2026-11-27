@@ -100,6 +100,8 @@ pub fn open(l: *Thread) Error!void {
     try aux.setField(l, mt, "__tostring", try aux.native(l, fToString, "tostring"));
     try aux.setField(l, mt, "__gc", try aux.native(l, fGc, "gc"));
     try aux.setField(l, mt, "__close", try aux.native(l, fGc, "close"));
+    try aux.lockMetatable(l, mt);
+    aux.freeze(methods);
     // The registry roots the metatable, and the extension map records it
     // for fast lookup.
     const g = l.g;

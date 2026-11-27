@@ -364,9 +364,14 @@ pub fn freezeEnv(l: *Thread) void {
     const loaded_key = state.newStringKnown(g, "_LOADED", true, 7) catch return;
     const loaded = table.getStr(reg, loaded_key);
     const skip: ?*object.Table = if (loaded.tag == .table) loaded.as(object.Table) else null;
-    freezeTable(g.globals.as(object.Table), skip, 2);
+    freezeTable(g.globals.as(object.Table), skip, 16);
+    // The metatables of strings, vectors, and enum values reach every
+    // value of their type.
+    for (g.type_metatables) |mt| if (mt) |t| freezeTable(t, skip, 16);
 }
 
+/// Makes `t` and every table it reaches read-only. A table that is
+/// read-only already ends the walk, which also ends it at a cycle.
 fn freezeTable(t: *object.Table, skip: ?*object.Table, depth: u32) void {
     const table = @import("vm/table.zig");
     if (t == skip) return;
@@ -376,6 +381,7 @@ fn freezeTable(t: *object.Table, skip: ?*object.Table, depth: u32) void {
     while (table.next(t, key) catch null) |e| : (key = e.key) {
         if (e.val.tag == .table and !e.val.as(object.Table).isReadonly()) freezeTable(e.val.as(object.Table), skip, depth - 1);
     }
+    if (t.metatable) |mt| if (!mt.isReadonly()) freezeTable(mt, skip, depth - 1);
 }
 
 /// Runs the finalizer of every object that still has one, as a closing

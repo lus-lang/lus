@@ -308,17 +308,24 @@ pub fn serve(l: *Thread) Error!u32 {
         t.ctx = s;
         t.cancel = stopServing;
     }
-    return acceptLoop(l, s) catch |e| {
-        // A suspension keeps the server open.
-        if (!l.yielding and owned) {
+    const n = acceptLoop(l, s) catch |e| {
+        // A suspension keeps the server open and keeps the way to stop
+        // it. Any other exit leaves the task with no pointer to a server
+        // that the collector may free.
+        if (!l.yielding) {
             if (sched.taskOf(l)) |t| {
                 t.ctx = null;
                 t.cancel = null;
             }
-            net.closeServer(l, s);
+            if (owned) net.closeServer(l, s);
         }
         return e;
     };
+    if (sched.taskOf(l)) |t| {
+        t.ctx = null;
+        t.cancel = null;
+    }
+    return n;
 }
 
 fn stopServing(g: *state.Global, ctx: *anyopaque) void {

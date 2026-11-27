@@ -869,7 +869,11 @@ pub const Lower = struct {
         if (b.captured(r) and b.virtIndex(v) != null) v = try b.materialize(v);
         const reg = &b.fr.regs[r];
         if (b.captured(r)) {
-            // A captured register is written through at once.
+            // A captured register is written through at once, which gives
+            // a new table another name.
+            if (b.fresh) |fz| {
+                if (v == fz.ref) b.endFresh();
+            }
             try b.clobberSlot(b.slotOf(r));
             b.clobber(.upval);
             _ = try b.emit(.{ .op = .sstore, .cls = .upval, .a = v, .imm = b.slotOf(r) });
@@ -2295,8 +2299,17 @@ pub const Lower = struct {
             if (try b.virtSet(b.fr.regs[src.reg].val, key_str, rv)) return true;
         }
         // A store into a table that this block allocated.
-        if (src == .reg) if (b.fresh) |*fz| {
-            if (b.fr.regs[src.reg].val == fz.ref) return b.freshStore(fz, key_v, rv);
+        if (src == .reg) if (b.fresh) |held| if (b.fr.regs[src.reg].val == held.ref) {
+            // Reading the value allocates it when it is a table that the
+            // block kept unallocated, and that table then becomes the one
+            // the block knows every node of. The value is read first, and
+            // the store takes the general path when that happened.
+            if (b.staticTy(rv)) |ty| if (ty != .nil) {
+                _ = try b.typed(rv, ty);
+            };
+            if (b.fresh) |*fz| {
+                if (b.fr.regs[src.reg].val == fz.ref) return b.freshStore(fz, key_v, rv);
+            }
         };
         const t = (try b.tableOf(src, 0)) orelse return false;
         if (t.sample.isShaped()) {
@@ -2357,6 +2370,7 @@ pub const Lower = struct {
                 if (k.? == key_str) slot = si;
             }
             const v = try b.typed(rv, ty);
+            const added = slot == null;
             if (slot == null) {
                 if (fz.used >= fz.keys.len) return false;
                 const g = b.l.g;
@@ -2369,6 +2383,9 @@ pub const Lower = struct {
                 fz.shape = c;
                 _ = try b.emit(.{ .op = .store, .size = 4, .cls = .tab_hash, .a = fz.ref, .b = try b.shapeWord(c), .imm = tl.hash_used, .flags = .{ .fresh = true } });
             }
+            // A store over a key that the table holds ends what the block
+            // knew of the old value.
+            if (!added) b.clobber(.node_val);
             try b.storeValueAt(fz.ref, slotDisp(fz.cap, slot.?), slotTagDisp(fz.cap, slot.?), 1, v, .node_val, true);
             _ = try b.emit(.{ .op = .barrier, .a = fz.ref, .b = v, .imm = @bitCast(@as(u64, @intFromPtr(key_str))) });
             return true;
@@ -2403,6 +2420,7 @@ pub const Lower = struct {
             fz.used += 1;
             _ = try b.emit(.{ .op = .store, .size = 4, .cls = .tab_hash, .a = fz.ref, .b = try b.kint(fz.used), .imm = tl.hash_used, .flags = .{ .fresh = true } });
         }
+        if (at != null) b.clobber(.node_val);
         try b.storeValueAt(fz.ref, base + tl.node_val, tags + tl.tag_val, 1, v, .node_val, true);
         _ = try b.emit(.{ .op = .barrier, .a = fz.ref, .b = v, .imm = @bitCast(@as(u64, @intFromPtr(key_str))) });
         return true;
@@ -2440,7 +2458,7 @@ pub const Lower = struct {
         });
         _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.ne), .a = t, .imm = 0 });
         try b.setReg(ra, t, Sample.tagged(.table));
-        b.fresh = null;
+        if (b.fresh != null) b.endFresh();
         const units = table.inlineUnits(nb, nc);
         if (nb == 0 and nc > 0 and units > 0) {
             if (nc <= shape.max_keys) {
@@ -2715,6 +2733,9 @@ pub const Lower = struct {
             // A string or a table is its pointer, which never equals the
             // nil word.
             .string, .table => {
+                if (b.fresh) |fz| {
+                    if (v == fz.ref) b.endFresh();
+                }
                 b.clobber(.elem);
                 _ = try b.emit(.{ .op = .storex, .cls = .elem, .a = ap, .b = zi, .c = v, .aux = tl.word_shift });
                 _ = try b.emit(.{ .op = .barrier, .a = t, .b = v });
@@ -3237,6 +3258,7 @@ pub const Lower = struct {
                     if (reg.val == ref) reg.val = t;
                 }
             }
+            if (b.fresh != null) b.endFresh();
             b.fresh = fz;
             b.snap_cache = ir.no_snap;
             return t;
@@ -3274,6 +3296,7 @@ pub const Lower = struct {
                 if (reg.val == ref) reg.val = t;
             }
         }
+        if (b.fresh != null) b.endFresh();
         b.fresh = fz;
         b.snap_cache = ir.no_snap;
         return t;
@@ -4031,8 +4054,10 @@ pub const Lower = struct {
             const bit0: u8 = @backingInt(state.TM.gc);
             if (b.fr.regs[a1].val != ir.none) if (b.virtIndex(b.fr.regs[a1].val)) |vi0| {
                 // An unallocated table: the metatable becomes one of
-                // its fields. It has none yet, or the call stays.
+                // its fields. It has none yet, or the call stays. A table
+                // that is its own metatable stays a call as well.
                 if (b.vobjs.items[vi0].mt != ir.none) return null;
+                if (b.fr.regs[a1].val == b.fr.regs[a1 + 1].val) return null;
                 try b.guardNative(ra, f);
                 var mt = try b.typed(a1 + 1, .table);
                 _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + il.absentByte(bit0), .aux = @as(u64, bit0 % 8) | (1 << 8) });
@@ -4060,8 +4085,13 @@ pub const Lower = struct {
             _ = try b.guard(.{ .op = .guardi, .cond = @backingInt(ir.Cond.eq), .a = ro, .imm = 0 });
             const bit: u8 = @backingInt(state.TM.gc);
             _ = try b.guard(.{ .op = .gbit, .cls = .tab_absent, .a = mt, .imm = tl.tm_absent + il.absentByte(bit), .aux = @as(u64, bit % 8) | (1 << 8) });
-            const is_fresh = if (b.fresh) |fz| fz.ref == t else false;
-            _ = try b.store(t, tl.metatable, mt, ptr_size, .tab_meta, is_fresh);
+            // The store starts a new epoch for the metatable words, so a
+            // later read sees that the table has a metatable now. A new
+            // table that becomes a metatable has another name from here.
+            if (b.fresh) |fz| {
+                if (mt == fz.ref and t != fz.ref) b.endFresh();
+            }
+            _ = try b.store(t, tl.metatable, mt, ptr_size, .tab_meta, false);
             _ = try b.emit(.{ .op = .barrier, .a = t, .aux = 1 });
             if (b.fresh) |*fz| {
                 if (fz.ref == t) fz.metatable = true;

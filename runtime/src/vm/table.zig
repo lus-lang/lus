@@ -42,9 +42,14 @@ pub fn hashValue(v: Value) u64 {
             h.update(std.mem.sliceAsBytes(b.limbs()));
             break :blk h.final();
         },
-        // Fractional decimals compare by value across scales (1.5 and
-        // 1.50), so they share one hash class. They are rare as keys.
-        .decimal => 0x9E3779B97F4A7C15,
+        // A decimal key has no trailing zeros (`numeric.normalizeKey`), so
+        // equal keys have equal digits and equal exponents.
+        .decimal => blk: {
+            const d = v.as(numeric.Decimal);
+            var h = std.hash.Wyhash.init(@as(u64, @as(u32, @bitCast(d.exponent))) << 1 | @intFromBool(d.positive));
+            h.update(std.mem.sliceAsBytes(d.limbs()));
+            break :blk h.final();
+        },
         else => mixInt(v.payload),
     };
 }
@@ -75,9 +80,15 @@ pub fn keyEqual(a: Value, b: Value) bool {
         .nil, .true, .false => true,
         .string => a.payload == b.payload or longStringEqual(a.as(object.String), b.as(object.String)),
         .bigint => a.payload == b.payload or bigEqual(a.as(numeric.BigInt), b.as(numeric.BigInt)),
-        .decimal => a.payload == b.payload or (numeric.compare(std.heap.page_allocator, a, b) orelse .lt) == .eq,
+        .decimal => a.payload == b.payload or decEqual(a.as(numeric.Decimal), b.as(numeric.Decimal)),
         else => a.payload == b.payload,
     };
+}
+
+/// Equality of two decimal keys, which are in the form without trailing
+/// zeros.
+fn decEqual(x: *const numeric.Decimal, y: *const numeric.Decimal) bool {
+    return x.positive == y.positive and x.exponent == y.exponent and std.mem.eql(numeric.Limb, x.limbs(), y.limbs());
 }
 
 fn bigEqual(x: *const numeric.BigInt, y: *const numeric.BigInt) bool {
@@ -1147,7 +1158,7 @@ pub fn length(t: *Table) i64 {
     }
     if (t.hash_len == 0) return @intCast(n);
     // Continue into the hash part with unbounded search.
-    var j: i64 = @intCast(n + 1);
+    var j: i64 = @as(i64, @intCast(n)) + 1;
     if (getHash(t, Value.int(j)).isNil()) return @intCast(n);
     var i: i64 = j;
     while (!getHash(t, Value.int(j)).isNil()) {
@@ -1161,7 +1172,7 @@ pub fn length(t: *Table) i64 {
         j *= 2;
     }
     while (j - i > 1) {
-        const m = @divTrunc(i + j, 2);
+        const m = i + @divTrunc(j - i, 2);
         if (getHash(t, Value.int(m)).isNil()) j = m else i = m;
     }
     return i;

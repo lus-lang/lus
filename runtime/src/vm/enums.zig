@@ -95,5 +95,6 @@ pub fn openEnums(l: *Thread) Error!void {
     try aux.setField(l, mt, "__lt", try aux.native(l, enumLt, "enum_lt"));
     try aux.setField(l, mt, "__le", try aux.native(l, enumLe, "enum_le"));
     try aux.setField(l, mt, "__name", try l.newStringValue("enum"));
+    aux.freeze(mt);
     l.g.type_metatables[@backingInt(value.Tag.enum_value)] = mt;
 }

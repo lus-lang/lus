@@ -69,7 +69,7 @@ pub fn ctxNew(l: *Thread) Error!u32 {
     sp.slot = std.math.maxInt(u32);
     try l.push(Value.obj(.userdata, u));
     try base_lib.registerFinalizer(l, &u.hdr, mt);
-    sp.slot = ctx.newSlot(l.g, default, name, source, @intCast(@max(line, 0))) catch return l.raiseMem();
+    sp.slot = ctx.newSlot(l.g, default, name, source, @intCast(std.math.clamp(line, 0, std.math.maxInt(u32)))) catch return l.raiseMem();
     return 1;
 }
 

@@ -224,13 +224,15 @@ noinline fn setmetatableSlow(l: *Thread) Error!u32 {
 }
 
 pub fn registerFinalizer(l: *Thread, h: *gc.Header, mt: *Table) Error!void {
-    if (h.finalize != .none) return;
     // The metatable's absence cache answers for the common metatable
     // without `__gc` without a hash lookup.
     if (state.tmLookup(l.g, mt, .gc).isNil()) return;
-    h.finalize = .pending;
-    l.g.finobj.append(l.g.gpa, h) catch return l.raiseMem();
+    // A new metatable with a finalizer on an object that already has one
+    // makes the finalizer run with the permissions of this thread.
     try @import("../vm/pledge.zig").noteFinalizer(l, h);
+    if (h.finalize != .none) return;
+    l.g.finobj.append(l.g.gpa, h) catch return l.raiseMem();
+    h.finalize = .pending;
 }
 
 fn rawequal(l: *Thread) Error!u32 {

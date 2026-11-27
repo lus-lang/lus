@@ -152,7 +152,13 @@ fn findProgram(gpa: std.mem.Allocator, io: std.Io, name: []const u8, cwd: ?[]con
         // A name that already has an extension is tried as it is first.
         try exts_list.append(gpa, "");
         var it = std.mem.splitScalar(u8, pathext orelse ".COM;.EXE;.BAT;.CMD", ';');
-        while (it.next()) |e| if (e.len > 0) try exts_list.append(gpa, e);
+        // An entry is an extension: a dot and a name, with nothing that
+        // leads to another file.
+        while (it.next()) |e| {
+            if (e.len < 2 or e[0] != '.') continue;
+            if (std.mem.indexOfAny(u8, e, "/\\:") != null or std.mem.indexOf(u8, e[1..], ".") != null) continue;
+            try exts_list.append(gpa, e);
+        }
         exts = exts_list.items;
     }
     if (hasSep(name)) {
@@ -251,7 +257,8 @@ fn spawn(l: *Thread) Error!u32 {
         // answer its permission gives.
         var by_name = !hasSep(name);
         if (by_name) if (resolved) |r| {
-            const trusted = findProgram(gpa, io, name, null, os_lib.startupPath(l), pathext) catch return l.raiseMem();
+            const trusted_ext: ?[]const u8 = if (windows) os_lib.startupGet(l, "PATHEXT") else null;
+            const trusted = findProgram(gpa, io, name, null, os_lib.startupPath(l), trusted_ext) catch return l.raiseMem();
             defer if (trusted) |t| gpa.free(t);
             by_name = if (trusted) |t| std.mem.eql(u8, t, r) else false;
         };

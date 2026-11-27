@@ -1098,7 +1098,6 @@ const sqlite_flags = [_][]const u8{
     "-DSQLITE_DEFAULT_MEMSTATUS=0",
     "-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
     "-DSQLITE_LIKE_DOESNT_MATCH_BLOBS",
-    "-DSQLITE_MAX_EXPR_DEPTH=0",
     "-DSQLITE_ENABLE_MATH_FUNCTIONS",
     "-fno-sanitize=undefined",
 };

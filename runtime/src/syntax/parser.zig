@@ -696,6 +696,8 @@ pub const Parser = struct {
     }
 
     fn groupCtor(p: *Parser) Error![]ast.GroupField {
+        try p.enter();
+        defer p.leave();
         const line = p.cur().line;
         _ = try p.expect(.lbrace);
         var fields: std.ArrayList(ast.GroupField) = .empty;

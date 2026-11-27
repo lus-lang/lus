@@ -301,6 +301,21 @@ comptime {
     if (@import("build_options").link_object) @export(&reg_layout, .{ .name = "lus.reg_layout" });
 }
 
+/// Closes a metatable that the runtime owns, once it holds every field:
+/// `getmetatable` answers `false` for its objects, and no store changes
+/// it. A coroutine with fewer permissions could otherwise replace a
+/// metamethod, such as `__gc`, that later runs for a thread with more.
+pub fn lockMetatable(l: *Thread, mt: *Table) Error!void {
+    try setField(l, mt, "__metatable", .false);
+    freeze(mt);
+}
+
+/// Makes a table of the runtime, and the method table that its `__index`
+/// names, read-only.
+pub fn freeze(mt: *Table) void {
+    mt.setReadonly(true);
+}
+
 pub fn setField(l: *Thread, t: *Table, name: []const u8, v: Value) Error!void {
     // Creating the key can collect, so the table and the value stay on
     // the stack until the store.

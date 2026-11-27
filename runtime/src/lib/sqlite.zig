@@ -1565,6 +1565,8 @@ pub fn register(l: *Thread, io_t: *Table) Error!void {
     const idx = state.newNative(l.g, dbIndex, "index", 1) catch return l.raiseMem();
     idx.upvalues()[0] = Value.obj(.table, methods);
     try aux.setField(l, db_mt, "__index", Value.obj(.native, idx));
+    aux.freeze(db_mt);
+    aux.freeze(methods);
     l.top -= 1;
     _ = try makeMeta(l, stmt_mt_key, &.{
         .{ .name = "run", .func = stmtRun },

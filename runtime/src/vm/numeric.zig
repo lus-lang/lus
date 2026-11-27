@@ -245,7 +245,7 @@ pub fn rangeOfText(text: []const u8) Range {
         while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) frac += 1;
     }
     if (std.mem.indexOfAny(u8, text, "eE")) |at| e = std.fmt.parseInt(i64, text[at + 1 ..], 10) catch 0;
-    return if (frac - e > max_frac_digits) .after else .before;
+    return if (frac -| e > max_frac_digits) .after else .before;
 }
 
 fn checkDec(l: *Thread, c: big.Const, exp: i64) Error!void {
@@ -283,7 +283,7 @@ pub fn parseDecimalLiteral(g: *Global, text: []const u8) !*Decimal {
     if (i < text.len and (text[i] == 'e' or text[i] == 'E')) {
         i += 1;
         const e = std.fmt.parseInt(i64, text[i..], 10) catch return error.InvalidCharacter;
-        exp += e;
+        exp +|= e;
         i = text.len;
     }
     if (i != text.len) return error.InvalidCharacter;
@@ -815,22 +815,81 @@ fn exactParts(gpa: Allocator, v: Value) !struct { M, i32 } {
     return .{ m, e };
 }
 
-/// Normalizes a bigint or decimal key to an integer when its value is
-/// integral and fits in 64 bits (or to a bigint for an integral decimal).
+/// Gives a bigint or decimal key the one form that every number equal to
+/// it has as a key, so that keys which compare equal name one slot. An
+/// integral value that fits in 64 bits is an integer. A value that a
+/// float holds exactly is that float. Any other integral value is a
+/// bigint, and any other fraction is a decimal without trailing zeros.
 pub fn normalizeKey(l: *Thread, k: Value) Error!Value {
     switch (k.tag) {
         .bigint => {
             if (bigToInt(k.as(BigInt))) |i| return Value.int(i);
-            return k;
+            return (try floatKey(l, k)) orelse k;
         },
         .decimal => {
-            var m = (decIntegral(l.g.gpa, k.as(Decimal)) catch return l.raiseMem()) orelse return k;
-            defer m.deinit();
-            if (m.toConst().toInt(i64)) |i| return Value.int(i) else |_| {}
-            return Value.obj(.bigint, newBigFromConst(l.g, m.toConst()) catch return l.raiseMem());
+            var whole = decIntegral(l.g.gpa, k.as(Decimal)) catch return l.raiseMem();
+            if (whole) |*m| {
+                defer m.deinit();
+                if (m.toConst().toInt(i64)) |i| return Value.int(i) else |_| {}
+                if (try floatKey(l, k)) |f| return f;
+                return Value.obj(.bigint, newBigFromConst(l.g, m.toConst()) catch return l.raiseMem());
+            }
+            if (try floatKey(l, k)) |f| return f;
+            return canonicalDecimal(l, k.as(Decimal));
         },
         else => return k,
     }
+}
+
+/// The float with exactly the value of the bigint or decimal `v`, or null
+/// when no float holds that value.
+fn floatKey(l: *Thread, v: Value) Error!?Value {
+    const f = toFloat(l.g.gpa, v);
+    if (!std.math.isFinite(f)) return null;
+    // Both sides are finite numbers, so only a failed allocation gives no
+    // order.
+    const order = compare(l.g.gpa, v, Value.float(f)) orelse return l.raiseMem();
+    return if (order == .eq) Value.float(f) else null;
+}
+
+/// Whether the coefficient of `d` ends in a zero digit.
+fn endsInZero(gpa: Allocator, d: *const Decimal) Allocator.Error!bool {
+    var m = try d.coef().toManaged(gpa);
+    defer m.deinit();
+    if (m.eqlZero()) return false;
+    var ten = try M.initSet(gpa, 10);
+    defer ten.deinit();
+    var q = try M.init(gpa);
+    defer q.deinit();
+    var r = try M.init(gpa);
+    defer r.deinit();
+    try M.divTrunc(&q, &r, &m, &ten);
+    return r.eqlZero();
+}
+
+/// The decimal equal to `d` whose coefficient ends in a digit other than
+/// zero, which is `d` itself when it has that form already. Two decimals
+/// in this form are equal exactly when their signs, exponents, and
+/// coefficients are.
+fn canonicalDecimal(l: *Thread, d: *Decimal) Error!Value {
+    const gpa = l.g.gpa;
+    if (!(endsInZero(gpa, d) catch return l.raiseMem())) return Value.obj(.decimal, d);
+    var m = d.coef().toManaged(gpa) catch return l.raiseMem();
+    defer m.deinit();
+    var ten = M.initSet(gpa, 10) catch return l.raiseMem();
+    defer ten.deinit();
+    var e: i64 = d.exponent;
+    while (true) {
+        var q = M.init(gpa) catch return l.raiseMem();
+        defer q.deinit();
+        var r = M.init(gpa) catch return l.raiseMem();
+        defer r.deinit();
+        M.divTrunc(&q, &r, &m, &ten) catch return l.raiseMem();
+        if (!r.eqlZero()) break;
+        m.swap(&q);
+        e += 1;
+    }
+    return Value.obj(.decimal, newDecFromConst(l.g, m.toConst(), @intCast(e)) catch return l.raiseMem());
 }
 
 const testing = std.testing;

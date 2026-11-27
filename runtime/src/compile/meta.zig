@@ -29,11 +29,14 @@ const Allocator = std.mem.Allocator;
 pub const FlagsMap = std.StringHashMapUnmanaged(Value);
 
 /// A raw store of a key that is never nil or NaN.
-fn tset(gpa: Allocator, t: *Table, k: Value, v: Value) Allocator.Error!void {
-    vm.table.set(gpa, t, k, v) catch |e| switch (e) {
+/// Stores without metamethods. The tables that compile-time evaluation
+/// keeps are old to the collector, so each store tells it of the value.
+fn tset(g: *vm.state.Global, t: *Table, k: Value, v: Value) Allocator.Error!void {
+    vm.table.set(g.gpa, t, k, v) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => unreachable,
     };
+    vm.gc.barrierTable(g, t, k, v);
 }
 
 /// Where the permissions of a meta state come from.
@@ -112,7 +115,7 @@ pub const Meta = struct {
     /// Keeps `v` alive for the rest of the compilation.
     pub fn retain(m: *Meta, v: Value) Allocator.Error!void {
         m.nkeep += 1;
-        try tset(m.l.g.gpa, m.keep, Value.int(m.nkeep), v);
+        try tset(m.l.g, m.keep, Value.int(m.nkeep), v);
     }
 };
 
@@ -177,7 +180,7 @@ fn copyFlags(l: *Thread, src: *const FlagsMap) OpenError!*const FlagsMap {
     var mi = map.iterator();
     while (mi.next()) |e| {
         const k = vm.state.newStringIn(g, e.key_ptr.*) catch return error.OutOfMemory;
-        try tset(g.gpa, data, Value.obj(.string, k), e.value_ptr.*);
+        try tset(g, data, Value.obj(.string, k), e.value_ptr.*);
     }
     data.setReadonly(true);
     @import("../lib/auxlib.zig").setGlobal(l, "flags", Value.obj(.table, data)) catch return error.MetaSetup;
@@ -383,7 +386,7 @@ const Converter = struct {
                     const k2 = try cv.value(kv.key, sub);
                     const v2 = try cv.value(kv.val, sub);
                     if (cv.bad != null) return .nil;
-                    try tset(g.gpa, out, k2, v2);
+                    try tset(g, out, k2, v2);
                 }
                 out.setReadonly(true);
                 return Value.obj(.table, out);

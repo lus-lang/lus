@@ -283,6 +283,8 @@ fn makeMetatable(l: *Thread, comptime name: []const u8, comptime methods: []cons
         try aux.setField(l, mt, "__gc", try aux.native(l, f, "gc"));
         try aux.setField(l, mt, "__close", try aux.native(l, f, "close"));
     }
+    try aux.lockMetatable(l, mt);
+    aux.freeze(m);
     // The registry roots the metatable, and the extension map records it
     // for fast lookup.
     const g = l.g;

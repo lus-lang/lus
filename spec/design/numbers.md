@@ -50,7 +50,7 @@ All four subtypes compare by mathematical value. `1 == 1.0`, `1 == 1n`, and `1n 
 
 ## Table keys
 
-A number used as a table key is normalized first. A float with an integral value that fits in 64 bits becomes an integer key, as in Lua. A bigint that fits in 64 bits becomes an integer key. A decimal with an integral value becomes the equivalent integer or bigint key. So `t[1]`, `t[1.0]`, `t[1n]`, and `t[1d]` all name the same slot.
+A number used as a table key is normalized first. A float with an integral value that fits in 64 bits becomes an integer key, as in Lua. A bigint that fits in 64 bits becomes an integer key. A decimal with an integral value becomes the equivalent integer or bigint key. So `t[1]`, `t[1.0]`, `t[1n]`, and `t[1d]` all name the same slot. A bigint or a decimal whose value a float holds exactly becomes that float, so `t[1e20]` and `t[100000000000000000000n]` name one slot, as do `t[0.5]` and `t[0.5d]`. Any other decimal key loses its trailing zeros, so `t[0.1d]` and `t[0.10d]` name one slot. Numbers that compare equal are therefore one key, and `pairs` returns the key in its normalized form.
 
 ## Conversions
 

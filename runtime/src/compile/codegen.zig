@@ -216,6 +216,9 @@ pub const Options = struct {
     flags: ?*const std.StringHashMapUnmanaged(Value) = null,
     /// Disables optimizations that hide locals from the debugger.
     debug: bool = false,
+    /// Reads a name that starts with `lazy.text_prefix` as a builtin. Only
+    /// source that the runtime wrote compiles this way.
+    builtin_names: bool = false,
     /// Replaces every read `flags.NAME` with the value of the flag in
     /// `flags`. The modules of a remote package compile this way, so they
     /// read the flags of their package (`spec/design/modules.md`).
@@ -635,6 +638,8 @@ fn loadNil(fs: *FuncState, from: u32, n: u32) Error!void {
 // Discharging expressions
 
 fn setReturns(fs: *FuncState, e: *ExpDesc, nresults: i32) Error!void {
+    // The count goes into one byte, with one more for "all of them".
+    if (nresults + 1 > 255) return fs.c.err(fs.line, "too many values (limit is 254) in {s}", .{whereFunc(fs)});
     switch (e.kind) {
         .call => opc.setC(&fs.code.items[@intCast(e.info)], @intCast(nresults + 1)),
         .vararg => {
@@ -1493,7 +1498,13 @@ fn singleVar(fs: *FuncState, name: []const u8, line: u32, v: *ExpDesc) Error!voi
     fs.c.ginfo = -1;
     try singleVarAux(fs, name, v, true);
     if (v.kind != .void_) return;
-    if (std.mem.startsWith(u8, name, lazy.prefix)) if (lazy.number(name[lazy.prefix.len..])) |n| {
+    const builtin: ?[]const u8 = if (std.mem.startsWith(u8, name, lazy.prefix))
+        name[lazy.prefix.len..]
+    else if (fs.c.opts.builtin_names and std.mem.startsWith(u8, name, lazy.text_prefix))
+        name[lazy.text_prefix.len..]
+    else
+        null;
+    if (builtin) |rest| if (lazy.number(rest)) |n| {
         v.* = ExpDesc.init(.k, @intCast(try valueK(fs, try lazy.get(fs.c.g, n))));
         return;
     };
@@ -2031,6 +2042,8 @@ fn genCatch(fs: *FuncState, c: ast.Catch, base: u8, nresults: i32) Error!void {
         fs.freereg = base + 1;
         try codeABC(fs, .catchcheck, base, 0, 0);
     }
+    // The value slots follow the status slot.
+    if (@as(u32, base) + 2 > max_regs) return fs.c.err(fs.line, "too many registers (limit is {d}) in {s}", .{ max_regs, whereFunc(fs) });
     const vals: u8 = base + 1; // first value slot
     const body_start = pc(fs);
     var be: ExpDesc = .{};
@@ -2209,6 +2222,7 @@ fn statement(fs: *FuncState, s: *ast.Stat) Error!void {
         .local_from => |l| try localFrom(fs, l.names, l.source, s.line),
         .local_group => |l| try localGroup(fs, l.names, l.inits, s.line),
         .local_function => |lf| {
+            try checkStack(fs, 1);
             _ = try newLocalVar(fs, lf.name.text, .regular);
             try adjustLocalVars(fs, 1);
             var v: ExpDesc = .{};
@@ -3028,6 +3042,7 @@ fn condition(fs: *FuncState, cond: ast.Cond, line: u32) Error!i32 {
             if (toclose != null) {
                 fs.bl.?.upval = true;
                 fs.bl.?.inside_tbc = true;
+                fs.needs_close = true;
             }
             return condTests(fs, first, @intCast(a.names.len));
         },
@@ -3961,7 +3976,13 @@ const DiscardMark = struct {
 };
 
 fn whileStat(fs: *FuncState, cond: ast.Cond, body: *ast.Block, line: u32) Error!void {
-    // Wrap in one scope for condition variables.
+    var closes = false;
+    if (cond == .assign) for (cond.assign.names) |an| {
+        if (an.has(.close)) closes = true;
+    };
+    if (closes) return whileClosing(fs, cond, body, line);
+    // Wrap in one scope for condition variables, which are one binding
+    // for the whole loop.
     var outer: Block = undefined;
     enterBlock(fs, &outer, false);
     const start = getLabel(fs);
@@ -3979,6 +4000,31 @@ fn whileStat(fs: *FuncState, cond: ast.Cond, body: *ast.Block, line: u32) Error!
     try patchList(fs, back, start);
     try leaveBlock(fs);
     try patchToHere(fs, exit);
+    try leaveBlock(fs);
+}
+
+/// A `while` whose condition declares a to-be-closed variable. The
+/// variables of the condition have one scope for each iteration, so the
+/// value closes before the condition runs again.
+fn whileClosing(fs: *FuncState, cond: ast.Cond, body: *ast.Block, line: u32) Error!void {
+    var bl: Block = undefined;
+    enterBlock(fs, &bl, true);
+    const start = getLabel(fs);
+    const level = nvarstack(fs);
+    var outer: Block = undefined;
+    enterBlock(fs, &outer, false);
+    const exit = try condition(fs, cond, line);
+    var inner: Block = undefined;
+    enterBlock(fs, &inner, false);
+    try statList(fs, body.stats);
+    try patchContinues(fs, &bl, getLabel(fs), true);
+    try leaveBlock(fs);
+    try leaveBlock(fs);
+    const back = try jump(fs);
+    try patchList(fs, back, start);
+    try patchToHere(fs, exit);
+    // A condition that fails leaves past the close of its scope.
+    try codeABC(fs, .close, level, 0, 0);
     try leaveBlock(fs);
 }
 
@@ -4199,6 +4245,7 @@ fn returnStat(fs: *FuncState, vals: []*ast.Expr, line: u32) Error!void {
         }
     }
     fs.line = line;
+    if (nret + 1 > 255) return fs.c.err(line, "too many values (limit is 254) in {s}", .{whereFunc(fs)});
     switch (nret) {
         0 => try codeABC(fs, .ret0, 0, 0, 0),
         1 => try codeABC(fs, .ret1, first, 0, 0),

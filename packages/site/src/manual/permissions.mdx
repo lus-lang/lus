@@ -242,6 +242,8 @@ lus -Pall script.lus
 
 A `-P` option that cannot apply, such as a grant after `-P seal` or a value that is empty, ends `lus` with an error before the script starts.
 
+`-P ~all` rejects every permission at once. Every check then fails, and a later `pledge` of any permission raises `permission "NAME" was rejected`.
+
 When the command line grants at least one permission, those grants are the limit of the script. A `pledge` in the script returns `true` for what the command line already allows and `false` for anything else. A person can therefore run a script that they have not read, granting what the script is supposed to need so that every other sensitive operation fails. The following script runs under `lus -Pfs:read=/srv/app/** script.lus`.
 
 ```lus nocheck

@@ -197,7 +197,7 @@ fn decode(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!Step {
                     if (b.limit != 0 and size > b.limit - @min(b.limit, b.total)) break :step refuse(b, 413, "request body too large");
                     // The line end after the data counts with its chunk.
                     b.framing_bytes += 2;
-                    if (b.request and b.framing_bytes > request_limits.framing + request_limits.framing_per_byte * (b.total + size))
+                    if (b.request and b.framing_bytes > request_limits.framing +| request_limits.framing_per_byte *| (b.total +| size))
                         break :step refuse(b, 413, "chunked body framing too large");
                     b.left = size;
                     b.chunk = .data;
@@ -228,14 +228,14 @@ fn decode(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!Step {
                 // Trailer lines follow the last chunk, up to an empty line.
                 .trailers => {
                     const le = lineEnd(b, buf, pos) orelse {
-                        if (b.request and b.framing_bytes + (buf.len - pos) > request_limits.framing + request_limits.framing_per_byte * b.total)
+                        if (b.request and b.framing_bytes +| (buf.len - pos) > request_limits.framing +| request_limits.framing_per_byte *| b.total)
                             break :step refuse(b, 431, "chunked body trailers too large");
                         break :step if (pos > 0) .progress else .more;
                     };
                     const len = le.end - pos;
                     b.framing_bytes += le.next - pos;
                     pos = le.next;
-                    if (b.request and b.framing_bytes > request_limits.framing + request_limits.framing_per_byte * b.total)
+                    if (b.request and b.framing_bytes > request_limits.framing +| request_limits.framing_per_byte *| b.total)
                         break :step refuse(b, 431, "chunked body trailers too large");
                     if (len == 0) {
                         b.done = true;

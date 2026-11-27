@@ -159,6 +159,13 @@ fn rsaPrivate(parts: RsaPrivateParts) KeyError!Key {
         if (x.len == 0 or x.len > n_len) return error.InvalidKey;
     }
     if (k.p.b[k.p.len - 1] & 1 == 0 or k.q.b[k.q.len - 1] & 1 == 0) return error.InvalidKey;
+    // The primes belong to the modulus: their product is a multiple of
+    // it and has no more bytes than it can have.
+    if (k.p.len + k.q.len > n_len + 1) return error.InvalidKey;
+    const n_mod = Modulus.fromBytes(k.n.slice(), .big) catch return error.InvalidKey;
+    const p_n = Fe.fromBytes(n_mod, k.p.slice(), .big) catch return error.InvalidKey;
+    const q_n = Fe.fromBytes(n_mod, k.q.slice(), .big) catch return error.InvalidKey;
+    if (!n_mod.mul(p_n, q_n).isZero()) return error.InvalidKey;
     // The CRT values must reduce under their primes, which the modular
     // arithmetic checks when it reads them.
     const p_mod = Modulus.fromBytes(k.p.slice(), .big) catch return error.InvalidKey;
@@ -703,7 +710,9 @@ pub const JwkOut = struct {
     names: [12][]const u8 = undefined,
     values: [12][]const u8 = undefined,
     len: usize = 0,
-    buf: [4096]u8 = undefined,
+    /// Room for the eight members of an RSA-4096 private key, each of
+    /// which takes at most 683 characters.
+    buf: [6144]u8 = undefined,
     used: usize = 0,
 
     fn add(o: *JwkOut, name: []const u8, text: []const u8) void {

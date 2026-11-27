@@ -213,11 +213,12 @@ fn dropSet(g: *Global, set: ?*Set) void {
 
 /// Records the permission set of `l` for the finalizer of `obj`, so the
 /// finalizer runs with the permissions of the code that registered it,
-/// whichever thread collects. A thread that holds the set of the main
-/// thread records nothing.
+/// whichever thread collects. Every registration records its set, since
+/// the thread that collects may hold another set by then, and a
+/// finalizer that runs on the main thread registers under the set it was
+/// given for that run.
 pub fn noteFinalizer(l: *Thread, obj: *anyopaque) Error!void {
     const g = l.g;
-    if (l.pledges == g.main_thread.pledges) return;
     const r = registry(g);
     const gop = r.finalizer_sets.getOrPut(g.gpa, obj) catch return l.raiseMem();
     if (gop.found_existing) dropSet(g, gop.value_ptr.*);
@@ -864,6 +865,7 @@ fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, 
     const parts = split(perm);
     const base = parts[0];
     const cap = findCap(g, base) orelse return false;
+    if (allRejected(s)) return false;
     if (s.find(perm)) |e| if (e.rejected) return false;
     if (s.find(base)) |e| if (e.rejected) return false;
     var canon: ?[]u8 = null;
@@ -906,10 +908,19 @@ fn setAllowsMode(g: *Global, s: *Set, perm: []const u8, requested: ?[]const u8, 
     return false;
 }
 
+/// Whether the set rejected every permission at once, with `~all`.
+fn allRejected(s: *const Set) bool {
+    for (s.entries.items) |e| {
+        if (e.rejected and std.mem.eql(u8, e.name, "all")) return true;
+    }
+    return false;
+}
+
 /// Whether `perm` is granted without a value restriction, as running a
 /// shell command needs, since a shell runs any program.
 pub fn allowedUnrestricted(l: *Thread, perm: []const u8) bool {
     const s = setOf(l) orelse return false;
+    if (allRejected(s)) return false;
     if (s.find(perm)) |e| {
         if (e.rejected) return false;
         if (e.unrestricted) return true;
@@ -924,6 +935,7 @@ pub fn allowedUnrestricted(l: *Thread, perm: []const u8) bool {
 /// passes such a ceiling, so `setAllows` alone would widen the grant.
 fn ceilingCovers(g: *Global, ceil: *Set, name: []const u8, val: ?[]const u8) bool {
     if (val) |v| return ceilingCoversValue(g, ceil, name, v);
+    if (allRejected(ceil)) return false;
     const parts = split(name);
     const cap = findCap(g, parts[0]) orelse return false;
     if (cap.kind == .none) return setAllows(g, ceil, name, null);
@@ -991,6 +1003,7 @@ fn hostCovers(ceiling: []const u8, pledged: []const u8) bool {
 /// `val`. The value is a pattern, so it is compared with the patterns of
 /// the ceiling in the form a grant stores them.
 fn ceilingCoversValue(g: *Global, ceil: *Set, name: []const u8, val: []const u8) bool {
+    if (allRejected(ceil)) return false;
     const parts = split(name);
     const base = parts[0];
     const cap = findCap(g, base) orelse return false;
@@ -1129,6 +1142,7 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
     if (!reject and !from_host and isBytecode(name)) return .refused;
     if (!reject) {
         if (setOf(l)) |s| if (s.find(name)) |e| if (e.rejected) return l.raiseFmt("permission \"{s}\" was rejected", .{name});
+        if (setOf(l)) |s| if (allRejected(s)) return l.raiseFmt("permission \"{s}\" was rejected", .{name});
         // The host ceiling bounds what scripts may grant. With a request
         // hook installed, the hook decides every script pledge the ceiling
         // does not already cover.
@@ -1148,7 +1162,9 @@ pub fn apply(l: *Thread, spec: []const u8, from_host: bool) Error!GrantResult {
         // earlier never widen what later script pledges may reach.
         const r = registry(g);
         if (isBytecode(name) and !reject) return .granted;
-        if (r.ceiling == null and !reject) {
+        // A rejection of every permission is a host decision that later
+        // script pledges must meet, so it makes a ceiling as a grant does.
+        if (r.ceiling == null and (!reject or std.mem.eql(u8, name, "all"))) {
             const n = gpa.create(Set) catch return l.raiseMem();
             n.* = .{};
             r.ceiling = n;

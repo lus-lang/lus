@@ -63,8 +63,13 @@ const run_source =
     \\end
 ;
 
-/// The name a compiled force function uses for builtin number `i`.
-pub const prefix = "__lus_builtin_";
+/// The name that code the compiler generates uses for a builtin. No
+/// identifier of a program starts with it, so only the compiler names a
+/// builtin.
+pub const prefix = "\x01builtin.";
+/// The name of a builtin in the source of the update of observed
+/// variables, which the runtime compiles itself.
+pub const text_prefix = "__lus_builtin_";
 
 /// The number of the builtin named `name` (without the prefix), or null.
 pub fn number(name: []const u8) ?u8 {
@@ -110,7 +115,7 @@ pub const bundle_module = ".observe";
 pub fn compileUpdate(g: *Global) std.mem.Allocator.Error!*object.Proto {
     if (comptime !@import("build_options").compiler) unreachable;
     const codegen = @import("../compile/codegen.zig");
-    const r = try codegen.compile(g, run_source, .{ .chunkname = "=observe", .meta_eval = false });
+    const r = try codegen.compile(g, run_source, .{ .chunkname = "=observe", .meta_eval = false, .builtin_names = true });
     const p = switch (r) {
         .ok => |p| p,
         .err => |msg| std.debug.panic("the observe update does not compile: {s}", .{msg}),
@@ -284,8 +289,12 @@ fn closer(l: *Thread) Error!u32 {
     const mt: *object.Table = if (g.ext.get("lazy.closer.mt")) |p| @ptrCast(@alignCast(p)) else blk: {
         const t = try l.newTable(0, 1);
         try l.push(Value.obj(.table, t));
+        // The key is made first, since making it may collect.
+        const key = try l.newStringValue("__close");
+        try l.push(key);
         const n = state.newNative(g, closeGuard, "close", 0) catch return l.raiseMem();
-        try ops.rawSet(l, t, try l.newStringValue("__close"), Value.obj(.native, n));
+        try ops.rawSet(l, t, key, Value.obj(.native, n));
+        l.top -= 1;
         g.fixed.append(g.gpa, &t.hdr) catch return l.raiseMem();
         g.ext.put(g.gpa, "lazy.closer.mt", t) catch return l.raiseMem();
         l.top -= 1;

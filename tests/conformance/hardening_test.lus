@@ -785,3 +785,253 @@ print((catch os.spawn({ "mytool" }, { stdout = "pipe", cwd = "/" })))]])
 
     assert(out == "false\nfalse\n", out)
 end
+
+local function a_new_table_stored_into_another_new_table_test()
+    local function build(i)
+        local t = { a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7, h = 8 }
+        local n = #t
+        local v = { x = i }
+        t.h = v
+        return t, v, n
+    end
+
+    for i = 1, 20000 do
+        local t, v = build(i)
+        assert(v.x == i and t.h == v and t.a == 1)
+    end
+
+    collectgarbage()
+end
+
+local function a_protected_metatable_stays_in_compiled_code_test()
+    local locked = {
+        __metatable = "locked",
+        __len = function()
+            return 42
+        end,
+    }
+
+    local other = {}
+
+    local function set()
+        local t = { a = 1 }
+        local before = #t
+        setmetatable(t, locked)
+        local n = #t
+        local ok = catch setmetatable(t, other)
+        return t, n, ok, before
+    end
+
+    for _ = 1, 20000 do
+        local t, n, ok = set()
+        assert(n == 42 and not ok and getmetatable(t) == "locked")
+    end
+
+    local function own()
+        local t = { x = 1 }
+        return setmetatable(t, t)
+    end
+
+    for _ = 1, 20000 do
+        local t = own()
+        assert(getmetatable(t) == t)
+    end
+end
+
+local function a_close_handler_that_drops_its_error_test()
+    -- The handler keeps no reference to the error it receives.
+    local function collect()
+        collectgarbage()
+
+        local junk = {}
+
+        for i = 1, 2000 do
+            junk[i] = `$(string.rep("q", 60))$i`
+        end
+    end
+
+    local co = coroutine.create(function()
+        local x <close> = setmetatable({}, { __close = collect })
+
+        local y <close> = setmetatable({}, {
+            __close = function()
+                error({ "payload", 1, 2, 3 })
+            end,
+        })
+
+        coroutine.yield()
+    end)
+
+    coroutine.resume(co)
+    local ok, e = coroutine.close(co)
+    assert(not ok and type(e) == "table" and e[1] == "payload")
+
+    local function fails()
+        local x <close> = setmetatable({}, { __close = collect })
+        local missing = nil
+        return missing[`$(string.rep("w", 100))abc`]
+    end
+
+    local caught, message = catch fails()
+    assert(not caught and tostring(message):find("index a nil value", 1, true), tostring(message))
+
+    -- A `catch` that succeeds inside a handler leaves the outer error.
+    local function inner_catch()
+        local x <close> = setmetatable({}, {
+            __close = function()
+                local _ = catch tostring(1)
+            end,
+        })
+
+        error("outer")
+    end
+
+    caught, message = catch inner_catch()
+    assert(not caught and tostring(message):find("outer", 1, true), tostring(message))
+end
+
+local function a_closing_condition_variable_closes_each_iteration_test()
+    local closed = 0
+
+    local function resource(i)
+        return setmetatable({ i = i }, {
+            __close = function()
+                closed = closed + 1
+            end,
+        })
+    end
+
+    local i = 0
+
+    while x <close> = i < 3 and resource(i + 1) do
+        i = i + 1
+        assert(closed == i - 1 and x.i == i)
+    end
+
+    assert(closed == 3, closed)
+end
+
+local function equal_numbers_are_one_key_test()
+    local t = {}
+    t[1e20] = "float"
+    assert(t[100000000000000000000n] == "float")
+    t[0.5] = "half"
+    assert(t[0.5d] == "half")
+    t[0.5d] = "decimal"
+    assert(t[0.5] == "decimal")
+    t[0.10d] = "tenth"
+    assert(t[0.1d] == "tenth" and t[0.100d] == "tenth")
+    local count = 0
+
+    for _ in pairs(t) do
+        count = count + 1
+    end
+
+    assert(count == 3, count)
+    local many = {}
+
+    for n = 1, 2000 do
+        many[decimal(n) / 7d] = n
+    end
+
+    assert(many[decimal(14) / 7d] == 14 and many[decimal(3) / 7d] == 3)
+end
+
+local function extreme_sizes_and_paces_raise_no_fault_test()
+    local t = table.create(6, 128)
+
+    for n = 1, 6 do
+        t[n] = true
+    end
+
+    for k = 0, 59 do
+        t[7 << k] = true
+    end
+
+    assert(#t >= 6)
+
+    for _, name in ipairs({ "pause", "stepmul", "stepsize", "minormul", "minormajor" }) do
+        local old = collectgarbage("param", name, math.maxinteger)
+        collectgarbage()
+        collectgarbage("param", name, old)
+    end
+
+    assert(not (catch decimal("0.1e-9223372036854775808")))
+    assert(not (catch load("return __lus_builtin_ctxnew(nil, 'a', 'b', 1 << 40)")()))
+end
+
+local function too_many_returned_values_are_a_compile_error_test()
+    local values = {}
+
+    for n = 1, 255 do
+        values[n] = "1"
+    end
+
+    local f, err = load(`return $(table.concat(values, ","))`)
+    assert(not f and tostring(err):find("too many", 1, true), tostring(err))
+    local nested = string.rep("x <group> = {", 300) .. string.rep("}", 300)
+    f, err = load(`local $nested`)
+    assert(not f)
+end
+
+local function runtime_metatables_are_closed_test()
+    assert(getmetatable(io.stdout) == false)
+    assert(not (catch setmetatable(io.stdout, {})))
+    local weak = setmetatable({}, { __mode = "v" })
+    weak[1] = io.stdout
+
+    weak[2] = setmetatable({}, {
+        __gc = function()
+        end,
+    })
+
+    local held = weak[2]
+    collectgarbage()
+    assert(weak[1] == io.stdout and weak[2] == held)
+end
+
+local function a_finalizer_registered_again_keeps_its_permissions_test()
+    local ran = {}
+
+    local co = coroutine.create(function()
+        pledge("~exec", "seal")
+        local stage = 0
+
+        setmetatable({}, {
+            __gc = function(self)
+                if stage == 0 then
+                    stage = 1
+                    setmetatable(self, getmetatable(self))
+                    return
+                end
+
+                ran[#ran + 1] = (catch os.execute("true"))
+            end,
+        })
+    end)
+
+    assert(coroutine.resume(co))
+    co = nil
+
+    for _ = 1, 4 do
+        collectgarbage()
+    end
+
+    assert(#ran == 1 and ran[1] == false, #ran)
+end
+
+local function rejecting_every_permission_holds_test()
+    local exe = os.getenv("LUS_EXE")
+
+    if not exe then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local script = io.open("none.lus", "w")
+    script:write([[print((catch pledge("fs")))
+print((catch io.open("none.lus")))]])
+    script:close()
+    local p = os.spawn({ exe, "-P", "~all", "none.lus" }, { stdout = "pipe" })
+    local out = p.stdout:read("a")
+    assert(out == "false\nfalse\n", out)
+end
