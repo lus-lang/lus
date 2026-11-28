@@ -251,6 +251,9 @@ fn zstdCompress(l: *Thread) Error!u32 {
     return retBytes(l, &list);
 }
 
+/// The largest declared size that `zstdDecompress` reserves at once.
+const zstd_one_step: u64 = 1024 * 1024;
+
 fn zstdDecompress(l: *Thread) Error!u32 {
     const input = try checkInput(l, 1);
     const max = try maxOut(l, 2);
@@ -260,10 +263,13 @@ fn zstdDecompress(l: *Thread) Error!u32 {
 
     const frame_size = ZSTD_getFrameContentSize(input.ptr, input.len);
     if (frame_size == zstd_content_size_error) return l.raiseFmt("zstd decompress: not valid zstd data", .{});
-    if (frame_size != zstd_content_size_unknown) {
-        // The declared size comes from the input, so check it against the
-        // cap before allocating it.
-        if (frame_size > max) return tooBig(l, max);
+    // The declared size comes from the input, so check it against the cap.
+    if (frame_size != zstd_content_size_unknown and frame_size > max) return tooBig(l, max);
+    // A frame that declares a small size decompresses in one step into a
+    // buffer of that size. A larger declared size is only a claim of a
+    // few bytes of input, so the buffer of such a frame grows with the
+    // data that the frame holds.
+    if (frame_size != zstd_content_size_unknown and frame_size <= zstd_one_step) {
         const size: usize = @intCast(frame_size);
         list.ensureTotalCapacity(gpa, @max(size, 1)) catch return l.raiseMem();
         const n = ZSTD_decompress(list.items.ptr, size, input.ptr, input.len);

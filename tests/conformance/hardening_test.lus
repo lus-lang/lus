@@ -1259,3 +1259,73 @@ local function a_host_grant_reads_the_host_of_a_url_test()
         assert(d, i)
     end
 end
+
+-- Runs `body` as a script of its own, which pledges what it needs, and
+-- returns what it printed.
+local function as_script(body)
+    local exe = os.getenv("LUS_EXE")
+
+    if not exe then
+        skip("the interpreter is not reachable, set LUS_EXE")
+    end
+
+    local script = io.open("unpacking.lus", "w")
+    script:write(body)
+    script:close()
+    return os.spawn({ exe, "unpacking.lus" }, { stdout = "pipe" }).stdout:read("a")
+end
+
+local function unpack_needs_write_for_each_directory_it_creates_test()
+    local packing = [[local tar = vector.archive.tar.pack({ { name = "x/y/file.txt", data = "data" } })]]
+
+    -- The parents of the target directory.
+    local out = as_script(`$packing
+pledge("fs:write=./unpack_deep/a/b", "fs:write=./unpack_deep/a/b/**", "seal")
+print(select(2, catch vector.archive.tar.unpack(tar, "unpack_deep/a/b")))`)
+
+    assert(string.find(out, "denied for 'unpack_deep'", 1, true), out)
+    assert(not (catch fs.stat("unpack_deep")))
+
+    -- The directories between the target and an entry.
+    out = as_script(`$packing
+pledge("fs:write=./unpack_flat", "fs:write=./unpack_flat/x/y/file.txt", "seal")
+print(select(2, catch vector.archive.tar.unpack(tar, "unpack_flat")))`)
+
+    assert(string.find(out, "denied for 'unpack_flat/x'", 1, true), out)
+    assert(not (catch fs.stat("unpack_flat/x")))
+
+    out = as_script(`$packing
+pledge("fs:write=./unpack_whole", "fs:write=./unpack_whole/**", "seal")
+print(vector.archive.tar.unpack(tar, "unpack_whole"))`)
+
+    assert(out == "1\n" and fs.stat("unpack_whole/x/y/file.txt"), out)
+end
+
+local function unpack_needs_write_for_the_target_of_a_link_test()
+    if os.platform() == "windows" then
+        skip("needs symbolic links")
+    end
+
+    local out = as_script([[local tar = vector.archive.tar.pack({
+    { name = "a/inner", kind = "symlink", target = "kept" },
+    { name = "a/outer", kind = "symlink", target = "../secret" },
+})
+pledge("fs:write=./unpack_link", "fs:write=./unpack_link/a", "fs:write=./unpack_link/a/**", "seal")
+print(select(2, catch vector.archive.tar.unpack(tar, "unpack_link")))]])
+
+    assert(string.find(out, "denied for '../secret'", 1, true), out)
+    assert(fs.stat("unpack_link/a/inner", { follow = false }))
+    assert(not (catch fs.stat("unpack_link/a/outer", { follow = false })))
+end
+
+-- A zstd frame of 14 bytes declares a content size of a pebibyte. The
+-- decompressor reads what the frame holds, which is nothing, and reserves
+-- no memory for the size that the frame claims.
+local function zstd_reserves_for_the_data_of_a_frame_test()
+    local frame = vector.create(14)
+    vector.pack(frame, 0, "<I4BBI8", 0xFD2FB528, 0xC0, 0, 1 << 50)
+    local ok, err = catch vector.archive.zstd.decompress(frame, 1 << 60)
+    assert(not ok and not string.find(tostring(err), "memory", 1, true), tostring(err))
+    ok, err = catch vector.archive.zstd.decompress(frame)
+    assert(not ok and string.find(tostring(err), "exceeds limit", 1, true), tostring(err))
+end

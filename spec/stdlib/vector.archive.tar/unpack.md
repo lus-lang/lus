@@ -23,7 +23,7 @@ Writes every entry of a tar archive under `directory` and returns the number of 
 - `directory` is the target directory, created when it does not exist.
 - `options` may set `max`, `entries`, and `overwrite`, as for [`vector.archive.zip.unpack`](/manual/api#vector.archive.zip.unpack).
 
-The function keeps every write inside `directory` by the rules of `vector.archive.zip.unpack`, and checks every entry before it writes anything. Hard links and special files raise `unsupported entry type 'link' for 'NAME'` or the same error with `'special'`. The function requires `fs:write` for `directory` and for every path it writes.
+The function keeps every write inside `directory` by the rules of `vector.archive.zip.unpack`, and checks every entry before it writes anything. Hard links and special files raise `unsupported entry type 'link' for 'NAME'` or the same error with `'special'`. The function requires `fs:write` for `directory`, for every path it writes, and for every directory it creates, the missing parents of `directory` included. A symlink also requires `fs:write` for its target, read from the directory of the link.
 
 The following example unpacks a compressed tar file into a new directory.
 

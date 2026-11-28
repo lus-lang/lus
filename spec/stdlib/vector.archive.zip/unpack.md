@@ -32,7 +32,7 @@ Every write stays inside `directory`. Before anything is written, the function c
 
 While writing, every directory on the way to an entry is opened without following a symbolic link, so no entry is written through a link, whether the archive made it or it was already on disk. Such a path raises `cannot write 'PATH' (a parent is a symlink or a file)`. Sizes are counted from the bytes actually decompressed, so a total past `max` raises `archive exceeds size limit (N bytes)` whatever the headers declare. Files get the permission bits `0644`, or `0755` when the entry is executable. Directories get `0755`.
 
-A file that already exists raises `file exists: PATH`. Directories that exist are merged. With `overwrite = true`, an existing file or symlink is removed and the entry written in its place, never through it. The function requires `fs:write` for `directory` and for every path it writes. The other errors are those of [`vector.archive.zip.read`](/manual/api#vector.archive.zip.read).
+A file that already exists raises `file exists: PATH`. Directories that exist are merged. With `overwrite = true`, an existing file or symlink is removed and the entry written in its place, never through it. The function requires `fs:write` for `directory`, for every path it writes, and for every directory it creates, the missing parents of `directory` included. A symlink also requires `fs:write` for its target, read from the directory of the link. The other errors are those of [`vector.archive.zip.read`](/manual/api#vector.archive.zip.read).
 
 The following example unpacks an archive, then unpacks it again over the same files.
 

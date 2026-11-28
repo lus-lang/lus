@@ -382,14 +382,17 @@ fn dirPermissions() File.Permissions {
 }
 
 /// Opens the directory `name` in `parent` without following a symbolic
-/// link, creating it when it does not exist.
-fn enterDir(l: *Thread, io: std.Io, parent: Dir, name: []const u8, path: []const u8) Error!Dir {
+/// link, creating it when it does not exist. `dir_path` is the path of
+/// the directory, which needs `fs:write` when the call creates it. `path`
+/// is the path of the entry that an error names.
+fn enterDir(l: *Thread, io: std.Io, parent: Dir, name: []const u8, path: []const u8, dir_path: []const u8) Error!Dir {
     var created = false;
     while (true) {
         if (parent.openDir(io, name, .{ .follow_symlinks = false })) |d| {
             return d;
         } else |e| switch (e) {
             error.FileNotFound => if (!created) {
+                try pledge.require(l, "fs:write", dir_path);
                 parent.createDir(io, name, dirPermissions()) catch |e2| switch (e2) {
                     error.PathAlreadyExists => {},
                     else => return l.raiseFmt("cannot create '{s}' ({s})", .{ path, os.errnoOf(e2).msg }),
@@ -400,6 +403,33 @@ fn enterDir(l: *Thread, io: std.Io, parent: Dir, name: []const u8, path: []const
             error.NotDir, error.SymLinkLoop => return l.raiseFmt("cannot write '{s}' (a parent is a symlink or a file)", .{path}),
             else => return l.raiseFmt("cannot open '{s}' ({s})", .{ path, os.errnoOf(e).msg }),
         }
+    }
+}
+
+/// The separators of a path of the system.
+const separators = if (builtin.os.tag == .windows) "/\\" else "/";
+
+/// Creates the directory `path` and its missing parents. Each directory
+/// that the call creates needs `fs:write` of its own.
+fn createRoot(l: *Thread, io: std.Io, path: []const u8) Error!void {
+    const cwd = Dir.cwd();
+    var it = std.mem.tokenizeAny(u8, path, separators);
+    while (it.next()) |part| {
+        if (std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) continue;
+        const end = @intFromPtr(part.ptr) - @intFromPtr(path.ptr) + part.len;
+        const prefix = path[0..end];
+        if (builtin.os.tag == .windows and end == 2 and part[1] == ':') continue;
+        _ = cwd.statFile(io, prefix, .{}) catch |e| switch (e) {
+            error.FileNotFound => {
+                try pledge.require(l, "fs:write", prefix);
+                cwd.createDir(io, prefix, .default_dir) catch |e2| switch (e2) {
+                    error.PathAlreadyExists => {},
+                    else => return l.raiseFmt("cannot create '{s}' ({s})", .{ path, os.errnoOf(e2).msg }),
+                };
+                continue;
+            },
+            else => return l.raiseFmt("cannot create '{s}' ({s})", .{ path, os.errnoOf(e).msg }),
+        };
     }
 }
 
@@ -450,7 +480,7 @@ fn unpack(l: *Thread, format: Format) Error!u32 {
     }
 
     try pledge.require(l, "fs:write", root_path);
-    Dir.cwd().createDirPath(io, root_path) catch |e| return l.raiseFmt("cannot create '{s}' ({s})", .{ root_path, os.errnoOf(e).msg });
+    try createRoot(l, io, root_path);
     var root = Dir.cwd().openDir(io, root_path, .{}) catch |e| return l.raiseFmt("cannot open '{s}' ({s})", .{ root_path, os.errnoOf(e).msg });
     defer root.close(io);
 
@@ -459,7 +489,7 @@ fn unpack(l: *Thread, format: Format) Error!u32 {
     for (entries, names, targets) |*e, rel, target| {
         if (rel.len == 0) continue;
         full.clearRetainingCapacity();
-        full.print(arena, "{s}/{s}", .{ std.mem.trimEnd(u8, root_path, "/"), rel }) catch return l.raiseMem();
+        full.print(arena, "{s}/{s}", .{ std.mem.trimEnd(u8, root_path, separators), rel }) catch return l.raiseMem();
         try pledge.require(l, "fs:write", full.items);
 
         // Walk the parent directories, then create the last component.
@@ -468,7 +498,7 @@ fn unpack(l: *Thread, format: Format) Error!u32 {
         defer if (owned) dir.close(io);
         var leaf = rel;
         while (std.mem.indexOfScalar(u8, leaf, '/')) |slash| {
-            const next = try enterDir(l, io, dir, leaf[0..slash], full.items);
+            const next = try enterDir(l, io, dir, leaf[0..slash], full.items, full.items[0 .. full.items.len - leaf.len + slash]);
             if (owned) dir.close(io);
             dir = next;
             owned = true;
@@ -476,10 +506,16 @@ fn unpack(l: *Thread, format: Format) Error!u32 {
         }
         switch (e.kind) {
             .directory => {
-                const d = try enterDir(l, io, dir, leaf, full.items);
+                const d = try enterDir(l, io, dir, leaf, full.items, full.items);
                 d.close(io);
             },
             .symlink => {
+                // The system resolves the target from the directory of
+                // the link, so the target needs `fs:write` read from
+                // there, as `fs.createlink` asks of its own.
+                const link_dir = std.fs.path.dirname(full.items) orelse ".";
+                const from_link = std.fs.path.join(arena, &.{ link_dir, target }) catch return l.raiseMem();
+                if (!pledge.allowed(l, "fs:write", from_link)) return l.raiseFmt("permission \"fs:write\" denied for '{s}'", .{target});
                 if (opts.overwrite) dir.deleteFile(io, leaf) catch {};
                 dir.symLink(io, target, leaf, .{}) catch |err| switch (err) {
                     error.PathAlreadyExists => return l.raiseFmt("file exists: {s}", .{full.items}),
