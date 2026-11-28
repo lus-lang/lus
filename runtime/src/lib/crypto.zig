@@ -389,6 +389,7 @@ fn openKey(l: *Thread) Error!void {
     try aux.setField(l, l.g.registry.as(Table), key_methods_key, Value.obj(.table, m));
     try aux.setField(l, mt, "__index", try aux.native(l, keyIndex, "index"));
     try aux.setField(l, mt, "__tostring", try aux.native(l, keyToString, "tostring"));
+    try aux.setField(l, mt, "__gc", try aux.native(l, keyGc, "gc"));
     try aux.setField(l, mt, "__name", try l.newStringValue(key_key));
     try aux.setField(l, mt, "__metatable", .false);
     l.g.ext.put(l.g.gpa, key_key, mt) catch return l.raiseMem();
@@ -399,8 +400,19 @@ fn extTable(l: *Thread, name: []const u8) *Table {
     return @ptrCast(@alignCast(l.g.ext.get(name).?));
 }
 
-/// A new `crypto.key` userdata holding `k`. It holds no heap memory, so
-/// it needs no finalizer.
+/// Clears the bytes of a key that the collector frees, so a private key
+/// stays in memory no longer than its object.
+fn keyGc(l: *Thread) Error!u32 {
+    const v = l.arg(1);
+    if (v.tag != .userdata) return 0;
+    const u = v.as(Userdata);
+    if (u.metatable != extTable(l, key_key) or u.size != @sizeOf(ckey.Key)) return 0;
+    std.crypto.secureZero(u8, u.data()[0..u.size]);
+    return 0;
+}
+
+/// A new `crypto.key` userdata holding `k`. A private key registers a
+/// finalizer that clears its bytes.
 fn newKey(l: *Thread, k: ckey.Key) Error!Value {
     gc.maybeCollect(l.g);
     const u = gc.alloc(l.g, Userdata, .userdata, Userdata.allocSize(@sizeOf(ckey.Key), 0)) catch return l.raiseMem();
@@ -409,6 +421,11 @@ fn newKey(l: *Thread, k: ckey.Key) Error!Value {
     u.metatable = extTable(l, key_key);
     const p: *ckey.Key = @ptrCast(@alignCast(u.data()));
     p.* = k;
+    if (k.private) {
+        try l.push(Value.obj(.userdata, u));
+        defer l.top -= 1;
+        try @import("base.zig").registerFinalizer(l, &u.hdr, u.metatable.?);
+    }
     return Value.obj(.userdata, u);
 }
 

@@ -463,6 +463,17 @@ fn runMain(init: std.process.Init, args: []const []const u8, start: usize, entry
                 gname = spec[0..eq];
                 mod = spec[eq + 1 ..];
             }
+            // The two parts go into a line of Lus, so the first is a name
+            // and the second holds nothing that ends a string.
+            var plain = gname.len > 0 and !std.ascii.isDigit(gname[0]);
+            for (gname) |ch| {
+                if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '.' and ch != '-') plain = false;
+            }
+            if (std.mem.indexOfAny(u8, mod, "\"\\\n\r\x00") != null) plain = false;
+            if (!plain) {
+                std.debug.print("lus: '-l {s}' names no module\n", .{spec});
+                return 1;
+            }
             const code = try std.fmt.allocPrint(gpa, "{s} = require(\"{s}\")", .{ gname, mod });
             defer gpa.free(code);
             if (!runString(l, code, "=(command line)")) return 1;
