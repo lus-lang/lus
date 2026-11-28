@@ -501,6 +501,89 @@ local function fetch_reaches_an_https_server_test()
     end)
 end
 
+-- Copies what `source` sends to `sink` until `source` ends, or until it stays
+-- silent once `finished()` holds.
+local function pump(source, sink, finished)
+    local reader = source:reader()
+
+    while true do
+        if ok, chunk = resume(reader) then
+            if not chunk then
+                return
+            end
+
+            sink:send(chunk)
+        elseif finished() or not string.find(tostring(chunk), "timeout", 1, true) then
+            return
+        else
+            reader = source:reader()
+        end
+    end
+end
+
+-- Fetches from a TLS server through a relay of the TCP stream. The server
+-- sends a response that runs to the end of the connection, then runs
+-- `after(conn)`. The relay closes both sides once the server ends its
+-- stream, or once the server stays silent after its response.
+local function fetch_through_a_relay(c, after)
+    local sent = false
+    local result
+
+    accepting(function(conn)
+        conn:starttls({ server = true, cert = c.server.cert, key = c.server.key })
+        conn:receive("*l")
+        conn:send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\npartial body")
+        sent = true
+        after(conn)
+    end, function(port)
+        local relay = network.tcp.bind("127.0.0.1", 0)
+        local _, relay_port = relay:getsockname()
+
+        local co = detach(create(function()
+            local client <close> = relay:accept()
+            local upstream <close> = network.tcp.connect("127.0.0.1", port, { timeout = 0.05 })
+            client:settimeout(0.05)
+
+            local up = detach(create(pump), client, upstream, function()
+                return false
+            end)
+
+            pump(upstream, client, function()
+                return sent
+            end)
+
+            coroutine.close(up)
+        end))
+
+        result = table.pack(catch network.fetch(`https://localhost:$relay_port/`, "GET", nil, nil, {
+            tls = { ca = c.ca },
+        }))
+
+        coroutine.close(co)
+        relay:close()
+    end)
+
+    return table.unpack(result, 1, result.n)
+end
+
+-- A response that runs to the end of the connection ends with the close
+-- notification of the server. A TCP stream that ends before one may have
+-- lost the rest of the body, so the client refuses what it received.
+local function fetch_refuses_a_body_that_ends_without_a_close_notification_test()
+    local c = make_certs()
+
+    local ok, status, body = fetch_through_a_relay(c, function()
+    end)
+
+    assert(ok and status == 200 and txt(body) == "partial body", tostring(status))
+
+    local cut, err = fetch_through_a_relay(c, function(conn)
+        catch conn:receive("*a")
+    end)
+
+    assert(not cut and string.find(tostring(err), "close notification", 1, true), tostring(err))
+end
+
 -- The timeout of the handshake starts once the connection is made. A
 -- server that starts its handshake late still answers within it, and a
 -- connection that waited in short ticks, as connections on Windows do,

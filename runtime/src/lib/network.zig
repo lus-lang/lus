@@ -89,6 +89,9 @@ pub const Socket = struct {
     owner: ?*Server = null,
     /// Set once a read found the end of the connection.
     eof: bool = false,
+    /// Set when a TLS connection ended with no close notification from
+    /// the peer, as it does when something between the two ends cuts it.
+    cut: bool = false,
     /// The count of poller events of the socket when a read last took
     /// fewer bytes than it asked for (`sched.quietCount`).
     quiet: ?u32 = null,

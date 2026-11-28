@@ -474,7 +474,7 @@ server:close()
 | `drain_timeout` | How many seconds the open connections may take to finish after the server stops. The default is 10. A negative value removes the limit, and `0` closes them at once. |
 | `tls` | A table with the PEM text of the certificate `cert` and of the private key `key` of the server, for HTTPS. A list of such tables holds one certificate for each name. |
 
-A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that makes no progress for `idle_timeout` seconds closes, whether it is between two requests or has stopped reading its response. A connection that stops in the middle of a request receives a 408 response before it closes. The time that the handler takes is excluded from the timeout.
+A connection makes progress when the server reads a part of a request from it or writes a part of a response to it. A connection that makes no progress for `idle_timeout` seconds closes, whether it is between two requests or has stopped reading its response. A connection that stops in the middle of a request receives a 408 response before it closes. The head of a request has `idle_timeout` seconds in all from its first byte, so a client that sends its head a few bytes at a time receives the 408 response too. The time that the handler takes is excluded from the timeout.
 
 While `max_connections` connections are open, further clients wait in the queue of the system until a connection closes and the server accepts the next one. When the system has no file descriptor or no memory left for a new connection, the server waits until a connection closes or a short time passes, then accepts again.
 

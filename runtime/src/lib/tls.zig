@@ -322,12 +322,23 @@ pub fn recv(l: *Thread, s: *net.Socket, dst: []u8) net.Try {
             return .{ .n = @intCast(r) };
         }
         switch (r) {
-            0, peer_close_notify, conn_eof => return .{ .n = 0 },
+            peer_close_notify => return .{ .n = 0 },
+            // The TCP stream ended and the peer sent no close
+            // notification, which Mbed TLS reports as a read of zero
+            // bytes. The reader of a message that runs to the end of the
+            // connection cannot tell this from a message cut short.
+            0, conn_eof => {
+                if (n > 0) s.cut = true;
+                return .{ .n = 0 };
+            },
             want_read, want_write => return .again,
             new_session_ticket => continue,
             else => {
                 if (t.io_err) |e| {
-                    if (e == error.ConnectionResetByPeer and lus_tls_handshake_done(t.conn) != 0) return .{ .n = 0 };
+                    if (e == error.ConnectionResetByPeer and lus_tls_handshake_done(t.conn) != 0) {
+                        s.cut = true;
+                        return .{ .n = 0 };
+                    }
                 }
                 return handshakeFail(t, r);
             },

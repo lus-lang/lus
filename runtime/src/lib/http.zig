@@ -48,10 +48,11 @@ const fetch_timeout_ms = 30000;
 /// A line of a body reader holds at most 1 MiB by default.
 const default_line_limit = 1024 * 1024;
 
-/// The limits of a request body that `network.serve` decodes: its line
-/// of a chunk fits in 1 KiB, and its framing, which is the lines of its
-/// chunks, the line ends after them, and its trailers, may spend 64 KiB
-/// and 8 bytes more for every byte of data.
+/// The limits on the framing of a chunked body, for a request that
+/// `network.serve` decodes and for a response that `network.fetch` reads:
+/// the line of a chunk fits in 1 KiB, and the framing, which is the lines
+/// of the chunks, the line ends after them, and the trailers, may spend
+/// 64 KiB and 8 bytes more for every byte of data.
 pub const request_limits = struct {
     pub const chunk_line = 1024;
     pub const framing = 64 * 1024;
@@ -182,11 +183,11 @@ fn decode(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!Step {
                     // A chunk decoded in this call goes to the reader
                     // before the decoder waits for the line of the next.
                     const le = lineEnd(b, buf, pos) orelse {
-                        if (b.request and buf.len - pos > request_limits.chunk_line) break :step refuse(b, 400, "malformed chunked body");
+                        if (buf.len - pos > request_limits.chunk_line) break :step refuse(b, 400, "malformed chunked body");
                         break :step if (pos > 0) .progress else .more;
                     };
                     const line = buf[pos..le.end];
-                    if (b.request and line.len > request_limits.chunk_line) break :step refuse(b, 400, "malformed chunked body");
+                    if (line.len > request_limits.chunk_line) break :step refuse(b, 400, "malformed chunked body");
                     const size = chunkSize(line) orelse break :step refuse(b, 400, "invalid chunk size");
                     b.framing_bytes += le.next - pos;
                     pos = le.next;
@@ -197,7 +198,7 @@ fn decode(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!Step {
                     if (b.limit != 0 and size > b.limit - @min(b.limit, b.total)) break :step refuse(b, 413, "request body too large");
                     // The line end after the data counts with its chunk.
                     b.framing_bytes += 2;
-                    if (b.request and b.framing_bytes > request_limits.framing +| request_limits.framing_per_byte *| (b.total +| size))
+                    if (b.framing_bytes > request_limits.framing +| request_limits.framing_per_byte *| (b.total +| size))
                         break :step refuse(b, 413, "chunked body framing too large");
                     b.left = size;
                     b.chunk = .data;
@@ -228,14 +229,14 @@ fn decode(l: *Thread, s: *net.Socket, b: *Body, max: usize) Error!Step {
                 // Trailer lines follow the last chunk, up to an empty line.
                 .trailers => {
                     const le = lineEnd(b, buf, pos) orelse {
-                        if (b.request and b.framing_bytes +| (buf.len - pos) > request_limits.framing +| request_limits.framing_per_byte *| b.total)
+                        if (b.framing_bytes +| (buf.len - pos) > request_limits.framing +| request_limits.framing_per_byte *| b.total)
                             break :step refuse(b, 431, "chunked body trailers too large");
                         break :step if (pos > 0) .progress else .more;
                     };
                     const len = le.end - pos;
                     b.framing_bytes += le.next - pos;
                     pos = le.next;
-                    if (b.request and b.framing_bytes > request_limits.framing +| request_limits.framing_per_byte *| b.total)
+                    if (b.framing_bytes > request_limits.framing +| request_limits.framing_per_byte *| b.total)
                         break :step refuse(b, 431, "chunked body trailers too large");
                     if (len == 0) {
                         b.done = true;
@@ -293,6 +294,14 @@ fn refill(l: *Thread, s: *net.Socket, b: *Body) Error!void {
         .got => {},
         .eof => {
             if (b.framing == .eof) {
+                // A body that runs to the end of a TLS connection ends
+                // with the close notification of the peer. Without one,
+                // nothing tells its end from a cut.
+                if (s.cut) {
+                    b.bad = 400;
+                    b.bad_msg = "truncated response body: the TLS connection ended without a close notification";
+                    return raiseBad(l, b);
+                }
                 b.done = true;
                 return;
             }

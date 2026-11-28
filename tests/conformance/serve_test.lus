@@ -1891,6 +1891,66 @@ local function an_idle_connection_closes_test()
     end, { idle_timeout = 0.05 })
 end
 
+-- The head of a request has the idle timeout as a whole. A client that
+-- sends one byte now and then makes progress on every read and is still
+-- told that its time ran out.
+local function a_head_that_arrives_slowly_times_out_test()
+    serving(function(_req)
+        return 200, "ok"
+    end, function(port)
+        local slow <close> = connect(port)
+        slow:send("GET / HT")
+
+        -- A byte arrives every 30 milliseconds for well over the timeout.
+        for _ = 1, 14 do
+            resume(coroutine.sleep(0.03))
+            local _ = catch slow:send("X")
+        end
+
+        -- The answer is already there. A server that restarted its wait
+        -- at every byte would still be reading.
+        slow:settimeout(0.02)
+        local ok, r = catch read_response(slow)
+        assert(ok, tostring(r))
+        assert(r.status == 408 and r.headers.connection == "close")
+    end, { idle_timeout = 0.15 })
+end
+
+-- Each line of a header that a request repeats counts.
+local function a_repeated_connection_header_closes_test()
+    serving(function(_req)
+        return 200, "bye"
+    end, function(port)
+        local sock <close> = connect(port)
+
+        local r = exchange(
+            sock,
+            "GET / HTTP/1.1\r\nHost: test\r\nConnection: keep-alive\r\nConnection: close\r\n\r\n"
+        )
+
+        assert(r.status == 200 and r.headers.connection == "close")
+        assert(at_end(sock))
+    end)
+end
+
+-- A response whose chunk line never ends, or runs on with extensions, is
+-- refused before the client has buffered it all.
+local function a_response_with_an_endless_chunk_line_is_refused_test()
+    local server, port = listen()
+
+    spawn(function()
+        local peer = server:accept()
+        peer:receive("*l")
+        peer:send("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+        local _ = catch peer:send(`1;$(string.rep("x", 8000))\r\na\r\n0\r\n\r\n`)
+        peer:close()
+    end)
+
+    local ok, err = catch network.fetch(`http://127.0.0.1:$port/`)
+    server:close()
+    assert(not ok and tostring(err):find("malformed chunked body", 1, true), tostring(err))
+end
+
 local function a_busy_connection_outlives_the_idle_timeout_test()
     serving(function(req)
         return 200, req.path

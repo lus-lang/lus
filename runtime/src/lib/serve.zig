@@ -69,6 +69,10 @@ pub const Http = struct {
     /// The length of the request line and the headers, once they are
     /// complete.
     head_end: usize = 0,
+    /// When the first bytes of the request line arrived, on the clock of
+    /// the scheduler, or zero between two requests. The whole head has
+    /// the idle timeout from then on, however slowly its bytes arrive.
+    head_started: u64 = 0,
     method: Span = .{},
     path: Span = .{},
     query: Span = .{},
@@ -106,6 +110,7 @@ pub const Http = struct {
 
     fn nextRequest(h: *Http) void {
         h.scan = 0;
+        h.head_started = 0;
         h.head_end = 0;
         h.headers.clearRetainingCapacity();
         h.framing = .none;
@@ -673,8 +678,15 @@ fn parseHead(l: *Thread, h: *Http, buf: []const u8, end: usize) Error!u16 {
         pos = eol + 2;
     }
 
-    const conn = headerValue(h, buf, "connection") orelse "";
-    h.keep = if (http10) hasToken(conn, "keep-alive") else !hasToken(conn, "close");
+    // A request may hold the header more than once, and each line counts.
+    var wants_close = false;
+    var wants_keep = false;
+    for (h.headers.items) |hd| {
+        if (!std.ascii.eqlIgnoreCase(text(buf, hd.name), "connection")) continue;
+        if (hasToken(text(buf, hd.val), "close")) wants_close = true;
+        if (hasToken(text(buf, hd.val), "keep-alive")) wants_keep = true;
+    }
+    h.keep = if (http10) wants_keep and !wants_close else !wants_close;
     h.framing = .none;
     h.length = 0;
     var seen_length = false;
@@ -720,8 +732,9 @@ fn parse(l: *Thread, s: *net.Socket, h: *Http) Error!Parse {
         if (status != 0) return .{ .bad = status };
         h.head_end = end;
         if (h.framing != .none) {
-            if (headerValue(h, buf, "expect")) |e| {
-                if (!std.ascii.eqlIgnoreCase(e, "100-continue")) return .{ .bad = 417 };
+            for (h.headers.items) |hd| {
+                if (!std.ascii.eqlIgnoreCase(text(buf, hd.name), "expect")) continue;
+                if (!std.ascii.eqlIgnoreCase(text(buf, hd.val), "100-continue")) return .{ .bad = 417 };
             }
         }
     }
@@ -752,7 +765,26 @@ fn readRequest(l: *Thread) Error!u32 {
     while (true) {
         switch (try parse(l, s, h)) {
             .more => |n| {
-                const got = (try net.tryFill(l, s, n)) orelse {
+                // A head that has begun must end within the idle timeout
+                // as a whole. Each read alone would let a client keep a
+                // connection for as long as it sends a byte now and then.
+                const idle_ms: i32 = if (s.owner) |o| o.idle_ms else s.timeout_ms;
+                var late = false;
+                if (s.buf.items.len > 0 and idle_ms >= 0) {
+                    const at = sched.now(l.g);
+                    if (h.head_started == 0) h.head_started = at;
+                    const limit = @as(u64, @intCast(idle_ms)) * std.time.ns_per_ms;
+                    const spent = at - h.head_started;
+                    if (spent >= limit) {
+                        late = true;
+                    } else {
+                        const left = (limit - spent + std.time.ns_per_ms - 1) / std.time.ns_per_ms;
+                        s.timeout_ms = @intCast(@min(left, @as(u64, @intCast(idle_ms))));
+                    }
+                }
+                const filled = if (late) null else try net.tryFill(l, s, n);
+                s.timeout_ms = idle_ms;
+                const got = filled orelse {
                     // The connection made no progress for the idle
                     // timeout. One that waits between two requests closes
                     // quietly, and one that stopped inside a request
@@ -778,7 +810,10 @@ fn readRequest(l: *Thread) Error!u32 {
                 try l.push(Value.int(status));
                 return 2;
             },
-            .done => return finishRequest(l, s, h),
+            .done => {
+                h.head_started = 0;
+                return finishRequest(l, s, h);
+            },
         }
     }
 }
