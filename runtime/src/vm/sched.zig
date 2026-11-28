@@ -967,7 +967,10 @@ pub fn drain(l: *Thread) Error!void {
 /// another thread makes it ask again.
 pub fn drainWhile(l: *Thread, ctx: *anyopaque, go: *const fn (ctx: *anyopaque) bool) Error!void {
     const g = l.g;
-    while (g.sched.nlive > 0) {
+    // Parked coroutines can only be woken by another coroutine, so once
+    // every coroutine left is parked there is nothing to wait for, as in
+    // `drain`. A step would return at once then, and the loop would spin.
+    while (g.sched.nlive > g.sched.nparked) {
         if (!go(ctx)) return;
         try step(g, l, true);
     }
