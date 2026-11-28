@@ -419,7 +419,8 @@ const Inotify = struct {
             const p = try std.mem.concat(gpa, u8, &.{ dir, "/", ent.name });
             defer gpa.free(p);
             if (report) s.push(.create, p);
-            if (ent.kind == .directory) {
+            // The watch goes no deeper than the program may read.
+            if (ent.kind == .directory and pledge.allowed(l, "fs:read", p)) {
                 _ = try b.add(p, dir_mask | IN_ONLYDIR);
                 try b.addTree(l, s, p, report);
             }
@@ -624,6 +625,8 @@ const Kqueue = struct {
                 b.dropTree(p);
                 if (report) s.push(.modify, p);
             } else if (report) s.push(.create, p);
+            // The watch goes no deeper than the program may read.
+            if (!pledge.allowed(l, "fs:read", p)) continue;
             if (kv.value_ptr.is_dir) {
                 if (s.recursive) _ = try b.addDir(l, s, p, report);
             } else _ = try b.add(p, false);

@@ -508,13 +508,26 @@ fn schemeLen(v: []const u8) ?usize {
     return null;
 }
 
+/// Where the host of an authority ends and its port begins. An IPv6
+/// address stands in brackets, since it holds colons of its own.
+fn hostEnd(authority: []const u8) usize {
+    if (authority.len > 0 and authority[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, authority, ']') orelse return authority.len;
+        return close + 1;
+    }
+    return std.mem.indexOfScalar(u8, authority, ':') orelse authority.len;
+}
+
 fn hostPartsMatch(granted: []const u8, rest: []const u8) bool {
     const auth_end = std.mem.indexOfAny(u8, rest, "/?") orelse rest.len;
     const authority = rest[0..auth_end];
-    const host = authority[0 .. std.mem.indexOfScalar(u8, authority, ':') orelse authority.len];
+    // User information before `@` is no part of the host, and a client
+    // may send its request to what follows the `@`.
+    if (std.mem.indexOfScalar(u8, authority, '@') != null) return false;
+    const host = authority[0..hostEnd(authority)];
     const slash = std.mem.indexOfScalar(u8, granted, '/');
     const g_auth = granted[0 .. slash orelse granted.len];
-    const subject = if (std.mem.indexOfScalar(u8, g_auth, ':') != null) authority else host;
+    const subject = if (hostEnd(g_auth) < g_auth.len) authority else host;
     // Authorities longer than any valid host name never match.
     if (g_auth.len >= 256 or subject.len >= 256) return false;
     if (!globMatch(g_auth, subject)) return false;
@@ -1017,8 +1030,9 @@ fn hostCovers(ceiling: []const u8, pledged: []const u8) bool {
     const p_slash = std.mem.indexOfScalar(u8, p, '/');
     const c_auth = c[0 .. c_slash orelse c.len];
     const p_auth = p[0 .. p_slash orelse p.len];
-    const c_port = std.mem.indexOfScalar(u8, c_auth, ':') != null;
-    const p_colon = std.mem.indexOfScalar(u8, p_auth, ':');
+    if (std.mem.indexOfScalar(u8, p_auth, '@') != null) return false;
+    const c_port = hostEnd(c_auth) < c_auth.len;
+    const p_colon: ?usize = if (hostEnd(p_auth) < p_auth.len) hostEnd(p_auth) else null;
     if (c_port) {
         // The ceiling names a port, so the pledge must name one too.
         if (p_colon == null or !patternCovers(c_auth, p_auth, false)) return false;

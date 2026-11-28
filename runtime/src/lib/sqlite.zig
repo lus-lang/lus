@@ -942,7 +942,13 @@ fn finalizeStmt(s: *Stmt) void {
 
 /// Finalizes every live statement, then closes the connection.
 fn closeDb(g: *state.Global, d: *Db) void {
-    const db = d.db orelse return;
+    const db = d.db orelse {
+        // An open that failed after its VFS was made left no connection,
+        // and the VFS is released here.
+        destroyVfs(g, d.vfs);
+        d.vfs = null;
+        return;
+    };
     while (d.stmts) |s| finalizeStmt(s);
     // Statements prepared outside this binding hold the connection too.
     while (c.sqlite3_next_stmt(db, null)) |st| _ = c.sqlite3_finalize(st);

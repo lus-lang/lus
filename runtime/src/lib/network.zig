@@ -388,6 +388,10 @@ fn timeoutArg(l: *Thread, i: u32) Error!i32 {
 
 /// Formats "host:port" for permission checks and messages.
 pub fn hostPort(buf: []u8, host: []const u8, port: u16) []const u8 {
+    // An IPv6 address holds colons, so it stands in brackets before the
+    // port, as in a URL.
+    if (std.mem.indexOfScalar(u8, host, ':') != null and (host.len == 0 or host[0] != '['))
+        return std.fmt.bufPrint(buf, "[{s}]:{d}", .{ host, port }) catch host;
     return std.fmt.bufPrint(buf, "{s}:{d}", .{ host, port }) catch host;
 }
 

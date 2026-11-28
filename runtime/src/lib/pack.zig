@@ -305,7 +305,7 @@ pub fn unpack(l: *Thread, fmt: []const u8, data: []const u8, start: usize, msgs:
                 n += 1;
             },
             .string => {
-                const len: usize = @intCast(@as(u64, @bitCast(try getInt(l, data[pos .. pos + it.size], p.little, it.size, false))));
+                const len = std.math.cast(usize, @as(u64, @bitCast(try getInt(l, data[pos .. pos + it.size], p.little, it.size, false)))) orelse return aux.argError(l, 2, "{s}", .{msgs.short});
                 if (len > data.len - pos - it.size) return aux.argError(l, 2, "{s}", .{msgs.short});
                 try l.push(try bytesValue(l, data[pos + it.size .. pos + it.size + len]));
                 pos += len;

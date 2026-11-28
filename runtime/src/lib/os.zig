@@ -532,7 +532,12 @@ fn localZone(l: *Thread) Zone {
         var tzs = tz_raw;
         if (tzs.len == 0) return ruleZone(l, "UTC0");
         if (tzs[0] == ':') tzs = tzs[1..];
-        const mem = if (tzs.len > 0 and tzs[0] == '/') loadTzFile(l, tzs) else loadNamedZone(l, tzs);
+        // A path that the host set at start is the host's choice. One
+        // that changed since is read only where the program may read it,
+        // whichever state or coroutine made the change.
+        const from_host = if (startupGet(l, "TZ")) |at_start| std.mem.eql(u8, at_start, tz_raw) else false;
+        const readable = from_host or @import("../vm/pledge.zig").allowed(l, "fs:read", tzs);
+        const mem = if (tzs.len > 0 and tzs[0] == '/') (if (readable) loadTzFile(l, tzs) else null) else loadNamedZone(l, tzs);
         if (mem) |m| return .{ .gpa = gpa, .mem = m };
         return ruleZone(l, tzs);
     }

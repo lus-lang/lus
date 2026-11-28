@@ -1229,3 +1229,33 @@ local function a_table_is_strong_once_its_weak_metatable_is_gone_test()
 
     collectgarbage("generational")
 end
+
+local function a_host_grant_reads_the_host_of_a_url_test()
+    local co = coroutine.create(function()
+        pledge("network:http=https://good.invalid", "network:tcp=[::1]:9", "seal")
+        local denied = {}
+
+        for _, url in ipairs({
+            "https://good.invalid@evil.invalid/",
+            "https://user:good.invalid@evil.invalid/",
+            "https://evil.invalid/",
+        }) do
+            local ok, err = catch network.fetch(url)
+            denied[#denied + 1] = not ok and tostring(err):find("denied", 1, true) ~= nil
+        end
+
+        -- The grant for the IPv6 address and its port covers that pair alone.
+        local ok, err = catch network.tcp.connect("::1", 10)
+        denied[#denied + 1] = not ok and tostring(err):find("denied", 1, true) ~= nil
+        ok, err = catch network.tcp.connect("::1", 9)
+        denied[#denied + 1] = ok or tostring(err):find("denied", 1, true) == nil
+        return denied
+    end)
+
+    local ok, denied = coroutine.resume(co)
+    assert(ok, tostring(denied))
+
+    for i, d in ipairs(denied) do
+        assert(d, i)
+    end
+end

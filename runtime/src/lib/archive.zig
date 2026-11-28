@@ -83,7 +83,7 @@ const default_max_out: usize = 512 * 1024 * 1024;
 
 fn maxOut(l: *Thread, i: u32) Error!usize {
     const m = try aux.optInt(l, i, 0);
-    return if (m > 0) @intCast(m) else default_max_out;
+    return if (m > 0) std.math.cast(usize, m) orelse std.math.maxInt(usize) else default_max_out;
 }
 
 fn tooBig(l: *Thread, max: usize) Error {

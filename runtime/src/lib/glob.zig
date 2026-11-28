@@ -15,6 +15,8 @@ const std = @import("std");
 
 /// The most globs one pattern may expand to through braces.
 pub const max_alternatives = 256;
+/// The most groups that one pattern expands one inside or after another.
+pub const max_nesting = 64;
 
 pub const Error = error{ TooManyAlternatives, OutOfMemory };
 
@@ -64,7 +66,7 @@ pub fn compile(gpa: std.mem.Allocator, pattern: []const u8) Error!Glob {
     errdefer arena.deinit();
     const a = arena.allocator();
     var expanded: std.ArrayList([]const u8) = .empty;
-    try expand(a, pattern, &expanded);
+    try expand(a, pattern, &expanded, 0);
     const alts = try a.alloc([]const Seg, expanded.items.len);
     var deep = false;
     for (expanded.items, 0..) |p, i| {
@@ -121,7 +123,10 @@ fn braceEnd(p: []const u8, i: usize) ?usize {
 }
 
 /// Appends every brace expansion of `p` to `out`.
-fn expand(a: std.mem.Allocator, p: []const u8, out: *std.ArrayList([]const u8)) Error!void {
+fn expand(a: std.mem.Allocator, p: []const u8, out: *std.ArrayList([]const u8), depth_in: usize) Error!void {
+    // Each group expands in a call of its own, so groups inside groups
+    // have a bound, as the alternatives do.
+    if (depth_in > max_nesting) return error.TooManyAlternatives;
     var i: usize = 0;
     while (i < p.len) : (i += 1) switch (p[i]) {
         '[' => if (classEnd(p, i)) |e| {
@@ -142,7 +147,7 @@ fn expand(a: std.mem.Allocator, p: []const u8, out: *std.ArrayList([]const u8)) 
                     '}' => depth -= 1,
                     ',' => if (depth == 0) {
                         const alt = try std.mem.concat(a, u8, &.{ p[0..i], p[start..j], p[e + 1 ..] });
-                        try expand(a, alt, out);
+                        try expand(a, alt, out, depth_in + 1);
                         if (out.items.len > max_alternatives) return error.TooManyAlternatives;
                         start = j + 1;
                     },

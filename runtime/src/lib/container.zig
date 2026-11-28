@@ -612,6 +612,11 @@ fn pack(l: *Thread, format: Format) Error!u32 {
         items.append(arena, e) catch return l.raiseMem();
     }
 
+    // A zip header holds the length of a name in 16 bits, with the slash
+    // that ends the name of a directory.
+    if (format == .zip) for (items.items, 1..) |e, at| {
+        if (e.name.len + 1 > std.math.maxInt(u16)) return l.raiseFmt("bad entry #{d} to 'pack' (the name is too long for a zip archive)", .{at});
+    };
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     const ok = switch (format) {
