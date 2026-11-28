@@ -1901,17 +1901,24 @@ local function a_head_that_arrives_slowly_times_out_test()
         local slow <close> = connect(port)
         slow:send("GET / HT")
 
-        -- A byte arrives every 30 milliseconds for well over the timeout.
-        for _ = 1, 14 do
-            resume(coroutine.sleep(0.03))
+        -- A byte arrives every 30 milliseconds until the server answers.
+        -- A server that restarted its wait at every byte would read for
+        -- as long as the bytes come. The client stops at the answer,
+        -- since a byte sent to a closed connection resets it on Windows
+        -- and discards the response.
+        slow:settimeout(0.03)
+        local r
+
+        for _ = 1, 40 do
+            if ok, got = catch read_response(slow) then
+                r = got
+                break
+            end
+
             local _ = catch slow:send("X")
         end
 
-        -- The answer is already there. A server that restarted its wait
-        -- at every byte would still be reading.
-        slow:settimeout(0.02)
-        local ok, r = catch read_response(slow)
-        assert(ok, tostring(r))
+        assert(r, "no response while the head arrived a byte at a time")
         assert(r.status == 408 and r.headers.connection == "close")
     end, { idle_timeout = 0.15 })
 end
